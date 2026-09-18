@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SID Herdr 主控台</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到主要內容</a>
+<div class="shell">
+  <nav class="side" aria-label="主要導覽">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">◈</span>
+      <span class="brand-text">SID Herdr<small>技能與團隊主控台</small></span>
+    </div>
+    <ul class="nav">
+      <li><a href="#/" data-nav="home"><span aria-hidden="true">⌂</span>我的工作台</a></li>
+      <li><a href="#/skills" data-nav="skills"><span aria-hidden="true">✦</span>技能庫</a></li>
+      <li><a href="#/team" data-nav="team"><span aria-hidden="true">☰</span>Agent 團隊</a></li>
+      <li><a href="#/projects" data-nav="projects"><span aria-hidden="true">▣</span>專案</a></li>
+      <li><a href="#/settings" data-nav="settings"><span aria-hidden="true">⚙</span>設定</a></li>
+    </ul>
+    <div class="side-foot" id="scan-status" aria-live="polite"></div>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/app.js"></script>
+</body>
+</html>

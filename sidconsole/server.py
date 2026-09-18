@@ -1,0 +1,344 @@
+"""Local HTTP server: JSON API plus the static web UI.
+
+Security posture (plan section 9):
+  - binds to loopback only
+  - Host header must be the loopback address, which blocks DNS rebinding
+  - state-changing requests need a custom header and a same-origin Origin,
+    which blocks cross-site request forgery from other pages in the browser
+  - strict Content-Security-Policy; the UI renders skill text as text, never
+    as HTML, because skill content is untrusted
+  - files are served only by skill id or by a reference the scanner already
+    verified inside that skill's directory; never by a caller-supplied path
+"""
+
+from __future__ import annotations
+
+import json
+import mimetypes
+import sys
+import threading
+import time
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from . import config as cfg
+from .bridge import herdr
+from .index import STALE_AFTER_S, Store
+from .model import ACT_ACTIVE
+from .scan import document
+
+WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
+STATIC_FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
+                "/favicon.svg": "favicon.svg"}
+MAX_FILE_BYTES = 256 * 1024
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+       "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+SKILL_SUMMARY_FIELDS = (
+    "skill_id", "name", "invoke_name", "tool", "scope", "activation", "activation_reason",
+    "path", "description", "missing_files", "warnings", "origin_package", "duplicate_of",
+    "mtime", "categories",
+)
+SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
+CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language"}
+
+
+class Console:
+    def __init__(self, port: int):
+        self.port = port
+        self.store = Store()
+        self.lock = threading.Lock()
+
+    # derived views ------------------------------------------------------
+
+    def skill_index(self) -> dict:
+        return {s["skill_id"]: s for s in self.store.static()["skills"]}
+
+    def roles_for_skill(self, skill_id: str) -> list[dict]:
+        out = []
+        for role in self.store.static()["roles"]:
+            if skill_id in role.get("skill_link_ids", []):
+                out.append({"role_id": role["role_id"], "name": role["name"],
+                            "tool": role["tool"], "basis": role["skill_link_basis"]})
+        return out
+
+    def usage_for_skill(self, skill_id: str) -> list[dict]:
+        rows = []
+        for sess in self.store.live()["usage"]["sessions"]:
+            for used in sess["skills"]:
+                if skill_id in used["skill_ids"]:
+                    rows.append({"session_id": sess["session_id"], "tool": sess["tool"],
+                                 "project_id": sess["project_id"], "cwd": sess["cwd"],
+                                 "count": used["count"], "last_ts": used["last_ts"],
+                                 "evidence": used["evidence"], "resolution": used["resolution"]})
+        rows.sort(key=lambda r: r["last_ts"], reverse=True)
+        return rows
+
+
+def make_handler(console: Console):
+    allowed_hosts = {f"127.0.0.1:{console.port}", f"localhost:{console.port}"}
+    allowed_origins = {f"http://{h}" for h in allowed_hosts}
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "SIDConsole/0.1"
+        sys_version = ""
+
+        def log_message(self, fmt, *args):  # keep the terminal quiet; no request bodies
+            if "--verbose" in sys.argv:
+                sys.stderr.write("%s %s\n" % (self.command, self.path.split("?", 1)[0]))
+
+        # plumbing ---------------------------------------------------------
+
+        def _headers(self, status: int, ctype: str, length: int):
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+        def _json(self, payload, status: int = 200):
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self._headers(status, "application/json; charset=utf-8", len(body))
+            self.wfile.write(body)
+
+        def _error(self, status: int, message: str):
+            self._json({"error": message}, status)
+
+        def _host_ok(self) -> bool:
+            return self.headers.get("Host", "") in allowed_hosts
+
+        def _write_ok(self) -> bool:
+            if self.headers.get("X-SID-Console") != "1":
+                return False
+            origin = self.headers.get("Origin")
+            return origin is None or origin in allowed_origins
+
+        def _body(self) -> dict:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > 64 * 1024:
+                return {}
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return {}
+            return data if isinstance(data, dict) else {}
+
+        # routes -----------------------------------------------------------
+
+        def do_GET(self):
+            if not self._host_ok():
+                return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+            url = urlparse(self.path)
+            path = url.path
+            try:
+                if path in STATIC_FILES:
+                    return self._static(STATIC_FILES[path])
+                if path == "/api/overview":
+                    return self._json(self._overview())
+                if path == "/api/skills":
+                    return self._json(self._skills())
+                if path.startswith("/api/skills/"):
+                    rest = path[len("/api/skills/"):]
+                    if rest.endswith("/file"):
+                        ref = parse_qs(url.query).get("ref", [""])[0]
+                        return self._skill_file(rest[:-5], ref)
+                    return self._skill_detail(rest)
+                if path == "/api/roles":
+                    return self._json(self._roles())
+                if path == "/api/live":
+                    force = parse_qs(url.query).get("force", ["0"])[0] == "1"
+                    return self._json(console.store.live(force=force))
+                if path == "/api/config":
+                    return self._json(self._config_view())
+            except Exception as exc:  # report, never crash the server
+                return self._error(500, f"內部錯誤：{type(exc).__name__}")
+            return self._error(404, "not found")
+
+        def do_HEAD(self):
+            if not self._host_ok():
+                return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+            self._headers(200 if urlparse(self.path).path in STATIC_FILES else 404,
+                          "text/html; charset=utf-8", 0)
+
+        def do_POST(self):
+            if not self._host_ok():
+                return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+            if not self._write_ok():
+                return self._error(403, "forbidden")
+            path = urlparse(self.path).path
+            try:
+                if path == "/api/rescan":
+                    data = console.store.rescan()
+                    return self._json({"ok": True, "generated_at": data["generated_at"],
+                                       "scan_seconds": data["scan_seconds"]})
+                if path == "/api/config":
+                    return self._json(self._config_update(self._body()))
+                if path == "/api/focus":
+                    target = str(self._body().get("target", ""))
+                    return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
+            except Exception as exc:
+                return self._error(500, f"內部錯誤：{type(exc).__name__}")
+            return self._error(404, "not found")
+
+        # handlers ---------------------------------------------------------
+
+        def _static(self, name: str):
+            file = WEB_ROOT / name
+            try:
+                body = file.read_bytes()
+            except OSError:
+                return self._error(404, "missing asset")
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
+                ctype += "; charset=utf-8"
+            self._headers(200, ctype, len(body))
+            self.wfile.write(body)
+
+        def _overview(self) -> dict:
+            static = console.store.static()
+            skills = static["skills"]
+            counts: dict = {}
+            for s in skills:
+                counts.setdefault(s["tool"], {}).setdefault(s["activation"], 0)
+                counts[s["tool"]][s["activation"]] += 1
+            problems_active = [s["skill_id"] for s in skills
+                               if s["activation"] == ACT_ACTIVE and (s["missing_files"] or s["warnings"])]
+            recent = sorted((s for s in skills if s["activation"] == ACT_ACTIVE),
+                            key=lambda s: s["mtime"], reverse=True)[:6]
+            return {
+                "generated_at": static["generated_at"],
+                "scan_seconds": static["scan_seconds"],
+                "age_seconds": round(time.time() - static["generated_at"]),
+                "stale": time.time() - static["generated_at"] > STALE_AFTER_S,
+                "counts": counts,
+                "totals": {"skills": len(skills), "roles": len(static["roles"]),
+                           "active": sum(1 for s in skills if s["activation"] == ACT_ACTIVE)},
+                "sources": static["sources"],
+                "problems": static["problems"],
+                "facts": static["facts"],
+                "skills_with_problems": problems_active,
+                "recent_skill_ids": [s["skill_id"] for s in recent],
+            }
+
+        def _skills(self) -> dict:
+            items = []
+            for s in console.store.static()["skills"]:
+                item = {k: s.get(k) for k in SKILL_SUMMARY_FIELDS}
+                when = s.get("when_to_use") or {}
+                item["when_to_use"] = {"value": str(when.get("value") or "")[:SEARCH_EXCERPT_CHARS],
+                                       "origin": when.get("origin")}
+                items.append(item)
+            return {"skills": items, "categories": console.store.static().get("category_table", [])}
+
+        def _skill_detail(self, skill_id: str):
+            skill = console.skill_index().get(skill_id)
+            if not skill:
+                return self._error(404, "找不到這個技能（索引可能已更新，請重新整理）")
+            raw, raw_error = "", ""
+            try:
+                file = Path(skill["path"])
+                if file.stat().st_size > MAX_FILE_BYTES:
+                    raw_error = "檔案超過 256KB，未載入原文"
+                else:
+                    raw = document.redact(file.read_text(encoding="utf-8", errors="replace"))
+            except OSError as exc:
+                raw_error = f"無法讀取原始檔：{exc.strerror or exc}"
+            index = console.skill_index()
+            dups = [{"skill_id": d, "tool": index[d]["tool"], "scope": index[d]["scope"],
+                     "activation": index[d]["activation"], "path": index[d]["path"],
+                     "origin_package": index[d]["origin_package"]}
+                    for d in skill.get("duplicate_of", []) if d in index]
+            return self._json({
+                "skill": skill,
+                "raw": raw,
+                "raw_error": raw_error,
+                "roles": console.roles_for_skill(skill_id),
+                "usage": console.usage_for_skill(skill_id),
+                "duplicates": dups,
+            })
+
+        def _skill_file(self, skill_id: str, ref: str):
+            skill = console.skill_index().get(skill_id)
+            if not skill:
+                return self._error(404, "找不到這個技能")
+            allowed = {r["ref"] for r in skill.get("referenced_files", []) if r.get("status") == "present"}
+            if ref not in allowed:
+                return self._error(403, "只能開啟此技能已驗證存在的引用檔")
+            base = Path(skill["path"]).parent.resolve()
+            target = (base / ref).resolve()
+            if not target.is_relative_to(base) or not target.is_file():
+                return self._error(403, "引用檔不在技能目錄內")
+            if target.stat().st_size > MAX_FILE_BYTES:
+                return self._json({"ref": ref, "text": "", "error": "檔案超過 256KB，未載入"})
+            data = target.read_bytes()
+            if b"\x00" in data[:4096]:
+                return self._json({"ref": ref, "text": "", "error": "二進位檔，不顯示內容"})
+            return self._json({"ref": ref, "text": document.redact(data.decode("utf-8", "replace"))})
+
+        def _roles(self) -> dict:
+            index = console.skill_index()
+            roles = []
+            for role in console.store.static()["roles"]:
+                linked = [index[i] for i in role.get("skill_link_ids", []) if i in index]
+                roles.append({**role, "skills": [
+                    {"skill_id": s["skill_id"], "name": s["name"], "invoke_name": s["invoke_name"],
+                     "scope": s["scope"], "description": (s["description"] or {}).get("value")}
+                    for s in linked]})
+            return {"roles": roles}
+
+        def _config_view(self) -> dict:
+            conf = console.store.conf
+            return {"config": {k: v for k, v in conf.items()}, "state_dir": str(cfg.state_dir()),
+                    "herdr_binary": herdr.binary(conf.get("herdr_bin", ""))}
+
+        def _config_update(self, body: dict) -> dict:
+            with console.lock:
+                conf = cfg.load()
+                for key in CONFIG_WRITABLE & body.keys():
+                    value = body[key]
+                    if key == "usage_days":
+                        try:
+                            value = max(1, min(365, int(value)))
+                        except (TypeError, ValueError):
+                            continue
+                    if key == "project_roots":
+                        if not isinstance(value, list):
+                            continue
+                        value = [str(v) for v in value if isinstance(v, str) and v.strip()][:20]
+                    if key in ("advanced_mode", "usage_enabled"):
+                        value = bool(value)
+                    conf[key] = value
+                toggles = body.get("source_enabled")
+                if isinstance(toggles, dict):
+                    for src in conf.get("sources", []):
+                        if src["source_id"] in toggles:
+                            src["enabled"] = bool(toggles[src["source_id"]])
+                cfg.save(conf)
+                console.store.conf = conf
+            return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
+                    or "project_roots" in body}
+
+    return Handler
+
+
+def serve(port: int | None = None, open_browser: bool = False) -> None:
+    conf = cfg.load()
+    port = int(port or conf.get("port") or cfg.DEFAULT_PORT)
+    console = Console(port)
+    console.store.static()  # load cached index or perform the first scan
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
+    url = f"http://127.0.0.1:{port}/"
+    print(f"SID Console 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
+    if open_browser:
+        import webbrowser
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
