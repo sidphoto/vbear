@@ -695,6 +695,138 @@ class StatePermissionTests(unittest.TestCase):  # L5
         (cfg.state_dir() / "t.json").unlink()
 
 
+class SlowHerdrTests(_HostileBase):  # AGY A1: a hung herdr must not stall the console
+    DELAY = 1.0  # seconds each fake herdr subcommand takes
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import time
+        from http.server import ThreadingHTTPServer
+        from sidconsole.server import Console, make_handler
+        cls.time = time
+        cls.log = HOSTILE / "slow-herdr.log"
+        fake = HOSTILE / "bin" / "slow-herdr"
+        fake.parent.mkdir(exist_ok=True)
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'echo "$@" >> "{cls.log}"\n'
+            f"sleep {cls.DELAY}\n"
+            'case "$1 $2" in\n'
+            ' "agent list") echo \'{"result":{"agents":[{"terminal_id":"t1","pane_id":"p1",'
+            '"agent":"claude","agent_status":"working","cwd":"/tmp"}]}}\';;\n'
+            ' "workspace list") echo \'{"result":{"workspaces":[]}}\';;\n'
+            ' "tab list") echo \'{"result":{"tabs":[]}}\';;\n'
+            ' "--version ") echo herdr-slow;;\n'
+            " *) echo '{}';;\nesac\n", encoding="utf-8")
+        fake.chmod(0o755)
+        cls.fake = str(fake)
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        port = cls.httpd.server_address[1]
+        cls.console = Console(port)
+        cls.httpd.RequestHandlerClass = make_handler(cls.console)
+        cls.base = f"http://127.0.0.1:{port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    req = ServerTests.req
+
+    def setUp(self):
+        conf = hostile_conf()
+        conf["herdr_bin"] = self.fake
+        conf["usage_enabled"] = False
+        self.store = self.console.store
+        self.store.conf = conf
+        self.store._static = build_static(conf)
+        self.store._live = None
+        self.log.write_text("", encoding="utf-8")
+
+    def rounds(self):
+        return self.log.read_text(encoding="utf-8").count("agent list")
+
+    def timed(self, fn):
+        start = self.time.monotonic()
+        result = fn()
+        return result, self.time.monotonic() - start
+
+    def in_background(self, fn, n=1):
+        threads = [threading.Thread(target=fn, daemon=True) for _ in range(n)]
+        for t in threads:
+            t.start()
+        return threads
+
+    def test_skill_library_answers_while_herdr_is_slow(self):
+        threads = self.in_background(lambda: self.store.live(force=True))
+        self.time.sleep(0.3)  # the live build is now inside herdr
+        _, took = self.timed(self.store.static)
+        self.assertLess(took, 0.5)
+        (status, data, _), took = self.timed(lambda: self.req("/api/skills"))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["skills"])
+        self.assertLess(took, 1.0)
+        for t in threads:
+            t.join(10)
+
+    def test_snapshot_calls_run_in_parallel(self):
+        snap, took = self.timed(lambda: herdr.snapshot(self.fake))
+        self.assertTrue(snap["available"])
+        self.assertEqual(snap["version"], "herdr-slow")
+        self.assertEqual(len(snap["agents"]), 1)
+        self.assertLess(took, 2 * self.DELAY)  # serial would be 4 x DELAY
+        calls = self.log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(sorted(calls), ["--version", "agent list", "tab list", "workspace list"])
+
+    def test_concurrent_live_requests_share_one_herdr_round(self):
+        results = []
+        _, took = self.timed(lambda: [t.join(10) for t in self.in_background(
+            lambda: results.append(self.store.live()), n=6)])
+        self.assertEqual(len(results), 6)
+        self.assertEqual(self.rounds(), 1)
+        self.assertLess(took, 2 * self.DELAY)
+        self.assertTrue(all(r is results[0] for r in results))
+
+    def test_stale_view_is_served_while_one_refresh_runs(self):
+        self.store.live()
+        self.store._live_at -= 60  # expire the cache
+        self.log.write_text("", encoding="utf-8")
+        builder = self.in_background(self.store.live)
+        self.time.sleep(0.3)
+        results = []
+        _, took = self.timed(lambda: [t.join(10) for t in self.in_background(
+            lambda: results.append(self.store.live()), n=5)])
+        self.assertLess(took, 0.5)
+        self.assertEqual(len(results), 5)
+        for t in builder:
+            t.join(10)
+        self.assertEqual(self.rounds(), 1)
+
+    def test_forced_refresh_uses_a_snapshot_taken_after_the_request(self):
+        self.store.live()
+        self.log.write_text("", encoding="utf-8")
+        results = []
+        threads = self.in_background(lambda: results.append(self.store.live(force=True)), n=4)
+        for t in threads:
+            t.join(15)
+        self.assertEqual(len(results), 4)
+        self.assertLessEqual(self.rounds(), 2)  # never one round per request
+        self.assertGreaterEqual(self.rounds(), 1)
+
+    def test_skill_detail_does_not_wait_for_herdr_when_a_view_exists(self):
+        self.store.live()
+        self.store._live_at -= 60
+        self.log.write_text("", encoding="utf-8")
+        sid = next(s["skill_id"] for s in self.store.static()["skills"] if s["name"] == "good")
+        (status, _, _), took = self.timed(lambda: self.req(f"/api/skills/{sid}"))
+        self.assertEqual(status, 200)
+        self.assertLess(took, 0.5)
+        self.time.sleep(2 * self.DELAY + 0.5)  # let the background refresh finish
+        self.assertEqual(self.rounds(), 1)
+
+
 def tearDownModule():
     shutil.rmtree(FAKE_HOME, ignore_errors=True)
 

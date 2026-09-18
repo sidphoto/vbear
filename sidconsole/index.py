@@ -317,29 +317,53 @@ def _resolve_usage(key: str, skills: list[dict], tool: str) -> tuple[list[str], 
 
 
 class Store:
-    """Holds the cached static index and a TTL-cached live view."""
+    """Holds the cached static index and a TTL-cached live view.
+
+    Nothing slow runs under a lock that other requests need. herdr calls and
+    usage parsing happen outside every lock, so a hung herdr can delay the
+    live view but never the skill library:
+      _lock       guards the swap of _static / conf (held only for assignments)
+      _scan_lock  serialises full scans (first load and rescan)
+      _live_cond  single-flight for the live view: one build at a time; other
+                  callers reuse the result of that build, or the last one.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._scan_lock = threading.Lock()
+        self._live_cond = threading.Condition()
         self._static: dict | None = None
         self._live: dict | None = None
-        self._live_at = 0.0
+        self._live_at = 0.0        # monotonic time the cached build finished
+        self._live_started = 0.0   # monotonic time the cached build started
+        self._live_building = False
+        self._live_epoch = 0       # bumped by rescan; older builds are not cached
         cfg.ensure_state_dir()  # also tightens a state dir made by an older version
         self.conf = cfg.load()
 
     # static
     def static(self) -> dict:
-        with self._lock:
+        data = self._static
+        if data is not None:
+            return data
+        with self._scan_lock:
             if self._static is None:
-                self._static = self._load_or_scan()
+                data = self._load_or_scan()
+                with self._lock:
+                    self._static = data
             return self._static
 
     def rescan(self) -> dict:
-        with self._lock:
-            self.conf = cfg.load()
-            self._static = self._scan()
-            self._live = None
-            return self._static
+        with self._scan_lock:
+            conf = cfg.load()
+            self.conf = conf
+            data = self._scan()
+            with self._lock:
+                self._static = data
+            with self._live_cond:
+                self._live = None
+                self._live_epoch += 1
+            return data
 
     def _load_or_scan(self) -> dict:
         path = cfg.index_path()
@@ -364,14 +388,57 @@ class Store:
         return data
 
     # live
-    def live(self, force: bool = False) -> dict:
-        static = self.static()
-        with self._lock:
-            if not force and self._live and time.time() - self._live_at < LIVE_TTL_S:
-                return self._live
-            self._live = build_live(self.conf, static)
-            self._live_at = time.time()
-            return self._live
+    def live(self, force: bool = False, stale_ok: bool = False) -> dict:
+        """The live view, rebuilt at most every LIVE_TTL_S seconds.
+
+        force     the result must come from a herdr call that started after
+                  this request (focus validation relies on this).
+        stale_ok  any cached view will do; a refresh runs in the background.
+                  For pages that only decorate static data with usage.
+        While a build is running, other non-forced callers get the previous
+        view if there is one; everyone else waits for that build instead of
+        calling herdr again.
+        """
+        asked = time.monotonic()
+        with self._live_cond:
+            while True:
+                cached = self._live
+                if force:
+                    if cached is not None and self._live_started >= asked:
+                        return cached
+                elif cached is not None:
+                    if time.monotonic() - self._live_at < LIVE_TTL_S:
+                        return cached
+                    if self._live_building:
+                        return cached
+                    if stale_ok:
+                        self._live_building = True
+                        threading.Thread(target=self._build_live, daemon=True,
+                                         name="sid-console-live").start()
+                        return cached
+                if not self._live_building:
+                    self._live_building = True
+                    break
+                self._live_cond.wait()
+        return self._build_live()
+
+    def _build_live(self) -> dict:
+        """Run one build; the caller has already set _live_building."""
+        data = None
+        try:
+            with self._live_cond:
+                epoch = self._live_epoch
+            started = time.monotonic()
+            data = build_live(self.conf, self.static())
+            return data
+        finally:
+            with self._live_cond:
+                if data is not None and epoch == self._live_epoch:
+                    self._live = data
+                    self._live_started = started
+                    self._live_at = time.monotonic()
+                self._live_building = False
+                self._live_cond.notify_all()
 
 
 def build_live(conf: dict, static: dict) -> dict:

@@ -36,6 +36,17 @@ const $main = () => document.getElementById("main");
 let seq = 0;
 function claim(token) { return token === seq ? $main() : document.createElement("div"); }
 
+// Typing fires one search after a short pause instead of one per keystroke.
+// .now() runs it at once (Enter, example buttons) and drops the pending one.
+function debounce(fn, ms = 200) {
+  let timer = null;
+  const run = () => { clearTimeout(timer); timer = null; fn(); };
+  const wrapped = () => { clearTimeout(timer); timer = setTimeout(run, ms); };
+  wrapped.now = run;
+  wrapped.cancel = () => { clearTimeout(timer); timer = null; };
+  return wrapped;
+}
+
 const api = {
   async get(path) {
     // The custom header lets the server tell its own page from a cross-site request.
@@ -362,8 +373,9 @@ async function viewHome() {
     setKids(results, ...(hits.length ? hits.map((h) => skillCard(h.s, h.why)) : [emptyState("沒有找到可使用的技能", "試試別的說法，或到技能庫顯示全部來源")]),
       hits.length ? el("a", { class: "btn", href: `#/skills?q=${encodeURIComponent(q)}`, style: "align-self:start" }, "在技能庫看全部結果 →") : null);
   };
-  input.addEventListener("input", runSearch);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; });
+  const searchSoon = debounce(runSearch);
+  input.addEventListener("input", searchSoon);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
@@ -379,7 +391,7 @@ async function viewHome() {
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
       el("div", { class: "search" }, input),
       el("div", { class: "search-hint" }, el("span", { class: "small muted" }, "試試："),
-        examples.map((w) => el("button", { type: "button", on: { click: () => { input.value = w; runSearch(); input.focus(); } } }, w))),
+        examples.map((w) => el("button", { type: "button", on: { click: () => { input.value = w; searchSoon.now(); input.focus(); } } }, w))),
       results),
     el("section", { class: "section" },
       sectionHead("最近的專案", null, el("a", { class: "btn small", href: "#/projects" }, "全部專案")),
@@ -436,6 +448,38 @@ async function viewSkills(params) {
   const save = () => store.set("skillFilters", { tool: f.tool, act: f.act, scope: f.scope, cat: f.cat, mine: f.mine });
   const myTags = [...new Set(D.skills.flatMap((s) => ann(s).tags || []))].sort();
 
+  // Results come in batches so a large library stays quick to paint; the
+  // "more" button appends the next batch and a new filter starts over.
+  const PAGE = { card: 240, list: 400 };
+  let shown = 0;
+  let hits = [];
+  const card = ({ s, why }) => skillCard(s, why);
+  const row = ({ s, why }) => el("tr", null,
+    el("td", null, el("a", { href: `#/skills/${s.skill_id}` }, displayName(s)), displayName(s) !== s.name ? el("div", { class: "small muted mono" }, s.name) : null, (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine" }, "#" + t))) : null, (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
+    el("td", null, firstSentence(s.description && s.description.value, 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null),
+    el("td", null, TOOL[s.tool] || s.tool),
+    el("td", null, SCOPE[s.scope] || s.scope, s.origin_package && s.origin_package.version ? el("div", { class: "small muted" }, s.origin_package.version) : null),
+    el("td", null, actBadge(s.activation)));
+  const more = el("button", { type: "button", class: "btn", style: "margin-top:14px", on: { click: showMore } });
+  let holder = null;  // grid or tbody that the next batch is appended to
+
+  function showMore() {
+    if (token !== seq || !holder) return;
+    const batch = hits.slice(shown, shown + PAGE[f.view === "list" ? "list" : "card"]);
+    const nodes = batch.map(f.view === "list" ? row : card);
+    append(holder, nodes);
+    shown += batch.length;
+    updateMore();
+    // keep keyboard users where the new items start
+    const first = nodes[0] && (nodes[0].matches("a") ? nodes[0] : nodes[0].querySelector("a"));
+    if (first) first.focus();
+  }
+  function updateMore() {
+    const left = hits.length - shown;
+    more.hidden = left <= 0;
+    more.textContent = `顯示更多（剩 ${left} 筆）`;
+  }
+
   function draw() {
     let pool = D.skills;
     if (f.tool) pool = pool.filter((s) => s.tool === f.tool);
@@ -444,27 +488,31 @@ async function viewSkills(params) {
     if (f.cat) pool = pool.filter((s) => (s.categories || []).some((c) => c.id === f.cat));
     if (f.mine === "*") pool = pool.filter((s) => s.annotation);
     else if (f.mine) pool = pool.filter((s) => (ann(s).tags || []).includes(f.mine));
-    const hits = searchSkills(f.q, pool);
+    hits = searchSkills(f.q, pool);
+    shown = 0;
+    holder = null;
     count.textContent = `${hits.length} / ${D.skills.length} 個技能紀錄`;
     if (!hits.length) {
       setKids(out, emptyState("沒有符合條件的技能", f.act === "active" ? "目前只顯示「可使用」的技能，可把狀態改成「全部」再找一次" : "試著放寬篩選條件"));
       return;
     }
     if (f.view === "list") {
+      holder = el("tbody");
       setKids(out, el("div", { class: "panel table-wrap" }, el("table", { class: "list" },
         el("thead", null, el("tr", null, ["名稱", "用途", "工具", "範圍", "狀態"].map((h) => el("th", { scope: "col" }, h)))),
-        el("tbody", null, hits.slice(0, 400).map(({ s, why }) => el("tr", null,
-          el("td", null, el("a", { href: `#/skills/${s.skill_id}` }, displayName(s)), displayName(s) !== s.name ? el("div", { class: "small muted mono" }, s.name) : null, (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine" }, "#" + t))) : null, (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
-          el("td", null, firstSentence(s.description && s.description.value, 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null),
-          el("td", null, TOOL[s.tool] || s.tool),
-          el("td", null, SCOPE[s.scope] || s.scope, s.origin_package && s.origin_package.version ? el("div", { class: "small muted" }, s.origin_package.version) : null),
-          el("td", null, actBadge(s.activation))))))));
+        holder)), more);
     } else {
-      setKids(out, el("div", { class: "grid" }, hits.slice(0, 240).map(({ s, why }) => skillCard(s, why))),
-        hits.length > 240 ? el("p", { class: "small muted" }, `只顯示前 240 筆，請用搜尋或篩選縮小範圍。`) : null);
+      holder = el("div", { class: "grid" });
+      setKids(out, holder, more);
     }
+    const batch = hits.slice(0, PAGE[f.view === "list" ? "list" : "card"]);
+    append(holder, batch.map(f.view === "list" ? row : card));
+    shown = batch.length;
+    updateMore();
   }
-  q.addEventListener("input", () => { f.q = q.value; history.replaceState(null, "", `#/skills${f.q ? "?q=" + encodeURIComponent(f.q) : ""}`); draw(); });
+  const search = debounce(() => { f.q = q.value; history.replaceState(null, "", `#/skills${f.q ? "?q=" + encodeURIComponent(f.q) : ""}`); draw(); });
+  q.addEventListener("input", search);
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter") search.now(); });
 
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
@@ -872,6 +920,7 @@ function setTheme(v) {
 
 let liveTimer = null;
 let liveTick = null;
+let routedHash = null;
 function parseHash() {
   const raw = location.hash.replace(/^#/, "") || "/";
   const [path, qs] = raw.split("?");
@@ -881,6 +930,7 @@ function parseHash() {
 
 async function route() {
   seq += 1;
+  routedHash = location.hash;
   const { parts, params } = parseHash();
   const top = parts[0] || "home";
   document.querySelectorAll("[data-nav]").forEach((a) => {
@@ -926,5 +976,21 @@ async function route() {
 setTheme(store.get("theme", "auto"));
 // Coming back from herdr to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick) liveTick(); });
-window.addEventListener("hashchange", () => { scrollTo(0, 0); route(); document.getElementById("main").focus({ preventScroll: true }); });
+// The skip link moves focus only; it must not become a route ("#main" is not a page).
+function skipToMain(e) {
+  if (e) e.preventDefault();
+  const main = $main();
+  main.focus({ preventScroll: true });
+  main.scrollIntoView({ block: "start" });
+}
+document.querySelector("a.skip").addEventListener("click", skipToMain);
+window.addEventListener("hashchange", () => {
+  if (location.hash === "#main" && routedHash !== null) {  // reached without the click handler
+    history.replaceState(null, "", routedHash || location.pathname + location.search);
+    skipToMain();
+    return;
+  }
+  scrollTo(0, 0); route(); document.getElementById("main").focus({ preventScroll: true });
+});
+if (location.hash === "#main") history.replaceState(null, "", location.pathname + location.search);
 route();

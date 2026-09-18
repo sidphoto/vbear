@@ -73,7 +73,7 @@ class Console:
 
     def usage_for_skill(self, skill_id: str) -> list[dict]:
         rows = []
-        for sess in self.store.live()["usage"]["sessions"]:
+        for sess in self.store.live(stale_ok=True)["usage"]["sessions"]:
             for used in sess["skills"]:
                 if skill_id in used["skill_ids"]:
                     rows.append({"session_id": sess["session_id"], "tool": sess["tool"],

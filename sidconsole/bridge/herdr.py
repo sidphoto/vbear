@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 # Must not start with "-" (herdr would read it as an option such as --help).
 # `herdr agent focus` takes exactly one argument and has no "--" separator
@@ -54,20 +55,31 @@ def _run(bin_path: str | None, *args: str) -> dict:
     return {"ok": True, "data": payload.get("result", payload)}
 
 
+def _version(bin_path: str | None) -> str | None:
+    if not bin_path:
+        return None
+    try:
+        proc = subprocess.run([bin_path, "--version"], capture_output=True, text=True,
+                              timeout=TIMEOUT_S, check=False, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout.strip() or None
+
+
 def snapshot(configured_bin: str = "") -> dict:
-    """Agents, workspaces and tabs in one call set. Partial failures are kept."""
+    """Agents, workspaces and tabs in one call set. Partial failures are kept.
+
+    The four CLI calls are independent, so they run side by side: a stuck
+    herdr costs about one TIMEOUT_S, not four.
+    """
     bin_path = binary(configured_bin)
-    agents = _run(bin_path, "agent", "list")
-    workspaces = _run(bin_path, "workspace", "list")
-    tabs = _run(bin_path, "tab", "list")
-    version = None
-    if bin_path:
-        try:
-            proc = subprocess.run([bin_path, "--version"], capture_output=True, text=True,
-                                  timeout=TIMEOUT_S, check=False, stdin=subprocess.DEVNULL)
-            version = proc.stdout.strip() or None
-        except (OSError, subprocess.TimeoutExpired):
-            version = None
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="herdr") as pool:
+        f_agents = pool.submit(_run, bin_path, "agent", "list")
+        f_workspaces = pool.submit(_run, bin_path, "workspace", "list")
+        f_tabs = pool.submit(_run, bin_path, "tab", "list")
+        f_version = pool.submit(_version, bin_path)
+        agents, workspaces, tabs = f_agents.result(), f_workspaces.result(), f_tabs.result()
+        version = f_version.result()
     problems = [r["error"] for r in (agents, workspaces, tabs) if not r["ok"]]
     return {
         "available": agents["ok"],
