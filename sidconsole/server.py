@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import annotations
 from . import config as cfg
 from .bridge import herdr
 from .index import STALE_AFTER_S, Store
@@ -177,6 +178,13 @@ def make_handler(console: Console):
                                        "scan_seconds": data["scan_seconds"]})
                 if path == "/api/config":
                     return self._json(self._config_update(self._body()))
+                if path == "/api/annotations":
+                    body = self._body()
+                    try:
+                        saved = annotations.save(str(body.get("key", "")), body)
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
+                    return self._json({"ok": True, "annotation": saved})
                 if path == "/api/focus":
                     target = str(self._body().get("target", ""))
                     return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
@@ -226,8 +234,11 @@ def make_handler(console: Console):
 
         def _skills(self) -> dict:
             items = []
+            notes = annotations.load()
             for s in console.store.static()["skills"]:
                 item = {k: s.get(k) for k in SKILL_SUMMARY_FIELDS}
+                item["annotation_key"] = annotations.key_for(s)
+                item["annotation"] = notes.get(item["annotation_key"])
                 when = s.get("when_to_use") or {}
                 item["when_to_use"] = {"value": str(when.get("value") or "")[:SEARCH_EXCERPT_CHARS],
                                        "origin": when.get("origin")}
@@ -252,8 +263,11 @@ def make_handler(console: Console):
                      "activation": index[d]["activation"], "path": index[d]["path"],
                      "origin_package": index[d]["origin_package"]}
                     for d in skill.get("duplicate_of", []) if d in index]
+            key = annotations.key_for(skill)
             return self._json({
                 "skill": skill,
+                "annotation_key": key,
+                "annotation": annotations.load().get(key),
                 "raw": raw,
                 "raw_error": raw_error,
                 "roles": console.roles_for_skill(skill_id),

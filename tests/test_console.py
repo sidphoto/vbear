@@ -239,6 +239,43 @@ class ServerTests(unittest.TestCase):
         self.req("/api/rescan", "POST", body={}, headers={"X-SID-Console": "1"})
         self.assertFalse(self.req("/api/overview")[1]["stale"])
 
+    def test_annotations_never_touch_skill_files(self):
+        import hashlib
+        def snapshot():
+            out = {}
+            for root in (".claude", ".codex", ".agents"):
+                for p in (FAKE_HOME / root).rglob("*"):
+                    if p.is_file():
+                        out[str(p)] = (hashlib.sha256(p.read_bytes()).hexdigest(), p.stat().st_mtime_ns)
+            return out
+        before = snapshot()
+        _, data, _ = self.req("/api/skills")
+        claude_alpha = next(s for s in data["skills"] if s["name"] == "alpha" and s["tool"] == "claude")
+        codex_alpha = next(s for s in data["skills"] if s["name"] == "alpha" and s["tool"] == "codex")
+        self.assertNotEqual(claude_alpha["annotation_key"], codex_alpha["annotation_key"])
+        hdr = {"X-SID-Console": "1"}
+        status, saved, _ = self.req("/api/annotations", "POST", headers=hdr, body={
+            "key": claude_alpha["annotation_key"], "aliases": "網站健檢，資安", "tags": ["上線前"] * 3 + ["x" * 99],
+            "note": "n" * 5000})
+        self.assertEqual(status, 200)
+        a = saved["annotation"]
+        self.assertEqual(a["aliases"], ["網站健檢", "資安"])
+        self.assertEqual(a["tags"], ["上線前", "x" * 60])
+        self.assertEqual(len(a["note"]), 2000)
+        _, data, _ = self.req("/api/skills")
+        by_id = {s["skill_id"]: s for s in data["skills"]}
+        self.assertEqual(by_id[claude_alpha["skill_id"]]["annotation"]["aliases"][0], "網站健檢")
+        self.assertIsNone(by_id[codex_alpha["skill_id"]]["annotation"])
+        _, detail, _ = self.req(f"/api/skills/{claude_alpha['skill_id']}")
+        self.assertEqual(detail["annotation"]["tags"], ["上線前", "x" * 60])
+        # empty annotation clears it
+        self.req("/api/annotations", "POST", headers=hdr, body={"key": claude_alpha["annotation_key"]})
+        _, detail, _ = self.req(f"/api/skills/{claude_alpha['skill_id']}")
+        self.assertIsNone(detail["annotation"])
+        self.assertEqual(self.req("/api/annotations", "POST", headers=hdr, body={"key": "bad"})[0], 400)
+        self.assertEqual(self.req("/api/annotations", "POST", body={"key": "claude:alpha", "tags": "x"})[0], 403)
+        self.assertEqual(before, snapshot())
+
     def test_bad_host_rejected(self):
         self.assertEqual(self.req("/api/skills", headers={"Host": "evil.example"})[0], 421)
 

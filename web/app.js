@@ -31,6 +31,10 @@ function append(node, kids) {
 }
 function setKids(node, ...kids) { node.replaceChildren(); return append(node, kids); }
 const $main = () => document.getElementById("main");
+// Navigation sequence: a view that finishes loading after the user has already
+// moved on must not paint over the newer page.
+let seq = 0;
+function claim(token) { return token === seq ? $main() : document.createElement("div"); }
 
 const api = {
   async get(path) {
@@ -88,6 +92,7 @@ const PROV = {
   derived: ["自動整理", "由主控台依文件結構或關鍵字整理，不是作者的聲明"],
   runtime: ["執行觀察", "從實際執行紀錄觀察到"],
   missing: ["未提供", "來源沒有提供這項資訊"],
+  user: ["我的註記", "你在主控台加上的註記，只存在主控台，不會寫回技能檔"],
 };
 const BASIS = {
   load_scope: "依載入範圍：技能位於此工具會載入的目錄且未停用",
@@ -188,6 +193,8 @@ async function rescan(ev) {
 // ---------- search ---------------------------------------------------------
 
 function norm(s) { return String(s || "").toLowerCase(); }
+function ann(s) { return s.annotation || {}; }
+function displayName(s) { return (ann(s).aliases || [])[0] || s.name; }
 
 function searchSkills(query, pool) {
   const q = norm(query).trim();
@@ -209,7 +216,14 @@ function searchSkills(query, pool) {
     const desc = norm(s.description && s.description.value);
     const when = norm(s.when_to_use && s.when_to_use.value);
     let score = 0; const why = [];
+    const a = ann(s);
+    const aliases = (a.aliases || []).map(norm), tags = (a.tags || []).map(norm), note = norm(a.note);
+    if (aliases.some((x) => x === q)) { score += 120; why.push("我的別名"); }
+    if (tags.some((x) => x === q)) { score += 60; why.push("我的標籤"); }
     for (const t of terms) {
+      if (aliases.some((x) => x.includes(t))) { score += 45; why.push("我的別名"); }
+      if (tags.some((x) => x.includes(t))) { score += 30; why.push("我的標籤"); }
+      if (note.includes(t)) { score += 10; why.push("我的備註"); }
       if (name === t || inv === t) { score += 100; why.push("名稱相符"); }
       else if (name.includes(t) || inv.includes(t)) { score += 40; why.push("名稱包含"); }
       if (desc.includes(t)) { score += 18; why.push("用途描述"); }
@@ -228,12 +242,13 @@ function skillCard(s, why) {
   return el("a", { class: "card", href: `#/skills/${s.skill_id}` },
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
-        el("div", { class: "card-title" }, s.name),
-        el("div", { class: "card-sub mono" }, s.invoke_name !== s.name ? `呼叫名稱 ${s.invoke_name}` : SCOPE[s.scope] || s.scope)),
+        el("div", { class: "card-title" }, displayName(s)),
+        el("div", { class: "card-sub mono" }, displayName(s) !== s.name ? `原名 ${s.invoke_name}` : s.invoke_name !== s.name ? `呼叫名稱 ${s.invoke_name}` : SCOPE[s.scope] || s.scope)),
       actBadge(s.activation)),
     s.description && s.description.value
       ? el("p", { class: "clamp" }, firstSentence(s.description.value, 170))
       : el("p", { class: "muted" }, "作者沒有提供用途描述"),
+    (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine", title: "我的標籤" }, "#" + t))) : null,
     el("div", { class: "chips" },
       toolTag(s.tool),
       el("span", { class: "tag" }, SCOPE[s.scope] || s.scope),
@@ -333,9 +348,10 @@ function sectionHead(title, sub, action) {
 // ---------- views ----------------------------------------------------------
 
 async function viewHome() {
+  const token = seq;
   await Promise.all([loadStatic(), loadLive()]);
   const L = D.live;
-  const main = $main();
+  const main = claim(token);
   const input = el("input", { type: "search", placeholder: "想做什麼？例如：網站安全檢查、做簡報、剪影片、部署…", "aria-label": "用途搜尋技能" });
   const results = el("div", { class: "grid", style: "margin-top:14px" });
   const runSearch = () => {
@@ -349,7 +365,6 @@ async function viewHome() {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
-  const attention = (L.attention || []).map((id) => L.sessions.find((s) => s.terminal_id === id)).filter(Boolean);
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
 
@@ -358,10 +373,7 @@ async function viewHome() {
     el("p", { class: "lede" }, "先看需要你處理的事，再找適合這次任務的技能。"),
     staleNotice(),
     herdrNotice(),
-    el("section", { class: "section", "aria-labelledby": "h-att" },
-      sectionHead("需要你處理", attention.length ? `${attention.length} 個 Terminal 在等你` : null),
-      attention.length ? el("div", { class: "grid", id: "h-att" }, attention.map(sessionCard))
-        : emptyState(L.herdr && L.herdr.available ? "目前沒有等你回覆或待查看的工作" : "herdr 未連線，無法判斷", null)),
+    el("section", { class: "section", id: "h-att-wrap" }, attentionSection()),
     el("section", { class: "section" },
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
       el("div", { class: "search" }, input),
@@ -376,6 +388,16 @@ async function viewHome() {
       el("div", { class: "grid" }, problemSkills.slice(0, 6).map((s) => skillCard(s)))) : null,
   );
   setTimeout(() => input.focus(), 0);
+}
+
+function attentionSection() {
+  const L = D.live;
+  const attention = (L.attention || []).map((id) => L.sessions.find((s) => s.terminal_id === id)).filter(Boolean);
+  return [
+    sectionHead("需要你處理", attention.length ? `${attention.length} 個 Terminal 在等你・每 5 秒更新` : "每 5 秒更新"),
+    attention.length ? el("div", { class: "grid" }, attention.map(sessionCard))
+      : emptyState(L.herdr && L.herdr.available ? "目前沒有等你回覆或待查看的工作" : "herdr 未連線，無法判斷", null),
+  ];
 }
 
 function projectCard(p) {
@@ -394,10 +416,11 @@ function projectCard(p) {
 }
 
 async function viewSkills(params) {
+  const token = seq;
   await loadStatic();
-  const f = Object.assign({ q: "", tool: "", act: "active", scope: "", cat: "", view: store.get("view", "card") }, store.get("skillFilters", {}), params);
+  const f = Object.assign({ q: "", tool: "", act: "active", scope: "", cat: "", mine: "", view: store.get("view", "card") }, store.get("skillFilters", {}), params);
   if (params.q !== undefined) f.q = params.q;
-  const main = $main();
+  const main = claim(token);
 
   const q = el("input", { type: "search", value: f.q, placeholder: "搜尋名稱、用途或描述（中英文皆可）", "aria-label": "搜尋技能" });
   const sel = (label, key, options) => {
@@ -409,7 +432,8 @@ async function viewSkills(params) {
     [["card", "卡片"], ["list", "列表"]].map(([v, t]) => el("button", { type: "button", "aria-pressed": String(f.view === v), on: { click: () => { f.view = v; store.set("view", v); seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.textContent === t))); draw(); } } }, t)));
   const count = el("span", { class: "count", "aria-live": "polite" });
   const out = el("div");
-  const save = () => store.set("skillFilters", { tool: f.tool, act: f.act, scope: f.scope, cat: f.cat });
+  const save = () => store.set("skillFilters", { tool: f.tool, act: f.act, scope: f.scope, cat: f.cat, mine: f.mine });
+  const myTags = [...new Set(D.skills.flatMap((s) => ann(s).tags || []))].sort();
 
   function draw() {
     let pool = D.skills;
@@ -417,6 +441,8 @@ async function viewSkills(params) {
     if (f.act) pool = pool.filter((s) => s.activation === f.act);
     if (f.scope) pool = pool.filter((s) => s.scope === f.scope);
     if (f.cat) pool = pool.filter((s) => (s.categories || []).some((c) => c.id === f.cat));
+    if (f.mine === "*") pool = pool.filter((s) => s.annotation);
+    else if (f.mine) pool = pool.filter((s) => (ann(s).tags || []).includes(f.mine));
     const hits = searchSkills(f.q, pool);
     count.textContent = `${hits.length} / ${D.skills.length} 個技能紀錄`;
     if (!hits.length) {
@@ -427,7 +453,7 @@ async function viewSkills(params) {
       setKids(out, el("div", { class: "panel table-wrap" }, el("table", { class: "list" },
         el("thead", null, el("tr", null, ["名稱", "用途", "工具", "範圍", "狀態"].map((h) => el("th", { scope: "col" }, h)))),
         el("tbody", null, hits.slice(0, 400).map(({ s, why }) => el("tr", null,
-          el("td", null, el("a", { href: `#/skills/${s.skill_id}` }, s.name), (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
+          el("td", null, el("a", { href: `#/skills/${s.skill_id}` }, displayName(s)), displayName(s) !== s.name ? el("div", { class: "small muted mono" }, s.name) : null, (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine" }, "#" + t))) : null, (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
           el("td", null, firstSentence(s.description && s.description.value, 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null),
           el("td", null, TOOL[s.tool] || s.tool),
           el("td", null, SCOPE[s.scope] || s.scope, s.origin_package && s.origin_package.version ? el("div", { class: "small muted" }, s.origin_package.version) : null),
@@ -450,6 +476,7 @@ async function viewSkills(params) {
       sel("工具", "tool", [["", "全部"], ["claude", "Claude Code"], ["codex", "Codex CLI"], ["shared", "skills CLI"]]),
       sel("用途", "cat", [["", "全部"], ...D.categories.map((c) => [c.id, c.label])]),
       sel("範圍", "scope", [["", "全部"], ...Object.entries(SCOPE)]),
+      sel("我的註記", "mine", [["", "不限"], ["*", "有註記的"], ...myTags.map((t) => [t, "#" + t])]),
       seg, count),
     el("div", { class: "legend", style: "margin-bottom:12px" },
       el("span", null, "用途分類為", el("b", null, "自動整理"), "（依描述關鍵字），滑過標籤可看到命中的字。")),
@@ -458,12 +485,14 @@ async function viewSkills(params) {
 }
 
 async function viewSkillDetail(id) {
+  const token = seq;
   await loadStatic();
-  const main = $main();
+  const main = claim(token);
   setKids(main, el("p", { class: "loading" }, "載入中…"));
   let d;
   try { d = await api.get(`/api/skills/${encodeURIComponent(id)}`); }
   catch (e) { setKids(main, crumbs([["技能庫", "#/skills"]]), notice("bad", e.message)); return; }
+  if (token !== seq) return;
   const s = d.skill;
   const pkg = s.origin_package || {};
   const field = (title, src, emptyText) => el("div", { class: "field" },
@@ -480,7 +509,8 @@ async function viewSkillDetail(id) {
 
   setKids(main, 
     crumbs([["技能庫", "#/skills"], [s.name]]),
-    el("div", { class: "row" }, el("h1", null, s.name), actBadge(s.activation), toolTag(s.tool)),
+    el("div", { class: "row" }, el("h1", null, (d.annotation && (d.annotation.aliases || [])[0]) || s.name), actBadge(s.activation), toolTag(s.tool)),
+    d.annotation && (d.annotation.aliases || [])[0] ? el("p", { class: "small muted" }, "原名：", el("span", { class: "mono" }, s.name)) : null,
     s.invoke_name !== s.name ? el("p", { class: "small muted" }, "在工具中的呼叫名稱：", el("span", { class: "mono" }, s.invoke_name)) : null,
     el("p", { class: "lede" }, s.activation_reason),
     (s.warnings || []).length ? notice("warn", ["結構檢查：", s.warnings.join("；")]) : null,
@@ -496,6 +526,7 @@ async function viewSkillDetail(id) {
         (s.categories || []).length ? el("div", { class: "field" }, el("h3", null, "用途分類", prov({ origin: "derived", detail: "描述關鍵字" })),
           el("div", { class: "chips" }, s.categories.map((c) => el("span", { class: "tag cat" }, `${c.label}（命中「${c.keyword}」）`)))) : null),
       el("div", { style: "display:grid;gap:16px;align-content:start" },
+        annotationPanel(s, d.annotation_key, d.annotation),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "誰可以使用"),
           d.roles.length ? el("ul", { class: "tree" }, d.roles.map((r) => el("li", null,
@@ -544,6 +575,35 @@ async function viewSkillDetail(id) {
   window.scrollTo(0, 0);
 }
 
+function annotationPanel(s, key, a) {
+  a = a || {};
+  const aliases = el("input", { type: "text", value: (a.aliases || []).join(", "), placeholder: "例如：網站資安健檢", maxlength: 320 });
+  const tags = el("input", { type: "text", value: (a.tags || []).join(", "), placeholder: "例如：上線前, 資安", maxlength: 720 });
+  const note = el("textarea", { rows: 3, placeholder: "什麼時候用、用過的心得…", maxlength: 2000 }, a.note || "");
+  const status = el("span", { class: "small muted", "aria-live": "polite" },
+    a.updated_at ? `上次儲存 ${ago(a.updated_at)}` : "尚未加註記");
+  const btn = el("button", { class: "btn primary small", type: "submit" }, "儲存註記");
+  const form = el("form", { class: "annot", on: { submit: async (e) => {
+    e.preventDefault(); btn.disabled = true;
+    try {
+      const r = await api.post("/api/annotations", { key, aliases: aliases.value, tags: tags.value, note: note.value });
+      const saved = r.annotation && Object.keys(r.annotation).length ? r.annotation : null;
+      for (const x of D.skills) if (x.annotation_key === key) x.annotation = saved;
+      status.textContent = saved ? "已儲存" : "已清除註記";
+      toast(saved ? "註記已儲存（只存在主控台）" : "已清除註記");
+    } catch (err) { status.textContent = "儲存失敗：" + err.message; }
+    finally { btn.disabled = false; }
+  } } },
+    el("label", null, el("span", null, "易懂名稱", el("small", null, "逗號分隔，第一個會顯示在卡片上")), aliases),
+    el("label", null, el("span", null, "我的標籤", el("small", null, "逗號分隔")), tags),
+    el("label", null, el("span", null, "備註"), note),
+    el("div", { class: "row" }, btn, status));
+  return el("div", { class: "panel pad" },
+    el("h2", { style: "margin-bottom:4px" }, "我的註記"),
+    el("p", { class: "small muted", style: "margin:0 0 10px" }, prov({ origin: "user" }), " 不會修改技能檔。套用到所有 ", el("span", { class: "mono" }, key), " 的副本，外掛升級後仍保留。"),
+    form);
+}
+
 async function openRef(id, ref, box) {
   setKids(box, el("p", { class: "small muted" }, "載入中…"));
   try {
@@ -558,8 +618,9 @@ function crumbs(items) {
 }
 
 async function viewTeam() {
+  const token = seq;
   await Promise.all([loadStatic(), loadLive()]);
-  const main = $main();
+  const main = claim(token);
   const L = D.live;
   const tview = store.get("teamView", "card");
   const sessions = [...L.sessions].sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
@@ -603,9 +664,10 @@ async function viewTeam() {
 const STATUS_ORDER = { blocked: 0, done: 1, working: 2, idle: 3, unknown: 4 };
 
 async function viewRole(id) {
+  const token = seq;
   await Promise.all([loadStatic(), loadLive()]);
   const r = D.roles.find((x) => x.role_id === id);
-  const main = $main();
+  const main = claim(token);
   if (!r) { setKids(main, crumbs([["Agent 團隊", "#/team"]]), notice("bad", "找不到這個角色（索引可能已更新）")); return; }
   const sessions = r.kind === "cli" ? D.live.sessions.filter((s) => s.agent === r.tool) : [];
   const field = (title, src) => src && (src.value || src.origin !== "missing")
@@ -648,9 +710,10 @@ async function viewRole(id) {
 }
 
 async function viewProjects(id) {
+  const token = seq;
   await Promise.all([loadStatic(), loadLive()]);
   const L = D.live;
-  const main = $main();
+  const main = claim(token);
   const projects = L.projects || [];
   if (id) {
     const p = projects.find((x) => x.project_id === id);
@@ -721,9 +784,11 @@ function projectDetail(p) {
 }
 
 async function viewSettings() {
+  const token = seq;
   await loadStatic();
-  const main = $main();
+  const main = claim(token);
   const c = await api.get("/api/config");
+  if (token !== seq) return;
   const conf = c.config;
   const advanced = !!conf.advanced_mode;
   const sources = D.overview.sources;
@@ -805,6 +870,7 @@ function setTheme(v) {
 // ---------- router ---------------------------------------------------------
 
 let liveTimer = null;
+let liveTick = null;
 function parseHash() {
   const raw = location.hash.replace(/^#/, "") || "/";
   const [path, qs] = raw.split("?");
@@ -813,6 +879,7 @@ function parseHash() {
 }
 
 async function route() {
+  seq += 1;
   const { parts, params } = parseHash();
   const top = parts[0] || "home";
   document.querySelectorAll("[data-nav]").forEach((a) => {
@@ -833,18 +900,30 @@ async function route() {
   }
   // Live pages refresh their data quietly; they re-render only when nothing
   // is focused inside main, so typing and scrolling are never interrupted.
+  // Home refreshes only its attention block, so the search box keeps focus.
+  liveTick = null;
+  if (top === "home") {
+    liveTick = async () => {
+      const before = JSON.stringify(D.live.attention);
+      await loadLive();
+      const box = document.getElementById("h-att-wrap");
+      if (box && JSON.stringify(D.live.attention) !== before) setKids(box, attentionSection());
+    };
+  }
   if (top === "team" || top === "projects") {
-    liveTimer = setInterval(async () => {
-      if (document.hidden) return;
+    liveTick = async () => {
       const before = JSON.stringify(D.live && D.live.sessions.map((s) => [s.terminal_id, s.status, s.skills_used.length]));
       await loadLive();
       const after = JSON.stringify(D.live.sessions.map((s) => [s.terminal_id, s.status, s.skills_used.length]));
       const busy = $main().contains(document.activeElement) && document.activeElement !== $main();
       if (before !== after && !busy) { const y = scrollY; await route(); scrollTo(0, y); }
-    }, 5000);
+    };
   }
+  if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
 }
 
 setTheme(store.get("theme", "auto"));
+// Coming back from herdr to this tab: refresh at once instead of waiting.
+document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick) liveTick(); });
 window.addEventListener("hashchange", () => { scrollTo(0, 0); route(); document.getElementById("main").focus({ preventScroll: true }); });
 route();

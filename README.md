@@ -29,7 +29,7 @@ herdr plugin action invoke sid.console.open
 | 頁面 | 內容 |
 |---|---|
 | 我的工作台 | 等你回覆／待查看的 Terminal、用自然語言找技能、最近專案、有問題的技能 |
-| 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍篩選；詳情含同名比較、引用檔、原始 SKILL.md、使用紀錄 |
+| 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
 | Agent 團隊 | 工作中的 Terminal（角色名、本次模型、本次用過的技能、切換）與角色設定（主代理、子代理） |
 | 專案 | 依 git 儲存庫歸類：專案 → herdr workspace → 各角色 Terminal |
 | 設定 | 掃描來源開關、使用紀錄範圍、進階模式、資料流向說明 |
@@ -47,6 +47,14 @@ herdr plugin action invoke sid.console.open
 | 用途分類 | `sidconsole/categories.py` 關鍵字表 | 自動整理 |
 
 使用紀錄只擷取技能名稱、模型名稱、工作階段 ID、工作目錄與時間；對話內容不會被讀出或保存。可在設定頁關閉。
+
+## 我的註記
+
+在技能詳情頁可以加上易懂名稱、標籤與備註，搜尋時會一併比對，卡片會顯示你取的名稱並保留原名。
+
+- 只存在 `~/.sid-console/annotations.json`，不會修改任何技能檔。
+- 以「工具＋呼叫名稱」為鍵（例如 `claude:vercel:vercel-firewall`）：外掛升級後註記仍在；Claude 與 Codex 的同名技能各自獨立。
+- 畫面上標示為「我的註記」，和作者說明、自動整理分開。
 
 ## 技能狀態
 
@@ -69,7 +77,7 @@ herdr plugin action invoke sid.console.open
 
 ## 狀態目錄
 
-`~/.sid-console/`（可用 `SID_CONSOLE_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`server.log`。
+`~/.sid-console/`（可用 `SID_CONSOLE_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`annotations.json`、`server.log`。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
 
 ## 結構
 
@@ -80,7 +88,8 @@ sidconsole/
   scan/usage.py                       使用證據
   bridge/herdr.py                     herdr CLI 橋接
   index.py                            靜態索引＋即時視圖
+  annotations.py                      我的註記（別名、標籤、備註）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
-tests/                                17 項測試，全部使用合成的 HOME
+tests/                                20 項測試，全部使用合成的 HOME
 ```
