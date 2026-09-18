@@ -22,6 +22,7 @@ from .model import (
     ACT_ACTIVE, ACT_UNKNOWN, AgentRole, SkillRecord, Sourced, stable_id,
 )
 from .scan import claude, codex, shared, usage
+from .scan.document import MAX_FILE_BYTES
 
 HOME = Path.home()
 TOOL_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "shared": "skills CLI"}
@@ -96,23 +97,30 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
         if not row["exists"]:
             problems.append(f"來源不存在：{src.label}")
             continue
-        if src.kind in ("skills", "plugin_cache", "marketplace"):
-            if src.tool == "shared":
-                found = shared.scan_skills(src, c_facts)
-            elif src.tool == "claude":
-                found = claude.scan_skills(src, c_facts)
-            else:
-                found = codex.scan_skills(src, x_facts)
-            skills += found
-            row["count"] = len(found)
-        elif src.kind == "agents":
-            found = (claude.scan_agents(src) if src.tool == "claude"
-                     else codex.scan_agents(src, x_facts))
-            roles += found
-            row["count"] = len(found)
+        # Each file is isolated inside the scanners; this is the last line of
+        # defence so one broken source cannot abort the whole scan.
+        try:
+            if src.kind in ("skills", "plugin_cache", "marketplace"):
+                if src.tool == "shared":
+                    found = shared.scan_skills(src, c_facts)
+                elif src.tool == "claude":
+                    found = claude.scan_skills(src, c_facts)
+                else:
+                    found = codex.scan_skills(src, x_facts)
+                skills += found
+                row["count"] = len(found)
+            elif src.kind == "agents":
+                found = (claude.scan_agents(src) if src.tool == "claude"
+                         else codex.scan_agents(src, x_facts))
+                roles += found
+                row["count"] = len(found)
+        except Exception as exc:
+            problems.append(f"掃描來源失敗：{src.label}（{type(exc).__name__}）")
 
-    plugin_roles = claude.scan_plugin_agents(c_facts)
-    roles += plugin_roles
+    try:
+        roles += claude.scan_plugin_agents(c_facts)
+    except Exception as exc:
+        problems.append(f"掃描外掛代理失敗（{type(exc).__name__}）")
 
     roots = _candidate_project_roots(conf) + list(extra_project_roots or [])
     seen_roots: set[str] = set()
@@ -120,8 +128,12 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
         if src.path in seen_roots:
             continue
         seen_roots.add(src.path)
-        found = (claude.scan_skills(src, c_facts) if src.tool == "claude"
-                 else codex.scan_skills(src, x_facts))
+        try:
+            found = (claude.scan_skills(src, c_facts) if src.tool == "claude"
+                     else codex.scan_skills(src, x_facts))
+        except Exception as exc:
+            problems.append(f"掃描來源失敗：{src.label}（{type(exc).__name__}）")
+            continue
         for rec in found:
             rec.scope = "project"
             rec.origin_package = {**rec.origin_package, "project": root.name,
@@ -223,23 +235,27 @@ def _declared_skills(role: AgentRole) -> list[str] | None:
         return None
     path = Path(role.path)
     try:
+        if path.stat().st_size > MAX_FILE_BYTES:
+            return None
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    if path.suffix == ".md":
-        from .scan import frontmatter
-        meta, _ = frontmatter.parse(frontmatter.split(text)[0])
-        value = meta.get("skills")
-    else:
-        import tomllib
-        try:
+    try:
+        if path.suffix == ".md":
+            from .scan import frontmatter
+            meta, _ = frontmatter.parse(frontmatter.split(text)[0])
+            value = meta.get("skills")
+        else:
+            import tomllib
             value = tomllib.loads(text).get("skills")
-        except tomllib.TOMLDecodeError:
-            return None
+    except Exception:  # malformed or hostile file: treat as "does not say"
+        return None
     if value is None:
         return None
     if isinstance(value, str):
         value = [v.strip() for v in value.split(",")]
+    if not isinstance(value, list):
+        return None
     return [str(v).lower() for v in value if v]
 
 
@@ -308,6 +324,7 @@ class Store:
         self._static: dict | None = None
         self._live: dict | None = None
         self._live_at = 0.0
+        cfg.ensure_state_dir()  # also tightens a state dir made by an older version
         self.conf = cfg.load()
 
     # static
@@ -343,11 +360,7 @@ class Store:
             if root:
                 extra.append(root)
         data = build_static(self.conf, extra)
-        path = cfg.index_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+        cfg.write_private(cfg.index_path(), json.dumps(data, ensure_ascii=False))
         return data
 
     # live

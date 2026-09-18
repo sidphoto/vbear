@@ -65,14 +65,24 @@ def scan_skills(source: cfg.Source, facts: dict) -> list[SkillRecord]:
     root = source.resolved()
     out: list[SkillRecord] = []
     for path in walk.find_files(root, "SKILL.md"):
-        out.append(_build_skill(path, root, source, facts))
+        try:
+            out.append(_build_skill(path, root, source, facts))
+        except Exception as exc:  # one hostile file must not stop the scan
+            from .claude import failed_record
+            out.append(failed_record("codex", path, root, exc))
     return out
 
 
 def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> SkillRecord:
     scope, activation, reason = classify(path, source, facts)
-    raw = document.read_skill_file(path)
+    raw = document.read_skill_file(path, root)
     skill_dir = path.parent
+    if "skipped" in raw:  # outside the source root or too large: no content
+        return SkillRecord(
+            skill_id=stable_id("codex", str(path)), name=skill_dir.name, tool="codex",
+            scope=scope, activation=activation, activation_reason=reason,
+            path=str(path), root=str(root), warnings=[raw["skipped"]],
+        )
     if "error" in raw:
         return SkillRecord(
             skill_id=stable_id("codex", str(path)), name=skill_dir.name, tool="codex",
@@ -118,10 +128,10 @@ def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> Ski
         outputs=sections.get("outputs") or Sourced.missing("文件未標示產出章節"),
         dependencies=sections.get("dependencies") or Sourced.missing("文件未說明相依需求"),
         frontmatter=_safe_meta(meta),
-        headings=document.headings_of(body)[:60],
+        headings=document.public_headings(body),
         referenced_files=refs,
         missing_files=missing,
-        warnings=warnings,
+        warnings=[document.redact(w) for w in warnings],
         origin_package=pkg,
         size_bytes=size,
         mtime=mtime,
@@ -151,8 +161,10 @@ def _load_profiles_registry() -> dict:
     if not path.exists():
         return {}
     try:
+        if path.stat().st_size > document.MAX_FILE_BYTES:
+            return {}
         data, _ = frontmatter.parse(path.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {}
     profiles = data.get("profiles") if isinstance(data, dict) else None
     return profiles if isinstance(profiles, dict) else {}
@@ -166,12 +178,18 @@ def scan_agents(source: cfg.Source, facts: dict) -> list[AgentRole]:
         return roles
     for path in sorted(root.glob("*.toml")):
         warnings: list[str] = []
+        real = document.contained_file(path, root)
         try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError) as exc:
+            if real is None:
+                raise ValueError("檔案指向代理目錄之外（符號連結），未讀取")
+            if real.stat().st_size > document.MAX_FILE_BYTES:
+                raise ValueError(f"檔案超過 {document.MAX_FILE_BYTES // 1024}KB，未解析")
+            data = tomllib.loads(real.read_text(encoding="utf-8"))
+        except Exception as exc:  # includes RecursionError from hostile nesting
             roles.append(AgentRole(
                 role_id=stable_id("codex-role", str(path)), name=path.stem, tool="codex",
-                kind="subagent", path=str(path), warnings=[f"無法解析：{exc}"],
+                kind="subagent", path=str(path),
+                warnings=[f"無法解析：{document.redact(str(exc))[:200] or type(exc).__name__}"],
             ))
             continue
         instructions = str(data.get("developer_instructions") or "")
@@ -184,8 +202,8 @@ def scan_agents(source: cfg.Source, facts: dict) -> list[AgentRole]:
                                       f"{path.name} developer_instructions「{field}」區塊")
             value = reg.get(reg_key) if reg else None
             if value:
-                text = ", ".join(value) if isinstance(value, list) else str(value)
-                return Sourced.author(text, f"agents/registry/PROFILES.yaml: {path.stem}.{reg_key}")
+                text = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+                return Sourced.author(document.redact(text), f"agents/registry/PROFILES.yaml: {path.stem}.{reg_key}")
             return Sourced.missing(f"{path.name} 未描述 {field}")
 
         model = data.get("model")

@@ -38,7 +38,8 @@ function claim(token) { return token === seq ? $main() : document.createElement(
 
 const api = {
   async get(path) {
-    const res = await fetch(path, { headers: { Accept: "application/json" } });
+    // The custom header lets the server tell its own page from a cross-site request.
+    const res = await fetch(path, { headers: { Accept: "application/json", "X-SID-Console": "1" } });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;

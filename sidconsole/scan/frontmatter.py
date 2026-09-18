@@ -4,6 +4,10 @@ The console ships with zero third-party dependencies, so this covers the subset
 that skill front matter actually uses: scalars, quoted scalars, nested maps,
 block and inline sequences, and block scalars. Anything it cannot parse is
 reported as a warning instead of being guessed at or silently dropped.
+
+Front matter is untrusted input, so the parser is bounded: nesting deeper than
+MAX_DEPTH is skipped with a warning (no RecursionError), and every line is
+visited a bounded number of times (no copying of the remaining lines).
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import re
 _DELIM = re.compile(r"^---\s*$")
 _KEY = re.compile(r"^(?P<indent>\s*)(?P<key>[A-Za-z0-9_.\-$]+)\s*:(?P<rest>.*)$")
 _ITEM = re.compile(r"^(?P<indent>\s*)-\s?(?P<rest>.*)$")
+MAX_DEPTH = 32  # real skill front matter nests 2-3 levels
 
 
 def split(text: str) -> tuple[str, str]:
@@ -30,7 +35,7 @@ def parse(text: str) -> tuple[dict, list[str]]:
     """Parse a front-matter block. Returns (mapping, warnings)."""
     warnings: list[str] = []
     lines = text.split("\n") if text else []
-    value, _ = _parse_block(lines, 0, 0, warnings)
+    value, _ = _parse_block(lines, 0, 0, warnings, 0)
     if not isinstance(value, dict):
         if value not in (None, {}, []):
             warnings.append("front matter is not a key/value mapping")
@@ -47,8 +52,31 @@ def _is_blank(line: str) -> bool:
     return not stripped or stripped.startswith("#")
 
 
-def _parse_block(lines, start: int, indent: int, warnings) -> tuple:
-    """Parse one block at the given indent. Returns (value, next_index)."""
+def _too_deep(warnings) -> None:
+    msg = f"front matter 巢狀超過 {MAX_DEPTH} 層，更深的內容未解析"
+    if msg not in warnings:
+        warnings.append(msg)
+
+
+def _skip_block(lines, start: int, indent: int) -> int:
+    """Index of the first non-blank line indented less than `indent`."""
+    i = start
+    while i < len(lines):
+        if not _is_blank(lines[i]) and _indent_of(lines[i]) < indent:
+            break
+        i += 1
+    return i
+
+
+def _parse_block(lines, start: int, indent: int, warnings, depth: int) -> tuple:
+    """Parse one block at the given indent. Returns (value, next_index).
+
+    `lines` is the parser's own list; a "- key: value" item is rewritten in
+    place to "  key: value" so the nested mapping is parsed without copying.
+    """
+    if depth > MAX_DEPTH:
+        _too_deep(warnings)
+        return None, _skip_block(lines, start, indent)
     mapping: dict = {}
     sequence: list = []
     i = start
@@ -69,16 +97,14 @@ def _parse_block(lines, start: int, indent: int, warnings) -> tuple:
                 if inner:
                     # "- key: value" starts a mapping inside the sequence item
                     offset = len(item.group(0)) - len(item.group("rest"))
-                    sub_lines = [" " * offset + item.group("rest")] + lines[i + 1 :]
-                    value, consumed = _parse_block(sub_lines, 0, offset, warnings)
+                    lines[i] = " " * offset + item.group("rest")
+                    value, i = _parse_block(lines, i, offset, warnings, depth + 1)
                     sequence.append(value)
-                    i += consumed
                     continue
-                sequence.append(_scalar(rest))
+                sequence.append(_scalar(rest, warnings))
             else:
-                value, consumed = _parse_block(lines, i + 1, indent + 1, warnings)
+                value, i = _parse_block(lines, i + 1, indent + 1, warnings, depth + 1)
                 sequence.append(value)
-                i = consumed
                 continue
             i += 1
             continue
@@ -94,13 +120,13 @@ def _parse_block(lines, start: int, indent: int, warnings) -> tuple:
             if rest == "":
                 nxt = _peek(lines, i + 1)
                 if nxt is not None and _indent_of(nxt) > indent:
-                    value, i = _parse_block(lines, i + 1, _indent_of(nxt), warnings)
+                    value, i = _parse_block(lines, i + 1, _indent_of(nxt), warnings, depth + 1)
                     mapping[name] = value
                     continue
                 mapping[name] = None
                 i += 1
                 continue
-            mapping[name] = _scalar(rest)
+            mapping[name] = _scalar(rest, warnings)
             i += 1
             continue
 
@@ -145,7 +171,11 @@ def _block_scalar(lines, start: int, parent_indent: int, fold: bool) -> tuple[st
     return joined, i
 
 
-def _scalar(raw: str):
+def _scalar(raw: str, warnings=None, depth: int = 0):
+    if depth > MAX_DEPTH:  # "[[[[..." inline nesting
+        if warnings is not None:
+            _too_deep(warnings)
+        return None
     text = raw.strip()
     if not text:
         return ""
@@ -158,14 +188,14 @@ def _scalar(raw: str):
         inner = text[1:-1].strip()
         if not inner:
             return []
-        return [_scalar(part) for part in _split_inline(inner)]
+        return [_scalar(part, warnings, depth + 1) for part in _split_inline(inner)]
     if text.startswith("{") and text.endswith("}"):
         inner = text[1:-1].strip()
         out = {}
         for part in _split_inline(inner):
             if ":" in part:
                 k, v = part.split(":", 1)
-                out[k.strip()] = _scalar(v)
+                out[k.strip()] = _scalar(v, warnings, depth + 1)
         return out
     low = text.lower()
     if low in ("true", "yes"):

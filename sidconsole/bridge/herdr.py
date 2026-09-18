@@ -14,7 +14,10 @@ import re
 import shutil
 import subprocess
 
-_TARGET = re.compile(r"^[A-Za-z0-9:_\-]{1,64}$")
+# Must not start with "-" (herdr would read it as an option such as --help).
+# `herdr agent focus` takes exactly one argument and has no "--" separator
+# (src/cli/agent.rs agent_focus), so the id itself has to be safe.
+_TARGET = re.compile(r"[A-Za-z0-9:_][A-Za-z0-9:_\-]{0,63}")
 TIMEOUT_S = 5
 
 
@@ -83,6 +86,10 @@ def focus(target: str, configured_bin: str = "") -> dict:
     Navigation only: it changes which pane herdr shows and sends nothing to
     the agent. The target is validated before it reaches argv.
     """
-    if not _TARGET.match(target or ""):
+    if not valid_target(target):
         return {"ok": False, "error": "無效的目標識別碼"}
     return _run(binary(configured_bin), "agent", "focus", target)
+
+
+def valid_target(target) -> bool:
+    return isinstance(target, str) and _TARGET.fullmatch(target) is not None

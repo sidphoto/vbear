@@ -154,14 +154,47 @@ def scan_skills(source: cfg.Source, facts: dict) -> list[SkillRecord]:
     root = source.resolved()
     records: list[SkillRecord] = []
     for path in walk.find_files(root, "SKILL.md"):
-        records.append(_build_skill(path, root, source, facts))
+        try:
+            records.append(_build_skill(path, root, source, facts))
+        except Exception as exc:  # one hostile file must not stop the scan
+            records.append(failed_record(source.tool, path, root, exc))
     return records
 
 
+def failed_record(tool: str, path: Path, root: Path, exc: Exception) -> SkillRecord:
+    """Placeholder for a SKILL.md that could not be processed. Carries only the
+    path and the error type, never file content."""
+    return SkillRecord(
+        skill_id=stable_id(tool, str(path)),
+        name=path.parent.name,
+        tool=tool,
+        scope="unknown",
+        activation=ACT_UNKNOWN,
+        activation_reason="解析時發生錯誤，無法判斷",
+        path=str(path),
+        root=str(root),
+        warnings=[f"無法解析此技能（{type(exc).__name__}），已略過內容"],
+    )
+
+
 def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> SkillRecord:
-    raw = document.read_skill_file(path)
+    raw = document.read_skill_file(path, root)
     skill_dir = path.parent
     scope, activation, reason, pkg = classify(path, source, facts)
+
+    if "skipped" in raw:  # outside the source root or too large: no content
+        return SkillRecord(
+            skill_id=stable_id(source.tool, str(path)),
+            name=skill_dir.name,
+            tool=source.tool,
+            scope=scope,
+            activation=activation,
+            activation_reason=reason,
+            path=str(path),
+            root=str(root),
+            warnings=[raw["skipped"]],
+            origin_package=pkg,
+        )
 
     if "error" in raw:
         return SkillRecord(
@@ -200,7 +233,7 @@ def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> Ski
     deps = sections.get("dependencies") or Sourced.missing("文件未說明相依需求")
     if meta.get("allowed-tools"):
         deps = Sourced.author(
-            _as_text(meta["allowed-tools"]), "SKILL.md front matter: allowed-tools"
+            document.redact(_as_text(meta["allowed-tools"])), "SKILL.md front matter: allowed-tools"
         )
 
     try:
@@ -224,10 +257,10 @@ def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> Ski
         outputs=sections.get("outputs") or Sourced.missing("文件未標示產出章節"),
         dependencies=deps,
         frontmatter=_safe_meta(meta),
-        headings=document.headings_of(body)[:60],
+        headings=document.public_headings(body),
         referenced_files=refs,
         missing_files=missing,
-        warnings=warnings,
+        warnings=[document.redact(w) for w in warnings],
         origin_package=pkg,
         size_bytes=size,
         mtime=mtime,
@@ -244,12 +277,16 @@ def _as_text(value) -> str:
 
 
 def _safe_meta(meta: dict) -> dict:
+    """Front matter for display and the index. A secret-named key (api_key,
+    apiKey, access_token, password, ...) loses its whole value, at any depth;
+    other text still goes through the pattern redaction."""
     out = {}
     for key, value in meta.items():
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            out[key] = document.redact(str(value)) if isinstance(value, str) else value
+        clean = document.redact_value(key, value)
+        if isinstance(clean, (str, int, float, bool)) or clean is None:
+            out[key] = clean
         else:
-            out[key] = document.redact(_as_text(value))
+            out[key] = document.redact(_as_text(clean))
     return out
 
 
@@ -259,8 +296,11 @@ def scan_agents(source: cfg.Source) -> list[AgentRole]:
     root = source.resolved()
     roles: list[AgentRole] = []
     for path in walk.find_by_suffix(root, ".md", max_depth=2):
-        raw = document.read_skill_file(path)
-        if "error" in raw:
+        try:
+            raw = document.read_skill_file(path, root)
+        except Exception:  # hostile file: skip it, keep scanning
+            continue
+        if "error" in raw or "skipped" in raw:
             continue
         meta = raw["frontmatter"]
         name = str(meta.get("name") or path.stem)
@@ -282,7 +322,7 @@ def scan_agents(source: cfg.Source) -> list[AgentRole]:
                 ),
                 emoji=str(meta.get("emoji") or ""),
                 color=str(meta.get("color") or ""),
-                warnings=list(raw["warnings"]),
+                warnings=[document.redact(w) for w in raw["warnings"]],
                 skill_link_basis="claude-subagent",
             )
         )
@@ -304,13 +344,19 @@ def scan_plugin_agents(facts: dict) -> list[AgentRole]:
         enabled = facts["enabled"].get(key)
         prefix = key.split("@", 1)[0]
         for rel in declared:
+            if not isinstance(rel, str):
+                continue
             path = (Path(install_dir) / rel).resolve()
-            raw = document.read_skill_file(path)
-            if "error" in raw:
+            try:
+                # the manifest path must stay inside the plugin's install dir
+                raw = document.read_skill_file(path, Path(install_dir))
+            except Exception:
+                continue
+            if "error" in raw or "skipped" in raw:
                 continue
             meta = raw["frontmatter"]
             desc = meta.get("description")
-            warnings = list(raw["warnings"])
+            warnings = [document.redact(w) for w in raw["warnings"]]
             if enabled is False:
                 warnings.append(f"外掛 {key} 在 settings.json 中停用，此角色目前不可用")
             elif enabled is None:

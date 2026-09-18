@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -26,6 +27,63 @@ def state_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / ".sid-console"
+
+
+STATE_DIR_MODE = 0o700
+STATE_FILE_MODE = 0o600
+
+
+def ensure_state_dir() -> Path:
+    """Create the state directory owner-only and tighten what is already there.
+
+    The index and usage cache list local paths, project names and session ids,
+    so neither the directory nor its files are readable by other accounts.
+    """
+    path = state_dir()
+    path.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
+    os.chmod(path, STATE_DIR_MODE)
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        try:
+            if entry.is_file() and not entry.is_symlink():
+                os.chmod(entry, STATE_FILE_MODE)
+        except OSError:
+            continue
+    return path
+
+
+def write_private(path: Path, text: str) -> None:
+    """Atomically replace `path` with an owner-only (0600) file.
+
+    The temporary name is unique (mkstemp), so a CLI scan and a server rescan
+    writing the same file at once cannot clobber each other's half-written
+    temp file; the last complete write wins.
+    """
+    ensure_state_dir()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(text)
+        os.chmod(tmp, STATE_FILE_MODE)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def open_private_log(path: Path):
+    """Append handle for server.log, created 0600 (and tightened if it exists)."""
+    ensure_state_dir()
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, STATE_FILE_MODE)
+    os.fchmod(fd, STATE_FILE_MODE)
+    return os.fdopen(fd, "ab")
 
 
 def config_path() -> Path:
@@ -101,11 +159,7 @@ def load() -> dict:
 
 
 def save(data: dict) -> None:
-    path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    write_private(config_path(), json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def sources_from(data: dict) -> list[Source]:

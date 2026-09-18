@@ -5,6 +5,10 @@ Security posture (plan section 9):
   - Host header must be the loopback address, which blocks DNS rebinding
   - state-changing requests need a custom header and a same-origin Origin,
     which blocks cross-site request forgery from other pages in the browser
+  - API reads refuse browser requests whose Sec-Fetch-Site is not same-origin
+    (or none), and the one GET with a side effect (/api/live?force=1, which
+    runs herdr) also needs the custom header
+  - focus targets must be a pane/terminal id from the current herdr snapshot
   - strict Content-Security-Policy; the UI renders skill text as text, never
     as HTML, because skill content is untrusted
   - files are served only by skill id or by a reference the scanner already
@@ -26,14 +30,14 @@ from urllib.parse import parse_qs, urlparse
 from . import annotations
 from . import config as cfg
 from .bridge import herdr
-from .index import STALE_AFTER_S, Store
+from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import document
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 STATIC_FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
                 "/favicon.svg": "favicon.svg"}
-MAX_FILE_BYTES = 256 * 1024
+MAX_FILE_BYTES = document.MAX_FILE_BYTES
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 SKILL_SUMMARY_FIELDS = (
@@ -43,6 +47,9 @@ SKILL_SUMMARY_FIELDS = (
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language"}
+LANGUAGES = {"zh-TW"}  # the only UI language shipped
+MAX_PROJECT_ROOTS = 20
+FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localhost ports
 
 
 class Console:
@@ -75,6 +82,18 @@ class Console:
                                  "evidence": used["evidence"], "resolution": used["resolution"]})
         rows.sort(key=lambda r: r["last_ts"], reverse=True)
         return rows
+
+    def annotation_keys(self) -> set[str]:
+        return {annotations.key_for(s) for s in self.store.static()["skills"]}
+
+    def live_targets(self, force: bool = False) -> set[str]:
+        """Pane and terminal ids herdr reported in the current live snapshot."""
+        ids: set[str] = set()
+        for sess in self.store.live(force=force)["sessions"]:
+            for field in ("pane_id", "terminal_id"):
+                if isinstance(sess.get(field), str) and sess[field]:
+                    ids.add(sess[field])
+        return ids
 
 
 def make_handler(console: Console):
@@ -118,6 +137,12 @@ def make_handler(console: Console):
             origin = self.headers.get("Origin")
             return origin is None or origin in allowed_origins
 
+        def _read_ok(self) -> bool:
+            # Browsers always send Sec-Fetch-Site; its absence means a non-browser
+            # local client (curl, the launcher's health check), which is allowed.
+            site = self.headers.get("Sec-Fetch-Site")
+            return site is None or site in FETCH_SITE_OK
+
         def _body(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0 or length > 64 * 1024:
@@ -135,6 +160,8 @@ def make_handler(console: Console):
                 return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
             url = urlparse(self.path)
             path = url.path
+            if path.startswith("/api/") and not self._read_ok():
+                return self._error(403, "forbidden")
             try:
                 if path in STATIC_FILES:
                     return self._static(STATIC_FILES[path])
@@ -152,6 +179,8 @@ def make_handler(console: Console):
                     return self._json(self._roles())
                 if path == "/api/live":
                     force = parse_qs(url.query).get("force", ["0"])[0] == "1"
+                    if force and self.headers.get("X-SID-Console") != "1":
+                        return self._error(403, "強制更新需要主控台標頭")
                     return self._json(console.store.live(force=force))
                 if path == "/api/config":
                     return self._json(self._config_view())
@@ -177,16 +206,27 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "generated_at": data["generated_at"],
                                        "scan_seconds": data["scan_seconds"]})
                 if path == "/api/config":
-                    return self._json(self._config_update(self._body()))
+                    try:
+                        return self._json(self._config_update(self._body()))
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
                 if path == "/api/annotations":
                     body = self._body()
                     try:
-                        saved = annotations.save(str(body.get("key", "")), body)
+                        saved = annotations.save(str(body.get("key", "")), body,
+                                                 allowed_keys=console.annotation_keys())
                     except ValueError as exc:
                         return self._error(400, str(exc))
                     return self._json({"ok": True, "annotation": saved})
                 if path == "/api/focus":
-                    target = str(self._body().get("target", ""))
+                    target = self._body().get("target", "")
+                    if not isinstance(target, str) or not herdr.valid_target(target):
+                        return self._error(400, "無效的目標識別碼")
+                    # Only a pane that herdr itself reported; refresh once in case
+                    # the cached snapshot predates a newly opened pane.
+                    if (target not in console.live_targets()
+                            and target not in console.live_targets(force=True)):
+                        return self._error(400, "目前沒有這個 Terminal")
                     return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
@@ -251,8 +291,13 @@ def make_handler(console: Console):
                 return self._error(404, "找不到這個技能（索引可能已更新，請重新整理）")
             raw, raw_error = "", ""
             try:
-                file = Path(skill["path"])
-                if file.stat().st_size > MAX_FILE_BYTES:
+                # re-check at read time: the file may have become a symlink since the scan
+                file = document.contained_file(Path(skill["path"]), Path(skill.get("root") or "/-"))
+                if file is None and not Path(skill["path"]).exists():
+                    raw_error = "原始檔已不存在（索引可能已過期，請重新掃描）"
+                elif file is None:
+                    raw_error = "原始檔不在此技能的來源目錄內（符號連結），基於安全未載入"
+                elif file.stat().st_size > MAX_FILE_BYTES:
                     raw_error = "檔案超過 256KB，未載入原文"
                 else:
                     raw = document.redact(file.read_text(encoding="utf-8", errors="replace"))
@@ -283,8 +328,9 @@ def make_handler(console: Console):
             if ref not in allowed:
                 return self._error(403, "只能開啟此技能已驗證存在的引用檔")
             base = Path(skill["path"]).parent.resolve()
-            target = (base / ref).resolve()
-            if not target.is_relative_to(base) or not target.is_file():
+            root = Path(skill.get("root") or "/-")
+            target = document.contained_file(base / ref, base)
+            if target is None or document.contained_file(target, root) is None:
                 return self._error(403, "引用檔不在技能目錄內")
             if target.stat().st_size > MAX_FILE_BYTES:
                 return self._json({"ref": ref, "text": "", "error": "檔案超過 256KB，未載入"})
@@ -320,9 +366,9 @@ def make_handler(console: Console):
                         except (TypeError, ValueError):
                             continue
                     if key == "project_roots":
-                        if not isinstance(value, list):
-                            continue
-                        value = [str(v) for v in value if isinstance(v, str) and v.strip()][:20]
+                        value = _valid_project_roots(value)
+                    if key == "language" and (not isinstance(value, str) or value not in LANGUAGES):
+                        raise ValueError("不支援的語言設定")
                     if key in ("advanced_mode", "usage_enabled"):
                         value = bool(value)
                     conf[key] = value
@@ -337,6 +383,29 @@ def make_handler(console: Console):
                     or "project_roots" in body}
 
     return Handler
+
+
+def _valid_project_roots(value) -> list[str]:
+    """Absolute directories (a leading ~ is allowed), never / or the home
+    directory or anything above it: project discovery lists one level of
+    children, and those would turn it into a scan of the whole account."""
+    if not isinstance(value, list) or len(value) > MAX_PROJECT_ROOTS:
+        raise ValueError(f"project_roots 必須是最多 {MAX_PROJECT_ROOTS} 個路徑的清單")
+    out: list[str] = []
+    home = HOME.resolve()
+    for raw in value:
+        if not isinstance(raw, str) or not raw.strip() or len(raw) > 1024 or "\x00" in raw:
+            raise ValueError("project_roots 只能包含路徑字串")
+        text = raw.strip()
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"project_roots 必須是絕對路徑：{text}")
+        real = path.resolve()
+        if real == Path(real.anchor) or home.is_relative_to(real):
+            raise ValueError(f"不能把根目錄或家目錄本身設為專案目錄：{text}")
+        if text not in out:
+            out.append(text)
+    return out
 
 
 def serve(port: int | None = None, open_browser: bool = False) -> None:

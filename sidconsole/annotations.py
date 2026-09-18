@@ -18,6 +18,7 @@ MAX_ALIASES = 5
 MAX_TAGS = 12
 MAX_TEXT = 60
 MAX_NOTE = 2000
+MAX_ENTRIES = 5000
 _lock = threading.Lock()
 
 
@@ -50,8 +51,13 @@ def _clean_list(value, limit: int) -> list[str]:
     return out[:limit]
 
 
-def save(key: str, body: dict) -> dict:
-    """Validate and store one annotation. Empty annotation removes the entry."""
+def save(key: str, body: dict, allowed_keys: set[str] | None = None) -> dict:
+    """Validate and store one annotation. Empty annotation removes the entry.
+
+    `allowed_keys` is the set of annotation keys in the current index (the
+    server always passes it), so a caller cannot fill the file with keys for
+    skills that do not exist. Removing an existing entry is always allowed.
+    """
     if not isinstance(key, str) or not key or len(key) > 200 or ":" not in key:
         raise ValueError("無效的技能識別")
     entry = {
@@ -65,12 +71,12 @@ def save(key: str, body: dict) -> dict:
             data.pop(key, None)
             result = {}
         else:
+            if allowed_keys is not None and key not in allowed_keys:
+                raise ValueError("索引中沒有這個技能，無法加上註記")
+            if key not in data and len(data) >= MAX_ENTRIES:
+                raise ValueError(f"註記已達上限 {MAX_ENTRIES} 筆")
             entry["updated_at"] = time.time()
             data[key] = entry
             result = entry
-        path = _path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        cfg.write_private(_path(), json.dumps(data, ensure_ascii=False, indent=2))
     return result

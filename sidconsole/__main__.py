@@ -82,9 +82,8 @@ def launch(port: int | None) -> int:
 
     if not alive():
         log = cfg.state_dir() / "server.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
         root = Path(__file__).resolve().parent.parent
-        with log.open("ab") as out:
+        with cfg.open_private_log(log) as out:
             subprocess.Popen([sys.executable, "-m", "sidconsole", "serve", "--port", str(port)],
                              cwd=root, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
                              start_new_session=True)

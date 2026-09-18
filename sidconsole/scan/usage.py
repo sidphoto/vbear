@@ -47,11 +47,7 @@ def _load_cache() -> dict:
 
 
 def _save_cache(cache: dict) -> None:
-    path = _cache_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cache), encoding="utf-8")
-    tmp.replace(path)
+    cfg.write_private(_cache_file(), json.dumps(cache))
 
 
 def _new_session(tool: str, file: Path) -> dict:

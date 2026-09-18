@@ -5,6 +5,7 @@ SID Herdr 的第一版主控台：把分散在各處的 Skill、Agent 角色與�
 
 - **本機、唯讀**：只讀取你選的來源，不修改任何技能或角色檔案，不執行技能內的腳本。
 - **零相依**：只用 Python 3.11+ 標準函式庫，沒有 npm / pip 套件，不連外部服務。
+  需要 Python 3.11 以上（用到 `tomllib`）；macOS 系統內建的 `/usr/bin/python3` 是 3.9，會啟動失敗，請改用 Homebrew 等較新的 `python3`。
 - **有來源才顯示**：每項資訊標示「作者說明／自動整理／執行觀察／未提供」，查不到就寫未知。
 
 ## 使用
@@ -48,6 +49,8 @@ herdr plugin action invoke sid.console.open
 
 使用紀錄只擷取技能名稱、模型名稱、工作階段 ID、工作目錄與時間；對話內容不會被讀出或保存。可在設定頁關閉。
 
+`/api/live` 會帶出 herdr 回報的 Terminal 標題（`terminal_title_stripped`）；Agent 常會自動把標題設成目前任務摘要，所以畫面上可能看到任務內容的片段。這份資料只在本機 API 中傳遞，不寫入狀態目錄。
+
 ## 我的註記
 
 在技能詳情頁可以加上易懂名稱、標籤與備註，搜尋時會一併比對，卡片會顯示你取的名稱並保留原名。
@@ -70,10 +73,21 @@ herdr plugin action invoke sid.console.open
 ## 安全
 
 - 只綁定 `127.0.0.1`；Host 標頭必須是本機位址（防 DNS rebinding）。
-- 寫入類請求需要自訂標頭與同源 Origin（防 CSRF）；只接受白名單設定鍵。
+- 寫入類請求需要自訂標頭與同源 Origin（防 CSRF）；只接受白名單設定鍵，並檢查值：
+  `language` 只接受 `zh-TW`；`project_roots` 必須是絕對路徑（可用 `~`），不接受 `/`、家目錄或其上層；
+  註記只能加在目前索引中存在的技能，總數上限 5000 筆。
+- 讀取 API 若帶 `Sec-Fetch-Site` 且不是 `same-origin`／`none` 一律拒絕（其他網站、同機其他埠的頁面都讀不到）；
+  會觸發 herdr 呼叫的 `/api/live?force=1` 另外需要自訂標頭。
 - 嚴格 CSP，技能內容一律以純文字渲染（無 `innerHTML`）。
-- 檔案只能依技能 ID 或「已驗證存在於該技能目錄內」的引用檔讀取；憑證樣式的字串會被遮蔽。
-- 「切到這個 Terminal」只呼叫 `herdr agent focus`，不會送出任何輸入給 Agent。
+- 檔案只能依技能 ID 或「已驗證存在於該技能目錄內」的引用檔讀取。`SKILL.md` 本身若是指向來源目錄之外的符號連結，
+  掃描與讀取時都不會打開它（來源目錄本身是符號連結時，以實際路徑比對，不受影響）。
+- 掃描有界：單檔超過 256KB 不解析、front matter 巢狀超過 32 層停止解析；任一技能解析失敗只會變成該技能的警告，不會中斷整次掃描。
+- 憑證遮蔽：front matter 鍵名像機密（`api_key`、`apiKey`、`access_token`、`password`、`auth` 等）整個值遮蔽；
+  內文的 `名稱: 值`／`名稱=值`（含 JSON 引號）遮到行尾；另外辨識 `sk-`／`sk-ant-`、GitHub、AWS `AKIA…`、Slack `xox?-`
+  與整塊 PEM 私鑰。遮蔽套用在索引、章節、原始 SKILL.md、引用檔與警告文字，寧可多遮（例如整行說明）也不漏。
+- 「切到這個 Terminal」只呼叫 `herdr agent focus`，不會送出任何輸入給 Agent；目標必須是目前 herdr 回報的 pane／terminal ID，
+  且不可以 `-` 開頭（`herdr agent focus` 只接受單一參數，沒有 `--` 分隔）。
+- 狀態目錄權限 `0700`、其中檔案 `0600`（啟動時也會收緊舊版建立的檔案）；暫存檔名唯一，CLI 掃描與伺服器重新掃描同時寫入不會互相覆蓋。
 
 ## 狀態目錄
 
@@ -91,5 +105,5 @@ sidconsole/
   annotations.py                      我的註記（別名、標籤、備註）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
-tests/                                20 項測試，全部使用合成的 HOME
+tests/                                42 項測試，全部使用合成的 HOME
 ```
