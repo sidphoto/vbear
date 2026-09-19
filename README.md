@@ -16,7 +16,7 @@
 python3 -m sidconsole serve --open   # 啟動並開啟 http://127.0.0.1:7788
 python3 -m sidconsole doctor         # 檢查來源與 herdr 連線
 python3 -m sidconsole scan           # 重新掃描並輸出摘要
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests   # 前端行為測試另需 node
 ```
 
 從 herdr 內開啟（會註冊到 herdr 的全域外掛設定）：
@@ -69,7 +69,7 @@ herdr plugin action invoke sid.console.open
 | 舊版快取 | 舊版本的快取副本，目前安裝的是較新版本 |
 | 附帶・不載入 | 隨外掛附帶，但不在外掛的技能載入路徑 |
 | 未安裝 | 外掛市集中的來源副本 |
-| 無法確認 | 沒有設定檔能證明它是否被載入 |
+| 無法確認 | 沒有設定檔能證明它是否被載入；或技能檔沒有被讀取（超過 256KB、或連到技能目錄之外），無法確認能否正常載入 |
 
 ## 安全
 
@@ -86,8 +86,15 @@ herdr plugin action invoke sid.console.open
 - 憑證遮蔽：front matter 鍵名像機密（`api_key`、`apiKey`、`access_token`、`password`、`auth` 等）整個值遮蔽；
   內文的 `名稱: 值`／`名稱=值`（含 JSON 引號）遮到行尾；另外辨識 `sk-`／`sk-ant-`、GitHub、AWS `AKIA…`、Slack `xox?-`
   與整塊 PEM 私鑰。遮蔽套用在索引、章節、原始 SKILL.md、引用檔與警告文字，寧可多遮（例如整行說明）也不漏。
+  只是「描述」機密的名稱不遮：數量或上限（`max_tokens`、`token_count`）、位置或名稱（`token_file`、`api_key_env`、`secret_name`）、
+  資料庫鍵（`primary_key`、`sort_key`）；它們的值若本身像 token，仍會被上面的樣式遮住。
 - 「切到這個 Terminal」只呼叫 `herdr agent focus`，不會送出任何輸入給 Agent；目標必須是目前 herdr 回報的 pane／terminal ID，
   且不可以 `-` 開頭（`herdr agent focus` 只接受單一參數，沒有 `--` 分隔）。
+- 請求內容：`Content-Length` 只接受純數字；超過 64KB 回 413 並關閉連線；整個請求內容必須在 15 秒內送完，
+  逐位元組拖延的連線會被切斷。標頭階段只有每次讀取 15 秒的逾時，沒有總時限。
+- 設定檔損毀時：不覆寫原檔（先備份為 `config.json.bak`）；掃描範圍改為「全部關閉」而不是預設值，
+  拒絕重新掃描（保留先前的索引），並在工作台、技能庫與設定頁顯示警告。
+- 啟動器用 `Server` 標頭加上回應格式辨認 7788 上的是不是 SID Console；這只能分辨別的服務，不是身分驗證。
 - 狀態目錄權限 `0700`、其中檔案 `0600`（啟動時也會收緊舊版建立的檔案）；暫存檔名唯一，CLI 掃描與伺服器重新掃描同時寫入不會互相覆蓋。
 
 ## 狀態目錄
@@ -106,5 +113,6 @@ sidconsole/
   annotations.py                      我的註記（別名、標籤、備註）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
-tests/                                42 項測試，全部使用合成的 HOME
+tests/                                84 項測試，全部使用合成的 HOME
+tests/frontend/                       前端行為測試（node＋合成 DOM，不是瀏覽器測試）
 ```

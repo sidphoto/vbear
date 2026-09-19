@@ -9,7 +9,7 @@ from pathlib import Path
 from .. import config as cfg
 from ..model import (
     ACT_ACTIVE, ACT_ARCHIVED, ACT_DISABLED, ACT_UNKNOWN,
-    AgentRole, SkillRecord, Sourced, stable_id,
+    AgentRole, SkillRecord, Sourced, stable_id, unread_activation,
 )
 from . import document, frontmatter, walk
 
@@ -78,6 +78,7 @@ def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> Ski
     raw = document.read_skill_file(path, root)
     skill_dir = path.parent
     if "skipped" in raw:  # outside the source root or too large: no content
+        activation, reason = unread_activation(activation, reason, raw["skipped"])
         return SkillRecord(
             skill_id=stable_id("codex", str(path)), name=skill_dir.name, tool="codex",
             scope=scope, activation=activation, activation_reason=reason,

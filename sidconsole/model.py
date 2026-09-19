@@ -60,6 +60,18 @@ ACT_NOT_LOADED = "not_loaded"  # shipped inside a package, but outside its load 
 ACT_UNKNOWN = "unknown"  # we could not establish it from any source
 
 
+def unread_activation(activation: str, reason: str, why: str) -> tuple[str, str]:
+    """A skill whose file was not read cannot be called usable.
+
+    The path may be in a load scope, but the console never saw the content
+    (too large, or it leads outside its folder), so it cannot say the tool
+    will load it cleanly. States that already say "not usable" are kept.
+    """
+    if activation != ACT_ACTIVE:
+        return activation, reason
+    return ACT_UNKNOWN, f"未讀取技能檔（{why}），無法確認能否正常載入；位置判讀：{reason}"
+
+
 @dataclass
 class SkillRecord:
     skill_id: str

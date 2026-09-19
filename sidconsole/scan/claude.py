@@ -9,6 +9,7 @@ from .. import config as cfg
 from ..model import (
     ACT_ACTIVE, ACT_ARCHIVED, ACT_DISABLED, ACT_NOT_INSTALLED, ACT_NOT_LOADED,
     ACT_SUPERSEDED, ACT_UNKNOWN, AgentRole, SkillRecord, Sourced, stable_id,
+    unread_activation,
 )
 from . import document, walk
 
@@ -183,6 +184,7 @@ def _build_skill(path: Path, root: Path, source: cfg.Source, facts: dict) -> Ski
     scope, activation, reason, pkg = classify(path, source, facts)
 
     if "skipped" in raw:  # outside the source root or too large: no content
+        activation, reason = unread_activation(activation, reason, raw["skipped"])
         return SkillRecord(
             skill_id=stable_id(source.tool, str(path)),
             name=skill_dir.name,

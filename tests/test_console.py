@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+ORIGINAL_PATH = os.environ.get("PATH", "")
 FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-test-"))
 os.environ["HOME"] = str(FAKE_HOME)
 os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
@@ -310,17 +311,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(data["config"]["port"], cfg.DEFAULT_PORT)
 
     def test_role_skills_paging_and_debounce(self):
-        r = urllib.request.Request(self.base + "/app.js")
-        with urllib.request.urlopen(r) as resp:
-            self.assertEqual(resp.status, 200)
-            self.assertIn("text/javascript", resp.headers.get("Content-Type", ""))
-            content = resp.read().decode("utf-8")
-            self.assertIn("async function viewRole", content)
-            role_part = content.split("async function viewRole")[1].split("async function viewProjects")[0]
-            self.assertIn("PAGE_SIZE = 120", role_part)
-            self.assertIn("debounce(draw, 200)", role_part)
-            self.assertIn('e.key === "Enter"', role_part)
-            self.assertIn("updateMore()", role_part)
+        """Runs tests/frontend/role_skills.cjs: the real viewRole() against a
+        synthetic DOM and clock (behaviour, not a browser test)."""
+        import subprocess
+        node = shutil.which("node", path=os.environ.get("SID_TEST_NODE_PATH", ORIGINAL_PATH))
+        if not node:
+            self.skipTest("node is not installed")
+        script = Path(__file__).resolve().parent / "frontend" / "role_skills.cjs"
+        proc = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ok IME composition Enter ignored", proc.stdout)
 
     def test_invalid_content_length_returns_400(self):
         import http.client
@@ -334,35 +334,54 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(resp.status, 400)
         conn.close()
 
-    def test_handler_has_socket_timeout(self):
-        self.assertEqual(getattr(self.httpd.RequestHandlerClass, "timeout", None), 15.0)
-
-    def test_launch_alive_validates_sid_console_schema(self):
-        import http.server
-        class FakeHandler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"unrelated": true}')
-            def log_message(self, *a): pass
-
-        fake_srv = http.server.HTTPServer(("127.0.0.1", 0), FakeHandler)
-        fport = fake_srv.server_address[1]
-        t = threading.Thread(target=fake_srv.serve_forever, daemon=True)
-        t.start()
+    def test_stalled_client_is_dropped(self):
+        """A client that stops mid-headers is disconnected by the socket
+        timeout, and the server keeps answering others meanwhile."""
+        import socket
+        import time
+        handler = self.httpd.RequestHandlerClass
+        self.assertEqual(handler.timeout, 15.0)
+        handler.timeout = 0.5  # same mechanism, shorter wait for the test
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{fport}/api/config", timeout=1) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-                alive = (isinstance(payload, dict) and "config" in payload and "state_dir" in payload)
-                self.assertFalse(alive)
-            with urllib.request.urlopen(f"{self.base}/api/config", timeout=1) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-                alive = (isinstance(payload, dict) and "config" in payload and "state_dir" in payload)
-                self.assertTrue(alive)
+            conn = socket.create_connection(("127.0.0.1", self.console.port), timeout=5)
+            conn.sendall(b"GET /api/config HTTP/1.1\r\nHost: 127.0.0.1\r\n")  # never finished
+            self.assertEqual(self.req("/api/config")[0], 200)
+            started = time.monotonic()
+            self.assertEqual(conn.recv(1024), b"")  # closed by the server
+            self.assertLess(time.monotonic() - started, 4)
+            conn.close()
         finally:
-            fake_srv.shutdown()
-            fake_srv.server_close()
+            handler.timeout = 15.0
+
+    def test_launch_identifies_sid_console(self):
+        """launch() decides through is_sid_console(); test that function."""
+        import http.server
+        from sidconsole.__main__ import is_sid_console
+
+        def fake(server_name, body):
+            class FakeHandler(http.server.BaseHTTPRequestHandler):
+                server_version = server_name
+                sys_version = ""
+                def do_GET(self):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+                def log_message(self, *a): pass
+            srv = http.server.HTTPServer(("127.0.0.1", 0), FakeHandler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+            return f"http://127.0.0.1:{srv.server_address[1]}/"
+
+        good_shape = b'{"config": {}, "state_dir": "/x"}'
+        self.assertTrue(is_sid_console(self.base + "/"))
+        self.assertFalse(is_sid_console(fake("SIDConsole/0.1", b'{"unrelated": true}')))
+        self.assertFalse(is_sid_console(fake("nginx", good_shape)))  # right shape, other server
+        self.assertFalse(is_sid_console(fake("SIDConsole/0.1", b'{"config": [], "state_dir": 1}')))
+        self.assertFalse(is_sid_console(fake("SIDConsole/0.1", b"not json")))
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
+            self.assertFalse(is_sid_console(self.base + "/"))
 
     def test_corrupt_config_prevents_overwrite_and_backs_up(self):
         cpath = cfg.config_path()
@@ -1037,8 +1056,10 @@ class IndexGenerationTests(_IsolatedState):  # R1
 
 
 class LiveEpochTests(_IsolatedState):  # R2
-    """A cached live view is never built from an older static index than the
-    one current when it is cached."""
+    """A live view is cached only under the epoch its static index belongs to,
+    so a cached view's static is at least as new as the one published for that
+    epoch. static() and live() may still briefly return different generations
+    while a publish is in progress; that is not what these tests claim."""
 
     def setUp(self):
         super().setUp()
@@ -1236,6 +1257,160 @@ class CorruptConfigBackupTests(_IsolatedState):  # R3, R4
             httpd.shutdown()
             httpd.server_close()
         self.assert_untouched()
+
+
+class CorruptConfigScopeTests(_IsolatedState):  # F3, F4
+    """A config that cannot be read never widens what is scanned."""
+
+    def good_index(self):
+        data = build_static({**cfg.DEFAULT_CONFIG, "sources": [], "project_roots": []})
+        data["marker"] = "good"
+        cfg.write_private(cfg.index_path(), json.dumps(data))
+        return data
+
+    def test_deep_nesting_counts_as_corrupt(self):
+        cfg.config_path().write_text("[" * 200000, encoding="utf-8")
+        self.assertTrue(cfg.is_corrupt())
+        self.assertTrue(cfg.load()["_corrupt"])
+        Store()  # starting the console must not crash
+
+    def test_corrupt_config_turns_every_source_off(self):
+        cfg.config_path().write_text("{broken", encoding="utf-8")
+        conf = cfg.load()
+        self.assertTrue(conf["_corrupt"])
+        self.assertTrue(conf["sources"])
+        self.assertFalse(any(src["enabled"] for src in conf["sources"]))
+        self.assertEqual(conf["project_roots"], [])
+
+    def test_rescan_is_refused_and_the_index_kept(self):
+        self.good_index()
+        before = cfg.index_path().read_bytes()
+        cfg.config_path().write_text("{broken", encoding="utf-8")
+        store = Store()
+        with mock.patch.object(index_mod, "build_static") as scan:
+            with self.assertRaises(ValueError):
+                store.rescan()
+            scan.assert_not_called()
+        self.assertEqual(cfg.index_path().read_bytes(), before)
+        self.assertEqual(store.static()["marker"], "good")
+
+    def test_corrupt_config_does_not_add_herdr_project_roots(self):
+        cfg.config_path().write_text("{broken", encoding="utf-8")
+        store = Store()
+        with mock.patch.object(index_mod.herdr, "snapshot") as snap, \
+                mock.patch.object(index_mod, "build_static", return_value=marker_index("x")) as scan:
+            store.static()  # no index on disk: first load scans
+        snap.assert_not_called()
+        conf, extra = scan.call_args[0]
+        self.assertFalse(any(src["enabled"] for src in conf["sources"]))
+        self.assertEqual(extra, [])
+
+    def test_server_reports_corrupt_config(self):
+        from http.server import ThreadingHTTPServer
+        from sidconsole.server import Console, make_handler
+        self.good_index()
+        cfg.config_path().write_text("{broken", encoding="utf-8")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        console = Console(httpd.server_address[1])
+        httpd.RequestHandlerClass = make_handler(console)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        with urllib.request.urlopen(base + "/api/config") as resp:
+            view = json.loads(resp.read())
+        self.assertTrue(view["corrupt"])
+        self.assertNotIn("_corrupt", view["config"])  # internal flag stays internal
+        with urllib.request.urlopen(base + "/api/overview") as resp:
+            self.assertTrue(json.loads(resp.read())["config_corrupt"])
+        status, body = post_json(base, "/api/rescan", {})
+        self.assertEqual(status, 409)
+        self.assertIn("設定檔已損毀", body["error"])
+
+
+class RequestBodyTests(unittest.TestCase):  # Content-Length strictness, whole-body deadline
+    setUpClass = classmethod(ServerTests.setUpClass.__func__)
+    tearDownClass = classmethod(ServerTests.tearDownClass.__func__)
+    req = ServerTests.req
+
+    def raw_post(self, length_header, body=b""):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.console.port, timeout=10)
+        conn.putrequest("POST", "/api/config")
+        conn.putheader("Host", f"127.0.0.1:{self.console.port}")
+        conn.putheader("X-SID-Console", "1")
+        conn.putheader("Content-Length", length_header)
+        conn.endheaders(body)
+        resp = conn.getresponse()
+        status = resp.status
+        conn.close()
+        return status
+
+    def test_only_plain_digits_are_a_length(self):
+        for bad in ("+5", "1_0", "-1", "0x10", "5 5", "9" * 20):
+            self.assertEqual(self.raw_post(bad), 400, bad)
+        self.assertEqual(self.raw_post("2", b"{}"), 200)
+
+    def test_oversized_body_is_rejected_not_ignored(self):
+        self.assertEqual(self.raw_post(str(64 * 1024 + 1)), 413)
+
+    def test_trickled_body_hits_the_total_deadline(self):
+        import socket
+        import time
+        from sidconsole import server as server_mod
+        with mock.patch.object(server_mod, "BODY_DEADLINE_S", 0.6):
+            conn = socket.create_connection(("127.0.0.1", self.console.port), timeout=10)
+            conn.sendall((f"POST /api/config HTTP/1.1\r\nHost: 127.0.0.1:{self.console.port}\r\n"
+                          "X-SID-Console: 1\r\nContent-Length: 20\r\n\r\n").encode())
+            started = time.monotonic()
+            reply = b""
+            try:
+                for _ in range(20):  # one byte every 0.2s: each read is fast, the total is not
+                    conn.sendall(b" ")
+                    time.sleep(0.2)
+            except OSError:
+                pass  # the server closed the connection while we were still sending
+            try:
+                reply = conn.recv(4096)
+            except OSError:
+                pass
+            conn.close()
+        self.assertLess(time.monotonic() - started, 3.5)
+        self.assertNotIn(b"200 OK", reply)
+        self.assertEqual(self.req("/api/config")[0], 200)  # still serving
+
+
+class UnreadSkillStateTests(_HostileBase):  # C2
+    def test_unread_skill_is_not_called_usable(self):
+        recs = self.scan()
+        for name in ("huge", "linked"):
+            self.assertEqual(recs[name].activation, "unknown", name)
+            self.assertIn("無法確認", recs[name].activation_reason)
+        self.assertEqual(recs["good"].activation, "active")
+
+    def test_states_that_already_say_unusable_are_kept(self):
+        from sidconsole.model import ACT_DISABLED, unread_activation
+        self.assertEqual(unread_activation(ACT_DISABLED, "off", "too big"), (ACT_DISABLED, "off"))
+
+
+class SecretNameTests(unittest.TestCase):  # C3
+    def test_names_that_hold_secrets(self):
+        for name in ("api_key", "apiKey", "ANTHROPIC_API_KEY", "access_token", "password",
+                     "client_secret", "private_key", "token", "authToken"):
+            self.assertTrue(document.secret_key_name(name), name)
+
+    def test_names_that_only_describe_a_secret(self):
+        for name in ("max_tokens", "maxTokens", "token_count", "primary_key", "sort_key",
+                     "token_file", "api_key_env", "secret_name", "password_min_length"):
+            self.assertFalse(document.secret_key_name(name), name)
+
+    def test_values_are_still_caught_by_shape(self):
+        text = document.redact("api_key_env: OPENAI_KEY\ntoken_file: sk-ant-abcdefghijklmnopqrstuv\n"
+                               "max_tokens: 4096\ntoken_url: https://x.test/?token=s3cr3tvalue")
+        self.assertIn("api_key_env: OPENAI_KEY", text)
+        self.assertIn("max_tokens: 4096", text)
+        self.assertNotIn("sk-ant-", text)
+        self.assertNotIn("s3cr3tvalue", text)
 
 
 def tearDownModule():

@@ -61,11 +61,33 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def is_sid_console(url: str, timeout: float = 1.0) -> bool:
+    """Whether `url` is served by a SID Console, not merely something on the port.
+
+    Checks the Server header this console sends and the shape of its config
+    reply. This tells a stray service apart from the console; it is not
+    authentication, and a local program could imitate both.
+    """
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/config", timeout=timeout) as resp:
+            if resp.status != 200:
+                return False
+            if not (resp.headers.get("Server") or "").startswith("SIDConsole/"):
+                return False
+            payload = json.loads(resp.read(256 * 1024).decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    return (isinstance(payload, dict)
+            and isinstance(payload.get("config"), dict)
+            and isinstance(payload.get("state_dir"), str))
+
+
 def launch(port: int | None) -> int:
     """Used by the herdr plugin action: never blocks herdr."""
     import subprocess
     import time
-    import urllib.request
     import webbrowser
     from pathlib import Path
 
@@ -74,16 +96,7 @@ def launch(port: int | None) -> int:
     url = f"http://127.0.0.1:{port}/"
 
     def alive() -> bool:
-        try:
-            with urllib.request.urlopen(url + "api/config", timeout=1) as resp:
-                if resp.status != 200:
-                    return False
-                payload = json.loads(resp.read().decode("utf-8"))
-                return (isinstance(payload, dict)
-                        and "config" in payload
-                        and "state_dir" in payload)
-        except (OSError, ValueError, UnicodeDecodeError):
-            return False
+        return is_sid_console(url)
 
     if not alive():
         log = cfg.state_dir() / "server.log"

@@ -390,11 +390,23 @@ class Store:
             self._publish(data, stamp)
             return data
 
+    def set_conf(self, conf: dict) -> None:
+        with self._lock:
+            self.conf = conf
+
     def rescan(self) -> dict:
+        """Scan again with the configuration on disk.
+
+        Refused while config.json is corrupt: the user's scan scope is then
+        unknown, and replacing a good index with a scan of nothing would
+        throw away what the console could still show.
+        """
         with self._scan_lock:
             conf = cfg.load()
-            self.conf = conf
-            data, stamp = self._scan()
+            self.set_conf(conf)
+            if conf.get("_corrupt"):
+                raise ValueError(cfg.corrupt_message())
+            data, stamp = self._scan(conf)
             self._publish(data, stamp)
             return data
 
@@ -422,18 +434,21 @@ class Store:
                 data = json.loads(fh.read().decode("utf-8"))
             if isinstance(data, dict) and data.get("index_version") == INDEX_VERSION:
                 return data, stamp
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             pass
-        return self._scan()
+        with self._lock:
+            conf = self.conf
+        return self._scan(conf)
 
-    def _scan(self) -> tuple[dict, tuple]:
+    def _scan(self, conf: dict) -> tuple[dict, tuple]:
         extra: list[Path] = []
-        snap = herdr.snapshot(self.conf.get("herdr_bin", ""))
-        for agent in snap["agents"]:
-            root = git_root(agent.get("foreground_cwd") or agent.get("cwd") or "")
-            if root:
-                extra.append(root)
-        data = build_static(self.conf, extra)
+        if not conf.get("_corrupt"):  # scope unknown: no roots beyond the (empty) config
+            snap = herdr.snapshot(conf.get("herdr_bin", ""))
+            for agent in snap["agents"]:
+                root = git_root(agent.get("foreground_cwd") or agent.get("cwd") or "")
+                if root:
+                    extra.append(root)
+        data = build_static(conf, extra)
         written = cfg.write_private(cfg.index_path(), json.dumps(data, ensure_ascii=False))
         return data, _stamp(written)
 
@@ -497,8 +512,10 @@ class Store:
         epoch = None
         try:
             static, epoch = self._static_for_live()
+            with self._lock:
+                conf = self.conf
             started = time.monotonic()
-            data = build_live(self.conf, static)
+            data = build_live(conf, static)
             return data
         finally:
             with self._live_cond:

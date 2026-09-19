@@ -346,6 +346,10 @@ function staleNotice() {
     el("div", null, `技能索引已經 ${ago(D.overview.generated_at).replace("前", "")}沒有更新，新增、移除或升級的技能可能還沒反映。 `,
       el("button", { class: "btn small", on: { click: rescan } }, "立即重新掃描")));
 }
+function corruptNotice() {
+  if (!D.overview || !D.overview.config_corrupt) return null;
+  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以主控台已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.sid-console/config.json 後重新啟動主控台；原檔不會被覆寫。");
+}
 function herdrNotice() {
   const h = D.live && D.live.herdr;
   if (!h) return null;
@@ -375,7 +379,7 @@ async function viewHome() {
   };
   const searchSoon = debounce(runSearch);
   input.addEventListener("input", searchSoon);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
@@ -384,6 +388,7 @@ async function viewHome() {
   setKids(main, 
     el("h1", null, "我的工作台"),
     el("p", { class: "lede" }, "先看需要你處理的事，再找適合這次任務的技能。"),
+    corruptNotice(),
     staleNotice(),
     herdrNotice(),
     el("section", { class: "section", id: "h-att-wrap" }, attentionSection()),
@@ -512,12 +517,13 @@ async function viewSkills(params) {
   }
   const search = debounce(() => { f.q = q.value; history.replaceState(null, "", `#/skills${f.q ? "?q=" + encodeURIComponent(f.q) : ""}`); draw(); });
   q.addEventListener("input", search);
-  q.addEventListener("keydown", (e) => { if (e.key === "Enter") search.now(); });
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) search.now(); });
 
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
     el("h1", null, "技能庫"),
     el("p", { class: "lede" }, "所有已盤點的技能。預設只顯示目前真的能用的；舊版快取、停用與市集副本可從「狀態」切換查看。"),
+    corruptNotice(),
     staleNotice(),
     el("div", { class: "search" }, q),
     el("div", { class: "toolbar" },
@@ -766,7 +772,7 @@ async function viewRole(id) {
   };
   const search = debounce(draw, 200);
   q.addEventListener("input", search);
-  q.addEventListener("keydown", (e) => { if (e.key === "Enter") search.now(); });
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) search.now(); });
 
   setKids(main, 
     crumbs([["Agent 團隊", "#/team"], [r.name]]),
@@ -899,6 +905,7 @@ async function viewSettings() {
   setKids(main, 
     el("h1", null, "設定"),
     el("p", { class: "lede" }, "選擇要盤點的來源。主控台只讀取你選的位置，不會修改任何技能或角色檔案。"),
+    c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
     el("div", { class: "grid-2" },
       el("div", { class: "panel pad" },
         el("h2", { style: "margin-bottom:6px" }, "掃描來源"),

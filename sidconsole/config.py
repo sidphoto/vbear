@@ -154,7 +154,7 @@ def is_corrupt() -> bool:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return not isinstance(data, dict)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):  # deep nesting is corrupt too
         return True
 
 
@@ -225,6 +225,21 @@ def corrupt_message() -> str:
     return f"設定檔已損毀，拒絕自動覆寫；{_BACKUP_NOTES[outcome]}，請修復後重試"
 
 
+def corrupt_fallback() -> dict:
+    """What the console runs with while config.json cannot be read.
+
+    The user's choices are unknown, so nothing is assumed: every source is
+    off and no project root is scanned. Falling back to the defaults would
+    silently widen the scan past what the user had chosen.
+    """
+    merged = json.loads(json.dumps(DEFAULT_CONFIG))
+    for src in merged["sources"]:
+        src["enabled"] = False
+    merged["project_roots"] = []
+    merged["_corrupt"] = True
+    return merged
+
+
 def load() -> dict:
     path = config_path()
     if not path.exists():
@@ -236,12 +251,10 @@ def load() -> dict:
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError("設定檔內容非物件")
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         if raw is not None:
             _backup_corrupt(raw)
-        merged = json.loads(json.dumps(DEFAULT_CONFIG))
-        merged["_corrupt"] = True
-        return merged
+        return corrupt_fallback()
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
     merged.update(data)
     known = {s["source_id"] for s in merged.get("sources", [])}

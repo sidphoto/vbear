@@ -55,14 +55,34 @@ _STRONG_PARTS = {
 _KEY_PARTS = _STRONG_PARTS | {"key", "keys", "auth", "private", "privatekey", "cookie"}
 
 
+# Name parts that make the field describe a secret instead of holding one:
+# a count or limit (max_tokens), where it lives (token_file, api_key_env) or
+# what it is called (secret_name). Their values are numbers, paths and names.
+_ABOUT_PARTS = {
+    "max", "min", "count", "counts", "num", "number", "limit", "limits", "length", "len",
+    "size", "budget", "usage", "used", "remaining", "total", "ttl", "expiry", "expires",
+    "file", "files", "path", "paths", "dir", "env", "var", "name", "names", "url", "header",
+    "type", "kind", "format", "field", "rotation",
+}
+# Database and data-structure keys, not credentials.
+_STRUCT_KEY_PREFIXES = ("primary", "foreign", "sort", "partition", "composite", "unique",
+                        "cache", "map", "dict", "hot", "short", "sub")
+
+
 def secret_key_name(name: str, strict: bool = True) -> bool:
     """True when a field name (api_key, apiKey, ACCESS_TOKEN, ...) names a secret.
 
     strict=True is for structured keys (front matter); strict=False is for
     "name: value" found inside free text, where a bare "key:" is usually prose.
+    Names that only describe a secret (max_tokens, token_file, primary_key)
+    are not secrets themselves.
     """
     parts = [p.lower() for p in _NAME_PART.findall(name)]
     if not parts:
+        return False
+    if _ABOUT_PARTS & set(parts):
+        return False
+    if parts[-1] in ("key", "keys") and len(parts) > 1 and parts[-2] in _STRUCT_KEY_PREFIXES:
         return False
     if (_KEY_PARTS if strict else _STRONG_PARTS) & set(parts):
         return True

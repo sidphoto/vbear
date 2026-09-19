@@ -49,6 +49,8 @@ SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is i
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
+MAX_BODY = 64 * 1024
+BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
 FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localhost ports
 
 
@@ -145,26 +147,43 @@ def make_handler(console: Console):
             return site is None or site in FETCH_SITE_OK
 
         def _read_content_length(self) -> int:
+            """Plain ASCII digits only. int() would also take "+5", "1_0" or
+            " 7 ", which no HTTP client sends and proxies may read differently."""
             raw = self.headers.get("Content-Length")
             if raw is None or raw == "":
                 return 0
-            try:
-                length = int(raw)
-                if length < 0:
-                    raise ValueError
-                return length
-            except ValueError:
+            if not (raw.isascii() and raw.isdigit()) or len(raw) > 9:
                 raise ValueError("無效的 Content-Length")
+            return int(raw)
+
+        def _read_body_bytes(self, length: int) -> bytes:
+            """Read exactly `length` bytes within BODY_DEADLINE_S in total.
+
+            The handler's socket timeout bounds each read; this bounds their
+            sum, so a client trickling a byte every few seconds cannot hold a
+            worker thread indefinitely.
+            """
+            deadline = time.monotonic() + BODY_DEADLINE_S
+            chunks, remaining = [], length
+            while remaining > 0:
+                if time.monotonic() > deadline:
+                    raise TimeoutError("request body too slow")
+                chunk = self.rfile.read1(min(remaining, 8192))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
 
         def _body(self) -> dict:
             length = self._read_content_length()
-            if length <= 0 or length > 64 * 1024:
+            if length <= 0:
                 return {}
             try:
-                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                data = json.loads(self._read_body_bytes(length).decode("utf-8"))
             except TimeoutError:
                 raise
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError, RecursionError):
                 return {}
             return data if isinstance(data, dict) else {}
 
@@ -217,13 +236,20 @@ def make_handler(console: Console):
             if not self._write_ok():
                 return self._error(403, "forbidden")
             try:
-                self._read_content_length()
+                length = self._read_content_length()
             except ValueError as exc:
+                self.close_connection = True
                 return self._error(400, str(exc))
+            if length > MAX_BODY:
+                self.close_connection = True  # the unread body must not be parsed as a request
+                return self._error(413, "請求內容過大")
             path = urlparse(self.path).path
             try:
                 if path == "/api/rescan":
-                    data = console.store.rescan()
+                    try:
+                        data = console.store.rescan()
+                    except ValueError as exc:  # corrupt config: scan scope unknown
+                        return self._error(409, str(exc))
                     return self._json({"ok": True, "generated_at": data["generated_at"],
                                        "scan_seconds": data["scan_seconds"]})
                 if path == "/api/config":
@@ -285,6 +311,7 @@ def make_handler(console: Console):
                 "scan_seconds": static["scan_seconds"],
                 "age_seconds": round(time.time() - static["generated_at"]),
                 "stale": time.time() - static["generated_at"] > STALE_AFTER_S,
+                "config_corrupt": bool(console.store.conf.get("_corrupt")) or cfg.is_corrupt(),
                 "counts": counts,
                 "totals": {"skills": len(skills), "roles": len(static["roles"]),
                            "active": sum(1 for s in skills if s["activation"] == ACT_ACTIVE)},
@@ -375,7 +402,8 @@ def make_handler(console: Console):
 
         def _config_view(self) -> dict:
             conf = console.store.conf
-            res = {"config": {k: v for k, v in conf.items()}, "state_dir": str(cfg.state_dir()),
+            res = {"config": {k: v for k, v in conf.items() if not k.startswith("_")},
+                   "state_dir": str(cfg.state_dir()),
                    "herdr_binary": herdr.binary(conf.get("herdr_bin", ""))}
             if conf.get("_corrupt") or cfg.is_corrupt():
                 res["corrupt"] = True
@@ -406,7 +434,7 @@ def make_handler(console: Console):
                         if src["source_id"] in toggles:
                             src["enabled"] = bool(toggles[src["source_id"]])
                 cfg.save(conf)
-                console.store.conf = conf
+                console.store.set_conf(conf)
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
                     or "project_roots" in body}
 
