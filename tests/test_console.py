@@ -309,6 +309,20 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(data["config"]["host"], cfg.DEFAULT_HOST)
         self.assertEqual(data["config"]["port"], cfg.DEFAULT_PORT)
 
+    def test_role_skills_paging_and_debounce(self):
+        r = urllib.request.Request(self.base + "/app.js")
+        with urllib.request.urlopen(r) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/javascript", resp.headers.get("Content-Type", ""))
+            content = resp.read().decode("utf-8")
+            self.assertIn("async function viewRole", content)
+            role_part = content.split("async function viewRole")[1].split("async function viewProjects")[0]
+            self.assertIn("PAGE_SIZE = 120", role_part)
+            self.assertIn("debounce(draw, 200)", role_part)
+            self.assertIn('e.key === "Enter"', role_part)
+            self.assertIn("updateMore()", role_part)
+
+
 
 # --- hardening (T5 review M1-M3, L1-L5) -------------------------------------
 #

@@ -723,13 +723,50 @@ async function viewRole(id) {
     ? el("div", { class: "field" }, el("h3", null, title, prov(src)), src.value ? el("div", { class: "body" }, String(src.value)) : el("div", { class: "empty" }, src.detail)) : null;
   const skills = r.skills || [];
   const q = el("input", { type: "search", placeholder: "在這個角色的技能中搜尋", "aria-label": "搜尋角色技能" });
-  const list = el("div", { class: "grid" });
+  const PAGE_SIZE = 120;
+  let shown = 0;
+  let hits = [];
+  const card = ({ s, why }) => skillCard(s, why);
+  const more = el("button", { type: "button", class: "btn", style: "margin-top:14px", on: { click: showMore } });
+  let holder = null;
+  const list = el("div", null);
+
+  function showMore() {
+    if (token !== seq || !holder) return;
+    const batch = hits.slice(shown, shown + PAGE_SIZE);
+    const nodes = batch.map(card);
+    append(holder, nodes);
+    shown += batch.length;
+    updateMore();
+    const first = nodes[0] && (nodes[0].matches("a") ? nodes[0] : nodes[0].querySelector("a"));
+    if (first) first.focus();
+  }
+
+  function updateMore() {
+    const left = hits.length - shown;
+    more.hidden = left <= 0;
+    more.textContent = `顯示更多（剩 ${left} 筆）`;
+  }
+
   const draw = () => {
     const pool = skills.map((x) => D.byId.get(x.skill_id)).filter(Boolean);
-    const hits = searchSkills(q.value, pool);
-    setKids(list, ...(hits.length ? hits.slice(0, 120).map((h) => skillCard(h.s, h.why)) : [emptyState("沒有符合的技能", null)]));
+    hits = searchSkills(q.value, pool);
+    shown = 0;
+    holder = null;
+    if (!hits.length) {
+      setKids(list, emptyState("沒有符合的技能", null));
+      return;
+    }
+    holder = el("div", { class: "grid" });
+    setKids(list, holder, more);
+    const batch = hits.slice(0, PAGE_SIZE);
+    append(holder, batch.map(card));
+    shown = batch.length;
+    updateMore();
   };
-  q.addEventListener("input", draw);
+  const search = debounce(draw, 200);
+  q.addEventListener("input", search);
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter") search.now(); });
 
   setKids(main, 
     crumbs([["Agent 團隊", "#/team"], [r.name]]),
