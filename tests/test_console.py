@@ -1404,6 +1404,17 @@ class SecretNameTests(unittest.TestCase):  # C3
                      "token_file", "api_key_env", "secret_name", "password_min_length"):
             self.assertFalse(document.secret_key_name(name), name)
 
+    def test_describing_names_still_hide_secret_looking_values(self):
+        """A describing name is no excuse: only harmless values stay visible."""
+        text = document.redact("secret_file: hunter2\ndb_password_env: hunter2\n"
+                               "token_type: opaque-value\npassword_min_length: 12")
+        self.assertNotIn("hunter2", text)
+        self.assertNotIn("opaque-value", text)
+        self.assertIn("password_min_length: 12", text)
+        self.assertEqual(document.redact_value("secret_file", "hunter2"), document.REDACTED)
+        self.assertEqual(document.redact_value("max_tokens", 4096), 4096)
+        self.assertEqual(document.redact_value("primary_key", "id"), "id")
+
     def test_values_are_still_caught_by_shape(self):
         text = document.redact("api_key_env: OPENAI_KEY\ntoken_file: sk-ant-abcdefghijklmnopqrstuv\n"
                                "max_tokens: 4096\ntoken_url: https://x.test/?token=s3cr3tvalue")

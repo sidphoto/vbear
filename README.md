@@ -86,8 +86,8 @@ herdr plugin action invoke sid.console.open
 - 憑證遮蔽：front matter 鍵名像機密（`api_key`、`apiKey`、`access_token`、`password`、`auth` 等）整個值遮蔽；
   內文的 `名稱: 值`／`名稱=值`（含 JSON 引號）遮到行尾；另外辨識 `sk-`／`sk-ant-`、GitHub、AWS `AKIA…`、Slack `xox?-`
   與整塊 PEM 私鑰。遮蔽套用在索引、章節、原始 SKILL.md、引用檔與警告文字，寧可多遮（例如整行說明）也不漏。
-  只是「描述」機密的名稱不遮：數量或上限（`max_tokens`、`token_count`）、位置或名稱（`token_file`、`api_key_env`、`secret_name`）、
-  資料庫鍵（`primary_key`、`sort_key`）；它們的值若本身像 token，仍會被上面的樣式遮住。
+  資料庫鍵（`primary_key`、`sort_key`）不遮。只是「描述」機密的名稱（`max_tokens`、`token_file`、`api_key_env`、`secret_name`）
+  只有在值明顯無害時才顯示：數字、路徑、網址（不含查詢字串）、`ENV_VAR` 名稱或布林值；其他值一律遮蔽（例如 `secret_file: hunter2`）。
 - 「切到這個 Terminal」只呼叫 `herdr agent focus`，不會送出任何輸入給 Agent；目標必須是目前 herdr 回報的 pane／terminal ID，
   且不可以 `-` 開頭（`herdr agent focus` 只接受單一參數，沒有 `--` 分隔）。
 - 請求內容：`Content-Length` 只接受純數字；超過 64KB 回 413 並關閉連線；整個請求內容必須在 15 秒內送完，
@@ -113,6 +113,6 @@ sidconsole/
   annotations.py                      我的註記（別名、標籤、備註）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
-tests/                                84 項測試，全部使用合成的 HOME
+tests/                                85 項測試，全部使用合成的 HOME
 tests/frontend/                       前端行為測試（node＋合成 DOM，不是瀏覽器測試）
 ```

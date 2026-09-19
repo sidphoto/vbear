@@ -7,6 +7,7 @@ like X", which is weaker than the author explicitly declaring the field.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -78,12 +79,45 @@ def secret_key_name(name: str, strict: bool = True) -> bool:
     are not secrets themselves.
     """
     parts = [p.lower() for p in _NAME_PART.findall(name)]
-    if not parts:
+    if not parts or _describes_only(parts) or _structure_key(parts):
         return False
-    if _ABOUT_PARTS & set(parts):
+    return _names_secret(parts, strict)
+
+
+def _describes_only(parts: list[str]) -> bool:
+    return bool(_ABOUT_PARTS & set(parts))
+
+
+def _structure_key(parts: list[str]) -> bool:
+    return parts[-1] in ("key", "keys") and len(parts) > 1 and parts[-2] in _STRUCT_KEY_PREFIXES
+
+
+# Values that cannot be a credential: counts, paths, URLs without a query,
+# ENV_VAR names and booleans. A describing name keeps only these visible.
+_HARMLESS_VALUE = re.compile(
+    r"\s*(?:[\"'`]?)(?:-?\d+(?:\.\d+)?[kKmM]?|true|false|null|none|"
+    r"[~./][^\s?#]*|https?://[^\s?#]+|[A-Z][A-Z0-9_]{2,})(?:[\"'`]?)\s*[,;]?\s*"
+)
+
+
+def secret_value_for(name: str, value: str, strict: bool = True) -> bool:
+    """Whether `value`, stored under `name`, must be hidden.
+
+    Secret names always hide their value. A name that only describes a secret
+    (max_tokens, token_file, api_key_env) keeps its value visible only while
+    that value is harmless; "secret_file: hunter2" is still hidden.
+    """
+    parts = [p.lower() for p in _NAME_PART.findall(name)]
+    if not parts or _structure_key(parts):
         return False
-    if parts[-1] in ("key", "keys") and len(parts) > 1 and parts[-2] in _STRUCT_KEY_PREFIXES:
+    if not _describes_only(parts):
+        return _names_secret(parts, strict)
+    if not _names_secret(parts, strict):
         return False
+    return not _HARMLESS_VALUE.fullmatch(value)
+
+
+def _names_secret(parts: list[str], strict: bool) -> bool:
     if (_KEY_PARTS if strict else _STRONG_PARTS) & set(parts):
         return True
     joined = "".join(parts)
@@ -131,8 +165,8 @@ def redact(text: str) -> str:
                 continue
             block_indent = None
         for match in _KV_NAME.finditer(line):
-            if secret_key_name(match.group(2), strict=False):
-                value = line[match.end():]
+            value = line[match.end():]
+            if secret_value_for(match.group(2), value, strict=False):
                 lines[i] = line[: match.end()] + REDACTED
                 if value.strip() in ("|", "|-", "|+", ">", ">-", ">+"):
                     block_indent = len(line) - len(line.lstrip())
@@ -144,7 +178,8 @@ def redact(text: str) -> str:
 
 def redact_value(key, value):
     """Redact a parsed front-matter value; secret-named keys lose the whole value."""
-    if isinstance(key, str) and secret_key_name(key):
+    if isinstance(key, str) and secret_value_for(
+            key, value if isinstance(value, str) else json.dumps(value, default=str)):
         return REDACTED
     if isinstance(value, str):
         return redact(value)
