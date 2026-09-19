@@ -1,7 +1,9 @@
-# SID Console
+# SID Console for Herdr
 
-SID Herdr 的第一版主控台：把分散在各處的 Skill、Agent 角色與工作中的 Terminal
+給 [herdr](https://github.com/herdrdev/herdr) 使用者的本機主控台外掛：把分散在各處的 Skill、Agent 角色與工作中的 Terminal
 整理成一般人看得懂的畫面。對應規劃書 P1（互動原型）＋ P2（唯讀技能庫）＋ P3（Agent 關聯）。
+
+本專案是獨立的第三方外掛，與 herdr 官方無關；「herdr」為其原作者的產品名稱，這裡只用來說明相容對象。
 
 - **本機、唯讀**：只讀取你選的來源，不修改任何技能或角色檔案，不執行技能內的腳本。
 - **零相依**：只用 Python 3.11+ 標準函式庫，沒有 npm / pip 套件，不連外部服務。
@@ -11,7 +13,6 @@ SID Herdr 的第一版主控台：把分散在各處的 Skill、Agent 角色與�
 ## 使用
 
 ```sh
-cd sid-console
 python3 -m sidconsole serve --open   # 啟動並開啟 http://127.0.0.1:7788
 python3 -m sidconsole doctor         # 檢查來源與 herdr 連線
 python3 -m sidconsole scan           # 重新掃描並輸出摘要
@@ -21,7 +22,7 @@ python3 -m unittest discover -s tests
 從 herdr 內開啟（會註冊到 herdr 的全域外掛設定）：
 
 ```sh
-herdr plugin link /path/to/sid-herdr/sid-console
+herdr plugin link /path/to/sid-console
 herdr plugin action invoke sid.console.open
 ```
 

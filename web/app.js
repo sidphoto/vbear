@@ -1,5 +1,5 @@
 "use strict";
-/* SID Herdr Console — UI.
+/* SID Console for Herdr — UI.
  * Skill and agent text is untrusted input: everything is rendered through
  * el(), which only ever creates text nodes. There is no innerHTML here.
  */

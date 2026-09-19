@@ -10,7 +10,7 @@ from . import config as cfg
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sidconsole", description="SID Herdr 技能與團隊主控台")
+    parser = argparse.ArgumentParser(prog="sidconsole", description="SID Console for Herdr：技能與團隊主控台")
     sub = parser.add_subparsers(dest="cmd")
     p_serve = sub.add_parser("serve", help="啟動本機主控台（預設）")
     p_serve.add_argument("--port", type=int)

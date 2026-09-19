@@ -1,5 +1,5 @@
 id = "sid.console"
-name = "SID Console"
+name = "SID Console for Herdr"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
 description = "技能庫、Agent 團隊與專案主控台（本機、唯讀）"

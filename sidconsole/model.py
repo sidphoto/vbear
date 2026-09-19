@@ -1,4 +1,4 @@
-"""Data model for SID Herdr Console.
+"""Data model for SID Console for Herdr.
 
 Design rule from the product plan (section 6.2 / 9): every user-visible claim
 must carry where it came from. A value the scanner derived by reading document
