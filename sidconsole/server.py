@@ -103,6 +103,7 @@ def make_handler(console: Console):
     class Handler(BaseHTTPRequestHandler):
         server_version = "SIDConsole/0.1"
         sys_version = ""
+        timeout = 15.0
 
         def log_message(self, fmt, *args):  # keep the terminal quiet; no request bodies
             if "--verbose" in sys.argv:
@@ -143,12 +144,26 @@ def make_handler(console: Console):
             site = self.headers.get("Sec-Fetch-Site")
             return site is None or site in FETCH_SITE_OK
 
+        def _read_content_length(self) -> int:
+            raw = self.headers.get("Content-Length")
+            if raw is None or raw == "":
+                return 0
+            try:
+                length = int(raw)
+                if length < 0:
+                    raise ValueError
+                return length
+            except ValueError:
+                raise ValueError("無效的 Content-Length")
+
         def _body(self) -> dict:
-            length = int(self.headers.get("Content-Length") or 0)
+            length = self._read_content_length()
             if length <= 0 or length > 64 * 1024:
                 return {}
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
+            except TimeoutError:
+                raise
             except (ValueError, UnicodeDecodeError):
                 return {}
             return data if isinstance(data, dict) else {}
@@ -184,6 +199,8 @@ def make_handler(console: Console):
                     return self._json(console.store.live(force=force))
                 if path == "/api/config":
                     return self._json(self._config_view())
+            except TimeoutError:
+                raise
             except Exception as exc:  # report, never crash the server
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
             return self._error(404, "not found")
@@ -199,6 +216,10 @@ def make_handler(console: Console):
                 return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
             if not self._write_ok():
                 return self._error(403, "forbidden")
+            try:
+                self._read_content_length()
+            except ValueError as exc:
+                return self._error(400, str(exc))
             path = urlparse(self.path).path
             try:
                 if path == "/api/rescan":
@@ -228,6 +249,8 @@ def make_handler(console: Console):
                             and target not in console.live_targets(force=True)):
                         return self._error(400, "目前沒有這個 Terminal")
                     return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
+            except TimeoutError:
+                raise
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
             return self._error(404, "not found")
@@ -352,11 +375,16 @@ def make_handler(console: Console):
 
         def _config_view(self) -> dict:
             conf = console.store.conf
-            return {"config": {k: v for k, v in conf.items()}, "state_dir": str(cfg.state_dir()),
-                    "herdr_binary": herdr.binary(conf.get("herdr_bin", ""))}
+            res = {"config": {k: v for k, v in conf.items()}, "state_dir": str(cfg.state_dir()),
+                   "herdr_binary": herdr.binary(conf.get("herdr_bin", ""))}
+            if conf.get("_corrupt") or cfg.is_corrupt():
+                res["corrupt"] = True
+            return res
 
         def _config_update(self, body: dict) -> dict:
             with console.lock:
+                if cfg.is_corrupt():
+                    raise ValueError("設定檔已損毀，拒絕自動覆寫；原檔已備份至 config.json.bak，請修復後重試")
                 conf = cfg.load()
                 for key in CONFIG_WRITABLE & body.keys():
                     value = body[key]

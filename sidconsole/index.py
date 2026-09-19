@@ -333,6 +333,7 @@ class Store:
         self._scan_lock = threading.Lock()
         self._live_cond = threading.Condition()
         self._static: dict | None = None
+        self._static_mtime: int = -1
         self._live: dict | None = None
         self._live_at = 0.0        # monotonic time the cached build finished
         self._live_started = 0.0   # monotonic time the cached build started
@@ -341,16 +342,33 @@ class Store:
         cfg.ensure_state_dir()  # also tightens a state dir made by an older version
         self.conf = cfg.load()
 
+    def _index_mtime(self) -> int:
+        try:
+            return cfg.index_path().stat().st_mtime_ns
+        except OSError:
+            return 0
+
     # static
     def static(self) -> dict:
-        data = self._static
-        if data is not None:
-            return data
+        mtime = self._index_mtime()
+        with self._lock:
+            if self._static is not None:
+                if self._static_mtime < 0:
+                    self._static_mtime = mtime
+                    return self._static
+                if self._static_mtime == mtime:
+                    return self._static
         with self._scan_lock:
-            if self._static is None:
+            mtime = self._index_mtime()
+            if self._static is None or (self._static_mtime >= 0 and self._static_mtime < mtime):
                 data = self._load_or_scan()
+                mtime = self._index_mtime()
                 with self._lock:
                     self._static = data
+                    self._static_mtime = mtime
+                with self._live_cond:
+                    self._live = None
+                    self._live_epoch += 1
             return self._static
 
     def rescan(self) -> dict:
@@ -358,8 +376,10 @@ class Store:
             conf = cfg.load()
             self.conf = conf
             data = self._scan()
+            mtime = self._index_mtime()
             with self._lock:
                 self._static = data
+                self._static_mtime = mtime
             with self._live_cond:
                 self._live = None
                 self._live_epoch += 1
@@ -426,10 +446,11 @@ class Store:
         """Run one build; the caller has already set _live_building."""
         data = None
         try:
+            static = self.static()
             with self._live_cond:
                 epoch = self._live_epoch
             started = time.monotonic()
-            data = build_live(self.conf, self.static())
+            data = build_live(self.conf, static)
             return data
         finally:
             with self._live_cond:

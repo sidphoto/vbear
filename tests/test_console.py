@@ -322,6 +322,82 @@ class ServerTests(unittest.TestCase):
             self.assertIn('e.key === "Enter"', role_part)
             self.assertIn("updateMore()", role_part)
 
+    def test_invalid_content_length_returns_400(self):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.console.port)
+        conn.putrequest("POST", "/api/focus")
+        conn.putheader("Host", f"127.0.0.1:{self.console.port}")
+        conn.putheader("X-SID-Console", "1")
+        conn.putheader("Content-Length", "invalid")
+        conn.endheaders()
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 400)
+        conn.close()
+
+    def test_handler_has_socket_timeout(self):
+        self.assertEqual(getattr(self.httpd.RequestHandlerClass, "timeout", None), 15.0)
+
+    def test_launch_alive_validates_sid_console_schema(self):
+        import http.server
+        class FakeHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"unrelated": true}')
+            def log_message(self, *a): pass
+
+        fake_srv = http.server.HTTPServer(("127.0.0.1", 0), FakeHandler)
+        fport = fake_srv.server_address[1]
+        t = threading.Thread(target=fake_srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{fport}/api/config", timeout=1) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+                alive = (isinstance(payload, dict) and "config" in payload and "state_dir" in payload)
+                self.assertFalse(alive)
+            with urllib.request.urlopen(f"{self.base}/api/config", timeout=1) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+                alive = (isinstance(payload, dict) and "config" in payload and "state_dir" in payload)
+                self.assertTrue(alive)
+        finally:
+            fake_srv.shutdown()
+            fake_srv.server_close()
+
+    def test_corrupt_config_prevents_overwrite_and_backs_up(self):
+        cpath = cfg.config_path()
+        bakpath = cpath.with_suffix(".json.bak")
+        original = cpath.read_text(encoding="utf-8")
+        try:
+            cpath.write_text("{broken json", encoding="utf-8")
+            self.assertTrue(cfg.is_corrupt())
+            loaded = cfg.load()
+            self.assertTrue(loaded.get("_corrupt"))
+            self.assertTrue(bakpath.exists())
+            with self.assertRaises(ValueError):
+                cfg.save(loaded)
+            # POST /api/config should return 400
+            status, _, _ = self.req("/api/config", "POST", headers={"X-SID-Console": "1"}, body={"usage_days": 30})
+            self.assertEqual(status, 400)
+            self.assertEqual(cpath.read_text(encoding="utf-8"), "{broken json")
+        finally:
+            cpath.write_text(original, encoding="utf-8")
+            bakpath.unlink(missing_ok=True)
+
+    def test_server_reloads_index_when_disk_mtime_changes(self):
+        self.console.store.static()
+        idx_path = cfg.index_path()
+        original = idx_path.read_text(encoding="utf-8")
+        try:
+            data = json.loads(original)
+            data["skills"].append({"name": "cli-added-skill", "skill_id": "test:cli-added", "tool": "claude"})
+            idx_path.write_text(json.dumps(data), encoding="utf-8")
+            reloaded = self.console.store.static()
+            self.assertTrue(any(s.get("name") == "cli-added-skill" for s in reloaded.get("skills", [])))
+        finally:
+            idx_path.write_text(original, encoding="utf-8")
+            self.console.store.static()
+
 
 
 # --- hardening (T5 review M1-M3, L1-L5) -------------------------------------

@@ -140,15 +140,37 @@ DEFAULT_CONFIG = {
 }
 
 
+def is_corrupt() -> bool:
+    path = config_path()
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return not isinstance(data, dict)
+    except (OSError, ValueError):
+        return True
+
+
 def load() -> dict:
     path = config_path()
     if not path.exists():
         save(DEFAULT_CONFIG)
         return json.loads(json.dumps(DEFAULT_CONFIG))
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("設定檔內容非物件")
     except (OSError, ValueError):
-        return json.loads(json.dumps(DEFAULT_CONFIG))
+        bak = path.with_suffix(".json.bak")
+        try:
+            if not bak.exists() and "raw" in locals():
+                bak.write_text(raw, encoding="utf-8")
+        except OSError:
+            pass
+        merged = json.loads(json.dumps(DEFAULT_CONFIG))
+        merged["_corrupt"] = True
+        return merged
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
     merged.update(data)
     known = {s["source_id"] for s in merged.get("sources", [])}
@@ -158,8 +180,11 @@ def load() -> dict:
     return merged
 
 
-def save(data: dict) -> None:
-    write_private(config_path(), json.dumps(data, ensure_ascii=False, indent=2))
+def save(data: dict, force: bool = False) -> None:
+    if not force and is_corrupt():
+        raise ValueError("設定檔已損毀，拒絕自動覆寫；原檔已備份至 config.json.bak，請修復後重試")
+    cleaned = {k: v for k, v in data.items() if not k.startswith("_")}
+    write_private(config_path(), json.dumps(cleaned, ensure_ascii=False, indent=2))
 
 
 def sources_from(data: dict) -> list[Source]:

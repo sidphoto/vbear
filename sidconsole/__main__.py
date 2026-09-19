@@ -76,8 +76,13 @@ def launch(port: int | None) -> int:
     def alive() -> bool:
         try:
             with urllib.request.urlopen(url + "api/config", timeout=1) as resp:
-                return resp.status == 200
-        except OSError:
+                if resp.status != 200:
+                    return False
+                payload = json.loads(resp.read().decode("utf-8"))
+                return (isinstance(payload, dict)
+                        and "config" in payload
+                        and "state_dir" in payload)
+        except (OSError, ValueError, UnicodeDecodeError):
             return False
 
     if not alive():
