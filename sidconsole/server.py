@@ -384,7 +384,7 @@ def make_handler(console: Console):
         def _config_update(self, body: dict) -> dict:
             with console.lock:
                 if cfg.is_corrupt():
-                    raise ValueError("設定檔已損毀，拒絕自動覆寫；原檔已備份至 config.json.bak，請修復後重試")
+                    raise ValueError(cfg.corrupt_message())
                 conf = cfg.load()
                 for key in CONFIG_WRITABLE & body.keys():
                     value = body[key]

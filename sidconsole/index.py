@@ -10,6 +10,7 @@ Two layers, because they change at different speeds:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import defaultdict
@@ -316,6 +317,20 @@ def _resolve_usage(key: str, skills: list[dict], tool: str) -> tuple[list[str], 
     return [s["skill_id"] for s in active], value, "exact" if len(active) == 1 else "ambiguous"
 
 
+_MISSING: tuple = ()  # the stamp of an index file that is not there
+
+
+def _stamp(st: os.stat_result) -> tuple:
+    """Which generation of the index file this is.
+
+    Compared for equality, never by age: a replacement can carry the same or
+    an older mtime (copies, restores, coarse clocks) and is still a different
+    inode or size. ctime is left out because every private state write
+    re-tightens file modes, which moves ctime without changing the content.
+    """
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
 class Store:
     """Holds the cached static index and a TTL-cached live view.
 
@@ -333,70 +348,85 @@ class Store:
         self._scan_lock = threading.Lock()
         self._live_cond = threading.Condition()
         self._static: dict | None = None
-        self._static_mtime: int = -1
+        self._static_stamp: tuple | None = None  # file _static came from; None = unknown
         self._live: dict | None = None
         self._live_at = 0.0        # monotonic time the cached build finished
         self._live_started = 0.0   # monotonic time the cached build started
         self._live_building = False
-        self._live_epoch = 0       # bumped by rescan; older builds are not cached
+        self._live_epoch = 0       # bumped when _static changes; older builds are not cached
         cfg.ensure_state_dir()  # also tightens a state dir made by an older version
         self.conf = cfg.load()
 
-    def _index_mtime(self) -> int:
+    def _index_stamp(self) -> tuple:
         try:
-            return cfg.index_path().stat().st_mtime_ns
+            return _stamp(cfg.index_path().stat())
         except OSError:
-            return 0
+            return _MISSING
 
     # static
     def static(self) -> dict:
-        mtime = self._index_mtime()
+        """The static index, reloaded when index.json is a different file
+        (for example after a CLI scan) than the one it was read from."""
+        current = self._index_stamp()
         with self._lock:
             if self._static is not None:
-                if self._static_mtime < 0:
-                    self._static_mtime = mtime
-                    return self._static
-                if self._static_mtime == mtime:
+                if self._static_stamp is None:  # assigned directly: adopt the file on disk
+                    self._static_stamp = current
+                if self._static_stamp == current:
                     return self._static
         with self._scan_lock:
-            mtime = self._index_mtime()
-            if self._static is None or (self._static_mtime >= 0 and self._static_mtime < mtime):
-                data = self._load_or_scan()
-                mtime = self._index_mtime()
-                with self._lock:
-                    self._static = data
-                    self._static_mtime = mtime
-                with self._live_cond:
-                    self._live = None
-                    self._live_epoch += 1
-            return self._static
+            current = self._index_stamp()
+            with self._lock:
+                if self._static is not None:
+                    if self._static_stamp == current:  # another caller reloaded it
+                        return self._static
+                    if current == _MISSING:
+                        # A deleted index is not newer content: keep serving the
+                        # one in memory (rendering never starts a scan) until a
+                        # new file appears or a rescan runs.
+                        self._static_stamp = _MISSING
+                        return self._static
+            data, stamp = self._load_or_scan()
+            self._publish(data, stamp)
+            return data
 
     def rescan(self) -> dict:
         with self._scan_lock:
             conf = cfg.load()
             self.conf = conf
-            data = self._scan()
-            mtime = self._index_mtime()
-            with self._lock:
-                self._static = data
-                self._static_mtime = mtime
-            with self._live_cond:
-                self._live = None
-                self._live_epoch += 1
+            data, stamp = self._scan()
+            self._publish(data, stamp)
             return data
 
-    def _load_or_scan(self) -> dict:
-        path = cfg.index_path()
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if data.get("index_version") == INDEX_VERSION:
-                    return data
-            except (OSError, ValueError):
-                pass
+    def _publish(self, data: dict, stamp: tuple) -> None:
+        """Swap in a static index, then retire live views built on older ones.
+        _static is set before the epoch moves; _static_for_live relies on it."""
+        with self._lock:
+            self._static = data
+            self._static_stamp = stamp
+        with self._live_cond:
+            self._live = None
+            self._live_epoch += 1
+
+    def _load_or_scan(self) -> tuple[dict, tuple]:
+        """The index on disk, or a fresh scan when there is no usable one,
+        with the stamp of the file the data really came from.
+
+        The stamp comes from the open descriptor, so a replacement that lands
+        after the read cannot lend its stamp to these bytes: it stays a
+        different file and is loaded on the next call.
+        """
+        try:
+            with open(cfg.index_path(), "rb") as fh:
+                stamp = _stamp(os.fstat(fh.fileno()))
+                data = json.loads(fh.read().decode("utf-8"))
+            if isinstance(data, dict) and data.get("index_version") == INDEX_VERSION:
+                return data, stamp
+        except (OSError, ValueError):
+            pass
         return self._scan()
 
-    def _scan(self) -> dict:
+    def _scan(self) -> tuple[dict, tuple]:
         extra: list[Path] = []
         snap = herdr.snapshot(self.conf.get("herdr_bin", ""))
         for agent in snap["agents"]:
@@ -404,8 +434,8 @@ class Store:
             if root:
                 extra.append(root)
         data = build_static(self.conf, extra)
-        cfg.write_private(cfg.index_path(), json.dumps(data, ensure_ascii=False))
-        return data
+        written = cfg.write_private(cfg.index_path(), json.dumps(data, ensure_ascii=False))
+        return data, _stamp(written)
 
     # live
     def live(self, force: bool = False, stale_ok: bool = False) -> dict:
@@ -442,19 +472,37 @@ class Store:
                 self._live_cond.wait()
         return self._build_live()
 
+    def _static_for_live(self) -> tuple[dict, int | None]:
+        """The static index and the live epoch it belongs to.
+
+        static() can publish a newer index (its own reload, or a rescan in
+        another thread), so the epoch is read on both sides of it and the pair
+        is used only if nothing was published in between. _publish sets
+        _static before it moves the epoch, so the snapshot is then at least as
+        new as that epoch. After a few unlucky tries the build still runs, but
+        its result is not cached (epoch None).
+        """
+        for _ in range(3):
+            with self._live_cond:
+                epoch = self._live_epoch
+            static = self.static()
+            with self._live_cond:
+                if epoch == self._live_epoch:
+                    return static, epoch
+        return static, None
+
     def _build_live(self) -> dict:
         """Run one build; the caller has already set _live_building."""
         data = None
+        epoch = None
         try:
-            static = self.static()
-            with self._live_cond:
-                epoch = self._live_epoch
+            static, epoch = self._static_for_live()
             started = time.monotonic()
             data = build_live(self.conf, static)
             return data
         finally:
             with self._live_cond:
-                if data is not None and epoch == self._live_epoch:
+                if data is not None and epoch is not None and epoch == self._live_epoch:
                     self._live = data
                     self._live_started = started
                     self._live_at = time.monotonic()

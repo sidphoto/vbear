@@ -917,6 +917,327 @@ class SlowHerdrTests(_HostileBase):  # AGY A1: a hung herdr must not stall the c
         self.assertEqual(self.rounds(), 1)
 
 
+# --- review fixes R1-R4 (.local/reviews/20260919-180318-summary.md) ----------
+#
+# Each test gets its own state directory, so the index and config written here
+# never meet the ones the tests above rely on. Races are forced with Events,
+# never with sleeps, and every thread is joined with a timeout.
+
+import stat  # noqa: E402
+
+from sidconsole import index as index_mod  # noqa: E402
+
+
+def marker_index(marker: str) -> dict:
+    return {"index_version": index_mod.INDEX_VERSION, "generated_at": 0, "scan_seconds": 0,
+            "marker": marker, "skills": [], "roles": [], "sources": [], "problems": []}
+
+
+def post_json(base: str, path: str, body: dict):
+    r = urllib.request.Request(base + path, method="POST", data=json.dumps(body).encode(),
+                               headers={"X-SID-Console": "1"})
+    try:
+        with urllib.request.urlopen(r, timeout=10) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        with e:
+            return e.code, json.loads(e.read())
+
+
+class _IsolatedState(unittest.TestCase):
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp(dir=FAKE_HOME, prefix="state-"))
+        os.chmod(self.state, 0o700)
+        env = mock.patch.dict(os.environ, {"SID_CONSOLE_HOME": str(self.state)})
+        env.start()
+        self.addCleanup(env.stop)
+
+
+class IndexGenerationTests(_IsolatedState):  # R1
+    """The index in memory is always paired with the file it was read from."""
+
+    def setUp(self):
+        super().setUp()
+        cfg.save({**cfg.DEFAULT_CONFIG, "sources": [], "project_roots": []})
+        scan = mock.patch.object(index_mod, "build_static",
+                                 side_effect=lambda conf, extra=None: marker_index("scanned"))
+        self.scan = scan.start()
+        self.addCleanup(scan.stop)
+        self.publish("A")
+        self.store = Store()
+
+    def publish(self, marker):
+        """What a CLI `scan` does: replace index.json atomically."""
+        cfg.write_private(cfg.index_path(), json.dumps(marker_index(marker)))
+
+    def test_replacement_after_read_is_not_stamped_onto_the_old_payload(self):
+        real = self.store._load_or_scan
+
+        def read_then_replace():
+            loaded = real()
+            self.publish("B")  # a CLI scan lands between the read and publication
+            return loaded
+
+        with mock.patch.object(self.store, "_load_or_scan", side_effect=read_then_replace):
+            self.assertEqual(self.store.static()["marker"], "A")  # what was actually read
+        self.assertEqual(self.store.static()["marker"], "B")
+        self.publish("C")  # the same race on a reload of an already cached index
+        with mock.patch.object(self.store, "_load_or_scan", side_effect=read_then_replace):
+            self.assertEqual(self.store.static()["marker"], "C")
+        self.assertEqual(self.store.static()["marker"], "B")
+
+    def test_replacement_after_rescan_write_is_not_stamped_onto_the_scan(self):
+        self.assertEqual(self.store.static()["marker"], "A")
+        real_write = cfg.write_private
+
+        def write_then_replace(path, text):
+            written = real_write(path, text)
+            if Path(path) == cfg.index_path():
+                real_write(path, json.dumps(marker_index("B")))  # a CLI scan right after ours
+            return written
+
+        with mock.patch.object(cfg, "write_private", side_effect=write_then_replace):
+            self.assertEqual(self.store.rescan()["marker"], "scanned")
+        self.assertEqual(self.store.static()["marker"], "B")
+
+    def test_replacement_with_same_or_older_mtime_is_loaded(self):
+        self.assertEqual(self.store.static()["marker"], "A")
+        first = cfg.index_path().stat()
+        for marker, shift in (("same-mtime", 0), ("older-mtime", -10**9)):
+            self.publish(marker)
+            os.utime(cfg.index_path(), ns=(first.st_atime_ns, first.st_mtime_ns + shift))
+            self.assertEqual(self.store.static()["marker"], marker)
+        # same inode rewritten in place with its mtime put back: the size still differs
+        before = cfg.index_path().stat()
+        cfg.index_path().write_text(json.dumps(marker_index("in-place-longer")), encoding="utf-8")
+        os.utime(cfg.index_path(), ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(cfg.index_path().stat().st_ino, before.st_ino)
+        self.assertEqual(self.store.static()["marker"], "in-place-longer")
+
+    def test_deleted_index_keeps_the_loaded_one_without_scanning(self):
+        self.assertEqual(self.store.static()["marker"], "A")
+        epoch = self.store._live_epoch
+        cfg.index_path().unlink()
+        for _ in range(2):
+            self.assertEqual(self.store.static()["marker"], "A")
+        self.scan.assert_not_called()  # rendering never starts a scan
+        self.assertFalse(cfg.index_path().exists())
+        self.assertEqual(self.store._live_epoch, epoch)
+        self.publish("B")
+        self.assertEqual(self.store.static()["marker"], "B")
+
+    def test_own_writes_do_not_trigger_a_reload(self):
+        data = self.store.rescan()
+        epoch = self.store._live_epoch
+        # every private state write re-tightens the files in the state dir
+        # (chmod), which changes index.json's ctime but not its content
+        cfg.write_private(cfg.state_dir() / "usage-cache.json", "{}")
+        self.assertIs(self.store.static(), data)
+        self.assertEqual(self.store._live_epoch, epoch)
+
+
+class LiveEpochTests(_IsolatedState):  # R2
+    """A cached live view is never built from an older static index than the
+    one current when it is cached."""
+
+    def setUp(self):
+        super().setUp()
+        cfg.save({**cfg.DEFAULT_CONFIG, "sources": [], "project_roots": []})
+        cfg.write_private(cfg.index_path(), json.dumps(marker_index("old")))
+        for name, fake in (("build_static", lambda conf, extra=None: marker_index("new")),
+                           ("build_live", lambda conf, static: {"marker": static["marker"]})):
+            patcher = mock.patch.object(index_mod, name, side_effect=fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.store = Store()
+        self.assertEqual(self.store.static()["marker"], "old")
+
+    def live_in_background(self):
+        out = []
+        thread = threading.Thread(target=lambda: out.append(self.store.live()), daemon=True)
+        thread.start()
+        return thread, out
+
+    def finish(self, thread):
+        thread.join(10)
+        self.assertFalse(thread.is_alive(), "live build did not finish (deadlock?)")
+
+    def test_rescan_between_snapshot_and_epoch_is_not_cached(self):
+        real_static = self.store.static
+        paused, resume = threading.Event(), threading.Event()
+
+        def static_then_pause():
+            snap = real_static()
+            if not paused.is_set():  # only the first call stops
+                paused.set()
+                if not resume.wait(10):
+                    raise RuntimeError("barrier timed out")
+            return snap
+
+        with mock.patch.object(self.store, "static", side_effect=static_then_pause):
+            thread, out = self.live_in_background()
+            self.assertTrue(paused.wait(10))
+            self.store.rescan()  # publishes "new" and bumps the epoch
+            resume.set()
+            self.finish(thread)
+        self.assertEqual(self.store.static()["marker"], "new")
+        cached = self.store._live
+        self.assertTrue(cached is None or cached["marker"] == "new", cached)
+        self.assertEqual(self.store.live()["marker"], "new")
+        self.assertEqual(out[0]["marker"], "new")
+
+    def test_rescan_during_build_is_not_cached(self):
+        building, resume = threading.Event(), threading.Event()
+
+        def slow_build(conf, static):
+            building.set()
+            if not resume.wait(10):
+                raise RuntimeError("barrier timed out")
+            return {"marker": static["marker"]}
+
+        with mock.patch.object(index_mod, "build_live", side_effect=slow_build):
+            thread, out = self.live_in_background()
+            self.assertTrue(building.wait(10))
+            self.store.rescan()
+            resume.set()
+            self.finish(thread)
+        self.assertEqual(out[0]["marker"], "old")  # it started before the rescan
+        self.assertIsNone(self.store._live)
+        self.assertEqual(self.store.live()["marker"], "new")
+
+    def test_reload_found_by_the_build_is_cached(self):
+        cfg.write_private(cfg.index_path(), json.dumps(marker_index("cli")))  # an external scan
+        first = self.store.live()
+        self.assertEqual(first["marker"], "cli")
+        self.assertIs(self.store.live(), first)  # cached, not rebuilt
+
+
+class CorruptConfigBackupTests(_IsolatedState):  # R3, R4
+    RAW = b'{"sources": [\xff\xfe broken'  # neither JSON nor UTF-8
+
+    def setUp(self):
+        super().setUp()
+        self.conf = cfg.config_path()
+        self.bak = self.state / "config.json.bak"
+        self.outside = Path(tempfile.mkdtemp(dir=FAKE_HOME, prefix="outside-")) / "target"
+        self.corrupt(self.RAW)
+
+    def corrupt(self, raw: bytes):
+        self.raw = raw
+        self.conf.write_bytes(raw)
+        os.chmod(self.conf, 0o600)
+
+    def refusal(self) -> str:
+        with self.assertRaises(ValueError) as caught:
+            cfg.save({"version": 1})
+        return str(caught.exception)
+
+    def assert_untouched(self):
+        self.assertEqual(self.conf.read_bytes(), self.raw)
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
+        self.assertEqual(list(self.state.glob("*.tmp")), [])
+
+    def test_backup_is_owner_only_under_a_loose_umask(self):
+        self.corrupt(b"{broken json")
+        old = os.umask(0o022)
+        try:
+            self.assertTrue(cfg.load()["_corrupt"])
+        finally:
+            os.umask(old)
+        self.assertFalse(self.bak.is_symlink())
+        self.assertEqual(stat.S_IMODE(self.bak.stat().st_mode), 0o600)
+        self.assertEqual(self.bak.read_bytes(), b"{broken json")
+        self.assert_untouched()
+
+    def test_backup_keeps_the_exact_bytes(self):
+        self.assertTrue(cfg.load()["_corrupt"])
+        self.assertEqual(self.bak.read_bytes(), self.RAW)
+        self.assertIn("已備份至 config.json.bak", self.refusal())
+        self.assert_untouched()
+
+    def test_dangling_backup_symlink_is_not_followed(self):
+        self.corrupt(b"{broken json")
+        self.bak.symlink_to(self.outside)
+        cfg.load()
+        msg = self.refusal()
+        self.assertTrue(self.bak.is_symlink())
+        self.assertFalse(self.outside.exists())
+        self.assertNotIn("已備份", msg)
+        self.assert_untouched()
+
+    def test_backup_symlink_to_a_file_is_not_followed(self):
+        self.corrupt(b"{broken json")
+        self.outside.write_bytes(b"unrelated")
+        self.bak.symlink_to(self.outside)
+        cfg.load()
+        msg = self.refusal()
+        self.assertTrue(self.bak.is_symlink())
+        self.assertEqual(self.outside.read_bytes(), b"unrelated")
+        self.assertNotIn("已備份", msg)
+        self.assert_untouched()
+
+    def test_older_backup_is_kept_and_not_reported_as_current(self):
+        self.bak.write_bytes(b"older backup")
+        cfg.load()
+        msg = self.refusal()
+        self.assertEqual(self.bak.read_bytes(), b"older backup")
+        self.assertNotIn("已備份", msg)
+        self.assertIn("config.json.bak", msg)
+        self.assert_untouched()
+
+    def test_existing_identical_backup_is_reported(self):
+        self.bak.write_bytes(self.RAW)
+        self.assertIn("已備份至 config.json.bak", self.refusal())
+        self.assertEqual(self.bak.read_bytes(), self.RAW)
+
+    def test_failed_backup_is_reported(self):
+        os.chmod(self.state, 0o500)  # nothing new can be created in the state dir
+        try:
+            self.assertTrue(cfg.load()["_corrupt"])
+            msg = self.refusal()
+        finally:
+            os.chmod(self.state, 0o700)
+        self.assertFalse(os.path.lexists(self.bak))
+        self.assertNotIn("已備份", msg)
+        self.assert_untouched()
+
+    def test_unreadable_config_is_reported(self):
+        os.chmod(self.conf, 0)
+        try:
+            self.assertTrue(cfg.is_corrupt())
+            self.assertTrue(cfg.load()["_corrupt"])
+            msg = self.refusal()
+        finally:
+            os.chmod(self.conf, 0o600)
+        self.assertFalse(os.path.lexists(self.bak))
+        self.assertNotIn("已備份", msg)
+        self.assert_untouched()
+
+    def test_api_reports_backup_truthfully(self):
+        from http.server import ThreadingHTTPServer
+        from sidconsole.server import Console, make_handler
+        self.bak.write_bytes(b"older backup")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        console = Console(httpd.server_address[1])
+        httpd.RequestHandlerClass = make_handler(console)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{console.port}"
+        try:
+            status, body = post_json(base, "/api/config", {"usage_days": 30})
+            self.assertEqual(status, 400)
+            self.assertNotIn("已備份", body["error"])
+            self.assertEqual(self.bak.read_bytes(), b"older backup")
+            self.bak.unlink()  # once the old backup is gone, this file gets its own
+            status, body = post_json(base, "/api/config", {"usage_days": 30})
+            self.assertEqual(status, 400)
+            self.assertIn("已備份至 config.json.bak", body["error"])
+            self.assertEqual(self.bak.read_bytes(), self.RAW)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        self.assert_untouched()
+
+
 def tearDownModule():
     shutil.rmtree(FAKE_HOME, ignore_errors=True)
 

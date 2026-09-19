@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -55,12 +56,15 @@ def ensure_state_dir() -> Path:
     return path
 
 
-def write_private(path: Path, text: str) -> None:
+def write_private(path: Path, text: str) -> os.stat_result:
     """Atomically replace `path` with an owner-only (0600) file.
 
     The temporary name is unique (mkstemp), so a CLI scan and a server rescan
     writing the same file at once cannot clobber each other's half-written
     temp file; the last complete write wins.
+
+    Returns the stat of the file this call installed, taken from its own
+    descriptor, so a caller can tell it apart from a later replacement.
     """
     ensure_state_dir()
     path.parent.mkdir(parents=True, exist_ok=True, mode=STATE_DIR_MODE)
@@ -68,6 +72,8 @@ def write_private(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             out.write(text)
+            out.flush()
+            written = os.fstat(out.fileno())
         os.chmod(tmp, STATE_FILE_MODE)
         os.replace(tmp, path)
     except BaseException:
@@ -76,6 +82,7 @@ def write_private(path: Path, text: str) -> None:
         except OSError:
             pass
         raise
+    return written
 
 
 def open_private_log(path: Path):
@@ -151,23 +158,87 @@ def is_corrupt() -> bool:
         return True
 
 
+def _holds(path: Path, raw: bytes) -> bool:
+    """Whether `path` is a regular file, not a symlink, with exactly `raw`."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            return (stat.S_ISREG(st.st_mode) and st.st_size == len(raw)
+                    and fh.read(len(raw) + 1) == raw)
+    except OSError:
+        return False
+
+
+def _backup_corrupt(raw: bytes) -> str:
+    """Keep a corrupt config's exact bytes in config.json.bak.
+
+    The copy is written owner-only to a temporary file and hard-linked into
+    place. link() never replaces or follows an existing entry, not even a
+    dangling symlink, so an older backup survives and a backup is either
+    complete or absent. Returns what is now true:
+      created   config.json.bak is this call's copy
+      existing  config.json.bak already held exactly these bytes
+      conflict  something else is there, and it was left alone
+      failed    no copy could be made
+    """
+    bak = config_path().with_suffix(".json.bak")
+    try:
+        fd, tmp = tempfile.mkstemp(dir=bak.parent, prefix=bak.name + ".", suffix=".tmp")
+    except OSError:
+        return "failed"
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(raw)
+        os.chmod(tmp, STATE_FILE_MODE)
+        os.link(tmp, bak)
+        return "created"
+    except FileExistsError:
+        return "existing" if _holds(bak, raw) else "conflict"
+    except OSError:
+        return "failed"
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+_BACKUP_NOTES = {
+    "created": "原檔未修改，內容已備份至 config.json.bak",
+    "existing": "原檔未修改，內容已備份至 config.json.bak（先前建立，內容相同）",
+    "conflict": "原檔未修改；config.json.bak 已存在但不是目前內容，未覆寫，本次內容沒有另外備份",
+    "failed": "原檔未修改，但無法建立備份",
+    "unreadable": "無法讀取原檔，沒有建立備份；原檔未被修改",
+}
+
+
+def corrupt_message() -> str:
+    """Why a corrupt config is not saved over. It says the file is backed up
+    only when config.json.bak holds exactly the file's current bytes."""
+    try:
+        raw = config_path().read_bytes()
+    except OSError:
+        outcome = "unreadable"
+    else:
+        outcome = _backup_corrupt(raw)
+    return f"設定檔已損毀，拒絕自動覆寫；{_BACKUP_NOTES[outcome]}，請修復後重試"
+
+
 def load() -> dict:
     path = config_path()
     if not path.exists():
         save(DEFAULT_CONFIG)
         return json.loads(json.dumps(DEFAULT_CONFIG))
+    raw = None
     try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
+        raw = path.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError("設定檔內容非物件")
     except (OSError, ValueError):
-        bak = path.with_suffix(".json.bak")
-        try:
-            if not bak.exists() and "raw" in locals():
-                bak.write_text(raw, encoding="utf-8")
-        except OSError:
-            pass
+        if raw is not None:
+            _backup_corrupt(raw)
         merged = json.loads(json.dumps(DEFAULT_CONFIG))
         merged["_corrupt"] = True
         return merged
@@ -182,7 +253,7 @@ def load() -> dict:
 
 def save(data: dict, force: bool = False) -> None:
     if not force and is_corrupt():
-        raise ValueError("設定檔已損毀，拒絕自動覆寫；原檔已備份至 config.json.bak，請修復後重試")
+        raise ValueError(corrupt_message())
     cleaned = {k: v for k, v in data.items() if not k.startswith("_")}
     write_private(config_path(), json.dumps(cleaned, ensure_ascii=False, indent=2))
 
