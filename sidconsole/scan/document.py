@@ -50,6 +50,7 @@ _NAME_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 _STRONG_PARTS = {
     "token", "tokens", "secret", "secrets", "password", "passwords", "passwd", "pwd",
     "credential", "credentials", "authorization", "bearer", "apikey", "passphrase",
+    "subkey",  # written without a separator, so "sub"+"key" never splits out
 }
 # Front matter keys are short identifiers, so a lone "key", "auth" or "private"
 # is treated as a secret there; in prose those words are too common.

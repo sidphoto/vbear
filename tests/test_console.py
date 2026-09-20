@@ -1396,7 +1396,8 @@ class UnreadSkillStateTests(_HostileBase):  # C2
 class SecretNameTests(unittest.TestCase):  # C3
     def test_names_that_hold_secrets(self):
         for name in ("api_key", "apiKey", "ANTHROPIC_API_KEY", "access_token", "password",
-                     "client_secret", "private_key", "token", "authToken"):
+                     "client_secret", "private_key", "token", "authToken",
+                     "subkey", "sub_key", "subscription_key"):
             self.assertTrue(document.secret_key_name(name), name)
 
     def test_names_that_only_describe_a_secret(self):
