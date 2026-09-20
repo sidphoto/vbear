@@ -66,8 +66,9 @@ _ABOUT_PARTS = {
     "type", "kind", "format", "field", "rotation",
 }
 # Database and data-structure keys, not credentials.
+# "sub" is deliberately absent: a sub_key is a real derived or subscription key.
 _STRUCT_KEY_PREFIXES = ("primary", "foreign", "sort", "partition", "composite", "unique",
-                        "cache", "map", "dict", "hot", "short", "sub")
+                        "cache", "map", "dict", "hot", "short")
 
 
 def secret_key_name(name: str, strict: bool = True) -> bool:
@@ -94,9 +95,13 @@ def _structure_key(parts: list[str]) -> bool:
 
 # Values that cannot be a credential: counts, paths, URLs without a query,
 # ENV_VAR names and booleans. A describing name keeps only these visible.
+# A path must actually look like one (a separator), and a URL must carry no
+# user:password@ part; otherwise a random secret starting with "." or "/", or
+# a credential embedded in an endpoint, would pass as harmless.
 _HARMLESS_VALUE = re.compile(
     r"\s*(?:[\"'`]?)(?:-?\d+(?:\.\d+)?[kKmM]?|true|false|null|none|"
-    r"[~./][^\s?#]*|https?://[^\s?#]+|[A-Z][A-Z0-9_]{2,})(?:[\"'`]?)\s*[,;]?\s*"
+    r"(?:\.{1,2}/|~/|/[^/\s?#]+/)[^\s?#]*|https?://[^@\s?#]+|[A-Z][A-Z0-9_]{2,})"
+    r"(?:[\"'`]?)\s*[,;]?\s*"
 )
 
 

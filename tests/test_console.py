@@ -1415,6 +1415,19 @@ class SecretNameTests(unittest.TestCase):  # C3
         self.assertEqual(document.redact_value("max_tokens", 4096), 4096)
         self.assertEqual(document.redact_value("primary_key", "id"), "id")
 
+    def test_credentials_hidden_in_paths_urls_and_subkeys(self):
+        """Reported by the independent review of 304fb89."""
+        for name, value in (("token_url", "https://admin:hunter2@api.internal.corp/v1"),
+                            ("api_key_url", "http://u:hunter2@h/x"),
+                            ("sub_key", "supersecretpassword"),
+                            ("secret_name", ".k9Px9qZsecret"),
+                            ("token_file", "/AAAABBBBCCCCDDDD+base64key==")):
+            self.assertTrue(document.secret_value_for(name, value), f"{name}: {value}")
+            self.assertNotIn(value, document.redact(f"{name}: {value}"))
+        for name, value in (("token_url", "https://api.test/v1"), ("token_file", "~/.config/t"),
+                            ("secret_file", "/etc/app/secrets.json"), ("max_tokens", "4096")):
+            self.assertIn(value, document.redact(f"{name}: {value}"), name)
+
     def test_values_are_still_caught_by_shape(self):
         text = document.redact("api_key_env: OPENAI_KEY\ntoken_file: sk-ant-abcdefghijklmnopqrstuv\n"
                                "max_tokens: 4096\ntoken_url: https://x.test/?token=s3cr3tvalue")

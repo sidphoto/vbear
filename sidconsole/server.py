@@ -121,6 +121,8 @@ def make_handler(console: Console):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
+            if self.close_connection:  # say so, instead of only hanging up
+                self.send_header("Connection", "close")
             self.end_headers()
 
         def _json(self, payload, status: int = 200):
