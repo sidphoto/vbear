@@ -4,8 +4,11 @@ Every test runs against a synthetic HOME, so nothing on the real machine is
 read. herdr is made unavailable on purpose to check the "unknown" paths.
 """
 
+import base64
 import json
+import time
 import os
+import queue
 import shutil
 import sys
 import tempfile
@@ -1436,6 +1439,368 @@ class SecretNameTests(unittest.TestCase):  # C3
         self.assertIn("max_tokens: 4096", text)
         self.assertNotIn("sk-ant-", text)
         self.assertNotIn("s3cr3tvalue", text)
+
+
+# --- terminal bridge (plan section A) ---------------------------------------
+# A fake herdr that speaks the subset of the observe/control protocol A0
+# recorded from real herdr 0.9.1: an initial full frame, terminal.input
+# echoed back as an incremental frame, terminal.closed with a reason on a
+# clean end, and an "already attached" refusal without --takeover.
+
+_FAKE_TERM_HERDR = r'''#!/usr/bin/env python3
+import base64, json, sys, time
+from pathlib import Path
+
+lock_dir = Path(sys.argv[0]).resolve().parent / "attach-locks"
+lock_dir.mkdir(exist_ok=True)
+
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def frame(text, seq, full):
+    send({"type": "terminal.frame", "bytes": base64.b64encode(text.encode()).decode(),
+          "encoding": "ansi", "full": full, "height": 24, "width": 80, "seq": seq})
+
+
+args = sys.argv[1:]
+mode, target = args[2], args[3]
+takeover = "--takeover" in args
+lock = lock_dir / target
+
+if mode == "control":
+    if target == "always-conflict":
+        send({"type": "terminal.closed",
+              "reason": "terminal attach failed: simulated conflict"})
+        sys.exit(0)
+    if lock.exists() and not takeover:
+        send({"type": "terminal.closed",
+              "reason": f"terminal attach failed: terminal {target} already has an "
+                        "attached client; retry with --takeover"})
+        sys.exit(0)
+    lock.write_text("attached")
+
+if target == "closes-immediately":
+    send({"type": "terminal.closed", "reason": f"terminal {target} exited"})
+    sys.exit(0)
+
+frame(f"{mode.upper()}-INIT", 1, True)
+seq = 1
+try:
+    if mode == "observe":
+        while True:
+            time.sleep(3600)  # observe takes no stdin; wait until killed
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        msg = json.loads(line)
+        if msg["type"] == "terminal.input":
+            seq += 1
+            text = base64.b64decode(msg["bytes"]).decode("utf-8", "replace")
+            frame(f"ECHO:{text}", seq, False)
+        elif msg["type"] == "terminal.resize":
+            seq += 1
+            frame(f"RESIZED:{msg['cols']}x{msg['rows']}", seq, False)
+        elif msg["type"] == "terminal.release":
+            send({"type": "terminal.closed", "reason": "released"})
+            break
+finally:
+    if lock.exists():
+        lock.unlink()
+'''
+
+
+def make_fake_term_herdr(path: Path) -> Path:
+    path.write_text(_FAKE_TERM_HERDR, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+class PaneSessionTests(unittest.TestCase):
+    """The bridge object directly, against the fake herdr above."""
+
+    def setUp(self):
+        self.bin = make_fake_term_herdr(Path(tempfile.mkdtemp(dir=FAKE_HOME)) / "herdr")
+        self.sessions = []
+
+    def tearDown(self):
+        for s in self.sessions:
+            s.stop()
+
+    def open(self, mode, target="p1", **kw):
+        from sidconsole.bridge.terminal import PaneSession
+        sess = PaneSession(target, str(self.bin), mode, kw.get("cols", 80), kw.get("rows", 24))
+        self.sessions.append(sess)
+        return sess
+
+    def drain(self, sess, n=1, timeout=5):
+        out = []
+        deadline = time.time() + timeout
+        while len(out) < n and time.time() < deadline:
+            try:
+                msg = sess.queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            out.append(msg)
+        return out
+
+    def test_first_frame_is_full(self):
+        sess = self.open("observe")
+        [frame] = self.drain(sess, 1)
+        self.assertEqual(frame["type"], "terminal.frame")
+        self.assertTrue(frame["full"])
+        self.assertEqual(frame["seq"], 1)
+
+    def test_input_round_trips_and_is_incremental(self):
+        sess = self.open("control", target="p2")
+        self.drain(sess, 1)  # initial frame
+        self.assertTrue(sess.send_input(b"hello"))
+        [frame] = self.drain(sess, 1)
+        self.assertFalse(frame["full"])
+        self.assertIn("ECHO:hello", base64.b64decode(frame["bytes"]).decode())
+
+    def test_observe_mode_cannot_send_input(self):
+        sess = self.open("observe", target="p3")
+        self.drain(sess, 1)
+        self.assertFalse(sess.send_input(b"nope"))
+
+    def test_release_ends_session_with_reason(self):
+        sess = self.open("control", target="p4")
+        self.drain(sess, 1)
+        sess.release_control()
+        msgs = self.drain(sess, 3)
+        closed = [m for m in msgs if m and m.get("type") == "terminal.closed"]
+        self.assertTrue(closed and closed[0]["reason"] == "released")
+        self.assertIn(None, msgs)  # sentinel after the session ends
+
+    def test_pane_exit_reports_closed_reason(self):
+        sess = self.open("control", target="closes-immediately")
+        msgs = self.drain(sess, 2)
+        closed = [m for m in msgs if m and m.get("type") == "terminal.closed"]
+        self.assertIn("exited", closed[0]["reason"])
+        self.assertFalse(closed[0].get("bridge_interrupted"))
+
+    def test_killed_child_is_reported_as_bridge_interrupted(self):
+        sess = self.open("observe", target="p5")
+        self.drain(sess, 1)
+        sess.stop()  # terminates the child without it sending terminal.closed
+        msgs = self.drain(sess, 2)
+        closed = [m for m in msgs if m and m.get("type") == "terminal.closed"]
+        self.assertTrue(closed[0]["bridge_interrupted"])
+
+    def test_control_always_requests_takeover(self):
+        """PaneSession only ever offers "watch" (observe) or "接管操作"
+        (control); there is no UI action for control-without-takeover, so it
+        always passes --takeover (plan 4.3). Confirmed against real herdr in
+        A0: a second, unrelated attached client is then replaced, not
+        refused."""
+        sess = self.open("control", target="p6")
+        self.drain(sess, 1)
+        self.assertIn("--takeover", sess._proc.args)
+
+    def test_attach_conflict_is_surfaced_as_closed(self):
+        """If herdr ever refuses an attach anyway (A0: seen without
+        --takeover, against an external client our bridge doesn't know
+        about), the refusal reaches the caller as a normal terminal.closed
+        message, not a hang or a crash."""
+        sess = self.open("control", target="always-conflict")
+        [closed] = self.drain(sess, 1)
+        self.assertEqual(closed["type"], "terminal.closed")
+        self.assertIn("simulated conflict", closed["reason"])
+
+
+class TerminalBridgeManagerTests(unittest.TestCase):
+    """The TerminalBridge that server.py shares across requests: swap on
+    takeover, one process per pane, concurrency cap."""
+
+    def setUp(self):
+        from sidconsole.bridge.terminal import TerminalBridge
+        self.bin = make_fake_term_herdr(Path(tempfile.mkdtemp(dir=FAKE_HOME)) / "herdr")
+        self.bridge = TerminalBridge(lambda: str(self.bin))
+
+    def tearDown(self):
+        self.bridge.close_all()
+
+    def test_open_observer_is_idempotent(self):
+        a = self.bridge.open_observer("p1")
+        b = self.bridge.open_observer("p1")
+        self.assertIs(a, b)
+
+    def test_takeover_replaces_the_session(self):
+        obs = self.bridge.open_observer("p2")
+        ctrl = self.bridge.takeover("p2")
+        self.assertIsNot(ctrl, obs)
+        self.assertEqual(ctrl.mode, "control")
+        self.assertTrue(obs.closed)  # the old observer was stopped
+        self.assertIs(self.bridge.get("p2"), ctrl)
+
+    def test_release_goes_back_to_a_fresh_observer(self):
+        self.bridge.takeover("p3")
+        back = self.bridge.release("p3")
+        self.assertEqual(back.mode, "observe")
+
+    def test_close_if_current_leaves_a_newer_takeover_running(self):
+        first = self.bridge.open_observer("p4")
+        second = self.bridge.takeover("p4")  # simulates a takeover racing an SSE handler
+        self.bridge.close_if_current("p4", first)  # the SSE loop's stale reference
+        self.assertIs(self.bridge.get("p4"), second)
+        self.assertFalse(second.closed)
+
+    def test_concurrent_pane_limit(self):
+        from sidconsole.bridge import terminal as term_mod
+        with mock.patch.object(term_mod, "MAX_CONCURRENT_PANES", 2):
+            self.assertIsNotNone(self.bridge.open_observer("q1"))
+            self.assertIsNotNone(self.bridge.open_observer("q2"))
+            self.assertIsNone(self.bridge.open_observer("q3"))
+            self.assertIsNotNone(self.bridge.open_observer("q1"))  # already-open pane is exempt
+
+
+class TerminalRouteTests(_HostileBase):
+    """The HTTP routes end to end, against the fake herdr, on a live pane id
+    from a fake herdr snapshot (reusing HardenedServerTests' fake CLI shape
+    plus terminal session support)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from http.server import ThreadingHTTPServer
+        from sidconsole.server import Console, make_handler
+        fake = HOSTILE / "bin" / "herdr"
+        fake.parent.mkdir(exist_ok=True)
+        make_fake_term_herdr(fake)
+        # extend it to also answer `agent list` etc. so live_targets() works
+        body = fake.read_text(encoding="utf-8")
+        snapshot_stub = (
+            'if args[:2] == ["agent", "list"]:\n'
+            '    print(json.dumps({"result": {"agents": [{"pane_id": "w1:pA", '
+            '"terminal_id": "term1", "agent": "claude", "agent_status": "idle", '
+            '"cwd": "/tmp"}]}})); sys.exit(0)\n'
+            'if args[:2] in (["workspace", "list"], ["tab", "list"]):\n'
+            '    print(json.dumps({"result": {}})); sys.exit(0)\n'
+            'mode, target = args[2], args[3]'
+        )
+        body = body.replace('mode, target = args[2], args[3]', snapshot_stub)
+        fake.write_text(body, encoding="utf-8")
+        fake.chmod(0o755)
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        port = cls.httpd.server_address[1]
+        cls.console = Console(port)
+        cls.conf = hostile_conf()
+        cls.conf["herdr_bin"] = str(fake)
+        cls.console.store.conf = cls.conf
+        cls.console.store._static = build_static(cls.conf)
+        cls.httpd.RequestHandlerClass = make_handler(cls.console)
+        cls.base = f"http://127.0.0.1:{port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.console.terminals.close_all()
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    req = ServerTests.req
+    H = {"X-SID-Console": "1"}
+
+    def setUp(self):
+        self.console.store.conf = json.loads(json.dumps(self.conf))
+        self.console.store._live = None
+        # Each test reuses the class-wide bridge and pane id; closing a client
+        # connection doesn't synchronously stop the server-side session (the
+        # SSE handler only notices on its next write, up to ~1s later), so an
+        # orphaned handler thread from the previous test could still be
+        # draining the same queue. Force a clean slate before every test.
+        self.console.terminals.close_all()
+
+    def tearDown(self):
+        self.console.terminals.close_all()
+
+    def open_stream(self, pane="w1:pA", extra_headers=None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.console.port, timeout=10)
+        headers = {"X-SID-Console": "1", **(extra_headers or {})}
+        conn.request("GET", f"/api/term/{pane}/stream", headers=headers)
+        return conn, conn.getresponse()
+
+    def read_sse_events(self, resp, n, timeout=5):
+        events, buf = [], b""
+        deadline = time.time() + timeout
+        while len(events) < n and time.time() < deadline:
+            chunk = resp.fp.read1(4096) if hasattr(resp.fp, "read1") else resp.read(4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n\n" in buf:
+                raw, buf = buf.split(b"\n\n", 1)
+                if raw.startswith(b"data: "):
+                    events.append(json.loads(raw[len(b"data: "):]))
+        return events
+
+    def test_stream_requires_custom_header(self):
+        _, data, _ = self.req("/api/term/w1:pA/stream")
+        # req() doesn't add X-SID-Console by default
+        self.assertIsNone(data)
+
+    def test_unknown_pane_is_rejected(self):
+        status, data, _ = self.req("/api/term/does-not-exist/stream", headers=self.H)
+        self.assertEqual(status, 404)
+
+    def test_stream_delivers_initial_full_frame(self):
+        conn, resp = self.open_stream()
+        try:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+            [frame] = self.read_sse_events(resp, 1)
+            self.assertTrue(frame["full"])
+        finally:
+            conn.close()
+
+    def test_input_refused_before_takeover(self):
+        conn, resp = self.open_stream(pane="w1:pA")
+        try:
+            self.read_sse_events(resp, 1)
+            status, data, _ = self.req("/api/term/w1:pA/input", "POST", headers=self.H,
+                                       body={"text": "echo hi\n"})
+            self.assertEqual(status, 409)
+        finally:
+            conn.close()
+
+    def test_takeover_then_input_then_release(self):
+        conn, resp = self.open_stream(pane="w1:pA")
+        try:
+            self.read_sse_events(resp, 1)  # initial observe frame
+            status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                       body={"action": "takeover"})
+            self.assertEqual(status, 200)
+            self.assertEqual(data["mode"], "control")
+            events = self.read_sse_events(resp, 1)  # new full frame from the control session
+            self.assertTrue(events[0]["full"])
+
+            status, data, _ = self.req("/api/term/w1:pA/input", "POST", headers=self.H,
+                                       body={"text": "ping"})
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            [echoed] = self.read_sse_events(resp, 1)
+            self.assertIn("ECHO:ping", base64.b64decode(echoed["bytes"]).decode())
+
+            status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                       body={"action": "release"})
+            self.assertEqual(status, 200)
+            self.assertEqual(data["mode"], "observe")
+        finally:
+            conn.close()
+
+    def test_oversized_input_rejected(self):
+        self.req("/api/term/w1:pA/control", "POST", headers=self.H, body={"action": "takeover"})
+        try:
+            status, data, _ = self.req("/api/term/w1:pA/input", "POST", headers=self.H,
+                                       body={"text": "x" * 5000})
+            self.assertEqual(status, 413)
+        finally:
+            self.req("/api/term/w1:pA/control", "POST", headers=self.H, body={"action": "release"})
 
 
 def tearDownModule():

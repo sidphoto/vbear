@@ -27,9 +27,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import queue as queue_mod
+from urllib.parse import unquote
+
 from . import annotations
 from . import config as cfg
-from .bridge import herdr
+from .bridge import herdr, terminal
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import document
@@ -52,6 +55,8 @@ MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
 FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localhost ports
+TERM_MIN_DIM, TERM_MAX_DIM = 1, 500
+TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS = 80, 24
 
 
 class Console:
@@ -59,6 +64,8 @@ class Console:
         self.port = port
         self.store = Store()
         self.lock = threading.Lock()
+        self.terminals = terminal.TerminalBridge(
+            lambda: herdr.binary(self.store.conf.get("herdr_bin", "")))
 
     # derived views ------------------------------------------------------
 
@@ -220,11 +227,17 @@ def make_handler(console: Console):
                     return self._json(console.store.live(force=force))
                 if path == "/api/config":
                     return self._json(self._config_view())
+                if path.startswith("/api/term/"):
+                    pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
+                    if action == "stream" and pane_enc:
+                        return self._term_stream(unquote(pane_enc), url.query)
+                return self._error(404, "not found")
             except TimeoutError:
                 raise
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client went away mid-request; nothing left to answer
             except Exception as exc:  # report, never crash the server
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
-            return self._error(404, "not found")
 
         def do_HEAD(self):
             if not self._host_ok():
@@ -277,11 +290,134 @@ def make_handler(console: Console):
                             and target not in console.live_targets(force=True)):
                         return self._error(400, "目前沒有這個 Terminal")
                     return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
+                if path.startswith("/api/term/"):
+                    pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
+                    if pane_enc and action in ("input", "control"):
+                        pane_id = unquote(pane_enc)
+                        if not self._term_target_ok(pane_id):
+                            return self._error(400, "目前沒有這個 Terminal")
+                        if action == "input":
+                            return self._term_input(pane_id, self._body())
+                        return self._term_control(pane_id, self._body())
+                return self._error(404, "not found")
             except TimeoutError:
                 raise
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client went away mid-request; nothing left to answer
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
-            return self._error(404, "not found")
+
+        # terminal bridge ----------------------------------------------------
+
+        def _term_target_ok(self, pane_id: str) -> bool:
+            if not herdr.valid_target(pane_id):
+                return False
+            return (pane_id in console.live_targets()
+                    or pane_id in console.live_targets(force=True))
+
+        def _term_dims(self, body: dict) -> tuple[int, int]:
+            def dim(value, default):
+                try:
+                    n = int(value)
+                except (TypeError, ValueError):
+                    return default
+                return n if TERM_MIN_DIM <= n <= TERM_MAX_DIM else default
+            return (dim(body.get("cols"), TERM_DEFAULT_COLS),
+                    dim(body.get("rows"), TERM_DEFAULT_ROWS))
+
+        def _term_stream(self, pane_id: str, query: str):
+            """Server-sent events: one 'data: <json>\\n\\n' per herdr frame.
+
+            A plain <script>-less EventSource cannot carry the X-SID-Console
+            header this endpoint requires (it has a side effect: spawning a
+            herdr child process), so the frontend must open this with
+            fetch() and read the streamed body itself, not `new EventSource`.
+            """
+            if self.headers.get("X-SID-Console") != "1":
+                return self._error(403, "forbidden")
+            if not self._term_target_ok(pane_id):
+                return self._error(404, "目前沒有這個 Terminal")
+            q = parse_qs(query)
+            cols = self._term_dims({"cols": q.get("cols", [None])[0]})[0]
+            rows = self._term_dims({"rows": q.get("rows", [None])[0]})[1]
+            sess = console.terminals.open_observer(pane_id, cols, rows)
+            if sess is None:
+                bin_path = herdr.binary(console.store.conf.get("herdr_bin", ""))
+                if not bin_path:
+                    return self._error(503, "找不到 herdr 執行檔")
+                return self._error(429, "同時開啟的 Terminal 過多，請先關閉其他分頁")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            current = sess
+            try:
+                while True:
+                    live = console.terminals.get(pane_id)
+                    if live is None:
+                        break
+                    if live is not current:
+                        current = live  # a takeover/release swapped the session
+                    try:
+                        msg = current.queue.get(timeout=1)
+                    except queue_mod.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    # A takeover or release can swap the pane's session while this
+                    # call was blocked above; re-check before trusting what just
+                    # came off `current`'s queue. A message from a session that has
+                    # already been superseded — including its own end-of-session
+                    # sentinel or synthetic "bridge interrupted" close — belongs to
+                    # the old session, not the pane, and must not reach the client
+                    # as if the Terminal itself ended. The new session's own first
+                    # frame (a full redraw) follows right behind on the next spin.
+                    live = console.terminals.get(pane_id)
+                    if live is not current:
+                        if live is None:
+                            break
+                        current = live
+                        continue
+                    if msg is None:  # current is still live and it legitimately ended
+                        break
+                    payload = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+                    self.wfile.write(b"data: " + payload + b"\n\n")
+                    self.wfile.flush()
+            finally:
+                console.terminals.close_if_current(pane_id, current)
+
+        def _term_input(self, pane_id: str, body: dict):
+            sess = console.terminals.get(pane_id)
+            if sess is None or sess.mode != "control":
+                return self._error(409, "目前不是這個 Terminal 的操作者")
+            text = body.get("text")
+            if not isinstance(text, str) or not text:
+                return self._error(400, "缺少輸入內容")
+            if len(text.encode("utf-8")) > 4096:  # one input call, not a file upload
+                return self._error(413, "單次輸入過長")
+            ok = sess.send_input(text.encode("utf-8"))
+            return self._json({"ok": ok})
+
+        def _term_control(self, pane_id: str, body: dict):
+            action = body.get("action")
+            if action == "takeover":
+                cols, rows = self._term_dims(body)
+                sess = console.terminals.takeover(pane_id, cols, rows)
+                if sess is None:
+                    return self._error(503, "找不到 herdr 執行檔")
+                return self._json({"ok": True, "mode": sess.mode})
+            if action == "release":
+                sess = console.terminals.release(pane_id)
+                return self._json({"ok": True, "mode": sess.mode if sess else None})
+            if action == "resize":
+                sess = console.terminals.get(pane_id)
+                cols, rows = self._term_dims(body)
+                ok = bool(sess) and sess.mode == "control" and sess.resize(cols, rows)
+                return self._json({"ok": ok})
+            return self._error(400, "未知的操作")
 
         # handlers ---------------------------------------------------------
 
@@ -482,4 +618,5 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        console.terminals.close_all()  # no orphaned herdr child processes on exit
         httpd.server_close()
