@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import queue
+import secrets
 import subprocess
 import threading
 
@@ -36,6 +37,7 @@ class PaneSession:
         self.mode = mode
         self.cols = cols
         self.rows = rows
+        self.token = secrets.token_hex(16)
         self.queue: queue.Queue = queue.Queue(maxsize=QUEUE_MAX)
         self.closed = False
         self.close_reason: str | None = None
@@ -245,6 +247,31 @@ class TerminalBridge:
             old.release_control()
         old.stop()
         return new
+
+    def abandon(self, pane_id: str, token: str | None = None) -> bool:
+        """Fully stop and remove any session for pane_id without spawning
+        an observe process. Used when a client unmounts or navigates away
+        while an operation is in flight, avoiding orphaned child processes.
+
+        If `token` is provided, the session is only stopped if its generation
+        matches. If the token mismatches (meaning a newer session was established
+        after the client initiated abandon), this call is an atomic no-op
+        returning False without stopping the newer session.
+        """
+        with self._lock:
+            self._purge_closed_locked()
+            curr = self._sessions.get(pane_id)
+            if curr is None:
+                return False
+            if token is not None and curr.token != token:
+                return False
+            old = self._sessions.pop(pane_id, None)
+        if old is None:
+            return False
+        if old.mode == "control":
+            old.release_control()
+        old.stop()
+        return True
 
     def close_if_current(self, pane_id: str, expected: PaneSession) -> None:
         """Used by the SSE handler when its stream ends: stop `expected`

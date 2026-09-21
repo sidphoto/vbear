@@ -38,10 +38,27 @@ from .model import ACT_ACTIVE
 from .scan import document
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
-STATIC_FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
-                "/favicon.svg": "favicon.svg"}
+STATIC_FILES = {
+    "/": "index.html",
+    "/app.js": "app.js",
+    "/style.css": "style.css",
+    "/favicon.svg": "favicon.svg",
+    "/vendor/xterm/xterm.js": "vendor/xterm/xterm.js",
+    "/vendor/xterm/xterm.css": "vendor/xterm/xterm.css",
+    "/vendor/xterm/addon-fit.js": "vendor/xterm/addon-fit.js",
+    "/vendor/xterm/LICENSE": "vendor/xterm/LICENSE",
+}
 MAX_FILE_BYTES = document.MAX_FILE_BYTES
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+# Content Security Policy:
+# - script-src is strictly pinned to 'self' (zero CDN, zero eval, zero inline scripts).
+# - style-src includes 'unsafe-inline' deliberately because xterm.js 5.5.0 requires dynamic
+#   <style> injection (_injectCss) and inline style attributes on row elements (_addStyle
+#   calling element.setAttribute('style', ...)) for ANSI 24-bit truecolor rendering.
+#   Without 'unsafe-inline', Chrome DevTools logs CSP violations and truecolor colors
+#   fall back to monochromatic terminal defaults. Because SID Console contains zero
+#   untrusted HTML/style injection sinks (all dynamic text uses textContent or strict
+#   DOM APIs), allowing 'unsafe-inline' in style-src is a safe, bounded trade-off.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 SKILL_SUMMARY_FIELDS = (
     "skill_id", "name", "invoke_name", "tool", "scope", "activation", "activation_reason",
@@ -408,10 +425,23 @@ def make_handler(console: Console):
                 sess = console.terminals.takeover(pane_id, cols, rows)
                 if sess is None:
                     return self._error(503, "找不到 herdr 執行檔")
-                return self._json({"ok": True, "mode": sess.mode})
+                return self._json({"ok": True, "mode": sess.mode, "token": sess.token})
             if action == "release":
                 sess = console.terminals.release(pane_id)
-                return self._json({"ok": True, "mode": sess.mode if sess else None})
+                return self._json({"ok": True, "mode": sess.mode if sess else None,
+                                   "token": sess.token if sess else None})
+            if action == "abandon":
+                expected_token = body.get("token")
+                if expected_token is not None and not isinstance(expected_token, str):
+                    return self._error(400, "無效的 session token")
+                stopped = console.terminals.abandon(pane_id, token=expected_token)
+                curr = console.terminals.get(pane_id)
+                return self._json({
+                    "ok": True,
+                    "action": "abandon",
+                    "mode": curr.mode if curr else None,
+                    "stopped": stopped,
+                })
             if action == "resize":
                 sess = console.terminals.get(pane_id)
                 cols, rows = self._term_dims(body)
@@ -422,12 +452,19 @@ def make_handler(console: Console):
         # handlers ---------------------------------------------------------
 
         def _static(self, name: str):
-            file = WEB_ROOT / name
+            file = (WEB_ROOT / name).resolve()
+            if not file.is_relative_to(WEB_ROOT):
+                return self._error(404, "missing asset")
             try:
                 body = file.read_bytes()
             except OSError:
                 return self._error(404, "missing asset")
-            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            ctype = mimetypes.guess_type(name)[0]
+            if not ctype:
+                if name.endswith("LICENSE"):
+                    ctype = "text/plain"
+                else:
+                    ctype = "application/octet-stream"
             if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
                 ctype += "; charset=utf-8"
             self._headers(200, ctype, len(body))

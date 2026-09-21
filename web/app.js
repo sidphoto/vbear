@@ -47,6 +47,389 @@ function debounce(fn, ms = 200) {
   return wrapped;
 }
 
+function base64ToUint8Array(b64) {
+  if (typeof atob === "function") {
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    return bytes;
+  }
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(b64, "base64"));
+  }
+  throw new Error("No base64 decoder available");
+}
+
+function createSSEParser(onEvent, onError, maxBufferSize = 512 * 1024) {
+  let buffer = "";
+  let eventType = "";
+  let dataLines = [];
+  let currentEventSize = 0;
+  let discardedEvent = false;
+
+  function processLine(line) {
+    if (line.endsWith("\r")) line = line.slice(0, -1);
+    if (line === "") {
+      if (discardedEvent) {
+        discardedEvent = false;
+        dataLines = [];
+        currentEventSize = 0;
+        eventType = "";
+        return;
+      }
+      if (dataLines.length > 0) {
+        const raw = dataLines.join("\n");
+        dataLines = [];
+        currentEventSize = 0;
+        const type = eventType || "message";
+        eventType = "";
+        try {
+          const data = JSON.parse(raw);
+          if (onEvent) onEvent({ type, data, raw });
+        } catch (err) {
+          if (onError) onError(new Error("SSE JSON parse error: " + err.message));
+        }
+      }
+      eventType = "";
+      currentEventSize = 0;
+      return;
+    }
+    if (discardedEvent) return;
+    if (line.startsWith(":")) return;
+    const colonIdx = line.indexOf(":");
+    let field = line;
+    let value = "";
+    if (colonIdx !== -1) {
+      field = line.slice(0, colonIdx);
+      value = line.slice(colonIdx + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+    }
+    if (field === "data") {
+      currentEventSize += value.length + 1;
+      if (currentEventSize > maxBufferSize) {
+        discardedEvent = true;
+        dataLines = [];
+        currentEventSize = 0;
+        eventType = "";
+        if (onError) onError(new Error("SSE event size limit exceeded"));
+        return;
+      }
+      dataLines.push(value);
+    } else if (field === "event") {
+      eventType = value;
+    }
+  }
+
+  function feed(chunkText) {
+    if (!chunkText) return;
+    if (buffer.length + chunkText.length > maxBufferSize) {
+      buffer = "";
+      dataLines = [];
+      currentEventSize = 0;
+      eventType = "";
+      discardedEvent = true;
+      if (onError) onError(new Error("SSE buffer limit exceeded"));
+      return;
+    }
+    buffer += chunkText;
+    let lineEnd;
+    while ((lineEnd = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, lineEnd);
+      buffer = buffer.slice(lineEnd + 1);
+      processLine(line);
+    }
+  }
+
+  function flush() {
+    if (buffer.length > 0) {
+      processLine(buffer);
+      buffer = "";
+    }
+    if (dataLines.length > 0 || discardedEvent) {
+      processLine("");
+    }
+  }
+
+  function reset() {
+    buffer = "";
+    dataLines = [];
+    currentEventSize = 0;
+    eventType = "";
+    discardedEvent = false;
+  }
+
+  return { feed, flush, reset };
+}
+
+function createReconnectPolicy(options = {}) {
+  const maxRetries = typeof options.maxRetries === "number" ? options.maxRetries : 5;
+  const baseDelayMs = typeof options.baseDelayMs === "number" ? options.baseDelayMs : 1000;
+  const factor = typeof options.factor === "number" ? options.factor : 1.5;
+  const maxDelayMs = typeof options.maxDelayMs === "number" ? options.maxDelayMs : 8000;
+
+  let retryCount = 0;
+  let hasReceivedValidFrame = false;
+
+  function recordConnectionSuccess() {
+    // Do not reset retryCount here: 200 + immediate EOF loop must not retry forever.
+  }
+
+  function recordValidFrame() {
+    retryCount = 0;
+    hasReceivedValidFrame = true;
+  }
+
+  function recordDrop() {
+    retryCount++;
+    if (retryCount <= maxRetries) {
+      const delayMs = Math.min(baseDelayMs * Math.pow(factor, retryCount - 1), maxDelayMs);
+      return { shouldRetry: true, attempt: retryCount, maxRetries, delayMs };
+    }
+    return { shouldRetry: false, attempt: retryCount, maxRetries, delayMs: null };
+  }
+
+  function resetManual() {
+    retryCount = 0;
+    hasReceivedValidFrame = false;
+    return { retryCount: 0 };
+  }
+
+  return {
+    recordConnectionSuccess,
+    recordValidFrame,
+    recordDrop,
+    resetManual,
+    canAutoRetry: () => retryCount < maxRetries,
+    getRetryCount: () => retryCount,
+    isExhausted: () => retryCount >= maxRetries,
+    hasValidFrame: () => hasReceivedValidFrame,
+  };
+}
+
+async function handleTakeoverResponse({ res, isDisposed, paneId, apiPost, onLiveSuccess, onLiveError }) {
+  if (isDisposed) {
+    if (res && res.ok) {
+      try {
+        await apiPost(`/api/term/${encodeURIComponent(paneId)}/control`, {
+          action: "abandon",
+          token: res.token,
+        });
+      } catch (_) {}
+    }
+    return { disposed: true, abandoned: Boolean(res && res.ok) };
+  }
+
+  if (res && res.ok) {
+    if (onLiveSuccess) onLiveSuccess(res);
+    return { disposed: false, ok: true, token: res.token };
+  }
+  if (onLiveError) onLiveError(res);
+  return { disposed: false, ok: false };
+}
+
+async function handleReleaseAction({ isDisposed, mode, connState, inputBatcher, apiPost, onObserve, onError }) {
+  if (inputBatcher) {
+    inputBatcher.setEnabled(false);
+    inputBatcher.clear();
+  }
+  try {
+    const res = await apiPost({ action: "release" });
+    if (onObserve) onObserve(res);
+    return { ok: true };
+  } catch (err) {
+    if (!isDisposed && mode === "control" && connState === "connected" && inputBatcher) {
+      inputBatcher.setEnabled(true);
+    }
+    if (onError) onError(err);
+    return { ok: false, error: err };
+  }
+}
+
+function handleTerminalFrame(msg, { term, reconnectPolicy } = {}) {
+  if (!msg || msg.type !== "terminal.frame") return false;
+  if (reconnectPolicy && typeof reconnectPolicy.recordValidFrame === "function") {
+    reconnectPolicy.recordValidFrame();
+  }
+  if (msg.full && term && typeof term.scrollToBottom === "function") {
+    term.scrollToBottom();
+  }
+  if (msg.bytes && term && typeof term.write === "function") {
+    term.write(base64ToUint8Array(msg.bytes));
+  }
+  return true;
+}
+
+function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options = {} }) {
+  if (!TerminalClass || !FitAddonClass) {
+    return { ok: false, error: "無法載入終端機模組 (xterm.js)", term: null, fitAddon: null };
+  }
+  let term = null;
+  let fitAddon = null;
+  try {
+    term = new TerminalClass({
+      cursorBlink: true,
+      allowProposedApi: false,
+      linkHandler: null,
+      windowOptions: {},
+      fontSize: 13,
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      theme: {
+        background: "#151917",
+        foreground: "#e9ece8",
+        cursor: "#7fb8a4",
+        selectionBackground: "rgba(47, 93, 80, 0.4)",
+      },
+      scrollback: 1000,
+      ...options,
+    });
+    fitAddon = new FitAddonClass();
+    term.loadAddon(fitAddon);
+    if (termElem) {
+      term.open(termElem);
+      if (typeof fitAddon.fit === "function") {
+        fitAddon.fit();
+      }
+    }
+    return { ok: true, term, fitAddon };
+  } catch (err) {
+    if (term && typeof term.dispose === "function") {
+      try { term.dispose(); } catch (_) {}
+    }
+    return { ok: false, error: err ? err.message : "終端機初始化失敗", term: null, fitAddon: null };
+  }
+}
+
+function canStartTerminalStream(state = {}) {
+  if (state.isDisposed) return false;
+  if (state.termReady === false) return false;
+  if (state.termReady === true) return true;
+  return Boolean(state.term && state.fitAddon);
+}
+
+function shouldShowTerminalRetryAction(state = {}) {
+  if (!canStartTerminalStream(state)) return false;
+  const s = state.connState;
+  return s === "disconnected" || s === "closed" || s === "error";
+}
+
+function createInputBatcher(sendFn, options = {}) {
+  const delayMs = options.delayMs || 10;
+  const maxBatchBytes = options.maxBatchBytes || 3500;
+  let queue = [];
+  let timer = null;
+  let sending = false;
+  let currentBytes = 0;
+  let enabled = false;
+
+  function setEnabled(val) {
+    const next = Boolean(val);
+    if (enabled !== next) {
+      enabled = next;
+      if (!enabled) clear();
+    }
+  }
+
+  function clear() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    queue = [];
+    currentBytes = 0;
+  }
+
+  function measureBytes(str) {
+    if (typeof TextEncoder !== "undefined") {
+      return new TextEncoder().encode(str).length;
+    }
+    if (typeof Buffer !== "undefined") {
+      return Buffer.byteLength(str, "utf8");
+    }
+    return unescape(encodeURIComponent(str)).length;
+  }
+
+  function push(str) {
+    if (!enabled || !str) return;
+    const strBytes = measureBytes(str);
+    if (strBytes > maxBatchBytes) {
+      let chunk = "";
+      let chunkBytes = 0;
+      for (const char of str) {
+        const cb = measureBytes(char);
+        if (chunkBytes + cb > maxBatchBytes) {
+          queue.push(chunk);
+          chunk = char;
+          chunkBytes = cb;
+        } else {
+          chunk += char;
+          chunkBytes += cb;
+        }
+      }
+      if (chunk) queue.push(chunk);
+    } else {
+      if (currentBytes + strBytes > maxBatchBytes) {
+        flush();
+      }
+      queue.push(str);
+      currentBytes += strBytes;
+    }
+
+    if (!timer && queue.length > 0 && !sending) {
+      timer = setTimeout(flush, delayMs);
+    }
+  }
+
+  async function flush() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!enabled || queue.length === 0 || sending) return;
+
+    let batch = "";
+    let batchBytes = 0;
+    while (queue.length > 0) {
+      const next = queue[0];
+      const nextBytes = measureBytes(next);
+      if (batchBytes + nextBytes > maxBatchBytes) {
+        if (batch.length === 0) {
+          batch = queue.shift();
+          batchBytes = nextBytes;
+        }
+        break;
+      }
+      batch += queue.shift();
+      batchBytes += nextBytes;
+    }
+    currentBytes = Math.max(0, currentBytes - batchBytes);
+    sending = true;
+
+    try {
+      await sendFn(batch);
+    } catch (err) {
+      clear();
+      if (options.onError) options.onError(err);
+    } finally {
+      sending = false;
+      if (enabled && queue.length > 0) {
+        timer = setTimeout(flush, delayMs);
+      }
+    }
+  }
+
+  return {
+    push,
+    flush,
+    clear,
+    setEnabled,
+    isEnabled: () => enabled,
+    getQueueLength: () => queue.length,
+  };
+}
+
 const api = {
   async get(path) {
     // The custom header lets the server tell its own page from a cross-site request.
@@ -295,7 +678,8 @@ function sessionCard(x) {
     el("div", { class: "row" },
       el("span", { class: "small muted mono" }, `${x.workspace_label || x.workspace_id} · ${x.pane_id}`),
       el("span", { class: "spacer" }),
-      el("button", { class: "btn small", on: { click: () => focusTerminal(x) }, title: "只切換 herdr 顯示的分頁，不會對 Agent 送出任何輸入" }, "切到這個 Terminal")));
+      el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(x.pane_id)}`, title: "開啟終端機串流（預設僅觀看，非獨占控制）" }, "開啟終端"),
+      el("button", { class: "btn small", on: { click: () => focusTerminal(x) }, title: "只切換 herdr 顯示的分頁，不會對 Agent 送出任何輸入" }, "切換焦點")));
 }
 
 function usedChip(u) {
@@ -692,7 +1076,9 @@ async function viewTeam() {
           el("td", null, modelList(x.models_observed).join("、") || el("span", { class: "muted" }, "未知")),
           el("td", null, ((L.projects || []).find((p) => p.project_id === x.project_id) || {}).name || "—"),
           el("td", null, (x.skills_used || []).length ? el("div", { class: "chips" }, x.skills_used.slice(0, 3).map(usedChip)) : el("span", { class: "muted" }, "—")),
-          el("td", null, el("button", { class: "btn small", on: { click: () => focusTerminal(x) } }, "切換")))))))
+          el("td", null,
+            el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(x.pane_id)}`, style: "margin-right:6px", title: "開啟終端機串流" }, "終端"),
+            el("button", { class: "btn small", on: { click: () => focusTerminal(x) } }, "切換")))))))
     : el("div", { class: "grid" }, sessions.map(sessionCard));
 
   const seg = el("div", { class: "seg", role: "group", "aria-label": "顯示方式" },
@@ -960,6 +1346,444 @@ function setTheme(v) {
   else document.documentElement.setAttribute("data-theme", v);
 }
 
+let activeTerminalCleanup = null;
+function cleanupActiveTerminal() {
+  if (activeTerminalCleanup) {
+    try { activeTerminalCleanup(); } catch (e) { /* ignore */ }
+    activeTerminalCleanup = null;
+  }
+}
+
+async function viewTerminal(paneId) {
+  const token = seq;
+  cleanupActiveTerminal();
+  await Promise.all([loadStatic(), loadLive()]);
+  const main = claim(token);
+  if (token !== seq) return;
+
+  const session = (D.live.sessions || []).find((s) => s.pane_id === paneId);
+  const roleName = session ? (session.role_label || session.agent || paneId) : paneId;
+  const toolName = session ? (TOOL[session.agent] || session.agent) : "Terminal";
+  const project = session ? (D.live.projects || []).find((p) => p.project_id === session.project_id) : null;
+
+  let mode = "observe";
+  let connState = "connecting";
+  let closedReason = "";
+  let errorMsg = "";
+  let retryTimer = null;
+  let resizeTimer = null;
+  let abortController = null;
+  let term = null;
+  let fitAddon = null;
+  let resizeObserver = null;
+  let modalElem = null;
+  let isDisposed = false;
+  let termReady = false;
+  let pendingTakeover = null;
+
+  const reconnectPolicy = createReconnectPolicy({
+    maxRetries: 5,
+    baseDelayMs: 1000,
+    factor: 1.5,
+    maxDelayMs: 8000,
+  });
+
+  const modeBadge = el("span");
+  const connBadge = el("span");
+  const bannerWrap = el("div", { class: "term-warning-box" });
+  const actionWrap = el("div", { class: "term-toolbar" });
+  const dimInfo = el("span", { class: "term-dim-info" }, "—");
+  const termElem = el("div", { class: "term-container", role: "region", "aria-label": `Terminal ${paneId}` });
+  const termWrap = el("div", { class: "term-container-wrap" }, termElem);
+
+  const inputBatcher = createInputBatcher(async (text) => {
+    if (isDisposed || mode !== "control") return;
+    await api.post(`/api/term/${encodeURIComponent(paneId)}/input`, { text });
+  }, {
+    onError: (err) => {
+      if (isDisposed) return;
+      toast("鍵盤輸入傳送失敗，已捨棄未送出之內容（不自動重播）：" + (err ? err.message : "網路錯誤"));
+    },
+  });
+
+  function updateUI() {
+    if (token !== seq || isDisposed) return;
+
+    if (mode === "control") {
+      setKids(modeBadge, badge("操作控制中 (Control)", "b-ok", "目前可由此網頁終端輸入"));
+    } else {
+      setKids(modeBadge, badge("僅觀看 (Observe)", "b-info", "目前為觀看模式，無法鍵盤輸入"));
+    }
+
+    if (connState === "connected") {
+      setKids(connBadge, badge("連線正常", "b-ok"));
+    } else if (connState === "connecting") {
+      setKids(connBadge, badge("連線中…", "b-warn"));
+    } else if (connState === "disconnected") {
+      setKids(connBadge, badge("連線中斷", "b-bad"));
+    } else if (connState === "closed") {
+      setKids(connBadge, badge("已結束", "b-mute"));
+    } else if (connState === "error") {
+      setKids(connBadge, badge("錯誤", "b-bad"));
+    }
+
+    const notices = [];
+    if (mode === "control") {
+      notices.push(notice("warn", "⚠️ 目前處於接管控制模式。請注意：接管取得的是共享輸入通道，不會鎖定原生 Herdr 視窗。兩端輸入可能交錯送出，操作 Agent 時請留意。"));
+    }
+    if (connState === "closed") {
+      notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}。如需重新開啟請點選右上方「重新連線」。`));
+    } else if (connState === "disconnected") {
+      const attempts = reconnectPolicy.getRetryCount();
+      const waitText = reconnectPolicy.canAutoRetry()
+        ? `將於稍後自動重試（第 ${attempts}/5 次）...`
+        : "已達最大重試次數，請手動點選「重新連線」。";
+      notices.push(notice("bad", `與伺服器終端串流中斷。${waitText}`));
+    } else if (connState === "error") {
+      notices.push(notice("bad", `連線錯誤：${errorMsg || "無法連接終端串流"}`));
+    }
+    setKids(bannerWrap, notices);
+
+    const actions = [];
+    if (connState === "connected") {
+      if (mode === "observe") {
+        actions.push(el("button", { class: "btn small primary", type: "button", on: { click: promptTakeover } }, "接管操作"));
+      } else {
+        actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, "釋放控制"));
+      }
+    }
+    if (shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
+      actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
+    }
+    actions.push(el("button", { class: "btn small", type: "button", on: { click: () => focusTerminal({ pane_id: paneId, role_label: roleName }) }, title: "在 herdr 視窗聚焦此 Terminal" }, "在 herdr 切換焦點"));
+    actions.push(el("a", { class: "btn small", href: "#/team" }, "返回團隊"));
+    setKids(actionWrap, actions);
+
+    if (term) {
+      dimInfo.textContent = `${term.cols} × ${term.rows}`;
+    }
+  }
+
+  function promptTakeover() {
+    if (modalElem) return;
+    const confirmBtn = el("button", { class: "btn primary", type: "button", on: { click: onConfirm } }, "確認接管操作");
+    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: closeModal } }, "取消");
+    modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "modal-takeover-title" },
+      el("div", { class: "modal-box" },
+        el("h2", { id: "modal-takeover-title" }, "確認接管終端操作"),
+        el("p", null, "您即將接管此 Terminal 的鍵盤輸入控制。"),
+        el("div", { class: "notice warn", style: "margin: 4px 0" },
+          el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+          el("div", null, "重要提醒：接管操作為共享輸入通道，不會鎖定原生 Herdr 視窗。原生視窗與瀏覽器均可打字，兩端輸入可能會互相交錯。若 Agent 正在執行任務，請避免非預期的干擾。")),
+        el("p", { class: "small muted" }, "接管後您隨時可以點選「釋放控制」回到僅觀看狀態。"),
+        el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
+    document.body.append(modalElem);
+    confirmBtn.focus();
+
+    function closeModal() {
+      if (modalElem) {
+        modalElem.remove();
+        modalElem = null;
+      }
+    }
+
+    async function onConfirm() {
+      confirmBtn.disabled = true;
+      let res;
+      try {
+        pendingTakeover = api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
+          action: "takeover",
+          cols: term ? term.cols : 80,
+          rows: term ? term.rows : 24,
+        });
+        res = await pendingTakeover;
+      } catch (err) {
+        if (!isDisposed) {
+          toast("接管失敗：" + err.message);
+          confirmBtn.disabled = false;
+        }
+        return;
+      } finally {
+        pendingTakeover = null;
+      }
+
+      await handleTakeoverResponse({
+        res,
+        isDisposed,
+        paneId,
+        apiPost: (path, body) => api.post(path, body),
+        onLiveSuccess: () => {
+          mode = "control";
+          inputBatcher.setEnabled(true);
+          toast("已接管終端操作（兩端可同時輸入）");
+          closeModal();
+          updateUI();
+          if (term) term.focus();
+        },
+        onLiveError: (r) => {
+          toast("接管失敗：" + (r?.error || "未知錯誤"));
+          confirmBtn.disabled = false;
+        },
+      });
+    }
+  }
+
+  async function doRelease() {
+    await handleReleaseAction({
+      isDisposed,
+      mode,
+      connState,
+      inputBatcher,
+      apiPost: (body) => api.post(`/api/term/${encodeURIComponent(paneId)}/control`, body),
+      onObserve: () => {
+        mode = "observe";
+        toast("已釋放操作控制，切換為僅觀看模式");
+        updateUI();
+      },
+      onError: (err) => {
+        toast("釋放控制失敗，維持操作模式：" + (err ? err.message : "網路錯誤"));
+        updateUI();
+      },
+    });
+  }
+
+  function onStreamDrop(reason) {
+    if (isDisposed || connState === "closed") return;
+    connState = "disconnected";
+    if (mode === "control") {
+      mode = "observe";
+      inputBatcher.setEnabled(false);
+    }
+    inputBatcher.clear();
+    updateUI();
+
+    const dropInfo = reconnectPolicy.recordDrop();
+    if (dropInfo.shouldRetry) {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        if (!isDisposed && connState === "disconnected") {
+          startStream();
+        }
+      }, dropInfo.delayMs);
+    } else {
+      updateUI();
+    }
+  }
+
+  function manualReconnect() {
+    if (!canStartTerminalStream({ isDisposed, termReady })) return;
+    clearTimeout(retryTimer);
+    reconnectPolicy.resetManual();
+    startStream();
+  }
+
+  async function startStream() {
+    if (!canStartTerminalStream({ isDisposed, termReady })) return;
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    connState = "connecting";
+    updateUI();
+
+    abortController = new AbortController();
+    const signal = abortController.signal;
+    const cols = term ? term.cols : 80;
+    const rows = term ? term.rows : 24;
+    const url = `/api/term/${encodeURIComponent(paneId)}/stream?cols=${cols}&rows=${rows}`;
+
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "text/event-stream",
+          "X-SID-Console": "1",
+        },
+        signal,
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          connState = "closed";
+          closedReason = "此 Terminal 不存在或該 Pane 已結束 (404)";
+        } else if (res.status === 429) {
+          connState = "error";
+          errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
+        } else if (res.status === 403) {
+          connState = "error";
+          errorMsg = "權限不足 (403)";
+        } else {
+          connState = "error";
+          errorMsg = `連線失敗 (HTTP ${res.status})`;
+        }
+        updateUI();
+        return;
+      }
+
+      connState = "connected";
+      reconnectPolicy.recordConnectionSuccess();
+      updateUI();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8", { stream: true });
+      const parser = createSSEParser(
+        (event) => {
+          if (isDisposed) return;
+          const msg = event.data;
+          if (!msg) return;
+          if (msg.type === "terminal.frame") {
+            handleTerminalFrame(msg, { term, reconnectPolicy });
+          } else if (msg.type === "terminal.closed") {
+            connState = "closed";
+            closedReason = msg.reason || "終端機已結束";
+            if (mode === "control") {
+              mode = "observe";
+              inputBatcher.setEnabled(false);
+            }
+            inputBatcher.clear();
+            updateUI();
+          }
+        },
+        (err) => {
+          console.warn("SSE parse error:", err);
+        }
+      );
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          parser.feed(decoder.decode(value, { stream: true }));
+        }
+      }
+      const rem = decoder.decode();
+      if (rem) parser.feed(rem);
+      parser.flush();
+
+      if (connState !== "closed" && !signal.aborted && !isDisposed) {
+        onStreamDrop("伺服器連線已中斷 (EOF)");
+      }
+    } catch (err) {
+      if (signal.aborted || isDisposed) return;
+      onStreamDrop(err.message);
+    }
+  }
+
+  function handleResize() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(async () => {
+      if (isDisposed || !term || !fitAddon || !termElem.parentElement) return;
+      const dims = fitAddon.proposeDimensions();
+      if (!dims || !dims.cols || !dims.rows) return;
+      if (dims.cols === term.cols && dims.rows === term.rows) return;
+      fitAddon.fit();
+      dimInfo.textContent = `${term.cols} × ${term.rows}`;
+      if (mode === "control" && connState === "connected") {
+        try {
+          await api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
+            action: "resize",
+            cols: term.cols,
+            rows: term.rows,
+          });
+        } catch (e) {
+          console.warn("Resize POST failed:", e);
+        }
+      }
+    }, 150);
+  }
+
+  setKids(main,
+    crumbs([["Agent 團隊", "#/team"], [`終端機 (${paneId})`]]),
+    el("div", { class: "term-head" },
+      el("div", { class: "term-meta" },
+        el("div", { class: "row" },
+          el("h1", null, roleName),
+          toolTag(session ? session.agent : "terminal"),
+          modeBadge,
+          connBadge),
+        el("p", { class: "small muted mono", style: "margin:0" },
+          `Pane ID: ${paneId}`,
+          project ? ` · 專案: ${project.name}` : "",
+          " · 尺寸: ", dimInfo)),
+      actionWrap),
+    bannerWrap,
+    termWrap,
+    el("div", { class: "legend section" },
+      el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
+      el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作"))
+  );
+
+  activeTerminalCleanup = () => {
+    isDisposed = true;
+    termReady = false;
+    reconnectPolicy.resetManual();
+    clearTimeout(retryTimer);
+    clearTimeout(resizeTimer);
+    inputBatcher.setEnabled(false);
+    inputBatcher.clear();
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+    if (modalElem) {
+      modalElem.remove();
+      modalElem = null;
+    }
+    if (term) {
+      try { term.dispose(); } catch (_) {}
+      term = null;
+    }
+    window.removeEventListener("resize", handleResize);
+  };
+
+  const TerminalClass = (typeof window !== "undefined" && window.Terminal) || (typeof Terminal !== "undefined" && Terminal) || null;
+  const FitAddonClass = (typeof window !== "undefined" && (window.FitAddon?.FitAddon || window.FitAddon)) || (typeof FitAddon !== "undefined" && (FitAddon.FitAddon || FitAddon)) || null;
+
+  const termInit = initTerminalInstance({
+    TerminalClass,
+    FitAddonClass,
+    termElem,
+  });
+
+  if (!termInit.ok) {
+    termReady = false;
+    connState = "error";
+    errorMsg = termInit.error;
+    setKids(termElem,
+      el("div", { class: "notice bad", role: "alert", style: "margin: 16px" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "✕"),
+        el("div", null,
+          el("b", null, "終端機載入失敗"),
+          el("p", { class: "small", style: "margin: 4px 0 0" }, termInit.error))));
+    updateUI();
+    return;
+  }
+
+  term = termInit.term;
+  fitAddon = termInit.fitAddon;
+  termReady = true;
+  dimInfo.textContent = `${term.cols} × ${term.rows}`;
+
+  term.onData((data) => {
+    if (mode === "control" && connState === "connected") {
+      inputBatcher.push(data);
+    }
+  });
+
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(termWrap);
+  }
+  window.addEventListener("resize", handleResize);
+
+  updateUI();
+  startStream();
+}
+
 // ---------- router ---------------------------------------------------------
 
 let liveTimer = null;
@@ -974,6 +1798,7 @@ function parseHash() {
 
 async function route() {
   seq += 1;
+  cleanupActiveTerminal();
   routedHash = location.hash;
   const { parts, params } = parseHash();
   const top = parts[0] || "home";
@@ -989,6 +1814,7 @@ async function route() {
     else if (top === "team") await viewTeam();
     else if (top === "projects") await viewProjects(parts[1]);
     else if (top === "settings") await viewSettings();
+    else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
     else setKids($main(), emptyState("找不到這個頁面", null));
   } catch (e) {
     setKids($main(), notice("bad", "載入失敗：" + e.message));
@@ -1038,3 +1864,19 @@ window.addEventListener("hashchange", () => {
 });
 if (location.hash === "#main") history.replaceState(null, "", location.pathname + location.search);
 route();
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    base64ToUint8Array,
+    createSSEParser,
+    createInputBatcher,
+    createReconnectPolicy,
+    handleTakeoverResponse,
+    handleReleaseAction,
+    handleTerminalFrame,
+    initTerminalInstance,
+    canStartTerminalStream,
+    shouldShowTerminalRetryAction,
+    parseHash,
+  };
+}

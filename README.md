@@ -5,8 +5,8 @@
 
 本專案是獨立的第三方外掛，與 herdr 官方無關；「herdr」為其原作者的產品名稱，這裡只用來說明相容對象。
 
-- **本機、唯讀**：只讀取你選的來源，不修改任何技能或角色檔案，不執行技能內的腳本。
-- **零相依**：只用 Python 3.11+ 標準函式庫，沒有 npm / pip 套件，不連外部服務。
+- **本機執行、外部技能與角色來源唯讀**：只讀取你選的外部工具來源，不修改任何技能或角色檔案，不執行技能內的腳本（SID Console 本身之設定、註記與終端操作除外）。終端工作台（Terminal Workbench）提供本機 Agent pane 畫面串流與受控輸入通道（見下文），其餘外部來源相關功能維持唯讀。
+- **後端零第三方相依、前端單一本機 Vendored 依賴**：後端僅使用 Python 3.11+ 標準函式庫（零 pip 套件、零雲端服務）。前端介面零 npm 建置步驟，唯一依賴為本機打包之 MIT 開源套件 `@xterm/xterm` 與 `@xterm/addon-fit`（置於 `web/vendor/xterm/`，鎖定版本並由單元測試持續驗證固定之 SHA-256 完整性雜湊，嚴格拒絕 CDN 外部載入，維持嚴格 CSP `script-src 'self'`）。
   需要 Python 3.11 以上（用到 `tomllib`）；macOS 系統內建的 `/usr/bin/python3` 是 3.9，會啟動失敗，請改用 Homebrew 等較新的 `python3`。
 - **有來源才顯示**：每項資訊標示「作者說明／自動整理／執行觀察／未提供」，查不到就寫未知。
 
@@ -34,6 +34,7 @@ herdr plugin action invoke sid.console.open
 | 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
 | Agent 團隊 | 工作中的 Terminal（角色名、本次模型、本次用過的技能、切換）與角色設定（主代理、子代理） |
 | 專案 | 依 git 儲存庫歸類：專案 → herdr workspace → 各角色 Terminal |
+| 終端工作台 | 單一 Pane 終端串流（SSE）、觀看／接管操作（Takeover）／釋放（Release）、自適應尺寸（Fit）、兩端並存安全警示 |
 | 設定 | 掃描來源開關、使用紀錄範圍、進階模式、資料流向說明 |
 
 ## 資料從哪裡來
@@ -90,6 +91,22 @@ herdr plugin action invoke sid.console.open
   只有在值明顯無害時才顯示：數字、路徑、網址（不含查詢字串）、`ENV_VAR` 名稱或布林值；其他值一律遮蔽（例如 `secret_file: hunter2`）。
 - 「切到這個 Terminal」只呼叫 `herdr agent focus`，不會送出任何輸入給 Agent；目標必須是目前 herdr 回報的 pane／terminal ID，
   且不可以 `-` 開頭（`herdr agent focus` 只接受單一參數，沒有 `--` 分隔）。
+- **終端工作台（Terminal Workbench）安全模型與資料流向**：
+  - **資料流向與本機邊界**：終端畫面走本機 SSE 串流 (`GET /api/term/<pane>/stream`)，輸出僅於記憶體中轉送，不落地儲存，絕不上傳外部或雲端。
+  - **端點防護與 Fetch-SSE**：瀏覽器不使用原生 `EventSource`（因其無法攜帶自訂標頭），改由原生 `fetch()` 串流。端點防護精確區分：串流讀取 (`GET /api/term/<pane>/stream`) 透過 Host 檢驗、強制 `X-SID-Console: 1` 自訂標頭及 Fetch Metadata (`Sec-Fetch-Site`) 阻擋跨站讀取；操作與輸入寫入 (`POST /api/term/<pane>/...`) 則透過 Host 檢驗、`X-SID-Console: 1` 標頭及同源 `Origin` 檢驗完整防禦 CSRF。
+  - **觀看／接管／釋放／放棄操作生命週期**：
+    - 預設為「觀看模式 (Observe)」：僅轉送畫面，不接收網頁鍵盤輸入，不送出任何輸入給 Agent。
+    - 「接管操作 (Takeover)」：使用者於畫面上確認接管風險後，透過 `POST /api/term/<pane>/control` 取得輸入控制權與隨機的不透明 generation token，方可透過 `POST /api/term/<pane>/input` 送出鍵盤輸入（客戶端限速批次傳送，單次上限小於伺服端 4096 位元組限制，連線中斷或錯誤不重放歷史輸入）。
+    - 「釋放控制 (Release)」：使用者主動釋放輸入通道，退回僅觀看模式並切回 observe 子進程。
+    - 「放棄與客戶端離開 (Abandon)」：當客戶端在接管中途卸載或跳頁時，發出帶 token 的 abandon 請求徹底停止該 session（不產生無人讀取的 observe 孤兒進程）；若 session 已被更新的操作接替，後端比對 token 不符即原子性 no-op，絕不誤殺新 session。
+  - **接管非獨佔風險說明**：接管操作取得的是與 herdr 共用的輸入通道，**不會獨佔或鎖定原生 Herdr 視窗**；原生視窗使用者仍可同時打字，兩端輸入會交錯送入同一 Pane。UI 介面與確認對話框均標示顯著警示。
+  - **CSP 策略與 style-src 'unsafe-inline' 權衡說明**：
+    - `script-src 'self'`：嚴格禁止任何 CDN、任何 inline script 與 `eval`。
+    - `style-src 'self' 'unsafe-inline'`：xterm.js 5.5.0 核心需要動態插入 `<style>` 元素（`_injectCss`）以及在 row 元素動態設定 inline style（`element.setAttribute('style', ...)`）以呈現 ANSI 24 位元真彩色 (Truecolor)。若限制為純 `'self'`，瀏覽器會阻擋真彩色並退回黑白預設色。由於 SID Console 前端完全無使用者可控之 HTML/CSS injection sink（所有動態內容皆經 safe DOM APIs / textContent 或 xterm 位元組解碼），開放 `style-src 'unsafe-inline'` 是受控且必要的安全權衡。
+  - **同 Pane 重新連線與無損全畫面重繪 (Same-Pane Continuity)**：
+    - Herdr 在 stream 重連或初次連線時送出 `full: true` 重繪畫面，內含 `\x1b[2J\x1b[1;1H` 視窗清除與游標定位，但**省略 DECSET 1049 (`\x1b[?1049h`)**。
+    - 前端不呼叫破壞性的 `term.reset()`，而是由 `handleTerminalFrame` 執行 `scrollToBottom()` 後直接寫入 decoded ANSI 位元組。如此能保留 Pane 正在執行的 Alternate Buffer 狀態與 Normal Buffer 的歷史捲動行數，避免重連時 scrollback 被洗白或 alternate 畫面黏在 normal buffer。
+  - **xterm.js 安全配置**：配置 `linkHandler: null` 明確禁用自動連結識別與開啟、配置 `windowOptions: {}` 禁止視窗操控序列；套件使用 xterm core 5.5.0 本機打包，未載入任何剪貼簿插件（無 OSC 52 剪貼簿寫入整合）與連結插件；前端 DOM 一律經由純文字節點與 safe DOM APIs 操作，嚴格杜絕 `innerHTML` 注入風險。
 - 請求內容：`Content-Length` 只接受純數字；超過 64KB 回 413 並關閉連線；整個請求內容必須在 15 秒內送完，
   逐位元組拖延的連線會被切斷。標頭階段只有每次讀取 15 秒的逾時，沒有總時限。
 - 設定檔損毀時：不覆寫原檔（先備份為 `config.json.bak`）；掃描範圍改為「全部關閉」而不是預設值，
@@ -113,6 +130,6 @@ sidconsole/
   annotations.py                      我的註記（別名、標籤、備註）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
-tests/                                85 項測試，全部使用合成的 HOME
+tests/                                117 項測試，全部使用合成的 HOME
 tests/frontend/                       前端行為測試（node＋合成 DOM，不是瀏覽器測試）
 ```

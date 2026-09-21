@@ -325,6 +325,96 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("ok IME composition Enter ignored", proc.stdout)
 
+    def req_raw(self, path, method="GET", headers=None):
+        r = urllib.request.Request(self.base + path, method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(r) as resp:
+                return resp.status, resp.read(), resp.headers
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            e.close()
+            return e.code, body, e.headers
+
+    def test_vendored_static_assets_serving_and_path_traversal(self):
+        """Vendored assets in /vendor/xterm/ are served with correct MIME,
+        strict security headers, and cannot be path-traversed."""
+        for path, expected_mime in [
+            ("/vendor/xterm/xterm.js", "text/javascript; charset=utf-8"),
+            ("/vendor/xterm/xterm.css", "text/css; charset=utf-8"),
+            ("/vendor/xterm/addon-fit.js", "text/javascript; charset=utf-8"),
+            ("/vendor/xterm/LICENSE", "text/plain; charset=utf-8"),
+        ]:
+            status, body, headers = self.req_raw(path)
+            self.assertEqual(status, 200, f"Failed for {path}")
+            self.assertTrue(len(body) > 0)
+            self.assertEqual(headers.get("Content-Type"), expected_mime, f"MIME mismatch for {path}")
+            self.assertIn("default-src 'self'", headers.get("Content-Security-Policy", ""))
+            self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+            self.assertEqual(headers.get("Referrer-Policy"), "no-referrer")
+
+        # Unmapped and path traversal attempts against static HTTP routing are rejected
+        # at router level by the exact-match STATIC_FILES whitelist table (404).
+        for bad_path in [
+            "/vendor/xterm/../../server.py",
+            "/vendor/xterm/%2e%2e/server.py",
+            "/vendor/xterm/../style.css",
+            "/vendor/xterm/nonexistent.js",
+            "/vendor/xterm",
+            "/vendor/xterm/",
+        ]:
+            status, _, _ = self.req_raw(bad_path)
+            self.assertEqual(status, 404, f"Traversal not rejected: {bad_path}")
+
+    def test_static_internal_path_traversal_guard(self):
+        """Directly tests handler._static() internal path traversal guard:
+        even if an internal caller passes a traversal path, it is rejected if
+        the resolved file escapes WEB_ROOT."""
+        from sidconsole.server import make_handler
+        handler_cls = make_handler(self.console)
+        h = handler_cls.__new__(handler_cls)
+        h._error = mock.MagicMock()
+        h._static("../../server.py")
+        h._error.assert_called_once_with(404, "missing asset")
+
+        h._error.reset_mock()
+        h._static("../../../etc/passwd")
+        h._error.assert_called_once_with(404, "missing asset")
+
+    def test_vendored_assets_pinned_sha256_integrity(self):
+        """Verifies that all vendored terminal assets strictly match their
+        pinned SHA-256 hashes, ensuring zero tampering, corruption, or CDN drift."""
+        import hashlib
+        from sidconsole.server import WEB_ROOT
+
+        pinned_hashes = {
+            "vendor/xterm/xterm.js": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495",
+            "vendor/xterm/xterm.css": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6",
+            "vendor/xterm/addon-fit.js": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089",
+            "vendor/xterm/LICENSE": "7a5804b91160d4f73ec579a05b20cf2f78a37a3d3bb1879b85ae97d21a6be931",
+        }
+
+        for rel_path, expected_sha in pinned_hashes.items():
+            target = (WEB_ROOT / rel_path).resolve()
+            self.assertTrue(target.is_file(), f"Vendored file missing: {rel_path}")
+            data = target.read_bytes()
+            actual_sha = hashlib.sha256(data).hexdigest()
+            self.assertEqual(
+                actual_sha, expected_sha,
+                f"Integrity check failed for {rel_path}: expected {expected_sha}, got {actual_sha}"
+            )
+
+    def test_terminal_frontend_suite(self):
+        """Runs tests/frontend/terminal.cjs to verify SSE parsing, base64/UTF-8,
+        input batching/gating, takeover warning, release, and cleanup."""
+        import subprocess
+        node = shutil.which("node", path=os.environ.get("SID_TEST_NODE_PATH", ORIGINAL_PATH))
+        if not node:
+            self.skipTest("node is not installed")
+        script = Path(__file__).resolve().parent / "frontend" / "terminal.cjs"
+        proc = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ALL FRONTEND TESTS PASSED", proc.stdout)
+
     def test_invalid_content_length_returns_400(self):
         import http.client
         conn = http.client.HTTPConnection("127.0.0.1", self.console.port)
@@ -1642,6 +1732,46 @@ class TerminalBridgeManagerTests(unittest.TestCase):
         back = self.bridge.release("p3")
         self.assertEqual(back.mode, "observe")
 
+    def test_abandon_stops_session_without_spawning_observe(self):
+        ctrl = self.bridge.takeover("p_abandon")
+        self.assertFalse(ctrl.closed)
+        ok = self.bridge.abandon("p_abandon")
+        self.assertTrue(ok)
+        self.assertTrue(ctrl.closed)
+        self.assertIsNone(self.bridge.get("p_abandon"))
+        # Idempotent / returns False if no active session
+        self.assertFalse(self.bridge.abandon("p_abandon"))
+
+    def test_abandon_same_session_success_with_token(self):
+        sess = self.bridge.takeover("p_token_ok")
+        self.assertFalse(sess.closed)
+        self.assertTrue(isinstance(sess.token, str) and len(sess.token) >= 16)
+        ok = self.bridge.abandon("p_token_ok", token=sess.token)
+        self.assertTrue(ok)
+        self.assertTrue(sess.closed)
+        self.assertIsNone(self.bridge.get("p_token_ok"))
+
+    def test_abandon_stale_token_is_atomic_noop(self):
+        sess1 = self.bridge.takeover("p_stale")
+        token1 = sess1.token
+        # Newer takeover establishes sess2 with new token
+        sess2 = self.bridge.takeover("p_stale")
+        self.assertNotEqual(token1, sess2.token)
+        self.assertTrue(sess1.closed)
+        self.assertFalse(sess2.closed)
+
+        # Stale abandon request with token1 arrives
+        ok = self.bridge.abandon("p_stale", token=token1)
+        self.assertFalse(ok)  # Atomic no-op
+        self.assertIs(self.bridge.get("p_stale"), sess2)  # Newer session untouched
+        self.assertFalse(sess2.closed)
+
+        # Abandon with matching token2 succeeds
+        ok2 = self.bridge.abandon("p_stale", token=sess2.token)
+        self.assertTrue(ok2)
+        self.assertTrue(sess2.closed)
+        self.assertIsNone(self.bridge.get("p_stale"))
+
     def test_close_if_current_leaves_a_newer_takeover_running(self):
         first = self.bridge.open_observer("p4")
         second = self.bridge.takeover("p4")  # simulates a takeover racing an SSE handler
@@ -1793,6 +1923,88 @@ class TerminalRouteTests(_HostileBase):
         finally:
             conn.close()
 
+    def test_control_abandon_stops_session(self):
+        self.req("/api/term/w1:pA/control", "POST", headers=self.H, body={"action": "takeover"})
+        self.assertIsNotNone(self.console.terminals.get("w1:pA"))
+        status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                   body={"action": "abandon"})
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        self.assertTrue(data.get("stopped"))
+        self.assertEqual(data.get("action"), "abandon")
+        self.assertIsNone(data.get("mode"))
+        self.assertIsNone(self.console.terminals.get("w1:pA"))
+
+    def test_control_abandon_with_matching_token_stops_session(self):
+        status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                   body={"action": "takeover"})
+        self.assertEqual(status, 200)
+        token = data.get("token")
+        self.assertTrue(isinstance(token, str) and len(token) >= 16)
+
+        status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                   body={"action": "abandon", "token": token})
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        self.assertTrue(data.get("stopped"))
+        self.assertEqual(data.get("action"), "abandon")
+        self.assertIsNone(data.get("mode"))
+        self.assertIsNone(self.console.terminals.get("w1:pA"))
+
+    def test_control_abandon_with_stale_token_is_noop(self):
+        status, data1, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                    body={"action": "takeover"})
+        self.assertEqual(status, 200)
+        token1 = data1.get("token")
+
+        # Newer takeover
+        status, data2, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                    body={"action": "takeover"})
+        self.assertEqual(status, 200)
+        token2 = data2.get("token")
+        self.assertNotEqual(token1, token2)
+
+        # Stale abandon request with token1 arrives
+        status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                   body={"action": "abandon", "token": token1})
+        self.assertEqual(status, 200)
+        self.assertTrue(data.get("ok"))
+        self.assertFalse(data.get("stopped"), "Stale token must not stop newer session")
+        self.assertEqual(data.get("mode"), "control")
+        self.assertIsNotNone(self.console.terminals.get("w1:pA"))
+
+        # Clean up with token2
+        self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                 body={"action": "abandon", "token": token2})
+
+    def test_active_sse_abandon_lifecycle_and_graceful_close(self):
+        conn, resp = self.open_stream(pane="w1:pA")
+        try:
+            self.read_sse_events(resp, 1)  # Initial observe frame
+            status, take_data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                            body={"action": "takeover"})
+            self.assertEqual(status, 200)
+            token = take_data["token"]
+            self.read_sse_events(resp, 1)  # Takeover redraw frame
+
+            # Active client unmount / abandon during live SSE stream
+            status, ab_data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                          body={"action": "abandon", "token": token})
+            self.assertEqual(status, 200)
+            self.assertTrue(ab_data["stopped"])
+
+            # Active SSE stream detects session termination and closes cleanly without hanging
+            deadline = time.time() + 3.0
+            closed = False
+            while time.time() < deadline:
+                chunk = resp.fp.read1(4096) if hasattr(resp.fp, "read1") else resp.read(4096)
+                if not chunk:
+                    closed = True
+                    break
+            self.assertTrue(closed, "SSE stream must close gracefully upon session abandon")
+        finally:
+            conn.close()
+
     def test_oversized_input_rejected(self):
         self.req("/api/term/w1:pA/control", "POST", headers=self.H, body={"action": "takeover"})
         try:
@@ -1801,6 +2013,86 @@ class TerminalRouteTests(_HostileBase):
             self.assertEqual(status, 413)
         finally:
             self.req("/api/term/w1:pA/control", "POST", headers=self.H, body={"action": "release"})
+
+    def test_hostile_target_matrix_rejects_without_bridge_call(self):
+        """T2 F5 hostile target regression matrix:
+        Tests option injection, path traversal, encoded separators, double encoding,
+        NUL/control bytes, empty/multi-segment, and oversized targets against real
+        GET /api/term/<pane>/stream, POST .../input, and POST .../control.
+        Asserts every attack is rejected and bridge is NEVER called or spawned."""
+        hostile_targets = [
+            # Option injection
+            "--takeover",
+            "--cols",
+            "-h",
+            "-w1:pA",
+            "%2d%2dtakeover",
+            "%2d%2dcols%20999",
+            # Path traversal
+            "../../etc/passwd",
+            "p1/../p2",
+            "/etc/passwd",
+            "%2e%2e%2fpasswd",
+            "..%2F..%2Fpasswd",
+            # Encoded separators
+            "%2F",
+            "w1%2FpA",
+            # Double encoding
+            "%252e%252e%252f",
+            "%252f",
+            # NUL and control bytes
+            "%00",
+            "%0a",
+            "%0d%0a",
+            "%1b%5b2J",
+            "%09",
+            "%0d",
+            # Multi-segment / action ambiguity / empty
+            "",
+            "a/b",
+            "w1:pA/extra",
+            # Length bounds
+            "a" * 65,
+            "a" * 4000,
+        ]
+
+        called = []
+        orig_open = self.console.terminals.open_observer
+        orig_takeover = self.console.terminals.takeover
+
+        def mock_open(pane_id, cols=None, rows=None):
+            called.append(("open_observer", pane_id))
+            return orig_open(pane_id, cols, rows)
+
+        def mock_takeover(pane_id, cols=None, rows=None):
+            called.append(("takeover", pane_id))
+            return orig_takeover(pane_id, cols, rows)
+
+        self.console.terminals.open_observer = mock_open
+        self.console.terminals.takeover = mock_takeover
+
+        try:
+            for target in hostile_targets:
+                # GET stream
+                status, _, _ = self.req(f"/api/term/{target}/stream", headers=self.H)
+                self.assertIn(status, (400, 404, 421), f"GET stream did not reject hostile target: {target!r}")
+
+                # POST input
+                status, _, _ = self.req(f"/api/term/{target}/input", "POST", headers=self.H,
+                                        body={"text": "evil"})
+                self.assertIn(status, (400, 404, 421), f"POST input did not reject hostile target: {target!r}")
+
+                # POST control
+                status, _, _ = self.req(f"/api/term/{target}/control", "POST", headers=self.H,
+                                        body={"action": "takeover"})
+                self.assertIn(status, (400, 404, 421), f"POST control did not reject hostile target: {target!r}")
+
+                # Crucial assertion: no bridge spawn was attempted for hostile target
+                self.assertEqual(len(called), 0, f"Bridge was invoked for hostile target {target!r}: {called}")
+                self.assertEqual(len(self.console.terminals._sessions), 0, f"Bridge spawned a pane for {target!r}")
+        finally:
+            self.console.terminals.open_observer = orig_open
+            self.console.terminals.takeover = orig_takeover
 
 
 def tearDownModule():

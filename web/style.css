@@ -212,3 +212,23 @@ form.annot { display: grid; gap: 10px; }
 form.annot label { display: grid; gap: 4px; font-size: 13.5px; font-weight: 600; }
 form.annot label small { font-weight: 400; color: var(--ink-3); margin-left: 6px; }
 form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); font-weight: 400; resize: vertical; }
+
+/* Terminal Workbench Styles */
+.term-view { display: flex; flex-direction: column; gap: 14px; }
+.term-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.term-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.term-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.term-status-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.term-container-wrap { position: relative; background: #151917; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; box-shadow: var(--shadow); overflow: hidden; }
+.term-container { width: 100%; height: 560px; min-height: 380px; }
+.term-container .xterm { height: 100%; }
+.term-container .xterm-viewport { border-radius: calc(var(--radius) - 4px); }
+.term-warning-box { margin-top: 10px; }
+.term-dim-info { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+/* Accessible Confirmation Modal */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: grid; place-items: center; z-index: 100; padding: 16px; backdrop-filter: blur(2px); }
+.modal-box { background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,0.3); max-width: 500px; width: 100%; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+.modal-box h2 { margin: 0; font-size: 18px; }
+.modal-box p { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.6; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
