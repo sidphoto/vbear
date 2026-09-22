@@ -5,6 +5,8 @@
 
 本專案是獨立的第三方外掛，與 herdr 官方無關；「herdr」為其原作者的產品名稱，這裡只用來說明相容對象。
 
+開發狀態與下一步請見 [`sidconsole/HANDOFF.md`](sidconsole/HANDOFF.md)。
+
 - **本機執行、外部技能與角色來源唯讀**：只讀取你選的外部工具來源，不修改任何技能或角色檔案，不執行技能內的腳本（SID Console 本身之設定、註記與終端操作除外）。終端工作台（Terminal Workbench）提供本機 Agent pane 畫面串流與受控輸入通道（見下文），其餘外部來源相關功能維持唯讀。
 - **後端零第三方相依、前端單一本機 Vendored 依賴**：後端僅使用 Python 3.11+ 標準函式庫（零 pip 套件、零雲端服務）。前端介面零 npm 建置步驟，唯一依賴為本機打包之 MIT 開源套件 `@xterm/xterm` 與 `@xterm/addon-fit`（置於 `web/vendor/xterm/`，鎖定版本並由單元測試持續驗證固定之 SHA-256 完整性雜湊，嚴格拒絕 CDN 外部載入，維持嚴格 CSP `script-src 'self'`）。
   需要 Python 3.11 以上（用到 `tomllib`）；macOS 系統內建的 `/usr/bin/python3` 是 3.9，會啟動失敗，請改用 Homebrew 等較新的 `python3`。
@@ -103,9 +105,10 @@ herdr plugin action invoke sid.console.open
   - **CSP 策略與 style-src 'unsafe-inline' 權衡說明**：
     - `script-src 'self'`：嚴格禁止任何 CDN、任何 inline script 與 `eval`。
     - `style-src 'self' 'unsafe-inline'`：xterm.js 5.5.0 核心需要動態插入 `<style>` 元素（`_injectCss`）以及在 row 元素動態設定 inline style（`element.setAttribute('style', ...)`）以呈現 ANSI 24 位元真彩色 (Truecolor)。若限制為純 `'self'`，瀏覽器會阻擋真彩色並退回黑白預設色。由於 SID Console 前端完全無使用者可控之 HTML/CSS injection sink（所有動態內容皆經 safe DOM APIs / textContent 或 xterm 位元組解碼），開放 `style-src 'unsafe-inline'` 是受控且必要的安全權衡。
-  - **同 Pane 重新連線與無損全畫面重繪 (Same-Pane Continuity)**：
+  - **同 Pane 重新連線與全畫面重繪 (Same-Pane Continuity)**：
     - Herdr 在 stream 重連或初次連線時送出 `full: true` 重繪畫面，內含 `\x1b[2J\x1b[1;1H` 視窗清除與游標定位，但**省略 DECSET 1049 (`\x1b[?1049h`)**。
-    - 前端不呼叫破壞性的 `term.reset()`，而是由 `handleTerminalFrame` 執行 `scrollToBottom()` 後直接寫入 decoded ANSI 位元組。如此能保留 Pane 正在執行的 Alternate Buffer 狀態與 Normal Buffer 的歷史捲動行數，避免重連時 scrollback 被洗白或 alternate 畫面黏在 normal buffer。
+    - 前端不呼叫破壞性的 `term.reset()`，而是由 `handleTerminalFrame` 執行 `scrollToBottom()` 後直接寫入 decoded ANSI 位元組，以保留 Pane 正在執行的 Alternate Buffer 狀態並避免重連畫面黏在 Normal Buffer。
+    - Herdr 的 live frame 以絕對游標定位重畫目前可視網格，不提供建立 xterm 歷史所需的換行或捲動語意。因此網頁終端使用 `scrollback: 0` 並明示「只同步目前可視畫面，不提供回捲歷史」；需要較早內容時請使用 Herdr 原生視窗。
   - **xterm.js 安全配置**：配置 `linkHandler: null` 明確禁用自動連結識別與開啟、配置 `windowOptions: {}` 禁止視窗操控序列；套件使用 xterm core 5.5.0 本機打包，未載入任何剪貼簿插件（無 OSC 52 剪貼簿寫入整合）與連結插件；前端 DOM 一律經由純文字節點與 safe DOM APIs 操作，嚴格杜絕 `innerHTML` 注入風險。
   - **三欄工作台、任務卡 (Task Card) 與 G/P/A/T 治理基礎 (Phase B1 - B4)**：
     - **統一三欄版面與專注模式 (B1/B2)**：左欄 Agent / Role / Skills 列表與切換、中欄真實 Terminal、右欄 Task Card 與 G/P/A/T 資訊；支援兩側獨立收合與一鍵「專注模式」（收合兩側、Esc 退出）。切換顯示中之 Agent 焦點**絕不重啟該既有 session**；離開分頁時自動中止串流以防止孤兒行程。若切換當下正處於接管操作模式，前端會送出**帶 token 的 abandon**（而非無條件的 release）：只有在該 token 仍與伺服器目前的 session 相符時才會停止，避免在快速切換或多分頁競速下，誤將別處剛完成的新接管操作奪回為僅觀看模式。
