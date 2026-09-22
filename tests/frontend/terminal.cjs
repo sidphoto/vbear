@@ -522,6 +522,22 @@ async function runAllTests() {
     assert.strictEqual(instantiatedOptions.allowProposedApi, false);
     assert.strictEqual(instantiatedOptions.linkHandler, null);
     assert.deepStrictEqual(instantiatedOptions.windowOptions, {});
+    assert.strictEqual(
+      instantiatedOptions.scrollback, 0,
+      "Herdr redraw frames expose only the current screen, so the UI must not advertise a non-functional xterm scrollback buffer"
+    );
+    assert.strictEqual(
+      appSource.includes("scrollback: 1000"), false,
+      "The live terminal must not retain the old misleading scrollback: 1000 setting"
+    );
+    assert(
+      appSource.includes("此網頁只同步 Herdr 目前可視畫面，不提供回捲歷史"),
+      "The UI must disclose the current-screen-only terminal contract"
+    );
+    assert.strictEqual(
+      (appSource.match(/class: \"term-history-notice\"/g) || []).length, 2,
+      "Both the standalone terminal and workbench terminal must show the history limitation"
+    );
 
     // 8f. Source integration check: proving startStream, manualReconnect, and UI consult readiness gate
     assert(
@@ -584,9 +600,12 @@ async function runAllTests() {
     console.log("ok: Category 9 - Backend resize contract, takeover warning & hash routing verified");
   }
 
-  // 10. Safe Full-Frame Resynchronization without term.reset() destruction
+  // 10. Safe Full-Frame Resynchronization without term.reset() destruction.
+  // The synthetic CRLF history below is deliberately a protocol-level guard:
+  // it proves a redraw does not destroy pre-existing xterm state, but does NOT
+  // claim the live Herdr absolute-position redraw stream can create scrollback.
   {
-    // 10a. Full frame preserves alternate buffer and normal scrollback
+    // 10a. Full frame preserves alternate buffer and synthetic normal-buffer history
     const writtenBytes = [];
     let scrolledToBottom = false;
     let validFrameRecorded = false;
@@ -616,7 +635,8 @@ async function runAllTests() {
     assert.strictEqual(writtenBytes.length, 1);
     assert.strictEqual(Buffer.from(writtenBytes[0]).toString("utf8"), "Hello Redraw");
 
-    // 10b. Real xterm instance verification: alternate buffer and scrollback preserved across full frame
+    // 10b. Real xterm instance verification: alternate buffer and pre-existing
+    // synthetic normal-buffer history are preserved across a full frame.
     const { Terminal } = require("../../web/vendor/xterm/xterm.js");
     const realTerm = new Terminal({ scrollback: 1000, rows: 10, cols: 40 });
     for (let i = 1; i <= 20; i++) {
@@ -637,7 +657,7 @@ async function runAllTests() {
         }, { term: realTerm, reconnectPolicy: fakePolicy });
 
         assert.strictEqual(realTerm.buffer.active.type, "alternate", "Alternate buffer must be preserved across full frame");
-        assert.strictEqual(realTerm.buffer.normal.length, 21, "Normal buffer scrollback must NOT be wiped by full frame");
+        assert.strictEqual(realTerm.buffer.normal.length, 21, "Pre-existing synthetic normal-buffer history must NOT be wiped by full frame");
 
         // 10c. Same-pane continuity: simulate full reconnect sequence where Herdr full frame
         // omits DECSET 1049, followed by application exiting alternate buffer (\x1b[?1049l)
@@ -653,19 +673,19 @@ async function runAllTests() {
         }, { term: realTerm, reconnectPolicy: fakePolicy });
 
         assert.strictEqual(realTerm.buffer.active.type, "alternate", "Buffer must remain alternate after Herdr reconnect frame");
-        assert.strictEqual(realTerm.buffer.normal.length, 21, "Normal buffer scrollback preserved during reconnect");
+        assert.strictEqual(realTerm.buffer.normal.length, 21, "Synthetic normal-buffer history is preserved during reconnect");
 
         // When application in the same pane later exits alternate buffer
         realTerm.write("\x1b[?1049l", () => {
           assert.strictEqual(realTerm.buffer.active.type, "normal", "Exiting alternate screen restores normal buffer");
-          assert.strictEqual(realTerm.buffer.normal.length, 21, "Original normal scrollback lines are intact");
+          assert.strictEqual(realTerm.buffer.normal.length, 21, "Original synthetic normal-buffer lines are intact");
           assert.strictEqual(realTerm.buffer.normal.getLine(9).translateToString(true), "line 10");
           resolve();
         });
       });
     });
 
-    console.log("ok: Category 10 - Safe full-frame resynchronization (same-pane continuity & scrollback preserved) verified");
+    console.log("ok: Category 10 - Safe full-frame resynchronization preserves pre-existing xterm state without claiming live Herdr scrollback");
   }
 
   // 11. Degenerate terminal dimensions never reach the server or the pane

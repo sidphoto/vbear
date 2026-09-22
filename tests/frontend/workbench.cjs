@@ -8,6 +8,7 @@ const path = require("path");
 const assert = require("assert");
 
 const appSource = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+const styleSource = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
 
 // ---------------------------------------------------------------------------
 // A small but real synthetic DOM: actual parent/child tree, actual
@@ -874,7 +875,37 @@ async function runWorkbenchTests() {
     console.log("ok: Category 17 - stacked dialogs unwind innermost-first and leave no residual inert/aria-hidden");
   }
 
-  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (17/17 categories verified)");
+  // 18. Status Provenance must remain inside the right-column card at narrow
+  // widths. The synthetic DOM has no layout engine, so lock the CSS contract
+  // that removes intrinsic flex-item minima, permits wrapping, and bounds the
+  // native select/badge to the card width. Also lock the semantic class used
+  // instead of an untestable inline flex style.
+  {
+    assert(
+      appSource.includes('class: "wb-provenance-head"'),
+      "Status Provenance header must use the responsive class"
+    );
+    assert(
+      /\.wb-provenance-head,\s*\n\.wb-provenance-row\s*\{[^}]*flex-wrap:\s*wrap;[^}]*min-width:\s*0;/s.test(styleSource),
+      "Provenance header and rows must wrap and allow their flex items to shrink"
+    );
+    assert(
+      /\.wb-provenance-head\s*>\s*\*,\s*\n\.wb-provenance-row\s*>\s*\*\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s.test(styleSource),
+      "Every direct provenance flex child must be bounded by the card"
+    );
+    assert(
+      /\.wb-provenance-head\s+\.badge\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s.test(styleSource),
+      "The long verification badge must be allowed to wrap"
+    );
+    assert(
+      /\.wb-provenance-row\s+select\s*\{[^}]*max-width:\s*100%;/s.test(styleSource),
+      "Native provenance selects must never exceed the card width"
+    );
+
+    console.log("ok: Category 18 - narrow Status Provenance layout is bounded and wrap-safe");
+  }
+
+  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (18/18 categories verified)");
 }
 
 runWorkbenchTests()

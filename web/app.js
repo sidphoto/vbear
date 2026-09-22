@@ -417,6 +417,7 @@ function handleTerminalFrame(msg, { term, reconnectPolicy } = {}) {
 // resize is forwarded to the pane it would wreck the native herdr window too.
 const TERM_MIN_COLS = 20;
 const TERM_MIN_ROWS = 5;
+const TERMINAL_VISIBLE_SCREEN_NOTICE = "畫面歷史：此網頁只同步 Herdr 目前可視畫面，不提供回捲歷史；需要較早內容時，請至 Herdr 原生視窗查看。";
 
 // True only for dimensions worth sending to the server or fitting to.
 // fitAddon.fit() measures the canvas, so when it is called before the grid
@@ -460,7 +461,11 @@ function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options 
         cursor: "#7fb8a4",
         selectionBackground: "rgba(47, 93, 80, 0.4)",
       },
-      scrollback: 1000,
+      // Herdr streams absolute-position redraws of the current screen, not
+      // newline/scroll events. xterm therefore cannot build truthful history
+      // from this feed; keeping a nominal scrollback buffer would promise a
+      // capability the live protocol does not provide.
+      scrollback: 0,
       ...options,
     });
     fitAddon = new FitAddonClass();
@@ -1939,7 +1944,8 @@ async function viewTerminal(paneId) {
     termWrap,
     el("div", { class: "legend section" },
       el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
-      el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作"))
+      el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作"),
+      el("span", { class: "term-history-notice" }, TERMINAL_VISIBLE_SCREEN_NOTICE))
   );
 
   activeTerminalCleanup = () => {
@@ -2685,7 +2691,8 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
         termWrap,
         el("div", { class: "legend section", style: "margin-top:8px" },
           el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
-          el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作")))
+          el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作"),
+          el("span", { class: "term-history-notice" }, TERMINAL_VISIBLE_SCREEN_NOTICE)))
     );
 
     activeTerminalCleanup = () => {
@@ -2926,7 +2933,7 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
 
     // Status Provenance Box
     const provBox = el("div", { class: "wb-provenance-box" },
-      el("div", { style: "font-weight:700; font-size:13px; display:flex; justify-content:space-between; align-items:center" },
+      el("div", { class: "wb-provenance-head" },
         el("span", null, "狀態證明 (Status Provenance)"),
         taskStatusBadge(derivedStatus)),
       el("div", { class: "wb-provenance-row" },
