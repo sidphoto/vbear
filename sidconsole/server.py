@@ -32,6 +32,7 @@ from urllib.parse import unquote
 
 from . import annotations
 from . import config as cfg
+from . import tasks
 from .bridge import herdr, terminal
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
@@ -244,6 +245,18 @@ def make_handler(console: Console):
                     return self._json(console.store.live(force=force))
                 if path == "/api/config":
                     return self._json(self._config_view())
+                if path == "/api/tasks":
+                    return self._json({"ok": True, "tasks": tasks.list_tasks()})
+                if path == "/api/task-templates":
+                    return self._json({"ok": True, "templates": tasks.get_templates()})
+                if path.startswith("/api/tasks/"):
+                    task_id = path[len("/api/tasks/"):]
+                    t = tasks.get_task(task_id)
+                    if t is None:
+                        return self._error(404, "找不到此任務卡")
+                    return self._json({"ok": True, "task": t})
+                if path == "/api/governance":
+                    return self._json(self._governance_view())
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
                     if action == "stream" and pane_enc:
@@ -253,6 +266,8 @@ def make_handler(console: Console):
                 raise
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the client went away mid-request; nothing left to answer
+            except tasks.TaskStorageError as exc:
+                return self._error(503, str(exc))
             except Exception as exc:  # report, never crash the server
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
 
@@ -307,6 +322,32 @@ def make_handler(console: Console):
                             and target not in console.live_targets(force=True)):
                         return self._error(400, "目前沒有這個 Terminal")
                     return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
+                if path == "/api/tasks":
+                    try:
+                        saved = tasks.save_task(None, self._body())
+                        return self._json({"ok": True, "task": saved})
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
+                if path.startswith("/api/tasks/"):
+                    rest = path[len("/api/tasks/"):]
+                    if rest.endswith("/delete"):
+                        task_id = rest[:-7]
+                        ok = tasks.delete_task(task_id)
+                        if not ok:
+                            return self._error(404, "找不到此任務卡或已刪除")
+                        return self._json({"ok": True, "deleted": task_id})
+                    task_id = rest
+                    body = self._body()
+                    if body.get("action") == "delete":
+                        ok = tasks.delete_task(task_id)
+                        if not ok:
+                            return self._error(404, "找不到此任務卡或已刪除")
+                        return self._json({"ok": True, "deleted": task_id})
+                    try:
+                        saved = tasks.save_task(task_id, body)
+                        return self._json({"ok": True, "task": saved})
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
                     if pane_enc and action in ("input", "control"):
@@ -321,6 +362,27 @@ def make_handler(console: Console):
                 raise
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the client went away mid-request; nothing left to answer
+            except tasks.TaskStorageError as exc:
+                return self._error(503, str(exc))
+            except Exception as exc:
+                return self._error(500, f"內部錯誤：{type(exc).__name__}")
+
+        def do_DELETE(self):
+            if not self._host_ok():
+                return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+            if not self._write_ok():
+                return self._error(403, "forbidden")
+            path = urlparse(self.path).path
+            try:
+                if path.startswith("/api/tasks/"):
+                    task_id = path[len("/api/tasks/"):]
+                    ok = tasks.delete_task(task_id)
+                    if not ok:
+                        return self._error(404, "找不到此任務卡或已刪除")
+                    return self._json({"ok": True, "deleted": task_id})
+                return self._error(404, "not found")
+            except tasks.TaskStorageError as exc:
+                return self._error(503, str(exc))
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
 
@@ -612,6 +674,61 @@ def make_handler(console: Console):
                 console.store.set_conf(conf)
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
                     or "project_roots" in body}
+
+        def _governance_view(self) -> dict:
+            return {
+                "ok": True,
+                "version": "3.0.0-foundation",
+                "compiler_active": False,
+                "effective_context_enabled": False,
+                "notice": "G/P 層於本階段為唯讀介面骨架展示，尚未進行全域治理遷移，無 Policy Compiler 或自動注入。",
+                "global": {
+                    "source": "全域規則骨架 (Global Skeleton)",
+                    "source_type": "skeleton_read_only",
+                    "status": "唯讀骨架 (未遷移 / 無主動編譯)",
+                    "description": "系統與專案底線規範，適用於所有 Agent",
+                    "categories": [
+                        {
+                            "name": "Security & Secrets",
+                            "rules": [
+                                {"id": "SEC-001", "name": "Protect Secrets", "type": "Mandatory",
+                                 "description": "API Key、Private Key 等機密資訊嚴禁寫入日誌、提示詞或程式碼庫。"},
+                                {"id": "SEC-002", "name": "Require Production Approval", "type": "Mandatory",
+                                 "description": "生產環境變更、發布、支付、對外通訊需具體人類批准。"},
+                            ],
+                        },
+                        {
+                            "name": "Operations & Git",
+                            "rules": [
+                                {"id": "GIT-001", "name": "Deny Force Push Main", "type": "Mandatory",
+                                 "description": "嚴禁對 main 分支進行強制推送 (force push)。"},
+                                {"id": "ACT-001", "name": "Destructive Operations Require Confirmation", "type": "Mandatory",
+                                 "description": "不可逆刪除、權限變更等破壞性操作需人類明確確認。"},
+                            ],
+                        },
+                        {
+                            "name": "Evidence & Verification",
+                            "rules": [
+                                {"id": "EVI-001", "name": "Important Conclusions Require Evidence", "type": "Mandatory",
+                                 "description": "重要變更與交付成果須有可驗證之實測證據，未實測不可稱 verified。"},
+                            ],
+                        },
+                    ],
+                },
+                "project": {
+                    "source": "專案契約骨架 (Project Contract)",
+                    "source_type": "skeleton_read_only",
+                    "status": "唯讀展示 (未編譯)",
+                    "description": "目前專案之架構、建置、測試與邊界契約",
+                    "contract": {
+                        "stack": "Python 3.11+ / Vanilla JS / xterm.js vendored / Herdr 0.9.1",
+                        "runtime": "Localhost only (127.0.0.1:7788)",
+                        "security": "Strict CSP, Safe DOM textContent, Same-Origin + X-SID-Console: 1",
+                        "tests": "python3 -B -m unittest discover -s tests -q && node tests/frontend/*.cjs",
+                        "boundaries": "Zero external pip dependencies, zero CDN, one writer per worktree",
+                    },
+                },
+            }
 
     return Handler
 

@@ -232,3 +232,352 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .modal-box h2 { margin: 0; font-size: 18px; }
 .modal-box p { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.6; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+
+/* ==========================================================================
+   Three-Column Unified Workbench & Context Governance (Phase B1 - B4)
+   ========================================================================== */
+
+.wb-shell {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+  margin-top: 14px;
+  transition: grid-template-columns .2s ease;
+}
+
+.wb-shell.left-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr) 360px;
+}
+.wb-shell.right-collapsed {
+  grid-template-columns: 280px minmax(0, 1fr) 0px;
+}
+/* Both collapsed at once needs its own explicit column list — without it,
+   the two single-side rules above have equal specificity and whichever is
+   declared last in the cascade wins outright, silently overriding the
+   other side back to its full width instead of combining (M2). */
+.wb-shell.left-collapsed.right-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr) 0px;
+}
+.wb-shell.focus-mode {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+/* A single explicit column only controls track sizing; with three grid
+   items still in the DOM, CSS Grid's default auto-flow would wrap the
+   left/right columns onto their own implicit rows below the terminal
+   instead of hiding them, so focus mode must hide them explicitly (M2). */
+.wb-shell.focus-mode .wb-col.side-col {
+  display: none !important;
+}
+
+.wb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.wb-col.collapsed {
+  display: none !important;
+}
+
+/* Persistent reopen controls (M3): live outside the collapsible columns so
+   they stay reachable when a column is collapsed (its own in-panel toggle
+   button disappears with it) and when no Terminal pane is active yet (the
+   terminal toolbar's reopen buttons don't exist until a pane is loaded). */
+.wb-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.wb-toolbar.hidden {
+  display: none;
+}
+
+.wb-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wb-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.wb-panel-title {
+  font-weight: 700;
+  font-size: 14.5px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Left Column: Sessions List & Active Agent Info */
+.wb-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.wb-session-item:hover {
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+.wb-session-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.wb-session-title {
+  font-weight: 650;
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.wb-session-sub {
+  font-size: 12px;
+  color: var(--ink-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Center Column: Terminal Panel & Focus Mode */
+.wb-term-center {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wb-focus-banner {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 8px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.wb-shell.focus-mode .wb-focus-banner {
+  display: flex;
+}
+
+/* Right Column: G / P / A / T Tabs & Task Card */
+.wb-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  gap: 2px;
+  overflow-x: auto;
+}
+.wb-tab-btn {
+  padding: 7px 11px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: all .15s;
+}
+.wb-tab-btn:hover {
+  color: var(--ink);
+  background: var(--panel-2);
+}
+.wb-tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 700;
+}
+
+.wb-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Task Card Details */
+.wb-task-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wb-task-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  word-break: break-word;
+}
+.wb-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wb-field-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+.wb-field-val {
+  font-size: 13px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--panel-2);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.wb-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.wb-step-item.done span {
+  text-decoration: line-through;
+  color: var(--ink-3);
+}
+
+/* Status Provenance */
+.wb-provenance-box {
+  display: grid;
+  gap: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+.wb-provenance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.wb-provenance-row select {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+}
+
+/* Task List Items in Selector */
+.wb-task-select-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  font-size: 13px;
+}
+.wb-task-select-item:hover {
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+.wb-task-select-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Forms */
+.wb-form {
+  display: grid;
+  gap: 10px;
+}
+.wb-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.wb-form input, .wb-form select, .wb-form textarea {
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  font: inherit;
+  font-size: 13px;
+}
+.wb-form textarea {
+  resize: vertical;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1140px) {
+  .wb-shell {
+    grid-template-columns: 240px minmax(0, 1fr) 300px;
+  }
+}
+@media (max-width: 900px) {
+  .wb-shell {
+    grid-template-columns: 1fr !important;
+  }
+  .wb-col.side-col {
+    display: none;
+  }
+  .wb-col.side-col.mobile-show {
+    display: flex;
+  }
+}
+
+/* Respect the OS-level motion preference (L7): every transition/animation
+   in this file (card hover, fold chevron, toast, side-panel collapse,
+   button/input hover) collapses to effectively instant for anyone who has
+   asked their system to reduce motion, instead of only ever being tunable
+   per-component. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -31,10 +31,10 @@ herdr plugin action invoke sid.console.open
 | 頁面 | 內容 |
 |---|---|
 | 我的工作台 | 等你回覆／待查看的 Terminal、用自然語言找技能、最近專案、有問題的技能 |
+| 終端工作台 | 統一三欄版面（左側角色、中間真實 Terminal、右側 Task Card 與 G/P/A/T 治理骨架）、專注模式、可收合側欄 |
 | 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
 | Agent 團隊 | 工作中的 Terminal（角色名、本次模型、本次用過的技能、切換）與角色設定（主代理、子代理） |
 | 專案 | 依 git 儲存庫歸類：專案 → herdr workspace → 各角色 Terminal |
-| 終端工作台 | 單一 Pane 終端串流（SSE）、觀看／接管操作（Takeover）／釋放（Release）、自適應尺寸（Fit）、兩端並存安全警示 |
 | 設定 | 掃描來源開關、使用紀錄範圍、進階模式、資料流向說明 |
 
 ## 資料從哪裡來
@@ -107,6 +107,11 @@ herdr plugin action invoke sid.console.open
     - Herdr 在 stream 重連或初次連線時送出 `full: true` 重繪畫面，內含 `\x1b[2J\x1b[1;1H` 視窗清除與游標定位，但**省略 DECSET 1049 (`\x1b[?1049h`)**。
     - 前端不呼叫破壞性的 `term.reset()`，而是由 `handleTerminalFrame` 執行 `scrollToBottom()` 後直接寫入 decoded ANSI 位元組。如此能保留 Pane 正在執行的 Alternate Buffer 狀態與 Normal Buffer 的歷史捲動行數，避免重連時 scrollback 被洗白或 alternate 畫面黏在 normal buffer。
   - **xterm.js 安全配置**：配置 `linkHandler: null` 明確禁用自動連結識別與開啟、配置 `windowOptions: {}` 禁止視窗操控序列；套件使用 xterm core 5.5.0 本機打包，未載入任何剪貼簿插件（無 OSC 52 剪貼簿寫入整合）與連結插件；前端 DOM 一律經由純文字節點與 safe DOM APIs 操作，嚴格杜絕 `innerHTML` 注入風險。
+  - **三欄工作台、任務卡 (Task Card) 與 G/P/A/T 治理基礎 (Phase B1 - B4)**：
+    - **統一三欄版面與專注模式 (B1/B2)**：左欄 Agent / Role / Skills 列表與切換、中欄真實 Terminal、右欄 Task Card 與 G/P/A/T 資訊；支援兩側獨立收合與一鍵「專注模式」（收合兩側、Esc 退出）。切換顯示中之 Agent 焦點**絕不重啟該既有 session**；離開分頁時自動中止串流以防止孤兒行程。若切換當下正處於接管操作模式，前端會送出**帶 token 的 abandon**（而非無條件的 release）：只有在該 token 仍與伺服器目前的 session 相符時才會停止，避免在快速切換或多分頁競速下，誤將別處剛完成的新接管操作奪回為僅觀看模式。
+    - **任務卡本機儲存與狀態證明 (B3)**：儲存於 `~/.sid-console/tasks.json`（0600 原子寫入、目錄 0700），跨執行緒與**跨行程**（`flock` 檔案鎖，涵蓋整個讀-改-寫區間）保護，讀取路徑遇到損毀 JSON、結構不符 schema 之項目、或任何非「檔案不存在」之讀取錯誤（權限、符號連結、硬連結等）一律**拒絕靜默降級為空集合**並隔離原檔待人工復原，避免後續寫入誤將真實資料覆寫遺失。固定 Goal/Scope/Out of Scope/Deliverables/Acceptance Criteria/Evidence 六核心欄位與步驟/成品追蹤。狀態證明（Status Provenance）明確分離 Agent 回報完成、自動化測試通過與介面核准三維度；本主控台**沒有任何具身份驗證能力的驗證者**，因此絕不推導或顯示治理層級的「已驗證 (Verified)」狀態——`provenance.verified` 恆為 `false`，僅有誠實命名的 `provenance.verification_asserted`（`status` 對應 `verification_asserted`）代表「測試與核准兩欄皆已透過此網頁/API 自我回報為通過」的**自我聲稱**，並非正式驗證；`status`/`verification_asserted` 欄位**無法**由用戶端直接偽造，僅能由實際通過測試與核准後推導產生。誠實揭露：本主控台無使用者身份驗證，三欄皆為透過此網頁/API 自行填寫之自我回報值（含「核准」欄位在內），並非經密碼學或帳號驗證之真實人類審查記錄；每一欄位記錄最後變更時間（`set_at`）供稽核。
+    - **追蹤關聯與未來規則邊界**：任務卡與 Session 關聯**僅為本機追蹤記錄，絕非 Context 注入**；變更 Task Card 並欲作為 Effective Context 套用時，**必須開啟全新 Agent Session**。
+    - **G/P/A/T 唯讀介面骨架 (B4)**：展示 Global 底線與 Project 契約骨架。本階段無 Policy Compiler、無自動注入、不掃描不修改 `~/.codex`。
 - 請求內容：`Content-Length` 只接受純數字；超過 64KB 回 413 並關閉連線；整個請求內容必須在 15 秒內送完，
   逐位元組拖延的連線會被切斷。標頭階段只有每次讀取 15 秒的逾時，沒有總時限。
 - 設定檔損毀時：不覆寫原檔（先備份為 `config.json.bak`）；掃描範圍改為「全部關閉」而不是預設值，
@@ -116,7 +121,7 @@ herdr plugin action invoke sid.console.open
 
 ## 狀態目錄
 
-`~/.sid-console/`（可用 `SID_CONSOLE_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`annotations.json`、`server.log`。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
+`~/.sid-console/`（可用 `SID_CONSOLE_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`server.log`。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
 
 ## 結構
 
@@ -126,10 +131,12 @@ sidconsole/
   scan/document.py frontmatter.py     SKILL.md 解析（無 PyYAML）
   scan/usage.py                       使用證據
   bridge/herdr.py                     herdr CLI 橋接
+  bridge/terminal.py                  terminal 橋接子程序管理
   index.py                            靜態索引＋即時視圖
   annotations.py                      我的註記（別名、標籤、備註）
+  tasks.py                            任務卡（Task Card MVP、狀態證明、本機儲存）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
-tests/                                117 項測試，全部使用合成的 HOME
+tests/                                Python 單元測試，全部使用合成的 HOME；實際筆數以 `python3 -m unittest discover -s tests` 執行結果為準，不在此處寫死固定數字
 tests/frontend/                       前端行為測試（node＋合成 DOM，不是瀏覽器測試）
 ```

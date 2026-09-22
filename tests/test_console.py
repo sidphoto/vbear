@@ -1732,6 +1732,62 @@ class TerminalBridgeManagerTests(unittest.TestCase):
         back = self.bridge.release("p3")
         self.assertEqual(back.mode, "observe")
 
+    def test_concurrent_takeover_does_not_leak_the_losing_session(self):
+        """M4: two takeover() calls racing the same pane must not leak a
+        spawned-but-never-installed PaneSession (and its real subprocess).
+
+        Deterministically forces the race: the first PaneSession
+        constructed is paused right after it has already spawned its child
+        process (so there is something real to leak) and before takeover()
+        gets to install it; a second, unpaced takeover() is then run to
+        completion first. When the first call resumes, its install must
+        detect it lost the race — against its own spawned session, not the
+        stale `old` it originally read — and stop the correct one.
+        """
+        from sidconsole.bridge import terminal as terminal_mod
+
+        real_init = terminal_mod.PaneSession.__init__
+        created = []
+        first_paused = threading.Event()
+        release_first = threading.Event()
+
+        def paced_init(self, *a, **kw):
+            real_init(self, *a, **kw)
+            is_first = not created
+            created.append(self)
+            if is_first:
+                first_paused.set()
+                release_first.wait(5)
+
+        results = {}
+
+        with mock.patch.object(terminal_mod.PaneSession, "__init__", paced_init):
+            def call_first():
+                results["first"] = self.bridge.takeover("p_race")
+
+            t1 = threading.Thread(target=call_first)
+            t1.start()
+            self.assertTrue(first_paused.wait(5), "first takeover's PaneSession construction must start")
+            # The second takeover fully completes — spawns and installs —
+            # before the first call is allowed to resume and attempt its
+            # own (now stale) install.
+            results["second"] = self.bridge.takeover("p_race")
+            release_first.set()
+            t1.join(5)
+            self.assertFalse(t1.is_alive(), "first takeover() call must not hang")
+
+        self.assertEqual(len(created), 2, "both racing calls must have spawned their own PaneSession")
+        loser, winner = created[0], created[1]
+
+        self.assertIs(self.bridge.get("p_race"), winner, "the second (winning) install must be the pane's live session")
+        self.assertIs(results["second"], winner)
+        self.assertIs(
+            results["first"], winner,
+            "the losing takeover() call must report the actual winning session, not silently return its own orphaned one"
+        )
+        self.assertTrue(loser.closed, "the losing session's real subprocess must be stopped, not leaked")
+        self.assertFalse(winner.closed)
+
     def test_abandon_stops_session_without_spawning_observe(self):
         ctrl = self.bridge.takeover("p_abandon")
         self.assertFalse(ctrl.closed)
@@ -1778,6 +1834,38 @@ class TerminalBridgeManagerTests(unittest.TestCase):
         self.bridge.close_if_current("p4", first)  # the SSE loop's stale reference
         self.assertIs(self.bridge.get("p4"), second)
         self.assertFalse(second.closed)
+
+    def test_close_if_current_releases_control_before_stopping(self):
+        """L2: when the client's SSE stream just ends on its own (pane
+        switch, navigation, tab close, dropped connection) rather than
+        through an explicit release() call, a control-mode session must
+        still be released, not just killed — otherwise the pane is left
+        looking taken-over with no one left to release it. A session that
+        gets release_control() before stop() reports close_reason
+        "released" (the fake herdr's own message for that request); one that
+        is just killed reports "bridge_interrupted" instead (see
+        test_killed_child_is_reported_as_bridge_interrupted) — so the
+        reason string tells the two paths apart here.
+        """
+        ctrl = self.bridge.takeover("p_close_release")
+        self.assertEqual(ctrl.mode, "control")
+        self.bridge.close_if_current("p_close_release", ctrl)
+        ctrl._reader.join(timeout=5)
+        self.assertTrue(ctrl.closed)
+        self.assertEqual(ctrl.close_reason, "released")
+        self.assertIsNone(self.bridge.get("p_close_release"))
+
+    def test_close_if_current_on_observer_does_not_send_release(self):
+        """An observe-mode session has nothing to release; close_if_current
+        must not try to write to it (release_control() is a no-op for
+        observe sessions anyway — see PaneSession._write — but this pins
+        that close_reason stays the ordinary "bridge_interrupted" kill path,
+        not a released one)."""
+        obs = self.bridge.open_observer("p_close_observe")
+        self.bridge.close_if_current("p_close_observe", obs)
+        obs._reader.join(timeout=5)
+        self.assertTrue(obs.closed)
+        self.assertTrue(obs._bridge_interrupted)
 
     def test_concurrent_pane_limit(self):
         from sidconsole.bridge import terminal as term_mod
@@ -2002,6 +2090,13 @@ class TerminalRouteTests(_HostileBase):
                     closed = True
                     break
             self.assertTrue(closed, "SSE stream must close gracefully upon session abandon")
+            # M3/H3: the pane this stream was watching must have no session
+            # left at all after the disconnect — a token-guarded abandon
+            # (what the frontend's unmount/pane-switch cleanup now sends,
+            # instead of an unconditional release()) fully removes the
+            # session rather than leaving a freshly-spawned observe session
+            # behind for the old pane.
+            self.assertIsNone(self.console.terminals.get("w1:pA"), "old pane must have no session left after SSE disconnect")
         finally:
             conn.close()
 

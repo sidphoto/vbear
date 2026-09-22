@@ -124,6 +124,28 @@ class PaneSession:
     def release_control(self) -> bool:
         return self._write({"type": "terminal.release"})
 
+    def release_and_stop(self, grace_s: float = 2.0) -> None:
+        """Ask a control-mode session to release control, give it a brief
+        window to act on that, then stop it regardless (L2).
+
+        release_control() followed immediately by stop() looks graceful but
+        essentially never is: stop()'s terminate() sends SIGTERM, which by
+        default kills the process at once — it is not caught and handled
+        the way a graceful-shutdown signal would be — so the child's own
+        blocked stdin read rarely gets a chance to even wake up and process
+        the release message before it's simply gone. Waiting briefly for
+        the child to exit on its own first (it does, once it has processed
+        the message) is what actually lets the release happen instead of
+        being pre-empted by the kill.
+        """
+        if self.mode == "control":
+            self.release_control()
+            try:
+                self._proc.wait(timeout=grace_s)
+            except subprocess.TimeoutExpired:
+                pass
+        self.stop()
+
     # lifecycle --------------------------------------------------------
 
     def stop(self) -> None:
@@ -197,6 +219,16 @@ class TerminalBridge:
         stopped, so `_sessions[pane_id]` is never briefly absent: an SSE
         handler that reads `get(pane_id)` at exactly the wrong moment would
         otherwise see nothing there and treat the pane as gone.
+
+        Install is CAS-guarded (M4): two takeover() calls racing the same
+        pane both read the same `old` and both spawn a real child process
+        before either re-acquires the lock to install. Without the check
+        below, the second install would silently overwrite the first
+        session's slot in `_sessions`, and only `old` (not that first,
+        now-orphaned session) would ever get `.stop()`'d — leaking its
+        subprocess forever. Whichever call's install loses re-discovers
+        that its own freshly-spawned session (not `old`) is the true loser
+        and stops that one instead, mirroring release()'s existing pattern.
         """
         with self._lock:
             self._purge_closed_locked()
@@ -206,6 +238,12 @@ class TerminalBridge:
             return None
         sess = PaneSession(pane_id, bin_path, "control", cols, rows)
         with self._lock:
+            current = self._sessions.get(pane_id)
+            if current is not old:
+                # Another takeover already won this pane while we were
+                # spawning ours; `sess` is the loser here, not `old`.
+                sess.stop()
+                return current
             self._sessions[pane_id] = sess  # atomic swap; the key stays present throughout
         if old is not None:
             old.stop()
@@ -234,7 +272,7 @@ class TerminalBridge:
             with self._lock:
                 if self._sessions.get(pane_id) is old:
                     self._sessions.pop(pane_id, None)
-            old.stop()
+            old.release_and_stop()
             return None
         new = PaneSession(pane_id, bin_path, "observe", old.cols, old.rows)
         with self._lock:
@@ -243,9 +281,7 @@ class TerminalBridge:
             else:
                 new.stop()
                 return self._sessions.get(pane_id)  # a concurrent takeover already won
-        if old.mode == "control":
-            old.release_control()
-        old.stop()
+        old.release_and_stop()
         return new
 
     def abandon(self, pane_id: str, token: str | None = None) -> bool:
@@ -268,21 +304,26 @@ class TerminalBridge:
             old = self._sessions.pop(pane_id, None)
         if old is None:
             return False
-        if old.mode == "control":
-            old.release_control()
-        old.stop()
+        old.release_and_stop()
         return True
 
     def close_if_current(self, pane_id: str, expected: PaneSession) -> None:
         """Used by the SSE handler when its stream ends: stop `expected`
         only if it is still the pane's active session. If a takeover already
         replaced it, the replacement is left running untouched.
+
+        Any way the client's stream can end (an explicit release/pane switch,
+        navigating away, closing the tab, a dropped connection) reaches here
+        without also making an explicit release() call, so a control-mode
+        session must release control here too, the same way release() does —
+        otherwise the pane can be left showing as taken over with no one
+        left to release it (L2).
         """
         with self._lock:
             if self._sessions.get(pane_id) is not expected:
                 return
             self._sessions.pop(pane_id, None)
-        expected.stop()
+        expected.release_and_stop()
 
     def close_all(self) -> None:
         with self._lock:
