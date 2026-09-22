@@ -67,25 +67,37 @@ def _version(bin_path: str | None) -> str | None:
 
 
 def snapshot(configured_bin: str = "") -> dict:
-    """Agents, workspaces and tabs in one call set. Partial failures are kept.
+    """Agents, panes, workspaces and tabs in one call set. Partial failures
+    are kept.
 
-    The four CLI calls are independent, so they run side by side: a stuck
-    herdr costs about one TIMEOUT_S, not four.
+    `agents` and `panes` are deliberately separate lists rather than one
+    merged view. `agent list` only reports panes where herdr currently
+    detects a running AI agent, so a pane whose agent has exited disappears
+    from it while the pane itself, its shell and its scrollback are all
+    still there. Anything that asks "may the console attach to this pane?"
+    must consult `panes`; only agent-specific features (the team view,
+    `agent focus`) may use `agents`.
+
+    The five CLI calls are independent, so they run side by side: a stuck
+    herdr costs about one TIMEOUT_S, not five.
     """
     bin_path = binary(configured_bin)
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="herdr") as pool:
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="herdr") as pool:
         f_agents = pool.submit(_run, bin_path, "agent", "list")
+        f_panes = pool.submit(_run, bin_path, "pane", "list")
         f_workspaces = pool.submit(_run, bin_path, "workspace", "list")
         f_tabs = pool.submit(_run, bin_path, "tab", "list")
         f_version = pool.submit(_version, bin_path)
-        agents, workspaces, tabs = f_agents.result(), f_workspaces.result(), f_tabs.result()
+        agents, panes = f_agents.result(), f_panes.result()
+        workspaces, tabs = f_workspaces.result(), f_tabs.result()
         version = f_version.result()
-    problems = [r["error"] for r in (agents, workspaces, tabs) if not r["ok"]]
+    problems = [r["error"] for r in (agents, panes, workspaces, tabs) if not r["ok"]]
     return {
         "available": agents["ok"],
         "binary": bin_path,
         "version": version,
         "agents": (agents.get("data") or {}).get("agents", []) if agents["ok"] else [],
+        "panes": (panes.get("data") or {}).get("panes", []) if panes["ok"] else [],
         "workspaces": (workspaces.get("data") or {}).get("workspaces", []) if workspaces["ok"] else [],
         "tabs": (tabs.get("data") or {}).get("tabs", []) if tabs["ok"] else [],
         "problems": problems,

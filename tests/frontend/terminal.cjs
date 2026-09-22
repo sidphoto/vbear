@@ -63,6 +63,8 @@ const {
   handleReleaseAction,
   handleTerminalFrame,
   initTerminalInstance,
+  usableTermDims,
+  termDimsForRequest,
   canStartTerminalStream,
   shouldShowTerminalRetryAction,
   parseHash,
@@ -75,6 +77,8 @@ assert.strictEqual(typeof createReconnectPolicy, "function");
 assert.strictEqual(typeof handleTakeoverResponse, "function");
 assert.strictEqual(typeof handleReleaseAction, "function");
 assert.strictEqual(typeof initTerminalInstance, "function");
+assert.strictEqual(typeof usableTermDims, "function");
+assert.strictEqual(typeof termDimsForRequest, "function");
 assert.strictEqual(typeof canStartTerminalStream, "function");
 assert.strictEqual(typeof shouldShowTerminalRetryAction, "function");
 assert.strictEqual(typeof parseHash, "function");
@@ -664,7 +668,87 @@ async function runAllTests() {
     console.log("ok: Category 10 - Safe full-frame resynchronization (same-pane continuity & scrollback preserved) verified");
   }
 
-  console.log("\nALL FRONTEND TESTS PASSED (10/10 categories verified)");
+  // 11. Degenerate terminal dimensions never reach the server or the pane
+  {
+    // 11a. The predicate itself: a pre-layout measurement is not usable.
+    assert.strictEqual(usableTermDims({ cols: 2, rows: 37 }), false, "cols=2 (the observed pre-layout fit) must be rejected");
+    assert.strictEqual(usableTermDims({ cols: 0, rows: 0 }), false);
+    assert.strictEqual(usableTermDims({ cols: 80, rows: 1 }), false, "a 1-row terminal is unusable too");
+    assert.strictEqual(usableTermDims(null), false);
+    assert.strictEqual(usableTermDims(undefined), false);
+    assert.strictEqual(usableTermDims({ cols: 80, rows: 24 }), true);
+    assert.strictEqual(usableTermDims({ cols: 20, rows: 5 }), true, "the floor itself is allowed");
+
+    // 11b. What gets advertised: fall back to 80x24 rather than clamping, so a
+    // degenerate measurement yields an ordinary terminal that the first real
+    // ResizeObserver callback corrects, not a valid-but-unusable 20-column one.
+    assert.deepStrictEqual(termDimsForRequest({ cols: 2, rows: 37 }), { cols: 80, rows: 24 });
+    assert.deepStrictEqual(termDimsForRequest(null), { cols: 80, rows: 24 });
+    assert.deepStrictEqual(termDimsForRequest({ cols: 120, rows: 40 }), { cols: 120, rows: 40 });
+
+    // 11c. init must not fit against a container that has not been laid out.
+    // This is the actual bug: term.open() followed by an immediate fit() inside
+    // a three-column grid that had not resolved yet measured a near-zero width.
+    let fittedEarly = false;
+    class DegenerateFitAddon {
+      fit() { fittedEarly = true; }
+      proposeDimensions() { return { cols: 2, rows: 37 }; }
+    }
+    class CountingTerminal {
+      constructor() { this.cols = 80; this.rows = 24; }
+      loadAddon() {}
+      open() {}
+      dispose() {}
+    }
+    const degenerateRes = initTerminalInstance({
+      TerminalClass: CountingTerminal,
+      FitAddonClass: DegenerateFitAddon,
+      termElem: new SyntheticNode("div"),
+    });
+    assert.strictEqual(degenerateRes.ok, true, "init still succeeds; only the fit is skipped");
+    assert.strictEqual(fittedEarly, false, "must NOT fit when proposeDimensions() is degenerate");
+
+    // A laid-out container still fits, so this is not simply "never fit".
+    let fittedReal = false;
+    class RealFitAddon {
+      fit() { fittedReal = true; }
+      proposeDimensions() { return { cols: 120, rows: 40 }; }
+    }
+    initTerminalInstance({
+      TerminalClass: CountingTerminal,
+      FitAddonClass: RealFitAddon,
+      termElem: new SyntheticNode("div"),
+    });
+    assert.strictEqual(fittedReal, true, "a real layout must still be fitted");
+
+    // 11d. Neither terminal implementation may advertise term.cols directly:
+    // that is what sent cols=2 to the server. The workbench terminal and the
+    // standalone one are separate implementations, so both are checked.
+    assert.strictEqual(
+      /cols:\s*term\s*\?\s*term\.cols\s*:\s*80/.test(appSource),
+      false,
+      "takeover/stream must not send term.cols unchecked; use termDimsForRequest()"
+    );
+    assert.strictEqual(
+      (appSource.match(/const \{ cols, rows \} = termDimsForRequest\(term\);/g) || []).length,
+      2,
+      "both the workbench and standalone stream URLs must use termDimsForRequest()"
+    );
+    assert.strictEqual(
+      (appSource.match(/\.\.\.termDimsForRequest\(term\),/g) || []).length,
+      2,
+      "both takeover payloads must use termDimsForRequest()"
+    );
+    assert.strictEqual(
+      (appSource.match(/if \(!usableTermDims\(dims\)\) return;/g) || []).length,
+      2,
+      "both handleResize implementations must gate on usableTermDims()"
+    );
+
+    console.log("ok: Category 11 - Degenerate terminal dimensions never reach the server or the pane");
+  }
+
+  console.log("\nALL FRONTEND TESTS PASSED (11/11 categories verified)");
 }
 
 runAllTests()

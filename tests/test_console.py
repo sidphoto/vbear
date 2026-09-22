@@ -732,6 +732,8 @@ class HardenedServerTests(_HostileBase):  # M2/M3 read path, L2, L3, L4
             'case "$1 $2" in\n'
             ' "agent list") echo \'{"result":{"agents":[{"terminal_id":"t1","pane_id":"p1",'
             '"agent":"claude","agent_status":"working","cwd":"/tmp"}]}}\';;\n'
+            ' "pane list") echo \'{"result":{"panes":[{"terminal_id":"t1","pane_id":"p1",'
+            '"agent":"claude","agent_status":"working","cwd":"/tmp"}]}}\';;\n'
             ' "workspace list") echo \'{"result":{"workspaces":[]}}\';;\n'
             ' "tab list") echo \'{"result":{"tabs":[]}}\';;\n'
             ' "agent focus") echo \'{"result":{"ok":true}}\';;\n'
@@ -917,6 +919,8 @@ class SlowHerdrTests(_HostileBase):  # AGY A1: a hung herdr must not stall the c
             'case "$1 $2" in\n'
             ' "agent list") echo \'{"result":{"agents":[{"terminal_id":"t1","pane_id":"p1",'
             '"agent":"claude","agent_status":"working","cwd":"/tmp"}]}}\';;\n'
+            ' "pane list") echo \'{"result":{"panes":[{"terminal_id":"t1","pane_id":"p1",'
+            '"agent":"claude","agent_status":"working","cwd":"/tmp"}]}}\';;\n'
             ' "workspace list") echo \'{"result":{"workspaces":[]}}\';;\n'
             ' "tab list") echo \'{"result":{"tabs":[]}}\';;\n'
             ' "--version ") echo herdr-slow;;\n'
@@ -978,9 +982,10 @@ class SlowHerdrTests(_HostileBase):  # AGY A1: a hung herdr must not stall the c
         self.assertTrue(snap["available"])
         self.assertEqual(snap["version"], "herdr-slow")
         self.assertEqual(len(snap["agents"]), 1)
-        self.assertLess(took, 2 * self.DELAY)  # serial would be 4 x DELAY
+        self.assertLess(took, 2 * self.DELAY)  # serial would be 5 x DELAY
         calls = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(sorted(calls), ["--version", "agent list", "tab list", "workspace list"])
+        self.assertEqual(sorted(calls),
+                         ["--version", "agent list", "pane list", "tab list", "workspace list"])
 
     def test_concurrent_live_requests_share_one_herdr_round(self):
         results = []
@@ -1896,6 +1901,15 @@ class TerminalRouteTests(_HostileBase):
             '    print(json.dumps({"result": {"agents": [{"pane_id": "w1:pA", '
             '"terminal_id": "term1", "agent": "claude", "agent_status": "idle", '
             '"cwd": "/tmp"}]}})); sys.exit(0)\n'
+            # `pane list` reports one pane more than `agent list`: w1:pB has no
+            # agent. That asymmetry is the point -- it is the exact shape herdr
+            # reports once an agent exits, and such a pane must stay attachable.
+            'if args[:2] == ["pane", "list"]:\n'
+            '    print(json.dumps({"result": {"panes": ['
+            '{"pane_id": "w1:pA", "terminal_id": "term1", "agent": "claude", '
+            '"agent_status": "idle", "cwd": "/tmp"}, '
+            '{"pane_id": "w1:pB", "terminal_id": "term2", "agent": None, '
+            '"agent_status": "unknown", "cwd": "/tmp"}]}})); sys.exit(0)\n'
             'if args[:2] in (["workspace", "list"], ["tab", "list"]):\n'
             '    print(json.dumps({"result": {}})); sys.exit(0)\n'
             'mode, target = args[2], args[3]'
@@ -1965,6 +1979,99 @@ class TerminalRouteTests(_HostileBase):
     def test_unknown_pane_is_rejected(self):
         status, data, _ = self.req("/api/term/does-not-exist/stream", headers=self.H)
         self.assertEqual(status, 404)
+
+    def test_agentless_pane_is_still_attachable(self):
+        """w1:pB exists in `pane list` but has no AI agent, so it is absent
+        from `agent list`.
+
+        This is precisely what herdr reports once an agent exits: the pane,
+        its shell and its scrollback are all still there. Validating attach
+        targets against `agent list` alone made the console answer
+        "目前沒有這個 Terminal" for a pane plainly on screen, refuse input with
+        400 and cut the SSE stream mid-session -- and it also meant a plain
+        shell pane could never be used at all.
+        """
+        self.assertIn("w1:pB", self.console.live_targets(force=True))
+        conn, resp = self.open_stream(pane="w1:pB")
+        try:
+            self.assertEqual(resp.status, 200, "agent-less pane must be streamable")
+            [frame] = self.read_sse_events(resp, 1)
+            self.assertTrue(frame["full"])
+
+            status, data, _ = self.req("/api/term/w1:pB/control", "POST", headers=self.H,
+                                       body={"action": "takeover"})
+            self.assertEqual(status, 200, "agent-less pane must be takeoverable")
+            self.assertEqual(data["mode"], "control")
+            self.read_sse_events(resp, 1)  # control session's redraw
+
+            status, data, _ = self.req("/api/term/w1:pB/input", "POST", headers=self.H,
+                                       body={"text": "ping"})
+            self.assertEqual(status, 200, "agent-less pane must accept input")
+            self.assertTrue(data["ok"])
+        finally:
+            self.req("/api/term/w1:pB/control", "POST", headers=self.H,
+                     body={"action": "abandon"})
+            conn.close()
+
+    def test_degenerate_dimensions_fall_back_instead_of_resizing_the_pane(self):
+        """A degenerate cols/rows must never reach herdr.
+
+        The browser really does propose cols=2 when fitAddon measures the
+        canvas before the grid has laid out. The old lower bound was 1, so
+        such a value was accepted verbatim and the pane -- including the
+        native herdr window showing it -- was genuinely resized to two
+        columns, making every TUI unreadable. Out-of-range values fall back
+        to 80x24 rather than being clamped, so the result is an ordinary
+        terminal rather than a technically-valid but unusable 20-column one.
+        """
+        seen = []
+        orig_open = self.console.terminals.open_observer
+
+        def spy(pane_id, cols=None, rows=None):
+            seen.append((cols, rows))
+            return orig_open(pane_id, cols, rows)
+
+        self.console.terminals.open_observer = spy
+        try:
+            for qs in ("cols=2&rows=37", "cols=0&rows=0", "cols=80&rows=1", "cols=-5&rows=24"):
+                self.console.terminals.close_all()
+                seen.clear()
+                import http.client
+                conn = http.client.HTTPConnection("127.0.0.1", self.console.port, timeout=10)
+                conn.request("GET", f"/api/term/w1:pA/stream?{qs}", headers=self.H)
+                resp = conn.getresponse()
+                try:
+                    self.assertEqual(resp.status, 200)
+                    self.read_sse_events(resp, 1)
+                    self.assertTrue(seen, f"no observer opened for {qs}")
+                    cols, rows = seen[0]
+                    self.assertGreaterEqual(cols, 20, f"{qs} reached herdr with cols={cols}")
+                    self.assertGreaterEqual(rows, 5, f"{qs} reached herdr with rows={rows}")
+                finally:
+                    conn.close()
+        finally:
+            self.console.terminals.open_observer = orig_open
+            self.console.terminals.close_all()
+
+    def test_degenerate_resize_and_takeover_dimensions_are_refused(self):
+        """The same floor applies to the control endpoint, which is where a
+        post-layout resize and the initial takeover both send dimensions."""
+        status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                   body={"action": "takeover", "cols": 2, "rows": 37})
+        self.assertEqual(status, 200)
+        try:
+            sess = self.console.terminals.get("w1:pA")
+            self.assertIsNotNone(sess)
+            self.assertGreaterEqual(sess.cols, 20, "takeover spawned a 2-column pane")
+
+            status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                                       body={"action": "resize", "cols": 2, "rows": 37})
+            self.assertEqual(status, 200)
+            self.assertGreaterEqual(self.console.terminals.get("w1:pA").cols, 20,
+                                    "resize shrank the pane to 2 columns")
+        finally:
+            self.req("/api/term/w1:pA/control", "POST", headers=self.H,
+                     body={"action": "abandon"})
 
     def test_stream_delivers_initial_full_frame(self):
         conn, resp = self.open_stream()

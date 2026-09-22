@@ -73,7 +73,15 @@ MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
 FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localhost ports
-TERM_MIN_DIM, TERM_MAX_DIM = 1, 500
+# A terminal this narrow or short cannot render anything usable: a stray
+# `cols=2` (which a browser really does propose when it measures the canvas
+# before the grid has laid out) makes every TUI and even plain wrapped text
+# unreadable, and the pane is resized for the native herdr window too. Out
+# of range values fall back to the defaults rather than being clamped, so a
+# degenerate measurement yields a sane 80x24 instead of a silently ruined
+# 20-column session.
+TERM_MIN_DIM, TERM_MAX_DIM = 20, 500
+TERM_MIN_ROWS = 5
 TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS = 80, 24
 
 
@@ -114,12 +122,24 @@ class Console:
         return {annotations.key_for(s) for s in self.store.static()["skills"]}
 
     def live_targets(self, force: bool = False) -> set[str]:
-        """Pane and terminal ids herdr reported in the current live snapshot."""
+        """Pane and terminal ids herdr reported in the current live snapshot.
+
+        Both `panes` (every pane herdr has) and `sessions` (only panes where
+        an AI agent is currently detected) are walked. `sessions` alone was
+        the old behaviour and it silently made the terminal bridge unusable
+        the moment an agent exited: the pane, its shell and its scrollback
+        were all still there, but it had vanished from `agent list`, so the
+        console answered "目前沒有這個 Terminal" for a pane plainly on screen
+        and cut the stream mid-session. `sessions` is still included because
+        a herdr old enough to lack `pane list` reports no panes at all, and
+        losing agent panes too would be a worse regression than the bug.
+        """
+        live = self.store.live(force=force)
         ids: set[str] = set()
-        for sess in self.store.live(force=force)["sessions"]:
+        for row in list(live.get("panes", ())) + list(live["sessions"]):
             for field in ("pane_id", "terminal_id"):
-                if isinstance(sess.get(field), str) and sess[field]:
-                    ids.add(sess[field])
+                if isinstance(row.get(field), str) and row[field]:
+                    ids.add(row[field])
         return ids
 
 
@@ -395,14 +415,14 @@ def make_handler(console: Console):
                     or pane_id in console.live_targets(force=True))
 
         def _term_dims(self, body: dict) -> tuple[int, int]:
-            def dim(value, default):
+            def dim(value, default, low):
                 try:
                     n = int(value)
                 except (TypeError, ValueError):
                     return default
-                return n if TERM_MIN_DIM <= n <= TERM_MAX_DIM else default
-            return (dim(body.get("cols"), TERM_DEFAULT_COLS),
-                    dim(body.get("rows"), TERM_DEFAULT_ROWS))
+                return n if low <= n <= TERM_MAX_DIM else default
+            return (dim(body.get("cols"), TERM_DEFAULT_COLS, TERM_MIN_DIM),
+                    dim(body.get("rows"), TERM_DEFAULT_ROWS, TERM_MIN_ROWS))
 
         def _term_stream(self, pane_id: str, query: str):
             """Server-sent events: one 'data: <json>\\n\\n' per herdr frame.
@@ -417,8 +437,8 @@ def make_handler(console: Console):
             if not self._term_target_ok(pane_id):
                 return self._error(404, "目前沒有這個 Terminal")
             q = parse_qs(query)
-            cols = self._term_dims({"cols": q.get("cols", [None])[0]})[0]
-            rows = self._term_dims({"rows": q.get("rows", [None])[0]})[1]
+            cols, rows = self._term_dims({"cols": q.get("cols", [None])[0],
+                                          "rows": q.get("rows", [None])[0]})
             sess = console.terminals.open_observer(pane_id, cols, rows)
             if sess is None:
                 bin_path = herdr.binary(console.store.conf.get("herdr_bin", ""))

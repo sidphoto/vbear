@@ -633,6 +633,19 @@ def build_live(conf: dict, static: dict) -> dict:
         "herdr": {"available": snap["available"], "version": snap["version"],
                   "binary": snap["binary"], "problems": snap["problems"]},
         "sessions": sessions,
+        # Every pane herdr currently has, agent or not. `sessions` above is
+        # built from `agent list` and therefore drops a pane the moment its
+        # AI agent exits, even though the pane, its shell and its scrollback
+        # are all still live. Attach decisions must use this list instead,
+        # or the terminal bridge would refuse a pane that plainly exists.
+        "panes": [
+            {"pane_id": p.get("pane_id"), "terminal_id": p.get("terminal_id"),
+             "tab_id": p.get("tab_id"), "workspace_id": p.get("workspace_id"),
+             "agent": p.get("agent"), "agent_status": p.get("agent_status", "unknown"),
+             "title": p.get("terminal_title_stripped") or "",
+             "cwd": p.get("foreground_cwd") or p.get("cwd") or ""}
+            for p in snap["panes"]
+        ],
         "workspaces": snap["workspaces"],
         "usage": {"window_days": use["window_days"], "sessions": usage_rows,
                   "problems": use["problems"]},

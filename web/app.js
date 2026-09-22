@@ -412,6 +412,34 @@ function handleTerminalFrame(msg, { term, reconnectPolicy } = {}) {
   return true;
 }
 
+// Mirrors TERM_MIN_DIM/TERM_MIN_ROWS in sidconsole/server.py. A terminal
+// narrower or shorter than this cannot render anything usable, and since a
+// resize is forwarded to the pane it would wreck the native herdr window too.
+const TERM_MIN_COLS = 20;
+const TERM_MIN_ROWS = 5;
+
+// True only for dimensions worth sending to the server or fitting to.
+// fitAddon.fit() measures the canvas, so when it is called before the grid
+// has laid out it proposes something degenerate -- a real observed case was
+// cols=2 -- and nothing downstream rejected it: the frontend sent cols=2 and
+// the backend's lower bound was 1, so the pane really was resized to two
+// columns, and every subsequent check of rendering, IME and scrollback was
+// measuring a ruined terminal.
+function usableTermDims(dims) {
+  return Boolean(dims) && dims.cols >= TERM_MIN_COLS && dims.rows >= TERM_MIN_ROWS;
+}
+
+// The dimensions to advertise for a pane. Falls back to the standard 80x24
+// rather than clamping, so a degenerate measurement yields an ordinary
+// terminal that the first real ResizeObserver callback then corrects,
+// instead of a technically-valid but unusable 20-column one.
+function termDimsForRequest(term) {
+  if (term && usableTermDims({ cols: term.cols, rows: term.rows })) {
+    return { cols: term.cols, rows: term.rows };
+  }
+  return { cols: 80, rows: 24 };
+}
+
 function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options = {} }) {
   if (!TerminalClass || !FitAddonClass) {
     return { ok: false, error: "無法載入終端機模組 (xterm.js)", term: null, fitAddon: null };
@@ -439,8 +467,20 @@ function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options 
     term.loadAddon(fitAddon);
     if (termElem) {
       term.open(termElem);
+      // Only fit if the element has actually been laid out. Fitting against a
+      // zero-width container leaves the terminal at a degenerate size that is
+      // then advertised to the server; leaving the xterm default in place is
+      // strictly better, because the ResizeObserver registered by the caller
+      // fires as soon as the real layout lands and fits properly then.
       if (typeof fitAddon.fit === "function") {
-        fitAddon.fit();
+        const dims = typeof fitAddon.proposeDimensions === "function"
+          ? fitAddon.proposeDimensions()
+          : null;
+        // No proposeDimensions (test doubles, older addon): keep the previous
+        // unconditional behaviour rather than never fitting at all.
+        if (!dims || usableTermDims(dims)) {
+          fitAddon.fit();
+        }
       }
     }
     return { ok: true, term, fitAddon };
@@ -1680,8 +1720,7 @@ async function viewTerminal(paneId) {
       try {
         pendingTakeover = api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
           action: "takeover",
-          cols: term ? term.cols : 80,
-          rows: term ? term.rows : 24,
+          ...termDimsForRequest(term),
         });
         res = await pendingTakeover;
       } catch (err) {
@@ -1778,8 +1817,7 @@ async function viewTerminal(paneId) {
 
     abortController = new AbortController();
     const signal = abortController.signal;
-    const cols = term ? term.cols : 80;
-    const rows = term ? term.rows : 24;
+    const { cols, rows } = termDimsForRequest(term);
     const url = `/api/term/${encodeURIComponent(paneId)}/stream?cols=${cols}&rows=${rows}`;
 
     try {
@@ -1865,7 +1903,7 @@ async function viewTerminal(paneId) {
     resizeTimer = setTimeout(async () => {
       if (isDisposed || !term || !fitAddon || !termElem.parentElement) return;
       const dims = fitAddon.proposeDimensions();
-      if (!dims || !dims.cols || !dims.rows) return;
+      if (!usableTermDims(dims)) return;
       if (dims.cols === term.cols && dims.rows === term.rows) return;
       fitAddon.fit();
       dimInfo.textContent = `${term.cols} × ${term.rows}`;
@@ -2427,8 +2465,7 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
         try {
           pendingTakeover = api.post(`/api/term/${encodeURIComponent(currentPane)}/control`, {
             action: "takeover",
-            cols: term ? term.cols : 80,
-            rows: term ? term.rows : 24,
+            ...termDimsForRequest(term),
           });
           res = await pendingTakeover;
         } catch (err) {
@@ -2525,8 +2562,7 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
 
       abortController = new AbortController();
       const signal = abortController.signal;
-      const cols = term ? term.cols : 80;
-      const rows = term ? term.rows : 24;
+      const { cols, rows } = termDimsForRequest(term);
       const url = `/api/term/${encodeURIComponent(currentPane)}/stream?cols=${cols}&rows=${rows}`;
 
       try {
@@ -2612,7 +2648,7 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
       resizeTimer = setTimeout(async () => {
         if (isDisposed || !term || !fitAddon || !termElem.parentElement) return;
         const dims = fitAddon.proposeDimensions();
-        if (!dims || !dims.cols || !dims.rows) return;
+        if (!usableTermDims(dims)) return;
         if (dims.cols === term.cols && dims.rows === term.rows) return;
         fitAddon.fit();
         dimInfo.textContent = `${term.cols} × ${term.rows}`;
@@ -3380,6 +3416,8 @@ if (typeof module !== "undefined" && module.exports) {
     handleReleaseAction,
     handleTerminalFrame,
     initTerminalInstance,
+    usableTermDims,
+    termDimsForRequest,
     canStartTerminalStream,
     shouldShowTerminalRetryAction,
     parseHash,
