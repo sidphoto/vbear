@@ -1,6 +1,6 @@
 # Phase C｜Agent Builder 實作計畫
 
-狀態：**Decision Draft｜等待五項產品裁決後才能開始 coding**
+狀態：**APPROVED｜C-D1～C-D5 已由產品負責人核准；等待 MCODE runtime smoke test 後開始 coding**
 
 基準：`main` / `26384c9` 之後
 
@@ -43,11 +43,11 @@ Phase C 只建立和管理設定，不啟動 Agent、不編譯 Effective Context
 - 不用 `herdr agent prompt` 傳遞治理內容。
 - 不存在於目前 catalog 的 Profession／Skill 引用必須標示 unresolved，不得靜默刪除或換成別項。
 
-## 3. 開工前五項產品裁決
+## 3. 已核准產品裁決
 
-Claude 唯讀審查判定這五項會直接決定 schema。下表列出建議預設值；使用者必須逐項核准或修改。
+產品負責人於 2026-09-22 回覆「全部採建議預設」，C-D1～C-D5 全數核准並凍結為 Phase C v1 契約。
 
-| ID | 決策 | 建議預設 |
+| ID | 決策 | 已核准內容 |
 |---|---|---|
 | C-D1 | Profession 來源 | 直接使用現有掃描出的 `AgentRole` 作為唯讀 catalog；不在 repo 另造種子模板 |
 | C-D2 | 名詞區分 | API／schema 使用 `agent_profile`；既有掃描資料保留 `agent_role`；UI 使用「Agent 設定」與「Profession 模板」 |
@@ -55,9 +55,9 @@ Claude 唯讀審查判定這五項會直接決定 schema。下表列出建議預
 | C-D4 | Permissions v1 | 固定 `read`、`write`、`test`、`deploy` 四鍵；值為 `allow`／`deny`／`unspecified`；全部標示為 intent-only |
 | C-D5 | Task Card 關聯 | Phase C 不新增 AgentProfile↔Task 關聯；留到 Phase E 在 Effective Context 契約下設計並做版本遷移 |
 
-未完成 C-D1～C-D5 前，不建立 `agent_profiles.json`，避免先寫死錯誤 schema 再依賴人工修復。
+任何 schema 變更都屬 scope expansion，必須重新取得產品負責人確認，不得由實作者自行調整。
 
-## 4. 建議資料契約（等待 C-D1～C-D5 核准）
+## 4. 已核准資料契約（Phase C v1）
 
 儲存檔：`~/.sid-console/agent_profiles.json`
 
@@ -193,13 +193,13 @@ Phase C 不新增：
 
 ## 7. 實作切片與依賴順序
 
-### C0｜產品裁決與契約凍結
+### C0｜產品裁決與契約凍結（完成）
 
-- 使用者裁決 C-D1～C-D5
-- 更新本文件為 `APPROVED`
-- 固定 schema v1、enum、上限與 out-of-scope
+- [x] 使用者裁決 C-D1～C-D5
+- [x] 本文件更新為 `APPROVED`
+- [x] 固定 schema v1、enum、上限與 out-of-scope
 
-**Gate C0：** 五項決策均有人工紀錄；尚未寫產品碼。
+**Gate C0：PASS。** 五項決策均有人工紀錄；尚未寫產品碼。
 
 ### C1｜Storage 與模型
 
@@ -353,4 +353,5 @@ Phase C product coding   BLOCKED
 - 使用者提供 `PHASE-C-AGENT-MODEL-ROUTING.md` v1.0，狀態 Active；已在不改變內容語意的前提下正規化 Markdown 換行後納入 repo。
 - MCODE：規劃階段啟動失敗，底層 executable 未找到；未開始審查、未改檔。
 - Claude：規劃階段唯讀審查完成；因 C-D1～C-D5 尚未裁決，verdict 為 **FAIL / not implementation-ready**。
-- 下一步：產品負責人裁決 C-D1～C-D5，並修復／重新驗證 MCODE runtime。
+- 產品負責人已核准 C-D1～C-D5 全部採建議預設。
+- 下一步：修復／重新驗證 MCODE runtime；完成 `mcode --version`、inspect-mode 真實 turn 與 writer-lock acquire/release smoke test 後，才能進入 `READY_FOR_IMPLEMENTATION`。

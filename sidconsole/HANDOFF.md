@@ -13,7 +13,7 @@
 - 下一階段計畫：[`PHASE-C-PLAN.md`](PHASE-C-PLAN.md)
 - Phase C Agent／model routing：[`PHASE-C-AGENT-MODEL-ROUTING.md`](PHASE-C-AGENT-MODEL-ROUTING.md)
 
-SID Console 的 Phase B1–B5 已完成。Gate 6 已由使用者於 2026-09-22 正式裁決 **PASS**；Issue #1 已補上最終證據並關閉。下一階段為 Phase C｜Agent Builder，目前等待五項 schema 產品決策。
+SID Console 的 Phase B1–B5 已完成。Gate 6 已由使用者於 2026-09-22 正式裁決 **PASS**；Issue #1 已補上最終證據並關閉。下一階段為 Phase C｜Agent Builder；C-D1～C-D5 已全部採建議預設並凍結，現在只等待 MCODE runtime smoke test。
 
 ## 2. 主要提交
 
@@ -112,8 +112,8 @@ README 不固定宣稱測試筆數；以上數字只代表 2026-09-22 的交接�
 
 ## 7. 後續工作
 
-1. 由使用者裁決 `PHASE-C-PLAN.md` 的 C-D1～C-D5，再把計畫狀態改為 `APPROVED`。
-2. 修復 MCODE 執行環境；routing 文件宣告 READY，但本 session 的 native evidence 是 `mcode-orca inspect` 最後回 `command not found: mcode`（exit 127）。
+1. 修復 MCODE 執行環境；routing 文件宣告 READY，但本 session 的 native evidence 是 `mcode-orca inspect` 最後回 `command not found: mcode`（exit 127）。
+2. 完成 `mcode --version`、inspect-mode 真實 turn 與 writer-lock acquire/release smoke test。
 3. 依 `PHASE-C-AGENT-MODEL-ROUTING.md` 執行固定角色、動態 model tier：MCODE 唯一產品碼 writer；Claude 獨立複審；Codex 依 trigger 啟動；AGY 負責適用的瀏覽器 QA；協調者只寫治理／文件／報告。
 4. 若要開發網頁歷史，先寫產品規格並確認 Herdr 協定，不要直接 hydrate xterm。
 5. 補強 Category 11 尺寸測試：鎖定精確 fallback `80×24`，不要只驗證退化值未送出。
