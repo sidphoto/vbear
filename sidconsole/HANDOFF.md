@@ -6,12 +6,14 @@
 
 - 分支：`main`
 - 最新功能修正：`0eddf9c fix terminal history disclosure and narrow layout`
-- 遠端：`origin/main` 已包含 `0eddf9c`
+- 遠端：`origin/main` 已包含 `26384c9`
 - 本機服務：`http://127.0.0.1:7788`
-- 交接時服務使用 `0eddf9c`，HTTP 與靜態資產檢查正常
-- GitHub Gate 6 追蹤入口：<https://github.com/sidphoto/sid-console/issues/1>
+- 交接時服務使用 `0eddf9c` 的產品碼，HTTP 與靜態資產檢查正常
+- GitHub Gate 6 追蹤入口：<https://github.com/sidphoto/sid-console/issues/1>（已關閉）
+- 下一階段計畫：[`PHASE-C-PLAN.md`](PHASE-C-PLAN.md)
+- Phase C Agent／model routing：[`PHASE-C-AGENT-MODEL-ROUTING.md`](PHASE-C-AGENT-MODEL-ROUTING.md)
 
-SID Console 的 Phase B1–B5 已完成。Gate 6 清單已全部執行；人工閘門必須由使用者裁決，代理不可自行宣告通過。
+SID Console 的 Phase B1–B5 已完成。Gate 6 已由使用者於 2026-09-22 正式裁決 **PASS**；Issue #1 已補上最終證據並關閉。下一階段為 Phase C｜Agent Builder，目前等待五項 schema 產品決策。
 
 ## 2. 主要提交
 
@@ -110,12 +112,13 @@ README 不固定宣稱測試筆數；以上數字只代表 2026-09-22 的交接�
 
 ## 7. 後續工作
 
-1. 由使用者根據 Issue #1 的證據做 Gate 6 人工裁決。
-2. 若裁決通過，在 Issue #1 補上最終版本與結論，再決定是否關閉 issue。
-3. 若要開發網頁歷史，先寫產品規格並確認 Herdr 協定，不要直接 hydrate xterm。
-4. 補強 Category 11 尺寸測試：鎖定精確 fallback `80×24`，不要只驗證退化值未送出。
-5. 將 Category 11d 從 regex/source assertion 改成注入 fake API/FitAddon，直接斷言 resize payload。
-6. 改善 agent-less pane 的 UI 可發現性。目前可用直接網址進入，但左欄只列 agent sessions。
+1. 由使用者裁決 `PHASE-C-PLAN.md` 的 C-D1～C-D5，再把計畫狀態改為 `APPROVED`。
+2. 修復 MCODE 執行環境；routing 文件宣告 READY，但本 session 的 native evidence 是 `mcode-orca inspect` 最後回 `command not found: mcode`（exit 127）。
+3. 依 `PHASE-C-AGENT-MODEL-ROUTING.md` 執行固定角色、動態 model tier：MCODE 唯一產品碼 writer；Claude 獨立複審；Codex 依 trigger 啟動；AGY 負責適用的瀏覽器 QA；協調者只寫治理／文件／報告。
+4. 若要開發網頁歷史，先寫產品規格並確認 Herdr 協定，不要直接 hydrate xterm。
+5. 補強 Category 11 尺寸測試：鎖定精確 fallback `80×24`，不要只驗證退化值未送出。
+6. 將 Category 11d 從 regex/source assertion 改成注入 fake API/FitAddon，直接斷言 resize payload。
+7. 改善 agent-less pane 的 UI 可發現性。目前可用直接網址進入，但左欄只列 agent sessions。
 
 ## 8. 已清理項目
 

@@ -5,7 +5,7 @@
 
 本專案是獨立的第三方外掛，與 herdr 官方無關；「herdr」為其原作者的產品名稱，這裡只用來說明相容對象。
 
-開發狀態與下一步請見 [`sidconsole/HANDOFF.md`](sidconsole/HANDOFF.md)。
+開發狀態與下一步請見 [`sidconsole/HANDOFF.md`](sidconsole/HANDOFF.md)；Phase C 規劃與 Agent／model routing 分別見 [`sidconsole/PHASE-C-PLAN.md`](sidconsole/PHASE-C-PLAN.md) 與 [`sidconsole/PHASE-C-AGENT-MODEL-ROUTING.md`](sidconsole/PHASE-C-AGENT-MODEL-ROUTING.md)。
 
 - **本機執行、外部技能與角色來源唯讀**：只讀取你選的外部工具來源，不修改任何技能或角色檔案，不執行技能內的腳本（SID Console 本身之設定、註記與終端操作除外）。終端工作台（Terminal Workbench）提供本機 Agent pane 畫面串流與受控輸入通道（見下文），其餘外部來源相關功能維持唯讀。
 - **後端零第三方相依、前端單一本機 Vendored 依賴**：後端僅使用 Python 3.11+ 標準函式庫（零 pip 套件、零雲端服務）。前端介面零 npm 建置步驟，唯一依賴為本機打包之 MIT 開源套件 `@xterm/xterm` 與 `@xterm/addon-fit`（置於 `web/vendor/xterm/`，鎖定版本並由單元測試持續驗證固定之 SHA-256 完整性雜湊，嚴格拒絕 CDN 外部載入，維持嚴格 CSP `script-src 'self'`）。
