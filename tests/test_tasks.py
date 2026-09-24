@@ -415,6 +415,14 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["deleted"], "task-api-2")
 
+    def test_delete_maps_storage_errors_to_503(self):
+        from sidconsole import agent_profiles
+        for exc in (tasks.TaskStorageError("blocked"),
+                    agent_profiles.AgentProfileStorageError("blocked")):
+            with mock.patch.object(tasks, "delete_task", side_effect=exc):
+                status, _, _ = self.req("/api/tasks/task-x", method="DELETE")
+            self.assertEqual(status, 503, type(exc).__name__)
+
     def test_task_templates_endpoint(self):
         status, data, _ = self.req("/api/task-templates")
         self.assertEqual(status, 200)

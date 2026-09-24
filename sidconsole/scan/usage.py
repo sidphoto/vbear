@@ -25,8 +25,24 @@ from pathlib import Path
 
 from .. import config as cfg
 
-CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
-CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+def CLAUDE_PROJECTS() -> Path:
+    """Per-call Claude Code projects directory.
+
+    Resolved on every call so tests which mutate ``os.environ['HOME']`` after
+    import see the new fake-home. Equivalent to
+    ``Path.home() / '.claude' / 'projects'`` in production.
+    """
+    return Path.home() / ".claude" / "projects"
+
+
+def CODEX_SESSIONS() -> Path:
+    """Per-call Codex CLI sessions directory.
+
+    Resolved on every call so tests which mutate ``os.environ['HOME']`` after
+    import see the new fake-home. Equivalent to
+    ``Path.home() / '.codex' / 'sessions'`` in production.
+    """
+    return Path.home() / ".codex" / "sessions"
 
 _SKILL_PATH = re.compile(r"((?:~|/)[^\s\"'\\]*?/skills/[^\s\"'\\]+?/SKILL\.md)")
 _CACHE_VERSION = 2
@@ -150,12 +166,14 @@ def collect(days: int = 30) -> dict:
     problems: list[str] = []
 
     jobs: list[tuple[Path, str]] = []
-    if CLAUDE_PROJECTS.is_dir():
-        jobs += [(p, "claude") for p in CLAUDE_PROJECTS.glob("*/*.jsonl")]
+    _cp = CLAUDE_PROJECTS()
+    if _cp.is_dir():
+        jobs += [(p, "claude") for p in _cp.glob("*/*.jsonl")]
     else:
         problems.append("找不到 ~/.claude/projects，Claude Code 使用紀錄不可用")
-    if CODEX_SESSIONS.is_dir():
-        jobs += [(p, "codex") for p in CODEX_SESSIONS.rglob("*.jsonl")]
+    _cs = CODEX_SESSIONS()
+    if _cs.is_dir():
+        jobs += [(p, "codex") for p in _cs.rglob("*.jsonl")]
     else:
         problems.append("找不到 ~/.codex/sessions，Codex 使用紀錄不可用")
 
@@ -200,14 +218,15 @@ def for_session_ids(ids: list[str]) -> dict[str, dict]:
     if not wanted:
         return found
     for sid in wanted:
-        for path in CLAUDE_PROJECTS.glob(f"*/{sid}.jsonl"):
+        for path in CLAUDE_PROJECTS().glob(f"*/{sid}.jsonl"):
             try:
                 found[sid] = parse_claude_log(path)
             except OSError:
                 pass
             break
-    if CODEX_SESSIONS.is_dir() and wanted - found.keys():
-        for path in CODEX_SESSIONS.rglob("rollout-*.jsonl"):
+    _cs = CODEX_SESSIONS()
+    if _cs.is_dir() and wanted - found.keys():
+        for path in _cs.rglob("rollout-*.jsonl"):
             sid = next((s for s in wanted - found.keys() if path.name.endswith(f"{s}.jsonl")), None)
             if sid:
                 try:

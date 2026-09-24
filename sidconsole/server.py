@@ -31,6 +31,7 @@ import queue as queue_mod
 from urllib.parse import unquote
 
 from . import annotations
+from . import agent_profiles
 from . import config as cfg
 from . import tasks
 from .bridge import herdr, terminal
@@ -277,6 +278,33 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "task": t})
                 if path == "/api/governance":
                     return self._json(self._governance_view())
+                if path == "/api/agent-builder/catalog":
+                    return self._json(self._agent_builder_catalog())
+                if path == "/api/agent-profiles":
+                    index = console.skill_index()
+                    known_skills = set(index.keys())
+                    known_roles = {
+                        r.get("role_id") for r in console.store.static().get("roles", [])
+                        if r.get("role_id")
+                    }
+                    return self._json({
+                        "ok": True,
+                        "profiles": agent_profiles.list_profiles(
+                            known_skills=known_skills, known_roles=known_roles),
+                    })
+                if path.startswith("/api/agent-profiles/"):
+                    rest = path[len("/api/agent-profiles/"):]
+                    index = console.skill_index()
+                    known_skills = set(index.keys())
+                    known_roles = {
+                        r.get("role_id") for r in console.store.static().get("roles", [])
+                        if r.get("role_id")
+                    }
+                    p = agent_profiles.get_profile(rest, known_skills=known_skills,
+                                                    known_roles=known_roles)
+                    if p is None:
+                        return self._error(404, "找不到此 Agent Profile")
+                    return self._json({"ok": True, "profile": p})
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
                     if action == "stream" and pane_enc:
@@ -287,6 +315,8 @@ def make_handler(console: Console):
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the client went away mid-request; nothing left to answer
             except tasks.TaskStorageError as exc:
+                return self._error(503, str(exc))
+            except agent_profiles.AgentProfileStorageError as exc:
                 return self._error(503, str(exc))
             except Exception as exc:  # report, never crash the server
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
@@ -368,6 +398,52 @@ def make_handler(console: Console):
                         return self._json({"ok": True, "task": saved})
                     except ValueError as exc:
                         return self._error(400, str(exc))
+                if path == "/api/agent-profiles":
+                    body = self._body()
+                    index = console.skill_index()
+                    known_skills = set(index.keys())
+                    known_roles = {
+                        r.get("role_id") for r in console.store.static().get("roles", [])
+                        if r.get("role_id")
+                    }
+                    try:
+                        saved = agent_profiles.save_profile(None, body,
+                                                             known_skills=known_skills,
+                                                             known_roles=known_roles)
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
+                    return self._json({"ok": True, "profile": saved})
+                if path.startswith("/api/agent-profiles/"):
+                    rest = path[len("/api/agent-profiles/"):]
+                    body = self._body()
+                    index = console.skill_index()
+                    known_skills = set(index.keys())
+                    known_roles = {
+                        r.get("role_id") for r in console.store.static().get("roles", [])
+                        if r.get("role_id")
+                    }
+                    if rest.endswith("/delete"):
+                        target = rest[:-7]
+                        ok = agent_profiles.delete_profile(target)
+                        if not ok:
+                            return self._error(404, "找不到此 Agent Profile 或已刪除")
+                        return self._json({"ok": True, "deleted": target})
+                    if rest.endswith("/duplicate"):
+                        target = rest[:-10]
+                        dup = agent_profiles.duplicate_profile(target,
+                                                                known_skills=known_skills,
+                                                                known_roles=known_roles)
+                        if dup is None:
+                            return self._error(404, "找不到此 Agent Profile")
+                        return self._json({"ok": True, "profile": dup})
+                    target = rest
+                    try:
+                        saved = agent_profiles.save_profile(target, body,
+                                                             known_skills=known_skills,
+                                                             known_roles=known_roles)
+                    except ValueError as exc:
+                        return self._error(400, str(exc))
+                    return self._json({"ok": True, "profile": saved})
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
                     if pane_enc and action in ("input", "control"):
@@ -383,6 +459,8 @@ def make_handler(console: Console):
             except (BrokenPipeError, ConnectionResetError):
                 pass  # the client went away mid-request; nothing left to answer
             except tasks.TaskStorageError as exc:
+                return self._error(503, str(exc))
+            except agent_profiles.AgentProfileStorageError as exc:
                 return self._error(503, str(exc))
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
@@ -401,7 +479,15 @@ def make_handler(console: Console):
                         return self._error(404, "找不到此任務卡或已刪除")
                     return self._json({"ok": True, "deleted": task_id})
                 return self._error(404, "not found")
+            except TimeoutError:
+                raise
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client went away mid-request; nothing left to answer
             except tasks.TaskStorageError as exc:
+                return self._error(503, str(exc))
+            except agent_profiles.AgentProfileStorageError as exc:
+                # Parity with do_GET/do_POST so a future DELETE endpoint for
+                # profiles fails closed with 503 instead of a generic 500.
                 return self._error(503, str(exc))
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
@@ -695,6 +781,77 @@ def make_handler(console: Console):
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
                     or "project_roots" in body}
 
+        def _agent_builder_catalog(self) -> dict:
+            """Read-only catalog used by the Agent Builder UI.
+
+            The console already knows the role catalog (from `self.store`),
+            the skill catalog, the supported tool ids, the permission key
+            / value enums and the model configuration shape. This view just
+            decorates that into the exact form the UI needs to render
+            selectors with no follow-up fetches: a Profession list pulled
+            from the read-only AgentRole catalog (C-D1 — strictly separate
+            from AgentProfile), a Tool list drawn from `agent_profiles.
+            KNOWN_TOOLS` (C-D2 / C-D3 — the catalog IS the registry, no
+            external list), a Skill Loadout entry per skill with the
+            minimum fields the picker needs, and the four-key Permission
+            Intent surface (C-D4). No `permission_intents` value is ever
+            `enforce`/`force`/`allow_unattended`: those would imply the
+            key has authority over something, which it does not
+            (permission values are intent-only — Phase C-D6).
+            """
+            index = console.skill_index()
+            skills_for_picker = []
+            for s in index.values():
+                desc = (s.get("description") or {}).get("value") or ""
+                skills_for_picker.append({
+                    "skill_id": s["skill_id"],
+                    "name": s["name"],
+                    "invoke_name": s.get("invoke_name", ""),
+                    "tool": s.get("tool", ""),
+                    "scope": s.get("scope", ""),
+                    "activation": s.get("activation", ""),
+                    "excerpt": desc[:140],
+                })
+            skills_for_picker.sort(key=lambda x: (x["tool"], x["name"].lower()))
+
+            roles = []
+            for r in console.store.static().get("roles", []):
+                roles.append({
+                    "role_id": r.get("role_id"),
+                    "name": r.get("name"),
+                    "tool": r.get("tool"),
+                    "kind": r.get("kind"),
+                    "skill_link_count": len(r.get("skill_link_ids") or []),
+                    "skill_link_basis": r.get("skill_link_basis"),
+                })
+
+            return {
+                "ok": True,
+                "tools": sorted(agent_profiles.KNOWN_TOOLS),
+                "permission_keys": list(agent_profiles.PERMISSION_KEYS),
+                "permission_values": list(agent_profiles.PERMISSION_VALUES),
+                "permission_intent_only": True,
+                "model_id_max_length": agent_profiles.MAX_MODEL_ID,
+                "max_profiles": agent_profiles.MAX_PROFILES,
+                "max_skills_per_profile": agent_profiles.MAX_SKILLS_PER_PROFILE,
+                "professions": roles,
+                "skills": skills_for_picker,
+                # Honest disclosure: equipped != loaded, intent != enforce.
+                # This text is shown to the user verbatim, never as an HTML
+                # permission warning or as an enforced UI block.
+                "disclosures": [
+                    "Equipped Skill Loadout ≠ Loaded into any running session. "
+                    "Saving a Profile never starts, restarts, or injects anything.",
+                    "Permission Intents are intent-only and are NOT enforced. "
+                    "They are descriptive records of what this Profile is composed "
+                    "for; the underlying CLI tools' actual authority comes from "
+                    "their own per-call rules and the Herdr bridge.",
+                    "Agent Profiles are stored only inside this console's own state "
+                    "directory. They never write to ~/.codex, ~/.claude, third-"
+                    "party skill/role sources, or any third-party marketplace cache.",
+                ],
+            }
+
         def _governance_view(self) -> dict:
             return {
                 "ok": True,
@@ -760,7 +917,7 @@ def _valid_project_roots(value) -> list[str]:
     if not isinstance(value, list) or len(value) > MAX_PROJECT_ROOTS:
         raise ValueError(f"project_roots 必須是最多 {MAX_PROJECT_ROOTS} 個路徑的清單")
     out: list[str] = []
-    home = HOME.resolve()
+    home = HOME().resolve()
     for raw in value:
         if not isinstance(raw, str) or not raw.strip() or len(raw) > 1024 or "\x00" in raw:
             raise ValueError("project_roots 只能包含路徑字串")

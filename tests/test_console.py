@@ -19,9 +19,17 @@ import urllib.request
 from pathlib import Path
 
 ORIGINAL_PATH = os.environ.get("PATH", "")
-FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-test-"))
-os.environ["HOME"] = str(FAKE_HOME)
-os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
+# Reuse the prior sibling's FAKE_HOME when one is already pinned, so that
+# `unittest discover`'s module-import-time HOME mutation by whichever
+# sibling loaded first sticks for the whole process. Same guard as
+# tests/test_tasks.py: without it every discovered sibling would race to
+# overwrite os.environ["HOME"] and the LAST module loaded wins.
+if "SID_CONSOLE_HOME" in os.environ:
+    FAKE_HOME = Path(os.environ["HOME"])
+else:
+    FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-test-"))
+    os.environ["HOME"] = str(FAKE_HOME)
+    os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
 os.environ["PATH"] = "/usr/bin:/bin"  # no herdr on PATH
 os.environ.pop("HERDR_BIN_PATH", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -992,8 +1000,11 @@ class SlowHerdrTests(_HostileBase):  # AGY A1: a hung herdr must not stall the c
         _, took = self.timed(lambda: [t.join(10) for t in self.in_background(
             lambda: results.append(self.store.live()), n=6)])
         self.assertEqual(len(results), 6)
-        self.assertEqual(self.rounds(), 1)
-        self.assertLess(took, 2 * self.DELAY)
+        self.assertEqual(self.rounds(), 1)  # the real sharing guarantee
+        # One shared round takes ~1 x DELAY; six serial rounds would take ~6x.
+        # 2x was flaky under thread-start jitter (observed 2.19s at Gate 7),
+        # 3x still cleanly separates shared from serial.
+        self.assertLess(took, 3 * self.DELAY)
         self.assertTrue(all(r is results[0] for r in results))
 
     def test_stale_view_is_served_while_one_refresh_runs(self):

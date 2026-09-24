@@ -2087,12 +2087,15 @@ function taskStatusBadge(status) {
 async function viewWorkbench(initialPaneId, initialTaskId) {
   const token = seq;
   cleanupActiveTerminal();
-  const [staticData, liveData, tasksRes, templatesRes, govRes] = await Promise.all([
+  const [staticData, liveData, tasksRes, templatesRes, govRes,
+          profilesRes, catalogRes] = await Promise.all([
     loadStatic(),
     loadLive(),
     api.get("/api/tasks").catch(() => ({ ok: false, tasks: [] })),
     api.get("/api/task-templates").catch(() => ({ ok: false, templates: {} })),
     api.get("/api/governance").catch(() => ({ ok: false })),
+    api.get("/api/agent-profiles").catch(() => ({ ok: false, profiles: [] })),
+    api.get("/api/agent-builder/catalog").catch(() => ({ ok: false })),
   ]);
 
   const main = claim(token);
@@ -2102,6 +2105,14 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
   let tasksList = (tasksRes && tasksRes.tasks) || [];
   const templates = (templatesRes && templatesRes.templates) || {};
   const govData = govRes || {};
+  // Agent Profile state (Phase C). The list is owned by the local mutation
+  // helpers below so editing/duplicating/deleting re-renders the right
+  // panel without a full viewWorkbench() round-trip. The catalog is
+  // fetched once on view mount and reused for every editor modal: the
+  // tools/permission enums never change inside a single tab lifetime and
+  // a re-fetch is wasted bandwidth.
+  let agentProfiles = (profilesRes && profilesRes.profiles) || [];
+  let agentBuilderCatalog = (catalogRes && catalogRes.ok) ? catalogRes : null;
 
   // Determine active pane ID
   let activePaneId = initialPaneId;
@@ -3082,28 +3093,437 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
     return taskContent;
   }
 
-  // Right Tab: [A] Agent Profile
-  function renderAgentTabContent() {
-    const activeSession = sessions.find((s) => s.pane_id === activePaneId);
-    const content = el("div", { class: "wb-tab-content" });
-    if (!activeSession) {
-      return append(content, emptyState("目前沒有選取中的 Agent", null));
-    }
-    const roleName = activeSession.role_label || activeSession.agent || activePaneId;
-    const skillsUsed = activeSession.skills_used || [];
+  // Right Tab: [A] Agent Profile (Phase C — full Agent Builder).
+  // Strictly distinct from AgentRole (read-only catalog the scanner picked
+  // up from `~/.codex/agents`, `~/.claude/agents`, plugin caches, etc).
+  // Equipped Skill Loadout here is never Loaded: saving a profile never
+  // starts, restarts, or injects anything into a running session. The
+  // permission_intents values are intent-only — they are not enforced.
+  let selectedProfileId = null;
 
-    return append(content,
+  async function reloadAgentProfiles() {
+    try {
+      const res = await api.get("/api/agent-profiles");
+      agentProfiles = (res && res.profiles) || [];
+    } catch (err) {
+      toast("載入 Agent Profile 失敗：" + err.message);
+      agentProfiles = [];
+    }
+    // If the previously selected one is gone (deleted from elsewhere),
+    // drop the selection rather than rendering a phantom.
+    if (selectedProfileId && !agentProfiles.find((p) => p.id === selectedProfileId)) {
+      selectedProfileId = null;
+    }
+  }
+
+  async function ensureCatalog() {
+    if (agentBuilderCatalog) return agentBuilderCatalog;
+    try {
+      const res = await api.get("/api/agent-builder/catalog");
+      agentBuilderCatalog = res && res.ok ? res : null;
+    } catch {
+      agentBuilderCatalog = null;
+    }
+    return agentBuilderCatalog;
+  }
+
+  function profileSummary(p) {
+    const tools = (agentBuilderCatalog && agentBuilderCatalog.tools) || [];
+    const profs = (agentBuilderCatalog && agentBuilderCatalog.professions) || [];
+    const profession = p.profession_role_id
+      ? (profs.find((r) => r.role_id === p.profession_role_id) || {}).name
+        || p.profession_role_id
+      : "（未選職業）";
+    const tool = p.model && p.model.tool;
+    const toolLabel = (tool === "claude" && "Claude Code")
+                    || (tool === "codex" && "Codex CLI")
+                    || (tool === "shared" && "skills CLI")
+                    || tool || "？";
+    return { profession, toolLabel };
+  }
+
+  function renderAgentProfileListItem(p) {
+    const { profession, toolLabel } = profileSummary(p);
+    const unresolved = (p._unresolved && p._unresolved.skills) || [];
+    const item = el("button", {
+      class: "wb-list-item",
+      type: "button",
+      "aria-pressed": String(p.id === selectedProfileId),
+      style: "text-align:left; padding:8px; margin-bottom:4px;",
+      on: { click: () => {
+        selectedProfileId = p.id;
+        renderRightColumn();
+      } },
+    },
       el("div", { class: "row", style: "justify-content:space-between" },
-        el("h3", { style: "margin:0" }, roleName),
-        prov({ origin: "runtime", detail: "執行觀察 · 唯讀" })),
+        el("strong", null, p.name || p.id),
+        p.enabled ? badge("啟用", "b-ok plain", "此 Profile 仍可載入")
+                  : badge("停用", "b-mute plain", "已停用，但保留存檔")),
+      el("div", { class: "small muted" },
+        `${profession} · ${toolLabel}`),
+      el("div", { class: "small muted mono" }, p.id),
+      unresolved.length ? el("div", { class: "small", style: "color:#b85" },
+        `⚠ ${unresolved.length} 項技能已從掃描結果中消失`) : null
+    );
+    return item;
+  }
+
+  function renderAgentProfileDetail(p) {
+    const { profession } = profileSummary(p);
+    const skills = p.equipped_skill_ids || [];
+    const unresolved = (p._unresolved && p._unresolved.skills) || [];
+    const unresolvedSet = new Set(unresolved);
+    const intentValues = ["allow", "deny", "unspecified"];
+    const intentLabels = { allow: "允許意圖", deny: "拒絕意圖", unspecified: "未定" };
+    const intentBadgeClass = { allow: "b-ok", deny: "b-bad", unspecified: "b-mute" };
+
+    const permRows = (agentBuilderCatalog && agentBuilderCatalog.permission_keys
+                      || ["read", "write", "test", "deploy"]).map((k) => {
+      const v = (p.permission_intents && p.permission_intents[k]) || "unspecified";
+      const safe = intentValues.includes(v) ? v : "unspecified";
+      return el("div", { class: "row", style: "justify-content:space-between; padding:2px 0;" },
+        el("span", { class: "mono" }, k),
+        el("span", null,
+          badge(intentLabels[safe], `${intentBadgeClass[safe]} plain`,
+                "僅為意圖記錄，不會實際執行為 CLI 權限")));
+    });
+
+    const skillList = skills.length
+      ? skills.map((sid) => {
+          const isUnresolved = unresolvedSet.has(sid);
+          return el("li", { class: "small mono" },
+            sid,
+            isUnresolved ? el("span", { class: "b-warn small", style: "margin-left:6px;" },
+                "⚠ 已不存在") : null);
+        })
+      : [el("li", { class: "small muted" }, "未裝備任何技能")];
+
+    return append(el("div", { class: "wb-tab-content" }),
+      el("div", { class: "row wb-profile-head", style: "justify-content:space-between" },
+        el("h3", { style: "margin:0" }, p.name || p.id),
+        el("div", { class: "wb-profile-actions" },
+          el("button", { class: "btn small", type: "button",
+            on: { click: () => promptAgentProfileEditor(p) } }, "編輯"),
+          el("button", { class: "btn small", type: "button",
+            on: { click: async () => {
+              try {
+                const res = await api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}/duplicate`, {});
+                toast("已建立副本：" + res.profile.name);
+                await reloadAgentProfiles();
+                selectedProfileId = res.profile.id;
+                renderRightColumn();
+              } catch (err) {
+                toast("複製失敗：" + err.message);
+              }
+            } } }, "複製"),
+          el("button", { class: "btn small", type: "button",
+            on: { click: () => promptDeleteAgentProfile(p) } }, "刪除"),
+          el("button", { class: "btn small", type: "button",
+            on: { click: async () => {
+              try {
+                const next = { ...p, enabled: !p.enabled };
+                await api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}`,
+                  { enabled: next.enabled });
+                p.enabled = next.enabled;
+                toast(next.enabled ? "已啟用" : "已停用");
+                renderRightColumn();
+              } catch (err) {
+                toast("更新失敗：" + err.message);
+              }
+            } } }, p.enabled ? "停用" : "啟用"))),
       el("dl", { class: "kv small" },
-        el("dt", null, "職業角色"), el("dd", null, activeSession.agent),
-        el("dt", null, "模型大腦"), el("dd", { class: "mono" }, activeSession.model || "—"),
-        el("dt", null, "已用裝備"), el("dd", null, skillsUsed.length ? skillsUsed.join("、") : "無")),
+        el("dt", null, "Profile ID"),
+          el("dd", { class: "mono" }, p.id),
+        el("dt", null, "職業角色"),
+          el("dd", null, profession),
+        el("dt", null, "模型工具"),
+          el("dd", null, (p.model && p.model.tool) || "—"),
+        el("dt", null, "模型設定 (Model ID)"),
+          el("dd", { class: "mono" }, (p.model && p.model.model_id) || "（未指定，視為該工具預設值；非執行環境）"),
+        el("dt", null, "更新時間"),
+          el("dd", null, fmtTime(p.updated_at || p.created_at))),
+      el("div", { class: "wb-field-group" },
+        el("div", { class: "wb-field-label" }, "已裝備技能 (Equipped Skill Loadout)"),
+        el("ul", { class: "wb-field-val", style: "list-style: disc inside; padding-left: 4px;" }, skillList)),
+      el("div", { class: "wb-field-group" },
+        el("div", { class: "wb-field-label" }, "權限意圖 (Permission Intents · 僅意圖)"),
+        el("div", { class: "wb-field-val" }, permRows)),
       el("div", { class: "notice info", style: "font-size:12.5px" },
         el("span", { class: "ico" }, "ℹ"),
-        el("div", null, "A 層於本階段管理角色身分、模型與武器裝備（Skill Loadout）觀察，為唯讀資訊展示。"))
+        el("div", null,
+          "Equipped Skill Loadout ≠ 已進入任何執行中的 session。儲存 Profile 不會啟動、",
+          "重啟或注入任何東西。權限意圖僅為意圖記錄，不會實際執行為 CLI 工具權限。"))
     );
+  }
+
+  function renderAgentProfileEditor(isNew) {
+    // Opens the editor modal. isNew=true is a Create; otherwise Edit.
+    // The editor pulls the catalog fresh if it's missing — the profile
+    // picker is useless without it.
+    return (async () => {
+      const catalog = await ensureCatalog();
+      if (!catalog) {
+        toast("無法載入 Agent Builder 目錄");
+        return;
+      }
+      promptAgentProfileEditor(null, catalog);
+    })();
+  }
+
+  function promptAgentProfileEditor(existingProfile, catalogArg) {
+    const catalog = catalogArg || agentBuilderCatalog;
+    if (!catalog) {
+      toast("Agent Builder 目錄尚未就緒，請稍候再試");
+      return;
+    }
+    const isNew = !existingProfile;
+    const initial = existingProfile || {
+      name: "",
+      profession_role_id: null,
+      model: { tool: (catalog.tools && catalog.tools[0]) || "claude", model_id: "" },
+      equipped_skill_ids: [],
+      permission_intents: { read: "unspecified", write: "unspecified",
+                            test: "unspecified", deploy: "unspecified" },
+      enabled: true,
+    };
+
+    const nameInput = el("input", { type: "text", maxlength: "200",
+      value: initial.name || "" });
+    const profSelect = el("select", null,
+      el("option", { value: "" }, "（不綁定職業角色）"),
+      (catalog.professions || []).map((r) => {
+        const opt = el("option", { value: r.role_id || "" },
+          `${r.name || r.role_id} (${r.tool || "?"})`);
+        if (initial.profession_role_id === r.role_id) opt.setAttribute("selected", "selected");
+        return opt;
+      }));
+    if (!initial.profession_role_id) profSelect.value = "";
+
+    const toolSelect = el("select", null,
+      (catalog.tools || []).map((t) => {
+        const opt = el("option", { value: t }, t);
+        if (initial.model && initial.model.tool === t) opt.setAttribute("selected", "selected");
+        return opt;
+      }));
+    if (initial.model && initial.model.tool) toolSelect.value = initial.model.tool;
+
+    const modelIdInput = el("input", { type: "text",
+      placeholder: "例如 opus-4.1、gpt-test；留空視為該工具預設",
+      maxlength: String(catalog.model_id_max_length || 200),
+      value: (initial.model && initial.model.model_id) || "" });
+
+    // Skill Loadout picker: select with multi-select + a move-in button +
+    // remove buttons on the equipped list. Multi-select native is keyboard
+    // accessible (Shift/Ctrl+Arrow), so we keep it.
+    const skillOptions = catalog.skills || [];
+    const skillById = new Map(skillOptions.map((s) => [s.skill_id, s]));
+    const equippedIds = new Set(initial.equipped_skill_ids || []);
+
+    const skillPicker = el("select", { size: "8", multiple: "multiple",
+      "aria-label": "可加入裝備的技能", style: "width: 100%;" },
+      skillOptions.map((s) => el("option", { value: s.skill_id },
+        `${s.tool} · ${s.name}${s.activation === "disabled" ? "（停用）" : ""}`)));
+    const equippedList = el("ul", { class: "wb-equipped",
+      "aria-label": "已裝備技能", style: "list-style: none; padding-left: 0;" });
+
+    function rebuildEquippedList() {
+      setKids(equippedList,
+        Array.from(equippedIds).length
+          ? Array.from(equippedIds).map((sid) => {
+              const s = skillById.get(sid);
+              const label = s ? `${s.tool} · ${s.name}` : `${sid}（已不存在）`;
+              return el("li", { class: "row", style: "justify-content:space-between; padding:2px 4px;" },
+                el("span", { class: "small mono" }, label),
+                el("button", { class: "btn small", type: "button",
+                  on: { click: () => {
+                    equippedIds.delete(sid);
+                    rebuildEquippedList();
+                  } } }, "移除"));
+            })
+          : [el("li", { class: "small muted", style: "padding:4px;" },
+              "未加入任何技能。Equipped ≠ Loaded，僅為意圖記錄")]);
+    }
+    rebuildEquippedList();
+
+    const addBtn = el("button", { class: "btn small", type: "button",
+      on: { click: () => {
+        for (const opt of Array.from(skillPicker.selectedOptions)) {
+          if (!equippedIds.has(opt.value)) equippedIds.add(opt.value);
+        }
+        rebuildEquippedList();
+      } } }, "加入裝備 →");
+
+    const permissionKeys = catalog.permission_keys || ["read", "write", "test", "deploy"];
+    const permissionValues = catalog.permission_values || ["allow", "deny", "unspecified"];
+    const intentLabels = { allow: "允許意圖", deny: "拒絕意圖", unspecified: "未定" };
+    const intentExplanations = {
+      allow: "代表此 Profile 的意圖為允許此操作；並非實際授權",
+      deny: "代表此 Profile 的意圖為拒絕此操作；並非實際撤銷授權",
+      unspecified: "尚未設定意圖",
+    };
+    const permSelects = {};
+    const permRows = permissionKeys.map((k) => {
+      const sel = el("select", null,
+        permissionValues.map((v) => {
+          const opt = el("option", { value: v }, intentLabels[v] || v);
+          if ((initial.permission_intents || {})[k] === v) opt.setAttribute("selected", "selected");
+          return opt;
+        }));
+      sel.value = (initial.permission_intents && initial.permission_intents[k]) || "unspecified";
+      permSelects[k] = sel;
+      const explain = () => intentExplanations[
+        sel.value in intentExplanations ? sel.value : "unspecified"];
+      const explainEl = el("span", { class: "small muted" }, explain());
+      // Keep the explanation in sync with the current choice (Gate 7 residual).
+      sel.addEventListener("change", () => { explainEl.textContent = explain(); });
+      return el("div", { class: "row", style: "justify-content:space-between; padding:2px 0;" },
+        el("span", null, k, " ", explainEl),
+        sel);
+    });
+
+    const cancelBtn = el("button", { class: "btn", type: "button",
+      on: { click: () => closeModal() } }, "取消");
+    const saveBtn = el("button", { class: "btn primary", type: "button",
+      on: { click: submitSave } }, isNew ? "建立 Profile" : "儲存修改");
+
+    const disclosures = (catalog.disclosures || []).map((line) =>
+      el("li", { class: "small" }, line));
+
+    const modal = el("div", { class: "modal-backdrop", role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "agent-profile-modal-title" },
+      el("div", { class: "modal-box", style: "max-width: 720px; max-height: 85vh; overflow-y: auto;" },
+        el("h2", { id: "agent-profile-modal-title" },
+          isNew ? "建立 Agent Profile" : `編輯 Agent Profile：${existingProfile.name || existingProfile.id}`),
+        el("div", { class: "wb-form" },
+          el("label", null, "名稱 *", nameInput),
+          el("label", null, "職業角色 (僅選用掃描器找到的角色，不會寫回來源)",
+            profSelect),
+          el("label", null, "模型工具 (Tool ID)", toolSelect),
+          el("label", null, "模型設定 (Model ID · 非執行環境)", modelIdInput),
+          el("fieldset", { style: "border: 1px solid var(--border, #ccc); padding: 8px; margin: 6px 0;" },
+            el("legend", null, "Skill Loadout (裝備清單)"),
+            el("div", { class: "small muted", style: "margin-bottom:4px;" },
+              "Equipped Skill Loadout ≠ 已進入任何 session；儲存 Profile 不會注入或啟動技能"),
+            el("select", null, skillPicker.options
+              ? [] : []), // placeholder so the multi-select stays mounted
+            skillPicker,
+            el("div", { style: "margin: 6px 0;" }, addBtn),
+            equippedList),
+          el("fieldset", { style: "border: 1px solid var(--border, #ccc); padding: 8px; margin: 6px 0;" },
+            el("legend", null, "Permission Intents (意圖 · 僅記錄)"),
+            el("div", { class: "small muted", style: "margin-bottom:6px;" },
+              "僅為意圖記錄，不會實際執行為底層 CLI 工具權限；數值僅 allow / deny / unspecified"),
+            permRows)),
+        el("div", { class: "notice info", style: "font-size:12.5px" },
+          el("span", { class: "ico" }, "ℹ"),
+          el("div", null,
+            el("strong", null, "邊界揭露："),
+            el("ul", { style: "margin: 4px 0 0 0; padding-left: 16px;" }, disclosures))),
+        el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
+    document.body.append(modal);
+    const closeModal = withModalA11y(modal, () => modal.remove());
+    nameInput.focus();
+
+    async function submitSave() {
+      const name = nameInput.value.trim();
+      if (!name) {
+        toast("請填寫 Profile 名稱");
+        nameInput.focus();
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const payload = {
+          name,
+          profession_role_id: profSelect.value || null,
+          model: { tool: toolSelect.value, model_id: modelIdInput.value.trim() },
+          equipped_skill_ids: Array.from(equippedIds),
+          permission_intents: permissionKeys.reduce((acc, k) => {
+            acc[k] = permSelects[k].value || "unspecified";
+            return acc;
+          }, {}),
+          enabled: existingProfile ? !!existingProfile.enabled : true,
+        };
+        const path = existingProfile
+          ? `/api/agent-profiles/${encodeURIComponent(existingProfile.id)}`
+          : `/api/agent-profiles`;
+        const res = await api.post(path, payload);
+        toast(existingProfile ? "Profile 已儲存" : "Profile 已建立");
+        await reloadAgentProfiles();
+        selectedProfileId = res.profile.id;
+        closeModal();
+        renderRightColumn();
+      } catch (err) {
+        toast((isNew ? "建立失敗：" : "儲存失敗：") + err.message);
+        saveBtn.disabled = false;
+      }
+    }
+  }
+
+  function promptDeleteAgentProfile(p) {
+    if (!confirm(`確定要刪除 Agent Profile「${p.name || p.id}」嗎？此動作不可回復。`)) return;
+    api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}/delete`, {})
+      .then(async () => {
+        toast("Profile 已刪除");
+        await reloadAgentProfiles();
+        if (selectedProfileId === p.id) selectedProfileId = null;
+        renderRightColumn();
+      })
+      .catch((err) => toast("刪除失敗：" + err.message));
+  }
+
+  function renderAgentTabContent() {
+    const content = el("div", { class: "wb-tab-content wb-agent-builder" });
+    const header = el("div", { class: "row", style: "justify-content:space-between" },
+      el("h3", { style: "margin:0" }, "Agent Builder"),
+      prov({ origin: "user", detail: "主控台儲存的 Profile · 與 AgentRole 不同" }));
+    const createBtn = el("button", { class: "btn primary", type: "button",
+      on: { click: () => renderAgentProfileEditor(true) } }, "+ 建立 Agent Profile");
+
+    const sub = el("div", { class: "small muted", style: "margin: 4px 0;" },
+      "Profile 是一份使用你自選職業、模型工具與裝備清單的設定組合，");
+    const sub2 = el("div", { class: "small muted", style: "margin-bottom: 8px;" },
+      "與掃描到的 AgentRole 名單（只讀）並存。Equipped Skill Loadout 僅為意圖，");
+
+    const selected = agentProfiles.find((p) => p.id === selectedProfileId);
+
+    const split = el("div", { class: "wb-split" });
+    // Sizing lives in style.css (.wb-agent-builder container query) so the
+    // split can stack when the right column is narrow; inline min-width here
+    // previously crushed the detail column to ~40px (Gate 7 finding).
+    const listCol = el("div", { class: "wb-col-left" });
+    const detailCol = el("div", { class: "wb-col-right" });
+
+    if (agentProfiles.length === 0) {
+      setKids(listCol, emptyState("尚未建立任何 Profile", null));
+    } else {
+      setKids(listCol,
+        el("div", { class: "wb-list" }, agentProfiles.map(renderAgentProfileListItem)));
+    }
+    if (selected) {
+      setKids(detailCol, renderAgentProfileDetail(selected));
+    } else {
+      setKids(detailCol,
+        emptyState("請從左側選取一個 Profile，或建立新的", null),
+        el("div", { class: "notice info", style: "font-size:12.5px; margin-top:8px;" },
+          el("span", { class: "ico" }, "ℹ"),
+          el("div", null,
+            "Profile 只會寫入主控台狀態目錄 (",
+            el("code", null, "~/.sid-console/agent_profiles.json"),
+            ")，",
+            "絕對不會寫入 ~/.codex、~/.claude、第三方技能/角色來源或外掛市集。")));
+    }
+    split.append(listCol, detailCol);
+
+    return append(content,
+      header,
+      createBtn,
+      sub,
+      sub2,
+      el("div", { class: "small muted", style: "margin-bottom: 8px;" },
+        "儲存後不會啟動、重啟或注入任何東西；權限意圖僅為意圖記錄。"),
+      split);
   }
 
   // Right Tab: [P] Project Contract Skeleton

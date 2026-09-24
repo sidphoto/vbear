@@ -13,7 +13,14 @@ from ..model import (
 )
 from . import document, walk
 
-CLAUDE_HOME = Path.home() / ".claude"
+def CLAUDE_HOME() -> Path:
+    """Per-call Claude Code home directory.
+
+    Resolved on every call so tests which mutate ``os.environ['HOME']`` after
+    import see the new fake-home. Equivalent to ``Path.home() / '.claude'``
+    in production.
+    """
+    return Path.home() / ".claude"
 
 
 # --- activation evidence ---------------------------------------------------
@@ -27,7 +34,7 @@ def load_activation_facts() -> dict:
     """
     facts = {"installed": {}, "enabled": {}, "problems": []}
 
-    installed_path = CLAUDE_HOME / "plugins" / "installed_plugins.json"
+    installed_path = CLAUDE_HOME() / "plugins" / "installed_plugins.json"
     if installed_path.exists():
         try:
             data = json.loads(installed_path.read_text(encoding="utf-8"))
@@ -47,7 +54,7 @@ def load_activation_facts() -> dict:
     else:
         facts["problems"].append("找不到 installed_plugins.json，外掛安裝狀態未知")
 
-    settings_path = CLAUDE_HOME / "settings.json"
+    settings_path = CLAUDE_HOME() / "settings.json"
     if settings_path.exists():
         try:
             data = json.loads(settings_path.read_text(encoding="utf-8"))

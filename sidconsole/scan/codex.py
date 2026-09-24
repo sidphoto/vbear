@@ -13,7 +13,14 @@ from ..model import (
 )
 from . import document, frontmatter, walk
 
-CODEX_HOME = Path.home() / ".codex"
+def CODEX_HOME() -> Path:
+    """Per-call Codex CLI home directory.
+
+    Resolved on every call so tests which mutate ``os.environ['HOME']`` after
+    import see the new fake-home. Equivalent to ``Path.home() / '.codex'``
+    in production.
+    """
+    return Path.home() / ".codex"
 
 # Labelled blocks inside developer_instructions ("Capabilities:" etc.). These
 # are authored, explicitly labelled fields, so they count as AUTHOR evidence.
@@ -29,7 +36,7 @@ _BLOCK_FIELDS = {
 def load_config_facts() -> dict:
     """Read only the non-secret keys the console needs from config.toml."""
     facts = {"skill_enabled": {}, "default_model": None, "default_effort": None, "problems": []}
-    path = CODEX_HOME / "config.toml"
+    path = CODEX_HOME() / "config.toml"
     if not path.exists():
         facts["problems"].append("找不到 ~/.codex/config.toml，Codex 技能啟用狀態未知")
         return facts
@@ -158,7 +165,7 @@ def _labelled_blocks(text: str) -> dict[str, str]:
 
 
 def _load_profiles_registry() -> dict:
-    path = CODEX_HOME / "agents" / "registry" / "PROFILES.yaml"
+    path = CODEX_HOME() / "agents" / "registry" / "PROFILES.yaml"
     if not path.exists():
         return {}
     try:

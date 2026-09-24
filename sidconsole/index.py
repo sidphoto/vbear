@@ -25,7 +25,15 @@ from .model import (
 from .scan import claude, codex, shared, usage
 from .scan.document import MAX_FILE_BYTES
 
-HOME = Path.home()
+def HOME() -> Path:
+    """The current user's home directory.
+
+    Resolved on every call so that tests which mutate ``os.environ['HOME']``
+    after import (the standard way this suite isolates each scenario into a
+    fake ``HOME``) see the new value instead of the one captured at module
+    import time. Outside of tests this is identical to ``Path.home()``.
+    """
+    return Path.home()
 TOOL_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "shared": "skills CLI"}
 LIVE_TTL_S = 3.0
 INDEX_VERSION = 1  # bump when the static index shape changes
@@ -45,7 +53,7 @@ def invoke_name(rec: SkillRecord) -> str:
 def _project_skill_sources(roots: list[Path]) -> list[tuple[cfg.Source, Path]]:
     found = []
     for root in roots:
-        if root == HOME or HOME.is_relative_to(root):
+        if root == HOME() or HOME().is_relative_to(root):
             continue
         for rel, tool in ((".claude/skills", "claude"), (".agents/skills", "codex"),
                           (".codex/skills", "codex")):
@@ -220,7 +228,7 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
 
 
 def _claude_default_model() -> Sourced:
-    path = HOME / ".claude" / "settings.json"
+    path = HOME() / ".claude" / "settings.json"
     try:
         model = json.loads(path.read_text(encoding="utf-8")).get("model")
     except (OSError, ValueError):
@@ -269,7 +277,7 @@ def git_root(path: str) -> Path | None:
     for _ in range(20):
         # The home directory is never a project, even when it is a git repo
         # (dotfile repos are common); stop before looking at it.
-        if current == HOME or current == current.parent:
+        if current == HOME() or current == current.parent:
             return None
         if (current / ".git").exists():
             return current
@@ -285,7 +293,7 @@ def _project_for(cwd: str) -> tuple[str, str, str, str]:
     if root:
         return stable_id("proj", str(root)), root.name, str(root), "git 儲存庫根目錄"
     p = Path(cwd)
-    if p == HOME:
+    if p == HOME():
         return "home", "家目錄（未指定專案）", str(p), "工作目錄是使用者家目錄"
     return stable_id("proj", str(p)), p.name, str(p), "工作目錄（非 git）"
 

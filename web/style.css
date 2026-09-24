@@ -570,15 +570,214 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   resize: vertical;
 }
 
+/* Agent Builder layout: two-column profile split + clickable profile-card
+   list + equipped-skill row list. The classes are emitted by web/app.js
+   (around lines 3149, 3326, 3488-3496) with no layout fallback in inline
+   styles, so this block is what actually paints the columns, the hover /
+   active visuals on the profile cards, and the dividers on the equipped
+   list. Visual language follows the surrounding .wb-* blocks above
+   (var(--panel), var(--line), var(--radius)-aligned radii, etc.). */
+.wb-split {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+}
+.wb-col-left {
+  flex: 0 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-right: 1px solid var(--line);
+  padding-right: 12px;
+}
+.wb-col-right {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Clickable profile card. Resets native <button> chrome so it reads as a
+   card (not an OS-default button), and uses aria-pressed=true for the
+   selected visual so the active state is unambiguous regardless of focus. */
+.wb-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.wb-list-item:hover {
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+.wb-list-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wb-list-item[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.wb-list-item[aria-pressed="true"] strong {
+  color: var(--accent);
+}
+
+/* Equipped-skill rows inside the profile editor. Each <li> is a flex row
+   laid out inline by app.js; the container here gives a bordered panel with
+   hairline dividers between rows and guarantees the remove button never
+   overflows the row (flex: none; white-space: nowrap). */
+.wb-equipped {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.wb-equipped > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+  max-width: 100%;
+}
+.wb-equipped > li:first-child {
+  border-top: 0;
+}
+.wb-equipped > li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wb-equipped > li > .btn.small {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Narrow-width degrade: drop the side-by-side split into a single stack and
+   move the divider from the right side of the left column to under it. Same
+   wrap+min-width:0 pattern the .wb-provenance-row RWD block uses. */
+@media (max-width: 720px) {
+  .wb-split {
+    flex-direction: column;
+  }
+  .wb-col-left {
+    flex-basis: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-right: 0;
+    padding-bottom: 10px;
+  }
+}
+
+/* Agent Builder sizing (Gate 7 fix). The right column is only ~300-360px,
+   so a viewport media query never fires while the list+detail split crushes
+   the detail column. Size against the builder's own width instead. */
+.wb-agent-builder {
+  container-type: inline-size;
+  container-name: agent-builder;
+  min-width: 0;
+}
+.wb-agent-builder .wb-col-left {
+  flex: 0 1 240px;
+  max-width: 260px;
+}
+.wb-profile-head {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wb-profile-head > h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wb-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wb-profile-actions > .btn {
+  white-space: nowrap;
+}
+@container agent-builder (max-width: 560px) {
+  .wb-split {
+    flex-direction: column;
+  }
+  .wb-col-left {
+    flex-basis: auto;
+    max-width: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-right: 0;
+    padding-bottom: 10px;
+  }
+  .kv {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+  .kv dt { margin-top: 6px; }
+}
+
+/* Named areas pin each column to its track, so a display:none (collapsed)
+   side column can't let auto-placement shift the terminal into a 0px track. */
+.wb-shell { grid-template-areas: "left center right"; }
+.wb-shell > .wb-left { grid-area: left; }
+.wb-shell > .wb-term-center { grid-area: center; }
+.wb-shell > .wb-right { grid-area: right; }
+/* !important: the mid-width collapsed rules below have equal specificity and
+   come later; focus mode must always win with a single center area. */
+.wb-shell.focus-mode { grid-template-areas: "center" !important; }
+
 /* Responsive adjustments */
 @media (max-width: 1140px) {
   .wb-shell {
     grid-template-columns: 240px minmax(0, 1fr) 300px;
   }
 }
+/* Mid-width (Gate 7 residual): three fixed columns + the 232px nav left the
+   terminal ~150px wide at ~944px. Move the right panel under the terminal
+   so the terminal keeps the full row. */
+@media (min-width: 901px) and (max-width: 1100px) {
+  .wb-shell,
+  .wb-shell.right-collapsed {
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-areas: "left center" "left right";
+  }
+  .wb-shell.left-collapsed,
+  .wb-shell.left-collapsed.right-collapsed {
+    grid-template-columns: 0px minmax(0, 1fr);
+    grid-template-areas: "left center" "left right";
+  }
+}
 @media (max-width: 900px) {
   .wb-shell {
     grid-template-columns: 1fr !important;
+    grid-template-areas: "left" "center" "right" !important;
   }
   .wb-col.side-col {
     display: none;
