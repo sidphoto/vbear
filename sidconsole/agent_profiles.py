@@ -633,6 +633,8 @@ def duplicate_profile(profile_id: str,
         all_profiles = load_all(skills_cat, roles_cat)
         if profile_id not in all_profiles:
             return None
+        if len(all_profiles) >= MAX_PROFILES:
+            raise ValueError(f"Agent Profile 已達上限 {MAX_PROFILES} 筆")
         existing = all_profiles[profile_id]
         for _ in range(8):
             new_id = f"prof-{secrets.token_hex(6)}"

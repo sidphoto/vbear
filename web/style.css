@@ -761,8 +761,10 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 }
 /* Mid-width (Gate 7 residual): three fixed columns + the 232px nav left the
    terminal ~150px wide at ~944px. Move the right panel under the terminal
-   so the terminal keeps the full row. */
-@media (min-width: 901px) and (max-width: 1100px) {
+   so the terminal keeps the full row. No min-width: the (max-width: 900px)
+   block below overrides with !important, so fractional widths between
+   900 and 901px (browser zoom) never fall back to three columns. */
+@media (max-width: 1100px) {
   .wb-shell,
   .wb-shell.right-collapsed {
     grid-template-columns: 220px minmax(0, 1fr);

@@ -178,6 +178,12 @@ class StorageShapeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap.save_profile(None, _sample(name="overflow"),
                             known_skills=set(), known_roles=set())
+        # Duplicate must respect the same cap (AGY review 2026-09-25, Medium).
+        with self.assertRaises(ValueError):
+            ap.duplicate_profile("prof-prefill-000", known_skills=set(),
+                                 known_roles=set())
+        self.assertEqual(len(ap.list_profiles(known_skills=set(),
+                                              known_roles=set())), MAX_PROFILES)
 
 
 class SchemaStrictnessTests(unittest.TestCase):

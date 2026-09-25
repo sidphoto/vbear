@@ -430,9 +430,12 @@ def make_handler(console: Console):
                         return self._json({"ok": True, "deleted": target})
                     if rest.endswith("/duplicate"):
                         target = rest[:-10]
-                        dup = agent_profiles.duplicate_profile(target,
-                                                                known_skills=known_skills,
-                                                                known_roles=known_roles)
+                        try:
+                            dup = agent_profiles.duplicate_profile(
+                                target, known_skills=known_skills,
+                                known_roles=known_roles)
+                        except ValueError as exc:
+                            return self._error(400, str(exc))
                         if dup is None:
                             return self._error(404, "找不到此 Agent Profile")
                         return self._json({"ok": True, "profile": dup})

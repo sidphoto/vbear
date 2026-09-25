@@ -214,6 +214,17 @@ class AgentBuilderAPITests(unittest.TestCase):
                               headers=_write_headers())
         self.assertEqual(status, 404)
 
+    def test_duplicate_value_error_is_400(self):
+        # AGY review 2026-09-25 (Low): ValueError from duplicate must be 400,
+        # not fall through to the generic 500 handler.
+        with mock.patch.object(agent_profiles, "duplicate_profile",
+                               side_effect=ValueError("Agent Profile 已達上限 500 筆")):
+            status, body = _request("POST", self.port,
+                                    "/api/agent-profiles/prof-any/duplicate",
+                                    body={}, headers=_write_headers())
+        self.assertEqual(status, 400)
+        self.assertIn("上限", json.dumps(body, ensure_ascii=False))
+
     def test_duplicate_unknown_is_404(self):
         status, _ = _request("POST", self.port,
                               "/api/agent-profiles/prof-missing/duplicate", body={},
