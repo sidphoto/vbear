@@ -1,0 +1,235 @@
+"""Runtime protocol (PHASE-R-PLAN §4) that any terminal-host backend must
+satisfy in R2+.
+
+R1 ships exactly one implementation, ``HerdrRuntime`` in this package; the
+whole point of the protocol is that a future ``NativeRuntime`` (R2) can drop
+in and pass the same contract tests without server.py / index.py /
+__main__.py learning about it.
+
+Shape choice (Protocol vs ABC):
+  - ``typing.Protocol`` with ``runtime_checkable`` lets the contract tests
+    ask ``isinstance(runtime, Runtime)`` against any object that quacks
+    like one — useful when a test rig substitutes a fake that does not want
+    to formally subclass ``Runtime``.
+  - Methods the §4 table marks as "MUST exist" are declared as abstract on
+    a concrete ``ABC`` (``RuntimeBase``); concrete implementations inherit
+    from it and get a clear ``TypeError`` if they forget one.
+  - Methods R1 cannot honour (``open_session``, ``close``) are concrete on
+    the base and ``raise NotSupported``. Implementations that can honour
+    them override; those that cannot inherit the explicit refusal and the
+    UI gets a real failure to translate, not a silent pretend-success.
+
+User-facing contract (see also PHASE-R-PLAN §4):
+
+  describe()              -> dict  name / version / binary / available / problems
+  is_available()          -> bool  ready to be asked for sessions at all
+  list_sessions()         -> dict  same shape as the old ``herdr.snapshot()``
+                                  (panes + agents + workspaces + tabs);
+                                  supersets the per-session read surface
+  snapshot()              -> dict  an alias for list_sessions(); kept so the
+                                  Doctor / Store paths do not need their
+                                  shape renamed just to migrate
+  validate_target(t)      -> bool  syntax-level id check (herdr regex etc.)
+  status(session_id)      -> str   ``idle`` / ``working`` / ``exited`` /
+                                  ``unknown``. ``unknown`` whenever the
+                                  backend cannot tell, per the project's
+                                  standing "no data → say unknown" rule.
+  observe(session_id)     -> SessionView | None
+  control(session_id)     -> SessionView | None
+  release(session_id)     -> SessionView | None
+  abandon(session_id, token=None) -> bool
+  send_input(sid, data)   -> bool
+  resize(sid, cols, rows) -> bool
+  get(session_id)         -> SessionView | None  current live session
+  focus(target)           -> dict  {ok, error?}; navigation only
+  close_all()             -> None  stop every active session (server-down)
+
+R1 stubs (raise NotSupported on the base; must be overridden in R2+):
+
+  open_session(spec)      -> SessionView
+  close(session_id)       -> bool
+
+The "describe" extra, the "snapshot"/"focus"/"validate_target" extras, and
+the ``list_sessions``-is-superset note come from the R1 contract section 3.1
+(not all are in §4, but server.py and Doctor already rely on them, so the
+protocol must keep them).
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class NotSupported(Exception):
+    """The Runtime advertises the capability but cannot honour it right now.
+
+    Not to be confused with "the Runtime is unavailable" (which surfaces as
+    ``is_available() == False`` and ``describe()['available'] == False``).
+    A R1 ``HerdrRuntime`` does not have these capabilities at all and never
+    will — they are R2 surface. UI / API code is expected to treat the
+    exception as a user-visible "not available" and not retry.
+    """
+
+
+class SessionView:
+    """The per-session object a Runtime hands to server.py after open.
+
+    The current ``HerdrRuntime`` returns a ``PaneSession`` from
+    ``bridge.terminal`` directly, so this is a structural specification,
+    not a wrapper. R2 ``NativeRuntime`` will return whatever its native
+    side gives, as long as it carries this surface (mode / cols / rows /
+    token / queue / send_input / resize).
+
+    Kept as a class (not an ABC) because the public surface is read-mostly;
+    implementations are free to be richer objects.
+    """
+
+    session_id: str
+    mode: str  # "observe" | "control"
+    cols: int
+    rows: int
+    token: str
+
+    # The bridge places terminal frames on .queue (one dict per json line,
+    # sentinel None at end of stream); R2 native place whatever it likes.
+    queue: Any  # queue.Queue for Herdr; not type-narrowed to allow R2.
+
+    def send_input(self, data: bytes) -> bool:
+        raise NotImplementedError
+
+    def resize(self, cols: int, rows: int) -> bool:
+        raise NotImplementedError
+
+
+class RuntimeBase(ABC):
+    """Common Runtime behaviour: identification helpers, R1 stubs.
+
+    Subclasses implement the abstract §4 methods and override the R1 stubs
+    only when they actually honour them.
+    """
+
+    # ---- identification (concrete, every Runtime can describe itself) ----
+
+    def is_available(self) -> bool:
+        """Whether this Runtime is presently usable. Default = no, which is
+        correct for an uninitialised Runtime; subclasses with a real backend
+        should override (typically via describe()['available']).
+        """
+        return bool(self.describe().get("available"))
+
+    @abstractmethod
+    def describe(self) -> dict:
+        """{name, version, binary, available, problems}. Used by Doctor and
+        /api/config. The shape is fixed; native R2 will populate it from
+        its own daemon, not the empty default."""
+
+    def binary(self) -> str | None:
+        """Cheap path lookup for /api/config (no backend round-trips).
+        Default falls back to describe(); backends with a cheaper resolver
+        should override."""
+        return self.describe().get("binary")
+
+    def close_if_current(self, session_id: str, expected: SessionView) -> None:
+        """SSE stream-end cleanup: stop ``expected`` only if it is still the
+        live session for session_id (identity check), releasing control
+        first. Backends must override; there is no safe generic fallback."""
+        raise NotSupported("close_if_current is not supported by the active runtime")
+
+    # ---- R1 stubs: these capabilities are listed in §4 but Herdr cannot
+    # provide them; the explicit refusal is the contract here, not a
+    # silent fallback. Override only in implementations that can honour
+    # them. ----
+
+    def open_session(self, spec: Any) -> SessionView:
+        """Open a new session by specification (cwd, command, env, ...).
+
+        R1's ``HerdrRuntime`` does not have this — sessions are managed
+        outside SID today — so calling this on a R1 runtime is an explicit
+        "not supported" failure rather than a fake success.
+        """
+        raise NotSupported("open_session is not supported by the active runtime")
+
+    def close(self, session_id: str) -> bool:
+        """End a session and its process group (§4 close).
+
+        R1 does not own the session lifecycle, so this raises NotSupported;
+        the UI/console have to ask herdr (or whoever owns the session) to
+        close it, and that is its own bridge path, not a Runtime op.
+        """
+        raise NotSupported("close is not supported by the active runtime")
+
+    # ---- abstract §4 surface (subclasses must provide) ----
+
+    @abstractmethod
+    def list_sessions(self) -> dict:
+        """All sessions and panes, in the existing herdr-shaped dict
+        (panes, agents, workspaces, tabs, problems). The PHASE-R-PLAN §4
+        name; server.py / index.py today iterate this view, so keeping the
+        shape removes the migration pressure from R2."""
+
+    @abstractmethod
+    def snapshot(self) -> dict:
+        """Alias of list_sessions(), for code paths already calling
+        ``herdr.snapshot()`` and that benefit from the existing name."""
+
+    @abstractmethod
+    def validate_target(self, target: str) -> bool:
+        """Syntax-only validity (herdr regex, native id rules, ...)."""
+
+    @abstractmethod
+    def status(self, session_id: str) -> str:
+        """``idle`` / ``working`` / ``exited`` / ``unknown``.
+
+        ``unknown`` whenever the runtime cannot tell; that is also what
+        the project ships in this state otherwise, per the standing
+        honesty rule."""
+
+    @abstractmethod
+    def observe(self, session_id: str, cols: int = 80, rows: int = 24) -> SessionView | None:
+        """Begin watch-only streaming of session_id."""
+
+    @abstractmethod
+    def control(self, session_id: str, cols: int = 80, rows: int = 24) -> SessionView | None:
+        """Take over (can type) session_id; replaces any prior session."""
+
+    @abstractmethod
+    def release(self, session_id: str) -> SessionView | None:
+        """Drop back from ``control`` to ``observe`` (fresh session).
+
+        Returns the new observe session, or ``None`` when there was no
+        control session to release."""
+        ...
+
+    @abstractmethod
+    def abandon(self, session_id: str, token: str | None = None) -> bool:
+        """Stop the session entirely without spawning an observe session.
+        With ``token``: only stop if the token matches the live session
+        (atomic no-op when it does not)."""
+
+    @abstractmethod
+    def send_input(self, session_id: str, data: bytes) -> bool:
+        """Write raw bytes to the active control session of session_id."""
+
+    @abstractmethod
+    def resize(self, session_id: str, cols: int, rows: int) -> bool:
+        """Resize the active session of session_id."""
+
+    @abstractmethod
+    def get(self, session_id: str) -> SessionView | None:
+        """Currently active session of session_id, or None."""
+
+    @abstractmethod
+    def focus(self, target: str) -> dict:
+        """Navigation: bring target to the foreground.
+
+        Returns ``{"ok": bool, "error"?: str}``; never raises for a
+        syntactically valid id, instead reports backend errors as data."""
+
+    @abstractmethod
+    def close_all(self) -> None:
+        """Stop every active session (server shutdown)."""
+
+
+# Public re-exports so callers do not need to reach into base directly.
+__all__ = ["NotSupported", "RuntimeBase", "SessionView"]

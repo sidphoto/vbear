@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import categories
 from . import config as cfg
-from .bridge import herdr
+from . import runtime as rt
 from .model import (
     ACT_ACTIVE, ACT_UNKNOWN, AgentRole, SkillRecord, Sourced, stable_id,
 )
@@ -351,7 +351,7 @@ class Store:
                   callers reuse the result of that build, or the last one.
     """
 
-    def __init__(self):
+    def __init__(self, runtime=None):
         self._lock = threading.Lock()
         self._scan_lock = threading.Lock()
         self._live_cond = threading.Condition()
@@ -364,6 +364,13 @@ class Store:
         self._live_epoch = 0       # bumped when _static changes; older builds are not cached
         cfg.ensure_state_dir()  # also tightens a state dir made by an older version
         self.conf = cfg.load()
+        # The Runtime is the seam through which Scan/Live reach a terminal
+        # backend; default to a herdr-backed one if the caller did not
+        # supply its own. Tests pass a fake Runtime here to avoid touching
+        # real herdr / PATH; the lazy bin_getter picks up config changes
+        # via the same getter the server uses for its own runtime.
+        self.runtime = runtime if runtime is not None else rt.get_runtime(
+            bin_getter=lambda: self.conf.get("herdr_bin", ""))
 
     def _index_stamp(self) -> tuple:
         try:
@@ -451,7 +458,7 @@ class Store:
     def _scan(self, conf: dict) -> tuple[dict, tuple]:
         extra: list[Path] = []
         if not conf.get("_corrupt"):  # scope unknown: no roots beyond the (empty) config
-            snap = herdr.snapshot(conf.get("herdr_bin", ""))
+            snap = self.runtime.snapshot()
             for agent in snap["agents"]:
                 root = git_root(agent.get("foreground_cwd") or agent.get("cwd") or "")
                 if root:
@@ -523,7 +530,7 @@ class Store:
             with self._lock:
                 conf = self.conf
             started = time.monotonic()
-            data = build_live(conf, static)
+            data = build_live(conf, static, self.runtime)
             return data
         finally:
             with self._live_cond:
@@ -535,8 +542,16 @@ class Store:
                 self._live_cond.notify_all()
 
 
-def build_live(conf: dict, static: dict) -> dict:
-    snap = herdr.snapshot(conf.get("herdr_bin", ""))
+def build_live(conf: dict, static: dict, runtime=None) -> dict:
+    # ``runtime`` is the single seam through which the live layer reaches a
+    # terminal backend. Server.py / __main__.py callers pass the active
+    # runtime explicitly; module-level calls (e.g. tests' direct build_live
+    # exercises) supply their own. The default of ``None`` is never hit in
+    # production, but kept conservative so a missing runtime fails loud,
+    # not via a global mutable.
+    if runtime is None:
+        runtime = rt.get_runtime(bin_getter=lambda: conf.get("herdr_bin", ""))
+    snap = runtime.snapshot()
     days = int(conf.get("usage_days", 30))
     use = usage.collect(days) if conf.get("usage_enabled", True) else {
         "sessions": [], "problems": ["使用紀錄掃描已在設定中關閉"], "window_days": days}

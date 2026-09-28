@@ -30,6 +30,11 @@ class PaneSession:
     output queue. `mode` is "observe" (read-only) or "control" (can accept
     input); moving between them means creating a new PaneSession, not
     mutating this one — see TerminalBridge.takeover()/release().
+
+    ``session_id`` is the name the Runtime contract uses for what is, in
+    the herdr world, the pane id. The property is a thin alias (not a
+    rename) so the two vocabularies do not collide; nothing in the
+    bridge or server.py reads through this name today.
     """
 
     def __init__(self, pane_id: str, herdr_bin: str, mode: str, cols: int, rows: int):
@@ -55,6 +60,18 @@ class PaneSession:
         self._reader = threading.Thread(target=self._read_loop, daemon=True,
                                         name=f"sid-console-term-{pane_id}")
         self._reader.start()
+
+    @property
+    def session_id(self) -> str:
+        """PHASE-R-PLAN §4 name for this object; equal to ``pane_id`` today.
+
+        ``pane_id`` stays the canonical attribute inside the bridge (it
+        matches what herdr calls it on its own CLI). Callers reaching
+        through the Runtime interface get to speak one term regardless
+        of which underlying bridge is in play. No aliasing of the
+        state — thread and subprocess lifecycles are unchanged.
+        """
+        return self.pane_id
 
     # reading --------------------------------------------------------------
 

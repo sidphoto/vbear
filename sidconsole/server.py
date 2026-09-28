@@ -34,7 +34,7 @@ from . import annotations
 from . import agent_profiles
 from . import config as cfg
 from . import tasks
-from .bridge import herdr, terminal
+from . import runtime as rt
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import document
@@ -91,8 +91,12 @@ class Console:
         self.port = port
         self.store = Store()
         self.lock = threading.Lock()
-        self.terminals = terminal.TerminalBridge(
-            lambda: herdr.binary(self.store.conf.get("herdr_bin", "")))
+        # The Runtime is the single seam the console has with whatever is
+        # hosting the terminal panes (R1: herdr; R2: native). It is built
+        # once at console startup; session lifecycles are gated on the
+        # *current* conf via the lazy bin_getter the Runtime keeps.
+        self.runtime = rt.get_runtime(
+            lambda: self.store.conf.get("herdr_bin", ""))
 
     # derived views ------------------------------------------------------
 
@@ -364,14 +368,14 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "annotation": saved})
                 if path == "/api/focus":
                     target = self._body().get("target", "")
-                    if not isinstance(target, str) or not herdr.valid_target(target):
+                    if not isinstance(target, str) or not console.runtime.validate_target(target):
                         return self._error(400, "無效的目標識別碼")
                     # Only a pane that herdr itself reported; refresh once in case
                     # the cached snapshot predates a newly opened pane.
                     if (target not in console.live_targets()
                             and target not in console.live_targets(force=True)):
                         return self._error(400, "目前沒有這個 Terminal")
-                    return self._json(herdr.focus(target, console.store.conf.get("herdr_bin", "")))
+                    return self._json(console.runtime.focus(target))
                 if path == "/api/tasks":
                     try:
                         saved = tasks.save_task(None, self._body())
@@ -498,7 +502,7 @@ def make_handler(console: Console):
         # terminal bridge ----------------------------------------------------
 
         def _term_target_ok(self, pane_id: str) -> bool:
-            if not herdr.valid_target(pane_id):
+            if not console.runtime.validate_target(pane_id):
                 return False
             return (pane_id in console.live_targets()
                     or pane_id in console.live_targets(force=True))
@@ -528,10 +532,9 @@ def make_handler(console: Console):
             q = parse_qs(query)
             cols, rows = self._term_dims({"cols": q.get("cols", [None])[0],
                                           "rows": q.get("rows", [None])[0]})
-            sess = console.terminals.open_observer(pane_id, cols, rows)
+            sess = console.runtime.observe(pane_id, cols, rows)
             if sess is None:
-                bin_path = herdr.binary(console.store.conf.get("herdr_bin", ""))
-                if not bin_path:
+                if not console.runtime.is_available():
                     return self._error(503, "找不到 herdr 執行檔")
                 return self._error(429, "同時開啟的 Terminal 過多，請先關閉其他分頁")
             self.send_response(200)
@@ -544,7 +547,7 @@ def make_handler(console: Console):
             current = sess
             try:
                 while True:
-                    live = console.terminals.get(pane_id)
+                    live = console.runtime.get(pane_id)
                     if live is None:
                         break
                     if live is not current:
@@ -563,7 +566,7 @@ def make_handler(console: Console):
                     # the old session, not the pane, and must not reach the client
                     # as if the Terminal itself ended. The new session's own first
                     # frame (a full redraw) follows right behind on the next spin.
-                    live = console.terminals.get(pane_id)
+                    live = console.runtime.get(pane_id)
                     if live is not current:
                         if live is None:
                             break
@@ -575,10 +578,13 @@ def make_handler(console: Console):
                     self.wfile.write(b"data: " + payload + b"\n\n")
                     self.wfile.flush()
             finally:
-                console.terminals.close_if_current(pane_id, current)
+                # Stop `current` only if still the pane's live session
+                # (identity check, releases control first); same call the
+                # bridge gave server.py before R1.
+                console.runtime.close_if_current(pane_id, current)
 
         def _term_input(self, pane_id: str, body: dict):
-            sess = console.terminals.get(pane_id)
+            sess = console.runtime.get(pane_id)
             if sess is None or sess.mode != "control":
                 return self._error(409, "目前不是這個 Terminal 的操作者")
             text = body.get("text")
@@ -593,20 +599,20 @@ def make_handler(console: Console):
             action = body.get("action")
             if action == "takeover":
                 cols, rows = self._term_dims(body)
-                sess = console.terminals.takeover(pane_id, cols, rows)
+                sess = console.runtime.control(pane_id, cols, rows)
                 if sess is None:
                     return self._error(503, "找不到 herdr 執行檔")
                 return self._json({"ok": True, "mode": sess.mode, "token": sess.token})
             if action == "release":
-                sess = console.terminals.release(pane_id)
+                sess = console.runtime.release(pane_id)
                 return self._json({"ok": True, "mode": sess.mode if sess else None,
                                    "token": sess.token if sess else None})
             if action == "abandon":
                 expected_token = body.get("token")
                 if expected_token is not None and not isinstance(expected_token, str):
                     return self._error(400, "無效的 session token")
-                stopped = console.terminals.abandon(pane_id, token=expected_token)
-                curr = console.terminals.get(pane_id)
+                stopped = console.runtime.abandon(pane_id, token=expected_token)
+                curr = console.runtime.get(pane_id)
                 return self._json({
                     "ok": True,
                     "action": "abandon",
@@ -614,7 +620,7 @@ def make_handler(console: Console):
                     "stopped": stopped,
                 })
             if action == "resize":
-                sess = console.terminals.get(pane_id)
+                sess = console.runtime.get(pane_id)
                 cols, rows = self._term_dims(body)
                 ok = bool(sess) and sess.mode == "control" and sess.resize(cols, rows)
                 return self._json({"ok": ok})
@@ -750,7 +756,7 @@ def make_handler(console: Console):
             conf = console.store.conf
             res = {"config": {k: v for k, v in conf.items() if not k.startswith("_")},
                    "state_dir": str(cfg.state_dir()),
-                   "herdr_binary": herdr.binary(conf.get("herdr_bin", ""))}
+                   "herdr_binary": console.runtime.binary()}
             if conf.get("_corrupt") or cfg.is_corrupt():
                 res["corrupt"] = True
             return res
@@ -952,5 +958,5 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        console.terminals.close_all()  # no orphaned herdr child processes on exit
+        console.runtime.close_all()  # no orphaned child processes on exit
         httpd.server_close()

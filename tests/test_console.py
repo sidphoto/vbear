@@ -244,6 +244,16 @@ class ServerTests(unittest.TestCase):
             e.close()
             return e.code, None, e.headers
 
+    def test_config_herdr_binary_does_not_snapshot(self):
+        """R1 review: GET /api/config must not call describe()/snapshot."""
+        from unittest import mock
+        with mock.patch.object(self.console.runtime, "describe",
+                               side_effect=AssertionError("describe called")), \
+             mock.patch.object(self.console.runtime, "binary", return_value="/x/herdr"):
+            status, data, _ = self.req("/api/config")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["herdr_binary"], "/x/herdr")
+
     def test_stale_index_is_flagged(self):
         self.assertFalse(self.req("/api/overview")[1]["stale"])
         self.console.store.static()["generated_at"] -= 2 * 86400
@@ -1175,7 +1185,10 @@ class LiveEpochTests(_IsolatedState):  # R2
         cfg.save({**cfg.DEFAULT_CONFIG, "sources": [], "project_roots": []})
         cfg.write_private(cfg.index_path(), json.dumps(marker_index("old")))
         for name, fake in (("build_static", lambda conf, extra=None: marker_index("new")),
-                           ("build_live", lambda conf, static: {"marker": static["marker"]})):
+                           # build_live gained an optional `runtime` kwarg in R1;
+                           # the test only cares about the returned marker, so
+                           # ignore it.
+                           ("build_live", lambda conf, static, runtime=None: {"marker": static["marker"]})):
             patcher = mock.patch.object(index_mod, name, side_effect=fake)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -1219,7 +1232,7 @@ class LiveEpochTests(_IsolatedState):  # R2
     def test_rescan_during_build_is_not_cached(self):
         building, resume = threading.Event(), threading.Event()
 
-        def slow_build(conf, static):
+        def slow_build(conf, static, runtime=None):
             building.set()
             if not resume.wait(10):
                 raise RuntimeError("barrier timed out")
@@ -1405,8 +1418,12 @@ class CorruptConfigScopeTests(_IsolatedState):  # F3, F4
 
     def test_corrupt_config_does_not_add_herdr_project_roots(self):
         cfg.config_path().write_text("{broken", encoding="utf-8")
-        store = Store()
-        with mock.patch.object(index_mod.herdr, "snapshot") as snap, \
+        # Post-R1, Store talks to a Runtime, not bridge.herdr directly. Pass
+        # a fake runtime so the assertion ("herdr not called when config is
+        # corrupt") stays a clean mock.patch on the new seam.
+        fake_runtime = mock.MagicMock(name="fake-runtime")
+        store = Store(runtime=fake_runtime)
+        with mock.patch.object(fake_runtime, "snapshot") as snap, \
                 mock.patch.object(index_mod, "build_static", return_value=marker_index("x")) as scan:
             store.static()  # no index on disk: first load scans
         snap.assert_not_called()
@@ -1641,6 +1658,36 @@ class PaneSessionTests(unittest.TestCase):
         sess = PaneSession(target, str(self.bin), mode, kw.get("cols", 80), kw.get("rows", 24))
         self.sessions.append(sess)
         return sess
+
+    def test_constructor_starts_proc_and_reader(self):
+        """Regression for the R1 session_id property insertion.
+
+        When PaneSession grew a ``session_id`` property in R1, the new
+        property accidentally ended up between __init__'s attribute
+        assignments and the subprocess.Popen / reader-thread starts,
+        making those lines dead code and every PaneSession produced a
+        ghost object with no child process. This test pins the lifecycle:
+        after construction ``_proc`` is alive and ``_reader`` has been
+        started, so the bridge is back to actually streaming frames.
+        """
+        sess = self.open("observe", target="lifecycle-pane")
+        try:
+            self.assertIsNotNone(getattr(sess, "_proc", None),
+                                 "PaneSession lost its _proc in R1")
+            self.assertIsNone(sess._proc.poll(),
+                              "PaneSession._proc exited immediately — "
+                              "Popen / _reader.start() was dropped from __init__")
+            self.assertIsNotNone(getattr(sess, "_reader", None),
+                                 "PaneSession lost its reader thread in R1")
+            self.assertTrue(sess._reader.is_alive()
+                            or sess.closed,  # closed == reader already exited normally
+                            "PaneSession._reader was never started")
+            # The Runtime contract calls the per-session id ``session_id``;
+            # assert both names are equivalent (the bridge uses pane_id
+            # internally; the property is the §4 alias).
+            self.assertEqual(sess.session_id, sess.pane_id)
+        finally:
+            sess.stop()
 
     def drain(self, sess, n=1, timeout=5):
         out = []
@@ -1941,7 +1988,7 @@ class TerminalRouteTests(_HostileBase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.console.terminals.close_all()
+        cls.console.runtime.close_all()
         cls.httpd.shutdown()
         cls.httpd.server_close()
 
@@ -1956,10 +2003,10 @@ class TerminalRouteTests(_HostileBase):
         # SSE handler only notices on its next write, up to ~1s later), so an
         # orphaned handler thread from the previous test could still be
         # draining the same queue. Force a clean slate before every test.
-        self.console.terminals.close_all()
+        self.console.runtime.close_all()
 
     def tearDown(self):
-        self.console.terminals.close_all()
+        self.console.runtime.close_all()
 
     def open_stream(self, pane="w1:pA", extra_headers=None):
         import http.client
@@ -2036,16 +2083,16 @@ class TerminalRouteTests(_HostileBase):
         terminal rather than a technically-valid but unusable 20-column one.
         """
         seen = []
-        orig_open = self.console.terminals.open_observer
+        orig_open = self.console.runtime.observe
 
         def spy(pane_id, cols=None, rows=None):
             seen.append((cols, rows))
             return orig_open(pane_id, cols, rows)
 
-        self.console.terminals.open_observer = spy
+        self.console.runtime.observe = spy
         try:
             for qs in ("cols=2&rows=37", "cols=0&rows=0", "cols=80&rows=1", "cols=-5&rows=24"):
-                self.console.terminals.close_all()
+                self.console.runtime.close_all()
                 seen.clear()
                 import http.client
                 conn = http.client.HTTPConnection("127.0.0.1", self.console.port, timeout=10)
@@ -2061,8 +2108,8 @@ class TerminalRouteTests(_HostileBase):
                 finally:
                     conn.close()
         finally:
-            self.console.terminals.open_observer = orig_open
-            self.console.terminals.close_all()
+            self.console.runtime.observe = orig_open
+            self.console.runtime.close_all()
 
     def test_degenerate_resize_and_takeover_dimensions_are_refused(self):
         """The same floor applies to the control endpoint, which is where a
@@ -2071,14 +2118,14 @@ class TerminalRouteTests(_HostileBase):
                                    body={"action": "takeover", "cols": 2, "rows": 37})
         self.assertEqual(status, 200)
         try:
-            sess = self.console.terminals.get("w1:pA")
+            sess = self.console.runtime.get("w1:pA")
             self.assertIsNotNone(sess)
             self.assertGreaterEqual(sess.cols, 20, "takeover spawned a 2-column pane")
 
             status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
                                        body={"action": "resize", "cols": 2, "rows": 37})
             self.assertEqual(status, 200)
-            self.assertGreaterEqual(self.console.terminals.get("w1:pA").cols, 20,
+            self.assertGreaterEqual(self.console.runtime.get("w1:pA").cols, 20,
                                     "resize shrank the pane to 2 columns")
         finally:
             self.req("/api/term/w1:pA/control", "POST", headers=self.H,
@@ -2131,7 +2178,7 @@ class TerminalRouteTests(_HostileBase):
 
     def test_control_abandon_stops_session(self):
         self.req("/api/term/w1:pA/control", "POST", headers=self.H, body={"action": "takeover"})
-        self.assertIsNotNone(self.console.terminals.get("w1:pA"))
+        self.assertIsNotNone(self.console.runtime.get("w1:pA"))
         status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
                                    body={"action": "abandon"})
         self.assertEqual(status, 200)
@@ -2139,7 +2186,7 @@ class TerminalRouteTests(_HostileBase):
         self.assertTrue(data.get("stopped"))
         self.assertEqual(data.get("action"), "abandon")
         self.assertIsNone(data.get("mode"))
-        self.assertIsNone(self.console.terminals.get("w1:pA"))
+        self.assertIsNone(self.console.runtime.get("w1:pA"))
 
     def test_control_abandon_with_matching_token_stops_session(self):
         status, data, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
@@ -2155,7 +2202,7 @@ class TerminalRouteTests(_HostileBase):
         self.assertTrue(data.get("stopped"))
         self.assertEqual(data.get("action"), "abandon")
         self.assertIsNone(data.get("mode"))
-        self.assertIsNone(self.console.terminals.get("w1:pA"))
+        self.assertIsNone(self.console.runtime.get("w1:pA"))
 
     def test_control_abandon_with_stale_token_is_noop(self):
         status, data1, _ = self.req("/api/term/w1:pA/control", "POST", headers=self.H,
@@ -2177,7 +2224,7 @@ class TerminalRouteTests(_HostileBase):
         self.assertTrue(data.get("ok"))
         self.assertFalse(data.get("stopped"), "Stale token must not stop newer session")
         self.assertEqual(data.get("mode"), "control")
-        self.assertIsNotNone(self.console.terminals.get("w1:pA"))
+        self.assertIsNotNone(self.console.runtime.get("w1:pA"))
 
         # Clean up with token2
         self.req("/api/term/w1:pA/control", "POST", headers=self.H,
@@ -2214,7 +2261,7 @@ class TerminalRouteTests(_HostileBase):
             # instead of an unconditional release()) fully removes the
             # session rather than leaving a freshly-spawned observe session
             # behind for the old pane.
-            self.assertIsNone(self.console.terminals.get("w1:pA"), "old pane must have no session left after SSE disconnect")
+            self.assertIsNone(self.console.runtime.get("w1:pA"), "old pane must have no session left after SSE disconnect")
         finally:
             conn.close()
 
@@ -2270,8 +2317,8 @@ class TerminalRouteTests(_HostileBase):
         ]
 
         called = []
-        orig_open = self.console.terminals.open_observer
-        orig_takeover = self.console.terminals.takeover
+        orig_open = self.console.runtime.observe
+        orig_takeover = self.console.runtime.control
 
         def mock_open(pane_id, cols=None, rows=None):
             called.append(("open_observer", pane_id))
@@ -2281,8 +2328,8 @@ class TerminalRouteTests(_HostileBase):
             called.append(("takeover", pane_id))
             return orig_takeover(pane_id, cols, rows)
 
-        self.console.terminals.open_observer = mock_open
-        self.console.terminals.takeover = mock_takeover
+        self.console.runtime.observe = mock_open
+        self.console.runtime.control = mock_takeover
 
         try:
             for target in hostile_targets:
@@ -2302,10 +2349,10 @@ class TerminalRouteTests(_HostileBase):
 
                 # Crucial assertion: no bridge spawn was attempted for hostile target
                 self.assertEqual(len(called), 0, f"Bridge was invoked for hostile target {target!r}: {called}")
-                self.assertEqual(len(self.console.terminals._sessions), 0, f"Bridge spawned a pane for {target!r}")
+                self.assertEqual(len(self.console.runtime._bridge._sessions), 0, f"Bridge spawned a pane for {target!r}")
         finally:
-            self.console.terminals.open_observer = orig_open
-            self.console.terminals.takeover = orig_takeover
+            self.console.runtime.observe = orig_open
+            self.console.runtime.control = orig_takeover
 
 
 def tearDownModule():

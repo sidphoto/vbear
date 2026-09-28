@@ -45,14 +45,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "doctor":
-        from .bridge import herdr
+        from . import runtime as rt
         conf = cfg.load()
         ok = True
         for src in cfg.sources_from(conf):
             exists = src.resolved().exists()
             ok &= exists or not src.enabled
             print(f"[{'OK ' if exists else '缺 '}] {src.label:<24} {src.path}{'' if src.enabled else '（已停用）'}")
-        snap = herdr.snapshot(conf.get("herdr_bin", ""))
+        # The doctor speaks through the Runtime, not bridge directly, so
+        # R2's native backend plugs in here without rewriting this file.
+        runtime = rt.get_runtime(bin_getter=lambda: conf.get("herdr_bin", ""))
+        snap = runtime.snapshot()
         print(f"[{'OK ' if snap['available'] else '缺 '}] herdr 連線  {snap['version'] or ''} {snap['binary'] or ''}")
         for p in snap["problems"]:
             print("     ", p)

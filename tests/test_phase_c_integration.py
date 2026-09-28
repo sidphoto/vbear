@@ -60,7 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sidconsole import agent_profiles, tasks, server  # noqa: E402
 from sidconsole import config as cfg  # noqa: E402
-from sidconsole.bridge import terminal  # noqa: E402
+from sidconsole import runtime as rt_mod  # noqa: E402
 from sidconsole.index import Store  # noqa: E402
 
 
@@ -134,7 +134,7 @@ def _fresh_console(sd):
     c.port = port
     c.store = Store()
     c.lock = threading.Lock()
-    c.terminals = terminal.TerminalBridge(lambda: "")
+    c.runtime = rt_mod.get_runtime(bin_getter=lambda: "")
     handler = server.make_handler(c)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
