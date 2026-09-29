@@ -1100,7 +1100,7 @@ async function viewSkills(params) {
 
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
-    el("h1", null, "技能庫"),
+    el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "Armory 四態總覽")),
     el("p", { class: "lede" }, "所有已盤點的技能。預設只顯示目前真的能用的；舊版快取、停用與市集副本可從「狀態」切換查看。"),
     corruptNotice(),
     staleNotice(),
@@ -1116,6 +1116,39 @@ async function viewSkills(params) {
       el("span", null, "用途分類為", el("b", null, "自動整理"), "（依描述關鍵字），滑過標籤可看到命中的字。")),
     out);
   draw();
+}
+
+async function viewArmory() {
+  const token = seq;
+  const main = claim(token);
+  setKids(main, el("p", { class: "loading" }, "載入 Armory…"));
+  let data;
+  try { data = await api.get("/api/armory"); }
+  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["Armory"]]), notice("bad", e.message)); return; }
+  if (token !== seq) return;
+  const state = (label, value, source, cls) => el("div", { class: "armory-state" },
+    badge(label, cls, source), el("span", { class: "small muted" }, source), value);
+  const rows = data.skills || [];
+  setKids(main,
+    crumbs([["技能庫", "#/skills"], ["Armory"]]),
+    el("div", { class: "row" }, el("h1", null, "SID Armory"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
+    el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、已裝備與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
+    data.unresolved_equipped && data.unresolved_equipped.length
+      ? notice("warn", `有 ${data.unresolved_equipped.length} 筆 Profile 引用找不到對應技能；不會自動刪除。`) : null,
+    el("div", { class: "grid armory-grid" }, rows.map((s) => {
+      const x = s.states || {}, loaded = x.loaded || {}, equipped = x.equipped || [];
+      return el("div", { class: "card" },
+        el("div", { class: "card-top" }, el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name), actBadge(s.activation)),
+        el("div", { class: "card-sub mono" }, s.invoke_name || s.skill_id),
+        el("div", { class: "armory-states" },
+          state("Available", x.available ? badge("可用", "b-info") : badge("不適用", "b-mute"), s.sources.available, "b-info"),
+          state("Installed", x.installed ? badge("已安裝", "b-ok") : badge("未安裝／其他", "b-mute"), s.sources.installed, "b-ok"),
+          state("Equipped", equipped.length
+            ? el("div", { class: "chips" }, equipped.map((p) => el("a", { class: "tag", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id, p.enabled ? null : "（已停用）")))
+            : badge("未裝備", "b-mute"), s.sources.equipped, "b-accent"),
+          state("Loaded", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("未知", "b-mute"), s.sources.loaded, "b-warn")));
+    })));
+  window.scrollTo(0, 0);
 }
 
 async function viewSkillDetail(id) {
@@ -1161,6 +1194,13 @@ async function viewSkillDetail(id) {
           el("div", { class: "chips" }, s.categories.map((c) => el("span", { class: "tag cat" }, `${c.label}（命中「${c.keyword}」）`)))) : null),
       el("div", { style: "display:grid;gap:16px;align-content:start" },
         annotationPanel(s, d.annotation_key, d.annotation),
+        el("div", { class: "panel pad" },
+          el("h2", { style: "margin-bottom:10px" }, "被哪些 Agent Profile 裝備"),
+          d.equipped_by && d.equipped_by.length ? el("ul", { class: "tree" }, d.equipped_by.map((p) => el("li", null,
+            el("a", { href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id),
+            " ", p.enabled ? badge("啟用", "b-ok") : badge("已停用", "b-mute"),
+            el("span", { class: "small muted" }, "・主控台 Profile（使用者意圖）"))))
+            : el("p", { class: "muted small" }, "沒有 Agent Profile 裝備此技能。")),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "誰可以使用"),
           d.roles.length ? el("ul", { class: "tree" }, d.roles.map((r) => el("li", null,
@@ -2084,7 +2124,7 @@ function taskStatusBadge(status) {
   return badge(label, cls, title);
 }
 
-async function viewWorkbench(initialPaneId, initialTaskId) {
+async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   const token = seq;
   cleanupActiveTerminal();
   const [staticData, liveData, tasksRes, templatesRes, govRes,
@@ -2132,9 +2172,11 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
 
   // Layout states
   let leftCollapsed = store.get("wb:left_collapsed", false);
-  let rightCollapsed = store.get("wb:right_collapsed", false);
+  // An Armory/Profile deep link must reveal its target, even if this browser
+  // previously remembered the right column as collapsed.
+  let rightCollapsed = initialProfileId ? false : store.get("wb:right_collapsed", false);
   let focusMode = false;
-  let activeTab = "task"; // "task" | "agent" | "project" | "global"
+  let activeTab = initialProfileId ? "agent" : "task"; // "task" | "agent" | "project" | "global"
 
   const shell = el("div", { class: "wb-shell" });
   const leftCol = el("div", { class: "wb-col wb-left side-col" });
@@ -3099,7 +3141,7 @@ async function viewWorkbench(initialPaneId, initialTaskId) {
   // Equipped Skill Loadout here is never Loaded: saving a profile never
   // starts, restarts, or injects anything into a running session. The
   // permission_intents values are intent-only — they are not enforced.
-  let selectedProfileId = null;
+  let selectedProfileId = initialProfileId || null;
 
   async function reloadAgentProfiles() {
     try {
@@ -3775,7 +3817,8 @@ async function route() {
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
-    else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task);
+    else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile);
+    else if (top === "armory") await viewArmory();
     else if (top === "skills" && parts[1]) await viewSkillDetail(parts[1]);
     else if (top === "skills") await viewSkills(params);
     else if (top === "team" && parts[1] === "role") await viewRole(parts[2]);

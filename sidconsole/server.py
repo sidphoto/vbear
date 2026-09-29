@@ -32,6 +32,7 @@ from urllib.parse import unquote
 
 from . import annotations
 from . import agent_profiles
+from . import armory
 from . import config as cfg
 from . import tasks
 from . import runtime as rt
@@ -122,6 +123,17 @@ class Console:
                                  "evidence": used["evidence"], "resolution": used["resolution"]})
         rows.sort(key=lambda r: r["last_ts"], reverse=True)
         return rows
+
+    def armory_view(self) -> dict:
+        """D1 read-only projection; profile storage failures deliberately
+        propagate to the handler's existing AgentProfileStorageError -> 503."""
+        static = self.store.static()
+        skills = static["skills"]
+        profiles = agent_profiles.list_profiles(
+            known_skills={s["skill_id"] for s in skills},
+            known_roles={r["role_id"] for r in static.get("roles", []) if r.get("role_id")},
+        )
+        return armory.project(skills, profiles, self.usage_for_skill)
 
     def annotation_keys(self) -> set[str]:
         return {annotations.key_for(s) for s in self.store.static()["skills"]}
@@ -255,6 +267,8 @@ def make_handler(console: Console):
                     return self._json(self._overview())
                 if path == "/api/skills":
                     return self._json(self._skills())
+                if path == "/api/armory":
+                    return self._json(console.armory_view())
                 if path.startswith("/api/skills/"):
                     rest = path[len("/api/skills/"):]
                     if rest.endswith("/file"):
@@ -711,8 +725,11 @@ def make_handler(console: Console):
                      "origin_package": index[d]["origin_package"]}
                     for d in skill.get("duplicate_of", []) if d in index]
             key = annotations.key_for(skill)
+            armory_row = next((row for row in console.armory_view()["skills"]
+                               if row["skill_id"] == skill_id), None)
             return self._json({
                 "skill": skill,
+                "equipped_by": (armory_row or {}).get("states", {}).get("equipped", []),
                 "annotation_key": key,
                 "annotation": annotations.load().get(key),
                 "raw": raw,

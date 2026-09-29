@@ -254,6 +254,44 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["herdr_binary"], "/x/herdr")
 
+    def test_armory_reverse_lookup_is_read_only_and_detail_links_profiles(self):
+        """D1: every GET derives Profile -> skill references live; it never
+        writes a second index or hides a disabled Profile."""
+        from sidconsole import agent_profiles
+        from unittest import mock
+        skill = self.console.store.static()["skills"][0]
+        profiles = [
+            {"id": "p-on", "name": "Enabled", "enabled": True,
+             "equipped_skill_ids": [skill["skill_id"]]},
+            {"id": "p-off", "name": "Disabled", "enabled": False,
+             "equipped_skill_ids": [skill["skill_id"], "gone-skill"]},
+        ]
+        path = agent_profiles._path()
+        before = (path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None
+        with mock.patch.object(agent_profiles, "list_profiles", return_value=profiles):
+            status, body, _ = self.req("/api/armory")
+            self.assertEqual(status, 200)
+            row = next(x for x in body["skills"] if x["skill_id"] == skill["skill_id"])
+            self.assertEqual([p["id"] for p in row["states"]["equipped"]], ["p-on", "p-off"])
+            self.assertFalse(row["states"]["equipped"][1]["enabled"])
+            self.assertEqual(body["unresolved_equipped"][0]["skill_id"], "gone-skill")
+            status, detail, _ = self.req(f"/api/skills/{skill['skill_id']}")
+            self.assertEqual(status, 200)
+            self.assertEqual([p["id"] for p in detail["equipped_by"]], ["p-on", "p-off"])
+        after = (path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None
+        self.assertEqual(after, before, "D1 GET endpoints must not write profile storage")
+
+    def test_armory_profile_storage_error_is_503(self):
+        from sidconsole import agent_profiles
+        from unittest import mock
+        skill_id = self.console.store.static()["skills"][0]["skill_id"]
+        with mock.patch.object(agent_profiles, "list_profiles",
+                               side_effect=agent_profiles.AgentProfileStorageError("blocked")):
+            status, _, _ = self.req("/api/armory")
+            self.assertEqual(status, 503)
+            status, _, _ = self.req(f"/api/skills/{skill_id}")
+        self.assertEqual(status, 503)
+
     def test_stale_index_is_flagged(self):
         self.assertFalse(self.req("/api/overview")[1]["stale"])
         self.console.store.static()["generated_at"] -= 2 * 86400

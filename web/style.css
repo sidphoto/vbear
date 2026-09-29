@@ -87,6 +87,10 @@ h3 { font-size: 15px; margin: 0; }
 .pad { padding: 16px 18px; }
 .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); }
 .grid-2 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.armory-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr)); }
+.armory-states { display: grid; gap: 8px; }
+.armory-state { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr); gap: 5px 9px; align-items: center; min-width: 0; }
+.armory-state > .small { grid-column: 1 / -1; overflow-wrap: anywhere; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 a.card { color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
