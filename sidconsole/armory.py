@@ -57,10 +57,11 @@ def project(skills: list[dict], profiles: list[dict], usage_for_skill) -> dict:
                 "loaded": {"observed": bool(usage), "evidence": usage},
             },
             "sources": {
-                "available": "掃描（marketplace 副本）",
-                "installed": "掃描",
+                "available": ("市集掃描（尚未安裝副本）" if activation == ACT_NOT_INSTALLED
+                              else "不適用：這不是市集未安裝副本"),
+                "installed": "本機掃描",
                 "equipped": "主控台 Profile（使用者意圖）",
-                "loaded": "RUNTIME 觀察" if usage else "未知（沒有執行觀察）",
+                "loaded": "RUNTIME 觀察" if usage else "未知：沒有執行觀察證據",
             },
         })
     return {"skills": rows, "unresolved_equipped": unresolved}

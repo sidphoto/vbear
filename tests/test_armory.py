@@ -35,7 +35,8 @@ class ArmoryProjectionTests(unittest.TestCase):
         self.assertFalse(rows["installed"]["states"]["equipped"][1]["enabled"])
         self.assertTrue(rows["installed"]["states"]["loaded"]["observed"])
         self.assertFalse(rows["available"]["states"]["loaded"]["observed"])
-        self.assertEqual(rows["available"]["sources"]["loaded"], "未知（沒有執行觀察）")
+        self.assertEqual(rows["available"]["sources"]["loaded"], "未知：沒有執行觀察證據")
+        self.assertEqual(rows["installed"]["sources"]["available"], "不適用：這不是市集未安裝副本")
 
     def test_unresolved_equipped_reference_is_reported_not_dropped(self):
         out = armory.project(self.skills, self.profiles, lambda _: [])

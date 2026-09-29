@@ -700,6 +700,23 @@ function badge(label, cls, title, plain) {
   return el("span", { class: `badge ${cls}${plain ? " plain" : ""}`, title }, label);
 }
 function actBadge(a) { const [l, c, t] = ACT[a] || ACT.unknown; return badge(l, c, t); }
+const ACT_HELP = {
+  active: "可使用代表掃描到它位於工具的載入範圍；不代表目前有 Agent 正在使用。",
+  disabled: "已安裝但被設定關閉；不會因為出現在清單中就自動啟用。",
+  superseded: "這是舊版快取副本；通常有較新版本存在，不能假定它會被實際載入。",
+  not_installed: "這是市集可取得的副本，目前尚未安裝到工具的載入範圍。",
+  not_loaded: "它隨套件附帶，但不在工具的技能載入路徑。",
+  archived: "它位於備份、暫存或封存位置，不是可使用的載入副本。",
+  unknown: "掃描到檔案，但現有設定不足以確認工具是否會載入它。",
+};
+function helpTip(label, hint) {
+  return el("span", { class: "armory-tip", "data-tip": hint,
+    "aria-label": `${label}說明：${hint}`, tabindex: "0" }, "ⓘ");
+}
+function activationWithHelp(a) {
+  const [label] = ACT[a] || ACT.unknown;
+  return el("span", { class: "status-help" }, actBadge(a), helpTip(label, ACT_HELP[a] || ACT_HELP.unknown));
+}
 function statusBadge(s) { const [l, c] = STATUS[s] || STATUS.unknown; return badge(l, c, `herdr 回報狀態：${s}`); }
 function toolTag(t) { return el("span", { class: "tag" }, TOOL[t] || t || "未知工具"); }
 function prov(src) {
@@ -834,7 +851,7 @@ function skillCard(s, why) {
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" }, displayName(s)),
         el("div", { class: "card-sub mono" }, displayName(s) !== s.name ? `原名 ${s.invoke_name}` : s.invoke_name !== s.name ? `呼叫名稱 ${s.invoke_name}` : SCOPE[s.scope] || s.scope)),
-      actBadge(s.activation)),
+      activationWithHelp(s.activation)),
     s.description && s.description.value
       ? el("p", { class: "clamp" }, firstSentence(s.description.value, 170))
       : el("p", { class: "muted" }, "作者沒有提供用途描述"),
@@ -1020,10 +1037,14 @@ async function viewSkills(params) {
   const main = claim(token);
 
   const q = el("input", { type: "search", value: f.q, placeholder: "搜尋名稱、用途或描述（中英文皆可）", "aria-label": "搜尋技能" });
-  const sel = (label, key, options) => {
-    const s = el("select", { "aria-label": label, on: { change: () => { f[key] = s.value; save(); draw(); } } },
+  const sel = (label, key, options, hint) => {
+    const id = `skill-filter-${key}`;
+    const s = el("select", { id, "aria-label": label, on: { change: () => { f[key] = s.value; save(); draw(); } } },
       options.map(([v, t]) => el("option", { value: v, selected: f[key] === v }, t)));
-    return el("label", null, label, s);
+    // Keep the focusable help control outside the label: nesting it would make
+    // the label activate the select instead of exposing the explanation.
+    return el("div", { class: "filter-control" }, el("label", { for: id }, label),
+      hint ? helpTip(label, hint) : null, s);
   };
   const seg = el("div", { class: "seg", role: "group", "aria-label": "顯示方式" },
     [["card", "卡片"], ["list", "列表"]].map(([v, t]) => el("button", { type: "button", "aria-pressed": String(f.view === v), on: { click: () => { f.view = v; store.set("view", v); seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.textContent === t))); draw(); } } }, t)));
@@ -1101,16 +1122,16 @@ async function viewSkills(params) {
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
     el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "Armory 四態總覽")),
-    el("p", { class: "lede" }, "所有已盤點的技能。預設只顯示目前真的能用的；舊版快取、停用與市集副本可從「狀態」切換查看。"),
+    el("p", { class: "lede" }, "這裡是掃描到的 Skill 清單。預設只顯示目前可使用的副本；想看安裝、裝備與使用證據，請開啟 Armory。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
     el("div", { class: "search" }, q),
     el("div", { class: "toolbar" },
-      sel("狀態", "act", actOptions),
-      sel("工具", "tool", [["", "全部"], ["claude", "Claude Code"], ["codex", "Codex CLI"], ["shared", "skills CLI"]]),
-      sel("用途", "cat", [["", "全部"], ...D.categories.map((c) => [c.id, c.label])]),
-      sel("範圍", "scope", [["", "全部"], ...Object.entries(SCOPE)]),
-      sel("我的註記", "mine", [["", "不限"], ["*", "有註記的"], ...myTags.map((t) => [t, "#" + t])]),
+      sel("狀態", "act", actOptions, "這是掃描到的載入狀態；可使用不代表目前有 Agent 正在使用。"),
+      sel("工具", "tool", [["", "全部"], ["claude", "Claude Code"], ["codex", "Codex CLI"], ["shared", "skills CLI"]], "這是 Skill 所屬或可載入它的工具，不是目前正在執行的 Agent。"),
+      sel("用途", "cat", [["", "全部"], ...D.categories.map((c) => [c.id, c.label])], "用途由主控台依描述關鍵字自動整理，不是作者的保證。"),
+      sel("範圍", "scope", [["", "全部"], ...Object.entries(SCOPE)], "範圍是掃描到檔案的位置，例如使用者、專案、外掛或市集。"),
+      sel("我的註記", "mine", [["", "不限"], ["*", "有註記的"], ...myTags.map((t) => [t, "#" + t])], "註記只存在 SID Console，不會寫回原本的 Skill 檔案。"),
       seg, count),
     el("div", { class: "legend", style: "margin-bottom:12px" },
       el("span", null, "用途分類為", el("b", null, "自動整理"), "（依描述關鍵字），滑過標籤可看到命中的字。")),
@@ -1126,8 +1147,9 @@ async function viewArmory() {
   try { data = await api.get("/api/armory"); }
   catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["Armory"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
-  const state = (label, value, source, cls) => el("div", { class: "armory-state" },
-    badge(label, cls, source), el("span", { class: "small muted" }, source), value);
+  const state = (label, value, source, hint, cls) => el("div", { class: "armory-state" },
+    el("div", { class: "armory-label" }, badge(label, cls), helpTip(label, hint)),
+    el("span", { class: "small muted" }, "依據：", source), value);
   const rows = data.skills || [];
   setKids(main,
     crumbs([["技能庫", "#/skills"], ["Armory"]]),
@@ -1141,12 +1163,16 @@ async function viewArmory() {
         el("div", { class: "card-top" }, el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name), actBadge(s.activation)),
         el("div", { class: "card-sub mono" }, s.invoke_name || s.skill_id),
         el("div", { class: "armory-states" },
-          state("Available", x.available ? badge("可用", "b-info") : badge("不適用", "b-mute"), s.sources.available, "b-info"),
-          state("Installed", x.installed ? badge("已安裝", "b-ok") : badge("未安裝／其他", "b-mute"), s.sources.installed, "b-ok"),
-          state("Equipped", equipped.length
+          state("市集可取得", x.available ? badge("可取得", "b-info") : badge("不適用", "b-mute"), s.sources.available,
+            "只有市集中的未安裝副本才會顯示「可取得」；這不代表目前可用。", "b-info"),
+          state("本機已安裝", x.installed ? badge("已安裝", "b-ok") : badge("未安裝／其他", "b-mute"), s.sources.installed,
+            "已安裝代表掃描到本機副本；不代表正在被任何 Agent 使用。", "b-ok"),
+          state("已裝備到 Profile", equipped.length
             ? el("div", { class: "chips" }, equipped.map((p) => el("a", { class: "tag", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id, p.enabled ? null : "（已停用）")))
-            : badge("未裝備", "b-mute"), s.sources.equipped, "b-accent"),
-          state("Loaded", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("未知", "b-mute"), s.sources.loaded, "b-warn")));
+            : badge("未裝備", "b-mute"), s.sources.equipped,
+            "裝備是 Profile 的使用者意圖；它不會自動啟動、載入或套用這個 Skill。", "b-accent"),
+          state("使用證據", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("尚無證據", "b-mute"), s.sources.loaded,
+            "只有執行紀錄確實觀察到使用時才會顯示；尚無證據不代表沒有載入。", "b-warn")));
     })));
   window.scrollTo(0, 0);
 }

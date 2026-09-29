@@ -91,6 +91,13 @@ h3 { font-size: 15px; margin: 0; }
 .armory-states { display: grid; gap: 8px; }
 .armory-state { display: grid; grid-template-columns: minmax(78px, auto) minmax(0, 1fr); gap: 5px 9px; align-items: center; min-width: 0; }
 .armory-state > .small { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.armory-label { display: inline-flex; gap: 4px; align-items: center; min-width: 0; }
+.armory-tip { display: inline-grid; place-items: center; position: relative; width: 17px; height: 17px; border: 1px solid var(--line-2); border-radius: 50%; color: var(--ink-3); cursor: help; font-size: 11px; line-height: 1; }
+.armory-tip::after { content: attr(data-tip); position: absolute; z-index: 5; left: 50%; bottom: calc(100% + 7px); width: min(260px, calc(100vw - 32px)); transform: translateX(-50%); padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); color: var(--ink); font: 12.5px/1.45 var(--sans); text-align: left; white-space: normal; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .12s ease; }
+.armory-tip:hover, .armory-tip:focus-visible { color: var(--accent); border-color: var(--accent); }
+.armory-tip:hover::after, .armory-tip:focus-visible::after { opacity: 1; visibility: visible; }
+/* Card status help sits at the right edge: anchor inward on narrow screens. */
+.status-help .armory-tip::after { left: auto; right: 0; transform: none; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 a.card { color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
@@ -136,7 +143,8 @@ a.card:hover { border-color: var(--line-2); transform: translateY(-1px); }
 .search-hint button:hover { background: var(--panel-2); }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
-.toolbar label { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; }
+.toolbar label { font-size: 13px; color: var(--ink-2); }
+.filter-control, .status-help { display: inline-flex; gap: 4px; align-items: center; min-width: 0; }
 .toolbar select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel); }
 .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 9px; overflow: hidden; }
 .seg button { border: 0; background: var(--panel); padding: 5px 11px; cursor: pointer; font-size: 13px; }
