@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import sys
 import threading
 import time
@@ -69,7 +70,8 @@ SKILL_SUMMARY_FIELDS = (
     "mtime", "categories",
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
-CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language"}
+CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
+                   "runtime_kind"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -96,8 +98,18 @@ class Console:
         # hosting the terminal panes (R1: herdr; R2: native). It is built
         # once at console startup; session lifecycles are gated on the
         # *current* conf via the lazy bin_getter the Runtime keeps.
+        kind = self.store.conf.get("runtime_kind", "herdr")
+        self.runtime_kind = kind if kind in rt.RUNTIME_KINDS else "herdr"
         self.runtime = rt.get_runtime(
-            lambda: self.store.conf.get("herdr_bin", ""))
+            lambda: self.store.conf.get("herdr_bin", ""),
+            kind=self.runtime_kind, autostart=True)
+        # Store's live snapshot must come from the same backend.
+        self.store.runtime = self.runtime
+
+    def runtime_unavailable_message(self) -> str:
+        if getattr(self, "runtime_kind", "herdr") == "native":
+            return "SID runtime 背景程序無法啟動或連線"
+        return "找不到 herdr 執行檔"
 
     # derived views ------------------------------------------------------
 
@@ -390,6 +402,10 @@ def make_handler(console: Console):
                             and target not in console.live_targets(force=True)):
                         return self._error(400, "目前沒有這個 Terminal")
                     return self._json(console.runtime.focus(target))
+                if path == "/api/native/sessions":
+                    return self._native_open(self._body())
+                if path.startswith("/api/native/sessions/") and path.endswith("/close"):
+                    return self._native_close(unquote(path[len("/api/native/sessions/"):-len("/close")]))
                 if path == "/api/tasks":
                     try:
                         saved = tasks.save_task(None, self._body())
@@ -549,7 +565,7 @@ def make_handler(console: Console):
             sess = console.runtime.observe(pane_id, cols, rows)
             if sess is None:
                 if not console.runtime.is_available():
-                    return self._error(503, "找不到 herdr 執行檔")
+                    return self._error(503, console.runtime_unavailable_message())
                 return self._error(429, "同時開啟的 Terminal 過多，請先關閉其他分頁")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -615,7 +631,7 @@ def make_handler(console: Console):
                 cols, rows = self._term_dims(body)
                 sess = console.runtime.control(pane_id, cols, rows)
                 if sess is None:
-                    return self._error(503, "找不到 herdr 執行檔")
+                    return self._error(503, console.runtime_unavailable_message())
                 return self._json({"ok": True, "mode": sess.mode, "token": sess.token})
             if action == "release":
                 sess = console.runtime.release(pane_id)
@@ -639,6 +655,42 @@ def make_handler(console: Console):
                 ok = bool(sess) and sess.mode == "control" and sess.resize(cols, rows)
                 return self._json({"ok": ok})
             return self._error(400, "未知的操作")
+
+        # native sessions (R2 S3) -------------------------------------------
+
+        def _native_open(self, body: dict):
+            if getattr(console, "runtime_kind", "herdr") != "native":
+                return self._error(409, "目前使用 Herdr 模式；請在設定改為 native 並重新啟動")
+            argv = body.get("argv")
+            if not (isinstance(argv, list) and argv and all(isinstance(a, str) and a for a in argv)):
+                return self._error(400, "argv 必須是非空字串陣列（不經過 shell）")
+            cwd = body.get("cwd") or str(Path.home())
+            if not isinstance(cwd, str) or not os.path.isabs(cwd):
+                return self._error(400, "cwd 必須是絕對路徑")
+            real = Path(os.path.realpath(cwd))
+            if not real.is_dir() or not real.is_relative_to(Path.home().resolve()):
+                return self._error(400, "cwd 必須是家目錄內既存的資料夾")
+            cols, rows = self._term_dims(body)
+            try:
+                info = console.runtime.create_session(
+                    {"argv": argv, "cwd": str(real), "cols": cols, "rows": rows})
+            except rt.native.NativeRuntimeUnavailable as exc:
+                return self._error(503, str(exc))
+            except rt.native.NativeRuntimeError as exc:
+                return self._error(400, str(exc))
+            console.store.live(force=True)  # new pane must be a live target at once
+            return self._json({"ok": True, "session": info})
+
+        def _native_close(self, sid: str):
+            if getattr(console, "runtime_kind", "herdr") != "native":
+                return self._error(409, "目前使用 Herdr 模式")
+            if not console.runtime.validate_target(sid):
+                return self._error(400, "無效的 session id")
+            ok = console.runtime.close(sid)
+            console.store.live(force=True)
+            if not ok:
+                return self._error(404, "沒有這個 session 或無法關閉")
+            return self._json({"ok": True, "closed": sid})
 
         # handlers ---------------------------------------------------------
 
@@ -773,7 +825,8 @@ def make_handler(console: Console):
             conf = console.store.conf
             res = {"config": {k: v for k, v in conf.items() if not k.startswith("_")},
                    "state_dir": str(cfg.state_dir()),
-                   "herdr_binary": console.runtime.binary()}
+                   "herdr_binary": console.runtime.binary(),
+                   "runtime_kind_active": getattr(console, "runtime_kind", "herdr")}
             if conf.get("_corrupt") or cfg.is_corrupt():
                 res["corrupt"] = True
             return res
@@ -796,6 +849,8 @@ def make_handler(console: Console):
                         raise ValueError("不支援的語言設定")
                     if key in ("advanced_mode", "usage_enabled"):
                         value = bool(value)
+                    if key == "runtime_kind" and value not in rt.RUNTIME_KINDS:
+                        raise ValueError("runtime_kind 只能是 herdr 或 native")
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):
@@ -805,7 +860,9 @@ def make_handler(console: Console):
                 cfg.save(conf)
                 console.store.set_conf(conf)
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
-                    or "project_roots" in body}
+                    or "project_roots" in body,
+                    "restart_needed": conf.get("runtime_kind", "herdr")
+                    != getattr(console, "runtime_kind", "herdr")}
 
         def _agent_builder_catalog(self) -> dict:
             """Read-only catalog used by the Agent Builder UI.

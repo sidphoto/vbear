@@ -59,9 +59,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{'OK ' if exists else '缺 '}] {src.label:<24} {src.path}{'' if src.enabled else '（已停用）'}")
         # The doctor speaks through the Runtime, not bridge directly, so
         # R2's native backend plugs in here without rewriting this file.
-        runtime = rt.get_runtime(bin_getter=lambda: conf.get("herdr_bin", ""))
+        kind = conf.get("runtime_kind", "herdr")
+        kind = kind if kind in rt.RUNTIME_KINDS else "herdr"
+        # Doctor only reports; it never spawns the native daemon.
+        runtime = rt.get_runtime(bin_getter=lambda: conf.get("herdr_bin", ""), kind=kind)
         snap = runtime.snapshot()
-        print(f"[{'OK ' if snap['available'] else '缺 '}] herdr 連線  {snap['version'] or ''} {snap['binary'] or ''}")
+        label = "SID runtime" if kind == "native" else "herdr 連線"
+        print(f"[{'OK ' if snap['available'] else '缺 '}] {label}  {snap['version'] or ''} {snap['binary'] or ''}")
         for p in snap["problems"]:
             print("     ", p)
         print(f"狀態目錄：{cfg.state_dir()}")

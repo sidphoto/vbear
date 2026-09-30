@@ -142,6 +142,7 @@ DEFAULT_CONFIG = {
     "language": "zh-TW",
     "advanced_mode": False,
     "herdr_bin": "",
+    "runtime_kind": "herdr",  # herdr | native (R2); takes effect on restart
     "project_roots": ["~/projects"],
     "sources": [asdict(s) for s in default_sources()],
 }

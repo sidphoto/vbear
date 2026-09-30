@@ -740,7 +740,10 @@ class Daemon:
         for conn in [c for c in self._conns.values() if c.deadline < now]:
             self._drop(conn)
         for att in [a for a in self._attachments.values()
-                    if (a.cur or a.out) and now - a.last_progress > self.write_stall]:
+                    # resync counts as pending: after an overflow the queue is
+                    # empty but a full replay is still owed to a blocked socket.
+                    if (a.cur or a.out or a.resync)
+                    and now - a.last_progress > self.write_stall]:
             self._log(f"{att.aid}: no write progress for {self.write_stall}s; dropping")
             self._drop_att(att)
 

@@ -50,6 +50,10 @@ class NativeRuntimeError(Exception):
     """A native runtime request failed; message is user-facing."""
 
 
+class NativeRuntimeUnavailable(NativeRuntimeError):
+    """The daemon cannot be reached (and could not be started)."""
+
+
 class AttachRefused(NativeRuntimeError):
     def __init__(self, message: str, code: str = ""):
         super().__init__(message)
@@ -299,9 +303,13 @@ class NativeAttachment(SessionView):
 class NativeRuntime(RuntimeBase):
     """R2 Runtime backed by ``sidconsole runtimed``."""
 
-    def __init__(self, base: Path | None = None):
+    def __init__(self, base: Path | None = None, *, autostart: bool = False):
         self._base = Path(base) if base is not None else None
+        self.autostart = autostart
         self._lock = threading.Lock()
+        self._spawn_lock = threading.Lock()
+        self._spawned: list = []  # Popen handles kept so they are never GC-warned
+        self._last_spawn = 0.0
         self._sessions: dict[str, NativeAttachment] = {}
         self._pane_locks: dict[str, threading.Lock] = {}
 
@@ -311,7 +319,74 @@ class NativeRuntime(RuntimeBase):
         return _d.socket_path(self._base or cfg.state_dir())
 
     def _rpc(self, op: str, timeout: float = 2.0, **fields) -> dict:
-        return _d.rpc(op, path=self.socket_path(), timeout=timeout, **fields)
+        try:
+            return _d.rpc(op, path=self.socket_path(), timeout=timeout, **fields)
+        except (FileNotFoundError, ConnectionRefusedError):
+            if not self.ensure_daemon():
+                raise
+            return _d.rpc(op, path=self.socket_path(), timeout=timeout, **fields)
+
+    def ensure_daemon(self, wait: float = 3.0) -> bool:
+        """Spawn ``sidconsole runtimed`` if autostart is on and nobody answers.
+
+        The daemon runs in its own session and is *not* stopped when the
+        server exits (user decision §9.2). Spawns are rate-limited; a second
+        concurrent daemon exits on its own via the flock (S0)."""
+        if not self.autostart:
+            return False
+        import os
+        import subprocess
+        import sys
+        import time
+        with self._spawn_lock:
+            try:
+                return bool(_d.rpc("hello", path=self.socket_path(), timeout=0.5).get("ok"))
+            except (OSError, ValueError):
+                pass
+            now = time.monotonic()
+            if now - self._last_spawn < 5.0:
+                return False
+            self._last_spawn = now
+            base = self._base or cfg.state_dir()
+            os.makedirs(base, mode=0o700, exist_ok=True)
+            env = dict(os.environ)
+            env["SID_CONSOLE_HOME"] = str(base)
+            log_fd = os.open(base / "runtimed.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "sidconsole", "runtimed"],
+                    cwd=str(Path(__file__).resolve().parent.parent.parent), env=env,
+                    stdin=subprocess.DEVNULL, stdout=log_fd, stderr=log_fd,
+                    start_new_session=True)
+            finally:
+                os.close(log_fd)
+            self._spawned.append(proc)
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                try:
+                    if _d.rpc("hello", path=self.socket_path(), timeout=0.5).get("ok"):
+                        return True
+                except (OSError, ValueError):
+                    pass
+                if proc.poll() is not None:
+                    return False
+                time.sleep(0.1)
+            return False
+
+    def create_session(self, spec) -> dict:
+        """Open a terminal without attaching (API use: the browser attaches
+        later through the normal stream). Returns the daemon's session info."""
+        if not isinstance(spec, dict):
+            raise NativeRuntimeError("spec 必須是物件")
+        fields = {k: spec[k] for k in ("argv", "cwd", "cols", "rows", "env") if k in spec}
+        try:
+            r = self._rpc("open", timeout=5.0, **fields)
+        except (OSError, ValueError) as exc:
+            raise NativeRuntimeUnavailable(f"SID runtime 無法連線：{exc}") from exc
+        if not r.get("ok"):
+            err = r.get("error") or {}
+            raise NativeRuntimeError(str(err.get("message") or "無法開啟"))
+        return r["result"]
 
     def _pane_lock(self, sid: str) -> threading.Lock:
         with self._lock:
@@ -322,6 +397,8 @@ class NativeRuntime(RuntimeBase):
             self._sessions.pop(sid, None)
 
     def _attach(self, sid: str, mode: str, cols: int, rows: int) -> NativeAttachment | None:
+        if self.autostart and not self.socket_path().exists():
+            self.ensure_daemon()
         try:
             sock, res, left = attach_socket(self.socket_path(), sid, mode, cols, rows)
         except AttachRefused as exc:
@@ -378,6 +455,7 @@ class NativeRuntime(RuntimeBase):
                 "workspace_id": WORKSPACE_ID,
                 "title": Path(argv[0]).name if argv else s["session_id"],
                 "cwd": s.get("cwd"), "command": argv, "pid": s.get("pid"),
+                "terminal_title_stripped": Path(argv[0]).name if argv else "",
                 "agent": None, "agent_status": "exited" if s.get("exited") else "unknown",
                 "exited": bool(s.get("exited")), "exit_code": s.get("exit_code"),
                 "cols": s.get("cols"), "rows": s.get("rows")})
@@ -403,17 +481,9 @@ class NativeRuntime(RuntimeBase):
     # ---- session lifecycle ----
 
     def open_session(self, spec) -> SessionView:
-        if not isinstance(spec, dict):
-            raise NativeRuntimeError("spec 必須是物件")
-        fields = {k: spec[k] for k in ("argv", "cwd", "cols", "rows", "env") if k in spec}
-        try:
-            r = self._rpc("open", timeout=5.0, **fields)
-        except (OSError, ValueError) as exc:
-            raise NativeRuntimeError(f"SID runtime 無法連線：{exc}") from exc
-        if not r.get("ok"):
-            raise NativeRuntimeError(str((r.get("error") or {}).get("message") or "無法開啟"))
-        sid = r["result"]["session_id"]
-        view = self.observe(sid, int(fields.get("cols", 80)), int(fields.get("rows", 24)))
+        info = self.create_session(spec)
+        sid = info["session_id"]
+        view = self.observe(sid, int(info.get("cols", 80)), int(info.get("rows", 24)))
         if view is None:
             raise NativeRuntimeError("session 已開啟，但目前無法連線觀看")
         return view
@@ -526,4 +596,5 @@ class NativeRuntime(RuntimeBase):
 
 
 __all__ = ["AttachRefused", "NativeAttachment", "NativeRuntime", "NativeRuntimeError",
+           "NativeRuntimeUnavailable",
            "attach_socket"]

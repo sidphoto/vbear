@@ -289,6 +289,21 @@ class AttachProtocolTests(DaemonCase):
             self.assertGreaterEqual(fulls, 1)  # resync delivered once the reader resumes
         self.rpc("close", session_id=sid)
 
+    def test_resync_pending_counts_as_stalled(self):
+        # Overflow empties the queue; a blocked socket with only a pending
+        # resync must still be dropped (flake seen under full-suite load).
+        sid = self.open(SLEEP)
+        a = self.raw(sid)
+        a.line()
+        self.wait_for(lambda: self.dm._attachments, msg="attachment")
+        att = next(iter(self.dm._attachments.values()))
+        self.dm.stop(); self.thread.join(5)  # freeze the loop; drive _sweep by hand
+        att.out.clear(); att.out_bytes = 0; att.cur.clear()
+        att.resync = True
+        att.last_progress = time.monotonic() - 60
+        self.dm._sweep(time.monotonic())
+        self.assertNotIn(att.sock, self.dm._attachments)
+
     def test_stalled_reader_dropped_other_session_unaffected(self):
         spew = [PY, "-c", "import sys\nwhile True: sys.stdout.write('z'*4000+'\\n')"]
         sid = self.open(spew)
