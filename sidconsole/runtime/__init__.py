@@ -15,6 +15,7 @@ from typing import Callable
 
 from .base import NotSupported, RuntimeBase, SessionView
 from .herdr import HerdrRuntime
+from .native import NativeRuntime  # R2 S2; not selectable via get_runtime until S3
 
 
 def get_runtime(bin_getter: Callable[[], str] | None = None, *, kind: str = "herdr") -> RuntimeBase:
@@ -43,4 +44,5 @@ def get_runtime(bin_getter: Callable[[], str] | None = None, *, kind: str = "her
     return HerdrRuntime(bin_getter)
 
 
-__all__ = ["get_runtime", "HerdrRuntime", "RuntimeBase", "SessionView", "NotSupported"]
+__all__ = ["get_runtime", "HerdrRuntime", "NativeRuntime", "RuntimeBase", "SessionView",
+           "NotSupported"]

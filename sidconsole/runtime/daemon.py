@@ -4,7 +4,16 @@ S0: secure state directory, single-instance lock, stale-socket recovery,
 owner-only Unix socket, peer-uid check, RPC ``hello`` / ``shutdown``.
 S1: PTY sessions — ``open`` / ``list`` / ``close``, natural-exit reaping,
 event-driven HUP -> TERM -> KILL close, scrollback ring, limits.
-Attach connections (observe/control/input/resize) are S2.
+S2: attach connections (contract v2 §1, §2B, §10 S2): an RPC connection
+whose first request is ``attach`` becomes a long-lived stream. Daemon ->
+client carries only frames (``terminal.frame`` / ``control_lost`` /
+``error`` / ``closed``); client -> daemon carries only fire-and-forget
+``terminal.input`` / ``resize`` / ``release``. Control is bound to the
+attach connection: a new control attach demotes the previous holder, and a
+dropped connection releases control at once. Per-attachment output is
+bounded; on overflow the queue is discarded and exactly one full replay
+(<= 64 KiB, UTF-8 aligned) is produced once the socket drains again. An
+attachment whose writes make no progress for WRITE_STALL seconds is dropped.
 
 Startup order (contract v2 §3):
   1. umask 077; state dir must be owned by us, 0700, not a symlink.
@@ -39,6 +48,8 @@ Process model (contract v2 §4, §10 S1):
 
 from __future__ import annotations
 
+import base64
+import binascii
 import errno
 import json
 import os
@@ -53,13 +64,14 @@ import struct
 import subprocess
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
 
 PROTOCOL_VERSION = 1
-DAEMON_VERSION = "native-r2-s1"
+DAEMON_VERSION = "native-r2-s2"
 MAX_LINE = 64 * 1024
 SUN_PATH_MAX = 103  # macOS sockaddr_un.sun_path is 104 bytes incl. NUL
 SOCKET_NAME = "runtime.sock"
@@ -75,6 +87,13 @@ CLOSE_WAIT = HUP_GRACE + TERM_GRACE + KILL_GRACE + 4.0  # deferred-reply deadlin
 ENV_ALLOW = ("PATH", "TERM", "LANG", "HOME")
 EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
 SESSION_RE = re.compile(r"^n-[0-9a-f]{12}$")
+MAX_ATTACHMENTS = 4           # per session (contract v2 §6)
+ATTACH_QUEUE_MAX = 256        # frames queued per attachment before resync
+ATTACH_QUEUE_BYTES = 4 << 20  # ... or this many encoded bytes
+FULL_REPLAY_MAX = 64 * 1024   # full-frame replay cap incl. the reset (§10 S2)
+WRITE_STALL = 10.0            # seconds without write progress -> drop
+INPUT_MAX = 16 * 1024         # decoded bytes per terminal.input
+RIS = b"\x1bc"                # full reset: a full frame replaces the screen
 PTYEXEC = str(Path(__file__).with_name("_ptyexec.py"))
 
 # Darwin: SOL_LOCAL = 0, LOCAL_PEERCRED = 1 (sys/un.h). Python does not
@@ -93,7 +112,9 @@ RPC_OPS: dict[str, frozenset] = {
     "open": frozenset({"argv", "cwd", "cols", "rows", "env"}),
     "list": frozenset(),
     "close": frozenset({"session_id"}),
+    "attach": frozenset({"session_id", "mode", "cols", "rows"}),
 }
+_ATTACHED = object()  # _dispatch result: the connection became an attachment
 
 
 class RuntimedError(Exception):
@@ -242,6 +263,11 @@ class Session:
         self.deadline = 0.0
         self.forced = False
         self.waiters: list = []
+        self.seq = 0
+        self.attachments: list = []
+        self.control = None  # the Attachment holding control, if any
+        self.exit_notified = False
+        self.exit_reason = ""
 
     def poll(self) -> int | None:
         if self.exit_code is None:
@@ -282,7 +308,50 @@ class Session:
                 "argv": list(self.argv), "cwd": self.cwd,
                 "cols": self.cols, "rows": self.rows, "started": self.started,
                 "exited": self.exit_code is not None, "exit_code": self.exit_code,
-                "closing": self.phase is not None, "output_bytes": self.total}
+                "closing": self.phase is not None, "output_bytes": self.total,
+                "attachments": len(self.attachments),
+                "control_attachment": self.control.aid if self.control else None}
+
+
+class Attachment:
+    """One attach connection (the v2 "Attachment" layer == R1 SessionView)."""
+
+    __slots__ = ("sock", "sess", "aid", "mode", "out", "out_bytes", "cur", "inbuf",
+                 "closing", "resync", "writing", "last_progress")
+
+    def __init__(self, sock: socket.socket, sess: Session, mode: str):
+        self.sock = sock
+        self.sess = sess
+        self.aid = "a-" + secrets.token_hex(6)
+        self.mode = mode
+        self.out: deque = deque()
+        self.out_bytes = 0
+        self.cur = bytearray()
+        self.inbuf = bytearray()
+        self.closing = False
+        self.resync = False
+        self.writing = False
+        self.last_progress = time.monotonic()
+
+
+def _line(obj: dict) -> bytes:
+    return json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+def _frame(s: Session, data: bytes, full: bool) -> dict:
+    return {"type": "terminal.frame", "bytes": base64.b64encode(data).decode("ascii"),
+            "encoding": "ansi", "full": full, "seq": s.seq,
+            "width": s.cols, "height": s.rows}
+
+
+def replay_bytes(scrollback: bytes | bytearray) -> bytes:
+    """Reset + the scrollback tail, <= FULL_REPLAY_MAX, never starting inside
+    a UTF-8 sequence."""
+    buf = scrollback[-(FULL_REPLAY_MAX - len(RIS)):]
+    start = 0
+    while start < len(buf) and start < 4 and (buf[start] & 0xC0) == 0x80:
+        start += 1
+    return RIS + bytes(buf[start:])
 
 
 # --- responses --------------------------------------------------------------
@@ -335,6 +404,9 @@ class Daemon:
         self._wake_r = self._wake_w = -1
         self._conns: dict[socket.socket, _Conn] = {}
         self._sessions: dict[str, Session] = {}
+        self._attachments: dict[socket.socket, Attachment] = {}
+        self.max_attachments = MAX_ATTACHMENTS
+        self.write_stall = WRITE_STALL
         self._stopping = False
         self._shutdown_requested = False
 
@@ -401,6 +473,13 @@ class Daemon:
                 if isinstance(data, Session):
                     if data.registered:
                         self._read_master(data)
+                elif isinstance(data, Attachment):
+                    if self._attachments.get(data.sock) is not data:
+                        continue
+                    if mask & selectors.EVENT_READ:
+                        self._att_read(data)
+                    if mask & selectors.EVENT_WRITE and self._attachments.get(data.sock) is data:
+                        self._att_flush(data)
                 elif isinstance(data, _Conn):
                     if self._conns.get(data.sock) is not data:
                         continue  # dropped earlier in this same batch
@@ -424,6 +503,8 @@ class Daemon:
         """Tear everything down. Idempotent. Sessions are killed here: with
         the daemon gone nobody could manage them, and orphans are worse."""
         self._kill_all_sessions()
+        for att in list(self._attachments.values()):
+            self._drop_att(att)
         for conn in list(self._conns.values()):
             self._drop(conn)
         if self._sel is not None:
@@ -508,6 +589,11 @@ class Daemon:
                 self._unregister_master(s)
                 return
             s.append(data)
+            if s.attachments:  # fan-out: encode once, queue per attachment
+                s.seq += 1
+                line = _line(_frame(s, data, False))
+                for att in list(s.attachments):
+                    self._att_enqueue(att, line)
 
     def _unregister_master(self, s: Session) -> None:
         if s.registered:
@@ -541,6 +627,14 @@ class Daemon:
     def _tick(self, now: float) -> None:
         for s in list(self._sessions.values()):
             s.poll()  # reaps natural exits too (no zombies)
+            if (s.exit_code is not None and not s.exit_notified
+                    and (s.eof or not s.registered or not s.group_alive())):
+                if s.registered:
+                    self._read_master(s, budget=64)
+                s.exit_notified = True
+                s.exit_reason = f"程序已結束（exit {s.exit_code}）"
+                for att in list(s.attachments):
+                    self._att_close_with(att, s.exit_reason)
             if s.phase is None:
                 continue
             if s.exit_code is not None and not s.group_alive():
@@ -567,6 +661,11 @@ class Daemon:
             self._read_master(s, budget=64)  # last output before the master closes
         self._close_master(s)
         self._sessions.pop(s.sid, None)
+        for att in list(s.attachments):
+            self._att_close_with(att, s.exit_reason or "session 已關閉")
+            att.sess = None
+        s.attachments.clear()
+        s.control = None
         result = {"session_id": s.sid, "exit_code": s.exit_code, "forced": s.forced}
         for conn in s.waiters:
             if self._conns.get(conn.sock) is conn and conn.waiting:
@@ -640,6 +739,10 @@ class Daemon:
         # connections use their own write-stall rule.
         for conn in [c for c in self._conns.values() if c.deadline < now]:
             self._drop(conn)
+        for att in [a for a in self._attachments.values()
+                    if (a.cur or a.out) and now - a.last_progress > self.write_stall]:
+            self._log(f"{att.aid}: no write progress for {self.write_stall}s; dropping")
+            self._drop_att(att)
 
     def _on_read(self, conn: _Conn) -> None:
         try:
@@ -661,6 +764,14 @@ class Daemon:
         if nl > MAX_LINE:
             return self._respond(conn, _err(None, "bad_request", "請求超過 64 KiB"))
         resp = self._dispatch(bytes(conn.buf[:nl]), conn)
+        if resp is _ATTACHED:  # this socket is now an attachment
+            rest = bytes(conn.buf[nl + 1:])
+            conn.buf.clear()
+            att = self._attachments.get(conn.sock)
+            if att is not None and rest:
+                att.inbuf += rest
+                self._att_process(att)
+            return
         if resp is None:  # deferred (close): answered from _finalize
             conn.buf.clear()
             conn.waiting = True
@@ -709,7 +820,8 @@ class Daemon:
             return _err(rid, "bad_request", f"未知欄位：{', '.join(sorted(extra))}")
         if op == "hello":
             return _ok(rid, {"protocol": PROTOCOL_VERSION, "version": DAEMON_VERSION,
-                             "pid": os.getpid(), "sessions": len(self._sessions)})
+                             "pid": os.getpid(), "sessions": len(self._sessions),
+                             "attachments": len(self._attachments)})
         if op == "list":
             return _ok(rid, {"sessions": [s.info() for s in
                                           sorted(self._sessions.values(), key=lambda s: s.started)]})
@@ -719,7 +831,213 @@ class Daemon:
             return self._op_close(rid, req, conn)
         if op == "shutdown":
             return self._op_shutdown(rid, req, conn)
+        if op == "attach":
+            return self._op_attach(rid, req, conn)
         return _err(rid, "internal", "未處理的指令")
+
+    # ---- attachments ----
+
+    def _op_attach(self, rid: str, req: dict, conn: _Conn):
+        sid = req.get("session_id")
+        if not isinstance(sid, str) or not SESSION_RE.match(sid):
+            return _err(rid, "bad_request", "無效的 session id")
+        mode = req.get("mode")
+        if mode not in ("observe", "control"):
+            return _err(rid, "bad_request", "mode 必須是 observe 或 control")
+        s = self._sessions.get(sid)
+        if s is None or s.phase is not None:
+            return _err(rid, "not_found", "沒有這個 session（或正在關閉）")
+        cols, rows = req.get("cols", s.cols), req.get("rows", s.rows)
+        if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
+            return _err(rid, "bad_request", "cols/rows 必須是 1–1000 的整數")
+        if len(s.attachments) >= self.max_attachments:
+            return _err(rid, "limit", f"此 session 已達連線上限（{self.max_attachments}）")
+        self._conns.pop(conn.sock, None)
+        att = Attachment(conn.sock, s, mode)
+        self._attachments[conn.sock] = att
+        self._sel.modify(conn.sock, selectors.EVENT_READ, att)
+        s.attachments.append(att)
+        if mode == "control":
+            prev = s.control
+            if prev is not None and prev is not att:
+                prev.mode = "observe"
+                self._att_enqueue(prev, _line({"type": "terminal.control_lost"}), frame=False)
+            s.control = att
+            if (cols, rows) != (s.cols, s.rows) and s.master >= 0 and s.exit_code is None:
+                try:
+                    _set_winsize(s.master, rows, cols)
+                    s.cols, s.rows = cols, rows
+                except OSError:
+                    pass
+        # The handshake reply (with attachment_id) precedes the first frame.
+        self._att_push(att, _line(_ok(rid, {"attachment_id": att.aid, "session_id": sid,
+                                            "mode": mode, "cols": s.cols, "rows": s.rows})))
+        self._att_push(att, self._full_line(s))
+        if s.exit_notified:
+            self._att_close_with(att, s.exit_reason)
+        return _ATTACHED
+
+    def _full_line(self, s: Session) -> bytes:
+        return _line(_frame(s, replay_bytes(s.scrollback), True))
+
+    def _att_push(self, att: Attachment, line: bytes) -> None:
+        if not att.out and not att.cur:
+            att.last_progress = time.monotonic()
+        att.out.append(line)
+        att.out_bytes += len(line)
+        self._att_want_write(att)
+
+    def _att_enqueue(self, att: Attachment, line: bytes, frame: bool = True) -> None:
+        if att.closing:
+            return
+        if frame:
+            if att.resync:
+                return  # the pending full replay will cover this output
+            if len(att.out) >= ATTACH_QUEUE_MAX or att.out_bytes + len(line) > ATTACH_QUEUE_BYTES:
+                # Slow reader: discard, and replay once the socket drains.
+                # Never build a full frame while the socket is still blocked.
+                att.out.clear()
+                att.out_bytes = 0
+                att.resync = True
+                self._att_want_write(att)
+                return
+        self._att_push(att, line)
+
+    def _att_close_with(self, att: Attachment, reason: str) -> None:
+        if att.closing:
+            return
+        if att.resync and att.sess is not None:
+            att.resync = False
+            self._att_push(att, self._full_line(att.sess))
+        self._att_push(att, _line({"type": "terminal.closed", "reason": reason}))
+        att.closing = True
+
+    def _att_error(self, att: Attachment, code: str) -> None:
+        self._att_enqueue(att, _line({"type": "terminal.error", "code": code}), frame=False)
+
+    def _att_want_write(self, att: Attachment) -> None:
+        if not att.writing and self._sel is not None:
+            att.writing = True
+            self._sel.modify(att.sock, selectors.EVENT_READ | selectors.EVENT_WRITE, att)
+
+    def _att_flush(self, att: Attachment) -> None:
+        while True:
+            if not att.cur:
+                if att.out:
+                    line = att.out.popleft()
+                    att.out_bytes -= len(line)
+                    att.cur = bytearray(line)
+                elif att.resync and att.sess is not None and not att.closing:
+                    att.resync = False
+                    att.cur = bytearray(self._full_line(att.sess))
+                else:
+                    break
+            try:
+                n = att.sock.send(att.cur)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                return self._drop_att(att)
+            if n:
+                att.last_progress = time.monotonic()
+                del att.cur[:n]
+            if att.cur:
+                return
+        if att.closing:
+            return self._drop_att(att)
+        if att.writing and self._sel is not None:
+            att.writing = False
+            self._sel.modify(att.sock, selectors.EVENT_READ, att)
+
+    def _att_read(self, att: Attachment) -> None:
+        try:
+            chunk = att.sock.recv(65536)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            return self._drop_att(att)
+        if not chunk:
+            return self._drop_att(att)  # disconnect releases control (§1)
+        if att.closing:
+            return
+        att.inbuf += chunk
+        self._att_process(att)
+
+    def _att_process(self, att: Attachment) -> None:
+        while self._attachments.get(att.sock) is att and not att.closing:
+            nl = att.inbuf.find(b"\n")
+            if nl < 0:
+                if len(att.inbuf) > MAX_LINE:
+                    self._drop_att(att)
+                return
+            line = bytes(att.inbuf[:nl])
+            del att.inbuf[:nl + 1]
+            if nl > MAX_LINE:
+                return self._drop_att(att)
+            self._att_command(att, line)
+
+    def _att_command(self, att: Attachment, line: bytes) -> None:
+        try:
+            msg = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return self._att_error(att, "bad_request")
+        if not isinstance(msg, dict):
+            return self._att_error(att, "bad_request")
+        kind, s = msg.get("type"), att.sess
+        if kind == "terminal.release":
+            if s is not None and s.control is att:
+                s.control = None
+            att.mode = "observe"
+            return self._att_close_with(att, "released")
+        if kind not in ("terminal.input", "terminal.resize"):
+            return self._att_error(att, "bad_request")
+        if s is None or s.exit_code is not None or s.master < 0:
+            return self._att_error(att, "exited")
+        if s.control is not att:
+            return self._att_error(att, "not_control")
+        if kind == "terminal.input":
+            try:
+                data = base64.b64decode(msg.get("bytes"), validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                return self._att_error(att, "bad_request")
+            if not data or len(data) > INPUT_MAX:
+                return self._att_error(att, "bad_request")
+            view = memoryview(data)
+            while view:
+                try:
+                    n = os.write(s.master, view)
+                except BlockingIOError:
+                    return self._att_error(att, "input_busy")
+                except InterruptedError:
+                    continue
+                except OSError:
+                    return self._att_error(att, "exited")
+                view = view[n:]
+            return
+        cols, rows = msg.get("cols"), msg.get("rows")
+        if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
+            return self._att_error(att, "bad_request")
+        try:
+            _set_winsize(s.master, rows, cols)  # kernel sends SIGWINCH to the fg group
+        except OSError:
+            return self._att_error(att, "exited")
+        s.cols, s.rows = cols, rows
+
+    def _drop_att(self, att: Attachment) -> None:
+        self._attachments.pop(att.sock, None)
+        if self._sel is not None:
+            try:
+                self._sel.unregister(att.sock)
+            except (KeyError, ValueError):
+                pass
+        att.sock.close()
+        s = att.sess
+        if s is not None:
+            if att in s.attachments:
+                s.attachments.remove(att)
+            if s.control is att:
+                s.control = None
+        att.sess = None
 
     def _op_open(self, rid: str, req: dict) -> dict:
         if self._shutdown_requested:
@@ -824,6 +1142,7 @@ def main(base: Path | None = None) -> int:
     return 0
 
 
-__all__ = ["AlreadyRunning", "Daemon", "RuntimedError", "Session", "UnsafePath",
+__all__ = ["AlreadyRunning", "Attachment", "Daemon", "RuntimedError", "Session",
+           "UnsafePath", "replay_bytes",
            "build_env", "lock_path", "main", "parse_xucred", "peer_uid", "rpc",
            "socket_path"]
