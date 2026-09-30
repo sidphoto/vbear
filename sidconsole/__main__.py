@@ -20,7 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     p_launch.add_argument("--port", type=int)
     sub.add_parser("scan", help="重新掃描並輸出摘要")
     sub.add_parser("doctor", help="檢查來源與 herdr 連線")
+    sub.add_parser("runtimed", help="（R2 開發中）原生 Terminal 背景程序")
     args = parser.parse_args(argv)
+
+    if args.cmd == "runtimed":
+        from .runtime.daemon import main as runtimed_main
+        return runtimed_main()
 
     if args.cmd in (None, "serve"):
         from .server import serve
