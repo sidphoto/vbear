@@ -306,7 +306,22 @@ class ValidationTests(SessionCase):
         keys = {line.split("=", 1)[0] for line in out.splitlines() if "=" in line}
         # macOS CoreFoundation injects __CF_USER_TEXT_ENCODING into every
         # process it starts; it is not inherited from the daemon.
-        self.assertLessEqual(keys - {"__CF_USER_TEXT_ENCODING"}, set(d.ENV_ALLOW))
+        self.assertLessEqual(keys - {"__CF_USER_TEXT_ENCODING"},
+                             set(d.ENV_ALLOW) | set(d.ENV_IDENTITY))
+        import pwd
+        me = pwd.getpwuid(os.getuid()).pw_name
+        self.assertIn(f"USER={me}", out.splitlines())
+        self.assertIn(f"LOGNAME={me}", out.splitlines())
+
+    def test_identity_inherited_without_env_and_not_overridable(self):
+        import pwd
+        me = pwd.getpwuid(os.getuid()).pw_name
+        with mock.patch.dict(os.environ, {"USER": "", "LOGNAME": ""}):
+            env = d.build_env({"PATH": "/usr/bin"})
+        self.assertEqual((env["USER"], env["LOGNAME"]), (me, me))
+        r = self.rpc("open", argv=["/bin/sh"], cwd=str(self.tmp), env={"USER": "root"})
+        self.assertEqual(r["error"]["code"], "bad_request")
+        self.assertEqual(d.build_env({"USER": "root"})["USER"], me)
 
 
 class ShutdownTests(SessionCase):

@@ -84,7 +84,11 @@ HUP_GRACE = 1.0
 TERM_GRACE = 2.0
 KILL_GRACE = 1.0
 CLOSE_WAIT = HUP_GRACE + TERM_GRACE + KILL_GRACE + 4.0  # deferred-reply deadline
-ENV_ALLOW = ("PATH", "TERM", "LANG", "HOME")
+ENV_ALLOW = ("PATH", "TERM", "LANG", "HOME")  # caller may override these
+# Inherited but never caller-overridable: identity of the daemon's own user.
+# Claude Code looks up its Keychain login by USER; without it the CLI reports
+# "Login expired" (Gate 9 finding).
+ENV_IDENTITY = ("USER", "LOGNAME")
 EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
 SESSION_RE = re.compile(r"^n-[0-9a-f]{12}$")
 MAX_ATTACHMENTS = 4           # per session (contract v2 §6)
@@ -214,13 +218,22 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
 
 
 def build_env(overrides: dict | None = None) -> dict:
-    """Child environment: only PATH/TERM/LANG/HOME (contract v2 §5).
+    """Child environment: PATH/TERM/LANG/HOME (contract v2 §5) plus the
+    daemon user's USER/LOGNAME, which callers cannot override.
 
     PATH gets the usual Homebrew/system dirs appended when missing, because a
     daemon started from Finder / an .app does not inherit the login shell
     PATH (PHASE-R-PLAN §8 risk 2). Existing entries keep their order."""
     env = {k: os.environ[k] for k in ENV_ALLOW if os.environ.get(k)}
-    env.update(overrides or {})
+    env.update({k: v for k, v in (overrides or {}).items() if k in ENV_ALLOW})
+    try:
+        import pwd
+        name = pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):
+        name = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    if name:
+        for k in ENV_IDENTITY:
+            env[k] = name
     env.setdefault("TERM", "xterm-256color")
     env.setdefault("LANG", "en_US.UTF-8")
     env.setdefault("HOME", str(Path.home()))
