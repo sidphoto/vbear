@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
 import queue as queue_mod
 import re
 import secrets
@@ -35,6 +36,8 @@ from pathlib import Path
 
 from .. import config as cfg
 from . import daemon as _d
+from . import cli_versions as _cli_versions
+from . import agent_sessions as _agent_sessions
 from .base import RuntimeBase, SessionView
 
 QUEUE_MAX = 200               # per subscriber, drop-oldest (same as the Herdr bridge)
@@ -58,6 +61,13 @@ class AttachRefused(NativeRuntimeError):
     def __init__(self, message: str, code: str = ""):
         super().__init__(message)
         self.code = code
+
+
+def _pinned_claude_binary() -> str | None:
+    """Install path of the verified Claude Code baseline, or None to fall back
+    to PATH lookup. Either way the version check decides."""
+    pinned = Path.home() / ".local/share/claude/versions" / _cli_versions.EXPECTED_VERSIONS["claude"]
+    return str(pinned) if pinned.is_file() else None
 
 
 def _line(obj: dict) -> bytes:
@@ -387,6 +397,146 @@ class NativeRuntime(RuntimeBase):
             err = r.get("error") or {}
             raise NativeRuntimeError(str(err.get("message") or "無法開啟"))
         return r["result"]
+
+    def create_checked_agent_session(self, engine: str, spec: dict) -> dict:
+        """Internal, version-checked Agent launch; not a Profile security gate.
+
+        This entry is deliberately not connected to the raw HTTP session API.
+        It checks the selected CLI before any daemon RPC/autostart, pins argv[0]
+        to the checked canonical path, and rechecks file identity immediately
+        before opening the PTY. The final path check and exec are not atomic,
+        so this does not claim to eliminate the filesystem TOCTOU window.
+        A successful result means version-checked/unmanaged only; it does not
+        confirm a preview or establish sandbox/Profile protection.
+        """
+        if not isinstance(engine, str) or engine not in _cli_versions.EXPECTED_VERSIONS:
+            raise _cli_versions.VersionAssertionError(
+                _cli_versions.check_cli_version(engine, cwd="/"))
+        if not isinstance(spec, dict) or set(spec) - {"argv", "cwd", "cols", "rows"}:
+            raise NativeRuntimeError("checked Agent spec 欄位無效")
+        for dim in ("cols", "rows"):
+            if dim in spec:
+                value = spec[dim]
+                if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 1000:
+                    raise NativeRuntimeError(f"checked Agent {dim} 必須是 1–1000 的整數")
+        argv = spec.get("argv")
+        cwd = spec.get("cwd")
+        if not isinstance(argv, list) or not 1 <= len(argv) <= 256 or any(
+                not isinstance(arg, str) or "\0" in arg or len(arg) > 4096 for arg in argv):
+            raise NativeRuntimeError("checked Agent argv 必須是非空字串陣列")
+        if not argv[0] or Path(argv[0]).name != engine:
+            raise NativeRuntimeError("checked Agent argv[0] 必須是指定引擎的 CLI")
+        if (not isinstance(cwd, str) or "\0" in cwd
+                or not os.path.isabs(cwd) or not os.path.isdir(cwd)):
+            raise NativeRuntimeError("checked Agent cwd 必須是既存的絕對路徑資料夾")
+
+        # No client baseline parameter exists: the guard reads trusted module
+        # constants and uses only the engine-specific fixed version argv.
+        canonical_cwd = os.path.realpath(cwd)
+        assertion = _cli_versions.assert_cli_version(engine, argv[0], cwd=canonical_cwd)
+        _cli_versions.ensure_binary_unchanged(assertion)
+
+        checked_spec = dict(spec)
+        checked_spec["argv"] = [assertion.binary_path, *argv[1:]]
+        checked_spec["cwd"] = canonical_cwd
+        session = self.create_session(checked_spec)
+        return {
+            "session": session,
+            "version_assertion": assertion.as_dict(),
+            "state": "version_checked_unmanaged",
+        }
+
+    def prepare_managed_claude_launch(self, spec: dict, *, allowed_root: str | None = None) -> dict:
+        """Step 1 of a managed Claude launch (R3 S2/S0): check the CLI version
+        and create the per-session settings, scratch and manifest. Starts
+        nothing. The result feeds a preview and, later, ``launch_prepared_claude``.
+
+        Only ``cwd`` and an optional validated ``model_id`` are accepted. The
+        CLI must be the verified baseline version; the pinned install path is
+        preferred so a newer default ``claude`` on PATH is never used by accident.
+        """
+        if not isinstance(spec, dict) or set(spec) - {"cwd", "model_id"}:
+            raise NativeRuntimeError("managed Agent spec 欄位無效")
+        cwd = spec.get("cwd")
+        if (not isinstance(cwd, str) or "\0" in cwd
+                or not os.path.isabs(cwd) or not os.path.isdir(cwd)):
+            raise NativeRuntimeError("managed Agent cwd 必須是既存的絕對路徑資料夾")
+        canonical_cwd = os.path.realpath(cwd)
+        assertion = _cli_versions.assert_cli_version(
+            "claude", _pinned_claude_binary(), cwd=canonical_cwd)
+        base = self._base or cfg.state_dir()
+        manifest = _agent_sessions.prepare_claude_launch(
+            base, canonical_cwd, cli_binary=assertion.binary_path,
+            cli_version=assertion.observed_version,
+            cli_identity=list(assertion._binary_identity), allowed_root=allowed_root,
+            model_id=spec.get("model_id") or None)
+        return {"manifest": manifest, "assertion": assertion}
+
+    def discard_prepared_claude_launch(self, launch_id: str) -> dict:
+        """Remove a prepared launch that will not be started (expired preview)."""
+        return _agent_sessions.discard_prepared(self._base or cfg.state_dir(), launch_id)
+
+    def launch_prepared_claude(self, prepared: dict, *, cols: int | None = None,
+                               rows: int | None = None) -> dict:
+        """Step 2: hand a prepared launch to the daemon. The daemon re-validates
+        the manifest, settings, paths and CLI file and builds argv and
+        environment itself. Every failed precondition refuses the launch;
+        nothing falls back to an unmanaged or looser session.
+
+        ``profile_managed`` means: Bash-tool writes are confined by Claude's
+        sandbox to the work directory and the session scratch (verified for
+        this CLI version and settings only), Edit/Write tools are not offered,
+        network is a strict empty allowlist. Reads are not isolated, and a user
+        typing in the advanced terminal can still change what the CLI does.
+        """
+        manifest, assertion = prepared["manifest"], prepared["assertion"]
+        dims = {}
+        for dim, value in (("cols", cols), ("rows", rows)):
+            if value is not None:
+                if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 1000:
+                    raise NativeRuntimeError(f"managed Agent {dim} 必須是 1–1000 的整數")
+                dims[dim] = value
+        base = self._base or cfg.state_dir()
+        launch_id = manifest["launch_id"]
+        try:
+            _cli_versions.ensure_binary_unchanged(assertion)
+            r = self._rpc("open_managed", timeout=5.0, launch_id=launch_id, **dims)
+        except _cli_versions.VersionAssertionError:
+            _agent_sessions.discard_prepared(base, launch_id)  # nothing was sent to a daemon
+            raise
+        except (FileNotFoundError, ConnectionRefusedError) as exc:
+            # No daemon answered, so no process can exist for this launch.
+            _agent_sessions.discard_prepared(base, launch_id)
+            raise NativeRuntimeUnavailable(f"SID runtime 未啟動或無法連線：{exc}") from exc
+        except (OSError, ValueError) as exc:
+            # Outcome unknown (e.g. timeout): the daemon may own a session. Keep the state.
+            raise NativeRuntimeUnavailable(f"SID runtime 無法連線：{exc}") from exc
+        if not r.get("ok"):
+            # Refused before anything started (the daemon removes its own state
+            # when a spawn fails); a still-prepared launch is ours to remove.
+            _agent_sessions.discard_prepared(base, launch_id)
+            err = r.get("error") or {}
+            raise NativeRuntimeError(str(err.get("message") or "無法開啟"))
+        return {
+            "session": r["result"],
+            "launch_id": launch_id,
+            "version_assertion": assertion.as_dict(),
+            "boundary": manifest["boundary"],
+            "state": "profile_managed",
+        }
+
+    def create_managed_claude_session(self, spec: dict, *, allowed_root: str | None = None) -> dict:
+        """Internal one-shot form of prepare + launch (no preview). Not on the HTTP API."""
+        if not isinstance(spec, dict) or set(spec) - {"cwd", "cols", "rows", "model_id"}:
+            raise NativeRuntimeError("managed Agent spec 欄位無效")
+        for dim in ("cols", "rows"):
+            if dim in spec:
+                value = spec[dim]
+                if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 1000:
+                    raise NativeRuntimeError(f"managed Agent {dim} 必須是 1–1000 的整數")
+        prepared = self.prepare_managed_claude_launch(
+            {k: spec[k] for k in ("cwd", "model_id") if k in spec}, allowed_root=allowed_root)
+        return self.launch_prepared_claude(prepared, cols=spec.get("cols"), rows=spec.get("rows"))
 
     def _pane_lock(self, sid: str) -> threading.Lock:
         with self._lock:

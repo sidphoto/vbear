@@ -44,6 +44,15 @@ Process model (contract v2 §4, §10 S1):
     streaming. Signals and reaping come first; the master closes last.
   * Known limit: a descendant that calls setsid() itself leaves our process
     group and is not reached by killpg.
+
+R3 S2 managed Claude sessions (``open_managed``): the daemon itself builds
+argv and environment from a validated launch manifest (``agent_sessions``);
+callers supply only a launch id and a size. Because Claude runs Bash-tool
+commands in their own process groups, managed sessions also track observed
+descendants (``proctrack``): closing signals the verified descendant groups
+too, and the session's scratch and settings are deleted only when the leader
+and every observed descendant are proven gone. Otherwise they are retained
+and marked for manual review. Plain ``open`` sessions are unchanged.
 """
 
 from __future__ import annotations
@@ -69,6 +78,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
+from . import agent_sessions, proctrack
 
 PROTOCOL_VERSION = 1
 DAEMON_VERSION = "native-r2-s2"
@@ -97,6 +107,9 @@ ATTACH_QUEUE_BYTES = 4 << 20  # ... or this many encoded bytes
 FULL_REPLAY_MAX = 64 * 1024   # full-frame replay cap incl. the reset (§10 S2)
 WRITE_STALL = 10.0            # seconds without write progress -> drop
 INPUT_MAX = 16 * 1024         # decoded bytes per terminal.input
+MANAGED_OBSERVE = 0.5         # seconds between process-table looks (managed sessions)
+MANAGED_OBSERVE_CLOSING = 0.2  # ... while a managed session is being closed
+PREPARED_SWEEP = 60.0         # seconds between sweeps of abandoned prepared launches
 RIS = b"\x1bc"                # full reset: a full frame replaces the screen
 PTYEXEC = str(Path(__file__).with_name("_ptyexec.py"))
 
@@ -114,6 +127,7 @@ RPC_OPS: dict[str, frozenset] = {
     "hello": frozenset(),
     "shutdown": frozenset({"force"}),
     "open": frozenset({"argv", "cwd", "cols", "rows", "env"}),
+    "open_managed": frozenset({"launch_id", "cols", "rows"}),
     "list": frozenset(),
     "close": frozenset({"session_id"}),
     "attach": frozenset({"session_id", "mode", "cols", "rows"}),
@@ -281,6 +295,18 @@ class Session:
         self.control = None  # the Attachment holding control, if any
         self.exit_notified = False
         self.exit_reason = ""
+        # Managed (R3 S2) sessions only; all stay inert for plain sessions.
+        self.launch_id: str | None = None
+        self.tracker: proctrack.DescendantTracker | None = None
+        self.extra_groups: list[int] = []   # verified descendant groups, from the last look
+        self.extra_alive = False            # an observed descendant outside our group still exists
+        # True when the *latest* look could not vouch for every descendant: the
+        # process table was unreadable, or a descendant cannot be verified. It is
+        # deliberately not sticky: cleanup is decided on a fresh forced look, and
+        # an earlier transient failure says nothing about what exists now.
+        self.unproven = False
+        self.missed_looks = 0               # how often the table was unreadable (logged at cleanup)
+        self.next_observe = 0.0
 
     def poll(self) -> int | None:
         if self.exit_code is None:
@@ -290,6 +316,9 @@ class Session:
         return self.exit_code
 
     def group_alive(self) -> bool:
+        return self.leader_group_alive() or self.extra_alive
+
+    def leader_group_alive(self) -> bool:
         if self.pgid <= 1 or self.pgid == os.getpgrp():
             return False  # symmetric with signal(): never probe ourselves/init
         try:
@@ -308,6 +337,13 @@ class Session:
             os.killpg(self.pgid, sig)
         except (ProcessLookupError, PermissionError):
             pass
+        for pgid in self.extra_groups:  # managed only; refreshed right before signalling
+            if pgid <= 1 or pgid == os.getpgrp() or pgid == self.pgid:
+                continue
+            try:
+                os.killpg(pgid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
 
     def append(self, data: bytes) -> None:
         self.total += len(data)
@@ -323,7 +359,8 @@ class Session:
                 "exited": self.exit_code is not None, "exit_code": self.exit_code,
                 "closing": self.phase is not None, "output_bytes": self.total,
                 "attachments": len(self.attachments),
-                "control_attachment": self.control.aid if self.control else None}
+                "control_attachment": self.control.aid if self.control else None,
+                "managed": self.launch_id}
 
 
 class Attachment:
@@ -422,6 +459,7 @@ class Daemon:
         self.write_stall = WRITE_STALL
         self._stopping = False
         self._shutdown_requested = False
+        self._next_prepared_sweep = time.monotonic() + PREPARED_SWEEP
 
     # ---- lifecycle ----
 
@@ -465,6 +503,12 @@ class Daemon:
             self.close()
             raise
         self._log(f"listening on {self.sock_path} (pid {os.getpid()})")
+        try:  # launches left behind by a previous daemon; never fatal
+            for item in agent_sessions.recover(self.base):
+                self._log(f"managed launch {item['launch_id']}: " +
+                          ("cleaned" if item.get("cleaned") else f"retained ({item.get('retained_reason')})"))
+        except Exception as exc:
+            self._log(f"managed launch recovery failed: {exc}")
 
     def wake(self) -> None:
         if self._wake_w >= 0:
@@ -584,6 +628,56 @@ class Daemon:
                 pass
             raise
 
+    def _observe_managed(self, s: Session, *, force: bool = False, rows: list | None = None) -> None:
+        """Refresh what we know about a managed session's descendants. Costs
+        one process-table read unless ``rows`` is supplied, so it is
+        rate-limited unless ``force`` is set."""
+        if s.tracker is None:
+            return
+        now = time.monotonic()
+        if not force and now < s.next_observe:
+            return
+        s.next_observe = now + (MANAGED_OBSERVE_CLOSING if s.phase else MANAGED_OBSERVE)
+        try:
+            rows = proctrack.process_table() if rows is None else rows
+        except proctrack.ProcessTableUnavailable as exc:
+            if not s.unproven:
+                self._log(f"{s.sid}: process table unavailable: {exc}")
+            s.unproven = True
+            s.missed_looks += 1
+            return
+        added = s.tracker.observe(rows)
+        groups, uncertain = s.tracker.groups(rows, uid=os.getuid(), exclude_pgid=s.pgid)
+        s.extra_groups = groups
+        s.extra_alive = any(r["pgid"] != s.pgid for r in s.tracker.live(rows))
+        s.unproven = bool(uncertain)
+        if added:
+            try:
+                agent_sessions.update_manifest(self.base, s.launch_id, observed=s.tracker.export())
+            except (OSError, agent_sessions.LaunchRefused) as exc:
+                self._log(f"{s.sid}: manifest update failed: {exc}")
+
+    def _finish_managed(self, s: Session) -> dict | None:
+        """Exact cleanup of a managed session's scratch and settings, or retain."""
+        if s.launch_id is None:
+            return None
+        self._observe_managed(s, force=True)
+        reason = ""
+        if s.exit_code is None:
+            reason = "leader 尚未結束"
+        elif s.leader_group_alive():
+            reason = "leader 的 process group 仍有程序"
+        elif s.extra_alive:
+            reason = "仍有已觀測的後代程序存活"
+        elif s.unproven:
+            reason = "無法取得程序表或有無法確認身分的後代"
+        result = agent_sessions.cleanup_launch(self.base, s.launch_id, proven_dead=not reason, reason=reason)
+        self._log(f"{s.sid}: managed launch {s.launch_id} " +
+                  ("cleaned" if result.get("cleaned") else f"retained ({result.get('retained_reason')})") +
+                  (f"; process table was unreadable {s.missed_looks} time(s) during the session"
+                   if s.missed_looks else ""))
+        return result
+
     def _read_master(self, s: Session, budget: int = 16) -> None:
         for _ in range(budget):  # bounded so one noisy session cannot starve others
             try:
@@ -631,6 +725,7 @@ class Daemon:
             return
         s.phase = "hup"
         s.deadline = time.monotonic() + HUP_GRACE
+        self._observe_managed(s, force=True)  # descendant groups current before signalling
         # Already exited with an empty group: signal nobody (a reused pgid
         # must never be hit); the next _tick finalizes it (AGY S1 P3).
         if s.poll() is not None and not s.group_alive():
@@ -638,6 +733,22 @@ class Daemon:
         s.signal(signal.SIGHUP)
 
     def _tick(self, now: float) -> None:
+        if now >= self._next_prepared_sweep:
+            self._next_prepared_sweep = now + PREPARED_SWEEP
+            try:  # previews nobody confirmed; they never had a process
+                for item in agent_sessions.expire_prepared(self.base):
+                    self._log(f"prepared launch {item['launch_id']} expired: " +
+                              ("removed" if item.get("cleaned") else f"kept ({item.get('retained_reason')})"))
+            except Exception as exc:
+                self._log(f"prepared launch sweep failed: {exc}")
+        due = [s for s in self._sessions.values() if s.tracker is not None and now >= s.next_observe]
+        if due:  # one process table per tick, shared by every managed session that is due
+            try:
+                table = proctrack.process_table()
+            except proctrack.ProcessTableUnavailable:
+                table = None
+            for s in due:
+                self._observe_managed(s, rows=table)
         for s in list(self._sessions.values()):
             s.poll()  # reaps natural exits too (no zombies)
             if (s.exit_code is not None and not s.exit_notified
@@ -657,9 +768,11 @@ class Daemon:
                 continue
             if s.phase == "hup":
                 s.phase, s.deadline = "term", now + TERM_GRACE
+                self._observe_managed(s, force=True)
                 s.signal(signal.SIGTERM)
             elif s.phase == "term":
                 s.phase, s.deadline, s.forced = "kill", now + KILL_GRACE, True
+                self._observe_managed(s, force=True)
                 s.signal(signal.SIGKILL)
             else:
                 self._log(f"{s.sid}: process group still present after SIGKILL; finalizing")
@@ -680,6 +793,9 @@ class Daemon:
         s.attachments.clear()
         s.control = None
         result = {"session_id": s.sid, "exit_code": s.exit_code, "forced": s.forced}
+        managed = self._finish_managed(s)
+        if managed is not None:
+            result["managed"] = managed
         for conn in s.waiters:
             if self._conns.get(conn.sock) is conn and conn.waiting:
                 conn.waiting = False
@@ -690,7 +806,9 @@ class Daemon:
         sessions = list(self._sessions.values())
         if not sessions:
             return
-        alive = lambda s: s.poll() is None or s.group_alive()
+        def alive(s):
+            self._observe_managed(s, force=True)
+            return s.poll() is None or s.group_alive()
         for s in sessions:
             if alive(s):
                 s.signal(signal.SIGTERM)
@@ -705,7 +823,13 @@ class Daemon:
                 s.proc.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 self._log(f"{s.sid}: leader did not exit after SIGKILL")
+            s.poll()
             self._close_master(s)
+            if s.launch_id is not None:
+                end = time.monotonic() + 1.0  # let SIGKILLed descendants disappear
+                while time.monotonic() < end and alive(s):
+                    time.sleep(0.05)
+                self._finish_managed(s)
         self._sessions.clear()
 
     # ---- connections ----
@@ -843,6 +967,8 @@ class Daemon:
                                           sorted(self._sessions.values(), key=lambda s: s.started)]})
         if op == "open":
             return self._op_open(rid, req)
+        if op == "open_managed":
+            return self._op_open_managed(rid, req)
         if op == "close":
             return self._op_close(rid, req, conn)
         if op == "shutdown":
@@ -1084,6 +1210,62 @@ class Daemon:
             sess = self._spawn(argv, cwd, cols, rows, env)
         except OSError as exc:
             return _err(rid, "internal", f"無法啟動：{exc}")
+        return _ok(rid, sess.info())
+
+    def _op_open_managed(self, rid: str, req: dict) -> dict:
+        """Start a managed Claude session from a prepared launch (R3 S2).
+
+        argv, cwd and environment come from the validated manifest in our own
+        state directory; the caller can pass neither. A launch id is single
+        use. Any failed check refuses the launch; nothing is downgraded."""
+        if self._shutdown_requested:
+            return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
+        launch_id = req.get("launch_id")
+        cols, rows = req.get("cols", 80), req.get("rows", 24)
+        if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
+            return _err(rid, "bad_request", "cols/rows 必須是 1–1000 的整數")
+        if len(self._sessions) >= self.max_sessions:
+            return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}）")
+        try:
+            m = agent_sessions.load_validated(self.base, launch_id)
+            if m.get("state") != "prepared" or m.get("native_session_id"):
+                raise agent_sessions.LaunchRefused("consumed", "此 launch 已使用或不可啟動")
+            argv = agent_sessions.claude_argv(m)
+            cwd = m["canonical_workspace"]
+            env = build_env()
+            env["CLAUDE_CODE_TMPDIR"] = m["scratch"]["path"]
+            # An interactive session otherwise runs the CLI's self-updater, which
+            # rewrites the user's global ``claude`` install (seen in S2 acceptance).
+            env["DISABLE_AUTOUPDATER"] = "1"
+            # Consume before spawning: a replay can never start a second process.
+            agent_sessions.update_manifest(self.base, launch_id, state="launching")
+        except agent_sessions.LaunchRefused as exc:
+            return _err(rid, "refused", f"{exc.code}: {exc}")
+        except OSError as exc:
+            return _err(rid, "refused", f"launch 狀態無法驗證：{exc}")
+        try:
+            sess = self._spawn(argv, cwd, cols, rows, env)
+        except OSError as exc:
+            # No process exists; the prepared state is ours to remove exactly.
+            agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
+            return _err(rid, "internal", f"無法啟動：{exc}")
+        sess.launch_id = launch_id
+        sess.tracker = proctrack.DescendantTracker(sess.pid)
+        leader = None
+        try:
+            table = proctrack.process_table()
+            sess.tracker.observe(table)
+            row = next((r for r in table if r["pid"] == sess.pid), None)
+            leader = ({"pid": sess.pid, "start": row["start"], "source": proctrack.SOURCE}
+                      if row else None)
+        except proctrack.ProcessTableUnavailable as exc:
+            self._log(f"{sess.sid}: process table unavailable at launch: {exc}")
+        try:
+            agent_sessions.update_manifest(self.base, launch_id, state="running",
+                                           native_session_id=sess.sid, leader=leader,
+                                           observed=sess.tracker.export())
+        except (OSError, agent_sessions.LaunchRefused) as exc:
+            self._log(f"{sess.sid}: manifest update failed: {exc}")
         return _ok(rid, sess.info())
 
     def _op_close(self, rid: str, req: dict, conn: _Conn) -> dict | None:
