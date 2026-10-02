@@ -243,6 +243,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: grid; place-items: center; z-index: 100; padding: 16px; backdrop-filter: blur(2px); }
 .modal-box { background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,0.3); max-width: 500px; width: 100%; padding: 22px; display: flex; flex-direction: column; gap: 14px; }
 .modal-box h2 { margin: 0; font-size: 18px; }
+.modal-box.modal-wide { max-width: 760px; max-height: 88vh; overflow: auto; }
+.agent-launch-labels { display: grid; gap: 8px; }
+.agent-launch-label { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 4px; }
 .modal-box p { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.6; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 

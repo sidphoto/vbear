@@ -3270,6 +3270,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       el("div", { class: "row wb-profile-head", style: "justify-content:space-between" },
         el("h3", { style: "margin:0" }, p.name || p.id),
         el("div", { class: "wb-profile-actions" },
+          el("button", { class: "btn small primary", type: "button",
+            title: "先看這次啟動實際會套用什麼，確認後才啟動",
+            on: { click: () => promptAgentLaunch(p) } }, "預覽並啟動"),
           el("button", { class: "btn small", type: "button",
             on: { click: () => promptAgentProfileEditor(p) } }, "編輯"),
           el("button", { class: "btn small", type: "button",
@@ -3525,6 +3528,115 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       } catch (err) {
         toast((isNew ? "建立失敗：" : "儲存失敗：") + err.message);
         saveBtn.disabled = false;
+      }
+    }
+  }
+
+  // Profile-managed launch (R3 S0): preview what will actually apply, then
+  // confirm. The labels come from the server and describe this one launch;
+  // they are not Profile settings and none of them is an unbypassable boundary.
+  function promptAgentLaunch(p) {
+    const titleId = "modal-agent-launch-title";
+    let current = null;   // the preview the confirm button refers to
+    let busy = false;
+    const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
+      placeholder: "家目錄內的資料夾絕對路徑，例如 /Users/you/projects/demo", autocomplete: "off" });
+    const commitBox = el("input", { type: "checkbox", id: "agent-launch-commit" });
+    const out = el("div", { class: "agent-launch-preview", "aria-live": "polite" });
+    const previewBtn = el("button", { class: "btn", type: "button", on: { click: () => doPreview() } }, "產生預覽");
+    const confirmBtn = el("button", { class: "btn primary", type: "button", on: { click: () => doLaunch() } }, "確認啟動");
+    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
+    confirmBtn.disabled = true;
+
+    function invalidate(message) {
+      current = null;
+      confirmBtn.disabled = true;
+      setKids(out, message ? el("p", { class: "small muted" }, message) : null);
+    }
+    workdirInput.addEventListener("input", () => invalidate("輸入已變更，請重新產生預覽。"));
+    commitBox.addEventListener("change", () => invalidate("輸入已變更，請重新產生預覽。"));
+
+    const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+      el("div", { class: "modal-box modal-wide" },
+        el("h2", { id: titleId }, `預覽並啟動：${p.name || p.id}`),
+        el("p", { class: "small muted" },
+          "啟動前先顯示這次實際會套用的設定與每一項權限的套用程度。確認後才會啟動 Agent。"),
+        el("label", { class: "small", for: "agent-launch-workdir" }, "工作目錄"),
+        workdirInput,
+        el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
+          commitBox,
+          el("span", null, "我知道這個設定無法阻止 commit（工作目錄的 .git 在可寫範圍內）。不勾選就無法啟動。")),
+        out,
+        el("div", { class: "modal-actions" }, cancelBtn, previewBtn, confirmBtn)));
+    document.body.append(modalElem);
+    const closeModal = withModalA11y(modalElem, () => modalElem.remove());
+    workdirInput.focus();
+
+    function renderPreview(pv) {
+      const kids = [];
+      if (!pv.launchable) {
+        kids.push(el("div", { class: "notice warn" },
+          el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+          el("div", null,
+            el("strong", null, "這個 Profile 目前無法啟動"),
+            el("ul", { class: "small" }, (pv.reasons || []).map((r) => el("li", null, r.message))))));
+      } else {
+        kids.push(el("dl", { class: "kv small" },
+          el("dt", null, "CLI"), el("dd", { class: "mono" }, `${pv.cli.version} · ${pv.cli.binary}`),
+          el("dt", null, "工作目錄"), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
+          el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
+          el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
+      }
+      kids.push(el("p", { class: "small muted" },
+        "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是 Profile 的設定值。" +
+        "使用者在進階終端仍可自行改變 CLI 行為，沒有一項是不可繞過的邊界。"));
+      kids.push(el("div", { class: "agent-launch-labels" },
+        Object.entries(pv.derived_labels || {}).map(([name, lab]) =>
+          el("div", { class: "agent-launch-label" },
+            el("div", { class: "row", style: "justify-content:space-between" },
+              el("strong", null, name),
+              badge(lab.level, "b-mute plain", "套用程度")),
+            el("div", { class: "small" }, lab.note),
+            lab.unknown_reason && lab.unknown_reason !== "none"
+              ? el("div", { class: "small muted" }, `未知或未測：${lab.unknown_reason}`) : null))));
+      setKids(out, ...kids);
+    }
+
+    async function doPreview() {
+      if (busy) return;
+      busy = true;
+      previewBtn.disabled = true;
+      invalidate("正在產生預覽…");
+      try {
+        const res = await api.post("/api/native/agent-previews", {
+          profile_id: p.id, workdir: workdirInput.value.trim(), commit: !!commitBox.checked });
+        renderPreview(res.preview);
+        current = res.preview.launchable ? res.preview : null;
+        confirmBtn.disabled = !current;
+      } catch (err) {
+        invalidate("無法產生預覽：" + err.message);
+      } finally {
+        busy = false;
+        previewBtn.disabled = false;
+      }
+    }
+
+    async function doLaunch() {
+      if (busy || !current) return;
+      busy = true;
+      confirmBtn.disabled = true;
+      const pv = current;
+      current = null;  // a preview is single use, whatever the outcome
+      try {
+        const res = await api.post("/api/native/agent-launches", {
+          preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true });
+        toast("已啟動（Profile 受管）");
+        closeModal();
+        location.hash = `#/term/${encodeURIComponent(res.launch.session.session_id)}`;
+      } catch (err) {
+        invalidate("啟動未完成：" + err.message + "　請重新產生預覽。");
+      } finally {
+        busy = false;
       }
     }
   }

@@ -32,6 +32,7 @@ import queue as queue_mod
 from urllib.parse import unquote
 
 from . import annotations
+from . import agent_launch
 from . import agent_profiles
 from . import armory
 from . import config as cfg
@@ -105,6 +106,17 @@ class Console:
             kind=self.runtime_kind, autostart=True)
         # Store's live snapshot must come from the same backend.
         self.store.runtime = self.runtime
+        # Profile-managed launches (R3 S0): work directories must be inside this root.
+        self.managed_root = Path.home()
+        self._previews = None
+
+    def previews(self):
+        """Preview store for Profile-managed launches; native runtime only."""
+        with self.lock:
+            if self._previews is None:
+                self._previews = agent_launch.PreviewStore(
+                    self.runtime, allowed_root=lambda: str(self.managed_root.resolve()))
+            return self._previews
 
     def runtime_unavailable_message(self) -> str:
         if getattr(self, "runtime_kind", "herdr") == "native":
@@ -404,6 +416,10 @@ def make_handler(console: Console):
                     return self._json(console.runtime.focus(target))
                 if path == "/api/native/sessions":
                     return self._native_open(self._body())
+                if path == "/api/native/agent-previews":
+                    return self._agent_preview(self._body())
+                if path == "/api/native/agent-launches":
+                    return self._agent_launch(self._body())
                 if path.startswith("/api/native/sessions/") and path.endswith("/close"):
                     return self._native_close(unquote(path[len("/api/native/sessions/"):-len("/close")]))
                 if path == "/api/tasks":
@@ -680,6 +696,60 @@ def make_handler(console: Console):
                 return self._error(400, str(exc))
             console.store.live(force=True)  # new pane must be a live target at once
             return self._json({"ok": True, "session": info})
+
+        # Profile-managed launch (R3 S0): preview, then confirm ---------------
+
+        def _load_profile(self, profile_id):
+            index = console.skill_index()
+            known_roles = {r.get("role_id") for r in console.store.static().get("roles", [])
+                           if r.get("role_id")}
+            return agent_profiles.get_profile(profile_id, known_skills=set(index.keys()),
+                                              known_roles=known_roles)
+
+        def _agent_preview(self, body: dict):
+            """What a Profile-managed launch would apply. Starts nothing. Raw
+            argv, env, settings and credentials are not accepted here."""
+            if getattr(console, "runtime_kind", "herdr") != "native":
+                return self._error(409, "目前使用 Herdr 模式；請在設定改為 native 並重新啟動")
+            extra = set(body) - {"profile_id", "workdir", "commit", "network", "tool"}
+            if extra:
+                return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
+            profile = self._load_profile(body.get("profile_id"))
+            if profile is None:
+                return self._error(404, "找不到此 Profile")
+            tool = body.get("tool")
+            if tool is not None and (tool == "shared" or tool != (profile.get("model") or {}).get("tool")):
+                return self._error(400, "tool 必須與 Profile 的工具相符，且不可為 shared")
+            workdir = body.get("workdir")
+            root = console.managed_root.resolve()
+            if (not isinstance(workdir, str) or not os.path.isabs(workdir)
+                    or not Path(os.path.realpath(workdir)).is_dir()
+                    or not Path(os.path.realpath(workdir)).is_relative_to(root)):
+                return self._error(400, "workdir 必須是家目錄內既存的資料夾")
+            try:
+                preview = console.previews().create(profile, workdir, body.get("commit", False),
+                                                    body.get("network"))
+            except agent_launch.PreviewError as exc:
+                return self._json({"error": str(exc), "code": exc.code}, exc.status)
+            return self._json({"ok": True, "preview": preview})
+
+        def _agent_launch(self, body: dict):
+            """Confirm a preview and start it. Anything that changed since the
+            preview answers 409 and needs a new preview."""
+            if getattr(console, "runtime_kind", "herdr") != "native":
+                return self._error(409, "目前使用 Herdr 模式；請在設定改為 native 並重新啟動")
+            extra = set(body) - {"preview_id", "expected_settings_digest", "user_confirmed", "cols", "rows"}
+            if extra:
+                return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
+            cols, rows = self._term_dims(body)
+            try:
+                result = console.previews().consume(
+                    body.get("preview_id"), body.get("expected_settings_digest"),
+                    body.get("user_confirmed"), self._load_profile, cols=cols, rows=rows)
+            except agent_launch.PreviewError as exc:
+                return self._json({"error": str(exc), "code": exc.code}, exc.status)
+            console.store.live(force=True)  # the new pane must be a live target at once
+            return self._json({"ok": True, "launch": result})
 
         def _native_close(self, sid: str):
             if getattr(console, "runtime_kind", "herdr") != "native":
@@ -1032,5 +1102,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if console._previews is not None:
+            console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit
         httpd.server_close()

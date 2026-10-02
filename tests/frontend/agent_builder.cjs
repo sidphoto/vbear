@@ -439,5 +439,100 @@ function findModalInBody() {
     console.log("ok delete confirm → POST to /<id>/delete");
   }
 
+  // Preview-and-launch dialog (R3 S0): preview first, confirm only when the
+  // server says launchable, single use, navigate to the new terminal.
+  {
+    const posts = [];
+    const label = (level, note, unknown = "none") => ({ level, note, source_version: { value: "2.1.286" },
+      settings_digest: "d".repeat(64), path_scope: "不適用", evidence_refs: [], bypass: "x", unknown_reason: unknown });
+    const labels = { Read: label("僅意圖", "讀取不隔離"), Write: label("部分強制", "Bash 寫入受限"),
+      Test: label("僅意圖", "可執行指令"), Commit: label("未限制", ".git 可寫", "未測試 denyWrite .git"),
+      Deploy: label("不授予", "不提供"), Network: label("強制（限已測路徑、版本與執行層）", "空 allowlist"),
+      Filesystem: label("強制（限已測路徑、版本與執行層）", "寫入邊界") };
+    const launchable = { preview_id: "p-" + "a".repeat(32), launchable: true, reasons: [],
+      cli: { binary: "/x/claude", version: "2.1.286" }, settings_digest: "d".repeat(64),
+      canonical_paths: { workdir: "/Users/u/work", scratch: "/private/tmp/sc-abc" },
+      derived_labels: labels, expires_at: 2000000000 };
+    const blocked = { preview_id: null, launchable: false,
+      reasons: [{ code: "commit_not_enforceable", message: "目前無法強制不 commit" }], cli: null,
+      settings_digest: null, canonical_paths: { workdir: "/Users/u/work", scratch: null },
+      derived_labels: labels, expires_at: null };
+    const ctx = freshContext({
+      "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
+      "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
+      "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
+      "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
+                                                          usage: { sessions: [] }, herdr: { available: true, problems: [] } }),
+      "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
+      "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
+      "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
+      "GET /api/agent-profiles":     () => jsonResponse({ ok: true, profiles: profilesList }),
+      "GET /api/agent-builder/catalog": () => jsonResponse(catalogBody),
+      "POST /api/native/agent-previews": (_u, o) => {
+        const body = JSON.parse(o.body);
+        posts.push({ url: "previews", body });
+        return jsonResponse({ ok: true, preview: body.commit ? launchable : blocked });
+      },
+      "POST /api/native/agent-launches": (_u, o) => {
+        posts.push({ url: "launches", body: JSON.parse(o.body) });
+        return jsonResponse({ ok: true, launch: { state: "profile_managed", session: { session_id: "n-0123456789ab" } } });
+      },
+    });
+    const tick = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null);
+    await switchToAgentTab();
+    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
+      && /First/.test(n.textContent || "")).dispatch("click");
+    await tick();
+    const openBtn = walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "預覽並啟動");
+    assert.ok(openBtn, "detail view offers 預覽並啟動");
+    openBtn.dispatch("click");
+    await tick();
+    const modal = findModalInBody();
+    assert.ok(modal, "launch dialog opened");
+    const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
+    const workdir = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "text");
+    const commit = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+    assert.strictEqual(button("確認啟動").disabled, true, "confirm disabled before any preview");
+
+    workdir.value = "/Users/u/work";
+    button("產生預覽").dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts[0].body, { profile_id: "p-1", workdir: "/Users/u/work", commit: false });
+    assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "目前無法強制不 commit"),
+              "non-launchable preview shows the reason");
+    assert.strictEqual(button("確認啟動").disabled, true, "confirm stays disabled when not launchable");
+
+    commit.checked = true;
+    commit.dispatch("change");
+    button("產生預覽").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[1].body.commit, true);
+    for (const name of Object.keys(labels)) assert.ok(findText(modal, name), `label ${name} rendered`);
+    assert.ok(findText(modal, "未限制") && findText(modal, "未測試 denyWrite .git"), "level and unknown reason shown");
+    assert.ok(findText(modal, "沒有一項是不可繞過的邊界"), "bypass disclosure shown");
+    assert.strictEqual(button("確認啟動").disabled, false, "confirm enabled for a launchable preview");
+
+    workdir.value = "/Users/u/other";
+    workdir.dispatch("input");
+    assert.strictEqual(button("確認啟動").disabled, true, "changing an input invalidates the preview");
+    button("確認啟動").dispatch("click");
+    await tick();
+    assert.ok(!posts.some((x) => x.url === "launches"), "no launch without a current preview");
+
+    button("產生預覽").dispatch("click");
+    await tick();
+    button("確認啟動").dispatch("click");
+    await tick();
+    const launch = posts.find((x) => x.url === "launches");
+    assert.deepStrictEqual(launch.body, { preview_id: launchable.preview_id,
+      expected_settings_digest: launchable.settings_digest, user_confirmed: true });
+    assert.strictEqual(posts.filter((x) => x.url === "launches").length, 1, "exactly one launch request");
+    assert.strictEqual(ctx.location.hash, "#/term/n-0123456789ab", "navigates to the new terminal");
+    assert.ok(!findModalInBody(), "dialog closed after launch");
+    console.log("ok preview → confirm → launch dialog");
+  }
+
   console.log("\nALL AGENT BUILDER FRONTEND TESTS PASSED");
 })().catch((e) => { console.error(e); process.exitCode = 1; });
