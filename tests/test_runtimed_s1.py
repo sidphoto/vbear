@@ -296,7 +296,8 @@ class ValidationTests(SessionCase):
         self.assertEqual(self.rpc("close", session_id="n-000000000000")["error"]["code"], "not_found")
 
     def test_env_allowlist_and_path(self):
-        with mock.patch.dict(os.environ, {"SID_R2_SECRET": "leak", "PATH": "/usr/bin:/bin"}):
+        # Isolate the daemon fallback from the developer/CI shell's TERM.
+        with mock.patch.dict(os.environ, {"SID_R2_SECRET": "leak", "PATH": "/usr/bin:/bin", "TERM": ""}):
             sid = self.open(["/usr/bin/env"])
             self.wait_for(lambda: (self.info(sid) or {}).get("exited"), msg="env exit")
         out = self.output(sid).decode()

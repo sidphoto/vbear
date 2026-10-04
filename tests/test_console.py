@@ -19,6 +19,10 @@ import urllib.request
 from pathlib import Path
 
 ORIGINAL_PATH = os.environ.get("PATH", "")
+# Only this module's private standalone run may remove the shared fake HOME.
+# Under unittest discovery a preceding sibling pins HOME for the whole suite;
+# deleting it here breaks later native-runtime tests that still use Path.home().
+_OWN_TEMP = "SID_CONSOLE_HOME" not in os.environ
 # Reuse the prior sibling's FAKE_HOME when one is already pinned, so that
 # `unittest discover`'s module-import-time HOME mutation by whichever
 # sibling loaded first sticks for the whole process. Same guard as
@@ -2394,7 +2398,8 @@ class TerminalRouteTests(_HostileBase):
 
 
 def tearDownModule():
-    shutil.rmtree(FAKE_HOME, ignore_errors=True)
+    if _OWN_TEMP:
+        shutil.rmtree(FAKE_HOME, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,23 @@ with open("fake-launch.json", "w") as f:
 time.sleep(600)
 '''
 
+FAKE_CODEX_CLI = r'''#!%(py)s
+import json, os, subprocess, sys, time
+if "--version" in sys.argv:
+    print("codex-cli 0.159.2")
+    raise SystemExit(0)
+mode = open("fake-mode").read().strip() if os.path.exists("fake-mode") else "tool"
+pid = None
+if mode == "tool":
+    pid = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True).pid
+with open("fake-launch.json", "w") as f:
+    json.dump({"argv": sys.argv, "cwd": os.getcwd(), "tool_pid": pid, "pid": os.getpid(),
+               "home": os.environ.get("HOME"), "user": os.environ.get("USER"),
+               "logname": os.environ.get("LOGNAME"), "codex_home": os.environ.get("CODEX_HOME"),
+               "tmpdir": os.environ.get("TMPDIR"), "env_names": sorted(os.environ)}, f)
+time.sleep(600)
+'''
+
 
 def gone(pid: int) -> bool:
     r = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
@@ -338,6 +355,40 @@ class ManagedCase(unittest.TestCase):
         self.assertEqual((result["session"]["cols"], result["session"]["rows"]), (100, 30))
         self.launched()
         self.rpc("close", session_id=result["session"]["session_id"])
+
+    def test_runtime_entry_launches_codex_through_shared_lifecycle(self):
+        codex = self.tmp / "codex"
+        codex.write_text(FAKE_CODEX_CLI % {"py": sys.executable}, encoding="utf-8")
+        codex.chmod(0o700)
+        (self.work / "fake-mode").write_text("tool")
+        with mock.patch("sidconsole.runtime.native._pinned_codex_binary", return_value=str(codex)), \
+                mock.patch("sidconsole.runtime.cli_versions.CODEX_INTERACTIVE_FLAGS_SUPPORTED", True):
+            result = self.runtime().create_managed_codex_session(
+                {"cwd": str(self.work), "cols": 100, "rows": 30, "commit": True},
+                allowed_root=str(self.tmp))
+        manifest = self.wait_for(
+            lambda: json.loads((self.base / "sessions" / result["launch_id"] / "manifest.json").read_text()),
+            msg="Codex manifest")
+        self.scratches.append(manifest["scratch"]["path"])
+        self.assertEqual(result["state"], "profile_managed")
+        self.assertEqual(result["session"]["managed"], result["launch_id"])
+        self.assertEqual(manifest["engine"], "codex")
+        seen = self.launched()
+        self.assertIn("--ignore-user-config", seen["argv"])
+        self.assertIn("--ignore-rules", seen["argv"])
+        self.assertIn("--ephemeral", seen["argv"])
+        self.assertIn("--sandbox", seen["argv"])
+        self.assertIn("sandbox_workspace_write.network_access=false", seen["argv"])
+        self.assertEqual(seen["cwd"], str(self.work))
+        self.assertEqual(seen["home"], str(Path.home()))
+        self.assertEqual(seen["user"], os.environ.get("USER") or os.environ.get("LOGNAME"))
+        self.assertEqual(seen["logname"], seen["user"])
+        self.assertIsNone(seen["codex_home"], "use the existing default auth location; do not fake CODEX_HOME")
+        self.assertIsNone(seen["tmpdir"], "do not make shared /tmp writable via TMPDIR")
+        self.assertFalse([n for n in seen["env_names"] if n.startswith(("ORCA_", "HERDR_"))])
+        closed = self.rpc("close", session_id=result["session"]["session_id"])
+        self.assertTrue(closed["result"]["managed"]["cleaned"], closed)
+        self.assertFalse(os.path.exists(manifest["scratch"]["path"]))
 
     def test_runtime_entry_refuses_other_cli_version_and_leaves_nothing(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")

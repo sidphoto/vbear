@@ -444,7 +444,7 @@ function findModalInBody() {
   {
     const posts = [];
     const label = (level, note, unknown = "none") => ({ level, note, source_version: { value: "2.1.286" },
-      settings_digest: "d".repeat(64), path_scope: "不適用", evidence_refs: [], bypass: "x", unknown_reason: unknown });
+      settings_digest: "d".repeat(64), path_scope: "不適用", evidence_refs: [], bypass: "以 ! 開頭的 shell 指令不經沙盒", unknown_reason: unknown });
     const labels = { Read: label("僅意圖", "讀取不隔離"), Write: label("部分強制", "Bash 寫入受限"),
       Test: label("僅意圖", "可執行指令"), Commit: label("未限制", ".git 可寫", "未測試 denyWrite .git"),
       Deploy: label("不授予", "不提供"), Network: label("強制（限已測路徑、版本與執行層）", "空 allowlist"),
@@ -512,6 +512,10 @@ function findModalInBody() {
     for (const name of Object.keys(labels)) assert.ok(findText(modal, name), `label ${name} rendered`);
     assert.ok(findText(modal, "未限制") && findText(modal, "未測試 denyWrite .git"), "level and unknown reason shown");
     assert.ok(findText(modal, "沒有一項是不可繞過的邊界"), "bypass disclosure shown");
+    assert.ok(findText(modal, "可繞過") && findText(modal, "以 ! 開頭的 shell 指令不經沙盒"),
+              "the concrete bypass from the labels is shown (S0 browser QA finding)");
+    assert.strictEqual(walk(modal).filter((n) => (n.textContent || "") === "以 ! 開頭的 shell 指令不經沙盒").length, 1,
+                       "the shared bypass text is shown once, not per label");
     assert.strictEqual(button("確認啟動").disabled, false, "confirm enabled for a launchable preview");
 
     workdir.value = "/Users/u/other";
@@ -532,6 +536,72 @@ function findModalInBody() {
     assert.strictEqual(ctx.location.hash, "#/term/n-0123456789ab", "navigates to the new terminal");
     assert.ok(!findModalInBody(), "dialog closed after launch");
     console.log("ok preview → confirm → launch dialog");
+  }
+
+  // Close button for native sessions (R3 S0 acceptance finding: the console
+  // had no way to close a session, so a managed session was never cleaned).
+  {
+    const posts = [];
+    let reply = { ok: true, closed: "n-0123456789ab", managed: { launch_id: "l-1", cleaned: true } };
+    let failureStatus = 200;
+    const ctx = freshContext({
+      "POST /api/native/sessions/n-0123456789ab/close": (u) => {
+        posts.push(u);
+        return failureStatus === 200 ? jsonResponse(reply) : jsonResponse({ error: "沒有這個 session" }, failureStatus);
+      },
+    });
+    evalAgentBuilderSlice(ctx);
+    const tick = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
+    assert.strictEqual(ctx.closeSessionButton("w1:p2"), null, "herdr panes get no close button");
+    assert.strictEqual(ctx.closeSessionButton("n-xyz"), null, "malformed ids get no close button");
+    // Clicks "關閉 Session", then answers the in-page dialog with confirm or cancel.
+    const confirmDialog = async (answer) => {
+      const dlg = findModalInBody();
+      assert.ok(dlg, "an in-page confirmation dialog opened");
+      const pick = walk(dlg).find((n) => n.tag === "button"
+        && (n.textContent || "").trim() === (answer ? "關閉 Session" : "取消"));
+      assert.ok(pick, "dialog offers the expected button");
+      pick.dispatch("click");
+      await tick();
+      assert.ok(!findModalInBody(), "dialog closed after answering");
+    };
+    const closeVia = async (answer = true) => {
+      ctx.closeSessionButton("n-0123456789ab").dispatch("click");
+      await tick();
+      await confirmDialog(answer);
+    };
+    const btn = ctx.closeSessionButton("n-0123456789ab");
+    assert.ok(btn && (btn.textContent || "").includes("關閉 Session"));
+    btn.dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts, [], "nothing is sent before the dialog is answered");
+    await confirmDialog(true);
+    assert.deepStrictEqual(posts, ["/api/native/sessions/n-0123456789ab/close"]);
+    assert.strictEqual(ctx.location.hash, "#/team", "returns to the team view");
+    const toastNode = walk(body).find((n) => n.getAttribute && n.getAttribute("id") === "toast");
+    assert.ok((toastNode.textContent || "").includes("暫存區與設定已清除"), "cleanup reported");
+
+    reply = { ok: true, closed: "n-0123456789ab", managed: { launch_id: "l-1", cleaned: false, retained_reason: "仍有已觀測的後代程序存活" } };
+    ctx.location.hash = "";
+    await closeVia();
+    assert.ok((toastNode.textContent || "").includes("保留待檢查") && (toastNode.textContent || "").includes("後代程序"),
+              "a retained launch says why");
+
+    ctx.location.hash = "#/workbench?project=p-1";
+    await closeVia();
+    assert.strictEqual(ctx.location.hash, "#/workbench?project=p-1", "keeps the workbench open after close");
+
+    failureStatus = 404;
+    ctx.location.hash = "#/term/n-0123456789ab";
+    await closeVia();
+    assert.strictEqual(ctx.location.hash, "#/team", "returns from the terminal when the session is already gone");
+    assert.ok((toastNode.textContent || "").includes("已不存在或已結束"), "404 is treated as an already ended session");
+
+    posts.length = 0;
+    await closeVia(false);
+    assert.deepStrictEqual(posts, [], "cancelled confirmation sends nothing");
+    assert.ok(!(walk(body).some((n) => n.tag === "script")), "no native confirm() needed");
+    console.log("ok close button for native sessions");
   }
 
   console.log("\nALL AGENT BUILDER FRONTEND TESTS PASSED");

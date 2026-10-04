@@ -1,12 +1,13 @@
-"""Managed Claude launch state: per-session settings, scratch and manifest
-(Phase R3 S2; boundary adopted 2026-10-02 = work directory + session-owned
-controlled scratch).
+"""Managed Claude and Codex launch state: per-session settings, scratch and
+manifest. Both engines share the same daemon ownership, process tracking,
+single-use launch IDs and fail-closed cleanup lifecycle.
 
 Layout (decision D1):
   ``<state>/sessions/<launch-id>/``   0700, holds ``settings.json`` and
                                       ``manifest.json`` (0600)
-  ``/private/tmp/sc-<random>/``       0700 scratch handed to the CLI through
-                                      ``CLAUDE_CODE_TMPDIR``
+  ``/private/tmp/sc-<random>/``       0700 launch-owned scratch; Claude receives
+                                      it as ``CLAUDE_CODE_TMPDIR`` and Codex
+                                      receives it only as an explicit writable root
 
 The scratch is not under the state directory on purpose: Claude Code 2.1.286
 falls back to the shared ``/tmp/claude-<uid>`` when its per-UID temp path
@@ -15,9 +16,10 @@ that. The exact scratch path, inode, uid and mode are recorded in the manifest
 and re-checked before every use and before deletion.
 
 What this module does and does not provide:
-  * Write isolation for Bash-tool commands is enforced by Claude's sandbox and
-    was verified for 2.1.286 with exactly this settings shape and argv. Other
-    CLI versions are refused by the caller's version check.
+  * Engine settings and argv are built here from a pinned manifest; caller raw
+    argv, environment and credentials never enter this module.
+  * The CLI version and settings evidence are engine-specific. A configuration
+    change must be re-tested before its evidence label can claim enforcement.
   * Read isolation between sessions is NOT provided (decision D2).
   * 0700 directories are ownership and lifecycle controls. They are not a
     security boundary between processes of the same user.
@@ -156,6 +158,76 @@ def claude_argv(manifest: dict) -> list[str]:
     return argv
 
 
+def codex_settings(workdir: str, scratch: str, *, sandbox_mode: str,
+                   commit: bool) -> dict:
+    """Codex 0.159.2 settings passed as trusted ``-c`` arguments.
+
+    ``read-only`` has no writable roots. ``workspace-write`` explicitly
+    excludes both shared temporary roots and grants only this work directory,
+    its owned scratch directory, and (when opted in) this repository's .git.
+    Commit remains an opt-in disclosure, not a command-pattern restriction.
+    """
+    if sandbox_mode == "read-only":
+        return {"sandbox_mode": sandbox_mode}
+    if sandbox_mode != "workspace-write":
+        raise LaunchRefused("unsupported_sandbox", "Codex sandbox 模式不支援")
+    if commit is not True:
+        raise LaunchRefused("commit_not_enforceable", "workspace-write 無法排除 .git；需要明確 commit=true")
+    roots = [workdir, scratch]
+    if commit:
+        roots.append(str(Path(workdir) / ".git"))
+    return {
+        "sandbox_mode": sandbox_mode,
+        "sandbox_workspace_write": {
+            "exclude_slash_tmp": True,
+            "exclude_tmpdir_env_var": True,
+            "network_access": False,
+            "writable_roots": roots,
+        },
+    }
+
+
+def codex_argv(manifest: dict) -> list[str]:
+    """Build the Codex command from a validated, private launch manifest."""
+    if manifest.get("engine") != "codex":
+        raise LaunchRefused("manifest_invalid", "Codex argv 需要 Codex manifest")
+    settings = manifest.get("_validated_settings")
+    if not isinstance(settings, dict):
+        raise LaunchRefused("manifest_invalid", "Codex settings 尚未經 launch 驗證")
+    mode = settings.get("sandbox_mode")
+    if mode not in ("read-only", "workspace-write"):
+        raise LaunchRefused("manifest_invalid", "Codex sandbox 模式不符")
+    argv = [manifest["cli_binary"], "--ignore-user-config", "--ignore-rules",
+            "--ephemeral", "--sandbox", mode, "--cd", manifest["canonical_workspace"],
+            "--skip-git-repo-check"]
+    if mode == "workspace-write":
+        sandbox = settings.get("sandbox_workspace_write")
+        if not isinstance(sandbox, dict) or sandbox != codex_settings(
+                manifest["canonical_workspace"], manifest["scratch"]["path"],
+                sandbox_mode=mode, commit=True
+        ).get("sandbox_workspace_write"):
+            raise LaunchRefused("manifest_invalid", "Codex workspace-write 設定不符")
+        for key in ("exclude_slash_tmp", "exclude_tmpdir_env_var", "network_access"):
+            argv += ["-c", f"sandbox_workspace_write.{key}={str(sandbox[key]).lower()}"]
+        roots = json.dumps(sandbox["writable_roots"], ensure_ascii=False, separators=(",", ":"))
+        argv += ["-c", f"sandbox_workspace_write.writable_roots={roots}"]
+    model_id = manifest.get("model_id")
+    if model_id:
+        if not isinstance(model_id, str) or not MODEL_ID_RE.match(model_id):
+            raise LaunchRefused("manifest_invalid", "model id 格式不符")
+        argv += ["--model", model_id]
+    return argv
+
+
+def managed_argv(manifest: dict) -> list[str]:
+    engine = manifest.get("engine")
+    if engine == "claude":
+        return claude_argv(manifest)
+    if engine == "codex":
+        return codex_argv(manifest)
+    raise LaunchRefused("manifest_invalid", "不支援的 managed Agent 引擎")
+
+
 def _check_workdir(workdir: str, allowed_root: str, base: Path) -> str:
     if not isinstance(workdir, str) or not workdir or "\0" in workdir or not os.path.isabs(workdir):
         raise LaunchRefused("invalid_workdir", "工作目錄必須是絕對路徑")
@@ -250,6 +322,75 @@ def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
         os.umask(old_umask)
 
 
+def prepare_codex_launch(base: Path, workdir: str, *, cli_binary: str, cli_version: str,
+                         cli_identity: list[int], allowed_root: str | None = None,
+                         model_id: str | None = None, commit: bool = True,
+                         read_only: bool = False) -> dict:
+    """Prepare a Codex launch without starting a process or changing user state."""
+    uid = os.getuid()
+    base = Path(os.path.realpath(base))
+    canonical = _check_workdir(workdir, allowed_root or str(Path.home()), base)
+    if not isinstance(cli_binary, str) or not os.path.isabs(cli_binary) or os.path.realpath(cli_binary) != cli_binary:
+        raise LaunchRefused("invalid_binary", "CLI 必須是已解析的絕對路徑")
+    if model_id is not None and (not isinstance(model_id, str) or not MODEL_ID_RE.match(model_id)):
+        raise LaunchRefused("invalid_model", "model id 格式不符")
+    if not isinstance(commit, bool) or not isinstance(read_only, bool):
+        raise LaunchRefused("bad_request", "Codex launch flags 必須是布林值")
+    root = base / SESSIONS_DIR
+    old_umask = os.umask(0o077)
+    ldir = scratch = None
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        _owned_dir(root, uid)
+        launch_id = "l-" + secrets.token_hex(8)
+        os.mkdir(root / launch_id, 0o700)
+        ldir = root / launch_id
+        lst = _owned_dir(ldir, uid)
+        scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=SCRATCH_PARENT))
+        if os.path.realpath(scratch) != str(scratch):
+            raise LaunchRefused("unsafe_path", "暫存區路徑含 symlink")
+        sst = _owned_dir(scratch, uid)
+        settings = codex_settings(canonical, str(scratch),
+                                  sandbox_mode="read-only" if read_only else "workspace-write",
+                                  commit=commit)
+        settings_path = ldir / SETTINGS
+        _write_private(settings_path, json.dumps(settings, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        manifest = {
+            "manifest_version": MANIFEST_VERSION,
+            "launch_id": launch_id,
+            "native_session_id": None,
+            "engine": "codex",
+            "cli_binary": cli_binary,
+            "cli_version": cli_version,
+            "cli_identity": list(cli_identity),
+            "model_id": model_id,
+            "settings_path": str(settings_path),
+            "settings_sha256": _sha256(settings_path),
+            "canonical_workspace": canonical,
+            "allowed_root": os.path.realpath(allowed_root or str(Path.home())),
+            "launch_dir": {"path": str(ldir), "inode": lst.st_ino, "uid": lst.st_uid},
+            "scratch": {"path": str(scratch), "inode": sst.st_ino, "uid": sst.st_uid},
+            "state": "prepared",
+            "created": time.time(),
+            "leader": None,
+            "observed": [],
+            "boundary": {
+                "write": "Codex OS sandbox mode selected per launch; evidence is version/settings specific",
+                "read": "not isolated",
+                "network": "explicitly disabled in workspace-write; read-only uses its own sandbox policy",
+            },
+        }
+        _write_private(ldir / MANIFEST, json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        return manifest
+    except BaseException:
+        for p in (scratch, ldir):
+            if p is not None:
+                shutil.rmtree(p, ignore_errors=True)
+        raise
+    finally:
+        os.umask(old_umask)
+
+
 def _read_manifest(ldir: Path, uid: int) -> dict:
     path = ldir / MANIFEST
     _owned_file(path, uid)
@@ -271,7 +412,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
         _owned_dir(sessions_root(base), uid)
         lst = _owned_dir(ldir, uid)
         m = _read_manifest(ldir, uid)
-        if m.get("launch_id") != launch_id or m.get("engine") != "claude":
+        if m.get("launch_id") != launch_id or m.get("engine") not in {"claude", "codex"}:
             raise LaunchRefused("manifest_invalid", "manifest 與 launch id 不符")
         if m["launch_dir"] != {"path": str(ldir), "inode": lst.st_ino, "uid": uid}:
             raise LaunchRefused("drift", "launch 目錄身分已改變")
@@ -287,7 +428,8 @@ def load_validated(base: Path, launch_id: str) -> dict:
         sst = _owned_dir(scratch, uid)
         if sst.st_ino != m["scratch"]["inode"] or sst.st_uid != m["scratch"]["uid"]:
             raise LaunchRefused("drift", "暫存區身分已改變")
-        if len(per_uid_tmp(str(scratch), uid).encode("utf-8")) > CLAUDE_TMP_PATH_LIMIT:
+        if (m["engine"] == "claude"
+                and len(per_uid_tmp(str(scratch), uid).encode("utf-8")) > CLAUDE_TMP_PATH_LIMIT):
             raise LaunchRefused("scratch_path_too_long", "暫存路徑過長")
         workdir = m.get("canonical_workspace")
         if (not isinstance(workdir, str) or os.path.realpath(workdir) != workdir
@@ -296,9 +438,23 @@ def load_validated(base: Path, launch_id: str) -> dict:
         # The same rules as at preparation, against the state as it is now.
         if _check_workdir(workdir, m.get("allowed_root") or str(Path.home()), Path(os.path.realpath(base))) != workdir:
             raise LaunchRefused("drift", "工作目錄不再符合規則")
-        expected = claude_settings(workdir, str(scratch), uid)
-        if json.loads(settings_path.read_text(encoding="utf-8")) != expected:
+        actual_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        if m["engine"] == "claude":
+            expected = claude_settings(workdir, str(scratch), uid)
+        else:
+            mode = actual_settings.get("sandbox_mode") if isinstance(actual_settings, dict) else None
+            if mode == "read-only":
+                expected = codex_settings(workdir, str(scratch), sandbox_mode=mode, commit=False)
+            elif mode == "workspace-write":
+                expected = codex_settings(workdir, str(scratch), sandbox_mode=mode, commit=True)
+            else:
+                raise LaunchRefused("manifest_invalid", "Codex sandbox policy 欄位不符")
+        if actual_settings != expected:
             raise LaunchRefused("drift", "settings 不是核准的形狀")
+        if m["engine"] == "codex":
+            # Pass exactly the object checked above to argv construction. Do
+            # not reopen the settings file between validation and spawn.
+            m["_validated_settings"] = actual_settings
         binary = m.get("cli_binary")
         if not isinstance(binary, str) or os.path.realpath(binary) != binary:
             raise LaunchRefused("drift", "CLI 路徑已改變")

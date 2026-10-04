@@ -27,6 +27,7 @@ import base64
 import binascii
 import json
 import os
+import platform
 import queue as queue_mod
 import re
 import secrets
@@ -68,6 +69,15 @@ def _pinned_claude_binary() -> str | None:
     to PATH lookup. Either way the version check decides."""
     pinned = Path.home() / ".local/share/claude/versions" / _cli_versions.EXPECTED_VERSIONS["claude"]
     return str(pinned) if pinned.is_file() else None
+
+
+def _pinned_codex_binary() -> str:
+    """Install path of the fixed Codex baseline; never fall back to newer PATH."""
+    machine = platform.machine().lower()
+    arch = "aarch64" if machine in {"arm64", "aarch64"} else "x86_64"
+    release = f"{_cli_versions.EXPECTED_VERSIONS['codex']}-{arch}-apple-darwin"
+    pinned = Path.home() / ".codex/packages/standalone/releases" / release / "bin/codex"
+    return str(pinned)
 
 
 def _line(obj: dict) -> bytes:
@@ -472,22 +482,51 @@ class NativeRuntime(RuntimeBase):
             model_id=spec.get("model_id") or None)
         return {"manifest": manifest, "assertion": assertion}
 
+    def prepare_managed_codex_launch(self, spec: dict, *, allowed_root: str | None = None) -> dict:
+        """Prepare Codex 0.159.2 with its user config/rules and session persistence disabled.
+
+        The real HOME remains so the CLI can use its existing login. The runtime
+        neither reads nor copies auth material and does not set CODEX_HOME.
+        """
+        if not _cli_versions.CODEX_INTERACTIVE_FLAGS_SUPPORTED:
+            raise NativeRuntimeError(
+                "固定版 Codex CLI 不支援在互動 TUI 同時使用 ignore-user-config/ephemeral；拒絕受管啟動")
+        if not isinstance(spec, dict) or set(spec) - {"cwd", "model_id", "commit", "read_only"}:
+            raise NativeRuntimeError("managed Agent spec 欄位無效")
+        cwd = spec.get("cwd")
+        if (not isinstance(cwd, str) or "\0" in cwd
+                or not os.path.isabs(cwd) or not os.path.isdir(cwd)):
+            raise NativeRuntimeError("managed Agent cwd 必須是既存的絕對路徑資料夾")
+        canonical_cwd = os.path.realpath(cwd)
+        assertion = _cli_versions.assert_cli_version(
+            "codex", _pinned_codex_binary(), cwd=canonical_cwd)
+        base = self._base or cfg.state_dir()
+        manifest = _agent_sessions.prepare_codex_launch(
+            base, canonical_cwd, cli_binary=assertion.binary_path,
+            cli_version=assertion.observed_version,
+            cli_identity=list(assertion._binary_identity), allowed_root=allowed_root,
+            model_id=spec.get("model_id") or None,
+            commit=spec.get("commit", True), read_only=spec.get("read_only", False))
+        return {"manifest": manifest, "assertion": assertion}
+
     def discard_prepared_claude_launch(self, launch_id: str) -> dict:
         """Remove a prepared launch that will not be started (expired preview)."""
         return _agent_sessions.discard_prepared(self._base or cfg.state_dir(), launch_id)
 
-    def launch_prepared_claude(self, prepared: dict, *, cols: int | None = None,
-                               rows: int | None = None) -> dict:
+    def discard_prepared_agent_launch(self, launch_id: str) -> dict:
+        """Shared Claude/Codex prepared-launch cleanup lifecycle."""
+        return self.discard_prepared_claude_launch(launch_id)
+
+    def launch_prepared_agent(self, prepared: dict, *, cols: int | None = None,
+                              rows: int | None = None) -> dict:
         """Step 2: hand a prepared launch to the daemon. The daemon re-validates
         the manifest, settings, paths and CLI file and builds argv and
         environment itself. Every failed precondition refuses the launch;
         nothing falls back to an unmanaged or looser session.
 
-        ``profile_managed`` means: Bash-tool writes are confined by Claude's
-        sandbox to the work directory and the session scratch (verified for
-        this CLI version and settings only), Edit/Write tools are not offered,
-        network is a strict empty allowlist. Reads are not isolated, and a user
-        typing in the advanced terminal can still change what the CLI does.
+        The daemon validates the same engine-specific settings used at preview.
+        A user typing in the advanced terminal can still change CLI behavior;
+        the caller must keep that bypass explicit in its labels.
         """
         manifest, assertion = prepared["manifest"], prepared["assertion"]
         dims = {}
@@ -525,6 +564,11 @@ class NativeRuntime(RuntimeBase):
             "state": "profile_managed",
         }
 
+    def launch_prepared_claude(self, prepared: dict, *, cols: int | None = None,
+                               rows: int | None = None) -> dict:
+        """Compatibility wrapper for existing Claude callers."""
+        return self.launch_prepared_agent(prepared, cols=cols, rows=rows)
+
     def create_managed_claude_session(self, spec: dict, *, allowed_root: str | None = None) -> dict:
         """Internal one-shot form of prepare + launch (no preview). Not on the HTTP API."""
         if not isinstance(spec, dict) or set(spec) - {"cwd", "cols", "rows", "model_id"}:
@@ -537,6 +581,15 @@ class NativeRuntime(RuntimeBase):
         prepared = self.prepare_managed_claude_launch(
             {k: spec[k] for k in ("cwd", "model_id") if k in spec}, allowed_root=allowed_root)
         return self.launch_prepared_claude(prepared, cols=spec.get("cols"), rows=spec.get("rows"))
+
+    def create_managed_codex_session(self, spec: dict, *, allowed_root: str | None = None) -> dict:
+        """Internal one-shot Codex form; preview APIs use prepare/launch separately."""
+        if not isinstance(spec, dict) or set(spec) - {"cwd", "cols", "rows", "model_id", "commit", "read_only"}:
+            raise NativeRuntimeError("managed Agent spec 欄位無效")
+        prepared = self.prepare_managed_codex_launch(
+            {k: spec[k] for k in ("cwd", "model_id", "commit", "read_only") if k in spec},
+            allowed_root=allowed_root)
+        return self.launch_prepared_agent(prepared, cols=spec.get("cols"), rows=spec.get("rows"))
 
     def _pane_lock(self, sid: str) -> threading.Lock:
         with self._lock:
@@ -639,15 +692,20 @@ class NativeRuntime(RuntimeBase):
         return view
 
     def close(self, session_id: str) -> bool:
+        return self.close_session(session_id) is not None
+
+    def close_session(self, session_id: str) -> dict | None:
+        """Close and return the daemon's result (including, for a managed
+        session, whether its scratch and settings were cleaned), or None."""
         if not self.validate_target(session_id):
-            return False
+            return None
         try:
             r = self._rpc("close", timeout=_d.CLOSE_WAIT + 2, session_id=session_id)
         except (OSError, ValueError):
-            return False
+            return None
         # The view receives terminal.closed from the daemon; the SSE loop
         # delivers it and then calls close_if_current, as for Herdr.
-        return bool(r.get("ok"))
+        return r.get("result") or {} if r.get("ok") else None
 
     def observe(self, session_id: str, cols: int = 80, rows: int = 24) -> SessionView | None:
         if not self.validate_target(session_id):

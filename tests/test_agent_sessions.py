@@ -35,6 +35,9 @@ class LaunchStateCase(unittest.TestCase):
         self.binary = self.tmp / "claude"
         self.binary.write_text(f"#!{sys.executable}\nprint('2.1.286 (Claude Code)')\n", encoding="utf-8")
         self.binary.chmod(0o700)
+        self.codex_binary = self.tmp / "codex"
+        self.codex_binary.write_text(f"#!{sys.executable}\nprint('codex-cli 0.159.2')\n", encoding="utf-8")
+        self.codex_binary.chmod(0o700)
         self.scratches: list[str] = []
 
     def tearDown(self):
@@ -47,6 +50,14 @@ class LaunchStateCase(unittest.TestCase):
         m = a.prepare_claude_launch(
             self.base, str(workdir or self.work), cli_binary=str(self.binary), cli_version="2.1.286",
             cli_identity=a.binary_identity(str(self.binary)), allowed_root=kw.pop("allowed_root", str(self.tmp)), **kw)
+        self.scratches.append(m["scratch"]["path"])
+        return m
+
+    def prepare_codex(self, *, read_only=False, commit=True):
+        m = a.prepare_codex_launch(
+            self.base, str(self.work), cli_binary=str(self.codex_binary), cli_version="0.159.2",
+            cli_identity=a.binary_identity(str(self.codex_binary)), allowed_root=str(self.tmp),
+            read_only=read_only, commit=commit)
         self.scratches.append(m["scratch"]["path"])
         return m
 
@@ -89,6 +100,49 @@ class LaunchStateCase(unittest.TestCase):
             str(self.binary), "--safe-mode", "--settings", m["settings_path"],
             "--permission-mode", "acceptEdits", "--tools", "Bash",
             "--disallowedTools", "Edit,Write", "--strict-mcp-config"])
+
+    def test_codex_prepare_and_argv_are_pinned_and_workspace_scoped(self):
+        m = self.prepare_codex()
+        self.assertEqual(m["engine"], "codex")
+        self.assertNotIn("commit", m)
+        self.assertNotIn("read_only", m)
+        self.assertEqual(mode(Path(m["settings_path"])), 0o600)
+        settings = json.loads(Path(m["settings_path"]).read_text())
+        self.assertEqual(settings, a.codex_settings(str(self.work), m["scratch"]["path"],
+                                                    sandbox_mode="workspace-write", commit=True))
+        loaded = a.load_validated(self.base, m["launch_id"])
+        argv = a.managed_argv(loaded)
+        self.assertEqual(argv[:10], [str(self.codex_binary), "--ignore-user-config", "--ignore-rules",
+                                     "--ephemeral", "--sandbox", "workspace-write", "--cd",
+                                     str(self.work), "--skip-git-repo-check", "-c"])
+        self.assertIn("sandbox_workspace_write.exclude_slash_tmp=true", argv)
+        self.assertIn("sandbox_workspace_write.exclude_tmpdir_env_var=true", argv)
+        self.assertIn("sandbox_workspace_write.network_access=false", argv)
+        roots = "sandbox_workspace_write.writable_roots=" + json.dumps(
+            [str(self.work), m["scratch"]["path"], str(self.work / ".git")], separators=(",", ":"))
+        self.assertIn(roots, argv)
+        self.assertNotIn("CODEX_HOME", json.dumps(loaded))
+
+    def test_codex_read_only_settings_have_no_writable_roots(self):
+        m = self.prepare_codex(read_only=True, commit=False)
+        self.assertEqual(json.loads(Path(m["settings_path"]).read_text()), {"sandbox_mode": "read-only"})
+        loaded = a.load_validated(self.base, m["launch_id"])
+        argv = a.managed_argv(loaded)
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")
+        self.assertFalse(any("writable_roots" in arg for arg in argv))
+
+    def test_codex_workspace_write_refuses_commit_false_and_settings_drift(self):
+        with self.assertRaises(a.LaunchRefused) as c:
+            a.codex_settings(str(self.work), "/private/tmp/sc-test", sandbox_mode="workspace-write", commit=False)
+        self.assertEqual(c.exception.code, "commit_not_enforceable")
+        m = self.prepare_codex()
+        path = Path(m["settings_path"])
+        data = json.loads(path.read_text())
+        data["sandbox_workspace_write"]["network_access"] = True
+        path.write_text(json.dumps(data))
+        with self.assertRaises(a.LaunchRefused) as c:
+            a.load_validated(self.base, m["launch_id"])
+        self.assertEqual(c.exception.code, "drift")
 
     def test_workdir_rules(self):
         cases = [

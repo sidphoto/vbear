@@ -756,11 +756,15 @@ def make_handler(console: Console):
                 return self._error(409, "目前使用 Herdr 模式")
             if not console.runtime.validate_target(sid):
                 return self._error(400, "無效的 session id")
-            ok = console.runtime.close(sid)
+            closer = getattr(console.runtime, "close_session", None)
+            result = closer(sid) if closer else ({} if console.runtime.close(sid) else None)
             console.store.live(force=True)
-            if not ok:
+            if result is None:
                 return self._error(404, "沒有這個 session 或無法關閉")
-            return self._json({"ok": True, "closed": sid})
+            body = {"ok": True, "closed": sid}
+            if result.get("managed") is not None:
+                body["managed"] = result["managed"]  # cleaned, or retained with the reason
+            return self._json(body)
 
         # handlers ---------------------------------------------------------
 

@@ -1,16 +1,13 @@
-"""Launch preview and confirmation for Profile-managed Claude sessions (Phase R3 S0).
+"""Launch preview and confirmation for Profile-managed Claude/Codex sessions.
 
 Flow: build a preview from a Profile and a work directory -> show what this
 launch will and will not enforce -> the user confirms -> re-validate -> start.
 A preview is single use and short lived; a changed Profile, settings digest,
 CLI file or path invalidates it and a new preview is required.
 
-What a preview states is derived from evidence, never from intent:
-only one Claude configuration has been verified (CLI baseline version, Bash
-tool confined by Claude's sandbox to the work directory and a session scratch,
-Edit/Write tools not offered, empty network allowlist). A Profile that this
-configuration cannot honour is reported as not launchable, with the reason;
-nothing is silently widened or narrowed to make it fit.
+What a preview states is derived from engine-specific evidence, never from
+intent. A Profile that the exact pinned CLI configuration cannot honour is
+reported as not launchable, with the reason; nothing is silently widened.
 
 The seven labels are launch metadata. They are not stored in the Profile and
 they are not seven grades of one permission. None of them is an unbypassable
@@ -22,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -33,7 +31,10 @@ from .runtime.native import NativeRuntimeError, NativeRuntimeUnavailable
 PREVIEW_TTL = 300.0
 PREVIEW_ID_BYTES = 16
 MAX_PREVIEWS = 32
-BYPASS_PTY = "使用者可在進階終端自行輸入指令或改變 CLI 行為；此標籤不是不可繞過的邊界"
+BYPASS_PTY = ("使用者在進階終端可自行改變 CLI 行為；例如在 Claude Code 以 ! 開頭直接執行的 shell 指令"
+              "不經沙盒（S0 驗收實測可寫入家目錄）。此標籤只約束 Agent，不是不可繞過的邊界")
+BYPASS_CODEX_PTY = ("使用者在 Codex Terminal 可輸入 ! 直接執行使用者 shell，繞過 Codex sandbox；此標籤只描述 Agent 執行層，"
+                    "不代表 OS 對使用者 shell 的隔離。")
 EVIDENCE_S2 = ".local/spikes/r3/round9/s2-record.md"
 EVIDENCE_T01 = ".local/spikes/r3/round9/controlled-temp-final-record.md"
 # Evidence for the empty network allowlist with this exact settings shape
@@ -42,6 +43,12 @@ EVIDENCE_T01 = ".local/spikes/r3/round9/controlled-temp-final-record.md"
 # request succeeded outside the sandbox. Set to None to report Network as
 # unknown again if the settings shape or the CLI baseline changes.
 NETWORK_EVIDENCE: str | None = ".local/spikes/r3/round9/controlled-temp-evidence/s0-summary.json"
+CODEX_ACCEPTANCE_EVIDENCE: str | None = None
+CODEX_EVIDENCE_CHECKS = frozenset({
+    "readonly_workspace_denied", "readonly_tmp_denied", "workspace_write_allowed",
+    "scratch_write_allowed", "shared_tmp_denied", "home_write_denied",
+    "network_denied", "git_write_allowed",
+})
 
 ENFORCED = "強制（限已測路徑、版本與執行層）"
 PARTIAL = "部分強制"
@@ -61,6 +68,30 @@ class PreviewError(Exception):
         self.code = code
 
 
+def _codex_evidence_reference() -> str | None:
+    """Return the evidence path only when its small acceptance record is complete."""
+    reference = CODEX_ACCEPTANCE_EVIDENCE
+    if not isinstance(reference, str) or not reference or Path(reference).is_absolute() or ".." in Path(reference).parts:
+        return None
+    path = Path(__file__).resolve().parents[1] / reference
+    try:
+        if path.is_symlink() or path.stat().st_size > 32 * 1024:
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("engine") != "codex" or record.get("version") != "0.159.2":
+        return None
+    if not isinstance(record.get("binary_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", record["binary_sha256"]):
+        return None
+    checks = record.get("checks")
+    if not isinstance(checks, dict) or not CODEX_EVIDENCE_CHECKS.issubset(checks):
+        return None
+    if not all(checks[name] is True for name in CODEX_EVIDENCE_CHECKS):
+        return None
+    return reference
+
+
 def profile_digest(profile: dict) -> str:
     """Digest of the validated Profile snapshot (the Profile has no revision)."""
     stable = {k: v for k, v in profile.items() if not k.startswith("_")}
@@ -77,9 +108,9 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         out.append({"code": code, "message": message})
 
     tool = (profile.get("model") or {}).get("tool")
-    if tool != "claude":
+    if tool not in {"claude", "codex"}:
         block("tool_not_launchable",
-              "shared 不是可啟動的工具" if tool == "shared" else "目前只有 Claude 有已驗證的受管啟動設定")
+              "shared 不是可啟動的工具" if tool == "shared" else "此 Agent 工具沒有受管啟動設定")
     if profile.get("enabled") is False:
         block("profile_disabled", "此 Profile 已停用")
     intents = profile.get("permission_intents") or {}
@@ -89,7 +120,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     if intents.get("read") == "deny":
         block("read_deny_unenforceable", "無法強制禁止讀取：讀取範圍沒有被隔離")
     if intents.get("write") == "deny":
-        block("readonly_unverified", "唯讀設定尚未在此啟動架構下驗證；已驗證的設定允許在工作目錄寫入")
+        block("readonly_unverified", "此 R3 Profile 啟動組合尚未驗證唯讀模式；不會退化成可寫模式")
     if intents.get("test") == "deny":
         block("test_deny_unenforceable", "無法強制禁止執行指令：已驗證的設定會提供 Bash 工具")
     if intents.get("deploy") == "allow":
@@ -105,12 +136,18 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     if not (isinstance(network, dict) and network.get("enabled") is False
             and not network.get("approved_domains")):
         block("network_not_available", "已驗證的設定只有關閉網路（空 allowlist）；不支援開啟網路或指定網域")
+    if tool == "codex" and not cli_versions.CODEX_INTERACTIVE_FLAGS_SUPPORTED:
+        block("codex_interactive_flags_unsupported",
+              "固定版 Codex CLI 0.159.2 只在 codex exec 支援 ignore-user-config/ephemeral；互動 TUI 會拒絕這些旗標，不能安全啟動受管 PTY")
+    if tool == "codex" and _codex_evidence_reference() is None:
+        block("codex_evidence_missing", "Codex 0.159.2 本輪 OS sandbox 驗收尚未完成；Network/Filesystem 維持未知並拒絕啟動")
     return out
 
 
-def derive_labels(manifest: dict | None, workdir: str | None) -> dict:
+def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None = None) -> dict:
     """The seven labels with the contract's metadata fields. ``manifest`` is
     None when nothing was prepared (the Profile is not launchable)."""
+    engine = (manifest or {}).get("engine") or engine
     version = (manifest or {}).get("cli_version") or "不適用"
     digest = (manifest or {}).get("settings_sha256") or "none"
     scratch = ((manifest or {}).get("scratch") or {}).get("path")
@@ -124,7 +161,7 @@ def derive_labels(manifest: dict | None, workdir: str | None) -> dict:
                 "settings_digest": digest,
                 "path_scope": path_scope if manifest else "不適用",
                 "evidence_refs": list(evidence) if manifest else [],
-                "bypass": BYPASS_PTY,
+                "bypass": BYPASS_CODEX_PTY if engine == "codex" else BYPASS_PTY,
                 "unknown_reason": unprepared or unknown_reason}
 
     net = (label(ENFORCED, "空 allowlist：Bash 工具的對外連線被拒（已測：HTTPS 請求經沙盒 proxy 回 403、"
@@ -132,6 +169,37 @@ def derive_labels(manifest: dict | None, workdir: str | None) -> dict:
            if NETWORK_EVIDENCE else
            label(UNKNOWN, "設定為空 allowlist，但尚未以這組設定實測",
                  unknown_reason="空 allowlist 在此設定形狀下尚無實測證據"))
+    if engine == "codex":
+        codex_ref = _codex_evidence_reference()
+        codex_evidence = [codex_ref] if codex_ref else []
+        codex_unknown = ("尚無 Codex 0.159.2 OS sandbox 驗收證據" if not codex_evidence else "none")
+        codex_proven = bool(codex_evidence)
+        scope = [workdir, scratch] if scratch else (workdir or "不適用")
+        return {
+            "Read": label(INTENT, "CLI 可讀取目前使用者可讀的其他路徑；沒有讀取隔離",
+                           evidence=codex_evidence, unknown_reason=codex_unknown),
+            "Write": label(ENFORCED if codex_proven else UNKNOWN,
+                           "Codex 0.159.2 workspace-write 的 Bash 寫入限於工作目錄與本 launch scratch；/tmp 與 TMPDIR 排除路徑已由 OS 拒絕"
+                           if codex_proven else "Codex workspace-write 邊界尚無本輪 OS 證據",
+                           path_scope=scope, evidence=codex_evidence,
+                           unknown_reason="none" if codex_proven else codex_unknown),
+            "Test": label(INTENT, "可執行指令；執行能力由 Codex sandbox 管理，不是 Test-only 權限",
+                          evidence=codex_evidence, unknown_reason=codex_unknown),
+            "Commit": label(UNRESTRICTED, "commit=true 明確允許工作目錄與 .git 寫入；沒有命令樣式攔截，也不涵蓋 push",
+                            path_scope=[workdir, str(Path(workdir) / ".git")] if workdir else "不適用",
+                            evidence=codex_evidence, unknown_reason="none" if codex_proven else codex_unknown),
+            "Deploy": label(NOT_GRANTED, "沒有 deploy 專用沙盒權限；不得把 shell 命令規則或網路設定當成完整部署隔離",
+                            evidence=codex_evidence, unknown_reason=codex_unknown),
+            "Network": label(ENFORCED if codex_proven else UNKNOWN,
+                             "workspace-write 明確設 network_access=false；本輪數字 IP 連線由 OS sandbox 拒絕"
+                             if codex_proven else "network_access=false 尚無本輪 OS 負向證據",
+                             evidence=codex_evidence, unknown_reason="none" if codex_proven else codex_unknown),
+            "Filesystem": label(ENFORCED if codex_proven else UNKNOWN,
+                                "僅工作目錄、session scratch 與明確 opt-in 的 .git 可寫；讀取未隔離"
+                                if codex_proven else "Codex filesystem sandbox 尚無本輪 OS 證據",
+                                path_scope=scope, evidence=codex_evidence,
+                                unknown_reason="none" if codex_proven else codex_unknown),
+        }
     return {
         "Read": label(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他 session 的暫存區",
                       evidence=[EVIDENCE_S2]),
@@ -144,7 +212,7 @@ def derive_labels(manifest: dict | None, workdir: str | None) -> dict:
                         unknown_reason="未測試以 denyWrite 排除 .git 的效果"),
         "Deploy": label(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
         "Network": net,
-        "Filesystem": label(ENFORCED, "寫入邊界：工作目錄與本 session 暫存區之外的寫入被 OS 拒絕"
+        "Filesystem": label(ENFORCED, "Agent 的 Bash 工具寫入邊界：工作目錄與本 session 暫存區之外的寫入被 OS 拒絕"
                                       "（含家目錄與全域 CLI 設定的已測路徑）。這不是讀取隔離",
                             path_scope=write_scope, evidence=[EVIDENCE_S2, EVIDENCE_T01]),
     }
@@ -165,7 +233,11 @@ class PreviewStore:
         launch_id = entry.get("launch_id")
         if launch_id:
             try:
-                self._runtime.discard_prepared_claude_launch(launch_id)
+                discard = getattr(self._runtime, "discard_prepared_agent_launch", None)
+                if discard is None:
+                    discard = getattr(self._runtime, "discard_prepared_claude_launch", None)
+                if discard is not None:
+                    discard(launch_id)
             except Exception:  # best effort; daemon recovery also expires stale prepared launches
                 pass
 
@@ -188,12 +260,17 @@ class PreviewStore:
                 raise PreviewError(429, "too_many_previews", "待確認的 preview 過多，請稍後再試")
         blockers = launch_blockers(profile, commit, network)
         prepared = None
+        engine = (profile.get("model") or {}).get("tool")
         if not blockers:
             model_id = (profile.get("model") or {}).get("model_id") or None
             try:
-                prepared = self._runtime.prepare_managed_claude_launch(
-                    {"cwd": canonical, **({"model_id": model_id} if model_id else {})},
-                    allowed_root=self._allowed_root() if callable(self._allowed_root) else self._allowed_root)
+                allowed_root = self._allowed_root() if callable(self._allowed_root) else self._allowed_root
+                spec = {"cwd": canonical, **({"model_id": model_id} if model_id else {})}
+                if engine == "claude":
+                    prepared = self._runtime.prepare_managed_claude_launch(spec, allowed_root=allowed_root)
+                elif engine == "codex":
+                    prepared = self._runtime.prepare_managed_codex_launch(
+                        {**spec, "commit": commit is True, "read_only": False}, allowed_root=allowed_root)
             except cli_versions.VersionAssertionError as exc:
                 blockers.append({"code": "cli_" + str(exc.code or "version"), "message": str(exc)})
             except agent_sessions.LaunchRefused as exc:
@@ -211,7 +288,7 @@ class PreviewStore:
             "cli": ({"binary": manifest["cli_binary"], "version": manifest["cli_version"]} if manifest else None),
             "settings_digest": manifest["settings_sha256"] if manifest else None,
             "canonical_paths": {"workdir": canonical, "scratch": manifest["scratch"]["path"] if manifest else None},
-            "derived_labels": derive_labels(manifest, canonical),
+            "derived_labels": derive_labels(manifest, canonical, (profile.get("model") or {}).get("tool")),
             "expires_at": None,
             "persisted": "commit 與 network 是本次啟動的輸入，不會寫回 Profile",
         }
@@ -254,7 +331,10 @@ class PreviewStore:
             if current is None or profile_digest(current) != entry["profile_digest"]:
                 raise PreviewError(409, "profile_drift", "Profile 在 preview 之後已變更；請重新 preview")
             try:
-                result = self._runtime.launch_prepared_claude(entry["prepared"], cols=cols, rows=rows)
+                launch = getattr(self._runtime, "launch_prepared_agent", None)
+                if launch is None:
+                    launch = self._runtime.launch_prepared_claude
+                result = launch(entry["prepared"], cols=cols, rows=rows)
             except cli_versions.VersionAssertionError as exc:
                 raise PreviewError(409, "cli_drift", f"CLI 在 preview 之後已變更：{exc}") from exc
             except NativeRuntimeUnavailable as exc:

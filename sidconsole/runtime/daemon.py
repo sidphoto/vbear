@@ -45,10 +45,10 @@ Process model (contract v2 §4, §10 S1):
   * Known limit: a descendant that calls setsid() itself leaves our process
     group and is not reached by killpg.
 
-R3 S2 managed Claude sessions (``open_managed``): the daemon itself builds
+R3 managed Claude/Codex sessions (``open_managed``): the daemon itself builds
 argv and environment from a validated launch manifest (``agent_sessions``);
-callers supply only a launch id and a size. Because Claude runs Bash-tool
-commands in their own process groups, managed sessions also track observed
+callers supply only a launch id and a size. Agent tool commands can run in
+their own process groups, so managed sessions also track observed
 descendants (``proctrack``): closing signals the verified descendant groups
 too, and the session's scratch and settings are deleted only when the leader
 and every observed descendant are proven gone. Otherwise they are retained
@@ -1213,7 +1213,7 @@ class Daemon:
         return _ok(rid, sess.info())
 
     def _op_open_managed(self, rid: str, req: dict) -> dict:
-        """Start a managed Claude session from a prepared launch (R3 S2).
+        """Start a managed Claude or Codex session from a prepared launch.
 
         argv, cwd and environment come from the validated manifest in our own
         state directory; the caller can pass neither. A launch id is single
@@ -1230,13 +1230,14 @@ class Daemon:
             m = agent_sessions.load_validated(self.base, launch_id)
             if m.get("state") != "prepared" or m.get("native_session_id"):
                 raise agent_sessions.LaunchRefused("consumed", "此 launch 已使用或不可啟動")
-            argv = agent_sessions.claude_argv(m)
+            argv = agent_sessions.managed_argv(m)
             cwd = m["canonical_workspace"]
             env = build_env()
-            env["CLAUDE_CODE_TMPDIR"] = m["scratch"]["path"]
-            # An interactive session otherwise runs the CLI's self-updater, which
-            # rewrites the user's global ``claude`` install (seen in S2 acceptance).
-            env["DISABLE_AUTOUPDATER"] = "1"
+            if m["engine"] == "claude":
+                env["CLAUDE_CODE_TMPDIR"] = m["scratch"]["path"]
+                # An interactive session otherwise runs the CLI's self-updater, which
+                # rewrites the user's global ``claude`` install (seen in S2 acceptance).
+                env["DISABLE_AUTOUPDATER"] = "1"
             # Consume before spawning: a replay can never start a second process.
             agent_sessions.update_manifest(self.base, launch_id, state="launching")
         except agent_sessions.LaunchRefused as exc:

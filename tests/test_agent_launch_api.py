@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from sidconsole import agent_launch
-from tests.test_runtimed_managed import FAKE_CLI
+from tests.test_runtimed_managed import FAKE_CLI, FAKE_CODEX_CLI
 from tests.test_runtimed_s3 import ServerCase
 
 LABELS = ("Read", "Write", "Test", "Commit", "Deploy", "Network", "Filesystem")
@@ -38,10 +38,17 @@ class PreviewApiCase(ServerCase):
         self.binary.chmod(0o700)
         self.pin = mock.patch("sidconsole.runtime.native._pinned_claude_binary", return_value=str(self.binary))
         self.pin.start()
+        self.codex_binary = self.tmp / "codex"
+        self.codex_binary.write_text(FAKE_CODEX_CLI % {"py": sys.executable}, encoding="utf-8")
+        self.codex_binary.chmod(0o700)
+        self.codex_pin = mock.patch("sidconsole.runtime.native._pinned_codex_binary",
+                                    return_value=str(self.codex_binary))
+        self.codex_pin.start()
         self.console.managed_root = self.tmp
         self.scratches: list[str] = []
 
     def tearDown(self):
+        self.codex_pin.stop()
         self.pin.stop()
         super().tearDown()
         for p in self.scratches:
@@ -114,6 +121,50 @@ class PreviewApiCase(ServerCase):
         for word in ("token", "credential", "password", "secret", "keychain"):
             self.assertNotIn(word, blob)
 
+    def test_codex_preview_confirm_and_close_use_the_shared_managed_lifecycle(self):
+        with mock.patch.object(agent_launch.cli_versions, "CODEX_INTERACTIVE_FLAGS_SUPPORTED", True), \
+                mock.patch.object(agent_launch, "_codex_evidence_reference",
+                                   return_value=".local/r3-finish-20261003/codex-acceptance.json"):
+            pid = self.profile(tool="codex")
+            st, r = self.preview(pid)
+            self.assertEqual(st, 200, r)
+            p = r["preview"]
+            self.assertTrue(p["launchable"], p["reasons"])
+            self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2"})
+            self.assertTrue(p["derived_labels"]["Write"]["bypass"].find("!") >= 0)
+            self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"],
+                             [".local/r3-finish-20261003/codex-acceptance.json"])
+            self.assertEqual(self.sessions(), [])
+            st, launched = self.launch(p)
+            self.assertEqual(st, 200, launched)
+            session = launched["launch"]["session"]["session_id"]
+            launch_file = self.work / "fake-launch.json"
+            deadline = time.monotonic() + 5
+            seen = None
+            while time.monotonic() < deadline and seen is None:
+                try:
+                    seen = json.loads(launch_file.read_text())
+                except (OSError, ValueError):
+                    time.sleep(0.03)
+            self.assertIsNotNone(seen, "Codex fake CLI did not start")
+            self.assertIn("--ephemeral", seen["argv"])
+            self.assertIsNone(seen["codex_home"])
+            st, closed = self.req("POST", f"/api/native/sessions/{session}/close", {})
+            self.assertEqual(st, 200, closed)
+            self.assertTrue(closed["managed"]["cleaned"], closed)
+            self.assertFalse(os.path.exists(p["canonical_paths"]["scratch"]))
+
+    def test_codex_without_os_evidence_is_fail_closed(self):
+        with mock.patch.object(agent_launch.cli_versions, "CODEX_INTERACTIVE_FLAGS_SUPPORTED", False), \
+                mock.patch.object(agent_launch, "_codex_evidence_reference", return_value=None):
+            st, r = self.preview(self.profile(tool="codex"))
+        self.assertEqual(st, 200, r)
+        self.assertFalse(r["preview"]["launchable"])
+        self.assertIn("codex_interactive_flags_unsupported", [x["code"] for x in r["preview"]["reasons"]])
+        self.assertIn("codex_evidence_missing", [x["code"] for x in r["preview"]["reasons"]])
+        self.assertEqual(r["preview"]["derived_labels"]["Network"]["level"], agent_launch.UNKNOWN)
+        self.assertEqual(self.sessions(), [])
+
     def test_profiles_the_verified_setup_cannot_honour_are_not_launchable(self):
         cases = [
             ({"intents": {k: "unspecified" for k in GOOD}}, {}, "intent_unspecified"),
@@ -121,7 +172,6 @@ class PreviewApiCase(ServerCase):
             ({"intents": dict(GOOD, deploy="allow")}, {}, "deploy_not_available"),
             ({"intents": dict(GOOD, read="deny")}, {}, "read_deny_unenforceable"),
             ({"intents": dict(GOOD, test="deny")}, {}, "test_deny_unenforceable"),
-            ({"tool": "codex"}, {}, "tool_not_launchable"),
             ({"tool": "shared"}, {}, "tool_not_launchable"),
             ({}, {"commit": False}, "commit_not_enforceable"),
             ({}, {"network": {"enabled": True, "approved_domains": ["example.com"]}}, "network_not_available"),
@@ -179,6 +229,23 @@ class PreviewApiCase(ServerCase):
         closed = self.dm_rpc("close", session_id=launch["session"]["session_id"])
         self.assertTrue(closed["result"]["managed"]["cleaned"])
         self.assertEqual(self.launch_dirs(), [])
+
+    def test_http_close_reports_the_managed_cleanup(self):
+        p = self.preview()[1]["preview"]
+        sid = self.launch(p)[1]["launch"]["session"]["session_id"]
+        st, r = self.req("POST", f"/api/native/sessions/{sid}/close", {})
+        self.assertEqual(st, 200, r)
+        self.assertEqual(r["closed"], sid)
+        self.assertTrue(r["managed"]["cleaned"], r)
+        self.assertEqual(self.launch_dirs(), [])
+        self.assertFalse(os.path.exists(p["canonical_paths"]["scratch"]))
+
+    def test_http_close_of_a_plain_session_has_no_managed_field(self):
+        st, r = self.req("POST", "/api/native/sessions", {"argv": ["/bin/sh", "-c", "sleep 30"],
+                                                           "cwd": str(Path.home())})
+        st, r = self.req("POST", f"/api/native/sessions/{r['session']['session_id']}/close", {})
+        self.assertEqual(st, 200, r)
+        self.assertNotIn("managed", r)
 
     def test_two_simultaneous_confirms_start_exactly_one_session(self):
         p = self.preview()[1]["preview"]

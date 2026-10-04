@@ -630,7 +630,11 @@ const api = {
     // The custom header lets the server tell its own page from a cross-site request.
     const res = await fetch(path, { headers: { Accept: "application/json", "X-SID-Console": "1" } });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const error = new Error(data.error || `HTTP ${res.status}`);
+      error.status = res.status;
+      throw error;
+    }
     return data;
   },
   async post(path, body) {
@@ -640,7 +644,11 @@ const api = {
       body: JSON.stringify(body || {}),
     });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const error = new Error(data.error || `HTTP ${res.status}`);
+      error.status = res.status;
+      throw error;
+    }
     return data;
   },
 };
@@ -909,6 +917,68 @@ async function focusTerminal(x) {
     const r = await api.post("/api/focus", { target: x.pane_id });
     toast(r.ok ? `已在 herdr 切換到「${x.role_label || x.pane_id}」` : `無法切換：${r.error}`);
   } catch (e) { toast("無法切換：" + e.message); }
+}
+
+// Native runtime sessions (pane ids "n-" + 12 hex) can be closed from the
+// console. Closing a Profile-managed session also removes its scratch and
+// settings once every one of its processes is proven gone; otherwise they are
+// kept for review, and the toast says so.
+const NATIVE_SESSION_RE = /^n-[0-9a-f]{12}$/;
+
+// In-page confirmation (not window.confirm): a native browser dialog blocks
+// the page and cannot be driven by browser automation, which left the close
+// button unverifiable in acceptance. Resolves true only on the confirm button.
+function confirmInPage(title, message, confirmLabel) {
+  return new Promise((resolve) => {
+    const titleId = "modal-confirm-title";
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      closeModal();
+      resolve(value);
+    };
+    const confirmBtn = el("button", { class: "btn primary", type: "button", on: { click: () => finish(true) } }, confirmLabel);
+    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => finish(false) } }, "取消");
+    const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+      el("div", { class: "modal-box" },
+        el("h2", { id: titleId }, title),
+        el("p", null, message),
+        el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
+    document.body.append(modalElem);
+    // Escape or a view teardown closes the dialog through this teardown: that is a "no".
+    const closeModal = withModalA11y(modalElem, () => {
+      modalElem.remove();
+      if (!settled) { settled = true; resolve(false); }
+    });
+    cancelBtn.focus();
+  });
+}
+function closeSessionButton(paneId) {
+  if (!NATIVE_SESSION_RE.test(paneId || "")) return null;
+  const btn = el("button", { class: "btn small", type: "button",
+    title: "結束這個 Terminal 裡的程式並關閉 session",
+    on: { click: async () => {
+      if (!(await confirmInPage("關閉 Session", "確定要關閉這個 Terminal？裡面正在執行的程式會被結束。", "關閉 Session"))) return;
+      btn.disabled = true;
+      try {
+        const r = await api.post(`/api/native/sessions/${encodeURIComponent(paneId)}/close`, {});
+        const m = r.managed;
+        toast(!m ? "Session 已關閉"
+          : m.cleaned ? "Session 已關閉，暫存區與設定已清除"
+          : `Session 已關閉；暫存區保留待檢查：${m.retained_reason || "原因未知"}`);
+        if (!location.hash.startsWith("#/workbench")) location.hash = "#/team";
+      } catch (e) {
+        if (e.status === 404) {
+          toast("Session 已不存在或已結束");
+          if (!location.hash.startsWith("#/workbench")) location.hash = "#/team";
+          return;
+        }
+        toast("關閉失敗：" + e.message);
+        btn.disabled = false;
+      }
+    } } }, "關閉 Session");
+  return btn;
 }
 
 function roleCard(r) {
@@ -1747,6 +1817,7 @@ async function viewTerminal(paneId) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
     actions.push(el("button", { class: "btn small", type: "button", on: { click: () => focusTerminal({ pane_id: paneId, role_label: roleName }) }, title: "在 herdr 視窗聚焦此 Terminal" }, "在 herdr 切換焦點"));
+    actions.push(closeSessionButton(paneId));
     actions.push(el("a", { class: "btn small", href: "#/team" }, "返回團隊"));
     setKids(actionWrap, actions);
 
@@ -2505,6 +2576,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       }, focusMode ? "退出專注" : "⛶ 專注模式"));
 
       actions.push(el("a", { class: "btn small", href: `#/term/${encodeURIComponent(currentPane)}`, title: "以獨立視窗開啟" }, "獨立視窗"));
+      actions.push(closeSessionButton(currentPane));
       if (rightCollapsed) {
         actions.push(el("button", { class: "btn small", type: "button", on: { click: toggleRight }, title: "展開右欄" }, "右欄 ►"));
       }
@@ -3590,6 +3662,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       kids.push(el("p", { class: "small muted" },
         "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是 Profile 的設定值。" +
         "使用者在進階終端仍可自行改變 CLI 行為，沒有一項是不可繞過的邊界。"));
+      // The concrete bypass (e.g. "!" shell commands in the terminal) comes from
+      // the server's labels; show each distinct text once instead of per label.
+      const bypasses = [...new Set(Object.values(pv.derived_labels || {})
+        .map((lab) => lab && lab.bypass).filter((b) => typeof b === "string" && b))];
+      if (bypasses.length) {
+        kids.push(el("div", { class: "notice warn agent-launch-bypass" },
+          el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+          el("div", { class: "small" }, el("strong", null, "可繞過："), bypasses.join(" "))));
+      }
       kids.push(el("div", { class: "agent-launch-labels" },
         Object.entries(pv.derived_labels || {}).map(([name, lab]) =>
           el("div", { class: "agent-launch-label" },
@@ -3618,6 +3699,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       } finally {
         busy = false;
         previewBtn.disabled = false;
+        // Disabling the focused button moved focus to <body>, outside the dialog,
+        // so Escape no longer reached it (S0 browser QA). Put focus back inside.
+        const active = document.activeElement;
+        if (!active || active === document.body || !modalElem.contains(active)) {
+          previewBtn.focus();  // not the confirm button: a stray Enter must not launch
+        }
       }
     }
 

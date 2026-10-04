@@ -28,6 +28,10 @@ EXPECTED_VERSIONS = MappingProxyType({
     "codex": "0.159.2",
     "claude": "2.1.286",
 })
+# In 0.159.2, --ignore-user-config and --ephemeral are accepted by `codex exec`
+# but rejected by the interactive TUI command. Managed PTY launches require the
+# interactive command, so they stay disabled until a pinned build supports both.
+CODEX_INTERACTIVE_FLAGS_SUPPORTED = False
 
 VERSION_PROBE_TIMEOUT_SECONDS = 3.0
 VERSION_PROBE_MAX_OUTPUT_BYTES = 4096
