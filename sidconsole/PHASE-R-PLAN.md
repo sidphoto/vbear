@@ -14,7 +14,7 @@
 | R-D2 | 保留 Phase D1 契約，排在 R1 之後，可與 R2 並行；D-D3 於 R3 定案後重新裁決 |
 | R-D3 | 執行期產品碼維持零第三方相依；打包工具（如 PyInstaller）允許 |
 | R-D4 | R2 先做到「瀏覽器關閉不中斷」；「App 結束後仍存活」另行裁決 |
-| R-D5 | Gate 10（R3）通過後才移除 Herdr 相容層 |
+| R-D5 | Gate 10（R3）通過後才移除 Herdr 相容層 — **已完成（2026-10-05，分支 `r4-remove-herdr`；回退點 tag `last-herdr`）** |
 | R-D6 | 沿用 routing；R1 STANDARD，R2、R3 DEEP 並須獨立審查 |
 | R-D7 | R2 開始前修復 AGY 瀏覽器 QA |
 | Gate 編號 | Gate 8～12 對應 R1～R5；Phase D1 Armory 改用 **Gate D1** |

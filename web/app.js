@@ -1,5 +1,5 @@
 "use strict";
-/* SID Console for Herdr — UI.
+/* SID Console — UI.
  * Skill and agent text is untrusted input: everything is rendered through
  * el(), which only ever creates text nodes. There is no innerHTML here.
  */
@@ -413,11 +413,11 @@ function handleTerminalFrame(msg, { term, reconnectPolicy } = {}) {
 }
 
 // Mirrors TERM_MIN_DIM/TERM_MIN_ROWS in sidconsole/server.py. A terminal
-// narrower or shorter than this cannot render anything usable, and since a
-// resize is forwarded to the pane it would wreck the native herdr window too.
+// narrower or shorter than this cannot render anything usable, and a resize
+// is applied to the session's PTY for every viewer.
 const TERM_MIN_COLS = 20;
 const TERM_MIN_ROWS = 5;
-const TERMINAL_VISIBLE_SCREEN_NOTICE = "畫面歷史：此網頁只同步 Herdr 目前可視畫面，不提供回捲歷史；需要較早內容時，請至 Herdr 原生視窗查看。";
+const TERMINAL_VISIBLE_SCREEN_NOTICE = "畫面歷史：開啟時只重播最近一段輸出，不提供完整的回捲歷史。";
 
 // True only for dimensions worth sending to the server or fitting to.
 // fitAddon.fit() measures the canvas, so when it is called before the grid
@@ -461,10 +461,9 @@ function initTerminalInstance({ TerminalClass, FitAddonClass, termElem, options 
         cursor: "#7fb8a4",
         selectionBackground: "rgba(47, 93, 80, 0.4)",
       },
-      // Herdr streams absolute-position redraws of the current screen, not
-      // newline/scroll events. xterm therefore cannot build truthful history
-      // from this feed; keeping a nominal scrollback buffer would promise a
-      // capability the live protocol does not provide.
+      // The stream is a replay of recent output plus live redraws, not a
+      // complete history; a nominal scrollback buffer would promise more than
+      // the protocol provides.
       scrollback: 0,
       ...options,
     });
@@ -725,7 +724,10 @@ function activationWithHelp(a) {
   const [label] = ACT[a] || ACT.unknown;
   return el("span", { class: "status-help" }, actBadge(a), helpTip(label, ACT_HELP[a] || ACT_HELP.unknown));
 }
-function statusBadge(s) { const [l, c] = STATUS[s] || STATUS.unknown; return badge(l, c, `herdr 回報狀態：${s}`); }
+function statusBadge(s) {
+  const [l, c] = STATUS[s] || STATUS.unknown;
+  return badge(l, c, s === "unknown" ? "SID runtime 無法從終端判斷 Agent 是否在工作或等你回覆" : `回報狀態：${s}`);
+}
 function toolTag(t) { return el("span", { class: "tag" }, TOOL[t] || t || "未知工具"); }
 function prov(src) {
   const origin = (src && src.origin) || "missing";
@@ -778,7 +780,7 @@ async function loadStatic(force) {
 }
 async function loadLive(force) {
   try { D.live = await api.get("/api/live" + (force ? "?force=1" : "")); }
-  catch (e) { D.live = { error: e.message, sessions: [], projects: [], attention: [], usage: { sessions: [] }, herdr: { available: false, problems: [e.message] } }; }
+  catch (e) { D.live = { error: e.message, sessions: [], projects: [], attention: [], usage: { sessions: [] }, runtime: { available: false, problems: [e.message] } }; }
   return D.live;
 }
 
@@ -883,7 +885,7 @@ function sessionCard(x) {
         el("div", { class: "avatar", "aria-hidden": "true" }, initialOf(x.role_label || x.agent)),
         el("div", null,
           el("div", { class: "card-title" }, x.role_label || `${TOOL[x.agent] || x.agent} 工作階段`),
-          el("div", { class: "card-sub" }, x.role_label_source ? "角色名稱來自 herdr 分頁" : "未命名分頁"))),
+          el("div", { class: "card-sub" }, x.role_label_source ? "角色名稱來自分頁名稱" : "未命名"))),
       statusBadge(x.status)),
     x.title ? el("p", { class: "clamp" }, x.title) : null,
     el("dl", { class: "kv small" },
@@ -898,8 +900,7 @@ function sessionCard(x) {
     el("div", { class: "row" },
       el("span", { class: "small muted mono" }, `${x.workspace_label || x.workspace_id} · ${x.pane_id}`),
       el("span", { class: "spacer" }),
-      el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(x.pane_id)}`, title: "開啟終端機串流（預設僅觀看，非獨占控制）" }, "開啟終端"),
-      el("button", { class: "btn small", on: { click: () => focusTerminal(x) }, title: "只切換 herdr 顯示的分頁，不會對 Agent 送出任何輸入" }, "切換焦點")));
+      el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(x.pane_id)}`, title: "開啟終端機串流（預設僅觀看）" }, "開啟終端")));
 }
 
 function usedChip(u) {
@@ -910,13 +911,6 @@ function usedChip(u) {
   return target
     ? el("a", { class: `badge ${cls}`, href: `#/skills/${target}`, title }, text)
     : el("span", { class: `badge ${cls}`, title }, text);
-}
-
-async function focusTerminal(x) {
-  try {
-    const r = await api.post("/api/focus", { target: x.pane_id });
-    toast(r.ok ? `已在 herdr 切換到「${x.role_label || x.pane_id}」` : `無法切換：${r.error}`);
-  } catch (e) { toast("無法切換：" + e.message); }
 }
 
 // Native runtime sessions (pane ids "n-" + 12 hex) can be closed from the
@@ -1016,11 +1010,27 @@ function corruptNotice() {
   if (!D.overview || !D.overview.config_corrupt) return null;
   return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以主控台已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.sid-console/config.json 後重新啟動主控台；原檔不會被覆寫。");
 }
-function herdrNotice() {
-  const h = D.live && D.live.herdr;
+function runtimeNotice() {
+  const h = D.live && D.live.runtime;
   if (!h) return null;
-  if (!h.available) return notice("warn", ["無法連線到 herdr，工作中的 Terminal 資訊暫不可用。", (h.problems || []).join("；")].join(" "));
+  if (!h.available) return notice("warn", ["無法連線到 SID runtime，工作中的 Terminal 資訊暫不可用。", (h.problems || []).join("；")].join(" "));
   return null;
+}
+// One-time notice after a Herdr-era config was switched to native (until acknowledged).
+function herdrMigrationNotice() {
+  if (!D.overview || !D.overview.herdr_migration_notice) return null;
+  const ack = el("button", { class: "btn small", type: "button", on: { click: async () => {
+    ack.disabled = true;
+    try {
+      await api.post("/api/config", { herdr_migration_acknowledged: true });
+      D.overview.herdr_migration_notice = false;
+      wrap.remove();
+    } catch (e) { toast("無法儲存：" + e.message); ack.disabled = false; }
+  } } }, "知道了");
+  const wrap = el("div", { class: "notice info" },
+    el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, "主控台已改用內建的 SID runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從 Agent Profile 的「預覽並啟動」開啟。 ", ack));
+  return wrap;
 }
 function sectionHead(title, sub, action) {
   return el("div", { class: "section-head" },
@@ -1056,7 +1066,8 @@ async function viewHome() {
     el("p", { class: "lede" }, "先看需要你處理的事，再找適合這次任務的技能。"),
     corruptNotice(),
     staleNotice(),
-    herdrNotice(),
+    herdrMigrationNotice(),
+    runtimeNotice(),
     el("section", { class: "section", id: "h-att-wrap" }, attentionSection()),
     el("section", { class: "section" },
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
@@ -1080,7 +1091,8 @@ function attentionSection() {
   return [
     sectionHead("需要你處理", attention.length ? `${attention.length} 個 Terminal 在等你・每 5 秒更新` : "每 5 秒更新"),
     attention.length ? el("div", { class: "grid" }, attention.map(sessionCard))
-      : emptyState(L.herdr && L.herdr.available ? "目前沒有等你回覆或待查看的工作" : "herdr 未連線，無法判斷", null),
+      : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為等你回覆的工作" : "SID runtime 未連線，無法判斷",
+        L.runtime && L.runtime.available ? "SID runtime 無法從終端判斷 Agent 是否在等你，狀態會顯示「狀態未知」；請到 Agent 團隊查看工作中的 Terminal。" : null),
   ];
 }
 
@@ -1408,8 +1420,7 @@ async function viewTeam() {
           el("td", null, ((L.projects || []).find((p) => p.project_id === x.project_id) || {}).name || "—"),
           el("td", null, (x.skills_used || []).length ? el("div", { class: "chips" }, x.skills_used.slice(0, 3).map(usedChip)) : el("span", { class: "muted" }, "—")),
           el("td", null,
-            el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(x.pane_id)}`, style: "margin-right:6px", title: "開啟終端機串流" }, "終端"),
-            el("button", { class: "btn small", on: { click: () => focusTerminal(x) } }, "切換")))))))
+            el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(x.pane_id)}`, title: "開啟終端機串流" }, "終端")))))))
     : el("div", { class: "grid" }, sessions.map(sessionCard));
 
   const seg = el("div", { class: "seg", role: "group", "aria-label": "顯示方式" },
@@ -1418,10 +1429,10 @@ async function viewTeam() {
   setKids(main, 
     el("h1", null, "Agent 團隊"),
     el("p", { class: "lede" }, "上半部是現在正在工作的 Terminal；下半部是可以重複使用的角色設定。兩者不同：一個角色可以同時有多個工作階段。"),
-    herdrNotice(),
+    runtimeNotice(),
     el("section", { class: "section" },
-      sectionHead("工作中的 Terminal", `${sessions.length} 個，來自 herdr`, seg),
-      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.herdr && L.herdr.available ? "在 herdr 中啟動 Claude Code 或 Codex 後會出現在這裡" : "herdr 未連線")),
+      sectionHead("工作中的 Terminal", `${sessions.length} 個，由 SID runtime 管理`, seg),
+      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「[A] 角色裝備」的 Agent Profile 按「預覽並啟動」後會出現在這裡" : "SID runtime 未連線")),
     el("section", { class: "section" },
       sectionHead("主代理", "直接在終端機執行的工具本身"),
       el("div", { class: "grid" }, cli.map(roleCard))),
@@ -1506,7 +1517,7 @@ async function viewRole(id) {
         el("dl", { class: "kv small" },
           el("dt", null, "預設模型"), el("dd", null, (r.model && r.model.value) || "未指定", " ", prov(r.model)),
           el("dt", null, "設定檔"), el("dd", { class: "mono" }, r.path ? home(r.path) : "（工具本身，沒有單一設定檔）"),
-          el("dt", null, "工作中"), el("dd", null, r.kind === "cli" ? `${sessions.length} 個 Terminal` : "herdr 目前無法辨識子代理的執行個體")),
+          el("dt", null, "工作中"), el("dd", null, r.kind === "cli" ? `${sessions.length} 個 Terminal` : "目前無法辨識子代理的執行個體")),
         sessions.length ? el("ul", { class: "tree", style: "margin-top:12px" }, sessions.map((s) => el("li", null,
           el("b", null, s.role_label || s.pane_id), " ", statusBadge(s.status), " ",
           el("span", { class: "small muted" }, modelList(s.models_observed).join("、") || "模型未知")))) : null)),
@@ -1534,8 +1545,8 @@ async function viewProjects(id) {
   const rest = projects.filter((p) => !p.live_session_ids.length);
   setKids(main, 
     el("h1", null, "專案"),
-    el("p", { class: "lede" }, "依工作目錄的 git 儲存庫歸類。專案是目標與資料歸屬；herdr 的 workspace 是實際工作的畫面，兩者不一定一一對應。"),
-    herdrNotice(),
+    el("p", { class: "lede" }, "依工作目錄的 git 儲存庫歸類。專案是目標與資料歸屬；工作中的 Terminal 依工作目錄對應到專案。"),
+    runtimeNotice(),
     el("section", { class: "section" },
       sectionHead("有 Agent 正在工作", `${active.length} 個專案`),
       active.length ? el("div", { style: "display:grid;gap:12px" }, active.map((p) => projectFold(p, true))) : emptyState("目前沒有工作中的專案", null)),
@@ -1557,11 +1568,11 @@ function projectFold(p, open) {
     el("div", { class: "fold-body" },
       el("div", { class: "small muted mono", style: "margin-bottom:8px" }, home(p.path), p.git_branch ? ` · ${p.git_branch}` : ""),
       live.length ? el("ul", { class: "tree" }, [...byWs.entries()].map(([ws, list]) => el("li", null,
-        el("span", { class: "small muted" }, "herdr workspace "), el("b", null, ws),
+        el("span", { class: "small muted" }, "群組 "), el("b", null, ws),
         el("ul", { class: "tree" }, list.map((s) => el("li", { class: "row" },
           el("b", null, s.role_label || s.pane_id), statusBadge(s.status), el("span", { class: "tag" }, TOOL[s.agent] || s.agent),
           (s.skills_used || []).slice(0, 3).map(usedChip),
-          el("button", { class: "btn small", on: { click: () => focusTerminal(s) } }, "切換"))))))) : el("p", { class: "small muted" }, "沒有工作中的 Terminal。"),
+          el("a", { class: "btn small", href: `#/term/${encodeURIComponent(s.pane_id)}` }, "開啟"))))))) : el("p", { class: "small muted" }, "沒有工作中的 Terminal。"),
       p.skills_used.length ? el("div", { class: "chips", style: "margin-top:10px" }, el("span", { class: "small muted" }, "近期用過："),
         p.skills_used.slice(0, 8).map(([name, n]) => el("span", { class: "tag" }, `${name} ×${n}`))) : null));
 }
@@ -1658,11 +1669,11 @@ async function viewSettings() {
             el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
             el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
             el("li", null, "主控台只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
-            el("li", null, "「切到這個 Terminal」只切換 herdr 的畫面，不會送出任何輸入給 Agent。"))),
+            el("li", null, "Agent 由主控台內建的 SID runtime 啟動與管理；開啟終端預設只觀看，接管後才會送出輸入。"))),
         advanced ? el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "診斷"),
           el("dl", { class: "kv small" },
-            el("dt", null, "herdr"), el("dd", { class: "mono" }, (D.live && D.live.herdr && D.live.herdr.version) || "未連線", " ", home(c.herdr_binary || "")),
+            el("dt", null, "SID runtime"), el("dd", { class: "mono" }, (D.live && D.live.runtime && D.live.runtime.version) || "未連線", " ", home(c.runtime_socket || "")),
             el("dt", null, "Claude 外掛"), el("dd", null, (D.overview.facts.claude_installed_plugins || []).join("、") || "—"),
             el("dt", null, "外掛啟用"), el("dd", { class: "mono" }, JSON.stringify(D.overview.facts.claude_enabled_plugins || {})),
             el("dt", null, "Codex 預設模型"), el("dd", null, D.overview.facts.codex_default_model || "—", D.overview.facts.codex_default_effort ? `（${D.overview.facts.codex_default_effort}）` : ""),
@@ -1790,7 +1801,7 @@ async function viewTerminal(paneId) {
 
     const notices = [];
     if (mode === "control") {
-      notices.push(notice("warn", "⚠️ 目前處於接管控制模式。請注意：接管取得的是共享輸入通道，不會鎖定原生 Herdr 視窗。兩端輸入可能交錯送出，操作 Agent 時請留意。"));
+      notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
     }
     if (connState === "closed") {
       notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}。如需重新開啟請點選右上方「重新連線」。`));
@@ -1816,7 +1827,6 @@ async function viewTerminal(paneId) {
     if (shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
-    actions.push(el("button", { class: "btn small", type: "button", on: { click: () => focusTerminal({ pane_id: paneId, role_label: roleName }) }, title: "在 herdr 視窗聚焦此 Terminal" }, "在 herdr 切換焦點"));
     actions.push(closeSessionButton(paneId));
     actions.push(el("a", { class: "btn small", href: "#/team" }, "返回團隊"));
     setKids(actionWrap, actions);
@@ -1836,7 +1846,7 @@ async function viewTerminal(paneId) {
         el("p", null, "您即將接管此 Terminal 的鍵盤輸入控制。"),
         el("div", { class: "notice warn", style: "margin: 4px 0" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-          el("div", null, "重要提醒：接管操作為共享輸入通道，不會鎖定原生 Herdr 視窗。原生視窗與瀏覽器均可打字，兩端輸入可能會互相交錯。若 Agent 正在執行任務，請避免非預期的干擾。")),
+          el("div", null, "重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。若 Agent 正在執行任務，請避免非預期的干擾。")),
         el("p", { class: "small muted" }, "接管後您隨時可以點選「釋放控制」回到僅觀看狀態。"),
         el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
     document.body.append(modalElem);
@@ -2081,7 +2091,7 @@ async function viewTerminal(paneId) {
     termWrap,
     el("div", { class: "legend section" },
       el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
-      el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作"),
+      el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字；同一時間只有一個分頁能控制"),
       el("span", { class: "term-history-notice" }, TERMINAL_VISIBLE_SCREEN_NOTICE))
   );
 
@@ -2407,14 +2417,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("dt", null, "角色名稱"), el("dd", { style: "font-weight:600" }, roleName),
           el("dt", null, "執行工具"), el("dd", null, toolTag(activeSession.agent)),
           el("dt", null, "模型"), el("dd", { class: "mono" }, activeSession.model || "—"),
-          el("dt", null, "已用技能"), el("dd", null, skillsUsed.length ? skillsUsed.join("、") : "無")),
-        el("div", { class: "row", style: "margin-top:4px" },
-          el("button", {
-            class: "btn small",
-            type: "button",
-            on: { click: () => focusTerminal({ pane_id: activePaneId, role_label: roleName }) },
-            title: "在 herdr 視窗聚焦此 Terminal",
-          }, "在 herdr 切換焦點")));
+          el("dt", null, "已用技能"), el("dd", null, skillsUsed.length ? skillsUsed.join("、") : "無")));
     }
 
     setKids(leftCol,
@@ -2538,7 +2541,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
 
       const notices = [];
       if (mode === "control") {
-        notices.push(notice("warn", "⚠️ 目前處於接管控制模式。請注意：接管取得的是共享輸入通道，不會鎖定原生 Herdr 視窗。兩端輸入可能交錯送出，操作 Agent 時請留意。"));
+        notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
       }
       if (connState === "closed") {
         notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}。如需重新開啟請點選右上方「重新連線」。`));
@@ -2597,7 +2600,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("p", null, "您即將接管此 Terminal 的鍵盤輸入控制。"),
           el("div", { class: "notice warn", style: "margin: 4px 0" },
             el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-            el("div", null, "重要提醒：接管操作為共享輸入通道，不會鎖定原生 Herdr 視窗。原生視窗與瀏覽器均可打字，兩端輸入可能會互相交錯。若 Agent 正在執行任務，請避免非預期的干擾。")),
+            el("div", null, "重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。若 Agent 正在執行任務，請避免非預期的干擾。")),
           el("p", { class: "small muted" }, "接管後您隨時可以點選「釋放控制」回到僅觀看狀態。"),
           el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
       document.body.append(modalElem);
@@ -2842,7 +2845,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         termWrap,
         el("div", { class: "legend section", style: "margin-top:8px" },
           el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
-          el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字，但非獨占控制，原生 Herdr 視窗仍可同時操作"),
+          el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字；同一時間只有一個分頁能控制"),
           el("span", { class: "term-history-notice" }, TERMINAL_VISIBLE_SCREEN_NOTICE)))
     );
 
@@ -4080,7 +4083,7 @@ async function route() {
 }
 
 setTheme(store.get("theme", "auto"));
-// Coming back from herdr to this tab: refresh at once instead of waiting.
+// Coming back to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).
 function skipToMain(e) {

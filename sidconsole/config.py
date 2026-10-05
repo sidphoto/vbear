@@ -11,6 +11,7 @@ import json
 import os
 import stat
 import tempfile
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -141,8 +142,7 @@ DEFAULT_CONFIG = {
     "port": DEFAULT_PORT,
     "language": "zh-TW",
     "advanced_mode": False,
-    "herdr_bin": "",
-    "runtime_kind": "herdr",  # herdr | native (R2); takes effect on restart
+    "runtime_kind": "native",  # the only runtime since the Herdr bridge was removed
     "project_roots": ["~/projects"],
     "sources": [asdict(s) for s in default_sources()],
 }
@@ -262,7 +262,26 @@ def load() -> dict:
     for extra in DEFAULT_CONFIG["sources"]:
         if extra["source_id"] not in known:
             merged["sources"].append(extra)
+    if _migrate_from_herdr(merged):
+        try:
+            save(merged)
+        except (OSError, ValueError):
+            pass  # still run as native this time; the migration is retried on the next load
     return merged
+
+
+def _migrate_from_herdr(conf: dict) -> bool:
+    """A config written while Herdr was supported becomes native once. The
+    time is kept so the UI can tell the user once (until acknowledged)."""
+    changed = False
+    if conf.get("runtime_kind") != "native":
+        conf["runtime_kind"] = "native"
+        conf.setdefault("herdr_migrated_at", time.time())
+        changed = True
+    if "herdr_bin" in conf:
+        del conf["herdr_bin"]
+        changed = True
+    return changed
 
 
 def save(data: dict, force: bool = False) -> None:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+os.environ["SID_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import shutil
 import socket
 import sys
@@ -134,7 +135,7 @@ def _fresh_console(sd):
     c.port = port
     c.store = Store()
     c.lock = threading.Lock()
-    c.runtime = rt_mod.get_runtime(bin_getter=lambda: "")
+    c.runtime = rt_mod.get_runtime()  # native; never autostarts a daemon
     handler = server.make_handler(c)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)

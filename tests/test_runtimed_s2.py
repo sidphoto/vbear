@@ -367,11 +367,10 @@ class NativeRuntimeTests(DaemonCase):
         ex = self.open(["/bin/sh", "-c", "exit 0"])
         self.wait_for(lambda: self.rt.status(ex) == "exited", msg="exited status")
 
-    def test_validate_target_and_focus(self):
+    def test_validate_target(self):
         self.assertTrue(self.rt.validate_target("n-0123456789ab"))
         for bad in ("", "w1:pA", "--x", "n-XYZ", "a/b", "n-" + "0" * 200):
             self.assertFalse(self.rt.validate_target(bad), bad)
-        self.assertFalse(self.rt.focus("n-0123456789ab")["ok"])
 
     def test_observe_first_frame_and_readonly(self):
         sid = self.open(SLEEP)

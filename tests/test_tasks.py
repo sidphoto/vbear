@@ -3,6 +3,7 @@
 import json
 import multiprocessing
 import os
+os.environ["SID_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import shutil
 import tempfile
 import threading

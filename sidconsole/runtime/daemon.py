@@ -297,6 +297,7 @@ class Session:
         self.exit_reason = ""
         # Managed (R3 S2) sessions only; all stay inert for plain sessions.
         self.launch_id: str | None = None
+        self.engine: str | None = None      # "claude" / "codex" for a managed session
         self.tracker: proctrack.DescendantTracker | None = None
         self.extra_groups: list[int] = []   # verified descendant groups, from the last look
         self.extra_alive = False            # an observed descendant outside our group still exists
@@ -360,7 +361,7 @@ class Session:
                 "closing": self.phase is not None, "output_bytes": self.total,
                 "attachments": len(self.attachments),
                 "control_attachment": self.control.aid if self.control else None,
-                "managed": self.launch_id}
+                "managed": self.launch_id, "engine": self.engine}
 
 
 class Attachment:
@@ -1251,6 +1252,7 @@ class Daemon:
             agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
             return _err(rid, "internal", f"無法啟動：{exc}")
         sess.launch_id = launch_id
+        sess.engine = m.get("engine")
         sess.tracker = proctrack.DescendantTracker(sess.pid)
         leader = None
         try:

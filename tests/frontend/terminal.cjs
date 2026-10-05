@@ -524,15 +524,15 @@ async function runAllTests() {
     assert.deepStrictEqual(instantiatedOptions.windowOptions, {});
     assert.strictEqual(
       instantiatedOptions.scrollback, 0,
-      "Herdr redraw frames expose only the current screen, so the UI must not advertise a non-functional xterm scrollback buffer"
+      "The stream replays only recent output, so the UI must not advertise a non-functional xterm scrollback buffer"
     );
     assert.strictEqual(
       appSource.includes("scrollback: 1000"), false,
       "The live terminal must not retain the old misleading scrollback: 1000 setting"
     );
     assert(
-      appSource.includes("此網頁只同步 Herdr 目前可視畫面，不提供回捲歷史"),
-      "The UI must disclose the current-screen-only terminal contract"
+      appSource.includes("開啟時只重播最近一段輸出，不提供完整的回捲歷史"),
+      "The UI must disclose the recent-output-only terminal contract"
     );
     assert.strictEqual(
       (appSource.match(/class: \"term-history-notice\"/g) || []).length, 2,
@@ -580,11 +580,13 @@ async function runAllTests() {
       "Resize must payload action: resize with cols and rows"
     );
 
-    // 9b. Takeover warning text verifies shared input channel
+    // 9b. Takeover warning text describes the native control model honestly
     assert(
-      appSource.includes("重要提醒：接管操作為共享輸入通道，不會鎖定原生 Herdr 視窗。原生視窗與瀏覽器均可打字，兩端輸入可能會互相交錯。"),
-      "Takeover warning must explicitly describe shared non-exclusive input"
+      appSource.includes("重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。"),
+      "Takeover warning must describe single-controller input with automatic demotion"
     );
+    assert(!/Herdr/i.test(appSource.replace(/herdr_migration\w*|herdrMigrationNotice|Herdr-era|不再支援 Herdr|在 Herdr 或其他終端/g, "")),
+      "no Herdr feature wording may remain outside the one-time migration notice");
 
     // 9c. Safe hash routing
     global.location.hash = "#/term/w1%3ApA";
@@ -603,7 +605,7 @@ async function runAllTests() {
   // 10. Safe Full-Frame Resynchronization without term.reset() destruction.
   // The synthetic CRLF history below is deliberately a protocol-level guard:
   // it proves a redraw does not destroy pre-existing xterm state, but does NOT
-  // claim the live Herdr absolute-position redraw stream can create scrollback.
+  // claim the live redraw stream can create scrollback.
   {
     // 10a. Full frame preserves alternate buffer and synthetic normal-buffer history
     const writtenBytes = [];
@@ -659,9 +661,9 @@ async function runAllTests() {
         assert.strictEqual(realTerm.buffer.active.type, "alternate", "Alternate buffer must be preserved across full frame");
         assert.strictEqual(realTerm.buffer.normal.length, 21, "Pre-existing synthetic normal-buffer history must NOT be wiped by full frame");
 
-        // 10c. Same-pane continuity: simulate full reconnect sequence where Herdr full frame
+        // 10c. Same-pane continuity: simulate full reconnect sequence where full frame
         // omits DECSET 1049, followed by application exiting alternate buffer (\x1b[?1049l)
-        const herdrRealisticFullFrame = Buffer.from(
+        const realisticFullFrame = Buffer.from(
           "\x1b[?2026h\x1b[?25l\x1b]8;;\x1b\\\x1b[2J\x1b[1;1H\x1b[0;39;49m=== SAME PANE RECONNECT REDRAW ===\x1b[0m\x1b[?25h",
           "utf8"
         ).toString("base64");
@@ -669,10 +671,10 @@ async function runAllTests() {
         handleTerminalFrame({
           type: "terminal.frame",
           full: true,
-          bytes: herdrRealisticFullFrame,
+          bytes: realisticFullFrame,
         }, { term: realTerm, reconnectPolicy: fakePolicy });
 
-        assert.strictEqual(realTerm.buffer.active.type, "alternate", "Buffer must remain alternate after Herdr reconnect frame");
+        assert.strictEqual(realTerm.buffer.active.type, "alternate", "Buffer must remain alternate after a reconnect frame");
         assert.strictEqual(realTerm.buffer.normal.length, 21, "Synthetic normal-buffer history is preserved during reconnect");
 
         // When application in the same pane later exits alternate buffer
@@ -685,7 +687,7 @@ async function runAllTests() {
       });
     });
 
-    console.log("ok: Category 10 - Safe full-frame resynchronization preserves pre-existing xterm state without claiming live Herdr scrollback");
+    console.log("ok: Category 10 - Safe full-frame resynchronization preserves pre-existing xterm state without claiming live scrollback");
   }
 
   // 11. Degenerate terminal dimensions never reach the server or the pane

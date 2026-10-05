@@ -1,4 +1,4 @@
-"""Data model for SID Console for Herdr.
+"""Data model for SID Console.
 
 Design rule from the product plan (section 6.2 / 9): every user-visible claim
 must carry where it came from. A value the scanner derived by reading document
@@ -15,7 +15,7 @@ from typing import Any
 
 AUTHOR = "author"  # stated by the skill/agent author in the source file
 DERIVED = "derived"  # inferred by this scanner from file structure
-RUNTIME = "runtime"  # observed from a running herdr session
+RUNTIME = "runtime"  # observed from a running runtime session
 MISSING = "missing"  # the source does not provide it
 
 
@@ -133,7 +133,7 @@ class AgentRole:
 
 @dataclass
 class LiveSession:
-    """One working terminal observed through the herdr API."""
+    """One working terminal observed through the runtime."""
 
     terminal_id: str
     agent: str

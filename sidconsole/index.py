@@ -3,7 +3,7 @@
 Two layers, because they change at different speeds:
   static  - skills, roles, relations. Built by an explicit scan and cached on
             disk; the UI never triggers a file walk while rendering.
-  live    - herdr sessions, usage evidence, projects. Cheap and incremental,
+  live    - runtime sessions, usage evidence, projects. Cheap and incremental,
             rebuilt on request with a short TTL.
 """
 
@@ -342,8 +342,8 @@ def _stamp(st: os.stat_result) -> tuple:
 class Store:
     """Holds the cached static index and a TTL-cached live view.
 
-    Nothing slow runs under a lock that other requests need. herdr calls and
-    usage parsing happen outside every lock, so a hung herdr can delay the
+    Nothing slow runs under a lock that other requests need. runtime calls and
+    usage parsing happen outside every lock, so a hung runtime can delay the
     live view but never the skill library:
       _lock       guards the swap of _static / conf (held only for assignments)
       _scan_lock  serialises full scans (first load and rescan)
@@ -364,13 +364,9 @@ class Store:
         self._live_epoch = 0       # bumped when _static changes; older builds are not cached
         cfg.ensure_state_dir()  # also tightens a state dir made by an older version
         self.conf = cfg.load()
-        # The Runtime is the seam through which Scan/Live reach a terminal
-        # backend; default to a herdr-backed one if the caller did not
-        # supply its own. Tests pass a fake Runtime here to avoid touching
-        # real herdr / PATH; the lazy bin_getter picks up config changes
-        # via the same getter the server uses for its own runtime.
-        self.runtime = runtime if runtime is not None else rt.get_runtime(
-            bin_getter=lambda: self.conf.get("herdr_bin", ""))
+        # The Runtime is the seam through which Live reaches the terminal
+        # backend. Tests pass a fake Runtime here.
+        self.runtime = runtime if runtime is not None else rt.get_runtime()
 
     def _index_stamp(self) -> tuple:
         try:
@@ -471,13 +467,13 @@ class Store:
     def live(self, force: bool = False, stale_ok: bool = False) -> dict:
         """The live view, rebuilt at most every LIVE_TTL_S seconds.
 
-        force     the result must come from a herdr call that started after
+        force     the result must come from a runtime call that started after
                   this request (focus validation relies on this).
         stale_ok  any cached view will do; a refresh runs in the background.
                   For pages that only decorate static data with usage.
         While a build is running, other non-forced callers get the previous
         view if there is one; everyone else waits for that build instead of
-        calling herdr again.
+        calling the runtime again.
         """
         asked = time.monotonic()
         with self._live_cond:
@@ -550,7 +546,7 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
     # production, but kept conservative so a missing runtime fails loud,
     # not via a global mutable.
     if runtime is None:
-        runtime = rt.get_runtime(bin_getter=lambda: conf.get("herdr_bin", ""))
+        runtime = rt.get_runtime()
     snap = runtime.snapshot()
     days = int(conf.get("usage_days", 30))
     use = usage.collect(days) if conf.get("usage_enabled", True) else {
@@ -614,7 +610,7 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
             "supported_tool": tool in ("claude", "codex"),
             "status": agent.get("agent_status", "unknown"),
             "role_label": role_label,
-            "role_label_source": "herdr 分頁名稱（使用者命名）" if tab.get("label") else "",
+            "role_label_source": "分頁名稱（使用者命名）" if tab.get("label") else "",
             "title": agent.get("terminal_title_stripped") or "",
             "workspace_id": agent.get("workspace_id"),
             "workspace_label": ws.get("label", ""),
@@ -653,14 +649,12 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
 
     return {
         "generated_at": time.time(),
-        "herdr": {"available": snap["available"], "version": snap["version"],
-                  "binary": snap["binary"], "problems": snap["problems"]},
+        "runtime": {"available": snap["available"], "version": snap["version"],
+                    "binary": snap["binary"], "problems": snap["problems"]},
         "sessions": sessions,
-        # Every pane herdr currently has, agent or not. `sessions` above is
-        # built from `agent list` and therefore drops a pane the moment its
-        # AI agent exits, even though the pane, its shell and its scrollback
-        # are all still live. Attach decisions must use this list instead,
-        # or the terminal bridge would refuse a pane that plainly exists.
+        # Every terminal the runtime has, agent or not. `sessions` above only
+        # holds Agent terminals; attach decisions must use this list, or a
+        # plain shell session that plainly exists would be refused.
         "panes": [
             {"pane_id": p.get("pane_id"), "terminal_id": p.get("terminal_id"),
              "tab_id": p.get("tab_id"), "workspace_id": p.get("workspace_id"),

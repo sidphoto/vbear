@@ -1,6 +1,7 @@
 """Phase R2 S3: runtime_kind switch, daemon autostart, native session API.
 
-Synthetic programs only (user decision §9.3). Herdr mode must be unchanged.
+Synthetic programs only (user decision §9.3). The Herdr runtime has been removed;
+a config written while it existed is migrated to native once.
 """
 
 from __future__ import annotations
@@ -28,9 +29,10 @@ ECHO = [PY, "-c", "import sys\nfor l in sys.stdin: print('ECHO:'+l.strip(),flush
 
 
 class FactoryTests(unittest.TestCase):
-    def test_default_is_herdr_and_config_default(self):
-        self.assertIsInstance(rt.get_runtime(bin_getter=lambda: ""), rt.HerdrRuntime)
-        self.assertEqual(cfg.DEFAULT_CONFIG["runtime_kind"], "herdr")
+    def test_default_is_native_and_config_default(self):
+        self.assertIsInstance(rt.get_runtime(), rt.NativeRuntime)
+        self.assertEqual(cfg.DEFAULT_CONFIG["runtime_kind"], "native")
+        self.assertNotIn("herdr_bin", cfg.DEFAULT_CONFIG)
 
     def test_native_kind(self):
         r = rt.get_runtime(kind="native", base=Path("/tmp/sidr2-nowhere"))
@@ -214,24 +216,46 @@ class NativeServerTests(ServerCase):
         st, body = self.req("POST", "/api/native/sessions", {"argv": ["/bin/sh"]})
         self.assertEqual(st, 503)
 
-    def test_config_update_kind_needs_restart(self):
-        self.assertEqual(self.req("POST", "/api/config", {"runtime_kind": "bogus"})[0], 400)
+    def test_runtime_kind_is_no_longer_writable(self):
         st, body = self.req("POST", "/api/config", {"runtime_kind": "herdr"})
         self.assertEqual(st, 200)
-        self.assertTrue(body["restart_needed"])
+        self.assertEqual(body["config"]["runtime_kind"], "native")
+        self.assertNotIn("restart_needed", body)
+
+    def test_focus_endpoint_is_gone(self):
+        st, _ = self.req("POST", "/api/focus", {"target": "n-0123456789ab"})
+        self.assertNotEqual(st, 200)
 
 
-class HerdrServerTests(ServerCase):
+class HerdrConfigMigrationTests(ServerCase):
+    """A state directory whose config still says runtime_kind=herdr."""
     kind = "herdr"
 
-    def test_herdr_mode_unchanged(self):
-        self.assertIsInstance(self.console.runtime, rt.HerdrRuntime)
-        self.assertEqual(self.console.runtime_unavailable_message(), "找不到 herdr 執行檔")
-        st, body = self.req("POST", "/api/native/sessions", {"argv": ["/bin/sh"]})
-        self.assertEqual(st, 409)
-        st, body = self.req("GET", "/api/config")
-        self.assertEqual(body["runtime_kind_active"], "herdr")
-        self.assertFalse(d.socket_path(self.home).exists(), "herdr mode must not start runtimed")
+    def setUp(self):
+        super().setUp()
+        raw = json.loads(cfg.config_path().read_text())
+        # The setUp above already loaded (and migrated) it once; re-create the old shape.
+        raw.update(runtime_kind="herdr", herdr_bin="/opt/herdr")
+        raw.pop("herdr_migrated_at", None)
+        cfg.config_path().write_text(json.dumps(raw))
+
+    def test_old_herdr_config_is_migrated_once_and_persisted(self):
+        conf = cfg.load()
+        self.assertEqual(conf["runtime_kind"], "native")
+        self.assertNotIn("herdr_bin", conf)
+        stamp = conf["herdr_migrated_at"]
+        on_disk = json.loads(cfg.config_path().read_text())
+        self.assertEqual(on_disk["runtime_kind"], "native")
+        self.assertNotIn("herdr_bin", on_disk)
+        self.assertEqual(cfg.load()["herdr_migrated_at"], stamp)   # not re-stamped
+
+    def test_console_runs_native_and_the_notice_can_be_acknowledged(self):
+        self.assertIsInstance(self.console.runtime, rt.NativeRuntime)
+        cfg.load()
+        st, body = self.req("POST", "/api/config", {"herdr_migration_acknowledged": True})
+        self.assertEqual(st, 200)
+        self.assertIs(body["config"]["herdr_migration_acknowledged"], True)
+        self.assertIn("herdr_migrated_at", body["config"])
 
 
 if __name__ == "__main__":

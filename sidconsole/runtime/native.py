@@ -16,7 +16,7 @@ PTY sessions; this adapter owns *attachments* — one attach connection per
   full frame built from the recent tail, so two tabs never steal each
   other's frames (§10 S2).
 
-Frames placed on the queues have the same shape the Herdr bridge produces
+Frames placed on the queues have the terminal-frame shape the web client expects
 (``terminal.frame`` / ``terminal.closed`` / ``None`` sentinel), so the SSE
 loop in server.py needs no change.
 """
@@ -41,7 +41,7 @@ from . import cli_versions as _cli_versions
 from . import agent_sessions as _agent_sessions
 from .base import RuntimeBase, SessionView
 
-QUEUE_MAX = 200               # per subscriber, drop-oldest (same as the Herdr bridge)
+QUEUE_MAX = 200               # per subscriber, drop-oldest
 MAX_SUBSCRIBERS = 8
 MAX_CONCURRENT_PANES = 4
 LINE_MAX = 2 << 20            # client-side frame line cap
@@ -78,6 +78,17 @@ def _pinned_codex_binary() -> str:
     release = f"{_cli_versions.EXPECTED_VERSIONS['codex']}-{arch}-apple-darwin"
     pinned = Path.home() / ".codex/packages/standalone/releases" / release / "bin/codex"
     return str(pinned)
+
+
+def _agent_engine(info: dict) -> str | None:
+    """Which Agent CLI a daemon session runs: the managed launch's engine, or
+    the command name for a plain session started as ``claude`` / ``codex``."""
+    engine = info.get("engine")
+    if engine in ("claude", "codex"):
+        return engine
+    argv = info.get("argv") or []
+    name = Path(argv[0]).name if argv else ""
+    return name if name in ("claude", "codex") else None
 
 
 def _line(obj: dict) -> bytes:
@@ -653,13 +664,24 @@ class NativeRuntime(RuntimeBase):
             return snap
         for s in (r.get("result") or {}).get("sessions") or ():
             argv = s.get("argv") or []
+            engine = _agent_engine(s)
+            if engine:
+                # Claude / Codex sessions are the console's working Agents. Their
+                # working/idle state is not detectable from a PTY, so it is unknown.
+                snap["agents"].append({
+                    "terminal_id": s["session_id"], "pane_id": s["session_id"],
+                    "workspace_id": WORKSPACE_ID, "tab_id": "", "agent": engine,
+                    "agent_status": "exited" if s.get("exited") else "unknown",
+                    "name": "", "cwd": s.get("cwd"), "foreground_cwd": s.get("cwd"),
+                    "terminal_title_stripped": engine, "focused": False,
+                    "managed": s.get("managed"), "agent_session": {}})
             snap["panes"].append({
                 "pane_id": s["session_id"], "terminal_id": s["session_id"],
                 "workspace_id": WORKSPACE_ID,
                 "title": Path(argv[0]).name if argv else s["session_id"],
                 "cwd": s.get("cwd"), "command": argv, "pid": s.get("pid"),
                 "terminal_title_stripped": Path(argv[0]).name if argv else "",
-                "agent": None, "agent_status": "exited" if s.get("exited") else "unknown",
+                "agent": engine, "agent_status": "exited" if s.get("exited") else "unknown",
                 "exited": bool(s.get("exited")), "exit_code": s.get("exit_code"),
                 "cols": s.get("cols"), "rows": s.get("rows")})
         return snap
@@ -677,9 +699,6 @@ class NativeRuntime(RuntimeBase):
             if p["pane_id"] == session_id:
                 return "exited" if p["exited"] else "unknown"  # R2 does not guess idle/working
         return "unknown"
-
-    def focus(self, target: str) -> dict:
-        return {"ok": False, "error": "原生 Terminal 不支援視窗切換"}
 
     # ---- session lifecycle ----
 
@@ -704,7 +723,7 @@ class NativeRuntime(RuntimeBase):
         except (OSError, ValueError):
             return None
         # The view receives terminal.closed from the daemon; the SSE loop
-        # delivers it and then calls close_if_current, as for Herdr.
+        # delivers it and then calls close_if_current.
         return r.get("result") or {} if r.get("ok") else None
 
     def observe(self, session_id: str, cols: int = 80, rows: int = 24) -> SessionView | None:

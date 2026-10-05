@@ -294,7 +294,7 @@ function findModalInBody() {
       "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
       "GET /api/live":               () => jsonResponse({ sessions: [], projects: [],
                                                           attention: [], usage: { sessions: [] },
-                                                          herdr: { available: true, problems: [] } }),
+                                                          runtime: { available: true, problems: [] } }),
       "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
       "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
       "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
@@ -321,7 +321,7 @@ function findModalInBody() {
       "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
       "GET /api/live":               () => jsonResponse({ sessions: [], projects: [],
                                                           attention: [], usage: { sessions: [] },
-                                                          herdr: { available: true, problems: [] } }),
+                                                          runtime: { available: true, problems: [] } }),
       "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
       "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
       "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
@@ -348,7 +348,7 @@ function findModalInBody() {
       "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
       "GET /api/live":               () => jsonResponse({ sessions: [], projects: [],
                                                           attention: [], usage: { sessions: [] },
-                                                          herdr: { available: true, problems: [] } }),
+                                                          runtime: { available: true, problems: [] } }),
       "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
       "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
       "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
@@ -401,7 +401,7 @@ function findModalInBody() {
       "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
       "GET /api/live":               () => jsonResponse({ sessions: [], projects: [],
                                                           attention: [], usage: { sessions: [] },
-                                                          herdr: { available: true, problems: [] } }),
+                                                          runtime: { available: true, problems: [] } }),
       "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
       "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
       "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
@@ -462,7 +462,7 @@ function findModalInBody() {
       "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
       "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
       "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
-                                                          usage: { sessions: [] }, herdr: { available: true, problems: [] } }),
+                                                          usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
       "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
       "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
       "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
@@ -552,7 +552,7 @@ function findModalInBody() {
     });
     evalAgentBuilderSlice(ctx);
     const tick = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
-    assert.strictEqual(ctx.closeSessionButton("w1:p2"), null, "herdr panes get no close button");
+    assert.strictEqual(ctx.closeSessionButton("w1:p2"), null, "non-native ids get no close button");
     assert.strictEqual(ctx.closeSessionButton("n-xyz"), null, "malformed ids get no close button");
     // Clicks "關閉 Session", then answers the in-page dialog with confirm or cancel.
     const confirmDialog = async (answer) => {

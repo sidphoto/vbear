@@ -1,5 +1,9 @@
 # SID Console 開發交接
 
+> **2026-10-05 更新：Herdr 相容層已移除（R-D5，Gate 10 通過後）。** 主控台只使用內建的 SID runtime；本文件中描述
+> Herdr 串流、Herdr 原生視窗與 `herdr` 指令的段落為歷史紀錄，不再適用。最後一個支援 Herdr 的版本為 git tag `last-herdr`。
+
+
 更新日期：2026-09-22
 
 ## 1. 目前狀態

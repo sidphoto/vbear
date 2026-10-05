@@ -12,7 +12,7 @@ Profiles are also NOT what an Agent Session runs with. Equipped is never Loaded
 saving a profile never starts, restarts, or injects anything into a session.
 A profile's permission_intents keys are always intent-only — they are not
 applied to the underlying CLI tools and never relax or strengthen any
-existing per-call authority the local Herdr bridge already enforces.
+existing per-call authority of the CLI tools themselves.
 
 Storage follows the same fail-closed invariants as tasks.py:
 

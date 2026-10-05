@@ -176,7 +176,7 @@ const FETCH_ROUTES = {
   "/api/overview": () => jsonResponse({ stale: false, generated_at: Date.now() / 1000, totals: { active: 3 } }),
   "/api/skills": () => jsonResponse({ skills: [], categories: [] }),
   "/api/roles": () => jsonResponse({ roles: [] }),
-  "/api/live": () => jsonResponse({ sessions: [{ pane_id: "w1:pA", agent: "claude", role_label: "Fix Writer", status: "running", model: "sonnet", skills_used: [] }], projects: [], attention: [], usage: { sessions: [] }, herdr: { available: true, problems: [] } }),
+  "/api/live": () => jsonResponse({ sessions: [{ pane_id: "w1:pA", agent: "claude", role_label: "Fix Writer", status: "running", model: "sonnet", skills_used: [] }], projects: [], attention: [], usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
   "/api/tasks": () => jsonResponse({
     ok: true,
     tasks: [{
@@ -487,8 +487,8 @@ async function runWorkbenchTests() {
       "the rendered UI must never claim takeover is an exclusive lock"
     );
     assert.ok(
-      bodyText.includes("非獨占控制"),
-      "the rendered terminal legend must describe takeover as shared/non-exclusive"
+      bodyText.includes("同一時間只有一個分頁能控制"),
+      "the rendered terminal legend must describe the single-controller takeover model"
     );
     // Provenance fields must not overclaim identity verification (L5): the
     // human-approval field is really just an unauthenticated UI assertion.

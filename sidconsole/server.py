@@ -7,8 +7,7 @@ Security posture (plan section 9):
     which blocks cross-site request forgery from other pages in the browser
   - API reads refuse browser requests whose Sec-Fetch-Site is not same-origin
     (or none), and the one GET with a side effect (/api/live?force=1, which
-    runs herdr) also needs the custom header
-  - focus targets must be a pane/terminal id from the current herdr snapshot
+    queries the runtime) also needs the custom header
   - strict Content-Security-Policy; the UI renders skill text as text, never
     as HTML, because skill content is untrusted
   - files are served only by skill id or by a reference the scanner already
@@ -72,7 +71,7 @@ SKILL_SUMMARY_FIELDS = (
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
-                   "runtime_kind"}
+                   "herdr_migration_acknowledged"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -81,7 +80,7 @@ FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localho
 # A terminal this narrow or short cannot render anything usable: a stray
 # `cols=2` (which a browser really does propose when it measures the canvas
 # before the grid has laid out) makes every TUI and even plain wrapped text
-# unreadable, and the pane is resized for the native herdr window too. Out
+# unreadable, and the session's PTY is resized for every viewer too. Out
 # of range values fall back to the defaults rather than being clamped, so a
 # degenerate measurement yields a sane 80x24 instead of a silently ruined
 # 20-column session.
@@ -95,15 +94,12 @@ class Console:
         self.port = port
         self.store = Store()
         self.lock = threading.Lock()
-        # The Runtime is the single seam the console has with whatever is
-        # hosting the terminal panes (R1: herdr; R2: native). It is built
-        # once at console startup; session lifecycles are gated on the
-        # *current* conf via the lazy bin_getter the Runtime keeps.
-        kind = self.store.conf.get("runtime_kind", "herdr")
-        self.runtime_kind = kind if kind in rt.RUNTIME_KINDS else "herdr"
-        self.runtime = rt.get_runtime(
-            lambda: self.store.conf.get("herdr_bin", ""),
-            kind=self.runtime_kind, autostart=True)
+        # The Runtime is the single seam the console has with the terminal
+        # backend (`sidconsole runtimed`), built once at console startup.
+        # SID_RUNTIME_AUTOSTART=0 keeps the console from spawning the daemon
+        # (tests run their own, and must never leave one behind).
+        self.runtime_kind = "native"
+        self.runtime = rt.get_runtime(autostart=os.environ.get("SID_RUNTIME_AUTOSTART", "1") != "0")
         # Store's live snapshot must come from the same backend.
         self.store.runtime = self.runtime
         # Profile-managed launches (R3 S0): work directories must be inside this root.
@@ -119,9 +115,7 @@ class Console:
             return self._previews
 
     def runtime_unavailable_message(self) -> str:
-        if getattr(self, "runtime_kind", "herdr") == "native":
-            return "SID runtime 背景程序無法啟動或連線"
-        return "找不到 herdr 執行檔"
+        return "SID runtime 背景程序無法啟動或連線"
 
     # derived views ------------------------------------------------------
 
@@ -163,18 +157,8 @@ class Console:
         return {annotations.key_for(s) for s in self.store.static()["skills"]}
 
     def live_targets(self, force: bool = False) -> set[str]:
-        """Pane and terminal ids herdr reported in the current live snapshot.
-
-        Both `panes` (every pane herdr has) and `sessions` (only panes where
-        an AI agent is currently detected) are walked. `sessions` alone was
-        the old behaviour and it silently made the terminal bridge unusable
-        the moment an agent exited: the pane, its shell and its scrollback
-        were all still there, but it had vanished from `agent list`, so the
-        console answered "目前沒有這個 Terminal" for a pane plainly on screen
-        and cut the stream mid-session. `sessions` is still included because
-        a herdr old enough to lack `pane list` reports no panes at all, and
-        losing agent panes too would be a worse regression than the bug.
-        """
+        """Session ids the runtime reported in the current live snapshot:
+        every terminal (`panes`) plus the Agent terminals (`sessions`)."""
         live = self.store.live(force=force)
         ids: set[str] = set()
         for row in list(live.get("panes", ())) + list(live["sessions"]):
@@ -404,16 +388,6 @@ def make_handler(console: Console):
                     except ValueError as exc:
                         return self._error(400, str(exc))
                     return self._json({"ok": True, "annotation": saved})
-                if path == "/api/focus":
-                    target = self._body().get("target", "")
-                    if not isinstance(target, str) or not console.runtime.validate_target(target):
-                        return self._error(400, "無效的目標識別碼")
-                    # Only a pane that herdr itself reported; refresh once in case
-                    # the cached snapshot predates a newly opened pane.
-                    if (target not in console.live_targets()
-                            and target not in console.live_targets(force=True)):
-                        return self._error(400, "目前沒有這個 Terminal")
-                    return self._json(console.runtime.focus(target))
                 if path == "/api/native/sessions":
                     return self._native_open(self._body())
                 if path == "/api/native/agent-previews":
@@ -564,12 +538,12 @@ def make_handler(console: Console):
                     dim(body.get("rows"), TERM_DEFAULT_ROWS, TERM_MIN_ROWS))
 
         def _term_stream(self, pane_id: str, query: str):
-            """Server-sent events: one 'data: <json>\\n\\n' per herdr frame.
+            """Server-sent events: one 'data: <json>\\n\\n' per terminal frame.
 
             A plain <script>-less EventSource cannot carry the X-SID-Console
-            header this endpoint requires (it has a side effect: spawning a
-            herdr child process), so the frontend must open this with
-            fetch() and read the streamed body itself, not `new EventSource`.
+            header this endpoint requires (it has a side effect: attaching to
+            the runtime), so the frontend must open this with fetch() and read
+            the streamed body itself, not `new EventSource`.
             """
             if self.headers.get("X-SID-Console") != "1":
                 return self._error(403, "forbidden")
@@ -675,8 +649,6 @@ def make_handler(console: Console):
         # native sessions (R2 S3) -------------------------------------------
 
         def _native_open(self, body: dict):
-            if getattr(console, "runtime_kind", "herdr") != "native":
-                return self._error(409, "目前使用 Herdr 模式；請在設定改為 native 並重新啟動")
             argv = body.get("argv")
             if not (isinstance(argv, list) and argv and all(isinstance(a, str) and a for a in argv)):
                 return self._error(400, "argv 必須是非空字串陣列（不經過 shell）")
@@ -709,8 +681,6 @@ def make_handler(console: Console):
         def _agent_preview(self, body: dict):
             """What a Profile-managed launch would apply. Starts nothing. Raw
             argv, env, settings and credentials are not accepted here."""
-            if getattr(console, "runtime_kind", "herdr") != "native":
-                return self._error(409, "目前使用 Herdr 模式；請在設定改為 native 並重新啟動")
             extra = set(body) - {"profile_id", "workdir", "commit", "network", "tool"}
             if extra:
                 return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
@@ -736,8 +706,6 @@ def make_handler(console: Console):
         def _agent_launch(self, body: dict):
             """Confirm a preview and start it. Anything that changed since the
             preview answers 409 and needs a new preview."""
-            if getattr(console, "runtime_kind", "herdr") != "native":
-                return self._error(409, "目前使用 Herdr 模式；請在設定改為 native 並重新啟動")
             extra = set(body) - {"preview_id", "expected_settings_digest", "user_confirmed", "cols", "rows"}
             if extra:
                 return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
@@ -752,8 +720,6 @@ def make_handler(console: Console):
             return self._json({"ok": True, "launch": result})
 
         def _native_close(self, sid: str):
-            if getattr(console, "runtime_kind", "herdr") != "native":
-                return self._error(409, "目前使用 Herdr 模式")
             if not console.runtime.validate_target(sid):
                 return self._error(400, "無效的 session id")
             closer = getattr(console.runtime, "close_session", None)
@@ -804,6 +770,9 @@ def make_handler(console: Console):
                 "age_seconds": round(time.time() - static["generated_at"]),
                 "stale": time.time() - static["generated_at"] > STALE_AFTER_S,
                 "config_corrupt": bool(console.store.conf.get("_corrupt")) or cfg.is_corrupt(),
+                # Shown once after a Herdr-era config was switched to native, until acknowledged.
+                "herdr_migration_notice": bool(console.store.conf.get("herdr_migrated_at"))
+                and not console.store.conf.get("herdr_migration_acknowledged"),
                 "counts": counts,
                 "totals": {"skills": len(skills), "roles": len(static["roles"]),
                            "active": sum(1 for s in skills if s["activation"] == ACT_ACTIVE)},
@@ -899,8 +868,8 @@ def make_handler(console: Console):
             conf = console.store.conf
             res = {"config": {k: v for k, v in conf.items() if not k.startswith("_")},
                    "state_dir": str(cfg.state_dir()),
-                   "herdr_binary": console.runtime.binary(),
-                   "runtime_kind_active": getattr(console, "runtime_kind", "herdr")}
+                   "runtime_socket": console.runtime.binary(),
+                   "runtime_kind_active": "native"}
             if conf.get("_corrupt") or cfg.is_corrupt():
                 res["corrupt"] = True
             return res
@@ -923,8 +892,8 @@ def make_handler(console: Console):
                         raise ValueError("不支援的語言設定")
                     if key in ("advanced_mode", "usage_enabled"):
                         value = bool(value)
-                    if key == "runtime_kind" and value not in rt.RUNTIME_KINDS:
-                        raise ValueError("runtime_kind 只能是 herdr 或 native")
+                    if key == "herdr_migration_acknowledged":
+                        value = bool(value)
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):
@@ -934,9 +903,7 @@ def make_handler(console: Console):
                 cfg.save(conf)
                 console.store.set_conf(conf)
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
-                    or "project_roots" in body,
-                    "restart_needed": conf.get("runtime_kind", "herdr")
-                    != getattr(console, "runtime_kind", "herdr")}
+                    or "project_roots" in body}
 
         def _agent_builder_catalog(self) -> dict:
             """Read-only catalog used by the Agent Builder UI.
@@ -1002,7 +969,8 @@ def make_handler(console: Console):
                     "Permission Intents are intent-only and are NOT enforced. "
                     "They are descriptive records of what this Profile is composed "
                     "for; the underlying CLI tools' actual authority comes from "
-                    "their own per-call rules and the Herdr bridge.",
+                    "their own per-call rules; only a Profile-managed launch applies "
+                    "a verified sandbox configuration.",
                     "Agent Profiles are stored only inside this console's own state "
                     "directory. They never write to ~/.codex, ~/.claude, third-"
                     "party skill/role sources, or any third-party marketplace cache.",
@@ -1055,7 +1023,7 @@ def make_handler(console: Console):
                     "status": "唯讀展示 (未編譯)",
                     "description": "目前專案之架構、建置、測試與邊界契約",
                     "contract": {
-                        "stack": "Python 3.11+ / Vanilla JS / xterm.js vendored / Herdr 0.9.1",
+                        "stack": "Python 3.11+ / Vanilla JS / xterm.js vendored / SID native runtime",
                         "runtime": "Localhost only (127.0.0.1:7788)",
                         "security": "Strict CSP, Safe DOM textContent, Same-Origin + X-SID-Console: 1",
                         "tests": "python3 -B -m unittest discover -s tests -q && node tests/frontend/*.cjs",

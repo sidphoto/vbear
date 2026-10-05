@@ -1,10 +1,9 @@
-"""Runtime protocol (PHASE-R-PLAN §4) that any terminal-host backend must
-satisfy in R2+.
+"""Runtime protocol (PHASE-R-PLAN §4) for the terminal-host backend.
 
-R1 ships exactly one implementation, ``HerdrRuntime`` in this package; the
-whole point of the protocol is that a future ``NativeRuntime`` (R2) can drop
-in and pass the same contract tests without server.py / index.py /
-__main__.py learning about it.
+The one implementation is ``NativeRuntime``. The protocol keeps server.py /
+index.py / __main__.py independent of it and lets tests substitute a fake.
+(The original R1 ``HerdrRuntime`` was removed after Gate 10; see tag
+``last-herdr``.)
 
 Shape choice (Protocol vs ABC):
   - ``typing.Protocol`` with ``runtime_checkable`` lets the contract tests
@@ -14,8 +13,8 @@ Shape choice (Protocol vs ABC):
   - Methods the §4 table marks as "MUST exist" are declared as abstract on
     a concrete ``ABC`` (``RuntimeBase``); concrete implementations inherit
     from it and get a clear ``TypeError`` if they forget one.
-  - Methods R1 cannot honour (``open_session``, ``close``) are concrete on
-    the base and ``raise NotSupported``. Implementations that can honour
+  - Optional methods (``open_session``, ``close``) are concrete on the base
+    and ``raise NotSupported``. Implementations that can honour
     them override; those that cannot inherit the explicit refusal and the
     UI gets a real failure to translate, not a silent pretend-success.
 
@@ -23,13 +22,12 @@ User-facing contract (see also PHASE-R-PLAN §4):
 
   describe()              -> dict  name / version / binary / available / problems
   is_available()          -> bool  ready to be asked for sessions at all
-  list_sessions()         -> dict  same shape as the old ``herdr.snapshot()``
-                                  (panes + agents + workspaces + tabs);
+  list_sessions()         -> dict  panes + agents + workspaces + tabs;
                                   supersets the per-session read surface
   snapshot()              -> dict  an alias for list_sessions(); kept so the
                                   Doctor / Store paths do not need their
                                   shape renamed just to migrate
-  validate_target(t)      -> bool  syntax-level id check (herdr regex etc.)
+  validate_target(t)      -> bool  syntax-level id check
   status(session_id)      -> str   ``idle`` / ``working`` / ``exited`` /
                                   ``unknown``. ``unknown`` whenever the
                                   backend cannot tell, per the project's
@@ -41,15 +39,14 @@ User-facing contract (see also PHASE-R-PLAN §4):
   send_input(sid, data)   -> bool
   resize(sid, cols, rows) -> bool
   get(session_id)         -> SessionView | None  current live session
-  focus(target)           -> dict  {ok, error?}; navigation only
   close_all()             -> None  stop every active session (server-down)
 
-R1 stubs (raise NotSupported on the base; must be overridden in R2+):
+Optional (raise NotSupported on the base; override to support):
 
   open_session(spec)      -> SessionView
   close(session_id)       -> bool
 
-The "describe" extra, the "snapshot"/"focus"/"validate_target" extras, and
+The "describe" extra, the "snapshot"/"validate_target" extras, and
 the ``list_sessions``-is-superset note come from the R1 contract section 3.1
 (not all are in §4, but server.py and Doctor already rely on them, so the
 protocol must keep them).
@@ -66,19 +63,16 @@ class NotSupported(Exception):
 
     Not to be confused with "the Runtime is unavailable" (which surfaces as
     ``is_available() == False`` and ``describe()['available'] == False``).
-    A R1 ``HerdrRuntime`` does not have these capabilities at all and never
-    will — they are R2 surface. UI / API code is expected to treat the
-    exception as a user-visible "not available" and not retry.
+    UI / API code is expected to treat the exception as a user-visible
+    "not available" and not retry.
     """
 
 
 class SessionView:
     """The per-session object a Runtime hands to server.py after open.
 
-    The current ``HerdrRuntime`` returns a ``PaneSession`` from
-    ``bridge.terminal`` directly, so this is a structural specification,
-    not a wrapper. R2 ``NativeRuntime`` will return whatever its native
-    side gives, as long as it carries this surface (mode / cols / rows /
+    A structural specification, not a wrapper: ``NativeRuntime`` returns its
+    attachment object, which carries this surface (mode / cols / rows /
     token / queue / send_input / resize).
 
     Kept as a class (not an ABC) because the public surface is read-mostly;
@@ -91,9 +85,9 @@ class SessionView:
     rows: int
     token: str
 
-    # The bridge places terminal frames on .queue (one dict per json line,
-    # sentinel None at end of stream); R2 native place whatever it likes.
-    queue: Any  # queue.Queue for Herdr; not type-narrowed to allow R2.
+    # Terminal frames are placed on .queue (one dict per frame, sentinel
+    # None at end of stream).
+    queue: Any
 
     def send_input(self, data: bytes) -> bool:
         raise NotImplementedError
@@ -136,26 +130,22 @@ class RuntimeBase(ABC):
         first. Backends must override; there is no safe generic fallback."""
         raise NotSupported("close_if_current is not supported by the active runtime")
 
-    # ---- R1 stubs: these capabilities are listed in §4 but Herdr cannot
-    # provide them; the explicit refusal is the contract here, not a
-    # silent fallback. Override only in implementations that can honour
-    # them. ----
+    # ---- optional capabilities: the explicit refusal is the contract here,
+    # not a silent fallback. Override only in implementations that can
+    # honour them. ----
 
     def open_session(self, spec: Any) -> SessionView:
         """Open a new session by specification (cwd, command, env, ...).
 
-        R1's ``HerdrRuntime`` does not have this — sessions are managed
-        outside SID today — so calling this on a R1 runtime is an explicit
-        "not supported" failure rather than a fake success.
+        A runtime without this capability fails explicitly rather than
+        faking success.
         """
         raise NotSupported("open_session is not supported by the active runtime")
 
     def close(self, session_id: str) -> bool:
         """End a session and its process group (§4 close).
 
-        R1 does not own the session lifecycle, so this raises NotSupported;
-        the UI/console have to ask herdr (or whoever owns the session) to
-        close it, and that is its own bridge path, not a Runtime op.
+        A runtime that does not own the session lifecycle raises NotSupported.
         """
         raise NotSupported("close is not supported by the active runtime")
 
@@ -163,19 +153,16 @@ class RuntimeBase(ABC):
 
     @abstractmethod
     def list_sessions(self) -> dict:
-        """All sessions and panes, in the existing herdr-shaped dict
-        (panes, agents, workspaces, tabs, problems). The PHASE-R-PLAN §4
-        name; server.py / index.py today iterate this view, so keeping the
-        shape removes the migration pressure from R2."""
+        """All sessions and panes (panes, agents, workspaces, tabs, problems).
+        server.py / index.py iterate this view."""
 
     @abstractmethod
     def snapshot(self) -> dict:
-        """Alias of list_sessions(), for code paths already calling
-        ``herdr.snapshot()`` and that benefit from the existing name."""
+        """Alias of list_sessions()."""
 
     @abstractmethod
     def validate_target(self, target: str) -> bool:
-        """Syntax-only validity (herdr regex, native id rules, ...)."""
+        """Syntax-only validity of a session id."""
 
     @abstractmethod
     def status(self, session_id: str) -> str:
@@ -218,13 +205,6 @@ class RuntimeBase(ABC):
     @abstractmethod
     def get(self, session_id: str) -> SessionView | None:
         """Currently active session of session_id, or None."""
-
-    @abstractmethod
-    def focus(self, target: str) -> dict:
-        """Navigation: bring target to the foreground.
-
-        Returns ``{"ok": bool, "error"?: str}``; never raises for a
-        syntactically valid id, instead reports backend errors as data."""
 
     @abstractmethod
     def close_all(self) -> None:

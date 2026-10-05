@@ -1,7 +1,7 @@
 """Phase R2 S1: PTY sessions in the runtime daemon (contract v2 §4, §6, §10 S1).
 
-Only synthetic programs are started (/bin/sh, python -c): no Claude, Codex
-or Herdr (user decision §9.3).
+Only synthetic programs are started (/bin/sh, python -c): no Claude or Codex
+(user decision §9.3).
 """
 
 from __future__ import annotations

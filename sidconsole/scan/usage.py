@@ -209,7 +209,7 @@ def collect(days: int = 30) -> dict:
 def for_session_ids(ids: list[str]) -> dict[str, dict]:
     """Parse the logs of specific sessions regardless of the time window.
 
-    Used for sessions herdr reports as running now: they are current work even
+    Used for sessions the runtime reports as running now: they are current work even
     when their log was last written long ago. Files are located by the session
     id in their file name, so nothing outside the two log roots is touched.
     """

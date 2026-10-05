@@ -10,7 +10,7 @@ from . import config as cfg
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sidconsole", description="SID Console for Herdr：技能與團隊主控台")
+    parser = argparse.ArgumentParser(prog="sidconsole", description="SID Console：技能與團隊主控台")
     sub = parser.add_subparsers(dest="cmd")
     p_serve = sub.add_parser("serve", help="啟動本機主控台（預設）")
     p_serve.add_argument("--port", type=int)
@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     p_launch = sub.add_parser("launch", help="背景啟動主控台（若尚未執行）並開啟瀏覽器")
     p_launch.add_argument("--port", type=int)
     sub.add_parser("scan", help="重新掃描並輸出摘要")
-    sub.add_parser("doctor", help="檢查來源與 herdr 連線")
+    sub.add_parser("doctor", help="檢查來源與 SID runtime 連線")
     sub.add_parser("runtimed", help="（R2 開發中）原生 Terminal 背景程序")
     args = parser.parse_args(argv)
 
@@ -57,15 +57,9 @@ def main(argv: list[str] | None = None) -> int:
             exists = src.resolved().exists()
             ok &= exists or not src.enabled
             print(f"[{'OK ' if exists else '缺 '}] {src.label:<24} {src.path}{'' if src.enabled else '（已停用）'}")
-        # The doctor speaks through the Runtime, not bridge directly, so
-        # R2's native backend plugs in here without rewriting this file.
-        kind = conf.get("runtime_kind", "herdr")
-        kind = kind if kind in rt.RUNTIME_KINDS else "herdr"
-        # Doctor only reports; it never spawns the native daemon.
-        runtime = rt.get_runtime(bin_getter=lambda: conf.get("herdr_bin", ""), kind=kind)
-        snap = runtime.snapshot()
-        label = "SID runtime" if kind == "native" else "herdr 連線"
-        print(f"[{'OK ' if snap['available'] else '缺 '}] {label}  {snap['version'] or ''} {snap['binary'] or ''}")
+        # Doctor only reports; it never spawns the runtime daemon.
+        snap = rt.get_runtime().snapshot()
+        print(f"[{'OK ' if snap['available'] else '缺 '}] SID runtime  {snap['version'] or ''} {snap['binary'] or ''}")
         for p in snap["problems"]:
             print("     ", p)
         print(f"狀態目錄：{cfg.state_dir()}")
@@ -97,7 +91,7 @@ def is_sid_console(url: str, timeout: float = 1.0) -> bool:
 
 
 def launch(port: int | None) -> int:
-    """Used by the herdr plugin action: never blocks herdr."""
+    """Start the console in the background if needed and open the browser; returns at once."""
     import subprocess
     import time
     import webbrowser
