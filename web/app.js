@@ -1734,6 +1734,7 @@ async function viewTerminal(paneId) {
   let mode = "observe";
   let connState = "connecting";
   let closedReason = "";
+  let sessionGone = false;  // the runtime answered 404: nothing left to reconnect to or close
   let errorMsg = "";
   let retryTimer = null;
   let resizeTimer = null;
@@ -1804,7 +1805,9 @@ async function viewTerminal(paneId) {
       notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
     }
     if (connState === "closed") {
-      notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}。如需重新開啟請點選右上方「重新連線」。`));
+      notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
+        ? "需要新的 Terminal 時，請從 Agent Profile 的「預覽並啟動」開啟。"
+        : "如需重新開啟請點選右上方「重新連線」。"}`));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
       const waitText = reconnectPolicy.canAutoRetry()
@@ -1824,10 +1827,10 @@ async function viewTerminal(paneId) {
         actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, "釋放控制"));
       }
     }
-    if (shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
+    if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
-    actions.push(closeSessionButton(paneId));
+    if (!sessionGone) actions.push(closeSessionButton(paneId));
     actions.push(el("a", { class: "btn small", href: "#/team" }, "返回團隊"));
     setKids(actionWrap, actions);
 
@@ -1894,7 +1897,7 @@ async function viewTerminal(paneId) {
           mode = "control";
           controlToken = r.token;
           inputBatcher.setEnabled(true);
-          toast("已接管終端操作（兩端可同時輸入）");
+          toast("已接管終端操作（其他分頁會改回僅觀看）");
           closeModal();
           updateUI();
           if (term) term.focus();
@@ -1985,7 +1988,8 @@ async function viewTerminal(paneId) {
       if (!res.ok) {
         if (res.status === 404) {
           connState = "closed";
-          closedReason = "此 Terminal 不存在或該 Pane 已結束 (404)";
+          sessionGone = true;
+          closedReason = "此 Terminal 已不存在（已關閉或從未存在）。";
         } else if (res.status === 429) {
           connState = "error";
           errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
@@ -2477,6 +2481,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     let mode = "observe";
     let connState = "connecting";
     let closedReason = "";
+    let sessionGone = false;  // the runtime answered 404: nothing left to reconnect to or close
     let errorMsg = "";
     let retryTimer = null;
     let resizeTimer = null;
@@ -2544,7 +2549,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
       }
       if (connState === "closed") {
-        notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}。如需重新開啟請點選右上方「重新連線」。`));
+        notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
+        ? "需要新的 Terminal 時，請從 Agent Profile 的「預覽並啟動」開啟。"
+        : "如需重新開啟請點選右上方「重新連線」。"}`));
       } else if (connState === "disconnected") {
         const attempts = reconnectPolicy.getRetryCount();
         const waitText = reconnectPolicy.canAutoRetry()
@@ -2568,7 +2575,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, "釋放控制"));
         }
       }
-      if (shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
+      if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
         actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
       }
       actions.push(el("button", {
@@ -2579,7 +2586,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       }, focusMode ? "退出專注" : "⛶ 專注模式"));
 
       actions.push(el("a", { class: "btn small", href: `#/term/${encodeURIComponent(currentPane)}`, title: "以獨立視窗開啟" }, "獨立視窗"));
-      actions.push(closeSessionButton(currentPane));
+      if (!sessionGone) actions.push(closeSessionButton(currentPane));
       if (rightCollapsed) {
         actions.push(el("button", { class: "btn small", type: "button", on: { click: toggleRight }, title: "展開右欄" }, "右欄 ►"));
       }
@@ -2647,7 +2654,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
             mode = "control";
             controlToken = r.token;
             inputBatcher.setEnabled(true);
-            toast("已接管終端操作（兩端可同時輸入）");
+            toast("已接管終端操作（其他分頁會改回僅觀看）");
             closeModal();
             updateUI();
             if (term) term.focus();
@@ -2738,7 +2745,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         if (!res.ok) {
           if (res.status === 404) {
             connState = "closed";
-            closedReason = "此 Terminal 不存在或該 Pane 已結束 (404)";
+            sessionGone = true;
+            closedReason = "此 Terminal 已不存在（已關閉或從未存在）。";
           } else if (res.status === 429) {
             connState = "error";
             errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
@@ -3681,7 +3689,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
               el("strong", null, name),
               badge(lab.level, "b-mute plain", "套用程度")),
             el("div", { class: "small" }, lab.note),
-            lab.unknown_reason && lab.unknown_reason !== "none"
+            lab.unknown_reason && lab.unknown_reason !== "none" && lab.unknown_reason !== lab.note
               ? el("div", { class: "small muted" }, `未知或未測：${lab.unknown_reason}`) : null))));
       setKids(out, ...kids);
     }

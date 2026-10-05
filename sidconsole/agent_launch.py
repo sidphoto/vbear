@@ -132,7 +132,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         block("intents_not_supported", "此權限組合不是已驗證設定所能對應的組合")
     if commit is not True:
         block("commit_not_enforceable",
-              "目前無法強制不 commit：工作目錄的 .git 在可寫範圍內。要啟動必須明確以 commit=true 知悉此事")
+              "目前無法強制不 commit：工作目錄的 .git 在可寫範圍內。要啟動，請勾選「我知道這個設定無法阻止 commit」")
     if not (isinstance(network, dict) and network.get("enabled") is False
             and not network.get("approved_domains")):
         block("network_not_available", "已驗證的設定只有關閉網路（空 allowlist）；不支援開啟網路或指定網域")

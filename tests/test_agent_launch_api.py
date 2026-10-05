@@ -208,6 +208,9 @@ class PreviewApiCase(ServerCase):
                 self.assertEqual(st, 400)
         self.assertEqual(self.preview(pid, workdir="/usr")[0], 400)           # outside the allowed root
         self.assertEqual(self.preview(pid, workdir="relative")[0], 400)
+        st, r = self.preview(pid, workdir="file://" + str(self.work))
+        self.assertEqual(st, 400)
+        self.assertIn("不是 file:// 連結", r["error"])     # a clear message, not just "invalid"
         self.assertEqual(self.preview("prof-does-not-exist")[0], 404)
         self.assertEqual(self.preview(pid, tool="shared")[0], 400)
         self.assertEqual(self.preview(pid, tool="codex")[0], 400)            # does not match the Profile

@@ -549,8 +549,13 @@ async function runAllTests() {
       "manualReconnect must check canStartTerminalStream gate before reconnecting"
     );
     assert(
-      appSource.includes("if (shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {"),
+      appSource.includes("if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {"),
       "updateUI must consult shouldShowTerminalRetryAction before rendering retry button"
+    );
+    assert(
+      appSource.includes("if (!sessionGone) actions.push(closeSessionButton(paneId));")
+        && appSource.includes("if (!sessionGone) actions.push(closeSessionButton(currentPane));"),
+      "a terminal the runtime reports as gone (404) must offer neither reconnect nor close"
     );
     assert(
       appSource.includes("if (!termInit.ok) {\n    termReady = false;\n    connState = \"error\";"),

@@ -519,7 +519,7 @@ def make_handler(console: Console):
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
 
-        # terminal bridge ----------------------------------------------------
+        # terminal streaming ---------------------------------------------------
 
         def _term_target_ok(self, pane_id: str) -> bool:
             if not console.runtime.validate_target(pane_id):
@@ -582,7 +582,7 @@ def make_handler(console: Console):
                     # call was blocked above; re-check before trusting what just
                     # came off `current`'s queue. A message from a session that has
                     # already been superseded — including its own end-of-session
-                    # sentinel or synthetic "bridge interrupted" close — belongs to
+                    # sentinel or synthetic "connection interrupted" close — belongs to
                     # the old session, not the pane, and must not reach the client
                     # as if the Terminal itself ended. The new session's own first
                     # frame (a full redraw) follows right behind on the next spin.
@@ -599,8 +599,7 @@ def make_handler(console: Console):
                     self.wfile.flush()
             finally:
                 # Stop `current` only if still the pane's live session
-                # (identity check, releases control first); same call the
-                # bridge gave server.py before R1.
+                # (identity check, releases control first).
                 console.runtime.close_if_current(pane_id, current)
 
         def _term_input(self, pane_id: str, body: dict):
@@ -691,6 +690,8 @@ def make_handler(console: Console):
             if tool is not None and (tool == "shared" or tool != (profile.get("model") or {}).get("tool")):
                 return self._error(400, "tool 必須與 Profile 的工具相符，且不可為 shared")
             workdir = body.get("workdir")
+            if isinstance(workdir, str) and workdir.strip().lower().startswith("file://"):
+                return self._error(400, "工作目錄請填資料夾路徑（例如 /Users/you/project），不是 file:// 連結")
             root = console.managed_root.resolve()
             if (not isinstance(workdir, str) or not os.path.isabs(workdir)
                     or not Path(os.path.realpath(workdir)).is_dir()

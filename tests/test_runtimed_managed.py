@@ -35,7 +35,9 @@ tool = ""
 if mode == "tool":
     tool = "import time; time.sleep(600)"
 elif mode == "stubborn":
-    tool = "import signal,time; [signal.signal(s, signal.SIG_IGN) for s in (signal.SIGHUP, signal.SIGTERM)]; time.sleep(600)"
+    # Signals are ignored before the marker is written, so the test can wait for it.
+    tool = ("import signal,time; [signal.signal(s, signal.SIG_IGN) for s in (signal.SIGHUP, signal.SIGTERM)]; "
+            "open('stubborn-ready','w').close(); time.sleep(600)")
 pid = None
 if mode == "orphan":
     # A command that leaves a background process behind and returns.
@@ -252,6 +254,7 @@ class ManagedCase(unittest.TestCase):
         m = self.prepare("stubborn")
         info = self.open_managed(m)
         seen = self.launched()
+        self.wait_for(lambda: (self.work / "stubborn-ready").exists(), msg="tool ignores HUP/TERM")
         self.wait_for(lambda: seen["tool_pid"] in [p for p, _ in self.manifest(m)["observed"]],
                       msg="tool observed")
         r = self.rpc("close", session_id=info["session_id"])

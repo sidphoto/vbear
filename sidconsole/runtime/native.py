@@ -277,8 +277,8 @@ class NativeAttachment(SessionView):
         except OSError:
             pass
         # EOF without terminal.closed: the connection, not the terminal, ended.
-        self._finish({"type": "terminal.closed", "bridge_interrupted": True,
-                      "reason": "橋接連線中斷（未收到結束訊息，Terminal 本身可能仍在執行）"})
+        self._finish({"type": "terminal.closed", "connection_interrupted": True,
+                      "reason": "與 SID runtime 的連線中斷（未收到結束訊息，Terminal 本身可能仍在執行）"})
 
     # ---- writing ----
 
