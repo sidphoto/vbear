@@ -39,6 +39,15 @@ def state_dir() -> Path:
     return current
 
 
+def _legacy_port(legacy: Path) -> int:
+    """The port the old console was configured for (default when unknown)."""
+    try:
+        port = json.loads((legacy / "config.json").read_text()).get("port")
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_PORT
+    return port if isinstance(port, int) and 0 < port < 65536 else DEFAULT_PORT
+
+
 def migrate_legacy_state_dir(port_in_use=None) -> str:
     """Move ~/.sid-console to ~/.vbear once, only when nothing is using it.
 
@@ -48,9 +57,11 @@ def migrate_legacy_state_dir(port_in_use=None) -> str:
         return "none"
     current = Path.home() / ".vbear"
     legacy = Path.home() / LEGACY_STATE_NAME
-    if current.exists() or not legacy.is_dir() or legacy.is_symlink():
+    if not legacy.is_dir() or legacy.is_symlink():
         return "none"
-    if port_in_use is not None and port_in_use():
+    if current.exists():
+        return "conflict"  # both exist: never merge; the caller tells the user
+    if port_in_use is not None and port_in_use(_legacy_port(legacy)):
         return "kept:console_running"
     sessions = legacy / "sessions"
     # Launch manifests hold absolute paths into this directory.
@@ -68,6 +79,8 @@ def migrate_legacy_state_dir(port_in_use=None) -> str:
                 return "kept:runtime_running"
         os.rename(legacy, current)
         return "moved"
+    except OSError:
+        return "kept:rename_failed"
     finally:
         if fd is not None:
             os.close(fd)  # releases the flock; the lock file moved with the directory

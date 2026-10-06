@@ -1,4 +1,4 @@
-"""SID native runtime daemon (Phase R2, contract v2).
+"""VBear native runtime daemon (Phase R2, contract v2).
 
 S0: secure state directory, single-instance lock, stale-socket recovery,
 owner-only Unix socket, peer-uid check, RPC ``hello`` / ``shutdown``.

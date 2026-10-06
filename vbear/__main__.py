@@ -148,13 +148,19 @@ def _port_in_use(port: int) -> bool:
 
 def _migrate_state_dir(port: int | None) -> None:
     """One-time move of the pre-rename state directory (~/.sid-console)."""
-    result = cfg.migrate_legacy_state_dir(lambda: _port_in_use(port or cfg.DEFAULT_PORT))
+    result = cfg.migrate_legacy_state_dir(
+        lambda legacy_port: _port_in_use(legacy_port) or (port is not None and _port_in_use(port)))
     if result == "moved":
         print(f"已把舊的狀態目錄 ~/{cfg.LEGACY_STATE_NAME} 搬到 {cfg.state_dir()}", file=sys.stderr)
+    elif result == "conflict":
+        print(f"注意：~/{cfg.LEGACY_STATE_NAME} 與 {cfg.state_dir()} 同時存在，VBear 使用後者，"
+              f"不會自動合併；舊目錄裡的設定、註記與任務卡請自行確認後搬移或刪除。", file=sys.stderr)
     elif result.startswith("kept:"):
         why = {"kept:console_running": "舊版主控台仍在執行",
                "kept:runtime_running": "舊版 runtime 仍在執行",
-               "kept:managed_launches_pending": "還有等待清理的受管 session"}.get(result, result)
+               "kept:managed_launches_pending":
+                   f"~/{cfg.LEGACY_STATE_NAME}/sessions 裡還有等待清理或待人工檢查的受管 session",
+               "kept:rename_failed": "搬移時發生檔案系統錯誤"}.get(result, result)
         print(f"暫時沿用舊的狀態目錄 ~/{cfg.LEGACY_STATE_NAME}（{why}）；停止後再啟動即會搬到 ~/.vbear",
               file=sys.stderr)
 

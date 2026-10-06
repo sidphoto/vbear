@@ -1235,7 +1235,7 @@ async function viewArmory() {
   const rows = data.skills || [];
   setKids(main,
     crumbs([["技能庫", "#/skills"], ["Armory"]]),
-    el("div", { class: "row" }, el("h1", null, "SID Armory"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
+    el("div", { class: "row" }, el("h1", null, "VBear Armory"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
     el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、已裝備與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
     data.unresolved_equipped && data.unresolved_equipped.length
       ? notice("warn", `有 ${data.unresolved_equipped.length} 筆 Profile 引用找不到對應技能；不會自動刪除。`) : null,

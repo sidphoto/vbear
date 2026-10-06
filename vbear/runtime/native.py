@@ -1,4 +1,4 @@
-"""NativeRuntime: the R2 Runtime backed by SID's own runtime daemon.
+"""NativeRuntime: the R2 Runtime backed by VBear's own runtime daemon.
 
 Contract v2 §1/§2B/§5/§10 S2. The daemon (``runtime/daemon.py``) owns the
 PTY sessions; this adapter owns *attachments* — one attach connection per
