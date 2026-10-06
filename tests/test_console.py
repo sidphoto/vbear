@@ -2196,6 +2196,26 @@ class AuthTests(unittest.TestCase):
                                  body={"argv": ["/bin/echo", "x"]})
         self.assertEqual(status, 401)
 
+    def test_delete_requires_the_token(self):
+        status, data, _ = self.call("/api/tasks/t-anything", "DELETE", headers={"X-VBear": "1"})
+        self.assertEqual(status, 401)
+        self.assertEqual(data["code"], "auth_required")
+
+    def test_every_method_is_gated_before_dispatch(self):
+        # Methods with no handler would answer 501; the central gate answers 401 first,
+        # so a handler added later without its own check is still covered.
+        for method in ("PUT", "PATCH", "OPTIONS", "DELETE", "HEAD"):
+            status, _, _ = self.call("/api/config", method, headers={"X-VBear": "1"})
+            self.assertEqual(status, 401, method)
+        status, _, _ = self.call("/api/config", "PATCH", headers=self.bearer())
+        self.assertEqual(status, 501)  # with the token, the method itself is still unsupported
+
+    def test_launcher_tells_a_foreign_vbear_apart(self):
+        from vbear.__main__ import vbear_status
+        self.assertEqual(vbear_status(self.base + "/", token=self.token), "ok")
+        self.assertEqual(vbear_status(self.base + "/", token="stale"), "auth")
+        self.assertIsNone(vbear_status("http://127.0.0.1:9/"))
+
     def test_stream_requires_the_token(self):
         status, data, _ = self.call("/api/term/n-000000000000/stream", headers={"X-VBear": "1"})
         self.assertEqual(status, 401)

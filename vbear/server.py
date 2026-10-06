@@ -256,6 +256,18 @@ def make_handler(console: Console):
                         break
             return bool(got) and hmac.compare_digest(got.encode(), want.encode())
 
+        def parse_request(self):
+            """Central token gate, before any do_<METHOD> runs: no method,
+            present or future, can reach /api/ without the token."""
+            if not super().parse_request():
+                return False
+            path = urlparse(self.path).path
+            if path.startswith("/api/") and path != "/api/auth" and not self._authed():
+                self.close_connection = True  # an unread body must not be parsed as a request
+                self._auth_error()
+                return False
+            return True
+
         def _auth_error(self):
             return self._json({"error": "需要從 VBear 開啟（執行 python3 -m vbear launch 或打開 VBear App）",
                                "code": "auth_required"}, 401)
@@ -570,6 +582,8 @@ def make_handler(console: Console):
                 return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
             if not self._write_ok():
                 return self._error(403, "forbidden")
+            if not self._authed():
+                return self._auth_error()
             path = urlparse(self.path).path
             try:
                 if path.startswith("/api/tasks/"):
@@ -1231,7 +1245,12 @@ def read_access_token(port: int) -> str | None:
 
 
 def remove_access_files(token: str | None) -> None:
-    """Remove the handoff files if they still belong to this server."""
+    """Remove the handoff files if they still belong to this server.
+
+    Between the check and the unlink another server on the same state
+    directory and port could write new files; only one server can hold the
+    port, so that needs a restart racing this shutdown, and the cost is a
+    launcher that has to be run again."""
     if token is None:
         return
     try:

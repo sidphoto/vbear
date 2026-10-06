@@ -86,10 +86,15 @@ def main(argv: list[str] | None = None) -> int:
 def is_vbear(url: str, timeout: float = 1.0, token: str | None = None) -> bool:
     """Whether `url` is served by a VBear, not merely something on the port.
 
-    Checks the Server header this console sends and the shape of its config
-    reply. This tells a stray service apart from the console; it is not
+    Checks the Server header this console sends and the shape of its reply.
+    This tells a stray service apart from the console; it is not
     authentication, and a local program could imitate both.
     """
+    return vbear_status(url, timeout, token) in ("ok", "auth")
+
+
+def vbear_status(url: str, timeout: float = 1.0, token: str | None = None) -> str | None:
+    """"ok" (a VBear that accepts `token`), "auth" (a VBear that does not), or None."""
     import urllib.error
     import urllib.request
 
@@ -99,9 +104,9 @@ def is_vbear(url: str, timeout: float = 1.0, token: str | None = None) -> bool:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
-                return False
+                return None
             if not (resp.headers.get("Server") or "").startswith("VBear/"):
-                return False
+                return None
             payload = json.loads(resp.read(256 * 1024).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         # A VBear that does not accept our token (another instance, or a token
@@ -112,13 +117,16 @@ def is_vbear(url: str, timeout: float = 1.0, token: str | None = None) -> bool:
             body = None
         finally:
             exc.close()
-        return ((exc.headers.get("Server") or "").startswith("VBear/")
-                and isinstance(body, dict) and body.get("code") == "auth_required")
+        if ((exc.headers.get("Server") or "").startswith("VBear/")
+                and isinstance(body, dict) and body.get("code") == "auth_required"):
+            return "auth"
+        return None
     except (OSError, ValueError, UnicodeDecodeError):
-        return False
-    return (isinstance(payload, dict)
-            and isinstance(payload.get("config"), dict)
-            and isinstance(payload.get("state_dir"), str))
+        return None
+    if (isinstance(payload, dict) and isinstance(payload.get("config"), dict)
+            and isinstance(payload.get("state_dir"), str)):
+        return "ok"
+    return None
 
 
 def launch(port: int | None) -> int:
@@ -136,6 +144,10 @@ def launch(port: int | None) -> int:
     def alive() -> bool:
         return is_vbear(url, token=read_access_token(port))
 
+    if vbear_status(url, token=read_access_token(port)) == "auth":
+        print(f"連接埠 {port} 上已有一個 VBear 在執行，但找不到它的通行證（可能是舊版或其他資料夾啟動的）。"
+              f"請先結束它，再重新執行 python3 -m vbear launch。", file=sys.stderr)
+        return 1
     if not alive():
         log = cfg.state_dir() / "server.log"
         root = Path(__file__).resolve().parent.parent
