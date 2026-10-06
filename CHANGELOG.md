@@ -4,7 +4,7 @@
 
 First open-source release under the MIT License.
 
-- **Renamed from SID Console to VBear (V熊).** The package is now `vbear` and the state directory is
+- **Renamed from SID Console to VBear.** The package is now `vbear` and the state directory is
   `~/.vbear` (an existing `~/.sid-console` is moved on first start). Environment variables are now
   `VBEAR_HOME` and `VBEAR_RUNTIME_AUTOSTART`, and the CSRF header is now `X-VBear`.
 

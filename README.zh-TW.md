@@ -7,7 +7,7 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 
 > **目前狀態：早期版本（v0.1）**，只在 macOS 上由作者本人日常使用與測試。開始使用前請先看下方「已知限制」。
 >
-> V熊（VBear）的名字來自台灣黑熊和牠胸前的 V 字：先看清楚，再放行。
+> VBear 的名字來自台灣黑熊和牠胸前的 V 字：先看清楚，再放行。
 >
 > v0.1.0 以前叫「SID Console」，最早依附 Herdr 執行終端（「SID Console for Herdr」）。第一次啟動時會自動把舊的 `~/.sid-console` 搬到 `~/.vbear`。Herdr 相容層已移除，最後一個支援 Herdr 的版本標記為 git tag `last-herdr`。
 > 舊設定的 `runtime_kind: herdr` 會在啟動時自動改為 native，並提示一次。

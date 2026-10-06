@@ -117,7 +117,7 @@ Issues and discussions in English or Traditional Chinese are both welcome.
 
 ## About
 
-VBear (V熊) is named after the Formosan black bear and the V-shaped mark on its chest. Like the bear,
+VBear is named after the Formosan black bear and the V-shaped mark on its chest. Like the bear,
 it watches before it acts: VBear shows you what a launch may do before anything starts.
 
 It was called **SID Console** until v0.1.0, and it began as a plugin for the Herdr terminal multiplexer.
