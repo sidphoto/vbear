@@ -22,12 +22,15 @@ from types import MappingProxyType
 from . import daemon
 
 
-# These values are the reviewed spike baselines. Callers cannot supply or
-# override them; a future baseline change must be made in trusted code here.
-EXPECTED_VERSIONS = MappingProxyType({
-    "codex": "0.159.2",
-    "claude": "2.1.286",
+# Versions whose sandbox boundary was verified (oldest first). Callers cannot
+# supply or override them; adding one is a code change backed by a passing
+# tools/verify_claude_boundary.py run and docs/evidence/<engine>-<version>.md.
+VERIFIED_VERSIONS = MappingProxyType({
+    "codex": ("0.159.2",),
+    "claude": ("2.1.286", "2.1.291"),
 })
+# The newest verified version per engine (where one fixed install is needed).
+EXPECTED_VERSIONS = MappingProxyType({k: v[-1] for k, v in VERIFIED_VERSIONS.items()})
 # In 0.159.2, --ignore-user-config and --ephemeral are accepted by `codex exec`
 # but rejected by the interactive TUI command. Managed PTY launches require the
 # interactive command, so they stay disabled until a pinned build supports both.
@@ -295,9 +298,10 @@ def check_cli_version(
     Only the fixed, engine-specific ``--version`` argv is executed. ``binary``
     is supplied by trusted upper-level resolution or defaults to PATH lookup.
     """
-    if not isinstance(engine, str) or engine not in EXPECTED_VERSIONS:
+    if not isinstance(engine, str) or engine not in VERIFIED_VERSIONS:
         return _blocked(engine, "unsupported_engine", "不支援此 Agent 引擎")
-    expected = EXPECTED_VERSIONS[engine]
+    verified = VERIFIED_VERSIONS[engine]
+    expected = "、".join(verified)  # shown when the version does not match
     if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
             or not (0 < timeout <= VERSION_PROBE_TIMEOUT_SECONDS)):
         return _blocked(engine, "invalid_probe_options", "版本檢查逾時設定無效", expected=expected)
@@ -341,8 +345,8 @@ def check_cli_version(
                   else "Agent CLI 版本輸出格式無效")
         return _blocked(engine, parse_error, reason, expected=expected,
                         binary_path=binary_path, identity=identity)
-    if observed != expected:
-        return _blocked(engine, "version_mismatch", "Agent CLI 版本與核准基準不符",
+    if observed not in verified:
+        return _blocked(engine, "version_mismatch", "Agent CLI 版本不在已驗證的版本清單",
                         expected=expected, observed=observed, binary_path=binary_path,
                         identity=identity)
     try:
@@ -357,7 +361,7 @@ def check_cli_version(
                         identity=identity)
     return VersionCheckResult(
         engine=engine,
-        expected_version=expected,
+        expected_version=observed,  # the verified version this binary matched
         observed_version=observed,
         binary_path=binary_path,
         compatible=True,
@@ -407,6 +411,7 @@ def assert_agent_version(engine: str, binary: str | os.PathLike[str] | None = No
 
 __all__ = [
     "EXPECTED_VERSIONS",
+    "VERIFIED_VERSIONS",
     "VersionAssertionError",
     "VersionCheckResult",
     "assert_agent_version",

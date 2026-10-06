@@ -142,7 +142,8 @@ def launch(port: int | None) -> int:
     from .server import open_in_browser, read_access_token
 
     def alive() -> bool:
-        return is_vbear(url, token=read_access_token(port))
+        # Ready means it accepts the token it wrote, so the browser can sign in.
+        return vbear_status(url, token=read_access_token(port)) == "ok"
 
     if vbear_status(url, token=read_access_token(port)) == "auth":
         print(f"連接埠 {port} 上已有一個 VBear 在執行，但找不到它的通行證（可能是舊版或其他資料夾啟動的）。"

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Claude Code 2.1.291 verified**: the version gate now accepts a list of verified versions (2.1.286, 2.1.291) and
+  launches the newest one installed. New `tools/verify_claude_boundary.py` re-runs the boundary check on any version
+  (one model call per run); evidence in `docs/evidence/claude-code-2.1.291.md`.
+- Faster live refresh: project lookups are resolved once per build (about 4x faster with many sessions).
 - **Access token on the local API**: each start creates a random token; `/api/` needs it as an HttpOnly cookie
   or a Bearer header. Other user accounts on the Mac can no longer drive VBear. Open VBear with
   `python3 -m vbear launch`, which signs the browser in through a private local file.

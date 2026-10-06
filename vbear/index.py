@@ -9,6 +9,7 @@ Two layers, because they change at different speeds:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import threading
@@ -539,6 +540,8 @@ class Store:
 
 
 def build_live(conf: dict, static: dict, runtime=None) -> dict:
+    # Many usage rows share a working directory; resolve each one once per build.
+    project_for = functools.lru_cache(maxsize=None)(_project_for)
     # ``runtime`` is the single seam through which the live layer reaches a
     # terminal backend. Server.py / __main__.py callers pass the active
     # runtime explicitly; module-level calls (e.g. tests' direct build_live
@@ -570,7 +573,7 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
                              "count": info["count"], "last_ts": info["last_ts"],
                              "evidence": info["evidence"]})
         resolved.sort(key=lambda r: r["last_ts"], reverse=True)
-        pid, pname, ppath, pbasis = _project_for(sess["cwd"])
+        pid, pname, ppath, pbasis = project_for(sess["cwd"])
         row = {"session_id": sess["session_id"], "tool": sess["tool"], "cwd": sess["cwd"],
                "first_ts": sess["first_ts"], "last_ts": sess["last_ts"],
                "models": sess["models"], "skills": resolved, "project_id": pid}
@@ -595,7 +598,7 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
         matched = usage_by_id.get(sess_id)
         tab = tabs.get(agent.get("tab_id", ""), {})
         ws = workspaces.get(agent.get("workspace_id", ""), {})
-        pid, pname, ppath, pbasis = _project_for(cwd)
+        pid, pname, ppath, pbasis = project_for(cwd)
         proj = project(pid, pname, ppath, pbasis)
         proj["live_session_ids"].append(agent.get("terminal_id"))
         if ws and ws.get("workspace_id") not in proj["workspace_ids"]:
@@ -628,7 +631,7 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
         })
 
     for row in usage_rows:
-        pid, pname, ppath, pbasis = _project_for(row["cwd"])
+        pid, pname, ppath, pbasis = project_for(row["cwd"])
         proj = project(pid, pname, ppath, pbasis)
         proj["recent_session_ids"].append(row["session_id"])
         if row["last_ts"] > proj["last_activity"]:

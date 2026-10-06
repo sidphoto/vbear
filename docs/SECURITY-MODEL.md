@@ -62,9 +62,9 @@ These are the claims the launch preview makes, and their status:
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | [Evidence for 2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
-| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | [Evidence for 2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
-| Bash cannot reach VBear itself | Enforced by the same sandbox | Both refused with `EPERM`. Tested on Claude Code 2.1.291 in headless mode on 2026-10-06; **not yet re-run on the pinned 2.1.286** ([details](evidence/claude-code-2.1.286.md#loopback)) |
+| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | Evidence for [2.1.291](evidence/claude-code-2.1.291.md#writes) and [2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
+| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | Evidence for [2.1.291](evidence/claude-code-2.1.291.md#network) and [2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
+| Bash cannot reach VBear itself | Enforced by the same sandbox | `127.0.0.1` listener and unix socket both refused with `EPERM`, headless and interactive, on [2.1.291](evidence/claude-code-2.1.291.md#network); headless-only spot check on 2.1.291 for the 2.1.286 page; **not re-run on 2.1.286 itself** |
 | Edit and Write tools are unavailable | `--tools Bash --disallowedTools Edit,Write`; those tools would not be covered by the Bash sandbox | Launch argv is built server-side from trusted values only |
 | No MCP servers or project hooks from the work directory | `--safe-mode --strict-mcp-config` | |
 | Commit is possible | **Not prevented.** `.git` is inside the writable work directory; you must acknowledge this before launch | |
@@ -73,7 +73,7 @@ These are the claims the launch preview makes, and their status:
 | Commands you type with `!` are sandboxed | **No.** Claude Code runs `!` commands outside the sandbox; the preview says so | |
 
 Other safeguards:
-- **Fail closed.** The launch is refused if the installed Claude Code version is not the pinned one, if
+- **Fail closed.** The launch is refused if the installed Claude Code version is not on the verified list, if
   the sandbox is unavailable (`failIfUnavailable`), or if the profile, work directory or config changed
   since the preview.
 - **No caller-supplied launch details.** The daemon's `open_managed` takes only a launch ID. It reads

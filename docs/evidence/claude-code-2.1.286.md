@@ -3,7 +3,7 @@
 This is a public summary of the maintainer's tests behind the launch preview's labels. The raw logs contain
 local paths and stay private. The test harness is not yet published as a reusable script.
 
-- Binary: Claude Code **2.1.286** (native build, macOS arm64), the version pinned in
+- Binary: Claude Code **2.1.286** (native build, macOS arm64), one of the verified versions in
   `vbear/runtime/cli_versions.py`.
 - Settings: exactly what `claude_settings()` in `vbear/runtime/agent_sessions.py` produces, with flags
   `--safe-mode --tools Bash --disallowedTools Edit,Write --strict-mcp-config`.

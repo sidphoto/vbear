@@ -61,7 +61,7 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
           │     private scratch dir /private/tmp/sc-<random>/
           └─ runtime  open_managed {launch_id}   (single use; the manifest is read from the
                                                   daemon's own state directory, never from the caller)
-                 ├─ version gate: `claude --version` must equal the pinned version
+                 ├─ version gate: `claude --version` must be on the verified list
                  ├─ trusted argv: --safe-mode --settings <file> --tools Bash
                  │                --disallowedTools Edit,Write --strict-mcp-config [--model <id>]
                  ├─ env: CLAUDE_CODE_TMPDIR=<scratch>, DISABLE_AUTOUPDATER=1, minimal allow-list

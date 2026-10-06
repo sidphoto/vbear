@@ -35,14 +35,21 @@ BYPASS_PTY = ("使用者在進階終端可自行改變 CLI 行為；例如在 Cl
               "不經沙盒（S0 驗收實測可寫入家目錄）。此標籤只約束 Agent，不是不可繞過的邊界")
 BYPASS_CODEX_PTY = ("使用者在 Codex Terminal 可輸入 ! 直接執行使用者 shell，繞過 Codex sandbox；此標籤只描述 Agent 執行層，"
                     "不代表 OS 對使用者 shell 的隔離。")
-EVIDENCE_S2 = "docs/evidence/claude-code-2.1.286.md#writes"
-EVIDENCE_T01 = "docs/evidence/claude-code-2.1.286.md#lifecycle"
-# Evidence for the empty network allowlist with this exact settings shape
-# (S0 acceptance, Claude Code 2.1.286): an HTTPS request was refused by the
-# sandbox proxy and a direct TCP connect failed with EPERM, while the same
-# request succeeded outside the sandbox. Set to None to report Network as
-# unknown again if the settings shape or the CLI baseline changes.
-NETWORK_EVIDENCE: str | None = "docs/evidence/claude-code-2.1.286.md#network"
+# Public evidence per verified Claude Code version: docs/evidence/claude-code-<version>.md,
+# with #writes, #network and #lifecycle sections.
+EVIDENCE_DIR = "docs/evidence"
+# The empty network allowlist with this exact settings shape was verified
+# (HTTPS refused by the sandbox proxy, direct TCP EPERM). Set to False to
+# report Network as unknown again if the settings shape changes.
+NETWORK_VERIFIED = True
+
+
+def claude_evidence(version: str, section: str) -> str:
+    """Evidence reference for a verified Claude Code version (the oldest one
+    when the version is unknown, which the version gate refuses anyway)."""
+    verified = cli_versions.VERIFIED_VERSIONS["claude"]
+    v = version if version in verified else verified[0]
+    return f"{EVIDENCE_DIR}/claude-code-{v}.md#{section}"
 CODEX_ACCEPTANCE_EVIDENCE: str | None = None
 CODEX_EVIDENCE_CHECKS = frozenset({
     "readonly_workspace_denied", "readonly_tmp_denied", "workspace_write_allowed",
@@ -164,9 +171,11 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
                 "bypass": BYPASS_CODEX_PTY if engine == "codex" else BYPASS_PTY,
                 "unknown_reason": unprepared or unknown_reason}
 
+    writes, lifecycle = claude_evidence(version, "writes"), claude_evidence(version, "lifecycle")
     net = (label(ENFORCED, "空 allowlist：Bash 工具的對外連線被拒（已測：HTTPS 請求經沙盒 proxy 回 403、"
-                           "直接 TCP 連線 EPERM；其他協定未測）", evidence=[NETWORK_EVIDENCE])
-           if NETWORK_EVIDENCE else
+                           "直接 TCP 連線與連回本機 EPERM；其他協定未測）",
+                 evidence=[claude_evidence(version, "network")])
+           if NETWORK_VERIFIED else
            label(UNKNOWN, "設定為空 allowlist，但尚未以這組設定實測",
                  unknown_reason="空 allowlist 在此設定形狀下尚無實測證據"))
     if engine == "codex":
@@ -202,11 +211,11 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
         }
     return {
         "Read": label(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他 session 的暫存區",
-                      evidence=[EVIDENCE_S2]),
+                      evidence=[writes]),
         "Write": label(PARTIAL, "Bash 工具的寫入由 Claude 沙盒限制在工作目錄與本 session 暫存區（OS 拒絕）；"
                                 "Edit/Write 工具未提供，屬工具層意圖，不是 OS 邊界",
-                       path_scope=write_scope, evidence=[EVIDENCE_S2, EVIDENCE_T01]),
-        "Test": label(INTENT, "可用 Bash 執行指令；只受寫入範圍與網路設定限制", evidence=[EVIDENCE_S2]),
+                       path_scope=write_scope, evidence=[writes, lifecycle]),
+        "Test": label(INTENT, "可用 Bash 執行指令；只受寫入範圍與網路設定限制", evidence=[writes]),
         "Commit": label(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
                         path_scope=[workdir] if workdir else "不適用",
                         unknown_reason="未測試以 denyWrite 排除 .git 的效果"),
@@ -214,7 +223,7 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
         "Network": net,
         "Filesystem": label(ENFORCED, "Agent 的 Bash 工具寫入邊界：工作目錄與本 session 暫存區之外的寫入被 OS 拒絕"
                                       "（含家目錄與全域 CLI 設定的已測路徑）。這不是讀取隔離",
-                            path_scope=write_scope, evidence=[EVIDENCE_S2, EVIDENCE_T01]),
+                            path_scope=write_scope, evidence=[writes, lifecycle]),
     }
 
 

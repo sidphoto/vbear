@@ -2200,6 +2200,27 @@ class AuthTests(unittest.TestCase):
         status, data, _ = self.call("/api/tasks/t-anything", "DELETE", headers={"X-VBear": "1"})
         self.assertEqual(status, 401)
         self.assertEqual(data["code"], "auth_required")
+        # with the token it reaches the handler (no such task)
+        self.assertEqual(self.call("/api/tasks/t-anything", "DELETE", headers=self.bearer())[0], 404)
+
+    def test_bad_host_is_refused_before_the_token_check(self):
+        status, _, _ = self.call("/api/config", headers={"Host": "evil.example", "X-VBear": "1"})
+        self.assertEqual(status, 421)
+
+    def test_head_refusal_has_no_body(self):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("HEAD", "/api/config")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 401)
+        self.assertEqual(resp.read(), b"")
+        conn.close()
+
+    def test_cookie_exchange_answer_carries_the_security_headers(self):
+        status, _, headers = self.call("/api/auth", "POST", headers={"X-VBear": "1"}, body={"token": self.token})
+        self.assertEqual(status, 200)
+        for name in ("Content-Security-Policy", "X-Content-Type-Options", "Referrer-Policy", "Cache-Control"):
+            self.assertTrue(headers.get(name), name)
 
     def test_every_method_is_gated_before_dispatch(self):
         # Methods with no handler would answer 501; the central gate answers 401 first,

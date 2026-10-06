@@ -206,8 +206,10 @@ def make_handler(console: Console):
 
         # plumbing ---------------------------------------------------------
 
-        def _headers(self, status: int, ctype: str, length: int):
+        def _headers(self, status: int, ctype: str, length: int, extra=()):
             self.send_response(status)
+            for name, value in extra:
+                self.send_header(name, value)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(length))
             self.send_header("Content-Security-Policy", CSP)
@@ -218,10 +220,11 @@ def make_handler(console: Console):
                 self.send_header("Connection", "close")
             self.end_headers()
 
-        def _json(self, payload, status: int = 200):
+        def _json(self, payload, status: int = 200, extra=()):
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self._headers(status, "application/json; charset=utf-8", len(body))
-            self.wfile.write(body)
+            self._headers(status, "application/json; charset=utf-8", len(body), extra)
+            if self.command != "HEAD":  # HEAD answers carry headers only
+                self.wfile.write(body)
 
         def _error(self, status: int, message: str):
             self._json({"error": message}, status)
@@ -261,6 +264,10 @@ def make_handler(console: Console):
             present or future, can reach /api/ without the token."""
             if not super().parse_request():
                 return False
+            if not self._host_ok():
+                self.close_connection = True
+                self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+                return False
             path = urlparse(self.path).path
             if path.startswith("/api/") and path != "/api/auth" and not self._authed():
                 self.close_connection = True  # an unread body must not be parsed as a request
@@ -280,14 +287,8 @@ def make_handler(console: Console):
                 return self._json({"ok": True})
             if not (isinstance(token, str) and hmac.compare_digest(token.encode(), want.encode())):
                 return self._error(401, "token 不正確或已過期（主控台重新啟動過），請重新從 VBear 開啟")
-            body_bytes = json.dumps({"ok": True}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body_bytes)))
-            self.send_header("Set-Cookie", f"{self._cookie_name()}={want}; HttpOnly; SameSite=Strict; Path=/")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body_bytes)
+            return self._json({"ok": True}, extra=[(
+                "Set-Cookie", f"{self._cookie_name()}={want}; HttpOnly; SameSite=Strict; Path=/")])
 
         def _read_ok(self) -> bool:
             # Browsers always send Sec-Fetch-Site; its absence means a non-browser

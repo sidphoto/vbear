@@ -34,7 +34,7 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 
 ## 安裝與使用
 
-需要 macOS、Python 3.13 以上；Profile 啟動另需 Claude Code 2.1.286。不需要安裝任何套件。
+需要 macOS、Python 3.13 以上；Profile 啟動另需已驗證版本的 Claude Code（2.1.291 或 2.1.286）。不需要安裝任何套件。
 
 ```sh
 git clone https://github.com/sidphoto/vbear.git && cd vbear

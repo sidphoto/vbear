@@ -111,8 +111,10 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(labels["Deploy"]["level"], agent_launch.NOT_GRANTED)
         self.assertEqual(labels["Write"]["level"], agent_launch.PARTIAL)
         self.assertEqual(labels["Filesystem"]["path_scope"], [str(self.work), p["canonical_paths"]["scratch"]])
-        if agent_launch.NETWORK_EVIDENCE:
-            self.assertEqual(labels["Network"]["evidence_refs"], [agent_launch.NETWORK_EVIDENCE])
+        if agent_launch.NETWORK_VERIFIED:
+            version = p["cli"]["version"]
+            self.assertEqual(labels["Network"]["evidence_refs"],
+                             [f"docs/evidence/claude-code-{version}.md#network"])
         else:  # no evidence, so it must not claim enforcement
             self.assertEqual(labels["Network"]["level"], agent_launch.UNKNOWN)
             self.assertNotEqual(labels["Network"]["unknown_reason"], "none")

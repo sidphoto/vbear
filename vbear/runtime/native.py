@@ -65,10 +65,14 @@ class AttachRefused(NativeRuntimeError):
 
 
 def _pinned_claude_binary() -> str | None:
-    """Install path of the verified Claude Code baseline, or None to fall back
-    to PATH lookup. Either way the version check decides."""
-    pinned = Path.home() / ".local/share/claude/versions" / _cli_versions.EXPECTED_VERSIONS["claude"]
-    return str(pinned) if pinned.is_file() else None
+    """Install path of the newest verified Claude Code version that is present,
+    or None to fall back to PATH lookup. Either way the version check decides."""
+    versions = Path.home() / ".local/share/claude/versions"
+    for version in reversed(_cli_versions.VERIFIED_VERSIONS["claude"]):
+        pinned = versions / version
+        if pinned.is_file():
+            return str(pinned)
+    return None
 
 
 def _pinned_codex_binary() -> str:
