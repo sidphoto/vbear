@@ -6,7 +6,7 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
 
 [繁體中文說明](README.zh-TW.md) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/SECURITY-MODEL.md) · [Contributing](.github/CONTRIBUTING.md)
 
-> **Status: early (v0.1).** It is built and used daily by one person on macOS.
+> **Status: early (v0.2).** It is built and used daily by one person on macOS.
 > The interface is in Traditional Chinese (zh-TW).
 > Expect rough edges, and read [Known limitations](#known-limitations) before relying on it.
 

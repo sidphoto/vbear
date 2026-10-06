@@ -5,7 +5,7 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 
 [English](README.md) · [架構](docs/ARCHITECTURE.md) · [安全模型](docs/SECURITY-MODEL.md) · [參與貢獻](.github/CONTRIBUTING.md) · [回報資安問題](SECURITY.md)
 
-> **目前狀態：早期版本（v0.1）**，只在 macOS 上由作者本人日常使用與測試。開始使用前請先看下方「已知限制」。
+> **目前狀態：早期版本（v0.2）**，只在 macOS 上由作者本人日常使用與測試。開始使用前請先看下方「已知限制」。
 >
 > VBear 的名字來自台灣黑熊和牠胸前的 V 字：先看清楚，再放行。
 >

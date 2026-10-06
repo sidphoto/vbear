@@ -45,7 +45,8 @@ PYLIB="$RES/python/lib/python3.13"
 rm -rf "$PYLIB/test" "$PYLIB/idlelib" "$PYLIB/tkinter" "$PYLIB/turtledemo" "$PYLIB/ensurepip" \
        "$PYLIB"/lib-dynload/_tkinter* "$RES/python/include" "$RES/python/share" \
        "$RES/python/lib"/libtcl* "$RES/python/lib"/libtk* "$RES/python/lib"/tcl* "$RES/python/lib"/tk* \
-       "$PYLIB"/site-packages/pip* "$RES/python/bin/pip"* "$RES/python/bin/idle"* "$RES/python/bin/pydoc"*
+       "$PYLIB"/site-packages/pip* "$RES/python/bin/pip"* "$RES/python/bin/idle"* "$RES/python/bin/pydoc"* \
+       "$RES/python/lib"/itcl* "$RES/python/lib"/thread* "$RES/python/lib"/tdbc* "$RES/python/lib/pkgconfig"
 find "$RES/python" -name "__pycache__" -type d -prune -exec rm -rf {} +
 
 rsync -a --exclude "__pycache__" "$ROOT/vbear" "$ROOT/web" "$RES/app/"
@@ -53,8 +54,12 @@ cp "$ROOT/LICENSE" "$RES/app/LICENSE"
 # Byte-compile once now: the signed bundle must not be written to at run time.
 # unchecked-hash .pyc files stay valid whatever the files' timestamps become
 # after copying, so Python never needs to rewrite them.
+# -s/-p record bundle-relative source paths, not the build machine's.
 "$RES/python/bin/python3" -B -m compileall -q --invalidation-mode unchecked-hash \
-  "$RES/app/vbear" "$PYLIB" >/dev/null
+  -s "$APP" -p "/Applications/VBear.app" "$RES/app/vbear" "$PYLIB" >/dev/null
+if grep -rlF "$ROOT" "$APP" >/dev/null 2>&1; then
+  echo "build path leaked into the bundle:" >&2; grep -rlF "$ROOT" "$APP" | head >&2; exit 1
+fi
 
 # 3. Swift shell, icon, Info.plist.
 swiftc -O -target arm64-apple-macos13.0 -framework Cocoa -framework WebKit \

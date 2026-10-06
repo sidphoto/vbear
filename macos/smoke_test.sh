@@ -42,7 +42,39 @@ ditto "$MNT/VBear.app" "$APP"
 hdiutil detach "$MNT" -quiet
 codesign --verify --deep --strict "$APP" && pass "signature valid" || fail "signature valid"
 PY="$APP/Contents/Resources/python/bin/python3"
-if otool -L "$PY" | grep -qE "/opt/homebrew|/usr/local"; then fail "bundled python is self-contained"; else pass "bundled python is self-contained"; fi
+[ -x "$PY" ] || { fail "bundled python exists"; exit 1; }
+# Every Mach-O file in the bundle may link only to the system or to the bundle itself.
+OUTSIDE=0
+while IFS= read -r f; do
+  deps="$(otool -L "$f" 2>/dev/null)" || { OUTSIDE=1; echo "  otool failed: $f"; continue; }
+  if echo "$deps" | tail -n +2 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/Library/|@rpath/|@loader_path/|@executable_path/)' | grep -q .; then
+    OUTSIDE=1; echo "  links outside: $f"
+  fi
+done < <(find "$APP/Contents" -type f \( -perm -u+x -o -name "*.dylib" -o -name "*.so" \) -exec sh -c 'file -b "$1" | grep -q Mach-O' _ {} \; -print)
+[ "$OUTSIDE" = 0 ] && pass "every binary links only to macOS or the bundle" || fail "every binary links only to macOS or the bundle"
+PLIST="$APP/Contents/Info.plist"
+[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$PLIST")" = "io.github.sidphoto.vbear" ] \
+  && pass "bundle id" || fail "bundle id"
+APPVER="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$PLIST")"
+case "$(basename "$DMG")" in *"-$APPVER-"*) pass "app version $APPVER matches the dmg name" ;; *) fail "app version $APPVER matches the dmg name" ;; esac
+if [ -f "$DMG.sha256" ]; then
+  [ "$(shasum -a 256 "$DMG" | awk '{print $1}')" = "$(awk '{print $1}' "$DMG.sha256")" ] \
+    && pass "dmg matches its .sha256" || fail "dmg matches its .sha256"
+fi
+# Compiled code must record bundle paths, not the build machine's (its user name).
+if "$PY" -B - "$APP/Contents/Resources/app/vbear" <<'PYEOF'
+import marshal, pathlib, sys
+bad = []
+for pyc in pathlib.Path(sys.argv[1]).rglob("*.pyc"):
+    code = marshal.loads(pyc.read_bytes()[16:])
+    if not code.co_filename.startswith("/Applications/VBear.app/"):
+        bad.append(f"{pyc.name}: {code.co_filename}")
+print("\n".join(bad[:3]))
+sys.exit(1 if bad else 0)
+PYEOF
+then pass "compiled code records bundle paths only"; else fail "compiled code records bundle paths only"; fi
+"$PY" -B -c "import ctypes, pty, termios, fcntl, selectors, tomllib, http.server, ssl, hashlib, secrets" \
+  && pass "bundled python has the modules VBear needs" || fail "bundled python has the modules VBear needs"
 
 # 2. Start it as a new user (no ~/.claude, ~/.codex, ~/.vbear).
 env -i HOME="$QA_HOME" USER="$USER" LOGNAME="$USER" VBEAR_HOME="$VBEAR_HOME" \
