@@ -1,4 +1,4 @@
-"""SID Console tests. Standard library only: python3 -m unittest discover -s tests
+"""VBear tests. Standard library only: python3 -m unittest discover -s tests
 
 Every test runs against a synthetic HOME, so nothing on the real machine is
 read. The runtime daemon is not running on purpose, to check the "unknown" paths.
@@ -8,7 +8,7 @@ import base64
 import json
 import time
 import os
-os.environ["SID_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
+os.environ["VBEAR_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import queue
 import shutil
 import sys
@@ -23,18 +23,18 @@ ORIGINAL_PATH = os.environ.get("PATH", "")
 # Only this module's private standalone run may remove the shared fake HOME.
 # Under unittest discovery a preceding sibling pins HOME for the whole suite;
 # deleting it here breaks later native-runtime tests that still use Path.home().
-_OWN_TEMP = "SID_CONSOLE_HOME" not in os.environ
+_OWN_TEMP = "VBEAR_HOME" not in os.environ
 # Reuse the prior sibling's FAKE_HOME when one is already pinned, so that
 # `unittest discover`'s module-import-time HOME mutation by whichever
 # sibling loaded first sticks for the whole process. Same guard as
 # tests/test_tasks.py: without it every discovered sibling would race to
 # overwrite os.environ["HOME"] and the LAST module loaded wins.
-if "SID_CONSOLE_HOME" in os.environ:
+if "VBEAR_HOME" in os.environ:
     FAKE_HOME = Path(os.environ["HOME"])
 else:
-    FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-test-"))
+    FAKE_HOME = Path(tempfile.mkdtemp(prefix="vbear-test-"))
     os.environ["HOME"] = str(FAKE_HOME)
-    os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
+    os.environ["VBEAR_HOME"] = str(FAKE_HOME / ".vbear")
 os.environ["PATH"] = "/usr/bin:/bin"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -106,9 +106,9 @@ def build_fixture():
 
 build_fixture()
 
-from sidconsole import config as cfg  # noqa: E402
-from sidconsole.index import Store  # noqa: E402
-from sidconsole.scan import document, frontmatter, usage  # noqa: E402
+from vbear import config as cfg  # noqa: E402
+from vbear.index import Store  # noqa: E402
+from vbear.scan import document, frontmatter, usage  # noqa: E402
 
 
 class FrontMatterTests(unittest.TestCase):
@@ -210,7 +210,7 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(by_id["sess-1"]["skills"]["name:alpha"]["evidence"], "explicit")
         self.assertEqual(by_id["cdx-1"]["models"], {"gpt-a": 1})
         self.assertIn(f"path:{FAKE_HOME}/.codex/skills/alpha/SKILL.md", by_id["cdx-1"]["skills"])
-        cache = (FAKE_HOME / ".sid-console" / "usage-cache.json").read_text()
+        cache = (FAKE_HOME / ".vbear" / "usage-cache.json").read_text()
         self.assertNotIn("SECRET PROMPT TEXT", cache)
         self.assertNotIn("SECRET PROMPT TEXT", json.dumps(result))
 
@@ -226,7 +226,7 @@ class ServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from http.server import ThreadingHTTPServer
-        from sidconsole.server import Console, make_handler
+        from vbear.server import Console, make_handler
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
@@ -263,7 +263,7 @@ class ServerTests(unittest.TestCase):
     def test_armory_reverse_lookup_is_read_only_and_detail_links_profiles(self):
         """D1: every GET derives Profile -> skill references live; it never
         writes a second index or hides a disabled Profile."""
-        from sidconsole import agent_profiles
+        from vbear import agent_profiles
         from unittest import mock
         skill = self.console.store.static()["skills"][0]
         profiles = [
@@ -288,7 +288,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(after, before, "D1 GET endpoints must not write profile storage")
 
     def test_armory_profile_storage_error_is_503(self):
-        from sidconsole import agent_profiles
+        from vbear import agent_profiles
         from unittest import mock
         skill_id = self.console.store.static()["skills"][0]["skill_id"]
         with mock.patch.object(agent_profiles, "list_profiles",
@@ -302,7 +302,7 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(self.req("/api/overview")[1]["stale"])
         self.console.store.static()["generated_at"] -= 2 * 86400
         self.assertTrue(self.req("/api/overview")[1]["stale"])
-        self.req("/api/rescan", "POST", body={}, headers={"X-SID-Console": "1"})
+        self.req("/api/rescan", "POST", body={}, headers={"X-VBear": "1"})
         self.assertFalse(self.req("/api/overview")[1]["stale"])
 
     def test_annotations_never_touch_skill_files(self):
@@ -319,7 +319,7 @@ class ServerTests(unittest.TestCase):
         claude_alpha = next(s for s in data["skills"] if s["name"] == "alpha" and s["tool"] == "claude")
         codex_alpha = next(s for s in data["skills"] if s["name"] == "alpha" and s["tool"] == "codex")
         self.assertNotEqual(claude_alpha["annotation_key"], codex_alpha["annotation_key"])
-        hdr = {"X-SID-Console": "1"}
+        hdr = {"X-VBear": "1"}
         status, saved, _ = self.req("/api/annotations", "POST", headers=hdr, body={
             "key": claude_alpha["annotation_key"], "aliases": "網站健檢，資安", "tags": ["上線前"] * 3 + ["x" * 99],
             "note": "n" * 5000})
@@ -348,8 +348,8 @@ class ServerTests(unittest.TestCase):
     def test_post_requires_header_and_same_origin(self):
         self.assertEqual(self.req("/api/rescan", "POST", body={})[0], 403)
         self.assertEqual(self.req("/api/rescan", "POST", body={},
-                                  headers={"X-SID-Console": "1", "Origin": "https://evil"})[0], 403)
-        self.assertEqual(self.req("/api/rescan", "POST", body={}, headers={"X-SID-Console": "1"})[0], 200)
+                                  headers={"X-VBear": "1", "Origin": "https://evil"})[0], 403)
+        self.assertEqual(self.req("/api/rescan", "POST", body={}, headers={"X-VBear": "1"})[0], 200)
 
     def test_detail_redacts_and_restricts_files(self):
         _, data, headers = self.req("/api/skills")
@@ -365,11 +365,11 @@ class ServerTests(unittest.TestCase):
 
     def test_focus_endpoint_is_gone(self):
         status, _, _ = self.req("/api/focus", "POST", body={"target": "w1:p1; rm -rf /"},
-                                headers={"X-SID-Console": "1"})
+                                headers={"X-VBear": "1"})
         self.assertNotEqual(status, 200)
 
     def test_config_only_accepts_known_keys(self):
-        _, data, _ = self.req("/api/config", "POST", headers={"X-SID-Console": "1"},
+        _, data, _ = self.req("/api/config", "POST", headers={"X-VBear": "1"},
                               body={"usage_days": 9999, "host": "0.0.0.0", "port": 1})
         self.assertEqual(data["config"]["usage_days"], 365)
         self.assertEqual(data["config"]["host"], cfg.DEFAULT_HOST)
@@ -379,7 +379,7 @@ class ServerTests(unittest.TestCase):
         """Runs tests/frontend/role_skills.cjs: the real viewRole() against a
         synthetic DOM and clock (behaviour, not a browser test)."""
         import subprocess
-        node = shutil.which("node", path=os.environ.get("SID_TEST_NODE_PATH", ORIGINAL_PATH))
+        node = shutil.which("node", path=os.environ.get("VBEAR_TEST_NODE_PATH", ORIGINAL_PATH))
         if not node:
             self.skipTest("node is not installed")
         script = Path(__file__).resolve().parent / "frontend" / "role_skills.cjs"
@@ -431,7 +431,7 @@ class ServerTests(unittest.TestCase):
         """Directly tests handler._static() internal path traversal guard:
         even if an internal caller passes a traversal path, it is rejected if
         the resolved file escapes WEB_ROOT."""
-        from sidconsole.server import make_handler
+        from vbear.server import make_handler
         handler_cls = make_handler(self.console)
         h = handler_cls.__new__(handler_cls)
         h._error = mock.MagicMock()
@@ -446,7 +446,7 @@ class ServerTests(unittest.TestCase):
         """Verifies that all vendored terminal assets strictly match their
         pinned SHA-256 hashes, ensuring zero tampering, corruption, or CDN drift."""
         import hashlib
-        from sidconsole.server import WEB_ROOT
+        from vbear.server import WEB_ROOT
 
         pinned_hashes = {
             "vendor/xterm/xterm.js": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495",
@@ -469,7 +469,7 @@ class ServerTests(unittest.TestCase):
         """Runs tests/frontend/terminal.cjs to verify SSE parsing, base64/UTF-8,
         input batching/gating, takeover warning, release, and cleanup."""
         import subprocess
-        node = shutil.which("node", path=os.environ.get("SID_TEST_NODE_PATH", ORIGINAL_PATH))
+        node = shutil.which("node", path=os.environ.get("VBEAR_TEST_NODE_PATH", ORIGINAL_PATH))
         if not node:
             self.skipTest("node is not installed")
         script = Path(__file__).resolve().parent / "frontend" / "terminal.cjs"
@@ -482,7 +482,7 @@ class ServerTests(unittest.TestCase):
         conn = http.client.HTTPConnection("127.0.0.1", self.console.port)
         conn.putrequest("POST", "/api/annotations")
         conn.putheader("Host", f"127.0.0.1:{self.console.port}")
-        conn.putheader("X-SID-Console", "1")
+        conn.putheader("X-VBear", "1")
         conn.putheader("Content-Length", "invalid")
         conn.endheaders()
         resp = conn.getresponse()
@@ -508,10 +508,10 @@ class ServerTests(unittest.TestCase):
         finally:
             handler.timeout = 15.0
 
-    def test_launch_identifies_sid_console(self):
-        """launch() decides through is_sid_console(); test that function."""
+    def test_launch_identifies_vbear(self):
+        """launch() decides through is_vbear(); test that function."""
         import http.server
-        from sidconsole.__main__ import is_sid_console
+        from vbear.__main__ import is_vbear
 
         def fake(server_name, body):
             class FakeHandler(http.server.BaseHTTPRequestHandler):
@@ -530,13 +530,13 @@ class ServerTests(unittest.TestCase):
             return f"http://127.0.0.1:{srv.server_address[1]}/"
 
         good_shape = b'{"config": {}, "state_dir": "/x"}'
-        self.assertTrue(is_sid_console(self.base + "/"))
-        self.assertFalse(is_sid_console(fake("SIDConsole/0.1", b'{"unrelated": true}')))
-        self.assertFalse(is_sid_console(fake("nginx", good_shape)))  # right shape, other server
-        self.assertFalse(is_sid_console(fake("SIDConsole/0.1", b'{"config": [], "state_dir": 1}')))
-        self.assertFalse(is_sid_console(fake("SIDConsole/0.1", b"not json")))
+        self.assertTrue(is_vbear(self.base + "/"))
+        self.assertFalse(is_vbear(fake("VBear/0.1", b'{"unrelated": true}')))
+        self.assertFalse(is_vbear(fake("nginx", good_shape)))  # right shape, other server
+        self.assertFalse(is_vbear(fake("VBear/0.1", b'{"config": [], "state_dir": 1}')))
+        self.assertFalse(is_vbear(fake("VBear/0.1", b"not json")))
         with mock.patch("urllib.request.urlopen", side_effect=OSError("refused")):
-            self.assertFalse(is_sid_console(self.base + "/"))
+            self.assertFalse(is_vbear(self.base + "/"))
 
     def test_corrupt_config_prevents_overwrite_and_backs_up(self):
         cpath = cfg.config_path()
@@ -551,7 +551,7 @@ class ServerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cfg.save(loaded)
             # POST /api/config should return 400
-            status, _, _ = self.req("/api/config", "POST", headers={"X-SID-Console": "1"}, body={"usage_days": 30})
+            status, _, _ = self.req("/api/config", "POST", headers={"X-VBear": "1"}, body={"usage_days": 30})
             self.assertEqual(status, 400)
             self.assertEqual(cpath.read_text(encoding="utf-8"), "{broken json")
         finally:
@@ -581,8 +581,8 @@ class ServerTests(unittest.TestCase):
 
 from unittest import mock  # noqa: E402
 
-from sidconsole import annotations  # noqa: E402
-from sidconsole.runtime import RuntimeBase  # noqa: E402
+from vbear import annotations  # noqa: E402
+from vbear.runtime import RuntimeBase  # noqa: E402
 
 
 class FakeRuntime(RuntimeBase):
@@ -628,8 +628,8 @@ class FakeRuntime(RuntimeBase):
     def close_all(self): pass
 
 
-from sidconsole.index import build_static  # noqa: E402
-from sidconsole.scan import claude  # noqa: E402
+from vbear.index import build_static  # noqa: E402
+from vbear.scan import claude  # noqa: E402
 
 HOSTILE = FAKE_HOME / "hostile"
 SECRETS = ("sk-live-FRONTMATTER", "CAMELSECRET", "ACCESSSECRET", "NESTEDSECRET", "JSONSECRET",
@@ -821,7 +821,7 @@ class HardenedServerTests(_HostileBase):  # M2/M3 read path, L2, L3, L4
     def setUpClass(cls):
         super().setUpClass()
         from http.server import ThreadingHTTPServer
-        from sidconsole.server import Console, make_handler
+        from vbear.server import Console, make_handler
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
@@ -838,7 +838,7 @@ class HardenedServerTests(_HostileBase):  # M2/M3 read path, L2, L3, L4
         cls.httpd.server_close()
 
     req = ServerTests.req
-    H = {"X-SID-Console": "1"}
+    H = {"X-VBear": "1"}
 
     def setUp(self):
         # a config POST replaces store.conf with the saved file; restore ours
@@ -983,7 +983,7 @@ class SlowRuntimeTests(_HostileBase):  # AGY A1: a hung runtime must not stall t
         super().setUpClass()
         import time
         from http.server import ThreadingHTTPServer
-        from sidconsole.server import Console, make_handler
+        from vbear.server import Console, make_handler
         cls.time = time
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
@@ -1093,7 +1093,7 @@ class SlowRuntimeTests(_HostileBase):  # AGY A1: a hung runtime must not stall t
 
 import stat  # noqa: E402
 
-from sidconsole import index as index_mod  # noqa: E402
+from vbear import index as index_mod  # noqa: E402
 
 
 def marker_index(marker: str) -> dict:
@@ -1103,7 +1103,7 @@ def marker_index(marker: str) -> dict:
 
 def post_json(base: str, path: str, body: dict):
     r = urllib.request.Request(base + path, method="POST", data=json.dumps(body).encode(),
-                               headers={"X-SID-Console": "1"})
+                               headers={"X-VBear": "1"})
     try:
         with urllib.request.urlopen(r, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
@@ -1116,7 +1116,7 @@ class _IsolatedState(unittest.TestCase):
     def setUp(self):
         self.state = Path(tempfile.mkdtemp(dir=FAKE_HOME, prefix="state-"))
         os.chmod(self.state, 0o700)
-        env = mock.patch.dict(os.environ, {"SID_CONSOLE_HOME": str(self.state)})
+        env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.state)})
         env.start()
         self.addCleanup(env.stop)
 
@@ -1388,7 +1388,7 @@ class CorruptConfigBackupTests(_IsolatedState):  # R3, R4
 
     def test_api_reports_backup_truthfully(self):
         from http.server import ThreadingHTTPServer
-        from sidconsole.server import Console, make_handler
+        from vbear.server import Console, make_handler
         self.bak.write_bytes(b"older backup")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         console = Console(httpd.server_address[1])
@@ -1462,7 +1462,7 @@ class CorruptConfigScopeTests(_IsolatedState):  # F3, F4
 
     def test_server_reports_corrupt_config(self):
         from http.server import ThreadingHTTPServer
-        from sidconsole.server import Console, make_handler
+        from vbear.server import Console, make_handler
         self.good_index()
         cfg.config_path().write_text("{broken", encoding="utf-8")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
@@ -1493,7 +1493,7 @@ class RequestBodyTests(unittest.TestCase):  # Content-Length strictness, whole-b
         conn = http.client.HTTPConnection("127.0.0.1", self.console.port, timeout=10)
         conn.putrequest("POST", "/api/config")
         conn.putheader("Host", f"127.0.0.1:{self.console.port}")
-        conn.putheader("X-SID-Console", "1")
+        conn.putheader("X-VBear", "1")
         conn.putheader("Content-Length", length_header)
         conn.endheaders(body)
         resp = conn.getresponse()
@@ -1512,11 +1512,11 @@ class RequestBodyTests(unittest.TestCase):  # Content-Length strictness, whole-b
     def test_trickled_body_hits_the_total_deadline(self):
         import socket
         import time
-        from sidconsole import server as server_mod
+        from vbear import server as server_mod
         with mock.patch.object(server_mod, "BODY_DEADLINE_S", 0.6):
             conn = socket.create_connection(("127.0.0.1", self.console.port), timeout=10)
             conn.sendall((f"POST /api/config HTTP/1.1\r\nHost: 127.0.0.1:{self.console.port}\r\n"
-                          "X-SID-Console: 1\r\nContent-Length: 20\r\n\r\n").encode())
+                          "X-VBear: 1\r\nContent-Length: 20\r\n\r\n").encode())
             started = time.monotonic()
             reply = b""
             try:
@@ -1544,7 +1544,7 @@ class UnreadSkillStateTests(_HostileBase):  # C2
         self.assertEqual(recs["good"].activation, "active")
 
     def test_states_that_already_say_unusable_are_kept(self):
-        from sidconsole.model import ACT_DISABLED, unread_activation
+        from vbear.model import ACT_DISABLED, unread_activation
         self.assertEqual(unread_activation(ACT_DISABLED, "off", "too big"), (ACT_DISABLED, "off"))
 
 
@@ -1603,9 +1603,9 @@ class TerminalRouteTests(_HostileBase):
     def setUpClass(cls):
         super().setUpClass()
         from http.server import ThreadingHTTPServer
-        from sidconsole.runtime import daemon as d
-        from sidconsole.runtime.native import NativeRuntime
-        from sidconsole.server import Console, make_handler
+        from vbear.runtime import daemon as d
+        from vbear.runtime.native import NativeRuntime
+        from vbear.server import Console, make_handler
         # A real runtime daemon on a short private path (macOS socket path limit).
         cls.rt_base = Path(tempfile.mkdtemp(prefix="sidtr-", dir="/tmp"))
         cls.dm = d.Daemon(cls.rt_base, log=lambda m: None)
@@ -1639,7 +1639,7 @@ class TerminalRouteTests(_HostileBase):
         shutil.rmtree(cls.rt_base, ignore_errors=True)
 
     req = ServerTests.req
-    H = {"X-SID-Console": "1"}
+    H = {"X-VBear": "1"}
 
     def setUp(self):
         self.console.store.conf = json.loads(json.dumps(self.conf))
@@ -1658,7 +1658,7 @@ class TerminalRouteTests(_HostileBase):
         pane = pane or self.PA
         import http.client
         conn = http.client.HTTPConnection("127.0.0.1", self.console.port, timeout=10)
-        headers = {"X-SID-Console": "1", **(extra_headers or {})}
+        headers = {"X-VBear": "1", **(extra_headers or {})}
         conn.request("GET", f"/api/term/{pane}/stream", headers=headers)
         return conn, conn.getresponse()
 
@@ -1678,7 +1678,7 @@ class TerminalRouteTests(_HostileBase):
 
     def test_stream_requires_custom_header(self):
         _, data, _ = self.req(f"/api/term/{self.PA}/stream")
-        # req() doesn't add X-SID-Console by default
+        # req() doesn't add X-VBear by default
         self.assertIsNone(data)
 
     def test_unknown_pane_is_rejected(self):

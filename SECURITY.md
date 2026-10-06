@@ -1,12 +1,12 @@
 # Security policy
 
-SID Console launches and controls coding agents on your machine, so we take vulnerabilities seriously.
+VBear launches and controls coding agents on your machine, so we take vulnerabilities seriously.
 
 ## Reporting a vulnerability
 
 Please **do not open a public issue.** Report it privately through GitHub:
 **Security → Report a vulnerability** on this repository, or use
-[this link](https://github.com/sidphoto/sid-console/security/advisories/new).
+[this link](https://github.com/sidphoto/vbear/security/advisories/new).
 
 Please include:
 - the version or commit;

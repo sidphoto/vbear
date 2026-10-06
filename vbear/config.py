@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-APP_NAME = "sid-console"
+APP_NAME = "vbear"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7788
 
@@ -24,11 +24,53 @@ DEFAULT_PORT = 7788
 ARCHIVE_MARKERS = ("_backups", ".tmp", "archived_sessions", "vendor_imports", "backups")
 
 
+LEGACY_STATE_NAME = ".sid-console"  # name before the VBear rename (v0.1.0)
+
+
 def state_dir() -> Path:
-    override = os.environ.get("SID_CONSOLE_HOME")
+    override = os.environ.get("VBEAR_HOME") or os.environ.get("SID_CONSOLE_HOME")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".sid-console"
+    current = Path.home() / ".vbear"
+    legacy = Path.home() / LEGACY_STATE_NAME
+    # Until the legacy directory can be moved safely, keep using it in place.
+    if not current.exists() and legacy.is_dir():
+        return legacy
+    return current
+
+
+def migrate_legacy_state_dir(port_in_use=None) -> str:
+    """Move ~/.sid-console to ~/.vbear once, only when nothing is using it.
+
+    Returns "none" (nothing to do), "moved", or "kept:<reason>" when the
+    legacy directory stays in use for now. Never merges or overwrites."""
+    if os.environ.get("VBEAR_HOME") or os.environ.get("SID_CONSOLE_HOME"):
+        return "none"
+    current = Path.home() / ".vbear"
+    legacy = Path.home() / LEGACY_STATE_NAME
+    if current.exists() or not legacy.is_dir() or legacy.is_symlink():
+        return "none"
+    if port_in_use is not None and port_in_use():
+        return "kept:console_running"
+    sessions = legacy / "sessions"
+    # Launch manifests hold absolute paths into this directory.
+    if sessions.is_dir() and any(sessions.iterdir()):
+        return "kept:managed_launches_pending"
+    lock = legacy / "runtimed.lock"
+    fd = None
+    try:
+        if lock.exists():
+            import fcntl
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return "kept:runtime_running"
+        os.rename(legacy, current)
+        return "moved"
+    finally:
+        if fd is not None:
+            os.close(fd)  # releases the flock; the lock file moved with the directory
 
 
 STATE_DIR_MODE = 0o700

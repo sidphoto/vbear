@@ -11,12 +11,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import cli_versions as versions
+from vbear.runtime import cli_versions as versions
 
 
 class MinimumPythonTests(unittest.TestCase):
     def test_entry_point_refuses_python_without_macos_waitid(self):
-        from sidconsole.__main__ import python_too_old
+        from vbear.__main__ import python_too_old
         self.assertIsNone(python_too_old((3, 13, 0)))
         self.assertIsNone(python_too_old((3, 14, 6)))
         msg = python_too_old((3, 12, 13))

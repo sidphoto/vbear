@@ -12,8 +12,8 @@ Humans should read [CONTRIBUTING](.github/CONTRIBUTING.md) as well.
 - **Fail closed** in launch and permission code. If something cannot be proven, such as a version, the sandbox,
   or that every process has exited, refuse or keep the state for manual review. Do not guess.
 - **Never touch real user data in tests.** Tests must use a synthetic `HOME`, a temporary
-  `SID_CONSOLE_HOME`, and `SID_RUNTIME_AUTOSTART=0` unless they start their own daemon in a temp dir.
-  Never connect to the user's console on port 7788 or to `~/.sid-console/runtime.sock`.
+  `VBEAR_HOME`, and `VBEAR_RUNTIME_AUTOSTART=0` unless they start their own daemon in a temp dir.
+  Never connect to the user's console on port 7788 or to `~/.vbear/runtime.sock`.
 - User-facing text is Traditional Chinese (zh-TW). Code, comments and commit messages are English.
 - Match the surrounding code's style and comment density.
 

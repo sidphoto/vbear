@@ -203,7 +203,7 @@ def _acquire_lock(path: Path, uid: int) -> int:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise AlreadyRunning("已有 SID runtime 背景程序在執行") from exc
+            raise AlreadyRunning("已有 VBear runtime 背景程序在執行") from exc
         os.ftruncate(fd, 0)
         os.write(fd, f"{os.getpid()}\n".encode("ascii"))
         return fd

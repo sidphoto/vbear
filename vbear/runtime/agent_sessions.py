@@ -11,7 +11,7 @@ Layout (decision D1):
 
 The scratch is not under the state directory on purpose: Claude Code 2.1.286
 falls back to the shared ``/tmp/claude-<uid>`` when its per-UID temp path
-exceeds 44 UTF-8 bytes, and a path below ``~/.sid-console`` is longer than
+exceeds 44 UTF-8 bytes, and a path below ``~/.vbear`` is longer than
 that. The exact scratch path, inode, uid and mode are recorded in the manifest
 and re-checked before every use and before deletion.
 

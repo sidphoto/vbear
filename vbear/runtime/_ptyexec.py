@@ -20,16 +20,16 @@ import termios
 def main() -> None:
     argv = sys.argv[1:]
     if not argv:
-        os.write(2, b"sid runtime: missing command\r\n")
+        os.write(2, b"vbear runtime: missing command\r\n")
         os._exit(127)
     try:
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
     except OSError as exc:  # still usable, but no job control / SIGWINCH
-        os.write(2, f"sid runtime: no controlling tty ({exc})\r\n".encode())
+        os.write(2, f"vbear runtime: no controlling tty ({exc})\r\n".encode())
     try:
         os.execvp(argv[0], argv)
     except OSError as exc:
-        os.write(2, f"sid runtime: cannot run {argv[0]}: {exc}\r\n".encode())
+        os.write(2, f"vbear runtime: cannot run {argv[0]}: {exc}\r\n".encode())
         os._exit(127)
 
 

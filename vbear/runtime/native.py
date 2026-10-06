@@ -278,7 +278,7 @@ class NativeAttachment(SessionView):
             pass
         # EOF without terminal.closed: the connection, not the terminal, ended.
         self._finish({"type": "terminal.closed", "connection_interrupted": True,
-                      "reason": "與 SID runtime 的連線中斷（未收到結束訊息，Terminal 本身可能仍在執行）"})
+                      "reason": "與 VBear runtime 的連線中斷（未收到結束訊息，Terminal 本身可能仍在執行）"})
 
     # ---- writing ----
 
@@ -332,7 +332,7 @@ class NativeAttachment(SessionView):
 
 
 class NativeRuntime(RuntimeBase):
-    """R2 Runtime backed by ``sidconsole runtimed``."""
+    """R2 Runtime backed by ``vbear runtimed``."""
 
     def __init__(self, base: Path | None = None, *, autostart: bool = False):
         self._base = Path(base) if base is not None else None
@@ -358,7 +358,7 @@ class NativeRuntime(RuntimeBase):
             return _d.rpc(op, path=self.socket_path(), timeout=timeout, **fields)
 
     def ensure_daemon(self, wait: float = 3.0) -> bool:
-        """Spawn ``sidconsole runtimed`` if autostart is on and nobody answers.
+        """Spawn ``vbear runtimed`` if autostart is on and nobody answers.
 
         The daemon runs in its own session and is *not* stopped when the
         server exits (user decision §9.2). Spawns are rate-limited; a second
@@ -381,11 +381,11 @@ class NativeRuntime(RuntimeBase):
             base = self._base or cfg.state_dir()
             os.makedirs(base, mode=0o700, exist_ok=True)
             env = dict(os.environ)
-            env["SID_CONSOLE_HOME"] = str(base)
+            env["VBEAR_HOME"] = str(base)
             log_fd = os.open(base / "runtimed.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-m", "sidconsole", "runtimed"],
+                    [sys.executable, "-m", "vbear", "runtimed"],
                     cwd=str(Path(__file__).resolve().parent.parent.parent), env=env,
                     stdin=subprocess.DEVNULL, stdout=log_fd, stderr=log_fd,
                     start_new_session=True)
@@ -413,7 +413,7 @@ class NativeRuntime(RuntimeBase):
         try:
             r = self._rpc("open", timeout=5.0, **fields)
         except (OSError, ValueError) as exc:
-            raise NativeRuntimeUnavailable(f"SID runtime 無法連線：{exc}") from exc
+            raise NativeRuntimeUnavailable(f"VBear runtime 無法連線：{exc}") from exc
         if not r.get("ok"):
             err = r.get("error") or {}
             raise NativeRuntimeError(str(err.get("message") or "無法開啟"))
@@ -557,10 +557,10 @@ class NativeRuntime(RuntimeBase):
         except (FileNotFoundError, ConnectionRefusedError) as exc:
             # No daemon answered, so no process can exist for this launch.
             _agent_sessions.discard_prepared(base, launch_id)
-            raise NativeRuntimeUnavailable(f"SID runtime 未啟動或無法連線：{exc}") from exc
+            raise NativeRuntimeUnavailable(f"VBear runtime 未啟動或無法連線：{exc}") from exc
         except (OSError, ValueError) as exc:
             # Outcome unknown (e.g. timeout): the daemon may own a session. Keep the state.
-            raise NativeRuntimeUnavailable(f"SID runtime 無法連線：{exc}") from exc
+            raise NativeRuntimeUnavailable(f"VBear runtime 無法連線：{exc}") from exc
         if not r.get("ok"):
             # Refused before anything started (the daemon removes its own state
             # when a spawn fails); a still-prepared launch is ours to remove.
@@ -631,11 +631,11 @@ class NativeRuntime(RuntimeBase):
             r = self._rpc("hello", timeout=1.0)
         except (OSError, ValueError):
             return {"name": "native", "version": None, "binary": str(self.socket_path()),
-                    "available": False, "problems": ["SID runtime 背景程序沒有在執行"]}
+                    "available": False, "problems": ["VBear runtime 背景程序沒有在執行"]}
         res = r.get("result") or {}
         return {"name": "native", "version": res.get("version"),
                 "binary": str(self.socket_path()), "available": bool(r.get("ok")),
-                "problems": [] if r.get("ok") else ["SID runtime 回應異常"]}
+                "problems": [] if r.get("ok") else ["VBear runtime 回應異常"]}
 
     def binary(self) -> str | None:
         return str(self.socket_path())  # path only; no round trip (/api/config)

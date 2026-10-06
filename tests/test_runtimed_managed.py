@@ -18,10 +18,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import agent_sessions as a
-from sidconsole.runtime import cli_versions
-from sidconsole.runtime import daemon as d
-from sidconsole.runtime.native import NativeRuntime, NativeRuntimeError
+from vbear.runtime import agent_sessions as a
+from vbear.runtime import cli_versions
+from vbear.runtime import daemon as d
+from vbear.runtime.native import NativeRuntime, NativeRuntimeError
 
 CLOSE_TIMEOUT = 15.0
 
@@ -346,7 +346,7 @@ class ManagedCase(unittest.TestCase):
 
     def test_runtime_entry_launches_managed_session(self):
         (self.work / "fake-mode").write_text("tool")
-        with mock.patch("sidconsole.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
+        with mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
             result = self.runtime().create_managed_claude_session(
                 {"cwd": str(self.work), "cols": 100, "rows": 30}, allowed_root=str(self.tmp))
         self.scratches.append(self.wait_for(
@@ -364,8 +364,8 @@ class ManagedCase(unittest.TestCase):
         codex.write_text(FAKE_CODEX_CLI % {"py": sys.executable}, encoding="utf-8")
         codex.chmod(0o700)
         (self.work / "fake-mode").write_text("tool")
-        with mock.patch("sidconsole.runtime.native._pinned_codex_binary", return_value=str(codex)), \
-                mock.patch("sidconsole.runtime.cli_versions.CODEX_INTERACTIVE_FLAGS_SUPPORTED", True):
+        with mock.patch("vbear.runtime.native._pinned_codex_binary", return_value=str(codex)), \
+                mock.patch("vbear.runtime.cli_versions.CODEX_INTERACTIVE_FLAGS_SUPPORTED", True):
             result = self.runtime().create_managed_codex_session(
                 {"cwd": str(self.work), "cols": 100, "rows": 30, "commit": True},
                 allowed_root=str(self.tmp))
@@ -395,7 +395,7 @@ class ManagedCase(unittest.TestCase):
 
     def test_runtime_entry_refuses_other_cli_version_and_leaves_nothing(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
-        with mock.patch("sidconsole.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
+        with mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
             with self.assertRaises(cli_versions.VersionAssertionError) as c:
                 self.runtime().create_managed_claude_session({"cwd": str(self.work)}, allowed_root=str(self.tmp))
         self.assertEqual(c.exception.code, "version_mismatch")
@@ -410,7 +410,7 @@ class ManagedCase(unittest.TestCase):
 
     def test_runtime_entry_cleans_prepared_state_when_daemon_refuses(self):
         rt = self.runtime()
-        with mock.patch("sidconsole.runtime.native._pinned_claude_binary", return_value=str(self.binary)), \
+        with mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary)), \
                 mock.patch.object(rt, "_rpc", return_value={"ok": False, "error": {"message": "refused"}}):
             with self.assertRaises(NativeRuntimeError):
                 rt.create_managed_claude_session({"cwd": str(self.work)}, allowed_root=str(self.tmp))

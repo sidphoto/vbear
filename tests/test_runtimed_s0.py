@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import daemon as d
+from vbear.runtime import daemon as d
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -251,7 +251,7 @@ class RpcTests(DaemonCase):
 class CliProcessTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="sidr2-", dir="/tmp"))
-        self.env = {**os.environ, "SID_CONSOLE_HOME": str(self.tmp / "st")}
+        self.env = {**os.environ, "VBEAR_HOME": str(self.tmp / "st")}
         self.procs = []
 
     def tearDown(self):
@@ -264,7 +264,7 @@ class CliProcessTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def spawn(self):
-        p = subprocess.Popen([sys.executable, "-m", "sidconsole", "runtimed"], cwd=ROOT,
+        p = subprocess.Popen([sys.executable, "-m", "vbear", "runtimed"], cwd=ROOT,
                              env=self.env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         self.procs.append(p)

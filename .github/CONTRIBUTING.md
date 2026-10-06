@@ -1,4 +1,4 @@
-# Contributing to SID Console
+# Contributing to VBear
 
 Thanks for your interest. This is a small, early project maintained by one person, so please
 **open an issue or a discussion before starting a large change**. Issues in English or Traditional
@@ -18,12 +18,12 @@ Chinese are both welcome.
 ## Local setup
 
 ```sh
-git clone https://github.com/sidphoto/sid-console.git
-cd sid-console
-SID_CONSOLE_HOME=$(mktemp -d) python3 -m sidconsole serve --port 7790 --open
+git clone https://github.com/sidphoto/vbear.git
+cd vbear
+VBEAR_HOME=$(mktemp -d) python3 -m vbear serve --port 7790 --open
 ```
 
-Using a temporary `SID_CONSOLE_HOME` and another port keeps your development console separate from
+Using a temporary `VBEAR_HOME` and another port keeps your development console separate from
 your everyday one.
 
 ## Branch naming

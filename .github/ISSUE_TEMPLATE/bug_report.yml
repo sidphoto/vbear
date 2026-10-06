@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Security issue? Do not file it here.** Use [private reporting](https://github.com/sidphoto/sid-console/security/advisories/new) instead.
+        **Security issue? Do not file it here.** Use [private reporting](https://github.com/sidphoto/vbear/security/advisories/new) instead.
         English or Traditional Chinese is fine. 中文或英文皆可。
   - type: textarea
     id: what
@@ -23,7 +23,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: SID Console version or commit
+      label: VBear version or commit
       placeholder: v0.1.0 or a commit hash
     validations:
       required: true
@@ -36,5 +36,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Relevant lines from ~/.sid-console/server.log or runtimed.log. Remove anything private first.
+      description: Relevant lines from ~/.vbear/server.log or runtimed.log. Remove anything private first.
       render: text

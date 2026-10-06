@@ -1,23 +1,23 @@
 # Architecture
 
-SID Console has two local processes and a browser UI. It has no build step, it uses no third-party Python
+VBear has two local processes and a browser UI. It has no build step, it uses no third-party Python
 packages, and it does not connect to anything outside your machine.
 
 ```
-browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (sidconsole serve)
+browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
                                              │  scans ~/.claude, ~/.codex, ~/.agents (read-only)
-                                             │  state in ~/.sid-console/
-                                             └──unix socket runtime.sock──▶  SID runtime (sidconsole runtimed)
+                                             │  state in ~/.vbear/
+                                             └──unix socket runtime.sock──▶  VBear runtime (vbear runtimed)
                                                                                owns the PTY sessions
                                                                                └── claude / codex / any command
 ```
 
-## Console server — `sidconsole/server.py`
+## Console server — `vbear/server.py`
 
 - A `ThreadingHTTPServer` bound to `127.0.0.1`. It serves `web/` and a JSON API under `/api/`.
-- **Index.** The `sidconsole/scan/` adapters read skills, plugins and agent roles from the Claude Code,
-  Codex and shared skill directories. `sidconsole/index.py` combines them into a static index
-  (`~/.sid-console/index.json`) and a live view of running sessions from the runtime.
+- **Index.** The `vbear/scan/` adapters read skills, plugins and agent roles from the Claude Code,
+  Codex and shared skill directories. `vbear/index.py` combines them into a static index
+  (`~/.vbear/index.json`) and a live view of running sessions from the runtime.
 - **Usage evidence.** `scan/usage.py` reads agent session logs and keeps only skill names, model names,
   session IDs, working directories and timestamps.
 - **Local data.** Notes (`annotations.py`), task cards (`tasks.py`) and Agent Profiles
@@ -25,12 +25,12 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (sidconsole s
 - **Terminal streaming.** `GET /api/term/<id>/stream` relays runtime output to the browser as
   server-sent events. Input goes through `POST /api/term/<id>/input` only after an explicit takeover.
 
-## SID runtime — `sidconsole/runtime/daemon.py`
+## VBear runtime — `vbear/runtime/daemon.py`
 
 - A single daemon for each state directory, guarded by `runtimed.lock`. The console starts it on demand
-  (set `SID_RUNTIME_AUTOSTART=0` to turn that off). It keeps running after the console exits, so open
+  (set `VBEAR_RUNTIME_AUTOSTART=0` to turn that off). It keeps running after the console exits, so open
   terminals survive a console restart.
-- **Protocol.** Newline-delimited JSON on `~/.sid-console/runtime.sock`. Only connections from the same
+- **Protocol.** Newline-delimited JSON on `~/.vbear/runtime.sock`. Only connections from the same
   uid are accepted; the daemon reads the peer's credentials with `LOCAL_PEERCRED`. Operations: `hello`,
   `open`, `open_managed`, `list`, `close`, `attach`, `shutdown`.
 - **Sessions.** Each session is a PTY child with a 1 MiB scrollback ring. At most 16 sessions run at
@@ -42,7 +42,7 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (sidconsole s
 - **Close.** Close escalates from SIGHUP to SIGTERM to SIGKILL against the session's process group.
   Managed sessions also signal the other process groups their descendants created.
 
-The client side is `sidconsole/runtime/native.py` (`NativeRuntime`), which implements the protocol
+The client side is `vbear/runtime/native.py` (`NativeRuntime`), which implements the protocol
 in `runtime/base.py`. Tests can substitute a fake runtime.
 
 ## Profile-managed Claude launch
@@ -52,7 +52,7 @@ UI ── POST /api/native/agent-previews ──▶ preview (stored 300 s, singl
 UI ── POST /api/native/agent-launches ──▶ re-check preview, profile and config (409 on any drift)
           │
           ├─ agent_sessions.prepare_claude_launch
-          │     ~/.sid-console/sessions/<launch-id>/{settings.json, manifest.json}
+          │     ~/.vbear/sessions/<launch-id>/{settings.json, manifest.json}
           │     private scratch dir /private/tmp/sc-<random>/
           └─ runtime  open_managed {launch_id}   (single use; the manifest is read from the
                                                   daemon's own state directory, never from the caller)

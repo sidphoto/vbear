@@ -7,7 +7,7 @@ for (const text of [
   "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。",
   "可使用不代表目前有 Agent 正在使用。",
   "這是 Skill 所屬或可載入它的工具，不是目前正在執行的 Agent。",
-  "註記只存在 SID Console，不會寫回原本的 Skill 檔案。",
+  "註記只存在 VBear，不會寫回原本的 Skill 檔案。",
   "已安裝但被設定關閉",
   "這是舊版快取副本",
 ]) assert(app.includes(text), `missing Skills Library explanation: ${text}`);

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from sidconsole import armory
+from vbear import armory
 
 
 class ArmoryProjectionTests(unittest.TestCase):

@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import daemon as d
+from vbear.runtime import daemon as d
 
 PY = sys.executable
 CLOSE_TIMEOUT = 10.0

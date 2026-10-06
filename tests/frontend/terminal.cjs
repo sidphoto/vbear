@@ -98,8 +98,8 @@ async function runAllTests() {
     "web/app.js must not call EventSource"
   );
   assert(
-    appSource.includes('"X-SID-Console": "1"'),
-    "Stream request must send X-SID-Console: 1 custom header"
+    appSource.includes('"X-VBear": "1"'),
+    "Stream request must send X-VBear: 1 custom header"
   );
   assert(
     appSource.includes('Accept: "text/event-stream"'),

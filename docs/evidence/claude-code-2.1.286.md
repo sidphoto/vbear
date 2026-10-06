@@ -4,8 +4,8 @@ This is a public summary of the maintainer's tests behind the launch preview's l
 local paths and stay private. The test harness is not yet published as a reusable script.
 
 - Binary: Claude Code **2.1.286** (native build, macOS arm64), the version pinned in
-  `sidconsole/runtime/cli_versions.py`.
-- Settings: exactly what `claude_settings()` in `sidconsole/runtime/agent_sessions.py` produces, with flags
+  `vbear/runtime/cli_versions.py`.
+- Settings: exactly what `claude_settings()` in `vbear/runtime/agent_sessions.py` produces, with flags
   `--safe-mode --tools Bash --disallowedTools Edit,Write --strict-mcp-config`.
 - Dates: 2026-10-02 to 2026-10-04. A small model was told to run fixed probe commands. Results were read from the probe's own
   output files and errno values, not from the model's reply.
@@ -43,8 +43,8 @@ Added 2026-10-06 and tested on **Claude Code 2.1.291** in headless mode. It has 
 
 | Probe from inside the Bash tool | Result |
 |---|---|
-| HTTP to the SID Console port on `127.0.0.1` | `EPERM` |
-| Connect to the SID runtime unix socket | `EPERM` |
+| HTTP to the VBear port on `127.0.0.1` | `EPERM` |
+| Connect to the VBear runtime unix socket | `EPERM` |
 
 ## Lifecycle
 

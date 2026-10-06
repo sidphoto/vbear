@@ -59,7 +59,7 @@ MAX_FILE_BYTES = document.MAX_FILE_BYTES
 #   <style> injection (_injectCss) and inline style attributes on row elements (_addStyle
 #   calling element.setAttribute('style', ...)) for ANSI 24-bit truecolor rendering.
 #   Without 'unsafe-inline', Chrome DevTools logs CSP violations and truecolor colors
-#   fall back to monochromatic terminal defaults. Because SID Console contains zero
+#   fall back to monochromatic terminal defaults. Because VBear contains zero
 #   untrusted HTML/style injection sinks (all dynamic text uses textContent or strict
 #   DOM APIs), allowing 'unsafe-inline' in style-src is a safe, bounded trade-off.
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
@@ -95,11 +95,11 @@ class Console:
         self.store = Store()
         self.lock = threading.Lock()
         # The Runtime is the single seam the console has with the terminal
-        # backend (`sidconsole runtimed`), built once at console startup.
-        # SID_RUNTIME_AUTOSTART=0 keeps the console from spawning the daemon
+        # backend (`vbear runtimed`), built once at console startup.
+        # VBEAR_RUNTIME_AUTOSTART=0 keeps the console from spawning the daemon
         # (tests run their own, and must never leave one behind).
         self.runtime_kind = "native"
-        self.runtime = rt.get_runtime(autostart=os.environ.get("SID_RUNTIME_AUTOSTART", "1") != "0")
+        self.runtime = rt.get_runtime(autostart=os.environ.get("VBEAR_RUNTIME_AUTOSTART", "1") != "0")
         # Store's live snapshot must come from the same backend.
         self.store.runtime = self.runtime
         # Profile-managed launches (R3 S0): work directories must be inside this root.
@@ -115,7 +115,7 @@ class Console:
             return self._previews
 
     def runtime_unavailable_message(self) -> str:
-        return "SID runtime 背景程序無法啟動或連線"
+        return "VBear runtime 背景程序無法啟動或連線"
 
     # derived views ------------------------------------------------------
 
@@ -173,7 +173,7 @@ def make_handler(console: Console):
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "SIDConsole/0.1"
+        server_version = "VBear/0.1"
         sys_version = ""
         timeout = 15.0
 
@@ -207,7 +207,7 @@ def make_handler(console: Console):
             return self.headers.get("Host", "") in allowed_hosts
 
         def _write_ok(self) -> bool:
-            if self.headers.get("X-SID-Console") != "1":
+            if self.headers.get("X-VBear") != "1":
                 return False
             origin = self.headers.get("Origin")
             return origin is None or origin in allowed_origins
@@ -287,7 +287,7 @@ def make_handler(console: Console):
                     return self._json(self._roles())
                 if path == "/api/live":
                     force = parse_qs(url.query).get("force", ["0"])[0] == "1"
-                    if force and self.headers.get("X-SID-Console") != "1":
+                    if force and self.headers.get("X-VBear") != "1":
                         return self._error(403, "強制更新需要主控台標頭")
                     return self._json(console.store.live(force=force))
                 if path == "/api/config":
@@ -540,12 +540,12 @@ def make_handler(console: Console):
         def _term_stream(self, pane_id: str, query: str):
             """Server-sent events: one 'data: <json>\\n\\n' per terminal frame.
 
-            A plain <script>-less EventSource cannot carry the X-SID-Console
+            A plain <script>-less EventSource cannot carry the X-VBear
             header this endpoint requires (it has a side effect: attaching to
             the runtime), so the frontend must open this with fetch() and read
             the streamed body itself, not `new EventSource`.
             """
-            if self.headers.get("X-SID-Console") != "1":
+            if self.headers.get("X-VBear") != "1":
                 return self._error(403, "forbidden")
             if not self._term_target_ok(pane_id):
                 return self._error(404, "目前沒有這個 Terminal")
@@ -1026,7 +1026,7 @@ def make_handler(console: Console):
                     "contract": {
                         "stack": "Python 3.13+ / Vanilla JS / xterm.js vendored / SID native runtime",
                         "runtime": "Localhost only (127.0.0.1:7788)",
-                        "security": "Strict CSP, Safe DOM textContent, Same-Origin + X-SID-Console: 1",
+                        "security": "Strict CSP, Safe DOM textContent, Same-Origin + X-VBear: 1",
                         "tests": "python3 -B -m unittest discover -s tests -q && node tests/frontend/*.cjs",
                         "boundaries": "Zero external pip dependencies, zero CDN, one writer per worktree",
                     },
@@ -1066,7 +1066,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     console.store.static()  # load cached index or perform the first scan
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
     url = f"http://127.0.0.1:{port}/"
-    print(f"SID Console 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
+    print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         import webbrowser
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
-from sidconsole import agent_launch
+from vbear import agent_launch
 from tests.test_runtimed_managed import FAKE_CLI, FAKE_CODEX_CLI
 from tests.test_runtimed_s3 import ServerCase
 
@@ -36,12 +36,12 @@ class PreviewApiCase(ServerCase):
         self.binary = self.tmp / "claude"
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.286"}, encoding="utf-8")
         self.binary.chmod(0o700)
-        self.pin = mock.patch("sidconsole.runtime.native._pinned_claude_binary", return_value=str(self.binary))
+        self.pin = mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary))
         self.pin.start()
         self.codex_binary = self.tmp / "codex"
         self.codex_binary.write_text(FAKE_CODEX_CLI % {"py": sys.executable}, encoding="utf-8")
         self.codex_binary.chmod(0o700)
-        self.codex_pin = mock.patch("sidconsole.runtime.native._pinned_codex_binary",
+        self.codex_pin = mock.patch("vbear.runtime.native._pinned_codex_binary",
                                     return_value=str(self.codex_binary))
         self.codex_pin.start()
         self.console.managed_root = self.tmp
@@ -80,7 +80,7 @@ class PreviewApiCase(ServerCase):
         return self.dm_rpc("list")["result"]["sessions"]
 
     def dm_rpc(self, op, **kw):
-        from sidconsole.runtime import daemon as d
+        from vbear.runtime import daemon as d
         return d.rpc(op, base=self.home, timeout=15.0, **kw)
 
     def launch_dirs(self):

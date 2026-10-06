@@ -1,12 +1,12 @@
 # Security model
 
-This page covers what SID Console protects, what it does not protect, and the evidence for each claim.
+This page covers what VBear protects, what it does not protect, and the evidence for each claim.
 For how to report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 ## Assumptions
 
-- **A single-user Mac.** SID Console runs as your user, and only you use the machine.
-- You trust the coding agents' own CLIs, such as Claude Code, and their providers. SID Console limits what
+- **A single-user Mac.** VBear runs as your user, and only you use the machine.
+- You trust the coding agents' own CLIs, such as Claude Code, and their providers. VBear limits what
   a *launched session* can change on disk. It does not protect you from the CLI vendor.
 
 ## The browser surface
@@ -14,7 +14,7 @@ For how to report a vulnerability, see [SECURITY.md](../SECURITY.md).
 | Threat | Mitigation |
 |---|---|
 | Another website reads your data | Read requests that carry `Sec-Fetch-Site` other than `same-origin` or `none` are rejected |
-| Another website makes changes (CSRF) | Writes need the `X-SID-Console: 1` header and a same-origin `Origin` |
+| Another website makes changes (CSRF) | Writes need the `X-VBear: 1` header and a same-origin `Origin` |
 | DNS rebinding | The server binds to `127.0.0.1`, and the `Host` header must be a local address |
 | Skill content injecting script | Strict CSP (`script-src 'self'`), `textContent` only, no `innerHTML` |
 | Oversized or slow requests | Bodies over 64 KiB get 413; a body must arrive within 15 s |
@@ -28,15 +28,15 @@ user-controlled HTML or CSS reaches the page.
 The local API has **no authentication.** The header and Origin checks stop browsers, but they do not stop
 other programs. Any program on the machine, under any user account, can connect to `127.0.0.1:7788`.
 Such a program can open a terminal running any command as you (`POST /api/native/sessions`) and type
-into existing terminals. Do not run SID Console on a machine shared with people or programs you do not trust.
+into existing terminals. Do not run VBear on a machine shared with people or programs you do not trust.
 
-The runtime socket (`~/.sid-console/runtime.sock`) is narrower: it accepts only connections from your own uid.
+The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connections from your own uid.
 
 ## Terminals
 
 - Opening a terminal in the browser only **observes** it. Typing requires an explicit takeover, and only
   one tab holds control at a time.
-- Output stays in memory and is never written to disk by SID Console. On connect, only the most recent
+- Output stays in memory and is never written to disk by VBear. On connect, only the most recent
   output is replayed, up to 64 KiB.
 - xterm.js runs with `linkHandler: null` and with window operations disabled. No clipboard (OSC 52) or link addon is loaded.
 
@@ -48,7 +48,7 @@ These are the claims the launch preview makes, and their status:
 |---|---|---|
 | Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | [Evidence for 2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
 | No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | [Evidence for 2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
-| Bash cannot reach SID Console itself | Enforced by the same sandbox | Both refused with `EPERM`. Tested on Claude Code 2.1.291 in headless mode on 2026-10-06; **not yet re-run on the pinned 2.1.286** ([details](evidence/claude-code-2.1.286.md#loopback)) |
+| Bash cannot reach VBear itself | Enforced by the same sandbox | Both refused with `EPERM`. Tested on Claude Code 2.1.291 in headless mode on 2026-10-06; **not yet re-run on the pinned 2.1.286** ([details](evidence/claude-code-2.1.286.md#loopback)) |
 | Edit and Write tools are unavailable | `--tools Bash --disallowedTools Edit,Write`; those tools would not be covered by the Bash sandbox | Launch argv is built server-side from trusted values only |
 | No MCP servers or project hooks from the work directory | `--safe-mode --strict-mcp-config` | |
 | Commit is possible | **Not prevented.** `.git` is inside the writable work directory; you must acknowledge this before launch | |
@@ -69,6 +69,6 @@ Other safeguards:
 
 - No telemetry, analytics, crash reporting or update checks. The only HTTP client in the code talks to
   the local console itself.
-- State lives in `~/.sid-console/`. The directory has mode `0700` and its files `0600`, written atomically.
+- State lives in `~/.vbear/`. The directory has mode `0700` and its files `0600`, written atomically.
 - If `config.json` is corrupt, it is never overwritten. It is backed up, scanning is turned off, and a
   warning is shown.

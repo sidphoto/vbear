@@ -3,7 +3,7 @@
 import json
 import multiprocessing
 import os
-os.environ["SID_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
+os.environ["VBEAR_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import shutil
 import tempfile
 import threading
@@ -16,12 +16,12 @@ from unittest import mock
 
 # Isolated test environment
 _OWN_TEMP = False
-if "SID_CONSOLE_HOME" in os.environ:
+if "VBEAR_HOME" in os.environ:
     FAKE_HOME = Path(os.environ["HOME"])
 else:
-    FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-tasks-test-"))
+    FAKE_HOME = Path(tempfile.mkdtemp(prefix="vbear-tasks-test-"))
     os.environ["HOME"] = str(FAKE_HOME)
-    os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
+    os.environ["VBEAR_HOME"] = str(FAKE_HOME / ".vbear")
     _OWN_TEMP = True
 
 os.environ["PATH"] = "/usr/bin:/bin"
@@ -30,15 +30,15 @@ os.environ.pop("HERDR_BIN_PATH", None)
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sidconsole import config as cfg
-from sidconsole import server, tasks
+from vbear import config as cfg
+from vbear import server, tasks
 
 
 def _mp_save_worker(i):
     """Module-level (picklable) worker for the cross-process lock test
     (H3): save_task() is exercised from a genuinely separate forked OS
     process, not just a thread sharing this process's in-memory lock."""
-    from sidconsole import tasks as _tasks
+    from vbear import tasks as _tasks
     t = _tasks.save_task(None, {"title": f"mp task {i}"})
     return t["id"]
 
@@ -326,7 +326,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
         cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", cls.port), cls.handler)
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
-        cls.H = {"Host": f"127.0.0.1:{cls.port}", "X-SID-Console": "1", "Origin": f"http://127.0.0.1:{cls.port}"}
+        cls.H = {"Host": f"127.0.0.1:{cls.port}", "X-VBear": "1", "Origin": f"http://127.0.0.1:{cls.port}"}
 
     @classmethod
     def tearDownClass(cls):
@@ -363,7 +363,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
             "title": "API Test Task",
             "template": "feature",
             "goal": "Verify REST API for task cards",
-            "scope": ["sidconsole/server.py"],
+            "scope": ["vbear/server.py"],
             "deliverables": ["New routes"],
             "acceptance_criteria": ["200 OK"],
             "evidence": ["test_tasks.py"],
@@ -417,7 +417,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
         self.assertEqual(data["deleted"], "task-api-2")
 
     def test_delete_maps_storage_errors_to_503(self):
-        from sidconsole import agent_profiles
+        from vbear import agent_profiles
         for exc in (tasks.TaskStorageError("blocked"),
                     agent_profiles.AgentProfileStorageError("blocked")):
             with mock.patch.object(tasks, "delete_task", side_effect=exc):
@@ -455,7 +455,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
         self.assertIn("Python 3.13+", p["contract"]["stack"])
 
     def test_security_protections_on_tasks(self):
-        # Missing X-SID-Console header
+        # Missing X-VBear header
         h_no_token = {"Host": f"127.0.0.1:{self.port}"}
         status, _, _ = self.req("/api/tasks", "POST", body={"title": "Attack"}, headers=h_no_token)
         self.assertEqual(status, 403)
@@ -463,7 +463,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
         # Hostile / cross-origin Origin
         h_bad_origin = {
             "Host": f"127.0.0.1:{self.port}",
-            "X-SID-Console": "1",
+            "X-VBear": "1",
             "Origin": "http://evil.com",
         }
         status, _, _ = self.req("/api/tasks", "POST", body={"title": "Attack"}, headers=h_bad_origin)
@@ -577,7 +577,7 @@ class TasksConcurrencyAndFilesystemSafetyTests(unittest.TestCase):
 class TasksCrossProcessLockTests(unittest.TestCase):
     """M2/H3: save_task() must serialize across separate OS processes, not
     just threads sharing this process's in-memory lock — the old
-    threading.Lock-only implementation could not see a second `sidconsole`
+    threading.Lock-only implementation could not see a second `vbear`
     invocation (e.g. a CLI scan running alongside the server) racing the
     same read-modify-write and silently discarding the loser's write."""
 

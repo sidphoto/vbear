@@ -1,6 +1,6 @@
 """Task Card storage, validation, and lifecycle management (Phase B3).
 
-Tasks are stored in ~/.sid-console/tasks.json (or $SID_CONSOLE_HOME/tasks.json).
+Tasks are stored in ~/.vbear/tasks.json (or $VBEAR_HOME/tasks.json).
 All writes are atomic and secure (permissions 0600, directory 0700), guarded
 by a cross-process lock so a CLI scan and the server can never race each
 other's read-modify-write (see _cross_process_lock).
@@ -396,8 +396,8 @@ def _cross_process_lock(timeout: float = 10.0):
     of save_task()/delete_task(), enforced at the OS level via flock().
 
     Unlike the in-process `_lock` above, this also serializes a *second OS
-    process* (e.g. a `sidconsole` CLI invocation running alongside the
-    server) writing the same ~/.sid-console/tasks.json, closing a lost-
+    process* (e.g. a `vbear` CLI invocation running alongside the
+    server) writing the same ~/.vbear/tasks.json, closing a lost-
     update race threading.Lock alone cannot see (H3): two separate processes
     could each load_all() the same version, each compute their own update,
     and the second write_private() call would silently discard whatever the

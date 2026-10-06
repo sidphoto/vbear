@@ -19,9 +19,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import daemon as d
-from sidconsole.runtime import native as n
-from sidconsole.runtime import NativeRuntime, RuntimeBase
+from vbear.runtime import daemon as d
+from vbear.runtime import native as n
+from vbear.runtime import NativeRuntime, RuntimeBase
 
 PY = sys.executable
 ECHO = [PY, "-c", "import sys\nfor l in sys.stdin: print('ECHO:'+l.strip(),flush=True)"]

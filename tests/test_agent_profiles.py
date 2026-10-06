@@ -28,21 +28,21 @@ ORIGINAL_PATH = os.environ.get("PATH", "")
 # don't overwrite a HOME already pinned by a sibling module loaded earlier
 # by `unittest discover`, or every test across the suite would observe the
 # wrong fake-home.
-if "SID_CONSOLE_HOME" in os.environ:
+if "VBEAR_HOME" in os.environ:
     FAKE_HOME = Path(os.environ["HOME"])
 else:
-    FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-profile-test-"))
+    FAKE_HOME = Path(tempfile.mkdtemp(prefix="vbear-profile-test-"))
     os.environ["HOME"] = str(FAKE_HOME)
-    os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
+    os.environ["VBEAR_HOME"] = str(FAKE_HOME / ".vbear")
 os.environ["PATH"] = "/usr/bin:/bin"
 os.environ.pop("HERDR_BIN_PATH", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sidconsole import agent_profiles as ap  # noqa: E402
+from vbear import agent_profiles as ap  # noqa: E402
 
 
 def _reset_state_dir():
-    sd = Path(os.environ["SID_CONSOLE_HOME"])
+    sd = Path(os.environ["VBEAR_HOME"])
     if sd.exists():
         shutil.rmtree(sd, ignore_errors=True)
     sd.mkdir(parents=True, exist_ok=True)
@@ -63,7 +63,7 @@ def _sample(name="Alpha", tool="claude", model_id="opus-4.1",
 
 def _mp_save_worker(args):
     payload, i = args
-    from sidconsole import agent_profiles as local
+    from vbear import agent_profiles as local
     return local.save_profile(None, payload, known_skills=set(),
                               known_roles={"writer", "reviewer"})["id"]
 
@@ -152,7 +152,7 @@ class StorageShapeTests(unittest.TestCase):
     def test_cap_at_max_profiles(self):
         # The cap only blocks new creates; this test seeds the file via the
         # public path so it goes through the normal save_profile validation.
-        from sidconsole.agent_profiles import MAX_PROFILES, _path
+        from vbear.agent_profiles import MAX_PROFILES, _path
         data = {}
         for i in range(MAX_PROFILES):
             data[f"prof-prefill-{i:03d}"] = {
@@ -168,7 +168,7 @@ class StorageShapeTests(unittest.TestCase):
             }
         ap._path().parent.mkdir(parents=True, exist_ok=True)
         cfg_state = ap._path()
-        from sidconsole import config as cfg
+        from vbear import config as cfg
         cfg.write_private(cfg_state, json.dumps(data))
         # We must have exactly the seeded records (none re-validated would
         # be silently dropped; their shape matches this module's so the load

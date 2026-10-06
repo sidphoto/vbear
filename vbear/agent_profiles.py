@@ -16,7 +16,7 @@ existing per-call authority of the CLI tools themselves.
 
 Storage follows the same fail-closed invariants as tasks.py:
 
-  * `~/.sid-console/agent_profiles.json` is owner-only (0600), in a 0700 dir.
+  * `~/.vbear/agent_profiles.json` is owner-only (0600), in a 0700 dir.
   * Cross-process lock (flock) + thread lock guard the entire read-modify-write.
   * Writes go to a unique mkstemp temp, fsync, chmod 0600, atomic replace,
     then directory fsync.
@@ -217,7 +217,7 @@ def _cross_process_lock(timeout: float = 10.0):
     """OS-level exclusive lock spanning save_profile()/delete_profile().
 
     See tasks._cross_process_lock for the rationale: a process-level
-    threading.Lock alone cannot see a *second* sidconsole process (e.g. a CLI
+    threading.Lock alone cannot see a *second* vbear process (e.g. a CLI
     running alongside the server) doing the same read-modify-write, so two
     writes would silently lose one of them. flock() is enough on its own —
     it also serialises threads inside this process, because each acquire

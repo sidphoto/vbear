@@ -17,8 +17,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import agent_sessions as a
-from sidconsole.runtime import proctrack
+from vbear.runtime import agent_sessions as a
+from vbear.runtime import proctrack
 
 
 def mode(path) -> int:

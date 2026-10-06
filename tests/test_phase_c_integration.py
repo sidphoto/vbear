@@ -2,7 +2,7 @@
 
 End-to-end: HTTP API -> server handler -> agent_profiles module -> on-disk
 JSON. Each scenario drives a real server on loopback the same way a browser
-would, then asserts on what landed in `~/.sid-console/agent_profiles.json`,
+would, then asserts on what landed in `~/.vbear/agent_profiles.json`,
 the quarantine file, and the marker.
 
 Also includes:
@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-os.environ["SID_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
+os.environ["VBEAR_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import shutil
 import socket
 import sys
@@ -35,34 +35,34 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-# HOME / SID_CONSOLE_HOME must be pinned BEFORE any `from sidconsole import ...`
-# line: sidconsole.index.HOME = Path.home() and friends are module-level
+# HOME / VBEAR_HOME must be pinned BEFORE any `from vbear import ...`
+# line: vbear.index.HOME = Path.home() and friends are module-level
 # constants evaluated at import time, and once bound to the real home they
 # will pollute every other test module unittest discover loads alongside us
 # (test_console / test_tasks pin HOME at module level and re-build fixtures
 # from it — they cannot override an already-bound constant from an earlier
 # import). Each test (and the per-class setup) creates a fresh tempdir and
-# patches sidconsole.config.state_dir / ensure_state_dir for its own use.
+# patches vbear.config.state_dir / ensure_state_dir for its own use.
 # Reuse-guard: if a sibling test module loaded earlier by `unittest discover`
-# already pinned SID_CONSOLE_HOME, honor that HOME instead of clobbering it.
+# already pinned VBEAR_HOME, honor that HOME instead of clobbering it.
 # Without this guard every sibling races to set os.environ["HOME"] at module
-# load time and whichever loads last wins for the whole process; sidconsole
+# load time and whichever loads last wins for the whole process; vbear
 # resolves HOME() at runtime now, but the fixtures built below track a
 # specific FAKE_HOME so they must stay consistent with what HOME() sees.
-if "SID_CONSOLE_HOME" in os.environ:
+if "VBEAR_HOME" in os.environ:
     FAKE_HOME = Path(os.environ["HOME"])
 else:
-    FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-phase-c-int-env-"))
+    FAKE_HOME = Path(tempfile.mkdtemp(prefix="vbear-phase-c-int-env-"))
     os.environ["HOME"] = str(FAKE_HOME)
-    os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
+    os.environ["VBEAR_HOME"] = str(FAKE_HOME / ".vbear")
 os.environ["PATH"] = "/usr/bin:/bin"
 os.environ.pop("HERDR_BIN_PATH", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sidconsole import agent_profiles, tasks, server  # noqa: E402
-from sidconsole import config as cfg  # noqa: E402
-from sidconsole import runtime as rt_mod  # noqa: E402
-from sidconsole.index import Store  # noqa: E402
+from vbear import agent_profiles, tasks, server  # noqa: E402
+from vbear import config as cfg  # noqa: E402
+from vbear import runtime as rt_mod  # noqa: E402
+from vbear.index import Store  # noqa: E402
 
 
 def _per_test_isolator(testcase_or_cls, _register=None):
@@ -77,8 +77,8 @@ def _per_test_isolator(testcase_or_cls, _register=None):
     must be invoked from tearDownClass (since TestCase.addCleanup is an
     instance method, not a classmethod).
     """
-    _TMP = Path(tempfile.mkdtemp(prefix="sidconsole-phase-c-int-"))
-    sd = _TMP / ".sid-console"
+    _TMP = Path(tempfile.mkdtemp(prefix="vbear-phase-c-int-"))
+    sd = _TMP / ".vbear"
 
     def _patched_state_dir(_ignored=None):
         sd.mkdir(parents=True, exist_ok=True)
@@ -163,7 +163,7 @@ def _request(method, port, path, body=None, headers=None):
 
 
 def _write_headers(headers=None):
-    h = {"X-SID-Console": "1"}
+    h = {"X-VBear": "1"}
     if headers:
         h.update(headers)
     return h
@@ -398,7 +398,7 @@ class ConcurrentHTTPRequestsTests(unittest.TestCase):
 
     def test_concurrent_http_cross_process_creates_all_persist(self):
         # Cross-process via multiprocessing — the actual scenario two
-        # terminal sessions of `sidconsole save` vs the server would race.
+        # terminal sessions of `vbear save` vs the server would race.
         n = 24
         ctx = multiprocessing.get_context("fork")
         with ctx.Pool(processes=8) as pool:

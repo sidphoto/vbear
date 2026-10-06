@@ -1,4 +1,4 @@
-"""python3 -m sidconsole [serve|scan|doctor] [--port N] [--open]"""
+"""python3 -m vbear [serve|scan|doctor] [--port N] [--open]"""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ MIN_PYTHON = (3, 13)  # os.waitid on macOS (safe Agent CLI version probe) arrive
 def python_too_old(version_info=sys.version_info) -> str | None:
     if tuple(version_info[:2]) >= MIN_PYTHON:
         return None
-    return (f"SID Console 需要 Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} 以上，目前是 "
+    return (f"VBear 需要 Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} 以上，目前是 "
             f"{version_info[0]}.{version_info[1]}。請改用 Homebrew 或 python.org 的較新版本。\n"
-            f"SID Console requires Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+.")
+            f"VBear requires Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+.")
 
 
 if (_too_old := python_too_old()) is not None:
@@ -24,7 +24,7 @@ from . import config as cfg  # noqa: E402  (after the version check on purpose)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sidconsole", description="SID Console：技能與團隊主控台")
+    parser = argparse.ArgumentParser(prog="vbear", description="VBear：技能與團隊主控台")
     sub = parser.add_subparsers(dest="cmd")
     p_serve = sub.add_parser("serve", help="啟動本機主控台（預設）")
     p_serve.add_argument("--port", type=int)
@@ -33,13 +33,15 @@ def main(argv: list[str] | None = None) -> int:
     p_launch = sub.add_parser("launch", help="背景啟動主控台（若尚未執行）並開啟瀏覽器")
     p_launch.add_argument("--port", type=int)
     sub.add_parser("scan", help="重新掃描並輸出摘要")
-    sub.add_parser("doctor", help="檢查來源與 SID runtime 連線")
-    sub.add_parser("runtimed", help="SID runtime 背景程序（通常由主控台自動啟動）")
+    sub.add_parser("doctor", help="檢查來源與 VBear runtime 連線")
+    sub.add_parser("runtimed", help="VBear runtime 背景程序（通常由主控台自動啟動）")
     args = parser.parse_args(argv)
 
     if args.cmd == "runtimed":
         from .runtime.daemon import main as runtimed_main
         return runtimed_main()
+
+    _migrate_state_dir(getattr(args, "port", None))
 
     if args.cmd in (None, "serve"):
         from .server import serve
@@ -73,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{'OK ' if exists else '缺 '}] {src.label:<24} {src.path}{'' if src.enabled else '（已停用）'}")
         # Doctor only reports; it never spawns the runtime daemon.
         snap = rt.get_runtime().snapshot()
-        print(f"[{'OK ' if snap['available'] else '缺 '}] SID runtime  {snap['version'] or ''} {snap['binary'] or ''}")
+        print(f"[{'OK ' if snap['available'] else '缺 '}] VBear runtime  {snap['version'] or ''} {snap['binary'] or ''}")
         for p in snap["problems"]:
             print("     ", p)
         print(f"狀態目錄：{cfg.state_dir()}")
@@ -81,8 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def is_sid_console(url: str, timeout: float = 1.0) -> bool:
-    """Whether `url` is served by a SID Console, not merely something on the port.
+def is_vbear(url: str, timeout: float = 1.0) -> bool:
+    """Whether `url` is served by a VBear, not merely something on the port.
 
     Checks the Server header this console sends and the shape of its config
     reply. This tells a stray service apart from the console; it is not
@@ -94,7 +96,7 @@ def is_sid_console(url: str, timeout: float = 1.0) -> bool:
         with urllib.request.urlopen(url.rstrip("/") + "/api/config", timeout=timeout) as resp:
             if resp.status != 200:
                 return False
-            if not (resp.headers.get("Server") or "").startswith("SIDConsole/"):
+            if not (resp.headers.get("Server") or "").startswith("VBear/"):
                 return False
             payload = json.loads(resp.read(256 * 1024).decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError):
@@ -116,13 +118,13 @@ def launch(port: int | None) -> int:
     url = f"http://127.0.0.1:{port}/"
 
     def alive() -> bool:
-        return is_sid_console(url)
+        return is_vbear(url)
 
     if not alive():
         log = cfg.state_dir() / "server.log"
         root = Path(__file__).resolve().parent.parent
         with cfg.open_private_log(log) as out:
-            subprocess.Popen([sys.executable, "-m", "sidconsole", "serve", "--port", str(port)],
+            subprocess.Popen([sys.executable, "-m", "vbear", "serve", "--port", str(port)],
                              cwd=root, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
                              start_new_session=True)
         for _ in range(60):
@@ -135,6 +137,26 @@ def launch(port: int | None) -> int:
     webbrowser.open(url)
     print(url)
     return 0
+
+
+def _port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.3)
+        return s.connect_ex((cfg.DEFAULT_HOST, port)) == 0
+
+
+def _migrate_state_dir(port: int | None) -> None:
+    """One-time move of the pre-rename state directory (~/.sid-console)."""
+    result = cfg.migrate_legacy_state_dir(lambda: _port_in_use(port or cfg.DEFAULT_PORT))
+    if result == "moved":
+        print(f"已把舊的狀態目錄 ~/{cfg.LEGACY_STATE_NAME} 搬到 {cfg.state_dir()}", file=sys.stderr)
+    elif result.startswith("kept:"):
+        why = {"kept:console_running": "舊版主控台仍在執行",
+               "kept:runtime_running": "舊版 runtime 仍在執行",
+               "kept:managed_launches_pending": "還有等待清理的受管 session"}.get(result, result)
+        print(f"暫時沿用舊的狀態目錄 ~/{cfg.LEGACY_STATE_NAME}（{why}）；停止後再啟動即會搬到 ~/.vbear",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

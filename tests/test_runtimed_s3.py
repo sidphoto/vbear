@@ -20,9 +20,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from sidconsole import config as cfg
-from sidconsole import runtime as rt
-from sidconsole.runtime import daemon as d
+from vbear import config as cfg
+from vbear import runtime as rt
+from vbear.runtime import daemon as d
 
 PY = sys.executable
 ECHO = [PY, "-c", "import sys\nfor l in sys.stdin: print('ECHO:'+l.strip(),flush=True)"]
@@ -85,7 +85,7 @@ class ServerCase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="sidr2-", dir="/tmp"))
         self.home = self.tmp / "st"
         self.home.mkdir(mode=0o700)
-        self.env = mock.patch.dict(os.environ, {"SID_CONSOLE_HOME": str(self.home)})
+        self.env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.home)})
         self.env.start()
         conf = json.loads(json.dumps(cfg.DEFAULT_CONFIG))
         for s in conf["sources"]:
@@ -98,7 +98,7 @@ class ServerCase(unittest.TestCase):
             self.dm.start()
             self.dthread = threading.Thread(target=self.dm.serve_forever, daemon=True)
             self.dthread.start()
-        from sidconsole import server
+        from vbear import server
         self.server = server
         import socket as so
         with so.socket() as s:
@@ -125,7 +125,7 @@ class ServerCase(unittest.TestCase):
 
     def req(self, method, path, body=None, timeout=15):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
-        h = {"Host": f"127.0.0.1:{self.port}", "X-SID-Console": "1"}
+        h = {"Host": f"127.0.0.1:{self.port}", "X-VBear": "1"}
         data = None
         if body is not None:
             data = json.dumps(body).encode()
@@ -141,7 +141,7 @@ class NativeServerTests(ServerCase):
     def stream(self, sid, want: str, timeout=8.0):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         c.request("GET", f"/api/term/{sid}/stream?cols=80&rows=24",
-                  headers={"Host": f"127.0.0.1:{self.port}", "X-SID-Console": "1"})
+                  headers={"Host": f"127.0.0.1:{self.port}", "X-VBear": "1"})
         r = c.getresponse()
         self.assertEqual(r.status, 200)
         acc, end = "", time.monotonic() + timeout
@@ -212,7 +212,7 @@ class NativeServerTests(ServerCase):
 
     def test_daemon_down_message_is_native(self):
         self.dm.stop(); self.dthread.join(5); self.dm.close(); self.dm = None
-        self.assertIn("SID runtime", self.console.runtime_unavailable_message())
+        self.assertIn("VBear runtime", self.console.runtime_unavailable_message())
         st, body = self.req("POST", "/api/native/sessions", {"argv": ["/bin/sh"]})
         self.assertEqual(st, 503)
 

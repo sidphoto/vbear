@@ -1,5 +1,5 @@
 "use strict";
-/* SID Console — UI.
+/* VBear — UI.
  * Skill and agent text is untrusted input: everything is rendered through
  * el(), which only ever creates text nodes. There is no innerHTML here.
  */
@@ -412,7 +412,7 @@ function handleTerminalFrame(msg, { term, reconnectPolicy } = {}) {
   return true;
 }
 
-// Mirrors TERM_MIN_DIM/TERM_MIN_ROWS in sidconsole/server.py. A terminal
+// Mirrors TERM_MIN_DIM/TERM_MIN_ROWS in vbear/server.py. A terminal
 // narrower or shorter than this cannot render anything usable, and a resize
 // is applied to the session's PTY for every viewer.
 const TERM_MIN_COLS = 20;
@@ -627,7 +627,7 @@ function createInputBatcher(sendFn, options = {}) {
 const api = {
   async get(path) {
     // The custom header lets the server tell its own page from a cross-site request.
-    const res = await fetch(path, { headers: { Accept: "application/json", "X-SID-Console": "1" } });
+    const res = await fetch(path, { headers: { Accept: "application/json", "X-VBear": "1" } });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     if (!res.ok) {
       const error = new Error(data.error || `HTTP ${res.status}`);
@@ -639,7 +639,7 @@ const api = {
   async post(path, body) {
     const res = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-SID-Console": "1" },
+      headers: { "Content-Type": "application/json", "X-VBear": "1" },
       body: JSON.stringify(body || {}),
     });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -726,7 +726,7 @@ function activationWithHelp(a) {
 }
 function statusBadge(s) {
   const [l, c] = STATUS[s] || STATUS.unknown;
-  return badge(l, c, s === "unknown" ? "SID runtime 無法從終端判斷 Agent 是否在工作或等你回覆" : `回報狀態：${s}`);
+  return badge(l, c, s === "unknown" ? "VBear runtime 無法從終端判斷 Agent 是否在工作或等你回覆" : `回報狀態：${s}`);
 }
 function toolTag(t) { return el("span", { class: "tag" }, TOOL[t] || t || "未知工具"); }
 function prov(src) {
@@ -1008,12 +1008,12 @@ function staleNotice() {
 }
 function corruptNotice() {
   if (!D.overview || !D.overview.config_corrupt) return null;
-  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以主控台已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.sid-console/config.json 後重新啟動主控台；原檔不會被覆寫。");
+  return notice("bad", "設定檔（config.json）無法讀取。你原本選的掃描範圍目前不明，所以主控台已關閉所有掃描來源，也不會重新掃描，畫面上是先前的索引。請修復或刪除 ~/.vbear/config.json 後重新啟動主控台；原檔不會被覆寫。");
 }
 function runtimeNotice() {
   const h = D.live && D.live.runtime;
   if (!h) return null;
-  if (!h.available) return notice("warn", ["無法連線到 SID runtime，工作中的 Terminal 資訊暫不可用。", (h.problems || []).join("；")].join(" "));
+  if (!h.available) return notice("warn", ["無法連線到 VBear runtime，工作中的 Terminal 資訊暫不可用。", (h.problems || []).join("；")].join(" "));
   return null;
 }
 // One-time notice after a Herdr-era config was switched to native (until acknowledged).
@@ -1029,7 +1029,7 @@ function herdrMigrationNotice() {
   } } }, "知道了");
   const wrap = el("div", { class: "notice info" },
     el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-    el("div", null, "主控台已改用內建的 SID runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從 Agent Profile 的「預覽並啟動」開啟。 ", ack));
+    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從 Agent Profile 的「預覽並啟動」開啟。 ", ack));
   return wrap;
 }
 function sectionHead(title, sub, action) {
@@ -1091,8 +1091,8 @@ function attentionSection() {
   return [
     sectionHead("需要你處理", attention.length ? `${attention.length} 個 Terminal 在等你・每 5 秒更新` : "每 5 秒更新"),
     attention.length ? el("div", { class: "grid" }, attention.map(sessionCard))
-      : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為等你回覆的工作" : "SID runtime 未連線，無法判斷",
-        L.runtime && L.runtime.available ? "SID runtime 無法從終端判斷 Agent 是否在等你，狀態會顯示「狀態未知」；請到 Agent 團隊查看工作中的 Terminal。" : null),
+      : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為等你回覆的工作" : "VBear runtime 未連線，無法判斷",
+        L.runtime && L.runtime.available ? "VBear runtime 無法從終端判斷 Agent 是否在等你，狀態會顯示「狀態未知」；請到 Agent 團隊查看工作中的 Terminal。" : null),
   ];
 }
 
@@ -1213,7 +1213,7 @@ async function viewSkills(params) {
       sel("工具", "tool", [["", "全部"], ["claude", "Claude Code"], ["codex", "Codex CLI"], ["shared", "skills CLI"]], "這是 Skill 所屬或可載入它的工具，不是目前正在執行的 Agent。"),
       sel("用途", "cat", [["", "全部"], ...D.categories.map((c) => [c.id, c.label])], "用途由主控台依描述關鍵字自動整理，不是作者的保證。"),
       sel("範圍", "scope", [["", "全部"], ...Object.entries(SCOPE)], "範圍是掃描到檔案的位置，例如使用者、專案、外掛或市集。"),
-      sel("我的註記", "mine", [["", "不限"], ["*", "有註記的"], ...myTags.map((t) => [t, "#" + t])], "註記只存在 SID Console，不會寫回原本的 Skill 檔案。"),
+      sel("我的註記", "mine", [["", "不限"], ["*", "有註記的"], ...myTags.map((t) => [t, "#" + t])], "註記只存在 VBear，不會寫回原本的 Skill 檔案。"),
       seg, count),
     el("div", { class: "legend", style: "margin-bottom:12px" },
       el("span", null, "用途分類為", el("b", null, "自動整理"), "（依描述關鍵字），滑過標籤可看到命中的字。")),
@@ -1431,8 +1431,8 @@ async function viewTeam() {
     el("p", { class: "lede" }, "上半部是現在正在工作的 Terminal；下半部是可以重複使用的角色設定。兩者不同：一個角色可以同時有多個工作階段。"),
     runtimeNotice(),
     el("section", { class: "section" },
-      sectionHead("工作中的 Terminal", `${sessions.length} 個，由 SID runtime 管理`, seg),
-      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「[A] 角色裝備」的 Agent Profile 按「預覽並啟動」後會出現在這裡" : "SID runtime 未連線")),
+      sectionHead("工作中的 Terminal", `${sessions.length} 個，由 VBear runtime 管理`, seg),
+      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「[A] 角色裝備」的 Agent Profile 按「預覽並啟動」後會出現在這裡" : "VBear runtime 未連線")),
     el("section", { class: "section" },
       sectionHead("主代理", "直接在終端機執行的工具本身"),
       el("div", { class: "grid" }, cli.map(roleCard))),
@@ -1669,11 +1669,11 @@ async function viewSettings() {
             el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
             el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
             el("li", null, "主控台只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
-            el("li", null, "Agent 由主控台內建的 SID runtime 啟動與管理；開啟終端預設只觀看，接管後才會送出輸入。"))),
+            el("li", null, "Agent 由主控台內建的 VBear runtime 啟動與管理；開啟終端預設只觀看，接管後才會送出輸入。"))),
         advanced ? el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "診斷"),
           el("dl", { class: "kv small" },
-            el("dt", null, "SID runtime"), el("dd", { class: "mono" }, (D.live && D.live.runtime && D.live.runtime.version) || "未連線", " ", home(c.runtime_socket || "")),
+            el("dt", null, "VBear runtime"), el("dd", { class: "mono" }, (D.live && D.live.runtime && D.live.runtime.version) || "未連線", " ", home(c.runtime_socket || "")),
             el("dt", null, "Claude 外掛"), el("dd", null, (D.overview.facts.claude_installed_plugins || []).join("、") || "—"),
             el("dt", null, "外掛啟用"), el("dd", { class: "mono" }, JSON.stringify(D.overview.facts.claude_enabled_plugins || {})),
             el("dt", null, "Codex 預設模型"), el("dd", null, D.overview.facts.codex_default_model || "—", D.overview.facts.codex_default_effort ? `（${D.overview.facts.codex_default_effort}）` : ""),
@@ -1980,7 +1980,7 @@ async function viewTerminal(paneId) {
         method: "GET",
         headers: {
           Accept: "text/event-stream",
-          "X-SID-Console": "1",
+          "X-VBear": "1",
         },
         signal,
       });
@@ -2737,7 +2737,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           method: "GET",
           headers: {
             Accept: "text/event-stream",
-            "X-SID-Console": "1",
+            "X-VBear": "1",
           },
           signal,
         });
@@ -3788,7 +3788,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("span", { class: "ico" }, "ℹ"),
           el("div", null,
             "Profile 只會寫入主控台狀態目錄 (",
-            el("code", null, "~/.sid-console/agent_profiles.json"),
+            el("code", null, "~/.vbear/agent_profiles.json"),
             ")，",
             "絕對不會寫入 ~/.codex、~/.claude、第三方技能/角色來源或外掛市集。")));
     }

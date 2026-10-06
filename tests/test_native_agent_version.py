@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sidconsole.runtime import cli_versions
-from sidconsole.runtime.native import NativeRuntime, NativeRuntimeError
+from vbear.runtime import cli_versions
+from vbear.runtime.native import NativeRuntime, NativeRuntimeError
 
 
 class NativeAgentVersionTests(unittest.TestCase):

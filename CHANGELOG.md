@@ -4,7 +4,11 @@
 
 First open-source release under the MIT License.
 
-- **SID runtime.** A local daemon that owns agent terminals, so they survive console restarts. Terminals can
+- **Renamed from SID Console to VBear (V熊).** The package is now `vbear` and the state directory is
+  `~/.vbear` (an existing `~/.sid-console` is moved on first start). Environment variables are now
+  `VBEAR_HOME` and `VBEAR_RUNTIME_AUTOSTART`, and the CSRF header is now `X-VBear`.
+
+- **VBear runtime.** A local daemon that owns agent terminals, so they survive console restarts. Terminals can
   be watched in the browser, typed into after an explicit takeover (one controller at a time),
   and closed from the UI.
 - **Profile-managed Claude Code launches** with a preview of seven permission labels, followed by confirmation.

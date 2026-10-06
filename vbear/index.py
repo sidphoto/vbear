@@ -184,7 +184,7 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
             kind="cli",
             description=Sourced.derived(
                 f"直接在終端機執行的 {TOOL_LABEL[tool]}。可使用所有位於其載入範圍且未停用的技能。",
-                "由 SID Console 依工具類型說明"),
+                "由 VBear 依工具類型說明"),
             model=model,
             skill_link_ids=active,
             skill_link_basis="load_scope",
@@ -490,7 +490,7 @@ class Store:
                     if stale_ok:
                         self._live_building = True
                         threading.Thread(target=self._build_live, daemon=True,
-                                         name="sid-console-live").start()
+                                         name="vbear-live").start()
                         return cached
                 if not self._live_building:
                     self._live_building = True

@@ -1,9 +1,9 @@
 """Phase C2 Agent Builder API endpoint tests.
 
-Boots a real `sidconsole.server.Console` on loopback, then drives it via
+Boots a real `vbear.server.Console` on loopback, then drives it via
 urllib like a browser would. Checks the wiring (catalog, list, get,
 create, update, delete, duplicate), the security headers (write needs
-X-SID-Console and same-origin Origin; oversized body is 413), the
+X-VBear and same-origin Origin; oversized body is 413), the
 validation boundary (unknown fields, unknown permission key, unknown
 tool, missing name, missing model), and the fail-closed 503 path when
 the storage layer is in a state that would lose data.
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import os
-os.environ["SID_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
+os.environ["VBEAR_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import shutil
 import socket
 import sys
@@ -32,20 +32,20 @@ from unittest import mock
 # don't overwrite a HOME already pinned by a sibling module loaded earlier
 # by `unittest discover`, or every test across the suite would observe the
 # wrong fake-home.
-if "SID_CONSOLE_HOME" in os.environ:
+if "VBEAR_HOME" in os.environ:
     FAKE_HOME = Path(os.environ["HOME"])
 else:
-    FAKE_HOME = Path(tempfile.mkdtemp(prefix="sidconsole-agent-api-"))
+    FAKE_HOME = Path(tempfile.mkdtemp(prefix="vbear-agent-api-"))
     os.environ["HOME"] = str(FAKE_HOME)
-    os.environ["SID_CONSOLE_HOME"] = str(FAKE_HOME / ".sid-console")
+    os.environ["VBEAR_HOME"] = str(FAKE_HOME / ".vbear")
 os.environ["PATH"] = "/usr/bin:/bin"
 os.environ.pop("HERDR_BIN_PATH", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sidconsole import agent_profiles, server  # noqa: E402
-from sidconsole import runtime as rt_mod  # noqa: E402
-from sidconsole.config import state_dir  # noqa: E402
-from sidconsole.index import Store  # noqa: E402
+from vbear import agent_profiles, server  # noqa: E402
+from vbear import runtime as rt_mod  # noqa: E402
+from vbear.config import state_dir  # noqa: E402
+from vbear.index import Store  # noqa: E402
 
 
 def _free_port():
@@ -96,7 +96,7 @@ def _request(method, port, path, body=None, headers=None):
 
 
 def _write_headers(headers=None):
-    h = {"X-SID-Console": "1"}
+    h = {"X-VBear": "1"}
     if headers:
         h.update(headers)
     return h
@@ -241,13 +241,13 @@ class AgentBuilderAPITests(unittest.TestCase):
     def test_write_with_foreign_origin_is_403(self):
         status, _ = _request("POST", self.port, "/api/agent-profiles",
                               body=_sample(name="X"),
-                              headers={"X-SID-Console": "1",
+                              headers={"X-VBear": "1",
                                         "Origin": "http://evil.example"})
         self.assertEqual(status, 403)
 
     def test_write_with_wrong_host_is_421(self):
         # Send to the real server's port with a spoofed Host header.
-        h = {"Host": "evil.example", "X-SID-Console": "1",
+        h = {"Host": "evil.example", "X-VBear": "1",
              "Content-Type": "application/json"}
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/api/agent-profiles",
