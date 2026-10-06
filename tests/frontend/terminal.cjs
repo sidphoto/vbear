@@ -784,7 +784,32 @@ async function runAllTests() {
     console.log("ok: Category 11 - Degenerate terminal dimensions never reach the server or the pane");
   }
 
-  console.log("\nALL FRONTEND TESTS PASSED (11/11 categories verified)");
+  // Category 12: built-in terminal helpers (stage A review F-02 / F-05)
+  {
+    const { shellPanes, shellLabel, shellTabLabels } = app;
+    const home = "/Users/u";
+    const panes = [
+      { pane_id: "n-000000000001", kind: "shell", cwd: "/Users/u" },
+      { pane_id: "n-000000000002", kind: "shell", cwd: "/Users/u/projects/app" },
+      { pane_id: "n-000000000003", kind: null, cwd: "/Users/u/projects/app" },        // Agent or plain session
+      { pane_id: "n-000000000004", kind: "shell", cwd: "/Users/u/work/app/" },
+      { pane_id: "n-000000000005", kind: "shell", cwd: "/Users/u/x", exited: true },  // ended
+    ];
+    const shells = shellPanes(panes);
+    assert.deepStrictEqual(shells.map((p) => p.pane_id),
+      ["n-000000000001", "n-000000000002", "n-000000000004"], "only live kind=shell panes are terminals");
+    assert.strictEqual(shellLabel(panes[0], home), "~", "the home directory is shown as ~");
+    assert.strictEqual(shellLabel(panes[0], home + "/"), "~");
+    assert.strictEqual(shellLabel(panes[1], home), "app");
+    assert.strictEqual(shellLabel({ cwd: "/" }, home), "/");
+    assert.strictEqual(shellLabel({ cwd: "" }, home), "~");
+    assert.deepStrictEqual(shellTabLabels(shells, home), ["~", "app (1)", "app (2)"],
+      "tabs sharing a folder name are numbered");
+    assert.deepStrictEqual(shellTabLabels([panes[1]], home), ["app"], "a unique name gets no number");
+    console.log("ok: Category 12 - Built-in terminal list, labels and numbered tabs");
+  }
+
+  console.log("\nALL FRONTEND TESTS PASSED (12/12 categories verified)");
 }
 
 runAllTests()

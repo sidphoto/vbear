@@ -16,9 +16,12 @@ Security posture (plan section 9):
 
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
 import os
+import secrets
+import signal
 import sys
 import threading
 import time
@@ -92,6 +95,11 @@ TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS = 80, 24
 class Console:
     def __init__(self, port: int):
         self.port = port
+        # Every /api/ request must carry this token (cookie or Bearer). It is
+        # new for each server start and is shared only through an owner-only
+        # file in the state directory. None turns the check off; only test
+        # code does that, there is no setting for it.
+        self.auth_token: str | None = secrets.token_urlsafe(32)
         self.store = Store()
         self.lock = threading.Lock()
         # The Runtime is the single seam the console has with the terminal
@@ -227,6 +235,48 @@ def make_handler(console: Console):
             origin = self.headers.get("Origin")
             return origin is None or origin in allowed_origins
 
+        def _cookie_name(self) -> str:
+            # Cookies are per host, not per port: two consoles on 127.0.0.1
+            # must not overwrite each other's session.
+            return f"vbear_session_{console.port}"
+
+        def _authed(self) -> bool:
+            want = console.auth_token
+            if want is None:
+                return True
+            got = ""
+            auth = self.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                got = auth[len("Bearer "):].strip()
+            else:
+                for part in self.headers.get("Cookie", "").split(";"):
+                    name, _, value = part.strip().partition("=")
+                    if name == self._cookie_name():
+                        got = value
+                        break
+            return bool(got) and hmac.compare_digest(got.encode(), want.encode())
+
+        def _auth_error(self):
+            return self._json({"error": "需要從 VBear 開啟（執行 python3 -m vbear launch 或打開 VBear App）",
+                               "code": "auth_required"}, 401)
+
+        def _auth_exchange(self, body: dict):
+            """Browser bootstrap: trade the launch token for an HttpOnly cookie."""
+            token = body.get("token")
+            want = console.auth_token
+            if want is None:
+                return self._json({"ok": True})
+            if not (isinstance(token, str) and hmac.compare_digest(token.encode(), want.encode())):
+                return self._error(401, "token 不正確或已過期（主控台重新啟動過），請重新從 VBear 開啟")
+            body_bytes = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.send_header("Set-Cookie", f"{self._cookie_name()}={want}; HttpOnly; SameSite=Strict; Path=/")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body_bytes)
+
         def _read_ok(self) -> bool:
             # Browsers always send Sec-Fetch-Site; its absence means a non-browser
             # local client (curl, the launcher's health check), which is allowed.
@@ -283,6 +333,8 @@ def make_handler(console: Console):
             path = url.path
             if path.startswith("/api/") and not self._read_ok():
                 return self._error(403, "forbidden")
+            if path.startswith("/api/") and not self._authed():
+                return self._auth_error()
             try:
                 if path in STATIC_FILES:
                     return self._static(STATIC_FILES[path])
@@ -373,6 +425,8 @@ def make_handler(console: Console):
                 return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
             if not self._write_ok():
                 return self._error(403, "forbidden")
+            if urlparse(self.path).path != "/api/auth" and not self._authed():
+                return self._auth_error()
             try:
                 length = self._read_content_length()
             except ValueError as exc:
@@ -383,6 +437,8 @@ def make_handler(console: Console):
                 return self._error(413, "請求內容過大")
             path = urlparse(self.path).path
             try:
+                if path == "/api/auth":
+                    return self._auth_exchange(self._body())
                 if path == "/api/rescan":
                     try:
                         data = console.store.rescan()
@@ -701,8 +757,12 @@ def make_handler(console: Console):
             expanded = os.path.expanduser(cwd.strip())
             if not os.path.isabs(expanded):
                 return self._error(400, "資料夾必須是絕對路徑，或以 ~ 開頭")
-            real = Path(os.path.realpath(expanded))
-            if not real.is_dir():
+            try:
+                real = Path(os.path.realpath(expanded))
+                found = real.is_dir()
+            except (OSError, ValueError):  # e.g. a name too long for the file system
+                return self._error(400, "資料夾路徑無效")
+            if not found:
                 return self._error(400, "找不到這個資料夾")
             if not real.is_relative_to(Path.home().resolve()):
                 return self._error(400, "資料夾必須在你的家目錄內")
@@ -1116,10 +1176,14 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     console.store.static()  # load cached index or perform the first scan
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
     url = f"http://127.0.0.1:{port}/"
+    write_access_files(port, console.auth_token)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
-        import webbrowser
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.4, lambda: open_in_browser(port)).start()
+
+    def _stop(signum, frame):  # SIGTERM (the app quitting, kill) cleans up like Ctrl+C
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _stop)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -1129,3 +1193,62 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit
         httpd.server_close()
+        remove_access_files(console.auth_token)
+
+
+# Access token handoff -------------------------------------------------------
+# server.token lets local tools (the launcher, the macOS app) authenticate;
+# open.html lets a browser do it without the token ever appearing in a
+# command line or a URL that leaves this machine's owner-only state directory.
+
+def token_path() -> Path:
+    return cfg.state_dir() / "server.token"
+
+
+def opener_path() -> Path:
+    return cfg.state_dir() / "open.html"
+
+
+def write_access_files(port: int, token: str | None) -> None:
+    if token is None:
+        return
+    cfg.write_private(token_path(), json.dumps({"port": port, "token": token, "pid": os.getpid()}))
+    target = json.dumps(f"http://127.0.0.1:{port}/#auth={token}")
+    cfg.write_private(opener_path(),
+                      "<!doctype html><meta charset=utf-8><title>VBear</title>"
+                      f"<script>location.replace({target})</script>"
+                      "<p>正在開啟 VBear…</p>\n")
+
+
+def read_access_token(port: int) -> str | None:
+    try:
+        data = json.loads(token_path().read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and data.get("port") == port and isinstance(data.get("token"), str):
+        return data["token"]
+    return None
+
+
+def remove_access_files(token: str | None) -> None:
+    """Remove the handoff files if they still belong to this server."""
+    if token is None:
+        return
+    try:
+        if json.loads(token_path().read_text()).get("token") != token:
+            return
+    except (OSError, ValueError, AttributeError):
+        return
+    for p in (token_path(), opener_path()):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def open_in_browser(port: int) -> None:
+    import webbrowser
+    if read_access_token(port) and opener_path().is_file():
+        webbrowser.open(opener_path().as_uri())
+    else:
+        webbrowser.open(f"http://127.0.0.1:{port}/")

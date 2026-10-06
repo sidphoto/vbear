@@ -230,6 +230,7 @@ class ServerTests(unittest.TestCase):
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
+        cls.console.auth_token = None  # auth has its own tests (AuthTests)
         cls.httpd.RequestHandlerClass = make_handler(cls.console)
         cls.base = f"http://127.0.0.1:{port}"
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
@@ -825,6 +826,7 @@ class HardenedServerTests(_HostileBase):  # M2/M3 read path, L2, L3, L4
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
+        cls.console.auth_token = None  # auth has its own tests (AuthTests)
         cls.console.runtime = cls.console.store.runtime = FakeRuntime()
         cls.conf = hostile_conf()
         cls.console.store._static = build_static(cls.conf)
@@ -988,6 +990,7 @@ class SlowRuntimeTests(_HostileBase):  # AGY A1: a hung runtime must not stall t
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
+        cls.console.auth_token = None  # auth has its own tests (AuthTests)
         cls.httpd.RequestHandlerClass = make_handler(cls.console)
         cls.base = f"http://127.0.0.1:{port}"
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
@@ -1392,6 +1395,7 @@ class CorruptConfigBackupTests(_IsolatedState):  # R3, R4
         self.bak.write_bytes(b"older backup")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         console = Console(httpd.server_address[1])
+        console.auth_token = None  # auth has its own tests (AuthTests)
         httpd.RequestHandlerClass = make_handler(console)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{console.port}"
@@ -1467,6 +1471,7 @@ class CorruptConfigScopeTests(_IsolatedState):  # F3, F4
         cfg.config_path().write_text("{broken", encoding="utf-8")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         console = Console(httpd.server_address[1])
+        console.auth_token = None  # auth has its own tests (AuthTests)
         httpd.RequestHandlerClass = make_handler(console)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         self.addCleanup(httpd.server_close)
@@ -1619,6 +1624,7 @@ class TerminalRouteTests(_HostileBase):
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
+        cls.console.auth_token = None  # auth has its own tests (AuthTests)
         cls.console.runtime = NativeRuntime(cls.rt_base, autostart=False)
         cls.console.store.runtime = cls.console.runtime
         cls.conf = hostile_conf()
@@ -2028,6 +2034,7 @@ class BuiltinTerminalTests(_HostileBase):
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
         port = cls.httpd.server_address[1]
         cls.console = Console(port)
+        cls.console.auth_token = None  # auth has its own tests (AuthTests)
         cls.console.runtime = NativeRuntime(cls.rt_base, autostart=False)
         cls.console.store.runtime = cls.console.runtime
         cls.conf = hostile_conf()
@@ -2087,6 +2094,16 @@ class BuiltinTerminalTests(_HostileBase):
             status, _, _ = self.open_terminal({"cwd": cwd})
             self.assertEqual(status, 400, cwd)
 
+    def test_symlink_out_of_home_and_odd_paths_are_refused(self):
+        link = self.dir / "to-tmp"
+        link.symlink_to("/tmp")
+        for cwd in (str(link), str(self.dir / ".." / ".." / ".."), "~root", "~nobody/x",
+                    str(self.dir) + "/" + "a" * 5000, "\u0000", "   "):
+            status, data, _ = self.open_terminal({"cwd": cwd})
+            if cwd.strip() == "":
+                continue  # blank means home, which is allowed
+            self.assertEqual(status, 400, (cwd[:40], data))
+
     def test_requires_the_csrf_header(self):
         status, _, _ = self.req("/api/native/terminals", "POST", body={"cwd": str(self.dir)})
         self.assertEqual(status, 403)
@@ -2119,3 +2136,110 @@ class BuiltinTerminalTests(_HostileBase):
         r = d.rpc("open", base=self.rt_base, argv=["/bin/sh"], cwd=str(self.dir), kind="agent")
         self.assertFalse(r["ok"])
         self.assertEqual(r["error"]["code"], "bad_request")
+
+
+class AuthTests(unittest.TestCase):
+    """Every /api/ request needs the per-launch token (Bearer or the HttpOnly
+    cookie the browser gets from POST /api/auth); static files do not."""
+
+    @classmethod
+    def setUpClass(cls):
+        from http.server import ThreadingHTTPServer
+        from vbear.server import Console, make_handler
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        cls.port = cls.httpd.server_address[1]
+        cls.console = Console(cls.port)  # auth on, as in production
+        cls.token = cls.console.auth_token
+        cls.httpd.RequestHandlerClass = make_handler(cls.console)
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def call(self, path, method="GET", headers=None, body=None):
+        r = urllib.request.Request(self.base + path, method=method, headers=headers or {},
+                                   data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(r) as resp:
+                return resp.status, json.loads(resp.read() or b"null") if path.startswith("/api/") else None, resp.headers
+        except urllib.error.HTTPError as e:
+            try:
+                data = json.loads(e.read() or b"null")
+            except ValueError:
+                data = None
+            e.close()
+            return e.code, data, e.headers
+
+    def bearer(self, token=None):
+        return {"Authorization": f"Bearer {token or self.token}", "X-VBear": "1"}
+
+    def test_token_is_long_and_random_per_console(self):
+        from vbear.server import Console
+        self.assertGreaterEqual(len(self.token), 40)
+        self.assertNotEqual(self.token, Console(self.port).auth_token)
+
+    def test_api_requires_the_token(self):
+        status, data, _ = self.call("/api/config")
+        self.assertEqual(status, 401)
+        self.assertEqual(data["code"], "auth_required")
+        self.assertEqual(self.call("/api/config", headers=self.bearer("wrong-" + self.token))[0], 401)
+        self.assertEqual(self.call("/api/config", headers=self.bearer())[0], 200)
+
+    def test_writes_require_the_token_too(self):
+        status, data, _ = self.call("/api/native/terminals", "POST", headers={"X-VBear": "1"}, body={"cwd": "~"})
+        self.assertEqual(status, 401)
+        self.assertEqual(data["code"], "auth_required")
+        status, _, _ = self.call("/api/native/sessions", "POST", headers={"X-VBear": "1"},
+                                 body={"argv": ["/bin/echo", "x"]})
+        self.assertEqual(status, 401)
+
+    def test_stream_requires_the_token(self):
+        status, data, _ = self.call("/api/term/n-000000000000/stream", headers={"X-VBear": "1"})
+        self.assertEqual(status, 401)
+
+    def test_static_page_needs_no_token(self):
+        for path in ("/", "/app.js", "/style.css"):
+            self.assertEqual(self.call(path)[0], 200, path)
+
+    def test_exchange_sets_an_httponly_strict_cookie_for_this_port_only(self):
+        status, _, _ = self.call("/api/auth", "POST", headers={"X-VBear": "1"}, body={"token": "nope"})
+        self.assertEqual(status, 401)
+        status, data, headers = self.call("/api/auth", "POST", headers={"X-VBear": "1"},
+                                          body={"token": self.token})
+        self.assertEqual(status, 200)
+        cookie = headers.get("Set-Cookie")
+        self.assertIn(f"vbear_session_{self.port}={self.token}", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        ok = {"Cookie": f"vbear_session_{self.port}={self.token}", "X-VBear": "1"}
+        self.assertEqual(self.call("/api/config", headers=ok)[0], 200)
+        other_port = {"Cookie": f"vbear_session_{self.port + 1}={self.token}", "X-VBear": "1"}
+        self.assertEqual(self.call("/api/config", headers=other_port)[0], 401)
+
+    def test_exchange_still_needs_the_csrf_header_and_same_origin(self):
+        self.assertEqual(self.call("/api/auth", "POST", body={"token": self.token})[0], 403)
+        hostile = {"X-VBear": "1", "Origin": "http://evil.example"}
+        self.assertEqual(self.call("/api/auth", "POST", headers=hostile, body={"token": self.token})[0], 403)
+
+    def test_access_files_are_private_and_removed_only_by_their_owner(self):
+        from vbear import server
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"VBEAR_HOME": d}):
+            server.write_access_files(self.port, self.token)
+            for p in (server.token_path(), server.opener_path()):
+                self.assertEqual(p.stat().st_mode & 0o777, 0o600, p)
+            self.assertEqual(server.read_access_token(self.port), self.token)
+            self.assertIsNone(server.read_access_token(self.port + 1))
+            self.assertIn(f"#auth={self.token}", server.opener_path().read_text())
+            server.remove_access_files("someone-else")   # a newer server's files stay
+            self.assertTrue(server.token_path().exists())
+            server.remove_access_files(self.token)
+            self.assertFalse(server.token_path().exists())
+            self.assertFalse(server.opener_path().exists())
+
+    def test_launcher_recognises_vbear_with_or_without_the_token(self):
+        from vbear.__main__ import is_vbear
+        self.assertTrue(is_vbear(self.base + "/", token=self.token))
+        self.assertTrue(is_vbear(self.base + "/"))  # 401 auth_required from a VBear still identifies it

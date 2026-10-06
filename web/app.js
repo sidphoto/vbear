@@ -629,6 +629,7 @@ const api = {
     // The custom header lets the server tell its own page from a cross-site request.
     const res = await fetch(path, { headers: { Accept: "application/json", "X-VBear": "1" } });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (res.status === 401 && data.code === "auth_required") authLost();
     if (!res.ok) {
       const error = new Error(data.error || `HTTP ${res.status}`);
       error.status = res.status;
@@ -643,6 +644,7 @@ const api = {
       body: JSON.stringify(body || {}),
     });
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (res.status === 401 && data.code === "auth_required") authLost();
     if (!res.ok) {
       const error = new Error(data.error || `HTTP ${res.status}`);
       error.status = res.status;
@@ -651,6 +653,25 @@ const api = {
     return data;
   },
 };
+
+// The session cookie stopped working (VBear restarted, or the page was
+// opened without going through VBear): stop refreshing and say how to get in.
+let authLostShown = false;
+function authLost() {
+  if (authLostShown || typeof document === "undefined") return;
+  authLostShown = true;
+  clearInterval(liveTimer);
+  liveTick = null;
+  cleanupActiveTerminal();
+  setKids($main(), authRequiredView());
+}
+
+function authRequiredView() {
+  return el("div", { class: "section" },
+    el("h1", null, "請從 VBear 開啟"),
+    notice("warn", "VBear 只接受從它自己打開的視窗。這個分頁沒有通行證，可能是直接輸入了網址，或 VBear 重新啟動過。"),
+    el("p", null, "打開 VBear App，或在終端機執行 ", el("code", null, "python3 -m vbear launch"), "，會自動開一個可以使用的分頁。"));
+}
 
 let toastTimer;
 function toast(msg) {
@@ -961,7 +982,8 @@ function closeSessionButton(paneId, afterHash = "#/team") {
         toast(!m ? "Session 已關閉"
           : m.cleaned ? "Session 已關閉，暫存區與設定已清除"
           : `Session 已關閉；暫存區保留待檢查：${m.retained_reason || "原因未知"}`);
-        if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
+        if (location.hash === afterHash) route();  // no hashchange: re-render in place
+        else if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
       } catch (e) {
         if (e.status === 404) {
           toast("Session 已不存在或已結束");
@@ -1724,14 +1746,28 @@ function cleanupActiveView() {
 // managed Agent launches, and the UI says so wherever they appear.
 const SHELL_NOTE = "一般終端機：以你的帳號直接執行，不受沙盒限制（跟受管的 Agent 不同）。";
 
-function shellPanes() {
-  return ((D.live && D.live.panes) || []).filter((p) => p.kind === "shell" && !p.exited);
+function shellPanes(panes = (D.live && D.live.panes) || []) {
+  return panes.filter((p) => p.kind === "shell" && !p.exited);
 }
 
-function shellLabel(p) {
-  const cwd = (p && p.cwd) || "";
-  const base = cwd.split("/").filter(Boolean).pop() || "~";
-  return base;
+function shellLabel(p, home = D.live && D.live.home) {
+  const trim = (x) => (x.length > 1 ? x.replace(/\/+$/, "") : x);
+  const cwd = trim((p && p.cwd) || "");
+  if (!cwd || (home && cwd === trim(home))) return "~";
+  return cwd.split("/").filter(Boolean).pop() || "/";
+}
+
+// Tab names: the folder name, numbered when several terminals share it.
+function shellTabLabels(panes, home) {
+  const seen = new Map();
+  const total = new Map();
+  for (const p of panes) { const l = shellLabel(p, home); total.set(l, (total.get(l) || 0) + 1); }
+  return panes.map((p) => {
+    const l = shellLabel(p, home);
+    const n = (seen.get(l) || 0) + 1;
+    seen.set(l, n);
+    return total.get(l) > 1 ? `${l} (${n})` : l;
+  });
 }
 
 async function openShellTerminal(dir) {
@@ -2182,8 +2218,9 @@ async function viewTerminal(paneId) {
 
   const shellTabs = isShell
     ? el("nav", { class: "term-tabs", "aria-label": "開著的終端機" },
-        shellPanes().map((p) => el("a", { class: "term-tab", href: `#/term/${encodeURIComponent(p.pane_id)}`,
-          title: p.cwd || "", "aria-current": p.pane_id === paneId ? "page" : null }, shellLabel(p))),
+        ((tabs) => tabs.map((p, i) => el("a", { class: "term-tab", href: `#/term/${encodeURIComponent(p.pane_id)}`,
+          title: p.cwd || "", "aria-current": p.pane_id === paneId ? "page" : null },
+          shellTabLabels(tabs, D.live.home)[i])))(shellPanes()),
         el("a", { class: "term-tab term-tab-new", href: "#/terminals", title: "開新的終端機" }, "＋"))
     : null;
 
@@ -4177,7 +4214,7 @@ async function route() {
     else if (top === "terminals") await viewTerminals();
     else setKids($main(), emptyState("找不到這個頁面", null));
   } catch (e) {
-    setKids($main(), notice("bad", "載入失敗：" + e.message));
+    setKids($main(), e.status === 401 ? authRequiredView() : notice("bad", "載入失敗：" + e.message));
   }
   // Live pages refresh their data quietly; they re-render only when nothing
   // is focused inside main, so typing and scrolling are never interrupted.
@@ -4198,6 +4235,15 @@ async function route() {
       const after = JSON.stringify(D.live.sessions.map((s) => [s.terminal_id, s.status, s.skills_used.length]));
       const busy = $main().contains(document.activeElement) && document.activeElement !== $main();
       if (before !== after && !busy) { const y = scrollY; await route(); scrollTo(0, y); }
+    };
+  }
+  if (top === "terminals") {
+    liveTick = async () => {
+      const ids = () => JSON.stringify(shellPanes().map((p) => p.pane_id));
+      const before = ids();
+      await loadLive();
+      const busy = $main().contains(document.activeElement) && document.activeElement !== $main();
+      if (before !== ids() && !busy) { const y = scrollY; await route(); scrollTo(0, y); }
     };
   }
   if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
@@ -4223,7 +4269,19 @@ window.addEventListener("hashchange", () => {
   scrollTo(0, 0); route(); document.getElementById("main").focus({ preventScroll: true });
 });
 if (location.hash === "#main") history.replaceState(null, "", location.pathname + location.search);
-route();
+
+// Opening VBear (launcher, app) lands here with #auth=<token> once; trade it
+// for the HttpOnly session cookie and drop it from the address bar at once.
+async function bootstrap() {
+  const m = /^#auth=([A-Za-z0-9_-]{20,200})$/.exec(location.hash || "");
+  if (m) {
+    history.replaceState(null, "", location.pathname + location.search + "#/");
+    try { await api.post("/api/auth", { token: m[1] }); }
+    catch (_) { /* the first API call then shows how to open VBear */ }
+  }
+  route();
+}
+bootstrap();
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -4245,6 +4303,9 @@ if (typeof module !== "undefined" && module.exports) {
     TASK_STATUS_LABELS,
     viewWorkbench,
     viewTerminal,
+    shellPanes,
+    shellLabel,
+    shellTabLabels,
     cleanupActiveView,
     cleanupActiveTerminal,
     // Exported so the modal registry's two subtle invariants can be tested

@@ -648,6 +648,7 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
     attention.sort(key=lambda s: order.get(s["status"], 9))
 
     return {
+        "home": str(HOME()),
         "generated_at": time.time(),
         "runtime": {"available": snap["available"], "version": snap["version"],
                     "binary": snap["binary"], "problems": snap["problems"]},

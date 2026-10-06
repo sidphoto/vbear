@@ -23,12 +23,23 @@ For how to report a vulnerability, see [SECURITY.md](../SECURITY.md).
 `style-src` allows `'unsafe-inline'`, because xterm.js sets inline styles for 24-bit colour. No
 user-controlled HTML or CSS reaches the page.
 
-### Not protected: other local programs
+### Other local programs: the access token
 
-The local API has **no authentication.** The header and Origin checks stop browsers, but they do not stop
-other programs. Any program on the machine, under any user account, can connect to `127.0.0.1:7788`.
-Such a program can open a terminal running any command as you (`POST /api/native/sessions`) and type
-into existing terminals. Do not run VBear on a machine shared with people or programs you do not trust.
+Since v0.2, every `/api/` request needs a **random token that is new for each server start**
+(`secrets.token_urlsafe(32)`). Requests without it get `401`. Static files (`/`, `app.js`, CSS) need no token
+and contain no data.
+
+- The token is written only to `~/.vbear/server.token` (mode `0600`, inside the `0700` state directory),
+  and to `~/.vbear/open.html`, the page the launcher opens. Both are removed when the server stops.
+- A browser exchanges it once (`POST /api/auth`) for an `HttpOnly; SameSite=Strict` cookie named after the
+  port. The token reaches the browser only as a URL fragment written by that local file, and the page removes
+  it from the address bar at once. It never appears in a command line.
+- Local tools send `Authorization: Bearer <token>`.
+
+The result is that **other user accounts on the Mac can no longer drive VBear**, because they cannot read your
+state directory. **Programs running as your own user still can,** because they can read the token file, just as
+they can read anything else you own. Sandboxed Agent sessions can read the file too (reads are not isolated),
+but their network access to `127.0.0.1` is refused by the sandbox (see the table below).
 
 The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connections from your own uid.
 

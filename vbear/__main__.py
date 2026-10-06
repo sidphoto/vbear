@@ -83,22 +83,37 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def is_vbear(url: str, timeout: float = 1.0) -> bool:
+def is_vbear(url: str, timeout: float = 1.0, token: str | None = None) -> bool:
     """Whether `url` is served by a VBear, not merely something on the port.
 
     Checks the Server header this console sends and the shape of its config
     reply. This tells a stray service apart from the console; it is not
     authentication, and a local program could imitate both.
     """
+    import urllib.error
     import urllib.request
 
+    req = urllib.request.Request(url.rstrip("/") + "/api/config")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(url.rstrip("/") + "/api/config", timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
                 return False
             if not (resp.headers.get("Server") or "").startswith("VBear/"):
                 return False
             payload = json.loads(resp.read(256 * 1024).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # A VBear that does not accept our token (another instance, or a token
+        # file from an earlier run) still identifies itself.
+        try:
+            body = json.loads(exc.read(64 * 1024).decode("utf-8")) if exc.code == 401 else None
+        except (OSError, ValueError, UnicodeDecodeError):
+            body = None
+        finally:
+            exc.close()
+        return ((exc.headers.get("Server") or "").startswith("VBear/")
+                and isinstance(body, dict) and body.get("code") == "auth_required")
     except (OSError, ValueError, UnicodeDecodeError):
         return False
     return (isinstance(payload, dict)
@@ -110,15 +125,16 @@ def launch(port: int | None) -> int:
     """Start the console in the background if needed and open the browser; returns at once."""
     import subprocess
     import time
-    import webbrowser
     from pathlib import Path
 
     conf = cfg.load()
     port = int(port or conf.get("port") or cfg.DEFAULT_PORT)
     url = f"http://127.0.0.1:{port}/"
 
+    from .server import open_in_browser, read_access_token
+
     def alive() -> bool:
-        return is_vbear(url)
+        return is_vbear(url, token=read_access_token(port))
 
     if not alive():
         log = cfg.state_dir() / "server.log"
@@ -134,7 +150,7 @@ def launch(port: int | None) -> int:
         else:
             print(f"主控台未能啟動，請查看 {log}", file=sys.stderr)
             return 1
-    webbrowser.open(url)
+    open_in_browser(port)
     print(url)
     return 0
 

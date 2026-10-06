@@ -68,6 +68,7 @@ def _fresh_console():
     c.port = port
     c.store = Store()
     c.lock = threading.Lock()
+    c.auth_token = None  # auth has its own tests (AuthTests)
     c.runtime = rt_mod.get_runtime()  # native; never autostarts a daemon
     handler = server.make_handler(c)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)

@@ -322,6 +322,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
 
         cls.port = 18889
         cls.console = server.Console(cls.port)
+        cls.console.auth_token = None  # auth has its own tests (AuthTests)
         cls.handler = server.make_handler(cls.console)
         cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", cls.port), cls.handler)
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)

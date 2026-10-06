@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Access token on the local API**: each start creates a random token; `/api/` needs it as an HttpOnly cookie
+  or a Bearer header. Other user accounts on the Mac can no longer drive VBear. Open VBear with
+  `python3 -m vbear launch`, which signs the browser in through a private local file.
 - **Built-in terminal**: a 「終端機」 page opens your login shell in a folder under your home directory,
   with tabs and direct typing. Labelled as an ordinary, unsandboxed terminal.
 

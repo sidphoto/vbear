@@ -90,10 +90,9 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
 - Only one launch shape exists (Bash only, Edit and Write disabled, no network). Read-only,
   network-enabled and Codex launches are planned, not built.
 - The console cannot tell whether an agent is working or waiting for you, so it shows *unknown*.
-- **There is no authentication on the local API.** Web pages from other sites are blocked, by checks on the
-  Host header, the Origin header, a custom request header and Fetch Metadata. A program running on the same Mac,
-  under any user account, can still call `127.0.0.1:7788` and type into your terminals. Use it only on a machine
-  you do not share. See the [security model](docs/SECURITY-MODEL.md).
+- **Programs running as your own user can drive VBear.** Other websites and other user accounts are kept out:
+  every API call needs a per-launch token stored in a file only you can read. A program running under your
+  account can read that file. See the [security model](docs/SECURITY-MODEL.md).
 
 ## Developing
 

@@ -105,6 +105,7 @@ class ServerCase(unittest.TestCase):
             s.bind(("127.0.0.1", 0))
             self.port = s.getsockname()[1]
         self.console = server.Console(self.port)
+        self.console.auth_token = None  # auth has its own tests (AuthTests)
         if isinstance(self.console.runtime, rt.NativeRuntime):
             self.console.runtime.autostart = False  # tests run their own in-thread daemon
         # make_handler reads console.port for the Host allow-list, so build it after.

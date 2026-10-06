@@ -15,6 +15,9 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
 ## Console server — `vbear/server.py`
 
 - A `ThreadingHTTPServer` bound to `127.0.0.1`. It serves `web/` and a JSON API under `/api/`.
+- **Access token.** Each start creates a random token. `/api/` requires it as a cookie (from `POST /api/auth`)
+  or a `Bearer` header; it is handed over through `~/.vbear/server.token` and `~/.vbear/open.html` (both `0600`),
+  which `vbear launch` and the app use.
 - **Index.** The `vbear/scan/` adapters read skills, plugins and agent roles from the Claude Code,
   Codex and shared skill directories. `vbear/index.py` combines them into a static index
   (`~/.vbear/index.json`) and a live view of running sessions from the runtime.
