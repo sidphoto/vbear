@@ -35,14 +35,14 @@ BYPASS_PTY = ("使用者在進階終端可自行改變 CLI 行為；例如在 Cl
               "不經沙盒（S0 驗收實測可寫入家目錄）。此標籤只約束 Agent，不是不可繞過的邊界")
 BYPASS_CODEX_PTY = ("使用者在 Codex Terminal 可輸入 ! 直接執行使用者 shell，繞過 Codex sandbox；此標籤只描述 Agent 執行層，"
                     "不代表 OS 對使用者 shell 的隔離。")
-EVIDENCE_S2 = ".local/spikes/r3/round9/s2-record.md"
-EVIDENCE_T01 = ".local/spikes/r3/round9/controlled-temp-final-record.md"
+EVIDENCE_S2 = "docs/evidence/claude-code-2.1.286.md#writes"
+EVIDENCE_T01 = "docs/evidence/claude-code-2.1.286.md#lifecycle"
 # Evidence for the empty network allowlist with this exact settings shape
 # (S0 acceptance, Claude Code 2.1.286): an HTTPS request was refused by the
 # sandbox proxy and a direct TCP connect failed with EPERM, while the same
 # request succeeded outside the sandbox. Set to None to report Network as
 # unknown again if the settings shape or the CLI baseline changes.
-NETWORK_EVIDENCE: str | None = ".local/spikes/r3/round9/controlled-temp-evidence/s0-summary.json"
+NETWORK_EVIDENCE: str | None = "docs/evidence/claude-code-2.1.286.md#network"
 CODEX_ACCEPTANCE_EVIDENCE: str | None = None
 CODEX_EVIDENCE_CHECKS = frozenset({
     "readonly_workspace_denied", "readonly_tmp_denied", "workspace_write_allowed",

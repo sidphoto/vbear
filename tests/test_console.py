@@ -1085,7 +1085,7 @@ class SlowRuntimeTests(_HostileBase):  # AGY A1: a hung runtime must not stall t
         self.assertEqual(self.rounds(), 1)
 
 
-# --- review fixes R1-R4 (.local/reviews/20260919-180318-summary.md) ----------
+# --- review fixes R1-R4 ------------------------------------------------------
 #
 # Each test gets its own state directory, so the index and config written here
 # never meet the ones the tests above rely on. Races are forced with Events,

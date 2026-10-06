@@ -31,7 +31,7 @@ body:
     id: env
     attributes:
       label: macOS / Python / agent CLI versions
-      placeholder: macOS 26.1, Python 3.12.4, Claude Code 2.1.286
+      placeholder: macOS 26.1, Python 3.13.5, Claude Code 2.1.286
   - type: textarea
     id: logs
     attributes:

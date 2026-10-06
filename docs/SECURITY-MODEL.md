@@ -46,9 +46,9 @@ These are the claims the launch preview makes, and their status:
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | The maintainer's boundary tests against the pinned version (not yet published as a reusable script); the shared `/tmp/claude-<uid>` is explicitly denied |
-| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | External connection refused with `EPERM` |
-| Bash cannot reach SID Console itself | Enforced by the same sandbox | `127.0.0.1:<console port>` and `runtime.sock` both refused with `EPERM` (Claude Code 2.1.291 in headless mode, 2026-10-06) |
+| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | [Evidence for 2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
+| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | [Evidence for 2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
+| Bash cannot reach SID Console itself | Enforced by the same sandbox | Both refused with `EPERM`. Tested on Claude Code 2.1.291 in headless mode on 2026-10-06; **not yet re-run on the pinned 2.1.286** ([details](evidence/claude-code-2.1.286.md#loopback)) |
 | Edit and Write tools are unavailable | `--tools Bash --disallowedTools Edit,Write`; those tools would not be covered by the Bash sandbox | Launch argv is built server-side from trusted values only |
 | No MCP servers or project hooks from the work directory | `--safe-mode --strict-mcp-config` | |
 | Commit is possible | **Not prevented.** `.git` is inside the writable work directory; you must acknowledge this before launch | |
