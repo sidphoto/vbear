@@ -126,7 +126,7 @@ ENVELOPE = frozenset({"v", "id", "op"})
 RPC_OPS: dict[str, frozenset] = {
     "hello": frozenset(),
     "shutdown": frozenset({"force"}),
-    "open": frozenset({"argv", "cwd", "cols", "rows", "env"}),
+    "open": frozenset({"argv", "cwd", "cols", "rows", "env", "kind"}),
     "open_managed": frozenset({"launch_id", "cols", "rows"}),
     "list": frozenset(),
     "close": frozenset({"session_id"}),
@@ -298,6 +298,7 @@ class Session:
         # Managed (R3 S2) sessions only; all stay inert for plain sessions.
         self.launch_id: str | None = None
         self.engine: str | None = None      # "claude" / "codex" for a managed session
+        self.kind: str | None = None        # "shell" for a user-opened login shell (label only)
         self.tracker: proctrack.DescendantTracker | None = None
         self.extra_groups: list[int] = []   # verified descendant groups, from the last look
         self.extra_alive = False            # an observed descendant outside our group still exists
@@ -361,7 +362,7 @@ class Session:
                 "closing": self.phase is not None, "output_bytes": self.total,
                 "attachments": len(self.attachments),
                 "control_attachment": self.control.aid if self.control else None,
-                "managed": self.launch_id, "engine": self.engine}
+                "managed": self.launch_id, "engine": self.engine, "kind": self.kind}
 
 
 class Attachment:
@@ -1197,6 +1198,9 @@ class Daemon:
         cols, rows = req.get("cols", 80), req.get("rows", 24)
         if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
             return _err(rid, "bad_request", "cols/rows 必須是 1–1000 的整數")
+        kind = req.get("kind")
+        if kind not in (None, "shell"):
+            return _err(rid, "bad_request", "kind 只能是 shell")
         env_in = req.get("env", {})
         if not isinstance(env_in, dict) or any(
                 k not in ENV_ALLOW or not isinstance(v, str) or "\0" in v
@@ -1211,6 +1215,7 @@ class Daemon:
             sess = self._spawn(argv, cwd, cols, rows, env)
         except OSError as exc:
             return _err(rid, "internal", f"無法啟動：{exc}")
+        sess.kind = kind
         return _ok(rid, sess.info())
 
     def _op_open_managed(self, rid: str, req: dict) -> dict:

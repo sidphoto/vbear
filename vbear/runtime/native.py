@@ -409,7 +409,7 @@ class NativeRuntime(RuntimeBase):
         later through the normal stream). Returns the daemon's session info."""
         if not isinstance(spec, dict):
             raise NativeRuntimeError("spec 必須是物件")
-        fields = {k: spec[k] for k in ("argv", "cwd", "cols", "rows", "env") if k in spec}
+        fields = {k: spec[k] for k in ("argv", "cwd", "cols", "rows", "env", "kind") if k in spec}
         try:
             r = self._rpc("open", timeout=5.0, **fields)
         except (OSError, ValueError) as exc:
@@ -683,7 +683,7 @@ class NativeRuntime(RuntimeBase):
                 "terminal_title_stripped": Path(argv[0]).name if argv else "",
                 "agent": engine, "agent_status": "exited" if s.get("exited") else "unknown",
                 "exited": bool(s.get("exited")), "exit_code": s.get("exit_code"),
-                "cols": s.get("cols"), "rows": s.get("rows")})
+                "cols": s.get("cols"), "rows": s.get("rows"), "kind": s.get("kind")})
         return snap
 
     def snapshot(self) -> dict:

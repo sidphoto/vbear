@@ -34,6 +34,11 @@ The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connec
 
 ## Terminals
 
+- **Built-in terminals** (`POST /api/native/terminals`) run your login shell (`/etc/shells`-listed
+  account shell, else `/bin/zsh`) with `-l` in a folder under your home directory. The server picks the
+  command; the request accepts only `cwd`, `cols` and `rows`. They are **not sandboxed**: they are
+  exactly as powerful as Terminal.app, and the UI labels them so. They take input control as soon as
+  they connect, without the takeover dialog Agent terminals use.
 - Opening a terminal in the browser only **observes** it. Typing requires an explicit takeover, and only
   one tab holds control at a time.
 - Output stays in memory and is never written to disk by VBear. On connect, only the most recent

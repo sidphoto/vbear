@@ -2007,3 +2007,115 @@ def tearDownModule():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuiltinTerminalTests(_HostileBase):
+    """POST /api/native/terminals: the user's login shell in a folder under HOME,
+    with the command chosen by the server, never by the caller."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from http.server import ThreadingHTTPServer
+        from vbear.runtime import daemon as d
+        from vbear.runtime.native import NativeRuntime
+        from vbear.server import Console, make_handler
+        cls.rt_base = Path(tempfile.mkdtemp(prefix="vbt-", dir="/tmp"))
+        cls.dm = d.Daemon(cls.rt_base, log=lambda m: None)
+        cls.dm.start()
+        cls.dthread = threading.Thread(target=cls.dm.serve_forever, daemon=True)
+        cls.dthread.start()
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        port = cls.httpd.server_address[1]
+        cls.console = Console(port)
+        cls.console.runtime = NativeRuntime(cls.rt_base, autostart=False)
+        cls.console.store.runtime = cls.console.runtime
+        cls.conf = hostile_conf()
+        cls.console.store.conf = cls.conf
+        cls.console.store._static = build_static(cls.conf)
+        cls.httpd.RequestHandlerClass = make_handler(cls.console)
+        cls.base = f"http://127.0.0.1:{port}"
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    tearDownClass = classmethod(TerminalRouteTests.tearDownClass.__func__)
+    req = ServerTests.req
+    H = {"X-VBear": "1"}
+    open_stream = TerminalRouteTests.open_stream
+    read_sse_events = TerminalRouteTests.read_sse_events
+
+    def setUp(self):
+        self.console.store.conf = json.loads(json.dumps(self.conf))
+        self.console.store._live = None
+        self.dir = Path(tempfile.mkdtemp(prefix="vbear-term-", dir=Path.home()))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def tearDown(self):
+        self.console.runtime.close_all()
+        for s in (self.console.runtime._rpc("list").get("result") or {}).get("sessions", []):
+            if s.get("kind") == "shell":
+                self.console.runtime.close_session(s["session_id"])
+
+    def open_terminal(self, body):
+        return self.req("/api/native/terminals", "POST", headers=self.H, body=body)
+
+    def test_opens_the_login_shell_in_the_folder_and_lists_it_as_shell(self):
+        from vbear.server import login_shell
+        status, data, _ = self.open_terminal({"cwd": str(self.dir)})
+        self.assertEqual(status, 200, data)
+        sess = data["session"]
+        self.assertEqual(sess["argv"], [login_shell(), "-l"])
+        self.assertEqual(sess["cwd"], str(self.dir.resolve()))
+        self.assertEqual(sess["kind"], "shell")
+        panes = self.console.store.live(force=True)["panes"]
+        [pane] = [p for p in panes if p["pane_id"] == sess["session_id"]]
+        self.assertEqual(pane["kind"], "shell")
+        self.assertFalse(pane["exited"])
+
+    def test_tilde_means_home(self):
+        status, data, _ = self.open_terminal({"cwd": "~"})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["session"]["cwd"], str(Path.home().resolve()))
+
+    def test_caller_cannot_choose_the_command_or_environment(self):
+        for extra in ({"argv": ["/bin/sh"]}, {"env": {"PATH": "/x"}}, {"kind": "agent"}):
+            status, data, _ = self.open_terminal({"cwd": str(self.dir), **extra})
+            self.assertEqual(status, 400, extra)
+
+    def test_folder_must_exist_under_home(self):
+        for cwd in ("/tmp", "/", str(self.dir / "missing"), "relative/path",
+                    "file://" + str(self.dir), str(Path.home().parent)):
+            status, _, _ = self.open_terminal({"cwd": cwd})
+            self.assertEqual(status, 400, cwd)
+
+    def test_requires_the_csrf_header(self):
+        status, _, _ = self.req("/api/native/terminals", "POST", body={"cwd": str(self.dir)})
+        self.assertEqual(status, 403)
+
+    def test_the_shell_runs_commands_typed_after_takeover(self):
+        status, data, _ = self.open_terminal({"cwd": str(self.dir)})
+        self.assertEqual(status, 200, data)
+        sid = data["session"]["session_id"]
+        conn, resp = self.open_stream(pane=sid)
+        try:
+            self.assertEqual(resp.status, 200)
+            status, ctl, _ = self.req(f"/api/term/{sid}/control", "POST", headers=self.H,
+                                      body={"action": "takeover", "cols": 100, "rows": 30})
+            self.assertEqual(status, 200, ctl)
+            status, _, _ = self.req(f"/api/term/{sid}/input", "POST", headers=self.H,
+                                    body={"text": "echo VBEAR_$((40+2))\r"})
+            self.assertEqual(status, 200)
+            seen = b""
+            deadline = time.time() + 10
+            while b"VBEAR_42" not in seen and time.time() < deadline:
+                for ev in self.read_sse_events(resp, 1, timeout=2):
+                    if ev.get("type") == "terminal.frame":
+                        seen += base64.b64decode(ev.get("bytes", ""))
+            self.assertIn(b"VBEAR_42", seen)  # the shell expanded it, not an echo of the input
+        finally:
+            conn.close()
+
+    def test_daemon_accepts_only_the_shell_label(self):
+        from vbear.runtime import daemon as d
+        r = d.rpc("open", base=self.rt_base, argv=["/bin/sh"], cwd=str(self.dir), kind="agent")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"]["code"], "bad_request")

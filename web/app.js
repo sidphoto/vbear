@@ -948,7 +948,7 @@ function confirmInPage(title, message, confirmLabel) {
     cancelBtn.focus();
   });
 }
-function closeSessionButton(paneId) {
+function closeSessionButton(paneId, afterHash = "#/team") {
   if (!NATIVE_SESSION_RE.test(paneId || "")) return null;
   const btn = el("button", { class: "btn small", type: "button",
     title: "結束這個 Terminal 裡的程式並關閉 session",
@@ -961,11 +961,11 @@ function closeSessionButton(paneId) {
         toast(!m ? "Session 已關閉"
           : m.cleaned ? "Session 已關閉，暫存區與設定已清除"
           : `Session 已關閉；暫存區保留待檢查：${m.retained_reason || "原因未知"}`);
-        if (!location.hash.startsWith("#/workbench")) location.hash = "#/team";
+        if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
       } catch (e) {
         if (e.status === 404) {
           toast("Session 已不存在或已結束");
-          if (!location.hash.startsWith("#/workbench")) location.hash = "#/team";
+          if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
           return;
         }
         toast("關閉失敗：" + e.message);
@@ -1719,6 +1719,66 @@ function cleanupActiveView() {
   }
 }
 
+// Built-in terminals: the user's own login shell, opened from VBear. They are
+// ordinary terminals under the user's account (no sandbox), unlike Profile-
+// managed Agent launches, and the UI says so wherever they appear.
+const SHELL_NOTE = "一般終端機：以你的帳號直接執行，不受沙盒限制（跟受管的 Agent 不同）。";
+
+function shellPanes() {
+  return ((D.live && D.live.panes) || []).filter((p) => p.kind === "shell" && !p.exited);
+}
+
+function shellLabel(p) {
+  const cwd = (p && p.cwd) || "";
+  const base = cwd.split("/").filter(Boolean).pop() || "~";
+  return base;
+}
+
+async function openShellTerminal(dir) {
+  const cwd = (dir || "").trim() || "~";
+  const r = await api.post("/api/native/terminals", { cwd });
+  store.set("terminal.lastDir", cwd);
+  location.hash = `#/term/${encodeURIComponent(r.session.session_id)}`;
+}
+
+function newTerminalForm() {
+  const input = el("input", { type: "text", class: "input mono", value: store.get("terminal.lastDir", "~"),
+    "aria-label": "資料夾", placeholder: "~/projects/app", spellcheck: "false", autocomplete: "off" });
+  const btn = el("button", { class: "btn primary", type: "submit" }, "開啟終端機");
+  const form = el("form", { class: "row new-term-form", on: { submit: async (ev) => {
+    ev.preventDefault();
+    btn.disabled = true;
+    try { await openShellTerminal(input.value); }
+    catch (e) { toast("無法開啟終端機：" + e.message); btn.disabled = false; }
+  } } }, el("label", { class: "small" }, "資料夾"), input, btn);
+  return form;
+}
+
+async function viewTerminals() {
+  const token = seq;
+  await loadLive();
+  const main = claim(token);
+  if (token !== seq) return;
+  const panes = shellPanes();
+  setKids(main,
+    el("h1", null, "終端機"),
+    el("p", { class: "lede" }, "在指定資料夾開啟你的登入 shell，直接打字使用。關掉這個頁面或主控台，終端機會繼續執行，回來就能接著用。"),
+    runtimeNotice(),
+    notice("info", SHELL_NOTE),
+    el("section", { class: "section" },
+      sectionHead("開新的終端機", "資料夾必須在你的家目錄內"),
+      newTerminalForm()),
+    el("section", { class: "section" },
+      sectionHead("開著的終端機", `${panes.length} 個`),
+      panes.length
+        ? el("ul", { class: "term-list" }, panes.map((p) => el("li", { class: "row" },
+            el("a", { class: "btn small primary", href: `#/term/${encodeURIComponent(p.pane_id)}` }, "開啟"),
+            el("b", null, shellLabel(p)),
+            el("span", { class: "small muted mono" }, p.cwd || ""),
+            closeSessionButton(p.pane_id, "#/terminals"))))
+        : emptyState("還沒有開著的終端機", "在上方選一個資料夾，按「開啟終端機」。")));
+}
+
 async function viewTerminal(paneId) {
   const token = seq;
   cleanupActiveTerminal();
@@ -1727,7 +1787,13 @@ async function viewTerminal(paneId) {
   if (token !== seq) return;
 
   const session = (D.live.sessions || []).find((s) => s.pane_id === paneId);
-  const roleName = session ? (session.role_label || session.agent || paneId) : paneId;
+  const pane = (D.live.panes || []).find((p) => p.pane_id === paneId);
+  // A built-in terminal is the user's own shell: it takes input as soon as it
+  // connects (no takeover dialog) and is labelled as unsandboxed.
+  const isShell = Boolean(pane && pane.kind === "shell");
+  const backHash = isShell ? "#/terminals" : "#/team";
+  const roleName = isShell ? `終端機 · ${shellLabel(pane)}`
+    : session ? (session.role_label || session.agent || paneId) : paneId;
   const toolName = session ? (TOOL[session.agent] || session.agent) : "Terminal";
   const project = session ? (D.live.projects || []).find((p) => p.project_id === session.project_id) : null;
 
@@ -1753,6 +1819,7 @@ async function viewTerminal(paneId) {
   // currently installed, so it would steal control back from a newer
   // takeover (e.g. another tab) that raced in after ours (L2/token safety).
   let controlToken = null;
+  let autoTakeoverDone = false;
 
   const reconnectPolicy = createReconnectPolicy({
     maxRetries: 5,
@@ -1801,12 +1868,14 @@ async function viewTerminal(paneId) {
     }
 
     const notices = [];
-    if (mode === "control") {
+    if (isShell) {
+      notices.push(notice("info", SHELL_NOTE + " 同一個終端機在另一個分頁打開時，輸入會移到那邊；這裡按「接管操作」可以拿回來。"));
+    } else if (mode === "control") {
       notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
     }
     if (connState === "closed") {
       notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? "需要新的 Terminal 時，請從 Agent Profile 的「預覽並啟動」開啟。"
+        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的 Terminal 時，請從 Agent Profile 的「預覽並啟動」開啟。")
         : "如需重新開啟請點選右上方「重新連線」。"}`));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
@@ -1830,8 +1899,8 @@ async function viewTerminal(paneId) {
     if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
-    if (!sessionGone) actions.push(closeSessionButton(paneId));
-    actions.push(el("a", { class: "btn small", href: "#/team" }, "返回團隊"));
+    if (!sessionGone) actions.push(closeSessionButton(paneId, backHash));
+    actions.push(el("a", { class: "btn small", href: backHash }, isShell ? "所有終端機" : "返回團隊"));
     setKids(actionWrap, actions);
 
     if (term) {
@@ -1908,6 +1977,39 @@ async function viewTerminal(paneId) {
         },
       });
     }
+  }
+
+  // Built-in terminals only: take input control right after the stream
+  // connects, once per page visit. Same API as the dialog, without the dialog.
+  async function autoTakeover() {
+    autoTakeoverDone = true;
+    let res;
+    try {
+      pendingTakeover = api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
+        action: "takeover",
+        ...termDimsForRequest(term),
+      });
+      res = await pendingTakeover;
+    } catch (err) {
+      if (!isDisposed) toast("無法取得輸入控制：" + err.message);
+      return;
+    } finally {
+      pendingTakeover = null;
+    }
+    await handleTakeoverResponse({
+      res,
+      isDisposed,
+      paneId,
+      apiPost: (path, body) => api.post(path, body),
+      onLiveSuccess: (r) => {
+        mode = "control";
+        controlToken = r.token;
+        inputBatcher.setEnabled(true);
+        updateUI();
+        if (term) term.focus();
+      },
+      onLiveError: (r) => toast("無法取得輸入控制：" + (r?.error || "未知錯誤")),
+    });
   }
 
   async function doRelease() {
@@ -2007,6 +2109,7 @@ async function viewTerminal(paneId) {
       connState = "connected";
       reconnectPolicy.recordConnectionSuccess();
       updateUI();
+      if (isShell && !autoTakeoverDone && mode === "observe") autoTakeover();
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8", { stream: true });
@@ -2077,13 +2180,22 @@ async function viewTerminal(paneId) {
     }, 150);
   }
 
+  const shellTabs = isShell
+    ? el("nav", { class: "term-tabs", "aria-label": "開著的終端機" },
+        shellPanes().map((p) => el("a", { class: "term-tab", href: `#/term/${encodeURIComponent(p.pane_id)}`,
+          title: p.cwd || "", "aria-current": p.pane_id === paneId ? "page" : null }, shellLabel(p))),
+        el("a", { class: "term-tab term-tab-new", href: "#/terminals", title: "開新的終端機" }, "＋"))
+    : null;
+
   setKids(main,
-    crumbs([["Agent 團隊", "#/team"], [`終端機 (${paneId})`]]),
+    isShell ? crumbs([["終端機", "#/terminals"], [shellLabel(pane)]])
+      : crumbs([["Agent 團隊", "#/team"], [`終端機 (${paneId})`]]),
+    shellTabs,
     el("div", { class: "term-head" },
       el("div", { class: "term-meta" },
         el("div", { class: "row" },
           el("h1", null, roleName),
-          toolTag(session ? session.agent : "terminal"),
+          isShell ? badge("一般終端機", "b-warn", SHELL_NOTE) : toolTag(session ? session.agent : "terminal"),
           modeBadge,
           connBadge),
         el("p", { class: "small muted mono", style: "margin:0" },
@@ -2094,8 +2206,8 @@ async function viewTerminal(paneId) {
     bannerWrap,
     termWrap,
     el("div", { class: "legend section" },
-      el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
-      el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字；同一時間只有一個分頁能控制"),
+      isShell ? null : el("span", null, el("b", null, "觀看模式"), "：預設唯讀轉送畫面，不攔截鍵盤，亦不對 Agent 送出輸入"),
+      isShell ? null : el("span", null, el("b", null, "接管操作"), "：經確認後可由瀏覽器打字；同一時間只有一個分頁能控制"),
       el("span", { class: "term-history-notice" }, TERMINAL_VISIBLE_SCREEN_NOTICE))
   );
 
@@ -4062,6 +4174,7 @@ async function route() {
     else if (top === "projects") await viewProjects(parts[1]);
     else if (top === "settings") await viewSettings();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
+    else if (top === "terminals") await viewTerminals();
     else setKids($main(), emptyState("找不到這個頁面", null));
   } catch (e) {
     setKids($main(), notice("bad", "載入失敗：" + e.message));

@@ -168,6 +168,21 @@ class Console:
         return ids
 
 
+def login_shell() -> str:
+    """The account's login shell when it is a listed, executable absolute path;
+    /bin/zsh (the macOS default) otherwise."""
+    import pwd
+    try:
+        shell = pwd.getpwuid(os.getuid()).pw_shell
+        listed = {line.strip() for line in Path("/etc/shells").read_text().splitlines()
+                  if line.strip() and not line.startswith("#")}
+    except (KeyError, OSError):
+        return "/bin/zsh"
+    if os.path.isabs(shell) and shell in listed and os.access(shell, os.X_OK):
+        return shell
+    return "/bin/zsh"
+
+
 def make_handler(console: Console):
     allowed_hosts = {f"127.0.0.1:{console.port}", f"localhost:{console.port}"}
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
@@ -390,6 +405,8 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "annotation": saved})
                 if path == "/api/native/sessions":
                     return self._native_open(self._body())
+                if path == "/api/native/terminals":
+                    return self._terminal_open(self._body())
                 if path == "/api/native/agent-previews":
                     return self._agent_preview(self._body())
                 if path == "/api/native/agent-launches":
@@ -666,6 +683,39 @@ def make_handler(console: Console):
             except rt.native.NativeRuntimeError as exc:
                 return self._error(400, str(exc))
             console.store.live(force=True)  # new pane must be a live target at once
+            return self._json({"ok": True, "session": info})
+
+        def _terminal_open(self, body: dict):
+            """Built-in terminal: the user's login shell in a folder they pick.
+
+            The command is chosen here, never by the caller. It is an ordinary
+            terminal under the user's account, with no sandbox; the UI says so."""
+            extra = set(body) - {"cwd", "cols", "rows"}
+            if extra:
+                return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
+            cwd = body.get("cwd") or "~"
+            if not isinstance(cwd, str) or "\0" in cwd:
+                return self._error(400, "資料夾必須是路徑字串")
+            if cwd.strip().lower().startswith("file://"):
+                return self._error(400, "請填資料夾路徑（例如 ~/projects/app），不是 file:// 連結")
+            expanded = os.path.expanduser(cwd.strip())
+            if not os.path.isabs(expanded):
+                return self._error(400, "資料夾必須是絕對路徑，或以 ~ 開頭")
+            real = Path(os.path.realpath(expanded))
+            if not real.is_dir():
+                return self._error(400, "找不到這個資料夾")
+            if not real.is_relative_to(Path.home().resolve()):
+                return self._error(400, "資料夾必須在你的家目錄內")
+            cols, rows = self._term_dims(body)
+            try:
+                info = console.runtime.create_session(
+                    {"argv": [login_shell(), "-l"], "cwd": str(real), "cols": cols, "rows": rows,
+                     "env": {"TERM": "xterm-256color"}, "kind": "shell"})
+            except rt.native.NativeRuntimeUnavailable as exc:
+                return self._error(503, str(exc))
+            except rt.native.NativeRuntimeError as exc:
+                return self._error(400, str(exc))
+            console.store.live(force=True)
             return self._json({"ok": True, "session": info})
 
         # Profile-managed launch (R3 S0): preview, then confirm ---------------

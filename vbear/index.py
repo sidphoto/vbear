@@ -660,7 +660,8 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
              "tab_id": p.get("tab_id"), "workspace_id": p.get("workspace_id"),
              "agent": p.get("agent"), "agent_status": p.get("agent_status", "unknown"),
              "title": p.get("terminal_title_stripped") or "",
-             "cwd": p.get("foreground_cwd") or p.get("cwd") or ""}
+             "cwd": p.get("foreground_cwd") or p.get("cwd") or "",
+             "kind": p.get("kind"), "exited": bool(p.get("exited"))}
             for p in snap["panes"]
         ],
         "workspaces": snap["workspaces"],

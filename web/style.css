@@ -817,3 +817,13 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
     scroll-behavior: auto !important;
   }
 }
+
+/* Built-in terminals */
+.new-term-form { gap: 8px; align-items: center; flex-wrap: wrap; }
+.new-term-form input { flex: 1 1 260px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--panel); color: var(--ink); font-size: 14px; }
+.term-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.term-list li { gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.term-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0 10px; }
+.term-tab { padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 8px 8px 0 0; text-decoration: none; color: var(--ink); font-size: 13px; background: var(--panel); }
+.term-tab[aria-current="page"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.term-tab-new { font-weight: 600; }

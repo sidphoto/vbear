@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Built-in terminal**: a 「終端機」 page opens your login shell in a folder under your home directory,
+  with tabs and direct typing. Labelled as an ordinary, unsandboxed terminal.
+
 ## v0.1.0 — first public release
 
 First open-source release under the MIT License.

@@ -22,6 +22,8 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   session IDs, working directories and timestamps.
 - **Local data.** Notes (`annotations.py`), task cards (`tasks.py`) and Agent Profiles
   (`agent_profiles.py`) are JSON files in the state directory, written atomically with mode `0600`.
+- **Built-in terminals.** `POST /api/native/terminals` opens the account's login shell in a folder
+  under `HOME`; the daemon labels the session `kind: "shell"` so the UI can tell it from Agent sessions.
 - **Terminal streaming.** `GET /api/term/<id>/stream` relays runtime output to the browser as
   server-sent events. Input goes through `POST /api/term/<id>/input` only after an explicit takeover.
 

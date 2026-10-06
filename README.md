@@ -12,6 +12,9 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
 
 ## Features
 
+- **Built-in terminal.** Open your login shell in any folder under your home directory from the
+  「終端機」 page and type right away. Multiple terminals show as tabs. These are ordinary terminals
+  under your account, **not sandboxed**, and the UI labels them that way.
 - **Terminal workbench.** Agent terminals run in a small local daemon (the *VBear runtime*), so they keep
   running when the browser tab or the console closes. You can watch any terminal in the browser.
   Typing into it takes an explicit takeover, and only one tab can type at a time.

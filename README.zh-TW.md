@@ -25,6 +25,8 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 
 ## 特色
 
+- **內建終端機**：在「終端機」頁選一個家目錄內的資料夾，就能開你的登入 shell 直接打字，多個終端機以分頁切換。
+  這是以你的帳號執行的一般終端機，**不受沙盒限制**，畫面上會標示。
 - **本機執行、外部技能與角色來源唯讀**：只讀取你選的外部工具來源，不修改任何技能或角色檔案，不執行技能內的腳本（VBear 本身之設定、註記與終端操作除外）。終端工作台（Terminal Workbench）提供本機 Agent pane 畫面串流與受控輸入通道（見下文），其餘外部來源相關功能維持唯讀。
 - **後端零第三方相依、前端單一本機 Vendored 依賴**：後端僅使用 Python 3.13+ 標準函式庫（零 pip 套件、零雲端服務）。前端介面零 npm 建置步驟，唯一依賴為本機打包之 MIT 開源套件 `@xterm/xterm` 與 `@xterm/addon-fit`（置於 `web/vendor/xterm/`，鎖定版本並由單元測試持續驗證固定之 SHA-256 完整性雜湊，嚴格拒絕 CDN 外部載入，維持嚴格 CSP `script-src 'self'`）。
   需要 Python 3.13 以上（Agent CLI 版本檢查需要 `os.waitid`，macOS 從 3.13 才提供）；macOS 系統內建的 `/usr/bin/python3` 是 3.9，會啟動失敗，請改用 Homebrew 等較新的 `python3`。

@@ -553,9 +553,18 @@ async function runAllTests() {
       "updateUI must consult shouldShowTerminalRetryAction before rendering retry button"
     );
     assert(
-      appSource.includes("if (!sessionGone) actions.push(closeSessionButton(paneId));")
+      appSource.includes("if (!sessionGone) actions.push(closeSessionButton(paneId, backHash));")
         && appSource.includes("if (!sessionGone) actions.push(closeSessionButton(currentPane));"),
       "a terminal the runtime reports as gone (404) must offer neither reconnect nor close"
+    );
+    assert(
+      appSource.includes('if (isShell && !autoTakeoverDone && mode === "observe") autoTakeover();')
+        && appSource.includes('const isShell = Boolean(pane && pane.kind === "shell");'),
+      "only built-in shell terminals (kind shell) take input control without the takeover dialog, once per visit"
+    );
+    assert(
+      appSource.includes('isShell ? badge("一般終端機", "b-warn", SHELL_NOTE)') && appSource.includes("不受沙盒限制"),
+      "built-in terminals are labelled as unsandboxed"
     );
     assert(
       appSource.includes("if (!termInit.ok) {\n    termReady = false;\n    connState = \"error\";"),
@@ -763,8 +772,8 @@ async function runAllTests() {
     );
     assert.strictEqual(
       (appSource.match(/\.\.\.termDimsForRequest\(term\),/g) || []).length,
-      2,
-      "both takeover payloads must use termDimsForRequest()"
+      3,
+      "every takeover payload (workbench, standalone dialog, built-in terminal auto-takeover) must use termDimsForRequest()"
     );
     assert.strictEqual(
       (appSource.match(/if \(!usableTermDims\(dims\)\) return;/g) || []).length,
