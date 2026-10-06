@@ -46,6 +46,26 @@ Skill and role scanning reads Claude Code (`~/.claude`), Codex (`~/.codex`) and 
 
 ## Install
 
+### The app (recommended)
+
+1. Download `VBear-<version>-arm64.dmg` from the [latest release](https://github.com/sidphoto/vbear/releases/latest),
+   open it and drag **VBear** into Applications. It needs an Apple Silicon Mac (M1 or later) and macOS 13 or newer.
+   Python is included, so there is nothing else to install.
+2. **First open:** the app is not yet signed with an Apple Developer ID, so macOS will refuse to open it the first time.
+   Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to VBear. You only
+   need to do this once.
+
+Or with Homebrew:
+
+```sh
+brew install --cask sidphoto/tap/vbear
+```
+
+Quitting the app stops its window and server. Terminals you opened keep running, and they are there again
+the next time you open VBear.
+
+### From source
+
 Requirements:
 - macOS. This is the only platform it has been tested on; the managed launch uses macOS-specific paths.
 - Python **3.13 or newer**, because the safe version check for agent CLIs needs `os.waitid`, which

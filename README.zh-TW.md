@@ -34,6 +34,19 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 
 ## 安裝與使用
 
+### 下載 App（建議）
+
+1. 從 [最新版本](https://github.com/sidphoto/vbear/releases/latest) 下載 `VBear-<版本>-arm64.dmg`，打開後把 **VBear** 拖進「應用程式」。
+   需要 Apple 晶片（M1 以後）的 Mac、macOS 13 以上；App 已內含 Python，不必另外安裝。
+2. **第一次打開**：App 目前沒有 Apple 開發者簽章，macOS 第一次會拒絕開啟。請到「系統設定 → 隱私權與安全性」，
+   往下找到 VBear，按「強制打開」。只需要做一次。
+
+也可以用 Homebrew：`brew install --cask sidphoto/tap/vbear`
+
+結束 App 會關掉視窗和伺服器；你開的終端機會繼續執行，下次打開 VBear 時還在。
+
+### 從原始碼執行
+
 需要 macOS、Python 3.13 以上；Profile 啟動另需已驗證版本的 Claude Code（2.1.291 或 2.1.286）。不需要安裝任何套件。
 
 ```sh

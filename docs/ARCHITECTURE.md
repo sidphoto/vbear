@@ -78,6 +78,16 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
   not launchable. With the pinned version, Codex's interactive mode still loads global MCP servers,
   plugins and hooks, and cannot ignore your user config.
 
+## macOS app — `macos/`
+
+`macos/build.sh` builds `VBear.app`. The app is a small Swift program (`macos/VBear/main.swift`) with a WebKit window,
+plus a standalone CPython 3.13 (python-build-standalone, pinned by version and SHA-256) and a copy of `vbear/` and
+`web/`. On launch it reuses a VBear that accepts the token in `server.token`, or starts
+`python3 -B -m vbear serve --port <free port>` with a fresh token in `VBEAR_ACCESS_TOKEN`. The server removes that
+variable from its environment at once, so the runtime daemon and terminals never inherit it. The window then loads
+`http://127.0.0.1:<port>/#auth=<token>`. The bundle is ad-hoc signed and is never written to at run time
+(`-B`, byte-compiled at build).
+
 ## Front end — `web/`
 
 Plain HTML, CSS and JavaScript with no framework. The only dependency is the bundled xterm.js 5.5.0 with

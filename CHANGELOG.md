@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **macOS app** (Apple Silicon): `VBear.app` with Python 3.13 included, in a `.dmg`. It starts VBear in the
+  background (or reuses a running one), signs its window in, and opens external links in your browser. Quitting
+  stops only the server it started; terminals keep running. Ad-hoc signed: allow it once in Privacy & Security.
 - **Claude Code 2.1.291 verified**: the version gate now accepts a list of verified versions (2.1.286, 2.1.291) and
   launches the newest one installed. New `tools/verify_claude_boundary.py` re-runs the boundary check on any version
   (one model call per run); evidence in `docs/evidence/claude-code-2.1.291.md`.

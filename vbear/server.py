@@ -20,6 +20,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import signal
 import sys
@@ -1188,6 +1189,9 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     conf = cfg.load()
     port = int(port or conf.get("port") or cfg.DEFAULT_PORT)
     console = Console(port)
+    handed = take_handed_token()
+    if handed:
+        console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
     url = f"http://127.0.0.1:{port}/"
@@ -1215,6 +1219,18 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
 # server.token lets local tools (the launcher, the macOS app) authenticate;
 # open.html lets a browser do it without the token ever appearing in a
 # command line or a URL that leaves this machine's owner-only state directory.
+
+HANDED_TOKEN_ENV = "VBEAR_ACCESS_TOKEN"
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
+
+
+def take_handed_token() -> str | None:
+    """A token chosen by the launching app, removed from the environment at
+    once so the runtime daemon and terminals never inherit it. Ignored unless
+    it looks like a token_urlsafe(32) or longer."""
+    token = os.environ.pop(HANDED_TOKEN_ENV, None)
+    return token if token and _TOKEN_RE.match(token) else None
+
 
 def token_path() -> Path:
     return cfg.state_dir() / "server.token"

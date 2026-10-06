@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 .local/
 _sandbox/
+build/
+dist/

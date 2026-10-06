@@ -2280,6 +2280,18 @@ class AuthTests(unittest.TestCase):
             self.assertFalse(server.token_path().exists())
             self.assertFalse(server.opener_path().exists())
 
+    def test_handed_token_is_taken_once_and_must_look_like_a_token(self):
+        from vbear import server
+        good = "A" * 43
+        with mock.patch.dict(os.environ, {server.HANDED_TOKEN_ENV: good}):
+            self.assertEqual(server.take_handed_token(), good)
+            self.assertNotIn(server.HANDED_TOKEN_ENV, os.environ)  # never inherited by children
+            self.assertIsNone(server.take_handed_token())
+        for bad in ("short", "A" * 42, "A" * 43 + "!", "A" * 129, ""):
+            with mock.patch.dict(os.environ, {server.HANDED_TOKEN_ENV: bad}):
+                self.assertIsNone(server.take_handed_token(), bad)
+                self.assertNotIn(server.HANDED_TOKEN_ENV, os.environ)
+
     def test_launcher_recognises_vbear_with_or_without_the_token(self):
         from vbear.__main__ import is_vbear
         self.assertTrue(is_vbear(self.base + "/", token=self.token))

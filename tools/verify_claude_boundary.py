@@ -107,6 +107,18 @@ PROMPT = ("Use the Bash tool to run exactly this command and nothing else: pytho
           "Then reply with the single word DONE.")
 
 
+SANDBOX_ERRNOS = (1, 13)  # EPERM, EACCES
+
+
+def sandbox_refusal(name: str, got: dict) -> bool:
+    """A refusal counts only if it is the sandbox's: EPERM/EACCES from the OS,
+    or the sandbox proxy refusing the CONNECT. A missing path, a typo or a
+    timeout must not pass as a refusal."""
+    if name == "https_via_proxy":
+        return "Tunnel connection failed: 403" in str(got.get("detail", ""))
+    return got.get("errno") in SANDBOX_ERRNOS
+
+
 def pick_claude(explicit: str | None) -> str:
     if explicit:
         return str(Path(explicit).expanduser())
@@ -123,11 +135,11 @@ def pick_claude(explicit: str | None) -> str:
 
 
 def claude_version(binary: str) -> str:
-    out = subprocess.run([binary, "--safe-mode", "--version"], capture_output=True, text=True,
-                         timeout=15).stdout
-    m = re.search(r"([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)", out)
-    if not m:
-        raise SystemExit(f"無法判斷版本：{out[:80]!r}")
+    proc = subprocess.run([binary, "--safe-mode", "--version"], capture_output=True, text=True,
+                          timeout=15)
+    m = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)", proc.stdout.strip())
+    if proc.returncode != 0 or not m:
+        raise SystemExit(f"無法判斷版本（exit {proc.returncode}）：{proc.stdout[:80]!r}")
     return m.group(1)
 
 
@@ -180,7 +192,9 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
         os.chdir(cwd)
         os.execve(argv[0], argv, env)
     transcript = bytearray()
-    deadline = time.monotonic() + RUN_TIMEOUT
+    start = time.monotonic()
+    deadline = start + RUN_TIMEOUT
+    last_output = start
     typed = False
     try:
         while time.monotonic() < deadline:
@@ -193,7 +207,12 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
                 if not chunk:
                     break
                 transcript += chunk
-            if not typed and len(transcript) > 200 and time.monotonic() > deadline - RUN_TIMEOUT + 6:
+                last_output = time.monotonic()
+            now = time.monotonic()
+            # Type once the TUI has drawn something and been quiet for 1.5 s
+            # (at least 4 s after start), or after 25 s whatever it shows.
+            drawn_and_quiet = transcript and now - last_output > 1.5 and now - start > 4
+            if not typed and (drawn_and_quiet or now - start > 25):
                 os.write(fd, PROMPT.encode())
                 time.sleep(0.5)
                 os.write(fd, b"\r")
@@ -227,6 +246,11 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
             else:
                 continue
             break
+        if pgid is not None:  # leftovers that ignored SIGHUP/SIGTERM
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
     text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(transcript)).decode("utf-8", "replace")
     return f"typed={typed}\n{text[-2000:]}"
 
@@ -285,10 +309,16 @@ def main() -> int:
         observed = json.loads(result.read_text())
         checks = {}
         for name, expect in EXPECT.items():
-            got = observed.get(name) or {}
-            allowed = bool(got.get("allowed"))
-            checks[name] = {"expect": expect, "allowed": allowed,
-                            "pass": allowed == (expect == "allow"),
+            got = observed.get(name)
+            if not isinstance(got, dict) or not isinstance(got.get("allowed"), bool):
+                checks[name] = {"expect": expect, "pass": False, "why": "probe did not report this check"}
+                continue
+            allowed = got["allowed"]
+            if expect == "allow":
+                ok = allowed
+            else:  # refused, and refused by the sandbox, not by some other failure
+                ok = not allowed and sandbox_refusal(name, got)
+            checks[name] = {"expect": expect, "allowed": allowed, "pass": ok,
                             **{k: got[k] for k in ("error", "errno", "detail") if k in got}}
         # The sandbox must not have created anything it refused.
         leaks = [str(p) for p in (peer_work / "leak.txt", peer_scratch / "leak.txt",
