@@ -51,7 +51,10 @@ find "$RES/python" -name "__pycache__" -type d -prune -exec rm -rf {} +
 rsync -a --exclude "__pycache__" "$ROOT/vbear" "$ROOT/web" "$RES/app/"
 cp "$ROOT/LICENSE" "$RES/app/LICENSE"
 # Byte-compile once now: the signed bundle must not be written to at run time.
-"$RES/python/bin/python3" -m compileall -q "$RES/app/vbear" "$PYLIB" >/dev/null || true
+# unchecked-hash .pyc files stay valid whatever the files' timestamps become
+# after copying, so Python never needs to rewrite them.
+"$RES/python/bin/python3" -B -m compileall -q --invalidation-mode unchecked-hash \
+  "$RES/app/vbear" "$PYLIB" >/dev/null
 
 # 3. Swift shell, icon, Info.plist.
 swiftc -O -target arm64-apple-macos13.0 -framework Cocoa -framework WebKit \
@@ -71,11 +74,11 @@ mkdir -p "$DIST"
 STAGE="$BUILD/dmg"
 rm -rf "$STAGE" "$DIST/VBear.app"
 mkdir -p "$STAGE"
-cp -R "$APP" "$STAGE/VBear.app"
+ditto "$APP" "$STAGE/VBear.app"
 ln -s /Applications "$STAGE/Applications"
 DMG="$DIST/VBear-$VERSION-arm64.dmg"
 rm -f "$DMG"
 hdiutil create -quiet -volname "VBear $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-cp -R "$APP" "$DIST/VBear.app"
+ditto "$APP" "$DIST/VBear.app"
 shasum -a 256 "$DMG" | tee "$DMG.sha256"
 du -sh "$APP" "$DMG"

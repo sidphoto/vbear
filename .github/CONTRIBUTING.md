@@ -59,3 +59,11 @@ Contributions are accepted under the project's [MIT License](../LICENSE). There 
 ## Releases
 
 Version bumps, tags and releases are handled by the maintainer. Please do not change version numbers in a PR.
+
+For maintainers:
+1. Set `__version__` in `vbear/__init__.py` and move the CHANGELOG notes under `## vX.Y.Z`.
+2. Build and check locally: `./macos/build.sh`, then `./macos/smoke_test.sh dist/VBear-X.Y.Z-arm64.dmg`.
+3. Tag and push (`git tag -a vX.Y.Z && git push origin vX.Y.Z`). The **Release** workflow tests, builds the app
+   and attaches the `.dmg` and its `.sha256` to the GitHub Release.
+4. Update `version` and `sha256` in `Casks/vbear.rb` of [sidphoto/homebrew-tap](https://github.com/sidphoto/homebrew-tap)
+   with the CI-built `.sha256`.

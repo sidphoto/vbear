@@ -1,0 +1,61 @@
+name: Release
+
+# Builds the macOS app on a version tag (vX.Y.Z) and attaches the .dmg to the
+# GitHub Release. The tag must match vbear/__init__.py.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  macos-app:
+    runs-on: macos-latest  # Apple Silicon
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Tag matches the package version
+        run: |
+          v="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' vbear/__init__.py)"
+          [ "v$v" = "$TAG" ] || { echo "tag $TAG != version $v" >&2; exit 1; }
+      - name: Tests
+        run: |
+          python -m unittest discover -s tests
+          for f in tests/frontend/*.cjs; do node "$f" || exit 1; done
+      - name: Build app and disk image
+        run: ./macos/build.sh
+      - name: Smoke-check the bundle
+        run: |
+          app=dist/VBear.app
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/Resources/python/bin/python3" -B -c "import ctypes, pty, termios, fcntl, selectors, tomllib, http.server, sqlite3, ssl; print('stdlib ok')"
+          if otool -L "$app/Contents/Resources/python/bin/python3" | grep -qE "/opt/homebrew|/usr/local"; then
+            echo "bundled python links outside the bundle" >&2; exit 1
+          fi
+          (cd "$app/Contents/Resources/app" && ../python/bin/python3 -B -c "import vbear.server, vbear.runtime.daemon; print('vbear', __import__('vbear').__version__)")
+          codesign --verify --deep --strict "$app"   # nothing above wrote into the bundle
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${TAG#v}"
+          awk "/^## v${v//./\\.}/{f=1;next} /^## /{f=0} f" CHANGELOG.md > notes.md
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "VBear $TAG" --notes-file notes.md --verify-tag
+          gh release upload "$TAG" dist/VBear-*-arm64.dmg dist/VBear-*-arm64.dmg.sha256 --clobber

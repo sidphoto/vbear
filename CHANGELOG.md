@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — installable macOS workbench
 
 - **macOS app** (Apple Silicon): `VBear.app` with Python 3.13 included, in a `.dmg`. It starts VBear in the
   background (or reuses a running one), signs its window in, and opens external links in your browser. Quitting

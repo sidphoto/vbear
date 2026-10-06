@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, urlparse
 import queue as queue_mod
 from urllib.parse import unquote
 
+from . import __version__
 from . import annotations
 from . import agent_launch
 from . import agent_profiles
@@ -197,7 +198,7 @@ def make_handler(console: Console):
     allowed_origins = {f"http://{h}" for h in allowed_hosts}
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "VBear/0.1"
+        server_version = f"VBear/{__version__}"
         sys_version = ""
         timeout = 15.0
 
