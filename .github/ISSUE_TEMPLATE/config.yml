@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas / 問題與想法
+    url: https://github.com/sidphoto/sid-console/discussions
+    about: Ask and discuss in GitHub Discussions.
+  - name: Security vulnerability / 資安漏洞
+    url: https://github.com/sidphoto/sid-console/security/advisories/new
+    about: Report privately. Please do not open a public issue.

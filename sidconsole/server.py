@@ -1024,7 +1024,7 @@ def make_handler(console: Console):
                     "status": "唯讀展示 (未編譯)",
                     "description": "目前專案之架構、建置、測試與邊界契約",
                     "contract": {
-                        "stack": "Python 3.11+ / Vanilla JS / xterm.js vendored / SID native runtime",
+                        "stack": "Python 3.13+ / Vanilla JS / xterm.js vendored / SID native runtime",
                         "runtime": "Localhost only (127.0.0.1:7788)",
                         "security": "Strict CSP, Safe DOM textContent, Same-Origin + X-SID-Console: 1",
                         "tests": "python3 -B -m unittest discover -s tests -q && node tests/frontend/*.cjs",

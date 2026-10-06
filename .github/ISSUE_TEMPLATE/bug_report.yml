@@ -1,0 +1,40 @@
+name: Bug report / 錯誤回報
+description: Something does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security issue? Do not file it here.** Use [private reporting](https://github.com/sidphoto/sid-console/security/advisories/new) instead.
+        English or Traditional Chinese is fine. 中文或英文皆可。
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / 發生什麼事
+      description: What you did, what you expected, and what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 重現步驟
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SID Console version or commit
+      placeholder: v0.1.0 or a commit hash
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: macOS / Python / agent CLI versions
+      placeholder: macOS 26.1, Python 3.12.4, Claude Code 2.1.286
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from ~/.sid-console/server.log or runtimed.log. Remove anything private first.
+      render: text

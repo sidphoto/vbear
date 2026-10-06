@@ -452,7 +452,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
         p = data["project"]
         self.assertEqual(p["source_type"], "skeleton_read_only")
         self.assertIn("contract", p)
-        self.assertIn("Python 3.11+", p["contract"]["stack"])
+        self.assertIn("Python 3.13+", p["contract"]["stack"])
 
     def test_security_protections_on_tasks(self):
         # Missing X-SID-Console header

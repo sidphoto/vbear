@@ -6,7 +6,21 @@ import argparse
 import json
 import sys
 
-from . import config as cfg
+MIN_PYTHON = (3, 13)  # os.waitid on macOS (safe Agent CLI version probe) arrived in 3.13
+
+
+def python_too_old(version_info=sys.version_info) -> str | None:
+    if tuple(version_info[:2]) >= MIN_PYTHON:
+        return None
+    return (f"SID Console 需要 Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} 以上，目前是 "
+            f"{version_info[0]}.{version_info[1]}。請改用 Homebrew 或 python.org 的較新版本。\n"
+            f"SID Console requires Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+.")
+
+
+if (_too_old := python_too_old()) is not None:
+    sys.exit(_too_old)
+
+from . import config as cfg  # noqa: E402  (after the version check on purpose)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     p_launch.add_argument("--port", type=int)
     sub.add_parser("scan", help="重新掃描並輸出摘要")
     sub.add_parser("doctor", help="檢查來源與 SID runtime 連線")
-    sub.add_parser("runtimed", help="（R2 開發中）原生 Terminal 背景程序")
+    sub.add_parser("runtimed", help="SID runtime 背景程序（通常由主控台自動啟動）")
     args = parser.parse_args(argv)
 
     if args.cmd == "runtimed":

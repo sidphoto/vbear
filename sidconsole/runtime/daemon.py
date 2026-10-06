@@ -237,7 +237,7 @@ def build_env(overrides: dict | None = None) -> dict:
 
     PATH gets the usual Homebrew/system dirs appended when missing, because a
     daemon started from Finder / an .app does not inherit the login shell
-    PATH (PHASE-R-PLAN §8 risk 2). Existing entries keep their order."""
+    PATH. Existing entries keep their order."""
     env = {k: os.environ[k] for k in ENV_ALLOW if os.environ.get(k)}
     env.update({k: v for k, v in (overrides or {}).items() if k in ENV_ALLOW})
     try:

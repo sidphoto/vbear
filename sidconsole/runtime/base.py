@@ -1,4 +1,4 @@
-"""Runtime protocol (PHASE-R-PLAN §4) for the terminal-host backend.
+"""Runtime protocol for the terminal-host backend (see docs/ARCHITECTURE.md).
 
 The one implementation is ``NativeRuntime``. The protocol keeps server.py /
 index.py / __main__.py independent of it and lets tests substitute a fake.
@@ -18,7 +18,7 @@ Shape choice (Protocol vs ABC):
     them override; those that cannot inherit the explicit refusal and the
     UI gets a real failure to translate, not a silent pretend-success.
 
-User-facing contract (see also PHASE-R-PLAN §4):
+User-facing contract:
 
   describe()              -> dict  name / version / binary / available / problems
   is_available()          -> bool  ready to be asked for sessions at all

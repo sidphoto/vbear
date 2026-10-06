@@ -1,4 +1,4 @@
-"""Contract tests for the Runtime abstraction (PHASE-R-PLAN §3.3).
+"""Contract tests for the Runtime abstraction.
 
 These check ``RuntimeBase`` itself and the runtime factory. The concrete
 ``NativeRuntime`` is exercised end to end in tests/test_runtimed_*.py.
