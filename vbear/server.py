@@ -1189,8 +1189,8 @@ def _valid_project_roots(value) -> list[str]:
 def serve(port: int | None = None, open_browser: bool = False) -> None:
     conf = cfg.load()
     port = int(port or conf.get("port") or cfg.DEFAULT_PORT)
+    handed = take_handed_token()  # first: out of the environment before anything else runs
     console = Console(port)
-    handed = take_handed_token()
     if handed:
         console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan

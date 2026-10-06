@@ -47,16 +47,22 @@ func recordedAccess() -> (port: Int, token: String)? {
     return (port, token)
 }
 
-/// 200 from /api/config with this token means a VBear that will let us in.
+/// A VBear that lets us in: 200 from /api/config with this token, its Server
+/// header, and the shape of its config reply.
 func accepts(port: Int, token: String) -> Bool {
     guard let url = URL(string: "http://127.0.0.1:\(port)/api/config") else { return false }
     var req = URLRequest(url: url, timeoutInterval: 1.5)
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     let done = DispatchSemaphore(value: 0)
     var ok = false
-    URLSession.shared.dataTask(with: req) { _, resp, _ in
-        ok = (resp as? HTTPURLResponse)?.statusCode == 200
-        done.signal()
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
+        defer { done.signal() }
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              (http.value(forHTTPHeaderField: "Server") ?? "").hasPrefix("VBear/"),
+              let data = data,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["config"] is [String: Any], obj["state_dir"] is String else { return }
+        ok = true
     }.resume()
     _ = done.wait(timeout: .now() + 2)
     return ok
@@ -136,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             }
             Thread.sleep(forTimeInterval: 0.3)
         }
+        server?.terminate()  // do not leave a hung server behind
         fail("VBear 在 3 分鐘內沒有完成啟動。")
     }
 
@@ -149,7 +156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         p.currentDirectoryURL = appDir
         let env = ProcessInfo.processInfo.environment
         var child: [String: String] = [:]
-        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "VBEAR_HOME"] { if let v = env[key] { child[key] = v } }
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "VBEAR_HOME", "VBEAR_RUNTIME_AUTOSTART"] {
+            if let v = env[key] { child[key] = v }
+        }
         child["LANG"] = env["LANG"] ?? "zh_TW.UTF-8"
         child["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         child["PYTHONPATH"] = appDir.path
@@ -214,7 +223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = action.request.url { NSWorkspace.shared.open(url) }
+        if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme ?? "") {
+            NSWorkspace.shared.open(url)
+        }
         return nil
     }
 
