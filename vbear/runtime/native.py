@@ -540,7 +540,19 @@ class NativeRuntime(RuntimeBase):
         return self.discard_prepared_claude_launch(launch_id)
 
     def launch_prepared_agent(self, prepared: dict, *, cols: int | None = None,
-                              rows: int | None = None, unverified_acknowledged: bool = False) -> dict:
+                              rows: int | None = None) -> dict:
+        """Launch a prepared session. Never starts an unverified Claude Code version."""
+        return self._launch_prepared(prepared, cols=cols, rows=rows, acknowledged=False)
+
+    def launch_prepared_agent_after_acknowledgement(self, prepared: dict, *, cols: int | None = None,
+                                                    rows: int | None = None) -> dict:
+        """Launch a prepared session the user confirmed knowing its Claude Code
+        version is unverified. Only the preview confirm step calls this, after
+        the user's checkbox (accept_unverified_cli: true)."""
+        return self._launch_prepared(prepared, cols=cols, rows=rows, acknowledged=True)
+
+    def _launch_prepared(self, prepared: dict, *, cols: int | None, rows: int | None,
+                         acknowledged: bool) -> dict:
         """Step 2: hand a prepared launch to the daemon. The daemon re-validates
         the manifest, settings, paths and CLI file and builds argv and
         environment itself. Every failed precondition refuses the launch;
@@ -553,7 +565,7 @@ class NativeRuntime(RuntimeBase):
         manifest, assertion = prepared["manifest"], prepared["assertion"]
         base = self._base or cfg.state_dir()
         if manifest.get("cli_verified") is False:
-            if unverified_acknowledged is not True:
+            if acknowledged is not True:
                 _agent_sessions.discard_prepared(base, manifest["launch_id"])
                 raise _cli_versions.VersionAssertionError(_cli_versions._blocked(
                     "claude", "unverified_not_acknowledged",
@@ -598,10 +610,9 @@ class NativeRuntime(RuntimeBase):
         }
 
     def launch_prepared_claude(self, prepared: dict, *, cols: int | None = None,
-                               rows: int | None = None, unverified_acknowledged: bool = False) -> dict:
+                               rows: int | None = None) -> dict:
         """Compatibility wrapper for existing Claude callers."""
-        return self.launch_prepared_agent(prepared, cols=cols, rows=rows,
-                                          unverified_acknowledged=unverified_acknowledged)
+        return self.launch_prepared_agent(prepared, cols=cols, rows=rows)
 
     def create_managed_claude_session(self, spec: dict, *, allowed_root: str | None = None) -> dict:
         """Internal one-shot form of prepare + launch (no preview). Not on the HTTP API."""

@@ -76,11 +76,15 @@ Other safeguards:
 - **Unverified Claude Code versions are labelled, not hidden.** A genuine Claude Code release that is not on the
   verified list (built-in, or verified on this Mac and recorded in `~/.vbear/claude-verified.json`) still gets the
   same sandbox settings, but Write, Network and Filesystem are labelled **unverified** with no evidence, and the
-  launch is refused unless the request carries `accept_unverified_cli: true` (the dialog's checkbox). The confirm
-  step records that acknowledgement in the launch's manifest in the state directory, and the **runtime daemon**,
-  which actually starts the process, decides on its own from the version whether it is verified and refuses an
-  unverified one without that record. The internal one-shot launch path never starts an unverified version. Output
-  that is not a Claude Code version is still refused.
+  launch is refused unless the request carries `accept_unverified_cli: true` (the dialog's checkbox). Only then does
+  the confirm step call `launch_prepared_agent_after_acknowledgement`, which records the acknowledgement in the
+  launch's manifest in the state directory. The **runtime daemon**, which actually starts the process, decides on
+  its own from the version whether it is verified and refuses an unverified one without that record. Every other
+  launch method (`launch_prepared_agent`, the one-shot `create_managed_claude_session`) refuses unverified versions.
+  Output that is not a Claude Code version is still refused.
+  Code running as your user could call that method or write the record itself, just as it could start any program
+  directly; as stated above, this model does not defend against programs running as you. What it does keep out:
+  websites, other user accounts, sandboxed Agents, and a launch the UI did not show as unverified.
   When a verified version is installed, it is used in preference to a newer unverified one.
 - **The version is what the program says it is.** The gate reads `claude --version`; it is not binary
   authentication. VBear prefers Claude Code's own versioned install (`~/.local/share/claude/versions/<version>`),

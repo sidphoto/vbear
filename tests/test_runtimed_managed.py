@@ -443,6 +443,21 @@ class ManagedCase(unittest.TestCase):
             self.assertIn("unverified_not_acknowledged", r["error"]["message"])
         self.assertEqual(self.rpc("list")["result"]["sessions"], [])
 
+    def test_only_the_acknowledgement_method_starts_an_unverified_version(self):
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
+        with mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
+            rt = self.runtime()
+            with self.assertRaises(TypeError):  # the ordinary method has no acknowledgement switch
+                rt.launch_prepared_agent({}, unverified_acknowledged=True)
+            prepared = rt.prepare_managed_claude_launch({"cwd": str(self.work)}, allowed_root=str(self.tmp))
+            self.scratches.append(prepared["manifest"]["scratch"]["path"])
+            info = rt.launch_prepared_agent_after_acknowledgement(prepared)
+            sid = info["session"]["session_id"]
+        m = json.loads((self.base / "sessions" / prepared["manifest"]["launch_id"] / "manifest.json").read_text())
+        self.assertIs(m["unverified_acknowledged"], True)
+        self.assertIn(sid, [s["session_id"] for s in self.rpc("list")["result"]["sessions"]])
+        self.rpc("close", session_id=sid)
+
     def test_runtime_entry_rejects_extra_spec_fields(self):
         for extra in ({"argv": ["x"]}, {"env": {}}, {"settings": "x"}):
             with self.subTest(extra=list(extra)):

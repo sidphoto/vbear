@@ -368,11 +368,14 @@ class PreviewStore:
             if current is None or profile_digest(current) != entry["profile_digest"]:
                 raise PreviewError(409, "profile_drift", "Profile 在 preview 之後已變更；請重新 preview")
             try:
-                launch = getattr(self._runtime, "launch_prepared_agent", None)
-                if launch is None:
-                    launch = self._runtime.launch_prepared_claude
-                result = launch(entry["prepared"], cols=cols, rows=rows,
-                                unverified_acknowledged=accept_unverified_cli is True)
+                if manifest.get("cli_verified") is False:
+                    # accept_unverified_cli is True here (checked above, before consuming).
+                    launch = self._runtime.launch_prepared_agent_after_acknowledgement
+                else:
+                    launch = getattr(self._runtime, "launch_prepared_agent", None)
+                    if launch is None:
+                        launch = self._runtime.launch_prepared_claude
+                result = launch(entry["prepared"], cols=cols, rows=rows)
             except cli_versions.VersionAssertionError as exc:
                 raise PreviewError(409, "cli_drift", f"CLI 在 preview 之後已變更：{exc}") from exc
             except NativeRuntimeUnavailable as exc:
