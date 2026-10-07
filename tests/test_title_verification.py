@@ -56,6 +56,32 @@ class TitleChecksTests(unittest.TestCase):
         r = boundary_check.title_checks([(1.0, I), (3.0, W), (4.0, W), (5.0, I)], typed_at=2.0)
         self.assertTrue(r["checks"]["spinner_cadence"]["pass"])
 
+    def test_bad_timestamps_fail_cleanly(self):
+        """Codex review r3: reversed, missing or non-finite times must fail, never raise."""
+        cases = {
+            "reversed": ([(1.0, I), (2.0, W), (1.5, W), (3.0, I)], 1.5),
+            "missing": ([(1.0, I), (None, W), (3.0, I)], 1.5),
+            "NaN": ([(1.0, I), (float("nan"), W), (3.0, W), (4.0, I)], 1.5),
+            "inf": ([(1.0, I), (2.0, W), (float("inf"), W)], 1.5),
+            "not a pair": ([(1.0, I), (2.0, W, "extra"), (3.0, I)], 1.5),
+            "typed_at NaN": ([(1.0, I), (2.0, W), (3.0, W), (4.0, I)], float("nan")),
+        }
+        for name, (events, typed) in cases.items():
+            with self.subTest(name):
+                r = boundary_check.title_checks(events, typed_at=typed)
+                self.assertFalse(r["passed"])
+                for check in r["checks"].values():
+                    self.assertFalse(check["pass"])
+                    self.assertTrue(check.get("why"))
+
+    def test_same_time_frames_are_not_spinner_evidence(self):
+        """Titles from one read share a timestamp; a 0 s gap proves nothing."""
+        r = boundary_check.title_checks([(1.0, I), (3.0, W), (3.0, W), (3.0, W), (4.0, I)], typed_at=2.0)
+        self.assertFalse(r["checks"]["spinner_cadence"]["pass"])
+        r = boundary_check.title_checks([(1.0, I), (3.0, W), (3.0, W), (3.9, W), (4.0, I)], typed_at=2.0)
+        self.assertTrue(r["checks"]["spinner_cadence"]["pass"])
+        self.assertEqual(r["checks"]["spinner_cadence"]["gaps"], 1)
+
     def test_never_typed_fails(self):
         r = boundary_check.title_checks([(1.0, I)], typed_at=None)
         self.assertFalse(r["checks"]["idle_before_prompt"]["pass"])

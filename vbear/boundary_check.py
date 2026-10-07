@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import pty
 import re
@@ -223,8 +224,43 @@ class TitleObservation:
         return self.tracker.state
 
 
+_TITLE_EXPECT = {
+    "idle_before_prompt": "✳ before the prompt is typed",
+    "working_after_prompt": "◐/◑ after the prompt",
+    "idle_after_turn": "✳ again after the last working frame",
+    "spinner_cadence": f"two or more working frames in a row, at most {SPINNER_STALE_S:g} s apart",
+}
+
+
+def _finite(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def _event_problem(events, typed_at) -> str | None:
+    """Why these events cannot be judged, or None. Times must be finite and
+    never go back; the order of events is what every check relies on."""
+    if typed_at is not None and not _finite(typed_at):
+        return "送出提示的時間不是有效的數字"
+    prev = None
+    for e in events:
+        if not (isinstance(e, (list, tuple)) and len(e) == 2 and isinstance(e[1], str)):
+            return "標題事件的格式不符"
+        if not _finite(e[0]):
+            return "標題事件缺少有效的時間"
+        if prev is not None and e[0] < prev:
+            return "標題事件的時間倒退"
+        prev = e[0]
+    return None
+
+
 def title_checks(events: list[tuple[float, str]], typed_at: float | None) -> dict:
-    """The four title checks for one interactive run (times relative to start)."""
+    """The four title checks for one interactive run (times relative to start).
+    Malformed, non-finite or backward times fail every check, with the reason."""
+    problem = _event_problem(events, typed_at)
+    if problem:
+        return {"passed": False, "problem": problem,
+                "checks": {n: {"pass": False, "expect": x, "why": problem} for n, x in _TITLE_EXPECT.items()},
+                "typed_at": typed_at if _finite(typed_at) else None, "events": []}
     before = [s for t, s in events if typed_at is None or t < typed_at]
     after = [(t, s) for t, s in events if typed_at is not None and t >= typed_at]
     working_times = [t for t, s in after if s == "working"]
@@ -232,25 +268,28 @@ def title_checks(events: list[tuple[float, str]], typed_at: float | None) -> dic
     idle_after = last_working is not None and any(
         s == "waiting" and t > last_working for t, s in after)
     # Gaps between consecutive working frames inside one uninterrupted working run.
-    # At least one gap must be measured: a single frame does not show the spinner
-    # keeps updating.
+    # Only gaps over 0 count: titles from one read share a timestamp, and a
+    # 0 s gap is not evidence that the spinner keeps updating. At least one
+    # such gap must be measured.
     max_gap, prev, gaps = 0.0, None, 0
     for t, s in after:
         if s == "working":
-            if prev is not None:
+            if prev is None:
+                prev = t
+            elif t > prev:
                 max_gap = max(max_gap, t - prev)
                 gaps += 1
-            prev = t
+                prev = t
         else:
             prev = None
     cadence_ok = gaps > 0 and max_gap <= SPINNER_STALE_S
     checks = {
         "idle_before_prompt": {"pass": typed_at is not None and "waiting" in before,
-                               "expect": "✳ before the prompt is typed"},
-        "working_after_prompt": {"pass": bool(working_times), "expect": "◐/◑ after the prompt"},
-        "idle_after_turn": {"pass": idle_after, "expect": "✳ again after the last working frame"},
+                               "expect": _TITLE_EXPECT["idle_before_prompt"]},
+        "working_after_prompt": {"pass": bool(working_times), "expect": _TITLE_EXPECT["working_after_prompt"]},
+        "idle_after_turn": {"pass": idle_after, "expect": _TITLE_EXPECT["idle_after_turn"]},
         "spinner_cadence": {"pass": cadence_ok,
-                            "expect": f"two or more working frames in a row, at most {SPINNER_STALE_S:g} s apart",
+                            "expect": _TITLE_EXPECT["spinner_cadence"],
                             "max_gap_s": round(max_gap, 3) if gaps else None, "gaps": gaps,
                             **({} if gaps else {"why": "沒有觀察到持續的轉圈更新（工作中的標題少於兩個連續畫面）"})},
     }
