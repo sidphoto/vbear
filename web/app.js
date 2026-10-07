@@ -4140,7 +4140,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       // silently showing it as a draft.
       const [label] = TASK_STATUS_LABELS[task.legacy_status] || [task.legacy_status];
       return el("div", { class: "wb-provenance-row small", style: "color:var(--warn)" },
-        `⚠️ 舊資料：這張卡以前直接標成「${label}」，但 Agent 回報狀態沒有跟著改，現在顯示為草稿。` +
+        `⚠️ 舊資料：這張卡以前直接標成「${label}」，但 Agent 回報狀態沒有跟著改；現在的狀態改依 Agent 回報、測試與核准判斷。` +
         "要標成完成或阻塞，請在第 1 欄重新選擇並附上結案理由。");
     }
     if (!c) {
