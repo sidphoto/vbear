@@ -94,6 +94,16 @@ class RunInteractiveTitleTests(unittest.TestCase):
         self.assertTrue(title["passed"], title)
         self.assertLess(took, 20)
 
+    def test_title_text_is_not_in_the_transcript_tail(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d) / "fake-claude"
+            fake.write_text(FAKE_TUI % {"py": sys.executable, "mode": "normal"})
+            fake.chmod(0o700)
+            tail, _ = boundary_check.run_interactive(
+                [str(fake)], {"PATH": "/usr/bin:/bin", "HOME": d}, d, Path(d) / "probe-result.json")
+        self.assertIn("ready", tail)       # ordinary output is kept
+        self.assertNotIn("task", tail)     # the title text ("◐ task", "✳ task") is not
+
     def test_never_returning_to_idle_fails_after_the_bounded_wait(self):
         title, took = self.run_fake("never-idle", idle_wait=2.0)
         self.assertFalse(title["checks"]["idle_after_turn"]["pass"])

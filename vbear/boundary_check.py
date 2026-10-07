@@ -333,7 +333,8 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
                 os.killpg(pgid, signal.SIGKILL)
             except OSError:
                 pass
-    text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(transcript)).decode("utf-8", "replace")
+    raw = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", bytes(transcript))  # titles: class only, above
+    text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", raw).decode("utf-8", "replace")
     return f"typed={typed_at is not None}\n{text[-2000:]}", title_checks(titles.events, typed_at)
 
 
