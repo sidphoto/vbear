@@ -82,9 +82,15 @@ class ClaudeVerifyTests(unittest.TestCase):
     def test_records_missing_fields_do_not_count(self):
         path = self.home / cli_versions.LOCAL_VERIFIED_FILE
         self.home.mkdir(parents=True, exist_ok=True)
+        good = self.home / "good.json"
+        good.write_text(json.dumps({"passed": True, "claude_version": "2.1.300"}))
+        other = self.home / "other.json"
+        other.write_text(json.dumps({"passed": True, "claude_version": "2.1.999"}))
         path.write_text(json.dumps({"versions": {
-            "2.1.299": {"passed": True},                                         # no report/binary/time
-            "2.1.300": {"passed": True, "report": "r", "binary": "b", "verified_at": "t"}}}))
+            "2.1.299": {"passed": True},                                          # no report/binary/time
+            "2.1.300": {"passed": True, "report": str(good), "binary": "b", "verified_at": "t"},
+            "2.1.301": {"passed": True, "report": str(self.home / "missing.json"), "binary": "b", "verified_at": "t"},
+            "2.1.302": {"passed": True, "report": str(other), "binary": "b", "verified_at": "t"}}}))
         self.assertEqual(sorted(cli_versions.local_verified_versions()), ["2.1.300"])
 
     def test_only_one_job_at_a_time(self):
@@ -95,8 +101,11 @@ class ClaudeVerifyTests(unittest.TestCase):
             thread.assert_not_called()
 
     def test_record_keeps_other_versions_and_ignores_garbage(self):
-        claude_verify.record_pass("2.1.299", "/x", {"interactive": "r1"})
-        claude_verify.record_pass("2.1.300", "/x", {"interactive": "r2"})
+        self.home.mkdir(parents=True, exist_ok=True)
+        for v in ("2.1.299", "2.1.300"):
+            (self.home / f"{v}.json").write_text(json.dumps({"passed": True, "claude_version": v}))
+        claude_verify.record_pass("2.1.299", "/x", {"interactive": str(self.home / "2.1.299.json")})
+        claude_verify.record_pass("2.1.300", "/x", {"interactive": str(self.home / "2.1.300.json")})
         self.assertEqual(sorted(cli_versions.local_verified_versions()), ["2.1.299", "2.1.300"])
         (self.home / cli_versions.LOCAL_VERIFIED_FILE).write_text("not json")
         self.assertEqual(cli_versions.local_verified_versions(), {})

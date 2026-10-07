@@ -422,6 +422,27 @@ class ManagedCase(unittest.TestCase):
         self.assertEqual(sorted(sessions.iterdir()) if sessions.exists() else [], [])  # prepared state removed
         self.assertEqual(self.rpc("list")["result"]["sessions"], [])
 
+    def test_daemon_refuses_unverified_without_a_recorded_acknowledgement(self):
+        """Tampering with the in-memory manifest or calling the daemon directly does
+        not help: the daemon decides from the version itself and its own state dir."""
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
+        with mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
+            rt = self.runtime()
+            # 1. Caller flips the in-memory flag to look verified.
+            prepared = rt.prepare_managed_claude_launch({"cwd": str(self.work)}, allowed_root=str(self.tmp))
+            self.scratches.append(prepared["manifest"]["scratch"]["path"])
+            prepared["manifest"]["cli_verified"] = True
+            with self.assertRaises(NativeRuntimeError) as c:
+                rt.launch_prepared_agent(prepared)
+            self.assertIn("unverified_not_acknowledged", str(c.exception))
+            # 2. Caller goes straight to the daemon's open_managed.
+            prepared = rt.prepare_managed_claude_launch({"cwd": str(self.work)}, allowed_root=str(self.tmp))
+            self.scratches.append(prepared["manifest"]["scratch"]["path"])
+            r = self.rpc("open_managed", launch_id=prepared["manifest"]["launch_id"])
+            self.assertFalse(r["ok"])
+            self.assertIn("unverified_not_acknowledged", r["error"]["message"])
+        self.assertEqual(self.rpc("list")["result"]["sessions"], [])
+
     def test_runtime_entry_rejects_extra_spec_fields(self):
         for extra in ({"argv": ["x"]}, {"env": {}}, {"settings": "x"}):
             with self.subTest(extra=list(extra)):

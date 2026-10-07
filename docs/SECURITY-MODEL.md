@@ -76,8 +76,11 @@ Other safeguards:
 - **Unverified Claude Code versions are labelled, not hidden.** A genuine Claude Code release that is not on the
   verified list (built-in, or verified on this Mac and recorded in `~/.vbear/claude-verified.json`) still gets the
   same sandbox settings, but Write, Network and Filesystem are labelled **unverified** with no evidence, and the
-  launch is refused unless the request carries `accept_unverified_cli: true` (the dialog's checkbox). The internal
-  one-shot launch path never starts an unverified version. Output that is not a Claude Code version is still refused.
+  launch is refused unless the request carries `accept_unverified_cli: true` (the dialog's checkbox). The confirm
+  step records that acknowledgement in the launch's manifest in the state directory, and the **runtime daemon**,
+  which actually starts the process, decides on its own from the version whether it is verified and refuses an
+  unverified one without that record. The internal one-shot launch path never starts an unverified version. Output
+  that is not a Claude Code version is still refused.
   When a verified version is installed, it is used in preference to a newer unverified one.
 - **The version is what the program says it is.** The gate reads `claude --version`; it is not binary
   authentication. VBear prefers Claude Code's own versioned install (`~/.local/share/claude/versions/<version>`),

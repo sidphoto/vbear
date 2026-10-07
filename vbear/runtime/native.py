@@ -33,6 +33,7 @@ import re
 import secrets
 import socket
 import threading
+import time
 from pathlib import Path
 
 from .. import config as cfg
@@ -551,14 +552,17 @@ class NativeRuntime(RuntimeBase):
         """
         manifest, assertion = prepared["manifest"], prepared["assertion"]
         base = self._base or cfg.state_dir()
-        if manifest.get("cli_verified") is False and unverified_acknowledged is not True:
-            # The gate sits here, in the one step every launch goes through, not
-            # only in the preview flow above it.
-            _agent_sessions.discard_prepared(base, manifest["launch_id"])
-            raise _cli_versions.VersionAssertionError(_cli_versions._blocked(
-                "claude", "unverified_not_acknowledged",
-                f"Claude Code {manifest.get('cli_version')} 尚未驗證，需要使用者明確知悉才能啟動",
-                observed=manifest.get("cli_version"), binary_path=manifest.get("cli_binary")))
+        if manifest.get("cli_verified") is False:
+            if unverified_acknowledged is not True:
+                _agent_sessions.discard_prepared(base, manifest["launch_id"])
+                raise _cli_versions.VersionAssertionError(_cli_versions._blocked(
+                    "claude", "unverified_not_acknowledged",
+                    f"Claude Code {manifest.get('cli_version')} 尚未驗證，需要使用者明確知悉才能啟動",
+                    observed=manifest.get("cli_version"), binary_path=manifest.get("cli_binary")))
+            # Recorded in the state directory, where the daemon (which decides on
+            # its own whether the version is verified) looks for it.
+            _agent_sessions.update_manifest(base, manifest["launch_id"], unverified_acknowledged=True,
+                                            unverified_acknowledged_at=time.time())
         dims = {}
         for dim, value in (("cols", cols), ("rows", rows)):
             if value is not None:

@@ -51,7 +51,22 @@ def local_verified_versions() -> dict:
         return {}
     return {v: r for v, r in versions.items()
             if isinstance(v, str) and _VERSION_RE.match(v) and isinstance(r, dict) and r.get("passed") is True
-            and all(isinstance(r.get(k), str) and r.get(k) for k in ("report", "binary", "verified_at"))}
+            and all(isinstance(r.get(k), str) and r.get(k) for k in ("report", "binary", "verified_at"))
+            and _report_backs(r, v)}
+
+
+def _report_backs(record: dict, version: str) -> bool:
+    """Every recorded report exists, is the check's output, passed, and is for this version."""
+    reports = record.get("reports")
+    paths = list(reports.values()) if isinstance(reports, dict) and reports else [record["report"]]
+    for path in paths:
+        try:
+            data = json.loads(Path(path).read_text())
+        except (OSError, ValueError, TypeError):
+            return False
+        if not (isinstance(data, dict) and data.get("passed") is True and data.get("claude_version") == version):
+            return False
+    return True
 
 
 def verified_versions(engine: str) -> tuple[str, ...]:

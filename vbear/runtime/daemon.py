@@ -1236,6 +1236,16 @@ class Daemon:
             m = agent_sessions.load_validated(self.base, launch_id)
             if m.get("state") != "prepared" or m.get("native_session_id"):
                 raise agent_sessions.LaunchRefused("consumed", "此 launch 已使用或不可啟動")
+            # The daemon decides itself whether the version is verified (not from a
+            # caller's flag or the manifest's own field); an unverified one starts only
+            # with the acknowledgement the confirm step recorded in this state dir.
+            from . import cli_versions  # here: cli_versions imports this module
+            if (m["engine"] == "claude"
+                    and m.get("cli_version") not in cli_versions.verified_versions("claude")
+                    and m.get("unverified_acknowledged") is not True):
+                raise agent_sessions.LaunchRefused(
+                    "unverified_not_acknowledged",
+                    f"Claude Code {m.get('cli_version')} 尚未驗證，需要使用者在確認畫面明確知悉")
             argv = agent_sessions.managed_argv(m)
             cwd = m["canonical_workspace"]
             env = build_env()

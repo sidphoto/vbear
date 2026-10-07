@@ -222,6 +222,8 @@ class PreviewApiCase(ServerCase):
     def test_locally_verified_version_counts_as_verified(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
         report = str(self.home / "verifications" / "claude-2.1.287-interactive.json")
+        Path(report).parent.mkdir(mode=0o700)
+        Path(report).write_text(json.dumps({"passed": True, "claude_version": "2.1.287"}))
         (self.home / "claude-verified.json").write_text(json.dumps({"versions": {
             "2.1.287": {"passed": True, "report": report, "binary": str(self.binary),
                         "verified_at": "2026-10-07T15:38:32+0800"},
