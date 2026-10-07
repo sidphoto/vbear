@@ -1052,7 +1052,33 @@ async function runWorkbenchTests() {
     console.log("ok: Category 19 - handoff and closure dialogs post only complete custody records");
   }
 
-  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (19/19 categories verified)");
+  // 20. A card an older version stored as blocked through the raw status
+  // alone (tasks.legacy_status) says so instead of silently reading as a draft.
+  {
+    const sample = (await FETCH_ROUTES["/api/tasks"]().json()).tasks[0];
+    const realFetch = global.fetch;
+    global.fetch = async (url, opts = {}) => {
+      if (String(url).split("?")[0] === "/api/tasks" && !opts.method) {
+        return jsonResponse({ ok: true, tasks: [{ ...sample, status: "draft", legacy_status: "blocked" }] });
+      }
+      return realFetch(url, opts);
+    };
+    try {
+      global.location.hash = "#/workbench";
+      dom = resetDom();
+      mainEl = dom.mainEl;
+      await app.route();
+      mainEl.find((n) => n.getAttribute("role") === "tab" && n.textContent.includes("[T]")).click();
+      const warning = mainEl.find((n) => n.tag === "div" && n.textContent.startsWith("⚠️ 舊資料："));
+      assert.ok(warning, "a legacy raw-status card must carry a visible warning");
+      assert.ok(warning.textContent.includes("「等待回覆 / 阻塞」"), "the warning must name what the card used to claim");
+    } finally {
+      global.fetch = realFetch;
+    }
+    console.log("ok: Category 20 - legacy raw-status cards are flagged, not silently downgraded");
+  }
+
+  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (20/20 categories verified)");
 }
 
 runWorkbenchTests()

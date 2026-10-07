@@ -315,6 +315,23 @@ class ClosureTests(_Store):
                              ("draft", "pending", None, False), raw)
         self.assertEqual(tasks.save_task(None, {"title": "x", "status": "in_progress"})["status"], "in_progress")
 
+    def test_raw_status_cards_from_older_versions_are_flagged_not_silently_downgraded(self):
+        # Review R2 finding: such a card used to read "blocked" and now derives
+        # to "draft"; legacy_status keeps what it claimed until the agent
+        # field is set.
+        legacy = {"t-raw": {"id": "t-raw", "title": "raw", "status": "blocked",
+                            "provenance": {"agent": "pending", "tests": "untested", "human": "pending"},
+                            "created_at": 1.0, "updated_at": 1.0}}
+        cfg.write_private(tasks._path(), json.dumps(legacy))
+        t = tasks.get_task("t-raw")
+        self.assertEqual((t["status"], t["legacy_status"], t["closure_missing"]), ("draft", "blocked", False))
+        t = tasks.save_task("t-raw", {"title": "raw, renamed"})
+        self.assertEqual((t["status"], t["legacy_status"]), ("draft", "blocked"))
+        self.assertEqual(json.loads(tasks._path().read_text())["t-raw"]["legacy_status"], "blocked")
+        t = tasks.save_task("t-raw", {"provenance": {"agent": "in_progress"}})
+        self.assertEqual((t["status"], t["legacy_status"]), ("in_progress", None))
+        self.assertIsNone(tasks.save_task(None, {"title": "new", "status": "blocked"})["legacy_status"])
+
     def test_records_saved_before_the_rule_still_load_and_are_flagged(self):
         legacy = {"t-old": {"id": "t-old", "title": "old", "status": "agent_completed",
                             "provenance": {"agent": "completed", "tests": "untested", "human": "pending"},

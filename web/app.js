@@ -4135,6 +4135,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   // the work went if it was handed off.
   function closureRow(task) {
     const c = task.closure;
+    if (task.legacy_status) {
+      // tasks.LEGACY_RAW_STATUSES: say what the old card claimed instead of
+      // silently showing it as a draft.
+      const [label] = TASK_STATUS_LABELS[task.legacy_status] || [task.legacy_status];
+      return el("div", { class: "wb-provenance-row small", style: "color:var(--warn)" },
+        `⚠️ 舊資料：這張卡以前直接標成「${label}」，但 Agent 回報狀態沒有跟著改，現在顯示為草稿。` +
+        "要標成完成或阻塞，請在第 1 欄重新選擇並附上結案理由。");
+    }
     if (!c) {
       return task.closure_missing
         ? el("div", { class: "wb-provenance-row small", style: "color:var(--warn)" },

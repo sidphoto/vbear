@@ -90,6 +90,10 @@ VALID_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 # excluded for the same reason: they come only from the agent field, which
 # cannot reach them without a closure reason.
 CLIENT_ASSERTABLE_STATUSES = ("draft", "in_progress")
+# Raw statuses older versions accepted without the agent field. A card stored
+# that way now derives to "draft"; legacy_status keeps what it said, so the UI
+# can say so instead of silently downgrading it.
+LEGACY_RAW_STATUSES = ("agent_completed", "blocked")
 
 # What may follow when the agent field moves to "completed" or "blocked".
 CLOSURE_REASONS = {
@@ -661,6 +665,19 @@ def _binding(task: dict[str, Any], heads) -> dict[str, Any]:
             "detail": f"結果對應目前的 commit {_short(commit)}（只比對 commit，看不到未提交的修改）"}
 
 
+def _legacy_status(task: dict[str, Any]) -> str | None:
+    """The raw completed/blocked status an older version stored without the
+    agent field, or None. Read from the persisted marker, else from the stored
+    status of a card not saved since this rule."""
+    marker = task.get("legacy_status")
+    if marker in LEGACY_RAW_STATUSES:
+        return marker
+    agent = (task.get("provenance") or {}).get("agent")
+    if task.get("status") in LEGACY_RAW_STATUSES and agent not in ("completed", "blocked"):
+        return task["status"]
+    return None
+
+
 def _derive(task: dict[str, Any], heads=None) -> dict[str, Any]:
     """Recompute everything that depends on the outside world (the commit the
     workdir is on now). Called on every read and after every write, so a
@@ -697,6 +714,7 @@ def _derive(task: dict[str, Any], heads=None) -> dict[str, Any]:
     out["status"] = status
     out["verification_binding"] = binding
     out["closure_missing"] = agent in ("completed", "blocked") and closure is None
+    out["legacy_status"] = _legacy_status(task)
     return out
 
 
@@ -841,6 +859,12 @@ def _validate_and_normalize(
 
     raw_status = _clean_str(body.get("status") or (existing.get("status") if existing else ""), 32)
 
+    # A card an older version stored as completed/blocked through the raw
+    # status alone keeps that fact until someone sets the agent field.
+    legacy_status = _legacy_status(existing) if existing else None
+    if existing and agent_status != existing_prov.get("agent", "pending"):
+        legacy_status = None
+
     provenance = {
         "agent": agent_status,
         "agent_set_at": agent_set_at,
@@ -899,6 +923,7 @@ def _validate_and_normalize(
         "status": raw_status if raw_status in CLIENT_ASSERTABLE_STATUSES else "draft",
         "provenance": provenance,
         "closure": closure,
+        "legacy_status": legacy_status,
         # Set only by handoff_task(), never from a request body.
         "handed_off_from": existing.get("handed_off_from") if existing else None,
         "chain_of_record": list(existing.get("chain_of_record") or []) if existing else [],

@@ -80,7 +80,9 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
   `packed-refs` as plain bounded files, including linked worktrees; it never runs `git`.
 - **Closure.** Moving the agent field to `completed` or `blocked` requires a reason saying what follows
   (`no_follow_on`, `handed_off_to`, `superseded`, `canceled`, `denied`; `blocked_on`, `escalation`), with a target for
-  the reasons that name someone. Older cards without one load and are flagged `closure_missing`.
+  the reasons that name someone. Older cards without one load and are flagged `closure_missing`. A raw
+  `status` can no longer stand in for the agent field; cards an older version stored that way derive to `draft`
+  and carry `legacy_status`, which the UI shows until the agent field is set.
 - **Handoff.** `POST /api/tasks/<id>/handoff` closes the card as `handed_off_to` and creates its successor in one
   locked write. The successor copies the contract and workdir, starts with fresh provenance, and carries
   `handed_off_from` and `chain_of_record`, which nothing else can set.

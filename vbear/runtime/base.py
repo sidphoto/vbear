@@ -28,10 +28,12 @@ User-facing contract:
                                   Doctor / Store paths do not need their
                                   shape renamed just to migrate
   validate_target(t)      -> bool  syntax-level id check
-  status(session_id)      -> str   ``idle`` / ``working`` / ``exited`` /
-                                  ``unknown``. ``unknown`` whenever the
-                                  backend cannot tell, per the project's
-                                  standing "no data → say unknown" rule.
+  status(session_id)      -> str   ``working`` / ``waiting`` /
+                                  ``needs-input`` / ``exited`` / ``unknown``
+                                  (vbear.activity display values).
+                                  ``unknown`` whenever the backend cannot
+                                  tell, per the project's standing
+                                  "no data → say unknown" rule.
   observe(session_id)     -> SessionView | None
   control(session_id)     -> SessionView | None
   release(session_id)     -> SessionView | None
