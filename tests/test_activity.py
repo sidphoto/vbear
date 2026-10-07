@@ -74,6 +74,14 @@ class TitleTrackerTests(unittest.TestCase):
         tr = feed_all([b"\x1b]0;\xe2\x97\x90 half\x1b", b"]0;\xe2\x9c\xb3 next\x07"])
         self.assertEqual((tr.state, tr.titles), ("waiting", 1))
 
+    def test_can_and_sub_cancel_a_title(self):
+        # Review finding: a cancelled title must not count as one.
+        for cancel in (b"\x18", b"\x1a"):
+            tr = feed_all([b"\x1b]0;\xe2\x97\x90 partial" + cancel + b"\x07"])
+            self.assertEqual((tr.state, tr.titles), (None, 0), cancel)
+            tr = feed_all([b"\x1b]0;\xe2\x97\x90 partial" + cancel, T("✳ next").encode()])
+            self.assertEqual((tr.state, tr.titles), ("waiting", 1), cancel)
+
     def test_snapshot_never_contains_title_text(self):
         tr = feed_all([T("◐ a secret task summary").encode()])
         snap = tr.snapshot()

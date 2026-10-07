@@ -2381,7 +2381,9 @@ function computeTaskProvenance(prov = {}, rawStatus = "draft", closure = null) {
     derivedStatus = "in_progress";
   } else if (agent === "blocked") {
     derivedStatus = "blocked";
-  } else if (["draft", "in_progress", "blocked", "agent_completed"].includes(rawStatus)) {
+  } else if (["draft", "in_progress"].includes(rawStatus)) {
+    // Mirrors tasks.CLIENT_ASSERTABLE_STATUSES: completed and blocked come
+    // only from the agent field, which requires a closure reason.
     // "verification_asserted" is deliberately excluded here too (mirrors
     // tasks.py H1): it must only ever be derived from verificationAsserted
     // above, never accepted as a raw status string, or a stale/forged

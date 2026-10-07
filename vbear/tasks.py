@@ -86,8 +86,10 @@ VALID_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 # is deliberately excluded: it must only ever be derived from provenance (see
 # _validate_and_normalize below), never accepted as a raw client-asserted
 # string, or a client could forge a verification-looking status without
-# passing tests or human approval.
-CLIENT_ASSERTABLE_STATUSES = ("draft", "in_progress", "blocked", "agent_completed")
+# passing tests or human approval. "agent_completed" and "blocked" are
+# excluded for the same reason: they come only from the agent field, which
+# cannot reach them without a closure reason.
+CLIENT_ASSERTABLE_STATUSES = ("draft", "in_progress")
 
 # What may follow when the agent field moves to "completed" or "blocked".
 CLOSURE_REASONS = {

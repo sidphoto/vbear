@@ -24,6 +24,8 @@ MAX_OSC = 4096  # longer OSC strings are skipped, not buffered
 
 ESC = 0x1B
 BEL = 0x07
+CAN = b"\x18"  # CAN and SUB cancel a control string (ECMA-48)
+SUB = b"\x1a"
 OSC_START = b"\x1b]"
 ST_FINAL = 0x5C  # the "\" of ESC \
 
@@ -90,7 +92,8 @@ class TitleTracker:
                 continue
             bel = data.find(b"\x07", i)
             esc = data.find(b"\x1b", i)
-            stops = [k for k in (bel, esc) if k >= 0]
+            cancel = [k for k in (data.find(CAN, i), data.find(SUB, i)) if k >= 0]
+            stops = [k for k in (bel, esc, *cancel) if k >= 0]
             if not stops:
                 self._append(data[i:])
                 return
@@ -98,6 +101,9 @@ class TitleTracker:
             self._append(data[i:k])
             if k == bel:
                 self._finish(now)
+                i = k + 1
+            elif k in cancel:
+                self._in_osc = False
                 i = k + 1
             elif k + 1 >= n:
                 self._esc = True

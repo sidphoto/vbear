@@ -331,6 +331,11 @@ async function runWorkbenchTests() {
     assert.strictEqual(computeTaskProvenance({ agent: "completed" }, "draft", { reason: "canceled" }).derivedStatus, "closed");
     assert.strictEqual(computeTaskProvenance({ agent: "completed" }, "draft", { reason: "no_follow_on" }).derivedStatus, "agent_completed");
     for (const st of ["verification_stale", "handed_off", "closed"]) assert.ok(TASK_STATUS_LABELS[st], st);
+    // A raw completed/blocked status no longer stands in for the agent field
+    // (it would skip the closure reason).
+    for (const raw of ["agent_completed", "blocked", "handed_off", "closed"]) {
+      assert.strictEqual(computeTaskProvenance({ agent: "pending" }, raw).derivedStatus, "draft", raw);
+    }
 
     const prov4 = computeTaskProvenance({ agent: "in_progress", tests: "untested", human: "pending" });
     assert.strictEqual(prov4.derivedStatus, "in_progress");

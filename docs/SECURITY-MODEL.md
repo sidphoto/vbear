@@ -116,8 +116,8 @@ Other safeguards:
 - **Commit binding never runs `git`.** Repository config (clean filters, fsmonitor and the like) can make git
   execute programs, and a managed Agent may write `.git` once commit is acknowledged; a git command run by the
   console would run that code outside every sandbox. `git_head` reads `HEAD`, refs and `packed-refs` as plain files
-  instead: symlinked `.git`, `HEAD` and ref files are refused, sizes are capped, and every ref name and hash is
-  validated. Nothing read is shown except a validated hash or ref name.
+  instead: symlinked `.git`, `HEAD` and ref files are refused, files are opened non-blocking so a FIFO planted in
+  `.git` is refused instead of hanging the request, sizes are capped, and every ref name and hash is validated. Nothing read is shown except a validated hash or ref name.
 - **The binding notices change; it does not authenticate history.** Anyone who can write `.git` can point HEAD
   anywhere, including back to the approved commit. Uncommitted changes are not seen.
 - Results, approvals, closure reasons and handoffs are still set through the same unauthenticated local UI/API, and

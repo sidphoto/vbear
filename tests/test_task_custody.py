@@ -99,6 +99,24 @@ class GitHeadTests(unittest.TestCase):
             self.assertIsNone(head["commit"], name)
             self.assertTrue(head["error"], name)
 
+    def test_a_fifo_never_blocks_the_read(self):
+        # Review finding: open() on a FIFO without O_NONBLOCK waits forever.
+        for where in ("HEAD", "refs/heads/main", "packed-refs"):
+            repo = fake_repo(self.tmp / f"fifo-{where.replace('/', '-')}",
+                             refs={} if where == "packed-refs" else None)
+            target = repo / ".git" / where
+            if target.exists():
+                target.unlink()
+            os.mkfifo(target)
+            done = {}
+            worker = threading.Thread(target=lambda: done.setdefault("head", git_head.read_head(str(repo))),
+                                      daemon=True)
+            worker.start()
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), f"read_head blocked on a FIFO {where}")
+            self.assertIsNone(done["head"]["commit"], where)
+            self.assertIn("不是一般檔案", done["head"]["error"], where)
+
     def test_symlinked_dot_git_is_not_followed(self):
         real = fake_repo(self.tmp / "real")
         link = self.tmp / "link"
@@ -289,6 +307,14 @@ class ClosureTests(_Store):
         reopened = tasks.save_task(t["id"], {"provenance": {"agent": "in_progress"}})
         self.assertIsNone(reopened["closure"])
 
+    def test_raw_status_cannot_stand_in_for_completion_or_blocking(self):
+        # Review finding: status="agent_completed"/"blocked" used to bypass closure.
+        for raw in ("agent_completed", "blocked", "verification_asserted", "handed_off", "closed"):
+            t = tasks.save_task(None, {"title": raw, "status": raw})
+            self.assertEqual((t["status"], t["provenance"]["agent"], t["closure"], t["closure_missing"]),
+                             ("draft", "pending", None, False), raw)
+        self.assertEqual(tasks.save_task(None, {"title": "x", "status": "in_progress"})["status"], "in_progress")
+
     def test_records_saved_before_the_rule_still_load_and_are_flagged(self):
         legacy = {"t-old": {"id": "t-old", "title": "old", "status": "agent_completed",
                             "provenance": {"agent": "completed", "tests": "untested", "human": "pending"},
@@ -448,6 +474,8 @@ class CustodyAPITests(unittest.TestCase):
         status, data = self.req("/api/tasks", "POST", {"title": "x", "provenance": {"agent": "completed"}})
         self.assertEqual(status, 400)
         self.assertIn("結案理由", data["error"])
+        status, data = self.req("/api/tasks", "POST", {"title": "x", "status": "agent_completed"})
+        self.assertEqual((status, data["task"]["status"]), (200, "draft"))
 
 
 if __name__ == "__main__":

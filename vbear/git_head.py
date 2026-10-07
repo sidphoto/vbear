@@ -40,9 +40,12 @@ class _Unreadable(Exception):
 
 
 def _read_small(path: Path, limit: int = MAX_SMALL_FILE) -> str | None:
-    """A regular, non-symlinked file's text, or None if it does not exist."""
+    """A regular, non-symlinked file's text, or None if it does not exist.
+
+    O_NONBLOCK keeps a FIFO planted in .git from blocking the open (and the
+    request) forever; it is then refused as not a regular file."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
     except OSError as exc:
