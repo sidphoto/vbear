@@ -185,6 +185,25 @@ class ArbitrateEntryTests(unittest.TestCase):
         # The good case is still read.
         self.assertEqual(activity.arbitrate(self.info(), self.NOW)["activity"], "working")
 
+    def test_extreme_but_finite_times(self):
+        """Codex review r5: each value finite, their difference not (age overflowed to inf)."""
+        big = 1.7976931348623157e308
+        pairs = [(big, -big), (-big, big), (1e308, -1e308), (big, big), (big, 1.0),
+                 (-1.0, 999.0), (1000.0, -1.0), (0.0, 0.0), (1000.0, 0.0), (0.0, -5.0)]
+        for now, last_seen in pairs:
+            with self.subTest(now=now, last_seen=last_seen):
+                r = activity.arbitrate(self.info(last_seen=last_seen), now)
+                self.assertEqual(r["activity"], "unknown")
+                self.assertTrue(r["reason"])
+
+    def test_title_checks_with_extreme_times_never_raise(self):
+        big = 1.7976931348623157e308
+        for events, typed in (([[0.0, "waiting"], [big / 2, "working"], [big, "working"], [big, "waiting"]], 1.0),
+                              ([[0.0, "waiting"], [1.0, "working"], [big, "working"], [big, "waiting"]], 0.5),
+                              ([[0.0, "waiting"], [1.0, "working"]], big)):
+            r = title_check.title_checks(events, typed)
+            self.assertFalse(r["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()

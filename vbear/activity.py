@@ -91,6 +91,14 @@ SPINNER_STALE_S = 5.0
 # Together with SPINNER_STALE_S this bounds how long "working" can still show
 # after the spinner stops: at most SPINNER_STALE_S + CLOCK_SKEW_S (about 7 s).
 CLOCK_SKEW_S = 2.0
+# Timestamps here are Unix epoch seconds: a usable one is positive and below
+# this bound (about the year 5138). Anything else is not a time.
+MAX_EPOCH_S = 1e11
+
+
+def _epoch(value) -> float | None:
+    t = finite_real(value)
+    return t if t is not None and 0 < t < MAX_EPOCH_S else None
 
 
 def display_value(session: str, activity: str, needs_input: dict) -> str:
@@ -115,12 +123,15 @@ def _title_reading(title: dict, now: float) -> tuple[str, str]:
     if state is None:
         return "unknown", "尚未收到 Claude 的終端標題（可能停在啟動時的信任確認畫面）"
     if state == "working":
-        seen = finite_real(last_seen)
+        seen = _epoch(last_seen)
         if seen is None:
             return "unknown", "工作中的標題沒有有效的時間紀錄"
         if now is None:
             return "unknown", "主控台的現在時間無效，無法判斷"
-        age = now - seen
+        # Both are in (0, MAX_EPOCH_S), so the difference is finite; checked anyway.
+        age = finite_real(now - seen)
+        if age is None:
+            return "unknown", "工作中的標題時間無法計算，不採用"
         if age < -CLOCK_SKEW_S:
             return "unknown", "工作中的標題時間在未來（時鐘不一致），不採用"
         if age > SPINNER_STALE_S:
@@ -143,7 +154,7 @@ def arbitrate(info: dict, now: float | None = None) -> dict:
     evidence considered, consulted or not."""
     # ``now`` and everything in ``info`` may come from outside; anything not
     # usable reads as unknown, never raises.
-    now = finite_real(time.time() if now is None else now)
+    now = _epoch(time.time() if now is None else now)
     if not isinstance(info, dict):
         info = {}
     session = "exited" if info.get("exited") else "present"
