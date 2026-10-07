@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from . import config as cfg
+from . import title_check
 from .runtime import cli_versions
 
 MODES = ("headless", "interactive")
@@ -124,14 +125,15 @@ def _title_result(report: Path) -> dict:
     except (OSError, ValueError):
         data = None
     title = data.get("title") if isinstance(data, dict) else None
-    checks = title.get("checks") if isinstance(title, dict) else None
-    if not isinstance(checks, dict) or not checks:
+    if not isinstance(title, dict):
         return {"passed": False, "failed": ["title_check_missing"], "report": str(report)}
-    failed = [n for n in cli_versions.TITLE_CHECKS
-              if not (isinstance(checks.get(n), dict) and checks[n].get("pass") is True)]
-    failed += [n for n in checks if n not in cli_versions.TITLE_CHECKS]  # unexpected entries
-    passed = (title.get("passed") is True and not failed
-              and cli_versions.title_checks_all_passed(checks))
+    # Judged again from the report's own events, not from its summary.
+    rejudged = title_check.title_checks(title.get("events"), title.get("typed_at"))
+    failed = [n for n, c in rejudged["checks"].items() if not c["pass"]]
+    version = data.get("claude_version")
+    passed = isinstance(version, str) and title_check.report_title_passes(data, version)
+    if not passed and not failed:
+        failed = ["title_summary_disagrees"]
     return {"passed": passed, "failed": failed, "report": str(report)}
 
 

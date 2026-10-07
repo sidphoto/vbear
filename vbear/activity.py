@@ -34,8 +34,9 @@ wrong one.
 
 from __future__ import annotations
 
-import math
 import time
+
+from .numbers import finite_real
 
 SESSION_VALUES = ("present", "exited")
 ACTIVITY_VALUES = ("working", "waiting", "unknown")
@@ -87,6 +88,8 @@ SPINNER_STALE_S = 5.0
 # A working title stamped up to this far in the future still counts: the
 # daemon stamps it, the console reads it, and their clocks are the same
 # machine's but sampled at different moments. Further ahead is not trusted.
+# Together with SPINNER_STALE_S this bounds how long "working" can still show
+# after the spinner stops: at most SPINNER_STALE_S + CLOCK_SKEW_S (about 7 s).
 CLOCK_SKEW_S = 2.0
 
 
@@ -112,10 +115,12 @@ def _title_reading(title: dict, now: float) -> tuple[str, str]:
     if state is None:
         return "unknown", "尚未收到 Claude 的終端標題（可能停在啟動時的信任確認畫面）"
     if state == "working":
-        if (not isinstance(last_seen, (int, float)) or isinstance(last_seen, bool)
-                or not math.isfinite(last_seen)):
+        seen = finite_real(last_seen)
+        if seen is None:
             return "unknown", "工作中的標題沒有有效的時間紀錄"
-        age = now - last_seen
+        if now is None:
+            return "unknown", "主控台的現在時間無效，無法判斷"
+        age = now - seen
         if age < -CLOCK_SKEW_S:
             return "unknown", "工作中的標題時間在未來（時鐘不一致），不採用"
         if age > SPINNER_STALE_S:
@@ -136,13 +141,18 @@ def arbitrate(info: dict, now: float | None = None) -> dict:
     ``activity_evidence``). The result is the single arbitrated answer every
     surface renders from, with the rung that decided it and every piece of
     evidence considered, consulted or not."""
-    now = time.time() if now is None else now
+    # ``now`` and everything in ``info`` may come from outside; anything not
+    # usable reads as unknown, never raises.
+    now = finite_real(time.time() if now is None else now)
+    if not isinstance(info, dict):
+        info = {}
     session = "exited" if info.get("exited") else "present"
     activity, decided_by, reason = "unknown", None, ""
     evidence: list[dict] = []
     engine = info.get("engine")
     managed = bool(info.get("managed"))
-    title = (info.get("activity_evidence") or {}).get("claude_title")
+    evidence_in = info.get("activity_evidence")
+    title = evidence_in.get("claude_title") if isinstance(evidence_in, dict) else None
 
     if engine == "claude" and managed and isinstance(title, dict):
         version = info.get("cli_version")

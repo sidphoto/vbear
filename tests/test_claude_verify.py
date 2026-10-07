@@ -88,9 +88,13 @@ class ClaudeVerifyTests(unittest.TestCase):
         other.write_text(json.dumps({"passed": True, "claude_version": "2.1.999"}))
         path.write_text(json.dumps({"versions": {
             "2.1.299": {"passed": True},                                          # no report/binary/time
-            "2.1.300": {"passed": True, "report": str(good), "binary": "b", "verified_at": "t"},
-            "2.1.301": {"passed": True, "report": str(self.home / "missing.json"), "binary": "b", "verified_at": "t"},
-            "2.1.302": {"passed": True, "report": str(other), "binary": "b", "verified_at": "t"}}}))
+            "2.1.300": {"passed": True, "report": str(good), "binary": "b", "verified_at": "t",
+                        "reports": {"interactive": str(good)}},
+            "2.1.301": {"passed": True, "report": str(self.home / "missing.json"), "binary": "b", "verified_at": "t",
+                        "reports": {"interactive": str(self.home / "missing.json")}},
+            "2.1.302": {"passed": True, "report": str(other), "binary": "b", "verified_at": "t",
+                        "reports": {"interactive": str(other)}},
+            "2.1.303": {"passed": True, "report": str(good), "binary": "b", "verified_at": "t"}}}))  # no reports map
         self.assertEqual(sorted(cli_versions.local_verified_versions()), ["2.1.300"])
 
     def test_only_one_job_at_a_time(self):

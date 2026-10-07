@@ -70,8 +70,12 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
   and for versions whose title check passed on this Mac (`cli_versions.local_title_verified_versions`, from
   「驗證這個版本」); trial for any other version.
 - **Title check.** `boundary_check`'s interactive run feeds the PTY output to `TitleTracker` and checks the idle mark
-  before the prompt, the spinner after it, the idle mark after the turn, and the spinner cadence. The result goes to
-  the report's `title`, and `claude_verify` records it beside the boundary result.
+  before the prompt, the spinner after it, the idle mark after the turn, and the spinner cadence (at least one gap
+  over 0 s between working frames, none over `SPINNER_STALE_S`). The judge is `vbear/title_check.py`; readers of a
+  report (`cli_versions`, `claude_verify`) run it again on the report's events. Numbers from reports, records and
+  evidence go through `vbear/numbers.finite_real` (finite reals only, never raises).
+- **Working freshness.** A working title counts while `-CLOCK_SKEW_S <= now - last_seen <= SPINNER_STALE_S`, so
+  "working" can still show for up to `SPINNER_STALE_S + CLOCK_SKEW_S` (about 7 s) after the spinner stops.
 - The result carries `decided_by`, a reason and every piece of evidence. The UI's status badges, the home page's
   「需要你處理」 list (only `waiting` / `needs-input`) and task-card pickup all read this one answer; without
   usable evidence it is `unknown`.

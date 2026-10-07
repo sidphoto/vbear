@@ -48,7 +48,7 @@ NETWORK_VERIFIED = True
 def _last_title_failure(engine: str | None, version: str) -> list[str] | None:
     """Failed title checks of this version's last verification on this Mac,
     or None when there is no failed title result to report."""
-    if engine != "claude":
+    if engine != "claude" or not isinstance(version, str):
         return None
     record = cli_versions.local_verified_versions().get(version) or {}
     title = record.get("title")
@@ -70,6 +70,8 @@ def claude_evidence(version: str, section: str) -> str | None:
     """Evidence for a verified Claude Code version: the public page for a
     built-in one, the local report for one verified on this machine, None
     for an unverified version."""
+    if not isinstance(version, str):
+        return None
     if version in cli_versions.VERIFIED_VERSIONS["claude"]:
         return f"{EVIDENCE_DIR}/claude-code-{version}.md#{section}"
     record = cli_versions.local_verified_versions().get(version)

@@ -18,6 +18,9 @@ from vbear import activity, boundary_check, claude_verify
 from vbear.runtime import cli_versions
 
 W, I = "working", "waiting"
+# Events of a normal turn, as a report records them (prompt typed at 2.0 s).
+GOOD_EVENTS = [[1.0, I], [3.0, W], [4.0, W], [5.0, W], [6.0, I]]
+GOOD_TYPED_AT = 2.0
 
 
 class TitleChecksTests(unittest.TestCase):
@@ -173,7 +176,8 @@ class TitleRecordTests(unittest.TestCase):
         if not title_pass:
             checks["idle_after_turn"]["pass"] = False
         path.write_text(json.dumps({"passed": True, "claude_version": version,
-                                    "title": {"passed": title_pass, "checks": checks}}))
+                                    "title": {"passed": title_pass, "checks": checks,
+                                              "events": GOOD_EVENTS, "typed_at": GOOD_TYPED_AT}}))
         return str(path)
 
     def record(self, version, *, title_pass=True):
@@ -228,7 +232,8 @@ class TitleRecordTests(unittest.TestCase):
         def report(checks, passed=True):
             path = self.home / f"r{len(list(self.home.iterdir()))}.json"
             path.write_text(json.dumps({"passed": True, "claude_version": "2.1.299",
-                                        "title": {"passed": passed, "checks": checks}}))
+                                        "title": {"passed": passed, "checks": checks,
+                                                  "events": GOOD_EVENTS, "typed_at": GOOD_TYPED_AT}}))
             return str(path)
         four = {k: {"pass": True} for k in ("idle_before_prompt", "working_after_prompt",
                                              "idle_after_turn", "spinner_cadence")}

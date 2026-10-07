@@ -65,8 +65,10 @@ The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connec
   permission, cleanup or verification decision reads it.
 - 「驗證這個版本」 checks the title in the same interactive run as the launch boundary and records the two results
   apart in `~/.vbear/claude-verified.json`. A title failure never undoes a boundary pass, and a title pass grants
-  nothing beyond using the title for display. Records without a title result, or whose report does not back it,
-  count as title-unverified. Like the rest of that file, it can be edited by programs running as you; the worst they
+  nothing beyond using the title for display. A title result counts only when the report's own events, judged again
+  by `vbear/title_check.py`, pass all four checks (the summary written in the report never suffices). Records or
+  reports of the wrong shape, non-finite or backward times, and missing results all count as title-unverified;
+  reading them never raises. Like the rest of that file, it can be edited by programs running as you; the worst they
   can do with it is make a status badge wrong.
 - Only the class of the title's first character and when it was seen are kept. The text, where Claude puts a
   summary of the current task, is discarded. OSC strings over 4 KiB are skipped, not buffered.
