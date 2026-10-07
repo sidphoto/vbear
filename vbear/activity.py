@@ -34,6 +34,7 @@ wrong one.
 
 from __future__ import annotations
 
+import math
 import time
 
 SESSION_VALUES = ("present", "exited")
@@ -83,6 +84,10 @@ def title_verified(engine: str, version) -> bool:
 
 # The working spinner re-sends its title about once a second (observed 0.96 s).
 SPINNER_STALE_S = 5.0
+# A working title stamped up to this far in the future still counts: the
+# daemon stamps it, the console reads it, and their clocks are the same
+# machine's but sampled at different moments. Further ahead is not trusted.
+CLOCK_SKEW_S = 2.0
 
 
 def display_value(session: str, activity: str, needs_input: dict) -> str:
@@ -107,10 +112,14 @@ def _title_reading(title: dict, now: float) -> tuple[str, str]:
     if state is None:
         return "unknown", "尚未收到 Claude 的終端標題（可能停在啟動時的信任確認畫面）"
     if state == "working":
-        if not isinstance(last_seen, (int, float)) or now - last_seen > SPINNER_STALE_S:
-            age = int(now - last_seen) if isinstance(last_seen, (int, float)) else None
-            return "unknown", (f"工作中的標題已 {age} 秒沒有更新" if age is not None
-                               else "工作中的標題沒有時間紀錄")
+        if (not isinstance(last_seen, (int, float)) or isinstance(last_seen, bool)
+                or not math.isfinite(last_seen)):
+            return "unknown", "工作中的標題沒有有效的時間紀錄"
+        age = now - last_seen
+        if age < -CLOCK_SKEW_S:
+            return "unknown", "工作中的標題時間在未來（時鐘不一致），不採用"
+        if age > SPINNER_STALE_S:
+            return "unknown", f"工作中的標題已 {int(age)} 秒沒有更新"
         return "working", "終端標題顯示工作中的動畫"
     if state == "waiting":
         return "waiting", "終端標題顯示閒置符號 ✳：Claude 沒有在工作，正在等你輸入或確認"

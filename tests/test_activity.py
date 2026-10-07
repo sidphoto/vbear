@@ -124,6 +124,28 @@ class ArbitrateTests(unittest.TestCase):
         self.assertEqual((r["activity"], r["decided_by"]), ("unknown", None))
         self.assertIn("沒有更新", r["reason"])
 
+    def test_working_needs_a_sane_recent_time(self):
+        """Codex review r3: a future, NaN or infinite last_seen read as working."""
+        cases = {
+            "far future": self.NOW + 60,
+            "NaN": float("nan"),
+            "+inf": float("inf"),
+            "-inf": float("-inf"),
+            "not a number": "999",
+            "bool": True,
+        }
+        for name, last_seen in cases.items():
+            with self.subTest(name):
+                r = self.arb(managed(state="working", since=990.0, last_seen=last_seen, titles=5))
+                self.assertEqual((r["activity"], r["decided_by"]), ("unknown", None))
+                self.assertTrue(r["reason"])
+        # A small clock difference (the daemon stamps with its own clock) is tolerated.
+        r = self.arb(managed(state="working", since=990.0,
+                             last_seen=self.NOW + activity.CLOCK_SKEW_S / 2, titles=5))
+        self.assertEqual(r["activity"], "working")
+        r = self.arb(managed(state="working", since=990.0, last_seen=self.NOW, titles=5))
+        self.assertEqual(r["activity"], "working")
+
     def test_no_title_yet_is_unknown(self):
         r = self.arb(managed(state=None))
         self.assertEqual(r["display"], "unknown")
