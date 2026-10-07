@@ -18,7 +18,7 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 - **`!` 指令不經沙盒**：在 Claude Code 裡以 `!` 自己輸入的指令不受沙盒限制；預覽畫面有標示。
 - **無法阻擋 commit**：工作目錄的 `.git` 可寫，啟動前必須勾選知悉。
 - 目前只有一種啟動設定（只開放 Bash、停用 Edit/Write、不連網）；唯讀、可連網與 Codex 受管啟動尚未提供。
-- 「工作中／等你回覆」只對 Profile 啟動、且版本有實測紀錄的 Claude Code（目前是 2.1.292）判斷，依據是 Claude 自己設定的終端標題；分不出是等你輸入還是等你確認。其他 Terminal、其他版本與 Codex 顯示「狀態未知」。
+- 「工作中／等你回覆」只對 Profile 啟動、且版本有實測紀錄的 Claude Code 判斷（內建 2.1.291、2.1.292，以及在你的 Mac 上驗證過終端標題的版本），依據是 Claude 自己設定的終端標題；分不出是等你輸入還是等你確認。Claude 自動更新後，新版本會先顯示「狀態未知」，在啟動對話框按「驗證這個版本」即可（同一次執行會一併驗證啟動邊界與終端標題）。其他 Terminal 與 Codex 顯示「狀態未知」。
 - 任務卡的版本綁定只比對 commit：核准之後未提交的修改，不會讓結果失效。
 - **以你的帳號執行的程式可以操作 VBear**：其他網站和其他使用者帳號會被擋下，因為每次呼叫 API 都要帶一組
   每次啟動都會更換的通行證，通行證存在只有你能讀的檔案裡。但以你的帳號執行的程式，也讀得到這個檔案。
@@ -81,7 +81,7 @@ Agent 終端由 `vbear runtimed`（VBear runtime 背景程序）執行；主控�
 | Codex 技能是否生效 | `~/.codex/config.toml` 的 `skills.config` | 設定檔 |
 | 技能上游 | `~/.agents/.skill-lock.json` | 設定檔 |
 | 工作中的 Terminal | VBear runtime 的 session 清單 | 執行觀察 |
-| 工作中／等你回覆 | Profile 啟動的 Claude Code 自己設定的終端標題（只保留開頭符號，不保存標題文字；只有版本有實測紀錄時採用，其他顯示「狀態未知」） | 執行觀察（Agent 自己回報） |
+| 工作中／等你回覆 | Profile 啟動的 Claude Code 自己設定的終端標題（只保留開頭符號，不保存標題文字；只有版本有實測紀錄或在本機驗證過時採用，其他顯示「狀態未知」） | 執行觀察（Agent 自己回報） |
 | 本次模型、本次用過的技能 | Claude `~/.claude/projects/*/*.jsonl` 的 Skill 呼叫；Codex `~/.codex/sessions` 讀取 SKILL.md 的工具呼叫 | 執行觀察（Codex 為較弱的「讀取過技能檔」） |
 | 用途分類 | `vbear/categories.py` 關鍵字表 | 自動整理 |
 

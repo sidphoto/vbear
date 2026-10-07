@@ -46,7 +46,8 @@ RUNG_LABELS = {RUNG_CLAUDE_TITLE: "Claude Code 終端標題（Agent 自己回報
 
 # rung -> engine -> versions whose behaviour was observed and recorded.
 VERIFIED = {
-    RUNG_CLAUDE_TITLE: {"claude": frozenset({"2.1.292"})},  # docs/evidence/claude-code-2.1.292-activity.md
+    # docs/evidence/claude-code-2.1.291-activity.md, docs/evidence/claude-code-2.1.292-activity.md
+    RUNG_CLAUDE_TITLE: {"claude": frozenset({"2.1.291", "2.1.292"})},
 }
 
 _LOCAL_TTL_S = 10.0

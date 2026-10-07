@@ -55,3 +55,9 @@ stored or returned.
 
 For any other Claude Code version, the same evidence is recorded as **trial**: shown, never consulted, so the state
 reads unknown. Adding a version to `VERIFIED` in `vbear/activity.py` needs a record like this one.
+
+## Re-checked by 「驗證這個版本」 (2026-10-07)
+
+The verification flow that now also checks titles was run on 2.1.292: every check passed. Title classes in order:
+1.15s ✳, 3.68s ◐/◑, 4.38s ◐/◑, 4.64s ◐/◑, 5.60s ◐/◑, 6.57s ◐/◑, 7.02s ✳ (prompt at 3.62 s; largest gap between working frames
+0.962 s). This matches the record above.

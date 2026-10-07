@@ -58,10 +58,16 @@ The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connec
 
 ## Agent activity evidence
 
-- For managed Claude sessions, the daemon classifies the terminal title Claude Code sets
-  ([evidence](evidence/claude-code-2.1.292-activity.md)). The title comes from the Agent process itself: anything
-  that can write to the session's terminal can set it. It is self-report, and it drives only what the UI shows
-  (status badges, 「需要你處理」, task-card pickup). No launch, permission, cleanup or verification decision reads it.
+- For managed Claude sessions, the daemon classifies the terminal title Claude Code sets (evidence for
+  [2.1.291](evidence/claude-code-2.1.291-activity.md) and [2.1.292](evidence/claude-code-2.1.292-activity.md)). The
+  title comes from the Agent process itself: anything that can write to the session's terminal can set it. It is
+  self-report, and it drives only what the UI shows (status badges, 「需要你處理」, task-card pickup). No launch,
+  permission, cleanup or verification decision reads it.
+- 「驗證這個版本」 checks the title in the same interactive run as the launch boundary and records the two results
+  apart in `~/.vbear/claude-verified.json`. A title failure never undoes a boundary pass, and a title pass grants
+  nothing beyond using the title for display. Records without a title result, or whose report does not back it,
+  count as title-unverified. Like the rest of that file, it can be edited by programs running as you; the worst they
+  can do with it is make a status badge wrong.
 - Only the class of the title's first character and when it was seen are kept. The text, where Claude puts a
   summary of the current task, is discarded. OSC strings over 4 KiB are skipped, not buffered.
 - Hooks are not used. `--safe-mode` stays in the launch argv, and it disables settings hooks.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Working/waiting follows version verification.** 「驗證這個版本」 now also checks Claude Code's terminal title
+  in the same interactive run (no extra model call) and records it apart from the launch-boundary result; a
+  version whose title passed shows working/waiting on this Mac. A title failure leaves the launch verified and the
+  state unknown. Versions whose boundary is verified but title is not get a notice and the same button. Claude Code
+  **2.1.291** is now built in for the title signal too ([evidence](docs/evidence/claude-code-2.1.291-activity.md));
+  2.1.286 is not installed here and stays trial.
 Ideas adopted from OpenRig, re-implemented ([notes](docs/evidence/openrig-learnings.md)):
 
 - **Working or waiting.** Profile-launched Claude Code sessions now show 「工作中」 or 「等你回覆」 instead of

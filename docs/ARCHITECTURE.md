@@ -66,7 +66,12 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
   source can observe it yet.
 - Evidence comes in rungs, each authoritative, trial (recorded and shown, never consulted) or absent. The only rung
   is `claude-title`, authoritative for the Claude Code versions in `activity.VERIFIED`, each backed by a record in
-  `docs/evidence/` ([2.1.292](evidence/claude-code-2.1.292-activity.md)); trial for any other version.
+  `docs/evidence/` ([2.1.291](evidence/claude-code-2.1.291-activity.md), [2.1.292](evidence/claude-code-2.1.292-activity.md)),
+  and for versions whose title check passed on this Mac (`cli_versions.local_title_verified_versions`, from
+  「驗證這個版本」); trial for any other version.
+- **Title check.** `boundary_check`'s interactive run feeds the PTY output to `TitleTracker` and checks the idle mark
+  before the prompt, the spinner after it, the idle mark after the turn, and the spinner cadence. The result goes to
+  the report's `title`, and `claude_verify` records it beside the boundary result.
 - The result carries `decided_by`, a reason and every piece of evidence. The UI's status badges, the home page's
   「需要你處理」 list (only `waiting` / `needs-input`) and task-card pickup all read this one answer; without
   usable evidence it is `unknown`.
