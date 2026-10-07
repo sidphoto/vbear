@@ -539,7 +539,7 @@ class NativeRuntime(RuntimeBase):
         return self.discard_prepared_claude_launch(launch_id)
 
     def launch_prepared_agent(self, prepared: dict, *, cols: int | None = None,
-                              rows: int | None = None) -> dict:
+                              rows: int | None = None, unverified_acknowledged: bool = False) -> dict:
         """Step 2: hand a prepared launch to the daemon. The daemon re-validates
         the manifest, settings, paths and CLI file and builds argv and
         environment itself. Every failed precondition refuses the launch;
@@ -550,13 +550,21 @@ class NativeRuntime(RuntimeBase):
         the caller must keep that bypass explicit in its labels.
         """
         manifest, assertion = prepared["manifest"], prepared["assertion"]
+        base = self._base or cfg.state_dir()
+        if manifest.get("cli_verified") is False and unverified_acknowledged is not True:
+            # The gate sits here, in the one step every launch goes through, not
+            # only in the preview flow above it.
+            _agent_sessions.discard_prepared(base, manifest["launch_id"])
+            raise _cli_versions.VersionAssertionError(_cli_versions._blocked(
+                "claude", "unverified_not_acknowledged",
+                f"Claude Code {manifest.get('cli_version')} 尚未驗證，需要使用者明確知悉才能啟動",
+                observed=manifest.get("cli_version"), binary_path=manifest.get("cli_binary")))
         dims = {}
         for dim, value in (("cols", cols), ("rows", rows)):
             if value is not None:
                 if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 1000:
                     raise NativeRuntimeError(f"managed Agent {dim} 必須是 1–1000 的整數")
                 dims[dim] = value
-        base = self._base or cfg.state_dir()
         launch_id = manifest["launch_id"]
         try:
             _cli_versions.ensure_binary_unchanged(assertion)
@@ -586,9 +594,10 @@ class NativeRuntime(RuntimeBase):
         }
 
     def launch_prepared_claude(self, prepared: dict, *, cols: int | None = None,
-                               rows: int | None = None) -> dict:
+                               rows: int | None = None, unverified_acknowledged: bool = False) -> dict:
         """Compatibility wrapper for existing Claude callers."""
-        return self.launch_prepared_agent(prepared, cols=cols, rows=rows)
+        return self.launch_prepared_agent(prepared, cols=cols, rows=rows,
+                                          unverified_acknowledged=unverified_acknowledged)
 
     def create_managed_claude_session(self, spec: dict, *, allowed_root: str | None = None) -> dict:
         """Internal one-shot form of prepare + launch (no preview). Not on the HTTP API."""

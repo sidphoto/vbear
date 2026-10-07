@@ -50,7 +50,8 @@ def local_verified_versions() -> dict:
     if not isinstance(versions, dict):
         return {}
     return {v: r for v, r in versions.items()
-            if isinstance(v, str) and _VERSION_RE.match(v) and isinstance(r, dict) and r.get("passed") is True}
+            if isinstance(v, str) and _VERSION_RE.match(v) and isinstance(r, dict) and r.get("passed") is True
+            and all(isinstance(r.get(k), str) and r.get(k) for k in ("report", "binary", "verified_at"))}
 
 
 def verified_versions(engine: str) -> tuple[str, ...]:

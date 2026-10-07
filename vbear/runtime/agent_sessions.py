@@ -306,10 +306,13 @@ def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
             "leader": None,
             "observed": [],
             "boundary": {
-                "write": "enforced for Bash-tool commands (Claude sandbox; verified for this version/settings only)",
+                "write": ("enforced for Bash-tool commands (Claude sandbox; verified for this version/settings only)"
+                          if cli_verified is True else
+                          "configured for Bash-tool commands (Claude sandbox); not verified for this version"),
                 "read": "not isolated",
                 "edit_write_tools": "disabled",
-                "network": "strict empty allowlist",
+                "network": ("strict empty allowlist" if cli_verified is True
+                            else "strict empty allowlist configured; not verified for this version"),
             },
         }
         _write_private(ldir / MANIFEST, json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n")

@@ -79,6 +79,10 @@ Other safeguards:
   launch is refused unless the request carries `accept_unverified_cli: true` (the dialog's checkbox). The internal
   one-shot launch path never starts an unverified version. Output that is not a Claude Code version is still refused.
   When a verified version is installed, it is used in preference to a newer unverified one.
+- **The version is what the program says it is.** The gate reads `claude --version`; it is not binary
+  authentication. VBear prefers Claude Code's own versioned install (`~/.local/share/claude/versions/<version>`),
+  pins the file's identity between preview and launch, and shows the path in the preview. A program that can put
+  itself first on your `PATH` already runs as you, so this is not treated as a boundary.
 - **Verifying on this Mac.** 「驗證這個版本」 runs `vbear/boundary_check.py` headless and interactive against
   the binary a launch would use. The version is recorded as verified only if both runs pass every check; a
   refusal only counts if it is the sandbox's (`EPERM`/`EACCES`, or the proxy's 403). The record file is

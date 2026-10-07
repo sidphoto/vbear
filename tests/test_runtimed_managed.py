@@ -405,6 +405,23 @@ class ManagedCase(unittest.TestCase):
         self.assertEqual(sorted(sessions.iterdir()) if sessions.exists() else [], [])
         self.assertEqual(self.rpc("list")["result"]["sessions"], [])
 
+    def test_prepared_unverified_launch_needs_the_acknowledgement_at_the_last_step(self):
+        """prepare + launch_prepared_agent directly (no preview) cannot start an
+        unverified version unless the caller passes the acknowledgement."""
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
+        with mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(self.binary)):
+            rt = self.runtime()
+            prepared = rt.prepare_managed_claude_launch({"cwd": str(self.work)}, allowed_root=str(self.tmp))
+            self.assertIs(prepared["manifest"]["cli_verified"], False)
+            self.assertNotIn("enforced", json.dumps(prepared["manifest"]["boundary"]))
+            self.scratches.append(prepared["manifest"]["scratch"]["path"])
+            with self.assertRaises(cli_versions.VersionAssertionError) as c:
+                rt.launch_prepared_agent(prepared)
+            self.assertEqual(c.exception.code, "unverified_not_acknowledged")
+        sessions = self.base / "sessions"
+        self.assertEqual(sorted(sessions.iterdir()) if sessions.exists() else [], [])  # prepared state removed
+        self.assertEqual(self.rpc("list")["result"]["sessions"], [])
+
     def test_runtime_entry_rejects_extra_spec_fields(self):
         for extra in ({"argv": ["x"]}, {"env": {}}, {"settings": "x"}):
             with self.subTest(extra=list(extra)):

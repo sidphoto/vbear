@@ -53,6 +53,12 @@ class ClaudeVerifier:
             self._state.update(kw)
 
     def _run(self, binary: str, version: str) -> None:
+        try:
+            self._run_checks(binary, version)
+        except Exception as exc:  # never leave the status stuck at "running"
+            self._finish("error", f"驗證中斷：{type(exc).__name__}")
+
+    def _run_checks(self, binary: str, version: str) -> None:
         out_dir = reports_dir()
         cfg.ensure_state_dir()
         out_dir.mkdir(mode=0o700, exist_ok=True)
@@ -76,10 +82,13 @@ class ClaudeVerifier:
                     "驗證沒有完成（模型可能沒有執行探測，或登入失效）")
                 return self._finish("failed", f"{mode}：{why}", reports=reports, failed=failed)
             try:
-                if json.loads(out.read_text()).get("claude_version") != version:
-                    return self._finish("error", "驗證期間 Claude Code 版本改變了，請重新驗證")
+                report = json.loads(out.read_text())
             except (OSError, ValueError):
                 return self._finish("error", f"{mode} 的報告無法讀取")
+            if not isinstance(report, dict) or report.get("passed") is not True:
+                return self._finish("error", f"{mode} 的報告格式不符")
+            if report.get("claude_version") != version:
+                return self._finish("error", "驗證期間 Claude Code 版本改變了，請重新驗證")
         record_pass(version, binary, reports)
         self._finish("passed", f"Claude Code {version} 通過全部檢查", reports=reports)
 
@@ -89,10 +98,13 @@ class ClaudeVerifier:
 
 def _failed_checks(report: Path) -> list[str]:
     try:
-        checks = json.loads(report.read_text()).get("checks") or {}
+        data = json.loads(report.read_text())
     except (OSError, ValueError):
         return []
-    return [name for name, c in checks.items() if not c.get("pass")]
+    checks = data.get("checks") if isinstance(data, dict) else None
+    if not isinstance(checks, dict):
+        return []
+    return [name for name, c in checks.items() if not (isinstance(c, dict) and c.get("pass"))]
 
 
 def record_pass(version: str, binary: str, reports: dict) -> None:

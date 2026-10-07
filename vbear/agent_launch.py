@@ -371,7 +371,8 @@ class PreviewStore:
                 launch = getattr(self._runtime, "launch_prepared_agent", None)
                 if launch is None:
                     launch = self._runtime.launch_prepared_claude
-                result = launch(entry["prepared"], cols=cols, rows=rows)
+                result = launch(entry["prepared"], cols=cols, rows=rows,
+                                unverified_acknowledged=accept_unverified_cli is True)
             except cli_versions.VersionAssertionError as exc:
                 raise PreviewError(409, "cli_drift", f"CLI 在 preview 之後已變更：{exc}") from exc
             except NativeRuntimeUnavailable as exc:

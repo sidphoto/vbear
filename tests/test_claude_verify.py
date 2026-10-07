@@ -65,6 +65,28 @@ class ClaudeVerifyTests(unittest.TestCase):
         self.assertEqual(status["result"], "failed")
         self.assertEqual(cli_versions.local_verified_versions(), {})
 
+    def test_a_report_that_is_not_an_object_ends_the_job(self):
+        def run(argv, **kw):
+            Path(argv[argv.index("--out") + 1]).write_text("[1, 2]")
+            return mock.Mock(returncode=0)
+        v = claude_verify.ClaudeVerifier()
+        with mock.patch("subprocess.run", side_effect=run):
+            v.start("/x/claude", "2.1.299")
+            for _ in range(100):
+                if not v.status()["running"]:
+                    break
+                time.sleep(0.02)
+        self.assertEqual(v.status()["result"], "error")
+        self.assertEqual(cli_versions.local_verified_versions(), {})
+
+    def test_records_missing_fields_do_not_count(self):
+        path = self.home / cli_versions.LOCAL_VERIFIED_FILE
+        self.home.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"versions": {
+            "2.1.299": {"passed": True},                                         # no report/binary/time
+            "2.1.300": {"passed": True, "report": "r", "binary": "b", "verified_at": "t"}}}))
+        self.assertEqual(sorted(cli_versions.local_verified_versions()), ["2.1.300"])
+
     def test_only_one_job_at_a_time(self):
         v = claude_verify.ClaudeVerifier()
         v._state = {"running": True, "version": "2.1.299"}

@@ -223,7 +223,8 @@ class PreviewApiCase(ServerCase):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
         report = str(self.home / "verifications" / "claude-2.1.287-interactive.json")
         (self.home / "claude-verified.json").write_text(json.dumps({"versions": {
-            "2.1.287": {"passed": True, "report": report},
+            "2.1.287": {"passed": True, "report": report, "binary": str(self.binary),
+                        "verified_at": "2026-10-07T15:38:32+0800"},
             "2.1.288": {"passed": False, "report": "x"},       # a failed run is not a pass
             "bad version": {"passed": True, "report": "x"}}}))
         st, r = self.preview()
