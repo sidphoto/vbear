@@ -56,6 +56,16 @@ The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connec
   output is replayed, up to 64 KiB.
 - xterm.js runs with `linkHandler: null` and with window operations disabled. No clipboard (OSC 52) or link addon is loaded.
 
+## Agent activity evidence
+
+- For managed Claude sessions, the daemon classifies the terminal title Claude Code sets
+  ([evidence](evidence/claude-code-2.1.292-activity.md)). The title comes from the Agent process itself: anything
+  that can write to the session's terminal can set it. It is self-report, and it drives only what the UI shows
+  (status badges, 「需要你處理」, task-card pickup). No launch, permission, cleanup or verification decision reads it.
+- Only the class of the title's first character and when it was seen are kept. The text, where Claude puts a
+  summary of the current task, is discarded. OSC strings over 4 KiB are skipped, not buffered.
+- Hooks are not used. `--safe-mode` stays in the launch argv, and it disables settings hooks.
+
 ## Profile-managed Claude launches
 
 These are the claims the launch preview makes, and their status:
@@ -100,6 +110,18 @@ Other safeguards:
   the manifest from its own state directory and re-validates the work directory. A launch ID is single-use.
 - **Cleanup only when it is proven safe.** Files belonging to a launch are removed only after every
   descendant process is confirmed gone. Otherwise the launch is kept for manual review.
+
+## Task cards
+
+- **Commit binding never runs `git`.** Repository config (clean filters, fsmonitor and the like) can make git
+  execute programs, and a managed Agent may write `.git` once commit is acknowledged; a git command run by the
+  console would run that code outside every sandbox. `git_head` reads `HEAD`, refs and `packed-refs` as plain files
+  instead: symlinked `.git`, `HEAD` and ref files are refused, sizes are capped, and every ref name and hash is
+  validated. Nothing read is shown except a validated hash or ref name.
+- **The binding notices change; it does not authenticate history.** Anyone who can write `.git` can point HEAD
+  anywhere, including back to the approved commit. Uncommitted changes are not seen.
+- Results, approvals, closure reasons and handoffs are still set through the same unauthenticated local UI/API, and
+  `verified` stays false.
 
 ## Data handling
 

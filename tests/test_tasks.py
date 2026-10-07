@@ -121,6 +121,7 @@ class TasksStorageTests(unittest.TestCase):
                 "tests": "untested",
                 "human": "pending",
             },
+            "closure": {"reason": "no_follow_on"},
         })
         self.assertFalse(task1["provenance"]["verified"], "verified must always be False; there is no authenticated verifier")
         self.assertFalse(task1["provenance"]["verification_asserted"], "Agent claim alone cannot assert verification")
@@ -134,6 +135,7 @@ class TasksStorageTests(unittest.TestCase):
                 "tests": "passed",
                 "human": "pending",
             },
+            "closure": {"reason": "no_follow_on"},
         })
         self.assertFalse(task2["provenance"]["verified"])
         self.assertFalse(task2["provenance"]["verification_asserted"], "Tests passed without human approval must not assert verification")
@@ -148,6 +150,7 @@ class TasksStorageTests(unittest.TestCase):
                 "tests": "passed",
                 "human": "approved",
             },
+            "closure": {"reason": "no_follow_on"},
         })
         self.assertFalse(task3["provenance"]["verified"], "verified must remain False even when tests passed and human approved — there is still no authenticated verifier")
         self.assertTrue(task3["provenance"]["verification_asserted"])
@@ -203,6 +206,7 @@ class TasksStorageTests(unittest.TestCase):
         task2 = tasks.save_task("t-h1-forge-2", {
             "title": "Forge attempt 2",
             "provenance": {"agent": "completed", "tests": "failed", "human": "pending"},
+            "closure": {"reason": "no_follow_on"},
             "status": "verification_asserted",
         })
         self.assertNotEqual(task2["status"], "verification_asserted")
@@ -217,6 +221,7 @@ class TasksStorageTests(unittest.TestCase):
         task3 = tasks.save_task("t-h1-legit", {
             "title": "Legit",
             "provenance": {"agent": "completed", "tests": "passed", "human": "approved"},
+            "closure": {"reason": "no_follow_on"},
         })
         self.assertEqual(task3["status"], "verification_asserted")
         self.assertTrue(task3["provenance"]["verification_asserted"])
@@ -394,6 +399,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
                 "tests": "passed",
                 "human": "approved",
             },
+            "closure": {"reason": "no_follow_on"},
         }
         status, data, _ = self.req("/api/tasks/task-api-1", "POST", body=update_payload)
         self.assertEqual(status, 200)
@@ -558,7 +564,8 @@ class TasksConcurrencyAndFilesystemSafetyTests(unittest.TestCase):
 
         def worker(i):
             try:
-                tasks.save_task("t-hot", {"provenance": {"agent": "in_progress" if i % 2 else "blocked"}})
+                tasks.save_task("t-hot", {"provenance": {"agent": "in_progress" if i % 2 else "blocked"},
+                                          "closure": None if i % 2 else {"reason": "blocked_on", "target": "reviewer"}})
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 

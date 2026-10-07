@@ -254,6 +254,9 @@ try {
 }
 
 const {
+  STATUS,
+  statusBadge,
+  activityBasis,
   computeTaskProvenance,
   taskStatusBadge,
   TASK_STATUS_LABELS,
@@ -309,9 +312,25 @@ async function runWorkbenchTests() {
     assert.strictEqual(prov2.verificationAsserted, false, "Passing tests without human approval must not assert verification");
     assert.strictEqual(prov2.derivedStatus, "agent_completed");
 
-    const prov3 = computeTaskProvenance({ agent: "completed", tests: "passed", human: "approved" });
+    // Both results asserted, and the server confirms they still refer to the
+    // commit the workdir is on now (tasks._derive): verification asserted.
+    const prov3 = computeTaskProvenance({ agent: "completed", tests: "passed", human: "approved", verification_asserted: true });
     assert.strictEqual(prov3.verificationAsserted, true, "Only passing tests and human approval can assert verification");
     assert.strictEqual(prov3.derivedStatus, "verification_asserted");
+
+    // The same results without the server's confirmation (the commit moved,
+    // or could not be read) are stale, never asserted.
+    const prov3b = computeTaskProvenance({ agent: "completed", tests: "passed", human: "approved", verification_asserted: false });
+    assert.strictEqual(prov3b.verificationAsserted, false, "A result bound to another commit must not assert verification");
+    assert.strictEqual(prov3b.derivedStatus, "verification_stale");
+    assert.strictEqual(computeTaskProvenance({ agent: "completed", tests: "passed", human: "pending", verification_asserted: true }).verificationAsserted,
+      false, "The server flag alone never asserts verification");
+
+    // Closure shapes the status of a completed card.
+    assert.strictEqual(computeTaskProvenance({ agent: "completed" }, "draft", { reason: "handed_off_to", target: "x" }).derivedStatus, "handed_off");
+    assert.strictEqual(computeTaskProvenance({ agent: "completed" }, "draft", { reason: "canceled" }).derivedStatus, "closed");
+    assert.strictEqual(computeTaskProvenance({ agent: "completed" }, "draft", { reason: "no_follow_on" }).derivedStatus, "agent_completed");
+    for (const st of ["verification_stale", "handed_off", "closed"]) assert.ok(TASK_STATUS_LABELS[st], st);
 
     const prov4 = computeTaskProvenance({ agent: "in_progress", tests: "untested", human: "pending" });
     assert.strictEqual(prov4.derivedStatus, "in_progress");
@@ -327,6 +346,26 @@ async function runWorkbenchTests() {
     assert.strictEqual(prov6.derivedStatus, "draft");
 
     console.log("ok: Category 1 - Status provenance verification strictly enforced (incl. H1 forgery guard)");
+  }
+
+  // 1b. Agent activity badges (vbear/activity.py): only the taxonomy's display
+  // values render as a state, and every badge says how VBear knows.
+  {
+    assert.deepStrictEqual(Object.keys(STATUS).sort(), ["exited", "needs-input", "unknown", "waiting", "working"]);
+    const act = {
+      display: "working", decided_by: "claude-title", reason: "終端標題顯示工作中的動畫",
+      evidence: [{ rung: "claude-title", label: "Claude Code 終端標題（Agent 自己回報）", trust: "authoritative" }],
+    };
+    const working = statusBadge("working", act);
+    assert.strictEqual(working.textContent, "工作中");
+    assert.strictEqual(working.getAttribute("title"), "終端標題顯示工作中的動畫｜依據：Claude Code 終端標題（Agent 自己回報）");
+    const trial = { display: "unknown", decided_by: null, reason: "Claude Code 2.1.286 的終端標題訊號尚未驗證：只記錄、不採用（試用中）",
+      evidence: [{ rung: "claude-title", label: "Claude Code 終端標題（Agent 自己回報）", trust: "trial" }] };
+    assert.ok(activityBasis(trial).endsWith("｜沒有可採用的證據"), "trial evidence must never read as the basis");
+    // Herdr-era words are not taxonomy values: they render as unknown.
+    for (const legacy of ["blocked", "done", "idle"]) assert.strictEqual(statusBadge(legacy, null).textContent, "狀態未知");
+    assert.ok(activityBasis(null).includes("沒有任何狀態證據"));
+    console.log("ok: Category 1b - activity badges render only taxonomy values, each with its basis");
   }
 
   // 2. Hash Routing & Compatibility
@@ -905,7 +944,110 @@ async function runWorkbenchTests() {
     console.log("ok: Category 18 - narrow Status Provenance layout is bounded and wrap-safe");
   }
 
-  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (18/18 categories verified)");
+  // 19. Task custody (tasks.py, adopted from OpenRig): handing off posts to
+  // the atomic /handoff endpoint and shows the chain of record; completing a
+  // card goes through the closure dialog, never straight to the API, and a
+  // reason that names someone cannot be sent without its target.
+  {
+    const sample = (await FETCH_ROUTES["/api/tasks"]().json()).tasks[0];
+    const calls = [];
+    const realFetch = global.fetch;
+    global.fetch = async (url, opts = {}) => {
+      const path = String(url).split("?")[0];
+      if (opts.method === "POST" && path.startsWith("/api/tasks/")) {
+        const body = JSON.parse(opts.body || "{}");
+        calls.push({ path, body });
+        if (path.endsWith("/handoff")) {
+          return jsonResponse({
+            ok: true,
+            from: { ...sample, status: "handed_off", provenance: { ...sample.provenance, agent: "completed" },
+              closure: { reason: "handed_off_to", target: body.to, note: body.note, set_at: 1, successor: "task-next" } },
+            to: { ...sample, id: "task-next", title: body.title, owner: body.to, handed_off_from: sample.id,
+              chain_of_record: [sample.id], pickup: { state: "unclaimed", detail: "還沒有關聯任何 Terminal" } },
+          });
+        }
+        const id = decodeURIComponent(path.slice("/api/tasks/".length));
+        return jsonResponse({ ok: true, task: { ...sample, id, provenance: { ...sample.provenance, ...(body.provenance || {}) },
+          closure: body.closure ? { ...body.closure, set_at: 1 } : null } });
+      }
+      return realFetch(url, opts);
+    };
+    try {
+      global.location.hash = "#/workbench";
+      dom = resetDom();
+      mainEl = dom.mainEl;
+      await app.route();
+      const tab = mainEl.find((n) => n.getAttribute("role") === "tab" && n.textContent.includes("[T]"));
+      tab.click();
+      assert.ok(mainEl.find((n) => n.textContent === "處理狀態未知"), "a card without a pickup state must read unknown, not idle");
+      assert.ok(mainEl.find((n) => n.tag === "span" && n.textContent.startsWith("4. 結果對應的版本")), "the commit binding row must render");
+
+      // Handoff.
+      mainEl.find((n) => n.tag === "button" && n.textContent === "交接給…").click();
+      let modal = document.body.find((n) => n.hasClass("modal-backdrop"));
+      assert.ok(modal && modal.find((n) => n.getAttribute("id") === "task-handoff-modal-title"), "handoff dialog must open");
+      const submitHandoff = modal.find((n) => n.tag === "button" && n.textContent === "交接");
+      submitHandoff.click();
+      await flushMicrotasks();
+      assert.strictEqual(calls.length, 0, "a handoff without a target must not be sent");
+      modal.find((n) => n.tag === "input" && (n.getAttribute("placeholder") || "").startsWith("接手")).value = "審查者";
+      // The synthetic DOM does not reflect the value attribute into .value the
+      // way a browser does, so check the default title on the attribute and
+      // type the title explicitly.
+      const titleField = modal.find((n) => n.tag === "input" && n.getAttribute("value") === `交接：${sample.title}`);
+      assert.ok(titleField, "the successor title must default to 交接：<old title>");
+      titleField.value = titleField.getAttribute("value");
+      submitHandoff.click();
+      await flushMicrotasks();
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].path, `/api/tasks/${sample.id}/handoff`);
+      assert.deepStrictEqual(calls[0].body, { to: "審查者", title: `交接：${sample.title}`, note: "" });
+      assert.strictEqual(modal.parentNode, null, "the handoff dialog must close after success");
+      const chain = mainEl.find((n) => n.textContent.startsWith("交接鏈："));
+      assert.ok(chain && chain.textContent.endsWith("本卡"), "the successor must show its chain of record");
+
+      // Closure on the successor (now the active card).
+      const agentSelect = () => mainEl.find((n) => n.tag === "select"
+        && n.findAll((o) => o.tag === "option" && o.getAttribute("value") === "completed").length > 0);
+      agentSelect().value = "completed";
+      agentSelect().dispatch("change");
+      await flushMicrotasks();
+      assert.strictEqual(calls.length, 1, "completing must wait for a closure reason");
+      modal = document.body.find((n) => n.hasClass("modal-backdrop"));
+      assert.ok(modal && modal.find((n) => n.getAttribute("id") === "task-closure-modal-title"), "closure dialog must open");
+      const reason = modal.find((n) => n.tag === "select");
+      reason.value = "handed_off_to";
+      reason.dispatch("change");
+      const confirmBtn = modal.find((n) => n.tag === "button" && n.textContent === "確定");
+      confirmBtn.click();
+      await flushMicrotasks();
+      assert.strictEqual(calls.length, 1, "a reason that names someone needs its target");
+      modal.find((n) => n.tag === "input").value = "下一位";
+      confirmBtn.click();
+      await flushMicrotasks();
+      assert.strictEqual(calls.length, 2);
+      assert.strictEqual(calls[1].path, "/api/tasks/task-next");
+      assert.strictEqual(calls[1].body.provenance.agent, "completed");
+      assert.deepStrictEqual(calls[1].body.closure, { reason: "handed_off_to", target: "下一位", note: "" });
+      assert.strictEqual(modal.parentNode, null, "the closure dialog must close after success");
+      assert.ok(mainEl.find((n) => n.tag === "b" && n.textContent === "交給下一位"), "the stored closure must be shown");
+
+      // Cancelling sends nothing.
+      agentSelect().value = "blocked";
+      agentSelect().dispatch("change");
+      modal = document.body.find((n) => n.hasClass("modal-backdrop"));
+      modal.dispatch("keydown", { key: "Escape" });
+      await flushMicrotasks();
+      assert.strictEqual(modal.parentNode, null);
+      assert.strictEqual(calls.length, 2, "a cancelled closure dialog must not post");
+    } finally {
+      global.fetch = realFetch;
+    }
+
+    console.log("ok: Category 19 - handoff and closure dialogs post only complete custody records");
+  }
+
+  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (19/19 categories verified)");
 }
 
 runWorkbenchTests()

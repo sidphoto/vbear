@@ -701,9 +701,11 @@ const ACT = {
 };
 const SCOPE = { user: "使用者", synced: "雲端同步", plugin: "外掛", marketplace: "外掛市集",
   system: "系統內建", project: "專案", shared: "共用庫", vendor: "匯入" };
+// Display values of vbear/activity.py (display_value). Anything else renders
+// as unknown: a word the taxonomy does not define is never shown as a state.
 const STATUS = {
-  blocked: ["等你回覆", "b-bad"], done: ["完成・待查看", "b-warn"], working: ["工作中", "b-info"],
-  idle: ["待命", "b-ok"], unknown: ["狀態未知", "b-mute"],
+  "needs-input": ["需要你處理", "b-bad"], waiting: ["等你回覆", "b-warn"], working: ["工作中", "b-info"],
+  exited: ["已結束", "b-mute"], unknown: ["狀態未知", "b-mute"],
 };
 const PROV = {
   author: ["作者說明", "原始檔案中作者寫下的內容"],
@@ -745,9 +747,17 @@ function activationWithHelp(a) {
   const [label] = ACT[a] || ACT.unknown;
   return el("span", { class: "status-help" }, actBadge(a), helpTip(label, ACT_HELP[a] || ACT_HELP.unknown));
 }
-function statusBadge(s) {
+// One line on how VBear knows: the arbitrated reason, and which evidence
+// decided it. Every state shown carries its source (AGENTS.md: truthful UI).
+function activityBasis(act) {
+  if (!act) return "沒有任何狀態證據，無法判斷 Agent 是否在工作或等你回覆";
+  const decided = (act.evidence || []).find((e) => e.rung === act.decided_by);
+  const basis = decided ? `依據：${decided.label}` : "沒有可採用的證據";
+  return [act.reason, basis].filter(Boolean).join("｜");
+}
+function statusBadge(s, act) {
   const [l, c] = STATUS[s] || STATUS.unknown;
-  return badge(l, c, s === "unknown" ? "VBear runtime 無法從終端判斷 Agent 是否在工作或等你回覆" : `回報狀態：${s}`);
+  return badge(l, c, activityBasis(act));
 }
 function toolTag(t) { return el("span", { class: "tag" }, TOOL[t] || t || "未知工具"); }
 function prov(src) {
@@ -907,10 +917,11 @@ function sessionCard(x) {
         el("div", null,
           el("div", { class: "card-title" }, x.role_label || `${TOOL[x.agent] || x.agent} 工作階段`),
           el("div", { class: "card-sub" }, x.role_label_source ? "角色名稱來自分頁名稱" : "未命名"))),
-      statusBadge(x.status)),
+      statusBadge(x.status, x.activity)),
     x.title ? el("p", { class: "clamp" }, x.title) : null,
     el("dl", { class: "kv small" },
       el("dt", null, "執行工具"), el("dd", null, TOOL[x.agent] || x.agent || "未知"),
+      el("dt", null, "狀態依據"), el("dd", { class: "small" }, activityBasis(x.activity)),
       el("dt", null, "本次模型"), el("dd", null,
         models.length ? [models.join("、"), " ", prov({ origin: "runtime", detail: "對話紀錄" })]
           : el("span", { class: "muted" }, x.supported_tool ? (x.usage_matched ? "紀錄中沒有模型資訊" : "找不到對應的對話紀錄") : "此工具不提供可讀紀錄")),
@@ -1111,10 +1122,10 @@ function attentionSection() {
   const L = D.live;
   const attention = (L.attention || []).map((id) => L.sessions.find((s) => s.terminal_id === id)).filter(Boolean);
   return [
-    sectionHead("需要你處理", attention.length ? `${attention.length} 個 Terminal 在等你・每 5 秒更新` : "每 5 秒更新"),
+    sectionHead("需要你處理", attention.length ? `${attention.length} 個 Agent 在等你・每 5 秒更新` : "每 5 秒更新"),
     attention.length ? el("div", { class: "grid" }, attention.map(sessionCard))
-      : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為等你回覆的工作" : "VBear runtime 未連線，無法判斷",
-        L.runtime && L.runtime.available ? "VBear runtime 無法從終端判斷 Agent 是否在等你，狀態會顯示「狀態未知」；請到 Agent 團隊查看工作中的 Terminal。" : null),
+      : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為在等你的 Agent" : "VBear runtime 未連線，無法判斷",
+        L.runtime && L.runtime.available ? "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到 Agent 團隊查看。" : null),
   ];
 }
 
@@ -1437,7 +1448,7 @@ async function viewTeam() {
         el("tbody", null, sessions.map((x) => el("tr", null,
           el("td", null, el("b", null, x.role_label || "未命名"), el("div", { class: "small muted mono" }, x.pane_id)),
           el("td", null, TOOL[x.agent] || x.agent),
-          el("td", null, statusBadge(x.status)),
+          el("td", null, statusBadge(x.status, x.activity)),
           el("td", null, modelList(x.models_observed).join("、") || el("span", { class: "muted" }, "未知")),
           el("td", null, ((L.projects || []).find((p) => p.project_id === x.project_id) || {}).name || "—"),
           el("td", null, (x.skills_used || []).length ? el("div", { class: "chips" }, x.skills_used.slice(0, 3).map(usedChip)) : el("span", { class: "muted" }, "—")),
@@ -1466,7 +1477,7 @@ async function viewTeam() {
       el("span", null, el("b", null, "預設模型"), "：設定檔中的預設值，實際執行可能不同")),
   );
 }
-const STATUS_ORDER = { blocked: 0, done: 1, working: 2, idle: 3, unknown: 4 };
+const STATUS_ORDER = { "needs-input": 0, waiting: 1, working: 2, unknown: 3, exited: 4 };
 
 async function viewRole(id) {
   const token = seq;
@@ -1541,7 +1552,7 @@ async function viewRole(id) {
           el("dt", null, "設定檔"), el("dd", { class: "mono" }, r.path ? home(r.path) : "（工具本身，沒有單一設定檔）"),
           el("dt", null, "工作中"), el("dd", null, r.kind === "cli" ? `${sessions.length} 個 Terminal` : "目前無法辨識子代理的執行個體")),
         sessions.length ? el("ul", { class: "tree", style: "margin-top:12px" }, sessions.map((s) => el("li", null,
-          el("b", null, s.role_label || s.pane_id), " ", statusBadge(s.status), " ",
+          el("b", null, s.role_label || s.pane_id), " ", statusBadge(s.status, s.activity), " ",
           el("span", { class: "small muted" }, modelList(s.models_observed).join("、") || "模型未知")))) : null)),
     el("section", { class: "section" },
       sectionHead(`可用技能（${r.kind === "cli" || r.skill_link_basis === "declared" ? skills.length : "未宣告"}）`, BASIS[r.skill_link_basis] || ""),
@@ -1592,7 +1603,7 @@ function projectFold(p, open) {
       live.length ? el("ul", { class: "tree" }, [...byWs.entries()].map(([ws, list]) => el("li", null,
         el("span", { class: "small muted" }, "群組 "), el("b", null, ws),
         el("ul", { class: "tree" }, list.map((s) => el("li", { class: "row" },
-          el("b", null, s.role_label || s.pane_id), statusBadge(s.status), el("span", { class: "tag" }, TOOL[s.agent] || s.agent),
+          el("b", null, s.role_label || s.pane_id), statusBadge(s.status, s.activity), el("span", { class: "tag" }, TOOL[s.agent] || s.agent),
           (s.skills_used || []).slice(0, 3).map(usedChip),
           el("a", { class: "btn small", href: `#/term/${encodeURIComponent(s.pane_id)}` }, "開啟"))))))) : el("p", { class: "small muted" }, "沒有工作中的 Terminal。"),
       p.skills_used.length ? el("div", { class: "chips", style: "margin-top:10px" }, el("span", { class: "small muted" }, "近期用過："),
@@ -2340,7 +2351,7 @@ async function viewTerminal(paneId) {
 
 // ---------- Phase B1-B4: Unified Workbench, Tasks & Governance -------------
 
-function computeTaskProvenance(prov = {}, rawStatus = "draft") {
+function computeTaskProvenance(prov = {}, rawStatus = "draft", closure = null) {
   const agent = (prov && prov.agent) || "pending";
   const tests = (prov && prov.tests) || "untested";
   const human = (prov && prov.human) || "pending";
@@ -2349,11 +2360,21 @@ function computeTaskProvenance(prov = {}, rawStatus = "draft") {
   // approval were both set through this same unauthenticated UI/API — never
   // a governed or cryptographically verified fact. Nothing here computes or
   // exposes a "verified" boolean; that field is only ever hardcoded false
-  // on the backend.
-  const verificationAsserted = (tests === "passed" && human === "approved");
+  // on the backend. Both results must also still refer to the commit the
+  // workdir is on now; only the server can read that, so its
+  // verification_asserted flag is required as well (tasks._derive).
+  const bothAsserted = (tests === "passed" && human === "approved");
+  const verificationAsserted = bothAsserted && Boolean(prov && prov.verification_asserted === true);
+  const reason = closure && closure.reason;
   let derivedStatus = "draft";
   if (verificationAsserted) {
     derivedStatus = "verification_asserted";
+  } else if (bothAsserted) {
+    derivedStatus = "verification_stale";
+  } else if (agent === "completed" && reason === "handed_off_to") {
+    derivedStatus = "handed_off";
+  } else if (agent === "completed" && ["superseded", "canceled", "denied"].includes(reason)) {
+    derivedStatus = "closed";
   } else if (agent === "completed") {
     derivedStatus = "agent_completed";
   } else if (agent === "in_progress") {
@@ -2377,7 +2398,35 @@ const TASK_STATUS_LABELS = {
   agent_completed: ["待驗收 (Agent回報完成)", "b-warn", "Agent 已回報完成，但尚未通過測試驗證與人類核准"],
   verification_asserted: ["聲稱驗證通過 (Verification Asserted)", "b-ok", "此主控台無身份驗證：僅代表自動化測試與介面核准兩欄皆已透過本頁/API 自我回報為通過，並非經授權之正式驗證"],
   blocked: ["等待回覆 / 阻塞", "b-bad", "任務遭遇問題等待指示"],
+  verification_stale: ["結果對應的版本已變更", "b-warn", "測試或核准記錄時的 commit 與目前不同（或無法確認）；需要重新測試與核准"],
+  handed_off: ["已交接", "b-mute", "已交給下一位；後續請看接手的任務卡"],
+  closed: ["已結案（未完成）", "b-mute", "取消、拒絕執行或被其他任務取代"],
 };
+// tasks.CLOSURE_REASONS, in the order offered.
+const CLOSURE_REASONS = {
+  completed: [["no_follow_on", "完成，沒有後續"], ["handed_off_to", "交給下一位"],
+    ["superseded", "被其他任務取代"], ["canceled", "取消"], ["denied", "拒絕執行"]],
+  blocked: [["blocked_on", "卡在某人或某事"], ["escalation", "已上報"]],
+};
+const CLOSURE_NEEDS_TARGET = new Set(["handed_off_to", "blocked_on", "escalation"]);
+const CLOSURE_LABEL = Object.fromEntries([...CLOSURE_REASONS.completed, ...CLOSURE_REASONS.blocked]);
+const PICKUP = {
+  closed: ["已結案", "b-mute"], blocked: ["阻塞中", "b-bad"], unclaimed: ["尚未認領", "b-warn"],
+  working: ["處理中", "b-info"], parked: ["停在等你", "b-warn"], stalled: ["中斷", "b-bad"],
+  unknown: ["處理狀態未知", "b-mute"],
+};
+const BINDING = {
+  current: ["對應目前版本", "b-ok"], stale: ["版本已變更", "b-warn"], mismatch: ["測試與核准版本不同", "b-warn"],
+  unknown: ["無法確認版本", "b-warn"], unbound: ["未綁定版本", "b-mute"], none: ["尚無結果", "b-mute"],
+};
+function pickupBadge(p) {
+  const [label, cls] = PICKUP[(p && p.state)] || PICKUP.unknown;
+  return badge(label, cls, `處理狀態（由關聯 Terminal 即時推算，不是誰填的）：${(p && p.detail) || "沒有資料"}`);
+}
+function bindingBadge(b) {
+  const [label, cls] = BINDING[(b && b.state)] || BINDING.unknown;
+  return badge(label, cls, (b && b.detail) || "");
+}
 
 function taskStatusBadge(status) {
   const [label, cls, title] = TASK_STATUS_LABELS[status] || TASK_STATUS_LABELS.draft;
@@ -2551,7 +2600,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       },
         el("div", { class: "wb-session-title" },
           el("span", { style: "font-weight:650" }, roleName),
-          statusBadge(sess.status)),
+          statusBadge(sess.status, sess.activity)),
         el("div", { class: "wb-session-sub" },
           toolTag(sess.agent),
           el("span", { class: "mono small" }, sess.pane_id)));
@@ -3208,7 +3257,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     }
 
     const taskProv = activeTask.provenance || {};
-    const { agent, tests, human, verificationAsserted, derivedStatus } = computeTaskProvenance(taskProv, activeTask.status);
+    const { agent, tests, human, verificationAsserted, derivedStatus } = computeTaskProvenance(taskProv, activeTask.status, activeTask.closure);
 
     // Tracking association status
     const isAssociatedWithCurrent = (activeTask.associated_pane_id === activePaneId);
@@ -3254,6 +3303,13 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           on: {
             change: async (e) => {
               const newAgent = e.target.value;
+              if (CLOSURE_REASONS[newAgent]) {
+                // Completing or blocking says what follows (tasks.py closure
+                // obligation). Cancelling the dialog re-renders, which puts
+                // the select back on the stored value.
+                promptClosure(activeTask, newAgent);
+                return;
+              }
               try {
                 const updated = await api.post(`/api/tasks/${encodeURIComponent(activeTask.id)}`, {
                   provenance: { ...taskProv, agent: newAgent },
@@ -3304,6 +3360,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         },
           [["pending", "審查中 (pending)"], ["approved", "核准 (approved)"], ["rejected", "退回 (rejected)"]]
             .map(([v, l]) => el("option", { value: v, selected: human === v }, l)))),
+      closureRow(activeTask),
+      el("div", { class: "wb-provenance-row" },
+        el("span", null, "4. 結果對應的版本：", bindingBadge(activeTask.verification_binding)),
+        el("span", { class: "small muted" }, (activeTask.verification_binding && activeTask.verification_binding.detail) || "")),
       el("div", { class: "small muted", style: "border-top: 1px dashed var(--line); padding-top:6px" },
         verificationAsserted
           ? el("span", { style: "color:var(--ok); font-weight:700" }, "✓ 測試與介面核准兩欄皆已自我回報為通過（聲稱驗證通過，非經授權之正式驗證）")
@@ -3367,6 +3427,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
 
     const actionRow = el("div", { class: "row", style: "margin-top:8px" },
       el("button", { class: "btn small", type: "button", on: { click: () => promptEditTask(activeTask) } }, "編輯任務"),
+      el("button", {
+        class: "btn small", type: "button", disabled: agent === "completed",
+        title: agent === "completed" ? "已結案的任務卡不能再交接" : "結束這張卡並建立接手的新卡（同一次寫入）",
+        on: { click: () => promptHandoff(activeTask) },
+      }, "交接給…"),
       el("button", { class: "btn small", type: "button", on: { click: () => promptDeleteTask(activeTask) } }, "刪除任務"));
 
     setKids(taskContent,
@@ -3376,7 +3441,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         el("div", { class: "row small muted" },
           badge(activeTask.template, "b-info", "任務範本"),
           taskStatusBadge(derivedStatus),
+          pickupBadge(activeTask.pickup),
+          activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
           prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" }))),
+      chainRow(activeTask),
       trackingBox,
       provBox,
       renderField("目標 (Goal)", activeTask.goal),
@@ -4061,6 +4129,130 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   }
 
   // ---------- Task Modals ----------
+  // What follows a completed or blocked card (tasks.py closure), and where
+  // the work went if it was handed off.
+  function closureRow(task) {
+    const c = task.closure;
+    if (!c) {
+      return task.closure_missing
+        ? el("div", { class: "wb-provenance-row small", style: "color:var(--warn)" },
+          "⚠️ 缺少結案理由：這張卡在規則加入前就已回報完成或阻塞。")
+        : null;
+    }
+    const successor = c.successor && tasksList.find((t) => t.id === c.successor);
+    return el("div", { class: "wb-provenance-row" },
+      el("span", null, "結案理由：", el("b", null, CLOSURE_LABEL[c.reason] || c.reason),
+        c.target ? `（對象：${c.target}）` : "",
+        c.set_at ? el("span", { class: "small muted" }, ` · ${fmtTime(c.set_at)}`) : null),
+      el("span", { class: "small muted" }, c.note || "",
+        successor ? el("button", {
+          class: "btn small", type: "button",
+          on: { click: () => { activeTaskId = successor.id; renderRightColumn(); } },
+        }, `開啟接手的卡：${successor.title}`) : null));
+  }
+
+  // The cards this one was handed down from, oldest first (tasks.py
+  // chain_of_record; only handoff_task() writes it).
+  function chainRow(task) {
+    const chain = task.chain_of_record || [];
+    if (!chain.length) return null;
+    return el("div", { class: "row small muted", style: "flex-wrap:wrap; gap:4px; margin:4px 0" },
+      "交接鏈：",
+      chain.map((id) => {
+        const t = tasksList.find((x) => x.id === id);
+        return [t
+          ? el("button", { class: "btn small", type: "button", on: { click: () => { activeTaskId = id; renderRightColumn(); } } }, t.title)
+          : el("span", { class: "mono", title: "這張卡已不在清單中" }, id), " → "];
+      }),
+      el("b", null, "本卡"));
+  }
+
+  function promptClosure(task, agent) {
+    const reasons = CLOSURE_REASONS[agent];
+    const reasonSelect = el("select", null, reasons.map(([v, l]) => el("option", { value: v }, l)));
+    const targetInput = el("input", { type: "text", placeholder: "交給誰、卡在誰或上報給誰" });
+    const noteInput = el("textarea", { rows: "2", placeholder: "補充說明（選填）" });
+    const targetLabel = el("label", null, "對象 *", targetInput);
+    const syncTarget = () => { targetLabel.style.display = CLOSURE_NEEDS_TARGET.has(reasonSelect.value) ? "" : "none"; };
+    reasonSelect.addEventListener("change", syncTarget);
+    syncTarget();
+    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
+    const saveBtn = el("button", { class: "btn primary", type: "button", on: { click: submit } }, "確定");
+    const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "task-closure-modal-title" },
+      el("div", { class: "modal-box", style: "max-width: 480px;" },
+        el("h2", { id: "task-closure-modal-title" }, agent === "completed" ? "回報完成：接下來是什麼？" : "阻塞：在等誰？"),
+        el("p", { class: "small muted" }, "標成「已回報完成」或「阻塞」時要說明後續，任務才不會停在沒人接手的狀態。"),
+        el("div", { class: "wb-form" }, el("label", null, "結案理由", reasonSelect), targetLabel, el("label", null, "說明", noteInput)),
+        el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
+    document.body.append(modal);
+    const closeModal = withModalA11y(modal, () => { modal.remove(); renderRightColumn(); });
+    reasonSelect.focus();
+
+    async function submit() {
+      const reason = reasonSelect.value;
+      const target = targetInput.value.trim();
+      if (CLOSURE_NEEDS_TARGET.has(reason) && !target) {
+        toast("這個結案理由需要填寫對象");
+        targetInput.focus();
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const res = await api.post(`/api/tasks/${encodeURIComponent(task.id)}`, {
+          provenance: { ...(task.provenance || {}), agent },
+          closure: { reason, target: target || null, note: noteInput.value.trim() },
+        });
+        Object.assign(task, res.task);
+        closeModal();
+      } catch (err) {
+        toast("更新失敗：" + err.message);
+        saveBtn.disabled = false;
+      }
+    }
+  }
+
+  function promptHandoff(task) {
+    const toInput = el("input", { type: "text", placeholder: "接手的角色、Agent 或人（必填）" });
+    const titleInput = el("input", { type: "text", value: `交接：${task.title}` });
+    const noteInput = el("textarea", { rows: "3", placeholder: "交接說明：做到哪、還缺什麼、怎麼驗證（選填）" });
+    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
+    const saveBtn = el("button", { class: "btn primary", type: "button", on: { click: submit } }, "交接");
+    const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "task-handoff-modal-title" },
+      el("div", { class: "modal-box", style: "max-width: 520px;" },
+        el("h2", { id: "task-handoff-modal-title" }, "交接任務卡"),
+        el("p", { class: "small muted" }, "這張卡會標成「已交接」，同時建立一張接手的新卡：目標、範圍、驗收條件與工作目錄沿用，狀態證明從頭開始，並記下交接鏈。"),
+        el("div", { class: "wb-form" },
+          el("label", null, "交給 *", toInput), el("label", null, "新卡標題", titleInput), el("label", null, "說明", noteInput)),
+        el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
+    document.body.append(modal);
+    const closeModal = withModalA11y(modal, () => modal.remove());
+    toInput.focus();
+
+    async function submit() {
+      const to = toInput.value.trim();
+      if (!to) {
+        toast("請填寫接手的對象");
+        toInput.focus();
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const res = await api.post(`/api/tasks/${encodeURIComponent(task.id)}/handoff`, {
+          to, title: titleInput.value.trim(), note: noteInput.value.trim(),
+        });
+        Object.assign(task, res.from);
+        tasksList.unshift(res.to);
+        activeTaskId = res.to.id;
+        toast(`已交接給 ${to}`);
+        closeModal();
+        renderRightColumn();
+      } catch (err) {
+        toast("交接失敗：" + err.message);
+        saveBtn.disabled = false;
+      }
+    }
+  }
+
   function promptCreateTask() {
     let modal;
     const titleInput = el("input", { type: "text", placeholder: "輸入任務標題 (必填)", required: true });
@@ -4085,6 +4277,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const deliverablesInput = el("textarea", { rows: "2", placeholder: "預期交付之成果物 (每行一項)" }, (defaultTmpl.deliverables || []).join("\n"));
     const criteriaInput = el("textarea", { rows: "2", placeholder: "驗收標準 (每行一項)" }, (defaultTmpl.acceptance_criteria || []).join("\n"));
     const evidenceInput = el("textarea", { rows: "2", placeholder: "驗證證據 (每行一項)" }, (defaultTmpl.evidence || []).join("\n"));
+    const activePane = ((D.live && D.live.panes) || []).find((x) => x.pane_id === activePaneId);
+    const workdirInput = el("input", { type: "text", value: (activePane && activePane.cwd) || "",
+      placeholder: "/Users/you/project（選填，預設為目前 Terminal 的工作目錄）" });
 
     const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
     const saveBtn = el("button", { class: "btn primary", type: "button", on: { click: submitSave } }, "建立任務卡");
@@ -4100,7 +4295,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("label", null, "範圍外 (Out of Scope，每行一項)", outOfScopeInput),
           el("label", null, "交付物 (Deliverables，每行一項)", deliverablesInput),
           el("label", null, "驗收條件 (Acceptance Criteria，每行一項)", criteriaInput),
-          el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput)),
+          el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput),
+          el("label", null, "工作目錄（選填：git 儲存庫內的絕對路徑，測試與核准會綁定到當時的 commit）", workdirInput)),
         el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
     document.body.append(modal);
 
@@ -4131,6 +4327,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           deliverables: deliverablesInput.value.trim(),
           acceptance_criteria: criteriaInput.value.trim(),
           evidence: evidenceInput.value.trim(),
+          workdir: workdirInput.value.trim() || null,
           associated_pane_id: activePaneId || null,
         };
         const res = await api.post("/api/tasks", payload);
@@ -4155,6 +4352,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const deliverablesInput = el("textarea", { rows: "2" }, (task.deliverables || []).join("\n"));
     const criteriaInput = el("textarea", { rows: "2" }, (task.acceptance_criteria || []).join("\n"));
     const evidenceInput = el("textarea", { rows: "2" }, (task.evidence || []).join("\n"));
+    const workdirInput = el("input", { type: "text", value: task.workdir || "", placeholder: "/Users/you/project（選填）" });
 
     const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
     const saveBtn = el("button", { class: "btn primary", type: "button", on: { click: submitSave } }, "儲存修改");
@@ -4169,7 +4367,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("label", null, "範圍外 (Out of Scope，每行一項)", outOfScopeInput),
           el("label", null, "交付物 (Deliverables，每行一項)", deliverablesInput),
           el("label", null, "驗收條件 (Acceptance Criteria，每行一項)", criteriaInput),
-          el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput)),
+          el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput),
+          el("label", null, "工作目錄（選填：改了之後，既有的測試與核准仍對應原本的 commit）", workdirInput)),
         el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
     document.body.append(modal);
 
@@ -4195,6 +4394,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           deliverables: deliverablesInput.value.trim(),
           acceptance_criteria: criteriaInput.value.trim(),
           evidence: evidenceInput.value.trim(),
+          workdir: workdirInput.value.trim() || null,
         };
         const res = await api.post(`/api/tasks/${encodeURIComponent(task.id)}`, payload);
         Object.assign(task, res.task);
@@ -4354,6 +4554,9 @@ if (typeof module !== "undefined" && module.exports) {
     canStartTerminalStream,
     shouldShowTerminalRetryAction,
     parseHash,
+    STATUS,
+    statusBadge,
+    activityBasis,
     computeTaskProvenance,
     taskStatusBadge,
     TASK_STATUS_LABELS,

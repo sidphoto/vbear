@@ -378,7 +378,7 @@ def make_handler(console: Console):
                 if path == "/api/config":
                     return self._json(self._config_view())
                 if path == "/api/tasks":
-                    return self._json({"ok": True, "tasks": tasks.list_tasks()})
+                    return self._json({"ok": True, "tasks": self._with_pickup(tasks.list_tasks())})
                 if path == "/api/task-templates":
                     return self._json({"ok": True, "templates": tasks.get_templates()})
                 if path.startswith("/api/tasks/"):
@@ -386,7 +386,7 @@ def make_handler(console: Console):
                     t = tasks.get_task(task_id)
                     if t is None:
                         return self._error(404, "找不到此任務卡")
-                    return self._json({"ok": True, "task": t})
+                    return self._json({"ok": True, "task": self._with_pickup([t])[0]})
                 if path == "/api/governance":
                     return self._json(self._governance_view())
                 if path == "/api/agent-builder/catalog":
@@ -494,11 +494,20 @@ def make_handler(console: Console):
                 if path == "/api/tasks":
                     try:
                         saved = tasks.save_task(None, self._body())
-                        return self._json({"ok": True, "task": saved})
+                        return self._json({"ok": True, "task": self._with_pickup([saved])[0]})
                     except ValueError as exc:
                         return self._error(400, str(exc))
                 if path.startswith("/api/tasks/"):
                     rest = path[len("/api/tasks/"):]
+                    if rest.endswith("/handoff"):
+                        try:
+                            moved = tasks.handoff_task(rest[:-len("/handoff")], self._body())
+                        except LookupError as exc:
+                            return self._error(404, str(exc))
+                        except ValueError as exc:
+                            return self._error(400, str(exc))
+                        done, successor = self._with_pickup([moved["from"], moved["to"]])
+                        return self._json({"ok": True, "from": done, "to": successor})
                     if rest.endswith("/delete"):
                         task_id = rest[:-7]
                         ok = tasks.delete_task(task_id)
@@ -514,7 +523,7 @@ def make_handler(console: Console):
                         return self._json({"ok": True, "deleted": task_id})
                     try:
                         saved = tasks.save_task(task_id, body)
-                        return self._json({"ok": True, "task": saved})
+                        return self._json({"ok": True, "task": self._with_pickup([saved])[0]})
                     except ValueError as exc:
                         return self._error(400, str(exc))
                 if path == "/api/agent-profiles":
@@ -1133,6 +1142,15 @@ def make_handler(console: Console):
                     "party skill/role sources, or any third-party marketplace cache.",
                 ],
             }
+
+        def _with_pickup(self, items: list[dict]) -> list[dict]:
+            """Each card plus its pickup state, derived now from the live view.
+            A live view that cannot be built makes pickup "unknown", never a guess."""
+            try:
+                live = console.store.live(stale_ok=True)
+            except Exception:  # noqa: BLE001 - the card itself must still load
+                live = None
+            return [{**t, "pickup": tasks.pickup(t, live)} for t in items]
 
         def _governance_view(self) -> dict:
             return {

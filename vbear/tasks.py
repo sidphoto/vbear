@@ -32,6 +32,25 @@ Task-to-session association is strictly tracking-only:
   - association_mode is always "tracking_only"
   - Never implies or generates context injection
   - Applying a changed Task Card as Effective Context requires a new session
+
+Ideas adopted from OpenRig's work queue (docs/evidence/openrig-learnings.md):
+  * Exact candidate. With a ``workdir``, setting tests to "passed" or human to
+    "approved" records the commit that working directory was on at that
+    moment (``tests_candidate`` / ``human_candidate``, read by git_head, never
+    supplied by the client). Every read compares them with the commit it is
+    on now: verification_asserted holds only while both refer to the current
+    commit. Otherwise status reads "verification_stale".
+  * Closure obligation. Moving the agent field to "completed" or "blocked"
+    requires a closure reason saying what follows (CLOSURE_REASONS), and a
+    target for the reasons that name someone. Enforced here, so every entry
+    point inherits it. Records saved before this rule keep working and are
+    flagged ``closure_missing``.
+  * Handoff. handoff_task() closes a card as handed_off_to and creates its
+    successor in one locked write; the successor carries handed_off_from and
+    the whole chain_of_record. Neither field can be set through save_task().
+  * Pickup. Whether anyone is working on a card is derived at read time from
+    the card and the live sessions (pickup()). It is never stored and never
+    accepted from a client.
 """
 
 from __future__ import annotations
@@ -50,6 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config as cfg
+from . import git_head
 
 MAX_TASKS = 1000
 MAX_TEXT_SHORT = 200
@@ -68,6 +88,21 @@ VALID_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 # string, or a client could forge a verification-looking status without
 # passing tests or human approval.
 CLIENT_ASSERTABLE_STATUSES = ("draft", "in_progress", "blocked", "agent_completed")
+
+# What may follow when the agent field moves to "completed" or "blocked".
+CLOSURE_REASONS = {
+    "completed": ("no_follow_on", "handed_off_to", "superseded", "canceled", "denied"),
+    "blocked": ("blocked_on", "escalation"),
+}
+# Reasons that name someone or something; the target is required for them.
+TARGET_REQUIRED = frozenset({"handed_off_to", "blocked_on", "escalation"})
+# Closed without the work being done.
+CLOSED_REASONS = frozenset({"superseded", "canceled", "denied"})
+MAX_CHAIN = 100
+PICKUP_STATES = ("closed", "blocked", "unclaimed", "working", "parked", "stalled", "unknown")
+
+# Reads HEAD for the exact-candidate binding. Tests replace it.
+HEAD_READER = git_head.read_head
 
 
 class TaskStorageError(RuntimeError):
@@ -358,6 +393,12 @@ def _entry_schema_problem(key: Any, value: Any) -> str | None:
     for ts_field in ("created_at", "updated_at"):
         if ts_field in value and not isinstance(value[ts_field], (int, float)):
             return f"{ts_field} 非數值"
+    if value.get("closure") is not None and not isinstance(value.get("closure"), dict):
+        return "closure 不是物件"
+    if "chain_of_record" in value and not isinstance(value["chain_of_record"], list):
+        return "chain_of_record 不是陣列"
+    if value.get("workdir") is not None and not isinstance(value.get("workdir"), str):
+        return "workdir 非字串"
     return None
 
 
@@ -493,9 +534,12 @@ def load_all() -> dict[str, dict[str, Any]]:
 
 
 def list_tasks() -> list[dict[str, Any]]:
-    """Return all tasks sorted by updated_at descending."""
+    """Return all tasks sorted by updated_at descending, each re-derived
+    against the commit its workdir is on now."""
     with _lock:
         tasks = list(load_all().values())
+    heads = _heads_cache()
+    tasks = [_derive(t, heads) for t in tasks]
     tasks.sort(key=lambda t: t.get("updated_at", 0), reverse=True)
     return tasks
 
@@ -504,7 +548,8 @@ def get_task(task_id: str) -> dict[str, Any] | None:
     if not isinstance(task_id, str) or not task_id:
         return None
     with _lock:
-        return load_all().get(task_id)
+        task = load_all().get(task_id)
+    return _derive(task) if task is not None else None
 
 
 def _clean_str(value: Any, max_len: int = MAX_TEXT_SHORT, default: str = "") -> str:
@@ -529,6 +574,138 @@ def _clean_str_list(value: Any, max_items: int = MAX_ITEMS, max_len: int = MAX_I
         if len(out) >= max_items:
             break
     return out
+
+
+def _clean_workdir(value: Any) -> str | None:
+    """An optional absolute directory, normalized; None clears it."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or "\x00" in value or len(value) > 1024 or not os.path.isabs(value):
+        raise ValueError("工作目錄必須是絕對路徑")
+    path = os.path.normpath(value)
+    if not os.path.isdir(path):
+        raise ValueError("工作目錄不存在")
+    return path
+
+
+def _clean_closure(raw: Any, agent_status: str, existing: Any, now: float) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("closure 必須是物件")
+    reason = _clean_str(raw.get("reason"), 32)
+    allowed = CLOSURE_REASONS[agent_status]
+    if reason not in allowed:
+        raise ValueError(f"結案理由不符：{'完成' if agent_status == 'completed' else '阻塞'}時只能是 {'、'.join(allowed)}")
+    target = _clean_str(raw.get("target"), MAX_TEXT_SHORT) or None
+    if reason in TARGET_REQUIRED and not target:
+        raise ValueError("這個結案理由必須填寫對象（交給誰、卡在誰或上報給誰）")
+    closure = {"reason": reason, "target": target, "note": _clean_str(raw.get("note"), 1000)}
+    old = existing if isinstance(existing, dict) else {}
+    same = all(old.get(k) == closure[k] for k in ("reason", "target", "note"))
+    closure["set_at"] = old["set_at"] if same and isinstance(old.get("set_at"), (int, float)) else now
+    if same and old.get("successor"):
+        closure["successor"] = old["successor"]
+    return closure
+
+
+def _candidate(workdir: str | None, now: float) -> dict[str, Any] | None:
+    """The commit ``workdir`` is on right now, recorded with a test result or
+    an approval. None without a workdir."""
+    if not workdir:
+        return None
+    head = HEAD_READER(workdir)
+    return {"commit": head.get("commit"), "ref": head.get("ref"), "repo": head.get("repo"),
+            "error": head.get("error"), "read_at": now}
+
+
+def _short(commit: str | None) -> str:
+    return commit[:8] if isinstance(commit, str) else "?"
+
+
+def _binding(task: dict[str, Any], heads) -> dict[str, Any]:
+    """How the asserted results relate to the commit the workdir is on now."""
+    prov = task.get("provenance") or {}
+    workdir = task.get("workdir")
+    asserted = [(prov.get("tests_candidate"), "測試") if prov.get("tests") == "passed" else None,
+                (prov.get("human_candidate"), "核准") if prov.get("human") == "approved" else None]
+    asserted = [a for a in asserted if a is not None]
+    if not workdir:
+        return {"state": "unbound", "current": None,
+                "detail": "未設定工作目錄：結果沒有綁定任何 commit"}
+    current = heads(workdir)
+    view = {"commit": current.get("commit"), "ref": current.get("ref"), "error": current.get("error")}
+    if not asserted:
+        return {"state": "none", "current": view, "detail": "還沒有測試通過或核准的紀錄"}
+    candidates = [c for c, _ in asserted]
+    if current.get("repo") is None and all(isinstance(c, dict) and c.get("repo") is None for c in candidates):
+        return {"state": "unbound", "current": view,
+                "detail": "工作目錄不在 git 儲存庫內：結果沒有綁定 commit"}
+    missing = [label for c, label in asserted if not isinstance(c, dict) or not c.get("commit")]
+    if missing:
+        return {"state": "unknown", "current": view,
+                "detail": f"記錄{'與'.join(missing)}結果時沒有讀到 commit，無法確認對應的版本"}
+    commits = {c["commit"] for c in candidates}
+    if len(commits) > 1:
+        return {"state": "mismatch", "current": view,
+                "detail": "測試與核准對應到不同的 commit：" + "、".join(
+                    f"{label} {_short(c['commit'])}" for c, label in asserted)}
+    (commit,) = commits
+    if not current.get("commit"):
+        return {"state": "unknown", "current": view,
+                "detail": f"目前無法讀取 commit（{current.get('error') or '原因不明'}）"}
+    if current["commit"] != commit:
+        return {"state": "stale", "current": view,
+                "detail": f"結果對應的版本已變更：記錄時是 {_short(commit)}，目前是 {_short(current['commit'])}"}
+    return {"state": "current", "current": view,
+            "detail": f"結果對應目前的 commit {_short(commit)}（只比對 commit，看不到未提交的修改）"}
+
+
+def _derive(task: dict[str, Any], heads=None) -> dict[str, Any]:
+    """Recompute everything that depends on the outside world (the commit the
+    workdir is on now). Called on every read and after every write, so a
+    stored status is never trusted on its own."""
+    heads = heads or HEAD_READER
+    prov = dict(task.get("provenance") or {})
+    binding = _binding(task, heads)
+    asserted = prov.get("tests") == "passed" and prov.get("human") == "approved"
+    verification_asserted = asserted and binding["state"] in ("unbound", "current")
+    prov["verification_asserted"] = verification_asserted
+    prov["verified"] = False
+    closure = task.get("closure") if isinstance(task.get("closure"), dict) else None
+    agent = prov.get("agent")
+    if verification_asserted:
+        status = "verification_asserted"
+    elif asserted:
+        status = "verification_stale"
+    elif closure and closure.get("reason") == "handed_off_to" and agent == "completed":
+        status = "handed_off"
+    elif closure and closure.get("reason") in CLOSED_REASONS and agent == "completed":
+        status = "closed"
+    elif agent == "completed":
+        status = "agent_completed"
+    elif agent == "in_progress":
+        status = "in_progress"
+    elif agent == "blocked":
+        status = "blocked"
+    elif task.get("status") in CLIENT_ASSERTABLE_STATUSES:
+        status = task["status"]
+    else:
+        status = "draft"
+    out = dict(task)
+    out["provenance"] = prov
+    out["status"] = status
+    out["verification_binding"] = binding
+    out["closure_missing"] = agent in ("completed", "blocked") and closure is None
+    return out
+
+
+def _heads_cache():
+    cache: dict[str, dict] = {}
+
+    def heads(workdir: str) -> dict:
+        if workdir not in cache:
+            cache[workdir] = HEAD_READER(workdir)
+        return cache[workdir]
+    return heads
 
 
 def _clean_steps(value: Any, max_steps: int = MAX_STEPS) -> list[dict[str, Any]]:
@@ -622,40 +799,61 @@ def _validate_and_normalize(
     tests_set_at = _field_set_at("tests", test_status)
     human_set_at = _field_set_at("human", human_status)
 
-    # verification_asserted strictly requires tests passed AND human
-    # approved. It is an honest name for what this is: an assertion made
-    # through this same unauthenticated console UI/API, never a governed or
-    # cryptographically verified fact (H1 / L5).
-    verification_asserted = (test_status == "passed" and human_status == "approved")
-
-    # overall status
-    raw_status = _clean_str(body.get("status") or (existing.get("status") if existing else ""), 32)
-    if verification_asserted:
-        derived_status = "verification_asserted"
-    elif agent_status == "completed":
-        derived_status = "agent_completed"  # agent claimed done, but tests/human pending
-    elif agent_status == "in_progress":
-        derived_status = "in_progress"
-    elif agent_status == "blocked":
-        derived_status = "blocked"
-    elif raw_status in CLIENT_ASSERTABLE_STATUSES:
-        derived_status = raw_status
+    workdir = _clean_workdir(body["workdir"]) if "workdir" in body else (existing.get("workdir") if existing else None)
+    if "owner" in body:
+        owner = _clean_str(body.get("owner"), MAX_TEXT_SHORT) or None
     else:
-        derived_status = "draft"
+        owner = existing.get("owner") if existing else None
+
+    # Exact candidate: a result is bound to the commit the workdir is on when
+    # it is first recorded. Keeping a "passed" keeps its original candidate;
+    # nothing re-binds an old result to a newer commit without re-asserting it.
+    def _bound(field: str, value: str, positive: str):
+        if value != positive:
+            return None
+        if existing_prov.get(field) == positive:
+            return existing_prov.get(f"{field}_candidate")
+        return _candidate(workdir, now)
+
+    tests_candidate = _bound("tests", test_status, "passed")
+    human_candidate = _bound("human", human_status, "approved")
+
+    # Closure obligation: completing or blocking says what follows.
+    prev_agent = existing_prov.get("agent")
+    existing_closure = existing.get("closure") if existing else None
+    if agent_status in CLOSURE_REASONS:
+        if isinstance(body.get("closure"), dict):
+            closure = _clean_closure(body["closure"], agent_status, existing_closure, now)
+        elif "closure" in body and body["closure"] is not None:
+            raise ValueError("closure 必須是物件")
+        elif prev_agent != agent_status:
+            raise ValueError("把任務標成「已回報完成」或「阻塞」時，必須附上結案理由（closure）")
+        elif "closure" in body:
+            raise ValueError("已回報完成或阻塞的任務不能移除結案理由")
+        else:
+            closure = existing_closure if isinstance(existing_closure, dict) else None
+    else:
+        if isinstance(body.get("closure"), dict):
+            raise ValueError("只有「已回報完成」或「阻塞」的任務可以有結案理由")
+        closure = None
+
+    raw_status = _clean_str(body.get("status") or (existing.get("status") if existing else ""), 32)
 
     provenance = {
         "agent": agent_status,
         "agent_set_at": agent_set_at,
         "tests": test_status,
         "tests_set_at": tests_set_at,
+        "tests_candidate": tests_candidate,
         "human": human_status,
         "human_set_at": human_set_at,
+        "human_candidate": human_candidate,
         # No authenticated verifier exists anywhere in this system, so this
         # console never claims a governed "Verified" state — this field
-        # always reads False (H1). See verification_asserted for the
-        # honestly-named self-reported assertion.
+        # always reads False (H1). verification_asserted, the honestly-named
+        # self-reported assertion, is derived in _derive().
         "verified": False,
-        "verification_asserted": verification_asserted,
+        "verification_asserted": False,
         "notes": _clean_str(prov_raw.get("notes") or existing_prov.get("notes", ""), 1000),
         # Truthful labeling (L5): "human" here means "asserted through this
         # local, single-operator console UI/API" — this app has no
@@ -681,7 +879,7 @@ def _validate_and_normalize(
 
     created_at = existing.get("created_at", now) if existing else now
 
-    return {
+    record = {
         "id": tid,
         "title": title,
         "template": template,
@@ -693,8 +891,15 @@ def _validate_and_normalize(
         "evidence": evidence,
         "steps": steps,
         "artifacts": artifacts,
-        "status": derived_status,
+        "workdir": workdir,
+        "owner": owner,
+        # The client may assert only these; everything else is derived.
+        "status": raw_status if raw_status in CLIENT_ASSERTABLE_STATUSES else "draft",
         "provenance": provenance,
+        "closure": closure,
+        # Set only by handoff_task(), never from a request body.
+        "handed_off_from": existing.get("handed_off_from") if existing else None,
+        "chain_of_record": list(existing.get("chain_of_record") or []) if existing else [],
         "associated_pane_id": associated_pane,
         "associated_session_id": associated_session,
         "association_mode": "tracking_only",
@@ -702,6 +907,10 @@ def _validate_and_normalize(
         "created_at": created_at,
         "updated_at": now,
     }
+    derived = _derive(record)
+    record["status"] = derived["status"]
+    record["provenance"] = derived["provenance"]
+    return record
 
 
 def save_task(task_id: str | None, body: dict[str, Any]) -> dict[str, Any]:
@@ -729,7 +938,91 @@ def save_task(task_id: str | None, body: dict[str, Any]) -> dict[str, Any]:
 
         data_str = json.dumps(all_tasks, ensure_ascii=False, indent=2)
         cfg.write_private(_path(), data_str)
-        return normalized
+        return _derive(normalized)
+
+
+def handoff_task(task_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Close ``task_id`` as handed off and create its successor in one locked
+    read-modify-write (a single atomic file replace), so neither can exist
+    without the other. Returns ``{"from": ..., "to": ...}``.
+
+    The successor copies the card's contract (goal, scope, acceptance...)
+    and workdir, starts with fresh provenance and no session association,
+    and carries ``handed_off_from`` plus the full ``chain_of_record``."""
+    if not isinstance(task_id, str) or not task_id:
+        raise LookupError("找不到此任務卡")
+    to = _clean_str(body.get("to"), MAX_TEXT_SHORT)
+    if not to:
+        raise ValueError("交接必須填寫接手的對象")
+    note = _clean_str(body.get("note"), 1000)
+    with _cross_process_lock():
+        all_tasks = load_all()
+        old = all_tasks.get(task_id)
+        if old is None:
+            raise LookupError("找不到此任務卡")
+        old_prov = old.get("provenance") or {}
+        if old_prov.get("agent") == "completed":
+            raise ValueError("此任務卡已結案，不能再交接；請從最新的一張接續")
+        if len(all_tasks) >= MAX_TASKS:
+            raise ValueError(f"任務卡已達上限 {MAX_TASKS} 筆")
+        chain = [*(old.get("chain_of_record") or []), task_id][-MAX_CHAIN:]
+        title = _clean_str(body.get("title"), MAX_TEXT_SHORT) or _clean_str(f"交接：{old['title']}", MAX_TEXT_SHORT)
+        successor = _validate_and_normalize(None, {
+            "title": title,
+            "template": old.get("template"),
+            "goal": old.get("goal", ""),
+            "scope": old.get("scope", []),
+            "out_of_scope": old.get("out_of_scope", []),
+            "deliverables": old.get("deliverables", []),
+            "acceptance_criteria": old.get("acceptance_criteria", []),
+            "evidence": old.get("evidence", []),
+            "steps": [{"title": st.get("title"), "done": False} for st in old.get("steps", [])
+                      if isinstance(st, dict)],
+            "workdir": old.get("workdir"),
+            "owner": to,
+        }, None, existing_ids=frozenset(all_tasks.keys()))
+        successor["handed_off_from"] = task_id
+        successor["chain_of_record"] = chain
+        closed = _validate_and_normalize(task_id, {
+            "provenance": {**old_prov, "agent": "completed"},
+            "closure": {"reason": "handed_off_to", "target": to, "note": note},
+        }, old, existing_ids=frozenset(all_tasks.keys()))
+        closed["closure"]["successor"] = successor["id"]
+        all_tasks[task_id] = closed
+        all_tasks[successor["id"]] = successor
+        cfg.write_private(_path(), json.dumps(all_tasks, ensure_ascii=False, indent=2))
+        heads = _heads_cache()
+        return {"from": _derive(closed, heads), "to": _derive(successor, heads)}
+
+
+def pickup(task: dict[str, Any], live: dict[str, Any] | None) -> dict[str, str]:
+    """Whether anyone is working on the card, derived now from the card and
+    the live view (index.build_live). Never stored, never client-supplied."""
+    prov = task.get("provenance") or {}
+    closure = task.get("closure") if isinstance(task.get("closure"), dict) else {}
+    agent = prov.get("agent")
+    if agent == "completed":
+        return {"state": "closed", "detail": "Agent 已回報完成或已結案"}
+    if agent == "blocked":
+        target = closure.get("target")
+        return {"state": "blocked", "detail": f"等待：{target}" if target else "阻塞，未記錄在等誰"}
+    pane = task.get("associated_pane_id") or task.get("associated_session_id")
+    if not pane:
+        return {"state": "unclaimed", "detail": "還沒有關聯任何 Terminal"}
+    runtime = (live or {}).get("runtime") or {}
+    if not runtime.get("available"):
+        return {"state": "unknown", "detail": "VBear runtime 未連線，無法確認關聯的 Terminal"}
+    match = next((x for x in (live or {}).get("panes") or () if x.get("pane_id") == pane), None)
+    if match is None:
+        return {"state": "stalled", "detail": "關聯的 Terminal 已不存在，任務還沒結案"}
+    if match.get("exited"):
+        return {"state": "stalled", "detail": "關聯的 Terminal 已結束，任務還沒結案"}
+    status = match.get("agent_status")
+    if status == "working":
+        return {"state": "working", "detail": "關聯的 Agent 正在工作"}
+    if status in ("waiting", "needs-input"):
+        return {"state": "parked", "detail": "關聯的 Agent 停下來在等你，任務還沒結案"}
+    return {"state": "unknown", "detail": "無法判斷關聯 Agent 的狀態"}
 
 
 def delete_task(task_id: str) -> bool:

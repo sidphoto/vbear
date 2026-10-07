@@ -51,6 +51,16 @@ with open("fake-launch.json", "w") as f:
                "tmpdir_env": os.environ.get("CLAUDE_CODE_TMPDIR"),
                "autoupdater_env": os.environ.get("DISABLE_AUTOUPDATER"),
                "env_names": sorted(os.environ)}, f)
+if mode == "titles":
+    # Like Claude Code: the idle title first, then whatever title the test asks for.
+    os.write(1, "\x1b]0;\u2733 Claude Code\x07".encode("utf-8"))
+    end = time.time() + 600
+    while time.time() < end:
+        if os.path.exists("fake-title"):
+            text = open("fake-title", encoding="utf-8").read()
+            os.remove("fake-title")
+            os.write(1, ("\x1b]0;" + text + "\x07").encode("utf-8"))
+        time.sleep(0.03)
 time.sleep(600)
 '''
 
@@ -338,6 +348,87 @@ class ManagedCase(unittest.TestCase):
         self.assertIsNone(self.dm._sessions[info["session_id"]].tracker)
         closed = self.rpc("close", session_id=info["session_id"])
         self.assertNotIn("managed", closed["result"])
+
+    # ---- activity evidence (terminal titles) ----
+
+    def prepare_version(self, version: str, mode: str):
+        """Like prepare(), with a stand-in that reports another version."""
+        binary = self.tmp / f"claude-{version}"
+        binary.write_text(FAKE_CLI % {"py": sys.executable, "version": version}, encoding="utf-8")
+        binary.chmod(0o700)
+        (self.work / "fake-mode").write_text(mode)
+        launch = self.work / "fake-launch.json"
+        if launch.exists():
+            launch.unlink()
+        m = a.prepare_claude_launch(self.base, str(self.work), cli_binary=str(binary),
+                                    cli_version=version, cli_identity=a.binary_identity(str(binary)),
+                                    allowed_root=str(self.tmp))
+        self.scratches.append(m["scratch"]["path"])
+        return m
+
+    def title_evidence(self, sid: str) -> dict | None:
+        r = self.rpc("list")
+        s = next(x for x in r["result"]["sessions"] if x["session_id"] == sid)
+        return (s.get("activity_evidence") or {}).get("claude_title")
+
+    def set_title(self, sid: str, text: str, state: str) -> dict:
+        (self.work / "fake-title").write_text(text, encoding="utf-8")
+        return self.wait_for(lambda: (e := self.title_evidence(sid)) and e["state"] == state and e,
+                             msg=f"{state} title")
+
+    def test_title_evidence_keeps_the_class_never_the_text(self):
+        m = self.prepare("titles")
+        sid = self.open_managed(m)["session_id"]
+        self.launched()
+        first = self.wait_for(lambda: (e := self.title_evidence(sid)) and e["state"] == "waiting" and e,
+                              msg="idle title")
+        self.assertEqual(first["titles"], 1)
+        working = self.set_title(sid, "\u25d0 a secret task summary", "working")
+        self.assertEqual(working["titles"], 2)
+        self.assertGreaterEqual(working["since"], first["since"])
+        listed = json.dumps(self.rpc("list"), ensure_ascii=False)
+        self.assertNotIn("secret task summary", listed)
+        s = next(x for x in self.rpc("list")["result"]["sessions"] if x["session_id"] == sid)
+        self.assertEqual(s["cli_version"], self.version)
+        self.rpc("close", session_id=sid)
+
+    def test_plain_sessions_have_no_title_evidence(self):
+        r = self.rpc("open", argv=["/bin/sh", "-c", "printf '\\033]0;\\342\\234\\263 x\\007'; sleep 30"],
+                     cwd=str(self.tmp))
+        sid = r["result"]["session_id"]
+        time.sleep(0.3)
+        self.assertIsNone(self.title_evidence(sid))
+        self.rpc("close", session_id=sid)
+
+    def test_unverified_version_title_is_trial_and_reads_unknown(self):
+        # 2.1.286 may launch, but its title behaviour was never recorded.
+        m = self.prepare("titles")
+        sid = self.open_managed(m)["session_id"]
+        self.launched()
+        self.set_title(sid, "\u25d0 working", "working")
+        agent = next(x for x in self.runtime().list_sessions()["agents"] if x["terminal_id"] == sid)
+        self.assertEqual(agent["agent_status"], "unknown")
+        act = agent["activity"]
+        self.assertIsNone(act["decided_by"])
+        self.assertEqual([(e["rung"], e["trust"], e["value"]) for e in act["evidence"]],
+                         [("claude-title", "trial", "working")])
+        self.rpc("close", session_id=sid)
+
+    def test_verified_version_title_decides_working_and_waiting(self):
+        m = self.prepare_version("2.1.292", "titles")
+        sid = self.open_managed(m)["session_id"]
+        self.launched()
+        self.wait_for(lambda: (e := self.title_evidence(sid)) and e["state"] == "waiting", msg="idle title")
+        rt = self.runtime()
+
+        def status():
+            agent = next(x for x in rt.list_sessions()["agents"] if x["terminal_id"] == sid)
+            return agent["agent_status"], agent["activity"]["decided_by"]
+        self.assertEqual(status(), ("waiting", "claude-title"))
+        self.assertEqual(rt.status(sid), "waiting")
+        self.set_title(sid, "\u25d1 working", "working")
+        self.assertEqual(status(), ("working", "claude-title"))
+        self.rpc("close", session_id=sid)
 
     # ---- NativeRuntime entry ----
 

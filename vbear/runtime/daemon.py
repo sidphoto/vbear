@@ -78,10 +78,10 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
-from . import agent_sessions, proctrack
+from . import agent_sessions, osc_title, proctrack
 
 PROTOCOL_VERSION = 1
-DAEMON_VERSION = "native-r2-s2"
+DAEMON_VERSION = "native-r2-s3"  # s3: activity evidence in session info
 MAX_LINE = 64 * 1024
 SUN_PATH_MAX = 103  # macOS sockaddr_un.sun_path is 104 bytes incl. NUL
 SOCKET_NAME = "runtime.sock"
@@ -309,6 +309,9 @@ class Session:
         self.unproven = False
         self.missed_looks = 0               # how often the table was unreadable (logged at cleanup)
         self.next_observe = 0.0
+        self.cli_version: str | None = None  # managed only: the version the launch was checked against
+        # Managed Claude only: the class of the latest terminal title (never its text).
+        self.titles: osc_title.TitleTracker | None = None
 
     def poll(self) -> int | None:
         if self.exit_code is None:
@@ -362,7 +365,10 @@ class Session:
                 "closing": self.phase is not None, "output_bytes": self.total,
                 "attachments": len(self.attachments),
                 "control_attachment": self.control.aid if self.control else None,
-                "managed": self.launch_id, "engine": self.engine, "kind": self.kind}
+                "managed": self.launch_id, "engine": self.engine, "kind": self.kind,
+                "cli_version": self.cli_version,
+                "activity_evidence": ({"claude_title": self.titles.snapshot()}
+                                      if self.titles is not None else None)}
 
 
 class Attachment:
@@ -698,6 +704,8 @@ class Daemon:
                 self._unregister_master(s)
                 return
             s.append(data)
+            if s.titles is not None:
+                s.titles.feed(data, time.time())
             if s.attachments:  # fan-out: encode once, queue per attachment
                 s.seq += 1
                 line = _line(_frame(s, data, False))
@@ -1268,6 +1276,9 @@ class Daemon:
             return _err(rid, "internal", f"無法啟動：{exc}")
         sess.launch_id = launch_id
         sess.engine = m.get("engine")
+        sess.cli_version = m.get("cli_version")
+        if sess.engine == "claude":
+            sess.titles = osc_title.TitleTracker()
         sess.tracker = proctrack.DescendantTracker(sess.pid)
         leader = None
         try:

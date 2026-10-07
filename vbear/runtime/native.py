@@ -36,6 +36,7 @@ import threading
 import time
 from pathlib import Path
 
+from .. import activity as _activity
 from .. import config as cfg
 from . import daemon as _d
 from . import cli_versions as _cli_versions
@@ -704,16 +705,21 @@ class NativeRuntime(RuntimeBase):
             snap["available"] = False
             snap["problems"].append("無法讀取 session 清單")
             return snap
+        now = time.time()
         for s in (r.get("result") or {}).get("sessions") or ():
             argv = s.get("argv") or []
             engine = _agent_engine(s)
+            act = None
             if engine:
-                # Claude / Codex sessions are the console's working Agents. Their
-                # working/idle state is not detectable from a PTY, so it is unknown.
+                # Claude / Codex sessions are the console's working Agents. What
+                # each one is doing is decided in exactly one place (activity.py)
+                # from the evidence the daemon collected; without usable
+                # evidence the answer is "unknown".
+                act = _activity.arbitrate(s, now)
                 snap["agents"].append({
                     "terminal_id": s["session_id"], "pane_id": s["session_id"],
                     "workspace_id": WORKSPACE_ID, "tab_id": "", "agent": engine,
-                    "agent_status": "exited" if s.get("exited") else "unknown",
+                    "agent_status": act["display"], "activity": act,
                     "name": "", "cwd": s.get("cwd"), "foreground_cwd": s.get("cwd"),
                     "terminal_title_stripped": engine, "focused": False,
                     "managed": s.get("managed"), "agent_session": {}})
@@ -723,7 +729,8 @@ class NativeRuntime(RuntimeBase):
                 "title": Path(argv[0]).name if argv else s["session_id"],
                 "cwd": s.get("cwd"), "command": argv, "pid": s.get("pid"),
                 "terminal_title_stripped": Path(argv[0]).name if argv else "",
-                "agent": engine, "agent_status": "exited" if s.get("exited") else "unknown",
+                "agent": engine,
+                "agent_status": act["display"] if act else ("exited" if s.get("exited") else "unknown"),
                 "exited": bool(s.get("exited")), "exit_code": s.get("exit_code"),
                 "cols": s.get("cols"), "rows": s.get("rows"), "kind": s.get("kind")})
         return snap
@@ -739,7 +746,7 @@ class NativeRuntime(RuntimeBase):
             return "unknown"
         for p in self.list_sessions()["panes"]:
             if p["pane_id"] == session_id:
-                return "exited" if p["exited"] else "unknown"  # R2 does not guess idle/working
+                return p["agent_status"]  # activity.arbitrate's display value, "unknown" without evidence
         return "unknown"
 
     # ---- session lifecycle ----

@@ -166,10 +166,10 @@ class RuntimeBase(ABC):
 
     @abstractmethod
     def status(self, session_id: str) -> str:
-        """``idle`` / ``working`` / ``exited`` / ``unknown``.
+        """``working`` / ``waiting`` / ``needs-input`` / ``exited`` / ``unknown``
+        (the display values of ``vbear.activity``).
 
-        ``unknown`` whenever the runtime cannot tell; that is also what
-        the project ships in this state otherwise, per the standing
+        ``unknown`` whenever the runtime cannot tell, per the standing
         honesty rule."""
 
     @abstractmethod

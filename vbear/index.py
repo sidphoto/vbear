@@ -612,6 +612,9 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
             "tool": tool,
             "supported_tool": tool in ("claude", "codex"),
             "status": agent.get("agent_status", "unknown"),
+            # The arbitrated state behind "status" (vbear.activity), or None when
+            # the runtime supplied no evidence at all.
+            "activity": agent.get("activity"),
             "role_label": role_label,
             "role_label_source": "分頁名稱（使用者命名）" if tab.get("label") else "",
             "title": agent.get("terminal_title_stripped") or "",
@@ -646,9 +649,11 @@ def build_live(conf: dict, static: dict, runtime=None) -> dict:
         proj["project_skill_ids"] = [s["skill_id"] for s in skills
                                      if s.get("origin_package", {}).get("project_path") == proj["path"]]
 
-    order = {"blocked": 0, "done": 1, "working": 2, "idle": 3}
-    attention = [s for s in sessions if s["status"] in ("blocked", "done")]
-    attention.sort(key=lambda s: order.get(s["status"], 9))
+    # Sessions whose Agent is waiting for the user. Only states some evidence
+    # decided can appear here; "unknown" never does.
+    order = {"needs-input": 0, "waiting": 1}
+    attention = [s for s in sessions if s["status"] in order]
+    attention.sort(key=lambda s: order[s["status"]])
 
     return {
         "home": str(HOME()),
