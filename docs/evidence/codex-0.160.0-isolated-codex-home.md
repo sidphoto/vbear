@@ -55,8 +55,8 @@ Layers that still apply with an empty home:
 ## 3. Credentials
 
 An empty home has none: `codex login status` says "Not logged in" (also with fake key variables set), and
-`codex doctor` points at `$CODEX_HOME/auth.json`. The user's config uses a custom provider with
-`requires_openai_auth = true`, so a per-launch config would need a copy of that provider block. Options, none
+`codex doctor` points at `$CODEX_HOME/auth.json`. A user config that selects its own model provider (a
+`model_providers` entry) would also need that provider block copied into the per-launch config. Options, none
 tested:
 
 1. Sign in per launch (browser, device code or API key), with `-c cli_auth_credentials_store="ephemeral"` so
