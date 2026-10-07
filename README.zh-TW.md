@@ -18,7 +18,8 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 - **`!` 指令不經沙盒**：在 Claude Code 裡以 `!` 自己輸入的指令不受沙盒限制；預覽畫面有標示。
 - **無法阻擋 commit**：工作目錄的 `.git` 可寫，啟動前必須勾選知悉。
 - 目前只有一種啟動設定（只開放 Bash、停用 Edit/Write、不連網）；唯讀、可連網與 Codex 受管啟動尚未提供。
-- 無法判斷 Agent 正在工作還是等你回覆，一律顯示「狀態未知」。
+- 「工作中／等你回覆」只對 Profile 啟動、且版本有實測紀錄的 Claude Code（目前是 2.1.292）判斷，依據是 Claude 自己設定的終端標題；分不出是等你輸入還是等你確認。其他 Terminal、其他版本與 Codex 顯示「狀態未知」。
+- 任務卡的版本綁定只比對 commit：核准之後未提交的修改，不會讓結果失效。
 - **以你的帳號執行的程式可以操作 VBear**：其他網站和其他使用者帳號會被擋下，因為每次呼叫 API 都要帶一組
   每次啟動都會更換的通行證，通行證存在只有你能讀的檔案裡。但以你的帳號執行的程式，也讀得到這個檔案。
 - **沒有遙測**：VBear 不對外連線，也沒有帳號或雲端服務。
@@ -79,7 +80,8 @@ Agent 終端由 `vbear runtimed`（VBear runtime 背景程序）執行；主控�
 | Claude 外掛是否生效 | `~/.claude/plugins/installed_plugins.json` + `settings.json` 的 `enabledPlugins` + 外掛 `plugin.json` 的載入路徑 | 設定檔 |
 | Codex 技能是否生效 | `~/.codex/config.toml` 的 `skills.config` | 設定檔 |
 | 技能上游 | `~/.agents/.skill-lock.json` | 設定檔 |
-| 工作中的 Terminal | VBear runtime 的 session 清單（Agent 是否在工作或等你回覆無法從終端判斷，顯示「狀態未知」） | 執行觀察 |
+| 工作中的 Terminal | VBear runtime 的 session 清單 | 執行觀察 |
+| 工作中／等你回覆 | Profile 啟動的 Claude Code 自己設定的終端標題（只保留開頭符號，不保存標題文字；只有版本有實測紀錄時採用，其他顯示「狀態未知」） | 執行觀察（Agent 自己回報） |
 | 本次模型、本次用過的技能 | Claude `~/.claude/projects/*/*.jsonl` 的 Skill 呼叫；Codex `~/.codex/sessions` 讀取 SKILL.md 的工具呼叫 | 執行觀察（Codex 為較弱的「讀取過技能檔」） |
 | 用途分類 | `vbear/categories.py` 關鍵字表 | 自動整理 |
 
@@ -148,6 +150,11 @@ Agent 終端由 `vbear runtimed`（VBear runtime 背景程序）執行；主控�
     - **統一三欄版面與專注模式**：左欄 Agent / Role / Skills 列表與切換、中欄真實 Terminal、右欄 Task Card 與 G/P/A/T 資訊；支援兩側獨立收合與一鍵「專注模式」（收合兩側、Esc 退出）。切換顯示中之 Agent 焦點**絕不重啟該既有 session**；離開分頁時自動中止串流以防止孤兒行程。若切換當下正處於接管操作模式，前端會送出**帶 token 的 abandon**（而非無條件的 release）：只有在該 token 仍與伺服器目前的 session 相符時才會停止，避免在快速切換或多分頁競速下，誤將別處剛完成的新接管操作奪回為僅觀看模式。
     - **任務卡本機儲存與狀態證明**：儲存於 `~/.vbear/tasks.json`（0600 原子寫入、目錄 0700），跨執行緒與**跨行程**（`flock` 檔案鎖，涵蓋整個讀-改-寫區間）保護，讀取路徑遇到損毀 JSON、結構不符 schema 之項目、或任何非「檔案不存在」之讀取錯誤（權限、符號連結、硬連結等）一律**拒絕靜默降級為空集合**並隔離原檔待人工復原，避免後續寫入誤將真實資料覆寫遺失。固定 Goal/Scope/Out of Scope/Deliverables/Acceptance Criteria/Evidence 六核心欄位與步驟/成品追蹤。狀態證明（Status Provenance）明確分離 Agent 回報完成、自動化測試通過與介面核准三維度；本主控台**沒有任何具身份驗證能力的驗證者**，因此絕不推導或顯示治理層級的「已驗證 (Verified)」狀態——`provenance.verified` 恆為 `false`，僅有誠實命名的 `provenance.verification_asserted`（`status` 對應 `verification_asserted`）代表「測試與核准兩欄皆已透過此網頁/API 自我回報為通過」的**自我聲稱**，並非正式驗證；`status`/`verification_asserted` 欄位**無法**由用戶端直接偽造，僅能由實際通過測試與核准後推導產生。誠實揭露：本主控台無使用者身份驗證，三欄皆為透過此網頁/API 自行填寫之自我回報值（含「核准」欄位在內），並非經密碼學或帳號驗證之真實人類審查記錄；每一欄位記錄最後變更時間（`set_at`）供稽核。
     - **追蹤關聯與未來規則邊界**：任務卡與 Session 關聯**僅為本機追蹤記錄，絕非 Context 注入**；變更 Task Card 並欲作為 Effective Context 套用時，**必須開啟全新 Agent Session**。
+    - **結果綁定 commit、結案理由、交接與處理狀態**（做法參考 OpenRig，見 [docs/evidence/openrig-learnings.md](docs/evidence/openrig-learnings.md)）：
+      - 任務卡可以設定工作目錄。測試設成通過、或核准時，伺服器讀取該目錄當時的 commit 一併記錄（用戶端無法指定）；之後每次讀取都會比對，commit 改變就顯示「結果對應的版本已變更」，不再算聲稱驗證通過。讀取 commit 時**不執行 `git`**，直接讀 `.git` 內的檔案，因為 repo 設定能讓 git 執行任意程式，而受管 Agent 可能寫得到 `.git`。
+      - 把 Agent 回報狀態標成「已回報完成」或「阻塞」時，必須選擇結案理由（完成沒有後續、交給下一位、被取代、取消、拒絕；卡在某人或某事、已上報），需要對象的理由必須填對象。規則在資料層強制，舊資料照常讀取並標示「缺少結案理由」。
+      - 「交接給…」在同一次寫入裡把原卡標成「已交接」並建立接手的新卡：沿用目標、範圍、驗收條件與工作目錄，狀態證明從頭開始，並記錄交接鏈。交接鏈無法從一般 API 修改。
+      - 「處理狀態」（尚未認領、處理中、停在等你、中斷、阻塞中、已結案、未知）由關聯的 Terminal 即時推算，不存檔、也不接受用戶端設定。
     - **G/P/A/T 唯讀介面骨架**：展示 Global 底線與 Project 契約骨架。本階段無 Policy Compiler、無自動注入、不掃描不修改 `~/.codex`。
 - 請求內容：`Content-Length` 只接受純數字；超過 64KB 回 413 並關閉連線；整個請求內容必須在 15 秒內送完，
   逐位元組拖延的連線會被切斷。標頭階段只有每次讀取 15 秒的逾時，沒有總時限。
@@ -174,7 +181,10 @@ vbear/
   agent_launch.py                     啟動前預覽與確認、七項權限標籤
   index.py                            靜態索引＋即時視圖
   annotations.py                      我的註記（別名、標籤、備註）
-  tasks.py                            任務卡（Task Card MVP、狀態證明、本機儲存）
+  tasks.py                            任務卡（Task Card MVP、狀態證明、結果綁定 commit、結案理由、交接、本機儲存）
+  git_head.py                         不執行 git，直接讀 .git 檔案取得目前的 commit
+  activity.py                         Agent 狀態判斷（工作中／等你回覆／未知）與判斷依據
+  runtime/osc_title.py                受管 Claude 的終端標題分類（不保存標題文字）
   server.py                           本機 HTTP API
 web/                                  介面（原生 HTML/CSS/JS）
 tests/                                Python 單元測試，全部使用合成的 HOME；實際筆數以 `python3 -m unittest discover -s tests` 執行結果為準，不在此處寫死固定數字

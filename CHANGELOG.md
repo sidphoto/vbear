@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+Ideas adopted from OpenRig, re-implemented ([notes](docs/evidence/openrig-learnings.md)):
+
+- **Working or waiting.** Profile-launched Claude Code sessions now show 「工作中」 or 「等你回覆」 instead of
+  always 「狀態未知」, read from the terminal title Claude sets (its idle mark, or its working spinner). Only the
+  title's first character is kept, never its text. The signal is used only for Claude Code versions with recorded
+  evidence (2.1.292, [evidence](docs/evidence/claude-code-2.1.292-activity.md)); on other versions it is recorded as
+  a trial and the state stays unknown. Every status badge says what it is based on. The home page's 「需要你處理」
+  lists the agents waiting for you.
+- **Task cards bind results to commits.** With a work directory set, a passed test and an approval record the
+  commit the directory was on. When it moves, the card reads 「結果對應的版本已變更」 and no longer counts as
+  verification asserted. HEAD is read from the `.git` files; VBear never runs `git` there.
+- **Closure reasons.** Marking a card 「已回報完成」 or 「阻塞」 asks what follows (no follow-on, handed off,
+  superseded, canceled, denied; blocked on, escalated), with a target where one is needed. Enforced by the API.
+- **Handoff.** 「交接給…」 closes the card and creates its successor in one write, carrying the chain of earlier
+  cards.
+- **Pickup state.** Each card shows whether its linked terminal is working, waiting, gone or unclaimed, derived
+  when the card is read.
+- Research note on giving Codex its own `CODEX_HOME` on 0.160.0
+  ([docs/evidence/codex-0.160.0-isolated-codex-home.md](docs/evidence/codex-0.160.0-isolated-codex-home.md)). Codex
+  launches stay off; the note also records that the interactive command rejects all four exec-only flags in
+  `codex_argv()`.
+- The runtime daemon reports itself as `native-r2-s3`. A daemon started by an older VBear keeps running and does
+  not report activity evidence until it is restarted.
+
 ## v0.2.1
 
 - **Unverified Claude Code versions can launch.** Claude Code updates itself almost daily; a release VBear has not

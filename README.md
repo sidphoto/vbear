@@ -29,8 +29,15 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
   for. Every fact carries its source, and it says *unknown* when there is no source.
 - **Projects and team view.** It groups running terminals by git repository and by agent role. It also
   shows which model and which skills a session actually used, read from the agent's own session logs.
+- **Working or waiting.** For profile-launched Claude Code sessions on a version with recorded evidence
+  (currently 2.1.292), the console shows whether the agent is working or waiting for you, read from the terminal
+  title Claude sets, and lists the waiting ones on the home page. Every status says what it is based on; anything
+  else shows *unknown*.
 - **Task cards.** Local goal, scope and acceptance checklists. The status shows separately what an agent claimed,
-  what tests reported and what you approved, and the console never labels a card "verified".
+  what tests reported and what you approved, and the console never labels a card "verified". With a work
+  directory, a test result and an approval are tied to the commit they were given for and go stale when it moves.
+  Marking a card done or blocked asks what follows; a handoff closes the card and opens its successor with the
+  chain of earlier cards; whether anyone is on it is worked out from the linked terminal, not typed in.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 
@@ -113,7 +120,10 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
 - Commit cannot be blocked yet: the work directory's `.git` is writable, and you must acknowledge this before launch.
 - Only one launch shape exists (Bash only, Edit and Write disabled, no network). Read-only,
   network-enabled and Codex launches are planned, not built.
-- The console cannot tell whether an agent is working or waiting for you, so it shows *unknown*.
+- Working/waiting is known only for profile-launched Claude Code on a version with recorded evidence (2.1.292). It
+  cannot tell waiting for your next message from waiting on a dialog. Other terminals, other versions and Codex
+  show *unknown*.
+- A task card's commit binding sees commits only: uncommitted changes after an approval do not make it stale.
 - **Programs running as your own user can drive VBear.** Other websites and other user accounts are kept out:
   every API call needs a per-launch token stored in a file only you can read. A program running under your
   account can read that file. See the [security model](docs/SECURITY-MODEL.md).

@@ -25,6 +25,7 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   session IDs, working directories and timestamps.
 - **Local data.** Notes (`annotations.py`), task cards (`tasks.py`) and Agent Profiles
   (`agent_profiles.py`) are JSON files in the state directory, written atomically with mode `0600`.
+  How task cards bind results to commits and hand work on is described [below](#task-cards--vbeartaskspy).
 - **Built-in terminals.** `POST /api/native/terminals` opens the account's login shell in a folder
   under `HOME`; the daemon labels the session `kind: "shell"` so the UI can tell it from Agent sessions.
 - **Terminal streaming.** `GET /api/term/<id>/stream` relays runtime output to the browser as
@@ -46,9 +47,45 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   session; a new takeover moves the old controller back to observe.
 - **Close.** Close escalates from SIGHUP to SIGTERM to SIGKILL against the session's process group.
   Managed sessions also signal the other process groups their descendants created.
+- **Activity evidence.** Output of a managed Claude session also goes through `osc_title.TitleTracker`, an
+  incremental OSC parser that keeps only the class of the latest terminal title (working spinner, idle mark,
+  empty, other) and when it was seen. `list` returns that as `activity_evidence`, with the launch's
+  `cli_version`. The title text is never stored.
 
 The client side is `vbear/runtime/native.py` (`NativeRuntime`), which implements the protocol
 in `runtime/base.py`. Tests can substitute a fake runtime.
+
+## Agent activity — `vbear/activity.py`
+
+What an Agent is doing is decided in one place, `activity.arbitrate()`, called by the runtime client for every
+Agent session it lists. The vocabulary is adapted from OpenRig's agent state taxonomy
+([docs/evidence/openrig-learnings.md](evidence/openrig-learnings.md)):
+
+- Three separate axes: session (`present` / `exited`), activity (`working` / `waiting` / `unknown`) and
+  resumability (not served, always `unknown`). Needs-input is a count plus a reason, never an activity value; no
+  source can observe it yet.
+- Evidence comes in rungs, each authoritative, trial (recorded and shown, never consulted) or absent. The only rung
+  is `claude-title`, authoritative for the Claude Code versions in `activity.VERIFIED`, each backed by a record in
+  `docs/evidence/` ([2.1.292](evidence/claude-code-2.1.292-activity.md)); trial for any other version.
+- The result carries `decided_by`, a reason and every piece of evidence. The UI's status badges, the home page's
+  「需要你處理」 list (only `waiting` / `needs-input`) and task-card pickup all read this one answer; without
+  usable evidence it is `unknown`.
+
+## Task cards — `vbear/tasks.py`
+
+- **Exact candidate.** A card may name a `workdir`. When tests are set to passed or the card is approved, the server
+  reads the commit that directory is on (`git_head.read_head`) and stores it with the result; the client cannot
+  supply it. Every read compares those commits with the current one: `verification_asserted` holds only while both
+  results refer to it, otherwise the status is `verification_stale`. `git_head` reads `HEAD`, refs and
+  `packed-refs` as plain bounded files, including linked worktrees; it never runs `git`.
+- **Closure.** Moving the agent field to `completed` or `blocked` requires a reason saying what follows
+  (`no_follow_on`, `handed_off_to`, `superseded`, `canceled`, `denied`; `blocked_on`, `escalation`), with a target for
+  the reasons that name someone. Older cards without one load and are flagged `closure_missing`.
+- **Handoff.** `POST /api/tasks/<id>/handoff` closes the card as `handed_off_to` and creates its successor in one
+  locked write. The successor copies the contract and workdir, starts with fresh provenance, and carries
+  `handed_off_from` and `chain_of_record`, which nothing else can set.
+- **Pickup.** Every task response includes `pickup` (`closed`, `blocked`, `unclaimed`, `working`, `parked`,
+  `stalled`, `unknown`), derived on the spot from the card and the live view. It is never stored.
 
 ## Profile-managed Claude launch
 
