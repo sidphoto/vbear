@@ -232,22 +232,27 @@ def title_checks(events: list[tuple[float, str]], typed_at: float | None) -> dic
     idle_after = last_working is not None and any(
         s == "waiting" and t > last_working for t, s in after)
     # Gaps between consecutive working frames inside one uninterrupted working run.
-    max_gap, prev = 0.0, None
+    # At least one gap must be measured: a single frame does not show the spinner
+    # keeps updating.
+    max_gap, prev, gaps = 0.0, None, 0
     for t, s in after:
         if s == "working":
             if prev is not None:
                 max_gap = max(max_gap, t - prev)
+                gaps += 1
             prev = t
         else:
             prev = None
+    cadence_ok = gaps > 0 and max_gap <= SPINNER_STALE_S
     checks = {
         "idle_before_prompt": {"pass": typed_at is not None and "waiting" in before,
                                "expect": "✳ before the prompt is typed"},
         "working_after_prompt": {"pass": bool(working_times), "expect": "◐/◑ after the prompt"},
         "idle_after_turn": {"pass": idle_after, "expect": "✳ again after the last working frame"},
-        "spinner_cadence": {"pass": bool(working_times) and max_gap <= SPINNER_STALE_S,
-                            "expect": f"working frames at most {SPINNER_STALE_S:g} s apart",
-                            "max_gap_s": round(max_gap, 3)},
+        "spinner_cadence": {"pass": cadence_ok,
+                            "expect": f"two or more working frames in a row, at most {SPINNER_STALE_S:g} s apart",
+                            "max_gap_s": round(max_gap, 3) if gaps else None, "gaps": gaps,
+                            **({} if gaps else {"why": "沒有觀察到持續的轉圈更新（工作中的標題少於兩個連續畫面）"})},
     }
     return {"passed": all(c["pass"] for c in checks.values()), "checks": checks,
             "typed_at": typed_at, "events": [[t, s] for t, s in events]}

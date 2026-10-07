@@ -42,6 +42,20 @@ class TitleChecksTests(unittest.TestCase):
                 self.assertFalse(r["passed"])
                 self.assertFalse(r["checks"][name]["pass"], r["checks"])
 
+    def test_a_single_working_frame_does_not_prove_a_moving_spinner(self):
+        """Codex review r2: waiting -> one working title -> waiting passed spinner_cadence."""
+        r = boundary_check.title_checks([(1.0, I), (3.0, W), (4.0, I)], typed_at=2.0)
+        cadence = r["checks"]["spinner_cadence"]
+        self.assertFalse(cadence["pass"])
+        self.assertIn("沒有觀察到持續的轉圈更新", cadence.get("why", ""))
+        self.assertFalse(r["passed"])
+        # Two working frames in separate runs still measure no gap.
+        r = boundary_check.title_checks([(1.0, I), (3.0, W), (3.5, I), (4.0, W), (5.0, I)], typed_at=2.0)
+        self.assertFalse(r["checks"]["spinner_cadence"]["pass"])
+        # Two frames in one run, close enough: passes.
+        r = boundary_check.title_checks([(1.0, I), (3.0, W), (4.0, W), (5.0, I)], typed_at=2.0)
+        self.assertTrue(r["checks"]["spinner_cadence"]["pass"])
+
     def test_never_typed_fails(self):
         r = boundary_check.title_checks([(1.0, I)], typed_at=None)
         self.assertFalse(r["checks"]["idle_before_prompt"]["pass"])
