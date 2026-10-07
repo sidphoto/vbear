@@ -5,6 +5,11 @@ The check is vbear/boundary_check.py, run twice in a child process
 (headless, then interactive in a PTY); each run makes one small model call
 with the user's own Claude login. A version counts as verified only when both
 runs pass every check. One verification runs at a time.
+
+The interactive run also checks the terminal title (activity evidence); that
+result is recorded next to the boundary result, under ``title``. A title
+failure never undoes a boundary pass: the version still launches as verified,
+and its working/waiting state just stays unknown.
 """
 
 from __future__ import annotations
@@ -89,8 +94,13 @@ class ClaudeVerifier:
                 return self._finish("error", f"{mode} 的報告格式不符")
             if report.get("claude_version") != version:
                 return self._finish("error", "驗證期間 Claude Code 版本改變了，請重新驗證")
-        record_pass(version, binary, reports)
-        self._finish("passed", f"Claude Code {version} 通過全部檢查", reports=reports)
+        title = _title_result(Path(reports["interactive"]))
+        record_pass(version, binary, reports, title=title)
+        title_note = ("終端標題也通過，這台 Mac 可以判斷「工作中／等你回覆」" if title["passed"]
+                      else "終端標題沒有通過（" + "、".join(title["failed"]) + "），狀態會維持未知")
+        self._finish("passed", f"Claude Code {version} 通過啟動邊界檢查；{title_note}",
+                     reports=reports, title_result="passed" if title["passed"] else "failed",
+                     title_failed=title["failed"])
 
     def _finish(self, result: str, message: str, **extra) -> None:
         self._set(running=False, result=result, message=message, finished_at=time.time(), **extra)
@@ -107,7 +117,21 @@ def _failed_checks(report: Path) -> list[str]:
     return [name for name, c in checks.items() if not (isinstance(c, dict) and c.get("pass"))]
 
 
-def record_pass(version: str, binary: str, reports: dict) -> None:
+def _title_result(report: Path) -> dict:
+    """The interactive report's title check, as recorded: passed, failed check names."""
+    try:
+        data = json.loads(report.read_text())
+    except (OSError, ValueError):
+        data = None
+    title = data.get("title") if isinstance(data, dict) else None
+    checks = title.get("checks") if isinstance(title, dict) else None
+    if not isinstance(checks, dict) or not checks:
+        return {"passed": False, "failed": ["title_check_missing"], "report": str(report)}
+    failed = [n for n, c in checks.items() if not (isinstance(c, dict) and c.get("pass") is True)]
+    return {"passed": title.get("passed") is True and not failed, "failed": failed, "report": str(report)}
+
+
+def record_pass(version: str, binary: str, reports: dict, title: dict | None = None) -> None:
     path = cfg.state_dir() / cli_versions.LOCAL_VERIFIED_FILE
     try:
         data = json.loads(path.read_text())
@@ -122,5 +146,9 @@ def record_pass(version: str, binary: str, reports: dict) -> None:
         "report": reports.get("interactive") or next(iter(reports.values()), ""),
         "reports": reports,
         "tool": "vbear.boundary_check",
+        # Separate from the boundary result; absent in records written before
+        # titles were checked, which therefore count as title-unverified.
+        "title": ({"passed": title["passed"] is True, "failed": list(title.get("failed") or []),
+                   "report": title["report"]} if title else {"passed": False, "failed": ["not_checked"]}),
     }
     cfg.write_private(path, json.dumps({"versions": versions}, ensure_ascii=False, indent=1) + "\n")

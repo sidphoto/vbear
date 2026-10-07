@@ -14,6 +14,14 @@ one probe script with the Bash tool, and checks what the sandbox allowed:
 Results come from the probe's own output file and errno values, never from
 the model's reply. Each run makes ONE model call.
 
+The interactive run also checks Claude Code's terminal title, which VBear
+uses to tell "working" from "waiting" (vbear/activity.py), in the same
+session: the idle mark ✳ before the prompt is typed, the ◐/◑ spinner after
+it, ✳ again when the turn ends, and spinner frames no further apart than
+activity.SPINNER_STALE_S. Only each title's first-character class is kept,
+never its text. The title result is reported separately (``title``); it does
+not change the boundary result or the exit status.
+
     python3 -m vbear.boundary_check --mode headless
     python3 -m vbear.boundary_check --mode interactive --claude ~/.local/share/claude/versions/2.1.291
     (or tools/verify_claude_boundary.py with the same arguments)
@@ -42,10 +50,14 @@ import threading
 import time
 from pathlib import Path
 
+from .activity import SPINNER_STALE_S
 from .runtime import agent_sessions, daemon
+from .runtime.osc_title import TitleTracker
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 RUN_TIMEOUT = 240.0
+IDLE_WAIT = 30.0     # after the probe result, how long to wait for the idle title
+PROMPT_WAIT = 25.0   # how long to wait for the idle title before typing anyway
 EXPECT = {
     "own_work_write": "allow",
     "own_scratch_write": "allow",
@@ -184,8 +196,67 @@ def run_headless(argv: list[str], env: dict, cwd: str) -> str:
     return f"exit={proc.returncode}\n{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
 
 
-def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
-    """The real launch shape: Claude Code's TUI in a PTY, prompt typed in."""
+class TitleObservation:
+    """The class of every terminal title the session sets, with its time.
+
+    Chunks are split after each OSC terminator so that two titles arriving in
+    one read are both seen. Title text is never kept."""
+
+    _AFTER_TERMINATOR = re.compile(rb"(?<=\x07)|(?<=\x1b\\)")
+
+    def __init__(self, start: float):
+        self.start = start
+        self.tracker = TitleTracker()
+        self.events: list[tuple[float, str]] = []
+
+    def feed(self, chunk: bytes, now: float) -> None:
+        for piece in self._AFTER_TERMINATOR.split(chunk):
+            if not piece:
+                continue
+            before = self.tracker.titles
+            self.tracker.feed(piece, now)
+            if self.tracker.titles > before:
+                self.events.append((round(now - self.start, 3), self.tracker.state))
+
+    @property
+    def state(self) -> str | None:
+        return self.tracker.state
+
+
+def title_checks(events: list[tuple[float, str]], typed_at: float | None) -> dict:
+    """The four title checks for one interactive run (times relative to start)."""
+    before = [s for t, s in events if typed_at is None or t < typed_at]
+    after = [(t, s) for t, s in events if typed_at is not None and t >= typed_at]
+    working_times = [t for t, s in after if s == "working"]
+    last_working = working_times[-1] if working_times else None
+    idle_after = last_working is not None and any(
+        s == "waiting" and t > last_working for t, s in after)
+    # Gaps between consecutive working frames inside one uninterrupted working run.
+    max_gap, prev = 0.0, None
+    for t, s in after:
+        if s == "working":
+            if prev is not None:
+                max_gap = max(max_gap, t - prev)
+            prev = t
+        else:
+            prev = None
+    checks = {
+        "idle_before_prompt": {"pass": typed_at is not None and "waiting" in before,
+                               "expect": "✳ before the prompt is typed"},
+        "working_after_prompt": {"pass": bool(working_times), "expect": "◐/◑ after the prompt"},
+        "idle_after_turn": {"pass": idle_after, "expect": "✳ again after the last working frame"},
+        "spinner_cadence": {"pass": bool(working_times) and max_gap <= SPINNER_STALE_S,
+                            "expect": f"working frames at most {SPINNER_STALE_S:g} s apart",
+                            "max_gap_s": round(max_gap, 3)},
+    }
+    return {"passed": all(c["pass"] for c in checks.values()), "checks": checks,
+            "typed_at": typed_at, "events": [[t, s] for t, s in events]}
+
+
+def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
+                    idle_wait: float = IDLE_WAIT, prompt_wait: float = PROMPT_WAIT) -> tuple[str, dict]:
+    """The real launch shape: Claude Code's TUI in a PTY, prompt typed in.
+    Returns the transcript tail and the title check."""
     pid, fd = pty.fork()
     if pid == 0:  # child
         os.chdir(cwd)
@@ -194,7 +265,9 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
     start = time.monotonic()
     deadline = start + RUN_TIMEOUT
     last_output = start
-    typed = False
+    titles = TitleObservation(start)
+    typed_at = None
+    result_at = None
     try:
         while time.monotonic() < deadline:
             r, _, _ = select.select([fd], [], [], 0.5)
@@ -205,20 +278,30 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
                     break
                 if not chunk:
                     break
+                now = time.monotonic()
                 transcript += chunk
-                last_output = time.monotonic()
+                titles.feed(chunk, now)
+                last_output = now
             now = time.monotonic()
-            # Type once the TUI has drawn something and been quiet for 1.5 s
-            # (at least 4 s after start), or after 25 s whatever it shows.
-            drawn_and_quiet = transcript and now - last_output > 1.5 and now - start > 4
-            if not typed and (drawn_and_quiet or now - start > 25):
+            # Type once the idle title is up and the TUI has been quiet for
+            # 1.5 s, or after PROMPT_WAIT whatever it shows (the title check
+            # then fails; the boundary check still runs).
+            idle_and_quiet = titles.state == "waiting" and now - last_output > 1.5 and now - start > 2
+            if typed_at is None and (idle_and_quiet or now - start > prompt_wait):
                 os.write(fd, PROMPT.encode())
                 time.sleep(0.5)
                 os.write(fd, b"\r")
-                typed = True
-            if typed and result.exists():
-                time.sleep(2)
-                break
+                typed_at = round(time.monotonic() - start, 3)
+            if typed_at is not None and result_at is None and result.exists():
+                result_at = now
+            if result_at is not None:
+                # Keep the session until the turn ends (idle title after the
+                # spinner), bounded, so the title check sees the whole turn.
+                if title_checks(titles.events, typed_at)["checks"]["idle_after_turn"]["pass"]:
+                    time.sleep(0.5)
+                    break
+                if now - result_at > idle_wait:
+                    break
     finally:
         # Close the PTY first: a child blocked writing to a full PTY cannot exit
         # while we wait on it. Then reap with a deadline, never blocking forever.
@@ -251,7 +334,7 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path) -> str:
             except OSError:
                 pass
     text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(transcript)).decode("utf-8", "replace")
-    return f"typed={typed}\n{text[-2000:]}"
+    return f"typed={typed_at is not None}\n{text[-2000:]}", title_checks(titles.events, typed_at)
 
 
 def main() -> int:
@@ -301,7 +384,7 @@ def main() -> int:
         if args.mode == "headless":
             report["transcript_tail"] = run_headless(argv, env, str(work))
         else:
-            report["transcript_tail"] = run_interactive(argv, env, str(work), result)
+            report["transcript_tail"], report["title"] = run_interactive(argv, env, str(work), result)
         if not result.exists():
             report["error"] = "probe-result.json 沒有產生（模型沒有執行 probe，或執行被擋下）"
             return finish(report, args.out, 2)
@@ -353,7 +436,9 @@ def finish(report: dict, out: str | None, code: int) -> int:
     summary = {k: v["pass"] for k, v in (report.get("checks") or {}).items()}
     print(json.dumps({"claude_version": report["claude_version"], "mode": report["mode"],
                       "passed": report.get("passed"), "error": report.get("error"),
-                      "checks": summary}, ensure_ascii=False, indent=1))
+                      "checks": summary,
+                      "title": ({k: v["pass"] for k, v in report["title"]["checks"].items()}
+                                if report.get("title") else None)}, ensure_ascii=False, indent=1))
     return code
 
 

@@ -3896,6 +3896,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
         if (needsAck(pv)) kids.push(unverifiedBox(pv));
+        else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));
       }
       kids.push(el("p", { class: "small muted" },
         "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是 Profile 的設定值。" +
@@ -3923,8 +3924,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
 
     // Claude Code updates itself often; a release nobody verified yet may still
     // run, but only after the user says so, and it can be verified from here.
-    function unverifiedBox(pv) {
-      ackBox = el("input", { type: "checkbox", id: "agent-launch-unverified", on: { change: syncConfirm } });
+    // 「驗證這個版本」: one run checks the launch boundary and the terminal
+    // title; the two results are shown separately when it ends.
+    function verifyControl(pv) {
       const verifyBtn = el("button", { class: "btn small", type: "button", on: { click: () => doVerify() } },
         "驗證這個版本");
       const progress = el("p", { class: "small muted", "aria-live": "polite" });
@@ -3943,10 +3945,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
               continue;
             }
             if (status.result === "passed") {
-              toast(`Claude Code ${pv.cli.version} 驗證通過`);
-              return doPreview();  // labels are now backed by this machine's evidence
+              const lines = verificationLines(pv.cli.version, status);
+              toast(lines.join("；"));
+              await doPreview();  // labels and the notice now follow this machine's record
+              setKids(out, ...[el("div", { class: "notice info small" }, lines.map((l) => el("div", null, l)))]
+                .concat([...out.childNodes]));
+              return;
             }
-            progress.textContent = "驗證沒有通過：" + (status.message || "原因未知") + "。仍可勾選上方選項後啟動。";
+            progress.textContent = "驗證沒有通過：" + (status.message || "原因未知") + "。";
             verifyBtn.disabled = false;
             return;
           }
@@ -3955,6 +3961,36 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           verifyBtn.disabled = false;
         }
       }
+      return { verifyBtn, progress };
+    }
+
+    function verificationLines(version, status) {
+      return [
+        `啟動邊界：Claude Code ${version} 通過`,
+        status.title_result === "passed"
+          ? "終端標題：通過，這台 Mac 可以判斷「工作中／等你回覆」"
+          : `終端標題：沒有通過（${(status.title_failed || []).join("、") || "原因未知"}），狀態會維持「未知」`,
+      ];
+    }
+
+    // Launch boundary verified, terminal title not: launching needs nothing
+    // extra, but VBear cannot tell working from waiting until it is verified.
+    function activityUnverifiedBox(pv) {
+      const { verifyBtn, progress } = verifyControl(pv);
+      return el("div", { class: "notice info" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+        el("div", { class: "small" },
+          el("strong", null, `Claude Code ${pv.cli.version} 的「工作中／等你回覆」判斷還沒有驗證`),
+          el("p", { style: "margin:4px 0" },
+            "可以照常啟動；只是啟動後，VBear 會把它的狀態顯示為「未知」。驗證會同時檢查啟動邊界與終端標題。"),
+          el("div", { class: "row", style: "gap:8px; align-items:center; margin-top:6px" }, verifyBtn,
+            el("span", { class: "muted" }, "會用你的 Claude 帳號做 2 次小型模型呼叫（Haiku）。")),
+          progress));
+    }
+
+    function unverifiedBox(pv) {
+      ackBox = el("input", { type: "checkbox", id: "agent-launch-unverified", on: { change: syncConfirm } });
+      const { verifyBtn, progress } = verifyControl(pv);
       return el("div", { class: "notice warn" },
         el("span", { class: "ico", "aria-hidden": "true" }, "!"),
         el("div", { class: "small" },

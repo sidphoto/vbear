@@ -35,6 +35,7 @@ import queue as queue_mod
 from urllib.parse import unquote
 
 from . import __version__
+from . import activity
 from . import annotations
 from . import agent_launch
 from . import agent_profiles
@@ -788,9 +789,12 @@ def make_handler(console: Console):
             if wanted is not None and wanted != result.observed_version:
                 return self._json({"error": f"目前的 Claude Code 是 {result.observed_version}，不是 {wanted}；請重新預覽",
                                    "code": "version_changed"}, 409)
-            if result.verified:
+            title_ok = activity.title_verified("claude", result.observed_version)
+            if result.verified and title_ok:
                 return self._json({"ok": True, "already_verified": True, "version": result.observed_version,
+                                   "boundary_verified": True, "title_verified": True,
                                    "status": console.claude_verifier.status()})
+            # Either check missing is reason enough: one run covers both.
             status = console.claude_verifier.start(result.binary_path, result.observed_version)
             return self._json({"ok": True, "status": status})
 

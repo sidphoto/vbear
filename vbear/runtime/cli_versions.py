@@ -55,6 +55,33 @@ def local_verified_versions() -> dict:
             and _report_backs(r, v)}
 
 
+def local_title_verified_versions() -> dict:
+    """{version: record} whose terminal-title check passed on this Mac. A
+    record written before titles were checked, or a malformed one, counts
+    as title-unverified."""
+    out = {}
+    for v, r in local_verified_versions().items():
+        title = r.get("title")
+        if (isinstance(title, dict) and title.get("passed") is True
+                and isinstance(title.get("report"), str) and _title_report_backs(title["report"], v)):
+            out[v] = r
+    return out
+
+
+def _title_report_backs(path: str, version: str) -> bool:
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    title = data.get("title")
+    checks = title.get("checks") if isinstance(title, dict) else None
+    return (data.get("claude_version") == version and isinstance(checks, dict) and bool(checks)
+            and title.get("passed") is True
+            and all(isinstance(c, dict) and c.get("pass") is True for c in checks.values()))
+
+
 def _report_backs(record: dict, version: str) -> bool:
     """Every recorded report exists, is the check's output, passed, and is for this version."""
     reports = record.get("reports")
@@ -466,6 +493,7 @@ def assert_agent_version(engine: str, binary: str | os.PathLike[str] | None = No
 __all__ = [
     "EXPECTED_VERSIONS",
     "VERIFIED_VERSIONS",
+    "local_title_verified_versions",
     "local_verified_versions",
     "verified_versions",
     "VersionAssertionError",

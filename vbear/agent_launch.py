@@ -25,6 +25,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import activity
 from .runtime import agent_sessions, cli_versions
 from .runtime.native import NativeRuntimeError, NativeRuntimeUnavailable
 
@@ -315,7 +316,10 @@ class PreviewStore:
             "reasons": blockers,
             "launch_inputs": {"commit": commit is True, "network": {"enabled": False, "approved_domains": []}},
             "cli": ({"binary": manifest["cli_binary"], "version": manifest["cli_version"],
-                     "verified": manifest.get("cli_verified") is not False} if manifest else None),
+                     "verified": manifest.get("cli_verified") is not False,
+                     # whether VBear can tell "working" from "waiting" for this version
+                     "activity_verified": activity.title_verified(engine, manifest["cli_version"])}
+                    if manifest else None),
             "settings_digest": manifest["settings_sha256"] if manifest else None,
             "canonical_paths": {"workdir": canonical, "scratch": manifest["scratch"]["path"] if manifest else None},
             "derived_labels": derive_labels(manifest, canonical, (profile.get("model") or {}).get("tool")),

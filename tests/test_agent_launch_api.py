@@ -96,7 +96,8 @@ class PreviewApiCase(ServerCase):
         self.assertTrue(p["launchable"])
         self.assertEqual(p["reasons"], [])
         self.assertRegex(p["preview_id"], r"^p-[0-9a-f]{32}$")
-        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.286", "verified": True})
+        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.286", "verified": True,
+                                    "activity_verified": False})  # boundary verified, title not
         self.assertEqual(p["canonical_paths"]["workdir"], str(self.work))
         self.assertRegex(p["settings_digest"], r"^[0-9a-f]{64}$")
         self.assertGreater(p["expires_at"], time.time())
@@ -132,7 +133,8 @@ class PreviewApiCase(ServerCase):
             self.assertEqual(st, 200, r)
             p = r["preview"]
             self.assertTrue(p["launchable"], p["reasons"])
-            self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2", "verified": True})
+            self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2", "verified": True,
+                                    "activity_verified": False})
             self.assertTrue(p["derived_labels"]["Write"]["bypass"].find("!") >= 0)
             self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"],
                              [".local/r3-finish-20261003/codex-acceptance.json"])
@@ -200,7 +202,8 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(st, 200, r)
         p = r["preview"]
         self.assertTrue(p["launchable"], p["reasons"])
-        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.287", "verified": False})
+        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.287", "verified": False,
+                                    "activity_verified": False})
         labels = p["derived_labels"]
         for name in ("Write", "Network", "Filesystem"):
             self.assertEqual(labels[name]["level"], agent_launch.UNVERIFIED, name)
@@ -232,6 +235,7 @@ class PreviewApiCase(ServerCase):
         st, r = self.preview()
         p = r["preview"]
         self.assertEqual(p["cli"]["verified"], True)
+        self.assertEqual(p["cli"]["activity_verified"], False)   # old-format record: title unverified
         self.assertEqual(p["derived_labels"]["Network"]["level"], agent_launch.ENFORCED)
         self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"], [report])
         st, r = self.launch(p)  # no acknowledgement needed
@@ -250,9 +254,18 @@ class PreviewApiCase(ServerCase):
             st, _ = self.req("POST", "/api/native/claude-verification", {"binary": "/bin/sh"})
             self.assertEqual(st, 400)  # the caller cannot choose what gets run
             self.assertEqual(start.call_count, 1)
+        # Boundary verified (built-in) but the terminal title is not: one run checks both.
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.286"}, encoding="utf-8")
+        with mock.patch.object(self.console.claude_verifier, "start",
+                               return_value={"running": True, "version": "2.1.286"}) as start:
+            st, r = self.req("POST", "/api/native/claude-verification", {})
+            self.assertEqual(st, 200, r)
+            self.assertNotIn("already_verified", r)
+            start.assert_called_once_with(str(self.binary), "2.1.286")
+        # Both verified (2.1.292 is built in for boundary and title): nothing to run.
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.292"}, encoding="utf-8")
         st, r = self.req("POST", "/api/native/claude-verification", {})
-        self.assertEqual((st, r.get("already_verified")), (200, True))
+        self.assertEqual((st, r.get("already_verified"), r.get("title_verified")), (200, True, True))
         st, r = self.req("GET", "/api/native/claude-verification")
         self.assertEqual(st, 200)
         self.assertIn("running", r["status"])

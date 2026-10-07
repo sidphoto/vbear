@@ -25,8 +25,11 @@ this session:
   absent         the source does not exist for this session
 
 A rung is authoritative only for the engine versions listed in ``VERIFIED``,
-each backed by a file in docs/evidence/. Any other version gets the same rung
-as trial. ``unknown`` is a first-class answer: it beats a confident wrong one.
+each backed by a file in docs/evidence/, plus (for the Claude title rung) the
+versions whose title check passed on this Mac through 「驗證這個版本」
+(``cli_versions.local_title_verified_versions``). Any other version gets the
+same rung as trial. ``unknown`` is a first-class answer: it beats a confident
+wrong one.
 """
 
 from __future__ import annotations
@@ -45,6 +48,37 @@ RUNG_LABELS = {RUNG_CLAUDE_TITLE: "Claude Code 終端標題（Agent 自己回報
 VERIFIED = {
     RUNG_CLAUDE_TITLE: {"claude": frozenset({"2.1.292"})},  # docs/evidence/claude-code-2.1.292-activity.md
 }
+
+_LOCAL_TTL_S = 10.0
+_local_cache: dict = {"key": None, "at": 0.0, "versions": frozenset()}
+
+
+def _local_title_versions() -> frozenset:
+    """Versions whose title check passed on this Mac, re-read when the record
+    file changes and at most every few seconds otherwise."""
+    from .runtime import cli_versions
+    from . import config as cfg
+    path = cfg.state_dir() / cli_versions.LOCAL_VERIFIED_FILE
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (str(path), None, None)
+    now = time.monotonic()
+    if key == _local_cache["key"] and now - _local_cache["at"] < _LOCAL_TTL_S:
+        return _local_cache["versions"]
+    versions = frozenset(cli_versions.local_title_verified_versions()) if key[1] is not None else frozenset()
+    _local_cache.update(key=key, at=now, versions=versions)
+    return versions
+
+
+def title_verified(engine: str, version) -> bool:
+    """Whether the terminal-title rung is authoritative for this engine version."""
+    if not isinstance(version, str):
+        return False
+    if version in VERIFIED[RUNG_CLAUDE_TITLE].get(engine, ()):
+        return True
+    return engine == "claude" and version in _local_title_versions()
 
 # The working spinner re-sends its title about once a second (observed 0.96 s).
 SPINNER_STALE_S = 5.0
@@ -102,9 +136,7 @@ def arbitrate(info: dict, now: float | None = None) -> dict:
 
     if engine == "claude" and managed and isinstance(title, dict):
         version = info.get("cli_version")
-        trust = ("authoritative"
-                 if isinstance(version, str) and version in VERIFIED[RUNG_CLAUDE_TITLE].get("claude", ())
-                 else "trial")
+        trust = "authoritative" if title_verified("claude", version) else "trial"
         value, note = _title_reading(title, now)
         evidence.append({"rung": RUNG_CLAUDE_TITLE, "label": RUNG_LABELS[RUNG_CLAUDE_TITLE],
                          "trust": trust, "value": value, "note": note,
@@ -116,7 +148,7 @@ def arbitrate(info: dict, now: float | None = None) -> dict:
                 reason = note
             else:
                 reason = (f"Claude Code {version or '（版本不明）'} 的終端標題訊號尚未驗證："
-                          "只記錄、不採用（試用中）")
+                          "只記錄、不採用（試用中）。可在啟動對話框按「驗證這個版本」")
     elif engine == "claude" and managed:
         reason = "VBear runtime 沒有回報這個 session 的狀態證據（背景程序可能是舊版，重新啟動後才會提供）"
     elif engine == "claude":

@@ -809,7 +809,18 @@ async function runAllTests() {
     console.log("ok: Category 12 - Built-in terminal list, labels and numbered tabs");
   }
 
-  console.log("\nALL FRONTEND TESTS PASSED (12/12 categories verified)");
+  // Category 13: the launch dialog offers verification for an unverified terminal title
+  {
+    assert(appSource.includes("else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));"),
+      "a boundary-verified version with an unverified title gets the title notice and the verify button");
+    assert(appSource.includes('"啟動邊界：Claude Code ${version} 通過"') || appSource.includes("`啟動邊界：Claude Code ${version} 通過`"),
+      "verification shows the boundary result");
+    assert(appSource.includes('status.title_result === "passed"'),
+      "verification shows the terminal-title result separately");
+    console.log("ok: Category 13 - Launch dialog offers title verification and shows both results");
+  }
+
+  console.log("\nALL FRONTEND TESTS PASSED (13/13 categories verified)");
 }
 
 runAllTests()
