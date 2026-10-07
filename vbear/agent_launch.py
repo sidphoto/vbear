@@ -54,6 +54,13 @@ def _last_title_failure(engine: str | None, version: str) -> list[str] | None:
     title = record.get("title")
     if not isinstance(title, dict) or title.get("passed") is True:
         return None
+    # Only a title report for this very version explains this version's failure.
+    try:
+        report = json.loads(Path(title.get("report") or "").read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(report, dict) or report.get("claude_version") != version:
+        return None
     failed = title.get("failed")
     names = [n for n in failed if isinstance(n, str)][:8] if isinstance(failed, list) else []
     return names or ["unknown"]

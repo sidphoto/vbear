@@ -260,6 +260,17 @@ class PreviewApiCase(ServerCase):
         cli = r["preview"]["cli"]
         self.assertEqual((cli["verified"], cli["activity_verified"], cli["activity_last_failure"]),
                          (True, False, ["idle_after_turn"]))
+        # Codex review r2: the boundary reports are this version's, but the record's
+        # title report is for another version; that failure is not shown.
+        other = vdir / "other-title.json"
+        other.write_text(json.dumps({"passed": True, "claude_version": "2.1.288",
+                                     "title": {"passed": False, "checks": {"idle_after_turn": {"pass": False}}}}))
+        record = json.loads((self.home / "claude-verified.json").read_text())
+        record["versions"]["2.1.287"]["title"]["report"] = str(other)
+        (self.home / "claude-verified.json").write_text(json.dumps(record))
+        st, r = self.preview()
+        self.assertTrue(r["preview"]["cli"]["verified"])            # the boundary record still counts
+        self.assertIsNone(r["preview"]["cli"]["activity_last_failure"])
 
     def test_verify_button_api(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
