@@ -97,7 +97,7 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(p["reasons"], [])
         self.assertRegex(p["preview_id"], r"^p-[0-9a-f]{32}$")
         self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.286", "verified": True,
-                                    "activity_verified": False})  # boundary verified, title not
+                                    "activity_verified": False, "activity_last_failure": None})  # boundary verified, title not
         self.assertEqual(p["canonical_paths"]["workdir"], str(self.work))
         self.assertRegex(p["settings_digest"], r"^[0-9a-f]{64}$")
         self.assertGreater(p["expires_at"], time.time())
@@ -134,7 +134,7 @@ class PreviewApiCase(ServerCase):
             p = r["preview"]
             self.assertTrue(p["launchable"], p["reasons"])
             self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2", "verified": True,
-                                    "activity_verified": False})
+                                    "activity_verified": False, "activity_last_failure": None})
             self.assertTrue(p["derived_labels"]["Write"]["bypass"].find("!") >= 0)
             self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"],
                              [".local/r3-finish-20261003/codex-acceptance.json"])
@@ -203,7 +203,7 @@ class PreviewApiCase(ServerCase):
         p = r["preview"]
         self.assertTrue(p["launchable"], p["reasons"])
         self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.287", "verified": False,
-                                    "activity_verified": False})
+                                    "activity_verified": False, "activity_last_failure": None})
         labels = p["derived_labels"]
         for name in ("Write", "Network", "Filesystem"):
             self.assertEqual(labels[name]["level"], agent_launch.UNVERIFIED, name)
@@ -240,6 +240,26 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"], [report])
         st, r = self.launch(p)  # no acknowledgement needed
         self.assertEqual(st, 200, r)
+
+    def test_preview_reports_the_last_title_failure_for_a_retry(self):
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
+        st, r = self.preview()
+        self.assertIsNone(r["preview"]["cli"]["activity_last_failure"])   # never verified here
+        vdir = self.home / "verifications"
+        vdir.mkdir(mode=0o700)
+        head = vdir / "h.json"
+        head.write_text(json.dumps({"passed": True, "claude_version": "2.1.287"}))
+        inter = vdir / "i.json"
+        inter.write_text(json.dumps({"passed": True, "claude_version": "2.1.287",
+                                     "title": {"passed": False, "checks": {"idle_after_turn": {"pass": False}}}}))
+        (self.home / "claude-verified.json").write_text(json.dumps({"versions": {"2.1.287": {
+            "passed": True, "report": str(inter), "binary": str(self.binary), "verified_at": "t",
+            "reports": {"headless": str(head), "interactive": str(inter)},
+            "title": {"passed": False, "failed": ["idle_after_turn"], "report": str(inter)}}}}))
+        st, r = self.preview()
+        cli = r["preview"]["cli"]
+        self.assertEqual((cli["verified"], cli["activity_verified"], cli["activity_last_failure"]),
+                         (True, False, ["idle_after_turn"]))
 
     def test_verify_button_api(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")

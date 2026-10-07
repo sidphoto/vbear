@@ -45,6 +45,20 @@ EVIDENCE_DIR = "docs/evidence"
 NETWORK_VERIFIED = True
 
 
+def _last_title_failure(engine: str | None, version: str) -> list[str] | None:
+    """Failed title checks of this version's last verification on this Mac,
+    or None when there is no failed title result to report."""
+    if engine != "claude":
+        return None
+    record = cli_versions.local_verified_versions().get(version) or {}
+    title = record.get("title")
+    if not isinstance(title, dict) or title.get("passed") is True:
+        return None
+    failed = title.get("failed")
+    names = [n for n in failed if isinstance(n, str)][:8] if isinstance(failed, list) else []
+    return names or ["unknown"]
+
+
 def claude_evidence(version: str, section: str) -> str | None:
     """Evidence for a verified Claude Code version: the public page for a
     built-in one, the local report for one verified on this machine, None
@@ -318,7 +332,9 @@ class PreviewStore:
             "cli": ({"binary": manifest["cli_binary"], "version": manifest["cli_version"],
                      "verified": manifest.get("cli_verified") is not False,
                      # whether VBear can tell "working" from "waiting" for this version
-                     "activity_verified": activity.title_verified(engine, manifest["cli_version"])}
+                     "activity_verified": activity.title_verified(engine, manifest["cli_version"]),
+                     # why the last title check on this Mac failed, if it did (retrying is allowed)
+                     "activity_last_failure": _last_title_failure(engine, manifest["cli_version"])}
                     if manifest else None),
             "settings_digest": manifest["settings_sha256"] if manifest else None,
             "canonical_paths": {"workdir": canonical, "scratch": manifest["scratch"]["path"] if manifest else None},

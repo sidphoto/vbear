@@ -817,6 +817,13 @@ async function runAllTests() {
       "verification shows the boundary result");
     assert(appSource.includes('status.title_result === "passed"'),
       "verification shows the terminal-title result separately");
+    assert.strictEqual(app.titleFailureText(["idle_after_turn", "spinner_cadence"]),
+      "回合結束後沒有回到 ✳、工作中的標題更新間隔超過 5 秒");
+    assert.strictEqual(app.titleFailureText(["weird"]), "其他（weird）");
+    assert.strictEqual(app.titleFailureText(null), "原因未知");
+    assert(appSource.includes("再驗證一次約用 2 次模型呼叫（Haiku，用你的 Claude 帳號）。")
+      && appSource.includes("pv.cli.activity_last_failure"),
+      "after a failed title check the dialog says why and what a retry costs");
     console.log("ok: Category 13 - Launch dialog offers title verification and shows both results");
   }
 

@@ -980,6 +980,20 @@ function confirmInPage(title, message, confirmLabel) {
     cancelBtn.focus();
   });
 }
+// Plain-language names for the terminal-title checks of 「驗證這個版本」.
+const TITLE_CHECK_TEXT = {
+  idle_before_prompt: "送出提示前沒有出現閒置符號 ✳",
+  working_after_prompt: "送出後沒有出現工作中的 ◐／◑",
+  idle_after_turn: "回合結束後沒有回到 ✳",
+  spinner_cadence: "工作中的標題更新間隔超過 5 秒",
+  title_check_missing: "報告裡沒有標題檢查",
+  not_checked: "那次沒有檢查標題",
+};
+function titleFailureText(names) {
+  const list = Array.isArray(names) ? names : [];
+  return list.map((n) => TITLE_CHECK_TEXT[n] || `其他（${n}）`).join("、") || "原因未知";
+}
+
 function closeSessionButton(paneId, afterHash = "#/team") {
   if (!NATIVE_SESSION_RE.test(paneId || "")) return null;
   const btn = el("button", { class: "btn small", type: "button",
@@ -3926,9 +3940,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     // run, but only after the user says so, and it can be verified from here.
     // 「驗證這個版本」: one run checks the launch boundary and the terminal
     // title; the two results are shown separately when it ends.
-    function verifyControl(pv) {
+    function verifyControl(pv, label = "驗證這個版本") {
       const verifyBtn = el("button", { class: "btn small", type: "button", on: { click: () => doVerify() } },
-        "驗證這個版本");
+        label);
       const progress = el("p", { class: "small muted", "aria-live": "polite" });
       async function doVerify() {
         verifyBtn.disabled = true;
@@ -3969,22 +3983,29 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         `啟動邊界：Claude Code ${version} 通過`,
         status.title_result === "passed"
           ? "終端標題：通過，這台 Mac 可以判斷「工作中／等你回覆」"
-          : `終端標題：沒有通過（${(status.title_failed || []).join("、") || "原因未知"}），狀態會維持「未知」`,
+          : `終端標題：沒有通過（${titleFailureText(status.title_failed)}），狀態會維持「未知」`,
       ];
     }
 
     // Launch boundary verified, terminal title not: launching needs nothing
     // extra, but VBear cannot tell working from waiting until it is verified.
     function activityUnverifiedBox(pv) {
-      const { verifyBtn, progress } = verifyControl(pv);
+      const lastFailure = Array.isArray(pv.cli.activity_last_failure) && pv.cli.activity_last_failure.length
+        ? pv.cli.activity_last_failure : null;
+      const { verifyBtn, progress } = verifyControl(pv, lastFailure ? "再驗證一次" : "驗證這個版本");
       return el("div", { class: "notice info" },
         el("span", { class: "ico", "aria-hidden": "true" }, "i"),
         el("div", { class: "small" },
           el("strong", null, `Claude Code ${pv.cli.version} 的「工作中／等你回覆」判斷還沒有驗證`),
           el("p", { style: "margin:4px 0" },
             "可以照常啟動；只是啟動後，VBear 會把它的狀態顯示為「未知」。驗證會同時檢查啟動邊界與終端標題。"),
+          lastFailure ? el("p", { class: "agent-launch-last-failure", style: "margin:4px 0" },
+            `上一次在這台 Mac 驗證時，啟動邊界通過，但終端標題沒有通過：${titleFailureText(lastFailure)}。` +
+            "這可能是當時 Claude 的畫面沒有照預期切換，可以再試一次。") : null,
           el("div", { class: "row", style: "gap:8px; align-items:center; margin-top:6px" }, verifyBtn,
-            el("span", { class: "muted" }, "會用你的 Claude 帳號做 2 次小型模型呼叫（Haiku）。")),
+            el("span", { class: "muted" }, lastFailure
+              ? "再驗證一次約用 2 次模型呼叫（Haiku，用你的 Claude 帳號）。"
+              : "會用你的 Claude 帳號做 2 次小型模型呼叫（Haiku）。")),
           progress));
     }
 
@@ -4611,6 +4632,7 @@ if (typeof module !== "undefined" && module.exports) {
     shellPanes,
     shellLabel,
     shellTabLabels,
+    titleFailureText,
     cleanupActiveView,
     cleanupActiveTerminal,
     // Exported so the modal registry's two subtle invariants can be tested
