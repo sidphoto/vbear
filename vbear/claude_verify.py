@@ -127,8 +127,12 @@ def _title_result(report: Path) -> dict:
     checks = title.get("checks") if isinstance(title, dict) else None
     if not isinstance(checks, dict) or not checks:
         return {"passed": False, "failed": ["title_check_missing"], "report": str(report)}
-    failed = [n for n, c in checks.items() if not (isinstance(c, dict) and c.get("pass") is True)]
-    return {"passed": title.get("passed") is True and not failed, "failed": failed, "report": str(report)}
+    failed = [n for n in cli_versions.TITLE_CHECKS
+              if not (isinstance(checks.get(n), dict) and checks[n].get("pass") is True)]
+    failed += [n for n in checks if n not in cli_versions.TITLE_CHECKS]  # unexpected entries
+    passed = (title.get("passed") is True and not failed
+              and cli_versions.title_checks_all_passed(checks))
+    return {"passed": passed, "failed": failed, "report": str(report)}
 
 
 def record_pass(version: str, binary: str, reports: dict, title: dict | None = None) -> None:

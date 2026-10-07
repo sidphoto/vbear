@@ -183,6 +183,34 @@ class TitleRecordTests(unittest.TestCase):
                 self.assertEqual(cli_versions.local_title_verified_versions(), {})
                 self.assertFalse(activity.title_verified("claude", "2.1.299"))
 
+    def test_title_report_needs_exactly_the_four_checks_all_passing(self):
+        """Codex review: a report listing only some checks (all passing) was accepted."""
+        def report(checks, passed=True):
+            path = self.home / f"r{len(list(self.home.iterdir()))}.json"
+            path.write_text(json.dumps({"passed": True, "claude_version": "2.1.299",
+                                        "title": {"passed": passed, "checks": checks}}))
+            return str(path)
+        four = {k: {"pass": True} for k in ("idle_before_prompt", "working_after_prompt",
+                                             "idle_after_turn", "spinner_cadence")}
+        self.assertTrue(cli_versions._title_report_backs(report(four), "2.1.299"))
+        cases = {
+            "only one check": {"idle_before_prompt": {"pass": True}},
+            "three of four": {k: v for k, v in four.items() if k != "spinner_cadence"},
+            "one failing": {**four, "idle_after_turn": {"pass": False}},
+            "pass not literally true": {**four, "spinner_cadence": {"pass": 1}},
+            "unknown extra check": {**four, "something_else": {"pass": True}},
+            "unknown extra failing": {**four, "something_else": {"pass": False}},
+            "check not an object": {**four, "working_after_prompt": True},
+        }
+        for name, checks in cases.items():
+            with self.subTest(name):
+                self.assertFalse(cli_versions._title_report_backs(report(checks), "2.1.299"))
+        self.assertFalse(cli_versions._title_report_backs(report(four, passed=False), "2.1.299"))
+
+    def test_boundary_check_reports_exactly_the_checked_names(self):
+        r = boundary_check.title_checks([(1.0, I)], typed_at=2.0)
+        self.assertEqual(tuple(r["checks"]), cli_versions.TITLE_CHECKS)
+
     def test_corrupt_record_file_means_nothing_is_verified(self):
         (self.home / cli_versions.LOCAL_VERIFIED_FILE).write_text("{not json")
         self.assertFalse(activity.title_verified("claude", "2.1.299"))

@@ -35,6 +35,10 @@ EXPECTED_VERSIONS = MappingProxyType({k: v[-1] for k, v in VERIFIED_VERSIONS.ite
 # Claude Code versions verified on this machine with the boundary check
 # (vbear/boundary_check.py), recorded in the state directory.
 LOCAL_VERIFIED_FILE = "claude-verified.json"
+# The terminal-title checks of the interactive verification run
+# (vbear/boundary_check.py title_checks). A title result counts only with
+# exactly these, each passed.
+TITLE_CHECKS = ("idle_before_prompt", "working_after_prompt", "idle_after_turn", "spinner_cadence")
 _VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
@@ -77,9 +81,15 @@ def _title_report_backs(path: str, version: str) -> bool:
         return False
     title = data.get("title")
     checks = title.get("checks") if isinstance(title, dict) else None
-    return (data.get("claude_version") == version and isinstance(checks, dict) and bool(checks)
-            and title.get("passed") is True
-            and all(isinstance(c, dict) and c.get("pass") is True for c in checks.values()))
+    return (data.get("claude_version") == version and isinstance(checks, dict)
+            and title.get("passed") is True and title_checks_all_passed(checks))
+
+
+def title_checks_all_passed(checks) -> bool:
+    """Exactly the expected title checks, each with pass: true. Missing,
+    unknown or malformed entries mean "not verified"."""
+    return (isinstance(checks, dict) and set(checks) == set(TITLE_CHECKS)
+            and all(isinstance(checks[n], dict) and checks[n].get("pass") is True for n in TITLE_CHECKS))
 
 
 def _report_backs(record: dict, version: str) -> bool:
@@ -493,7 +503,9 @@ def assert_agent_version(engine: str, binary: str | os.PathLike[str] | None = No
 __all__ = [
     "EXPECTED_VERSIONS",
     "VERIFIED_VERSIONS",
+    "TITLE_CHECKS",
     "local_title_verified_versions",
+    "title_checks_all_passed",
     "local_verified_versions",
     "verified_versions",
     "VersionAssertionError",
