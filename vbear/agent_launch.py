@@ -44,12 +44,16 @@ EVIDENCE_DIR = "docs/evidence"
 NETWORK_VERIFIED = True
 
 
-def claude_evidence(version: str, section: str) -> str:
-    """Evidence reference for a verified Claude Code version (the oldest one
-    when the version is unknown, which the version gate refuses anyway)."""
-    verified = cli_versions.VERIFIED_VERSIONS["claude"]
-    v = version if version in verified else verified[0]
-    return f"{EVIDENCE_DIR}/claude-code-{v}.md#{section}"
+def claude_evidence(version: str, section: str) -> str | None:
+    """Evidence for a verified Claude Code version: the public page for a
+    built-in one, the local report for one verified on this machine, None
+    for an unverified version."""
+    if version in cli_versions.VERIFIED_VERSIONS["claude"]:
+        return f"{EVIDENCE_DIR}/claude-code-{version}.md#{section}"
+    record = cli_versions.local_verified_versions().get(version)
+    if record and isinstance(record.get("report"), str):
+        return record["report"]
+    return None
 CODEX_ACCEPTANCE_EVIDENCE: str | None = None
 CODEX_EVIDENCE_CHECKS = frozenset({
     "readonly_workspace_denied", "readonly_tmp_denied", "workspace_write_allowed",
@@ -58,6 +62,7 @@ CODEX_EVIDENCE_CHECKS = frozenset({
 })
 
 ENFORCED = "強制（限已測路徑、版本與執行層）"
+UNVERIFIED = "未驗證（此 Claude Code 版本尚未實測）"
 PARTIAL = "部分強制"
 INTENT = "僅意圖"
 UNKNOWN = "未知"
@@ -167,11 +172,12 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
                 "source_version": {"value": version, "kind": "本次啟動實測版本" if manifest else "不適用"},
                 "settings_digest": digest,
                 "path_scope": path_scope if manifest else "不適用",
-                "evidence_refs": list(evidence) if manifest else [],
+                "evidence_refs": [e for e in evidence if e] if manifest else [],
                 "bypass": BYPASS_CODEX_PTY if engine == "codex" else BYPASS_PTY,
                 "unknown_reason": unprepared or unknown_reason}
 
     writes, lifecycle = claude_evidence(version, "writes"), claude_evidence(version, "lifecycle")
+    unverified = bool(manifest) and engine == "claude" and manifest.get("cli_verified") is False
     net = (label(ENFORCED, "空 allowlist：Bash 工具的對外連線被拒（已測：HTTPS 請求經沙盒 proxy 回 403、"
                            "直接 TCP 連線與連回本機 EPERM；其他協定未測）",
                  evidence=[claude_evidence(version, "network")])
@@ -208,6 +214,20 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
                                 if codex_proven else "Codex filesystem sandbox 尚無本輪 OS 證據",
                                 path_scope=scope, evidence=codex_evidence,
                                 unknown_reason="none" if codex_proven else codex_unknown),
+        }
+    if unverified:
+        why = f"Claude Code {version} 尚未驗證（說明見上方提示）"
+        return {
+            "Read": label(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到", unknown_reason=why),
+            "Write": label(UNVERIFIED, "設定為只允許寫入工作目錄與本 session 暫存區，但此版本未實測",
+                           path_scope=write_scope, unknown_reason=why),
+            "Test": label(INTENT, "可用 Bash 執行指令；限制尚未在此版本實測", unknown_reason=why),
+            "Commit": label(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+                            path_scope=[workdir] if workdir else "不適用", unknown_reason=why),
+            "Deploy": label(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
+            "Network": label(UNVERIFIED, "設定為空 allowlist（不連網），但此版本未實測", unknown_reason=why),
+            "Filesystem": label(UNVERIFIED, "設定為工作目錄與本 session 暫存區之外不可寫，但此版本未實測",
+                                path_scope=write_scope, unknown_reason=why),
         }
     return {
         "Read": label(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他 session 的暫存區",
@@ -294,7 +314,8 @@ class PreviewStore:
             "launchable": not blockers,
             "reasons": blockers,
             "launch_inputs": {"commit": commit is True, "network": {"enabled": False, "approved_domains": []}},
-            "cli": ({"binary": manifest["cli_binary"], "version": manifest["cli_version"]} if manifest else None),
+            "cli": ({"binary": manifest["cli_binary"], "version": manifest["cli_version"],
+                     "verified": manifest.get("cli_verified") is not False} if manifest else None),
             "settings_digest": manifest["settings_sha256"] if manifest else None,
             "canonical_paths": {"workdir": canonical, "scratch": manifest["scratch"]["path"] if manifest else None},
             "derived_labels": derive_labels(manifest, canonical, (profile.get("model") or {}).get("tool")),
@@ -314,7 +335,8 @@ class PreviewStore:
         return body
 
     def consume(self, preview_id, expected_settings_digest, user_confirmed, load_profile,
-                *, cols: int | None = None, rows: int | None = None) -> dict:
+                *, cols: int | None = None, rows: int | None = None,
+                accept_unverified_cli=None) -> dict:
         """Confirm and launch. ``load_profile(profile_id)`` returns the current
         Profile so a change since the preview is detected."""
         if user_confirmed is not True:
@@ -332,6 +354,12 @@ class PreviewStore:
             if entry["expires"] <= now:
                 self._discard(self._previews.pop(preview_id))
                 raise PreviewError(410, "preview_expired", "preview 已過期；請重新 preview")
+            manifest = (entry.get("prepared") or {}).get("manifest") or {}
+            if manifest.get("cli_verified") is False and accept_unverified_cli is not True:
+                # Checked before consuming, so the same preview can still be confirmed.
+                raise PreviewError(409, "cli_unverified_not_acknowledged",
+                                   f"Claude Code {manifest.get('cli_version')} 尚未驗證；"
+                                   "需要明確勾選「我知道這個版本未驗證，仍要啟動」")
             entry["consumed"] = True  # single use from here on, whatever happens next
         try:
             if expected_settings_digest != entry["settings_digest"]:

@@ -61,7 +61,7 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
           │     private scratch dir /private/tmp/sc-<random>/
           └─ runtime  open_managed {launch_id}   (single use; the manifest is read from the
                                                   daemon's own state directory, never from the caller)
-                 ├─ version gate: `claude --version` must be on the verified list
+                 ├─ version gate: a genuine Claude Code version; unverified ones need the user's acknowledgement
                  ├─ trusted argv: --safe-mode --settings <file> --tools Bash
                  │                --disallowedTools Edit,Write --strict-mcp-config [--model <id>]
                  ├─ env: CLAUDE_CODE_TMPDIR=<scratch>, DISABLE_AUTOUPDATER=1, minimal allow-list
@@ -99,5 +99,5 @@ All dynamic text goes through `textContent`, and `innerHTML` is not used.
 - `tests/test_*.py` use a synthetic `HOME` and start real runtime daemons in temporary directories. They
   never touch your real state directory.
 - `tests/frontend/*.cjs` run the UI logic in Node against a minimal synthetic DOM. They are not browser tests.
-- Some runtime tests measure timing, such as stream latency and a 3 s version probe, and can fail
+- Some runtime tests measure timing, such as stream latency and an 8 s version probe, and can fail
   occasionally on a heavily loaded machine.

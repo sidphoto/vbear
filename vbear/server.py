@@ -39,9 +39,11 @@ from . import annotations
 from . import agent_launch
 from . import agent_profiles
 from . import armory
+from . import claude_verify
 from . import config as cfg
 from . import tasks
 from . import runtime as rt
+from .runtime import cli_versions
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import document
@@ -115,6 +117,7 @@ class Console:
         # Profile-managed launches (R3 S0): work directories must be inside this root.
         self.managed_root = Path.home()
         self._previews = None
+        self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
         """Preview store for Profile-managed launches; native runtime only."""
@@ -388,6 +391,8 @@ def make_handler(console: Console):
                     return self._json(self._governance_view())
                 if path == "/api/agent-builder/catalog":
                     return self._json(self._agent_builder_catalog())
+                if path == "/api/native/claude-verification":
+                    return self._json({"status": console.claude_verifier.status()})
                 if path == "/api/agent-profiles":
                     index = console.skill_index()
                     known_skills = set(index.keys())
@@ -478,6 +483,8 @@ def make_handler(console: Console):
                     return self._native_open(self._body())
                 if path == "/api/native/terminals":
                     return self._terminal_open(self._body())
+                if path == "/api/native/claude-verification":
+                    return self._claude_verify_start(self._body())
                 if path == "/api/native/agent-previews":
                     return self._agent_preview(self._body())
                 if path == "/api/native/agent-launches":
@@ -758,6 +765,26 @@ def make_handler(console: Console):
             console.store.live(force=True)  # new pane must be a live target at once
             return self._json({"ok": True, "session": info})
 
+        def _claude_verify_start(self, body: dict):
+            """「驗證這個版本」: check the Claude Code a managed launch would use.
+            Spends two small model calls with the user's own login."""
+            if set(body) - {"version"}:
+                return self._error(400, "不接受的欄位")
+            from .runtime import native as rt_native
+            result = cli_versions.check_cli_version(
+                "claude", rt_native._pinned_claude_binary(), cwd=str(Path.home()), allow_unverified=True)
+            if not result.compatible:
+                return self._json({"error": result.reason, "code": result.error_code}, 400)
+            wanted = body.get("version")
+            if wanted is not None and wanted != result.observed_version:
+                return self._json({"error": f"目前的 Claude Code 是 {result.observed_version}，不是 {wanted}；請重新預覽",
+                                   "code": "version_changed"}, 409)
+            if result.verified:
+                return self._json({"ok": True, "already_verified": True, "version": result.observed_version,
+                                   "status": console.claude_verifier.status()})
+            status = console.claude_verifier.start(result.binary_path, result.observed_version)
+            return self._json({"ok": True, "status": status})
+
         def _terminal_open(self, body: dict):
             """Built-in terminal: the user's login shell in a folder they pick.
 
@@ -834,14 +861,16 @@ def make_handler(console: Console):
         def _agent_launch(self, body: dict):
             """Confirm a preview and start it. Anything that changed since the
             preview answers 409 and needs a new preview."""
-            extra = set(body) - {"preview_id", "expected_settings_digest", "user_confirmed", "cols", "rows"}
+            extra = set(body) - {"preview_id", "expected_settings_digest", "user_confirmed", "cols", "rows",
+                                 "accept_unverified_cli"}
             if extra:
                 return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
             cols, rows = self._term_dims(body)
             try:
                 result = console.previews().consume(
                     body.get("preview_id"), body.get("expected_settings_digest"),
-                    body.get("user_confirmed"), self._load_profile, cols=cols, rows=rows)
+                    body.get("user_confirmed"), self._load_profile, cols=cols, rows=rows,
+                    accept_unverified_cli=body.get("accept_unverified_cli"))
             except agent_launch.PreviewError as exc:
                 return self._json({"error": str(exc), "code": exc.code}, exc.status)
             console.store.live(force=True)  # the new pane must be a live target at once

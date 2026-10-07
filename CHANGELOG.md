@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.1
+
+- **Unverified Claude Code versions can launch.** Claude Code updates itself almost daily; a release VBear has not
+  verified no longer blocks profile launches. Its permission labels say 「未驗證」, and you tick that you know before
+  it starts. A verified version, when installed, is still preferred.
+- **「驗證這個版本」** in the launch dialog runs the boundary check on the current Claude Code (two small model calls
+  with your own login). A pass is recorded in `~/.vbear/claude-verified.json` and the version counts as verified.
+- **Claude Code 2.1.292 verified** (headless and interactive, 15/15 each), through the new button itself.
+- The verification script moved into the package (`vbear/boundary_check.py`); `tools/verify_claude_boundary.py`
+  still works.
+- The CLI version probe waits up to 8 s (was 3 s), so a busy Mac no longer blocks launches.
+- GitHub secret scanning and push protection are on for the repositories.
+
 ## v0.2.0 — installable macOS workbench
 
 - **macOS app** (Apple Silicon): `VBear.app` with Python 3.13 included, in a `.dmg`. It starts VBear in the

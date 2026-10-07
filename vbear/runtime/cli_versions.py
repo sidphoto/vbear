@@ -6,6 +6,7 @@ that can emit the expected version string is not thereby proven genuine.
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
 import re
@@ -27,16 +28,43 @@ from . import daemon
 # tools/verify_claude_boundary.py run and docs/evidence/<engine>-<version>.md.
 VERIFIED_VERSIONS = MappingProxyType({
     "codex": ("0.159.2",),
-    "claude": ("2.1.286", "2.1.291"),
+    "claude": ("2.1.286", "2.1.291", "2.1.292"),
 })
 # The newest verified version per engine (where one fixed install is needed).
 EXPECTED_VERSIONS = MappingProxyType({k: v[-1] for k, v in VERIFIED_VERSIONS.items()})
+# Claude Code versions verified on this machine with the boundary check
+# (vbear/boundary_check.py), recorded in the state directory.
+LOCAL_VERIFIED_FILE = "claude-verified.json"
+_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+
+
+def local_verified_versions() -> dict:
+    """{version: record} of Claude Code versions that passed the boundary
+    check here. Unreadable or malformed entries count as not verified."""
+    from .. import config as cfg
+    try:
+        data = json.loads((cfg.state_dir() / LOCAL_VERIFIED_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    versions = data.get("versions") if isinstance(data, dict) else None
+    if not isinstance(versions, dict):
+        return {}
+    return {v: r for v, r in versions.items()
+            if isinstance(v, str) and _VERSION_RE.match(v) and isinstance(r, dict) and r.get("passed") is True}
+
+
+def verified_versions(engine: str) -> tuple[str, ...]:
+    """Built-in verified versions, plus (Claude Code only) local ones."""
+    built_in = VERIFIED_VERSIONS.get(engine, ())
+    if engine != "claude":
+        return built_in
+    return built_in + tuple(v for v in sorted(local_verified_versions()) if v not in built_in)
 # In 0.159.2, --ignore-user-config and --ephemeral are accepted by `codex exec`
 # but rejected by the interactive TUI command. Managed PTY launches require the
 # interactive command, so they stay disabled until a pinned build supports both.
 CODEX_INTERACTIVE_FLAGS_SUPPORTED = False
 
-VERSION_PROBE_TIMEOUT_SECONDS = 3.0
+VERSION_PROBE_TIMEOUT_SECONDS = 8.0  # bounds the wait only; a busy Mac can be slow to start a CLI
 VERSION_PROBE_MAX_OUTPUT_BYTES = 4096
 _CLEANUP_GRACE_SECONDS = 0.15
 _SAFE_ENV_KEYS = ("USER", "LOGNAME", "PATH", "TERM", "LANG", "HOME")
@@ -58,6 +86,7 @@ class VersionCheckResult:
     state: str
     reason: str
     error_code: str | None = None
+    verified: bool = False  # True only when the observed version is on a verified list
     _binary_identity: tuple[int, ...] | None = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
@@ -71,6 +100,7 @@ class VersionCheckResult:
             "state": self.state,
             "reason": self.reason,
             "error_code": self.error_code,
+            "verified": self.verified,
         }
 
 
@@ -292,6 +322,7 @@ def check_cli_version(
     *,
     cwd: str | os.PathLike[str],
     timeout: float = VERSION_PROBE_TIMEOUT_SECONDS,
+    allow_unverified: bool = False,
 ) -> VersionCheckResult:
     """Probe a supported CLI and return a preview-ready structured result.
 
@@ -300,7 +331,7 @@ def check_cli_version(
     """
     if not isinstance(engine, str) or engine not in VERIFIED_VERSIONS:
         return _blocked(engine, "unsupported_engine", "不支援此 Agent 引擎")
-    verified = VERIFIED_VERSIONS[engine]
+    verified = verified_versions(engine)
     expected = "、".join(verified)  # shown when the version does not match
     if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
             or not (0 < timeout <= VERSION_PROBE_TIMEOUT_SECONDS)):
@@ -345,7 +376,10 @@ def check_cli_version(
                   else "Agent CLI 版本輸出格式無效")
         return _blocked(engine, parse_error, reason, expected=expected,
                         binary_path=binary_path, identity=identity)
-    if observed not in verified:
+    # A genuine Claude Code release that nobody verified yet may still run when the
+    # caller asks for it; the result says so and the labels must say "unverified".
+    unverified_ok = allow_unverified and engine == "claude"
+    if observed not in verified and not unverified_ok:
         return _blocked(engine, "version_mismatch", "Agent CLI 版本不在已驗證的版本清單",
                         expected=expected, observed=observed, binary_path=binary_path,
                         identity=identity)
@@ -359,14 +393,16 @@ def check_cli_version(
         return _blocked(engine, "binary_changed_during_probe", "版本檢查期間 Agent CLI 檔案改變",
                         expected=expected, observed=observed, binary_path=binary_path,
                         identity=identity)
+    is_verified = observed in verified
     return VersionCheckResult(
         engine=engine,
-        expected_version=observed,  # the verified version this binary matched
+        expected_version=observed if is_verified else expected,
         observed_version=observed,
         binary_path=binary_path,
         compatible=True,
-        state="compatible",
-        reason="version_matches_baseline",
+        state="compatible" if is_verified else "unverified",
+        reason="version_matches_baseline" if is_verified else "version_not_verified",
+        verified=is_verified,
         _binary_identity=identity,
     )
 
@@ -377,9 +413,11 @@ def assert_cli_version(
     *,
     cwd: str | os.PathLike[str],
     timeout: float = VERSION_PROBE_TIMEOUT_SECONDS,
+    allow_unverified: bool = False,
 ) -> VersionCheckResult:
     """Return a compatible result or raise a structured version error."""
-    result = check_cli_version(engine, binary, cwd=cwd, timeout=timeout)
+    result = check_cli_version(engine, binary, cwd=cwd, timeout=timeout,
+                               allow_unverified=allow_unverified)
     if not result.compatible:
         raise VersionAssertionError(result)
     return result
@@ -412,6 +450,8 @@ def assert_agent_version(engine: str, binary: str | os.PathLike[str] | None = No
 __all__ = [
     "EXPECTED_VERSIONS",
     "VERIFIED_VERSIONS",
+    "local_verified_versions",
+    "verified_versions",
     "VersionAssertionError",
     "VersionCheckResult",
     "assert_agent_version",

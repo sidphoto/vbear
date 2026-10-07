@@ -62,8 +62,8 @@ These are the claims the launch preview makes, and their status:
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | Evidence for [2.1.291](evidence/claude-code-2.1.291.md#writes) and [2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
-| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | Evidence for [2.1.291](evidence/claude-code-2.1.291.md#network) and [2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
+| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | Evidence for [2.1.292](evidence/claude-code-2.1.292.md#writes), [2.1.291](evidence/claude-code-2.1.291.md#writes) and [2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
+| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | Evidence for [2.1.292](evidence/claude-code-2.1.292.md#network), [2.1.291](evidence/claude-code-2.1.291.md#network) and [2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
 | Bash cannot reach VBear itself | Enforced by the same sandbox | `127.0.0.1` listener and unix socket both refused with `EPERM`, headless and interactive, on [2.1.291](evidence/claude-code-2.1.291.md#network); headless-only spot check on 2.1.291 for the 2.1.286 page; **not re-run on 2.1.286 itself** |
 | Edit and Write tools are unavailable | `--tools Bash --disallowedTools Edit,Write`; those tools would not be covered by the Bash sandbox | Launch argv is built server-side from trusted values only |
 | No MCP servers or project hooks from the work directory | `--safe-mode --strict-mcp-config` | |
@@ -73,9 +73,18 @@ These are the claims the launch preview makes, and their status:
 | Commands you type with `!` are sandboxed | **No.** Claude Code runs `!` commands outside the sandbox; the preview says so | |
 
 Other safeguards:
-- **Fail closed.** The launch is refused if the installed Claude Code version is not on the verified list, if
-  the sandbox is unavailable (`failIfUnavailable`), or if the profile, work directory or config changed
-  since the preview.
+- **Unverified Claude Code versions are labelled, not hidden.** A genuine Claude Code release that is not on the
+  verified list (built-in, or verified on this Mac and recorded in `~/.vbear/claude-verified.json`) still gets the
+  same sandbox settings, but Write, Network and Filesystem are labelled **unverified** with no evidence, and the
+  launch is refused unless the request carries `accept_unverified_cli: true` (the dialog's checkbox). The internal
+  one-shot launch path never starts an unverified version. Output that is not a Claude Code version is still refused.
+  When a verified version is installed, it is used in preference to a newer unverified one.
+- **Verifying on this Mac.** 「驗證這個版本」 runs `vbear/boundary_check.py` headless and interactive against
+  the binary a launch would use. The version is recorded as verified only if both runs pass every check; a
+  refusal only counts if it is the sandbox's (`EPERM`/`EACCES`, or the proxy's 403). The record file is
+  owner-only. Any program running as you could edit it, as it could edit anything else you own.
+- **Fail closed** otherwise: the launch is refused if the sandbox is unavailable (`failIfUnavailable`), or if the
+  profile, work directory, Claude Code binary or config changed since the preview.
 - **No caller-supplied launch details.** The daemon's `open_managed` takes only a launch ID. It reads
   the manifest from its own state directory and re-validates the work directory. A launch ID is single-use.
 - **Cleanup only when it is proven safe.** Files belonging to a launch are removed only after every

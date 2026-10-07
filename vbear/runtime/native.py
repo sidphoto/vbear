@@ -66,9 +66,12 @@ class AttachRefused(NativeRuntimeError):
 
 def _pinned_claude_binary() -> str | None:
     """Install path of the newest verified Claude Code version that is present,
-    or None to fall back to PATH lookup. Either way the version check decides."""
+    or None to fall back to PATH lookup (the current, possibly unverified,
+    release). Either way the version check decides and reports which it is."""
     versions = Path.home() / ".local/share/claude/versions"
-    for version in reversed(_cli_versions.VERIFIED_VERSIONS["claude"]):
+    ordered = sorted(_cli_versions.verified_versions("claude"),
+                     key=lambda v: tuple(int(x) for x in v.split(".")))
+    for version in reversed(ordered):
         pinned = versions / version
         if pinned.is_file():
             return str(pinned)
@@ -487,14 +490,17 @@ class NativeRuntime(RuntimeBase):
                 or not os.path.isabs(cwd) or not os.path.isdir(cwd)):
             raise NativeRuntimeError("managed Agent cwd 必須是既存的絕對路徑資料夾")
         canonical_cwd = os.path.realpath(cwd)
+        # A genuine but unverified Claude Code release is allowed; the manifest
+        # records it so every label says "unverified" and launching needs an
+        # explicit acknowledgement.
         assertion = _cli_versions.assert_cli_version(
-            "claude", _pinned_claude_binary(), cwd=canonical_cwd)
+            "claude", _pinned_claude_binary(), cwd=canonical_cwd, allow_unverified=True)
         base = self._base or cfg.state_dir()
         manifest = _agent_sessions.prepare_claude_launch(
             base, canonical_cwd, cli_binary=assertion.binary_path,
             cli_version=assertion.observed_version,
             cli_identity=list(assertion._binary_identity), allowed_root=allowed_root,
-            model_id=spec.get("model_id") or None)
+            model_id=spec.get("model_id") or None, cli_verified=assertion.verified)
         return {"manifest": manifest, "assertion": assertion}
 
     def prepare_managed_codex_launch(self, spec: dict, *, allowed_root: str | None = None) -> dict:
@@ -595,6 +601,14 @@ class NativeRuntime(RuntimeBase):
                     raise NativeRuntimeError(f"managed Agent {dim} 必須是 1–1000 的整數")
         prepared = self.prepare_managed_claude_launch(
             {k: spec[k] for k in ("cwd", "model_id") if k in spec}, allowed_root=allowed_root)
+        assertion = prepared["assertion"]
+        if not assertion.verified:
+            # Unverified versions start only through a preview the user acknowledged.
+            self.discard_prepared_claude_launch(prepared["manifest"]["launch_id"])
+            raise _cli_versions.VersionAssertionError(_cli_versions._blocked(
+                "claude", "version_mismatch", "Agent CLI 版本不在已驗證的版本清單",
+                expected=assertion.expected_version, observed=assertion.observed_version,
+                binary_path=assertion.binary_path))
         return self.launch_prepared_claude(prepared, cols=spec.get("cols"), rows=spec.get("rows"))
 
     def create_managed_codex_session(self, spec: dict, *, allowed_root: str | None = None) -> dict:

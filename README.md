@@ -38,7 +38,7 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
 
 | Agent | Watch and type in terminals | Profile launch with preview and sandbox |
 |---|---|---|
-| Claude Code | yes | yes, on **verified versions only** (2.1.286, 2.1.291); any other version is refused |
+| Claude Code | yes | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
 | Codex CLI | yes | **not yet.** The preview explains why: 0.159.2's interactive mode still loads your global config |
 
 Skill and role scanning reads Claude Code (`~/.claude`), Codex (`~/.codex`) and shared skills
@@ -71,9 +71,11 @@ Requirements:
 - Python **3.13 or newer**, because the safe version check for agent CLIs needs `os.waitid`, which
   arrived on macOS in 3.13. The system `/usr/bin/python3` on macOS is 3.9 and will not work, so use
   Homebrew or python.org.
-- Claude Code 2.1.291 or 2.1.286, only if you want profile launches. Claude Code updates itself often; a new version
-  works in VBear once it passes [`tools/verify_claude_boundary.py`](tools/verify_claude_boundary.py) and is added to the
-  verified list.
+- Claude Code, only if you want profile launches. Claude Code updates itself often. A version VBear has not verified
+  still launches, but its permission labels say **unverified** and you must tick that you know. The launch dialog's
+  **驗證這個版本** button runs the boundary check on it (two small model calls with your own Claude login, about
+  1–3 minutes); once it passes, that version counts as verified on your Mac. The same check is
+  [`tools/verify_claude_boundary.py`](tools/verify_claude_boundary.py).
 
 There are no packages to install. The backend uses only the Python standard library, and the web UI
 has no build step.

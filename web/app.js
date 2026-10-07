@@ -3771,6 +3771,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const titleId = "modal-agent-launch-title";
     let current = null;   // the preview the confirm button refers to
     let busy = false;
+    let ackBox = null;    // "I know this Claude Code version is unverified" (only for such previews)
     const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
       placeholder: "家目錄內的資料夾絕對路徑，例如 /Users/you/projects/demo", autocomplete: "off" });
     const commitBox = el("input", { type: "checkbox", id: "agent-launch-commit" });
@@ -3780,8 +3781,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
     confirmBtn.disabled = true;
 
+    function needsAck(pv) { return Boolean(pv && pv.cli && pv.cli.verified === false); }
+    function syncConfirm() {
+      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked));
+    }
+
     function invalidate(message) {
       current = null;
+      ackBox = null;
       confirmBtn.disabled = true;
       setKids(out, message ? el("p", { class: "small muted" }, message) : null);
     }
@@ -3818,6 +3825,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("dt", null, "工作目錄"), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
+        if (needsAck(pv)) kids.push(unverifiedBox(pv));
       }
       kids.push(el("p", { class: "small muted" },
         "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是 Profile 的設定值。" +
@@ -3843,6 +3851,53 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       setKids(out, ...kids);
     }
 
+    // Claude Code updates itself often; a release nobody verified yet may still
+    // run, but only after the user says so, and it can be verified from here.
+    function unverifiedBox(pv) {
+      ackBox = el("input", { type: "checkbox", id: "agent-launch-unverified", on: { change: syncConfirm } });
+      const verifyBtn = el("button", { class: "btn small", type: "button", on: { click: () => doVerify() } },
+        "驗證這個版本");
+      const progress = el("p", { class: "small muted", "aria-live": "polite" });
+      async function doVerify() {
+        verifyBtn.disabled = true;
+        progress.textContent = "正在驗證…（約 1–3 分鐘）";
+        try {
+          const r = await api.post("/api/native/claude-verification", { version: pv.cli.version });
+          if (r.already_verified) { progress.textContent = "這個版本已驗證過。"; return doPreview(); }
+          for (;;) {
+            await new Promise((res) => setTimeout(res, 3000));
+            if (!modalElem.isConnected) return;
+            const { status } = await api.get("/api/native/claude-verification");
+            if (status.running) {
+              progress.textContent = `正在驗證（${status.step === "interactive" ? "2/2 互動模式" : "1/2 無頭模式"}）…`;
+              continue;
+            }
+            if (status.result === "passed") {
+              toast(`Claude Code ${pv.cli.version} 驗證通過`);
+              return doPreview();  // labels are now backed by this machine's evidence
+            }
+            progress.textContent = "驗證沒有通過：" + (status.message || "原因未知") + "。仍可勾選上方選項後啟動。";
+            verifyBtn.disabled = false;
+            return;
+          }
+        } catch (err) {
+          progress.textContent = "無法驗證：" + err.message;
+          verifyBtn.disabled = false;
+        }
+      }
+      return el("div", { class: "notice warn" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+        el("div", { class: "small" },
+          el("strong", null, `Claude Code ${pv.cli.version} 還沒有驗證過`),
+          el("p", { style: "margin:4px 0" },
+            "VBear 會套用和已驗證版本相同的沙盒設定，但沒有實測過這個版本是否真的遵守，所以下方的權限標示為「未驗證」。"),
+          el("label", { class: "row", for: "agent-launch-unverified", style: "gap:8px; align-items:flex-start" },
+            ackBox, el("span", null, "我知道這個版本未驗證，仍要啟動。")),
+          el("div", { class: "row", style: "gap:8px; align-items:center; margin-top:6px" }, verifyBtn,
+            el("span", { class: "muted" }, "會用你的 Claude 帳號做 2 次小型模型呼叫（Haiku）；通過後這個版本就算已驗證。")),
+          progress));
+    }
+
     async function doPreview() {
       if (busy) return;
       busy = true;
@@ -3851,9 +3906,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       try {
         const res = await api.post("/api/native/agent-previews", {
           profile_id: p.id, workdir: workdirInput.value.trim(), commit: !!commitBox.checked });
-        renderPreview(res.preview);
         current = res.preview.launchable ? res.preview : null;
-        confirmBtn.disabled = !current;
+        renderPreview(res.preview);
+        syncConfirm();
       } catch (err) {
         invalidate("無法產生預覽：" + err.message);
       } finally {
@@ -3876,7 +3931,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       current = null;  // a preview is single use, whatever the outcome
       try {
         const res = await api.post("/api/native/agent-launches", {
-          preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true });
+          preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true,
+          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}) });
         toast("已啟動（Profile 受管）");
         closeModal();
         location.hash = `#/term/${encodeURIComponent(res.launch.session.session_id)}`;

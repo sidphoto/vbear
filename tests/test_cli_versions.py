@@ -48,8 +48,8 @@ class CliVersionTests(unittest.TestCase):
 
     def test_both_trusted_baselines_pass_with_fixed_argv(self):
         self.assertEqual(dict(versions.VERIFIED_VERSIONS),
-                         {"codex": ("0.159.2",), "claude": ("2.1.286", "2.1.291")})
-        self.assertEqual(dict(versions.EXPECTED_VERSIONS), {"codex": "0.159.2", "claude": "2.1.291"})
+                         {"codex": ("0.159.2",), "claude": ("2.1.286", "2.1.291", "2.1.292")})
+        self.assertEqual(dict(versions.EXPECTED_VERSIONS), {"codex": "0.159.2", "claude": "2.1.292"})
         for engine in ("codex", "claude"):
             with self.subTest(engine=engine):
                 record = self.tmp / f"{engine}-argv.json"
@@ -70,8 +70,8 @@ class CliVersionTests(unittest.TestCase):
                 self.assertEqual(json.loads(record.read_text()), expected_argv)
 
     def test_every_verified_claude_version_passes_and_others_do_not(self):
-        for version, ok in (("2.1.286", True), ("2.1.291", True), ("2.1.290", False),
-                            ("2.1.292", False), ("2.1.2860", False)):
+        for version, ok in (("2.1.286", True), ("2.1.291", True), ("2.1.292", True), ("2.1.290", False),
+                            ("2.1.293", False), ("2.1.2860", False)):
             with self.subTest(version=version):
                 binary = self.make_cli("claude", f"print({version + ' (Claude Code)'!r})\n")
                 result = versions.check_cli_version("claude", binary, cwd=self.cwd)

@@ -47,7 +47,7 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 
 ### 從原始碼執行
 
-需要 macOS、Python 3.13 以上；Profile 啟動另需已驗證版本的 Claude Code（2.1.291 或 2.1.286）。不需要安裝任何套件。
+需要 macOS、Python 3.13 以上；Profile 啟動另需 Claude Code。尚未驗證的版本也能啟動，但權限標示會是「未驗證」，啟動前要勾選知悉；啟動對話框的「驗證這個版本」會用你的 Claude 帳號做 2 次小型模型呼叫來驗證（約 1–3 分鐘），通過後這個版本在你的 Mac 上就算已驗證。不需要安裝任何套件。
 
 ```sh
 git clone https://github.com/sidphoto/vbear.git && cd vbear

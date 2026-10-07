@@ -252,7 +252,7 @@ def _check_workdir(workdir: str, allowed_root: str, base: Path) -> str:
 
 def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_version: str,
                           cli_identity: list[int], allowed_root: str | None = None,
-                          model_id: str | None = None) -> dict:
+                          model_id: str | None = None, cli_verified: bool = True) -> dict:
     """Create the launch directory, scratch, settings and manifest. No process
     is started. On any failure everything created here is removed again."""
     uid = os.getuid()
@@ -291,6 +291,7 @@ def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
             "engine": "claude",
             "cli_binary": cli_binary,
             "cli_version": cli_version,
+            "cli_verified": cli_verified is True,
             "cli_identity": list(cli_identity),
             "model_id": model_id,
             "settings_path": str(settings_path),

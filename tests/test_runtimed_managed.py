@@ -399,7 +399,10 @@ class ManagedCase(unittest.TestCase):
             with self.assertRaises(cli_versions.VersionAssertionError) as c:
                 self.runtime().create_managed_claude_session({"cwd": str(self.work)}, allowed_root=str(self.tmp))
         self.assertEqual(c.exception.code, "version_mismatch")
-        self.assertFalse((self.base / "sessions").exists())
+        # An unverified version is prepared (to learn it is unverified), then removed:
+        # the direct path never starts one without a user-acknowledged preview.
+        sessions = self.base / "sessions"
+        self.assertEqual(sorted(sessions.iterdir()) if sessions.exists() else [], [])
         self.assertEqual(self.rpc("list")["result"]["sessions"], [])
 
     def test_runtime_entry_rejects_extra_spec_fields(self):

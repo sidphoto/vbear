@@ -96,7 +96,7 @@ class PreviewApiCase(ServerCase):
         self.assertTrue(p["launchable"])
         self.assertEqual(p["reasons"], [])
         self.assertRegex(p["preview_id"], r"^p-[0-9a-f]{32}$")
-        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.286"})
+        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.286", "verified": True})
         self.assertEqual(p["canonical_paths"]["workdir"], str(self.work))
         self.assertRegex(p["settings_digest"], r"^[0-9a-f]{64}$")
         self.assertGreater(p["expires_at"], time.time())
@@ -132,7 +132,7 @@ class PreviewApiCase(ServerCase):
             self.assertEqual(st, 200, r)
             p = r["preview"]
             self.assertTrue(p["launchable"], p["reasons"])
-            self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2"})
+            self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2", "verified": True})
             self.assertTrue(p["derived_labels"]["Write"]["bypass"].find("!") >= 0)
             self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"],
                              [".local/r3-finish-20261003/codex-acceptance.json"])
@@ -194,12 +194,71 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(self.launch_dirs(), [])
         self.assertEqual(self.sessions(), [])
 
-    def test_wrong_cli_version_is_not_launchable(self):
+    def test_unverified_cli_version_launches_only_when_acknowledged(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
         st, r = self.preview()
         self.assertEqual(st, 200, r)
+        p = r["preview"]
+        self.assertTrue(p["launchable"], p["reasons"])
+        self.assertEqual(p["cli"], {"binary": str(self.binary), "version": "2.1.287", "verified": False})
+        labels = p["derived_labels"]
+        for name in ("Write", "Network", "Filesystem"):
+            self.assertEqual(labels[name]["level"], agent_launch.UNVERIFIED, name)
+            self.assertEqual(labels[name]["evidence_refs"], [], name)   # no evidence claimed
+            self.assertIn("2.1.287", labels[name]["unknown_reason"], name)
+        self.assertNotIn(agent_launch.ENFORCED, [l["level"] for l in labels.values()])
+        # Without the acknowledgement: refused, and the preview is not used up.
+        st, r = self.launch(p)
+        self.assertEqual((st, r["code"]), (409, "cli_unverified_not_acknowledged"))
+        for bad in (False, "true", 1):
+            st, r = self.launch(p, accept_unverified_cli=bad)
+            self.assertEqual(st, 409, bad)
+        st, r = self.launch(p, accept_unverified_cli=True)
+        self.assertEqual(st, 200, r)
+        [manifest] = [json.loads((self.home / "sessions" / d / "manifest.json").read_text())
+                      for d in self.launch_dirs()]
+        self.assertIs(manifest["cli_verified"], False)
+
+    def test_locally_verified_version_counts_as_verified(self):
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
+        report = str(self.home / "verifications" / "claude-2.1.287-interactive.json")
+        (self.home / "claude-verified.json").write_text(json.dumps({"versions": {
+            "2.1.287": {"passed": True, "report": report},
+            "2.1.288": {"passed": False, "report": "x"},       # a failed run is not a pass
+            "bad version": {"passed": True, "report": "x"}}}))
+        st, r = self.preview()
+        p = r["preview"]
+        self.assertEqual(p["cli"]["verified"], True)
+        self.assertEqual(p["derived_labels"]["Network"]["level"], agent_launch.ENFORCED)
+        self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"], [report])
+        st, r = self.launch(p)  # no acknowledgement needed
+        self.assertEqual(st, 200, r)
+
+    def test_verify_button_api(self):
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
+        with mock.patch.object(self.console.claude_verifier, "start",
+                               return_value={"running": True, "version": "2.1.287"}) as start:
+            st, r = self.req("POST", "/api/native/claude-verification", {"version": "2.1.287"})
+            self.assertEqual(st, 200, r)
+            self.assertEqual(r["status"]["version"], "2.1.287")
+            start.assert_called_once_with(str(self.binary), "2.1.287")
+            st, r = self.req("POST", "/api/native/claude-verification", {"version": "2.1.290"})
+            self.assertEqual((st, r["code"]), (409, "version_changed"))
+            st, _ = self.req("POST", "/api/native/claude-verification", {"binary": "/bin/sh"})
+            self.assertEqual(st, 400)  # the caller cannot choose what gets run
+            self.assertEqual(start.call_count, 1)
+        self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.286"}, encoding="utf-8")
+        st, r = self.req("POST", "/api/native/claude-verification", {})
+        self.assertEqual((st, r.get("already_verified")), (200, True))
+        st, r = self.req("GET", "/api/native/claude-verification")
+        self.assertEqual(st, 200)
+        self.assertIn("running", r["status"])
+
+    def test_non_claude_output_is_still_refused(self):
+        self.binary.write_text(f"#!{sys.executable}\nprint('hello 2.1.287')\n", encoding="utf-8")
+        st, r = self.preview()
+        self.assertEqual(st, 200, r)
         self.assertFalse(r["preview"]["launchable"])
-        self.assertIn("cli_version_mismatch", [x["code"] for x in r["preview"]["reasons"]])
         self.assertEqual(self.launch_dirs(), [])
 
     def test_preview_rejects_raw_launch_fields_and_bad_targets(self):
