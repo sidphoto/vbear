@@ -32,6 +32,11 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 - **後端零第三方相依、前端單一本機 Vendored 依賴**：後端僅使用 Python 3.13+ 標準函式庫（零 pip 套件、零雲端服務）。前端介面零 npm 建置步驟，唯一依賴為本機打包之 MIT 開源套件 `@xterm/xterm` 與 `@xterm/addon-fit`（置於 `web/vendor/xterm/`，鎖定版本並由單元測試持續驗證固定之 SHA-256 完整性雜湊，嚴格拒絕 CDN 外部載入，維持嚴格 CSP `script-src 'self'`）。
   需要 Python 3.13 以上（Agent CLI 版本檢查需要 `os.waitid`，macOS 從 3.13 才提供）；macOS 系統內建的 `/usr/bin/python3` 是 3.9，會啟動失敗，請改用 Homebrew 等較新的 `python3`。
 - **有來源才顯示**：每項資訊標示「作者說明／自動整理／執行觀察／未提供」，查不到就寫未知。
+- **流程看板（只看、只記錄）**：一張任務卡由多個 Agent 合作完成時，記下誰規劃、誰執行、誰審查（含模型家族）。
+  「流程」頁顯示目前階段（計畫中、等核准、實作中、審查第 N 輪、等修正、審查通過・等合併、審查結果已過期、等 push、完成）、
+  審查輪次與時間軸，首頁「需要你處理」列出等你處理的關卡。階段每次讀取時由事件與即時資料推導，不儲存。
+  審查者與執行者必須是不同且已知的模型家族，審查結果才算通過；執行者的工作目錄離開被審查的 commit，通過就標為已過期。
+  所有事件都由表單手動記錄，標示「手動記錄（未驗證）」；VBear 不會為流程派工、輸入指令、執行 git 或啟動任何程式。
 
 ## 安裝與使用
 
@@ -70,6 +75,7 @@ Agent 終端由 `vbear runtimed`（VBear runtime 背景程序）執行；主控�
 | 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
 | Agent 團隊 | 工作中的 Terminal（VBear runtime 管理的 Claude／Codex，角色名、本次模型、本次用過的技能、開啟終端）與角色設定（主代理、子代理） |
 | 專案 | 依 git 儲存庫歸類：專案 → 各角色 Terminal |
+| 流程 | 多 Agent 合作的任務卡：角色與模型家族、推導出的階段、審查輪次、時間軸、手動記錄事件 |
 | 設定 | 掃描來源開關、使用紀錄範圍、進階模式、資料流向說明 |
 
 ## 資料從哪裡來
@@ -165,7 +171,7 @@ Agent 終端由 `vbear runtimed`（VBear runtime 背景程序）執行；主控�
 
 ## 狀態目錄
 
-`~/.vbear/`（可用 `VBEAR_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`agent_profiles.json`、`server.log`、
+`~/.vbear/`（可用 `VBEAR_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`flows.json`、`agent_profiles.json`、`server.log`、
 VBear runtime 的 `runtime.sock`／`runtimed.lock`／`runtimed.log`，以及 Profile 管理 session 的 `sessions/<launch-id>/`（session 暫存區在 `/private/tmp/sc-<隨機>/`）。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
 
 ## 結構
@@ -182,6 +188,8 @@ vbear/
   index.py                            靜態索引＋即時視圖
   annotations.py                      我的註記（別名、標籤、備註）
   tasks.py                            任務卡（Task Card MVP、狀態證明、結果綁定 commit、結案理由、交接、本機儲存）
+  flows.py                            流程看板（角色、事件紀錄、階段推導、審查與 commit 綁定；只記錄不執行）
+  jsonstore.py                        私有 JSON 儲存（0600、原子寫入、跨程序鎖、損毀時封鎖）
   git_head.py                         不執行 git，直接讀 .git 檔案取得目前的 commit
   activity.py                         Agent 狀態判斷（工作中／等你回覆／未知）與判斷依據
   runtime/osc_title.py                受管 Claude 的終端標題分類（不保存標題文字）

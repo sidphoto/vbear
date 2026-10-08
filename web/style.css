@@ -207,8 +207,8 @@ details.fold > .fold-body { padding: 0 14px 14px; }
 #toast.show { opacity: 1; transform: none; }
 
 @media (max-width: 820px) {
-  .shell { grid-template-columns: 1fr; }
-  .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 12px; gap: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .shell { grid-template-columns: minmax(0, 1fr); }   /* a long nav scrolls instead of widening the page */
+  .side { min-width: 0; position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 12px; gap: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand-text small { display: none; }
   .nav { display: flex; overflow-x: auto; gap: 2px; width: 100%; }
   .nav a { white-space: nowrap; padding: 7px 10px; }
@@ -827,3 +827,20 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .term-tab { padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 8px 8px 0 0; text-decoration: none; color: var(--ink); font-size: 13px; background: var(--panel); }
 .term-tab[aria-current="page"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .term-tab-new { font-weight: 600; }
+
+/* Flows board */
+.flow-form { display: grid; gap: 8px; max-width: 760px; }
+.flow-role-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.flow-role-row b { min-width: 52px; }
+.flow-role-row .input { flex: 1 1 160px; min-width: 0; }
+.flow-form .input, .flow-form select, .flow-form textarea { padding: 6px 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; }
+.flow-rounds { width: 100%; border-collapse: collapse; font-size: 13px; }
+.flow-rounds th, .flow-rounds td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.flow-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.flow-timeline li { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.flow-gates { margin-bottom: 10px; }
+.flow-form [hidden] { display: none !important; }
+.flow-form > button { justify-self: start; }
+.flow-path { overflow-wrap: anywhere; }
+.table-scroll { max-width: 100%; overflow-x: auto; }
+.flow-rounds th, .flow-rounds td.mono { white-space: nowrap; }

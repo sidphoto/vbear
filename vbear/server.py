@@ -42,6 +42,7 @@ from . import agent_profiles
 from . import armory
 from . import claude_verify
 from . import config as cfg
+from . import flows
 from . import tasks
 from . import runtime as rt
 from .runtime import cli_versions
@@ -388,6 +389,14 @@ def make_handler(console: Console):
                     if t is None:
                         return self._error(404, "找不到此任務卡")
                     return self._json({"ok": True, "task": self._with_pickup([t])[0]})
+                if path == "/api/flows":
+                    return self._json(self._flows_view())
+                if path.startswith("/api/flows/"):
+                    try:
+                        flow = flows.get_flow(path[len("/api/flows/"):])
+                    except KeyError:
+                        return self._error(404, "找不到這個流程")
+                    return self._json({"ok": True, "flow": self._flow_view(flow)})
                 if path == "/api/governance":
                     return self._json(self._governance_view())
                 if path == "/api/agent-builder/catalog":
@@ -431,6 +440,8 @@ def make_handler(console: Console):
             except tasks.TaskStorageError as exc:
                 return self._error(503, str(exc))
             except agent_profiles.AgentProfileStorageError as exc:
+                return self._error(503, str(exc))
+            except flows.StoreError as exc:
                 return self._error(503, str(exc))
             except Exception as exc:  # report, never crash the server
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
@@ -492,6 +503,8 @@ def make_handler(console: Console):
                     return self._agent_launch(self._body())
                 if path.startswith("/api/native/sessions/") and path.endswith("/close"):
                     return self._native_close(unquote(path[len("/api/native/sessions/"):-len("/close")]))
+                if path == "/api/flows" or path.startswith("/api/flows/"):
+                    return self._flows_post(path, self._body())
                 if path == "/api/tasks":
                     try:
                         saved = tasks.save_task(None, self._body())
@@ -593,6 +606,8 @@ def make_handler(console: Console):
             except tasks.TaskStorageError as exc:
                 return self._error(503, str(exc))
             except agent_profiles.AgentProfileStorageError as exc:
+                return self._error(503, str(exc))
+            except flows.StoreError as exc:
                 return self._error(503, str(exc))
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
@@ -774,6 +789,60 @@ def make_handler(console: Console):
                 return self._error(400, str(exc))
             console.store.live(force=True)  # new pane must be a live target at once
             return self._json({"ok": True, "session": info})
+
+        # Flows (stage 1: a board; nothing here starts, sends or runs anything) ---
+
+        def _flow_view(self, flow: dict) -> dict:
+            def task_title(task_id):
+                try:
+                    task = tasks.get_task(task_id)
+                except tasks.TaskStorageError:
+                    return None
+                return task.get("title") if task else None
+            live = console.store.live_if_ready()   # never wait for the first scan here
+            by_id = {s.get("terminal_id"): s for s in (live or {}).get("sessions", ())}
+            panes = {p.get("pane_id") for p in (live or {}).get("panes", ())}
+
+            def live_session(sid):
+                if live is None:
+                    return {"display": "unknown", "label": "讀取中", "reason": "即時資料還在整理，稍後重新整理"}
+                s = by_id.get(sid)
+                if s is None:
+                    return {"display": "unknown", "label": "狀態未知", "reason": "不是 Agent session"} if sid in panes else None
+                act = s.get("activity") if isinstance(s.get("activity"), dict) else {}
+                display = s.get("status") or "unknown"
+                labels = {"working": "工作中", "waiting": "等你回覆", "needs-input": "需要你處理",
+                          "exited": "已結束", "unknown": "狀態未知"}
+                return {"display": display, "label": labels.get(display, "狀態未知"), "reason": act.get("reason", "")}
+            return flows.view(flow, heads=flows.head_reader, task_title=task_title, live_session=live_session)
+
+        def _flows_view(self) -> dict:
+            items = [self._flow_view(f) for f in flows.list_flows()]
+            items.sort(key=lambda v: (not v["attention"], -(v["events"][-1]["at"] if v["events"] else v["created_at"])))
+            return {"ok": True, "flows": items,
+                    "families": [{"key": k, "label": flows.FAMILY_LABELS[k]} for k in flows.FAMILIES],
+                    "kinds": [{"key": k, "label": flows.KIND_LABELS[k]} for k in flows.CLIENT_KINDS],
+                    "verdicts": list(flows.VERDICTS), "manual_label": flows.MANUAL_LABEL}
+
+        def _flows_post(self, path: str, body: dict):
+            def task_exists(task_id):
+                return tasks.get_task(task_id) is not None
+            try:
+                if path == "/api/flows":
+                    flow = flows.create_flow(body, task_exists)
+                else:
+                    rest = path[len("/api/flows/"):]
+                    if rest.endswith("/events"):
+                        flow = flows.append_event(rest[:-len("/events")], body)
+                    elif rest.endswith("/roles"):
+                        flow = flows.set_roles(rest[:-len("/roles")], body)
+                    else:
+                        return self._error(404, "not found")
+            except KeyError:
+                return self._error(404, "找不到這個流程")
+            except ValueError as exc:
+                return self._error(400, str(exc))
+            return self._json({"ok": True, "flow": self._flow_view(flow)})
 
         def _claude_verify_start(self, body: dict):
             """「驗證這個版本」: check the Claude Code a managed launch would use.

@@ -39,6 +39,13 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
   directory, a test result and an approval are tied to the commit they were given for and go stale when it moves.
   Marking a card done or blocked asks what follows; a handoff closes the card and opens its successor with the
   chain of earlier cards; whether anyone is on it is worked out from the linked terminal, not typed in.
+- **Flows (look-only).** One task card carried by several agents: who plans, who executes, who reviews, each
+  with a model family. The 「流程」 page shows the phase (planning, awaiting approval, implementing, review round N,
+  needs fix, passed and awaiting merge, review out of date, awaiting push, done), the review rounds and a timeline,
+  and the home page lists the gates waiting for you. Phases are derived on every read, never stored. A review
+  counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
+  date as soon as the executor's directory moves off the reviewed commit. Every event is entered by hand and
+  labelled 「手動記錄（未驗證）」; VBear starts, sends and runs nothing for a flow.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 

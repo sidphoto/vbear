@@ -131,6 +131,23 @@ Other safeguards:
 - Results, approvals, closure reasons and handoffs are still set through the same unauthenticated local UI/API, and
   `verified` stays false.
 
+## Flows
+
+- **No new execution capability.** The flows board records and shows. Its routes write only `flows.json`; nothing
+  in `vbear/flows.py` starts a process, sends input to a terminal, runs `git` or contacts the network. The only
+  outside reads are the executor directory's HEAD through `git_head` (plain bounded file reads, as for task cards)
+  and the cached live view.
+- **Manual means unverified.** Every event is entered through the UI/API by whoever can reach it with the access
+  token, and is labelled 「手動記錄（未驗證）」. A recorded review result says someone typed it, not that a
+  reviewer produced it.
+- **What the board does enforce.** Phases cannot be set by a client; they are derived on each read. A review counts
+  as a pass only for different, known model families, judged on the families stored with the event. A pass
+  binds to the reviewed commit and is shown as out of date when HEAD moves; like task cards, this notices change
+  and does not authenticate history or see uncommitted edits.
+- **Malformed data fails closed.** Stored values that are non-finite, out of range, of the wrong type, out of order
+  or unknown block the store instead of being shown or repaired; tests feed each entry point NaN, ±inf, huge
+  integers, booleans, wrong containers and unknown fields.
+
 ## Data handling
 
 - No telemetry, analytics, crash reporting or update checks. The only HTTP client in the code talks to

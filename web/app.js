@@ -809,6 +809,12 @@ async function loadStatic(force) {
   if (force || !D.roles) D.roles = (await api.get("/api/roles")).roles;
   renderScanStatus();
 }
+async function loadFlows() {
+  try { D.flows = await api.get("/api/flows"); }
+  catch (e) { D.flows = { error: e.message, flows: [] }; }
+  return D.flows;
+}
+
 async function loadLive(force) {
   try { D.live = await api.get("/api/live" + (force ? "?force=1" : "")); }
   catch (e) { D.live = { error: e.message, sessions: [], projects: [], attention: [], usage: { sessions: [] }, runtime: { available: false, problems: [e.message] } }; }
@@ -1088,7 +1094,7 @@ function sectionHead(title, sub, action) {
 
 async function viewHome() {
   const token = seq;
-  await Promise.all([loadStatic(), loadLive()]);
+  await Promise.all([loadStatic(), loadLive(), loadFlows()]);
   const L = D.live;
   const main = claim(token);
   const input = el("input", { type: "search", placeholder: "想做什麼？例如：網站安全檢查、做簡報、剪影片、部署…", "aria-label": "用途搜尋技能" });
@@ -1135,9 +1141,13 @@ async function viewHome() {
 function attentionSection() {
   const L = D.live;
   const attention = (L.attention || []).map((id) => L.sessions.find((s) => s.terminal_id === id)).filter(Boolean);
+  const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);
+  const parts = [attention.length ? `${attention.length} 個 Agent 在等你` : "",
+    gates.length ? `${gates.length} 個流程關卡等你` : ""].filter(Boolean);
   return [
-    sectionHead("需要你處理", attention.length ? `${attention.length} 個 Agent 在等你・每 5 秒更新` : "每 5 秒更新"),
-    attention.length ? el("div", { class: "grid" }, attention.map(sessionCard))
+    sectionHead("需要你處理", parts.length ? `${parts.join("・")}・每 5 秒更新` : "每 5 秒更新"),
+    gates.length ? el("div", { class: "grid flow-gates" }, gates.map(flowCard)) : null,
+    attention.length || gates.length ? el("div", { class: "grid" }, attention.map(sessionCard))
       : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為在等你的 Agent" : "VBear runtime 未連線，無法判斷",
         L.runtime && L.runtime.available ? "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到 Agent 團隊查看。" : null),
   ];
@@ -1764,6 +1774,215 @@ function cleanupActiveView() {
     try { activeViewCleanup(); } catch (e) { /* ignore */ }
     activeViewCleanup = null;
   }
+}
+
+// Flows (stage 1): a board of multi-agent work. It only shows and records:
+// every event comes from a form and is labelled 「手動記錄（未驗證）」, phases
+// are derived by the server, and nothing here starts, sends or runs anything.
+const FLOW_ATTENTION = new Set(["awaiting_approval", "awaiting_merge", "awaiting_push", "review_unverified"]);
+function flowPhaseClass(key) {
+  if (key === "done") return "b-ok";
+  if (key === "review_stale" || key === "needs_fix") return "b-bad";
+  if (FLOW_ATTENTION.has(key)) return "b-warn";
+  if (key === "in_review" || key === "implementing") return "b-info";
+  return "b-mute";
+}
+function flowPhaseBadge(phase) {
+  return badge(phase.label, flowPhaseClass(phase.key), phase.reason || "");
+}
+function shortCommit(c) { return typeof c === "string" ? c.slice(0, 7) : "—"; }
+function roleText(r) {
+  return r ? [r.name, r.family_label, r.model].filter(Boolean).join("・") : "—";
+}
+const VERDICT_CLASS = { PASS: "b-ok", NEEDS_WORK: "b-warn", BLOCKED: "b-bad" };
+
+function flowCard(f) {
+  const rev = f.latest_review;
+  return el("a", { class: "card", href: `#/flows/${encodeURIComponent(f.id)}` },
+    el("div", { class: "card-top" },
+      el("div", { style: "min-width:0" },
+        el("div", { class: "card-title" }, f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title),
+        el("div", { class: "card-sub" }, f.phase.reason)),
+      flowPhaseBadge(f.phase)),
+    el("div", { class: "stat-line" },
+      el("span", null, "執行 ", el("b", null, roleText(f.roles.executor))),
+      el("span", null, "session ", el("b", null, f.executor_live.label))),
+    el("div", { class: "stat-line" },
+      el("span", null, "審查 ", el("b", null, f.roles.reviewers.map(roleText).join("、"))),
+      rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
+        rev.counts_as_pass ? "算通過" : (rev.why || "")), ` ${shortCommit(rev.commit)}`) : null),
+    f.binding ? el("div", { class: "small muted" }, f.binding.detail) : null);
+}
+
+function flowNotice() {
+  return notice("info", "這一版的流程只記錄與顯示：事件都由表單手動記錄（未驗證），階段由 VBear 依事件與即時資料推導。" +
+    "VBear 不會派工、輸入指令、執行 git 或啟動任何程式。");
+}
+
+function familyOptions(families, selected) {
+  return families.map((f) => el("option", { value: f.key, selected: f.key === selected ? "selected" : null }, f.label));
+}
+
+function roleInputs(prefix, families, role, opts = {}) {
+  const name = el("input", { type: "text", class: "input", "aria-label": `${prefix}名稱`, value: role ? role.name : "",
+    maxlength: "80", placeholder: "名稱，例如 Codex" });
+  const family = el("select", { "aria-label": `${prefix}模型家族` }, familyOptions(families, role ? role.family : "unknown"));
+  const model = el("input", { type: "text", class: "input", "aria-label": `${prefix}模型`, value: role && role.model ? role.model : "",
+    maxlength: "80", placeholder: "模型（選填）" });
+  const extra = {};
+  const fields = [el("b", null, prefix), name, family, model];
+  if (opts.executor) {
+    const sessions = ((D.live && D.live.panes) || []);
+    extra.session = el("select", { "aria-label": "執行者的 session" },
+      el("option", { value: "" }, "（不綁定 session）"),
+      sessions.map((p) => el("option", { value: p.pane_id, selected: role && role.session_id === p.pane_id ? "selected" : null },
+        `${p.pane_id}・${p.title || p.agent || "terminal"}`)));
+    extra.workdir = el("input", { type: "text", class: "input mono", "aria-label": "執行者的工作目錄",
+      value: role && role.workdir ? role.workdir : "", placeholder: "工作目錄（絕對路徑，用來核對 HEAD）" });
+    fields.push(extra.session, extra.workdir);
+  }
+  const read = () => {
+    const r = { name: name.value.trim(), family: family.value };
+    if (model.value.trim()) r.model = model.value.trim();
+    if (opts.executor) {
+      if (extra.session.value) r.session_id = extra.session.value;
+      if (extra.workdir.value.trim()) r.workdir = extra.workdir.value.trim();
+    }
+    return r;
+  };
+  return { node: el("div", { class: "flow-role-row" }, fields), read };
+}
+
+async function viewFlows() {
+  const token = seq;
+  const [data, tasksRes] = await Promise.all([loadFlows(), api.get("/api/tasks").catch(() => ({ tasks: [] })), loadLive()]);
+  const main = claim(token);
+  if (token !== seq) return;
+  const used = new Set((data.flows || []).map((f) => f.task_id));
+  const free = (tasksRes.tasks || []).filter((t) => !used.has(t.id));
+  const families = data.families || [];
+  const taskSel = el("select", { "aria-label": "任務卡" },
+    free.length ? free.map((t) => el("option", { value: t.id }, t.title)) : el("option", { value: "" }, "（沒有尚未建立流程的任務卡）"));
+  const planner = roleInputs("規劃", families, null);
+  const executor = roleInputs("執行", families, null, { executor: true });
+  const reviewerRows = [roleInputs("審查 1", families, null), roleInputs("審查 2", families, null)];
+  const submit = el("button", { class: "btn primary", type: "submit", disabled: free.length ? null : "disabled" }, "建立流程");
+  const form = el("form", { class: "flow-form", on: { submit: async (ev) => {
+    ev.preventDefault();
+    const reviewers = reviewerRows.map((r) => r.read()).filter((r) => r.name);
+    submit.disabled = true;
+    try {
+      const r = await api.post("/api/flows", { task_id: taskSel.value,
+        roles: { planner: planner.read(), executor: executor.read(), reviewers } });
+      location.hash = `#/flows/${encodeURIComponent(r.flow.id)}`;
+    } catch (e) { toast("無法建立流程：" + e.message); submit.disabled = false; }
+  } } },
+    el("label", { class: "small" }, "任務卡（一張任務卡對應一個流程）"), taskSel,
+    planner.node, executor.node, reviewerRows.map((r) => r.node),
+    el("p", { class: "small muted" }, "審查者與執行者必須是不同模型家族，審查結果才算通過；家族「其他」或「不明」也不算。"),
+    submit);
+  const list = data.flows || [];
+  setKids(main,
+    el("h1", null, "流程"),
+    el("p", { class: "lede" }, "多個 Agent 合作完成一張任務卡：誰規劃、誰執行、誰審查，進行到哪一步，等誰處理。"),
+    flowNotice(),
+    data.error ? notice("bad", "流程無法讀取：" + data.error) : null,
+    el("section", { class: "section" },
+      sectionHead("進行中的流程", `${list.length} 個`),
+      list.length ? el("div", { class: "grid" }, list.map(flowCard)) : emptyState("還沒有流程", "在下方選一張任務卡建立。")),
+    el("section", { class: "section" }, sectionHead("建立流程", null), form));
+}
+
+function flowEventBody(kind, values) {
+  // Only the fields the server accepts for this kind are sent.
+  const body = { kind, note: values.note || "" };
+  if (kind === "executor_report" || kind === "review_result") body.commit = (values.commit || "").trim().toLowerCase();
+  if (kind === "review_result") {
+    body.verdict = values.verdict;
+    body.reviewer = Number.parseInt(values.reviewer, 10);
+  }
+  return body;
+}
+
+async function viewFlowDetail(flowId) {
+  const token = seq;
+  let res;
+  try { res = await api.get(`/api/flows/${encodeURIComponent(flowId)}`); }
+  catch (e) {
+    const main = claim(token);
+    setKids(main, crumbs([["流程", "#/flows"], ["找不到"]]), notice("bad", "無法讀取這個流程：" + e.message));
+    return;
+  }
+  const meta = D.flows && D.flows.kinds ? D.flows : await loadFlows();
+  const main = claim(token);
+  if (token !== seq) return;
+  const f = res.flow;
+  const kindSel = el("select", { "aria-label": "事件種類" }, (meta.kinds || []).map((k) => el("option", { value: k.key }, k.label)));
+  const commit = el("input", { type: "text", class: "input mono", "aria-label": "commit", placeholder: "完整的 40 或 64 碼 commit", maxlength: "64" });
+  const verdict = el("select", { "aria-label": "審查結論" }, (meta.verdicts || []).map((v) => el("option", { value: v }, v)));
+  const reviewer = el("select", { "aria-label": "審查者" }, f.roles.reviewers.map((r, i) => el("option", { value: String(i) }, roleText(r))));
+  const note = el("textarea", { class: "input", "aria-label": "備註", maxlength: "2000", rows: "3", placeholder: "備註（選填）" });
+  const commitRow = el("label", { class: "small" }, "commit ", commit);
+  const reviewRow = el("div", { class: "row" }, el("label", { class: "small" }, "審查者 ", reviewer), el("label", { class: "small" }, "結論 ", verdict));
+  const syncFields = () => {
+    const k = kindSel.value;
+    commitRow.hidden = !(k === "executor_report" || k === "review_result");
+    reviewRow.hidden = k !== "review_result";
+  };
+  kindSel.addEventListener("change", syncFields);
+  syncFields();
+  const add = el("button", { class: "btn primary", type: "submit" }, "記錄事件");
+  const form = el("form", { class: "flow-form", on: { submit: async (ev) => {
+    ev.preventDefault();
+    add.disabled = true;
+    try {
+      await api.post(`/api/flows/${encodeURIComponent(f.id)}/events`, flowEventBody(kindSel.value,
+        { commit: commit.value, verdict: verdict.value, reviewer: reviewer.value, note: note.value }));
+      toast("已記錄（手動記錄，未驗證）");
+      route();
+    } catch (e) { toast("無法記錄：" + e.message); add.disabled = false; }
+  } } }, el("label", { class: "small" }, "事件 ", kindSel), commitRow, reviewRow, note,
+    el("p", { class: "small muted" }, "這筆會標示為「手動記錄（未驗證）」。VBear 只記錄，不會執行任何動作。"), add);
+
+  const rounds = f.rounds || [];
+  const roundTable = rounds.length ? el("div", { class: "table-scroll" }, el("table", { class: "flow-rounds" },
+    el("thead", null, el("tr", null, ["輪次", "回報的 commit", "審查者", "家族", "結論", "算通過", "說明"].map((h) => el("th", null, h)))),
+    el("tbody", null, rounds.flatMap((rnd) => (rnd.reviews.length ? rnd.reviews : [null]).map((rv, i) =>
+      el("tr", null,
+        el("td", null, i === 0 ? `第 ${rnd.round} 輪` : ""),
+        el("td", { class: "mono" }, i === 0 ? shortCommit(rnd.commit) : ""),
+        el("td", null, rv ? rv.reviewer : "（尚未審查）"),
+        el("td", null, rv ? (D.flows.families || []).find((x) => x.key === rv.family)?.label || rv.family : ""),
+        el("td", null, rv ? badge(rv.verdict, VERDICT_CLASS[rv.verdict] || "b-mute") : ""),
+        el("td", null, rv ? (rv.counts_as_pass ? "是" : "否") : ""),
+        el("td", { class: "small" }, rv ? rv.why : ""))))))) : emptyState("還沒有執行者回報", "執行者回報 commit 後，審查結果會依輪次列在這裡。");
+  const timeline = el("ol", { class: "flow-timeline" }, (f.events || []).map((e) => el("li", null,
+    el("div", { class: "row" }, el("b", null, e.label), badge(e.source_label, "b-mute", "由表單記錄，VBear 沒有核對"),
+      el("span", { class: "small muted" }, fmtTime(e.at))),
+    e.commit ? el("div", { class: "small mono" }, `commit ${shortCommit(e.commit)}`) : null,
+    e.verdict ? el("div", { class: "small" }, `${e.reviewer.name}：${e.verdict}`) : null,
+    e.note ? el("div", { class: "small" }, e.note) : null)));
+
+  setKids(main,
+    crumbs([["流程", "#/flows"], [f.task_missing ? f.id : f.task_title]]),
+    el("div", { class: "row", style: "justify-content:space-between" },
+      el("h1", null, f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title), flowPhaseBadge(f.phase)),
+    flowNotice(),
+    f.attention ? notice("warn", "等你處理：" + f.phase.reason) : el("p", { class: "lede" }, f.phase.reason),
+    (f.warnings || []).map((w) => notice("warn", w)),
+    f.binding ? notice(f.binding.state === "current" ? "info" : "warn", f.binding.detail) : null,
+    el("section", { class: "section" }, sectionHead("角色", null),
+      el("dl", { class: "kv small" },
+        el("dt", null, "規劃"), el("dd", null, roleText(f.roles.planner)),
+        el("dt", null, "執行"), el("dd", null, roleText(f.roles.executor)),
+        el("dt", null, "執行者 session"), el("dd", null, `${f.executor_live.label}${f.executor_live.reason ? "：" + f.executor_live.reason : ""}`),
+        el("dt", null, "工作目錄"), el("dd", { class: "mono flow-path" }, f.roles.executor.workdir || "（未設定，無法核對 HEAD）"),
+        el("dt", null, "審查"), el("dd", null, f.roles.reviewers.map(roleText).join("、")))),
+    el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
+      (f.stray_reviews || []).length ? notice("info", `另有 ${f.stray_reviews.length} 筆審查的 commit 不是最新一次回報的 commit，未列入輪次。`) : null),
+    el("section", { class: "section" }, sectionHead("時間軸", `${(f.events || []).length} 筆`),
+      (f.events || []).length ? timeline : emptyState("還沒有事件", null)),
+    el("section", { class: "section" }, sectionHead("手動記錄事件", null), form));
 }
 
 // Built-in terminals: the user's own login shell, opened from VBear. They are
@@ -4535,6 +4754,8 @@ async function route() {
     else if (top === "settings") await viewSettings();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
     else if (top === "terminals") await viewTerminals();
+    else if (top === "flows" && parts[1]) await viewFlowDetail(decodeURIComponent(parts[1]));
+    else if (top === "flows") await viewFlows();
     else setKids($main(), emptyState("找不到這個頁面", null));
   } catch (e) {
     setKids($main(), e.status === 401 ? authRequiredView() : notice("bad", "載入失敗：" + e.message));
@@ -4545,10 +4766,12 @@ async function route() {
   liveTick = null;
   if (top === "home") {
     liveTick = async () => {
-      const before = JSON.stringify(D.live.attention);
-      await loadLive();
+      const gateKey = () => JSON.stringify(((D.flows && D.flows.flows) || [])
+        .filter((f) => f.attention).map((f) => [f.id, f.phase.key]));
+      const before = JSON.stringify(D.live.attention) + gateKey();
+      await Promise.all([loadLive(), loadFlows()]);
       const box = document.getElementById("h-att-wrap");
-      if (box && JSON.stringify(D.live.attention) !== before) setKids(box, attentionSection());
+      if (box && JSON.stringify(D.live.attention) + gateKey() !== before) setKids(box, attentionSection());
     };
   }
   if (top === "team" || top === "projects") {
@@ -4633,6 +4856,8 @@ if (typeof module !== "undefined" && module.exports) {
     shellLabel,
     shellTabLabels,
     titleFailureText,
+    flowPhaseClass,
+    flowEventBody,
     cleanupActiveView,
     cleanupActiveTerminal,
     // Exported so the modal registry's two subtle invariants can be tested

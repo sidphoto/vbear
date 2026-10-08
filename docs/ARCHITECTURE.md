@@ -98,6 +98,33 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
 - **Pickup.** Every task response includes `pickup` (`closed`, `blocked`, `unclaimed`, `working`, `parked`,
   `stalled`, `unknown`), derived on the spot from the card and the live view. It is never stored.
 
+## Flows — `vbear/flows.py`
+
+Stage 1 of multi-agent support: a board, with no new capability to start, send or run anything.
+
+- **Record.** One flow per task card in `flows.json`: `roles` (planner, executor, 1–4 reviewers, each with a model
+  family from a fixed list; the executor may name a runtime session id and a work directory) and an append-only
+  `events` list. The server sets each event's `seq`, `at` (never earlier than the previous event, so a clock that
+  steps back cannot break the log's ordering) and `source` (`manual`, the only value in this stage). A review
+  event also stores the reviewer's and the executor's family as they were when it was recorded, so changing roles
+  later cannot turn an old review into a pass. Commits must be full 40- or 64-character lowercase hashes.
+- **Storage.** `vbear/jsonstore.py` holds the rules `tasks.json` established — 0600 atomic writes, one `flock` per
+  read-modify-write, refusal of non-regular files, symlinks and extra hard links, and a blocked state (marker
+  first, then quarantine) when the file does not parse or holds an entry `flows.py` could not have written. Every
+  entry is re-validated on load and again before save: event order, times (finite, in range, not going back),
+  field sets per kind, enums and lengths.
+- **Derivation.** `derive()` runs on every read and stores nothing: the phase from the events; review rounds
+  (one per executor report, holding the reviews of that commit; a review of another commit is listed apart and
+  never counts); whether a PASS counts (both families known, not `other`, and different); and, for a counted pass,
+  the executor directory's HEAD read now by `git_head`, giving `awaiting_merge` (same commit), `review_stale`
+  (moved) or `review_unverified` (no directory, or HEAD unreadable). A merge or push recorded without a counted
+  pass shows a warning. The executor's live state comes from the cached live view (`Store.live_if_ready`, which
+  never waits for a first build).
+- **API** (behind the access token): `GET /api/flows`, `GET /api/flows/<id>`, `POST /api/flows`
+  (`task_id`, `roles`), `POST /api/flows/<id>/events`, `POST /api/flows/<id>/roles`. Unknown fields are rejected
+  per event kind; `roles_changed` is written only by the roles route. Bad input → 400, unknown flow → 404, a
+  blocked store → 503.
+
 ## Profile-managed Claude launch
 
 ```

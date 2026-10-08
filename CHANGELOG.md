@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Flows board (look-only).** A new 「流程」 page records multi-agent work on a task card: planner, executor and
+  reviewers with their model families, and an append-only event log entered by hand (「手動記錄（未驗證）」). The
+  phase, review rounds and commit binding are derived on every read; a review counts as a pass only for different,
+  known families, and a pass goes out of date when the executor's directory moves off the reviewed commit. The
+  home page's 「需要你處理」 lists flow gates (approval, merge, push, a pass whose HEAD cannot be checked). Stored
+  in `flows.json` under the same fail-closed rules as `tasks.json`, now shared in `vbear/jsonstore.py`. VBear
+  starts, sends and runs nothing for a flow.
+- At phone width a long sidebar now scrolls inside the nav instead of widening every page.
+- Two timing-sensitive runtime tests no longer race under load (the abandoned-launch expiry log, and the open/close
+  round trip's hang-up grace).
+
 - **Working/waiting follows version verification.** 「驗證這個版本」 now also checks Claude Code's terminal title
   in the same interactive run (no extra model call) and records it apart from the launch-boundary result; a
   version whose title passed shows working/waiting on this Mac. A title failure leaves the launch verified and the

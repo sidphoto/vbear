@@ -827,7 +827,29 @@ async function runAllTests() {
     console.log("ok: Category 13 - Launch dialog offers title verification and shows both results");
   }
 
-  console.log("\nALL FRONTEND TESTS PASSED (13/13 categories verified)");
+  // Category 14: flows board (stage 1) - look and record only
+  {
+    const { flowPhaseClass, flowEventBody } = app;
+    assert.strictEqual(flowPhaseClass("awaiting_merge"), "b-warn");
+    assert.strictEqual(flowPhaseClass("review_stale"), "b-bad");
+    assert.strictEqual(flowPhaseClass("done"), "b-ok");
+    assert.strictEqual(flowPhaseClass("in_review"), "b-info");
+    assert.deepStrictEqual(flowEventBody("note", { commit: "a".repeat(40), verdict: "PASS", reviewer: "0", note: "n" }),
+      { kind: "note", note: "n" }, "a note sends no commit, verdict or reviewer");
+    assert.deepStrictEqual(flowEventBody("executor_report", { commit: " ABC ", note: "" }),
+      { kind: "executor_report", note: "", commit: "abc" });
+    assert.deepStrictEqual(flowEventBody("review_result", { commit: "a".repeat(40), verdict: "NEEDS_WORK", reviewer: "1" }),
+      { kind: "review_result", note: "", commit: "a".repeat(40), verdict: "NEEDS_WORK", reviewer: 1 });
+    assert(appSource.includes("VBear 不會派工、輸入指令、執行 git 或啟動任何程式"),
+      "the board says it starts, sends and runs nothing");
+    assert(appSource.includes('badge(e.source_label, "b-mute", "由表單記錄，VBear 沒有核對")'),
+      "every event shows it was recorded by hand and not checked");
+    assert(appSource.includes("const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);"),
+      "the home page lists flow gates waiting for the user");
+    console.log("ok: Category 14 - Flows board shows and records only");
+  }
+
+  console.log("\nALL FRONTEND TESTS PASSED (14/14 categories verified)");
 }
 
 runAllTests()
