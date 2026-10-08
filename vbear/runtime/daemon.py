@@ -477,6 +477,8 @@ class Daemon(daemon_stream.StreamOps):
         self._shutdown_requested = False
         self._next_prepared_sweep = time.monotonic() + PREPARED_SWEEP
         self._streams: dict = {}                  # launch id -> stream_session.StreamSession
+        self._held_leaders: list = []             # unreaped leaders of sessions given up (design 5.8)
+        self._held_next = 0.0
         self._ledger = quota.Ledger(self.base)    # design 9; rebuilt at start()
 
     # ---- lifecycle ----

@@ -110,12 +110,46 @@ class StreamCheckTests(unittest.TestCase):
             return 0
         private = self.tmp / "t"
         private.mkdir()
-        with mock.patch.object(stream_check, "_run", all_pass):
+        with mock.patch.object(stream_check, "_run", all_pass), \
+                mock.patch.object(stream_check, "remove_tree"):         # a removal that silently did nothing
             code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
                                     tmp_root=str(private))
         report = json.loads(out.read_text())
         self.assertEqual((code, report["passed"], report["checks"]["cleanup"]["pass"]), (1, False, False))
         self.assertEqual([p.name.startswith("vbp-") for p in private.iterdir()], [True])   # left, and only here
+
+    def test_the_endpoint_pin_needs_the_control_to_connect(self):
+        # Review B3: without a control connection nothing shows the project
+        # file was read, so the pin is not proven.
+        self.assertTrue(stream_check.endpoint_pinned(0, 7, True))
+        self.assertFalse(stream_check.endpoint_pinned(0, 0, True))       # control never connected
+        self.assertFalse(stream_check.endpoint_pinned(1, 7, True))       # the run itself connected
+        self.assertFalse(stream_check.endpoint_pinned(0, 7, False))
+        out = self.tmp / "report.json"
+        private = self.tmp / "t"
+        private.mkdir()
+        stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out), tmp_root=str(private))
+        pin = json.loads(out.read_text())["checks"]["endpoint_pin"]
+        self.assertEqual((pin["connections"], pin["control_connections"], pin["pass"]), (0, 0, False))
+
+    def test_a_failure_creating_the_state_still_removes_the_root(self):
+        # Review B4.
+        out = self.tmp / "report.json"
+        private = self.tmp / "t"
+        private.mkdir()
+        real = Path.mkdir
+
+        def mkdir(path, *args, **kw):
+            if path.name == "st":
+                raise OSError(28, "No space left on device")
+            return real(path, *args, **kw)
+        with mock.patch.object(Path, "mkdir", mkdir):
+            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
+                                    tmp_root=str(private))
+        report = json.loads(out.read_text())
+        self.assertEqual((code, report["passed"]), (2, False))
+        self.assertIn("No space left", report["error"])
+        self.assertEqual(os.listdir(private), [])
 
     def test_remove_tree_lists_what_it_could_not_remove(self):
         locked = self.tmp / "locked"

@@ -45,14 +45,14 @@ def main() -> int:
     ap.add_argument("--stream-report", required=True, help="the passing boundary_check --mode stream report")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    root = Path(tempfile.mkdtemp(prefix="vbe-", dir="/private/tmp"))
-    state = root / "st"
-    state.mkdir(mode=0o700)
-    os.environ["VBEAR_HOME"] = str(state)
     report = {"tool": "stream_daemon_probe", "started": time.time(), "claude": args.claude, "model": args.model,
               "cleanup_errors": []}
     from vbear.stream_check import present, remove_tree
-    try:
+    root = Path(tempfile.mkdtemp(prefix="vbe-", dir="/private/tmp"))
+    try:                    # review B4: creating the state is inside the cleanup too
+        state = root / "st"
+        state.mkdir(mode=0o700)
+        os.environ["VBEAR_HOME"] = str(state)
         report.update(_run(args, root, state, report["cleanup_errors"]))
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"

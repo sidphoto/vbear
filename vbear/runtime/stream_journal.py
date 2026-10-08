@@ -425,10 +425,13 @@ class JournalState:
         return self.cost
 
     def _close_if_needed(self, turn: Turn):
-        """After a completed turn: the reasons design 2.4 gives for taking no
-        further dispatch on this session (recomputed from facts)."""
-        c = self._consts_for(self.started["cli_version"])
-        why = closing_reasons(turn, c)
+        """After a completed turn: an invalid turn takes the session out of
+        dispatching (design 6: one failure stops the flow). One source with
+        turn_validity (part 2 review A-1): every reason it gives closes,
+        except "the identity is unknown", which only a replay without the
+        identity (flow accounting) sees; a live session always has it."""
+        why = [r for r, identity_unknown in _invalid_reasons(self, turn.dispatch_id, _report_problem)
+               if not identity_unknown]
         if why:
             self.closed_reasons.append("；".join(why))
 
@@ -475,24 +478,37 @@ def closing_reasons(turn: Turn, consts) -> list[str]:
     return why
 
 
+def _report_problem(so, dispatch_id):
+    from .. import executor_report               # design 4's schema; the same function live and on replay
+    return executor_report.problem(so, dispatch_id)
+
+
 def turn_validity(js: JournalState, dispatch_id: str, report_problem=None) -> tuple[bool, list[str]]:
     """(valid, reasons) for one dispatch, from the journal's facts only.
     ``report_problem(structured_output, dispatch_id)`` is design 4's schema
     check (executor_report.problem); checks against files come later."""
+    reasons = [r for r, _ in _invalid_reasons(js, dispatch_id, report_problem)]
+    return not reasons, reasons
+
+
+def _invalid_reasons(js: JournalState, dispatch_id: str, report_problem) -> list[tuple[str, bool]]:
+    """Every reason a turn is invalid, as (reason, only_because_the_identity_is_unknown).
+    turn_validity and the session's closing both read this list."""
     turn = js.turns.get(dispatch_id)
     if turn is None:
-        return False, ["沒有這則派工"]
-    reasons = []
+        return [("沒有這則派工", False)]
+    out = []
     c = js._consts_for(js.started["cli_version"]) if js.started else None
+    reasons = []
     if js.identity is None:
-        reasons.append("無法核對執行者身分（缺少 manifest 或接受時的資料）")
+        out.append(("無法核對執行者身分（缺少 manifest 或接受時的資料）", True))
     elif turn.init is None:
         reasons.append("沒有 init，無法核對執行者身分")
     if turn.failed is not None or turn.status != "ended" or turn.lifecycle != ["queued", "started", "completed"]:
         reasons.append("這一輪沒有完整走完")
     r = turn.result
     if r is None:
-        return False, reasons + ["沒有 result"]
+        return out + [(x, False) for x in reasons + ["沒有 result"]]
     reasons += closing_reasons(turn, c)
     if r["subtype"] != "success" or r["is_error"]:
         reasons.append(f"result 不是成功（{r['subtype']}）")
@@ -523,8 +539,9 @@ def turn_validity(js: JournalState, dispatch_id: str, report_problem=None) -> tu
             problem = report_problem(so, dispatch_id)
             if problem:
                 reasons.append(f"回報格式不符（{problem}）")
-    reasons = list(dict.fromkeys(reasons))
-    return not reasons, reasons
+    seen = {r for r, _ in out}
+    out += [(r, False) for r in dict.fromkeys(reasons) if r not in seen]
+    return out
 
 
 # --- writing and reading --------------------------------------------------------------------

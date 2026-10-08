@@ -47,6 +47,8 @@ TERM_GRACE = 2.0
 KILL_GRACE = 2.0
 OBSERVE_EVERY = 1.0
 CAPTURE_TRIES = 3
+KILL_GIVE_UP = 10.0       # after SIGKILL: still members -> manual review, the leader is kept unreaped
+TABLE_GIVE_UP = 30.0      # no process table this long after the exit -> manual review, kept unreaped
 
 
 # ---- process identity before any signal (design 2.3, 5.8; part 2 review B6) ------------
@@ -422,7 +424,8 @@ class StreamSession:
                 pass
         self.writer.close()
         self.outcome = {"launch_id": self.launch_id, "manual_review": reason,
-                        "journal_bytes": self.writer.size, "close_reason": self.close_reason or reason}
+                        "journal_bytes": self.writer.size, "close_reason": self.close_reason or reason,
+                        "leader_held": True}
         self.finished = True
 
     def _poll_exit(self, now: float) -> None:
@@ -511,12 +514,12 @@ class StreamSession:
             elif self.phase == "term" and now > self.phase_deadline:
                 self.phase, self.phase_deadline = "kill", now + KILL_GRACE
                 self._killpg(signal.SIGKILL)
-            elif self.phase == "kill" and now > self.phase_deadline + 10:
-                self._finish(manual_review="程序群組在 SIGKILL 後仍有程序存活")
+            elif self.phase == "kill" and now > self.phase_deadline + KILL_GIVE_UP:
+                self._finish(manual_review="程序群組在 SIGKILL 後仍有程序存活", reap=False)
             return
         if live is None:
-            if now > self.exit_seen + 30:
-                self._finish(manual_review="無法取得程序表，無法證明所有程序都已結束")
+            if now > self.exit_seen + TABLE_GIVE_UP:
+                self._finish(manual_review="無法取得程序表，無法證明所有程序都已結束", reap=False)
             return
         escaped = [r for r in self.descendants.live(rows) if r["pgid"] != self.pgid]
         if escaped:
@@ -524,16 +527,20 @@ class StreamSession:
             return
         self._finish(manual_review=None)
 
-    def _finish(self, *, manual_review: str | None) -> None:
-        """The group is empty (or we give up on proving it): reap the leader,
-        close our ends. The daemon then cleans up or retains the launch."""
+    def _finish(self, *, manual_review: str | None, reap: bool = True) -> None:
+        """Close our ends; the daemon then cleans up or retains the launch.
+        The leader is reaped only when its group is proven empty (``reap``;
+        design 5.8, part 2 review B-1). Otherwise it stays a zombie that the
+        daemon keeps holding (outcome leader_held), so its PID, the group
+        id, cannot be reused while a member may still live."""
         if self.finished:
             return
-        try:
-            os.waitpid(self.pid, 0)
-            self.proc.returncode = self._returncode()
-        except ChildProcessError:
-            pass
+        if reap:
+            try:
+                os.waitpid(self.pid, 0)
+                self.proc.returncode = self._returncode()
+            except ChildProcessError:
+                pass
         for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
             try:
                 f.close()
@@ -541,5 +548,6 @@ class StreamSession:
                 pass
         self.writer.close()
         self.outcome = {"launch_id": self.launch_id, "manual_review": manual_review,
-                        "journal_bytes": self.writer.size, "close_reason": self.close_reason}
+                        "journal_bytes": self.writer.size, "close_reason": self.close_reason,
+                        "leader_held": not reap}
         self.finished = True              # last: whoever sees finished sees the outcome

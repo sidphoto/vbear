@@ -95,6 +95,9 @@ for line in sys.stdin:
                          model=model, responses=responses, rep=rep)
     if mode == "no_completed":
         events = events[:-1]
+    if mode == "is_error":
+        events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
+                         model=model, subtype="error_during_execution", is_error=True)
     if mode == "huge_turn":
         # One response split into very many assistant events: the turn's
         # facts no longer fit one journal line (512 KiB / 100 000 nodes).
@@ -480,6 +483,20 @@ class RefusalTests(StreamCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["result"]["status"], "accepted")
 
+    def test_an_invalid_turn_stops_dispatching(self):
+        # Part 2 review A-1: the result says error, the lifecycle completes;
+        # the turn is invalid, so the session takes nothing more (design 6).
+        launch_id, _ = self.open("is_error")
+        d1 = self.dispatch(launch_id)
+        t = self.wait_for(lambda: (x := self.turn_status(launch_id, d1)) and x["status"] == "ended" and x,
+                          msg="turn ended")
+        self.assertFalse(t["valid"])
+        self.assertEqual(self.status(launch_id)["state"], "idle")
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=fx.new_uuid(),
+                     text="下一則", approval={"kind": "preview", "id": "p"})
+        self.assertFalse(r["ok"])
+        self.assertIn("不再接受派工", r["error"]["message"])
+
     def test_dispatch_limit_counts_prepares(self):
         self.accept(max_dispatches=1)
         launch_id, _ = self.open()
@@ -775,6 +792,50 @@ class ProcessTests(StreamCase):
         self.rpc("stream_close", launch_id=launch_id)
         self.wait_for(lambda: launch_id not in self.dm._streams, msg="ended")
         self.assertEqual(seen["state"], "ended")
+
+    def unproven_group(self, group_members):
+        """Review B-1: the leader exits, but the group cannot be proven
+        empty; the leader must not be reaped until it is."""
+        import vbear.runtime.daemon_stream as ds
+        launch_id, _ = self.open()
+        pid = self.launched()["pid"]
+        reaped = []
+        real_waitpid = os.waitpid
+
+        def waitpid(p, opts):
+            reaped.append(p)
+            return real_waitpid(p, opts)
+        with mock.patch.object(stream_session.StreamSession, "_group_members", group_members), \
+                mock.patch.object(stream_session, "KILL_GIVE_UP", 0.2), \
+                mock.patch.object(stream_session, "TABLE_GIVE_UP", 0.2), \
+                mock.patch.object(stream_session, "TERM_GRACE", 0.2), \
+                mock.patch.object(stream_session, "KILL_GRACE", 0.2), \
+                mock.patch.object(ds, "HELD_RECHECK", 3600.0), \
+                mock.patch.object(stream_session.os, "waitpid", waitpid):
+            self.rpc("stream_close", launch_id=launch_id)
+            self.wait_for(lambda: launch_id not in self.dm._streams, msg="given up")
+            self.assertNotIn(pid, reaped)
+        m = self.manifest(launch_id)
+        self.assertEqual(m["state"], "manual_review")
+        self.assertTrue(stream_session.leader_exited(pid))                   # a zombie, still our child
+        self.assertIn(pid, [h["pid"] for h in self.dm._held_leaders])
+        # later the group is proven empty: only then is the leader reaped
+        self.dm._held_next = 0.0
+        self.wait_for(lambda: pid not in [h["pid"] for h in self.dm._held_leaders], msg="reaped later")
+        self.assertFalse(stream_session.leader_exited(pid))                  # gone: reaped
+        return m
+
+    def test_members_alive_after_sigkill_keep_the_leader_unreaped(self):
+        fake = {"pid": 2, "ppid": 1, "pgid": 0, "uid": os.getuid(), "stat": "R", "start": "1.000000"}
+
+        def members(s):
+            return [dict(fake, pgid=s.pgid)], []
+        m = self.unproven_group(members)
+        self.assertIn("SIGKILL 後仍有程序存活", m["retained_reason"])
+
+    def test_no_process_table_keeps_the_leader_unreaped(self):
+        m = self.unproven_group(lambda s: (None, None))
+        self.assertIn("無法取得程序表", m["retained_reason"])
 
     def test_existing_managed_sessions_are_unchanged(self):
         """A PTY-managed Claude launch next to a stream session behaves as
@@ -1300,6 +1361,69 @@ class LedgerTests(StreamCase):
             stack.enter_context(mock.patch.object(sj.os, "fsync", fsync))
             return stack
         self.journal_failure(fail)
+
+    # ---- review B-2: the manifest's temp file and a start record whose fsync failed
+
+    def failed_open(self, *patches):
+        led = self.dm._ledger
+        m = self.prepare()
+        before = led.used
+        for p in patches:
+            p.start()
+        try:
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertFalse(r["ok"])
+        self.assertNotIn(f"session:{m['launch_id']}", led.reservations)
+        return m, led.used - before
+
+    def test_a_manifest_temp_file_left_by_a_failed_rewrite_is_counted(self):
+        real = a._write_private
+
+        def write_private(path, text, *, replace=False):
+            if replace and path.name == a.MANIFEST and '"launching"' in text:
+                tmp = path.with_name(path.name + ".tmp")
+                tmp.write_text(text)
+                tmp.chmod(0o600)
+                raise OSError(5, "Input/output error")                    # the fsync of the temp file failed
+            return real(path, text, replace=replace)
+        m, added = self.failed_open(mock.patch.object(a, "_write_private", write_private))
+        tmp = self.base / "sessions" / m["launch_id"] / (a.MANIFEST + ".tmp")
+        self.assertTrue(tmp.exists())
+        self.assertEqual(added, tmp.stat().st_size)
+
+    def test_a_start_record_whose_sync_failed_is_removed_or_counted(self):
+        from vbear.runtime import pipeline_store as ps
+        started = self.base / "pipelines" / self.tid / "started.json"
+        real_sync = ps._fsync_dir
+        calls = []
+
+        def sync_fails_once(fd):
+            calls.append(fd)
+            if len(calls) == 1:
+                raise ps.StoreRefused("sync")                               # the record landed, its sync failed
+            return real_sync(fd)
+        m, added = self.failed_open(mock.patch.object(ps, "_fsync_dir", sync_fails_once))
+        self.assertFalse(started.exists())                                   # ours, so removed exactly
+        self.assertEqual(added, 0)
+        calls.clear()
+        m, added = self.failed_open(mock.patch.object(ps, "_fsync_dir", sync_fails_once),
+                                    mock.patch.object(ps.Pipeline, "remove_start",
+                                                      side_effect=ps.StoreRefused("unlink")))
+        self.assertTrue(started.exists())
+        self.assertEqual(json.loads(started.read_text())["launch_id"], m["launch_id"])
+        self.assertEqual(added, started.stat().st_size)                     # left on disk: counted
+        started.unlink()
+
+    def test_an_unmeasurable_start_record_counts_the_reservation(self):
+        from vbear.runtime import pipeline_store as ps, quota
+        m, added = self.failed_open(mock.patch.object(ps, "_fsync_dir", side_effect=ps.StoreRefused("sync")),
+                                    mock.patch.object(ps.Pipeline, "start_record_bytes",
+                                                      side_effect=OSError(5, "Input/output error")))
+        self.assertEqual(added, quota.RESERVE_SESSION)
+        self.assertTrue(self.dm._ledger.overrun)
 
     def test_full_ledger_refuses(self):
         self.dm._ledger.limit = self.dm._ledger.used + 1024

@@ -187,10 +187,9 @@ class HappyPathTests(unittest.TestCase):
                                    [{"type": "tool_use", "id": "toolu_b_so", "name": "StructuredOutput",
                                      "input": fx.report("PLACEHOLDER")}]])
         self.assertFalse(h.validity(d2)[0])                         # the placeholder dispatch id is wrong
-        d3 = h.run_turn(rep=None)
-        self.assertTrue(h.validity(d3)[0])
-        self.assertEqual(h.js.result_index, 2)
-        self.assertEqual(h.js.responses, 1 + 2 + 1)
+        self.assertEqual(h.js.result_index, 1)
+        self.assertEqual(h.js.responses, 1 + 2)
+        self.assertTrue(h.js.closed_reasons)                         # an invalid turn stops dispatching (A-1)
 
     def later_cases(self, change, *, first=False):
         """One turn whose later (or first) assistant events get ``change``;
@@ -374,26 +373,47 @@ class ProtocolErrorTests(unittest.TestCase):
 class InvalidTurnTests(unittest.TestCase):
     """The turn completes; validity says no, with a reason."""
 
-    def invalid(self, closes=False, **kw):
-        h = Harness()
-        d = h.run_turn(**kw)
+    def invalid(self, h=None, d=None, **kw):
+        """A completed turn turn_validity calls invalid: it closes the
+        session, and the next dispatch is refused (part 2 review A-1,
+        design 6: one failure stops the flow)."""
+        h = h or Harness()
+        d = d or h.run_turn(**kw)
         ok, reasons = h.validity(d)
         self.assertFalse(ok)
         self.assertTrue(reasons)
-        self.assertEqual(bool(h.js.closed_reasons), closes, reasons)
+        self.assertEqual(h.js.state, "idle")                          # it did complete
+        self.assertTrue(h.js.closed_reasons, reasons)
+        with self.assertRaises(sj.JournalCorrupt):
+            h.record("dispatch_accepted", {"dispatch_id": fx.new_uuid(), "text_sha256": "b" * 64, "length": 1,
+                                           "approval": {"kind": "preview", "id": "p"}})
         return reasons
 
     def test_cases(self):
-        so = lambda d: fx.report(d)
-        self.invalid(subtype="error_max_budget_usd", is_error=True)
-        self.invalid(is_error=True)
-        self.invalid(responses=[[{"type": "thinking", "thinking": "."}]])                     # no StructuredOutput
-        self.invalid(structured_is_error=True)
-        self.invalid(structured_result="Structured output failed")
-        self.invalid(structured_output={"other": 1})
-        self.invalid(structured_output=None)
-        self.invalid(closes=True, num_turns=5)                                                  # CLI count differs
-        self.invalid(rep={"v": 1})                                                              # schema v1 fails
+        table = {
+            "result not success": dict(subtype="error_max_budget_usd", is_error=True),
+            "result is_error": dict(is_error=True),
+            "no StructuredOutput": dict(responses=[[{"type": "thinking", "thinking": "."}]]),
+            "StructuredOutput is_error": dict(structured_is_error=True),
+            "StructuredOutput failed": dict(structured_result="Structured output failed"),
+            "structured_output differs": dict(structured_output={"other": 1}),
+            "no structured_output": dict(structured_output=None),
+            "num_turns differs": dict(num_turns=5),
+            "report schema fails": dict(rep={"v": 1}),
+        }
+        for name, kw in table.items():
+            with self.subTest(reason=name):
+                self.invalid(**kw)
+        with self.subTest(reason="init shows another model"):
+            h = Harness(identity={**IDENTITY, "model_id": "claude-other-1"})
+            self.assertIn("init 的模型不是這次啟動與接受時的模型", self.invalid(h))
+        with self.subTest(reason="an unknown event field"):
+            h = Harness()
+            d, text = h.dispatch()
+            events = fx.turn(h.sid, d, text, cwd=CWD, prefix="x")
+            events[3]["surprise"] = 1                                     # thinking_tokens with an extra field
+            h.feed(events)
+            self.assertIn("出現未知種類或多餘欄位", self.invalid(h, d))
 
     def test_tool_without_result(self):
         h = Harness()
@@ -404,9 +424,7 @@ class InvalidTurnTests(unittest.TestCase):
         dangling["message"]["content"] = [{"type": "tool_use", "id": "dangling", "name": "Bash", "input": {}}]
         events.insert(8, dangling)
         h.feed(events)
-        ok, reasons = h.validity(d)
-        self.assertFalse(ok)
-        self.assertIn("有工具呼叫沒有結果", reasons)
+        self.assertIn("有工具呼叫沒有結果", self.invalid(h, d))
 
     def test_disallowed_tool_closes_the_session(self):
         h = Harness()

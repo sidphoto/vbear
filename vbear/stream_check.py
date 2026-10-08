@@ -110,6 +110,14 @@ def present(path) -> bool:
     return True
 
 
+def endpoint_pinned(connections: int, control_connections: int, protocol_ok: bool) -> bool:
+    """Review B3: the pin holds only when the run made no connection to the
+    project file's endpoint and the control, the same project file without
+    VBear's env block, did connect: otherwise nothing shows the project
+    file was read at all."""
+    return protocol_ok and connections == 0 and control_connections >= 1
+
+
 def remove_tree(path, errors: list) -> None:
     """Delete a temporary tree, never ignoring an error (review B5): what
     could not be removed is listed, and the run cannot pass."""
@@ -134,7 +142,15 @@ def run(binary: str, version: str, model: str, out: str | None, *, tmp_root: str
         return finish(report, out, 2)
     root = Path(tempfile.mkdtemp(prefix="vbp-", dir=tmp_root))
     report["cleanup_errors"] = []
-    code = _run(binary, version, model, consts, root, report)
+    try:                    # review B4: every step after the root exists is inside the cleanup
+        code = _run(binary, version, model, consts, root, report)
+    except Exception as exc:
+        report["error"] = f"{type(exc).__name__}: {exc}"[:500]
+        report["passed"] = False
+        code = 2
+    finally:
+        if present(root):
+            remove_tree(root, report["cleanup_errors"])
     # The temporary state (HMAC key, journal) is gone before the report is
     # written; a failed or incomplete removal fails the run (review B5).
     report["temp_removed"] = not present(root)
@@ -354,7 +370,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         sandbox["no_files_outside"] = {"leaks": leaks, "pass": not leaks}
         sandbox["listeners_untouched"] = {"accepted": dict(listeners.accepted), "pass": not any(listeners.accepted.values())}
         report["checks"]["sandbox"] = {"pass": all(v["pass"] for v in sandbox.values()), "detail": sandbox}
-        pinned = {"pass": endpoint.accepted == 0 and protocol["pass"], "connections": endpoint.accepted}
+        pinned = {"connections": endpoint.accepted}
         # Control: same project file, no VBear env block; its endpoint is the
         # listener, so no request reaches Anthropic.
         before = endpoint.accepted
@@ -368,6 +384,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
             pass
         pinned["control_connections"] = endpoint.accepted - before
         pinned["control_shows_project_file_is_read"] = endpoint.accepted - before > 0
+        pinned["pass"] = endpoint_pinned(pinned["connections"], pinned["control_connections"], protocol["pass"])
         report["checks"]["endpoint_pin"] = pinned
         for p in (home_probe, shared_probe):
             try:

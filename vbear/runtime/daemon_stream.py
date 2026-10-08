@@ -42,6 +42,9 @@ def _err(rid, code: str, message: str) -> dict:
     return {"v": 1, "id": rid, "ok": False, "error": {"code": code, "message": message}}
 
 
+HELD_RECHECK = 5.0
+
+
 class _SetupFailed(Exception):
     pass
 
@@ -92,6 +95,7 @@ class StreamOps:
         key = f"session:{launch_id}"
         reserved = launching = False
         started_here = None                   # the start record, when this open wrote it
+        start_mine = False                    # this open may have written a start record (review B-2)
         manifest_before = start_bytes = 0     # for what this session adds to the quota (B4)
         m = None
         try:
@@ -139,6 +143,7 @@ class StreamOps:
             manifest_before = self._manifest_bytes(m)
             with pipeline_store.Pipeline(self.base, m["task_id"], create=True) as p:
                 if p.started_at(m["pipeline_id"]) is None:
+                    start_mine = True             # from here a start record on disk may be this open's
                     started_here = p.record_start(m["pipeline_id"], now, launch_id=launch_id)
                     start_bytes = p.start_record_bytes()
             agent_sessions.update_manifest(self.base, launch_id, state="launching",
@@ -151,10 +156,9 @@ class StreamOps:
                 # Marked launching, but no journal and no process yet: do not
                 # leave it so (the flow's totals would refuse until recovery).
                 agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
-            undone = self._undo_start(m, started_here)
+            left = self._undo_start(m, start_mine)
             if reserved:
-                self._ledger.release(key, self._session_bytes(m, manifest_before, 0 if undone else start_bytes)
-                                     if m is not None else 0)
+                self._ledger.release(key, self._session_bytes(m, manifest_before, left) if m is not None else 0)
             if isinstance(exc, OSError):
                 return _err(rid, "refused", f"launch 狀態無法驗證：{exc}")
             code = getattr(exc, "code", "refused")
@@ -170,8 +174,8 @@ class StreamOps:
         except (OSError, stream_journal.JournalCorrupt) as exc:
             # No process was started: clean up what this launch left.
             agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
-            undone = self._undo_start(m, started_here)
-            self._ledger.release(key, self._session_bytes(m, manifest_before, 0 if undone else start_bytes))
+            left = self._undo_start(m, start_mine)
+            self._ledger.release(key, self._session_bytes(m, manifest_before, left))
             return _err(rid, "internal", f"日誌無法建立：{exc}")
         try:
             writer.append("session_started", {
@@ -256,6 +260,7 @@ class StreamOps:
             agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
         else:
             agent_sessions._retain(self.base, launch_id, f"啟動後初始化失敗（{why}）；{problem}")
+            self._hold_leader(proc, launch_id)                 # not proven: never reaped here
         self._ledger.release(key, self._session_bytes(m, manifest_before, start_bytes))
         self._streams.pop(launch_id, None)
         return _err(rid, "internal", f"啟動後初始化失敗：{why}")
@@ -270,12 +275,17 @@ class StreamOps:
 
     @staticmethod
     def _manifest_bytes(m: dict) -> int:
-        try:
-            return os.lstat(os.path.join(m["launch_dir"]["path"], agent_sessions.MANIFEST)).st_size
-        except FileNotFoundError:
-            return 0
+        """The manifest and its sibling temp file (a failed atomic rewrite
+        leaves manifest.json.tmp behind; the quota scan counts it: review B-2)."""
+        total = 0
+        for name in (agent_sessions.MANIFEST, agent_sessions.MANIFEST + ".tmp"):
+            try:
+                total += os.lstat(os.path.join(m["launch_dir"]["path"], name)).st_size
+            except FileNotFoundError:
+                pass
+        return total
 
-    def _session_bytes(self, m: dict, manifest_before: int, start_bytes: int) -> int | None:
+    def _session_bytes(self, m: dict, manifest_before: int, start_bytes: int | None) -> int | None:
         """What one stream session added to the protected data (review B4),
         as measured on disk (review B-1: never the writer's own count, which
         misses a short write or a failed fsync): its journal, its
@@ -291,21 +301,32 @@ class StreamOps:
         except OSError as exc:
             self._log(f"{m.get('launch_id')}: bytes on disk cannot be measured ({exc})")
             return None
+        if start_bytes is None:
+            return None
         return journal + grown + start_bytes
 
-    def _undo_start(self, m: dict | None, started_here: float | None) -> bool:
+    def _undo_start(self, m: dict | None, start_mine: bool) -> int | None:
         """A failed first open leaves no start record behind: otherwise the
         flow would have a start but no session journal, which refuses every
-        later count (stream_flow). Only before any journal was written."""
-        if started_here is None or m is None:
-            return True
+        later count (stream_flow). Only before any journal was written.
+        Review B-2: record_start can fail after its file landed (an fsync),
+        so what is on disk decides, not whether record_start returned: a
+        record naming this launch is removed exactly. Returns the bytes this
+        open leaves in the start record, None when they cannot be measured."""
+        if not start_mine or m is None:
+            return 0
         try:
             with pipeline_store.Pipeline(self.base, m["task_id"], create=False) as p:
-                p.remove_start(m["pipeline_id"], started_here, launch_id=m["launch_id"])
-            return True
+                try:
+                    rec = p.start_record()
+                    if rec is not None and rec["launch_id"] == m["launch_id"]:
+                        p.remove_start(m["pipeline_id"], rec["started_at"], launch_id=m["launch_id"])
+                except pipeline_store.StoreRefused as exc:
+                    self._log(f"cannot undo the flow's start record: {exc}")
+                return p.start_record_bytes()
         except (OSError, pipeline_store.StoreRefused) as exc:
-            self._log(f"cannot undo the flow's start record: {exc}")
-            return False
+            self._log(f"the flow's start record cannot be measured: {exc}")
+            return None
 
     # ---- dispatch ----------------------------------------------------------------------
 
@@ -580,7 +601,37 @@ class StreamOps:
         elif s.on_writable(now):
             self._unregister_stream(s, "stdin")
 
+    def _hold_leader(self, proc, launch_id: str) -> None:
+        """Keep the Popen object of a leader that may not be reaped (a
+        dropped one would be reaped by the subprocess module)."""
+        self._held_leaders.append({"proc": proc, "pid": proc.pid, "launch_id": launch_id})
+        self._log(f"{launch_id}: leader {proc.pid} kept unreaped until its group is proven empty")
+
+    def _recheck_held(self, now: float) -> None:
+        """Reap a held leader once it has exited and its group is proven
+        empty; until then (and at daemon exit) it stays as it is."""
+        if not self._held_leaders or now < self._held_next:
+            return
+        self._held_next = now + HELD_RECHECK
+        try:
+            rows = proctrack.process_table()
+        except proctrack.ProcessTableUnavailable:
+            return
+        for h in list(self._held_leaders):
+            pid = h["pid"]
+            if not stream_session.leader_exited(pid):
+                continue
+            if any(r["pgid"] == pid and "Z" not in r["stat"] for r in rows):
+                continue
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+            self._held_leaders.remove(h)
+            self._log(f"{h['launch_id']}: group of leader {pid} proven empty, leader reaped")
+
     def _stream_tick(self, now: float) -> None:
+        self._recheck_held(now)
         for s in list(self._streams.values()):
             s.tick(now)
             if s.writing is None:
@@ -600,7 +651,8 @@ class StreamOps:
         # "running" on disk (a crash in between is recovered like any other).
         # A finished session always has an outcome; if not, nothing proves
         # it ended cleanly, so it is kept for a person, not cleaned up.
-        outcome = s.outcome if isinstance(s.outcome, dict) else {"manual_review": "session 結束時沒有留下結果"}
+        outcome = s.outcome if isinstance(s.outcome, dict) else {"manual_review": "session 結束時沒有留下結果",
+                                                                                  "leader_held": True}
         if s.journal_broken and not outcome.get("manual_review"):
             # The journal stops mid-session: what it shows is not how the
             # session ended. Keep everything for a person to look at.
@@ -611,6 +663,8 @@ class StreamOps:
         else:
             result = agent_sessions.cleanup_launch(self.base, s.launch_id, proven_dead=True)
             self._log(f"{s.sid}: stream session ended ({'cleaned' if result.get('cleaned') else result})")
+        if outcome.get("leader_held"):
+            self._hold_leader(s.proc, s.launch_id)
         manifest_before, start_bytes = getattr(s, "quota_base", (0, 0))
         self._ledger.release(f"session:{s.launch_id}",
                              self._session_bytes(s.manifest, manifest_before, start_bytes))
