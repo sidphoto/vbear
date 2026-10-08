@@ -849,12 +849,38 @@ async function runAllTests() {
     assert.strictEqual(flowBindingNote({ phase: { reason: "等你合併" }, binding: { detail: "只比對 commit" } }), "只比對 commit");
     assert.strictEqual(flowBindingNote({ phase: { reason: "x" }, binding: null }), "");
     assert(!appSource.includes("f.binding ? notice("), "the detail page no longer repeats the binding as its own notice");
-    assert(/await loadLive\(\);\s+\/\/ first: \/api\/flows only reads the live cache\s+let res;/.test(appSource),
-      "the flow detail loads /api/live before the flow");
     assert(appSource.includes('badge(e.source_label, "b-mute", "由表單記錄，VBear 沒有核對")'),
       "every event shows it was recorded by hand and not checked");
     assert(appSource.includes("const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);"),
       "the home page lists flow gates waiting for the user");
+    // Live state: shown as current only when fresh, never after this page's own load failed (Codex S1 r2).
+    const { flowLiveText, api } = app;
+    const fresh = { label: "工作中", reason: "標題顯示工作中", freshness: { state: "fresh", age_s: 3 } };
+    assert.deepStrictEqual(flowLiveText(fresh, ""), { label: "工作中", reason: "標題顯示工作中・即時狀態 3 秒前" });
+    assert.strictEqual(flowLiveText(fresh, "10 秒沒有回應，已停止等待").label, "即時狀態未載入",
+      "a failed or timed-out /api/live load hides the cached state");
+    const staleLive = { label: "即時狀態已過期", reason: "即時資料是 90 秒前的，已超過 30 秒，不代表現在；當時是「工作中」",
+      freshness: { state: "stale", age_s: 90 } };
+    assert.strictEqual(flowLiveText(staleLive, "").label, "即時狀態已過期");
+    assert(!flowLiveText(staleLive, "").reason.includes("即時狀態 90 秒前"), "no age line presented as current for a stale view");
+    for (const bad of [NaN, -1, 1.5, "3", null, Infinity]) {
+      const r = flowLiveText({ label: "工作中", reason: "", freshness: { state: "fresh", age_s: bad } }, "");
+      assert.strictEqual(r.reason, "", `no age shown for age_s=${String(bad)}`);
+    }
+    assert.deepStrictEqual(flowLiveText(null, ""), { label: "狀態未知", reason: "" });
+    // A hung /api/live gives up after the timeout instead of blocking the page.
+    const realFetch = global.fetch;
+    global.fetch = (url, opts) => new Promise((resolve, reject) => {
+      opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    });
+    const t0 = Date.now();
+    await assert.rejects(api.get("/api/live", { timeoutMs: 60 }), (e) => e.timeout === true && /沒有回應/.test(e.message));
+    assert(Date.now() - t0 < 2000, "the timeout fires");
+    global.fetch = realFetch;
+    assert(appSource.includes("await loadLive(false, FLOW_LIVE_TIMEOUT_MS);   // first: /api/flows only reads the live cache\n  let res;"),
+      "the flow detail bounds its wait for /api/live");
+    assert(appSource.includes("await loadLive(false, FLOW_LIVE_TIMEOUT_MS);   // first: /api/flows only reads the live cache\n  const [data, tasksRes]"),
+      "the flows list bounds its wait for /api/live");
     console.log("ok: Category 14 - Flows board shows and records only");
   }
 

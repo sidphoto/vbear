@@ -35,7 +35,7 @@ import time
 from typing import Any, Callable
 
 from . import git_head
-from .activity import MAX_EPOCH_S
+from .activity import CLOCK_SKEW_S, MAX_EPOCH_S
 from .jsonstore import GuardedJsonStore, StoreError
 from .numbers import finite_real
 from .tasks import VALID_ID_RE as TASK_ID_RE
@@ -72,6 +72,14 @@ MAX_REVIEWERS = 4
 MAX_NAME = 80
 MAX_NOTE = 2000
 MAX_PATH = 1024
+# How old the console's cached live view may be before session states in it
+# stop being shown as current. The flows pages load /api/live (cached for at
+# most index.LIVE_TTL_S = 3 s) right before reading flows, and the home page
+# refreshes every 5 s, so a healthy view is a few seconds old even after a
+# slow build. One older than this means the last refresh failed or nothing
+# refreshed for that long, while an Agent's working/waiting state changes in
+# seconds.
+LIVE_STALE_S = 30.0
 
 _BASE_EVENT_KEYS = frozenset({"seq", "at", "kind", "source", "note"})
 _STORED_KIND_KEYS = {
@@ -466,19 +474,65 @@ def _role_view(role: dict) -> dict:
     return {**role, "family_label": FAMILY_LABELS.get(role.get("family"), "不明")}
 
 
+_LIVE_LABELS = {"working": "工作中", "waiting": "等你回覆", "needs-input": "需要你處理",
+                "exited": "已結束", "unknown": "狀態未知"}
+
+
+def live_freshness(live, now) -> dict:
+    """How old the cached live view is. Its time is checked like any time
+    this module did not just take: finite and in range, not ahead of now by
+    more than the clock-skew allowance; within it, a clock that stepped back
+    reads as age 0."""
+    if live is None:
+        return {"state": "missing", "generated_at": None, "age_s": None, "detail": "主控台還沒有即時資料"}
+    now_t = _epoch(now)
+    gen = _epoch(live.get("generated_at")) if isinstance(live, dict) else None
+    if now_t is None or gen is None:
+        return {"state": "invalid", "generated_at": None, "age_s": None, "detail": "即時資料沒有可用的產生時間"}
+    if gen > now_t + CLOCK_SKEW_S:
+        return {"state": "invalid", "generated_at": None, "age_s": None,
+                "detail": "即時資料的產生時間比現在還晚，無法判斷新舊"}
+    age = int(max(0.0, now_t - gen))          # both bounded by MAX_EPOCH_S: no overflow
+    state = "stale" if age > LIVE_STALE_S else "fresh"
+    detail = f"即時資料是 {age} 秒前的" + ("，已超過 {:g} 秒，不代表現在".format(LIVE_STALE_S) if state == "stale" else "")
+    return {"state": state, "generated_at": gen, "age_s": age, "detail": detail}
+
+
+def executor_live(session_id, live, now) -> dict:
+    """The executor session's state from the cached live view, never shown
+    as current unless the view is fresh and the runtime answered."""
+    if not session_id:
+        return {"state": "unbound", "label": "未綁定 session", "reason": "沒有設定執行者的 session", "freshness": None}
+    fresh = live_freshness(live, now)
+    if fresh["state"] == "missing":
+        return {"state": "not_loaded", "label": "即時狀態未載入", "reason": fresh["detail"], "freshness": fresh}
+    if fresh["state"] == "invalid":
+        return {"state": "unknown", "label": "即時狀態時間不明", "reason": fresh["detail"], "freshness": fresh}
+    runtime = live.get("runtime") if isinstance(live.get("runtime"), dict) else {}
+    sessions = [x for x in live.get("sessions") or () if isinstance(x, dict)] \
+        if isinstance(live.get("sessions"), list) else []
+    panes = [x for x in live.get("panes") or () if isinstance(x, dict)] if isinstance(live.get("panes"), list) else []
+    match = next((x for x in sessions if x.get("terminal_id") == session_id), None)
+    if runtime.get("available") is not True:
+        label, state, reason = "runtime 未連線", "unknown", "無法判斷 session 狀態"
+    elif match is not None:
+        state = match.get("status") if match.get("status") in _LIVE_LABELS else "unknown"
+        act = match.get("activity") if isinstance(match.get("activity"), dict) else {}
+        label, reason = _LIVE_LABELS[state], act.get("reason") if isinstance(act.get("reason"), str) else ""
+    elif any(p.get("pane_id") == session_id for p in panes):
+        label, state, reason = "狀態未知", "unknown", "不是 Agent session"
+    else:
+        label, state, reason = "找不到 session", "missing", "這個 session 不在終端機清單（可能已結束）"
+    if fresh["state"] == "stale":
+        return {"state": "stale", "label": "即時狀態已過期",
+                "reason": f"{fresh['detail']}；當時是「{label}」", "freshness": fresh}
+    return {"state": state, "label": label, "reason": reason, "freshness": fresh}
+
+
 def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str], str | None],
-         live_session: Callable[[str], dict | None]) -> dict:
+         live: dict | None, now: float) -> dict:
     derived = derive(flow, heads)
     roles = flow["roles"]
-    sid = roles["executor"].get("session_id")
-    live = live_session(sid) if sid else None
-    if not sid:
-        executor_live = {"state": "unbound", "label": "未綁定 session", "reason": "沒有設定執行者的 session"}
-    elif live is None:
-        executor_live = {"state": "missing", "label": "找不到 session", "reason": "這個 session 不在目前的終端機清單（可能已結束）"}
-    else:
-        executor_live = {"state": live.get("display") or "unknown", "label": live.get("label") or "狀態未知",
-                         "reason": live.get("reason") or ""}
     title = task_title(flow["task_id"])
     return {
         "id": flow["id"], "task_id": flow["task_id"], "task_title": title, "task_missing": title is None,
@@ -487,7 +541,7 @@ def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str]
                   "reviewers": [_role_view(r) for r in roles["reviewers"]]},
         **derived,
         "latest_review": next((r for rnd in reversed(derived["rounds"]) for r in reversed(rnd["reviews"])), None),
-        "executor_live": executor_live,
+        "executor_live": executor_live(roles["executor"].get("session_id"), live, now),
         "events": [{**e, "label": KIND_LABELS[e["kind"]], "source_label": MANUAL_LABEL} for e in flow["events"]],
     }
 

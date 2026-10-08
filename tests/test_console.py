@@ -759,11 +759,14 @@ class SizeAndSpeedTests(_HostileBase):  # L1
     def test_many_list_items_parse_in_linear_time(self):
         import time
         text = "items:\n" + "".join(f"  - key{i}: v\n    other: x\n" for i in range(40000))
-        started = time.time()
+        # CPU time of this thread, not wall time: other processes competing for
+        # the machine cannot push it over the budget, a quadratic parser still
+        # would (linear is about 0.6 s here).
+        started = time.thread_time()
         data, warnings = frontmatter.parse(text)
         self.assertEqual(len(data["items"]), 40000)
         self.assertEqual(data["items"][7], {"key7": "v", "other": "x"})
-        self.assertLess(time.time() - started, 3.0)
+        self.assertLess(time.thread_time() - started, 3.0)
 
 
 class RedactionTests(_HostileBase):  # M2

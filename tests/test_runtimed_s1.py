@@ -194,7 +194,10 @@ class LifecycleTests(SessionCase):
         done.set()
         t.join()
         self.assertGreater(len(samples), 50)
-        self.assertLess(max(samples[1:]), 0.2, "other session stalled during close")
+        # A close that blocked the daemon loop would stall the other session for
+        # at least a grace period (HUP_GRACE, 1 s); half of it separates that
+        # from a busy machine's scheduling delay (0.27 s seen under load).
+        self.assertLess(max(samples[1:]), d.HUP_GRACE / 2, "other session stalled during close")
         self.rpc("close", session_id=busy)
 
     def test_double_close_both_answered_then_not_found(self):

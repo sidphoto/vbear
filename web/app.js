@@ -625,17 +625,34 @@ function createInputBatcher(sendFn, options = {}) {
 }
 
 const api = {
-  async get(path) {
-    // The custom header lets the server tell its own page from a cross-site request.
-    const res = await fetch(path, { headers: { Accept: "application/json", "X-VBear": "1" } });
-    const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    if (res.status === 401 && data.code === "auth_required") authLost();
-    if (!res.ok) {
-      const error = new Error(data.error || `HTTP ${res.status}`);
-      error.status = res.status;
-      throw error;
+  // opts.timeoutMs: give up after that long (the request is aborted) and
+  // throw an error with .timeout set, instead of waiting forever.
+  async get(path, opts = {}) {
+    const ctl = opts.timeoutMs ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), opts.timeoutMs) : null;
+    const timedOut = () => {
+      const error = new Error(`${Math.round(opts.timeoutMs / 1000)} 秒沒有回應，已停止等待`);
+      error.timeout = true;
+      return error;
+    };
+    try {
+      // The custom header lets the server tell its own page from a cross-site request.
+      const res = await fetch(path, { headers: { Accept: "application/json", "X-VBear": "1" }, signal: ctl ? ctl.signal : undefined });
+      const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      if (ctl && ctl.signal.aborted) throw timedOut();
+      if (res.status === 401 && data.code === "auth_required") authLost();
+      if (!res.ok) {
+        const error = new Error(data.error || `HTTP ${res.status}`);
+        error.status = res.status;
+        throw error;
+      }
+      return data;
+    } catch (e) {
+      if (ctl && ctl.signal.aborted && !e.timeout) throw timedOut();
+      throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    return data;
   },
   async post(path, body) {
     const res = await fetch(path, {
@@ -815,8 +832,8 @@ async function loadFlows() {
   return D.flows;
 }
 
-async function loadLive(force) {
-  try { D.live = await api.get("/api/live" + (force ? "?force=1" : "")); }
+async function loadLive(force, timeoutMs) {
+  try { D.live = await api.get("/api/live" + (force ? "?force=1" : ""), { timeoutMs }); }
   catch (e) { D.live = { error: e.message, sessions: [], projects: [], attention: [], usage: { sessions: [] }, runtime: { available: false, problems: [e.message] } }; }
   return D.live;
 }
@@ -1780,6 +1797,10 @@ function cleanupActiveView() {
 // Flows (stage 1): a board of multi-agent work. It only shows and records:
 // every event comes from a form and is labelled 「手動記錄（未驗證）」, phases
 // are derived by the server, and nothing here starts, sends or runs anything.
+// The flows pages wait this long for /api/live before showing flows without
+// live state. A cached view answers at once and a first build takes seconds;
+// past this the page should not stay empty because the runtime hangs.
+const FLOW_LIVE_TIMEOUT_MS = 10000;
 const FLOW_ATTENTION = new Set(["awaiting_approval", "awaiting_merge", "awaiting_push", "review_unverified"]);
 function flowPhaseClass(key) {
   if (key === "done") return "b-ok";
@@ -1791,6 +1812,15 @@ function flowPhaseClass(key) {
 function flowPhaseBadge(phase) {
   return badge(phase.label, flowPhaseClass(phase.key), phase.reason || "");
 }
+// The executor's live state as shown. If this page's own /api/live load
+// failed or timed out, nothing from the server's cache is shown as current.
+function flowLiveText(ex, liveError) {
+  if (liveError) return { label: "即時狀態未載入", reason: `這次讀取即時狀態失敗：${liveError}` };
+  const fr = ex && ex.freshness;
+  const age = fr && fr.state === "fresh" && Number.isSafeInteger(fr.age_s) && fr.age_s >= 0 ? `即時狀態 ${fr.age_s} 秒前` : "";
+  return { label: ex ? ex.label : "狀態未知", reason: [ex && ex.reason, age].filter(Boolean).join("・") };
+}
+function liveLoadError() { return D.live && D.live.error ? D.live.error : ""; }
 function shortCommit(c) { return typeof c === "string" ? c.slice(0, 7) : "—"; }
 function roleText(r) {
   return r ? [r.name, r.family_label, r.model].filter(Boolean).join("・") : "—";
@@ -1807,7 +1837,8 @@ function flowCard(f) {
       flowPhaseBadge(f.phase)),
     el("div", { class: "stat-line" },
       el("span", null, "執行 ", el("b", null, roleText(f.roles.executor))),
-      el("span", null, "session ", el("b", null, f.executor_live.label))),
+      el("span", null, "session ", el("b", { title: flowLiveText(f.executor_live, liveLoadError()).reason },
+        flowLiveText(f.executor_live, liveLoadError()).label))),
     el("div", { class: "stat-line" },
       el("span", null, "審查 ", el("b", null, f.roles.reviewers.map(roleText).join("、"))),
       rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
@@ -1861,7 +1892,7 @@ function roleInputs(prefix, families, role, opts = {}) {
 
 async function viewFlows() {
   const token = seq;
-  await loadLive();   // first: /api/flows only reads the live cache
+  await loadLive(false, FLOW_LIVE_TIMEOUT_MS);   // first: /api/flows only reads the live cache
   const [data, tasksRes] = await Promise.all([loadFlows(), api.get("/api/tasks").catch(() => ({ tasks: [] }))]);
   const main = claim(token);
   if (token !== seq) return;
@@ -1913,7 +1944,7 @@ function flowEventBody(kind, values) {
 
 async function viewFlowDetail(flowId) {
   const token = seq;
-  await loadLive();   // first: /api/flows only reads the live cache
+  await loadLive(false, FLOW_LIVE_TIMEOUT_MS);   // first: /api/flows only reads the live cache
   let res;
   try { res = await api.get(`/api/flows/${encodeURIComponent(flowId)}`); }
   catch (e) {
@@ -1984,7 +2015,8 @@ async function viewFlowDetail(flowId) {
       el("dl", { class: "kv small" },
         el("dt", null, "規劃"), el("dd", null, roleText(f.roles.planner)),
         el("dt", null, "執行"), el("dd", null, roleText(f.roles.executor)),
-        el("dt", null, "執行者 session"), el("dd", null, `${f.executor_live.label}${f.executor_live.reason ? "：" + f.executor_live.reason : ""}`),
+        el("dt", null, "執行者 session"), el("dd", null, (({ label, reason }) => `${label}${reason ? "：" + reason : ""}`)(
+          flowLiveText(f.executor_live, liveLoadError()))),
         el("dt", null, "工作目錄"), el("dd", { class: "mono flow-path" }, f.roles.executor.workdir || "（未設定，無法核對 HEAD）"),
         el("dt", null, "審查"), el("dd", null, f.roles.reviewers.map(roleText).join("、")))),
     el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
@@ -4869,6 +4901,8 @@ if (typeof module !== "undefined" && module.exports) {
     flowPhaseClass,
     flowEventBody,
     flowBindingNote,
+    flowLiveText,
+    api,
     cleanupActiveView,
     cleanupActiveTerminal,
     // Exported so the modal registry's two subtle invariants can be tested

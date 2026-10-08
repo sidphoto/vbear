@@ -10,7 +10,9 @@
   in `flows.json` under the same fail-closed rules as `tasks.json`, now shared in `vbear/jsonstore.py`. VBear does
   not dispatch work, type into a terminal, run `git` or start an agent for a flow; the flows API reads live state
   only from the console's cache and never starts anything. Like the home page, the flows pages load the live view,
-  which can start VBear's own runtime.
+  which can start VBear's own runtime; they wait for it at most 10 s. A session state from that cache is shown as
+  current only when it is at most 30 s old and this page's own load succeeded; otherwise it reads
+  「即時狀態已過期」 or 「即時狀態未載入」.
 - At phone width a long sidebar now scrolls inside the nav instead of widening every page.
 - Two timing-sensitive runtime tests no longer race under load (the abandoned-launch expiry log, and the open/close
   round trip's hang-up grace).

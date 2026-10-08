@@ -422,6 +422,77 @@ class LiveCachedTests(FlowCase):
         self.assertEqual(store.runtime.method_calls, [])
 
 
+SID = "n-0123456789ab"
+
+
+def live_view(age, status="working", available=True, now=1_800_000_000.0, **extra):
+    return {"generated_at": now - age, "runtime": {"available": available},
+            "sessions": [{"terminal_id": SID, "status": status, "activity": {"reason": "標題顯示工作中"}}],
+            "panes": [{"pane_id": SID}], **extra}
+
+
+class LiveFreshnessTests(unittest.TestCase):
+    """Codex S1 r2: a cached live view is never shown as the current state
+    unless it is fresh; its time gets checks a-d like any other."""
+    NOW = 1_800_000_000.0
+
+    def ex(self, live, now=...):
+        return flows.executor_live(SID, live, self.NOW if now is ... else now)
+
+    def test_fresh_view_shows_the_state_and_its_age(self):
+        r = self.ex(live_view(3))
+        self.assertEqual((r["state"], r["label"], r["freshness"]["state"], r["freshness"]["age_s"]),
+                         ("working", "工作中", "fresh", 3))
+
+    def test_stale_view_is_not_shown_as_current(self):
+        r = self.ex(live_view(flows.LIVE_STALE_S + 1))
+        self.assertEqual((r["state"], r["label"]), ("stale", "即時狀態已過期"))
+        self.assertIn("當時是「工作中」", r["reason"])
+        self.assertEqual(self.ex(live_view(flows.LIVE_STALE_S))["state"], "working")   # the limit itself is fresh
+
+    def test_no_view_yet(self):
+        self.assertEqual(self.ex(None)["label"], "即時狀態未載入")
+
+    def test_unbound_executor_needs_no_view(self):
+        self.assertEqual(flows.executor_live(None, None, self.NOW)["state"], "unbound")
+
+    def test_bad_generated_at_is_never_current(self):
+        for bad in (NAN, INF, -INF, 10 ** 400, True, False, "1800000000", None, -1, 0, 1e12, [], {}):
+            with self.subTest(bad=repr(bad)[:20]):
+                r = self.ex({**live_view(0), "generated_at": bad})
+                self.assertEqual(r["freshness"]["state"], "invalid")
+                self.assertEqual(r["label"], "即時狀態時間不明")
+
+    def test_bad_now_is_never_current(self):
+        for bad in (NAN, INF, None, True):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.ex(live_view(0), now=bad)["freshness"]["state"], "invalid")
+
+    def test_future_time_beyond_the_skew_allowance_is_invalid(self):
+        from vbear.activity import CLOCK_SKEW_S
+        self.assertEqual(self.ex(live_view(-(CLOCK_SKEW_S + 1)))["freshness"]["state"], "invalid")
+        within = self.ex(live_view(-1))          # a clock a second behind reads as age 0
+        self.assertEqual((within["freshness"]["state"], within["freshness"]["age_s"]), ("fresh", 0))
+
+    def test_runtime_down_is_not_a_missing_session(self):
+        r = self.ex(live_view(1, available=False))
+        self.assertEqual((r["state"], r["label"]), ("unknown", "runtime 未連線"))
+
+    def test_other_session_states(self):
+        self.assertEqual(self.ex({**live_view(1), "sessions": []})["label"], "狀態未知")          # a plain shell pane
+        self.assertEqual(self.ex({**live_view(1), "sessions": [], "panes": []})["label"], "找不到 session")
+        self.assertEqual(self.ex(live_view(1, status="needs-input"))["label"], "需要你處理")
+
+    def test_malformed_view_parts_are_tolerated(self):
+        for extra in ({"sessions": "x"}, {"sessions": [1, None]}, {"panes": {"a": 1}}, {"runtime": "up"},
+                      {"sessions": [{"terminal_id": SID, "status": "rm -rf"}]},
+                      {"sessions": [{"terminal_id": SID, "status": "working", "activity": {"reason": 5}}]}):
+            with self.subTest(extra=extra):
+                r = self.ex(live_view(1, **extra))
+                self.assertIn(r["label"], {"狀態未知", "找不到 session", "runtime 未連線", "工作中"})
+                self.assertIsInstance(r["reason"], str)
+
+
 class FlowApiTests(unittest.TestCase):
     """The HTTP surface: needs the access token, rejects bad input, adds no
     execution capability (only GET /api/flows[/id] and three POST routes)."""
@@ -483,6 +554,20 @@ class FlowApiTests(unittest.TestCase):
             self.assertEqual(self.call(f"/api/flows/{fid}")[0], 200)
             self.assertEqual(self.call("/api/flows")[0], 200)
             build.assert_not_called()
+
+    def test_the_api_marks_a_stale_live_view(self):
+        tid = tasks.save_task(None, {"title": "過期即時狀態"})["id"]
+        r = roles()
+        r["executor"]["session_id"] = SID
+        fid = self.call("/api/flows", "POST", {"task_id": tid, "roles": r})[1]["flow"]["id"]
+        store = self.console.store
+        self.addCleanup(setattr, store, "_live", store._live)
+        store._live = live_view(flows.LIVE_STALE_S + 60, now=time.time())
+        ex = self.call(f"/api/flows/{fid}")[1]["flow"]["executor_live"]
+        self.assertEqual((ex["state"], ex["freshness"]["state"]), ("stale", "stale"))
+        store._live = live_view(2, now=time.time())
+        ex = self.call(f"/api/flows/{fid}")[1]["flow"]["executor_live"]
+        self.assertEqual((ex["state"], ex["freshness"]["state"]), ("working", "fresh"))
 
     def test_token_required(self):
         self.assertEqual(self.call("/api/flows", token=False)[0], 401)

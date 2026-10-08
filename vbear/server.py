@@ -800,22 +800,7 @@ def make_handler(console: Console):
                     return None
                 return task.get("title") if task else None
             live = console.store.live_cached()   # never builds: reading a flow starts nothing
-            by_id = {s.get("terminal_id"): s for s in (live or {}).get("sessions", ())}
-            panes = {p.get("pane_id") for p in (live or {}).get("panes", ())}
-
-            def live_session(sid):
-                if live is None:
-                    return {"display": "unknown", "label": "即時狀態未載入",
-                            "reason": "主控台還沒有即時資料；重新整理頁面後會顯示"}
-                s = by_id.get(sid)
-                if s is None:
-                    return {"display": "unknown", "label": "狀態未知", "reason": "不是 Agent session"} if sid in panes else None
-                act = s.get("activity") if isinstance(s.get("activity"), dict) else {}
-                display = s.get("status") or "unknown"
-                labels = {"working": "工作中", "waiting": "等你回覆", "needs-input": "需要你處理",
-                          "exited": "已結束", "unknown": "狀態未知"}
-                return {"display": display, "label": labels.get(display, "狀態未知"), "reason": act.get("reason", "")}
-            return flows.view(flow, heads=flows.head_reader, task_title=task_title, live_session=live_session)
+            return flows.view(flow, heads=flows.head_reader, task_title=task_title, live=live, now=time.time())
 
         def _flows_view(self) -> dict:
             items = [self._flow_view(f) for f in flows.list_flows()]
