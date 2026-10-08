@@ -279,7 +279,7 @@ def referenced_files(body: str, skill_dir: Path) -> tuple[list[dict], list[str]]
         parts = Path(ref).parts
         if not parts or ".." in parts:
             continue
-        if not re.search(r"\.[A-Za-z0-9]{1,8}$", ref):
+        if not re.search(r"\.[A-Za-z0-9]{1,8}\Z", ref):
             continue
         target = skill_dir / ref
         if target.exists():

@@ -355,9 +355,16 @@ class EventTracker:
                    "message")
         self._need(isinstance(ev.get("request_id"), str), "request_id")
         self._need(ev.get("parent_tool_use_id", "absent") is None, "parent_tool_use_id")
-        self._need("user_message_uuid" in ev and "user_message_uuids" in ev, "user_message_uuid(s)")
         first = not t.assistant_events
-        umu, umus = ev["user_message_uuid"], ev["user_message_uuids"]
+        # Design v29.6: the first assistant event of a turn carries both
+        # fields, equal to the dispatch. Later ones carry them as null or, as
+        # 2.1.292 does (stream probe 2026-10-08), not at all: absent reads as
+        # null and is journaled as null. Any non-null value on a later event,
+        # even the dispatch id, breaks attribution: a protocol error, so the
+        # turn is invalid and the session takes no further dispatch.
+        if first:
+            self._need("user_message_uuid" in ev and "user_message_uuids" in ev, "user_message_uuid(s)")
+        umu, umus = ev.get("user_message_uuid"), ev.get("user_message_uuids")
         if first and not (umu == t.dispatch_id and umus == [t.dispatch_id]):
             raise ProtocolError("attribution", "first assistant")
         if not first and not (umu is None and umus is None):

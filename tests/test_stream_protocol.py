@@ -84,6 +84,66 @@ class HappyPathTests(unittest.TestCase):
         self.assertEqual(h.js.result_index, 2)
         self.assertEqual(h.js.responses, 1 + 2 + 1)
 
+    def later_cases(self, change, *, first=False):
+        """One turn whose later (or first) assistant events get ``change``;
+        returns (valid, harness, dispatch) or the ProtocolError."""
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix=d[:6])
+        assistants = [e for e in events if e.get("type") == "assistant"]
+        self.assertGreaterEqual(len(assistants), 2)
+        for e in (assistants[:1] if first else assistants[1:]):
+            change(e, d)
+        try:
+            h.feed(events)
+        except sp.ProtocolError as exc:
+            # The daemon records it; the turn can then never be valid.
+            h.record("protocol_error", {"reason": exc.reason, "detail": exc.detail})
+            ok, reasons = h.validity(d)
+            self.assertFalse(ok)
+            return exc
+        return h.validity(d)
+
+    def test_v29_6_later_assistant_attribution(self):
+        # Design v29.6 (stream probe 2026-10-08): absent or null on later
+        # events is fine; any non-null value is not; the first must carry d.
+        def omit(e, d):
+            del e["user_message_uuid"], e["user_message_uuids"]
+
+        def null(e, d):
+            e["user_message_uuid"] = e["user_message_uuids"] = None
+
+        def wrong(e, d):
+            e["user_message_uuid"], e["user_message_uuids"] = fx.new_uuid(), [fx.new_uuid()]
+
+        def same_as_d(e, d):
+            e["user_message_uuid"], e["user_message_uuids"] = d, [d]
+
+        def only_one_field(e, d):
+            del e["user_message_uuid"]
+            e["user_message_uuids"] = [d]
+        self.assertEqual(self.later_cases(omit), (True, []))
+        self.assertEqual(self.later_cases(null), (True, []))
+        for name, change in (("wrong value", wrong), ("equal to d", same_as_d), ("one field set", only_one_field)):
+            with self.subTest(case=name):
+                result = self.later_cases(change)
+                self.assertIsInstance(result, sp.ProtocolError)
+                self.assertEqual(result.reason, "attribution")
+        result = self.later_cases(omit, first=True)                       # the first must carry both
+        self.assertIsInstance(result, sp.ProtocolError)
+        self.assertEqual(result.reason, "missing_field")
+
+    def test_absent_attribution_is_journaled_as_null(self):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="j")
+        for e in [e for e in events if e.get("type") == "assistant"][1:]:
+            del e["user_message_uuid"], e["user_message_uuids"]
+        h.feed(events)
+        later = h.js.turns[d].result["assistant_events"][1:]
+        self.assertTrue(later)
+        self.assertTrue(all(e["user_message_uuid"] is None and e["user_message_uuids"] is None for e in later))
+
     def test_bash_then_report_with_two_responses(self):
         h = Harness()
         d, text = h.dispatch()
