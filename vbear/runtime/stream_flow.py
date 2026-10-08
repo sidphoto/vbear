@@ -17,6 +17,7 @@ trusted for it (planner decisions 2026-10-08, S2a-2 Q1/Q3/Q4):
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import stat
@@ -66,7 +67,7 @@ class FlowContext:
     key: login_identity.LoginKey
     started_at: float | None
     totals: Totals
-    released_at: float | None = None      # v29.8: the user's last "continue" (pipeline_release)
+    resolved: frozenset = frozenset()     # v29.8 / round 6: failure identities the user has released
 
 
 def _journal_state(base, launch_id: str) -> stream_journal.ReadResult:
@@ -166,7 +167,7 @@ def _pipeline_view(base, pipeline_id: str, task_id: str):
         with pipeline_store.Pipeline(base, task_id, create=False) as p:
             started = p.started_at(pipeline_id)
             texts = {d: p.read_text(d) for d in p.text_names()}
-            released = p.released_at(pipeline_id)
+            released = p.release_record(pipeline_id)
     except pipeline_store.StoreRefused as exc:
         if exc.missing:
             return None
@@ -240,31 +241,46 @@ def load(base, pipeline_id: str) -> FlowContext:
     view = _pipeline_view(base, pipeline_id, task_id)
     started = view[0] if view is not None else None
     return FlowContext(pipeline_id, task_id, acc, dict(limits), key, started,
-                       totals(base, pipeline_id, task_id, view), view[2] if view is not None else None)
+                       totals(base, pipeline_id, task_id, view),
+                       frozenset(view[2]["resolved"]) if view is not None and view[2] is not None else frozenset())
 
 
 def _failure(m: dict, js: stream_journal.JournalState) -> dict:
-    """A session's failure (design v29.8), from its facts and its manifest:
-    the latest failure fact, or the session kept for manual review."""
-    reasons = [(t, why) for why, t in js.failures]
+    """A session's failures (design v29.8) with their identities (review
+    round 6): "<launch>#<seq>" for each failure fact in its journal, and
+    "<launch>#manual_review#<retained_at as stored>" when it was kept for a
+    person. Whether a failure is resolved is decided by identity only; the
+    time is for display."""
+    lid = m["launch_id"]
+    ids = [(f"{lid}#{seq}", why, t) for why, t, seq in js.failures]
     if m.get("state") == "manual_review":
-        at = m.get("retained_at")
-        reasons.append((at if isinstance(at, (int, float)) and not isinstance(at, bool) else float("inf"),
-                        f"交人工處理：{str(m.get('retained_reason'))[:200]}"))
-    if not reasons:
-        return {"failure": None, "failure_at": None}
-    t, why = max(reasons, key=lambda x: x[0])
-    return {"failure": why, "failure_at": t}
+        raw = json.dumps(m.get("retained_at"))
+        ids.append((f"{lid}#manual_review#{raw}", f"交人工處理：{str(m.get('retained_reason'))[:200]}",
+                    m.get("retained_at")))
+    return {"failure_ids": [i for i, _, _ in ids], "failures": [{"id": i, "why": w, "at": t} for i, w, t in ids]}
 
 
 def unresolved_failure(ctx: FlowContext) -> str | None:
-    """v29.8: a failure of the flow after its last release; then nothing new
-    opens until the user presses "continue". Recomputed from the journals,
-    so a lost hold file does not let the flow go on."""
+    """v29.8: any failure of the flow the user has not released yet, by
+    identity. Recomputed from the journals and manifests, so neither a lost
+    hold file nor the clock lets the flow go on."""
     for x in ctx.totals.sessions:
-        if x["failure"] and (ctx.released_at is None or not x["failure_at"] <= ctx.released_at):
-            return f"session {x['launch_id']}：{x['failure']}"
+        for f in x["failures"]:
+            if f["id"] not in ctx.resolved:
+                return f"session {x['launch_id']}：{f['why']}"
     return None
+
+
+def failure_ids(base, pipeline_id: str) -> list[str]:
+    """Every failure identity of the flow on disk now, for pipeline_release.
+    Anything unreadable refuses (a release never assumes)."""
+    out = []
+    for m in flow_sessions(base, pipeline_id, started=False):
+        res = _journal_state(base, m["launch_id"])
+        if res.problem:
+            raise FlowRefused("count_unavailable", f"session {m['launch_id']} 的日誌無法使用（{res.problem}）")
+        out += _failure(m, res.state)["failure_ids"]
+    return out
 
 
 def _never_ran(base, rec: dict) -> str | None:
@@ -341,6 +357,9 @@ def _flow_has_journal(base, pipeline_id: str) -> bool:
 def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0) -> None:
     """Design 6, for dispatch_prepare (counting_dispatch) and stream_send."""
     lim, tot = ctx.limits, ctx.totals
+    failed = unresolved_failure(ctx)                     # v29.8: one failure stops the flow
+    if failed:
+        raise FlowRefused("failed", f"流程有尚未「繼續」的失敗（{failed}），需要使用者先按「繼續」")
     if not (isinstance(tot.spent_usd, (int, float)) and math.isfinite(tot.spent_usd)):
         raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")   # NaN passes every comparison
     if ctx.started_at is not None and now - ctx.started_at > lim["max_elapsed_h"] * 3600:

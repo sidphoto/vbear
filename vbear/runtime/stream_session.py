@@ -322,8 +322,11 @@ class StreamSession:
                 chunk = os.read(self.stdout, READ_CHUNK)
             except BlockingIOError:
                 return
-            except OSError:
-                chunk = b""
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                self._pipe_error("stdout", exc)
+                return
             if not chunk:
                 self.stdout_eof = True
                 return
@@ -379,6 +382,18 @@ class StreamSession:
                 self.fail("response_cap")
                 self.terminate("已達模型回應數上限")
 
+    def _pipe_error(self, which: str, exc: OSError) -> None:
+        """Review round 6 #3: a read error (not EAGAIN/EINTR) is not an EOF:
+        output may be lost, so it is a protocol error (the session goes to
+        error, a v29.8 failure) and the session ends. The pipe is not read
+        again."""
+        if which == "stdout":
+            self.stdout_eof = True
+        else:
+            self.stderr_eof = True
+        self.protocol_error("pipe_read_error", f"{which} errno {exc.errno}")
+        self.terminate(f"{which} 讀取錯誤")
+
     def on_stderr(self, now: float) -> None:
         for _ in range(READ_BUDGET):
             if self.finished:
@@ -387,8 +402,11 @@ class StreamSession:
                 chunk = os.read(self.stderr, READ_CHUNK)
             except BlockingIOError:
                 return
-            except OSError:
-                chunk = b""
+            except InterruptedError:
+                continue
+            except OSError as exc:
+                self._pipe_error("stderr", exc)
+                return
             if not chunk:
                 self.stderr_eof = True
                 return

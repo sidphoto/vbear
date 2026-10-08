@@ -158,6 +158,30 @@ class PipelineStoreTests(StateDir):
             p.remove_start(fid, t)
             self.assertIsNone(p.started_at(fid))
 
+    def test_release_record_holds_failure_identities(self):
+        # Review round 6 #1: identities, accumulated, at most RESOLVED_MAX.
+        fid = "flow-0123456789ab"
+        ids = [f"{LID}#3", f"{LID}#manual_review#1791467063.473483"]
+        with ps.Pipeline(self.base, "task-1", create=True) as p:
+            self.assertIsNone(p.release_record(fid))
+            p.record_release(fid, time.time(), ids)
+            self.assertEqual(p.release_record(fid)["resolved"], set(ids))
+            with self.assertRaises(ps.StoreRefused):
+                p.record_release(fid, time.time(), [f"{LID}#{n}" for n in range(1, ps.RESOLVED_MAX + 2)])
+            for bad in ([f"{LID}#0"], ["l-xyz#3"], [f"{LID}#3\n"], [f"{LID}#manual_review#x"]):
+                with self.subTest(bad=bad), self.assertRaises(ps.StoreRefused):
+                    p.record_release(fid, time.time(), bad)
+            self.assertEqual(p.release_record(fid)["resolved"], set(ids))      # unchanged by the refusals
+        path = self.base / "pipelines" / "task-1" / "released.json"
+        for value in ({"v": 1, "pipeline_id": fid, "released_at": time.time()},           # the time-only format
+                      {"v": 2, "pipeline_id": fid, "released_at": time.time(), "resolved": ids + ids[:1]},
+                      {"v": 2, "pipeline_id": fid, "released_at": time.time(), "resolved": "x"}):
+            with self.subTest(value=value):
+                path.write_text(json.dumps(value))
+                path.chmod(0o600)
+                with ps.Pipeline(self.base, "task-1", create=False) as p, self.assertRaises(ps.StoreRefused):
+                    p.release_record(fid)
+
     def test_holds(self):
         fid = "flow-0123456789ab"
         self.assertFalse(ps.is_held(self.base, fid))

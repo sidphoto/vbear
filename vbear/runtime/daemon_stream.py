@@ -615,16 +615,22 @@ class StreamOps:
             return _err(rid, "refused", f"無法讀取流程（{exc}）")
         if flow is None:
             return _err(rid, "refused", "找不到這個流程")
+        try:
+            current = stream_flow.failure_ids(self.base, pipeline)      # review round 6: by identity
+        except stream_flow.FlowRefused as exc:
+            return _err(rid, "refused", f"無法核對流程的失敗（{exc}），不能繼續")
         key = f"release:{pipeline}"
-        why = self._reserve(key, quota.START_RECORD_MAX * 2)        # the record and its temp file
+        why = self._reserve(key, pipeline_store.RELEASE_FILE_MAX * 2)   # the record and its temp file
         if why:
             return _err(rid, "refused", why)
         before, written = None, 0
         try:
             with pipeline_store.Pipeline(self.base, flow["task_id"], create=True) as p:
                 before = p.release_record_bytes()
+                previous = p.release_record(pipeline)
+                resolved = set(current) | (previous["resolved"] if previous else set())
                 try:
-                    p.record_release(pipeline, time.time())
+                    p.record_release(pipeline, time.time(), resolved)
                 finally:
                     try:
                         written = max(0, p.release_record_bytes() - before)

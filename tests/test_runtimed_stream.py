@@ -34,6 +34,7 @@ from vbear.runtime import stream_session
 
 REPO = str(Path(__file__).resolve().parent.parent)
 TIMEOUT = 20.0
+STARTUP_TIMEOUT = 60.0
 
 FAKE_STREAM_CLI = r'''#!%(py)s
 import json, os, signal, subprocess, sys, time
@@ -231,7 +232,10 @@ class StreamCase(unittest.TestCase):
         return m["launch_id"], r["result"]
 
     def launched(self):
-        return self.wait_for(lambda: self._read(self.work / "fake-launch.json"), msg="fake CLI start")
+        # A Python start under heavy load (the planner's churn plus a full
+        # suite) took over 20 s once; this only waits for the fake to exist.
+        return self.wait_for(lambda: self._read(self.work / "fake-launch.json"), timeout=STARTUP_TIMEOUT,
+                             msg="fake CLI start")
 
     @staticmethod
     def _read(path):
@@ -546,6 +550,24 @@ class FailureTests(StreamCase):
         r = self.rpc("open_stream", launch_id=nxt)
         self.assertFalse(r["ok"])
         self.assertIn("額度", r["error"]["message"])                    # and the worst case used the budget
+
+    def test_a_pipe_read_error_is_not_an_eof(self):
+        # Review round 6 #3.
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        real = os.read
+
+        def read(fd, n):
+            if fd == s.stdout:
+                raise OSError(5, "Input/output error")
+            return real(fd, n)
+        with mock.patch.object(stream_session.os, "read", read):
+            self.dispatch(launch_id)
+            self.wait_for(lambda: s.js.protocol_errors, msg="read error recorded")
+        self.assertEqual(s.js.protocol_errors[0]["reason"], "pipe_read_error")
+        self.assertIn("errno 5", s.js.protocol_errors[0]["detail"])
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session ended")
+        self.assertIn("pipe_read_error", json.loads((self.base / "holds" / self.fid).read_text())["reason"])
 
     def test_not_confirmed(self):
         self.run_mode("silent", ("error",), "not_confirmed", CONFIRM_DEADLINE=0.5)
@@ -975,6 +997,28 @@ class RecoveryTests(StreamCase):
         self.assertIn("未記錄的程序", m["retained_reason"])
         self.assertEqual(self.journal(launch_id).state.recovered, {"process": "alive"})
 
+    def test_an_unknown_recovery_stays_a_failure_after_cleanup(self):
+        # Review round 6 #2: the first recovery could not hold the flow nor
+        # write the manifest; a later one cleans up; the failure remains.
+        from vbear.runtime import pipeline_store as ps
+        launch_id = self.on_disk_session([])
+        self.crash_daemon()
+        with mock.patch.object(a.proctrack, "process_table",
+                               side_effect=a.proctrack.ProcessTableUnavailable("test")), \
+                mock.patch.object(ps, "hold", side_effect=OSError(5, "Input/output error")), \
+                mock.patch.object(a, "update_manifest", side_effect=OSError(5, "Input/output error")):
+            self.restart_daemon()
+        self.assertEqual(self.journal(launch_id).state.recovered, {"process": "unknown"})
+        self.assertEqual(self.manifest(launch_id)["state"], "running")          # nothing else was written
+        self.assertFalse((self.base / "holds" / self.fid).exists())
+        self.crash_daemon()
+        self.restart_daemon()                                                   # now provably gone: cleaned
+        self.assertEqual(self.manifest(launch_id)["state"], "ended")
+        (self.base / "holds" / self.fid).unlink(missing_ok=True)
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn("狀態不明", r["error"]["message"])
+
     def test_a_damaged_journal_is_kept_for_review(self):
         launch_id = self.on_disk_session([])
         path = self.base / "sessions" / launch_id / "journal.jsonl"
@@ -1324,6 +1368,33 @@ class FailureHoldTests(StreamCase):
         self.assertEqual(self.manifest(launch_id)["state"], "manual_review")
         self.assertIn(launch_id, self.hold_reason())
         self.assertIn("不送訊號", self.hold_reason())
+
+    def released_then_fail_again(self, clock):
+        """One failure, closed and released; a second session fails with its
+        journal clock set by ``clock(released_at)``; the hold file is lost."""
+        import vbear.runtime.daemon_stream as ds
+        first = self.fail_once("is_error")
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        released = json.loads((self.base / "pipelines" / self.tid / "released.json").read_text())
+        self.assertTrue(any(x.startswith(first + "#") for x in released["resolved"]))
+        nxt, _ = self.open("ok")
+        self.dm._streams[nxt].writer._now = lambda: clock(released["released_at"])
+        (self.work / "fake-mode").write_text("is_error")
+        self.dispatch(nxt)
+        self.wait_for(lambda: nxt in (self.hold_reason() or ""), msg="held again")
+        self.rpc("stream_close", launch_id=nxt)
+        self.wait_for(lambda: nxt not in self.dm._streams, msg="closed")
+        (self.base / "holds" / self.fid).unlink()
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn(nxt, r["error"]["message"])
+
+    def test_a_clock_that_went_back_cannot_release_a_new_failure(self):
+        # Review round 6 #1: identities decide, not times.
+        self.released_then_fail_again(lambda released_at: released_at - 3600)
+
+    def test_a_failure_stamped_with_the_release_time_is_not_released(self):
+        self.released_then_fail_again(lambda released_at: released_at)
 
     def test_recovery_holds_the_flow(self):
         launch_id, _ = self.open("hang")

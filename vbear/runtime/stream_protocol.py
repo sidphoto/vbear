@@ -196,7 +196,8 @@ class ProtocolError(Exception):
 PROTOCOL_REASONS = ("session_mismatch", "bad_uuid", "duplicate_uuid", "missing_field", "init_mismatch",
                     "out_of_order", "attribution", "response_ids", "tool_result_unknown", "duplicate_tool_use",
                     "event_while_idle", "event_while_writing", "bad_json", "stdout_limit", "event_limit",
-                    "turn_event_limit", "stderr_limit", "journal_full", "dispatch_reuse", "dispatch_file")
+                    "turn_event_limit", "stderr_limit", "journal_full", "dispatch_reuse", "dispatch_file",
+                    "pipe_read_error")       # review round 6 #3: a read error is not an EOF
 FAILED_REASONS = ("partial_write", "not_confirmed", "no_progress", "turn_timeout", "no_completed",
                   "response_cap", "process_exited")
 ANOMALY_REASONS = ("unknown_type", "extra_fields")
