@@ -100,7 +100,7 @@ ENV_ALLOW = ("PATH", "TERM", "LANG", "HOME")  # caller may override these
 # "Login expired" (Gate 9 finding).
 ENV_IDENTITY = ("USER", "LOGNAME")
 EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
-SESSION_RE = re.compile(r"^n-[0-9a-f]{12}$")
+SESSION_RE = re.compile(r"^n-[0-9a-f]{12}\Z")
 MAX_ATTACHMENTS = 4           # per session (contract v2 §6)
 ATTACH_QUEUE_MAX = 256        # frames queued per attachment before resync
 ATTACH_QUEUE_BYTES = 4 << 20  # ... or this many encoded bytes

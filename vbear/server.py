@@ -1328,7 +1328,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
 # command line or a URL that leaves this machine's owner-only state directory.
 
 HANDED_TOKEN_ENV = "VBEAR_ACCESS_TOKEN"
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}\Z")
 
 
 def take_handed_token() -> str | None:

@@ -40,19 +40,27 @@ import time
 from pathlib import Path
 
 from . import proctrack
+from . import stream_protocol
 
 SESSIONS_DIR = "sessions"
 MANIFEST = "manifest.json"
 SETTINGS = "settings.json"
-LAUNCH_RE = re.compile(r"^l-[0-9a-f]{16}$")
+# \Z, not $: $ also matches before a trailing newline, and these name paths.
+LAUNCH_RE = re.compile(r"^l-[0-9a-f]{16}\Z")
 SCRATCH_PARENT = "/private/tmp"
 SCRATCH_PREFIX = "sc-"
 # Claude Code 2.1.286: per-UID temp path limit before the shared-tmp fallback.
 CLAUDE_TMP_PATH_LIMIT = 44
 MANIFEST_VERSION = 1
-MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,63}$")
-# States recovery may act on; "manual_review" is left for a human.
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,63}\Z")
+# States recovery may act on; "manual_review" is left for a human. A stream
+# launch whose processes are proven gone becomes "ended": its directory (the
+# journal) is kept until the user deletes the flow (design 2.5, 9).
 _ACTIVE_STATES = ("prepared", "launching", "running")
+ENGINES = ("claude", "codex", "claude-stream")
+FLOW_ID_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")       # tasks.VALID_ID_RE; never "." or ".."
+JOURNAL = "journal.jsonl"
 # A prepared launch younger than this may still be about to start (the daemon
 # can be autostarted by the very RPC that launches it), so recovery skips it.
 PREPARED_TTL = 600.0
@@ -144,6 +152,46 @@ def claude_settings(workdir: str, scratch: str, uid: int) -> dict:
     }}
 
 
+def stream_settings(workdir: str, scratch: str, uid: int, cli_version: str) -> dict:
+    """Design 2.1: the managed sandbox settings plus an ``env`` block that
+    pins the API endpoint and provider. ``--settings`` ranks above user and
+    project settings, so neither can move the endpoint."""
+    consts = stream_protocol.constants_for(cli_version)
+    if consts is None:
+        raise LaunchRefused("unsupported_version", f"Claude Code {cli_version} 沒有串流模式的常數")
+    return {**claude_settings(workdir, scratch, uid), "env": dict(consts.pinned_env)}
+
+
+def stream_argv(manifest: dict) -> list[str]:
+    """Design 2.1, exactly. Everything comes from the validated manifest; the
+    session id and remaining budget are set by the daemon before spawning."""
+    from .. import executor_report  # here: executor_report imports this package
+    sid, budget, model = manifest.get("claude_session_id"), manifest.get("budget_usd"), manifest.get("model_id")
+    if not (isinstance(sid, str) and stream_protocol.UUID_RE.match(sid)):
+        raise LaunchRefused("manifest_invalid", "claude_session_id 格式不符")
+    if not _budget_ok(budget):
+        raise LaunchRefused("manifest_invalid", "額度必須是有限正數")
+    if not (isinstance(model, str) and STREAM_MODEL_RE.match(model)):
+        raise LaunchRefused("manifest_invalid", "串流執行者必須以完整的 Claude 模型 id 啟動")
+    schema = json.dumps(executor_report.JSON_SCHEMA, separators=(",", ":"), sort_keys=True)
+    return [manifest["cli_binary"], "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--verbose", "--replay-user-messages", "--permission-prompts", "none",
+            "--json-schema", schema, "--max-budget-usd", f"{budget:.2f}",
+            "--safe-mode", "--settings", manifest["settings_path"], "--permission-mode", "acceptEdits",
+            "--tools", "Bash", "--disallowedTools", "Edit,Write", "--strict-mcp-config",
+            "--session-id", sid, "--model", model]
+
+
+def _budget_ok(value) -> bool:
+    import math
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            and 0 < value <= 100 and round(value, 2) == value)
+
+
+# A full Claude model id (acceptance.CLAUDE_MODEL_RE), never an alias.
+STREAM_MODEL_RE = re.compile(r"^claude-[a-z0-9][a-z0-9.-]{0,62}\Z")
+
+
 def claude_argv(manifest: dict) -> list[str]:
     """Trusted argv; nothing here comes from an RPC caller. Edit/Write tools are
     not offered (decision D4): they are not covered by the Bash sandbox."""
@@ -225,6 +273,8 @@ def managed_argv(manifest: dict) -> list[str]:
         return claude_argv(manifest)
     if engine == "codex":
         return codex_argv(manifest)
+    if engine == "claude-stream":
+        return stream_argv(manifest)
     raise LaunchRefused("manifest_invalid", "不支援的 managed Agent 引擎")
 
 
@@ -255,6 +305,35 @@ def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
                           model_id: str | None = None, cli_verified: bool = True) -> dict:
     """Create the launch directory, scratch, settings and manifest. No process
     is started. On any failure everything created here is removed again."""
+    return _prepare_claude(base, workdir, cli_binary=cli_binary, cli_version=cli_version,
+                           cli_identity=cli_identity, allowed_root=allowed_root, model_id=model_id,
+                           cli_verified=cli_verified, engine="claude", extra=None)
+
+
+def prepare_stream_launch(base: Path, workdir: str, *, cli_binary: str, cli_version: str,
+                          cli_identity: list[int], model_id: str, pipeline_id: str, task_id: str,
+                          allowed_root: str | None = None) -> dict:
+    """A stream executor launch (design 2.1): the managed launch plus the
+    flow it belongs to. The daemon adds the Claude session id and the
+    remaining budget when it starts the process."""
+    if not (isinstance(pipeline_id, str) and FLOW_ID_RE.match(pipeline_id)):
+        raise LaunchRefused("bad_request", "流程 id 格式不符")
+    if not (isinstance(task_id, str) and TASK_ID_RE.match(task_id)) or task_id in (".", ".."):
+        raise LaunchRefused("bad_request", "任務 id 格式不符")
+    if not (isinstance(model_id, str) and STREAM_MODEL_RE.match(model_id)):
+        raise LaunchRefused("invalid_model", "串流執行者必須以完整的 Claude 模型 id 啟動")
+    if stream_protocol.constants_for(cli_version) is None:
+        raise LaunchRefused("unsupported_version", f"Claude Code {cli_version} 沒有串流模式的常數")
+    return _prepare_claude(base, workdir, cli_binary=cli_binary, cli_version=cli_version,
+                           cli_identity=cli_identity, allowed_root=allowed_root, model_id=model_id,
+                           cli_verified=True, engine="claude-stream",
+                           extra={"pipeline_id": pipeline_id, "task_id": task_id,
+                                  "claude_session_id": None, "budget_usd": None})
+
+
+def _prepare_claude(base: Path, workdir: str, *, cli_binary: str, cli_version: str, cli_identity: list[int],
+                    allowed_root: str | None, model_id: str | None, cli_verified: bool, engine: str,
+                    extra: dict | None) -> dict:
     uid = os.getuid()
     base = Path(os.path.realpath(base))
     canonical = _check_workdir(workdir, allowed_root or str(Path.home()), base)
@@ -282,13 +361,14 @@ def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
             raise LaunchRefused("scratch_path_too_long",
                                 f"暫存路徑 {tmp_bytes} bytes 超過 {CLAUDE_TMP_PATH_LIMIT}，CLI 會退回共用暫存區")
         settings_path = ldir / SETTINGS
-        _write_private(settings_path, json.dumps(claude_settings(canonical, str(scratch), uid),
-                                                 ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        settings = (claude_settings(canonical, str(scratch), uid) if engine == "claude"
+                    else stream_settings(canonical, str(scratch), uid, cli_version))
+        _write_private(settings_path, json.dumps(settings, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
         manifest = {
             "manifest_version": MANIFEST_VERSION,
             "launch_id": launch_id,
             "native_session_id": None,
-            "engine": "claude",
+            "engine": engine,
             "cli_binary": cli_binary,
             "cli_version": cli_version,
             "cli_verified": cli_verified is True,
@@ -314,6 +394,7 @@ def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
                 "network": ("strict empty allowlist" if cli_verified is True
                             else "strict empty allowlist configured; not verified for this version"),
             },
+            **(extra or {}),
         }
         _write_private(ldir / MANIFEST, json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
         return manifest
@@ -416,7 +497,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
         _owned_dir(sessions_root(base), uid)
         lst = _owned_dir(ldir, uid)
         m = _read_manifest(ldir, uid)
-        if m.get("launch_id") != launch_id or m.get("engine") not in {"claude", "codex"}:
+        if m.get("launch_id") != launch_id or m.get("engine") not in ENGINES:
             raise LaunchRefused("manifest_invalid", "manifest 與 launch id 不符")
         if m["launch_dir"] != {"path": str(ldir), "inode": lst.st_ino, "uid": uid}:
             raise LaunchRefused("drift", "launch 目錄身分已改變")
@@ -432,7 +513,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
         sst = _owned_dir(scratch, uid)
         if sst.st_ino != m["scratch"]["inode"] or sst.st_uid != m["scratch"]["uid"]:
             raise LaunchRefused("drift", "暫存區身分已改變")
-        if (m["engine"] == "claude"
+        if (m["engine"] in ("claude", "claude-stream")
                 and len(per_uid_tmp(str(scratch), uid).encode("utf-8")) > CLAUDE_TMP_PATH_LIMIT):
             raise LaunchRefused("scratch_path_too_long", "暫存路徑過長")
         workdir = m.get("canonical_workspace")
@@ -443,7 +524,10 @@ def load_validated(base: Path, launch_id: str) -> dict:
         if _check_workdir(workdir, m.get("allowed_root") or str(Path.home()), Path(os.path.realpath(base))) != workdir:
             raise LaunchRefused("drift", "工作目錄不再符合規則")
         actual_settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        if m["engine"] == "claude":
+        if m["engine"] == "claude-stream":
+            _check_stream_fields(m)
+            expected = stream_settings(workdir, str(scratch), uid, m.get("cli_version"))
+        elif m["engine"] == "claude":
             expected = claude_settings(workdir, str(scratch), uid)
         else:
             mode = actual_settings.get("sandbox_mode") if isinstance(actual_settings, dict) else None
@@ -471,6 +555,25 @@ def load_validated(base: Path, launch_id: str) -> dict:
     except (OSError, KeyError, TypeError) as exc:
         raise LaunchRefused("unsafe_path", f"launch 狀態無法驗證：{exc}") from exc
     return m
+
+
+def _check_stream_fields(m: dict) -> None:
+    """Design 2.1: every stream-only field, exactly (UUID, flow id, task id,
+    a full model id, a finite positive budget once set)."""
+    if not (isinstance(m.get("pipeline_id"), str) and FLOW_ID_RE.match(m["pipeline_id"])):
+        raise LaunchRefused("manifest_invalid", "流程 id 格式不符")
+    tid = m.get("task_id")
+    if not (isinstance(tid, str) and TASK_ID_RE.match(tid)) or tid in (".", ".."):
+        raise LaunchRefused("manifest_invalid", "任務 id 格式不符")
+    if not (isinstance(m.get("model_id"), str) and STREAM_MODEL_RE.match(m["model_id"])):
+        raise LaunchRefused("manifest_invalid", "模型 id 格式不符")
+    if stream_protocol.constants_for(m.get("cli_version")) is None:
+        raise LaunchRefused("manifest_invalid", "沒有串流模式常數的版本")
+    sid, budget = m.get("claude_session_id"), m.get("budget_usd")
+    if sid is not None and not (isinstance(sid, str) and stream_protocol.UUID_RE.match(sid)):
+        raise LaunchRefused("manifest_invalid", "claude_session_id 格式不符")
+    if budget is not None and not _budget_ok(budget):
+        raise LaunchRefused("manifest_invalid", "額度必須是有限正數")
 
 
 def update_manifest(base: Path, launch_id: str, **fields) -> dict:
@@ -516,6 +619,11 @@ def cleanup_launch(base: Path, launch_id: str, *, proven_dead: bool, reason: str
             shutil.rmtree(scratch)
             if scratch.exists() or scratch.is_symlink():
                 return _retain(base, launch_id, "暫存區刪除後仍存在")
+        if m.get("engine") == "claude-stream" and (ldir / JOURNAL).exists():
+            # The journal is the session's record; it stays until the user
+            # deletes the flow (design 2.5, 9). Only the scratch goes.
+            update_manifest(base, launch_id, state="ended", ended_at=time.time())
+            return {"launch_id": launch_id, "cleaned": True, "kept": "journal"}
         shutil.rmtree(ldir)
         if ldir.exists():
             return {"launch_id": launch_id, "cleaned": False, "retained_reason": "launch 目錄刪除後仍存在"}

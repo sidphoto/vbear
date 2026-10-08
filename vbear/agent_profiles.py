@@ -55,7 +55,7 @@ MAX_PROFILE_ID_BODY = 63
 
 # Same safe character class as Task IDs (plan section 4.1): the body is
 # kept short because it is also visible in URLs the agent builder renders.
-VALID_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
+VALID_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 
 # Fixed key set from C-D4: read / write / test / deploy. The values are the
 # three intent levels the UI is allowed to pick. Anything else (including a

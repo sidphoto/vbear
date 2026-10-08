@@ -34,7 +34,9 @@ import secrets
 import time
 from typing import Any, Callable
 
-from . import git_head
+from pathlib import Path
+
+from . import acceptance, git_head, strictjson
 from .activity import CLOCK_SKEW_S, MAX_EPOCH_S
 from .jsonstore import GuardedJsonStore, StoreError
 from .numbers import finite_real
@@ -48,13 +50,16 @@ FAMILIES = ("anthropic", "openai", "google", "minimax", "other", "unknown")
 FAMILY_LABELS = {"anthropic": "Anthropic（Claude）", "openai": "OpenAI（Codex）", "google": "Google（Gemini）",
                  "minimax": "MiniMax", "other": "其他", "unknown": "不明"}
 VERDICTS = ("PASS", "NEEDS_WORK", "BLOCKED")
-SOURCES = ("manual",)
+# "manual": typed into a form (unverified). "console": written by the console
+# itself from a server-held preview; only risk_acknowledged (design 10, S2c).
+SOURCES = ("manual", "console")
 EVENT_KINDS = ("plan_submitted", "plan_approved", "implementation_started", "executor_report",
-               "review_result", "merge_done", "push_done", "note", "roles_changed")
-CLIENT_KINDS = tuple(k for k in EVENT_KINDS if k != "roles_changed")
+               "review_result", "merge_done", "push_done", "note", "roles_changed", "risk_acknowledged")
+CLIENT_KINDS = tuple(k for k in EVENT_KINDS if k not in ("roles_changed", "risk_acknowledged"))
 KIND_LABELS = {"plan_submitted": "提出計畫", "plan_approved": "計畫核准", "implementation_started": "開始實作",
                "executor_report": "執行者回報", "review_result": "審查結果", "merge_done": "已合併",
-               "push_done": "已 push", "note": "備註", "roles_changed": "角色變更"}
+               "push_done": "已 push", "note": "備註", "roles_changed": "角色變更",
+               "risk_acknowledged": "接受殘餘風險"}
 # Fields a client may send per kind (besides kind and note).
 KIND_FIELDS = {"executor_report": frozenset({"commit"}),
                "review_result": frozenset({"reviewer", "verdict", "commit"})}
@@ -66,6 +71,7 @@ PHASES = {
 }
 ATTENTION_PHASES = frozenset({"awaiting_approval", "awaiting_merge", "awaiting_push", "review_unverified"})
 MANUAL_LABEL = "手動記錄（未驗證）"
+CONSOLE_LABEL = "主控台依預覽記錄"
 
 MAX_FLOWS = 200
 MAX_EVENTS = 500
@@ -87,6 +93,7 @@ _STORED_KIND_KEYS = {
     "executor_report": frozenset({"commit"}),
     "review_result": frozenset({"reviewer", "verdict", "commit", "executor_family"}),
     "roles_changed": frozenset({"roles"}),
+    "risk_acknowledged": acceptance.FIELDS,
 }
 
 
@@ -160,6 +167,8 @@ def _event_problem(event, index: int, prev_at: float | None) -> str | None:
         return "事件時間倒退"
     if event.get("source") not in SOURCES:
         return "事件來源不合法"
+    if (event["source"] == "console") != (kind == "risk_acknowledged"):
+        return "事件來源與種類不符"
     if not _short_text(event.get("note"), MAX_NOTE):
         return "備註不合法"
     if kind in ("executor_report", "review_result"):
@@ -177,6 +186,10 @@ def _event_problem(event, index: int, prev_at: float | None) -> str | None:
             return "審查者紀錄不合法"
     if kind == "roles_changed" and _roles_problem(event.get("roles")):
         return "角色紀錄不合法"
+    if kind == "risk_acknowledged":
+        problem = acceptance.record_problem(acceptance.acceptance_fields(event))
+        if problem:
+            return f"風險接受紀錄不合法（{problem}）"
     return None
 
 
@@ -209,6 +222,30 @@ def _entry_problem(key, value) -> str | None:
 
 
 store = GuardedJsonStore("flows.json", "流程儲存", _entry_problem)
+
+# flows.json for readers that must not write: the runtime daemon (planner
+# decision S2a-2 Q3). 200 flows x 500 events is far below these limits.
+FLOWS_LIMITS = strictjson.Limits(32 << 20, 4_000_000, 16, 32 << 20)
+
+
+def read_only_snapshot(state_dir=None) -> dict:
+    """All flows, read strictly and never repaired: the corruption marker,
+    an unsafe file, a strict-JSON failure, a limit or any entry this module
+    could not have written raises StoreError. Unlike ``store.load`` it
+    quarantines nothing; a missing file is an empty store."""
+    base = Path(state_dir) if state_dir is not None else store.path().parent
+    if (base / (store.filename + ".corrupted")).exists():
+        raise StoreError("流程儲存先前偵測到損毀，需人工復原")
+    parsed = strictjson.load_owned_object(base / store.filename, FLOWS_LIMITS)
+    if not parsed.ok:
+        if parsed.problem == "檔案不存在":
+            return {}
+        raise StoreError(f"流程儲存無法安全讀取（{parsed.problem}）")
+    for key, value in parsed.value.items():
+        problem = _entry_problem(key, value)
+        if problem:
+            raise StoreError(f"流程儲存含有不符結構的項目（{problem}）")
+    return parsed.value
 
 
 # --- input from the API (strict; ValueError on anything else) ----------------
@@ -547,7 +584,9 @@ def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str]
         **derived,
         "latest_review": next((r for rnd in reversed(derived["rounds"]) for r in reversed(rnd["reviews"])), None),
         "executor_live": executor_live(roles["executor"].get("session_id"), live, now),
-        "events": [{**e, "label": KIND_LABELS[e["kind"]], "source_label": MANUAL_LABEL} for e in flow["events"]],
+        "events": [{**e, "label": KIND_LABELS[e["kind"]],
+                    "source_label": CONSOLE_LABEL if e["source"] == "console" else MANUAL_LABEL}
+                   for e in flow["events"]],
     }
 
 

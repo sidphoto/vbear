@@ -38,7 +38,7 @@ LOCAL_VERIFIED_FILE = "claude-verified.json"
 # The terminal-title checks of the interactive verification run; judged by
 # vbear/title_check.py from a report's own events.
 from ..title_check import TITLE_CHECKS, report_title_passes  # noqa: E402
-_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
 
 
 def local_verified_versions() -> dict:

@@ -28,7 +28,7 @@ MAX_SMALL_FILE = 4096          # HEAD, a loose ref, a .git file, commondir
 MAX_PACKED_REFS = 8 << 20
 MAX_PARENTS = 64
 MAX_SYMREF_DEPTH = 5
-SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 # git check-ref-format, conservatively: no component starts with "." and none
 # holds a control character, space, ~ ^ : ? * [ or backslash ("/" separates).
 _REF_PART = r"(?!\.)[^\x00-\x20~^:?*\[\\\x7f/]+"

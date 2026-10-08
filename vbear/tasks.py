@@ -79,7 +79,7 @@ MAX_ITEMS = 50
 MAX_STEPS = 50
 MAX_ARTIFACTS = 50
 
-VALID_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
+VALID_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 
 # Statuses the client may assert directly via body["status"] when it doesn't
 # correspond to agent/tests/human provenance state. "verification_asserted"

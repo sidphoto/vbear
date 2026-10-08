@@ -48,7 +48,7 @@ MAX_SUBSCRIBERS = 8
 MAX_CONCURRENT_PANES = 4
 LINE_MAX = 2 << 20            # client-side frame line cap
 TAIL_MAX = _d.FULL_REPLAY_MAX
-SESSION_RE = re.compile(r"^n-[0-9a-f]{12}$")
+SESSION_RE = re.compile(r"^n-[0-9a-f]{12}\Z")
 WORKSPACE_ID = "native"
 
 
