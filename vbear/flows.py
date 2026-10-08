@@ -40,9 +40,10 @@ from .jsonstore import GuardedJsonStore, StoreError
 from .numbers import finite_real
 from .tasks import VALID_ID_RE as TASK_ID_RE
 
-FLOW_ID_RE = re.compile(r"^flow-[0-9a-f]{12}$")
-SESSION_RE = re.compile(r"^n-[0-9a-f]{12}$")
-COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+# \Z, not $: $ also matches before a trailing newline ("<sha>\n" would pass).
+FLOW_ID_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
+SESSION_RE = re.compile(r"^n-[0-9a-f]{12}\Z")
+COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 FAMILIES = ("anthropic", "openai", "google", "minimax", "other", "unknown")
 FAMILY_LABELS = {"anthropic": "Anthropic（Claude）", "openai": "OpenAI（Codex）", "google": "Google（Gemini）",
                  "minimax": "MiniMax", "other": "其他", "unknown": "不明"}

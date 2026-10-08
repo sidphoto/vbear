@@ -299,6 +299,8 @@ class InputTests(FlowCase):
             {"kind": "review_result", "reviewer": 5, "verdict": "PASS", "commit": C1},
             {"kind": "review_result", "reviewer": True, "verdict": "PASS", "commit": C1},
             {"kind": "note", "note": "x" * 2001},
+            {"kind": "executor_report", "commit": C1 + "\n"},          # $ would have let this through
+            {"kind": "review_result", "reviewer": 0, "verdict": "PASS", "commit": C1 + "\n"},
         ]
         for body in bad:
             with self.subTest(body=str(body)[:60]):
@@ -318,6 +320,7 @@ class InputTests(FlowCase):
             {**roles(), "planner": {"name": "", "family": "anthropic"}},
             {**roles(), "planner": {"name": "p", "family": "gpt"}},
             {**roles(), "executor": {"name": "e", "family": "anthropic", "session_id": "n-zz"}},
+            {**roles(), "executor": {"name": "e", "family": "anthropic", "session_id": "n-0123456789ab\n"}},
             {**roles(), "executor": {"name": "e", "family": "anthropic", "workdir": "relative"}},
             {**roles(), "executor": {"name": "e", "family": "anthropic", "workdir": str(self.root / "missing")}},
             {**roles(), "planner": {"name": "p", "family": "anthropic", "workdir": "/tmp"}},   # only executor has one
