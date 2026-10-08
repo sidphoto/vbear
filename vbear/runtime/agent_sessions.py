@@ -477,15 +477,126 @@ def prepare_codex_launch(base: Path, workdir: str, *, cli_binary: str, cli_versi
 
 
 def _read_manifest(ldir: Path, uid: int) -> dict:
+    """Design 2.3: read through one O_NOFOLLOW descriptor (owned by us, a
+    regular file, <= 64 KiB) and parsed strictly (node and depth limits, no
+    duplicate keys, no NaN/Infinity). A claude-stream manifest is then checked
+    field by field against its exact schema."""
+    from .. import strictjson
     path = ldir / MANIFEST
     _owned_file(path, uid)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise LaunchRefused("manifest_invalid", "manifest 無法讀取") from exc
-    if not isinstance(data, dict) or data.get("manifest_version") != MANIFEST_VERSION:
+    parsed = strictjson.load_owned_object(path, strictjson.MANIFEST)
+    if not parsed.ok:
+        raise LaunchRefused("manifest_invalid", f"manifest 無法讀取（{parsed.problem}）")
+    data = parsed.value
+    if data.get("manifest_version") != MANIFEST_VERSION or isinstance(data.get("manifest_version"), bool):
         raise LaunchRefused("manifest_invalid", "manifest 格式不符")
+    if data.get("engine") == "claude-stream":
+        problem = stream_manifest_problem(data)
+        if problem:
+            raise LaunchRefused("manifest_invalid", f"串流 manifest 不符（{problem}）")
     return data
+
+
+_STREAM_REQUIRED = frozenset({
+    "manifest_version", "launch_id", "native_session_id", "engine", "cli_binary", "cli_version", "cli_verified",
+    "cli_identity", "model_id", "settings_path", "settings_sha256", "canonical_workspace", "allowed_root",
+    "launch_dir", "scratch", "state", "created", "leader", "observed", "boundary", "pipeline_id", "task_id",
+    "claude_session_id", "budget_usd"})
+_STREAM_OPTIONAL = frozenset({"retained_reason", "retained_at", "ended_at"})
+_STREAM_STATES = ("prepared", "launching", "running", "manual_review", "ended")
+_HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
+_LIBPROC_START = re.compile(r"^([0-9]{1,12})\.[0-9]{6}\Z")
+_PS_START = re.compile(r"^[A-Z][a-z]{2} [A-Z][a-z]{2} [ 0-9][0-9] [0-9]{2}:[0-9]{2}:[0-9]{2} ([0-9]{4})\Z")
+_EARLIEST = 1577836800.0                                   # 2020-01-01
+
+
+def _int_in(value, low: int, high: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _epoch_ok(value) -> bool:
+    import math
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            and _EARLIEST <= value <= time.time() + 86400)
+
+
+def _start_ok(value, *, allow_empty: bool) -> bool:
+    """A process start time as proctrack writes it (design 2.4: between
+    2020-01-01 and a day from now)."""
+    if value == "" and allow_empty:
+        return True
+    if not isinstance(value, str):
+        return False
+    m = _LIBPROC_START.match(value)
+    if m:
+        return _EARLIEST <= int(m.group(1)) <= time.time() + 86400
+    m = _PS_START.match(value)
+    return m is not None and 2020 <= int(m.group(1)) <= time.gmtime(time.time() + 86400).tm_year
+
+
+def _abs_path(value) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= 4096 and "\0" not in value and os.path.isabs(value)
+
+
+def stream_manifest_problem(m: dict) -> str | None:
+    """None when ``m`` is exactly a claude-stream manifest (design 2.1, 2.4:
+    identifiers by their formats, process identities within range, no other
+    fields)."""
+    keys = set(m)
+    if not _STREAM_REQUIRED <= keys or keys - _STREAM_REQUIRED - _STREAM_OPTIONAL:
+        return "欄位不符"
+    checks = [
+        ("launch_id", isinstance(m["launch_id"], str) and LAUNCH_RE.match(m["launch_id"]) is not None),
+        ("native_session_id", m["native_session_id"] is None or (isinstance(m["native_session_id"], str)
+                                                                 and re.match(r"^n-[0-9a-f]{12}\Z",
+                                                                              m["native_session_id"]) is not None)),
+        ("cli_binary", _abs_path(m["cli_binary"])),
+        ("cli_version", stream_protocol.constants_for(m["cli_version"]) is not None),
+        ("cli_verified", m["cli_verified"] is True),
+        ("cli_identity", isinstance(m["cli_identity"], list) and len(m["cli_identity"]) == 6
+                         and all(_int_in(x, 0, 2 ** 63) for x in m["cli_identity"])),
+        ("model_id", isinstance(m["model_id"], str) and STREAM_MODEL_RE.match(m["model_id"]) is not None),
+        ("settings_path", _abs_path(m["settings_path"])),
+        ("settings_sha256", isinstance(m["settings_sha256"], str) and _HEX64.match(m["settings_sha256"]) is not None),
+        ("canonical_workspace", _abs_path(m["canonical_workspace"])),
+        ("allowed_root", _abs_path(m["allowed_root"])),
+        ("launch_dir", isinstance(m["launch_dir"], dict) and set(m["launch_dir"]) == {"path", "inode", "uid"}
+                       and _abs_path(m["launch_dir"]["path"]) and _int_in(m["launch_dir"]["inode"], 0, 2 ** 63)
+                       and _int_in(m["launch_dir"]["uid"], 0, 2 ** 31)),
+        ("scratch", isinstance(m["scratch"], dict)
+                    and set(m["scratch"]) == {"path", "inode", "uid", "per_uid_tmp_bytes"}
+                    and _abs_path(m["scratch"]["path"]) and _int_in(m["scratch"]["inode"], 0, 2 ** 63)
+                    and _int_in(m["scratch"]["uid"], 0, 2 ** 31)
+                    and _int_in(m["scratch"]["per_uid_tmp_bytes"], 0, CLAUDE_TMP_PATH_LIMIT)),
+        ("state", m["state"] in _STREAM_STATES),
+        ("created", _epoch_ok(m["created"])),
+        ("leader", m["leader"] is None or (isinstance(m["leader"], dict)
+                                           and set(m["leader"]) == {"pid", "start", "source"}
+                                           and _int_in(m["leader"]["pid"], 1, 99999)
+                                           and _start_ok(m["leader"]["start"], allow_empty=False)
+                                           and m["leader"]["source"] in ("libproc", "ps"))),
+        ("observed", isinstance(m["observed"], list) and len(m["observed"]) <= 4096
+                     and all(isinstance(x, list) and len(x) == 2 and _int_in(x[0], 1, 99999)
+                             and _start_ok(x[1], allow_empty=True) for x in m["observed"])),
+        ("boundary", isinstance(m["boundary"], dict) and len(m["boundary"]) <= 16
+                     and all(isinstance(k, str) and isinstance(v, str) and len(v) <= 512
+                             for k, v in m["boundary"].items())),
+        ("pipeline_id", isinstance(m["pipeline_id"], str) and FLOW_ID_RE.match(m["pipeline_id"]) is not None),
+        ("task_id", isinstance(m["task_id"], str) and TASK_ID_RE.match(m["task_id"]) is not None
+                    and m["task_id"] not in (".", "..")),
+        ("claude_session_id", m["claude_session_id"] is None
+                              or (isinstance(m["claude_session_id"], str)
+                                  and stream_protocol.UUID_RE.match(m["claude_session_id"]) is not None)),
+        ("budget_usd", m["budget_usd"] is None or _budget_ok(m["budget_usd"])),
+        ("retained_reason", "retained_reason" not in m
+                            or (isinstance(m["retained_reason"], str) and len(m["retained_reason"]) <= 4096)),
+        ("retained_at", "retained_at" not in m or _epoch_ok(m["retained_at"])),
+        ("ended_at", "ended_at" not in m or _epoch_ok(m["ended_at"])),
+    ]
+    for name, ok in checks:
+        if not ok:
+            return f"{name} 不合法"
+    return None
 
 
 def load_validated(base: Path, launch_id: str) -> dict:

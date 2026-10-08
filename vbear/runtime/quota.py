@@ -85,6 +85,11 @@ def scan(base) -> int:
     return total
 
 
+def _amount(value) -> bool:
+    """A byte count: an int (never a bool), 0 <= value <= the hard limit."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= HARD_LIMIT
+
+
 class Ledger:
     def __init__(self, base, limit: int = HARD_LIMIT):
         self.base = base
@@ -92,6 +97,7 @@ class Ledger:
         self.used: int | None = None              # None: not rebuilt, nothing is granted
         self.reservations: dict[str, int] = {}
         self.problem = "額度尚未核算"
+        self.overrun = ""                         # a writer passed its reservation: refuse until rebuilt
 
     def rebuild(self, outstanding: dict[str, int] | None) -> bool:
         """``outstanding``: writers not proven finished, each at its full
@@ -99,12 +105,15 @@ class Ledger:
         try:
             if outstanding is None:
                 raise ScanFailed("無法判斷哪些寫入者仍在進行")
+            if not isinstance(outstanding, dict) or not all(
+                    isinstance(k, str) and _amount(v) for k, v in outstanding.items()):
+                raise ScanFailed("進行中寫入者的保留額度不合法")
             used = scan(self.base)
         except ScanFailed as exc:
             self.used, self.reservations = None, {}
             self.problem = f"額度無法核算，需要人工檢查（{exc}）"
             return False
-        self.used, self.reservations, self.problem = used, dict(outstanding), ""
+        self.used, self.reservations, self.problem, self.overrun = used, dict(outstanding), "", ""
         return True
 
     def free(self) -> int | None:
@@ -116,6 +125,10 @@ class Ledger:
         """None when granted, else why not."""
         if self.used is None:
             return self.problem
+        if self.overrun:
+            return self.overrun
+        if not isinstance(key, str) or not _amount(amount):
+            return "保留額度必須是非負整數"
         if key in self.reservations:
             return "重複的保留"
         if self.used + sum(self.reservations.values()) + amount > self.limit:
@@ -124,10 +137,23 @@ class Ledger:
         self.reservations[key] = amount
         return None
 
-    def release(self, key: str, written: int) -> None:
-        """The writer is done: what it actually wrote becomes used, the rest
-        of its reservation is returned."""
+    def release(self, key: str, written) -> None:
+        """The writer is done: what it actually wrote becomes used, and the
+        rest of its reservation is returned. A writer must stay within its
+        reservation (design 9); if it did not, or its count is not a byte
+        count, the true (or worst-case) amount is counted and nothing more
+        is granted until the ledger is rebuilt from a scan."""
         amount = self.reservations.pop(key, None)
-        if amount is None or self.used is None:
+        if self.used is None:
             return
-        self.used += max(0, min(written, amount))
+        if not _amount(written):
+            self.used += amount if amount is not None else 0
+            self.overrun = "寫入量無法核對，額度需要重新核算"
+            return
+        if amount is None:
+            self.used += written
+            self.overrun = "未保留額度就寫入，額度需要重新核算"
+            return
+        self.used += written
+        if written > amount:
+            self.overrun = f"有寫入超過保留額度（{written} > {amount}），額度需要重新核算"

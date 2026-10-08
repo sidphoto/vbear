@@ -275,11 +275,22 @@ class JournalState:
         cost = finite_real(d["total_cost_usd"])
         if cost < self.cost:
             self._bad("total_cost_usd 變小")
-        # Facts must agree with each other (design 2.5).
+        # Facts must agree with each other (design 2.5), under the same rules
+        # the EventTracker applies live (design 2.4 response identity): a
+        # request_id maps to one message.id and back, and once the events
+        # move on to a new request_id an earlier one never returns (A, B, A
+        # is refused here as it is live).
         pairs = {}
+        current = None
+        seen_order: set[str] = set()
         for e in d["assistant_events"]:
             if pairs.setdefault(e["request_id"], e["message_id"]) != e["message_id"]:
                 self._bad("同一個 request_id 對到兩個 message_id")
+            if e["request_id"] != current:
+                if current is not None and e["request_id"] in seen_order:
+                    self._bad("回應順序交錯：切換後又回到先前的 request_id")
+                seen_order.add(e["request_id"])
+                current = e["request_id"]
         if len(set(pairs.values())) != len(pairs):
             self._bad("同一個 message_id 對到兩個 request_id")
         ids = [c["tool_use_id"] for c in d["tool_calls"]]

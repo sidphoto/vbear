@@ -112,6 +112,29 @@ class PipelineStoreTests(StateDir):
                 with ps.Pipeline(self.base, "task-1", create=False) as p, self.assertRaises(ps.StoreRefused):
                     p.started_at(fid)
 
+    def test_directory_sync_failure_is_reported(self):
+        real = os.fsync
+
+        def dir_fsync_fails(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(5, "Input/output error")
+            return real(fd)
+        fid = "flow-0123456789ab"
+        with ps.Pipeline(self.base, "task-1", create=True) as p:
+            with mock.patch("vbear.runtime.pipeline_store.os.fsync", dir_fsync_fails):
+                with self.assertRaises(ps.StoreRefused):
+                    p.write_text(fx.new_uuid(), b"text")
+                with self.assertRaises(ps.StoreRefused):
+                    p.record_start(fid, time.time())
+                with self.assertRaises(ps.StoreRefused):
+                    ps.hold(self.base, fid, "stop")
+                with self.assertRaises(ps.StoreRefused):
+                    ps.release(self.base, fid)
+            # outside the injection everything works again
+            d = fx.new_uuid()
+            p.write_text(d, b"ok")
+            self.assertEqual(p.read_text(d), b"ok")
+
     def test_holds(self):
         fid = "flow-0123456789ab"
         self.assertFalse(ps.is_held(self.base, fid))
@@ -149,6 +172,34 @@ class QuotaTests(StateDir):
         self.assertEqual(led.used, 1074)
         self.assertIsNone(led.reserve("b", 1900))
 
+    def test_amounts_must_be_byte_counts(self):
+        # Codex S2a-2 p1 #2
+        led = quota.Ledger(self.base, limit=100)
+        for bad in ({"x": -1}, {"x": True}, {"x": 1.5}, {"x": "5"}, {"x": quota.HARD_LIMIT + 1}, {1: 5}, ["x"]):
+            with self.subTest(outstanding=bad):
+                self.assertFalse(led.rebuild(bad))
+        self.assertTrue(led.rebuild({}))
+        for bad in (-1, True, False, 1.5, "1", None, quota.HARD_LIMIT + 1):
+            with self.subTest(amount=bad):
+                self.assertIsNotNone(led.reserve("k", bad))
+        self.assertEqual(led.free(), 100)
+
+    def test_an_overrun_is_counted_in_full_and_stops_further_grants(self):
+        led = quota.Ledger(self.base, limit=1000)
+        self.assertTrue(led.rebuild({}))
+        self.assertIsNone(led.reserve("w", 1))
+        led.release("w", 100)                         # wrote more than it reserved
+        self.assertEqual(led.used, 100)
+        self.assertIn("超過", led.reserve("next", 1))
+        self.assertTrue(led.rebuild({}))              # a fresh scan clears it
+        self.assertIsNone(led.reserve("next", 1))
+        led.release("next", True)                      # not a byte count: worst case, then refuse
+        self.assertEqual(led.used, 1)
+        self.assertIsNotNone(led.reserve("again", 1))
+        self.assertTrue(led.rebuild({}))
+        led.release("never-reserved", 5)
+        self.assertIsNotNone(led.reserve("again", 1))
+
     def test_anything_unexpected_refuses(self):
         (self.base / "sessions").mkdir()
         os.symlink("/etc", self.base / "sessions" / "link")
@@ -183,6 +234,23 @@ class FlowContextTests(StateDir):
         self.key = login_identity.create_login_key(self.base, valid_acceptances=0)
         self.cj = claude_json(self.base / "claude.json")
         self.fp = login_identity.claude_login_fingerprint(self.cj, self.key).hmac
+
+    def launch(self, **fields) -> Path:
+        """A real claude-stream manifest for this flow (prepare_stream_launch),
+        then ``fields`` set as the daemon would."""
+        work = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbss-fw-")))
+        self.addCleanup(shutil.rmtree, work, True)
+        binary = self.base / "claude"
+        if not binary.exists():
+            binary.write_text("#!/bin/sh\n")
+            binary.chmod(0o700)
+        m = a.prepare_stream_launch(self.base, str(work), cli_binary=str(binary), cli_version="2.1.292",
+                                    cli_identity=a.binary_identity(str(binary)), model_id=fx.MODEL,
+                                    pipeline_id=self.fid, task_id=self.tid, allowed_root=str(work.parent))
+        self.addCleanup(shutil.rmtree, m["scratch"]["path"], True)
+        if fields:
+            a.update_manifest(self.base, m["launch_id"], **fields)
+        return Path(m["launch_dir"]["path"])
 
     def accept(self, **over):
         fields = {"text_version": acc.RISK_TEXT_VERSION, "codex_version": "0.160.0", "model": "gpt-6-luna",
@@ -272,12 +340,7 @@ class FlowContextTests(StateDir):
     def test_totals_come_from_journals_and_texts(self):
         self.accept()
         # a stream launch with a journal of one valid turn
-        root = self.base / "sessions" / "l-0123456789abcdef"
-        root.mkdir(parents=True, mode=0o700)
-        (self.base / "sessions").chmod(0o700)
-        (root / "manifest.json").write_text(json.dumps({"manifest_version": 1, "launch_id": root.name,
-                                                        "engine": "claude-stream", "pipeline_id": self.fid}))
-        (root / "manifest.json").chmod(0o600)
+        root = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=20.0)
         from tests.test_stream_protocol import Harness
         h = Harness()
         h.records[0] = stream_journal.encode(1, time.time(), "session_started",
@@ -297,6 +360,26 @@ class FlowContextTests(StateDir):
         with self.assertRaises(stream_flow.FlowRefused) as cm:
             stream_flow.load(self.base, self.fid)
         self.assertEqual(cm.exception.code, "count_unavailable")
+
+    def test_a_started_launch_without_journal_refuses(self):
+        # Codex S2a-2 p1 #3: never skipped, whatever its state.
+        self.accept()
+        launch = self.launch()
+        leader = {"pid": 4242, "start": f"{int(time.time())}.000000", "source": "libproc"}
+        for state, extra, refused in (("prepared", {}, False),
+                                      ("prepared", {"native_session_id": "n-0123456789ab"}, True),
+                                      ("prepared", {"leader": leader}, True),
+                                      ("launching", {}, True), ("running", {}, True), ("ended", {}, True),
+                                      ("manual_review", {}, True)):
+            with self.subTest(state=state, extra=extra):
+                a.update_manifest(self.base, launch.name, **{"state": state, "native_session_id": None,
+                                                             "leader": None, **extra})
+                if refused:
+                    with self.assertRaises(stream_flow.FlowRefused) as cm:
+                        stream_flow.flow_sessions(self.base, self.fid)
+                    self.assertEqual(cm.exception.code, "count_unavailable")
+                else:
+                    self.assertEqual(stream_flow.flow_sessions(self.base, self.fid), [])
 
 
 class StreamLaunchTests(StateDir):
@@ -370,6 +453,72 @@ class StreamLaunchTests(StateDir):
         settings.write_text(json.dumps(s))
         with self.assertRaises(a.LaunchRefused):
             a.load_validated(self.base, m["launch_id"])
+
+    def test_manifests_are_read_strictly(self):
+        # Codex S2a-2 p1 #4: every engine's manifest goes through strictjson.
+        for engine_prepare in ("stream", "claude"):
+            with self.subTest(engine=engine_prepare):
+                if engine_prepare == "stream":
+                    m = self.prepare()
+                else:
+                    m = a.prepare_claude_launch(self.base, str(self.work), cli_binary=str(self.binary),
+                                                cli_version="2.1.292",
+                                                cli_identity=a.binary_identity(str(self.binary)),
+                                                allowed_root=str(self.work.parent))
+                    self.scratches.append(m["scratch"]["path"])
+                path = Path(m["launch_dir"]["path"]) / "manifest.json"
+                good = path.read_text()
+                bad = {
+                    "duplicate key": good.replace('"state": "prepared"', '"state": "prepared", "state": "running"'),
+                    "NaN": good.replace('"created": ', '"created": NaN, "x_": ', 1),
+                    "over 64 KiB": good[:-2] + ', "pad": "' + "x" * (64 << 10) + '"}\n',
+                    "not an object": "[]",
+                }
+                for name, text in bad.items():
+                    with self.subTest(case=name):
+                        path.write_text(text)
+                        with self.assertRaises(a.LaunchRefused):
+                            a.load_validated(self.base, m["launch_id"])
+                path.unlink()
+                elsewhere = self.base / "elsewhere.json"
+                elsewhere.write_text(good)
+                path.symlink_to(elsewhere)
+                with self.assertRaises(a.LaunchRefused):
+                    a.load_validated(self.base, m["launch_id"])
+                path.unlink()
+                path.write_text(good)
+                path.chmod(0o600)
+                a.load_validated(self.base, m["launch_id"])
+
+    def test_stream_manifest_schema(self):
+        m = self.prepare()
+        path = Path(m["launch_dir"]["path"]) / "manifest.json"
+        good = json.loads(path.read_text())
+        now = time.time()
+        cases = [
+            {"extra": 1}, {"state": "running2"}, {"cli_verified": False}, {"cli_identity": [1, 2]},
+            {"native_session_id": "n-x"}, {"settings_sha256": "x"}, {"created": 1.0}, {"created": True},
+            {"leader": {"pid": 0, "start": f"{int(now)}.000000", "source": "libproc"}},
+            {"leader": {"pid": 100000, "start": f"{int(now)}.000000", "source": "libproc"}},
+            {"leader": {"pid": True, "start": f"{int(now)}.000000", "source": "libproc"}},
+            {"leader": {"pid": 5, "start": "1.000000", "source": "libproc"}},                   # before 2020
+            {"leader": {"pid": 5, "start": f"{int(now) + 10 * 86400}.000000", "source": "libproc"}},
+            {"leader": {"pid": 5, "start": "", "source": "libproc"}},
+            {"leader": {"pid": 5, "start": f"{int(now)}.000000", "source": "other"}},
+            {"observed": [[5, "x"]]}, {"observed": [[5, ""]] * 4097}, {"observed": [[0, ""]]},
+            {"retained_at": float("inf")}, {"retained_reason": 5},
+        ]
+        for change in cases:
+            with self.subTest(change=repr(change)[:60]):
+                bad = {**good, **change}
+                path.write_text(json.dumps(bad, allow_nan=True))
+                with self.assertRaises(a.LaunchRefused):
+                    a._read_manifest(Path(m["launch_dir"]["path"]), os.getuid())
+        ok = {**good, "state": "running", "native_session_id": "n-0123456789ab",
+              "leader": {"pid": 5, "start": f"{int(now)}.000000", "source": "libproc"},
+              "observed": [[6, ""], [7, "Wed Oct  8 12:00:00 2026"]], "retained_reason": "x", "ended_at": now}
+        path.write_text(json.dumps(ok))
+        self.assertEqual(a._read_manifest(Path(m["launch_dir"]["path"]), os.getuid())["state"], "running")
 
     def test_cleanup_keeps_the_journal(self):
         m = self.prepare()

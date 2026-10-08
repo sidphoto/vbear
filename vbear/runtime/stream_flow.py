@@ -80,9 +80,17 @@ def flow_sessions(base, pipeline_id: str) -> list[dict]:
             m = agent_sessions._read_manifest(agent_sessions.launch_dir(base, name), os.getuid())
         except (OSError, agent_sessions.LaunchRefused) as exc:
             raise FlowRefused("count_unavailable", f"launch {name} 的 manifest 無法讀取，無法核算流程用量") from exc
-        if m.get("engine") == "claude-stream" and m.get("pipeline_id") == pipeline_id \
-                and (root / name / agent_sessions.JOURNAL).exists():
+        if m.get("engine") != "claude-stream" or m.get("pipeline_id") != pipeline_id:
+            continue
+        journal = root / name / agent_sessions.JOURNAL
+        if journal.exists() or journal.is_symlink():
             out.append(m)
+        elif not (m.get("state") == "prepared" and m.get("native_session_id") is None and m.get("leader") is None):
+            # Only a launch that never had a process may lack a journal (the
+            # journal is created before the process starts). Any other one
+            # would make the flow's totals silently low (Codex S2a-2 p1 #3).
+            raise FlowRefused("count_unavailable",
+                              f"launch {name} 的日誌不見了（狀態 {str(m.get('state'))[:32]}），無法核算流程用量")
     return out
 
 

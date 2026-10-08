@@ -391,6 +391,15 @@ class JournalTests(unittest.TestCase):
                     *r["data"]["assistant_events"], {**r["data"]["assistant_events"][0], "message_id": "m2",
                                                      "user_message_uuid": None, "user_message_uuids": None}]}}
                 for r in recs],
+            "A, B, A response order": lambda recs: [
+                r if r["kind"] != "turn_result" else {**r, "data": {
+                    **r["data"], "num_turns": 3, "assistant_events": [
+                        r["data"]["assistant_events"][0],
+                        {"request_id": "req_B", "message_id": "msg_B", "user_message_uuid": None,
+                         "user_message_uuids": None},
+                        {**r["data"]["assistant_events"][0], "user_message_uuid": None,
+                         "user_message_uuids": None}]}}
+                for r in recs],
             "tool id repeated": lambda recs: [
                 r if r["kind"] != "turn_result" else {**r, "data": {**r["data"], "tool_calls":
                                                                      r["data"]["tool_calls"] * 2}}
@@ -421,6 +430,50 @@ class JournalTests(unittest.TestCase):
             w.close()
         finally:
             os.close(fd)
+
+
+class RecoveryMatchesLiveTests(unittest.TestCase):
+    """Codex S2a-2 p1 #1: what the tracker refuses live, the journal state
+    machine refuses on recovery."""
+
+    def test_a_b_a_is_refused_in_both(self):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="z", responses=[
+            [{"type": "thinking", "thinking": "."}],
+            [{"type": "thinking", "thinking": "."}],
+            [{"type": "tool_use", "id": "so", "name": "StructuredOutput", "input": fx.report(d)}]],
+            rep=fx.report(d))
+        a_event = next(e for e in events if e.get("type") == "assistant" and e["request_id"] == "req_z_1")
+        back = copy.deepcopy(a_event)
+        back.update(uuid=fx.new_uuid(), user_message_uuid=None, user_message_uuids=None)
+        events.insert(events.index(next(e for e in events if e.get("request_id") == "req_z_2")) + 1, back)
+        with self.assertRaises(sp.ProtocolError) as cm:              # live
+            h.feed(events)
+        self.assertEqual(cm.exception.reason, "response_ids")
+        js = sj.JournalState()                                        # recovery, from facts alone
+        sid = fx.new_uuid()
+        recs = [("session_started", {"claude_session_id": sid, "pipeline_id": "flow-0123456789ab",
+                                     "cli_version": "2.1.292", "argv_sha256": "a" * 64, "budget_usd": 20.0}),
+                ("dispatch_accepted", {"dispatch_id": d, "text_sha256": "b" * 64, "length": 1,
+                                       "approval": {"kind": "preview", "id": "p"}}),
+                ("dispatch_written", {"dispatch_id": d}),
+                ("turn_lifecycle", {"dispatch_id": d, "state": "queued"}),
+                ("turn_lifecycle", {"dispatch_id": d, "state": "started"}),
+                ("turn_init", {"dispatch_id": d, "permissionMode": "acceptEdits", "tools": ["Bash", "StructuredOutput"],
+                               "mcp_servers": [], "model": fx.MODEL, "cwd": CWD, "claude_code_version": "2.1.292",
+                               "apiKeySource": "none"}),
+                ("dispatch_confirmed", {"dispatch_id": d})]
+        for n, (kind, data) in enumerate(recs, 1):
+            js.apply(kind, data, time.time())
+        ev = lambda rid, first: {"request_id": rid, "message_id": "m" + rid, "user_message_uuid": d if first else None,
+                                 "user_message_uuids": [d] if first else None}
+        result = {"dispatch_id": d, "subtype": "success", "is_error": False, "num_turns": 3, "total_cost_usd": 0.1,
+                  "result_index": 0, "user_message_uuids": [d],
+                  "assistant_events": [ev("A", True), ev("B", False), ev("A", False)], "tool_calls": [],
+                  "structured_output": None, "result_text": None, "result_too_large": False}
+        with self.assertRaises(sj.JournalCorrupt):
+            js.apply("turn_result", result, time.time())
 
 
 class SanitizeTests(unittest.TestCase):

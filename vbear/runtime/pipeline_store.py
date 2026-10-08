@@ -59,10 +59,14 @@ def _open_dir(name: str, parent: int, *, create: bool) -> int:
 
 
 def _fsync_dir(fd: int):
+    """Make a rename/link/unlink in this directory durable. A failure is
+    reported, never swallowed (Codex S2a-2 p1 #5): the caller treats the
+    write as failed, so e.g. a start record that might vanish after a crash
+    cannot quietly move the flow's elapsed-time origin."""
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        raise StoreRefused(f"資料夾無法同步到磁碟（{exc.strerror or type(exc).__name__}）") from exc
 
 
 class Pipeline:

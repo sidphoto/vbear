@@ -402,7 +402,12 @@ class EventTracker:
                         and isinstance(item.get("is_error", False), bool))
             if not shape_ok:
                 # design 2.4: content not a string, is_error not a boolean or
-                # another field -> this turn is invalid (recorded as such).
+                # another field -> this turn is invalid. The journal's anomaly
+                # reasons are fixed by design 2.5 (unknown_type, extra_fields),
+                # so the item is recorded as extra_fields with event_type
+                # "user/tool_result": a wrong type or a missing field reads as
+                # "fields other than allowed". The effect is the design's (turn
+                # invalid, no further dispatch); only the label is coarser.
                 out.append(("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "extra_fields",
                                              "event_type": "user/tool_result"}))
                 continue

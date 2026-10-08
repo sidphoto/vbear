@@ -32,7 +32,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 # git check-ref-format, conservatively: no component starts with "." and none
 # holds a control character, space, ~ ^ : ? * [ or backslash ("/" separates).
 _REF_PART = r"(?!\.)[^\x00-\x20~^:?*\[\\\x7f/]+"
-REF_RE = re.compile(rf"^refs/(?:{_REF_PART}/)*{_REF_PART}$")
+REF_RE = re.compile(rf"^refs/(?:{_REF_PART}/)*{_REF_PART}\Z")
 
 
 class _Unreadable(Exception):

@@ -25,6 +25,7 @@ GOOD = {
     "server._TOKEN_RE": (server._TOKEN_RE, "A" * 43),
     "cli_versions._VERSION_RE": (cli_versions._VERSION_RE, "2.1.292"),
     "git_head.SHA_RE": (git_head.SHA_RE, "a" * 40),
+    "git_head.REF_RE": (git_head.REF_RE, "refs/heads/main"),
     "git_objects.SHA_RE": (git_objects.SHA_RE, "a" * 64),
     "flows.COMMIT_RE": (flows.COMMIT_RE, "a" * 40),
     "flows.FLOW_ID_RE": (flows.FLOW_ID_RE, "flow-0123456789ab"),
