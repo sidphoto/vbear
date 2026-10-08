@@ -44,7 +44,12 @@ DISPLAY_VALUES = ("working", "waiting", "needs-input", "exited", "unknown")
 TRUST_VALUES = ("authoritative", "trial", "absent")
 
 RUNG_CLAUDE_TITLE = "claude-title"
-RUNG_LABELS = {RUNG_CLAUDE_TITLE: "Claude Code 終端標題（Agent 自己回報）"}
+RUNG_CLAUDE_STREAM = "claude-stream"
+RUNG_LABELS = {RUNG_CLAUDE_TITLE: "Claude Code 終端標題（Agent 自己回報）",
+               RUNG_CLAUDE_STREAM: "Claude Code 串流協定（每一輪的事件）"}
+# design 2.4: the stream session's state, which the protocol reports; more
+# trustworthy than the title. Anything else reads as unknown.
+STREAM_WORKING = frozenset({"writing", "sent", "running", "finishing"})
 
 # rung -> engine -> versions whose behaviour was observed and recorded.
 VERIFIED = {
@@ -165,7 +170,20 @@ def arbitrate(info: dict, now: float | None = None) -> dict:
     evidence_in = info.get("activity_evidence")
     title = evidence_in.get("claude_title") if isinstance(evidence_in, dict) else None
 
-    if engine == "claude" and managed and isinstance(title, dict):
+    stream = evidence_in.get("claude_stream") if isinstance(evidence_in, dict) else None
+    if engine == "claude-stream" and managed and isinstance(stream, dict):
+        state = stream.get("state")
+        value = "working" if state in STREAM_WORKING else "waiting" if state == "idle" else "unknown"
+        note = {"working": "執行者正在處理派工（依串流協定）", "waiting": "這一輪已結束，等待下一則派工",
+                "unknown": f"串流 session 的狀態是 {str(state)[:32]}，無法判斷"}[value]
+        evidence.append({"rung": RUNG_CLAUDE_STREAM, "label": RUNG_LABELS[RUNG_CLAUDE_STREAM],
+                         "trust": "authoritative", "value": value, "note": note, "since": None,
+                         "observed_at": None})
+        if session == "present" and not info.get("closing"):
+            if value != "unknown":
+                activity, decided_by = value, RUNG_CLAUDE_STREAM
+            reason = note
+    elif engine == "claude" and managed and isinstance(title, dict):
         version = info.get("cli_version")
         trust = "authoritative" if title_verified("claude", version) else "trial"
         value, note = _title_reading(title, now)

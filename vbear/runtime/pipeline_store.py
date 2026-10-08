@@ -235,6 +235,17 @@ class Pipeline:
         return now
 
 
+    def remove_start(self, pipeline_id: str, expected: float) -> None:
+        """Undo a start record this daemon just wrote, when the open that wrote
+        it failed before any journal existed: the flow has not started, so
+        there is no origin to move. Refuses unless the record is exactly the
+        one written (never a record some session started from)."""
+        if self.started_at(pipeline_id) != expected:
+            raise StoreRefused("流程開始時間的紀錄不是這次寫入的，不能移除")
+        os.unlink(STARTED, dir_fd=self.fd)
+        _fsync_dir(self.fd)
+
+
 # holds (design 7) -------------------------------------------------------------------
 
 def _holds_dir(base, *, create: bool) -> tuple[int, int]:

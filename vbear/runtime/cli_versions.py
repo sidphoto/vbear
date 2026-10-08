@@ -107,6 +107,44 @@ def verified_versions(engine: str) -> tuple[str, ...]:
     if engine != "claude":
         return built_in
     return built_in + tuple(v for v in sorted(local_verified_versions()) if v not in built_in)
+
+
+# Claude Code versions whose stream mode (design 2.2) passed
+# ``boundary_check --mode stream``: built in only with a code change backed by
+# docs/evidence/claude-code-<version>-stream.md, or recorded on this Mac by
+# the probe. Kept apart from the headless/interactive records. A version that
+# is neither cannot start a stream session; there is no "start unverified".
+# 2.1.292: boundary_check --mode stream passed 2026-10-08
+# (docs/evidence/claude-code-2.1.292-stream.md).
+STREAM_VERIFIED_VERSIONS: tuple[str, ...] = ("2.1.292",)
+LOCAL_STREAM_VERIFIED_FILE = "claude-stream-verified.json"
+_STREAM_REPORT_MAX = 8 << 20
+
+
+def local_stream_verified_versions() -> dict:
+    """{version: record} whose stream probe passed here, each backed by its
+    report (mode "stream", passed, this version), re-read every time."""
+    from .. import config as cfg, strictjson
+    rec = strictjson.load_owned_object(cfg.state_dir() / LOCAL_STREAM_VERIFIED_FILE, strictjson.MANIFEST)
+    versions = rec.value.get("versions") if rec.ok else None
+    if not isinstance(versions, dict):
+        return {}
+    out = {}
+    for v, r in versions.items():
+        if not (isinstance(v, str) and _VERSION_RE.match(v) and isinstance(r, dict) and r.get("passed") is True
+                and isinstance(r.get("report"), str) and isinstance(r.get("verified_at"), str)):
+            continue
+        report = strictjson.load_owned_object(r["report"], strictjson.Limits(_STREAM_REPORT_MAX, 2_000_000, 64,
+                                                                             _STREAM_REPORT_MAX))
+        data = report.value if report.ok else {}
+        if data.get("mode") == "stream" and data.get("passed") is True and data.get("claude_version") == v:
+            out[v] = r
+    return out
+
+
+def stream_verified_versions() -> tuple[str, ...]:
+    built_in = STREAM_VERIFIED_VERSIONS
+    return built_in + tuple(v for v in sorted(local_stream_verified_versions()) if v not in built_in)
 # In 0.159.2, --ignore-user-config and --ephemeral are accepted by `codex exec`
 # but rejected by the interactive TUI command. Managed PTY launches require the
 # interactive command, so they stay disabled until a pinned build supports both.

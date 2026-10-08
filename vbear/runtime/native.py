@@ -95,6 +95,8 @@ def _agent_engine(info: dict) -> str | None:
     engine = info.get("engine")
     if engine in ("claude", "codex"):
         return engine
+    if engine == "claude-stream":
+        return "claude"
     argv = info.get("argv") or []
     name = Path(argv[0]).name if argv else ""
     return name if name in ("claude", "codex") else None

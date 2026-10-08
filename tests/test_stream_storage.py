@@ -17,6 +17,7 @@ from tests import stream_fixtures as fx
 from vbear import acceptance as acc
 from vbear import flows, login_identity, tasks
 from vbear.runtime import agent_sessions as a
+from vbear.runtime import cli_versions
 from vbear.runtime import pipeline_store as ps
 from vbear.runtime import quota, stream_flow, stream_journal, stream_protocol as sp
 
@@ -134,6 +135,18 @@ class PipelineStoreTests(StateDir):
             d = fx.new_uuid()
             p.write_text(d, b"ok")
             self.assertEqual(p.read_text(d), b"ok")
+
+    def test_remove_start_only_undoes_the_record_just_written(self):
+        fid = "flow-0123456789ab"
+        with ps.Pipeline(self.base, "task-abc", create=True) as p:
+            t = p.record_start(fid, time.time())
+            with self.assertRaises(ps.StoreRefused):
+                p.remove_start(fid, t - 1)                                  # not the one written
+            with self.assertRaises(ps.StoreRefused):
+                p.remove_start("flow-ffffffffffff", t)                      # another flow's
+            self.assertEqual(p.started_at(fid), t)
+            p.remove_start(fid, t)
+            self.assertIsNone(p.started_at(fid))
 
     def test_holds(self):
         fid = "flow-0123456789ab"
@@ -695,6 +708,34 @@ class FlowContextTests(StateDir):
                     self.assertEqual(cm.exception.code, "count_unavailable")
                 else:
                     self.assertEqual(stream_flow.flow_sessions(self.base, self.fid, started=False), [])
+
+
+class StreamVerificationRecordTests(StateDir):
+    """A version counts as stream-verified only when built in or backed by a
+    passing stream report (design 2.2: no "unverified but start")."""
+
+    def record(self, report: dict | None, **over):
+        path = self.base / "report.json"
+        if report is not None:
+            path.write_text(json.dumps(report))
+            path.chmod(0o600)
+        rec = {"passed": True, "report": str(path), "verified_at": "now", **over}
+        (self.base / cli_versions.LOCAL_STREAM_VERIFIED_FILE).write_text(json.dumps({"versions": {"9.9.9": rec}}))
+        (self.base / cli_versions.LOCAL_STREAM_VERIFIED_FILE).chmod(0o600)
+
+    def test_record_must_be_backed_by_a_passing_stream_report(self):
+        good = {"mode": "stream", "passed": True, "claude_version": "9.9.9"}
+        self.record(good)
+        self.assertIn("9.9.9", cli_versions.stream_verified_versions())
+        for report, over in ((None, {}), ({**good, "mode": "headless"}, {}), ({**good, "passed": False}, {}),
+                             ({**good, "claude_version": "9.9.8"}, {}), (good, {"passed": False}),
+                             (good, {"passed": "true"})):
+            with self.subTest(report=report, over=over):
+                if (self.base / "report.json").exists():
+                    (self.base / "report.json").unlink()
+                self.record(report, **over)
+                self.assertNotIn("9.9.9", cli_versions.stream_verified_versions())
+        self.assertEqual(cli_versions.STREAM_VERIFIED_VERSIONS, ("2.1.292",))
 
 
 class StreamLaunchTests(StateDir):

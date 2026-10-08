@@ -79,8 +79,10 @@ VERSIONS = {
                                                  "subtype", "type", "user_message_uuid", "uuid"}),
             "user/replay": frozenset({"isReplay", "message", "parent_tool_use_id", "session_id", "timestamp",
                                       "type", "uuid"}),
+            # tool_result_meta: seen on a Bash result by the stream probe
+            # (2026-10-08), absent from the earlier measurement; not read.
             "user/tool_result": frozenset({"message", "parent_tool_use_id", "session_id", "timestamp",
-                                           "tool_use_result", "type", "uuid"}),
+                                           "tool_result_meta", "tool_use_result", "type", "uuid"}),
             "assistant": frozenset({"message", "parent_tool_use_id", "request_id", "session_id",
                                     "thinking_duration_ms", "timestamp", "type", "user_message_uuid",
                                     "user_message_uuids", "uuid", "wire_tool_inputs"}),

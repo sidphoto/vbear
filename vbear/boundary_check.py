@@ -22,8 +22,20 @@ activity.SPINNER_STALE_S. Only each title's first-character class is kept,
 never its text. The title result is reported separately (``title``); it does
 not change the boundary result or the exit status.
 
+The stream run (design 2.2) verifies a version for the stream executor: it
+starts Claude Code with exactly VBear's stream argv, settings (with the
+pinned endpoint) and environment, and drives two dispatches through the same
+EventTracker, journal and turn-validity code the daemon uses. The second
+dispatch is written right after the first result, before its completed
+lifecycle. It also checks the sandbox (as above), that a project settings
+file pointing ANTHROPIC_BASE_URL at a local listener gets no connection
+while the run completes (with a no-API control run showing the project file
+is read), the administrator-policy check, and that ~/.claude.json has the
+account fields (booleans only; no value is printed or kept).
+
     python3 -m vbear.boundary_check --mode headless
     python3 -m vbear.boundary_check --mode interactive --claude ~/.local/share/claude/versions/2.1.291
+    python3 -m vbear.boundary_check --mode stream --claude ~/.local/share/claude/versions/2.1.292
     (or tools/verify_claude_boundary.py with the same arguments)
 
 Exit status: 0 all checks passed, 1 a check failed, 2 the run itself failed.
@@ -311,13 +323,16 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--claude", help="Claude Code binary (default: newest in ~/.local/share/claude/versions)")
-    ap.add_argument("--mode", choices=("headless", "interactive"), default="headless")
+    ap.add_argument("--mode", choices=("headless", "interactive", "stream"), default="headless")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--out", help="write the JSON report here")
     args = ap.parse_args()
 
     binary = pick_claude(args.claude)
     version = claude_version(binary)
+    if args.mode == "stream":
+        from . import stream_check
+        return stream_check.run(binary, version, args.model, args.out)
     uid = os.getuid()
     root = Path(tempfile.mkdtemp(prefix="vbv-", dir="/private/tmp"))
     scratch = Path(tempfile.mkdtemp(prefix=agent_sessions.SCRATCH_PREFIX,

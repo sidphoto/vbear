@@ -78,10 +78,10 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
-from . import agent_sessions, osc_title, proctrack
+from . import agent_sessions, daemon_stream, osc_title, proctrack, quota
 
 PROTOCOL_VERSION = 1
-DAEMON_VERSION = "native-r2-s3"  # s3: activity evidence in session info
+DAEMON_VERSION = "native-r2-s4"  # s4: stream executor sessions (claude-stream)
 MAX_LINE = 64 * 1024
 SUN_PATH_MAX = 103  # macOS sockaddr_un.sun_path is 104 bytes incl. NUL
 SOCKET_NAME = "runtime.sock"
@@ -131,6 +131,14 @@ RPC_OPS: dict[str, frozenset] = {
     "list": frozenset(),
     "close": frozenset({"session_id"}),
     "attach": frozenset({"session_id", "mode", "cols", "rows"}),
+    # stream executor (design 2-3, 7; daemon_stream)
+    "open_stream": frozenset({"launch_id"}),
+    "dispatch_prepare": frozenset({"launch_id", "pipeline", "dispatch_id", "text", "approval"}),
+    "stream_send": frozenset({"launch_id", "pipeline", "dispatch_id"}),
+    "stream_status": frozenset({"launch_id"}),
+    "stream_close": frozenset({"launch_id"}),
+    "pipeline_hold": frozenset({"pipeline", "reason"}),
+    "pipeline_release": frozenset({"pipeline"}),
 }
 _ATTACHED = object()  # _dispatch result: the connection became an attachment
 
@@ -440,7 +448,7 @@ class _Conn:
         self.waiting = False
 
 
-class Daemon:
+class Daemon(daemon_stream.StreamOps):
     """Single-threaded selectors loop. ``stop()`` / ``wake()`` are the only
     thread-safe entry points (they only set a flag and poke the wake pipe)."""
 
@@ -468,6 +476,8 @@ class Daemon:
         self._stopping = False
         self._shutdown_requested = False
         self._next_prepared_sweep = time.monotonic() + PREPARED_SWEEP
+        self._streams: dict = {}                  # launch id -> stream_session.StreamSession
+        self._ledger = quota.Ledger(self.base)    # design 9; rebuilt at start()
 
     # ---- lifecycle ----
 
@@ -517,6 +527,7 @@ class Daemon:
                           ("cleaned" if item.get("cleaned") else f"retained ({item.get('retained_reason')})"))
         except Exception as exc:
             self._log(f"managed launch recovery failed: {exc}")
+        self._rebuild_ledger()
 
     def wake(self) -> None:
         if self._wake_w >= 0:
@@ -532,7 +543,8 @@ class Daemon:
     def serve_forever(self) -> None:
         assert self._sel is not None, "start() first"
         while not self._stopping:
-            busy = self._shutdown_requested or any(s.phase for s in self._sessions.values())
+            busy = (self._shutdown_requested or any(s.phase for s in self._sessions.values())
+                    or any(s.phase or s.writing or s.exit_info for s in self._streams.values()))
             for key, mask in self._sel.select(timeout=0.05 if busy else 0.25):
                 data = key.data
                 if isinstance(data, Session):
@@ -552,6 +564,9 @@ class Daemon:
                         self._on_read(data)
                     elif mask & selectors.EVENT_WRITE:
                         self._flush(data)
+                elif isinstance(data, tuple) and data[0] == "stream":
+                    if data[1].launch_id in self._streams:
+                        self._stream_ready(data[1], data[2], time.monotonic())
                 elif data == "listen":
                     self._accept()
                 elif data == "wake":
@@ -567,6 +582,7 @@ class Daemon:
     def close(self) -> None:
         """Tear everything down. Idempotent. Sessions are killed here: with
         the daemon gone nobody could manage them, and orphans are worse."""
+        self._kill_all_streams()
         self._kill_all_sessions()
         for att in list(self._attachments.values()):
             self._drop_att(att)
@@ -743,6 +759,7 @@ class Daemon:
         s.signal(signal.SIGHUP)
 
     def _tick(self, now: float) -> None:
+        self._stream_tick(now)
         if now >= self._next_prepared_sweep:
             self._next_prepared_sweep = now + PREPARED_SWEEP
             try:  # previews nobody confirmed; they never had a process
@@ -788,7 +805,7 @@ class Daemon:
                 self._log(f"{s.sid}: process group still present after SIGKILL; finalizing")
                 s.poll()
                 self._finalize(s)
-        if (self._shutdown_requested and not self._sessions
+        if (self._shutdown_requested and not self._sessions and not self._streams
                 and not any(c.stop_after for c in self._conns.values())):
             self.stop()
 
@@ -970,11 +987,11 @@ class Daemon:
             return _err(rid, "bad_request", f"未知欄位：{', '.join(sorted(extra))}")
         if op == "hello":
             return _ok(rid, {"protocol": PROTOCOL_VERSION, "version": DAEMON_VERSION,
-                             "pid": os.getpid(), "sessions": len(self._sessions),
+                             "pid": os.getpid(), "sessions": len(self._sessions) + len(self._streams),
                              "attachments": len(self._attachments)})
         if op == "list":
-            return _ok(rid, {"sessions": [s.info() for s in
-                                          sorted(self._sessions.values(), key=lambda s: s.started)]})
+            everyone = list(self._sessions.values()) + list(self._streams.values())
+            return _ok(rid, {"sessions": [s.info() for s in sorted(everyone, key=lambda s: s.started)]})
         if op == "open":
             return self._op_open(rid, req)
         if op == "open_managed":
@@ -985,6 +1002,16 @@ class Daemon:
             return self._op_shutdown(rid, req, conn)
         if op == "attach":
             return self._op_attach(rid, req, conn)
+        stream_ops = {"open_stream": self._op_open_stream, "dispatch_prepare": self._op_dispatch_prepare,
+                      "stream_send": self._op_stream_send, "stream_status": self._op_stream_status,
+                      "stream_close": self._op_stream_close, "pipeline_hold": self._op_pipeline_hold,
+                      "pipeline_release": self._op_pipeline_release}
+        if op in stream_ops:
+            try:
+                return stream_ops[op](rid, req)
+            except Exception as exc:  # never let a request take the loop down (design 2.3)
+                self._log(f"{op} failed: {type(exc).__name__}: {exc}")
+                return _err(rid, "internal", f"內部錯誤：{type(exc).__name__}")
         return _err(rid, "internal", "未處理的指令")
 
     # ---- attachments ----

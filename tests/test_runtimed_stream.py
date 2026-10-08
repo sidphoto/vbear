@@ -1,0 +1,742 @@
+"""Stream executor sessions in the runtime daemon (design 2-3, 5.8, 6, 7, 9;
+planner decisions S2a-2 Q1-Q4).
+
+A synthetic stand-in plays Claude Code 2.1.292 in stream-json mode: it reads
+one dispatch line from stdin and answers with a turn in the measured event
+order (tests/stream_fixtures.py). No Claude, Codex or model is started. The
+flows.json, key and .claude.json are synthetic; the admin-policy check runs
+against a temporary root, never the real /Library or /etc.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from tests import stream_fixtures as fx
+from vbear import acceptance as acc
+from vbear import admin_policy, flows, login_identity, tasks
+from vbear.runtime import pipeline_store
+from vbear.runtime import agent_sessions as a
+from vbear.runtime import cli_versions
+from vbear.runtime import daemon as d
+from vbear.runtime import stream_protocol as sp
+from vbear.runtime import stream_session
+
+REPO = str(Path(__file__).resolve().parent.parent)
+TIMEOUT = 20.0
+
+FAKE_STREAM_CLI = r'''#!%(py)s
+import json, os, subprocess, sys, time
+sys.path.insert(0, %(repo)r)
+from tests import stream_fixtures as fx
+argv = sys.argv
+sid = argv[argv.index("--session-id") + 1]
+model = argv[argv.index("--model") + 1]
+with open("fake-launch.json", "w") as f:
+    json.dump({"argv": argv, "cwd": os.getcwd(), "pid": os.getpid(), "pgid": os.getpgrp(),
+               "env": sorted(os.environ), "home": os.environ.get("HOME"),
+               "tmpdir": os.environ.get("CLAUDE_CODE_TMPDIR")}, f)
+index, cost = 0, 0.0
+def emit(events):
+    for e in events:
+        sys.stdout.write(json.dumps(e) + "\n")
+    sys.stdout.flush()
+for line in sys.stdin:
+    msg = json.loads(line)
+    d = msg["uuid"]
+    text = msg["message"]["content"][0]["text"]
+    mode = open("fake-mode").read().strip() if os.path.exists("fake-mode") else "ok"
+    if mode == "exit":
+        sys.exit(3)
+    if mode == "silent":
+        continue
+    if mode == "child_then_exit":
+        # Stays in our group and ignores SIGTERM, so the group outlives the
+        # leader until SIGKILL: a stable window to look at the leader.
+        subprocess.Popen([sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                          "open('child-started','w').close(); time.sleep(600)"])
+        while not os.path.exists("child-started"):
+            time.sleep(0.01)
+        sys.exit(0)
+    if mode == "escape_then_exit":
+        # Like a Bash tool command that starts its own session; the CLI keeps
+        # running a while, as Claude Code does while its tool runs.
+        p = subprocess.Popen(["sleep", "600"], start_new_session=True)
+        open("escaped.pid", "w").write(str(p.pid))
+        time.sleep(3)
+        sys.exit(0)
+    if mode == "bad_json":
+        sys.stdout.write("{not json\n"); sys.stdout.flush()
+        continue
+    if mode == "stderr_flood":
+        sys.stderr.write("x" * 4096 * 64); sys.stderr.flush()
+    cost += 0.01
+    events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
+                     model=model)
+    if mode == "many_responses":
+        rep = fx.report(d)
+        responses = [[{"type": "thinking", "thinking": "."}] for _ in range(5)]
+        responses.append([{"type": "tool_use", "id": "so%%d" %% index, "name": "StructuredOutput", "input": rep}])
+        events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
+                         model=model, responses=responses, rep=rep)
+    if mode == "no_completed":
+        events = events[:-1]
+    if mode == "huge_turn":
+        # One response split into very many assistant events: the turn's
+        # facts no longer fit one journal line (512 KiB / 100 000 nodes).
+        rep = fx.report(d)
+        many = [{"type": "thinking", "thinking": "."}] * 12000
+        events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
+                         model=model, responses=[many + [{"type": "tool_use", "id": "so%%d" %% index,
+                                                          "name": "StructuredOutput", "input": rep}]], rep=rep)
+    if mode == "slow":
+        emit(events[:5]); time.sleep(1.5); emit(events[5:])
+    else:
+        emit(events)
+    index += 1
+'''
+
+FAKE_PTY_CLI = r'''#!%(py)s
+import json, os, sys, time
+with open("fake-launch.json", "w") as f:
+    json.dump({"pid": os.getpid()}, f)
+time.sleep(600)
+'''
+
+
+class StreamCase(unittest.TestCase):
+    limits = None
+
+    def setUp(self):
+        self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbs-", dir="/tmp")))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.base = self.tmp / "st"
+        self.base.mkdir(mode=0o700)
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.root = self.tmp / "root"                         # the admin-policy root, never the real /
+        self.root.mkdir()
+        self.work = self.tmp / "work"
+        self.work.mkdir()
+        env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.base), "HOME": str(self.home)})
+        env.start()
+        self.addCleanup(env.stop)
+        real_check = admin_policy.check_claude
+        p = mock.patch("vbear.runtime.daemon_stream.admin_policy.check_claude",
+                       side_effect=lambda version, home=None: real_check(version, root=str(self.root), home=home))
+        p.start()
+        self.addCleanup(p.stop)
+        v = mock.patch.object(cli_versions, "STREAM_VERIFIED_VERSIONS", ("2.1.292",))
+        v.start()
+        self.addCleanup(v.stop)
+        self.binary = self.tmp / "claude"
+        self.binary.write_text(FAKE_STREAM_CLI % {"py": sys.executable, "repo": REPO})
+        self.binary.chmod(0o700)
+        (self.home / ".claude.json").write_text(json.dumps({"oauthAccount": {
+            "accountUuid": "11111111-2222-3333-4444-555555555555",
+            "organizationUuid": "66666666-7777-8888-9999-000000000000"}}))
+        self.tid = tasks.save_task(None, {"title": "t"})["id"]
+        roles = {"planner": {"name": "p", "family": "anthropic"}, "executor": {"name": "e", "family": "anthropic"},
+                 "reviewers": [{"name": "c", "family": "openai"}]}
+        self.fid = flows.create_flow({"task_id": self.tid, "roles": roles}, lambda t: True)["id"]
+        self.key = login_identity.create_login_key(self.base, valid_acceptances=0)
+        self.accept()
+        self.scratches: list[str] = []
+        self.pids: list[int] = []
+        self.logs: list[str] = []
+        self.dm = d.Daemon(self.base, log=self.logs.append)
+        self.dm.start()
+        self.thread = threading.Thread(target=self.dm.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.dm.stop()
+        self.thread.join(5)
+        self.dm.close()
+        for pid in self.pids:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        for p in self.scratches:
+            if p.startswith("/private/tmp/sc-") and not os.path.islink(p):
+                shutil.rmtree(p, ignore_errors=True)
+
+    def accept(self, **limits):
+        fp = login_identity.claude_login_fingerprint(self.home / ".claude.json", self.key).hmac
+        fields = {"text_version": acc.RISK_TEXT_VERSION, "codex_version": "0.160.0", "model": "gpt-6-luna",
+                  "executor_claude_version": "2.1.292", "executor_model": fx.MODEL,
+                  "executor_login_fingerprint": fp, "login_fingerprint": "b" * 64, "login_key_id": self.key.key_id,
+                  "limits": {**acc.DEFAULT_LIMITS, **(self.limits or {}), **limits}}
+        with flows.store.locked():
+            data = flows.store.load()
+            ev = data[self.fid]["events"]
+            ev.append({"seq": len(ev) + 1, "at": time.time(), "kind": "risk_acknowledged", "source": "console",
+                       "note": "", **fields})
+            flows.store.save(data)
+
+    def rpc(self, op, **kw):
+        return d.rpc(op, base=self.base, timeout=TIMEOUT, **kw)
+
+    def raw_rpc(self, op, **kw):
+        """Like rpc, but JSON with \\u escapes (a lone surrogate can travel this way)."""
+        import socket
+        req = {"v": 1, "id": "raw", "op": op, **kw}
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+            c.settimeout(TIMEOUT)
+            c.connect(str(d.socket_path(self.base)))
+            c.sendall(json.dumps(req).encode("ascii") + b"\n")
+            buf = b""
+            while b"\n" not in buf:
+                chunk = c.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+        return json.loads(buf.split(b"\n")[0])
+
+    def prepare(self, mode="ok"):
+        (self.work / "fake-mode").write_text(mode)
+        m = a.prepare_stream_launch(self.base, str(self.work), cli_binary=str(self.binary), cli_version="2.1.292",
+                                    cli_identity=a.binary_identity(str(self.binary)), model_id=fx.MODEL,
+                                    pipeline_id=self.fid, task_id=self.tid, allowed_root=str(self.tmp))
+        self.scratches.append(m["scratch"]["path"])
+        return m
+
+    def open(self, mode="ok"):
+        m = self.prepare(mode)
+        r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r.get("ok"), r)
+        info = self.launched()
+        self.pids.append(info["pid"])
+        return m["launch_id"], r["result"]
+
+    def launched(self):
+        return self.wait_for(lambda: self._read(self.work / "fake-launch.json"), msg="fake CLI start")
+
+    @staticmethod
+    def _read(path):
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+
+    def wait_for(self, pred, timeout=TIMEOUT, msg="condition"):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            value = pred()
+            if value:
+                return value
+            time.sleep(0.03)
+        self.fail(f"timed out waiting for {msg}; logs: {self.logs[-5:]}")
+
+    def dispatch(self, launch_id, text="請完成工作", d=None):
+        d = d or fx.new_uuid()
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d, text=text,
+                     approval={"kind": "preview", "id": "pv-" + d[:8]})
+        self.assertTrue(r.get("ok"), r)
+        r = self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=d)
+        self.assertTrue(r.get("ok"), r)
+        return d
+
+    def status(self, launch_id):
+        r = self.rpc("stream_status", launch_id=launch_id)
+        self.assertTrue(r.get("ok"), r)
+        return r["result"]
+
+    def turn_status(self, launch_id, d):
+        st = self.status(launch_id)
+        return next((x for x in st["dispatches"] if x["dispatch_id"] == d), None)
+
+
+class HappyPathTests(StreamCase):
+    def test_two_valid_turns_then_close(self):
+        launch_id, info = self.open()
+        launch = self.launched()
+        self.assertEqual(launch["cwd"], str(self.work))
+        self.assertNotIn("ANTHROPIC_BASE_URL", launch["env"])                 # the endpoint is in --settings
+        settings = json.loads(Path(launch["argv"][launch["argv"].index("--settings") + 1]).read_text())
+        self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], "https://api.anthropic.com")
+        self.assertEqual(launch["argv"][launch["argv"].index("--session-id") + 1], info["claude_session_id"])
+        d1 = self.dispatch(launch_id)
+        t = self.wait_for(lambda: (x := self.turn_status(launch_id, d1)) and x["status"] == "ended" and x,
+                          msg="first turn")
+        self.assertEqual((t["valid"], t["reasons"]), (True, []))
+        # design 4: the executor's words and VBear's file checks, apart. The
+        # fake reports head 000..., and this work dir is no repository.
+        self.assertEqual(t["report"]["dispatch_id"], d1)
+        self.assertTrue(t["file_checks"])
+        d2 = self.dispatch(launch_id, text="第二則")
+        t = self.wait_for(lambda: (x := self.turn_status(launch_id, d2)) and x["status"] == "ended" and x,
+                          msg="second turn")
+        self.assertTrue(t["valid"])
+        st = self.status(launch_id)
+        self.assertEqual((st["state"], st["responses"], st["live"]), ("idle", 2, True))
+        # resending either RPC is safe
+        again = self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=d2)
+        self.assertEqual(again["result"]["status"], "ended")
+        again = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d2, text="第二則",
+                         approval={"kind": "preview", "id": "pv-x"})
+        self.assertEqual(again["result"]["status"], "ended")
+        other = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d2, text="改了",
+                         approval={"kind": "preview", "id": "pv-x"})
+        self.assertFalse(other["ok"])
+        texts = sorted(os.listdir(self.base / "pipelines" / self.tid / "dispatches"))
+        self.assertEqual(texts, sorted([f"{d1}.txt", f"{d2}.txt"]))
+        self.assertTrue((self.base / "pipelines" / self.tid / "started.json").exists())
+        # close: the journal stays, the scratch goes
+        self.assertTrue(self.rpc("stream_close", launch_id=launch_id)["ok"])
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session finished")
+        m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+        self.assertEqual(m["state"], "ended")
+        self.assertTrue((self.base / "sessions" / launch_id / "journal.jsonl").exists())
+        st = self.status(launch_id)
+        self.assertEqual((st["live"], st["state"], st["journal_problem"]), (False, "exited", ""))
+        self.assertTrue(st["dispatches"][0]["valid"])
+
+    def test_listing_and_activity(self):
+        launch_id, info = self.open()
+        listed = self.rpc("list")["result"]["sessions"]
+        mine = next(s for s in listed if s["managed"] == launch_id)
+        self.assertEqual((mine["engine"], mine["activity_evidence"]["claude_stream"]["state"]),
+                         ("claude-stream", "idle"))
+        from vbear import activity
+        self.assertEqual(activity.arbitrate(mine)["activity"], "waiting")
+
+
+class RefusalTests(StreamCase):
+    def test_open_refusals(self):
+        cases = []
+
+        def held():
+            self.assertTrue(self.rpc("pipeline_hold", pipeline=self.fid, reason="stop")["ok"])
+            yield
+            self.rpc("pipeline_release", pipeline=self.fid)
+
+        def no_acceptance():
+            (self.base / login_identity.KEY_NAME).unlink()
+            yield
+            self.key = login_identity.create_login_key(self.base, valid_acceptances=0)
+            self.accept()
+
+        def other_account():
+            original = (self.home / ".claude.json").read_text()
+            (self.home / ".claude.json").write_text(original.replace("1111", "9999"))
+            yield
+            (self.home / ".claude.json").write_text(original)
+
+        def admin_source():
+            p = self.root / "Library" / "Application Support" / "ClaudeCode"
+            p.mkdir(parents=True)
+            yield
+            shutil.rmtree(self.root / "Library")
+
+        def remote_cache():
+            (self.home / ".claude").mkdir()
+            (self.home / ".claude" / "remote-settings.json").write_text("{}")
+            yield
+            shutil.rmtree(self.home / ".claude")
+
+        def unverified():
+            with mock.patch.object(cli_versions, "STREAM_VERIFIED_VERSIONS", ()):
+                yield
+
+        for name, ctx in (("held", held), ("no acceptance", no_acceptance), ("other account", other_account),
+                          ("admin source", admin_source), ("server-managed cache", remote_cache),
+                          ("unverified version", unverified)):
+            with self.subTest(case=name):
+                gen = ctx()
+                next(gen)
+                try:
+                    m = self.prepare()
+                    r = self.rpc("open_stream", launch_id=m["launch_id"])
+                    self.assertFalse(r.get("ok"), r)
+                finally:
+                    next(gen, None)
+        self.assertEqual(self.dm._streams, {})
+
+    def test_dispatch_refusals(self):
+        launch_id, _ = self.open()
+        good = dict(launch_id=launch_id, pipeline=self.fid, approval={"kind": "preview", "id": "pv1"}, text="hi")
+        cases = [
+            {"pipeline": "flow-ffffffffffff"},
+            {"dispatch_id": "not-a-uuid"},
+            {"dispatch_id": fx.new_uuid().upper()},
+            {"approval": {"kind": "other", "id": "x"}},
+            {"approval": {"kind": "preview"}},
+            {"text": "has\x1b escape"},                                 # not the sanitised preview text
+            {"text": "x" * sp.MAX_DISPATCH_LINE},
+            {"launch_id": "l-ffffffffffffffff"},
+        ]
+        for change in cases:
+            with self.subTest(change=repr(change)[:50]):
+                r = self.rpc("dispatch_prepare", **{"dispatch_id": fx.new_uuid(), **good, **change})
+                self.assertFalse(r.get("ok"), r)
+        r = self.raw_rpc("dispatch_prepare", **{**good, "dispatch_id": fx.new_uuid(), "text": "\ud800"})
+        self.assertFalse(r["ok"])                                         # a lone surrogate is refused
+        self.assertIn("surrogate", r["error"]["message"])
+        r = self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=fx.new_uuid())
+        self.assertFalse(r["ok"])                                         # never prepared
+        # at most one prepared, unsent dispatch
+        d1 = fx.new_uuid()
+        self.assertTrue(self.rpc("dispatch_prepare", dispatch_id=d1, **good)["ok"])
+        self.assertFalse(self.rpc("dispatch_prepare", dispatch_id=fx.new_uuid(), **good)["ok"])
+        # a hold stops the send; release lets it through
+        self.rpc("pipeline_hold", pipeline=self.fid, reason="stop")
+        self.assertFalse(self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1)["ok"])
+        self.rpc("pipeline_release", pipeline=self.fid)
+        self.assertTrue(self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1)["ok"])
+
+    def test_a_partial_left_by_a_crash_is_removed(self):
+        launch_id, _ = self.open()
+        ddir = self.base / "pipelines" / self.tid / "dispatches"
+        ddir.mkdir(parents=True, exist_ok=True)
+        stale = fx.new_uuid()
+        (ddir / f".{stale}.partial").write_text("half")
+        self.dispatch(launch_id)
+        self.assertFalse((ddir / f".{stale}.partial").exists())
+
+    def test_saved_text_is_checked_before_sending(self):
+        launch_id, _ = self.open()
+        d1 = fx.new_uuid()
+        self.assertTrue(self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1,
+                                 text="original", approval={"kind": "preview", "id": "p"})["ok"])
+        path = self.base / "pipelines" / self.tid / "dispatches" / f"{d1}.txt"
+        path.write_text("tampered")
+        r = self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1)
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.status(launch_id)["state"], "error")
+
+    def test_a_pending_text_counts_and_its_id_completes_it(self):
+        # Planner ruling R5 #2: a saved text without an acceptance counts
+        # against the limit; the same id sent again completes it (3.5).
+        self.accept(max_dispatches=1)
+        launch_id, _ = self.open()
+        d1 = fx.new_uuid()
+        with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
+            p.write_text(d1, "left by a crash".encode())
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=fx.new_uuid(),
+                     text="another", approval={"kind": "preview", "id": "p"})
+        self.assertFalse(r["ok"])
+        self.assertIn("派工則數", r["error"]["message"])
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1,
+                     text="left by a crash", approval={"kind": "preview", "id": "p"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["result"]["status"], "accepted")
+
+    def test_dispatch_limit_counts_prepares(self):
+        self.accept(max_dispatches=1)
+        launch_id, _ = self.open()
+        d1 = self.dispatch(launch_id)
+        self.wait_for(lambda: (x := self.turn_status(launch_id, d1)) and x["status"] == "ended", msg="turn ended")
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=fx.new_uuid(),
+                     text="two", approval={"kind": "preview", "id": "p"})
+        self.assertFalse(r["ok"])
+        self.assertIn("派工則數", r["error"]["message"])
+
+
+class FailureTests(StreamCase):
+    def run_mode(self, mode, expect_state, expect_failed=None, **patches):
+        stack = [mock.patch.object(stream_session, k, v) for k, v in patches.items()]
+        for p in stack:
+            p.start()
+            self.addCleanup(p.stop)
+        launch_id, _ = self.open(mode)
+        dd = self.dispatch(launch_id)
+        st = self.wait_for(lambda: (s := self.status(launch_id)) and s["state"] in expect_state and s,
+                           msg=f"state {expect_state}")
+        if expect_failed:
+            t = next(x for x in st["dispatches"] if x["dispatch_id"] == dd)
+            self.assertEqual(t["failed"], expect_failed)
+        return launch_id, dd
+
+    def test_process_exit_mid_turn(self):
+        launch_id, _ = self.run_mode("exit", ("exited",), "process_exited")
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="cleanup")
+        self.assertEqual(self.status(launch_id)["exit"]["returncode"], 3)
+
+    def test_not_confirmed(self):
+        self.run_mode("silent", ("error",), "not_confirmed", CONFIRM_DEADLINE=0.5)
+
+    def test_no_completed(self):
+        self.run_mode("no_completed", ("uncertain",), "no_completed", FINISH_DEADLINE=0.5)
+
+    def test_no_progress(self):
+        self.run_mode("slow", ("uncertain",), "no_progress", NO_PROGRESS=0.5)
+
+    def test_bad_json_is_a_protocol_error(self):
+        launch_id, dd = self.run_mode("bad_json", ("error",))
+        self.assertIn("協定錯誤", " ".join(self.status(launch_id)["closed_reasons"]))
+
+    def test_response_cap_ends_the_session(self):
+        self.limits = {"executor_turn_max_responses": 3}
+        self.accept()
+        launch_id, dd = self.run_mode("many_responses", ("error", "exited"), "response_cap")
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session ended")
+
+    def test_stderr_over_limit(self):
+        self.run_mode("stderr_flood", ("error", "exited"), STDERR_MAX=1024)
+
+    def test_turn_event_limit(self):
+        self.run_mode("ok", ("error", "exited"), TURN_EVENTS_MAX=3)
+
+
+class ReviewDifferenceTests(StreamCase):
+    """The two S2a-2 part-1 review differences that only the daemon can show."""
+
+    def test_turn_too_big_for_the_journal_ends_in_error_and_review(self):
+        # Difference 3: turn_result past the journal's line/node limit.
+        launch_id, _ = self.open("huge_turn")
+        self.dispatch(launch_id)
+        self.wait_for(lambda: (s := self.dm._streams.get(launch_id)) is None or s.state == "error",
+                      msg="error state")
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session ended")
+        m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+        self.assertEqual(m["state"], "manual_review")
+        self.assertIn("日誌無法寫入", m["retained_reason"])
+
+    def test_a_session_without_an_outcome_is_kept_for_review(self):
+        # R4 audit: nothing proves such a session ended cleanly.
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        real = s._finish
+
+        def finish(**kw):
+            real(**kw)
+            s.outcome = None
+        s._finish = finish
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session ended")
+        m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+        self.assertEqual(m["state"], "manual_review")
+        self.assertIn("沒有留下結果", m["retained_reason"])
+
+    def test_pipeline_field_must_match_the_manifest(self):
+        # Difference 4: both dispatch RPCs carry the flow and it must match.
+        launch_id, _ = self.open()
+        d1 = fx.new_uuid()
+        bad = "flow-ffffffffffff"
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=bad, dispatch_id=d1, text="t",
+                     approval={"kind": "preview", "id": "p"})
+        self.assertFalse(r["ok"])
+        self.assertIn("流程", r["error"]["message"])
+        self.assertTrue(self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1,
+                                 text="t", approval={"kind": "preview", "id": "p"})["ok"])
+        for pipeline in (bad, None, 5, self.fid + "\n"):
+            with self.subTest(pipeline=pipeline):
+                r = self.rpc("stream_send", launch_id=launch_id, pipeline=pipeline, dispatch_id=d1)
+                self.assertFalse(r["ok"])
+        r = self.rpc("stream_send", launch_id=launch_id, dispatch_id=d1)
+        self.assertFalse(r["ok"])                                    # the field is required
+        self.assertTrue(self.rpc("stream_send", launch_id=launch_id, pipeline=self.fid, dispatch_id=d1)["ok"])
+
+
+class JournalOrderTests(StreamCase):
+    """Planner, S2a-2 R2: the journal (with session_started) exists before
+    the process is spawned, so a launch without a journal never had one;
+    and a journal write failure puts the session in error."""
+
+    def test_journal_is_written_before_the_process_starts(self):
+        import vbear.runtime.daemon_stream as ds
+        real = ds.subprocess.Popen
+        seen = {}
+
+        def spy(argv, **kw):
+            launch = Path(kw["cwd"])
+            ldirs = [p for p in (self.base / "sessions").iterdir() if (p / "journal.jsonl").exists()]
+            seen["journals"] = [json.loads(l)["kind"] for p in ldirs for l in (p / "journal.jsonl").read_text().splitlines()]
+            seen["state"] = [json.loads((p / "manifest.json").read_text())["state"] for p in ldirs]
+            return real(argv, **kw)
+        with mock.patch.object(ds.subprocess, "Popen", spy):
+            launch_id, _ = self.open()
+        self.assertEqual(seen["journals"], ["session_started"])
+        self.assertEqual(seen["state"], ["launching"])
+
+    def test_at_spawn_the_flow_counts_this_launch(self):
+        # The prepared exception (a launch without a journal never had a
+        # process): at the moment of spawn the start record and the journal
+        # exist, and the flow's totals include this launch.
+        import vbear.runtime.daemon_stream as ds
+        from vbear.runtime import stream_flow
+        real = ds.subprocess.Popen
+        seen = {}
+
+        def spy(argv, **kw):
+            ctx = stream_flow.load(self.base, self.fid)
+            seen["sessions"] = [x["launch_id"] for x in ctx.totals.sessions]
+            seen["started"] = ctx.started_at is not None
+            return real(argv, **kw)
+        m = self.prepare()
+        with mock.patch.object(ds.subprocess, "Popen", spy):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(seen, {"sessions": [m["launch_id"]], "started": True})
+
+    def test_a_failed_start_record_leaves_the_launch_prepared(self):
+        import vbear.runtime.daemon_stream as ds
+        m = self.prepare()
+        with mock.patch.object(ds.pipeline_store.Pipeline, "record_start",
+                               side_effect=pipeline_store.StoreRefused("disk")), \
+                mock.patch.object(ds.subprocess, "Popen") as popen:
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertFalse(r["ok"])
+        popen.assert_not_called()
+        ldir = self.base / "sessions" / m["launch_id"]
+        self.assertEqual(json.loads((ldir / "manifest.json").read_text())["state"], "prepared")
+        self.assertFalse(os.path.lexists(ldir / "journal.jsonl"))
+        self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
+
+    def test_a_failure_after_launching_does_not_strand_the_launch(self):
+        import vbear.runtime.daemon_stream as ds
+        for where in ("load_validated", "journal"):
+            with self.subTest(where=where):
+                m = self.prepare()
+                calls = {"n": 0}
+                real_load = ds.agent_sessions.load_validated
+
+                def load(base, launch_id):
+                    calls["n"] += 1
+                    if calls["n"] == 2:               # the re-check after "launching"
+                        raise ds.agent_sessions.LaunchRefused("drift", "test")
+                    return real_load(base, launch_id)
+                patches = ([mock.patch.object(ds.agent_sessions, "load_validated", load)] if where == "load_validated"
+                           else [mock.patch.object(ds.stream_journal, "JournalWriter",
+                                                   side_effect=OSError(28, "No space left on device"))])
+                with patches[0], mock.patch.object(ds.subprocess, "Popen") as popen:
+                    r = self.rpc("open_stream", launch_id=m["launch_id"])
+                self.assertFalse(r["ok"])
+                popen.assert_not_called()
+                self.assertFalse((self.base / "sessions" / m["launch_id"]).exists())   # never ran: removed
+                self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
+                self.assertFalse((self.base / "pipelines" / self.tid / "started.json").exists())  # not started
+        launch_id, _ = self.open()                                            # the flow is not stuck
+        self.assertTrue((self.base / "pipelines" / self.tid / "started.json").exists())
+
+    def test_spawn_failure_leaves_a_complete_journal(self):
+        import vbear.runtime.daemon_stream as ds
+        m = self.prepare()
+        with mock.patch.object(ds.subprocess, "Popen", side_effect=OSError(8, "Exec format error")):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertFalse(r["ok"])
+        ldir = self.base / "sessions" / m["launch_id"]
+        kinds = [json.loads(l)["kind"] for l in (ldir / "journal.jsonl").read_text().splitlines()]
+        self.assertEqual(kinds, ["session_started", "exited"])
+        self.assertEqual(json.loads((ldir / "manifest.json").read_text())["state"], "ended")
+        self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
+
+    def test_a_journal_write_failure_is_an_error(self):
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        real_append = s.writer.append
+
+        def failing(kind, data):
+            if kind == "dispatch_confirmed":
+                raise OSError(28, "No space left on device")
+            return real_append(kind, data)
+        s.writer.append = failing
+        self.dispatch(launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams or self.dm._streams[launch_id].state == "error",
+                      msg="error")
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="ended")
+        m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+        self.assertEqual(m["state"], "manual_review")
+        self.assertIn("日誌無法寫入", m["retained_reason"])
+
+
+class ProcessTests(StreamCase):
+    def test_leader_is_not_reaped_while_its_group_lives(self):
+        """Design 5.8: the exit is seen with waitid(WNOWAIT); the leader stays
+        a zombie (its PID and group id cannot be reused) until the rest of
+        the group is gone, then it is reaped."""
+        stack = [mock.patch.object(stream_session, "TERM_GRACE", 3.0)]
+        for p in stack:
+            p.start()
+            self.addCleanup(p.stop)
+        launch_id, _ = self.open("child_then_exit")
+        leader = self.launched()["pid"]
+        self.dispatch(launch_id)
+        self.wait_for(lambda: (self.work / "child-started").exists(), msg="child")
+        s = self.wait_for(lambda: (x := self.dm._streams.get(launch_id)) and x.exit_recorded and x, msg="exit seen")
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(leader)], capture_output=True, text=True).stdout.strip()
+        self.assertIn("Z", stat, "the exited leader must still be an unreaped zombie")
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="group cleaned")
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(leader)], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(stat, "", "reaped after cleanup")
+        self.assertEqual(json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())["state"],
+                         "ended")
+
+    def test_escaped_descendant_means_manual_review(self):
+        launch_id, _ = self.open("escape_then_exit")
+        self.dispatch(launch_id)
+        pid = int(self.wait_for(lambda: (self.work / "escaped.pid").exists()
+                                and (self.work / "escaped.pid").read_text(), msg="escaped child"))
+        self.pids.append(pid)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session finished")
+        m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+        self.assertEqual(m["state"], "manual_review")
+        os.kill(pid, 0)                                   # not chased: still alive
+
+    def test_existing_managed_sessions_are_unchanged(self):
+        """A PTY-managed Claude launch next to a stream session behaves as
+        before: opened by open_managed, closed by close, cleaned up."""
+        launch_id, _ = self.open()
+        pty_bin = self.tmp / "claude-pty"
+        pty_bin.write_text(FAKE_PTY_CLI % {"py": sys.executable})
+        pty_bin.chmod(0o700)
+        pty_work = self.tmp / "pty-work"
+        pty_work.mkdir()
+        m = a.prepare_claude_launch(self.base, str(pty_work), cli_binary=str(pty_bin), cli_version="2.1.292",
+                                    cli_identity=a.binary_identity(str(pty_bin)), allowed_root=str(self.tmp))
+        self.scratches.append(m["scratch"]["path"])
+        r = self.rpc("open_managed", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        sid = r["result"]["session_id"]
+        self.assertTrue(self.rpc("close", session_id=sid)["ok"])
+        self.assertFalse(Path(m["launch_dir"]["path"]).exists())          # removed, as before
+        self.assertEqual(self.status(launch_id)["state"], "idle")         # the stream session is untouched
+
+
+class LedgerTests(StreamCase):
+    def test_session_reservation_and_release(self):
+        launch_id, _ = self.open()
+        self.assertIn(f"session:{launch_id}", self.dm._ledger.reservations)
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="finished")
+        self.assertNotIn(f"session:{launch_id}", self.dm._ledger.reservations)
+
+    def test_rebuild_refuses_a_sessions_root_it_cannot_list(self):
+        # R4 audit: only a sessions root that was never created means "no
+        # launch"; any other listing error leaves nothing granted.
+        for error in (PermissionError(13, "Permission denied"), NotADirectoryError(20, "Not a directory")):
+            with self.subTest(error=type(error).__name__):
+                real = os.listdir
+
+                def listdir(path=".", _e=error):
+                    if str(path).endswith("/sessions"):
+                        raise _e
+                    return real(path)
+                with mock.patch("vbear.runtime.daemon_stream.os.listdir", listdir):
+                    self.assertFalse(self.dm._rebuild_ledger())
+                self.assertIsNone(self.dm._ledger.used)
+                self.assertIn("額度無法核算", self.dm._ledger.problem)
+        self.assertTrue(self.dm._rebuild_ledger())
+
+    def test_full_ledger_refuses(self):
+        self.dm._ledger.limit = self.dm._ledger.used + 1024
+        m = self.prepare()
+        r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn("quota", r["error"]["message"])
+
+
+if __name__ == "__main__":
+    unittest.main()

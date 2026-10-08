@@ -1,0 +1,504 @@
+"""Stream executor RPCs and loop hooks for the runtime daemon (design 2-3, 6,
+7, 9; planner decisions S2a-2 Q1-Q4). Mixed into ``daemon.Daemon``; every
+method runs on the daemon's single thread, so a hold and a dispatch are
+strictly ordered (design 7).
+
+  open_stream       {launch_id}                         start a prepared stream launch
+  dispatch_prepare  {launch_id, pipeline, dispatch_id, text, approval}
+  stream_send       {launch_id, pipeline, dispatch_id}
+  stream_status     {launch_id}
+  stream_close      {launch_id}
+  pipeline_hold     {pipeline, reason}
+  pipeline_release  {pipeline}
+
+``pipeline`` in the two dispatch RPCs is what design 3.1 checks against the
+manifest ("manifest 綁定的流程等於請求的流程").
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import secrets
+import selectors
+import signal
+import subprocess
+import time
+import uuid
+
+from .. import admin_policy, executor_report
+from . import (agent_sessions, cli_versions, pipeline_store, proctrack, quota, stream_flow, stream_journal,
+               stream_protocol as sp, stream_session)
+
+_APPROVAL_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}\Z")
+_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _ok(rid, result) -> dict:
+    return {"v": 1, "id": rid, "ok": True, "result": result}
+
+
+def _err(rid, code: str, message: str) -> dict:
+    return {"v": 1, "id": rid, "ok": False, "error": {"code": code, "message": message}}
+
+
+class StreamOps:
+    # set up by Daemon.__init__: base, _sel, _sessions, _streams, _ledger, _log, max_sessions
+
+    # ---- quota ---------------------------------------------------------------------
+
+    def _rebuild_ledger(self) -> bool:
+        """Design 9: used = a fresh scan; every stream launch not proven
+        ended counts at its full journal reservation."""
+        outstanding: dict[str, int] | None = {}
+        root = agent_sessions.sessions_root(self.base)
+        try:
+            try:
+                names = sorted(os.listdir(root))
+            except FileNotFoundError:
+                names = []                # never created: no launch at all (not Path.is_dir(), which reads errors as False)
+            for name in names:
+                if not agent_sessions.LAUNCH_RE.match(name):
+                    continue
+                m = agent_sessions._read_manifest(agent_sessions.launch_dir(self.base, name), os.getuid())
+                if m.get("engine") == "claude-stream" and m.get("state") not in ("prepared", "ended"):
+                    outstanding["session:" + name] = quota.RESERVE_SESSION
+        except (OSError, agent_sessions.LaunchRefused) as exc:
+            self._log(f"quota rebuild: manifests unreadable: {exc}")
+            outstanding = None
+        ok = self._ledger.rebuild(outstanding)
+        if not ok:
+            self._log(f"quota rebuild failed: {self._ledger.problem}")
+        return ok
+
+    def _reserve(self, key: str, amount: int) -> str | None:
+        if self._ledger.used is None:
+            self._rebuild_ledger()
+        return self._ledger.reserve(key, amount)
+
+    # ---- open --------------------------------------------------------------------------
+
+    def _op_open_stream(self, rid: str, req: dict) -> dict:
+        from .daemon import build_env  # here: daemon imports this module
+        if self._shutdown_requested:
+            return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
+        if len(self._sessions) + len(self._streams) >= self.max_sessions:
+            return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}）")
+        launch_id = req.get("launch_id")
+        key = f"session:{launch_id}"
+        reserved = launching = False
+        started_here = None                   # the start record, when this open wrote it
+        try:
+            m = agent_sessions.load_validated(self.base, launch_id)
+            if m["engine"] != "claude-stream" or m.get("state") != "prepared" or m.get("native_session_id"):
+                raise agent_sessions.LaunchRefused("consumed", "此 launch 不是待啟動的串流 launch")
+            version = m["cli_version"]
+            if version not in cli_versions.stream_verified_versions():
+                raise agent_sessions.LaunchRefused("unverified", f"Claude Code {version} 的串流模式尚未通過驗證")
+            env = build_env()
+            env["CLAUDE_CODE_TMPDIR"] = m["scratch"]["path"]
+            env["DISABLE_AUTOUPDATER"] = "1"
+            home = env.get("HOME", "")
+            policy = admin_policy.check_claude(version, home=home)
+            if not policy.ok:
+                raise agent_sessions.LaunchRefused("admin_policy", policy.reason())
+            ctx = stream_flow.load(self.base, m["pipeline_id"])
+            if ctx.task_id != m["task_id"]:
+                raise agent_sessions.LaunchRefused("manifest_invalid", "launch 的任務與流程不符")
+            if pipeline_store.is_held(self.base, m["pipeline_id"]):
+                raise agent_sessions.LaunchRefused("held", "這個流程已停止")
+            stream_flow.check_executor(ctx, cli_version=version, model_id=m["model_id"],
+                                       claude_json=os.path.join(home, ".claude.json"))
+            now = time.time()
+            stream_flow.check_limits(ctx, now=now, counting_dispatch=False)
+            budget = stream_flow.remaining_budget(ctx)
+            why = self._reserve(key, quota.RESERVE_SESSION)
+            if why:
+                raise agent_sessions.LaunchRefused("quota", why)
+            reserved = True
+            # The flow's first start (planner Q1) is recorded before anything
+            # else changes: if it fails the launch is still "prepared"; if the
+            # daemon dies right after, the clock has started a little early.
+            # Never a journal (or a process) without a start record.
+            with pipeline_store.Pipeline(self.base, m["task_id"], create=True) as p:
+                if p.started_at(m["pipeline_id"]) is None:
+                    started_here = p.record_start(m["pipeline_id"], now)
+            agent_sessions.update_manifest(self.base, launch_id, state="launching",
+                                           claude_session_id=str(uuid.uuid4()), budget_usd=budget)
+            launching = True
+            m = agent_sessions.load_validated(self.base, launch_id)
+            argv = agent_sessions.managed_argv(m)
+        except (agent_sessions.LaunchRefused, stream_flow.FlowRefused, pipeline_store.StoreRefused, OSError) as exc:
+            if launching:
+                # Marked launching, but no journal and no process yet: do not
+                # leave it so (the flow's totals would refuse until recovery).
+                agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
+            self._undo_start(m, started_here)
+            if reserved:
+                self._ledger.release(key, 0)
+            if isinstance(exc, OSError):
+                return _err(rid, "refused", f"launch 狀態無法驗證：{exc}")
+            code = getattr(exc, "code", "refused")
+            return _err(rid, "refused", f"{code}: {exc}")
+        # The journal exists (with session_started) before the process does:
+        # a launch without one never had a process (stream_flow relies on it).
+        try:
+            ldir = os.open(m["launch_dir"]["path"], _DIR)
+            try:
+                writer = stream_journal.JournalWriter(ldir, identity=stream_journal.identity_from(m, ctx.acceptance))
+            finally:
+                os.close(ldir)
+        except (OSError, stream_journal.JournalCorrupt) as exc:
+            # No process was started: clean up what this launch left.
+            agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
+            self._undo_start(m, started_here)
+            self._ledger.release(key, 0)
+            return _err(rid, "internal", f"日誌無法建立：{exc}")
+        try:
+            writer.append("session_started", {
+                "claude_session_id": m["claude_session_id"], "pipeline_id": m["pipeline_id"],
+                "cli_version": m["cli_version"], "argv_sha256": sp.sha256_hex(sp.canonical(argv)),
+                "budget_usd": m["budget_usd"]})
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    cwd=m["canonical_workspace"], env=env, start_new_session=True, close_fds=True)
+        except (OSError, stream_journal.JournalCorrupt) as exc:
+            try:
+                writer.append("exited", {"returncode": None, "signal": None, "stderr_tail": f"無法啟動：{exc}"[:500]})
+            except (OSError, stream_journal.JournalCorrupt):
+                pass
+            writer.close()
+            agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
+            self._ledger.release(key, writer.size)
+            return _err(rid, "internal", f"無法啟動：{exc}")
+        sid = "n-" + secrets.token_hex(6)
+        while sid in self._sessions or any(s.sid == sid for s in self._streams.values()):
+            sid = "n-" + secrets.token_hex(6)
+        tracker = sp.EventTracker(sp.constants_for(m["cli_version"]), m["claude_session_id"],
+                                  m["canonical_workspace"], m["model_id"],
+                                  executor_version=ctx.acceptance["executor_claude_version"])
+        s = stream_session.StreamSession(sid=sid, launch_id=launch_id, manifest=m, proc=proc, writer=writer,
+                                         tracker=tracker, prior_responses=ctx.totals.responses, log=self._log,
+                                         now=time.monotonic())
+        self._streams[launch_id] = s
+        self._register_stream(s, "stdout")
+        self._register_stream(s, "stderr")
+        leader = None
+        try:
+            table = proctrack.process_table()
+            s.descendants.observe(table)
+            row = next((r for r in table if r["pid"] == s.pid), None)
+            leader = {"pid": s.pid, "start": row["start"], "source": proctrack.SOURCE} if row else None
+        except proctrack.ProcessTableUnavailable as exc:
+            self._log(f"{sid}: process table unavailable at launch: {exc}")
+        try:
+            agent_sessions.update_manifest(self.base, launch_id, state="running", native_session_id=sid,
+                                           leader=leader, observed=s.descendants.export())
+        except (OSError, agent_sessions.LaunchRefused) as exc:
+            self._log(f"{sid}: manifest update failed: {exc}")
+        return _ok(rid, {"session_id": sid, "launch_id": launch_id, "claude_session_id": m["claude_session_id"],
+                         "budget_usd": m["budget_usd"], "state": s.state})
+
+    def _undo_start(self, m: dict, started_here: float | None) -> None:
+        """A failed first open leaves no start record behind: otherwise the
+        flow would have a start but no session journal, which refuses every
+        later count (stream_flow). Only before any journal was written."""
+        if started_here is None:
+            return
+        try:
+            with pipeline_store.Pipeline(self.base, m["task_id"], create=False) as p:
+                p.remove_start(m["pipeline_id"], started_here)
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            self._log(f"cannot undo the flow's start record: {exc}")
+
+    # ---- dispatch ----------------------------------------------------------------------
+
+    def _stream_for(self, req: dict):
+        launch_id = req.get("launch_id")
+        if not (isinstance(launch_id, str) and agent_sessions.LAUNCH_RE.match(launch_id)):
+            return None, "無效的 launch id"
+        s = self._streams.get(launch_id)
+        if s is None:
+            return None, "這個串流 session 不在執行"
+        if req.get("pipeline") != s.pipeline_id:
+            return None, "請求的流程與 session 綁定的流程不同"
+        d = req.get("dispatch_id")
+        if not (isinstance(d, str) and sp.UUID_RE.match(d)):
+            return None, "dispatch_id 必須是小寫 UUID"
+        return s, None
+
+    def _op_dispatch_prepare(self, rid: str, req: dict) -> dict:
+        s, why = self._stream_for(req)
+        if why:
+            return _err(rid, "refused", why)
+        d, text, approval = req["dispatch_id"], req.get("text"), req.get("approval")
+        if not (isinstance(approval, dict) and set(approval) == {"kind", "id"}
+                and approval["kind"] in ("preview", "automation")
+                and isinstance(approval["id"], str) and _APPROVAL_ID.match(approval["id"])):
+            return _err(rid, "bad_request", "approval 格式不符")
+        try:
+            if sp.sanitize(text) != text:
+                return _err(rid, "bad_request", "文字必須是清洗後、與預覽相同的版本")
+        except ValueError as exc:
+            return _err(rid, "bad_request", str(exc))
+        data = text.encode("utf-8")
+        sha = sp.sha256_hex(data)
+        existing = s.js.turns.get(d)
+        if existing is not None:
+            if existing.text_sha256 == sha and existing.length == len(data):
+                return _ok(rid, {"dispatch_id": d, "status": "writing" if s.writing == d else existing.status})
+            return _err(rid, "refused", "這個 dispatch_id 已用於不同的內容")
+        why = s.accepts_dispatch()
+        if why:
+            return _err(rid, "refused", why)
+        if s.js.pending is not None:
+            return _err(rid, "refused", "已有一則準備好但還沒送出的派工")
+        if pipeline_store.is_held(self.base, s.pipeline_id):
+            return _err(rid, "refused", "這個流程已停止")
+        try:
+            ctx = stream_flow.load(self.base, s.pipeline_id)
+            # A saved text without an acceptance already counts against the
+            # limit (planner ruling R5 #2); sending the same id again completes
+            # that dispatch (3.5) and adds none.
+            stream_flow.check_limits(ctx, now=time.time(),
+                                     counting_dispatch=d not in ctx.totals.pending_or_orphan_texts)
+            if d in ctx.totals.accepted:
+                return _err(rid, "refused", "這個 dispatch_id 已在流程中使用過")
+            sp.dispatch_line(text, s.claude_session_id, d)
+        except stream_flow.FlowRefused as exc:
+            return _err(rid, "refused", f"{exc.code}: {exc}")
+        except ValueError as exc:
+            return _err(rid, "refused", str(exc))
+        key = f"dispatch:{d}"
+        why = self._reserve(key, quota.RESERVE_DISPATCH)
+        if why:
+            return _err(rid, "refused", why)
+        written = 0
+        try:
+            with pipeline_store.Pipeline(self.base, s.task_id, create=True) as p:
+                p.remove_partials()      # 3.5: a .partial was never accepted; a crash left it
+                try:
+                    p.write_text(d, data)
+                    written = len(data)
+                except FileExistsError:
+                    # 3.5 recovery: the text was saved, the journal record was not.
+                    saved = p.read_text(d)
+                    if saved != data:
+                        return _err(rid, "refused", "已有這則派工的全文，但內容不同（孤兒檔，交人工處理）")
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            return _err(rid, "refused", f"派工全文無法保存：{exc}")
+        finally:
+            self._ledger.release(key, written)
+        if not s.record("dispatch_accepted", {"dispatch_id": d, "text_sha256": sha, "length": len(data),
+                                              "approval": dict(approval)}):
+            return _err(rid, "internal", "日誌無法寫入")
+        return _ok(rid, {"dispatch_id": d, "status": "accepted"})
+
+    def _op_stream_send(self, rid: str, req: dict) -> dict:
+        s, why = self._stream_for(req)
+        if why:
+            return _err(rid, "refused", why)
+        d = req["dispatch_id"]
+        if s.writing == d:
+            return _ok(rid, {"dispatch_id": d, "status": "writing"})
+        turn = s.js.turns.get(d)
+        if turn is None:
+            return _err(rid, "refused", "這則派工還沒有 prepare")
+        if turn.status != "accepted":
+            return _ok(rid, {"dispatch_id": d, "status": turn.status})         # idempotent (v29.2)
+        why = s.accepts_dispatch()
+        if why:
+            return _err(rid, "refused", why)
+        if pipeline_store.is_held(self.base, s.pipeline_id):
+            return _err(rid, "refused", "這個流程已停止")
+        # This dispatch's own text first: a changed text stops the session
+        # (3.5), before the flow's totals (which cross-check every text and
+        # would only refuse this one request).
+        try:
+            with pipeline_store.Pipeline(self.base, s.task_id, create=False) as p:
+                data = p.read_text(d)
+            if sp.sha256_hex(data) != turn.text_sha256 or len(data) != turn.length:
+                raise pipeline_store.StoreRefused("保存的全文與 prepare 時不同")
+            text = data.decode("utf-8")
+            line = sp.dispatch_line(text, s.claude_session_id, d)
+        except (OSError, UnicodeDecodeError, ValueError, pipeline_store.StoreRefused) as exc:
+            s.protocol_error("dispatch_file", str(exc))
+            return _err(rid, "refused", f"保存的派工全文無法核對（{exc}），session 停止接受派工")
+        try:
+            ctx = stream_flow.load(self.base, s.pipeline_id)
+            stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)
+        except stream_flow.FlowRefused as exc:
+            return _err(rid, "refused", f"{exc.code}: {exc}")
+        lim = ctx.limits
+        s.start_write(d, text, line, time.monotonic(), turn_cap=lim["executor_turn_max_responses"],
+                      total_cap=lim["executor_total_max_responses"],
+                      turn_timeout=lim["executor_turn_timeout_min"] * 60.0)
+        self._register_stream(s, "stdin")
+        return _ok(rid, {"dispatch_id": d, "status": "writing"})
+
+    # ---- status, close, holds --------------------------------------------------------------
+
+    def _op_stream_status(self, rid: str, req: dict) -> dict:
+        launch_id = req.get("launch_id")
+        if not (isinstance(launch_id, str) and agent_sessions.LAUNCH_RE.match(launch_id)):
+            return _err(rid, "bad_request", "無效的 launch id")
+        s = self._streams.get(launch_id)
+        manifest_state = None
+        if s is not None:
+            js, state, problem = s.js, s.state, ""
+        else:
+            try:
+                m = agent_sessions._read_manifest(agent_sessions.launch_dir(self.base, launch_id), os.getuid())
+                manifest_state = m.get("state")
+                if m.get("engine") != "claude-stream":
+                    return _err(rid, "refused", "不是串流 launch")
+                fd = os.open(str(agent_sessions.launch_dir(self.base, launch_id)), _DIR)
+                try:
+                    res = stream_journal.read(fd, self._identity_for(m))
+                finally:
+                    os.close(fd)
+            except (OSError, agent_sessions.LaunchRefused) as exc:
+                return _err(rid, "refused", f"無法讀取：{exc}")
+            js, state, problem = res.state, res.state.state, res.problem
+        workdir = (s.cwd if s is not None else (m.get("canonical_workspace") if manifest_state else None))
+        dispatches = []
+        for d in js.order:
+            t = js.turns[d]
+            status = "writing" if s is not None and s.writing == d else t.status
+            valid, reasons = (stream_journal.turn_validity(js, d, executor_report.problem)
+                              if t.status == "ended" and not problem else (None, []))
+            entry = {"dispatch_id": d, "status": status, "failed": t.failed, "times": dict(t.times),
+                     "valid": valid, "reasons": reasons}
+            if valid:
+                # design 4: the executor's own words and VBear's file checks, apart
+                report = t.result["structured_output"]
+                entry["report"] = report
+                entry["file_checks"] = (executor_report.verify(report, workdir) if isinstance(workdir, str)
+                                        else ["不知道任務工作目錄"])
+            dispatches.append(entry)
+        return _ok(rid, {"launch_id": launch_id, "live": s is not None, "state": state,
+                         "manifest_state": manifest_state, "journal_problem": problem,
+                         "dispatches": dispatches, "total_cost_usd": js.cost, "responses": js.responses,
+                         "num_turns": js.num_turns, "closed_reasons": list(js.closed_reasons), "exit": js.exit})
+
+    def _identity_for(self, m: dict) -> dict | None:
+        """The identity an ended session's turns are judged against: its
+        manifest and the flow's acceptance valid now. None (so no turn is
+        valid) when either cannot be read."""
+        from .. import acceptance, flows, login_identity
+        try:
+            flow = flows.read_only_snapshot(self.base).get(m.get("pipeline_id"))
+            key = login_identity.load_login_key(self.base)
+        except Exception:
+            return None
+        accepted = acceptance.latest_valid(flow, key.key_id) if flow else None
+        return stream_journal.identity_from(m, accepted)
+
+    def _op_stream_close(self, rid: str, req: dict) -> dict:
+        s = self._streams.get(req.get("launch_id")) if isinstance(req.get("launch_id"), str) else None
+        if s is None:
+            return _err(rid, "refused", "這個串流 session 不在執行")
+        s.terminate("使用者關閉")
+        return _ok(rid, {"launch_id": s.launch_id, "closing": True})
+
+    def _op_pipeline_hold(self, rid: str, req: dict) -> dict:
+        try:
+            pipeline_store.hold(self.base, req.get("pipeline"), req.get("reason") or "")
+        except (OSError, ValueError, pipeline_store.StoreRefused) as exc:
+            return _err(rid, "refused", f"無法停止：{exc}")
+        # Review jobs of the flow end here once they exist (S2b); a running
+        # executor turn is not affected (design 7).
+        return _ok(rid, {"pipeline": req["pipeline"], "held": True})
+
+    def _op_pipeline_release(self, rid: str, req: dict) -> dict:
+        try:
+            released = pipeline_store.release(self.base, req.get("pipeline"))
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            return _err(rid, "refused", f"無法繼續：{exc}")
+        return _ok(rid, {"pipeline": req["pipeline"], "held": False, "released": released})
+
+    # ---- loop hooks ---------------------------------------------------------------------------
+
+    def _register_stream(self, s, which: str) -> None:
+        fd = {"stdin": s.stdin, "stdout": s.stdout, "stderr": s.stderr}[which]
+        if which in s.registered:
+            return
+        events = selectors.EVENT_WRITE if which == "stdin" else selectors.EVENT_READ
+        self._sel.register(fd, events, ("stream", s, which))
+        s.registered.add(which)
+
+    def _unregister_stream(self, s, which: str) -> None:
+        if which not in s.registered:
+            return
+        fd = {"stdin": s.stdin, "stdout": s.stdout, "stderr": s.stderr}[which]
+        try:
+            self._sel.unregister(fd)
+        except (KeyError, ValueError):
+            pass
+        s.registered.discard(which)
+
+    def _stream_ready(self, s, which: str, now: float) -> None:
+        if which == "stdout":
+            s.on_stdout(now)
+        elif which == "stderr":
+            s.on_stderr(now)
+        elif s.on_writable(now):
+            self._unregister_stream(s, "stdin")
+
+    def _stream_tick(self, now: float) -> None:
+        for s in list(self._streams.values()):
+            s.tick(now)
+            if s.writing is None:
+                self._unregister_stream(s, "stdin")
+            if s.stdout_eof:
+                self._unregister_stream(s, "stdout")
+            if s.stderr_eof:
+                self._unregister_stream(s, "stderr")
+            if s.finished:
+                self._finish_stream(s)
+
+    def _finish_stream(self, s) -> None:
+        for which in list(s.registered):
+            self._unregister_stream(s, which)
+        self._streams.pop(s.launch_id, None)
+        # A finished session always has an outcome; if not, nothing proves
+        # it ended cleanly, so it is kept for a person, not cleaned up.
+        outcome = s.outcome if isinstance(s.outcome, dict) else {"manual_review": "session 結束時沒有留下結果"}
+        if s.journal_broken and not outcome.get("manual_review"):
+            # The journal stops mid-session: what it shows is not how the
+            # session ended. Keep everything for a person to look at.
+            outcome["manual_review"] = f"日誌無法寫入，session 已結束（{s.journal_broken[:200]}）"
+        if outcome.get("manual_review"):
+            agent_sessions._retain(self.base, s.launch_id, outcome["manual_review"])
+            self._log(f"{s.sid}: retained for manual review: {outcome['manual_review']}")
+        else:
+            result = agent_sessions.cleanup_launch(self.base, s.launch_id, proven_dead=True)
+            self._log(f"{s.sid}: stream session ended ({'cleaned' if result.get('cleaned') else result})")
+        self._ledger.release(f"session:{s.launch_id}", s.writer.size)
+
+    def _kill_all_streams(self) -> None:
+        """Daemon shutdown: nobody could manage these afterwards."""
+        streams = list(self._streams.values())
+        for s in streams:
+            s.terminate("背景程序關閉")
+        deadline = time.monotonic() + stream_session.TERM_GRACE + stream_session.KILL_GRACE + 2.0
+        while streams and time.monotonic() < deadline:
+            for s in streams:
+                for which in ("stdout", "stderr"):
+                    if which in s.registered:
+                        try:
+                            getattr(s, "on_" + which)(time.monotonic())
+                        except OSError:
+                            pass
+                s.tick(time.monotonic())
+                if s.finished:
+                    self._finish_stream(s)
+            streams = [s for s in streams if not s.finished]
+            time.sleep(0.05)
+        for s in streams:
+            s._killpg(signal.SIGKILL)
+            self._log(f"{s.sid}: still running at shutdown; launch kept for manual review")
+            try:
+                agent_sessions._retain(self.base, s.launch_id, "背景程序關閉時程序未能證明已結束")
+            except Exception:
+                pass
+            self._streams.pop(s.launch_id, None)
