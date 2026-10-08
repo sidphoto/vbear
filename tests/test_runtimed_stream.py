@@ -1168,6 +1168,25 @@ class HoldTests(StreamCase):
     """Part 2 review A-3 / design v29.1: after a hold every dispatch RPC is
     refused, an idempotent repeat included; the status rides along."""
 
+    def test_idempotent_repeats_recheck_the_acceptance(self):
+        # Review round 4 #3: a repeat is answered only when a new request
+        # would pass the acceptance and limits; nothing is sent either way.
+        launch_id, _ = self.open()
+        d1 = self.dispatch(launch_id)
+        self.wait_for(lambda: (x := self.turn_status(launch_id, d1)) and x["status"] == "ended", msg="turn ended")
+        d2 = fx.new_uuid()
+        prep = dict(dispatch_id=d2, text="二", approval={"kind": "preview", "id": "p2"})
+        self.assertTrue(self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, **prep)["ok"])
+        (self.base / login_identity.KEY_NAME).unlink()                     # the key changes: no valid acceptance
+        self.key = login_identity.create_login_key(self.base, valid_acceptances=0)
+        for op, kw, status in (("dispatch_prepare", prep, "accepted"), ("stream_send", dict(dispatch_id=d1), "ended")):
+            with self.subTest(op=op):
+                r = self.rpc(op, launch_id=launch_id, pipeline=self.fid, **kw)
+                self.assertFalse(r["ok"])
+                self.assertIn("no_acceptance", r["error"]["message"])
+                self.assertEqual(r["error"]["dispatch_status"], status)
+        self.assertEqual(self.turn_status(launch_id, d2)["status"], "accepted")   # nothing was sent
+
     def test_idempotent_repeats_are_refused_after_a_hold(self):
         launch_id, _ = self.open()
         d1 = self.dispatch(launch_id)
@@ -1188,6 +1207,43 @@ class HoldTests(StreamCase):
                 self.assertIn("已停止", r["error"]["message"])
                 self.assertEqual(r["error"]["dispatch_status"], status)
         self.assertEqual(self.turn_status(launch_id, d2)["status"], "accepted")   # nothing was sent
+
+
+class HeldLeaderLimitTests(StreamCase):
+    """Review round 4 #1: held leaders count toward the session limit, and
+    too many of them stop every new open until they are resolved."""
+
+    def hold(self, n):
+        procs = [subprocess.Popen(["/bin/sleep", "600"], start_new_session=True) for _ in range(n)]
+        for p in procs:
+            self.pids.append(p.pid)
+            self.dm._held_leaders.append({"proc": p, "pid": p.pid, "launch_id": "l-test"})
+        return procs
+
+    def test_held_leaders_fill_the_session_limit(self):
+        import vbear.runtime.daemon_stream as ds
+        self.dm.max_sessions = 2
+        procs = self.hold(2)
+        with mock.patch.object(ds, "MAX_HELD_LEADERS", 10):
+            r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+            self.assertFalse(r["ok"])
+            self.assertIn("session 上限", r["error"]["message"])
+            for p in procs:                       # their groups end: the recheck may reap them now
+                os.kill(p.pid, 9)
+            self.dm._held_next = 0.0
+            self.wait_for(lambda: not self.dm._held_leaders, msg="held leaders reaped")
+            self.open()
+
+    def test_too_many_held_leaders_stop_every_open(self):
+        import vbear.runtime.daemon_stream as ds
+        with mock.patch.object(ds, "MAX_HELD_LEADERS", 1):
+            self.hold(1)
+            r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+            self.assertFalse(r["ok"])
+            self.assertIn("需要人工處理", r["error"]["message"])
+            r = self.rpc("open", argv=["/bin/sh"], cwd=str(self.work))      # a terminal too
+            self.assertFalse(r["ok"])
+            self.assertIn("需要人工處理", r["error"]["message"])
 
 
 class LedgerTests(StreamCase):

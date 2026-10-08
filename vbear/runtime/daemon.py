@@ -1250,8 +1250,9 @@ class Daemon(daemon_stream.StreamOps):
                 k not in ENV_ALLOW or not isinstance(v, str) or "\0" in v
                 for k, v in env_in.items()):
             return _err(rid, "bad_request", f"env 只允許 {', '.join(ENV_ALLOW)}")
-        if len(self._sessions) >= self.max_sessions:
-            return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}）")
+        refused = self._session_room(rid)          # terminals, streams and held leaders together
+        if refused:
+            return refused
         env = build_env(env_in)
         if _resolve(argv[0], cwd, env["PATH"]) is None:
             return _err(rid, "not_found", f"找不到可執行的指令：{argv[0]}")
@@ -1274,8 +1275,9 @@ class Daemon(daemon_stream.StreamOps):
         cols, rows = req.get("cols", 80), req.get("rows", 24)
         if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
             return _err(rid, "bad_request", "cols/rows 必須是 1–1000 的整數")
-        if len(self._sessions) >= self.max_sessions:
-            return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}）")
+        refused = self._session_room(rid)          # terminals, streams and held leaders together
+        if refused:
+            return refused
         try:
             m = agent_sessions.load_validated(self.base, launch_id)
             if m.get("state") != "prepared" or m.get("native_session_id"):

@@ -45,7 +45,7 @@ from pathlib import Path
 
 from . import acceptance, admin_policy, executor_report, login_identity, strictjson
 from .boundary_check import EXPECT, PROBE, Listeners, finish, sandbox_refusal
-from .runtime import agent_sessions, daemon, stream_journal, stream_protocol as sp
+from .runtime import agent_sessions, daemon, stream_journal, stream_session, stream_protocol as sp
 
 TURN_TIMEOUT = 300.0
 CONTROL_TIMEOUT = 60.0
@@ -172,6 +172,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
     os.environ["VBEAR_HOME"] = str(state)
     listeners = endpoint = None
     proc = None
+    proc_done = False
+    leader_start = None
     scratch = None
     try:
         home = os.path.expanduser("~")
@@ -228,6 +230,11 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         tracker = sp.EventTracker(consts, sid, str(work), model, executor_version=version)
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 cwd=str(work), env=env, start_new_session=True, close_fds=True)
+        # The daemon's rules (design 5.8; review round 4 #2): the leader's
+        # identity is taken now; its exit is seen without reaping; signals
+        # only go to the group of a verified, unreaped leader; it is reaped
+        # only when the group is proven empty, and never signalled after.
+        leader_start = stream_session.capture_leader(proc.pid)
         d1, d2 = str(uuid.uuid4()), str(uuid.uuid4())
         texts = {d1: _prompt(d1, run_probe=True), d2: _prompt(d2, run_probe=False)}
         keysets: dict[str, set] = {}
@@ -257,8 +264,9 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                     raise sp.ProtocolError("out_of_order", "probe timed out")
                 ready, _, _ = select.select([proc.stdout], [], [], 1.0)
                 if not ready:
-                    if proc.poll() is not None:
-                        raise sp.ProtocolError("out_of_order", f"CLI exited early ({proc.returncode})")
+                    if stream_session.leader_exited(proc.pid):
+                        raise sp.ProtocolError("out_of_order",
+                                               f"CLI exited early ({stream_session.exit_returncode(proc.pid)})")
                     continue
                 chunk = os.read(proc.stdout.fileno(), 65536)
                 if not chunk:
@@ -306,14 +314,13 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
             except stream_journal.JournalCorrupt:
                 pass
         proc.stdin.close()
-        try:
-            rc = proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            rc = None
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
+        end = time.monotonic() + 30
+        while not stream_session.leader_exited(proc.pid) and time.monotonic() < end:
+            time.sleep(0.05)
+        rc = stream_session.exit_returncode(proc.pid)
+        ended = stream_session.end_spawned(proc, leader_start)     # kill the group, prove it empty, then reap
+        proc_done = True
+        report["checks"]["process"] = {"pass": ended is None, "problem": ended}
         if writer.state.exit is None:
             try:
                 writer.append("exited", {"returncode": rc if isinstance(rc, int) and 0 <= rc <= 255 else None,
@@ -394,11 +401,12 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         report["passed"] = all(c.get("pass") for c in report["checks"].values())
         return 0 if report["passed"] else 1
     finally:
-        if proc is not None and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+        if proc is not None and not proc_done:
+            # never after a reap: end_spawned checks the leader first and
+            # sends nothing when it is not our unreaped, verified child
+            problem = stream_session.end_spawned(proc, leader_start)
+            if problem:
+                report["process_problem"] = problem
         for x in (listeners, endpoint):
             if x is not None:
                 x.close()

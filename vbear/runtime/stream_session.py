@@ -61,6 +61,18 @@ def leader_exited(pid: int) -> bool:
         return False
 
 
+def exit_returncode(pid: int) -> int | None:
+    """The exit code of our exited child, without reaping it; None when it
+    has not exited, was killed by a signal, or is not ours."""
+    try:
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return None
+    if info is None or info.si_code != os.CLD_EXITED:
+        return None
+    return info.si_status
+
+
 def capture_leader(pid: int) -> str | None:
     """The start time of a just-spawned leader, as proctrack reports it, or
     None when it cannot be read (then nothing may ever be signalled)."""
@@ -119,8 +131,8 @@ def end_spawned(proc, leader_start: str | None, descendants=None) -> str | None:
         return f"不送訊號：{why}"
     try:
         os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    except (ProcessLookupError, PermissionError):
+        pass                    # macOS: EPERM for a group whose only member is the zombie leader
     deadline = time.monotonic() + KILL_GRACE + TERM_GRACE
     while not leader_exited(pid):
         if time.monotonic() > deadline:

@@ -43,6 +43,7 @@ def _err(rid, code: str, message: str) -> dict:
 
 
 HELD_RECHECK = 5.0
+MAX_HELD_LEADERS = 4      # unproven process groups VBear keeps; at this many, no new session opens
 
 
 class _SetupFailed(Exception):
@@ -89,8 +90,9 @@ class StreamOps:
         from .daemon import build_env  # here: daemon imports this module
         if self._shutdown_requested:
             return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
-        if len(self._sessions) + len(self._streams) >= self.max_sessions:
-            return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}）")
+        refused = self._session_room(rid)
+        if refused:
+            return refused
         launch_id = req.get("launch_id")
         key = f"session:{launch_id}"
         reserved = launching = False
@@ -368,6 +370,9 @@ class StreamOps:
             return self._held(rid, s, d)
         if existing is not None:
             if existing.text_sha256 == sha and existing.length == len(data):
+                refused = self._revalidate(rid, s, d)
+                if refused:
+                    return refused
                 return _ok(rid, {"dispatch_id": d, "status": "writing" if s.writing == d else existing.status})
             return _err(rid, "refused", "這個 dispatch_id 已用於不同的內容")
         why = s.accepts_dispatch()
@@ -428,9 +433,13 @@ class StreamOps:
         d = req["dispatch_id"]
         if pipeline_store.is_held(self.base, s.pipeline_id):
             return self._held(rid, s, d)                  # before any idempotent answer (A-3)
+        turn = s.js.turns.get(d)
+        if s.writing == d or (turn is not None and turn.status != "accepted"):
+            refused = self._revalidate(rid, s, d)
+            if refused:
+                return refused
         if s.writing == d:
             return _ok(rid, {"dispatch_id": d, "status": "writing"})
-        turn = s.js.turns.get(d)
         if turn is None:
             return _err(rid, "refused", "這則派工還沒有 prepare")
         if turn.status != "accepted":
@@ -530,6 +539,24 @@ class StreamOps:
                          "unfinished": js.unfinished(), "recovered": js.recovered,
                          "num_turns": js.num_turns, "closed_reasons": list(js.closed_reasons), "exit": js.exit})
 
+    def _revalidate(self, rid: str, s, d) -> dict | None:
+        """Before an idempotent answer, the same checks as a new request:
+        the flow's acceptance and its limits (part 2 review round 4 #3).
+        Nothing is sent or created either way; a refusal carries the status."""
+        try:
+            ctx = stream_flow.load(self.base, s.pipeline_id)
+            stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)
+        except stream_flow.FlowRefused as exc:
+            r = _err(rid, "refused", f"{exc.code}: {exc}")
+            r["error"]["dispatch_status"] = self._status_of(s, d)
+            return r
+        return None
+
+    @staticmethod
+    def _status_of(s, d):
+        turn = s.js.turns.get(d) if isinstance(d, str) else None
+        return "writing" if s.writing == d else (turn.status if turn is not None else None)
+
     def _held(self, rid: str, s, d) -> dict:
         turn = s.js.turns.get(d) if isinstance(d, str) else None
         status = "writing" if s.writing == d else (turn.status if turn is not None else None)
@@ -600,6 +627,17 @@ class StreamOps:
             s.on_stderr(now)
         elif s.on_writable(now):
             self._unregister_stream(s, "stdin")
+
+    def _session_room(self, rid: str) -> dict | None:
+        """Review round 4 #1: a held leader is a process group VBear still
+        answers for, so it counts toward the session limit; with too many,
+        nothing new opens until a person has looked."""
+        held = len(self._held_leaders)
+        if held >= MAX_HELD_LEADERS:
+            return _err(rid, "limit", f"有 {held} 個無法證明已結束的程序群組，需要人工處理後才能開啟新的 session")
+        if len(self._sessions) + len(self._streams) + held >= self.max_sessions:
+            return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}，含 {held} 個待確認的程序群組）")
+        return None
 
     def _hold_leader(self, proc, launch_id: str) -> None:
         """Keep the Popen object of a leader that may not be reaped (a

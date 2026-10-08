@@ -151,6 +151,55 @@ class StreamCheckTests(unittest.TestCase):
         self.assertIn("No space left", report["error"])
         self.assertEqual(os.listdir(private), [])
 
+    def test_the_probe_never_signals_after_reaping(self):
+        # Review round 4 #2: signals only to a verified, unreaped leader's
+        # group; reaped only when the group is proven empty; nothing after.
+        from vbear.runtime import stream_session
+        events = []
+        real_killpg, real_waitpid = os.killpg, os.waitpid
+
+        def killpg(pgid, sig):
+            events.append(("signal", pgid))
+            return real_killpg(pgid, sig)
+
+        def waitpid(pid, opts):
+            events.append(("reap", pid))
+            return real_waitpid(pid, opts)
+        out = self.tmp / "report.json"
+        private = self.tmp / "t"
+        private.mkdir()
+        import subprocess
+        real_popen, leaders = subprocess.Popen, []
+
+        def popen(argv, *args, **kw):
+            proc = real_popen(argv, *args, **kw)
+            if "--session-id" in argv:                                   # the stream CLI, not the control
+                leaders.append(proc.pid)
+            return proc
+        with mock.patch.object(stream_session.os, "killpg", killpg), \
+                mock.patch.object(stream_session.os, "waitpid", waitpid), \
+                mock.patch.object(stream_check.subprocess, "Popen", popen):
+            stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
+                             tmp_root=str(private))
+        report = json.loads(out.read_text())
+        self.assertEqual(report["checks"]["process"], {"pass": True, "problem": None})
+        pid, = leaders
+        mine = [e for e in events if e[1] == pid]
+        self.assertEqual([e for e in mine if e[0] == "reap"], [("reap", pid)])     # reaped once
+        self.assertEqual(mine[-1], ("reap", pid))                                  # nothing after it
+
+    def test_a_reaped_leader_is_never_signalled(self):
+        import subprocess
+        from vbear.runtime import stream_session
+        proc = subprocess.Popen(["/bin/sleep", "600"], start_new_session=True)
+        start = stream_session.capture_leader(proc.pid)
+        os.kill(proc.pid, 9)
+        proc.wait()                                                      # reaped by someone else
+        with mock.patch.object(stream_session.os, "killpg") as killpg:
+            problem = stream_session.end_spawned(proc, start)
+        killpg.assert_not_called()
+        self.assertIn("不送訊號", problem)
+
     def test_remove_tree_lists_what_it_could_not_remove(self):
         locked = self.tmp / "locked"
         (locked / "inner").mkdir(parents=True)
