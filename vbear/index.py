@@ -465,18 +465,16 @@ class Store:
         return data, _stamp(written)
 
     # live
-    def live_if_ready(self) -> dict | None:
-        """The cached live view, or None without waiting when there is none
-        yet (a first build is then started in the background). For surfaces
-        that only decorate their own data with live state and must not block
-        on the first, possibly slow, scan."""
+    def live_cached(self) -> dict | None:
+        """The last live view built, however old, or None when none has been
+        built yet. It never starts a build and never waits.
+
+        A build calls the runtime, and the native runtime starts its daemon
+        when none is running; surfaces that only decorate their own data with
+        live state (flows) use this so that reading them can never start
+        anything. The pages showing them load /api/live first."""
         with self._live_cond:
-            if self._live is None:
-                if not self._live_building:
-                    self._live_building = True
-                    threading.Thread(target=self._build_live, daemon=True, name="vbear-live").start()
-                return None
-        return self.live(stale_ok=True)   # has a cached view: never waits
+            return self._live
 
     def live(self, force: bool = False, stale_ok: bool = False) -> dict:
         """The live view, rebuilt at most every LIVE_TTL_S seconds.

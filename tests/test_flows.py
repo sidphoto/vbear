@@ -207,6 +207,65 @@ class DerivationTests(FlowCase):
         self.assertEqual(d["phase"]["key"], "in_review")
         self.assertEqual(len(d["stray_reviews"]), 1)
 
+    def passed_merged_pushed(self):
+        fid = self.flow(workdir=self.repo)
+        self.add(fid, "executor_report", commit=C1)
+        self.add(fid, "review_result", reviewer=0, verdict="PASS", commit=C1)
+        self.add(fid, "merge_done")
+        self.add(fid, "push_done")
+        self.assertEqual(self.derive(fid)["phase"]["key"], "done")
+        return fid
+
+    def test_a_late_pass_of_the_merged_commit_does_not_reopen_the_flow(self):
+        # Codex S1 #3: report, PASS, merge, push, then another PASS of the same commit.
+        fid = self.passed_merged_pushed()
+        self.add(fid, "review_result", reviewer=0, verdict="PASS", commit=C1)
+        d = self.derive(fid)
+        self.assertEqual(d["phase"]["key"], "done")
+        late = d["rounds"][-1]["reviews"][-1]
+        self.assertFalse(late["counts_as_pass"])
+        self.assertIn("合併後", late["why"])
+        self.assertEqual(d["warnings"], [])
+
+    def test_a_late_pass_between_merge_and_push_does_not_go_back_to_awaiting_merge(self):
+        fid = self.flow(workdir=self.repo)
+        self.add(fid, "executor_report", commit=C1)
+        self.add(fid, "review_result", reviewer=0, verdict="PASS", commit=C1)
+        self.add(fid, "merge_done")
+        self.add(fid, "review_result", reviewer=0, verdict="PASS", commit=C1)
+        self.assertEqual(self.derive(fid)["phase"]["key"], "awaiting_push")
+
+    def test_a_late_objection_keeps_the_phase_and_is_flagged(self):
+        fid = self.passed_merged_pushed()
+        self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)
+        d = self.derive(fid)
+        self.assertEqual(d["phase"]["key"], "done")
+        self.assertEqual(len(d["warnings"]), 1)
+        self.assertIn("NEEDS_WORK", d["warnings"][0])
+
+    def test_reporting_the_merged_commit_again_does_not_open_a_round(self):
+        fid = self.passed_merged_pushed()
+        self.add(fid, "executor_report", commit=C1)
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], len(d["rounds"])), ("done", 1))
+        self.assertEqual(len(d["warnings"]), 1)
+
+    def test_a_new_commit_after_push_opens_a_new_round(self):
+        fid = self.passed_merged_pushed()
+        fake_repo(self.repo, C2)
+        self.add(fid, "executor_report", commit=C2)
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], d["phase"]["round"]), ("in_review", 2))
+        self.add(fid, "review_result", reviewer=0, verdict="PASS", commit=C2)
+        self.assertEqual(self.derive(fid)["phase"]["key"], "awaiting_merge")
+
+    def test_re_reporting_the_same_commit_before_merge_still_opens_a_round(self):
+        fid = self.flow(workdir=self.repo)
+        self.add(fid, "executor_report", commit=C1)
+        self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)
+        self.add(fid, "executor_report", commit=C1)
+        self.assertEqual(self.derive(fid)["phase"]["round"], 2)
+
     def test_merge_without_a_valid_pass_is_flagged(self):
         fid = self.flow(workdir=self.repo)
         self.add(fid, "merge_done")
@@ -345,34 +404,22 @@ class MalformedInputTests(FlowCase):
                 self.add(fid, "note")
 
 
-class LiveIfReadyTests(FlowCase):
-    """The flows API decorates flows with live state but must not wait for
-    the first live build (it may be slow, or the runtime may hang)."""
+class LiveCachedTests(FlowCase):
+    """Flows decorate themselves with live state from the cache only: a live
+    build calls the runtime, which may start its daemon (Codex S1 #1)."""
 
-    def test_first_call_returns_none_without_waiting_then_the_cached_view(self):
+    def test_never_builds_and_never_waits(self):
         from vbear.index import Store
         store = Store(runtime=mock.Mock())
-        release = threading.Event()
-        built = {"sessions": [], "panes": []}
-
-        def slow_build():
-            release.wait(10)
+        with mock.patch.object(store, "_build_live") as build:
+            self.assertIsNone(store.live_cached())
+            built = {"sessions": [], "panes": []}
             with store._live_cond:
-                store._live, store._live_at = built, time.monotonic()
-                store._live_building = False
-                store._live_cond.notify_all()
-            return built
-        with mock.patch.object(store, "_build_live", side_effect=slow_build) as build:
-            t0 = time.monotonic()
-            self.assertIsNone(store.live_if_ready())
-            self.assertIsNone(store.live_if_ready())          # still building: no second build
-            self.assertLess(time.monotonic() - t0, 1.0)
-            release.set()
-            deadline = time.monotonic() + 10
-            while store._live is None and time.monotonic() < deadline:
-                time.sleep(0.01)
-            self.assertIs(store.live_if_ready(), built)
-            self.assertEqual(build.call_count, 1)
+                store._live, store._live_at = built, 0.0      # stale on purpose
+            self.assertIs(store.live_cached(), built)
+            build.assert_not_called()
+        store.runtime.assert_not_called()
+        self.assertEqual(store.runtime.method_calls, [])
 
 
 class FlowApiTests(unittest.TestCase):
@@ -423,6 +470,19 @@ class FlowApiTests(unittest.TestCase):
             data = json.loads(e.read() or b"null")
             e.close()
             return e.code, data
+
+    def test_flow_routes_never_build_the_live_view(self):
+        tid = tasks.save_task(None, {"title": "不觸發即時建置"})["id"]
+        with mock.patch.object(self.console.store, "_build_live") as build, \
+                mock.patch.object(self.console.store, "live", side_effect=AssertionError("live() called")):
+            st, r = self.call("/api/flows", "POST", {"task_id": tid, "roles": roles()})
+            self.assertEqual(st, 200, r)
+            fid = r["flow"]["id"]
+            self.assertEqual(self.call(f"/api/flows/{fid}/events", "POST", {"kind": "note"})[0], 200)
+            self.assertEqual(self.call(f"/api/flows/{fid}/roles", "POST", {"roles": roles()})[0], 200)
+            self.assertEqual(self.call(f"/api/flows/{fid}")[0], 200)
+            self.assertEqual(self.call("/api/flows")[0], 200)
+            build.assert_not_called()
 
     def test_token_required(self):
         self.assertEqual(self.call("/api/flows", token=False)[0], 401)

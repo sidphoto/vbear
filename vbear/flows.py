@@ -371,9 +371,15 @@ def _short(commit) -> str:
 
 def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
     """Phase, review rounds and commit binding from the events, plus the
-    executor's HEAD read now. ``flow`` is a stored flow (already validated)."""
+    executor's HEAD read now. ``flow`` is a stored flow (already validated).
+
+    Once a merge is recorded, the round's commit is closed: later reviews of
+    it, or a report of it again, are kept and shown but never move the phase
+    back (a late PASS must not turn 「完成」 into 「等合併」; a late objection is
+    flagged). Only a report of a different commit opens a new round."""
     state, reason = "planning", "還沒有提出計畫"
     current_commit, passed_commit = None, None
+    closed = False          # the current round's commit has been merged
     rounds: list[dict] = []
     stray: list[dict] = []
     warnings: list[str] = []
@@ -385,7 +391,10 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
             if state in ("planning", "awaiting_approval", "implementing"):
                 state, reason = "implementing", "執行者實作中"
         elif kind == "executor_report":
-            current_commit, passed_commit = e["commit"], None
+            if closed and e["commit"] == current_commit:
+                warnings.append(f"合併後又回報同一個 commit {_short(e['commit'])}，不開始新一輪")
+                continue
+            current_commit, passed_commit, closed = e["commit"], None, False
             rounds.append({"round": len(rounds) + 1, "commit": e["commit"], "reported_at": e["at"], "reviews": []})
             state, reason = "in_review", f"等待審查 {_short(e['commit'])}（第 {len(rounds)} 輪）"
         elif kind == "review_result":
@@ -395,7 +404,14 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
                    "at": e["at"], "seq": e["seq"],
                    "counts_as_pass": e["verdict"] == "PASS" and counted,
                    "why": why if e["verdict"] == "PASS" and not counted else ""}
-            if rounds and e["commit"] == current_commit:
+            if rounds and e["commit"] == current_commit and closed:
+                row["counts_as_pass"] = False
+                row["why"] = "合併後才記錄的審查，不改變階段"
+                rounds[-1]["reviews"].append(row)
+                if e["verdict"] != "PASS":
+                    warnings.append(f"合併後才記錄的審查結論 {e['verdict']}（{e['reviewer']['name']}，"
+                                    f"commit {_short(e['commit'])}）")
+            elif rounds and e["commit"] == current_commit:
                 rounds[-1]["reviews"].append(row)
                 if e["verdict"] != "PASS":
                     state, reason = "needs_fix", f"審查結論 {e['verdict']}，等執行者修正"
@@ -411,7 +427,7 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
         elif kind == "merge_done":
             if state not in ("review_passed",):
                 warnings.append("合併時沒有對應最新 commit 的有效審查通過")
-            state, reason = "awaiting_push", "已合併，等 push"
+            state, reason, closed = "awaiting_push", "已合併，等 push", True
         elif kind == "push_done":
             if state != "awaiting_push":
                 warnings.append("push 之前沒有合併的紀錄")
@@ -437,7 +453,7 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
             else:
                 state, reason = "awaiting_merge", f"審查通過的 {_short(commit)} 就是執行者目前的 commit，等你合併"
                 binding = {"state": "current", "reviewed": passed_commit, "head": commit,
-                           "detail": f"審查結果對應目前的 commit {_short(commit)}（只比對 commit，看不到未提交的修改）"}
+                           "detail": "只比對 commit，看不到未提交的修改"}
     label = PHASES[state]
     if state == "in_review" and rounds:
         label = f"審查第 {len(rounds)} 輪"

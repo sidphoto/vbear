@@ -45,7 +45,8 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
   and the home page lists the gates waiting for you. Phases are derived on every read, never stored. A review
   counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
   date as soon as the executor's directory moves off the reviewed commit. Every event is entered by hand and
-  labelled 「手動記錄（未驗證）」; VBear starts, sends and runs nothing for a flow.
+  labelled 「手動記錄（未驗證）」. VBear does not dispatch work, type into a terminal, run `git` or start an agent for
+  a flow. Like the home page, the flows pages read the live view, which can start VBear's own runtime.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 

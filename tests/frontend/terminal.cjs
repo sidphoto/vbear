@@ -829,7 +829,7 @@ async function runAllTests() {
 
   // Category 14: flows board (stage 1) - look and record only
   {
-    const { flowPhaseClass, flowEventBody } = app;
+    const { flowPhaseClass, flowEventBody, flowBindingNote } = app;
     assert.strictEqual(flowPhaseClass("awaiting_merge"), "b-warn");
     assert.strictEqual(flowPhaseClass("review_stale"), "b-bad");
     assert.strictEqual(flowPhaseClass("done"), "b-ok");
@@ -840,8 +840,17 @@ async function runAllTests() {
       { kind: "executor_report", note: "", commit: "abc" });
     assert.deepStrictEqual(flowEventBody("review_result", { commit: "a".repeat(40), verdict: "NEEDS_WORK", reviewer: "1" }),
       { kind: "review_result", note: "", commit: "a".repeat(40), verdict: "NEEDS_WORK", reviewer: 1 });
-    assert(appSource.includes("VBear 不會派工、輸入指令、執行 git 或啟動任何程式"),
-      "the board says it starts, sends and runs nothing");
+    assert(appSource.includes("VBear 不會為流程派工、輸入指令、執行 git，也不會啟動 Agent；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。"),
+      "the board says what it does not do, and that reading live state may start VBear's own runtime");
+    assert(!appSource.includes("啟動任何程式"), "no claim that nothing at all is started");
+    // A sentence shown once: the binding line only when it adds to the phase reason (planner S1 #4).
+    const stale = "審查通過的是 aaaaaaa，執行者目前在 bbbbbbb：審查結果已過期，需要重新審查";
+    assert.strictEqual(flowBindingNote({ phase: { reason: stale }, binding: { detail: stale } }), "");
+    assert.strictEqual(flowBindingNote({ phase: { reason: "等你合併" }, binding: { detail: "只比對 commit" } }), "只比對 commit");
+    assert.strictEqual(flowBindingNote({ phase: { reason: "x" }, binding: null }), "");
+    assert(!appSource.includes("f.binding ? notice("), "the detail page no longer repeats the binding as its own notice");
+    assert(/await loadLive\(\);\s+\/\/ first: \/api\/flows only reads the live cache\s+let res;/.test(appSource),
+      "the flow detail loads /api/live before the flow");
     assert(appSource.includes('badge(e.source_label, "b-mute", "由表單記錄，VBear 沒有核對")'),
       "every event shows it was recorded by hand and not checked");
     assert(appSource.includes("const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);"),

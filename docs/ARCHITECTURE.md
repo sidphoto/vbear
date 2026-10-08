@@ -100,7 +100,7 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
 
 ## Flows — `vbear/flows.py`
 
-Stage 1 of multi-agent support: a board, with no new capability to start, send or run anything.
+Stage 1 of multi-agent support: a board. It adds no way to dispatch work, send input, run `git` or start an agent.
 
 - **Record.** One flow per task card in `flows.json`: `roles` (planner, executor, 1–4 reviewers, each with a model
   family from a fixed list; the executor may name a runtime session id and a work directory) and an append-only
@@ -118,8 +118,11 @@ Stage 1 of multi-agent support: a board, with no new capability to start, send o
   never counts); whether a PASS counts (both families known, not `other`, and different); and, for a counted pass,
   the executor directory's HEAD read now by `git_head`, giving `awaiting_merge` (same commit), `review_stale`
   (moved) or `review_unverified` (no directory, or HEAD unreadable). A merge or push recorded without a counted
-  pass shows a warning. The executor's live state comes from the cached live view (`Store.live_if_ready`, which
-  never waits for a first build).
+  pass shows a warning. Once a merge is recorded the round's commit is closed: later reviews of it, or a report of
+  it again, are listed but never move the phase back (a late objection is a warning); only a report of a different
+  commit opens a new round. The executor's live state comes from `Store.live_cached()`, the last live view built:
+  it never builds one, because a build calls the runtime and the native runtime starts its daemon when none is
+  running. The flows pages load `/api/live` first (as the home page always has), which fills that cache.
 - **API** (behind the access token): `GET /api/flows`, `GET /api/flows/<id>`, `POST /api/flows`
   (`task_id`, `roles`), `POST /api/flows/<id>/events`, `POST /api/flows/<id>/roles`. Unknown fields are rejected
   per event kind; `roles_changed` is written only by the roles route. Bad input → 400, unknown flow → 404, a

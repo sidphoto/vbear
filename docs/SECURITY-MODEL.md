@@ -136,7 +136,12 @@ Other safeguards:
 - **No new execution capability.** The flows board records and shows. Its routes write only `flows.json`; nothing
   in `vbear/flows.py` starts a process, sends input to a terminal, runs `git` or contacts the network. The only
   outside reads are the executor directory's HEAD through `git_head` (plain bounded file reads, as for task cards)
-  and the cached live view.
+  and the last live view already built (`Store.live_cached()`). The flows routes never build a live view, so they
+  never reach the runtime and cannot start its daemon; a test holds them to that.
+- **The pages still read live state the existing way.** The 「流程」 pages, like the home page, call `/api/live`. On
+  the native runtime with autostart on (the default), that call starts VBear's own runtime daemon when it is not
+  running (unchanged behaviour). It
+  never starts an agent.
 - **Manual means unverified.** Every event is entered through the UI/API by whoever can reach it with the access
   token, and is labelled 「手動記錄（未驗證）」. A recorded review result says someone typed it, not that a
   reviewer produced it.

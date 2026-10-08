@@ -799,13 +799,14 @@ def make_handler(console: Console):
                 except tasks.TaskStorageError:
                     return None
                 return task.get("title") if task else None
-            live = console.store.live_if_ready()   # never wait for the first scan here
+            live = console.store.live_cached()   # never builds: reading a flow starts nothing
             by_id = {s.get("terminal_id"): s for s in (live or {}).get("sessions", ())}
             panes = {p.get("pane_id") for p in (live or {}).get("panes", ())}
 
             def live_session(sid):
                 if live is None:
-                    return {"display": "unknown", "label": "讀取中", "reason": "即時資料還在整理，稍後重新整理"}
+                    return {"display": "unknown", "label": "即時狀態未載入",
+                            "reason": "主控台還沒有即時資料；重新整理頁面後會顯示"}
                 s = by_id.get(sid)
                 if s is None:
                     return {"display": "unknown", "label": "狀態未知", "reason": "不是 Agent session"} if sid in panes else None

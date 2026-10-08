@@ -7,8 +7,10 @@
   phase, review rounds and commit binding are derived on every read; a review counts as a pass only for different,
   known families, and a pass goes out of date when the executor's directory moves off the reviewed commit. The
   home page's 「需要你處理」 lists flow gates (approval, merge, push, a pass whose HEAD cannot be checked). Stored
-  in `flows.json` under the same fail-closed rules as `tasks.json`, now shared in `vbear/jsonstore.py`. VBear
-  starts, sends and runs nothing for a flow.
+  in `flows.json` under the same fail-closed rules as `tasks.json`, now shared in `vbear/jsonstore.py`. VBear does
+  not dispatch work, type into a terminal, run `git` or start an agent for a flow; the flows API reads live state
+  only from the console's cache and never starts anything. Like the home page, the flows pages load the live view,
+  which can start VBear's own runtime.
 - At phone width a long sidebar now scrolls inside the nav instead of widening every page.
 - Two timing-sensitive runtime tests no longer race under load (the abandoned-launch expiry log, and the open/close
   round trip's hang-up grace).

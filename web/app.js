@@ -1094,7 +1094,8 @@ function sectionHead(title, sub, action) {
 
 async function viewHome() {
   const token = seq;
-  await Promise.all([loadStatic(), loadLive(), loadFlows()]);
+  // /api/flows reads live state from the cache /api/live fills, so live goes first.
+  await Promise.all([loadStatic(), loadLive().then(() => loadFlows())]);
   const L = D.live;
   const main = claim(token);
   const input = el("input", { type: "search", placeholder: "想做什麼？例如：網站安全檢查、做簡報、剪影片、部署…", "aria-label": "用途搜尋技能" });
@@ -1811,12 +1812,17 @@ function flowCard(f) {
       el("span", null, "審查 ", el("b", null, f.roles.reviewers.map(roleText).join("、"))),
       rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
         rev.counts_as_pass ? "算通過" : (rev.why || "")), ` ${shortCommit(rev.commit)}`) : null),
-    f.binding ? el("div", { class: "small muted" }, f.binding.detail) : null);
+    flowBindingNote(f) ? el("div", { class: "small muted" }, flowBindingNote(f)) : null);
+}
+
+// The binding's own line, unless the phase reason already says the same.
+function flowBindingNote(f) {
+  return f.binding && f.binding.detail && f.binding.detail !== f.phase.reason ? f.binding.detail : "";
 }
 
 function flowNotice() {
   return notice("info", "這一版的流程只記錄與顯示：事件都由表單手動記錄（未驗證），階段由 VBear 依事件與即時資料推導。" +
-    "VBear 不會派工、輸入指令、執行 git 或啟動任何程式。");
+    "VBear 不會為流程派工、輸入指令、執行 git，也不會啟動 Agent；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。");
 }
 
 function familyOptions(families, selected) {
@@ -1855,7 +1861,8 @@ function roleInputs(prefix, families, role, opts = {}) {
 
 async function viewFlows() {
   const token = seq;
-  const [data, tasksRes] = await Promise.all([loadFlows(), api.get("/api/tasks").catch(() => ({ tasks: [] })), loadLive()]);
+  await loadLive();   // first: /api/flows only reads the live cache
+  const [data, tasksRes] = await Promise.all([loadFlows(), api.get("/api/tasks").catch(() => ({ tasks: [] }))]);
   const main = claim(token);
   if (token !== seq) return;
   const used = new Set((data.flows || []).map((f) => f.task_id));
@@ -1906,6 +1913,7 @@ function flowEventBody(kind, values) {
 
 async function viewFlowDetail(flowId) {
   const token = seq;
+  await loadLive();   // first: /api/flows only reads the live cache
   let res;
   try { res = await api.get(`/api/flows/${encodeURIComponent(flowId)}`); }
   catch (e) {
@@ -1942,7 +1950,7 @@ async function viewFlowDetail(flowId) {
       route();
     } catch (e) { toast("無法記錄：" + e.message); add.disabled = false; }
   } } }, el("label", { class: "small" }, "事件 ", kindSel), commitRow, reviewRow, note,
-    el("p", { class: "small muted" }, "這筆會標示為「手動記錄（未驗證）」。VBear 只記錄，不會執行任何動作。"), add);
+    el("p", { class: "small muted" }, "這筆會標示為「手動記錄（未驗證）」。記錄事件只會寫入流程紀錄，不會派工、輸入指令或執行 git。"), add);
 
   const rounds = f.rounds || [];
   const roundTable = rounds.length ? el("div", { class: "table-scroll" }, el("table", { class: "flow-rounds" },
@@ -1968,9 +1976,10 @@ async function viewFlowDetail(flowId) {
     el("div", { class: "row", style: "justify-content:space-between" },
       el("h1", null, f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title), flowPhaseBadge(f.phase)),
     flowNotice(),
-    f.attention ? notice("warn", "等你處理：" + f.phase.reason) : el("p", { class: "lede" }, f.phase.reason),
+    f.attention ? notice("warn", "等你處理：" + f.phase.reason)
+      : f.phase.key === "review_stale" ? notice("warn", f.phase.reason) : el("p", { class: "lede" }, f.phase.reason),
+    flowBindingNote(f) ? el("p", { class: "small muted" }, flowBindingNote(f)) : null,
     (f.warnings || []).map((w) => notice("warn", w)),
-    f.binding ? notice(f.binding.state === "current" ? "info" : "warn", f.binding.detail) : null,
     el("section", { class: "section" }, sectionHead("角色", null),
       el("dl", { class: "kv small" },
         el("dt", null, "規劃"), el("dd", null, roleText(f.roles.planner)),
@@ -4769,7 +4778,8 @@ async function route() {
       const gateKey = () => JSON.stringify(((D.flows && D.flows.flows) || [])
         .filter((f) => f.attention).map((f) => [f.id, f.phase.key]));
       const before = JSON.stringify(D.live.attention) + gateKey();
-      await Promise.all([loadLive(), loadFlows()]);
+      await loadLive();
+      await loadFlows();
       const box = document.getElementById("h-att-wrap");
       if (box && JSON.stringify(D.live.attention) + gateKey() !== before) setKids(box, attentionSection());
     };
@@ -4858,6 +4868,7 @@ if (typeof module !== "undefined" && module.exports) {
     titleFailureText,
     flowPhaseClass,
     flowEventBody,
+    flowBindingNote,
     cleanupActiveView,
     cleanupActiveTerminal,
     // Exported so the modal registry's two subtle invariants can be tested
