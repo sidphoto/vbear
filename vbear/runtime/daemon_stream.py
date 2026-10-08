@@ -127,6 +127,12 @@ class StreamOps:
             if busy:
                 raise agent_sessions.LaunchRefused(
                     "busy", f"這個流程已有尚未結束的串流 session（{', '.join(busy[:4])}），一次只能有一個")
+            # v29.8: one failure stops the flow until the user presses
+            # "continue"; recomputed from the journals, not only the hold.
+            failed = stream_flow.unresolved_failure(ctx)
+            if failed:
+                raise agent_sessions.LaunchRefused(
+                    "failed", f"流程在上次「繼續」之後有失敗（{failed}），需要使用者先按「繼續」")
             if pipeline_store.is_held(self.base, m["pipeline_id"]):
                 raise agent_sessions.LaunchRefused("held", "這個流程已停止")
             stream_flow.check_executor(ctx, cli_version=version, model_id=m["model_id"],
@@ -594,11 +600,44 @@ class StreamOps:
         return _ok(rid, {"pipeline": req["pipeline"], "held": True})
 
     def _op_pipeline_release(self, rid: str, req: dict) -> dict:
+        """The user's "continue" (design 7, v29.8): the time is recorded in
+        the daemon's own record first (open_stream compares failures with
+        it), then the hold goes. A failed session must be closed before."""
+        from .. import flows
+        pipeline = req.get("pipeline")
+        open_failed = [x.launch_id for x in self._streams.values()
+                       if x.pipeline_id == pipeline and x.js.failures]
+        if open_failed:
+            return _err(rid, "refused", f"請先關閉失敗的 session（{', '.join(open_failed)}），再按「繼續」")
         try:
-            released = pipeline_store.release(self.base, req.get("pipeline"))
+            flow = flows.read_only_snapshot(self.base).get(pipeline) if isinstance(pipeline, str) else None
+        except Exception as exc:
+            return _err(rid, "refused", f"無法讀取流程（{exc}）")
+        if flow is None:
+            return _err(rid, "refused", "找不到這個流程")
+        key = f"release:{pipeline}"
+        why = self._reserve(key, quota.START_RECORD_MAX * 2)        # the record and its temp file
+        if why:
+            return _err(rid, "refused", why)
+        before, written = None, 0
+        try:
+            with pipeline_store.Pipeline(self.base, flow["task_id"], create=True) as p:
+                before = p.release_record_bytes()
+                try:
+                    p.record_release(pipeline, time.time())
+                finally:
+                    try:
+                        written = max(0, p.release_record_bytes() - before)
+                    except OSError:
+                        written = None                       # unknown: the reservation, ledger over
+            released = pipeline_store.release(self.base, pipeline)
         except (OSError, pipeline_store.StoreRefused) as exc:
+            if before is None:
+                written = 0
             return _err(rid, "refused", f"無法繼續：{exc}")
-        return _ok(rid, {"pipeline": req["pipeline"], "held": False, "released": released})
+        finally:
+            self._ledger.release(key, written)
+        return _ok(rid, {"pipeline": pipeline, "held": False, "released": released})
 
     # ---- loop hooks ---------------------------------------------------------------------------
 
@@ -668,10 +707,26 @@ class StreamOps:
             self._held_leaders.remove(h)
             self._log(f"{h['launch_id']}: group of leader {pid} proven empty, leader reaped")
 
+    def _hold_for_failure(self, pipeline_id: str, launch_id: str, why: str) -> None:
+        """v29.8: any failure holds the flow (reason "failure"). If the hold
+        cannot be written, open_stream still refuses: it recomputes the
+        failures from the journals."""
+        try:
+            pipeline_store.hold(self.base, pipeline_id, f"failure: session {launch_id}: {why}")
+            self._log(f"{launch_id}: flow {pipeline_id} held after a failure: {why}")
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            self._log(f"{launch_id}: cannot hold flow {pipeline_id} after a failure ({exc})")
+
+    def _check_failure(self, s) -> None:
+        if not getattr(s, "failure_held", False) and s.js.failures:
+            s.failure_held = True
+            self._hold_for_failure(s.pipeline_id, s.launch_id, s.js.failures[-1][0])
+
     def _stream_tick(self, now: float) -> None:
         self._recheck_held(now)
         for s in list(self._streams.values()):
             s.tick(now)
+            self._check_failure(s)
             if s.writing is None:
                 self._unregister_stream(s, "stdin")
             if s.stdout_eof:
@@ -703,6 +758,11 @@ class StreamOps:
             self._log(f"{s.sid}: stream session ended ({'cleaned' if result.get('cleaned') else result})")
         if outcome.get("leader_held"):
             self._hold_leader(s.proc, s.launch_id)
+        self._check_failure(s)
+        if not getattr(s, "failure_held", False) and (outcome.get("manual_review") or s.js.unfinished()):
+            s.failure_held = True
+            self._hold_for_failure(s.pipeline_id, s.launch_id,
+                                   outcome.get("manual_review") or "回合沒有結果，以最壞情況計入")
         manifest_before, start_bytes = getattr(s, "quota_base", (0, 0))
         self._ledger.release(f"session:{s.launch_id}",
                              self._session_bytes(s.manifest, manifest_before, start_bytes))

@@ -30,6 +30,7 @@ PIPELINES = "pipelines"
 DISPATCHES = "dispatches"
 HOLDS = "holds"
 STARTED = "started.json"
+RELEASED = "released.json"                 # v29.8: the flow's last pipeline_release
 TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 FLOW_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
 LAUNCH_RE = re.compile(r"^l-[0-9a-f]{16}\Z")              # agent_sessions.LAUNCH_RE
@@ -268,6 +269,62 @@ class Pipeline:
             return os.stat(STARTED, dir_fd=self.fd, follow_symlinks=False).st_size
         except FileNotFoundError:
             return 0
+
+    # the flow's last release (design v29.8) ------------------------------------------
+
+    def released_at(self, pipeline_id: str) -> float | None:
+        """When the user last pressed "continue" (pipeline_release), None when
+        never; StoreRefused when the record cannot be trusted."""
+        try:
+            fd, _ = strictjson.open_owned(RELEASED, dir_fd=self.fd, max_bytes=strictjson.MANIFEST.file_bytes)
+        except strictjson.ReadRefused as exc:
+            if exc.missing:
+                return None
+            raise StoreRefused(f"流程繼續時間無法讀取（{exc}）") from exc
+        try:
+            raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
+        except strictjson.ReadRefused as exc:
+            raise StoreRefused(f"流程繼續時間無法讀取（{exc}）") from exc
+        finally:
+            os.close(fd)
+        parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+        if not parsed.ok:
+            raise StoreRefused(f"流程繼續時間無法讀取（{parsed.problem}）")
+        d = parsed.value
+        t = finite_real(d.get("released_at")) if not isinstance(d.get("released_at"), bool) else None
+        if (set(d) != {"v", "pipeline_id", "released_at"} or d.get("v") != 1 or isinstance(d.get("v"), bool)
+                or d.get("pipeline_id") != pipeline_id or t is None or not EARLIEST <= t <= time.time() + 86400):
+            raise StoreRefused("流程繼續時間的紀錄不符")
+        return t
+
+    def record_release(self, pipeline_id: str, now: float) -> None:
+        """Replace the release record atomically (temp file, fsync, rename,
+        directory sync); a failure raises, so a release is never assumed."""
+        if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
+            raise StoreRefused("流程 id 格式不符")
+        tmp = f".{RELEASED}.tmp"
+        try:
+            os.unlink(tmp, dir_fd=self.fd)                     # left by a crash: never trusted
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                     dir_fd=self.fd)
+        try:
+            os.write(fd, json.dumps({"v": 1, "pipeline_id": pipeline_id, "released_at": now}).encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, RELEASED, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+        _fsync_dir(self.fd)
+
+    def release_record_bytes(self) -> int:
+        total = 0
+        for name in (RELEASED, f".{RELEASED}.tmp"):
+            try:
+                total += os.stat(name, dir_fd=self.fd, follow_symlinks=False).st_size
+            except FileNotFoundError:
+                pass
+        return total
 
     def remove_start(self, pipeline_id: str, expected: float, *, launch_id: str | None = None) -> None:
         """Undo a start record no session ever started from: the open that

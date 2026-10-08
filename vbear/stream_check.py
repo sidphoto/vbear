@@ -110,6 +110,18 @@ def present(path) -> bool:
     return True
 
 
+_HELD: list = []        # Popen objects of CLIs not proven gone: never dropped (GC would reap the leader)
+
+
+def _keep_for_review(proc, report: dict) -> None:
+    """The CLI's group could not be proven gone: no further signal, no
+    reap; the Popen object is held until the program ends, and the
+    temporary directories stay (their paths go in the report)."""
+    _HELD.append(proc)
+    report["kept_for_review"] = []
+    report["passed"] = False
+
+
 def endpoint_pinned(connections: int, control_connections: int, protocol_ok: bool) -> bool:
     """Review B3: the pin holds only when the run made no connection to the
     project file's endpoint and the control, the same project file without
@@ -149,7 +161,7 @@ def run(binary: str, version: str, model: str, out: str | None, *, tmp_root: str
         report["passed"] = False
         code = 2
     finally:
-        if present(root):
+        if present(root) and report.get("kept_for_review") is None:
             remove_tree(root, report["cleanup_errors"])
     # The temporary state (HMAC key, journal) is gone before the report is
     # written; a failed or incomplete removal fails the run (review B5).
@@ -157,8 +169,11 @@ def run(binary: str, version: str, model: str, out: str | None, *, tmp_root: str
     report["temp_ls"] = subprocess.run(["ls", "-ld", str(root)], capture_output=True, text=True).stderr.strip()
     report["temp_paths"] = [str(root), *[str(p) for p in report.get("_cleanup_paths", [])]]
     left = [str(p) for p in report.pop("_cleanup_paths", []) if present(p)]
-    clean = report["temp_removed"] and not left and not report["cleanup_errors"]
-    report["checks"]["cleanup"] = {"pass": clean, "left": left, "errors": report["cleanup_errors"]}
+    clean = (report["temp_removed"] and not left and not report["cleanup_errors"]
+             and report.get("kept_for_review") is None)
+    report["checks"]["cleanup"] = {"pass": clean, "left": left, "errors": report["cleanup_errors"],
+                                   **({"kept_for_review": report["kept_for_review"]}
+                                      if report.get("kept_for_review") is not None else {})}
     if not clean:
         report["passed"] = False
         code = code or 1
@@ -321,6 +336,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         ended = stream_session.end_spawned(proc, leader_start)     # kill the group, prove it empty, then reap
         proc_done = True
         report["checks"]["process"] = {"pass": ended is None, "problem": ended}
+        if ended:
+            _keep_for_review(proc, report)
         if writer.state.exit is None:
             try:
                 writer.append("exited", {"returncode": rc if isinstance(rc, int) and 0 <= rc <= 255 else None,
@@ -405,8 +422,10 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
             # never after a reap: end_spawned checks the leader first and
             # sends nothing when it is not our unreaped, verified child
             problem = stream_session.end_spawned(proc, leader_start)
+            proc_done = True
             if problem:
                 report["process_problem"] = problem
+                _keep_for_review(proc, report)
         for x in (listeners, endpoint):
             if x is not None:
                 x.close()
@@ -414,7 +433,13 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
             os.environ.pop("VBEAR_HOME", None)
         else:
             os.environ["VBEAR_HOME"] = saved_home
-        remove_tree(root, report["cleanup_errors"])
         if scratch:
-            remove_tree(scratch, report["cleanup_errors"])
             report["_cleanup_paths"] = [scratch]
+        if report.get("kept_for_review") is not None:
+            # Review round 5 B-2: the CLI's group could not be proven gone;
+            # its directories stay for a person, with their paths reported.
+            report["kept_for_review"] = [str(root), *([scratch] if scratch else [])]
+        else:
+            remove_tree(root, report["cleanup_errors"])
+            if scratch:
+                remove_tree(scratch, report["cleanup_errors"])

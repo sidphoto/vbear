@@ -214,6 +214,7 @@ class JournalState:
         self.exit: dict | None = None
         self.recovered: dict | None = None
         self.protocol_errors: list[dict] = []
+        self.failures: list[tuple[str, float]] = []   # v29.8: (why, when); any one holds the flow
 
     def _bad(self, why):
         raise JournalCorrupt(why)
@@ -359,6 +360,8 @@ class JournalState:
         if turn is None or d["dispatch_id"] not in (self.current, self.pending) or turn.failed is not None:
             self._bad("失敗紀錄不屬於進行中的派工")
         turn.failed, turn.status, turn.times["failed"] = d["reason"], "failed", t
+        if turn.turn_cap is not None:             # it may have reached the CLI
+            self.failures.append((f"派工失敗（{d['reason']}）", t))
         if d["dispatch_id"] == self.pending:
             self.pending = None
         else:
@@ -372,6 +375,7 @@ class JournalState:
         if self.state == "exited":
             self._bad("程序結束後的協定錯誤")
         self.protocol_errors.append(dict(d))
+        self.failures.append((f"協定錯誤（{d['reason']}）", t))
         for x in (self.current, self.pending):
             if x is not None and self.turns[x].failed is None:
                 self.turns[x].status, self.turns[x].failed = "failed", "protocol_error"
@@ -386,6 +390,8 @@ class JournalState:
         for x in (self.current, self.pending):
             if x is not None and self.turns[x].failed is None:
                 self.turns[x].status, self.turns[x].failed = "failed", "process_exited"
+                if self.turns[x].turn_cap is not None:
+                    self.failures.append(("程序在回合中結束", t))
         self.current = self.pending = None
         self.state = "exited"
         self.closed_reasons.append("程序已結束")
@@ -397,6 +403,8 @@ class JournalState:
         for x in (self.current, self.pending):
             if x is not None and self.turns[x].failed is None:
                 self.turns[x].status, self.turns[x].failed = "failed", "daemon_restart"
+                if self.turns[x].turn_cap is not None:
+                    self.failures.append(("daemon 重啟時回合未完成", t))
         self.current = self.pending = None
         self.state = "recovered"
         self.closed_reasons.append("daemon 重啟後恢復")
@@ -434,6 +442,7 @@ class JournalState:
                if not identity_unknown]
         if why:
             self.closed_reasons.append("；".join(why))
+            self.failures.append(("回合無效：" + "；".join(why)[:200], turn.times.get("ended", self.last_t or 0.0)))
 
     # the record path, used by readers and by the daemon after each write
 

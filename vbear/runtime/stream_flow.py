@@ -66,6 +66,7 @@ class FlowContext:
     key: login_identity.LoginKey
     started_at: float | None
     totals: Totals
+    released_at: float | None = None      # v29.8: the user's last "continue" (pipeline_release)
 
 
 def _journal_state(base, launch_id: str) -> stream_journal.ReadResult:
@@ -165,13 +166,14 @@ def _pipeline_view(base, pipeline_id: str, task_id: str):
         with pipeline_store.Pipeline(base, task_id, create=False) as p:
             started = p.started_at(pipeline_id)
             texts = {d: p.read_text(d) for d in p.text_names()}
+            released = p.released_at(pipeline_id)
     except pipeline_store.StoreRefused as exc:
         if exc.missing:
             return None
         raise FlowRefused("count_unavailable", f"流程資料無法讀取（{exc}）") from exc
     except OSError as exc:
         raise FlowRefused("count_unavailable", f"流程資料無法讀取（{exc.strerror}）") from exc
-    return started, texts
+    return started, texts, released
 
 
 def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
@@ -180,7 +182,7 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
     dispatch is accepted, so every accepted dispatch has its text with the
     recorded hash and length; a text without an accepted record is an orphan
     from a crash and is counted too). Anything inconsistent refuses."""
-    started, texts = view if view is not None else (None, {})
+    started, texts, _ = view if view is not None else (None, {}, None)
     sessions = flow_sessions(base, pipeline_id, started=started is not None)
     if sessions and view is None:
         raise FlowRefused("count_unavailable", "流程有 session 紀錄，但流程資料夾不見了，無法核算用量")
@@ -198,7 +200,7 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
         t.spent_usd += js.counted_cost    # total_cost_usd is per process: the session's last value
         t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "manifest_state": m.get("state"),
                            "dispatches": js.dispatch_count(),
-                           "unfinished": js.unfinished()})
+                           "unfinished": js.unfinished(), **_failure(m, js)})
         for d in js.order:
             if d in t.accepted:
                 raise FlowRefused("count_unavailable", f"派工 {d} 被兩個 session 接受過")
@@ -238,7 +240,31 @@ def load(base, pipeline_id: str) -> FlowContext:
     view = _pipeline_view(base, pipeline_id, task_id)
     started = view[0] if view is not None else None
     return FlowContext(pipeline_id, task_id, acc, dict(limits), key, started,
-                       totals(base, pipeline_id, task_id, view))
+                       totals(base, pipeline_id, task_id, view), view[2] if view is not None else None)
+
+
+def _failure(m: dict, js: stream_journal.JournalState) -> dict:
+    """A session's failure (design v29.8), from its facts and its manifest:
+    the latest failure fact, or the session kept for manual review."""
+    reasons = [(t, why) for why, t in js.failures]
+    if m.get("state") == "manual_review":
+        at = m.get("retained_at")
+        reasons.append((at if isinstance(at, (int, float)) and not isinstance(at, bool) else float("inf"),
+                        f"交人工處理：{str(m.get('retained_reason'))[:200]}"))
+    if not reasons:
+        return {"failure": None, "failure_at": None}
+    t, why = max(reasons, key=lambda x: x[0])
+    return {"failure": why, "failure_at": t}
+
+
+def unresolved_failure(ctx: FlowContext) -> str | None:
+    """v29.8: a failure of the flow after its last release; then nothing new
+    opens until the user presses "continue". Recomputed from the journals,
+    so a lost hold file does not let the flow go on."""
+    for x in ctx.totals.sessions:
+        if x["failure"] and (ctx.released_at is None or not x["failure_at"] <= ctx.released_at):
+            return f"session {x['launch_id']}：{x['failure']}"
+    return None
 
 
 def _never_ran(base, rec: dict) -> str | None:

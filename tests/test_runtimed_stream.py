@@ -495,7 +495,8 @@ class RefusalTests(StreamCase):
         r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=fx.new_uuid(),
                      text="下一則", approval={"kind": "preview", "id": "p"})
         self.assertFalse(r["ok"])
-        self.assertIn("不再接受派工", r["error"]["message"])
+        self.assertIn("已停止", r["error"]["message"])                  # v29.8: held after the failure
+        self.assertTrue(self.status(launch_id)["closed_reasons"])        # and the session itself is closed
 
     def test_dispatch_limit_counts_prepares(self):
         self.accept(max_dispatches=1)
@@ -537,9 +538,14 @@ class FailureTests(StreamCase):
         self.assertEqual(st["counted_responses"], acc.DEFAULT_LIMITS["executor_turn_max_responses"])
         self.rpc("stream_close", launch_id=launch_id)
         self.wait_for(lambda: launch_id not in self.dm._streams, msg="ended")
-        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        nxt = self.prepare()["launch_id"]
+        r = self.rpc("open_stream", launch_id=nxt)
         self.assertFalse(r["ok"])
-        self.assertIn("額度", r["error"]["message"])
+        self.assertIn("繼續", r["error"]["message"])                    # v29.8: the failure holds the flow
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertFalse(r["ok"])
+        self.assertIn("額度", r["error"]["message"])                    # and the worst case used the budget
 
     def test_not_confirmed(self):
         self.run_mode("silent", ("error",), "not_confirmed", CONFIRM_DEADLINE=0.5)
@@ -896,8 +902,14 @@ class RecoveryTests(StreamCase):
         self.restart_daemon()
         self.assert_worst_case(launch_id, d1, budget, "gone")
         self.assertEqual(self.manifest(launch_id)["state"], "ended")
-        # the flow's budget was used up by the worst case: the next open is refused
-        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        # held by the failure (v29.8); after "continue", the worst case has
+        # used up the budget, so the next open is still refused
+        nxt = self.prepare()["launch_id"]
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertFalse(r["ok"])
+        self.assertIn("繼續", r["error"]["message"])
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        r = self.rpc("open_stream", launch_id=nxt)
         self.assertFalse(r["ok"])
         self.assertIn("額度", r["error"]["message"])
 
@@ -944,6 +956,24 @@ class RecoveryTests(StreamCase):
         from vbear.runtime import stream_flow
         ctx = stream_flow.load(self.base, self.fid)
         self.assertEqual((ctx.totals.responses, ctx.totals.spent_usd), (17, 3.25))
+
+    def test_an_unrecorded_group_member_keeps_the_launch(self):
+        # Review round 5 B-1: the leader is gone, but its group still has a
+        # process the manifest never recorded.
+        launch_id = self.on_disk_session([])
+        leader = self.manifest(launch_id)["leader"]["pid"]
+        real = stream_session.proctrack.process_table
+
+        def table():
+            return real() + [{"pid": 99990, "ppid": 1, "pgid": leader, "uid": os.getuid(), "stat": "R",
+                              "start": f"{int(time.time())}.000000"}]
+        self.crash_daemon()
+        with mock.patch.object(a.proctrack, "process_table", table):
+            self.restart_daemon()
+        m = self.manifest(launch_id)
+        self.assertEqual(m["state"], "manual_review")                        # not cleaned up
+        self.assertIn("未記錄的程序", m["retained_reason"])
+        self.assertEqual(self.journal(launch_id).state.recovered, {"process": "alive"})
 
     def test_a_damaged_journal_is_kept_for_review(self):
         launch_id = self.on_disk_session([])
@@ -1207,6 +1237,102 @@ class HoldTests(StreamCase):
                 self.assertIn("已停止", r["error"]["message"])
                 self.assertEqual(r["error"]["dispatch_status"], status)
         self.assertEqual(self.turn_status(launch_id, d2)["status"], "accepted")   # nothing was sent
+
+
+class FailureHoldTests(StreamCase):
+    """Design v29.8: one failure stops the flow until the user's "continue"."""
+
+    def fresh_flow(self):
+        self.tid = tasks.save_task(None, {"title": "t"})["id"]
+        roles = {"planner": {"name": "p", "family": "anthropic"}, "executor": {"name": "e", "family": "anthropic"},
+                 "reviewers": [{"name": "c", "family": "openai"}]}
+        self.fid = flows.create_flow({"task_id": self.tid, "roles": roles}, lambda t: True)["id"]
+        self.accept()
+
+    def hold_reason(self):
+        path = self.base / "holds" / self.fid
+        return json.loads(path.read_text())["reason"] if path.exists() else None
+
+    def fail_once(self, mode, **patches):
+        stack = [mock.patch.object(stream_session, k, v) for k, v in patches.items()]
+        for p in stack:
+            p.start()
+        try:
+            launch_id, _ = self.open(mode)
+            self.dispatch(launch_id)
+            self.wait_for(lambda: (self.hold_reason() or "").startswith("failure"), msg=f"held after {mode}")
+            self.rpc("stream_close", launch_id=launch_id)
+            self.wait_for(lambda: launch_id not in self.dm._streams, msg="closed")
+        finally:
+            for p in stack:
+                p.stop()
+        return launch_id
+
+    def test_every_failure_holds_the_flow(self):
+        cases = {"dispatch failed (not confirmed)": ("silent", {"CONFIRM_DEADLINE": 0.5}),
+                 "invalid turn": ("is_error", {}),
+                 "protocol error": ("bad_json", {}),
+                 "ended for manual review": ("escape_then_exit", {})}
+        for name, (mode, patches) in cases.items():
+            with self.subTest(failure=name):
+                self.fresh_flow()                 # a worst case uses up a flow's budget: one flow per case
+                launch_id = self.fail_once(mode, **patches)
+                self.assertIn(launch_id, self.hold_reason())
+                if mode == "escape_then_exit":
+                    self.pids.append(int((self.work / "escaped.pid").read_text()))
+                self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+                if mode == "escape_then_exit":           # a person resolves the kept launch
+                    shutil.rmtree(self.base / "sessions" / launch_id)
+
+    def test_release_order_and_a_lost_hold_file(self):
+        launch_id, _ = self.open("is_error")
+        self.dispatch(launch_id)
+        self.wait_for(lambda: (self.hold_reason() or "").startswith("failure"), msg="held")
+        r = self.rpc("pipeline_release", pipeline=self.fid)
+        self.assertFalse(r["ok"])                                          # close the failed session first
+        self.assertIn("先關閉", r["error"]["message"])
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="closed")
+        nxt = self.prepare()["launch_id"]
+        (self.base / "holds" / self.fid).unlink()                           # the hold file is lost
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertFalse(r["ok"])                                          # recomputed from the journals
+        self.assertIn("繼續", r["error"]["message"])
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        released = json.loads((self.base / "pipelines" / self.tid / "released.json").read_text())
+        self.assertEqual(released["pipeline_id"], self.fid)
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+        # a second failure, after the release, holds the flow again
+        (self.work / "fake-mode").write_text("is_error")
+        self.dispatch(nxt)
+        self.wait_for(lambda: nxt in (self.hold_reason() or ""), msg="held again")
+        self.rpc("stream_close", launch_id=nxt)
+        self.wait_for(lambda: nxt not in self.dm._streams, msg="closed")
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn(nxt, r["error"]["message"])
+
+    def test_ending_in_manual_review_alone_holds_the_flow(self):
+        # No failure fact: the session is given up at close (no signal could
+        # be sent), so it ends in manual review; that alone holds the flow.
+        launch_id, _ = self.open()
+        self.dm._streams[launch_id].leader_start = "1600000000.000000"
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="given up")
+        self.assertEqual(self.manifest(launch_id)["state"], "manual_review")
+        self.assertIn(launch_id, self.hold_reason())
+        self.assertIn("不送訊號", self.hold_reason())
+
+    def test_recovery_holds_the_flow(self):
+        launch_id, _ = self.open("hang")
+        self.dispatch(launch_id)
+        self.wait_for(lambda: (self.work / "hang-ready").exists(), msg="turn in flight")
+        self.wait_for(lambda: self.dm._streams[launch_id].js.state == "running", msg="confirmed")
+        self.crash_daemon()
+        self.restart_daemon()
+        self.assertIn("daemon 重啟時回合未完成", self.hold_reason())
 
 
 class HeldLeaderLimitTests(StreamCase):

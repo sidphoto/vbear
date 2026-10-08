@@ -895,6 +895,11 @@ def _stream_process(m: dict, rows) -> tuple[str, str]:
     alive = proctrack.DescendantTracker(leader["pid"], identities).live(rows)
     if alive:
         return "alive", "daemon 重啟後仍有已記錄的程序存活：" + ", ".join(str(r["pid"]) for r in alive)
+    # Part 2 review round 5 B-1: a member of the leader's group that was
+    # never recorded (started after the last observation) is alive too.
+    members = [r for r in rows if r["pgid"] == leader["pid"] and "Z" not in r["stat"]]
+    if members:
+        return "alive", "daemon 重啟後程序群組裡仍有未記錄的程序存活：" + ", ".join(str(r["pid"]) for r in members[:8])
     return "gone", ""
 
 
@@ -932,6 +937,15 @@ def _recover_stream(base: Path, name: str, m: dict, rows, has_journal: bool) -> 
                 return _retain(base, name, f"無法寫入恢復紀錄（{exc}）")
     finally:
         os.close(dfd)
+    # v29.8: a failure found here (a turn cut off, or processes that cannot
+    # be cleaned up) holds the flow until the user presses "continue".
+    failed = res.state.failures[-1][0] if res.state.failures else (why if process != "gone" else "")
+    if failed:
+        from . import pipeline_store
+        try:
+            pipeline_store.hold(base, m["pipeline_id"], f"failure: session {name}: {failed}")
+        except (OSError, pipeline_store.StoreRefused):
+            pass                          # open_stream recomputes the failures from the journals
     if process == "gone":
         return cleanup_launch(base, name, proven_dead=True)
     return _retain(base, name, why)

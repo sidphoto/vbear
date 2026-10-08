@@ -188,6 +188,33 @@ class StreamCheckTests(unittest.TestCase):
         self.assertEqual([e for e in mine if e[0] == "reap"], [("reap", pid)])     # reaped once
         self.assertEqual(mine[-1], ("reap", pid))                                  # nothing after it
 
+    def test_a_group_not_proven_gone_keeps_everything_for_review(self):
+        # Review round 5 B-2: no removal, no second attempt, no signal; the
+        # Popen object is held so nothing reaps the leader.
+        from vbear.runtime import stream_session
+        out = self.tmp / "report.json"
+        private = self.tmp / "t"
+        private.mkdir()
+        held_before = len(stream_check._HELD)
+        with mock.patch.object(stream_session, "end_spawned", return_value="群組仍有程序（test）") as end, \
+                mock.patch.object(stream_session.os, "killpg") as killpg:
+            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
+                                    tmp_root=str(private))
+        report = json.loads(out.read_text())
+        self.assertEqual(end.call_count, 1)
+        killpg.assert_not_called()
+        self.assertNotEqual(code, 0)
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["checks"]["process"], {"pass": False, "problem": "群組仍有程序（test）"})
+        root, scratch = report["kept_for_review"]
+        self.assertTrue(os.path.isdir(root) and os.path.isdir(scratch))       # left for a person
+        self.assertEqual(report["checks"]["cleanup"]["kept_for_review"], [root, scratch])
+        self.assertEqual(len(stream_check._HELD), held_before + 1)
+        proc = stream_check._HELD.pop()                                    # the test is the person here
+        proc.wait()
+        shutil.rmtree(root)
+        shutil.rmtree(scratch)
+
     def test_a_reaped_leader_is_never_signalled(self):
         import subprocess
         from vbear.runtime import stream_session
