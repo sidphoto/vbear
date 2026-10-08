@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 import os
+import stat
 import time
 from dataclasses import dataclass, field
 
@@ -66,14 +67,30 @@ def _journal_state(base, launch_id: str) -> stream_journal.ReadResult:
         os.close(fd)
 
 
-def flow_sessions(base, pipeline_id: str) -> list[dict]:
+def flow_sessions(base, pipeline_id: str, *, started: bool) -> list[dict]:
     """Every stream launch of the flow that has a journal, as manifests.
-    A manifest that cannot be read refuses: it could belong to this flow."""
+    Anything that could hide usage refuses: a manifest that cannot be read
+    (it could belong to this flow), a sessions root that is not a plain
+    directory or cannot be listed, and a flow that has started (``started``:
+    its first-start record exists) but whose sessions are gone. Only a flow
+    that never started may have none (Codex S2a-2 p1 R2 #1)."""
     root = agent_sessions.sessions_root(base)
-    if not root.is_dir():
+    try:
+        st = os.lstat(root)
+    except FileNotFoundError:
+        if started:
+            raise FlowRefused("count_unavailable", "流程已啟動過，但找不到 session 資料夾，無法核算用量")
         return []
+    except OSError as exc:
+        raise FlowRefused("count_unavailable", f"session 資料夾無法檢查（{exc.strerror}）") from exc
+    if not stat.S_ISDIR(st.st_mode):
+        raise FlowRefused("count_unavailable", "session 資料夾不是一般資料夾，無法核算用量")
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as exc:
+        raise FlowRefused("count_unavailable", f"session 資料夾無法列出（{exc.strerror}）") from exc
     out = []
-    for name in sorted(os.listdir(root)):
+    for name in names:
         if not agent_sessions.LAUNCH_RE.match(name):
             continue
         try:
@@ -91,12 +108,14 @@ def flow_sessions(base, pipeline_id: str) -> list[dict]:
             # would make the flow's totals silently low (Codex S2a-2 p1 #3).
             raise FlowRefused("count_unavailable",
                               f"launch {name} 的日誌不見了（狀態 {str(m.get('state'))[:32]}），無法核算流程用量")
+    if started and not out:
+        raise FlowRefused("count_unavailable", "流程已啟動過，但找不到它的任何 session 日誌，無法核算用量")
     return out
 
 
-def totals(base, pipeline_id: str, task_id: str) -> Totals:
+def totals(base, pipeline_id: str, task_id: str, *, started: bool) -> Totals:
     t = Totals()
-    for m in flow_sessions(base, pipeline_id):
+    for m in flow_sessions(base, pipeline_id, started=started):
         res = _journal_state(base, m["launch_id"])
         if res.problem:
             raise FlowRefused("count_unavailable", f"session {m['launch_id']} 的日誌無法使用（{res.problem}）")
@@ -140,7 +159,8 @@ def load(base, pipeline_id: str) -> FlowContext:
         if "不存在" not in str(exc):
             raise FlowRefused("count_unavailable", str(exc)) from exc
         started = None
-    return FlowContext(pipeline_id, task_id, acc, dict(limits), key, started, totals(base, pipeline_id, task_id))
+    return FlowContext(pipeline_id, task_id, acc, dict(limits), key, started,
+                       totals(base, pipeline_id, task_id, started=started is not None))
 
 
 def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0) -> None:

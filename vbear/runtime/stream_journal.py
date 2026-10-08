@@ -159,14 +159,35 @@ class Turn:
     result: dict | None = None
     failed: str | None = None
     times: dict = field(default_factory=dict)
+    identity_problems: list = field(default_factory=list)   # turn_init vs manifest and acceptance
+
+
+IDENTITY_KEYS = frozenset({"model_id", "workdir", "executor_claude_version", "executor_model"})
+
+
+def identity_from(manifest: dict, accepted: dict | None) -> dict | None:
+    """The executor identity a session's turns must show (design 5.9, 10):
+    the manifest's model and work directory, the accepted version and
+    model. None when any part is unknown."""
+    if not isinstance(manifest, dict) or not isinstance(accepted, dict):
+        return None
+    ident = {"model_id": manifest.get("model_id"), "workdir": manifest.get("canonical_workspace"),
+             "executor_claude_version": accepted.get("executor_claude_version"),
+             "executor_model": accepted.get("executor_model")}
+    return ident if all(isinstance(v, str) and v for v in ident.values()) else None
 
 
 class JournalState:
     """Fed one record at a time, in order. Raises JournalCorrupt on an
-    impossible order or a contradiction between records."""
+    impossible order or a contradiction between records.
 
-    def __init__(self, consts_for=sp.constants_for):
+    ``identity`` (identity_from): what every turn_init must show. A turn
+    whose init differs is invalid and closes the session; without an
+    identity no turn can be judged valid (Codex S2a-2 p1 R2 #2)."""
+
+    def __init__(self, consts_for=sp.constants_for, identity: dict | None = None):
         self._consts_for = consts_for
+        self.identity = identity if isinstance(identity, dict) and set(identity) == IDENTITY_KEYS else None
         self.seq = 0
         self.last_t: float | None = None
         self.started: dict | None = None
@@ -251,6 +272,15 @@ class JournalState:
         first = next((self.turns[x].init for x in self.order if self.turns[x].init is not None), None)
         if first is not None and (d["model"] != first["model"] or d["cwd"] != first["cwd"]):
             self._bad("turn_init 的 model 或 cwd 與第一輪不同")
+        if self.identity is not None:
+            ident = self.identity
+            if d["model"] != ident["model_id"] or d["model"] != ident["executor_model"]:
+                turn.identity_problems.append("init 的模型不是這次啟動與接受時的模型")
+            if d["cwd"] != ident["workdir"]:
+                turn.identity_problems.append("init 的工作目錄不是這個任務的工作目錄")
+            if (d["claude_code_version"] != ident["executor_claude_version"]
+                    or d["claude_code_version"] != self.started["cli_version"]):
+                turn.identity_problems.append("init 的 Claude Code 版本不是接受時的版本")
         turn.init = dict(d)
 
     def _dispatch_confirmed(self, d, t):
@@ -380,7 +410,7 @@ class JournalState:
 # --- validity (design 2.4 「有效回合」), recomputed from facts --------------------------
 
 def closing_reasons(turn: Turn, consts) -> list[str]:
-    why = []
+    why = list(turn.identity_problems)
     if turn.anomalies:
         why.append("出現未知種類或多餘欄位")
     r = turn.result
@@ -402,6 +432,10 @@ def turn_validity(js: JournalState, dispatch_id: str, report_problem=None) -> tu
         return False, ["沒有這則派工"]
     reasons = []
     c = js._consts_for(js.started["cli_version"]) if js.started else None
+    if js.identity is None:
+        reasons.append("無法核對執行者身分（缺少 manifest 或接受時的資料）")
+    elif turn.init is None:
+        reasons.append("沒有 init，無法核對執行者身分")
     if turn.failed is not None or turn.status != "ended" or turn.lifecycle != ["queued", "started", "completed"]:
         reasons.append("這一輪沒有完整走完")
     r = turn.result
@@ -454,11 +488,11 @@ class JournalWriter:
     fsync per record, never past MAX_JOURNAL. The JournalState it keeps is
     fed every record it writes, so the live state and a reader's agree."""
 
-    def __init__(self, dir_fd: int, *, now=time.time):
+    def __init__(self, dir_fd: int, *, identity: dict | None = None, now=time.time):
         self.fd = os.open(JOURNAL_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_NOFOLLOW
                           | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
         self.size = 0
-        self.state = JournalState()
+        self.state = JournalState(identity=identity)
         self._now = now
 
     def append(self, kind: str, data: dict) -> dict:
@@ -497,10 +531,11 @@ class ReadResult:
     truncated_tail: bool = False   # the last line is incomplete
 
 
-def read(dir_fd: int) -> ReadResult:
+def read(dir_fd: int, identity: dict | None = None) -> ReadResult:
     """Rebuild a session from its journal. Any problem is fail closed: the
-    caller shows the session and takes no action on it."""
-    js = JournalState()
+    caller shows the session and takes no action on it. Without
+    ``identity`` the counts are usable but no turn is judged valid."""
+    js = JournalState(identity=identity)
     try:
         fd, st = strictjson.open_owned(JOURNAL_NAME, dir_fd=dir_fd, max_bytes=MAX_JOURNAL)
     except strictjson.ReadRefused as exc:

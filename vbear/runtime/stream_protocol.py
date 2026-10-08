@@ -216,11 +216,13 @@ class EventTracker:
     produces, as (kind, data) pairs, and raises ProtocolError for a protocol
     error (the daemon records it and stops the session from dispatching)."""
 
-    def __init__(self, consts: StreamConstants, claude_session_id: str, workdir: str, model: str | None):
+    def __init__(self, consts: StreamConstants, claude_session_id: str, workdir: str, model: str | None,
+                 executor_version: str | None = None):
         self.c = consts
         self.session_id = claude_session_id
         self.workdir = workdir
-        self.expected_model = model
+        self.expected_model = model                 # the manifest's model, which the acceptance names
+        self.executor_version = executor_version    # the accepted Claude Code version
         self.uuids: set[str] = set()
         self.request_ids: set[str] = set()
         self.message_ids: set[str] = set()
@@ -314,6 +316,8 @@ class EventTracker:
             self.first_model = model
         if model != self.first_model or (self.expected_model is not None and model != self.expected_model):
             raise ProtocolError("init_mismatch", "model")
+        if self.executor_version is not None and ev["claude_code_version"] != self.executor_version:
+            raise ProtocolError("init_mismatch", "accepted version")
         self.phase = "sent:replay"
         return [("turn_init", {"dispatch_id": t.dispatch_id, "permissionMode": ev["permissionMode"],
                                "tools": list(tools), "mcp_servers": [], "model": model, "cwd": cwd,

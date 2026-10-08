@@ -316,6 +316,38 @@ class FlowContextTests(StateDir):
                 self.assertFalse((self.base / "flows.json.corrupted").exists())   # read-only: no quarantine
                 self.assertEqual(path.read_bytes(), raw)
 
+    def test_sessions_root_must_be_sound(self):
+        # Codex S2a-2 p1 R2 #1
+        root = self.base / "sessions"
+        self.assertEqual(stream_flow.flow_sessions(self.base, self.fid, started=False), [])
+        with self.assertRaises(stream_flow.FlowRefused):
+            stream_flow.flow_sessions(self.base, self.fid, started=True)          # started, nothing left
+        root.write_text("not a directory")
+        for started in (False, True):
+            with self.subTest(case="file", started=started), self.assertRaises(stream_flow.FlowRefused):
+                stream_flow.flow_sessions(self.base, self.fid, started=started)
+        root.unlink()
+        real = self.base / "elsewhere"
+        real.mkdir(mode=0o700)
+        root.symlink_to(real)
+        with self.assertRaises(stream_flow.FlowRefused):
+            stream_flow.flow_sessions(self.base, self.fid, started=False)
+        root.unlink()
+        root.mkdir(mode=0o700)
+        root.chmod(0o000)
+        try:
+            with self.assertRaises(stream_flow.FlowRefused):
+                stream_flow.flow_sessions(self.base, self.fid, started=False)
+        finally:
+            root.chmod(0o700)
+        # a started flow whose sessions are gone: through load()
+        self.accept()
+        with ps.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_start(self.fid, time.time())
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.load(self.base, self.fid)
+        self.assertEqual(cm.exception.code, "count_unavailable")
+
     def test_limits(self):
         self.accept(limits={**acc.DEFAULT_LIMITS, "max_dispatches": 2, "max_elapsed_h": 1,
                             "executor_total_max_responses": 10, "executor_budget_usd": 5.0})
@@ -376,10 +408,10 @@ class FlowContextTests(StateDir):
                                                              "leader": None, **extra})
                 if refused:
                     with self.assertRaises(stream_flow.FlowRefused) as cm:
-                        stream_flow.flow_sessions(self.base, self.fid)
+                        stream_flow.flow_sessions(self.base, self.fid, started=False)
                     self.assertEqual(cm.exception.code, "count_unavailable")
                 else:
-                    self.assertEqual(stream_flow.flow_sessions(self.base, self.fid), [])
+                    self.assertEqual(stream_flow.flow_sessions(self.base, self.fid, started=False), [])
 
 
 class StreamLaunchTests(StateDir):
@@ -505,7 +537,11 @@ class StreamLaunchTests(StateDir):
             {"leader": {"pid": 5, "start": f"{int(now) + 10 * 86400}.000000", "source": "libproc"}},
             {"leader": {"pid": 5, "start": "", "source": "libproc"}},
             {"leader": {"pid": 5, "start": f"{int(now)}.000000", "source": "other"}},
-            {"observed": [[5, "x"]]}, {"observed": [[5, ""]] * 4097}, {"observed": [[0, ""]]},
+            {"observed": [[5, "x"]]}, {"observed": [[5, f"{int(now)}.000000"]] * 4097},
+            {"observed": [[0, f"{int(now)}.000000"]]},
+            {"observed": [[5, ""]]},                                              # no start time: unidentifiable
+            {"observed": [[5, "1.000000"]]}, {"observed": [[5, f"{int(now) + 10 * 86400}.000000"]]},
+            {"observed": [[5, "Wed Oct  8 12:00:00 2019"]]}, {"observed": [[5, None]]},
             {"retained_at": float("inf")}, {"retained_reason": 5},
         ]
         for change in cases:
@@ -516,7 +552,8 @@ class StreamLaunchTests(StateDir):
                     a._read_manifest(Path(m["launch_dir"]["path"]), os.getuid())
         ok = {**good, "state": "running", "native_session_id": "n-0123456789ab",
               "leader": {"pid": 5, "start": f"{int(now)}.000000", "source": "libproc"},
-              "observed": [[6, ""], [7, "Wed Oct  8 12:00:00 2026"]], "retained_reason": "x", "ended_at": now}
+              "observed": [[6, f"{int(now)}.000000"], [7, "Wed Oct  8 12:00:00 2026"]], "retained_reason": "x",
+              "ended_at": now}
         path.write_text(json.dumps(ok))
         self.assertEqual(a._read_manifest(Path(m["launch_dir"]["path"]), os.getuid())["state"], "running")
 

@@ -19,16 +19,17 @@ from vbear.runtime import stream_protocol as sp
 NAN, INF = float("nan"), float("inf")
 CWD = "/private/tmp/vbear-task"
 C = sp.VERSIONS["2.1.292"]
+IDENTITY = {"model_id": fx.MODEL, "workdir": CWD, "executor_claude_version": "2.1.292", "executor_model": fx.MODEL}
 
 
 class Harness:
     """Plays the daemon: writes its own records and feeds events through the
     tracker; every record goes through encode -> strict parse -> apply."""
 
-    def __init__(self, model=fx.MODEL):
+    def __init__(self, model=fx.MODEL, identity=IDENTITY):
         self.sid = fx.new_uuid()
         self.tracker = sp.EventTracker(C, self.sid, CWD, model)
-        self.js = sj.JournalState()
+        self.js = sj.JournalState(identity=identity)
         self.seq = 0
         self.records = []
         self.record("session_started", {"claude_session_id": self.sid, "pipeline_id": "flow-0123456789ab",
@@ -104,7 +105,7 @@ class HappyPathTests(unittest.TestCase):
         os.chmod(os.path.join(tmp, sj.JOURNAL_NAME), 0o600)
         fd = os.open(tmp, os.O_RDONLY)
         try:
-            res = sj.read(fd)
+            res = sj.read(fd, IDENTITY)
         finally:
             os.close(fd)
         self.assertEqual(res.problem, "")
@@ -474,6 +475,75 @@ class RecoveryMatchesLiveTests(unittest.TestCase):
                   "structured_output": None, "result_text": None, "result_too_large": False}
         with self.assertRaises(sj.JournalCorrupt):
             js.apply("turn_result", result, time.time())
+
+
+class IdentityTests(unittest.TestCase):
+    """Codex S2a-2 p1 R2 #2: a turn counts only when its init shows the
+    manifest's model and work directory and the accepted version and model."""
+
+    def test_wrong_identity_in_init_invalidates_and_closes(self):
+        cases = {"model": {"model_id": "claude-other-1", "executor_model": "claude-other-1"},
+                 "accepted model": {"executor_model": "claude-other-1"},
+                 "work directory": {"workdir": "/wrong/workdir"},
+                 "accepted version": {"executor_claude_version": "2.1.291"}}
+        for name, change in cases.items():
+            with self.subTest(case=name):
+                h = Harness(identity={**IDENTITY, **change})
+                d = h.run_turn()
+                ok, reasons = h.validity(d)
+                self.assertFalse(ok)
+                self.assertTrue(any("init" in r for r in reasons), reasons)
+                self.assertTrue(h.js.closed_reasons)
+
+    def test_without_an_identity_nothing_is_valid(self):
+        for identity in (None, {}, {**IDENTITY, "extra": 1}, {k: v for k, v in IDENTITY.items() if k != "workdir"}):
+            with self.subTest(identity=identity):
+                h = Harness(identity=identity)
+                d = h.run_turn()
+                ok, reasons = h.validity(d)
+                self.assertFalse(ok)
+                self.assertIn("無法核對執行者身分（缺少 manifest 或接受時的資料）", reasons)
+
+    def test_recovery_with_a_rewritten_init(self):
+        h = Harness()
+        d = h.run_turn()
+        recs = [json.loads(l) for l in h.records]
+        for r in recs:
+            if r["kind"] == "turn_init":
+                r["data"]["model"], r["data"]["cwd"] = "claude-not-the-one", "/wrong/workdir"
+        tmp = tempfile.mkdtemp(prefix="vbsi-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with open(os.path.join(tmp, sj.JOURNAL_NAME), "wb") as f:
+            for r in recs:
+                body = {k: r[k] for k in ("v", "seq", "t", "kind", "data")}
+                f.write(sp.canonical(dict(body, sha256=sp.sha256_hex(sp.canonical(body)))) + b"\n")
+        os.chmod(os.path.join(tmp, sj.JOURNAL_NAME), 0o600)
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            res = sj.read(fd, IDENTITY)
+        finally:
+            os.close(fd)
+        self.assertEqual(res.problem, "")
+        ok, reasons = sj.turn_validity(res.state, d, executor_report.problem)
+        self.assertFalse(ok)
+        self.assertIn("init 的模型不是這次啟動與接受時的模型", reasons)
+        self.assertIn("init 的工作目錄不是這個任務的工作目錄", reasons)
+
+    def test_identity_from(self):
+        manifest = {"model_id": fx.MODEL, "canonical_workspace": CWD}
+        accepted = {"executor_claude_version": "2.1.292", "executor_model": fx.MODEL}
+        self.assertEqual(sj.identity_from(manifest, accepted), IDENTITY)
+        self.assertIsNone(sj.identity_from(manifest, None))
+        self.assertIsNone(sj.identity_from({}, accepted))
+        self.assertIsNone(sj.identity_from({**manifest, "model_id": 5}, accepted))
+
+    def test_tracker_checks_the_accepted_version_live(self):
+        h = Harness()
+        h.tracker.executor_version = "2.1.291"
+        d, text = h.dispatch()
+        with self.assertRaises(sp.ProtocolError) as cm:
+            h.feed(fx.turn(h.sid, d, text, cwd=CWD))
+        self.assertEqual(cm.exception.reason, "init_mismatch")
 
 
 class SanitizeTests(unittest.TestCase):

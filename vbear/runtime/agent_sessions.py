@@ -520,11 +520,11 @@ def _epoch_ok(value) -> bool:
             and _EARLIEST <= value <= time.time() + 86400)
 
 
-def _start_ok(value, *, allow_empty: bool) -> bool:
+def _start_ok(value) -> bool:
     """A process start time as proctrack writes it (design 2.4: between
-    2020-01-01 and a day from now)."""
-    if value == "" and allow_empty:
-        return True
+    2020-01-01 and a day from now). Never empty: an identity without a start
+    time matches no process, so a live descendant could pass for gone
+    (Codex S2a-2 p1 R2 #3)."""
     if not isinstance(value, str):
         return False
     m = _LIBPROC_START.match(value)
@@ -573,11 +573,11 @@ def stream_manifest_problem(m: dict) -> str | None:
         ("leader", m["leader"] is None or (isinstance(m["leader"], dict)
                                            and set(m["leader"]) == {"pid", "start", "source"}
                                            and _int_in(m["leader"]["pid"], 1, 99999)
-                                           and _start_ok(m["leader"]["start"], allow_empty=False)
+                                           and _start_ok(m["leader"]["start"])
                                            and m["leader"]["source"] in ("libproc", "ps"))),
         ("observed", isinstance(m["observed"], list) and len(m["observed"]) <= 4096
                      and all(isinstance(x, list) and len(x) == 2 and _int_in(x[0], 1, 99999)
-                             and _start_ok(x[1], allow_empty=True) for x in m["observed"])),
+                             and _start_ok(x[1]) for x in m["observed"])),
         ("boundary", isinstance(m["boundary"], dict) and len(m["boundary"]) <= 16
                      and all(isinstance(k, str) and isinstance(v, str) and len(v) <= 512
                              for k, v in m["boundary"].items())),
