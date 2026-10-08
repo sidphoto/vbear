@@ -538,6 +538,107 @@ def _abs_path(value) -> bool:
     return isinstance(value, str) and 0 < len(value) <= 4096 and "\0" not in value and os.path.isabs(value)
 
 
+def _leader_ok(v) -> bool:
+    return v is None or (isinstance(v, dict) and set(v) == {"pid", "start", "source"}
+                         and _int_in(v["pid"], 1, 99999) and _start_ok(v["start"])
+                         and v["source"] in ("libproc", "ps"))
+
+
+def _observed_ok(v) -> bool:
+    return (isinstance(v, list) and len(v) <= 4096
+            and all(isinstance(x, list) and len(x) == 2 and _int_in(x[0], 1, 99999) and _start_ok(x[1]) for x in v))
+
+
+def _boundary_ok(v) -> bool:
+    return (isinstance(v, dict) and len(v) <= 16
+            and all(isinstance(k, str) and isinstance(x, str) and len(x) <= 512 for k, x in v.items()))
+
+
+def _launch_dir_ok(v) -> bool:
+    return (isinstance(v, dict) and set(v) == {"path", "inode", "uid"} and _abs_path(v["path"])
+            and _int_in(v["inode"], 0, 2 ** 63) and _int_in(v["uid"], 0, 2 ** 31))
+
+
+def _scratch_ok(v, keys: frozenset) -> bool:
+    return (isinstance(v, dict) and set(v) == keys and _abs_path(v["path"])
+            and _int_in(v["inode"], 0, 2 ** 63) and _int_in(v["uid"], 0, 2 ** 31)
+            and ("per_uid_tmp_bytes" not in v or _int_in(v["per_uid_tmp_bytes"], 0, CLAUDE_TMP_PATH_LIMIT)))
+
+
+_SCRATCH_CLAUDE = frozenset({"path", "inode", "uid", "per_uid_tmp_bytes"})
+_SCRATCH_CODEX = frozenset({"path", "inode", "uid"})
+_MANAGED_COMMON = frozenset({
+    "manifest_version", "launch_id", "native_session_id", "engine", "cli_binary", "cli_version", "cli_identity",
+    "model_id", "settings_path", "settings_sha256", "canonical_workspace", "allowed_root", "launch_dir", "scratch",
+    "state", "created", "leader", "observed", "boundary"})
+# What prepare_claude_launch / prepare_codex_launch write, and what
+# native._launch_prepared, the daemon and _retain may add later.
+_MANAGED_REQUIRED = {"claude": _MANAGED_COMMON | {"cli_verified"}, "codex": _MANAGED_COMMON}
+_MANAGED_OPTIONAL = {"claude": frozenset({"retained_reason", "retained_at", "unverified_acknowledged",
+                                          "unverified_acknowledged_at"}),
+                     "codex": frozenset({"retained_reason", "retained_at"})}
+_MANAGED_STATES = ("prepared", "launching", "running", "manual_review")
+_CLI_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}\Z")
+
+
+def managed_manifest_problem(m: dict) -> str | None:
+    """None when ``m`` is exactly a claude or codex (terminal) manifest as
+    VBear writes one. Used where such a launch is skipped as "not part of a
+    flow": only one that passes is skipped (Codex S2a-2 p1 R5 #1)."""
+    engine = m.get("engine")
+    if engine not in _MANAGED_REQUIRED:
+        return "engine 不符"
+    keys, required = set(m), _MANAGED_REQUIRED[engine]
+    if not required <= keys or keys - required - _MANAGED_OPTIONAL[engine]:
+        return "欄位不符"
+    checks = [
+        ("manifest_version", m["manifest_version"] == MANIFEST_VERSION and not isinstance(m["manifest_version"], bool)),
+        ("launch_id", isinstance(m["launch_id"], str) and LAUNCH_RE.match(m["launch_id"]) is not None),
+        ("native_session_id", m["native_session_id"] is None or (isinstance(m["native_session_id"], str)
+                                                                 and re.match(r"^n-[0-9a-f]{12}\Z",
+                                                                              m["native_session_id"]) is not None)),
+        ("cli_binary", _abs_path(m["cli_binary"])),
+        ("cli_version", isinstance(m["cli_version"], str) and _CLI_VERSION_RE.match(m["cli_version"]) is not None),
+        ("cli_verified", engine != "claude" or isinstance(m["cli_verified"], bool)),
+        ("cli_identity", isinstance(m["cli_identity"], list) and len(m["cli_identity"]) == 6
+                         and all(_int_in(x, 0, 2 ** 63) for x in m["cli_identity"])),
+        ("model_id", m["model_id"] is None or (isinstance(m["model_id"], str)
+                                               and MODEL_ID_RE.match(m["model_id"]) is not None)),
+        ("settings_path", _abs_path(m["settings_path"])),
+        ("settings_sha256", isinstance(m["settings_sha256"], str) and _HEX64.match(m["settings_sha256"]) is not None),
+        ("canonical_workspace", _abs_path(m["canonical_workspace"])),
+        ("allowed_root", _abs_path(m["allowed_root"])),
+        ("launch_dir", _launch_dir_ok(m["launch_dir"])),
+        ("scratch", _scratch_ok(m["scratch"], _SCRATCH_CLAUDE if engine == "claude" else _SCRATCH_CODEX)),
+        ("state", m["state"] in _MANAGED_STATES),
+        ("created", _epoch_ok(m["created"])),
+        ("leader", _leader_ok(m["leader"])),
+        ("observed", _observed_ok(m["observed"])),
+        ("boundary", _boundary_ok(m["boundary"])),
+        ("retained_reason", "retained_reason" not in m
+                            or (isinstance(m["retained_reason"], str) and len(m["retained_reason"]) <= 4096)),
+        ("retained_at", "retained_at" not in m or _epoch_ok(m["retained_at"])),
+        ("unverified_acknowledged", "unverified_acknowledged" not in m or m["unverified_acknowledged"] is True),
+        ("unverified_acknowledged_at", "unverified_acknowledged_at" not in m
+                                       or _epoch_ok(m["unverified_acknowledged_at"])),
+    ]
+    for name, ok in checks:
+        if not ok:
+            return f"{name} 不合法"
+    return None
+
+
+def _lexists(path) -> bool:
+    """Whether anything is at ``path`` (a link counts). Errors other than
+    "not found" are raised, never read as absent: Path.exists() follows a
+    dangling link to False and, on Python 3.14, returns False on any OSError."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def stream_manifest_problem(m: dict) -> str | None:
     """None when ``m`` is exactly a claude-stream manifest (design 2.1, 2.4:
     identifiers by their formats, process identities within range, no other
@@ -723,20 +824,20 @@ def cleanup_launch(base: Path, launch_id: str, *, proven_dead: bool, reason: str
         scratch = Path(m["scratch"]["path"])
         if scratch.parent != Path(SCRATCH_PARENT) or not scratch.name.startswith(SCRATCH_PREFIX):
             return _retain(base, launch_id, "暫存區位置與核准樣式不符")
-        if scratch.exists() or scratch.is_symlink():
+        if _lexists(scratch):
             sst = _owned_dir(scratch, uid)
             if sst.st_ino != m["scratch"]["inode"]:
                 return _retain(base, launch_id, "暫存區 inode 與 manifest 不符")
             shutil.rmtree(scratch)
-            if scratch.exists() or scratch.is_symlink():
+            if _lexists(scratch):
                 return _retain(base, launch_id, "暫存區刪除後仍存在")
-        if m.get("engine") == "claude-stream" and (ldir / JOURNAL).exists():
+        if m.get("engine") == "claude-stream" and _lexists(ldir / JOURNAL):
             # The journal is the session's record; it stays until the user
             # deletes the flow (design 2.5, 9). Only the scratch goes.
             update_manifest(base, launch_id, state="ended", ended_at=time.time())
             return {"launch_id": launch_id, "cleaned": True, "kept": "journal"}
         shutil.rmtree(ldir)
-        if ldir.exists():
+        if _lexists(ldir):
             return {"launch_id": launch_id, "cleaned": False, "retained_reason": "launch 目錄刪除後仍存在"}
     except (OSError, KeyError, TypeError, LaunchRefused) as exc:
         return _retain(base, launch_id, f"清理檢查失敗：{exc}")

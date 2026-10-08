@@ -39,10 +39,21 @@ class FlowRefused(Exception):
 
 @dataclass
 class Totals:
-    dispatches: int = 0
     responses: int = 0
     spent_usd: float = 0.0
     sessions: list = field(default_factory=list)
+    accepted: set = field(default_factory=set)                  # dispatch ids some session of the flow accepted
+    pending_or_orphan_texts: list = field(default_factory=list)  # saved texts no journal accepted (sorted ids)
+
+    @property
+    def dispatches(self) -> int:
+        """What counts against max_dispatches: accepted dispatches plus saved
+        texts without an acceptance. Design 3.5 treats the latter as orphans
+        (disk use, listed for a person), not dispatches; but one may be a
+        prepare whose acceptance is still to be written (the same id sent
+        again completes it), so counting it is deliberately more conservative
+        than the design (planner ruling, Codex S2a-2 p1 R5 #2)."""
+        return len(self.accepted) + len(self.pending_or_orphan_texts)
 
 
 @dataclass
@@ -68,13 +79,30 @@ def _journal_state(base, launch_id: str) -> stream_journal.ReadResult:
         os.close(fd)
 
 
+def _journal_present(root, name: str) -> bool:
+    # lstat, not Path.exists(): on Python 3.14 that returns False on any
+    # OSError (EACCES included), which would read as "no journal".
+    try:
+        os.lstat(root / name / agent_sessions.JOURNAL)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise FlowRefused("count_unavailable",
+                          f"launch {name} 的日誌無法檢查（{exc.strerror}），無法核算流程用量") from exc
+    return True
+
+
 def flow_sessions(base, pipeline_id: str, *, started: bool) -> list[dict]:
     """Every stream launch of the flow that has a journal, as manifests.
-    Anything that could hide usage refuses: a manifest that cannot be read
-    (it could belong to this flow), a sessions root that is not a plain
-    directory or cannot be listed, and a flow that has started (``started``:
-    its first-start record exists) but whose sessions are gone. Only a flow
-    that never started may have none (Codex S2a-2 p1 R2 #1)."""
+    Anything that could hide usage refuses (Codex S2a-2 p1 R2 #1, R5 #1):
+    a sessions root that is not a plain directory or cannot be listed; an
+    entry that is not a launch directory (VBear puts nothing else there); a
+    launch directory that is not the one its manifest names (renamed or
+    copied); a manifest that cannot be read or has an unknown engine; a
+    terminal (claude/codex) manifest that is not exactly that schema, names
+    a flow, or sits next to a stream journal; a flow that has started but
+    whose sessions are gone. Only a stream launch of another flow is skipped,
+    and only a flow that never started may have none."""
     root = agent_sessions.sessions_root(base)
     try:
         st = os.lstat(root)
@@ -90,34 +118,39 @@ def flow_sessions(base, pipeline_id: str, *, started: bool) -> list[dict]:
         names = sorted(os.listdir(root))
     except OSError as exc:
         raise FlowRefused("count_unavailable", f"session 資料夾無法列出（{exc.strerror}）") from exc
+    uid = os.getuid()
     out = []
     for name in names:
         if not agent_sessions.LAUNCH_RE.match(name):
-            continue
+            raise FlowRefused("count_unavailable", f"session 資料夾裡有不認得的項目 {name[:64]!r}，無法核算流程用量")
         try:
-            m = agent_sessions._read_manifest(agent_sessions.launch_dir(base, name), os.getuid())
+            lst = os.lstat(root / name)
+            m = agent_sessions._read_manifest(agent_sessions.launch_dir(base, name), uid)
         except (OSError, agent_sessions.LaunchRefused) as exc:
             raise FlowRefused("count_unavailable", f"launch {name} 的 manifest 無法讀取，無法核算流程用量") from exc
-        if m.get("engine") != "claude-stream" or m.get("pipeline_id") != pipeline_id:
-            continue
-        # lstat, not Path.exists(): on Python 3.14 that returns False on
-        # any OSError (EACCES included), which would read as "no journal".
-        try:
-            os.lstat(root / name / agent_sessions.JOURNAL)
-            has_journal = True
-        except FileNotFoundError:
-            has_journal = False
-        except OSError as exc:
-            raise FlowRefused("count_unavailable",
-                              f"launch {name} 的日誌無法檢查（{exc.strerror}），無法核算流程用量") from exc
-        if has_journal:
-            out.append(m)                 # a symlink or a non-file is refused when the journal is read
-        elif not (m.get("state") == "prepared" and m.get("native_session_id") is None and m.get("leader") is None):
-            # Only a launch that never had a process may lack a journal (the
-            # journal is created before the process starts). Any other one
-            # would make the flow's totals silently low (Codex S2a-2 p1 #3).
-            raise FlowRefused("count_unavailable",
-                              f"launch {name} 的日誌不見了（狀態 {str(m.get('state'))[:32]}），無法核算流程用量")
+        if (not stat.S_ISDIR(lst.st_mode) or m.get("launch_id") != name
+                or m.get("launch_dir") != {"path": str(root / name), "inode": lst.st_ino, "uid": uid}):
+            raise FlowRefused("count_unavailable", f"launch {name} 的資料夾與 manifest 不符（改名或複製過），無法核算流程用量")
+        engine = m.get("engine")
+        if engine == "claude-stream":     # _read_manifest checked the stream schema
+            if m.get("pipeline_id") != pipeline_id:
+                continue                  # another flow's session: a filter, not an error
+            if _journal_present(root, name):
+                out.append(m)
+            elif not (m.get("state") == "prepared" and m.get("native_session_id") is None and m.get("leader") is None):
+                # Only a launch that never had a process may lack a journal (the
+                # journal is created before the process starts). Any other one
+                # would make the flow's totals silently low (Codex S2a-2 p1 #3).
+                raise FlowRefused("count_unavailable",
+                                  f"launch {name} 的日誌不見了（狀態 {str(m.get('state'))[:32]}），無法核算流程用量")
+        elif engine in ("claude", "codex"):
+            problem = agent_sessions.managed_manifest_problem(m)
+            if problem or "pipeline_id" in m or _journal_present(root, name):
+                raise FlowRefused("count_unavailable",
+                                  f"launch {name} 標示為 {engine}，但不是完整的終端 session 紀錄"
+                                  f"（{problem or '帶有流程欄位或串流日誌'}），無法核算流程用量")
+        else:
+            raise FlowRefused("count_unavailable", f"launch {name} 的引擎不認得，無法核算流程用量")
     if started and not out:
         raise FlowRefused("count_unavailable", "流程已啟動過，但找不到它的任何 session 日誌，無法核算用量")
     return out
@@ -162,6 +195,9 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
         t.spent_usd += js.cost            # total_cost_usd is per process: the session's last value
         t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "dispatches": js.dispatch_count()})
         for d in js.order:
+            if d in t.accepted:
+                raise FlowRefused("count_unavailable", f"派工 {d} 被兩個 session 接受過")
+            t.accepted.add(d)
             turn = js.turns[d]
             data = texts.get(d)
             if data is None:
@@ -170,7 +206,7 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
                 raise FlowRefused("count_unavailable", f"派工 {d} 的全文與接受時的紀錄不同")
     if not math.isfinite(t.spent_usd):
         raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")
-    t.dispatches = len(texts)
+    t.pending_or_orphan_texts = sorted(set(texts) - t.accepted)
     return t
 
 

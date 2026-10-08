@@ -360,7 +360,10 @@ class FlowContextTests(StateDir):
         ctx = stream_flow.load(self.base, self.fid)
         now = time.time()
         stream_flow.check_limits(ctx, now=now, counting_dispatch=True)
-        ctx.totals.dispatches = 2
+        ctx.totals.accepted = {fx.new_uuid()}
+        stream_flow.check_limits(ctx, now=now, counting_dispatch=True)
+        ctx.totals.pending_or_orphan_texts = [fx.new_uuid()]                  # counts against the limit too
+        self.assertEqual(ctx.totals.dispatches, 2)
         with self.assertRaises(stream_flow.FlowRefused):
             stream_flow.check_limits(ctx, now=now, counting_dispatch=True)
         stream_flow.check_limits(ctx, now=now, counting_dispatch=False)      # stream_send does not count
@@ -398,7 +401,12 @@ class FlowContextTests(StateDir):
     def test_totals_come_from_journals_and_texts(self):
         root, d = self.flow_with_one_session()
         ctx = stream_flow.load(self.base, self.fid)
-        self.assertEqual((ctx.totals.dispatches, ctx.totals.responses), (2, 1))   # orphans count too
+        # R5 #2: accepted and saved-but-unaccepted texts are listed apart;
+        # the limit counts both (more conservative than design 3.5).
+        self.assertEqual(ctx.totals.accepted, {d})
+        self.assertEqual(len(ctx.totals.pending_or_orphan_texts), 1)
+        self.assertNotIn(d, ctx.totals.pending_or_orphan_texts)
+        self.assertEqual((ctx.totals.dispatches, ctx.totals.responses), (2, 1))
         self.assertAlmostEqual(ctx.totals.spent_usd, 0.25)
         good = (root / "journal.jsonl").read_bytes()
         (root / "journal.jsonl").write_bytes(good[:-3])                     # damaged: counts unknown
@@ -485,6 +493,8 @@ class FlowContextTests(StateDir):
         def huge(base, launch_id):
             res = real_read(base, launch_id)
             res.state.cost = 1.7e308
+            if launch_id != root.name:    # the copy: the same dispatch twice would refuse first
+                res.state.order, res.state.turns = [], {}
             return res
         second = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=20.0)
         (second / "journal.jsonl").write_bytes((root / "journal.jsonl").read_bytes())
@@ -493,6 +503,160 @@ class FlowContextTests(StateDir):
             with self.assertRaises(stream_flow.FlowRefused) as cm:
                 stream_flow.load(self.base, self.fid)
         self.assertIn("有限", str(cm.exception))
+
+    # ---- R5 #1: nothing under sessions/ is skipped unless it provably is not this flow's
+
+    def edit_manifest(self, ldir: Path, change):
+        m = json.loads((ldir / "manifest.json").read_text())
+        change(m)
+        (ldir / "manifest.json").write_text(json.dumps(m))
+        (ldir / "manifest.json").chmod(0o600)
+
+    def terminal_launch(self, engine: str) -> Path:
+        """A real claude or codex terminal launch, as prepare_* writes it."""
+        work = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbss-tl-")))
+        self.addCleanup(shutil.rmtree, work, True)
+        binary = work / engine
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o700)
+        prepare = a.prepare_claude_launch if engine == "claude" else a.prepare_codex_launch
+        m = prepare(self.base, str(work), cli_binary=str(binary), cli_version="2.1.292",
+                    cli_identity=a.binary_identity(str(binary)), allowed_root=str(work.parent))
+        self.addCleanup(shutil.rmtree, m["scratch"]["path"], True)
+        return Path(m["launch_dir"]["path"])
+
+    def assert_refused(self, why: str):
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.load(self.base, self.fid)
+        self.assertEqual(cm.exception.code, "count_unavailable")
+        self.assertIn(why, str(cm.exception))
+
+    def test_terminal_and_other_flow_launches_are_skipped(self):
+        root, d = self.flow_with_one_session()
+        claude, codex = self.terminal_launch("claude"), self.terminal_launch("codex")
+        a.update_manifest(self.base, claude.name, state="running", native_session_id="n-0123456789ab",
+                          unverified_acknowledged=True, unverified_acknowledged_at=time.time(),
+                          leader={"pid": 4242, "start": f"{int(time.time())}.000000", "source": "libproc"},
+                          observed=[[4243, f"{int(time.time())}.000000"]])
+        a._retain(self.base, codex.name, "test")
+        other = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=1.0)
+        self.edit_manifest(other, lambda m: m.update(pipeline_id="flow-ffffffffffff"))   # another flow
+        (other / "journal.jsonl").write_bytes(b"not this flow's")
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertEqual([x["launch_id"] for x in ctx.totals.sessions], [root.name])
+        self.assertEqual(ctx.totals.accepted, {d})
+
+    def test_an_entry_that_is_not_a_launch_refuses(self):
+        self.flow_with_one_session()
+        for name, make in ((".DS_Store", "file"), ("notes", "dir"), ("l-xyz", "dir"), ("l-0123", "file")):
+            with self.subTest(name=name):
+                target = self.base / "sessions" / name
+                target.mkdir() if make == "dir" else target.write_text("x")
+                self.assert_refused("不認得的項目")
+                shutil.rmtree(target) if make == "dir" else target.unlink()
+        stream_flow.load(self.base, self.fid)
+
+    def test_a_renamed_or_copied_launch_refuses(self):
+        # Codex R5 repro: renaming the flow's launch folder hid its usage.
+        root, _ = self.flow_with_one_session()
+        sessions = self.base / "sessions"
+        root.rename(sessions / "l-renamed")                                  # not a launch name
+        self.assert_refused("不認得的項目")
+        (sessions / "l-renamed").rename(sessions / "l-00000000000000aa")      # a launch name, not its own
+        self.assert_refused("與 manifest 不符")
+        (sessions / "l-00000000000000aa").rename(root)
+        stream_flow.load(self.base, self.fid)
+        shutil.copytree(root, sessions / "l-00000000000000bb")               # a copy: same manifest
+        self.assert_refused("與 manifest 不符")
+
+    def test_an_unreadable_or_unknown_manifest_refuses(self):
+        root, _ = self.flow_with_one_session()
+        good = (root / "manifest.json").read_bytes()
+        cases = {
+            "missing": lambda: (root / "manifest.json").unlink(),
+            "not json": lambda: (root / "manifest.json").write_text("{"),
+            "unknown engine": lambda: self.edit_manifest(root, lambda m: m.update(engine="gemini")),
+            "no engine": lambda: self.edit_manifest(root, lambda m: m.pop("engine")),
+        }
+        for name, damage in cases.items():
+            with self.subTest(case=name):
+                damage()
+                with self.assertRaises(stream_flow.FlowRefused) as cm:
+                    stream_flow.load(self.base, self.fid)
+                self.assertEqual(cm.exception.code, "count_unavailable")
+                (root / "manifest.json").write_bytes(good)
+                (root / "manifest.json").chmod(0o600)
+
+    def test_a_stream_launch_relabelled_as_terminal_refuses(self):
+        # Codex R5 repro: changing a stream manifest's engine hid its usage.
+        root, _ = self.flow_with_one_session()
+        self.edit_manifest(root, lambda m: m.update(engine="claude"))
+        self.assert_refused("欄位不符")                                       # still has the stream fields
+
+        def as_terminal(m):                                                  # a clean claude manifest, but
+            for k in ("pipeline_id", "task_id", "claude_session_id", "budget_usd", "ended_at"):
+                m.pop(k, None)
+            m.update(engine="claude", state="manual_review")
+        self.edit_manifest(root, as_terminal)
+        self.assertIsNone(a.managed_manifest_problem(json.loads((root / "manifest.json").read_text())))
+        self.assert_refused("帶有流程欄位或串流日誌")                          # ... its journal is still there
+
+    def test_a_terminal_manifest_must_be_exact(self):
+        self.flow_with_one_session()
+        cases = {
+            "names a flow": (lambda m: m.update(pipeline_id=self.fid), "欄位不符"),
+            "extra field": (lambda m: m.update(note="x"), "欄位不符"),
+            "missing field": (lambda m: m.pop("observed"), "欄位不符"),
+            "bad state": (lambda m: m.update(state="ended"), "state 不合法"),
+            "bad leader": (lambda m: m.update(leader={"pid": 1, "start": "", "source": "ps"}), "leader 不合法"),
+            "bad version": (lambda m: m.update(cli_version="2.1.292\n"), "cli_version 不合法"),
+            "bool verified as string": (lambda m: m.update(cli_verified="true"), "cli_verified 不合法"),
+        }
+        for engine in ("claude", "codex"):
+            for name, (change, why) in cases.items():
+                if engine == "codex" and name == "bool verified as string":
+                    continue
+                with self.subTest(engine=engine, case=name):
+                    ldir = self.terminal_launch(engine)
+                    stream_flow.load(self.base, self.fid)
+                    self.edit_manifest(ldir, change)
+                    self.assert_refused(why)
+                    shutil.rmtree(ldir)
+        ldir = self.terminal_launch("codex")
+        self.edit_manifest(ldir, lambda m: m.update(cli_verified=True))       # a claude-only field
+        self.assert_refused("欄位不符")
+        shutil.rmtree(ldir)
+        ldir = self.terminal_launch("claude")
+        (ldir / "journal.jsonl").write_bytes(b"")                              # a journal beside it
+        self.assert_refused("帶有流程欄位或串流日誌")
+
+    def test_cleanup_never_reads_an_error_or_a_dangling_link_as_absent(self):
+        # R5 audit (agent_sessions.cleanup_launch, a deleting path).
+        ldir = self.launch(state="running")
+        (ldir / "journal.jsonl").symlink_to(self.base / "nowhere")            # Path.exists() says False
+        out = a.cleanup_launch(self.base, ldir.name, proven_dead=True)
+        self.assertEqual(out.get("kept"), "journal")
+        self.assertTrue(ldir.is_dir())                                       # not deleted with its record
+        ldir = self.launch(state="running")
+        scratch = json.loads((ldir / "manifest.json").read_text())["scratch"]["path"]
+        real = os.lstat
+
+        def lstat(path, *args, **kw):
+            if str(path) == scratch:
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **kw)
+        with mock.patch("vbear.runtime.agent_sessions.os.lstat", lstat):
+            out = a.cleanup_launch(self.base, ldir.name, proven_dead=True)
+        self.assertFalse(out["cleaned"])                                      # not "cleaned" with the scratch left
+        self.assertTrue(os.path.isdir(scratch))
+        self.assertEqual(json.loads((ldir / "manifest.json").read_text())["state"], "manual_review")
+
+    def test_one_dispatch_in_two_journals_refuses(self):
+        root, _ = self.flow_with_one_session()
+        second = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=20.0)
+        (second / "journal.jsonl").write_bytes((root / "journal.jsonl").read_bytes())
+        (second / "journal.jsonl").chmod(0o600)
+        self.assert_refused("被兩個 session 接受過")
 
     def test_a_journal_that_cannot_be_checked_refuses(self):
         # R4 audit: Path.exists() (Python 3.14) reads EACCES as "absent", which
