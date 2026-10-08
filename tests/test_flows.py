@@ -450,6 +450,15 @@ class LiveFreshnessTests(unittest.TestCase):
         self.assertIn("當時是「工作中」", r["reason"])
         self.assertEqual(self.ex(live_view(flows.LIVE_STALE_S))["state"], "working")   # the limit itself is fresh
 
+    def test_staleness_is_judged_on_the_exact_age(self):
+        # Codex S1 r3 #1: truncating first let 30.1-30.9 s pass as fresh.
+        for age, state in ((29.9, "fresh"), (30.0, "fresh"), (30.1, "stale"), (30.9, "stale"), (31.0, "stale")):
+            with self.subTest(age=age):
+                fr = flows.live_freshness(live_view(age, now=self.NOW), self.NOW)
+                self.assertEqual(fr["state"], state)
+                self.assertEqual(fr["age_s"], int(age))                 # shown in whole seconds
+                self.assertEqual(self.ex(live_view(age))["state"], "working" if state == "fresh" else "stale")
+
     def test_no_view_yet(self):
         self.assertEqual(self.ex(None)["label"], "即時狀態未載入")
 
@@ -478,6 +487,17 @@ class LiveFreshnessTests(unittest.TestCase):
         r = self.ex(live_view(1, available=False))
         self.assertEqual((r["state"], r["label"]), ("unknown", "runtime 未連線"))
 
+    def test_runtime_state_not_proven_is_unknown_not_down(self):
+        # Codex S1 r3 #2: only an explicit False shows 「runtime 未連線」.
+        for runtime in ({}, {"available": None}, {"available": 1}, {"available": "false"}, {"available": 0},
+                        None, "up", [True]):
+            with self.subTest(runtime=runtime):
+                r = self.ex({**live_view(1), "runtime": runtime})
+                self.assertEqual((r["state"], r["label"]), ("unknown", "runtime 狀態不明"))
+        view = live_view(1)
+        del view["runtime"]
+        self.assertEqual(self.ex(view)["label"], "runtime 狀態不明")
+
     def test_other_session_states(self):
         self.assertEqual(self.ex({**live_view(1), "sessions": []})["label"], "狀態未知")          # a plain shell pane
         self.assertEqual(self.ex({**live_view(1), "sessions": [], "panes": []})["label"], "找不到 session")
@@ -489,7 +509,7 @@ class LiveFreshnessTests(unittest.TestCase):
                       {"sessions": [{"terminal_id": SID, "status": "working", "activity": {"reason": 5}}]}):
             with self.subTest(extra=extra):
                 r = self.ex(live_view(1, **extra))
-                self.assertIn(r["label"], {"狀態未知", "找不到 session", "runtime 未連線", "工作中"})
+                self.assertIn(r["label"], {"狀態未知", "找不到 session", "runtime 狀態不明", "工作中"})
                 self.assertIsInstance(r["reason"], str)
 
 

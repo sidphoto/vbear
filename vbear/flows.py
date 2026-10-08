@@ -492,10 +492,12 @@ def live_freshness(live, now) -> dict:
     if gen > now_t + CLOCK_SKEW_S:
         return {"state": "invalid", "generated_at": None, "age_s": None,
                 "detail": "即時資料的產生時間比現在還晚，無法判斷新舊"}
-    age = int(max(0.0, now_t - gen))          # both bounded by MAX_EPOCH_S: no overflow
-    state = "stale" if age > LIVE_STALE_S else "fresh"
-    detail = f"即時資料是 {age} 秒前的" + ("，已超過 {:g} 秒，不代表現在".format(LIVE_STALE_S) if state == "stale" else "")
-    return {"state": state, "generated_at": gen, "age_s": age, "detail": detail}
+    age = max(0.0, now_t - gen)               # both bounded by MAX_EPOCH_S: no overflow
+    shown = int(age)                          # whole seconds, for display only
+    if age > LIVE_STALE_S:                    # judged on the exact age: 30.1 s is already stale
+        return {"state": "stale", "generated_at": gen, "age_s": shown,
+                "detail": f"即時資料超過 {LIVE_STALE_S:g} 秒沒有更新（約 {shown} 秒前），不代表現在"}
+    return {"state": "fresh", "generated_at": gen, "age_s": shown, "detail": f"即時資料是 {shown} 秒前的"}
 
 
 def executor_live(session_id, live, now) -> dict:
@@ -513,8 +515,10 @@ def executor_live(session_id, live, now) -> dict:
         if isinstance(live.get("sessions"), list) else []
     panes = [x for x in live.get("panes") or () if isinstance(x, dict)] if isinstance(live.get("panes"), list) else []
     match = next((x for x in sessions if x.get("terminal_id") == session_id), None)
-    if runtime.get("available") is not True:
+    if runtime.get("available") is False:     # only an explicit False proves it did not answer
         label, state, reason = "runtime 未連線", "unknown", "無法判斷 session 狀態"
+    elif runtime.get("available") is not True:
+        label, state, reason = "runtime 狀態不明", "unknown", "即時資料沒有可用的 runtime 狀態，無法判斷 session 狀態"
     elif match is not None:
         state = match.get("status") if match.get("status") in _LIVE_LABELS else "unknown"
         act = match.get("activity") if isinstance(match.get("activity"), dict) else {}

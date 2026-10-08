@@ -859,7 +859,7 @@ async function runAllTests() {
     assert.deepStrictEqual(flowLiveText(fresh, ""), { label: "工作中", reason: "標題顯示工作中・即時狀態 3 秒前" });
     assert.strictEqual(flowLiveText(fresh, "10 秒沒有回應，已停止等待").label, "即時狀態未載入",
       "a failed or timed-out /api/live load hides the cached state");
-    const staleLive = { label: "即時狀態已過期", reason: "即時資料是 90 秒前的，已超過 30 秒，不代表現在；當時是「工作中」",
+    const staleLive = { label: "即時狀態已過期", reason: "即時資料超過 30 秒沒有更新（約 90 秒前），不代表現在；當時是「工作中」",
       freshness: { state: "stale", age_s: 90 } };
     assert.strictEqual(flowLiveText(staleLive, "").label, "即時狀態已過期");
     assert(!flowLiveText(staleLive, "").reason.includes("即時狀態 90 秒前"), "no age line presented as current for a stale view");

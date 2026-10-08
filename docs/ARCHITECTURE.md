@@ -125,11 +125,15 @@ Stage 1 of multi-agent support: a board. It adds no way to dispatch work, send i
   running. The flows pages load `/api/live` first (as the home page always has), which fills that cache; they wait
   at most 10 s for it and then show flows without live state. The cached view's age travels with every flow
   (`executor_live.freshness`): its `generated_at` must be finite, in range and not ahead of now by more than the
-  2 s clock-skew allowance. A session state is shown as current only from a view at most 30 s old
-  (`flows.LIVE_STALE_S`: the pages refresh the 3 s cache just before reading, so older means the refresh failed);
-  otherwise it reads 「即時狀態已過期」 with the old state as history. A view from a runtime that did not answer
-  reads 「runtime 未連線」, not a missing session, and a page whose own `/api/live` load failed shows
-  「即時狀態未載入」.
+  2 s clock-skew allowance. A session state is shown as current only from a view at most 30 s old, judged on the
+  exact age (`flows.LIVE_STALE_S`: the pages refresh the 3 s cache just before reading, so older means the refresh
+  failed). Otherwise the executor reads:
+  - 「即時狀態未載入」: no view built yet, or this page's own `/api/live` load failed or timed out;
+  - 「即時狀態時間不明」: the view's `generated_at` is missing, invalid or ahead of now beyond the allowance;
+  - 「即時狀態已過期」: older than 30 s, with the old state as history;
+  - 「runtime 未連線」: the view says the runtime did not answer (`runtime.available` is `false`), rather than
+    reporting the session as missing;
+  - 「runtime 狀態不明」: the view does not say whether the runtime answered.
 - **API** (behind the access token): `GET /api/flows`, `GET /api/flows/<id>`, `POST /api/flows`
   (`task_id`, `roles`), `POST /api/flows/<id>/events`, `POST /api/flows/<id>/roles`. Unknown fields are rejected
   per event kind; `roles_changed` is written only by the roles route. Bad input → 400, unknown flow → 404, a

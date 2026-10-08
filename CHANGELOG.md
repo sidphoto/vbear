@@ -11,11 +11,14 @@
   not dispatch work, type into a terminal, run `git` or start an agent for a flow; the flows API reads live state
   only from the console's cache and never starts anything. Like the home page, the flows pages load the live view,
   which can start VBear's own runtime; they wait for it at most 10 s. A session state from that cache is shown as
-  current only when it is at most 30 s old and this page's own load succeeded; otherwise it reads
-  「即時狀態已過期」 or 「即時狀態未載入」.
+  current only when the cache is at most 30 s old, its time is valid, the runtime answered, and this page's own
+  load succeeded. Otherwise the executor reads 「即時狀態未載入」 (no cache yet, or this page's load failed or timed
+  out), 「即時狀態時間不明」 (the cache's time is missing, invalid or in the future), 「即時狀態已過期」 (older than
+  30 s), 「runtime 未連線」 (the runtime did not answer) or 「runtime 狀態不明」 (the cache does not say).
 - At phone width a long sidebar now scrolls inside the nav instead of widening every page.
-- Two timing-sensitive runtime tests no longer race under load (the abandoned-launch expiry log, and the open/close
-  round trip's hang-up grace).
+- Four timing-sensitive tests no longer fail on a busy machine: the abandoned-launch expiry log and the open/close
+  round trip's hang-up grace no longer race; the linear-parse test budgets CPU time instead of wall time; the
+  streaming-during-close test allows half a grace period instead of 0.2 s.
 
 - **Working/waiting follows version verification.** 「驗證這個版本」 now also checks Claude Code's terminal title
   in the same interactive run (no extra model call) and records it apart from the launch-boundary result; a
