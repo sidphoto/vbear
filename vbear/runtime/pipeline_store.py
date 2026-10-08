@@ -184,6 +184,19 @@ class Pipeline:
             os.unlink(partial, dir_fd=self.dispatches)
         _fsync_dir(self.dispatches)
 
+    def text_bytes(self, dispatch_id: str) -> int:
+        """Bytes on disk for this dispatch's text: the final file and a
+        .partial, each counted, as the quota scan counts them (review B-1)."""
+        if not (isinstance(dispatch_id, str) and sp.UUID_RE.match(dispatch_id)):
+            raise StoreRefused("dispatch_id 格式不符")
+        total = 0
+        for name in (f"{dispatch_id}.txt", f".{dispatch_id}.partial"):
+            try:
+                total += os.stat(name, dir_fd=self.dispatches, follow_symlinks=False).st_size
+            except FileNotFoundError:
+                pass
+        return total
+
     def read_text(self, dispatch_id: str) -> bytes:
         if not (isinstance(dispatch_id, str) and sp.UUID_RE.match(dispatch_id)):
             raise StoreRefused("dispatch_id 格式不符")

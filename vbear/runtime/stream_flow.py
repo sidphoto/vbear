@@ -196,7 +196,8 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
         # counts at its worst case (its turn cap; the session's budget).
         t.responses += js.counted_responses
         t.spent_usd += js.counted_cost    # total_cost_usd is per process: the session's last value
-        t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "dispatches": js.dispatch_count(),
+        t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "manifest_state": m.get("state"),
+                           "dispatches": js.dispatch_count(),
                            "unfinished": js.unfinished()})
         for d in js.order:
             if d in t.accepted:

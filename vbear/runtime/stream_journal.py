@@ -546,6 +546,7 @@ class JournalWriter:
         self.size = 0
         self.state = JournalState(identity=identity)
         self._now = now
+        self.broken = ""
 
     @classmethod
     def resume(cls, dir_fd: int, read_result: "ReadResult", *, now=time.time) -> "JournalWriter":
@@ -567,11 +568,14 @@ class JournalWriter:
         self.size = st.st_size
         self.state = read_result.state
         self._now = now
+        self.broken = ""
         return self
 
     def append(self, kind: str, data: dict) -> dict:
         if self.fd < 0:
             raise JournalCorrupt("日誌已關閉")          # never write to a descriptor number reused since
+        if self.broken:
+            raise JournalCorrupt(f"日誌先前寫入失敗（{self.broken}），不再寫入")
         if self.state.exit is not None and kind not in ("exited", "recovered"):
             raise JournalCorrupt("程序結束後不再寫入")
         t = self._now()
@@ -586,10 +590,17 @@ class JournalWriter:
         if not rec.ok:
             raise JournalCorrupt(f"紀錄無法重讀（{rec.problem}）")
         self.state.apply_record(rec.value)          # validate before it reaches the disk
-        written = os.write(self.fd, line)
-        if written != len(line):
-            raise JournalCorrupt("寫入不完整")
-        os.fsync(self.fd)
+        # From here the state holds a fact the disk may not: on any failure
+        # the writer is broken and its state is no longer the journal's
+        # (readers go to the disk; part 2 review A-2).
+        try:
+            written = os.write(self.fd, line)
+            if written != len(line):
+                raise JournalCorrupt("寫入不完整")
+            os.fsync(self.fd)
+        except BaseException as exc:
+            self.broken = f"{type(exc).__name__}: {exc}"[:300]
+            raise
         self.size += len(line)
         return rec.value
 

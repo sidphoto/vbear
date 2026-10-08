@@ -111,6 +111,16 @@ class StreamOps:
             ctx = stream_flow.load(self.base, m["pipeline_id"])
             if ctx.task_id != m["task_id"]:
                 raise agent_sessions.LaunchRefused("manifest_invalid", "launch 的任務與流程不符")
+            # Part 2 review A-1 (design principle 3: one flow, one managed
+            # executor): at most one stream session of a flow is not ended.
+            # Each would start from the same snapshot of the flow's responses.
+            # The manifest decides; manual_review is not ended (a person
+            # resolves it first). A prepared launch never had a process.
+            busy = sorted({x.launch_id for x in self._streams.values() if x.pipeline_id == m["pipeline_id"]}
+                          | {x["launch_id"] for x in ctx.totals.sessions if x["manifest_state"] != "ended"})
+            if busy:
+                raise agent_sessions.LaunchRefused(
+                    "busy", f"這個流程已有尚未結束的串流 session（{', '.join(busy[:4])}），一次只能有一個")
             if pipeline_store.is_held(self.base, m["pipeline_id"]):
                 raise agent_sessions.LaunchRefused("held", "這個流程已停止")
             stream_flow.check_executor(ctx, cli_version=version, model_id=m["model_id"],
@@ -143,7 +153,7 @@ class StreamOps:
                 agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
             undone = self._undo_start(m, started_here)
             if reserved:
-                self._ledger.release(key, self._session_bytes(m, 0, manifest_before, 0 if undone else start_bytes)
+                self._ledger.release(key, self._session_bytes(m, manifest_before, 0 if undone else start_bytes)
                                      if m is not None else 0)
             if isinstance(exc, OSError):
                 return _err(rid, "refused", f"launch 狀態無法驗證：{exc}")
@@ -161,7 +171,7 @@ class StreamOps:
             # No process was started: clean up what this launch left.
             agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
             undone = self._undo_start(m, started_here)
-            self._ledger.release(key, self._session_bytes(m, 0, manifest_before, 0 if undone else start_bytes))
+            self._ledger.release(key, self._session_bytes(m, manifest_before, 0 if undone else start_bytes))
             return _err(rid, "internal", f"日誌無法建立：{exc}")
         try:
             writer.append("session_started", {
@@ -182,11 +192,7 @@ class StreamOps:
                 # The journal could not be written whole: a damaged journal is
                 # for a person (v29.7), never "ended".
                 agent_sessions._retain(self.base, launch_id, f"日誌無法寫入，無法啟動（{exc}）")
-            try:
-                journal_bytes = os.lstat(os.path.join(m["launch_dir"]["path"], agent_sessions.JOURNAL)).st_size
-            except OSError:
-                journal_bytes = quota.JOURNAL_MAX           # unknown: the most it may be
-            self._ledger.release(key, self._session_bytes(m, journal_bytes, manifest_before, start_bytes))
+            self._ledger.release(key, self._session_bytes(m, manifest_before, start_bytes))
             return _err(rid, "internal", f"無法啟動：{exc}")
         # From here a process exists: every step until the session is set up
         # and on record is undone on failure (review B2), and nothing is ever
@@ -250,9 +256,17 @@ class StreamOps:
             agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
         else:
             agent_sessions._retain(self.base, launch_id, f"啟動後初始化失敗（{why}）；{problem}")
-        self._ledger.release(key, self._session_bytes(m, writer.size, manifest_before, start_bytes))
+        self._ledger.release(key, self._session_bytes(m, manifest_before, start_bytes))
         self._streams.pop(launch_id, None)
         return _err(rid, "internal", f"啟動後初始化失敗：{why}")
+
+    def _text_added(self, task_id: str, d: str, before: int) -> int | None:
+        try:
+            with pipeline_store.Pipeline(self.base, task_id, create=False) as p:
+                return max(0, p.text_bytes(d) - before)
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            self._log(f"dispatch {d}: bytes on disk cannot be measured ({exc})")
+            return None
 
     @staticmethod
     def _manifest_bytes(m: dict) -> int:
@@ -261,14 +275,23 @@ class StreamOps:
         except FileNotFoundError:
             return 0
 
-    def _session_bytes(self, m: dict, journal_bytes: int, manifest_before: int, start_bytes: int) -> int:
-        """What one stream session added to the protected data (review B4):
-        its journal, its manifest's growth and the start record it wrote."""
+    def _session_bytes(self, m: dict, manifest_before: int, start_bytes: int) -> int | None:
+        """What one stream session added to the protected data (review B4),
+        as measured on disk (review B-1: never the writer's own count, which
+        misses a short write or a failed fsync): its journal, its
+        manifest's growth and the start record it wrote. None when it
+        cannot be measured: the ledger then counts the whole reservation and
+        grants nothing more until rebuilt."""
         try:
+            try:
+                journal = os.lstat(os.path.join(m["launch_dir"]["path"], agent_sessions.JOURNAL)).st_size
+            except FileNotFoundError:
+                journal = 0
             grown = max(0, self._manifest_bytes(m) - manifest_before)
-        except OSError:
-            grown = 2 * quota.MANIFEST_MAX            # unknown: the most it may be
-        return journal_bytes + grown + start_bytes
+        except OSError as exc:
+            self._log(f"{m.get('launch_id')}: bytes on disk cannot be measured ({exc})")
+            return None
+        return journal + grown + start_bytes
 
     def _undo_start(self, m: dict | None, started_here: float | None) -> bool:
         """A failed first open leaves no start record behind: otherwise the
@@ -317,6 +340,11 @@ class StreamOps:
         data = text.encode("utf-8")
         sha = sp.sha256_hex(data)
         existing = s.js.turns.get(d)
+        if pipeline_store.is_held(self.base, s.pipeline_id):
+            # Design 7 / v29.1: after a hold every dispatch RPC is refused,
+            # an idempotent repeat included (part 2 review A-3); the status
+            # is attached for the runner, which reads it with stream_status.
+            return self._held(rid, s, d)
         if existing is not None:
             if existing.text_sha256 == sha and existing.length == len(data):
                 return _ok(rid, {"dispatch_id": d, "status": "writing" if s.writing == d else existing.status})
@@ -326,8 +354,6 @@ class StreamOps:
             return _err(rid, "refused", why)
         if s.js.pending is not None:
             return _err(rid, "refused", "已有一則準備好但還沒送出的派工")
-        if pipeline_store.is_held(self.base, s.pipeline_id):
-            return _err(rid, "refused", "這個流程已停止")
         try:
             ctx = stream_flow.load(self.base, s.pipeline_id)
             # A saved text without an acceptance already counts against the
@@ -346,10 +372,11 @@ class StreamOps:
         why = self._reserve(key, quota.RESERVE_DISPATCH)
         if why:
             return _err(rid, "refused", why)
-        written = 0
+        written, before = 0, None
         try:
             with pipeline_store.Pipeline(self.base, s.task_id, create=True) as p:
                 p.remove_partials()      # 3.5: a .partial was never accepted; a crash left it
+                before = p.text_bytes(d)
                 try:
                     p.write_text(d, data)
                     written = len(data)
@@ -359,6 +386,12 @@ class StreamOps:
                     if saved != data:
                         return _err(rid, "refused", "已有這則派工的全文，但內容不同（孤兒檔，交人工處理）")
         except (OSError, pipeline_store.StoreRefused) as exc:
+            if before is not None:
+                # Review B-1: a failed write may still have left the final
+                # file (unlink of .partial or the directory sync failed) or a
+                # .partial: count what is on disk; unknown -> the reservation,
+                # and the ledger is marked over until rebuilt.
+                written = self._text_added(s.task_id, d, before)
             return _err(rid, "refused", f"派工全文無法保存：{exc}")
         finally:
             self._ledger.release(key, written)
@@ -372,6 +405,8 @@ class StreamOps:
         if why:
             return _err(rid, "refused", why)
         d = req["dispatch_id"]
+        if pipeline_store.is_held(self.base, s.pipeline_id):
+            return self._held(rid, s, d)                  # before any idempotent answer (A-3)
         if s.writing == d:
             return _ok(rid, {"dispatch_id": d, "status": "writing"})
         turn = s.js.turns.get(d)
@@ -382,8 +417,6 @@ class StreamOps:
         why = s.accepts_dispatch()
         if why:
             return _err(rid, "refused", why)
-        if pipeline_store.is_held(self.base, s.pipeline_id):
-            return _err(rid, "refused", "這個流程已停止")
         # This dispatch's own text first: a changed text stops the session
         # (3.5), before the flow's totals (which cross-check every text and
         # would only refuse this one request).
@@ -418,8 +451,23 @@ class StreamOps:
             return _err(rid, "bad_request", "無效的 launch id")
         s = self._streams.get(launch_id)
         manifest_state = None
-        if s is not None:
+        write_failed = ""
+        if s is not None and not s.journal_broken:
             js, state, problem = s.js, s.state, ""
+        elif s is not None:
+            # Part 2 review A-2: a failed append leaves the in-memory state
+            # ahead of the disk, so it is not shown; the journal is read
+            # back from the disk with this session's identity instead.
+            write_failed = s.journal_broken
+            try:
+                fd = os.open(str(agent_sessions.launch_dir(self.base, launch_id)), _DIR)
+                try:
+                    res = stream_journal.read(fd, s.writer.state.identity)
+                finally:
+                    os.close(fd)
+            except (OSError, agent_sessions.LaunchRefused) as exc:
+                return _err(rid, "refused", f"無法讀取：{exc}")
+            js, state, problem = res.state, s.state, res.problem
         else:
             try:
                 m = agent_sessions._read_manifest(agent_sessions.launch_dir(self.base, launch_id), os.getuid())
@@ -452,6 +500,7 @@ class StreamOps:
             dispatches.append(entry)
         return _ok(rid, {"launch_id": launch_id, "live": s is not None, "state": state,
                          "manifest_state": manifest_state, "journal_problem": problem,
+                         "journal_write_failed": write_failed,
                          "dispatches": dispatches, "total_cost_usd": js.cost, "responses": js.responses,
                          # v29.7: what the flow's limits count; an unfinished
                          # dispatch has no result, so its cost is unknown and
@@ -459,6 +508,13 @@ class StreamOps:
                          "counted_responses": js.counted_responses, "counted_cost_usd": js.counted_cost,
                          "unfinished": js.unfinished(), "recovered": js.recovered,
                          "num_turns": js.num_turns, "closed_reasons": list(js.closed_reasons), "exit": js.exit})
+
+    def _held(self, rid: str, s, d) -> dict:
+        turn = s.js.turns.get(d) if isinstance(d, str) else None
+        status = "writing" if s.writing == d else (turn.status if turn is not None else None)
+        r = _err(rid, "refused", "這個流程已停止")
+        r["error"]["dispatch_status"] = status
+        return r
 
     def _identity_for(self, m: dict) -> dict | None:
         """The identity an ended session's turns are judged against: its
@@ -557,7 +613,7 @@ class StreamOps:
             self._log(f"{s.sid}: stream session ended ({'cleaned' if result.get('cleaned') else result})")
         manifest_before, start_bytes = getattr(s, "quota_base", (0, 0))
         self._ledger.release(f"session:{s.launch_id}",
-                             self._session_bytes(s.manifest, s.writer.size, manifest_before, start_bytes))
+                             self._session_bytes(s.manifest, manifest_before, start_bytes))
         self._streams.pop(s.launch_id, None)
 
     def _kill_all_streams(self) -> None:

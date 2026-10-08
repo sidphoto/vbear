@@ -1044,6 +1044,91 @@ class SignalIdentityTests(StreamCase):
         self.assertEqual(self.manifest(launch_id)["state"], "ended")
 
 
+class FlowConcurrencyTests(StreamCase):
+    """Part 2 review A-1: one flow, at most one stream session not ended."""
+
+    def test_a_second_session_of_the_flow_is_refused(self):
+        first, _ = self.open()
+        second = self.prepare()["launch_id"]
+        r = self.rpc("open_stream", launch_id=second)
+        self.assertFalse(r["ok"])
+        self.assertIn("尚未結束的串流 session", r["error"]["message"])
+        self.assertIn(first, r["error"]["message"])
+        self.assertEqual(self.manifest(second)["state"], "prepared")      # untouched, can open later
+        self.rpc("stream_close", launch_id=first)
+        self.wait_for(lambda: first not in self.dm._streams, msg="first ended")
+        self.assertEqual(self.manifest(first)["state"], "ended")
+        r = self.rpc("open_stream", launch_id=second)
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+
+    def test_manual_review_blocks_until_a_person_resolves_it(self):
+        first, _ = self.open()
+        a._retain(self.base, first, "test")                               # as after an escaped child
+        self.dm._streams.pop(first)
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn(first, r["error"]["message"])
+
+
+class JournalFailureStatusTests(StreamCase):
+    """Part 2 review A-2: after a failed append the state in memory is not
+    what the disk holds; status must not report from it."""
+
+    def test_a_completed_that_never_reached_the_disk_is_not_valid(self):
+        from vbear.runtime import stream_journal
+        real_write = os.write
+
+        def write(fd, data):
+            if b'"kind":"turn_lifecycle"' in bytes(data) and b'"state":"completed"' in bytes(data):
+                raise OSError(28, "No space left on device")
+            return real_write(fd, data)
+        launch_id, _ = self.open()
+        with mock.patch.object(stream_session.StreamSession, "terminate"), \
+                mock.patch.object(stream_journal.os, "write", write):
+            d1 = self.dispatch(launch_id)
+            self.wait_for(lambda: self.dm._streams[launch_id].journal_broken, msg="append failed")
+            s = self.dm._streams[launch_id]
+            self.assertEqual(s.js.turns[d1].status, "ended")              # memory ran ahead of the disk
+            st = self.status(launch_id)
+        self.assertTrue(st["live"])
+        self.assertIn("No space left", st["journal_write_failed"])
+        t = next(x for x in st["dispatches"] if x["dispatch_id"] == d1)
+        self.assertNotEqual(t["status"], "ended")
+        self.assertFalse(t["valid"])
+        self.assertNotIn("report", t)
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="ended")
+        t = next(x for x in self.status(launch_id)["dispatches"] if x["dispatch_id"] == d1)
+        self.assertNotIn("report", t)
+
+
+class HoldTests(StreamCase):
+    """Part 2 review A-3 / design v29.1: after a hold every dispatch RPC is
+    refused, an idempotent repeat included; the status rides along."""
+
+    def test_idempotent_repeats_are_refused_after_a_hold(self):
+        launch_id, _ = self.open()
+        d1 = self.dispatch(launch_id)
+        self.wait_for(lambda: (x := self.turn_status(launch_id, d1)) and x["status"] == "ended", msg="turn ended")
+        d2 = fx.new_uuid()
+        r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d2, text="二",
+                     approval={"kind": "preview", "id": "p2"})
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(self.rpc("pipeline_hold", pipeline=self.fid, reason="stop")["ok"])
+        cases = [("dispatch_prepare", dict(dispatch_id=d2, text="二", approval={"kind": "preview", "id": "p2"}),
+                  "accepted"),
+                 ("stream_send", dict(dispatch_id=d1), "ended"),
+                 ("stream_send", dict(dispatch_id=d2), "accepted")]
+        for op, kw, status in cases:
+            with self.subTest(op=op, status=status):
+                r = self.rpc(op, launch_id=launch_id, pipeline=self.fid, **kw)
+                self.assertFalse(r["ok"])
+                self.assertIn("已停止", r["error"]["message"])
+                self.assertEqual(r["error"]["dispatch_status"], status)
+        self.assertEqual(self.turn_status(launch_id, d2)["status"], "accepted")   # nothing was sent
+
+
 class LedgerTests(StreamCase):
     def test_session_reservation_and_release(self):
         launch_id, _ = self.open()
@@ -1098,6 +1183,123 @@ class LedgerTests(StreamCase):
                  + (self.base / "pipelines" / self.tid / "started.json").stat().st_size)
         self.assertEqual(led.used - before_used, added)
         self.assertEqual(led.overrun, "")
+
+    # ---- review B-1: a failed write still counts what reached the disk
+
+    def prepare_with(self, launch_id, *patches):
+        led = self.dm._ledger
+        before = led.used
+        d = fx.new_uuid()
+        for p in patches:
+            p.start()
+        try:
+            r = self.rpc("dispatch_prepare", launch_id=launch_id, pipeline=self.fid, dispatch_id=d,
+                         text="全文" * 10, approval={"kind": "preview", "id": "pv"})
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertFalse(r["ok"])
+        ddir = self.base / "pipelines" / self.tid / "dispatches"
+        on_disk = sum(p.stat().st_size for p in ddir.iterdir() if d in p.name)
+        return led.used - before, on_disk, d
+
+    def test_text_write_failures_count_what_is_on_disk(self):
+        from vbear.runtime import pipeline_store as ps
+        launch_id, _ = self.open()
+        real_unlink, real_write = os.unlink, os.write
+
+        def unlink(path, *a, **kw):
+            if str(path).endswith(".partial") and kw.get("dir_fd") is not None:
+                raise OSError(5, "Input/output error")
+            return real_unlink(path, *a, **kw)
+
+        def short_write(fd, data):
+            real_write(fd, bytes(data)[:7])
+            raise OSError(28, "No space left on device")
+        cases = {
+            "unlink of .partial fails after the link": mock.patch.object(ps.os, "unlink", unlink),
+            "directory sync fails": mock.patch.object(ps, "_fsync_dir", side_effect=ps.StoreRefused("sync")),
+            ".partial write fails (removed again)": mock.patch.object(ps.os, "write", short_write),
+        }
+        for name, patch in cases.items():
+            with self.subTest(case=name):
+                try:
+                    added, on_disk, d = self.prepare_with(launch_id, patch)
+                    self.assertGreater(on_disk, 0) if "removed" not in name else self.assertEqual(on_disk, 0)
+                    self.assertEqual(added, on_disk)
+                    self.assertEqual(self.dm._ledger.overrun, "")
+                finally:                                  # every case starts from an empty directory
+                    for p in (self.base / "pipelines" / self.tid / "dispatches").iterdir():
+                        p.unlink()
+
+    def test_unmeasurable_text_counts_the_reservation_and_stops_granting(self):
+        from vbear.runtime import pipeline_store as ps, quota
+        launch_id, _ = self.open()
+        real = ps.Pipeline.text_bytes
+        calls = []
+
+        def text_bytes(p, d):
+            calls.append(d)
+            if len(calls) > 1:
+                raise OSError(5, "Input/output error")
+            return real(p, d)
+        added, _, _ = self.prepare_with(launch_id, mock.patch.object(ps, "_fsync_dir",
+                                                                     side_effect=ps.StoreRefused("sync")),
+                                        mock.patch.object(ps.Pipeline, "text_bytes", text_bytes))
+        self.assertEqual(added, quota.RESERVE_DISPATCH)
+        self.assertTrue(self.dm._ledger.overrun)
+        self.assertIn("額度", self.dm._ledger.reserve("x", 1))
+
+    def journal_failure(self, fail):
+        """``fail(data)`` -> True for the journal line whose write fails."""
+        from vbear.runtime import stream_journal
+        led = self.dm._ledger
+        m = self.prepare()
+        ldir = self.base / "sessions" / m["launch_id"]
+        before_manifest, before_used = (ldir / "manifest.json").stat().st_size, led.used
+        r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+        with fail(stream_journal):
+            self.dispatch(m["launch_id"])
+            self.wait_for(lambda: m["launch_id"] not in self.dm._streams, msg="ended after the failure")
+        texts = sum(p.stat().st_size for p in (self.base / "pipelines" / self.tid / "dispatches").iterdir())
+        added = ((ldir / "journal.jsonl").stat().st_size + (ldir / "manifest.json").stat().st_size - before_manifest
+                 + (self.base / "pipelines" / self.tid / "started.json").stat().st_size + texts)
+        self.assertEqual(led.used - before_used, added)
+        self.assertEqual(self.manifest(m["launch_id"])["state"], "manual_review")
+
+    def test_a_short_journal_write_is_counted(self):
+        real = os.write
+
+        def fail(sj):
+            def write(fd, data):
+                if b'"kind":"dispatch_confirmed"' in bytes(data):
+                    return real(fd, bytes(data)[:20])                     # short: 20 bytes reach the disk
+                return real(fd, data)
+            return mock.patch.object(sj.os, "write", write)
+        self.journal_failure(fail)
+
+    def test_a_journal_line_whose_fsync_failed_is_counted(self):
+        real_write, real_fsync = os.write, os.fsync
+        last = {}
+
+        def fail(sj):
+            import contextlib
+
+            def write(fd, data):
+                last[fd] = bytes(data)
+                return real_write(fd, data)
+
+            def fsync(fd):
+                if b'"kind":"dispatch_confirmed"' in last.get(fd, b""):
+                    raise OSError(5, "Input/output error")
+                return real_fsync(fd)
+            stack = contextlib.ExitStack()
+            stack.enter_context(mock.patch.object(sj.os, "write", write))
+            stack.enter_context(mock.patch.object(sj.os, "fsync", fsync))
+            return stack
+        self.journal_failure(fail)
 
     def test_full_ledger_refuses(self):
         self.dm._ledger.limit = self.dm._ledger.used + 1024

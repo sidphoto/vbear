@@ -42,8 +42,10 @@ class StreamCheckTests(unittest.TestCase):
 
     def test_run_against_the_fake(self):
         out = self.tmp / "report.json"
-        before = set(os.listdir("/private/tmp"))
-        code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out))
+        private = self.tmp / "t"                                        # this test's own temp root
+        private.mkdir()
+        code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
+                                tmp_root=str(private))
         report = json.loads(out.read_text())
         checks = {k: v["pass"] for k, v in report["checks"].items()}
         self.assertEqual(code, 1)                                       # sandbox: the fake runs no probe
@@ -59,8 +61,14 @@ class StreamCheckTests(unittest.TestCase):
             self.assertNotIn(secret, text)                              # booleans only
         self.assertNotIn("hmac", text.lower())
         self.assertEqual(os.environ["VBEAR_HOME"], str(self.tmp / "unused"))   # restored
-        leftovers = {n for n in set(os.listdir("/private/tmp")) - before if n.startswith(("vbp-", "sc-"))}
-        self.assertEqual(leftovers, set())
+        # Only what this run used: other test runs on the machine (another
+        # worktree, a reviewer) create and remove their own sc-* meanwhile.
+        self.assertEqual(os.listdir(private), [])
+        root, scratch = report["temp_paths"]
+        self.assertEqual(Path(root).parent, private)
+        self.assertTrue(Path(scratch).name.startswith("sc-"))
+        self.assertFalse(stream_check.present(root) or stream_check.present(scratch))
+        self.assertEqual(report["checks"]["cleanup"], {"pass": True, "left": [], "errors": []})
 
     def test_a_failed_cleanup_fails_the_run(self):
         # Part 2 review B5: never ignore_errors; what is left fails the run.
@@ -77,9 +85,12 @@ class StreamCheckTests(unittest.TestCase):
         def mkdtemp(*args, **kw):
             roots.append(real_mkdtemp(*args, **kw))
             return roots[-1]
+        private = self.tmp / "t"
+        private.mkdir()
         with mock.patch("vbear.stream_check.shutil.rmtree", rmtree), \
                 mock.patch("vbear.stream_check.tempfile.mkdtemp", mkdtemp):
-            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out))
+            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
+                                    tmp_root=str(private))
         for r in roots:
             self.addCleanup(real, r, True)
         report = json.loads(out.read_text())
@@ -97,13 +108,14 @@ class StreamCheckTests(unittest.TestCase):
             report["checks"] = {"protocol": {"pass": True}}
             report["passed"] = True
             return 0
+        private = self.tmp / "t"
+        private.mkdir()
         with mock.patch.object(stream_check, "_run", all_pass):
-            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out))
+            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out),
+                                    tmp_root=str(private))
         report = json.loads(out.read_text())
         self.assertEqual((code, report["passed"], report["checks"]["cleanup"]["pass"]), (1, False, False))
-        for r in Path("/private/tmp").glob("vbp-*"):
-            if (r / "hmac-key").exists():
-                shutil.rmtree(r)
+        self.assertEqual([p.name.startswith("vbp-") for p in private.iterdir()], [True])   # left, and only here
 
     def test_remove_tree_lists_what_it_could_not_remove(self):
         locked = self.tmp / "locked"

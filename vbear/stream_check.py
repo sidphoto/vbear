@@ -121,20 +121,25 @@ def remove_tree(path, errors: list) -> None:
         errors.append(f"rmtree {path}: {type(exc).__name__}: {exc}"[:300])
 
 
-def run(binary: str, version: str, model: str, out: str | None) -> int:
+def run(binary: str, version: str, model: str, out: str | None, *, tmp_root: str = "/private/tmp") -> int:
+    """``tmp_root``: where the temporary VBEAR_HOME goes (tests pass their
+    own directory, so concurrent runs elsewhere cannot be mistaken for
+    leftovers). The launch's scratch is always under agent_sessions'
+    SCRATCH_PARENT; both paths are in the report's temp_paths."""
     report = {"tool": "verify_claude_boundary", "mode": "stream", "claude_version": version, "binary": binary,
               "model": model, "started": time.time(), "checks": {}}
     consts = sp.constants_for(version)
     if consts is None:
         report["error"] = f"Claude Code {version} 沒有串流模式的常數，不能驗證"
         return finish(report, out, 2)
-    root = Path(tempfile.mkdtemp(prefix="vbp-", dir="/private/tmp"))
+    root = Path(tempfile.mkdtemp(prefix="vbp-", dir=tmp_root))
     report["cleanup_errors"] = []
     code = _run(binary, version, model, consts, root, report)
     # The temporary state (HMAC key, journal) is gone before the report is
     # written; a failed or incomplete removal fails the run (review B5).
     report["temp_removed"] = not present(root)
     report["temp_ls"] = subprocess.run(["ls", "-ld", str(root)], capture_output=True, text=True).stderr.strip()
+    report["temp_paths"] = [str(root), *[str(p) for p in report.get("_cleanup_paths", [])]]
     left = [str(p) for p in report.pop("_cleanup_paths", []) if present(p)]
     clean = report["temp_removed"] and not left and not report["cleanup_errors"]
     report["checks"]["cleanup"] = {"pass": clean, "left": left, "errors": report["cleanup_errors"]}
