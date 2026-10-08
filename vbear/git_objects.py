@@ -17,6 +17,8 @@ Rules, in short (the design is the reference):
     commit, and the hash of ``commit <size>\\0<content>`` (SHA-1 for 40 hex
     digits, SHA-256 for 64) equals the requested sha. For an object from a
     pack, the pack and its index must also pass their checksums.
+  * Every idx passes its own checksum before it is searched, so "not found"
+    is never read off a damaged index.
   * The object exists with a matching hash but is not a commit: False. Not
     found locally and no alternates: False. Not found but alternates exist,
     or anything malformed, over a limit, too slow or symlinked: None.
@@ -84,6 +86,7 @@ class _Check:
         self.algo = algo
         self.hashlen = hashlib.new(algo).digest_size
         self.deadline = time.monotonic() + DEADLINE_S
+        self.checksum_deadline: float | None = None   # starts at the first verification
         self.inflated = 0
         self.fds: list[int] = []
 
@@ -494,33 +497,52 @@ class _Pack:
                 or _identity(os.fstat(self.pack)) != _identity(self.pack_st)):
             raise _Undecidable("pack 或 idx 在讀取期間改變")
 
-    def verify_checksums(self):
-        """idx checksum, the pack checksum the idx records, and the pack's
-        own trailer, all recomputed; cached by both files' identity."""
-        key = (self.chk.algo, _identity(self.idx_st), _identity(self.pack_st))
+    def _cached(self, key: tuple) -> bool:
         self.unchanged()
         with _cache_lock:
-            if key in _checksum_cache:
-                return
-        if self.pack_st.st_size > CHECKSUM_PACK_MAX:
-            raise _Undecidable("pack 超過可驗證的大小")
-        h = self.chk.hashlen
-        deadline = time.monotonic() + CHECKSUM_DEADLINE_S
-        idx_size = self.idx_st.st_size
-        idx_digest = self._digest(self.idx, idx_size - h, deadline)
-        trailer = self.chk.pread(self.idx, 2 * h, idx_size - 2 * h)
-        if idx_digest != trailer[h:]:
-            raise _Undecidable("idx 校驗和不符")
-        pack_trailer = self.chk.pread(self.pack, h, self.end)
-        if pack_trailer != trailer[:h]:
-            raise _Undecidable("idx 記錄的 pack 校驗和不符")
-        if self._digest(self.pack, self.end, deadline) != pack_trailer:
-            raise _Undecidable("pack 校驗和不符")
+            return key in _checksum_cache
+
+    def _remember(self, key: tuple):
         self.unchanged()
         with _cache_lock:
             if len(_checksum_cache) > 4096:
                 _checksum_cache.clear()
             _checksum_cache.add(key)
+
+    def _deadline(self) -> float:
+        if self.chk.checksum_deadline is None:
+            self.chk.checksum_deadline = time.monotonic() + CHECKSUM_DEADLINE_S
+        return self.chk.checksum_deadline
+
+    def verify_idx(self):
+        """The idx's own checksum, before it is searched: an idx that fails
+        it can neither show an object present nor show it absent."""
+        key = ("idx", self.chk.algo, _identity(self.idx_st))
+        if self._cached(key):
+            return
+        h = self.chk.hashlen
+        size = self.idx_st.st_size
+        if self._digest(self.idx, size - h, self._deadline()) != self.chk.pread(self.idx, h, size - h):
+            raise _Undecidable("idx 校驗和不符")
+        self._remember(key)
+
+    def verify_pack(self):
+        """For the pair the object came from: the pack checksum the idx
+        records and the pack's own trailer, recomputed. Cached by both
+        files' identity."""
+        key = ("pack", self.chk.algo, _identity(self.idx_st), _identity(self.pack_st))
+        if self._cached(key):
+            return
+        if self.pack_st.st_size > CHECKSUM_PACK_MAX:
+            raise _Undecidable("pack 超過可驗證的大小")
+        h = self.chk.hashlen
+        recorded = self.chk.pread(self.idx, h, self.idx_st.st_size - 2 * h)
+        trailer = self.chk.pread(self.pack, h, self.end)
+        if trailer != recorded:
+            raise _Undecidable("idx 記錄的 pack 校驗和不符")
+        if self._digest(self.pack, self.end, self._deadline()) != trailer:
+            raise _Undecidable("pack 校驗和不符")
+        self._remember(key)
 
     def _digest(self, fd: int, length: int, deadline: float) -> bytes:
         h = hashlib.new(self.chk.algo)
@@ -557,6 +579,7 @@ def _packed(chk: _Check, objects: int, sha: str) -> bool | None:
     want = bytes.fromhex(sha)
     for name in sorted(names):
         pack = _Pack(chk, pack_dir, name)
+        pack.verify_idx()
         offset = pack.find(want)
         if offset is None:
             continue
@@ -564,7 +587,7 @@ def _packed(chk: _Check, objects: int, sha: str) -> bool | None:
         pack.unchanged()
         if not chk.matches(kind, data, sha):
             raise _Undecidable("pack 物件的雜湊不符")
-        pack.verify_checksums()
+        pack.verify_pack()
         return kind == "commit"
     return None
 

@@ -23,11 +23,18 @@ each file and does not miss a file a later version adds:
 Managed preferences are looked up in ``/Library/Managed Preferences/`` and in
 every per-user directory under it.
 
-Not covered, and stated where the risk is accepted: Claude Code's
-server-managed settings are fetched from claude.ai and are not a local file
-(user decision 2026-10-08, design 2.1 and 10).
+Claude Code's server-managed settings are fetched from claude.ai and are no
+local file. Its cache, ``~/.claude/remote-settings.json`` (in the HOME the
+executor runs with), refuses the launch when present (design v29.3, 2.1);
+that cannot prove the source absent (a ``-p`` run applies such settings
+without caching them), so the rest is a residual risk the user accepts per
+flow (user decision 2026-10-08, design 10).
 
-Tests pass another ``root`` instead of ``/``.
+"Not there" means ``lstat`` raised FileNotFoundError, nothing else: a parent
+that is a regular file (ENOTDIR), a permission error or any other failure
+leaves the question open, and the launch is refused.
+
+Tests pass another ``root`` instead of ``/`` and another ``home``.
 """
 
 from __future__ import annotations
@@ -39,8 +46,9 @@ from dataclasses import dataclass, field
 MANAGED_PREFS = "Library/Managed Preferences"
 MANAGED_PREFS_MAX_ENTRIES = 10_000
 
-_CLAUDE = {"paths": ("Library/Application Support/ClaudeCode",), "domain": "com.anthropic.claudecode"}
-_CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex"}
+_CLAUDE = {"paths": ("Library/Application Support/ClaudeCode",), "domain": "com.anthropic.claudecode",
+           "home_paths": (".claude/remote-settings.json",)}
+_CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex", "home_paths": ()}
 
 CLAUDE_SOURCES = {"2.1.292": _CLAUDE}
 CODEX_SOURCES = {"0.160.0": _CODEX}
@@ -61,22 +69,22 @@ class PolicyCheck:
 
 
 def _exists(path: str) -> bool:
-    """lstat: True if anything is there; False only for "not there"; any
-    other failure raises (the caller refuses)."""
+    """lstat: True if anything is there, False only for FileNotFoundError;
+    any other failure (ENOTDIR included) raises and the caller refuses."""
     try:
         os.lstat(path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
         return False
     return True
 
 
-def _check(spec: dict | None, version: str, root: str, tool: str) -> PolicyCheck:
+def _check(spec: dict | None, version: str, root: str, home: str, tool: str) -> PolicyCheck:
     if spec is None:
         return PolicyCheck(False, problems=[f"{tool} {version} 沒有管理員政策來源清單，不能啟動"])
     result = PolicyCheck(True)
 
-    def look(path: str):
-        shown = "/" + os.path.relpath(path, root) if root != "/" else path
+    def look(path: str, shown: str | None = None):
+        shown = shown or ("/" + os.path.relpath(path, root) if root != "/" else path)
         try:
             if _exists(path):
                 result.found.append(shown)
@@ -85,12 +93,17 @@ def _check(spec: dict | None, version: str, root: str, tool: str) -> PolicyCheck
 
     for rel in spec["paths"]:
         look(os.path.join(root, rel))
+    for rel in spec["home_paths"]:
+        if not isinstance(home, str) or not home.startswith("/"):
+            result.problems.append("不知道執行者的 HOME，無法確認伺服器管理設定的快取")
+            continue
+        look(os.path.join(home, rel), "~/" + rel)
     plist = spec["domain"] + ".plist"
     prefs = os.path.join(root, MANAGED_PREFS)
     look(os.path.join(prefs, plist))
     try:
         st = os.lstat(prefs)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
         st = None
     except OSError as exc:
         result.problems.append(f"無法確認 /{MANAGED_PREFS} 是否存在（{exc.strerror or type(exc).__name__}）")
@@ -115,11 +128,14 @@ def _check(spec: dict | None, version: str, root: str, tool: str) -> PolicyCheck
     return result
 
 
-def check_claude(version: str, root: str = "/") -> PolicyCheck:
-    """Before every stream session and probe (design 2.1). Never raises."""
+def check_claude(version: str, root: str = "/", home: str | None = None) -> PolicyCheck:
+    """Before every stream session and probe (design 2.1). ``home`` is the
+    HOME the executor runs with (default: this process's). Never raises."""
     try:
+        if home is None:
+            home = os.path.expanduser("~")
         return _check(CLAUDE_SOURCES.get(version) if isinstance(version, str) else None, str(version), root,
-                      "Claude Code")
+                      home, "Claude Code")
     except Exception as exc:
         return PolicyCheck(False, problems=[f"管理員政策檢查失敗（{type(exc).__name__}）"])
 
@@ -128,6 +144,6 @@ def check_codex(version: str, root: str = "/") -> PolicyCheck:
     """Before every review (design 5.2). Never raises."""
     try:
         return _check(CODEX_SOURCES.get(version) if isinstance(version, str) else None, str(version), root,
-                      "Codex")
+                      "", "Codex")
     except Exception as exc:
         return PolicyCheck(False, problems=[f"系統設定層檢查失敗（{type(exc).__name__}）"])

@@ -15,14 +15,27 @@ from vbear import git_objects as go
 from vbear.git_objects import commit_exists
 
 GIT = shutil.which("git")
-ENV = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+# git is fully isolated from this machine: no inherited GIT_* variables, no
+# global or system config, a throwaway HOME, and no automatic maintenance.
+# Every add/commit otherwise spawns a detached `git maintenance run --auto`
+# that can pack the fixture's loose objects in the background, which made
+# the loose-object tests fail now and then (S2a-1 review, planner's capture).
+_GIT_HOME = tempfile.mkdtemp(prefix="vbgo-home-")
+ENV = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": _GIT_HOME, "LANG": "C",
+       "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
        "GIT_COMMITTER_EMAIL": "t@t"}
+NO_MAINTENANCE = ("-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "maintenance.auto=false",
+                  "-c", "maintenance.autoDetach=false")
 
 
 def git(cwd, *args) -> str:
-    return subprocess.run([GIT, *args], cwd=cwd, env=ENV, capture_output=True, text=True,
+    return subprocess.run([GIT, *NO_MAINTENANCE, *args], cwd=cwd, env=ENV, capture_output=True, text=True,
                           check=True).stdout.strip()
+
+
+def loose_path(repo: Path, sha: str) -> Path:
+    return repo / ".git" / "objects" / sha[:2] / sha[2:]
 
 
 def build(path: Path, fmt: str, commits: int = 30) -> list[str]:
@@ -83,9 +96,21 @@ class GitObjectsCase(unittest.TestCase):
             pack(dst)
             cls.packed[fmt] = (dst, shas)
 
+        # The loose fixtures must really be loose, and stay that way.
+        for fmt, (repo, shas) in cls.loose.items():
+            missing = [sha for sha in shas if not loose_path(repo, sha).is_file()]
+            assert not missing, f"{fmt}: commits not loose after building: {missing[:3]}"
+            assert not list((repo / ".git" / "objects" / "pack").glob("*.pack")), f"{fmt}: fixture got packed"
+
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def assert_loose(self, repo: Path, *shas: str):
+        """A test about loose objects states its premise first."""
+        for sha in shas:
+            self.assertTrue(loose_path(repo, sha).is_file(),
+                            f"premise: {sha} must be a loose object in {repo} (was the fixture packed?)")
 
     def setUp(self):
         go._checksum_cache.clear()
@@ -102,6 +127,7 @@ class BasicTests(GitObjectsCase):
         for fmt in ("sha1", "sha256"):
             with self.subTest(fmt=fmt):
                 repo, shas = self.loose[fmt]
+                self.assert_loose(repo, shas[0], shas[-1])
                 self.assertIs(commit_exists(str(repo), shas[0]), True)
                 self.assertIs(commit_exists(str(repo), shas[-1]), True)
                 self.assertIs(commit_exists(str(repo), git(repo, "rev-parse", "HEAD:f")), False)       # blob
@@ -236,6 +262,7 @@ class FailClosedTests(GitObjectsCase):
     def test_loose_subdirectory_symlink(self):
         repo = self.copy(self.loose["sha1"][0])
         sha = self.loose["sha1"][1][0]
+        self.assert_loose(repo, sha)
         sub = repo / ".git" / "objects" / sha[:2]
         moved = repo.parent / "sub-real"
         sub.rename(moved)
@@ -266,7 +293,8 @@ class FailClosedTests(GitObjectsCase):
         for name, change in cases.items():
             with self.subTest(case=name):
                 copy = self.copy(repo)
-                path = copy / ".git" / "objects" / shas[0][:2] / shas[0][2:]
+                self.assert_loose(copy, shas[0])
+                path = loose_path(copy, shas[0])
                 raw = path.read_bytes()
                 path.chmod(0o644)
                 path.write_bytes(change(raw))
@@ -295,6 +323,21 @@ class FailClosedTests(GitObjectsCase):
             with self.subTest(target=target, how=how):
                 self.assertIsNone(commit_exists(str(damage(target, how)), shas[0]))
 
+    def test_damaged_idx_cannot_show_an_object_absent(self):
+        # Codex S2a-1 #3: an absent sha used to read as False off a damaged idx.
+        repo, shas = self.packed["sha1"]
+        for where in ("checksum", "names", "fanout"):
+            with self.subTest(damage=where):
+                copy = self.copy(repo)
+                idx, _ = pack_files(copy)
+                n = int.from_bytes(idx.read_bytes()[8 + 255 * 4:8 + 256 * 4], "big")
+                pos = {"checksum": idx.stat().st_size - 3, "names": 1032 + (n // 2) * 20 + 4,
+                       "fanout": 8 + 200 * 4 + 3}[where]
+                flip(idx, pos)
+                self.assertIs(commit_exists(str(self.packed["sha1"][0]), "e" * 40), False)   # intact repo
+                self.assertIsNone(commit_exists(str(copy), "e" * 40))
+                self.assertIsNone(commit_exists(str(copy), shas[0]))
+
     def test_forged_pack_entry_with_valid_checksums(self):
         # The idx claims sha Y for commit A's data and its checksum is
         # recomputed, so every container check passes: only the object hash
@@ -319,10 +362,8 @@ class FailClosedTests(GitObjectsCase):
         self.assertIsNone(commit_exists(str(repo), forged.hex()))
 
     def test_any_single_byte_change_never_passes(self):
-        # Damage never yields True. It is usually None (a checksum fails);
-        # a flip in the idx name table can instead hide the object, which
-        # then reads as not found (False): design 5.7 verifies only the
-        # pack/idx pair the object was found in, and both answers block.
+        # Every idx is verified before it is searched, and the pack an
+        # object comes from is verified too, so any change gives None.
         repo, shas = self.packed["sha1"]
         rng = random.Random(8)
         copy = self.copy(repo)
@@ -336,7 +377,10 @@ class FailClosedTests(GitObjectsCase):
             data[rng.randrange(len(data))] ^= 1 << rng.randrange(8)
             target.write_bytes(bytes(data))
             for sha in (shas[0], shas[-1]):
-                self.assertIn(commit_exists(str(copy), sha), (None, False))
+                self.assertIsNone(commit_exists(str(copy), sha))
+            # An absent sha is read off the idx alone: a damaged idx gives
+            # None; a damaged pack under an intact idx still shows it absent.
+            self.assertIs(commit_exists(str(copy), "e" * 40), None if target == idx else False)
             target.write_bytes(originals[target])
 
     def test_limits(self):
@@ -345,6 +389,7 @@ class FailClosedTests(GitObjectsCase):
         delta = max(depths, key=depths.get)
         whole = next(s for s, d in depths.items() if d == 0)
         loose_repo, loose_shas = self.loose["sha1"]
+        self.assert_loose(loose_repo, loose_shas[0])
         checks = [
             ("DELTA_MAX_DEPTH", depths[delta] - 1, repo, delta),
             ("OBJECT_MAX", 100, repo, whole),
@@ -384,11 +429,15 @@ class FailClosedTests(GitObjectsCase):
             self.assertIs(commit_exists(str(repo), sha), True)
             self.assertEqual(len(calls), 2)                     # idx and pack
             self.assertIs(commit_exists(str(repo), sha), True)
-            self.assertEqual(len(calls), 2)                     # cached
-            _, packfile = pack_files(repo)
-            packfile.chmod(0o600)                               # ctime moves
+            self.assertIs(commit_exists(str(repo), "e" * 40), False)
+            self.assertEqual(len(calls), 2)                     # both cached
+            idx, packfile = pack_files(repo)
+            packfile.chmod(0o600)                               # the pack's ctime moves
             self.assertIs(commit_exists(str(repo), sha), True)
-            self.assertEqual(len(calls), 4)
+            self.assertEqual(len(calls), 3)                     # only the pack again
+            idx.chmod(0o600)                                    # the idx's ctime moves
+            self.assertIs(commit_exists(str(repo), sha), True)
+            self.assertEqual(len(calls), 5)                     # the idx and the pair again
 
     def test_malformed_arguments(self):
         repo, shas = self.loose["sha1"]

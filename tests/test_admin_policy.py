@@ -1,6 +1,6 @@
 """Administrator policy and system config layers (vbear/admin_policy.py,
-design 2.1 and 5.2). Every check runs against a temporary root; the real
-/Library and /etc are never looked at."""
+design 2.1 and 5.2). Every check runs against a temporary root and a
+temporary home; the real /Library, /etc and ~/.claude are never looked at."""
 
 import os
 import shutil
@@ -19,6 +19,8 @@ PREFS = "Library/Managed Preferences"
 class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbap-")))
+        self.home = self.root / "Users" / "someone"
+        self.home.mkdir(parents=True)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -40,7 +42,7 @@ class PolicyTests(unittest.TestCase):
         return p
 
     def claude(self):
-        return ap.check_claude(CLAUDE, str(self.root))
+        return ap.check_claude(CLAUDE, str(self.root), str(self.home))
 
     def codex(self):
         return ap.check_codex(CODEX, str(self.root))
@@ -72,7 +74,7 @@ class PolicyTests(unittest.TestCase):
         for tool, rel, directory in cases:
             with self.subTest(tool=tool, source=rel):
                 self._cleanup()
-                self.root.mkdir()
+                self.home.mkdir(parents=True)
                 p = self.make(rel, directory=directory)
                 p.chmod(0o000) if not directory else None              # unreadable: still found by lstat
                 r = self.claude() if tool == "claude" else self.codex()
@@ -129,10 +131,65 @@ class PolicyTests(unittest.TestCase):
     def test_unknown_versions_cannot_launch(self):
         for version in ("2.1.291", "2.1.286", "9.9.9", "", None, 2, ["2.1.292"]):
             with self.subTest(version=version):
-                r = ap.check_claude(version, str(self.root))
+                r = ap.check_claude(version, str(self.root), str(self.home))
                 self.assertFalse(r.ok)
                 self.assertIn("清單", r.reason())
         self.assertFalse(ap.check_codex("0.159.2", str(self.root)).ok)
+
+    def test_server_managed_settings_cache_refuses(self):
+        cache = self.home / ".claude" / "remote-settings.json"
+        cache.parent.mkdir()
+        self.assertTrue(self.claude().ok)
+        for kind in ("file", "empty", "symlink", "directory"):
+            with self.subTest(kind=kind):
+                if kind == "file":
+                    cache.write_text('{"env": {}}')
+                elif kind == "empty":
+                    cache.write_text("")
+                elif kind == "symlink":
+                    cache.symlink_to("/nonexistent")
+                else:
+                    cache.mkdir()
+                r = self.claude()
+                self.assertFalse(r.ok)
+                self.assertEqual(r.found, ["~/.claude/remote-settings.json"])
+                self.assertTrue(self.codex().ok, "the cache is a Claude Code source only")
+                cache.rmdir() if kind == "directory" else cache.unlink()
+        self.assertTrue(self.claude().ok)
+
+    def test_server_managed_settings_cache_cannot_be_established(self):
+        claude_dir = self.home / ".claude"
+        claude_dir.mkdir()
+        claude_dir.chmod(0o000)
+        r = self.claude()
+        self.assertFalse(r.ok)
+        self.assertIn("~/.claude/remote-settings.json", r.problems[0])
+        claude_dir.chmod(0o700)
+        claude_dir.rmdir()
+        claude_dir.write_text("")                                  # .claude is a file: ENOTDIR
+        self.assertFalse(self.claude().ok)
+        for home in ("", "relative/home", 5):
+            with self.subTest(home=home):
+                self.assertFalse(ap.check_claude(CLAUDE, str(self.root), home).ok)
+
+    def test_a_parent_that_is_a_file_refuses(self):
+        # Codex S2a-1 #1: ENOTDIR leaves existence open; it used to read as absent.
+        for rel in ("etc", "Library", "Library/Application Support", "Library/Managed Preferences"):
+            with self.subTest(parent=rel):
+                self._cleanup()
+                self.home.mkdir(parents=True)
+                self.make(rel)
+                tool_results = {"claude": self.claude(), "codex": self.codex()}
+                if rel == "etc":
+                    self.assertFalse(tool_results["codex"].ok)
+                    self.assertTrue(tool_results["codex"].problems)
+                else:
+                    self.assertFalse(tool_results["claude"].ok)
+                    self.assertTrue(tool_results["claude"].problems)
+                if rel in ("Library", "Library/Managed Preferences"):
+                    self.assertFalse(tool_results["codex"].ok, "the managed preferences are shared")
+                elif rel == "Library/Application Support":
+                    self.assertTrue(tool_results["codex"].ok, "Codex does not read Application Support")
 
     def test_never_raises(self):
         with mock.patch.object(ap, "_check", side_effect=RuntimeError("boom")):
@@ -141,8 +198,10 @@ class PolicyTests(unittest.TestCase):
 
     def test_source_lists_are_the_reviewed_constants(self):
         self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": {"paths": ("Library/Application Support/ClaudeCode",),
-                                                         "domain": "com.anthropic.claudecode"}})
-        self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex"}})
+                                                         "domain": "com.anthropic.claudecode",
+                                                         "home_paths": (".claude/remote-settings.json",)}})
+        self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
+                                                        "home_paths": ()}})
 
 
 if __name__ == "__main__":
