@@ -32,9 +32,12 @@ class ScanTests(unittest.TestCase):
         limits = sj.Limits(4 << 20, 10 ** 9, 64, None)
         for raw in (b'"' + b'\\"' * (1 << 20), b'"' + b"\\" * (2 << 20), b'"' * (2 << 20),
                     b"[" * 64 + b'"' + b"x" * (3 << 20)):
-            t = time.monotonic()
+            # CPU time of this thread, not wall clock: quadratic work would
+            # take minutes either way, but a loaded machine only delays the
+            # wall clock (seen at 4.1 s under the planner's load test).
+            t = time.thread_time()
             sj.scan(raw, limits)
-            self.assertLess(time.monotonic() - t, 3.0)
+            self.assertLess(time.thread_time() - t, 3.0)
 
 
 class LoadsTests(unittest.TestCase):

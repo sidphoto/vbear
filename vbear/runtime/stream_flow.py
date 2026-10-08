@@ -21,6 +21,7 @@ import math
 import os
 import stat
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from .. import acceptance, flows, login_identity
@@ -191,9 +192,12 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
         if res.problem:
             raise FlowRefused("count_unavailable", f"session {m['launch_id']} 的日誌無法使用（{res.problem}）")
         js = res.state
-        t.responses += js.responses
-        t.spent_usd += js.cost            # total_cost_usd is per process: the session's last value
-        t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "dispatches": js.dispatch_count()})
+        # v29.7: a dispatch that may have reached the CLI without a result
+        # counts at its worst case (its turn cap; the session's budget).
+        t.responses += js.counted_responses
+        t.spent_usd += js.counted_cost    # total_cost_usd is per process: the session's last value
+        t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "dispatches": js.dispatch_count(),
+                           "unfinished": js.unfinished()})
         for d in js.order:
             if d in t.accepted:
                 raise FlowRefused("count_unavailable", f"派工 {d} 被兩個 session 接受過")
@@ -234,6 +238,77 @@ def load(base, pipeline_id: str) -> FlowContext:
     started = view[0] if view is not None else None
     return FlowContext(pipeline_id, task_id, acc, dict(limits), key, started,
                        totals(base, pipeline_id, task_id, view))
+
+
+def _never_ran(base, rec: dict) -> str | None:
+    """None when the start record's launch provably never had a process
+    (design v29.7): it does not exist, or it is still "prepared" with no
+    session id, leader or journal (Popen always follows the journal); and
+    no stream launch of the flow has a journal. Else why it is kept."""
+    root = agent_sessions.sessions_root(base)
+    name = rec["launch_id"]
+    try:
+        names = sorted(os.listdir(root))
+    except FileNotFoundError:
+        names = []
+    except OSError as exc:
+        return f"session 資料夾無法列出（{exc.strerror}）"
+    uid = os.getuid()
+    for other in names:
+        if not agent_sessions.LAUNCH_RE.match(other):
+            return f"session 資料夾裡有不認得的項目 {other[:64]!r}"
+        try:
+            m = agent_sessions._read_manifest(agent_sessions.launch_dir(base, other), uid)
+            journal = agent_sessions._lexists(root / other / agent_sessions.JOURNAL)
+        except (OSError, agent_sessions.LaunchRefused) as exc:
+            return f"launch {other} 無法檢查（{exc}）"
+        if other == name:
+            if (m.get("engine") != "claude-stream" or m.get("pipeline_id") != rec["pipeline_id"]
+                    or m.get("state") != "prepared" or m.get("native_session_id") is not None
+                    or m.get("leader") is not None or journal):
+                return f"開始紀錄指向的 launch {name} 不是從未啟動的狀態"
+        elif m.get("engine") == "claude-stream" and m.get("pipeline_id") == rec["pipeline_id"] and journal:
+            return f"流程的 launch {other} 有日誌"
+    return None
+
+
+def recover_start_records(base) -> list[dict]:
+    """Daemon start (design v29.7): a start record left by an open that
+    crashed before its journal existed would keep the flow refused forever
+    ("started, but no session"). It is removed exactly (flow, time and
+    launch) when that launch provably never ran; anything else is kept for
+    a person."""
+    root = Path(os.path.realpath(base)) / pipeline_store.PIPELINES
+    try:
+        tasks = sorted(os.listdir(root))
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        return [{"task": None, "kept": f"流程資料夾無法列出（{exc.strerror}）"}]
+    out = []
+    for task in tasks:
+        try:
+            with pipeline_store.Pipeline(base, task, create=False) as p:
+                rec = p.start_record()
+                if rec is None:
+                    continue
+                why = _never_ran(base, rec)
+                if why is None:
+                    p.remove_start(rec["pipeline_id"], rec["started_at"], launch_id=rec["launch_id"])
+                    out.append({"task": task, "pipeline_id": rec["pipeline_id"], "removed": rec["launch_id"]})
+                elif not _flow_has_journal(base, rec["pipeline_id"]):
+                    out.append({"task": task, "pipeline_id": rec["pipeline_id"], "kept": why})
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            out.append({"task": task, "kept": str(exc)})
+    return out
+
+
+def _flow_has_journal(base, pipeline_id: str) -> bool:
+    """For the log only: a started flow with a session journal is normal."""
+    try:
+        return bool(flow_sessions(base, pipeline_id, started=False))
+    except FlowRefused:
+        return False
 
 
 def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0) -> None:

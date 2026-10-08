@@ -78,7 +78,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
-from . import agent_sessions, daemon_stream, osc_title, proctrack, quota
+from . import agent_sessions, daemon_stream, osc_title, proctrack, quota, stream_flow
 
 PROTOCOL_VERSION = 1
 DAEMON_VERSION = "native-r2-s4"  # s4: stream executor sessions (claude-stream)
@@ -527,6 +527,13 @@ class Daemon(daemon_stream.StreamOps):
                           ("cleaned" if item.get("cleaned") else f"retained ({item.get('retained_reason')})"))
         except Exception as exc:
             self._log(f"managed launch recovery failed: {exc}")
+        try:  # start records of opens that died before their journal (design v29.7)
+            for item in stream_flow.recover_start_records(self.base):
+                self._log(f"flow start record ({item.get('task')}): " +
+                          (f"removed (launch {item['removed']} never ran)" if "removed" in item
+                           else f"kept ({item.get('kept')})"))
+        except Exception as exc:
+            self._log(f"flow start record recovery failed: {exc}")
         self._rebuild_ledger()
 
     def wake(self) -> None:

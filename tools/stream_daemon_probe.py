@@ -49,18 +49,20 @@ def main() -> int:
     state = root / "st"
     state.mkdir(mode=0o700)
     os.environ["VBEAR_HOME"] = str(state)
-    report = {"tool": "stream_daemon_probe", "started": time.time(), "claude": args.claude, "model": args.model}
+    report = {"tool": "stream_daemon_probe", "started": time.time(), "claude": args.claude, "model": args.model,
+              "cleanup_errors": []}
+    from vbear.stream_check import present, remove_tree
     try:
-        report.update(_run(args, root, state))
+        report.update(_run(args, root, state, report["cleanup_errors"]))
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
     finally:
-        shutil.rmtree(root, ignore_errors=True)
-    from vbear.stream_check import present
+        remove_tree(root, report["cleanup_errors"])        # never ignore_errors (review B5)
     report["temp_removed"] = not present(root)
     report["temp_ls"] = subprocess.run(["ls", "-ld", str(root)], capture_output=True, text=True).stderr.strip()
     report["passed"] = bool(report.get("valid") and report.get("verify") == [] and not report.get("error")
-                            and report.get("closed_state") == "ended" and report["temp_removed"])
+                            and report.get("closed_state") == "ended" and report["temp_removed"]
+                            and not report["cleanup_errors"])
     report["finished"] = time.time()
     Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n")
     print(json.dumps({k: report.get(k) for k in ("passed", "valid", "reasons", "verify", "model_responses",
@@ -77,7 +79,8 @@ def _git(cwd, *a):
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def _run(args, root: Path, state: Path) -> dict:
+def _run(args, root: Path, state: Path, cleanup_errors: list) -> dict:
+    from vbear.stream_check import present, remove_tree
     from vbear import acceptance, flows, login_identity, tasks
     from vbear.runtime import agent_sessions as a
     from vbear.runtime import cli_versions, stream_journal
@@ -178,8 +181,8 @@ def _run(args, root: Path, state: Path) -> dict:
         dm.stop()
         thread.join(10)
         dm.close()
-        if m is not None:
-            shutil.rmtree(m["scratch"]["path"], ignore_errors=True)
+        if m is not None and present(m["scratch"]["path"]):
+            remove_tree(m["scratch"]["path"], cleanup_errors)
         out["daemon_log"] = [line for line in logs if "listening" not in line][-10:]
     return out
 

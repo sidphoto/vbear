@@ -19,6 +19,7 @@ from vbear.runtime import stream_protocol as sp
 NAN, INF = float("nan"), float("inf")
 CWD = "/private/tmp/vbear-task"
 C = sp.VERSIONS["2.1.292"]
+TURN_CAP = 200
 IDENTITY = {"model_id": fx.MODEL, "workdir": CWD, "executor_claude_version": "2.1.292", "executor_model": fx.MODEL}
 
 
@@ -36,17 +37,18 @@ class Harness:
                                         "cli_version": "2.1.292", "argv_sha256": "a" * 64, "budget_usd": 20.0})
 
     def record(self, kind, data):
-        self.seq += 1
-        line = sj.encode(self.seq, time.time(), kind, data)
+        line = sj.encode(self.seq + 1, time.time(), kind, data)
         parsed = strictjson.loads(line[:-1], strictjson.SESSION_LOG)
         assert parsed.ok, parsed.problem
-        self.js.apply_record(parsed.value)
+        self.js.apply_record(parsed.value)             # a refused record is not kept, as in JournalWriter
+        self.seq += 1
         self.records.append(line)
 
     def dispatch(self, text="please do the work"):
         d = fx.new_uuid()
         self.record("dispatch_accepted", {"dispatch_id": d, "text_sha256": sp.sha256_hex(text),
                                           "length": len(text.encode()), "approval": {"kind": "preview", "id": "p1"}})
+        self.record("dispatch_writing", {"dispatch_id": d, "turn_cap": TURN_CAP})
         self.record("dispatch_written", {"dispatch_id": d})
         self.tracker.begin(d, text)
         return d, text
@@ -68,7 +70,113 @@ class Harness:
         return sj.turn_validity(self.js, d, executor_report.problem)
 
 
+class UnfinishedTurnTests(unittest.TestCase):
+    """Design v29.7: a dispatch that may have reached the CLI (from
+    dispatch_writing) and has no turn_result counts at its worst case: its
+    turn cap, and the session's budget as its spend."""
+
+    def started(self, h):
+        """A dispatch written and confirmed, the turn running, no result."""
+        d, text = h.dispatch()
+        h.feed(fx.turn(h.sid, d, text, cwd=CWD, prefix=d[:6])[:5])
+        self.assertEqual(h.js.state, "running")
+        return d
+
+    def test_writing_comes_before_written(self):
+        h = Harness()
+        d = fx.new_uuid()
+        h.record("dispatch_accepted", {"dispatch_id": d, "text_sha256": "b" * 64, "length": 1,
+                                       "approval": {"kind": "preview", "id": "p"}})
+        with self.assertRaises(sj.JournalCorrupt):
+            h.record("dispatch_written", {"dispatch_id": d})
+        for cap in (0, sj.TURN_CAP_MAX + 1, True, "200"):
+            with self.subTest(cap=cap), self.assertRaises(sj.JournalCorrupt):
+                h.record("dispatch_writing", {"dispatch_id": d, "turn_cap": cap})   # schema refuses it
+        h.record("dispatch_writing", {"dispatch_id": d, "turn_cap": 7})
+        self.assertEqual((h.js.state, h.js.turns[d].status, h.js.unfinished()), ("writing", "writing", [d]))
+        h.record("dispatch_written", {"dispatch_id": d})
+        self.assertEqual((h.js.state, h.js.turns[d].status), ("sent", "written"))
+
+    def test_every_way_a_sent_dispatch_can_end_without_a_result(self):
+        endings = {
+            "no_progress": lambda h, d: h.record("dispatch_failed", {"dispatch_id": d, "reason": "no_progress"}),
+            "turn_timeout": lambda h, d: h.record("dispatch_failed", {"dispatch_id": d, "reason": "turn_timeout"}),
+            "response_cap": lambda h, d: h.record("dispatch_failed", {"dispatch_id": d, "reason": "response_cap"}),
+            "process_exited": lambda h, d: (h.record("dispatch_failed", {"dispatch_id": d, "reason": "process_exited"}),
+                                            h.record("exited", {"returncode": 1, "signal": None, "stderr_tail": ""})),
+            "protocol_error": lambda h, d: h.record("protocol_error", {"reason": "bad_json", "detail": ""}),
+            "recovered": lambda h, d: h.record("recovered", {"process": "gone"}),
+            "journal just stops": lambda h, d: None,
+        }
+        for name, end in endings.items():
+            with self.subTest(ending=name):
+                h = Harness()
+                h.run_turn(cost=0.05)                                     # one finished turn first
+                d = self.started(h)
+                end(h, d)
+                self.assertEqual(h.js.unfinished(), [d])
+                self.assertEqual(h.js.counted_responses, 1 + TURN_CAP)
+                self.assertEqual(h.js.counted_cost, 20.0)                # the session's budget_usd
+                self.assertEqual((h.js.responses, h.js.cost), (1, 0.05))   # what was observed stays apart
+        for reason in ("not_confirmed", "partial_write"):
+            with self.subTest(ending=reason):
+                h = Harness()
+                d, _ = h.dispatch() if reason == "not_confirmed" else (None, None)
+                if reason == "partial_write":
+                    d = fx.new_uuid()
+                    h.record("dispatch_accepted", {"dispatch_id": d, "text_sha256": "b" * 64, "length": 1,
+                                                   "approval": {"kind": "preview", "id": "p"}})
+                    h.record("dispatch_writing", {"dispatch_id": d, "turn_cap": 9})
+                h.record("dispatch_failed", {"dispatch_id": d, "reason": reason})
+                cap = TURN_CAP if reason == "not_confirmed" else 9
+                self.assertEqual((h.js.counted_responses, h.js.counted_cost), (cap, 20.0))
+
+    def test_what_never_reached_the_cli_or_has_a_result_counts_exactly(self):
+        h = Harness()
+        d = fx.new_uuid()
+        h.record("dispatch_accepted", {"dispatch_id": d, "text_sha256": "b" * 64, "length": 1,
+                                       "approval": {"kind": "preview", "id": "p"}})
+        h.record("exited", {"returncode": 0, "signal": None, "stderr_tail": ""})   # never written
+        self.assertEqual((h.js.unfinished(), h.js.counted_responses, h.js.counted_cost), ([], 0, 0.0))
+        h = Harness()
+        d, text = h.dispatch()
+        h.feed(fx.turn(h.sid, d, text, cwd=CWD, prefix="nc", cost=0.07)[:-1])     # result, no completed
+        h.record("dispatch_failed", {"dispatch_id": d, "reason": "no_completed"})
+        self.assertEqual((h.js.unfinished(), h.js.counted_responses, h.js.counted_cost), ([], 1, 0.07))
+
+    def test_recovered_ends_the_session(self):
+        h = Harness()
+        d = self.started(h)
+        h.record("recovered", {"process": "alive"})
+        self.assertEqual((h.js.state, h.js.turns[d].failed), ("recovered", "daemon_restart"))
+        self.assertFalse(sj.turn_validity(h.js, d)[0])
+        for kind, data in (("recovered", {"process": "gone"}),
+                           ("exited", {"returncode": 0, "signal": None, "stderr_tail": ""})):
+            with self.subTest(after=kind), self.assertRaises(sj.JournalCorrupt):
+                h.record(kind, data)
+        for bad in ({"process": "dead"}, {"process": "gone", "x": 1}, {}):
+            with self.subTest(bad=bad), self.assertRaises(sj.JournalCorrupt):
+                Harness().record("recovered", bad)
+
+
 class HappyPathTests(unittest.TestCase):
+    def test_an_oversized_result_text_does_not_invalidate_the_turn(self):
+        # Planner ruling (part 2 review A1): design 2.5 records an oversized
+        # result as result_text=null, result_too_large=true; the report is the
+        # structured_output, so the turn stays valid.
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="big")
+        result = next(e for e in events if e.get("type") == "result")
+        result["result"] = "x" * (sp.MAX_RESULT_TEXT + 1)
+        h.feed(events)
+        r = h.js.turns[d].result
+        self.assertEqual((r["result_text"], r["result_too_large"]), (None, True))
+        self.assertEqual(h.validity(d), (True, []))
+        self.assertEqual(r["structured_output"], fx.report(d))
+        self.assertIsNone(executor_report.problem(r["structured_output"], d))
+        self.assertLess(max(len(x) for x in h.records), sj.MAX_LINE)       # the journal line stays small
+
     def test_two_valid_turns(self):
         h = Harness()
         d1 = h.run_turn()
@@ -518,6 +626,7 @@ class RecoveryMatchesLiveTests(unittest.TestCase):
                                      "cli_version": "2.1.292", "argv_sha256": "a" * 64, "budget_usd": 20.0}),
                 ("dispatch_accepted", {"dispatch_id": d, "text_sha256": "b" * 64, "length": 1,
                                        "approval": {"kind": "preview", "id": "p"}}),
+                ("dispatch_writing", {"dispatch_id": d, "turn_cap": TURN_CAP}),
                 ("dispatch_written", {"dispatch_id": d}),
                 ("turn_lifecycle", {"dispatch_id": d, "state": "queued"}),
                 ("turn_lifecycle", {"dispatch_id": d, "state": "started"}),

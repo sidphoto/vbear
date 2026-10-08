@@ -42,6 +42,10 @@ def _err(rid, code: str, message: str) -> dict:
     return {"v": 1, "id": rid, "ok": False, "error": {"code": code, "message": message}}
 
 
+class _SetupFailed(Exception):
+    pass
+
+
 class StreamOps:
     # set up by Daemon.__init__: base, _sel, _sessions, _streams, _ledger, _log, max_sessions
 
@@ -88,6 +92,8 @@ class StreamOps:
         key = f"session:{launch_id}"
         reserved = launching = False
         started_here = None                   # the start record, when this open wrote it
+        manifest_before = start_bytes = 0     # for what this session adds to the quota (B4)
+        m = None
         try:
             m = agent_sessions.load_validated(self.base, launch_id)
             if m["engine"] != "claude-stream" or m.get("state") != "prepared" or m.get("native_session_id"):
@@ -120,9 +126,11 @@ class StreamOps:
             # else changes: if it fails the launch is still "prepared"; if the
             # daemon dies right after, the clock has started a little early.
             # Never a journal (or a process) without a start record.
+            manifest_before = self._manifest_bytes(m)
             with pipeline_store.Pipeline(self.base, m["task_id"], create=True) as p:
                 if p.started_at(m["pipeline_id"]) is None:
-                    started_here = p.record_start(m["pipeline_id"], now)
+                    started_here = p.record_start(m["pipeline_id"], now, launch_id=launch_id)
+                    start_bytes = p.start_record_bytes()
             agent_sessions.update_manifest(self.base, launch_id, state="launching",
                                            claude_session_id=str(uuid.uuid4()), budget_usd=budget)
             launching = True
@@ -133,9 +141,10 @@ class StreamOps:
                 # Marked launching, but no journal and no process yet: do not
                 # leave it so (the flow's totals would refuse until recovery).
                 agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
-            self._undo_start(m, started_here)
+            undone = self._undo_start(m, started_here)
             if reserved:
-                self._ledger.release(key, 0)
+                self._ledger.release(key, self._session_bytes(m, 0, manifest_before, 0 if undone else start_bytes)
+                                     if m is not None else 0)
             if isinstance(exc, OSError):
                 return _err(rid, "refused", f"launch 狀態無法驗證：{exc}")
             code = getattr(exc, "code", "refused")
@@ -151,8 +160,8 @@ class StreamOps:
         except (OSError, stream_journal.JournalCorrupt) as exc:
             # No process was started: clean up what this launch left.
             agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
-            self._undo_start(m, started_here)
-            self._ledger.release(key, 0)
+            undone = self._undo_start(m, started_here)
+            self._ledger.release(key, self._session_bytes(m, 0, manifest_before, 0 if undone else start_bytes))
             return _err(rid, "internal", f"日誌無法建立：{exc}")
         try:
             writer.append("session_started", {
@@ -167,48 +176,113 @@ class StreamOps:
             except (OSError, stream_journal.JournalCorrupt):
                 pass
             writer.close()
-            agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
-            self._ledger.release(key, writer.size)
+            if writer.state.started is not None and writer.state.exit is not None:
+                agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
+            else:
+                # The journal could not be written whole: a damaged journal is
+                # for a person (v29.7), never "ended".
+                agent_sessions._retain(self.base, launch_id, f"日誌無法寫入，無法啟動（{exc}）")
+            try:
+                journal_bytes = os.lstat(os.path.join(m["launch_dir"]["path"], agent_sessions.JOURNAL)).st_size
+            except OSError:
+                journal_bytes = quota.JOURNAL_MAX           # unknown: the most it may be
+            self._ledger.release(key, self._session_bytes(m, journal_bytes, manifest_before, start_bytes))
             return _err(rid, "internal", f"無法啟動：{exc}")
-        sid = "n-" + secrets.token_hex(6)
-        while sid in self._sessions or any(s.sid == sid for s in self._streams.values()):
+        # From here a process exists: every step until the session is set up
+        # and on record is undone on failure (review B2), and nothing is ever
+        # signalled without the leader's identity (B6), captured first.
+        s = leader_start = None
+        try:
+            leader_start = stream_session.capture_leader(proc.pid)
+            if leader_start is None:
+                raise _SetupFailed("無法取得 leader 的開始時間，這個程序無法安全地管理")
             sid = "n-" + secrets.token_hex(6)
-        tracker = sp.EventTracker(sp.constants_for(m["cli_version"]), m["claude_session_id"],
-                                  m["canonical_workspace"], m["model_id"],
-                                  executor_version=ctx.acceptance["executor_claude_version"])
-        s = stream_session.StreamSession(sid=sid, launch_id=launch_id, manifest=m, proc=proc, writer=writer,
-                                         tracker=tracker, prior_responses=ctx.totals.responses, log=self._log,
-                                         now=time.monotonic())
-        self._streams[launch_id] = s
-        self._register_stream(s, "stdout")
-        self._register_stream(s, "stderr")
-        leader = None
-        try:
-            table = proctrack.process_table()
-            s.descendants.observe(table)
-            row = next((r for r in table if r["pid"] == s.pid), None)
-            leader = {"pid": s.pid, "start": row["start"], "source": proctrack.SOURCE} if row else None
-        except proctrack.ProcessTableUnavailable as exc:
-            self._log(f"{sid}: process table unavailable at launch: {exc}")
-        try:
+            while sid in self._sessions or any(x.sid == sid for x in self._streams.values()):
+                sid = "n-" + secrets.token_hex(6)
+            tracker = sp.EventTracker(sp.constants_for(m["cli_version"]), m["claude_session_id"],
+                                      m["canonical_workspace"], m["model_id"],
+                                      executor_version=ctx.acceptance["executor_claude_version"])
+            s = stream_session.StreamSession(sid=sid, launch_id=launch_id, manifest=m, proc=proc, writer=writer,
+                                             tracker=tracker, prior_responses=ctx.totals.responses, log=self._log,
+                                             now=time.monotonic(), leader_start=leader_start)
+            s.quota_base = (manifest_before, start_bytes)
+            self._streams[launch_id] = s
+            self._register_stream(s, "stdout")
+            self._register_stream(s, "stderr")
+            try:
+                s.descendants.observe(proctrack.process_table())
+            except proctrack.ProcessTableUnavailable as exc:
+                self._log(f"{sid}: process table unavailable at launch: {exc}")
             agent_sessions.update_manifest(self.base, launch_id, state="running", native_session_id=sid,
-                                           leader=leader, observed=s.descendants.export())
-        except (OSError, agent_sessions.LaunchRefused) as exc:
-            self._log(f"{sid}: manifest update failed: {exc}")
+                                           leader={"pid": proc.pid, "start": leader_start,
+                                                   "source": proctrack.SOURCE},
+                                           observed=s.descendants.export())
+        except Exception as exc:
+            return self._abort_spawned(rid, key, m, proc, writer, s, leader_start, manifest_before, start_bytes,
+                                       f"{type(exc).__name__}: {exc}")
         return _ok(rid, {"session_id": sid, "launch_id": launch_id, "claude_session_id": m["claude_session_id"],
                          "budget_usd": m["budget_usd"], "state": s.state})
 
-    def _undo_start(self, m: dict, started_here: float | None) -> None:
+    def _abort_spawned(self, rid, key, m, proc, writer, s, leader_start, manifest_before, start_bytes, why) -> dict:
+        """Review B2: the process started but its session could not be set
+        up. Unwatch it, kill its group after the identity check, prove it
+        gone, record the exit, close our ends; clean up, or keep the launch
+        for manual review when nothing could be proven."""
+        launch_id = m["launch_id"]
+        self._log(f"{launch_id}: set-up after spawn failed ({why}); ending the process")
+        if s is not None:
+            for which in list(s.registered):
+                self._unregister_stream(s, which)
+        problem = stream_session.end_spawned(proc, leader_start, s.descendants if s is not None else None)
+        if writer.state.exit is None:
+            try:
+                writer.append("exited", {"returncode": None, "signal": None,
+                                         "stderr_tail": f"啟動後初始化失敗：{why}"[:500]})
+            except (OSError, stream_journal.JournalCorrupt):
+                pass
+        for f in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                f.close()
+            except OSError:
+                pass
+        writer.close()
+        if problem is None:
+            agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
+        else:
+            agent_sessions._retain(self.base, launch_id, f"啟動後初始化失敗（{why}）；{problem}")
+        self._ledger.release(key, self._session_bytes(m, writer.size, manifest_before, start_bytes))
+        self._streams.pop(launch_id, None)
+        return _err(rid, "internal", f"啟動後初始化失敗：{why}")
+
+    @staticmethod
+    def _manifest_bytes(m: dict) -> int:
+        try:
+            return os.lstat(os.path.join(m["launch_dir"]["path"], agent_sessions.MANIFEST)).st_size
+        except FileNotFoundError:
+            return 0
+
+    def _session_bytes(self, m: dict, journal_bytes: int, manifest_before: int, start_bytes: int) -> int:
+        """What one stream session added to the protected data (review B4):
+        its journal, its manifest's growth and the start record it wrote."""
+        try:
+            grown = max(0, self._manifest_bytes(m) - manifest_before)
+        except OSError:
+            grown = 2 * quota.MANIFEST_MAX            # unknown: the most it may be
+        return journal_bytes + grown + start_bytes
+
+    def _undo_start(self, m: dict | None, started_here: float | None) -> bool:
         """A failed first open leaves no start record behind: otherwise the
         flow would have a start but no session journal, which refuses every
         later count (stream_flow). Only before any journal was written."""
-        if started_here is None:
-            return
+        if started_here is None or m is None:
+            return True
         try:
             with pipeline_store.Pipeline(self.base, m["task_id"], create=False) as p:
-                p.remove_start(m["pipeline_id"], started_here)
+                p.remove_start(m["pipeline_id"], started_here, launch_id=m["launch_id"])
+            return True
         except (OSError, pipeline_store.StoreRefused) as exc:
             self._log(f"cannot undo the flow's start record: {exc}")
+            return False
 
     # ---- dispatch ----------------------------------------------------------------------
 
@@ -329,9 +403,10 @@ class StreamOps:
         except stream_flow.FlowRefused as exc:
             return _err(rid, "refused", f"{exc.code}: {exc}")
         lim = ctx.limits
-        s.start_write(d, text, line, time.monotonic(), turn_cap=lim["executor_turn_max_responses"],
-                      total_cap=lim["executor_total_max_responses"],
-                      turn_timeout=lim["executor_turn_timeout_min"] * 60.0)
+        if not s.start_write(d, text, line, time.monotonic(), turn_cap=lim["executor_turn_max_responses"],
+                             total_cap=lim["executor_total_max_responses"],
+                             turn_timeout=lim["executor_turn_timeout_min"] * 60.0):
+            return _err(rid, "internal", "日誌無法寫入，這則派工沒有送出")
         self._register_stream(s, "stdin")
         return _ok(rid, {"dispatch_id": d, "status": "writing"})
 
@@ -378,6 +453,11 @@ class StreamOps:
         return _ok(rid, {"launch_id": launch_id, "live": s is not None, "state": state,
                          "manifest_state": manifest_state, "journal_problem": problem,
                          "dispatches": dispatches, "total_cost_usd": js.cost, "responses": js.responses,
+                         # v29.7: what the flow's limits count; an unfinished
+                         # dispatch has no result, so its cost is unknown and
+                         # counted at the worst case
+                         "counted_responses": js.counted_responses, "counted_cost_usd": js.counted_cost,
+                         "unfinished": js.unfinished(), "recovered": js.recovered,
                          "num_turns": js.num_turns, "closed_reasons": list(js.closed_reasons), "exit": js.exit})
 
     def _identity_for(self, m: dict) -> dict | None:
@@ -459,7 +539,9 @@ class StreamOps:
     def _finish_stream(self, s) -> None:
         for which in list(s.registered):
             self._unregister_stream(s, which)
-        self._streams.pop(s.launch_id, None)
+        # The manifest is final and the quota released before the session
+        # leaves _streams: a session no longer tracked here is never left
+        # "running" on disk (a crash in between is recovered like any other).
         # A finished session always has an outcome; if not, nothing proves
         # it ended cleanly, so it is kept for a person, not cleaned up.
         outcome = s.outcome if isinstance(s.outcome, dict) else {"manual_review": "session 結束時沒有留下結果"}
@@ -473,7 +555,10 @@ class StreamOps:
         else:
             result = agent_sessions.cleanup_launch(self.base, s.launch_id, proven_dead=True)
             self._log(f"{s.sid}: stream session ended ({'cleaned' if result.get('cleaned') else result})")
-        self._ledger.release(f"session:{s.launch_id}", s.writer.size)
+        manifest_before, start_bytes = getattr(s, "quota_base", (0, 0))
+        self._ledger.release(f"session:{s.launch_id}",
+                             self._session_bytes(s.manifest, s.writer.size, manifest_before, start_bytes))
+        self._streams.pop(s.launch_id, None)
 
     def _kill_all_streams(self) -> None:
         """Daemon shutdown: nobody could manage these afterwards."""

@@ -43,12 +43,13 @@ import time
 import uuid
 from pathlib import Path
 
-from . import admin_policy, executor_report, login_identity, strictjson
+from . import acceptance, admin_policy, executor_report, login_identity, strictjson
 from .boundary_check import EXPECT, PROBE, Listeners, finish, sandbox_refusal
 from .runtime import agent_sessions, daemon, stream_journal, stream_protocol as sp
 
 TURN_TIMEOUT = 300.0
 CONTROL_TIMEOUT = 60.0
+TURN_CAP = acceptance.DEFAULT_LIMITS["executor_turn_max_responses"]
 
 
 class _Endpoint:
@@ -109,6 +110,17 @@ def present(path) -> bool:
     return True
 
 
+def remove_tree(path, errors: list) -> None:
+    """Delete a temporary tree, never ignoring an error (review B5): what
+    could not be removed is listed, and the run cannot pass."""
+    def onexc(func, p, exc):
+        errors.append(f"{getattr(func, '__name__', 'remove')} {p}: {type(exc).__name__}: {exc}"[:300])
+    try:
+        shutil.rmtree(path, onexc=onexc)
+    except OSError as exc:
+        errors.append(f"rmtree {path}: {type(exc).__name__}: {exc}"[:300])
+
+
 def run(binary: str, version: str, model: str, out: str | None) -> int:
     report = {"tool": "verify_claude_boundary", "mode": "stream", "claude_version": version, "binary": binary,
               "model": model, "started": time.time(), "checks": {}}
@@ -117,10 +129,18 @@ def run(binary: str, version: str, model: str, out: str | None) -> int:
         report["error"] = f"Claude Code {version} 沒有串流模式的常數，不能驗證"
         return finish(report, out, 2)
     root = Path(tempfile.mkdtemp(prefix="vbp-", dir="/private/tmp"))
+    report["cleanup_errors"] = []
     code = _run(binary, version, model, consts, root, report)
-    # The temporary state (HMAC key, journal) is gone before the report is written.
+    # The temporary state (HMAC key, journal) is gone before the report is
+    # written; a failed or incomplete removal fails the run (review B5).
     report["temp_removed"] = not present(root)
     report["temp_ls"] = subprocess.run(["ls", "-ld", str(root)], capture_output=True, text=True).stderr.strip()
+    left = [str(p) for p in report.pop("_cleanup_paths", []) if present(p)]
+    clean = report["temp_removed"] and not left and not report["cleanup_errors"]
+    report["checks"]["cleanup"] = {"pass": clean, "left": left, "errors": report["cleanup_errors"]}
+    if not clean:
+        report["passed"] = False
+        code = code or 1
     return finish(report, out, code)
 
 
@@ -201,6 +221,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                                                 "approval": {"kind": "automation", "id": "probe"}})
 
         accept(d1)
+        writer.append("dispatch_writing", {"dispatch_id": d1, "turn_cap": TURN_CAP})
         proc.stdin.write(sp.dispatch_line(texts[d1], sid, d1))
         proc.stdin.flush()
         writer.append("dispatch_written", {"dispatch_id": d1})
@@ -242,7 +263,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                             rapid = {"pass": True, "written_after": "result(d1)"}
                         if k == "turn_lifecycle" and data["state"] == "completed":
                             if data["dispatch_id"] == d1:
-                                accept(d2)
+                                accept(d2)            # its bytes went out at result(d1); the facts follow in order
+                                writer.append("dispatch_writing", {"dispatch_id": d2, "turn_cap": TURN_CAP})
                                 writer.append("dispatch_written", {"dispatch_id": d2})
                                 tracker.begin(d2, texts[d2])
                             else:
@@ -362,6 +384,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
             os.environ.pop("VBEAR_HOME", None)
         else:
             os.environ["VBEAR_HOME"] = saved_home
-        shutil.rmtree(root, ignore_errors=True)
+        remove_tree(root, report["cleanup_errors"])
         if scratch:
-            shutil.rmtree(scratch, ignore_errors=True)
+            remove_tree(scratch, report["cleanup_errors"])
+            report["_cleanup_paths"] = [scratch]

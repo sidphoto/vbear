@@ -881,6 +881,62 @@ def expire_prepared(base: Path) -> list[dict]:
     return out
 
 
+def _stream_process(m: dict, rows) -> tuple[str, str]:
+    """("gone" | "alive" | "unknown", why) for a stream launch's recorded
+    processes. Nothing is signalled."""
+    if rows is None:
+        return "unknown", "daemon 重啟後無法取得程序表"
+    leader = m.get("leader")
+    if not leader:
+        return "unknown", "daemon 重啟後缺少 leader 身分紀錄"
+    if leader.get("source") != proctrack.SOURCE:
+        return "unknown", "程序身分紀錄的來源與目前不同，無法比對"
+    identities = list(m.get("observed") or []) + [[leader["pid"], leader["start"]]]
+    alive = proctrack.DescendantTracker(leader["pid"], identities).live(rows)
+    if alive:
+        return "alive", "daemon 重啟後仍有已記錄的程序存活：" + ", ".join(str(r["pid"]) for r in alive)
+    return "gone", ""
+
+
+def _recover_stream(base: Path, name: str, m: dict, rows, has_journal: bool) -> dict:
+    """Design v29.7: a stream launch a previous daemon left launching or
+    running. The journal is read and replayed first: a damaged one is kept
+    for a person (nothing written); a sound one gets a ``recovered`` fact,
+    after which a dispatch that may have reached the CLI without a result
+    counts at its worst case. Then the launch is cleaned up when its
+    processes are provably gone, otherwise kept for manual review. Nothing
+    is ever signalled here."""
+    from . import stream_journal
+    if not has_journal:
+        if m.get("state") == "launching" and m.get("leader") is None and m.get("native_session_id") is None:
+            # The journal is created before the process starts: none ever ran.
+            return cleanup_launch(base, name, proven_dead=True)
+        return _retain(base, name, "串流 launch 沒有日誌")
+    process, why = _stream_process(m, rows)
+    try:
+        dfd = os.open(str(launch_dir(base, name)), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        return _retain(base, name, f"launch 資料夾無法開啟（{exc.strerror}）")
+    try:
+        res = stream_journal.read(dfd)
+        if res.problem:
+            return _retain(base, name, f"日誌無法使用（{res.problem}），需要人工檢查")
+        if res.state.recovered is None:
+            try:
+                writer = stream_journal.JournalWriter.resume(dfd, res)
+                try:
+                    writer.append("recovered", {"process": process})
+                finally:
+                    writer.close()
+            except (OSError, stream_journal.JournalCorrupt) as exc:
+                return _retain(base, name, f"無法寫入恢復紀錄（{exc}）")
+    finally:
+        os.close(dfd)
+    if process == "gone":
+        return cleanup_launch(base, name, proven_dead=True)
+    return _retain(base, name, why)
+
+
 def recover(base: Path) -> list[dict]:
     """Run once at daemon start, when the daemon owns no session.
 
@@ -907,6 +963,15 @@ def recover(base: Path) -> list[dict]:
             continue
         if m.get("state") not in _ACTIVE_STATES:
             continue  # already under manual review
+        if m.get("engine") == "claude-stream":
+            try:
+                has_journal = _lexists(launch_dir(base, name) / JOURNAL)
+            except OSError as exc:
+                out.append(_retain(base, name, f"日誌無法檢查（{exc}）"))
+                continue
+            if has_journal or m.get("state") != "prepared":
+                out.append(_recover_stream(base, name, m, rows, has_journal))
+                continue
         created = m.get("created")
         if m.get("state") == "prepared":
             if not isinstance(created, (int, float)) or isinstance(created, bool):

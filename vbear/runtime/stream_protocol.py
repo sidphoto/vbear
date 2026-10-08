@@ -465,6 +465,12 @@ class EventTracker:
                 "num_turns": ev["num_turns"], "total_cost_usd": cost, "result_index": ev["result_index"],
                 "user_message_uuids": [t.dispatch_id], "assistant_events": t.assistant_events,
                 "tool_calls": t.tool_calls, "structured_output": structured if isinstance(structured, dict) else None}
+        # Design 2.5, turn_result: result_text is a string up to 256 KiB "or
+        # null with result_too_large=true". That is a recorded fact, not an
+        # error: the report comes from structured_output (design 4), never
+        # from this text, so an oversized text does not make the turn invalid
+        # (planner ruling on S2a-2 part 2 review A1; the 512 KiB journal line
+        # limit, review difference 3, is a different rule).
         fits = isinstance(text, str) and len(text.encode("utf-8")) <= MAX_RESULT_TEXT
         data["result_text"] = text if fits else None
         data["result_too_large"] = isinstance(text, str) and not fits

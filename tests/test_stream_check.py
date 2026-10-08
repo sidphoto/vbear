@@ -62,6 +62,60 @@ class StreamCheckTests(unittest.TestCase):
         leftovers = {n for n in set(os.listdir("/private/tmp")) - before if n.startswith(("vbp-", "sc-"))}
         self.assertEqual(leftovers, set())
 
+    def test_a_failed_cleanup_fails_the_run(self):
+        # Part 2 review B5: never ignore_errors; what is left fails the run.
+        out = self.tmp / "report.json"
+        real = shutil.rmtree
+
+        def rmtree(path, *args, **kw):
+            if os.path.basename(str(path)).startswith("vbp-"):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path, *args, **kw)
+        roots = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def mkdtemp(*args, **kw):
+            roots.append(real_mkdtemp(*args, **kw))
+            return roots[-1]
+        with mock.patch("vbear.stream_check.shutil.rmtree", rmtree), \
+                mock.patch("vbear.stream_check.tempfile.mkdtemp", mkdtemp):
+            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out))
+        for r in roots:
+            self.addCleanup(real, r, True)
+        report = json.loads(out.read_text())
+        self.assertNotEqual(code, 0)
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["temp_removed"])
+        self.assertFalse(report["checks"]["cleanup"]["pass"])
+        self.assertTrue(report["checks"]["cleanup"]["errors"])
+
+    def test_cleanup_alone_decides_a_run_that_otherwise_passed(self):
+        out = self.tmp / "report.json"
+
+        def all_pass(binary, version, model, consts, root, report):
+            (root / "hmac-key").write_text("k")                  # left behind: no removal ran
+            report["checks"] = {"protocol": {"pass": True}}
+            report["passed"] = True
+            return 0
+        with mock.patch.object(stream_check, "_run", all_pass):
+            code = stream_check.run(str(self.binary), "2.1.292", "claude-haiku-4-5-20251001", str(out))
+        report = json.loads(out.read_text())
+        self.assertEqual((code, report["passed"], report["checks"]["cleanup"]["pass"]), (1, False, False))
+        for r in Path("/private/tmp").glob("vbp-*"):
+            if (r / "hmac-key").exists():
+                shutil.rmtree(r)
+
+    def test_remove_tree_lists_what_it_could_not_remove(self):
+        locked = self.tmp / "locked"
+        (locked / "inner").mkdir(parents=True)
+        (locked / "inner" / "f").write_text("x")
+        (locked / "inner").chmod(0o500)
+        self.addCleanup((locked / "inner").chmod, 0o700)
+        errors = []
+        stream_check.remove_tree(locked, errors)
+        self.assertTrue(errors)
+        self.assertTrue(stream_check.present(locked / "inner" / "f"))
+
     def test_present_counts_errors_and_dangling_links(self):
         # R4 audit: Path.exists() misses a dangling link and reads EACCES as
         # absent; a leak or a leftover must not pass unseen.

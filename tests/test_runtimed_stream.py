@@ -36,8 +36,12 @@ REPO = str(Path(__file__).resolve().parent.parent)
 TIMEOUT = 20.0
 
 FAKE_STREAM_CLI = r'''#!%(py)s
-import json, os, subprocess, sys, time
+import json, os, signal, subprocess, sys, time
 sys.path.insert(0, %(repo)r)
+def _term(*_):
+    open("got-sigterm", "w").close()                  # evidence that a signal arrived
+    sys.exit(143)
+signal.signal(signal.SIGTERM, _term)
 from tests import stream_fixtures as fx
 argv = sys.argv
 sid = argv[argv.index("--session-id") + 1]
@@ -99,6 +103,9 @@ for line in sys.stdin:
         events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
                          model=model, responses=[many + [{"type": "tool_use", "id": "so%%d" %% index,
                                                           "name": "StructuredOutput", "input": rep}]], rep=rep)
+    if mode == "hang":
+        # Confirmed, then the model never answers: a turn in flight.
+        emit(events[:5]); open("hang-ready", "w").close(); time.sleep(600)
     if mode == "slow":
         emit(events[:5]); time.sleep(1.5); emit(events[5:])
     else:
@@ -248,6 +255,39 @@ class StreamCase(unittest.TestCase):
         self.assertTrue(r.get("ok"), r)
         return d
 
+    def crash_daemon(self):
+        """The daemon dies as if killed: its loop stops and the kernel closes
+        its descriptors; nothing is cleaned up, signalled or reaped. The CLI
+        lives on in its own session."""
+        self.dm.stop()
+        self.thread.join(5)
+        for s in list(self.dm._streams.values()):
+            for f in (s.proc.stdin, s.proc.stdout, s.proc.stderr):
+                try:
+                    f.close()
+                except OSError:
+                    pass
+            s.writer.close()
+        self.dm._streams.clear()
+        self.dm.close()                           # listener and lock only: nothing is left to kill
+
+    def restart_daemon(self):
+        self.dm = d.Daemon(self.base, log=self.logs.append)
+        self.dm.start()                           # recovery runs here
+        self.thread = threading.Thread(target=self.dm.serve_forever, daemon=True)
+        self.thread.start()
+
+    def manifest(self, launch_id):
+        return json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+
+    def journal(self, launch_id):
+        from vbear.runtime import stream_journal
+        fd = os.open(self.base / "sessions" / launch_id, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            return stream_journal.read(fd)
+        finally:
+            os.close(fd)
+
     def status(self, launch_id):
         r = self.rpc("stream_status", launch_id=launch_id)
         self.assertTrue(r.get("ok"), r)
@@ -314,6 +354,13 @@ class HappyPathTests(StreamCase):
 
 
 class RefusalTests(StreamCase):
+    def test_an_unknown_or_malformed_launch_is_refused_not_an_internal_error(self):
+        for launch_id in ("l-0000000000000000", "l-xyz", None):
+            with self.subTest(launch_id=launch_id):
+                r = self.rpc("open_stream", launch_id=launch_id)
+                self.assertFalse(r["ok"])
+                self.assertEqual(r["error"]["code"], "refused", r)
+
     def test_open_refusals(self):
         cases = []
 
@@ -464,6 +511,19 @@ class FailureTests(StreamCase):
         self.wait_for(lambda: launch_id not in self.dm._streams, msg="cleanup")
         self.assertEqual(self.status(launch_id)["exit"]["returncode"], 3)
 
+    def test_a_live_failure_counts_the_worst_case_for_the_next_open(self):
+        # v29.7: no result, so the cost is unknown: the session's budget.
+        launch_id, dd = self.run_mode("silent", ("error",), "not_confirmed", CONFIRM_DEADLINE=0.5)
+        budget = self.manifest(launch_id)["budget_usd"]
+        st = self.status(launch_id)
+        self.assertEqual((st["unfinished"], st["counted_cost_usd"]), ([dd], budget))
+        self.assertEqual(st["counted_responses"], acc.DEFAULT_LIMITS["executor_turn_max_responses"])
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="ended")
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn("額度", r["error"]["message"])
+
     def test_not_confirmed(self):
         self.run_mode("silent", ("error",), "not_confirmed", CONFIRM_DEADLINE=0.5)
 
@@ -560,6 +620,20 @@ class JournalOrderTests(StreamCase):
             launch_id, _ = self.open()
         self.assertEqual(seen["journals"], ["session_started"])
         self.assertEqual(seen["state"], ["launching"])
+
+    def test_a_journal_that_cannot_be_started_is_kept_for_review(self):
+        import vbear.runtime.daemon_stream as ds
+        m = self.prepare()
+        with mock.patch.object(ds.stream_journal.JournalWriter, "append",
+                               side_effect=OSError(28, "No space left on device")), \
+                mock.patch.object(ds.subprocess, "Popen") as popen:
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertFalse(r["ok"])
+        popen.assert_not_called()
+        man = self.manifest(m["launch_id"])
+        self.assertEqual(man["state"], "manual_review")                   # not "ended"
+        self.assertIn("日誌無法寫入", man["retained_reason"])
+        self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
 
     def test_at_spawn_the_flow_counts_this_launch(self):
         # The prepared exception (a launch without a journal never had a
@@ -685,6 +759,23 @@ class ProcessTests(StreamCase):
         self.assertEqual(m["state"], "manual_review")
         os.kill(pid, 0)                                   # not chased: still alive
 
+    def test_the_manifest_is_final_before_the_session_leaves_tracking(self):
+        # The planner's flaky run: a session gone from _streams while its
+        # manifest still said "running". The manifest is written first now.
+        launch_id, _ = self.open()
+        seen = {}
+        manifest = self.manifest
+
+        class Watch(dict):
+            def pop(inner, key, *default):
+                if key == launch_id:
+                    seen["state"] = manifest(launch_id)["state"]
+                return dict.pop(inner, key, *default)
+        self.dm._streams = Watch(self.dm._streams)
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="ended")
+        self.assertEqual(seen["state"], "ended")
+
     def test_existing_managed_sessions_are_unchanged(self):
         """A PTY-managed Claude launch next to a stream session behaves as
         before: opened by open_managed, closed by close, cleaned up."""
@@ -703,6 +794,254 @@ class ProcessTests(StreamCase):
         self.assertTrue(self.rpc("close", session_id=sid)["ok"])
         self.assertFalse(Path(m["launch_dir"]["path"]).exists())          # removed, as before
         self.assertEqual(self.status(launch_id)["state"], "idle")         # the stream session is untouched
+
+
+class RecoveryTests(StreamCase):
+    """Design v29.7 (part 2 review B1, B3): what a restarted daemon finds."""
+
+    def mid_turn_crash(self):
+        launch_id, _ = self.open("hang")
+        pid = self.launched()["pid"]
+        d1 = self.dispatch(launch_id)
+        self.wait_for(lambda: (self.work / "hang-ready").exists(), msg="turn in flight")
+        self.wait_for(lambda: self.dm._streams[launch_id].js.state == "running", msg="confirmed")
+        budget = self.manifest(launch_id)["budget_usd"]
+        self.crash_daemon()
+        return launch_id, pid, d1, budget
+
+    def assert_worst_case(self, launch_id, d1, budget, process):
+        res = self.journal(launch_id)
+        self.assertEqual(res.problem, "")
+        self.assertEqual(res.state.recovered, {"process": process})
+        self.assertEqual(res.state.turns[d1].failed, "daemon_restart")
+        from vbear.runtime import stream_flow
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertEqual(ctx.totals.responses, acc.DEFAULT_LIMITS["executor_turn_max_responses"])
+        self.assertAlmostEqual(ctx.totals.spent_usd, budget)
+
+    def test_daemon_killed_mid_turn_cli_still_running(self):
+        launch_id, pid, d1, budget = self.mid_turn_crash()
+        self.restart_daemon()
+        self.assert_worst_case(launch_id, d1, budget, "alive")
+        m = self.manifest(launch_id)
+        self.assertEqual(m["state"], "manual_review")
+        self.assertIn("仍有已記錄的程序存活", m["retained_reason"])
+        os.kill(pid, 0)                                          # recovery never signals
+
+    def test_daemon_killed_mid_turn_cli_gone(self):
+        launch_id, pid, d1, budget = self.mid_turn_crash()
+        os.kill(pid, 9)
+        self.wait_for(lambda: stream_session.leader_exited(pid), msg="CLI gone")
+        self.restart_daemon()
+        self.assert_worst_case(launch_id, d1, budget, "gone")
+        self.assertEqual(self.manifest(launch_id)["state"], "ended")
+        # the flow's budget was used up by the worst case: the next open is refused
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn("額度", r["error"]["message"])
+
+    def on_disk_session(self, records):
+        """A stream launch as a dead daemon left it: manifest running with a
+        leader that is gone, and a journal with ``records`` after the start."""
+        from vbear.runtime import stream_journal
+        gone = subprocess.Popen(["/usr/bin/true"])
+        gone.wait()
+        leader_pid = gone.pid                     # exited; with this start time it can match no process
+        m = self.prepare()
+        launch_id, sid = m["launch_id"], fx.new_uuid()
+        a.update_manifest(self.base, launch_id, state="running", claude_session_id=sid, budget_usd=3.25,
+                          native_session_id="n-0123456789ab",
+                          leader={"pid": leader_pid, "start": f"{int(time.time()) - 60}.000000",
+                                  "source": stream_session.proctrack.SOURCE})
+        fd = os.open(self.base / "sessions" / launch_id, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            w = stream_journal.JournalWriter(fd)
+        finally:
+            os.close(fd)
+        w.append("session_started", {"claude_session_id": sid, "pipeline_id": self.fid, "cli_version": "2.1.292",
+                                     "argv_sha256": "a" * 64, "budget_usd": 3.25})
+        for kind, data in records:
+            w.append(kind, data)
+        w.close()
+        with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_start(self.fid, time.time(), launch_id=launch_id)
+        return launch_id
+
+    def test_crash_between_writing_and_written(self):
+        d1, text = fx.new_uuid(), "請完成工作"
+        launch_id = self.on_disk_session([
+            ("dispatch_accepted", {"dispatch_id": d1, "text_sha256": sp.sha256_hex(text.encode()),
+                                   "length": len(text.encode()), "approval": {"kind": "preview", "id": "p"}}),
+            ("dispatch_writing", {"dispatch_id": d1, "turn_cap": 17})])
+        with pipeline_store.Pipeline(self.base, self.tid, create=False) as p:
+            p.write_text(d1, text.encode())
+        self.crash_daemon()
+        self.restart_daemon()
+        res = self.journal(launch_id)
+        self.assertEqual((res.state.recovered, res.state.turns[d1].failed), ({"process": "gone"}, "daemon_restart"))
+        self.assertEqual(self.manifest(launch_id)["state"], "ended")
+        from vbear.runtime import stream_flow
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertEqual((ctx.totals.responses, ctx.totals.spent_usd), (17, 3.25))
+
+    def test_a_damaged_journal_is_kept_for_review(self):
+        launch_id = self.on_disk_session([])
+        path = self.base / "sessions" / launch_id / "journal.jsonl"
+        damaged = path.read_bytes()[:-5] + b"xxxx\n"
+        path.write_bytes(damaged)
+        self.crash_daemon()
+        self.restart_daemon()
+        m = self.manifest(launch_id)
+        self.assertEqual(m["state"], "manual_review")                       # not ended
+        self.assertIn("日誌無法使用", m["retained_reason"])
+        self.assertEqual(path.read_bytes(), damaged)                         # nothing written
+        from vbear.runtime import stream_flow
+        with self.assertRaises(stream_flow.FlowRefused):
+            stream_flow.load(self.base, self.fid)
+
+    def test_crash_right_after_the_start_record(self):
+        # B3: the open died after record_start, before anything else changed.
+        m = self.prepare()
+        with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_start(self.fid, time.time(), launch_id=m["launch_id"])
+        from vbear.runtime import stream_flow
+        with self.assertRaises(stream_flow.FlowRefused):                     # stuck until recovery
+            stream_flow.load(self.base, self.fid)
+        self.crash_daemon()
+        self.restart_daemon()
+        self.assertFalse((self.base / "pipelines" / self.tid / "started.json").exists())
+        r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+
+    def test_crash_after_launching_before_the_journal(self):
+        m = self.prepare()
+        with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_start(self.fid, time.time(), launch_id=m["launch_id"])
+        a.update_manifest(self.base, m["launch_id"], state="launching", claude_session_id=fx.new_uuid(),
+                          budget_usd=5.0)
+        self.crash_daemon()
+        self.restart_daemon()
+        self.assertFalse((self.base / "sessions" / m["launch_id"]).exists())     # never ran: removed
+        self.assertFalse((self.base / "pipelines" / self.tid / "started.json").exists())
+        self.open()                                                           # the flow opens again
+
+
+class SetupFailureTests(StreamCase):
+    """Part 2 review B2: a failure after Popen leaves no unmanaged process."""
+
+    def stream_keys(self):
+        return [k for k in self.dm._sel.get_map().values() if isinstance(k.data, tuple) and k.data[0] == "stream"]
+
+    def spawned(self):
+        """Records the pid at Popen: the group may be killed before the fake
+        CLI has written anything."""
+        import vbear.runtime.daemon_stream as ds
+        real, pids = ds.subprocess.Popen, []
+
+        def spy(*args, **kw):
+            proc = real(*args, **kw)
+            pids.append(proc.pid)
+            return proc
+        return mock.patch.object(ds.subprocess, "Popen", spy), pids
+
+    def check_ended(self, m, r, pids):
+        self.assertFalse(r["ok"])
+        self.assertIn("啟動後初始化失敗", r["error"]["message"])
+        pid, = pids
+        self.pids.append(pid)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)                                   # killed and reaped
+        ldir = self.base / "sessions" / m["launch_id"]
+        kinds = [json.loads(x)["kind"] for x in (ldir / "journal.jsonl").read_text().splitlines()]
+        self.assertEqual(kinds, ["session_started", "exited"])
+        self.assertEqual(self.manifest(m["launch_id"])["state"], "ended")
+        self.assertNotIn(m["launch_id"], self.dm._streams)
+        self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
+        self.assertEqual(self.stream_keys(), [])
+
+    def test_set_blocking_fails(self):
+        m = self.prepare()
+        spy, pids = self.spawned()
+        with spy, mock.patch("vbear.runtime.stream_session.os.set_blocking", side_effect=OSError(9, "Bad file")):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.check_ended(m, r, pids)
+
+    def test_selector_registration_fails_half_way(self):
+        m = self.prepare()
+        real = self.dm._register_stream
+
+        def register(s, which):
+            if which == "stderr":                            # stdout is already registered
+                raise OSError(24, "Too many open files")
+            return real(s, which)
+        spy, pids = self.spawned()
+        with spy, mock.patch.object(self.dm, "_register_stream", side_effect=register):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.check_ended(m, r, pids)
+
+    def test_no_leader_identity_means_no_signal(self):
+        m = self.prepare()
+        with mock.patch.object(stream_session, "capture_leader", return_value=None):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertFalse(r["ok"])
+        pid = self.launched()["pid"]
+        self.pids.append(pid)
+        man = self.manifest(m["launch_id"])
+        self.assertEqual(man["state"], "manual_review")
+        self.assertIn("不送訊號", man["retained_reason"])
+
+
+class SignalIdentityTests(StreamCase):
+    """Part 2 review B6: before any signal, the leader is checked (design 2.3)."""
+
+    def test_leader_start_is_recorded_at_launch(self):
+        launch_id, _ = self.open()
+        pid = self.launched()["pid"]
+        row = next(r for r in stream_session.proctrack.process_table() if r["pid"] == pid)
+        self.assertEqual(self.manifest(launch_id)["leader"]["start"], row["start"])
+        self.assertEqual(self.dm._streams[launch_id].leader_start, row["start"])
+
+    def refused(self, why, break_identity):
+        launch_id, _ = self.open()
+        pid = self.launched()["pid"]
+        s = self.dm._streams[launch_id]
+        with break_identity(s):
+            self.rpc("stream_close", launch_id=launch_id)
+            self.wait_for(lambda: launch_id not in self.dm._streams, msg="given up")
+        m = self.manifest(launch_id)
+        self.assertEqual(m["state"], "manual_review")
+        self.assertIn("不送訊號", m["retained_reason"])
+        self.assertIn(why, m["retained_reason"])
+        return pid
+
+    def test_a_different_start_time_sends_nothing(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def other_start(s):
+            s.leader_start = "1600000000.000000"
+            yield
+        self.refused("開始時間", other_start)
+        time.sleep(0.5)
+        self.assertFalse((self.work / "got-sigterm").exists())   # never signalled
+
+    def test_no_process_table_sends_nothing(self):
+        def unavailable(s):
+            return mock.patch.object(stream_session.proctrack, "process_table",
+                                     side_effect=stream_session.proctrack.ProcessTableUnavailable("test"))
+        self.refused("無法取得程序表", unavailable)
+        time.sleep(0.5)
+        self.assertFalse((self.work / "got-sigterm").exists())
+
+    def test_an_exited_leader_is_checked_as_our_unreaped_child(self):
+        launch_id, _ = self.open("child_then_exit")
+        pid = self.launched()["pid"]
+        self.dispatch(launch_id)
+        self.wait_for(lambda: stream_session.leader_exited(pid), msg="leader exited")
+        self.assertIsNone(stream_session.leader_check(pid, pid, self.dm._streams[launch_id].leader_start))
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="group killed")
+        self.assertEqual(self.manifest(launch_id)["state"], "ended")
 
 
 class LedgerTests(StreamCase):
@@ -729,6 +1068,36 @@ class LedgerTests(StreamCase):
                 self.assertIsNone(self.dm._ledger.used)
                 self.assertIn("額度無法核算", self.dm._ledger.problem)
         self.assertTrue(self.dm._rebuild_ledger())
+
+    def test_the_reservation_covers_more_than_the_journal(self):
+        # Review B4: room for exactly the journal is not enough.
+        from vbear import strictjson
+        from vbear.runtime import quota
+        self.assertEqual(quota.JOURNAL_MAX, strictjson.SESSION_LOG.file_bytes)
+        self.assertEqual(quota.MANIFEST_MAX, strictjson.MANIFEST.file_bytes)
+        self.assertEqual(quota.START_RECORD_MAX, strictjson.MANIFEST.file_bytes)
+        led = self.dm._ledger
+        led.limit = led.used + sum(led.reservations.values()) + quota.JOURNAL_MAX
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn("quota", r["error"]["message"])
+        led.limit = led.used + sum(led.reservations.values()) + quota.RESERVE_SESSION
+        self.open()
+
+    def test_release_reports_everything_the_session_added(self):
+        led = self.dm._ledger
+        m = self.prepare()
+        ldir = self.base / "sessions" / m["launch_id"]
+        before_manifest, before_used = (ldir / "manifest.json").stat().st_size, led.used
+        r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+        self.rpc("stream_close", launch_id=m["launch_id"])
+        self.wait_for(lambda: m["launch_id"] not in self.dm._streams, msg="ended")
+        added = ((ldir / "journal.jsonl").stat().st_size + (ldir / "manifest.json").stat().st_size - before_manifest
+                 + (self.base / "pipelines" / self.tid / "started.json").stat().st_size)
+        self.assertEqual(led.used - before_used, added)
+        self.assertEqual(led.overrun, "")
 
     def test_full_ledger_refuses(self):
         self.dm._ledger.limit = self.dm._ledger.used + 1024

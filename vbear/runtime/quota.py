@@ -24,7 +24,13 @@ import os
 import stat
 
 HARD_LIMIT = 4 << 30
-RESERVE_SESSION = 16 << 20        # a stream session's journal (2.5)
+JOURNAL_MAX = 16 << 20            # a stream session's journal (2.5; strictjson.SESSION_LOG.file_bytes)
+MANIFEST_MAX = 64 << 10           # a launch manifest, as read (strictjson.MANIFEST.file_bytes)
+START_RECORD_MAX = 64 << 10       # pipelines/<task>/started.json, as read (strictjson.MANIFEST.file_bytes)
+# What one stream session may add (review B4): its journal; its manifest's
+# growth, rewritten through a sibling temp file, so two copies at the peak;
+# and the flow's start record when it is the first session.
+RESERVE_SESSION = JOURNAL_MAX + 2 * MANIFEST_MAX + START_RECORD_MAX
 RESERVE_DISPATCH = 64 << 10       # one dispatch text (3.5)
 RESERVE_REVIEW = 96 << 20         # one review's outputs (5.2, 5.4, 5.6)
 SCAN_MAX_ENTRIES = 1_000_000

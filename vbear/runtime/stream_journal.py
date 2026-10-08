@@ -17,7 +17,7 @@ import stat
 import time
 from dataclasses import dataclass, field
 
-from .. import strictjson
+from .. import acceptance, strictjson
 from ..numbers import finite_real
 from . import stream_protocol as sp
 
@@ -33,7 +33,9 @@ _VERSION = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\Z")
 _ID = re.compile(r"^[\x21-\x7e]{1,256}\Z")          # request/message/tool ids: printable, bounded
 _APPROVAL_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}\Z")
 
-TERMINAL = ("error", "uncertain", "exited")
+TERMINAL = ("error", "uncertain", "exited", "recovered")
+TURN_CAP_MAX = acceptance.LIMITS["executor_turn_max_responses"][1]
+RECOVERED_PROCESS = ("gone", "alive", "unknown")
 
 
 class JournalCorrupt(Exception):
@@ -119,6 +121,9 @@ SCHEMAS = {
                                     and d["approval"]["kind"] in ("preview", "automation")
                                     and isinstance(d["approval"]["id"], str)
                                     and _APPROVAL_ID.match(d["approval"]["id"]) is not None),
+    # v29.7: before the first byte reaches stdin ("may have reached the CLI").
+    "dispatch_writing": lambda d: (set(d) == {"dispatch_id", "turn_cap"} and _uuid(d["dispatch_id"])
+                                   and _int(d["turn_cap"], 1, TURN_CAP_MAX)),
     "dispatch_written": lambda d: set(d) == {"dispatch_id"} and _uuid(d["dispatch_id"]),
     "turn_lifecycle": lambda d: (set(d) == {"dispatch_id", "state"} and _uuid(d["dispatch_id"])
                                  and d["state"] in ("queued", "started", "completed")),
@@ -141,6 +146,8 @@ SCHEMAS = {
                          and (d["returncode"] is None or _int(d["returncode"], 0, 255))
                          and (d["signal"] is None or _int(d["signal"], 1, 31))
                          and _str(d["stderr_tail"], 64 * 1024)),
+    # v29.7: written by daemon recovery for a session whose daemon is gone.
+    "recovered": lambda d: set(d) == {"process"} and d["process"] in RECOVERED_PROCESS,
 }
 
 
@@ -149,7 +156,7 @@ SCHEMAS = {
 @dataclass
 class Turn:
     dispatch_id: str
-    status: str = "accepted"       # accepted | written | confirmed | ended | failed
+    status: str = "accepted"       # accepted | writing | written | confirmed | ended | failed
     text_sha256: str = ""
     length: int = 0
     approval: dict = field(default_factory=dict)
@@ -160,6 +167,7 @@ class Turn:
     failed: str | None = None
     times: dict = field(default_factory=dict)
     identity_problems: list = field(default_factory=list)   # turn_init vs manifest and acceptance
+    turn_cap: int | None = None    # set by dispatch_writing: from then on it may have reached the CLI
 
 
 IDENTITY_KEYS = frozenset({"model_id", "workdir", "executor_claude_version", "executor_model"})
@@ -204,6 +212,7 @@ class JournalState:
         self.num_turns = 0
         self.closed_reasons: list[str] = []     # why no further dispatch is accepted
         self.exit: dict | None = None
+        self.recovered: dict | None = None
         self.protocol_errors: list[dict] = []
 
     def _bad(self, why):
@@ -215,6 +224,8 @@ class JournalState:
             self._bad(f"未知的紀錄種類 {kind}")
         if kind != "session_started" and self.started is None:
             self._bad("第一筆不是 session_started")
+        if self.recovered is not None:
+            self._bad("恢復紀錄之後不能再有紀錄")
         handler(data, t)
 
     def _turn(self, data, *, current=True) -> Turn:
@@ -241,9 +252,16 @@ class JournalState:
         self.order.append(d["dispatch_id"])
         self.pending = d["dispatch_id"]
 
-    def _dispatch_written(self, d, t):
+    def _dispatch_writing(self, d, t):
         if self.state != "idle" or d["dispatch_id"] != self.pending:
-            self._bad("沒有 prepare 就寫出")
+            self._bad("沒有 prepare 就開始寫出")
+        turn = self.turns[d["dispatch_id"]]
+        turn.status, turn.turn_cap, turn.times["writing"] = "writing", d["turn_cap"], t
+        self.state = "writing"
+
+    def _dispatch_written(self, d, t):
+        if self.state != "writing" or d["dispatch_id"] != self.pending:
+            self._bad("沒有開始寫出就寫完")
         turn = self.turns[d["dispatch_id"]]
         turn.status, turn.times["written"] = "written", t
         self.pending, self.current, self.state = None, d["dispatch_id"], "sent"
@@ -372,6 +390,40 @@ class JournalState:
         self.state = "exited"
         self.closed_reasons.append("程序已結束")
 
+    def _recovered(self, d, t):
+        """v29.7: the daemon that wrote this journal is gone. Whatever was in
+        flight failed (daemon_restart) and the session takes nothing more."""
+        self.recovered = dict(d)
+        for x in (self.current, self.pending):
+            if x is not None and self.turns[x].failed is None:
+                self.turns[x].status, self.turns[x].failed = "failed", "daemon_restart"
+        self.current = self.pending = None
+        self.state = "recovered"
+        self.closed_reasons.append("daemon 重啟後恢復")
+
+    # ---- usage (v29.7), derived from facts: the same function live and on recovery
+
+    def unfinished(self) -> list[str]:
+        """Dispatches that may have reached the CLI (dispatch_writing) and
+        have no turn_result: their use is unknown."""
+        return [x for x in self.order if self.turns[x].turn_cap is not None and self.turns[x].result is None]
+
+    @property
+    def counted_responses(self) -> int:
+        """Responses for the flow's limits: every turn_result's, plus, for an
+        unfinished dispatch, the turn cap it was sent with (worst case)."""
+        return self.responses + sum(self.turns[x].turn_cap for x in self.unfinished())
+
+    @property
+    def counted_cost(self) -> float:
+        """Spend for the flow's limits: the last total_cost_usd, or, when a
+        dispatch is unfinished, at least the budget this session was started
+        with (worst case; --max-budget-usd is checked only at a turn's end,
+        so this is not a strict bound: design section 10, residual risk 2)."""
+        if self.unfinished() and self.started is not None:
+            return max(self.cost, finite_real(self.started["budget_usd"]))
+        return self.cost
+
     def _close_if_needed(self, turn: Turn):
         """After a completed turn: the reasons design 2.4 gives for taking no
         further dispatch on this session (recomputed from facts)."""
@@ -495,8 +547,32 @@ class JournalWriter:
         self.state = JournalState(identity=identity)
         self._now = now
 
+    @classmethod
+    def resume(cls, dir_fd: int, read_result: "ReadResult", *, now=time.time) -> "JournalWriter":
+        """Append to a journal another daemon wrote (recovery only). It must
+        have been read whole and sound, and be the same file, unchanged
+        (owner, mode, size), when it is opened again."""
+        if read_result.problem or read_result.size is None:
+            raise JournalCorrupt("日誌沒有完整讀過，不能續寫")
+        self = cls.__new__(cls)
+        self.fd = os.open(JOURNAL_NAME, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+        try:
+            st = os.fstat(self.fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) & 0o077
+                    or st.st_size != read_result.size or (st.st_dev, st.st_ino) != read_result.file_id):
+                raise JournalCorrupt("日誌在讀取後被改動過")
+        except BaseException:
+            os.close(self.fd)
+            raise
+        self.size = st.st_size
+        self.state = read_result.state
+        self._now = now
+        return self
+
     def append(self, kind: str, data: dict) -> dict:
-        if self.state.exit is not None and kind != "exited":
+        if self.fd < 0:
+            raise JournalCorrupt("日誌已關閉")          # never write to a descriptor number reused since
+        if self.state.exit is not None and kind not in ("exited", "recovered"):
             raise JournalCorrupt("程序結束後不再寫入")
         t = self._now()
         if self.state.last_t is not None and t < self.state.last_t:
@@ -518,10 +594,13 @@ class JournalWriter:
         return rec.value
 
     def close(self):
+        if self.fd < 0:
+            return
         try:
             os.close(self.fd)
         except OSError:
             pass
+        self.fd = -1
 
 
 @dataclass
@@ -529,6 +608,8 @@ class ReadResult:
     state: JournalState
     problem: str = ""              # "" when the whole journal is sound
     truncated_tail: bool = False   # the last line is incomplete
+    size: int | None = None        # bytes read, when the whole file was read
+    file_id: tuple | None = None   # (st_dev, st_ino) of the file read
 
 
 def read(dir_fd: int, identity: dict | None = None) -> ReadResult:
@@ -556,4 +637,4 @@ def read(dir_fd: int, identity: dict | None = None) -> ReadResult:
         os.close(fd)
     if js.started is None:
         return ReadResult(js, "日誌是空的")
-    return ReadResult(js)
+    return ReadResult(js, size=st.st_size, file_id=(st.st_dev, st.st_ino))

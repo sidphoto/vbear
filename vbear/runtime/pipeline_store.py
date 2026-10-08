@@ -32,6 +32,7 @@ HOLDS = "holds"
 STARTED = "started.json"
 TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 FLOW_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
+LAUNCH_RE = re.compile(r"^l-[0-9a-f]{16}\Z")              # agent_sessions.LAUNCH_RE
 TEXT_NAME = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.txt\Z")
 PARTIAL_NAME = re.compile(r"^\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.partial\Z")
 MAX_TEXT = sp.MAX_DISPATCH_LINE
@@ -193,9 +194,10 @@ class Pipeline:
 
     # the flow's first stream start (planner decision S2a-2 Q1) -------------------
 
-    def started_at(self, pipeline_id: str) -> float | None:
-        """None when no stream session has started yet; StoreRefused when the
-        record cannot be trusted (then the caller refuses)."""
+    def start_record(self) -> dict | None:
+        """The flow's start record {"pipeline_id", "launch_id", "started_at"}
+        (v29.7: the launch whose open wrote it), None when there is none yet;
+        StoreRefused when it cannot be trusted (then the caller refuses)."""
         try:
             fd, _ = strictjson.open_owned(STARTED, dir_fd=self.fd, max_bytes=strictjson.MANIFEST.file_bytes)
         except strictjson.ReadRefused as exc:
@@ -213,17 +215,31 @@ class Pipeline:
             raise StoreRefused(f"流程開始時間無法讀取（{parsed.problem}）")
         d = parsed.value
         t = finite_real(d.get("started_at")) if not isinstance(d.get("started_at"), bool) else None
-        if (set(d) != {"v", "pipeline_id", "started_at"} or d.get("v") != 1 or isinstance(d.get("v"), bool)
-                or d.get("pipeline_id") != pipeline_id or t is None or not EARLIEST <= t <= time.time() + 86400):
+        if (set(d) != {"v", "pipeline_id", "launch_id", "started_at"} or d.get("v") != 1
+                or isinstance(d.get("v"), bool) or not isinstance(d.get("pipeline_id"), str)
+                or not FLOW_RE.match(d["pipeline_id"]) or not isinstance(d.get("launch_id"), str)
+                or not LAUNCH_RE.match(d["launch_id"]) or t is None or not EARLIEST <= t <= time.time() + 86400):
             raise StoreRefused("流程開始時間的紀錄不符")
-        return t
+        return {"pipeline_id": d["pipeline_id"], "launch_id": d["launch_id"], "started_at": t}
 
-    def record_start(self, pipeline_id: str, now: float) -> float:
+    def started_at(self, pipeline_id: str) -> float | None:
+        """None when no stream session has started yet; StoreRefused when the
+        record cannot be trusted or names another flow."""
+        rec = self.start_record()
+        if rec is None:
+            return None
+        if rec["pipeline_id"] != pipeline_id:
+            raise StoreRefused("流程開始時間的紀錄不符")
+        return rec["started_at"]
+
+    def record_start(self, pipeline_id: str, now: float, *, launch_id: str) -> float:
         """Write the first start once; an existing record is kept."""
+        if not (isinstance(launch_id, str) and LAUNCH_RE.match(launch_id)):
+            raise StoreRefused("launch id 格式不符")
         existing = self.started_at(pipeline_id)
         if existing is not None:
             return existing
-        data = json.dumps({"v": 1, "pipeline_id": pipeline_id, "started_at": now}).encode()
+        data = json.dumps({"v": 1, "pipeline_id": pipeline_id, "launch_id": launch_id, "started_at": now}).encode()
         fd = os.open(STARTED, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
                      dir_fd=self.fd)
         try:
@@ -234,13 +250,20 @@ class Pipeline:
         _fsync_dir(self.fd)
         return now
 
+    def start_record_bytes(self) -> int:
+        try:
+            return os.stat(STARTED, dir_fd=self.fd, follow_symlinks=False).st_size
+        except FileNotFoundError:
+            return 0
 
-    def remove_start(self, pipeline_id: str, expected: float) -> None:
-        """Undo a start record this daemon just wrote, when the open that wrote
-        it failed before any journal existed: the flow has not started, so
-        there is no origin to move. Refuses unless the record is exactly the
-        one written (never a record some session started from)."""
-        if self.started_at(pipeline_id) != expected:
+    def remove_start(self, pipeline_id: str, expected: float, *, launch_id: str | None = None) -> None:
+        """Undo a start record no session ever started from: the open that
+        wrote it failed before any journal existed (or, v29.7, recovery
+        proved it). Refuses unless the record is exactly that one (flow,
+        time and, when given, launch)."""
+        rec = self.start_record()
+        if (rec is None or rec["pipeline_id"] != pipeline_id or rec["started_at"] != expected
+                or (launch_id is not None and rec["launch_id"] != launch_id)):
             raise StoreRefused("流程開始時間的紀錄不是這次寫入的，不能移除")
         os.unlink(STARTED, dir_fd=self.fd)
         _fsync_dir(self.fd)

@@ -24,6 +24,9 @@ from vbear.runtime import quota, stream_flow, stream_journal, stream_protocol as
 NAN, INF = float("nan"), float("inf")
 
 
+LID = "l-0123456789abcdef"
+
+
 class StateDir(unittest.TestCase):
     def setUp(self):
         self.base = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbss-")))
@@ -94,20 +97,25 @@ class PipelineStoreTests(StateDir):
         fid = "flow-0123456789ab"
         with ps.Pipeline(self.base, "task-1", create=True) as p:
             self.assertIsNone(p.started_at(fid))
-            t = p.record_start(fid, time.time())
+            t = p.record_start(fid, time.time(), launch_id=LID)
             self.assertEqual(p.started_at(fid), t)
-            self.assertEqual(p.record_start(fid, time.time() + 100), t)          # first start is kept
+            self.assertEqual(p.start_record(), {"pipeline_id": fid, "launch_id": LID, "started_at": t})
+            self.assertEqual(p.record_start(fid, time.time() + 100, launch_id=LID), t)   # first start is kept
+            for bad_id in ("l-xyz", LID + "\n", None):
+                with self.assertRaises(ps.StoreRefused):
+                    p.record_start(fid, time.time(), launch_id=bad_id)
         path = self.base / "pipelines" / "task-1" / "started.json"
-        bad = [{"v": 1, "pipeline_id": "flow-ffffffffffff", "started_at": t}, {"v": 1, "pipeline_id": fid},
-               {"v": 2, "pipeline_id": fid, "started_at": t}, {"v": True, "pipeline_id": fid, "started_at": t},
-               {"v": 1, "pipeline_id": fid, "started_at": 1.0},
-               {"v": 1, "pipeline_id": fid, "started_at": time.time() + 10 * 86400},
-               {"v": 1, "pipeline_id": fid, "started_at": True}, {"v": 1, "pipeline_id": fid, "started_at": "1"},
-               {"v": 1, "pipeline_id": fid, "started_at": t, "x": 1}]
+        good = {"v": 1, "pipeline_id": fid, "launch_id": LID}
+        bad = [{**good, "pipeline_id": "flow-ffffffffffff", "started_at": t}, dict(good),
+               {**good, "v": 2, "started_at": t}, {**good, "v": True, "started_at": t},
+               {**good, "started_at": 1.0}, {**good, "started_at": time.time() + 10 * 86400},
+               {**good, "started_at": True}, {**good, "started_at": "1"}, {**good, "started_at": t, "x": 1},
+               {"v": 1, "pipeline_id": fid, "started_at": t},                      # no launch id (pre-v29.7)
+               {**good, "launch_id": "l-xyz", "started_at": t}, {**good, "launch_id": None, "started_at": t}]
         for value in bad + ["NaN", "Infinity"]:
             with self.subTest(value=repr(value)[:60]):
                 raw = json.dumps(value).encode() if isinstance(value, dict) else \
-                    f'{{"v": 1, "pipeline_id": "{fid}", "started_at": {value}}}'.encode()
+                    f'{{"v": 1, "pipeline_id": "{fid}", "launch_id": "{LID}", "started_at": {value}}}'.encode()
                 path.chmod(0o600)
                 path.write_bytes(raw)
                 with ps.Pipeline(self.base, "task-1", create=False) as p, self.assertRaises(ps.StoreRefused):
@@ -126,7 +134,7 @@ class PipelineStoreTests(StateDir):
                 with self.assertRaises(ps.StoreRefused):
                     p.write_text(fx.new_uuid(), b"text")
                 with self.assertRaises(ps.StoreRefused):
-                    p.record_start(fid, time.time())
+                    p.record_start(fid, time.time(), launch_id=LID)
                 with self.assertRaises(ps.StoreRefused):
                     ps.hold(self.base, fid, "stop")
                 with self.assertRaises(ps.StoreRefused):
@@ -139,9 +147,11 @@ class PipelineStoreTests(StateDir):
     def test_remove_start_only_undoes_the_record_just_written(self):
         fid = "flow-0123456789ab"
         with ps.Pipeline(self.base, "task-abc", create=True) as p:
-            t = p.record_start(fid, time.time())
+            t = p.record_start(fid, time.time(), launch_id=LID)
             with self.assertRaises(ps.StoreRefused):
                 p.remove_start(fid, t - 1)                                  # not the one written
+            with self.assertRaises(ps.StoreRefused):
+                p.remove_start(fid, t, launch_id="l-ffffffffffffffff")       # another launch's
             with self.assertRaises(ps.StoreRefused):
                 p.remove_start("flow-ffffffffffff", t)                      # another flow's
             self.assertEqual(p.started_at(fid), t)
@@ -362,7 +372,7 @@ class FlowContextTests(StateDir):
         # a started flow whose sessions are gone: through load()
         self.accept()
         with ps.Pipeline(self.base, self.tid, create=True) as p:
-            p.record_start(self.fid, time.time())
+            p.record_start(self.fid, time.time(), launch_id=LID)
         with self.assertRaises(stream_flow.FlowRefused) as cm:
             stream_flow.load(self.base, self.fid)
         self.assertEqual(cm.exception.code, "count_unavailable")
@@ -408,7 +418,7 @@ class FlowContextTests(StateDir):
         with ps.Pipeline(self.base, self.tid, create=True) as p:
             p.write_text(d, "please do the work".encode())            # the text Harness.dispatch accepted
             p.write_text(fx.new_uuid(), b"orphan")                      # saved, never accepted
-            p.record_start(self.fid, time.time())
+            p.record_start(self.fid, time.time(), launch_id=root.name)
         return root, d
 
     def test_totals_come_from_journals_and_texts(self):
@@ -489,6 +499,88 @@ class FlowContextTests(StateDir):
                 with self.assertRaises(stream_flow.FlowRefused) as cm:
                     stream_flow.load(self.base, self.fid)
                 self.assertEqual(cm.exception.code, "count_unavailable")
+
+    # ---- v29.7: what the next session's accounting counts for an unfinished dispatch
+
+    def session_ending(self, end):
+        """A second session of the flow: one dispatch written and confirmed,
+        then ``end``; its text is saved like dispatch_prepare does."""
+        from tests.test_stream_protocol import Harness, CWD
+        root = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=7.5)
+        h = Harness()
+        h.records.clear()
+        h.seq, h.js = 0, stream_journal.JournalState()
+        h.record("session_started", {"claude_session_id": h.sid, "pipeline_id": self.fid, "cli_version": "2.1.292",
+                                     "argv_sha256": "a" * 64, "budget_usd": 7.5})
+        d, text = h.dispatch()
+        h.feed(fx.turn(h.sid, d, text, cwd=CWD, prefix="u")[:5])
+        end(h, d)
+        (root / "journal.jsonl").write_bytes(b"".join(h.records))
+        (root / "journal.jsonl").chmod(0o600)
+        with ps.Pipeline(self.base, self.tid, create=False) as p:
+            p.write_text(d, text.encode())
+        return d
+
+    def test_the_next_session_counts_the_worst_case(self):
+        endings = {
+            "no_progress": lambda h, d: h.record("dispatch_failed", {"dispatch_id": d, "reason": "no_progress"}),
+            "turn_timeout": lambda h, d: h.record("dispatch_failed", {"dispatch_id": d, "reason": "turn_timeout"}),
+            "response_cap": lambda h, d: h.record("dispatch_failed", {"dispatch_id": d, "reason": "response_cap"}),
+            "process_exited": lambda h, d: (h.record("dispatch_failed", {"dispatch_id": d, "reason": "process_exited"}),
+                                            h.record("exited", {"returncode": 1, "signal": None, "stderr_tail": ""})),
+            "protocol_error": lambda h, d: h.record("protocol_error", {"reason": "bad_json", "detail": ""}),
+            "daemon died, recovered": lambda h, d: h.record("recovered", {"process": "gone"}),
+            "daemon died, not yet recovered": lambda h, d: None,
+        }
+        from tests.test_stream_protocol import TURN_CAP
+        for name, end in endings.items():
+            with self.subTest(ending=name):
+                for p in ("pipelines", "sessions"):
+                    shutil.rmtree(self.base / p, ignore_errors=True)
+                with flows.store.locked():
+                    data = flows.store.load()
+                    data[self.fid]["events"] = []
+                    flows.store.save(data)
+                self.flow_with_one_session(cost=0.25)                    # 1 response, USD 0.25
+                d = self.session_ending(end)
+                ctx = stream_flow.load(self.base, self.fid)
+                self.assertEqual(ctx.totals.responses, 1 + TURN_CAP)
+                self.assertAlmostEqual(ctx.totals.spent_usd, 0.25 + 7.5)  # the second session's whole budget
+                self.assertEqual([x["unfinished"] for x in ctx.totals.sessions if x["unfinished"]], [[d]])
+
+    def test_start_record_recovery(self):
+        # v29.7 / review B3: a start record whose launch never ran is removed
+        # exactly; anything else is kept.
+        def start_for(launch_id):
+            with ps.Pipeline(self.base, self.tid, create=True) as p:
+                p.record_start(self.fid, time.time(), launch_id=launch_id)
+
+        def has_start():
+            return (self.base / "pipelines" / self.tid / "started.json").exists()
+        prepared = self.launch()                                              # never opened
+        start_for(prepared.name)
+        out = stream_flow.recover_start_records(self.base)
+        self.assertEqual(out, [{"task": self.tid, "pipeline_id": self.fid, "removed": prepared.name}])
+        self.assertFalse(has_start())
+        start_for("l-00000000000000ee")                                        # a launch that is gone
+        stream_flow.recover_start_records(self.base)
+        self.assertFalse(has_start())
+        kept = {
+            "launching": lambda: a.update_manifest(self.base, prepared.name, state="launching"),
+            "has a journal": lambda: (prepared / "journal.jsonl").write_bytes(b""),
+            "another launch of the flow has a journal": lambda: (
+                self.launch(state="ended") / "journal.jsonl").write_bytes(b""),
+            "an unknown entry in sessions/": lambda: (self.base / "sessions" / "notes").write_text("x"),
+        }
+        for name, make in kept.items():
+            with self.subTest(case=name):
+                shutil.rmtree(self.base / "sessions")
+                prepared = self.launch()
+                start_for(prepared.name)
+                make()
+                out = stream_flow.recover_start_records(self.base)
+                self.assertTrue(has_start())
+                (self.base / "pipelines" / self.tid / "started.json").unlink()
 
     def test_spend_that_is_not_finite_refuses(self):
         self.accept()
