@@ -152,6 +152,11 @@ class PipelineStoreTests(StateDir):
         (self.base / "holds").chmod(0o000)
         self.assertTrue(ps.is_held(self.base, fid))                 # unreadable: held
         (self.base / "holds").chmod(0o700)
+        # R4 audit: a state directory that is missing or not a directory is
+        # not "no holds".
+        self.assertTrue(ps.is_held(self.base / "no-such-state", fid))
+        (self.base / "a-file").write_text("x")
+        self.assertTrue(ps.is_held(self.base / "a-file", fid))
 
 
 class QuotaTests(StateDir):
@@ -240,10 +245,11 @@ class FlowContextTests(StateDir):
         then ``fields`` set as the daemon would."""
         work = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbss-fw-")))
         self.addCleanup(shutil.rmtree, work, True)
-        binary = self.base / "claude"
-        if not binary.exists():
-            binary.write_text("#!/bin/sh\n")
-            binary.chmod(0o700)
+        # Not in the state directory: writing a private file there tightens
+        # every entry to 0600 (config.ensure_state_dir), executables included.
+        binary = work / "claude"
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o700)
         m = a.prepare_stream_launch(self.base, str(work), cli_binary=str(binary), cli_version="2.1.292",
                                     cli_identity=a.binary_identity(str(binary)), model_id=fx.MODEL,
                                     pipeline_id=self.fid, task_id=self.tid, allowed_root=str(work.parent))
@@ -369,9 +375,10 @@ class FlowContextTests(StateDir):
         with self.assertRaises(stream_flow.FlowRefused):
             stream_flow.remaining_budget(ctx)
 
-    def test_totals_come_from_journals_and_texts(self):
+    def flow_with_one_session(self, cost=0.25):
+        """A started flow with one session whose journal accepted one
+        dispatch, its saved text, and one orphan text (3.5)."""
         self.accept()
-        # a stream launch with a journal of one valid turn
         root = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=20.0)
         from tests.test_stream_protocol import Harness
         h = Harness()
@@ -379,19 +386,131 @@ class FlowContextTests(StateDir):
                                              {"claude_session_id": h.sid, "pipeline_id": self.fid,
                                               "cli_version": "2.1.292", "argv_sha256": "a" * 64,
                                               "budget_usd": 20.0})
-        h.run_turn(cost=0.25)
+        d = h.run_turn(cost=cost)
         (root / "journal.jsonl").write_bytes(b"".join(h.records))
         (root / "journal.jsonl").chmod(0o600)
         with ps.Pipeline(self.base, self.tid, create=True) as p:
-            p.write_text(fx.new_uuid(), b"a")
-            p.write_text(fx.new_uuid(), b"b")
+            p.write_text(d, "please do the work".encode())            # the text Harness.dispatch accepted
+            p.write_text(fx.new_uuid(), b"orphan")                      # saved, never accepted
+            p.record_start(self.fid, time.time())
+        return root, d
+
+    def test_totals_come_from_journals_and_texts(self):
+        root, d = self.flow_with_one_session()
         ctx = stream_flow.load(self.base, self.fid)
-        self.assertEqual((ctx.totals.dispatches, ctx.totals.responses), (2, 1))
+        self.assertEqual((ctx.totals.dispatches, ctx.totals.responses), (2, 1))   # orphans count too
         self.assertAlmostEqual(ctx.totals.spent_usd, 0.25)
-        (root / "journal.jsonl").write_bytes(b"".join(h.records)[:-3])          # damaged: counts unknown
+        good = (root / "journal.jsonl").read_bytes()
+        (root / "journal.jsonl").write_bytes(good[:-3])                     # damaged: counts unknown
         with self.assertRaises(stream_flow.FlowRefused) as cm:
             stream_flow.load(self.base, self.fid)
         self.assertEqual(cm.exception.code, "count_unavailable")
+
+    def test_nothing_is_read_as_zero_on_an_error(self):
+        # Codex S2a-2 p1 R4: every way the flow's own files can go wrong refuses.
+        cases = {}
+
+        def flow_dir_deleted():
+            shutil.rmtree(self.base / "pipelines" / self.tid)
+        cases["flow directory deleted (Codex repro)"] = flow_dir_deleted
+
+        def accepted_text_missing():
+            (self.base / "pipelines" / self.tid / "dispatches" / f"{self.d}.txt").unlink()
+        cases["accepted text missing"] = accepted_text_missing
+
+        def accepted_text_changed():
+            (self.base / "pipelines" / self.tid / "dispatches" / f"{self.d}.txt").write_bytes(b"changed!!")
+        cases["accepted text changed"] = accepted_text_changed
+
+        def start_record_missing():
+            (self.base / "pipelines" / self.tid / "started.json").unlink()
+        cases["start record missing"] = start_record_missing
+
+        def start_record_is_a_directory():
+            (self.base / "pipelines" / self.tid / "started.json").unlink()
+            (self.base / "pipelines" / self.tid / "started.json").mkdir()
+        cases["start record is a directory"] = start_record_is_a_directory
+
+        def start_record_is_a_symlink():
+            target = self.base / "start-elsewhere.json"
+            (self.base / "pipelines" / self.tid / "started.json").rename(target)
+            (self.base / "pipelines" / self.tid / "started.json").symlink_to(target)
+        cases["start record is a symlink"] = start_record_is_a_symlink
+
+        def dispatches_dir_missing():
+            shutil.rmtree(self.base / "pipelines" / self.tid / "dispatches")
+        cases["dispatches directory missing"] = dispatches_dir_missing
+
+        def pipelines_root_is_a_file():
+            shutil.rmtree(self.base / "pipelines")
+            (self.base / "pipelines").write_text("x")
+        cases["pipelines root is a file"] = pipelines_root_is_a_file
+
+        def sessions_root_gone():
+            shutil.rmtree(self.base / "sessions")
+        cases["sessions gone after the start"] = sessions_root_gone
+
+        for name, damage in cases.items():
+            with self.subTest(case=name):
+                for p in ("pipelines", "sessions"):
+                    target = self.base / p
+                    if target.is_symlink() or target.is_file():
+                        target.unlink()
+                    elif target.exists():
+                        shutil.rmtree(target)
+                with flows.store.locked():
+                    data = flows.store.load()
+                    data[self.fid]["events"] = []
+                    flows.store.save(data)
+                _, self.d = self.flow_with_one_session()
+                stream_flow.load(self.base, self.fid)                    # sound before the damage
+                damage()
+                with self.assertRaises(stream_flow.FlowRefused) as cm:
+                    stream_flow.load(self.base, self.fid)
+                self.assertEqual(cm.exception.code, "count_unavailable")
+
+    def test_spend_that_is_not_finite_refuses(self):
+        self.accept()
+        ctx = stream_flow.load(self.base, self.fid)
+        for spent in (float("inf"), float("nan"), 1e308 * 10):
+            ctx.totals.spent_usd = spent
+            with self.subTest(spent=spent), self.assertRaises(stream_flow.FlowRefused):
+                stream_flow.remaining_budget(ctx)                         # never OverflowError
+            with self.subTest(spent=spent, path="check_limits"), self.assertRaises(stream_flow.FlowRefused):
+                stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=True)
+        # many finite costs summed past the float range
+        root, d = self.flow_with_one_session()
+        real_read = stream_flow._journal_state
+
+        def huge(base, launch_id):
+            res = real_read(base, launch_id)
+            res.state.cost = 1.7e308
+            return res
+        second = self.launch(state="ended", claude_session_id=fx.new_uuid(), budget_usd=20.0)
+        (second / "journal.jsonl").write_bytes((root / "journal.jsonl").read_bytes())
+        (second / "journal.jsonl").chmod(0o600)
+        with mock.patch.object(stream_flow, "_journal_state", huge):
+            with self.assertRaises(stream_flow.FlowRefused) as cm:
+                stream_flow.load(self.base, self.fid)
+        self.assertIn("有限", str(cm.exception))
+
+    def test_a_journal_that_cannot_be_checked_refuses(self):
+        # R4 audit: Path.exists() (Python 3.14) reads EACCES as "absent", which
+        # for a never-started launch would skip it silently.
+        self.accept()
+        root = self.launch(state="prepared")
+        (root / "journal.jsonl").write_bytes(b"")
+        real = os.lstat
+
+        def lstat(path, *args, **kw):
+            if str(path).endswith("/journal.jsonl"):
+                raise PermissionError(13, "Permission denied")
+            return real(path, *args, **kw)
+        with mock.patch("vbear.runtime.stream_flow.os.lstat", lstat):
+            with self.assertRaises(stream_flow.FlowRefused) as cm:
+                stream_flow.flow_sessions(self.base, self.fid, started=False)
+        self.assertEqual(cm.exception.code, "count_unavailable")
+        self.assertIn("無法檢查", str(cm.exception))
 
     def test_a_started_launch_without_journal_refuses(self):
         # Codex S2a-2 p1 #3: never skipped, whatever its state.

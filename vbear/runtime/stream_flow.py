@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from .. import acceptance, flows, login_identity
 from ..jsonstore import StoreError
 from . import agent_sessions, pipeline_store, stream_journal
+from . import stream_protocol as sp
 
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -99,9 +100,18 @@ def flow_sessions(base, pipeline_id: str, *, started: bool) -> list[dict]:
             raise FlowRefused("count_unavailable", f"launch {name} 的 manifest 無法讀取，無法核算流程用量") from exc
         if m.get("engine") != "claude-stream" or m.get("pipeline_id") != pipeline_id:
             continue
-        journal = root / name / agent_sessions.JOURNAL
-        if journal.exists() or journal.is_symlink():
-            out.append(m)
+        # lstat, not Path.exists(): on Python 3.14 that returns False on
+        # any OSError (EACCES included), which would read as "no journal".
+        try:
+            os.lstat(root / name / agent_sessions.JOURNAL)
+            has_journal = True
+        except FileNotFoundError:
+            has_journal = False
+        except OSError as exc:
+            raise FlowRefused("count_unavailable",
+                              f"launch {name} 的日誌無法檢查（{exc.strerror}），無法核算流程用量") from exc
+        if has_journal:
+            out.append(m)                 # a symlink or a non-file is refused when the journal is read
         elif not (m.get("state") == "prepared" and m.get("native_session_id") is None and m.get("leader") is None):
             # Only a launch that never had a process may lack a journal (the
             # journal is created before the process starts). Any other one
@@ -113,9 +123,37 @@ def flow_sessions(base, pipeline_id: str, *, started: bool) -> list[dict]:
     return out
 
 
-def totals(base, pipeline_id: str, task_id: str, *, started: bool) -> Totals:
+def _pipeline_view(base, pipeline_id: str, task_id: str):
+    """(started_at, {dispatch id: text bytes}) from the flow's directory, or
+    None when that directory does not exist at all. Any other problem
+    refuses; nothing is read as zero or empty on an error."""
+    try:
+        with pipeline_store.Pipeline(base, task_id, create=False) as p:
+            started = p.started_at(pipeline_id)
+            texts = {d: p.read_text(d) for d in p.text_names()}
+    except pipeline_store.StoreRefused as exc:
+        if exc.missing:
+            return None
+        raise FlowRefused("count_unavailable", f"流程資料無法讀取（{exc}）") from exc
+    except OSError as exc:
+        raise FlowRefused("count_unavailable", f"流程資料無法讀取（{exc.strerror}）") from exc
+    return started, texts
+
+
+def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
+    """Usage over every stream session of the flow, cross-checked against
+    the saved dispatch texts (design 3.5: a text is saved before its
+    dispatch is accepted, so every accepted dispatch has its text with the
+    recorded hash and length; a text without an accepted record is an orphan
+    from a crash and is counted too). Anything inconsistent refuses."""
+    started, texts = view if view is not None else (None, {})
+    sessions = flow_sessions(base, pipeline_id, started=started is not None)
+    if sessions and view is None:
+        raise FlowRefused("count_unavailable", "流程有 session 紀錄，但流程資料夾不見了，無法核算用量")
+    if sessions and started is None:
+        raise FlowRefused("count_unavailable", "流程有 session 紀錄，但沒有開始時間紀錄，無法核算經過時間")
     t = Totals()
-    for m in flow_sessions(base, pipeline_id, started=started):
+    for m in sessions:
         res = _journal_state(base, m["launch_id"])
         if res.problem:
             raise FlowRefused("count_unavailable", f"session {m['launch_id']} 的日誌無法使用（{res.problem}）")
@@ -123,12 +161,16 @@ def totals(base, pipeline_id: str, task_id: str, *, started: bool) -> Totals:
         t.responses += js.responses
         t.spent_usd += js.cost            # total_cost_usd is per process: the session's last value
         t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "dispatches": js.dispatch_count()})
-    try:
-        with pipeline_store.Pipeline(base, task_id, create=False) as p:
-            t.dispatches = len(p.text_names())
-    except pipeline_store.StoreRefused as exc:
-        if "不存在" not in str(exc):
-            raise FlowRefused("count_unavailable", f"派工紀錄無法讀取（{exc}）") from exc
+        for d in js.order:
+            turn = js.turns[d]
+            data = texts.get(d)
+            if data is None:
+                raise FlowRefused("count_unavailable", f"派工 {d} 已被接受，但它的全文不見了")
+            if len(data) != turn.length or sp.sha256_hex(data) != turn.text_sha256:
+                raise FlowRefused("count_unavailable", f"派工 {d} 的全文與接受時的紀錄不同")
+    if not math.isfinite(t.spent_usd):
+        raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")
+    t.dispatches = len(texts)
     return t
 
 
@@ -152,20 +194,17 @@ def load(base, pipeline_id: str) -> FlowContext:
     if problem:
         raise FlowRefused("no_acceptance", f"接受的上限不合規（{problem}）")
     task_id = flow["task_id"]
-    try:
-        with pipeline_store.Pipeline(base, task_id, create=False) as p:
-            started = p.started_at(pipeline_id)
-    except pipeline_store.StoreRefused as exc:
-        if "不存在" not in str(exc):
-            raise FlowRefused("count_unavailable", str(exc)) from exc
-        started = None
+    view = _pipeline_view(base, pipeline_id, task_id)
+    started = view[0] if view is not None else None
     return FlowContext(pipeline_id, task_id, acc, dict(limits), key, started,
-                       totals(base, pipeline_id, task_id, started=started is not None))
+                       totals(base, pipeline_id, task_id, view))
 
 
 def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0) -> None:
     """Design 6, for dispatch_prepare (counting_dispatch) and stream_send."""
     lim, tot = ctx.limits, ctx.totals
+    if not (isinstance(tot.spent_usd, (int, float)) and math.isfinite(tot.spent_usd)):
+        raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")   # NaN passes every comparison
     if ctx.started_at is not None and now - ctx.started_at > lim["max_elapsed_h"] * 3600:
         raise FlowRefused("limit", f"已達經過時間上限（{lim['max_elapsed_h']} 小時）")
     if counting_dispatch and tot.dispatches >= lim["max_dispatches"]:
@@ -177,9 +216,18 @@ def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_
 
 
 def remaining_budget(ctx: FlowContext) -> float:
-    """What --max-budget-usd gets: the budget left, rounded down to cents."""
-    left = math.floor((ctx.limits["executor_budget_usd"] - ctx.totals.spent_usd) * 100) / 100
+    """What --max-budget-usd gets: the budget left, rounded down to cents.
+    A spend or budget that is not a finite number refuses (never an
+    OverflowError from rounding infinity)."""
+    spent, budget = ctx.totals.spent_usd, ctx.limits["executor_budget_usd"]
+    if not (isinstance(spent, (int, float)) and math.isfinite(spent)
+            and isinstance(budget, (int, float)) and math.isfinite(budget)):
+        raise FlowRefused("count_unavailable", "執行者額度或花費不是有限數")
+    left = budget - spent
     if not math.isfinite(left) or left <= 0:
+        raise FlowRefused("limit", "已用完執行者額度")
+    left = math.floor(left * 100) / 100
+    if left <= 0:
         raise FlowRefused("limit", "已用完執行者額度")
     return left
 

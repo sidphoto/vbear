@@ -41,7 +41,12 @@ _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 class StoreRefused(Exception):
-    pass
+    """``missing`` is True only when the flow's directory itself does not
+    exist (never decided from the message text)."""
+
+    def __init__(self, message: str, *, missing: bool = False):
+        super().__init__(message)
+        self.missing = missing
 
 
 def _open_dir(name: str, parent: int, *, create: bool) -> int:
@@ -77,14 +82,19 @@ class Pipeline:
             raise StoreRefused("任務 id 格式不符")
         self.task_id = task_id
         self._fds: list[int] = []
+        step = "state"
         try:
             state = self._keep(os.open(str(base), _DIR))
+            step = "flow"                     # pipelines/ or pipelines/<task>: the flow's own directory
             root = self._keep(_open_dir(PIPELINES, state, create=create))
             self.fd = self._keep(_open_dir(task_id, root, create=create))
+            step = "dispatches"               # created with the flow directory: missing means damaged
             self.dispatches = self._keep(_open_dir(DISPATCHES, self.fd, create=create))
         except FileNotFoundError as exc:
             self.close()
-            raise StoreRefused("流程資料夾不存在") from exc
+            if step == "flow":
+                raise StoreRefused("流程資料夾不存在", missing=True) from exc
+            raise StoreRefused(f"流程資料夾不完整（{step} 不見了）") from exc
         except OSError as exc:
             self.close()
             raise StoreRefused(f"無法開啟流程資料夾（{exc.strerror}）") from exc
@@ -186,10 +196,20 @@ class Pipeline:
     def started_at(self, pipeline_id: str) -> float | None:
         """None when no stream session has started yet; StoreRefused when the
         record cannot be trusted (then the caller refuses)."""
-        parsed = strictjson.load_owned_object(STARTED, strictjson.MANIFEST, dir_fd=self.fd)
-        if not parsed.ok:
-            if parsed.problem == "檔案不存在":
+        try:
+            fd, _ = strictjson.open_owned(STARTED, dir_fd=self.fd, max_bytes=strictjson.MANIFEST.file_bytes)
+        except strictjson.ReadRefused as exc:
+            if exc.missing:                   # the read's own flag, not its message
                 return None
+            raise StoreRefused(f"流程開始時間無法讀取（{exc}）") from exc
+        try:
+            raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
+        except strictjson.ReadRefused as exc:
+            raise StoreRefused(f"流程開始時間無法讀取（{exc}）") from exc
+        finally:
+            os.close(fd)
+        parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+        if not parsed.ok:
             raise StoreRefused(f"流程開始時間無法讀取（{parsed.problem}）")
         d = parsed.value
         t = finite_real(d.get("started_at")) if not isinstance(d.get("started_at"), bool) else None
@@ -227,14 +247,22 @@ def _holds_dir(base, *, create: bool) -> tuple[int, int]:
 
 
 def is_held(base, pipeline_id: str) -> bool:
-    """True when the flow is stopped, or when that cannot be ruled out."""
+    """True when the flow is stopped, or when that cannot be ruled out.
+    Only a missing ``holds/`` (inside a state directory that opened) or a
+    missing hold file means "not held"."""
     if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
         return True
     try:
-        state, holds = _holds_dir(base, create=False)
+        state = os.open(str(base), _DIR)
+    except OSError:
+        return True                       # no state directory: nothing can be ruled out
+    try:
+        holds = _open_dir(HOLDS, state, create=False)
     except FileNotFoundError:
+        os.close(state)
         return False
     except (OSError, StoreRefused):
+        os.close(state)
         return True
     try:
         os.stat(pipeline_id, dir_fd=holds, follow_symlinks=False)
