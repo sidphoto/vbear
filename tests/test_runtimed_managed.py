@@ -337,9 +337,13 @@ class ManagedCase(unittest.TestCase):
             fresh = self.prepare("none")
             self.wait_for(lambda: not (self.base / "sessions" / stale["launch_id"]).exists(),
                           msg="stale prepared launch removed")
+            # The sweep removes the directory first and logs afterwards: wait for
+            # the log line too, instead of reading the log the moment the
+            # directory is gone (a race seen in CI on Python 3.14).
+            self.wait_for(lambda: any("expired: removed" in line for line in self.logs),
+                          msg="expiry logged")
         self.assertFalse(os.path.exists(stale["scratch"]["path"]))
         self.assertTrue(os.path.isdir(fresh["scratch"]["path"]))
-        self.assertTrue(any("expired: removed" in line for line in self.logs))
 
     def test_plain_sessions_are_unmanaged_and_untracked(self):
         r = self.rpc("open", argv=["/bin/sh", "-c", "sleep 30"], cwd=str(self.tmp))

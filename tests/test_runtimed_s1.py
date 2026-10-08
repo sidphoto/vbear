@@ -78,6 +78,14 @@ class SessionCase(unittest.TestCase):
 
 class LifecycleTests(SessionCase):
     def test_open_list_close_roundtrip(self):
+        # The point is that close sends SIGHUP first and the session ends on it.
+        # Under heavy load the shell can take longer than the 1 s HUP_GRACE to
+        # exit, and the daemon then escalates to SIGTERM (seen in CI); give the
+        # SIGHUP step room here. CLOSE_WAIT (the reply deadline) stays longer.
+        hup = mock.patch.object(d, "HUP_GRACE", 5.0)
+        hup.start()
+        self.addCleanup(hup.stop)
+        self.assertLess(d.HUP_GRACE, d.CLOSE_WAIT)
         sid = self.open(["/bin/sh", "-c", "echo ready; exec sleep 100"])
         self.assertRegex(sid, r"^n-[0-9a-f]{12}$")
         self.wait_out(sid, b"ready")
