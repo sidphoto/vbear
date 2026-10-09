@@ -107,6 +107,11 @@ for line in sys.stdin:
         events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
                          model=model, responses=[many + [{"type": "tool_use", "id": "so%%d" %% index,
                                                           "name": "StructuredOutput", "input": rep}]], rep=rep)
+    if mode == "surrogate_so":
+        # A complete, otherwise valid turn; only the result's structured
+        # output (a copy: the fixture shares it with the tool input) carries
+        # a lone surrogate, which strict JSON still decodes.
+        events[-2]["structured_output"] = dict(events[-2]["structured_output"], notes="\ud800")
     if mode == "hang":
         # Confirmed, then the model never answers: a turn in flight.
         emit(events[:5]); open("hang-ready", "w").close(); time.sleep(600)
@@ -367,6 +372,29 @@ class RefusalTests(StreamCase):
         self.assertFalse(r["ok"])
         self.assertEqual(r["error"]["code"], "internal")
         self.assertIsNotNone(self.dm._sel)
+
+    def test_an_attach_failing_after_conversion_frees_its_slot(self):
+        # Claude review finding 1: the error reaches the client and no dead
+        # Attachment keeps a slot.
+        import socket
+        sid = self.rpc("open", argv=["/bin/sh", "-c", "sleep 30"], cwd=str(self.work))["result"]["session_id"]
+        self.pids.append(self.dm._sessions[sid].pid)
+        with mock.patch.object(self.dm, "_full_line", side_effect=RuntimeError("synthetic attach failure")):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+                c.settimeout(TIMEOUT)
+                c.connect(str(d.socket_path(self.base)))
+                c.sendall(json.dumps({"v": 1, "id": "a1", "op": "attach", "session_id": sid,
+                                      "mode": "control"}).encode() + b"\n")
+                response = json.loads(c.recv(65536).split(b"\n", 1)[0])
+        self.assertFalse(response["ok"])
+        self.assertEqual((response["id"], response["error"]["code"]), ("a1", "internal"))
+        # at once: before this fix the stale one went only after the 10 s
+        # no-write-progress watchdog
+        self.wait_for(lambda: not self.dm._attachments, timeout=2.0, msg="no attachment left")
+        self.assertEqual(self.dm._sessions[sid].attachments, [])
+        self.assertIsNone(self.dm._sessions[sid].control)
+        self.assertTrue(self.rpc("hello")["ok"])
+        self.rpc("close", session_id=sid)
 
     def test_invalid_rpc_id_cannot_escape_response_encoding(self):
         import socket
@@ -720,15 +748,19 @@ class JournalOrderTests(StreamCase):
         self.assertEqual(self.manifest(launch_id)["state"], "manual_review")
 
     def test_nested_surrogate_event_is_contained_and_holds_flow(self):
+        # The original review finding, end to end: before ae56eb7 this turn
+        # passed the tracker and its journal record ended the daemon loop
+        # (UnicodeEncodeError from canonical()).
         import vbear.runtime.daemon_stream as ds
-        launch_id, _ = self.open("hang")
-        s = self.dm._streams[launch_id]
-        s._on_line(b'{"type":"result","structured_output":{"nested":["\\ud800"]}}',
-                   time.monotonic())
-        self.assertEqual(s.state, "error")
-        self.dm._check_failure(s)
-        self.assertTrue(ds.pipeline_store.is_held(self.base, self.fid))
-        self.assertIsNotNone(self.dm._sel)                 # malformed event did not take down daemon
+        launch_id, _ = self.open("surrogate_so")
+        d1 = self.dispatch(launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams or self.dm._streams[launch_id].state == "error",
+                      msg="session in error")
+        self.assertTrue(self.thread.is_alive(), "the daemon loop ended")
+        self.assertTrue(self.rpc("hello")["ok"])
+        self.wait_for(lambda: ds.pipeline_store.is_held(self.base, self.fid), msg="held")
+        t = self.turn_status(launch_id, d1)
+        self.assertNotIn("report", t)
         self.rpc("stream_close", launch_id=launch_id)
         self.wait_for(lambda: launch_id not in self.dm._streams, msg="closed")
 
@@ -1574,6 +1606,60 @@ class FailureHoldTests(StreamCase):
         self.crash_daemon()
         self.restart_daemon()
         self.assertIn("daemon 重啟時回合未完成", self.hold_reason())
+
+
+class OuterGuardTests(StreamCase):
+    """Claude review finding 4: an unexpected exception in any per-session
+    step of the event loop becomes a session error and a failure hold; the
+    session is given up to manual review; the daemon goes on."""
+
+    def hold_reason(self):
+        path = self.base / "holds" / self.fid
+        return json.loads(path.read_text())["reason"] if path.exists() else None
+
+    def setUp(self):
+        super().setUp()
+        self.dm._held_next = float("inf")    # no recheck: once its group is empty a held leader is reaped
+
+    def crashed(self, launch_id):
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="given up")
+        self.assertTrue(self.thread.is_alive(), "the daemon loop ended")
+        self.assertTrue(self.rpc("hello")["ok"])
+        m = self.manifest(launch_id)
+        self.assertEqual(m["state"], "manual_review")
+        self.assertIn("未預期的錯誤", m["retained_reason"])
+        self.assertIn("未預期的錯誤", self.hold_reason())
+        return m
+
+    def test_an_exception_in_tick(self):
+        launch_id, _ = self.open()
+        pid = self.launched()["pid"]
+        s = self.dm._streams[launch_id]
+        with mock.patch.object(s, "tick", side_effect=RuntimeError("synthetic tick failure")):
+            self.crashed(launch_id)
+        res = self.journal(launch_id)
+        self.assertEqual(res.state.protocol_errors[-1]["reason"], "internal_error")
+        self.assertIn(pid, [h["pid"] for h in self.dm._held_leaders])      # kept, never reaped (5.8)
+        self.assertFalse((self.work / "got-sigterm").exists())              # nothing was signalled
+
+    def test_an_exception_on_pipe_readiness(self):
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        with mock.patch.object(s, "on_stdout", side_effect=RuntimeError("synthetic read failure")):
+            self.dispatch(launch_id)                    # its output makes stdout ready
+            self.crashed(launch_id)
+
+    def test_an_exception_in_the_clean_up_itself(self):
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        with mock.patch.object(self.dm, "_finish_stream", side_effect=RuntimeError("synthetic clean-up failure")), \
+                mock.patch.object(s, "tick", side_effect=RuntimeError("synthetic tick failure")):
+            self.crashed(launch_id)
+        self.assertIn(s.pid, [h["pid"] for h in self.dm._held_leaders])
+
+    def test_a_hold_reason_that_cannot_be_encoded_does_not_escape(self):
+        self.dm._hold_for_failure(self.fid, "l-0000000000000000", "x\ud800")    # sanitize raises ValueError
+        self.assertTrue(self.rpc("hello")["ok"])
 
 
 class HeldLeaderLimitTests(StreamCase):

@@ -33,6 +33,11 @@ def gone(pid: int) -> bool:
 
 class SessionCase(unittest.TestCase):
     def setUp(self):
+        # A host that ignores SIGHUP (some IDEs, agent runners, CI) passes
+        # SIG_IGN on to the shells these tests start, so the daemon's SIGHUP
+        # would not end them (Gemini review of ae56eb7). Default it here.
+        previous = signal.signal(signal.SIGHUP, signal.SIG_DFL)
+        self.addCleanup(signal.signal, signal.SIGHUP, previous)
         self.tmp = Path(tempfile.mkdtemp(prefix="sidr2-", dir="/tmp"))
         self.base = self.tmp / "st"
         self.dm = d.Daemon(self.base, log=lambda m: None)

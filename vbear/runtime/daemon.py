@@ -1003,8 +1003,30 @@ class Daemon(daemon_stream.StreamOps):
                 self._log(f"RPC dispatch failed: {type(exc).__name__}")
             except Exception:
                 pass
+            try:
+                self._undo_attach(conn)
+            except Exception:
+                pass
             return _err(conn.rid if isinstance(conn.rid, str) else None, "internal",
                         f"內部錯誤：{type(exc).__name__}")
+
+    def _undo_attach(self, conn: _Conn) -> None:
+        """An attach that failed after the socket became an Attachment: the
+        Attachment goes (no slot is kept by a dead one; Claude review finding
+        1) and the socket is a plain RPC connection again, so the error
+        reply reaches the client. The socket itself is not closed here."""
+        att = self._attachments.pop(conn.sock, None)
+        if att is None:
+            return
+        sess = att.sess
+        if sess is not None:
+            if att in sess.attachments:
+                sess.attachments.remove(att)
+            if sess.control is att:
+                sess.control = None
+        att.sess = None
+        att.closing = True
+        self._conns[conn.sock] = conn
 
     def _dispatch_inner(self, line: bytes, conn: _Conn) -> dict | None:
         try:

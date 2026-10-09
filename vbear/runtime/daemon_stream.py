@@ -692,12 +692,15 @@ class StreamOps:
         s.registered.discard(which)
 
     def _stream_ready(self, s, which: str, now: float) -> None:
-        if which == "stdout":
-            s.on_stdout(now)
-        elif which == "stderr":
-            s.on_stderr(now)
-        elif s.on_writable(now):
-            self._unregister_stream(s, "stdin")
+        try:
+            if which == "stdout":
+                s.on_stdout(now)
+            elif which == "stderr":
+                s.on_stderr(now)
+            elif s.on_writable(now):
+                self._unregister_stream(s, "stdin")
+        except Exception as exc:
+            self._stream_crashed(s, exc)
 
     def _session_room(self, rid: str) -> dict | None:
         """Review round 4 #1: a held leader is a process group VBear still
@@ -746,8 +749,11 @@ class StreamOps:
         try:
             pipeline_store.hold(self.base, pipeline_id, f"failure: session {launch_id}: {why}")
             self._log(f"{launch_id}: flow {pipeline_id} held after a failure: {why}")
-        except (OSError, pipeline_store.StoreRefused) as exc:
-            self._log(f"{launch_id}: cannot hold flow {pipeline_id} after a failure ({exc})")
+        except Exception as exc:          # e.g. ValueError from sanitize: never out of the event loop
+            try:
+                self._log(f"{launch_id}: cannot hold flow {pipeline_id} after a failure ({type(exc).__name__})")
+            except Exception:
+                pass
 
     def _check_failure(self, s) -> None:
         if not getattr(s, "failure_held", False) and s.js.failures:
@@ -755,18 +761,60 @@ class StreamOps:
             self._hold_for_failure(s.pipeline_id, s.launch_id, s.js.failures[-1][0])
 
     def _stream_tick(self, now: float) -> None:
-        self._recheck_held(now)
+        try:
+            self._recheck_held(now)
+        except Exception as exc:
+            self._log(f"held leader recheck failed: {type(exc).__name__}")
         for s in list(self._streams.values()):
-            s.tick(now)
-            self._check_failure(s)
-            if s.writing is None:
-                self._unregister_stream(s, "stdin")
-            if s.stdout_eof:
-                self._unregister_stream(s, "stdout")
-            if s.stderr_eof:
-                self._unregister_stream(s, "stderr")
-            if s.finished:
-                self._finish_stream(s)
+            if self._streams.get(s.launch_id) is not s:
+                continue                          # given up earlier in this pass
+            try:
+                s.tick(now)
+                self._check_failure(s)
+                if s.writing is None:
+                    self._unregister_stream(s, "stdin")
+                if s.stdout_eof:
+                    self._unregister_stream(s, "stdout")
+                if s.stderr_eof:
+                    self._unregister_stream(s, "stderr")
+                if s.finished:
+                    self._finish_stream(s)
+            except Exception as exc:
+                self._stream_crashed(s, exc)
+
+    def _stream_crashed(self, s, exc: Exception) -> None:
+        """The outer guard of every per-session step in the event loop (tick,
+        pipe I/O, end-of-session clean-up; Claude review finding 4): an
+        unexpected exception never leaves the loop. The session is in error
+        (a protocol_error "internal_error" when the journal still takes one,
+        so the failure has its (launch, seq) identity), the flow is held, and
+        the session is given up to manual review without a signal and with
+        its leader kept unreaped (design 5.8). It always leaves _streams, so
+        the same exception cannot repeat on every pass."""
+        why = f"管理 session 時發生未預期的錯誤（{type(exc).__name__}）"
+        for step in (lambda: self._log(f"{s.launch_id}: {why}"),
+                     lambda: s.protocol_error("internal_error", type(exc).__name__),
+                     lambda: setattr(s, "failure_held", True),
+                     lambda: self._hold_for_failure(s.pipeline_id, s.launch_id, why),
+                     lambda: s._abandon(f"{why}，交人工處理") if not s.finished else None):
+            try:
+                step()
+            except Exception:
+                pass
+        try:
+            self._finish_stream(s)
+        except Exception:
+            # The usual clean-up failed too: do the minimum by hand.
+            for step in (lambda: [self._unregister_stream(s, w) for w in list(s.registered)],
+                         lambda: agent_sessions._retain(self.base, s.launch_id, why),
+                         # not a leader the normal clean-up already reaped
+                         lambda: self._hold_leader(s.proc, s.launch_id)
+                         if not isinstance(s.outcome, dict) or s.outcome.get("leader_held", True) else None):
+                try:
+                    step()
+                except Exception:
+                    pass
+            self._streams.pop(s.launch_id, None)
 
     def _finish_stream(self, s) -> None:
         for which in list(s.registered):
@@ -804,23 +852,30 @@ class StreamOps:
         """Daemon shutdown: nobody could manage these afterwards."""
         streams = list(self._streams.values())
         for s in streams:
-            s.terminate("背景程序關閉")
+            try:
+                s.terminate("背景程序關閉")
+            except Exception as exc:
+                self._stream_crashed(s, exc)
+        streams = [s for s in streams if s.launch_id in self._streams]
         deadline = time.monotonic() + stream_session.TERM_GRACE + stream_session.KILL_GRACE + 2.0
         while streams and time.monotonic() < deadline:
             for s in streams:
-                for which in ("stdout", "stderr"):
-                    if which in s.registered:
-                        try:
+                try:
+                    for which in ("stdout", "stderr"):
+                        if which in s.registered:
                             getattr(s, "on_" + which)(time.monotonic())
-                        except OSError:
-                            pass
-                s.tick(time.monotonic())
-                if s.finished:
-                    self._finish_stream(s)
-            streams = [s for s in streams if not s.finished]
+                    s.tick(time.monotonic())
+                    if s.finished:
+                        self._finish_stream(s)
+                except Exception as exc:
+                    self._stream_crashed(s, exc)          # leaves _streams, kept for review
+            streams = [s for s in streams if not s.finished and s.launch_id in self._streams]
             time.sleep(0.05)
         for s in streams:
-            s._killpg(signal.SIGKILL)
+            try:
+                s._killpg(signal.SIGKILL)
+            except Exception:
+                pass                              # no proven identity: nothing is sent; kept for review below
             self._log(f"{s.sid}: still running at shutdown; launch kept for manual review")
             try:
                 agent_sessions._retain(self.base, s.launch_id, "背景程序關閉時程序未能證明已結束")
