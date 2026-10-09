@@ -44,6 +44,7 @@ class CodexConstants:
     network_restricted: object            # turn_context.payload.permission_profile.network (probe)
     multi_agent_disabled: object          # world_state.payload.multi_agent_mode (probe)
     usage_fields: tuple                   # the six counts of a token_usage_record's usage objects
+    cache_fields: tuple                   # which of them are cache counts: each must be <= input_tokens
     model_message_kinds: frozenset        # what a model produces: counts as a model response item
     approval_policy: str
     sandbox_type: str
@@ -106,6 +107,7 @@ VERSIONS: dict[str, CodexConstants] = {
         multi_agent_disabled="disabled",          # (probe)
         usage_fields=("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
                       "reasoning_output_tokens", "total_tokens"),
+        cache_fields=("cached_input_tokens", "cache_write_input_tokens"),
         model_message_kinds=frozenset({("response_item", "message"), ("response_item", "reasoning"),
                                        ("response_item", "custom_tool_call")}),
         approval_policy="never",

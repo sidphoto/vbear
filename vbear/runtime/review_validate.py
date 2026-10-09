@@ -151,19 +151,62 @@ class ReportResult:
     problems: list = field(default_factory=list)
 
 
+CONTROL_KEYS = ("REVIEWED_COMMIT", "BASE_IS_ANCESTOR", "VERDICT")
+CONTROL_LINE_IN_FENCE = "控制欄位出現在 code fence 裡面"
+CONTROL_LINE_WRAPPED = "控制欄位被引用、清單、加粗或行內 code 包起來，不是獨立的一行"
+UNCLOSED_FENCE = "code fence 沒有關閉"
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+# a line that is, or is dressed up as, a control line: any run of quote,
+# list, heading, bold, italic or code markers (or numbering) in front of
+# the key, then the colon
+_CONTROL_LIKE = re.compile(r"^[\s>*+\-`_#~\d.)(\[\]]*(?:" + "|".join(CONTROL_KEYS) + r")[*_`\s]*:")
+
+
+def _split_fences(lines: list[str]) -> tuple[list[str], list[str], bool]:
+    """(lines outside any code fence, lines inside one, a fence is left
+    open). ``` and ~~~ fences; a fence closes on a line of the same
+    character at least as long; the fence lines themselves are neither."""
+    outside, inside = [], []
+    opener: tuple[str, int] | None = None
+    for ln in lines:
+        m = _FENCE.match(ln)
+        if opener is None:
+            if m:
+                opener = (m.group(1)[0], len(m.group(1)))
+            else:
+                outside.append(ln)
+        elif m and m.group(1)[0] == opener[0] and len(m.group(1)) >= opener[1] \
+                and not ln.strip().strip(opener[0]):
+            opener = None
+        else:
+            inside.append(ln)
+    return outside, inside, opener is not None
+
+
 def check_report(text, commit: str) -> ReportResult:
     """The report's form. Everything a person relies on is on its own exact
-    line: REVIEWED_COMMIT (the reviewed commit), BASE_IS_ANCESTOR (v29.9: the
-    reviewer's own statement that the flow's base commit is an ancestor; VBear
-    has not verified it), and VERDICT as the last non-empty line."""
+    line, outside any code fence: REVIEWED_COMMIT (the reviewed commit),
+    BASE_IS_ANCESTOR (v29.9: the reviewer's own statement that the flow's base
+    commit is an ancestor; VBear has not verified it), and VERDICT as the last
+    non-empty line. A control line inside a fence, or one quoted, listed,
+    bolded or put in inline code, is a problem of its own (Codex S2b part 2
+    review R2 #2), not something that is skipped."""
     out = ReportResult(None, None)
     if not _text(text, REPORT_MAX):
         out.problems.append("報告不是合法的 UTF-8 或超過 256 KiB")
         return out
     lines = text.split("\n")
+    outside, inside, open_fence = _split_fences(lines)
+    if open_fence:
+        out.problems.append(UNCLOSED_FENCE)
+    if any(_CONTROL_LIKE.match(ln) for ln in inside):
+        out.problems.append(CONTROL_LINE_IN_FENCE)
+    exact = tuple(f"{k}:" for k in CONTROL_KEYS)
+    if any(_CONTROL_LIKE.match(ln) and not ln.startswith(exact) for ln in outside):
+        out.problems.append(CONTROL_LINE_WRAPPED)
 
     def only(prefix: str) -> list[str]:
-        return [ln for ln in lines if ln.startswith(prefix)]
+        return [ln for ln in outside if ln.startswith(prefix)]
 
     got = only("REVIEWED_COMMIT:")
     if got != [f"REVIEWED_COMMIT: {commit}"]:
@@ -198,6 +241,18 @@ def _stat_key(st) -> tuple:
 
 
 def open_rollout(codex_home, c: cc.CodexConstants, thread_id: str, dates) -> tuple[int, os.stat_result, str]:
+    """See _open_rollout. Nothing but ReviewInvalid comes out of here: a
+    wrong argument type or any other exception is a reason that names only
+    the exception's type (Codex S2b part 2 review R2 #3)."""
+    try:
+        return _open_rollout(codex_home, c, thread_id, dates)
+    except ReviewInvalid:
+        raise
+    except Exception as exc:
+        raise ReviewInvalid(f"rollout 找不到或無法安全開啟（{type(exc).__name__}）") from exc
+
+
+def _open_rollout(codex_home, c: cc.CodexConstants, thread_id: str, dates) -> tuple[int, os.stat_result, str]:
     """The rollout of ``thread_id``: exactly one file named
     ``<prefix>…-<thread_id>.jsonl`` under CODEX_HOME/<rollout_dir>/<date
     parts> for the given dates (start and end of the review), opened through
@@ -292,6 +347,18 @@ class CopyResult:
 
 def copy_rollout(src_fd: int, dst_dir_fd: int, name: str, *, expect_sha256: str, src_before,
                  dst_path: str = "") -> CopyResult:
+    """See _copy_rollout. Nothing is raised, whatever the arguments are
+    (S2b part 2 review R2 #3): an exception of any kind is a reason that names
+    only its type."""
+    try:
+        return _copy_rollout(src_fd, dst_dir_fd, name, expect_sha256=expect_sha256, src_before=src_before,
+                             dst_path=dst_path)
+    except Exception as exc:
+        return CopyResult(False, None, [f"rollout 複製失敗（{type(exc).__name__}）"])
+
+
+def _copy_rollout(src_fd: int, dst_dir_fd: int, name: str, *, expect_sha256: str, src_before,
+                  dst_path: str = "") -> CopyResult:
     """Copy the verified rollout (from the same descriptor, rewound) into a
     file created exclusively in the review record directory (O_EXCL |
     O_NOFOLLOW, 0600), hashing the copy. The two hashes must be equal and the
@@ -626,8 +693,10 @@ class _Walk:
             self.bad("token_usage_record.turn_id 不是這次審查的 turn_id")
         if usage is None or turn is None or thread is None:
             return
-        if usage["input_tokens"] <= 0 or usage["total_tokens"] <= 0 or usage["cached_input_tokens"] > usage["input_tokens"]:
-            self.bad("token_usage_record 的 usage 輸入為 0，或快取超過輸入")
+        if usage["input_tokens"] <= 0 or usage["total_tokens"] <= 0:
+            self.bad("token_usage_record 的 usage 輸入或總數為 0")
+        if any(usage[f] > usage["input_tokens"] for f in self.c.cache_fields):
+            self.bad("token_usage_record 的 usage 有快取欄位超過輸入")
         for f in self.c.usage_fields:
             if turn[f] != self.prev_turn[f] + usage[f] or thread[f] != self.prev_thread[f] + usage[f]:
                 self.bad("用量的累計鏈對不上（中間可能有缺漏）")

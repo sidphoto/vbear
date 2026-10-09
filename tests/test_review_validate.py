@@ -172,6 +172,66 @@ class ReportTests(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertTrue(rv.check_report(text, rf.COMMIT).problems, name)
 
+    def test_control_lines_inside_a_code_fence_are_a_problem(self):
+        # Codex S2b part 2 review R2 #2: not skipped, not counted
+        good = rf.report()
+        c, b, v = f"REVIEWED_COMMIT: {rf.COMMIT}", "BASE_IS_ANCESTOR: yes", "VERDICT: PASS"
+        cases = {
+            "commit in a backtick fence": good.replace(c + "\n", "```\n" + c + "\n```\n"),
+            "ancestor in a tilde fence": good.replace(b + "\n", "~~~\n" + b + "\n~~~\n"),
+            "verdict in a fence": good.replace(v + "\n", "```\n" + v + "\n```\n"),
+            "a long fence": good.replace(c + "\n", "`````\n" + c + "\n`````\n"),
+            "fence with an info string": good.replace(c + "\n", "```text\n" + c + "\n```\n"),
+            "indented fence": good.replace(c + "\n", "  ```\n" + c + "\n  ```\n"),
+            "a real copy outside and a fenced copy": good + "```\n" + c + "\n```\n" + v + "\n",
+            "everything after an open fence": good.replace("No defects found.\n", "```\nNo defects found.\n"),
+            "a shorter closer does not close": good.replace(c + "\n", "````\n" + c + "\n```\n"),
+            "the other fence character does not close": good.replace(c + "\n", "```\n" + c + "\n~~~\n"),
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                rep = rv.check_report(text, rf.COMMIT)
+                self.assertTrue(rep.problems, name)
+                self.assertTrue(rep.verdict is None or rv.UNCLOSED_FENCE in rep.problems
+                                or rv.CONTROL_LINE_IN_FENCE in rep.problems, name)
+        rep = rv.check_report(good.replace(c + "\n", "```\n" + c + "\n```\n" + c + "\n"), rf.COMMIT)
+        self.assertIn(rv.CONTROL_LINE_IN_FENCE, rep.problems)             # the fenced one is a problem by itself
+        self.assertIn(rv.UNCLOSED_FENCE, rv.check_report(good.replace("No defects found.\n", "```\nx\n"),
+                                                         rf.COMMIT).problems)
+
+    def test_wrapped_control_lines_are_a_problem(self):
+        good = rf.report()
+        c, b, v = f"REVIEWED_COMMIT: {rf.COMMIT}", "BASE_IS_ANCESTOR: yes", "VERDICT: PASS"
+        wraps = {
+            "quote": lambda x: "> " + x, "nested quote": lambda x: ">> " + x, "dash list": lambda x: "- " + x,
+            "star list": lambda x: "* " + x, "plus list": lambda x: "+ " + x, "numbered": lambda x: "1. " + x,
+            "bold": lambda x: "**" + x + "**", "bold key": lambda x: "**" + x.replace(":", ":**", 1),
+            "italic": lambda x: "_" + x + "_", "inline code": lambda x: "`" + x + "`",
+            "heading": lambda x: "# " + x, "indented": lambda x: "  " + x, "tab": lambda x: "\t" + x,
+            "in a table": lambda x: "| " + x + " |",
+        }
+        for line in (c, b, v):
+            for name, wrap in wraps.items():
+                with self.subTest(line=line[:12], wrap=name):
+                    rep = rv.check_report(good.replace(line, wrap(line)), rf.COMMIT)
+                    self.assertTrue(rep.problems)
+                    if not (name == "in a table"):
+                        self.assertIn(rv.CONTROL_LINE_WRAPPED, rep.problems)
+        # a wrapped copy next to the correct line is a problem too
+        rep = rv.check_report(good + "", rf.COMMIT)
+        self.assertEqual(rep.problems, [])
+        self.assertIn(rv.CONTROL_LINE_WRAPPED,
+                      rv.check_report(good.replace("No defects found.", "> " + v + "\nNo defects found."),
+                                      rf.COMMIT).problems)
+
+    def test_ordinary_code_blocks_and_mentions_are_fine(self):
+        text = rf.report(extra="Here is the snippet:\n```python\nprint('x')\n```\nand `inline` code, **bold** text,\n"
+                               "- a list item\n> a quote\nThe verdict below follows the rules.")
+        rep = rv.check_report(text, rf.COMMIT)
+        self.assertEqual((rep.problems, rep.verdict), ([], "PASS"))
+        rep = rv.check_report(rf.report(extra="~~~\ncode with a REVIEWED_COMMIT mention\n~~~"), rf.COMMIT)
+        self.assertEqual(rep.problems, [])                  # a fence that does not look like a control line
+
     def test_the_verdicts_and_the_ancestor_line(self):
         for verdict in rv.VERDICTS:
             rep = rv.check_report(rf.report(verdict=verdict), rf.COMMIT)
@@ -183,6 +243,42 @@ class ReportTests(unittest.TestCase):
             self.assertEqual((rep.base_is_ancestor, rep.verdict, rep.problems), (False, verdict, [rv.BASE_NOT_ANCESTOR]))
         rep = rv.check_report(rf.report() + "\n\n", rf.COMMIT)
         self.assertEqual(rep.problems, [])                                       # blank lines after are fine
+
+
+class CacheFieldTests(unittest.TestCase):
+    def test_every_cache_field_must_stay_within_the_input(self):
+        # Codex S2b part 2 review R2 #1
+        self.assertEqual(set(C.cache_fields), {"cached_input_tokens", "cache_write_input_tokens"})
+        for field_name in C.cache_fields:
+            _, recs, _ = rf.valid_run()
+            rec = [r for r in recs if r["type"] == "token_usage_record"][0]["payload"]
+            rec["usage"][field_name] = rec["usage"]["input_tokens"] + 1
+            # keep the cumulative chain intact so only this rule can fire
+            for key in ("turn_token_usage", "thread_token_usage"):
+                rec[key][field_name] = rec["usage"][field_name]
+            out = run_rollout(recs)
+            with self.subTest(field=field_name):
+                self.assertTrue(any("快取欄位超過輸入" in r for r in out.reasons), out.reasons)
+        # equal to the input is allowed
+        _, recs, _ = rf.valid_run()
+        first = [r for r in recs if r["type"] == "token_usage_record"][0]["payload"]
+        first["usage"]["cache_write_input_tokens"] = first["usage"]["input_tokens"]
+        for key in ("turn_token_usage", "thread_token_usage"):
+            first[key]["cache_write_input_tokens"] = first["usage"]["input_tokens"]
+        second = [r for r in recs if r["type"] == "token_usage_record"][1]["payload"]
+        for key in ("turn_token_usage", "thread_token_usage"):
+            second[key]["cache_write_input_tokens"] = first["usage"]["input_tokens"] + second["usage"]["cache_write_input_tokens"]
+        evs, _, _ = rf.valid_run()
+        out = run_rollout(recs, events_usage={f: second["turn_token_usage"][f] for f in C.events_usage_fields})
+        self.assertEqual([r for r in out.reasons if "快取" in r], [])
+
+    def test_a_cache_field_that_is_not_a_count_is_refused(self):
+        for field_name in C.cache_fields:
+            for bad in (-1, True, 1.5, "1", None):
+                with self.subTest(field=field_name, bad=bad):
+                    _, recs, _ = rf.valid_run()
+                    [r for r in recs if r["type"] == "token_usage_record"][0]["payload"]["usage"][field_name] = bad
+                    self.assertTrue(run_rollout(recs).reasons)
 
 
 class RolloutTests(unittest.TestCase):
@@ -470,6 +566,35 @@ class LocateAndCopyTests(unittest.TestCase):
         with mock.patch.object(rv.os, "listdir", side_effect=PermissionError(13, "Permission denied")):
             with self.assertRaises(rv.ReviewInvalid):
                 self.open_()
+
+    def test_wrong_argument_types_come_out_as_reasons(self):
+        # Codex S2b part 2 review R2 #3: nothing but ReviewInvalid / a CopyResult
+        import os
+        self.put(self.day1)
+        for label, call in (("dates is None", lambda: rv.open_rollout(self.home, C, rf.THREAD, None)),
+                            ("dates holds a string", lambda: rv.open_rollout(self.home, C, rf.THREAD, ["2026-10-08"])),
+                            ("dates holds an int", lambda: rv.open_rollout(self.home, C, rf.THREAD, [5])),
+                            ("home is an int", lambda: rv.open_rollout(5, C, rf.THREAD, [self.day1])),
+                            ("home is None", lambda: rv.open_rollout(None, C, rf.THREAD, [self.day1])),
+                            ("constants are None", lambda: rv.open_rollout(self.home, None, rf.THREAD, [self.day1]))):
+            with self.subTest(case=label), self.assertRaises(rv.ReviewInvalid) as cm:
+                call()
+            self.assertTrue(cm.exception.reasons)
+        path, out, fd, st, dfd, sha = self.copy_setup(b"a\n")
+        for label, kw in (("name is an int", {"name": 5}), ("name is None", {"name": None}),
+                          ("name has a NUL", {"name": "a\0b"}), ("dst_dir_fd is a string", {"dfd": "x"}),
+                          ("src_fd is a string", {"src": "x"}), ("sha is an int", {"expect_sha256": 5}),
+                          ("src_before is None", {"src_before": None}), ("dst_path is an int", {"dst_path": 5})):
+            args = dict(src=fd, dfd=dfd, name="w.jsonl", expect_sha256=sha, src_before=st, dst_path=str(out))
+            args.update(kw)
+            with self.subTest(case=label):
+                res = rv.copy_rollout(args["src"], args["dfd"], args["name"], expect_sha256=args["expect_sha256"],
+                                      src_before=args["src_before"], dst_path=args["dst_path"])
+                if label != "dst_path is an int":
+                    self.assertFalse(res.ok)
+                self.assertTrue(isinstance(res, rv.CopyResult))
+                for leftover in out.iterdir():
+                    leftover.unlink()
 
     def test_a_file_over_the_limit_is_refused(self):
         from unittest import mock
