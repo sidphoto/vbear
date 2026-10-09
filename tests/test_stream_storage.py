@@ -851,13 +851,21 @@ class FlowContextTests(StateDir):
             stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)
         self.assertEqual(cm.exception.code, "failed")
         self.assertEqual(stream_flow.failure_ids(self.base, self.fid, self.tid), [f"{job}#invalid"])
+        # and it says what it is: by the outcome, not the (now cleaned) state
+        text = stream_flow.unresolved_failure(ctx)
+        self.assertIn("審查無效", text)
+        self.assertIn("rollout 不符", text)
+        self.assertNotIn("None", text)
         with ps.Pipeline(self.base, self.tid, create=True) as p:
             p.record_release(self.fid, time.time(), [f"{job}#invalid"])     # only the user's "continue" lets it go
         self.assertIsNone(stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
         # the same for a review kept for a person and cleaned up later
         other = self.review(2, state="cleaned", outcome="manual_review", retained_at=1791467063.473483,
                             retained_reason="x")
-        self.assertIn(other, stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
+        text = stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid))
+        self.assertIn(other, text)
+        self.assertIn("交人工處理", text)
+        self.assertNotIn("None", text)
 
     def test_a_review_that_cannot_be_read_refuses_the_count(self):
         from vbear.runtime import review_store as rs

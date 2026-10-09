@@ -302,9 +302,10 @@ def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
 
 def _review_failure(m: dict) -> dict:
     ident = review_store.failure_id(m)
-    why = {"invalid": "審查無效", "manual_review": "審查交人工處理"}.get(m["state"])
+    # by the outcome, which a clean-up does not change (S2b part 1 review R2)
+    why = {"invalid": "審查無效", "manual_review": "審查交人工處理"}.get(m["outcome"])
     reasons = (m.get("invalid_reasons") or [])[:3]
-    if m["state"] == "manual_review":
+    if m["outcome"] == "manual_review":
         reasons = [str(m.get("retained_reason"))[:200]]
     return {"failure_ids": [ident] if ident else [],
             "failures": [{"id": ident, "why": f"{why}：{'；'.join(reasons)}"[:300],
