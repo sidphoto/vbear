@@ -286,85 +286,66 @@ class CommitOrderTests(Scenario):
 
 
 class SameBytesTests(Scenario):
-    """Codex 3c review #2: what is judged is what is saved, and a file
-    replaced in between is noticed."""
+    """Codex 3c R1 #2 and R3: events.jsonl and stderr.log are opened once and
+    read whole into memory; the judgement and the saved record both use those
+    bytes, and the names are never opened again. Whatever happens to the
+    files after they were read cannot make the record differ from what was
+    judged, and there is no second look at the path to race."""
 
-    def swap_after_judging(self, change):
+    def after_judging(self, change):
         real = rfn.git_objects.commit_exists
 
-        def later(*a, **kw):                       # runs after events.jsonl was read and judged
+        def later(*a, **kw):                       # runs after both files were read and events.jsonl judged
             change()
             return real(*a, **kw)
         return mock.patch.object(rfn.git_objects, "commit_exists", later)
 
-    def test_a_replaced_events_file_is_invalid_and_the_record_holds_what_was_judged(self):
+    def test_the_files_are_opened_for_reading_only_once(self):
+        reads = []
+        real_open = os.open
+
+        def spy(path, flags, *a, **kw):
+            if (str(path) in ("events.jsonl", "stderr.log") and "dir_fd" in kw
+                    and not flags & (os.O_CREAT | os.O_WRONLY | os.O_RDWR)):
+                reads.append(str(path))
+            return real_open(path, flags, *a, **kw)
+        with mock.patch.object(os, "open", spy):
+            out = self.finish()
+        self.assertEqual(out.outcome, "valid")
+        self.assertEqual(sorted(reads), ["events.jsonl", "stderr.log"])        # once each, from judging to saving
+
+    def test_a_change_after_reading_cannot_change_the_record(self):
+        originals = {n: (self.job / n).read_bytes() for n in ("events.jsonl", "stderr.log")}
+
+        def change():
+            (self.job / "events.jsonl.new").write_bytes(b'{"type":"thread.started","thread_id":"x"}\n')
+            os.rename(self.job / "events.jsonl.new", self.job / "events.jsonl")            # replaced
+            with open(self.job / "stderr.log", "ab") as f:                                  # appended to
+                f.write(b"more\n")
+        with self.after_judging(change):
+            out = self.finish()
+        self.assertEqual(out.outcome, "valid")                                    # the bytes that were judged are valid
+        for name, data in originals.items():
+            self.assertEqual((self.record() / name).read_bytes(), data)           # and those are what the record holds
+
+    def test_a_same_size_rewrite_after_reading_cannot_change_the_record(self):
         original = (self.job / "events.jsonl").read_bytes()
 
-        def replace():
-            (self.job / "events.jsonl.new").write_bytes(b'{"type":"thread.started","thread_id":"x"}\n')
-            os.rename(self.job / "events.jsonl.new", self.job / "events.jsonl")
-        with self.swap_after_judging(replace):
+        def rewrite():
+            with open(self.job / "events.jsonl", "r+b") as f:
+                f.write(b"X" + original[1:])
+        with self.after_judging(rewrite):
             out = self.finish()
-        self.assertEqual(out.outcome, "invalid")
-        self.assertIn("被替換或改動", " | ".join(out.reasons))
-        self.assertEqual((self.record() / "events.jsonl").read_bytes(), original)   # the judged bytes
-        self.assertTrue((self.job / "events.jsonl").exists())                        # the stranger is kept for a person
-        self.assertNotEqual(self.manifest()["state"], "valid")
+        self.assertEqual(out.outcome, "valid")
+        self.assertEqual((self.record() / "events.jsonl").read_bytes(), original)
 
-    def test_a_file_changed_in_place_is_noticed(self):
-        def append():
-            with open(self.job / "events.jsonl", "ab") as f:
-                f.write(b"\n")
-        with self.swap_after_judging(append):
-            out = self.finish()
-        self.assertEqual(out.outcome, "invalid")
-        self.assertIn("events.jsonl", " | ".join(out.reasons))
-
-    def test_a_same_size_rewrite_in_place_is_noticed(self):
-        # Codex 3c R2: device, inode and size do not change when the bytes are
-        # overwritten with others of the same length; the SHA-256 does
-        for name in ("events.jsonl", "stderr.log"):
-            with self.subTest(file=name):
-                self.tearDown_and_setUp()
-
-                def rewrite(name=name):
-                    path = self.job / name
-                    data = bytearray(path.read_bytes())
-                    data[0] = data[0] ^ 0x01 if data[0] not in b"\n" else data[0]
-                    with open(path, "r+b") as f:             # same inode, same size
-                        f.write(bytes(data))
-                    self.assertNotEqual(bytes(data), self.expected[name])
-                self.expected = {name: (self.job / name).read_bytes()}
-                with self.swap_after_judging(rewrite):
-                    out = self.finish()
-                self.assertEqual(out.outcome, "invalid")
-                self.assertIn(name, " | ".join(out.reasons))
-                self.assertEqual((self.record() / name).read_bytes(), self.expected[name])   # what was judged
-                self.assertTrue((self.job / name).exists())                                     # kept for a person
-
-    def test_stderr_is_treated_the_same_way(self):
-        original = (self.job / "stderr.log").read_bytes()
-
-        def replace():
-            os.unlink(self.job / "stderr.log")
-            (self.job / "stderr.log").write_text("something else\n")
-        with self.swap_after_judging(replace):
-            out = self.finish()
+    def test_a_file_that_is_not_a_plain_file_is_not_read(self):
+        os.unlink(self.job / "stderr.log")
+        os.symlink("/etc/hosts", self.job / "stderr.log")
+        out = self.finish()
         self.assertEqual(out.outcome, "invalid")
         self.assertIn("stderr.log", " | ".join(out.reasons))
-        self.assertEqual((self.record() / "stderr.log").read_bytes(), original)
-
-    def test_the_file_is_read_only_once(self):
-        opened = []
-        real = rfn.strictjson.open_owned
-
-        def spy(path, **kw):
-            opened.append(str(path))
-            return real(path, **kw)
-        with mock.patch.object(rfn.strictjson, "open_owned", spy):
-            self.finish()
-        self.assertEqual(sorted(x for x in opened if x in ("events.jsonl", "stderr.log")),
-                         ["events.jsonl", "stderr.log"])             # once each, not once to judge and once to save
+        self.assertFalse((self.record() / "stderr.log").exists())
 
 
 class HoldTests(Scenario):

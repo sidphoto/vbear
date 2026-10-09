@@ -28,7 +28,6 @@ durably, result.json last. The rollout *source* is never deleted.
 from __future__ import annotations
 
 import datetime
-import hashlib
 import json
 import os
 import shutil
@@ -84,51 +83,16 @@ class _Dir:
 
 # ---- reading what the process left ------------------------------------------------------------------
 
-@dataclass
-class _Blob:
-    """A job file read once, from one descriptor: the bytes that are judged
-    are the bytes that are saved, and the identity it had when read is kept
-    so that a replacement in between is noticed (Codex S2b part 3c review #2)."""
-    data: bytes
-    dev: int
-    ino: int
-    size: int
-    sha256: str
-
-
-def _read_blob(job_fd: int, name: str, limit: int) -> _Blob:
+def _read_once(job_fd: int, name: str, limit: int) -> bytes:
+    """A job file, opened once and read whole into memory (at most ``limit``
+    bytes). Everything after this - judging it and saving it into the record -
+    uses these bytes and never opens the name again, so there is no gap
+    between "what was judged" and "what was saved" for anyone to use
+    (Codex S2b part 3c R3: the earlier re-open to compare had a gap of its
+    own)."""
     fd, _ = strictjson.open_owned(name, dir_fd=job_fd, max_bytes=limit)
     try:
-        st = os.fstat(fd)
-        data = strictjson.read_fd(fd, limit)
-    finally:
-        os.close(fd)
-    return _Blob(data, st.st_dev, st.st_ino, len(data), hashlib.sha256(data).hexdigest())
-
-
-def _unchanged(job_fd: int, name: str, blob: _Blob) -> bool:
-    """Whether ``name`` is still exactly what was read: a regular file (not a
-    link) with the same device, inode and size, and the same SHA-256 of its
-    bytes (a same-size rewrite in place keeps the first three; Codex 3c R2).
-    Anything else, and any error, is "no"."""
-    try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=job_fd)
-    except OSError:
-        return False
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino, st.st_size) != (blob.dev, blob.ino, blob.size):
-            return False
-        h, left = hashlib.sha256(), blob.size + 1             # one byte more than expected: a longer file shows
-        while left > 0:
-            chunk = os.read(fd, min(left, 1 << 20))
-            if not chunk:
-                break
-            h.update(chunk)
-            left -= len(chunk)
-        return left == 1 and h.hexdigest() == blob.sha256
-    except OSError:
-        return False
+        return strictjson.read_fd(fd, limit)
     finally:
         os.close(fd)
 
@@ -315,15 +279,15 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
         saved_all = False
     try:
         with _Dir(jdir) as job_fd:
-            blobs: dict[str, _Blob] = {}
+            blobs: dict[str, bytes] = {}
             for fname in (EVENTS_NAME, STDERR_NAME):
                 try:
-                    blobs[fname] = _read_blob(job_fd, fname, strictjson.CODEX_EVENTS.file_bytes)
+                    blobs[fname] = _read_once(job_fd, fname, strictjson.CODEX_EVENTS.file_bytes)
                 except (strictjson.ReadRefused, OSError) as exc:
                     reasons.append(f"{fname} 無法讀取（{type(exc).__name__}），不能判定或保存到審查紀錄")
                     saved_all = False
             if EVENTS_NAME in blobs:
-                tracker, events, ev_reasons = judge_events(blobs[EVENTS_NAME].data, c)
+                tracker, events, ev_reasons = judge_events(blobs[EVENTS_NAME], c)
             else:
                 tracker, events, ev_reasons = review_validate.EventsTracker(c), None, []
             reasons += ev_reasons
@@ -378,7 +342,7 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
                     files.append(("last.md", events.last_message.encode("utf-8")))
                 for name in (EVENTS_NAME, STDERR_NAME):
                     if name in blobs:
-                        files.append((name, blobs[name].data))
+                        files.append((name, blobs[name]))
                 for name, data in files:
                     saved = _write_new(record_fd, name, data, record_path)
                     if not saved.ok:
@@ -386,10 +350,6 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
                         reasons.append(saved.reason)
                         if saved.leftover:
                             leftover, leftover_bytes = leftover or saved.leftover, leftover_bytes + saved.leftover_bytes
-            for fname, blob in blobs.items():
-                if not _unchanged(job_fd, fname, blob):
-                    reasons.append(f"{fname} 在判定與保存之間被替換或改動")
-                    saved_all = False                                  # the job's files are kept for a person
     except OSError as exc:
         reasons.append(f"審查工作資料夾無法開啟（{exc.strerror or type(exc).__name__}）")
         saved_all = False
