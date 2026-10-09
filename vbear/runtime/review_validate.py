@@ -1,0 +1,576 @@
+"""When a Codex review is valid (design 5.5, 5.6, v29.9): the stdout events,
+the report, and the rollout, all against the version's constants
+(codex_constants). Pure functions over bytes and file descriptors; nothing is
+written, nothing is signalled, no process is started.
+
+A review is valid only if every rule holds; ``ReviewInvalid`` carries the
+reasons, which are fixed texts that name fields and never echo a value from
+the input (a value may be anything, including a lone surrogate or a secret).
+Fields VBear does not read may be present and are ignored; every field it
+does read has an exact type and range. Any exception while looking at the
+input is itself a reason, never an exception out of here.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+from dataclasses import dataclass, field
+
+from .. import strictjson
+from . import codex_constants as cc
+from . import review_store
+
+REPORT_MAX = 256 << 10
+ROLLOUT_MAX = 64 << 20
+MAX_REASONS = 16
+VERDICTS = ("PASS", "NEEDS WORK", "BLOCKED")
+READ_CHUNK = 1 << 20
+
+
+class ReviewInvalid(Exception):
+    def __init__(self, reasons):
+        reasons = [reasons] if isinstance(reasons, str) else list(reasons)
+        super().__init__("；".join(reasons[:3]))
+        self.reasons = reasons[:MAX_REASONS]
+
+
+def _int(v, low=0, high=cc.TOKEN_MAX) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and low <= v <= high
+
+
+def _text(v, limit: int) -> bool:
+    """A string that is valid UTF-8 (no lone surrogate) and at most ``limit`` bytes."""
+    if not isinstance(v, str):
+        return False
+    try:
+        return len(v.encode("utf-8")) <= limit
+    except Exception:
+        return False
+
+
+# ---- stdout events (5.5 item 2) -------------------------------------------------------------
+
+@dataclass
+class EventsResult:
+    thread_id: str
+    last_message: str
+    usage: dict
+    events: int
+
+
+class EventsTracker:
+    """Fed the lines of ``codex exec --json`` in order. ``feed`` raises
+    ReviewInvalid at the first event that breaks a rule; ``finish`` checks
+    that the stream is complete."""
+
+    def __init__(self, c: cc.CodexConstants):
+        self.c = c
+        self.events = 0
+        self.thread_id: str | None = None
+        self.turn_started = False
+        self.turn_completed = False
+        self.last_message: str | None = None
+        self.usage: dict | None = None
+
+    def feed(self, line: bytes) -> None:
+        try:
+            self._feed(line)
+        except ReviewInvalid:
+            raise
+        except Exception as exc:
+            raise ReviewInvalid(f"事件無法檢查（{type(exc).__name__}）") from exc
+
+    def _feed(self, line: bytes) -> None:
+        c = self.c
+        parsed = strictjson.loads_object(line, strictjson.CODEX_EVENTS)
+        if not parsed.ok:
+            raise ReviewInvalid("事件不是嚴格的 JSON 物件")
+        ev = parsed.value
+        self.events += 1
+        kind = ev.get("type")
+        if not isinstance(kind, str) or kind not in c.event_kinds:
+            raise ReviewInvalid("出現未知的事件種類")
+        if kind in c.failure_events:
+            raise ReviewInvalid("Codex 回報失敗事件")
+        if self.turn_completed:
+            raise ReviewInvalid("turn.completed 之後還有事件")
+        if self.events == 1:
+            if kind != "thread.started":
+                raise ReviewInvalid("第一個事件不是 thread.started")
+            tid = ev.get("thread_id")
+            if not (isinstance(tid, str) and review_store.THREAD_RE.match(tid)):
+                raise ReviewInvalid("thread_id 不合法")
+            self.thread_id = tid
+            return
+        if kind == "thread.started":
+            raise ReviewInvalid("thread.started 出現不只一次")
+        if kind == "turn.started":
+            if self.turn_started:
+                raise ReviewInvalid("turn.started 出現不只一次")
+            self.turn_started = True
+            return
+        if not self.turn_started:
+            raise ReviewInvalid("事件出現在 turn.started 之前")
+        if kind in ("item.started", "item.completed"):
+            item = ev.get("item")
+            if not isinstance(item, dict) or not isinstance(item.get("type"), str):
+                raise ReviewInvalid("item 的格式不符")
+            if kind == "item.completed" and item["type"] == c.message_item_type:
+                text = item.get(c.message_text_key)
+                if not _text(text, REPORT_MAX):
+                    raise ReviewInvalid("最後一則回覆不是合法的 UTF-8 或超過 256 KiB")
+                self.last_message = text
+            return
+        # turn.completed
+        usage = ev.get("usage")
+        if not isinstance(usage, dict) or not all(_int(usage.get(f)) for f in c.events_usage_fields):
+            raise ReviewInvalid("turn.completed 的 usage 不合法")
+        self.usage = {f: usage[f] for f in c.events_usage_fields}
+        self.turn_completed = True
+
+    def finish(self) -> EventsResult:
+        if self.thread_id is None:
+            raise ReviewInvalid("沒有 thread.started")
+        if not self.turn_started or not self.turn_completed:
+            raise ReviewInvalid("事件不完整：缺少 turn.started 或 turn.completed")
+        if self.last_message is None:
+            raise ReviewInvalid("事件裡沒有最後一則回覆")
+        return EventsResult(self.thread_id, self.last_message, dict(self.usage), self.events)
+
+
+# ---- the report, last.md (5.5 item 3) -----------------------------------------------------------
+
+@dataclass
+class ReportResult:
+    verdict: str | None
+    base_is_ancestor: bool | None
+    problems: list = field(default_factory=list)
+
+
+def check_report(text, commit: str) -> ReportResult:
+    """The report's form. Everything a person relies on is on its own exact
+    line: REVIEWED_COMMIT (the reviewed commit), BASE_IS_ANCESTOR (v29.9: the
+    reviewer's own statement that the flow's base commit is an ancestor; VBear
+    has not verified it), and VERDICT as the last non-empty line."""
+    out = ReportResult(None, None)
+    if not _text(text, REPORT_MAX):
+        out.problems.append("報告不是合法的 UTF-8 或超過 256 KiB")
+        return out
+    lines = text.split("\n")
+
+    def only(prefix: str) -> list[str]:
+        return [ln for ln in lines if ln.startswith(prefix)]
+
+    got = only("REVIEWED_COMMIT:")
+    if got != [f"REVIEWED_COMMIT: {commit}"]:
+        out.problems.append("REVIEWED_COMMIT 不是剛好一行，或不等於被審 commit")
+    anc = only("BASE_IS_ANCESTOR:")
+    if len(anc) == 1 and anc[0] in ("BASE_IS_ANCESTOR: yes", "BASE_IS_ANCESTOR: no"):
+        out.base_is_ancestor = anc[0].endswith("yes")
+    else:
+        out.problems.append("BASE_IS_ANCESTOR 不是剛好一行 yes 或 no")
+    verdicts = only("VERDICT:")
+    nonempty = [ln for ln in lines if ln.strip()]
+    if (len(verdicts) == 1 and verdicts[0] in tuple(f"VERDICT: {v}" for v in VERDICTS)
+            and nonempty and nonempty[-1] == verdicts[0]):
+        out.verdict = verdicts[0][len("VERDICT: "):]
+    else:
+        out.problems.append("VERDICT 不是剛好一行，或不是最後一個非空行")
+    return out
+
+
+# ---- finding and copying the rollout (5.6 item 1, "rollout 的去向") ----------------------------------
+
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _stat_key(st) -> tuple:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def open_rollout(codex_home, c: cc.CodexConstants, thread_id: str, dates) -> tuple[int, os.stat_result, str]:
+    """The rollout of ``thread_id``: exactly one file named
+    ``<prefix>…-<thread_id>.jsonl`` under CODEX_HOME/<rollout_dir>/<date
+    parts> for the given dates (start and end of the review), opened through
+    directory descriptors, nothing followed through a symlink, then checked
+    as a plain file owned by this user and at most 64 MiB. Returns (fd, fstat,
+    relative path); the caller closes the fd. ReviewInvalid for none or more
+    than one, or anything wrong with it: the file is then left alone."""
+    if not (isinstance(thread_id, str) and review_store.THREAD_RE.match(thread_id)):
+        raise ReviewInvalid("thread_id 不合法，找不到 rollout")
+    suffix = f"-{thread_id}.jsonl"
+    uid = os.geteuid()
+    found: list[tuple[str, int]] = []
+    seen_dirs = set()
+    try:
+        root = os.open(str(codex_home), _DIR_FLAGS)
+    except OSError as exc:
+        raise ReviewInvalid(f"CODEX_HOME 無法開啟（{exc.strerror}）") from exc
+    try:
+        for when in dates:
+            parts = [c.rollout_dir, *(when.strftime(p) for p in c.rollout_date_parts)]
+            rel = "/".join(parts)
+            if rel in seen_dirs:
+                continue
+            seen_dirs.add(rel)
+            fds = []
+            try:
+                cur = root
+                missing = False
+                for name in parts:
+                    try:
+                        cur = os.open(name, _DIR_FLAGS, dir_fd=cur)
+                    except FileNotFoundError:
+                        missing = True
+                        break
+                    except OSError as exc:        # a symlink or anything else on the way: not followed
+                        raise ReviewInvalid(f"rollout 的資料夾無法安全開啟（{exc.strerror}）") from exc
+                    fds.append(cur)
+                if missing:
+                    continue
+                try:
+                    names = os.listdir(cur)
+                except OSError as exc:
+                    raise ReviewInvalid(f"rollout 資料夾無法列出（{exc.strerror}）") from exc
+                found += [(f"{rel}/{n}", n) for n in names if n.startswith(c.rollout_prefix) and n.endswith(suffix)]
+            finally:
+                for f in fds:
+                    os.close(f)
+        if len(found) != 1:
+            raise ReviewInvalid("找不到 rollout" if not found else "找到不只一份 rollout")
+        relpath = found[0][0]
+        fds = []
+        try:
+            cur = root
+            for name in relpath.split("/")[:-1]:
+                try:
+                    cur = os.open(name, _DIR_FLAGS, dir_fd=cur)
+                except OSError as exc:
+                    raise ReviewInvalid(f"rollout 的資料夾無法安全開啟（{exc.strerror}）") from exc
+                fds.append(cur)
+            try:
+                fd = os.open(relpath.split("/")[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                             dir_fd=cur)
+            except OSError as exc:
+                raise ReviewInvalid(f"rollout 無法開啟（{exc.strerror}）") from exc
+        finally:
+            for f in fds:
+                os.close(f)
+        try:
+            st = os.fstat(fd)
+            import stat as _stat
+            if not _stat.S_ISREG(st.st_mode) or st.st_uid != uid:
+                raise ReviewInvalid("rollout 不是本人擁有的一般檔案")
+            if st.st_size > ROLLOUT_MAX:
+                raise ReviewInvalid("rollout 超過 64 MiB")
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd, st, relpath
+    finally:
+        os.close(root)
+
+
+def copy_rollout(src_fd: int, dst_dir_fd: int, name: str, *, expect_sha256: str, src_before) -> dict:
+    """Copy the verified rollout (from the same descriptor, rewound) into a
+    file created exclusively in the review record directory (O_EXCL |
+    O_NOFOLLOW, 0600), hashing the copy. The two hashes must be equal and the
+    source's (dev, inode, size, mtime, ctime) must not have changed; else the
+    copy is removed and the review is invalid. The source is never deleted
+    (the name could be swapped between matching and deleting)."""
+    digest = hashlib.sha256()
+    out_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                     dir_fd=dst_dir_fd)
+    ok = False
+    try:
+        os.lseek(src_fd, 0, os.SEEK_SET)
+        size = 0
+        while True:
+            chunk = os.read(src_fd, READ_CHUNK)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > ROLLOUT_MAX:
+                raise ReviewInvalid("rollout 超過 64 MiB")
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                n = os.write(out_fd, view)
+                if n <= 0:
+                    raise OSError(5, "寫入沒有進展")
+                view = view[n:]
+        os.fsync(out_fd)
+        after = os.fstat(src_fd)
+        if digest.hexdigest() != expect_sha256:
+            raise ReviewInvalid("rollout 複製時的雜湊與核對時不同")
+        if _stat_key(after) != _stat_key(src_before):
+            raise ReviewInvalid("rollout 在核對與複製之間被改動")
+        os.fsync(dst_dir_fd)                       # the new name is durable too; a failure removes the copy
+        ok = True
+        return {"sha256": digest.hexdigest(), "size": size, "source_dev": after.st_dev, "source_inode": after.st_ino}
+    finally:
+        os.close(out_fd)
+        if not ok:
+            try:
+                os.unlink(name, dir_fd=dst_dir_fd)
+            except OSError:
+                pass
+
+
+# ---- the rollout (5.6) ----------------------------------------------------------------------------
+
+@dataclass
+class RolloutResult:
+    sha256: str
+    size: int
+    responses: int
+    turn_id: str | None
+    reasons: list
+
+
+def _lines(fd: int, limits: strictjson.Limits, digest):
+    """Each line of the file (without its newline), the whole file hashed as
+    it is read; LineError for a line or a file over its limit, a read error,
+    or a last line without a newline."""
+    buf = bytearray()
+    total = 0
+    while True:
+        try:
+            chunk = os.read(fd, READ_CHUNK)
+        except OSError as exc:
+            raise strictjson.LineError(f"讀取失敗（{exc.strerror or type(exc).__name__}）") from exc
+        if not chunk:
+            break
+        digest.update(chunk)
+        total += len(chunk)
+        if total > limits.file_bytes:
+            raise strictjson.LineError("檔案超過上限")
+        buf += chunk
+        while True:
+            cut = buf.find(b"\n")
+            if cut < 0:
+                break
+            if cut > limits.unit_bytes:
+                raise strictjson.LineError("有一行超過上限")
+            line = bytes(buf[:cut])
+            del buf[:cut + 1]
+            yield line
+        if len(buf) > limits.unit_bytes:
+            raise strictjson.LineError("有一行超過上限")
+    if buf:
+        raise strictjson.LineError("最後一行沒有以換行結尾")
+
+
+def validate_rollout(fd: int, c: cc.CodexConstants, *, thread_id: str, scratch: str, model: str,
+                     events_usage: dict, last_message: str) -> RolloutResult:
+    """The rollout read through one already verified descriptor (the caller
+    opened it O_NOFOLLOW and checked owner, type and size). ``RolloutResult
+    .reasons`` is empty only when every rule of design 5.6 holds."""
+    digest = hashlib.sha256()
+    reasons: list[str] = []
+    v = _Walk(c, thread_id, scratch, model, events_usage, last_message, reasons)
+    size = 0
+    try:
+        for raw in _lines(fd, strictjson.ROLLOUT, digest):
+            size += len(raw) + 1
+            parsed = strictjson.loads_object(raw, strictjson.ROLLOUT)
+            if not parsed.ok:
+                reasons.append("有一行不是嚴格的 JSON 物件")
+                break
+            try:
+                v.record(parsed.value)
+            except Exception as exc:                  # a record that cannot even be looked at
+                reasons.append(f"有一筆紀錄無法檢查（{type(exc).__name__}）")
+                break
+            if len(reasons) >= MAX_REASONS:
+                break
+    except strictjson.LineError as exc:
+        reasons.append(f"rollout 檔案不符：{exc}")
+    if not reasons:
+        try:
+            v.finish()
+        except Exception as exc:
+            reasons.append(f"rollout 無法檢查（{type(exc).__name__}）")
+    return RolloutResult(digest.hexdigest(), size, v.token_records, v.turn_id, list(dict.fromkeys(reasons))[:MAX_REASONS])
+
+
+class _Walk:
+    def __init__(self, c, thread_id, scratch, model, events_usage, last_message, reasons):
+        self.c, self.thread_id, self.scratch, self.model = c, thread_id, scratch, model
+        self.events_usage, self.last_message, self.reasons = events_usage, last_message, reasons
+        self.ordinal = 0
+        self.session_meta = 0
+        self.world_state = 0
+        self.turn_contexts = 0
+        self.task_started: dict | None = None
+        self.task_complete: dict | None = None
+        self.turn_id: str | None = None
+        self.token_records = 0
+        self.model_items = 0
+        self.prev_turn = {f: 0 for f in c.usage_fields}
+        self.prev_thread = {f: 0 for f in c.usage_fields}
+        self.last_turn_usage: dict | None = None
+        self.after_complete = False
+
+    def bad(self, why: str) -> None:
+        self.reasons.append(why)
+
+    def record(self, rec: dict) -> None:
+        c = self.c
+        if self.after_complete:
+            self.bad("task_complete 不是最後一筆")
+            self.after_complete = False
+        if not _int(rec.get("ordinal"), 0, 10 ** 9) or rec["ordinal"] != self.ordinal:
+            self.bad("ordinal 不是從 0 開始逐筆加 1 的整數")
+        first = self.ordinal == 0
+        self.ordinal += 1
+        typ, payload = rec.get("type"), rec.get("payload")
+        if not isinstance(typ, str) or not isinstance(payload, dict):
+            self.bad("有一筆紀錄缺少 type 或 payload")
+            return
+        sub = None
+        if (typ, None) not in c.rollout_kinds:
+            sub = payload.get("type")
+            if not isinstance(sub, str):
+                self.bad("有一筆紀錄的種類不在常數內")
+                return
+        kind = (typ, sub)
+        if kind not in c.rollout_kinds:
+            self.bad("有一筆紀錄的種類不在常數內")
+            return
+        if first and typ != "session_meta":
+            self.bad("第一筆不是 session_meta")
+        if kind in c.model_message_kinds and (kind != ("response_item", "message")
+                                              or payload.get("role") == "assistant"):
+            self.model_items += 1                    # something the model produced
+        handler = getattr(self, "_" + (sub if sub else typ), None)
+        if handler is not None:
+            handler(payload)
+        if kind == c.tool_call_kind:
+            if payload.get(c.tool_name_key) not in c.tools:
+                self.bad("出現不在允許清單內的工具呼叫")
+
+    # ---- the records VBear reads
+    def _session_meta(self, p):
+        c = self.c
+        self.session_meta += 1
+        if self.session_meta > 1:
+            self.bad("session_meta 不只一筆")
+            return
+        if p.get("id") != self.thread_id:
+            self.bad("session_meta.id 不等於 thread_id")
+        if p.get("cwd") != self.scratch:
+            self.bad("session_meta.cwd 不是審查暫存區")
+        if p.get("cli_version") != c.version:
+            self.bad("session_meta.cli_version 不是已驗證的版本")
+        if p.get("originator") != c.session_originator or p.get("source") != c.session_source:
+            self.bad("session_meta 的 originator 或 source 不符")
+        if p.get("model_provider") != c.model_provider:
+            self.bad("session_meta.model_provider 不是 openai")
+
+    def _world_state(self, p):
+        c = self.c
+        self.world_state += 1
+        if p.get("apps_instructions") is not False or p.get("plugins_instructions") is not False:
+            self.bad("world_state 的 apps 或 plugins 指示不是 false")
+        if p.get("host_skills") not in ([], {}, None) or "host_skills" not in p:
+            self.bad("world_state.host_skills 有內容或缺少")
+        if "multi_agent_mode" not in p or p["multi_agent_mode"] != c.multi_agent_disabled:
+            self.bad("world_state.multi_agent_mode 缺少或不是停用值")
+
+    def _turn_context(self, p):
+        c = self.c
+        if self.world_state == 0:
+            self.bad("world_state 沒有出現在第一個 turn_context 之前")
+        self.turn_contexts += 1
+        sp_ = p.get("sandbox_policy")
+        if not (isinstance(sp_, dict) and sp_.get("type") == c.sandbox_type and sp_.get("network_access") is False
+                and sp_.get("exclude_slash_tmp") is True and sp_.get("exclude_tmpdir_env_var") is True
+                and sp_.get("writable_roots") in (None, [])):
+            self.bad("turn_context 的 sandbox_policy 不是受限的值")
+        pp = p.get("permission_profile")
+        if not (isinstance(pp, dict) and "network" in pp and pp["network"] == c.network_restricted):
+            self.bad("turn_context 的 permission_profile.network 不是受限值")
+        if p.get("approval_policy") != c.approval_policy:
+            self.bad("turn_context.approval_policy 不是 never")
+        if p.get("cwd") != self.scratch:
+            self.bad("turn_context.cwd 不是審查暫存區")
+        if p.get("model") != self.model or p.get("model") not in c.models:
+            self.bad("turn_context.model 不是要求的模型，或不在清單內")
+        tid = p.get("turn_id")
+        if not isinstance(tid, str) or not tid or (self.turn_id is not None and tid != self.turn_id):
+            self.bad("turn_context.turn_id 與 task_started 不同")
+        elif self.turn_id is None:
+            self.turn_id = tid
+
+    def _task_started(self, p):
+        if self.task_started is not None:
+            self.bad("task_started 不只一筆")
+            return
+        self.task_started = p
+        tid = p.get("turn_id")
+        if not isinstance(tid, str) or not tid or not _int(p.get("started_at"), 0, 2 ** 53):
+            self.bad("task_started 的 turn_id 或 started_at 不合法")
+            return
+        if self.turn_id is not None and tid != self.turn_id:
+            self.bad("task_started.turn_id 與 turn_context 不同")
+        self.turn_id = self.turn_id or tid
+
+    def _task_complete(self, p):
+        if self.task_complete is not None:
+            self.bad("task_complete 不只一筆")
+            return
+        self.task_complete = p
+        self.after_complete = True
+        if not _int(p.get("completed_at"), 0, 2 ** 53):
+            self.bad("task_complete.completed_at 不合法")
+        elif self.task_started and _int(self.task_started.get("started_at"), 0, 2 ** 53) \
+                and p["completed_at"] < self.task_started["started_at"]:
+            self.bad("completed_at 早於 started_at")
+        if p.get("turn_id") != (self.task_started or {}).get("turn_id"):
+            self.bad("task_complete.turn_id 與 task_started 不同")
+        if not isinstance(p.get("last_agent_message"), str) or p["last_agent_message"] != self.last_message:
+            self.bad("task_complete.last_agent_message 與事件流的最後一則回覆不同")
+
+    def _usage_obj(self, obj, what: str):
+        c = self.c
+        if not (isinstance(obj, dict) and all(_int(obj.get(f)) for f in c.usage_fields)):
+            self.bad(f"token_usage_record 的 {what} 不合法")
+            return None
+        return {f: obj[f] for f in c.usage_fields}
+
+    def _token_usage_record(self, p):
+        self.token_records += 1
+        usage = self._usage_obj(p.get("usage"), "usage")
+        turn = self._usage_obj(p.get("turn_token_usage"), "turn_token_usage")
+        thread = self._usage_obj(p.get("thread_token_usage"), "thread_token_usage")
+        if p.get("turn_id") != self.turn_id or self.turn_id is None:
+            self.bad("token_usage_record.turn_id 不是這次審查的 turn_id")
+        if usage is None or turn is None or thread is None:
+            return
+        if usage["input_tokens"] <= 0 or usage["total_tokens"] <= 0 or usage["cached_input_tokens"] > usage["input_tokens"]:
+            self.bad("token_usage_record 的 usage 輸入為 0，或快取超過輸入")
+        for f in self.c.usage_fields:
+            if turn[f] != self.prev_turn[f] + usage[f] or thread[f] != self.prev_thread[f] + usage[f]:
+                self.bad("用量的累計鏈對不上（中間可能有缺漏）")
+                break
+        self.prev_turn, self.prev_thread, self.last_turn_usage = turn, thread, turn
+
+    def finish(self):
+        if self.session_meta != 1:
+            self.bad("沒有剛好一筆 session_meta")
+        if self.task_started is None or self.task_complete is None:
+            self.bad("缺少 task_started 或 task_complete")
+        if self.turn_contexts < 1:
+            self.bad("沒有 turn_context")
+        if self.world_state < 1:
+            self.bad("沒有 world_state")
+        if self.token_records < 1:
+            self.bad("沒有 token_usage_record")
+        if self.model_items < 1:
+            self.bad("沒有模型產生的 response_item")
+        if self.last_turn_usage is not None:
+            if any(self.last_turn_usage.get(f) != self.events_usage.get(f) for f in self.c.events_usage_fields):
+                self.bad("最後一筆用量的 turn_token_usage 不等於 turn.completed.usage")
