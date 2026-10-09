@@ -59,22 +59,30 @@ def codex_binary(version: str, home: str | None = None) -> str:
     return str(path)
 
 
-def read_version(binary: str, run) -> str | None:
-    """`codex --version`, parsed; None when it cannot be read. ``run`` is
-    cli_versions._run_probe-shaped: run(binary, "codex", cwd, env, timeout)."""
+def read_version_detail(binary: str, run) -> tuple[str | None, str]:
+    """`codex --version`, parsed: (version, "") or (None, why it could not be
+    read). ``run`` is cli_versions._run_probe-shaped:
+    run(binary, "codex", cwd, env, timeout)."""
     from . import cli_versions
     try:
         code, out, err = run(binary, "codex", "/", cli_versions._probe_environment(), 10.0)
-    except Exception:
-        return None
-    if code != 0 or err:
-        return None
+    except Exception as exc:
+        return None, f"無法執行（{type(exc).__name__}）"
+    if err:
+        return None, f"執行失敗（{err}）"
+    if code != 0:
+        return None, f"結束碼 {code}"
     try:
         text = out.decode("utf-8")
     except UnicodeDecodeError:
-        return None
+        return None, "輸出不是 UTF-8"
     m = VERSION_OUT.fullmatch(text)
-    return m.group(1) if m else None
+    return (m.group(1), "") if m else (None, "輸出不是剛好一行 codex-cli X.Y.Z")
+
+
+def read_version(binary: str, run) -> str | None:
+    """The version, or None when it cannot be read (read_version_detail says why)."""
+    return read_version_detail(binary, run)[0]
 
 
 # ---- environment, prompt, argv --------------------------------------------------------------------

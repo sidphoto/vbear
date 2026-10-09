@@ -19,7 +19,23 @@ manifest that cannot be read is reported and left as it is: the flow's
 accounting refuses until a person looks (stream_flow.flow_reviews).
 
 Each item of the result is {job_id, pipeline_id, action, failure, why}; the
-caller holds the flow for every item with failure True.
+caller holds the flow for every item with failure True. Codex 3d B-R2: any
+item that says the flow's record of the job is incomplete or cannot be
+trusted is a failure, not only a job's own outcome:
+
+  action           failure
+  invalid          True   (interrupted, judged)
+  manual_review    True
+  error            True   (an unexpected exception for this job)
+  link_problem     True   (the flow's link could not be checked or written back)
+  cleaned/kept     True when the job is a failure by its outcome (invalid), or
+                          its record is not whole (no marker, damaged, a
+                          marker that disagrees); False for a valid job with a
+                          whole record whose clean-up only needs a person
+  unreadable       False, with no flow to name: a manifest that cannot be read
+                   makes the accounting of *every* flow refuse
+                   (stream_flow.flow_reviews lists all jobs), which blocks
+                   them all until a person looks; there is no hold to write
 """
 
 from __future__ import annotations
@@ -58,8 +74,8 @@ def _finish_decided(base, m: dict, constants) -> dict:
                                       c=constants.get(m["codex_version"]))
     # an invalid review is a v29.8 failure; the daemon may have died before it
     # wrote the hold, so it is written again (the caller holds for failure=True)
-    failure = m["outcome"] != "valid"
-    why = "；".join(m.get("invalid_reasons") or [])[:200] if failure else ""
+    failure = m["outcome"] != "valid" or not out.record_complete
+    why = ("；".join(m.get("invalid_reasons") or []) or out.problem or "")[:200] if failure else ""
     if out.cleaned:
         return _item(m, name, "cleaned", why, failure=failure)
     return _item(m, name, "kept", out.problem or "審查紀錄不完整，保留原檔，不清理", failure=failure)
@@ -109,7 +125,8 @@ def recover(base, *, constants=None, rows=None, now: float | None = None) -> lis
         try:
             problem = _repair_link(base, m)
             if problem:
-                out.append(_item(m, name, "link_problem", problem))
+                # the flow cannot be shown to agree with this job: fail closed
+                out.append(_item(m, name, "link_problem", problem, failure=True))
             if m["state"] in ("manual_review", "cleaned"):
                 continue
             if m["state"] in ("finished", "invalid"):

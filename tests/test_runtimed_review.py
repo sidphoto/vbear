@@ -373,6 +373,15 @@ class RefusalTests(ReviewCase):
         (self.root / "etc/codex/managed_config.toml").write_text("x")
         self.refused("admin_policy")
 
+    def test_the_refusal_says_what_was_read_instead_of_the_version(self):
+        self.executor_done()
+        self.fake_mode("wrong_version")
+        r = self.refused("version_mismatch")
+        self.assertIn("實際是 0.159.2", r["error"]["message"])
+        self.codex.write_text("#!/bin/sh\nexit 7\n")
+        r = self.refused("version_mismatch")
+        self.assertIn("讀不到版本：結束碼 7", r["error"]["message"])
+
     def test_the_binary_must_be_the_pinned_one(self):
         self.executor_done()
         self.fake_mode("wrong_version")
@@ -765,6 +774,26 @@ class ShutdownAndRecoveryTests(ReviewCase):
         self.assertEqual(self.review_status(job)["state"], "cleaned")
         self.assertTrue(self.held())
         self.assertTrue(any("held after a failure" in line for line in self.logs))
+
+    def test_a_manual_review_job_whose_link_cannot_be_written_back_holds_its_flow(self):
+        # Codex 3d B-R2
+        self.executor_done()
+        job = self.run_review("hang")
+        self.wait_for(lambda: (self.fake_dir / "hang-ready").exists(), msg="hang")
+        self.pids.append(self.exec_calls()[0]["pid"])
+        self.crash_daemon()
+        self.restart_daemon()                                                           # now manual_review, flow held
+        self.assertEqual(self.review_status(job)["state"], "manual_review")
+        self.dm.stop()
+        self.thread.join(5)
+        self.dm.close()
+        os.unlink(self.base / "holds" / self.fid)                                       # the hold never reached the disk
+        shutil.rmtree(self.base / "pipelines" / self.tid / "reviews")                   # and the flow's link is gone
+        self.assertFalse(self.held())
+        with mock.patch.object(pipeline_store.Pipeline, "write_review_link", side_effect=OSError(5, "io")):
+            self.restart_daemon()
+            self.assertTrue(self.held())
+        self.assertTrue(any("link_problem" in line for line in self.logs))
 
     def test_an_unreadable_review_job_means_no_quota_is_granted(self):
         self.executor_done()

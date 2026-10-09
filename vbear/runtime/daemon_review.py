@@ -186,8 +186,10 @@ class ReviewOps:
         if not policy.ok:
             raise _Refused("admin_policy", policy.reason())
         binary = review_codex.codex_binary(version, home=self.review_home)
-        if review_codex.read_version(binary, cli_versions._run_probe) != version:
-            raise _Refused("version_mismatch", f"固定位置的 Codex 不是 {version}")
+        seen, why = review_codex.read_version_detail(binary, cli_versions._run_probe)
+        if seen != version:
+            raise _Refused("version_mismatch", f"固定位置的 Codex 不是 {version}（"
+                           + (f"實際是 {seen}" if seen else f"讀不到版本：{why}") + "）")
         home = review_codex.check_codex_home(self.base)
         if review_codex.over_limit(review_codex.tree_size(home), review_codex.HOME_LIMIT):
             raise _Refused("codex_home_full", "專用的 CODEX_HOME 超過 512 MiB（或無法完整計算），請先清理")

@@ -205,7 +205,76 @@ class LinkAndDecidedTests(RecoverCase):
         self.assertEqual(self.manifest(), before)
 
 
+class FailureFlagTests(RecoverCase):
+    """Codex 3d B-R2: every report that says the flow's record of a job is
+    incomplete or cannot be trusted is a failure, so the daemon holds the flow."""
+
+    def test_a_link_that_cannot_be_written_back_is_a_failure_for_any_state(self):
+        for state in ("manual_review", "invalid", "cleaned", "running"):
+            with self.subTest(state=state):
+                self.tearDown_and_setUp()
+                if state == "manual_review":
+                    self.recover(self.alive_rows())                     # the reviewer's job: already manual_review
+                elif state == "invalid":
+                    self.finish(exit_code=3)
+                elif state == "cleaned":
+                    self.finish()
+                shutil.rmtree(self.base / "pipelines" / TID / "reviews")
+                with mock.patch.object(ps.Pipeline, "write_review_link", side_effect=OSError(5, "io")):
+                    items = self.recover(self.alive_rows())
+                problems = [i for i in items if i["action"] == "link_problem"]
+                self.assertEqual(len(problems), 1, items)
+                self.assertTrue(problems[0]["failure"], problems)
+                self.assertEqual(problems[0]["pipeline_id"], FID)
+
+    def test_the_second_recovery_still_holds_when_the_first_one_could_not_write_the_hold(self):
+        # the reviewer's injection: manual_review already decided, link missing, link write fails
+        self.recover(self.alive_rows())
+        shutil.rmtree(self.base / "pipelines" / TID / "reviews")
+        with mock.patch.object(ps.Pipeline, "write_review_link", side_effect=OSError(5, "io")):
+            first = self.recover(self.alive_rows())
+            second = self.recover(self.alive_rows())
+        for items in (first, second):
+            self.assertEqual([(i["action"], i["failure"]) for i in items], [("link_problem", True)])
+
+    def test_a_decided_job_whose_record_is_not_whole_is_a_failure_even_when_valid(self):
+        real = rr.review_finish.cleanup_job
+        with mock.patch.object(rr.review_finish, "cleanup_job", return_value="died here"):
+            self.finish()                                             # valid, whole record, only the clean-up missing
+        (self.record() / "result.json").write_text("{")               # now the marker is damaged
+        items = self.recover([])
+        self.assertEqual([(i["action"], i["failure"]) for i in items], [("kept", True)])
+
+    def test_a_valid_job_with_a_whole_record_that_only_needs_cleaning_is_not_a_failure(self):
+        with mock.patch.object(rr.review_finish, "cleanup_job", return_value="died here"):
+            self.finish()
+        with mock.patch.object(rr.review_finish, "cleanup_job", return_value="still cannot delete"):
+            items = self.recover([])
+        self.assertEqual([(i["action"], i["failure"]) for i in items], [("kept", False)])
+
+    def test_the_documented_table_names_every_action_the_module_can_report(self):
+        import re
+        actions = set(re.findall(r'_item\([^,]+,[^,]+, "(\w+)"', open(rr.__file__).read()))
+        actions |= {"invalid", "manual_review"}                       # reported from finish_review's outcome
+        for action in sorted(actions):
+            self.assertIn(action, rr.__doc__, f"{action} is not in the table of the module docstring")
+        self.assertIn("link_problem     True", rr.__doc__)
+        self.assertIn("unreadable       False", rr.__doc__)
+
+
 class UnreadableRootTests(RecoverCase):
+    def test_an_unreadable_manifest_blocks_every_flows_accounting_instead(self):
+        # there is no flow to hold, so the accounting itself refuses for all of them
+        second = "r-" + "5" * 16
+        rs.create_job_dir(self.base, second)
+        (rs.job_dir(self.base, second) / rs.MANIFEST).write_text("{")
+        items = self.recover([])
+        self.assertFalse([i for i in items if i["action"] == "unreadable"][0]["failure"])
+        for pipeline, task in ((FID, TID), ("flow-ffffffffffff", "task-other")):
+            with self.assertRaises(sfl.FlowRefused) as cm:
+                sfl.flow_reviews(self.base, pipeline, task)
+            self.assertEqual(cm.exception.code, "count_unavailable")
+
     def test_an_unreadable_reviews_root_is_reported(self):
         os.chmod(rs.reviews_root(self.base), 0o755)
         items = self.recover([])
