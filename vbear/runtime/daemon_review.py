@@ -77,9 +77,9 @@ class ReviewOps:
         if not (isinstance(commit, str) and review_store.COMMIT_RE.match(commit)):
             return _err(rid, "bad_request", "commit 必須是 40 或 64 碼小寫十六進位")
         try:
-            ctx = stream_flow.load(self.base, pipeline)
-            if pipeline_store.is_held(self.base, pipeline):           # first: a hold refuses a resend too
+            if pipeline_store.is_held(self.base, pipeline):           # first of all: a hold refuses a resend too
                 raise _Refused("held", "這個流程已停止")
+            ctx = stream_flow.load(self.base, pipeline)
             now = time.time()
             # the acceptance, the limits and any unresolved failure are
             # re-checked on every call, a resend included (v29.8)
@@ -235,33 +235,40 @@ class ReviewOps:
         why = self._reserve(key, quota.RESERVE_REVIEW)
         if why:
             return _err(rid, "refused", f"quota: {why}")
-        scratch = run_home = None            # (path, {"inode", "dev"}) of what this call created
+        scratch = run_home = None            # the paths of what this call created, set the moment they exist
         m = None
         events_fd = stderr_fd = -1
         proc = leader_start = run = None
         try:
             prompt = review_codex.prompt_for(c, workdir=plan["workdir"], commit=commit, base=plan["base_commit"])
-            spath = tempfile.mkdtemp(prefix=review_store.SCRATCH_PREFIX, dir=review_store.SCRATCH_PARENT)
+            spath = scratch = tempfile.mkdtemp(prefix=review_store.SCRATCH_PREFIX, dir=review_store.SCRATCH_PARENT)
             st = os.stat(spath)
-            scratch = (spath, {"inode": st.st_ino, "dev": st.st_dev})
+            sident = {"inode": st.st_ino, "dev": st.st_dev}
             hpath = str(review_store.run_home(self.base, job_id))
             self._run_homes_root()
             os.mkdir(hpath, 0o700)
+            run_home = hpath
             st = os.stat(hpath)
-            run_home = (hpath, {"inode": st.st_ino, "dev": st.st_dev})
+            hident = {"inode": st.st_ino, "dev": st.st_dev}
             argv = review_codex.review_argv(c, plan["binary"], model=model, scratch=spath, prompt=prompt)
             env = review_codex.build_env(str(plan["home"]), hpath)
             m = {"review_manifest_version": 1, "job_id": job_id, "pipeline_id": ctx.pipeline_id,
                  "task_id": ctx.task_id, "round": round_, "commit": commit, "model": model, "codex_version": version,
                  "argv_sha256": hashlib.sha256("\0".join(argv).encode("utf-8")).hexdigest(),
-                 "scratch": {"path": spath, **scratch[1]}, "run_home": dict(run_home[1]), "leader": None,
+                 "scratch": {"path": spath, **sident}, "run_home": hident, "leader": None,
                  "observed": [], "thread_id": None, "exit_code": None, "state": "prepared", "created": time.time(),
                  "process": "none", "outcome": None, "workdir": plan["workdir"]}
             review_store.create_job_dir(self.base, job_id)
         except Exception as exc:
-            self._review_undo_dirs(scratch, run_home)
-            self._ledger.release(key, 0)
-            return _err(rid, "refused", f"審查工作無法建立：{type(exc).__name__}: {exc}")
+            problems = self._review_undo_dirs(scratch, run_home, job_id)
+            if problems:
+                # something this call created could not be removed: a person looks, and the flow waits
+                self._log(f"{job_id}: " + "；".join(problems))
+                self._hold_for_review(ctx.pipeline_id, job_id, "審查工作無法建立，且已建立的目錄無法清理：" + problems[0])
+            # what is on disk now is measured, never assumed to be nothing (Codex 3d A3)
+            self._ledger.release(key, self._review_bytes(job_id, None))
+            return _err(rid, "refused", f"審查工作無法建立：{type(exc).__name__}: {exc}"
+                        + (f"；{problems[0]}" if problems else ""))
         # From here the job is on disk: whatever fails ends it as a decided job.
         try:
             review_store.write_new_manifest(self.base, m)
@@ -312,12 +319,38 @@ class ReviewOps:
             return _err(rid, "internal", f"啟動後初始化失敗：{type(exc).__name__}")
         return _ok(rid, self._review_view(job_id))
 
-    def _review_undo_dirs(self, scratch, run_home) -> None:
-        """Before the job had a manifest: remove only what this call created."""
+    def _review_undo_dirs(self, scratch: str | None, run_home: str | None, job_id: str) -> list[str]:
+        """Before the job had a manifest: remove what this call created, and
+        say what could not be removed. The identity of each directory is
+        taken from the directory itself now (it was made a moment ago by this
+        call, so even when the earlier stat failed it is known what to
+        remove), and the removal goes through the same identity-checked
+        rename-and-delete as the final clean-up. A job directory the failed
+        creation left behind (empty: no manifest was written) goes too."""
+        problems: list[str] = []
+
+        def remove(parent: str, name: str) -> None:
+            try:
+                st = os.lstat(os.path.join(parent, name))
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                problems.append(f"{name} 無法檢查（{exc.strerror or type(exc).__name__}）")
+                return
+            p = review_finish._remove_child(parent, name, {"inode": st.st_ino, "dev": st.st_dev})
+            if p:
+                problems.append(p)
         if scratch is not None:
-            review_finish._remove_child(review_store.SCRATCH_PARENT, os.path.basename(scratch[0]), scratch[1])
+            remove(review_store.SCRATCH_PARENT, os.path.basename(scratch))
         if run_home is not None:
-            review_finish._remove_child(os.path.dirname(run_home[0]), os.path.basename(run_home[0]), run_home[1])
+            remove(os.path.dirname(run_home), os.path.basename(run_home))
+        try:
+            os.rmdir(review_store.job_dir(self.base, job_id))        # only an empty one: never a job with a manifest
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            problems.append(f"審查工作資料夾 {job_id} 無法移除（{exc.strerror or type(exc).__name__}）")
+        return problems
 
     def _hold_for_review(self, pipeline_id: str, job_id: str, why: str) -> None:
         self._hold_for_failure(pipeline_id, job_id, why, kind="review")
@@ -604,7 +637,10 @@ class ReviewOps:
                 if not review_store.JOB_RE.match(name):
                     raise review_store.ReviewRefused("manifest_invalid", f"reviews/ 裡有不認得的項目 {name[:64]!r}")
                 m = review_store.read_manifest(self.base, name)
-                if m["state"] not in review_store.TERMINAL:
+                # A whitelist (Codex 3d B3): only a cleaned job, whose outcome is
+                # decided, is done with its reservation. manual_review is not
+                # (design 9), nor is a decided job still waiting for its clean-up.
+                if not (m["state"] == "cleaned" and m["outcome"] is not None):
                     out[f"review:{name}"] = quota.RESERVE_REVIEW
         except (review_store.ReviewRefused, OSError) as exc:
             self._log(f"quota rebuild: review jobs unreadable: {exc}")

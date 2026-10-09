@@ -4,6 +4,7 @@ model."""
 
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -199,6 +200,39 @@ class CodexHomeTests(Tmp):
         home.write_text("a file")
         with self.assertRaises(rc.CodexRefused):
             rc.check_codex_home(self.tmp)
+
+
+class RunCaptureTests(unittest.TestCase):
+    def test_a_read_error_is_a_failure_not_the_end_of_the_output(self):
+        # Codex 3d A4: "[]" followed by a failed read is not a complete "[]"
+        from vbear.runtime import cli_versions
+        real = os.read
+        calls = []
+        got_data = set()
+
+        def read(fd, n):
+            calls.append(fd)
+            if fd in got_data:                                  # the read after the data fails
+                raise OSError(5, "Input/output error")
+            data = real(fd, n)
+            if data:
+                got_data.add(fd)
+            return data
+        argv = [sys.executable, "-c", "import sys,time; sys.stdout.write('[]'); sys.stdout.flush(); time.sleep(0.3)"]
+        with mock.patch.object(cli_versions.os, "read", read):
+            code, out, err = cli_versions.run_capture(argv, "/", {"PATH": os.environ["PATH"]}, 10.0, 4096)
+        self.assertEqual((code, err), (None, "read_error"))
+        self.assertEqual(out, b"[]")
+        # and the check that relies on it refuses
+        with mock.patch.object(cli_versions.os, "read", read):
+            calls.clear()
+            got_data.clear()
+            self.assertFalse(rc.mcp_list_is_empty(C, "/x", {"PATH": os.environ["PATH"]},
+                                                   lambda argv_, env, t: cli_versions.run_capture(argv, "/", env, t, 4096)))
+        calls.clear()
+        self.assertTrue(rc.mcp_list_is_empty(C, "/x", {"PATH": os.environ["PATH"]},
+                                             lambda argv_, env, t: cli_versions.run_capture(
+                                                 [sys.executable, "-c", "print('[]')"], "/", env, t, 4096)))
 
 
 class CodexHomePathTests(Tmp):

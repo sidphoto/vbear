@@ -154,6 +154,21 @@ class LinkAndDecidedTests(RecoverCase):
         self.assertFalse(self.scratch.exists() or self.run_home.exists())
         self.assertEqual(sorted(p.name for p in self.job.iterdir()), ["manifest.json"])
 
+    def test_a_decided_invalid_job_is_reported_as_a_failure_so_its_flow_is_held_again(self):
+        # Codex 3d B4
+        real = rr.review_finish.cleanup_job
+        with mock.patch.object(rr.review_finish, "cleanup_job", return_value="died here"):
+            self.finish(exit_code=3)
+        self.assertNotEqual(self.manifest()["state"], "cleaned")
+        items = self.recover([])
+        self.assertEqual([(i["action"], i["failure"]) for i in items], [("cleaned", True)])
+        self.assertTrue(items[0]["why"])
+        # a valid one is not a failure
+        self.tearDown_and_setUp()
+        with mock.patch.object(rr.review_finish, "cleanup_job", return_value="died here"):
+            self.finish()
+        self.assertEqual([(i["action"], i["failure"]) for i in self.recover([])], [("cleaned", False)])
+
     def test_a_decided_job_without_a_marker_gets_it_back_from_the_saved_copies(self):
         self.decided_but_not_cleaned()
         os.unlink(self.record() / "result.json")

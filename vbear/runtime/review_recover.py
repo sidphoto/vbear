@@ -56,9 +56,13 @@ def _finish_decided(base, m: dict, constants) -> dict:
     name = m["job_id"]
     out = review_finish.finish_review(base, m, {"interrupted": True, "manual_review": None},
                                       c=constants.get(m["codex_version"]))
+    # an invalid review is a v29.8 failure; the daemon may have died before it
+    # wrote the hold, so it is written again (the caller holds for failure=True)
+    failure = m["outcome"] != "valid"
+    why = "；".join(m.get("invalid_reasons") or [])[:200] if failure else ""
     if out.cleaned:
-        return _item(m, name, "cleaned")
-    return _item(m, name, "kept", out.problem or "審查紀錄不完整，保留原檔，不清理")
+        return _item(m, name, "cleaned", why, failure=failure)
+    return _item(m, name, "kept", out.problem or "審查紀錄不完整，保留原檔，不清理", failure=failure)
 
 
 def _recover_active(base, m: dict, rows, constants, now: float) -> dict:

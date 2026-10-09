@@ -377,7 +377,9 @@ def run_capture(argv: list[str], cwd: str, env: dict[str, str], timeout: float,
                 try:
                     chunk = os.read(key.fileobj.fileno(), 8192)
                 except OSError:
-                    chunk = b""
+                    # Not the end of the output (Codex 3d A4): what was read so
+                    # far may be a prefix of something longer.
+                    return None, bytes(output["stdout"]), "read_error"
                 if not chunk:
                     selector.unregister(key.fileobj)
                     continue

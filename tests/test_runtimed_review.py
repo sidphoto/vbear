@@ -112,6 +112,24 @@ class ReviewCase(StreamCase):
         self.git("commit", "-q", "--allow-empty", "-m", "base")
         self.base_commit = self.commit = self.git("rev-parse", "HEAD")      # the executor starts here (v29.9 base_commit)
         tasks.save_task(self.tid, {"title": "t", "workdir": str(self.work)})
+        self.made: list[str] = []                       # scratch directories this test's daemon made
+        real_mkdtemp = daemon_review.tempfile.mkdtemp
+
+        def mkdtemp(*a, **kw):
+            path = real_mkdtemp(*a, **kw)
+            self.made.append(path)
+            return path
+        p = mock.patch.object(daemon_review.tempfile, "mkdtemp", mkdtemp)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self.remove_made)
+
+    def remove_made(self):
+        """Only what this test's daemon created (a crash or an injected
+        failure leaves a scratch behind), never another process's."""
+        for path in self.made:
+            if os.path.basename(path).startswith("sr-") and os.path.dirname(path) == "/private/tmp":
+                shutil.rmtree(path, ignore_errors=True)
 
     def git(self, *args):
         env = {"PATH": os.environ["PATH"], "HOME": str(self.work), "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -193,6 +211,14 @@ class ReviewCase(StreamCase):
         return self.wait_for(lambda: (s := self.review_status(job_id))["state"] in states and s,
                              timeout=timeout, msg=f"review {job_id} to reach {states}")
 
+    def why(self, end):
+        """What a failed expectation needs to be understood: the reasons and what the process wrote to stderr."""
+        try:
+            err = (self.record_dir(end.get("round") or 1) / "stderr.log").read_text()[-1500:]
+        except OSError:
+            err = "(no stderr.log)"
+        return f"reasons={end.get('invalid_reasons')} retained={end.get('retained_reason')} stderr={err!r}"
+
     def record_dir(self, round_=1):
         return self.base / "pipelines" / self.tid / "reviews" / str(round_)
 
@@ -211,7 +237,8 @@ class HappyPathTests(ReviewCase):
         self.executor_done()
         job = self.run_review("ok")
         end = self.wait_state(job, "cleaned")
-        self.assertEqual((end["outcome"], end["process"], end["exit_code"]), ("valid", "started", 0))
+        self.assertEqual((end["outcome"], end["process"], end["exit_code"]), ("valid", "started", 0),
+                         self.why(end))
         self.assertEqual(end["record"], "complete")
         self.assertEqual((end["result"]["valid"], end["result"]["verdict"], end["result"]["base_is_ancestor"]),
                          (True, "PASS", True))
@@ -304,6 +331,21 @@ class RefusalTests(ReviewCase):
         self.executor_done()
         pipeline_store.hold(self.base, self.fid, "user stop")
         self.refused("held")
+
+    def test_the_hold_comes_before_the_flow_and_its_acceptance_are_loaded(self):
+        # Codex 3d A5: a flow without a valid acceptance says "held" while held,
+        # and its own problem once it is not
+        roles = {"planner": {"name": "p", "family": "anthropic"}, "executor": {"name": "e", "family": "anthropic"},
+                 "reviewers": [{"name": "c", "family": "openai"}]}
+        task2 = tasks.save_task(None, {"title": "t2"})["id"]
+        other = flows.create_flow({"task_id": task2, "roles": roles}, lambda t: True)["id"]
+        pipeline_store.hold(self.base, other, "user stop")
+        r = self.rpc("review_start", pipeline=other, round=1, commit=self.commit)
+        self.assertFalse(r["ok"])
+        self.assertIn("held", r["error"]["message"])
+        pipeline_store.release(self.base, other)
+        r = self.rpc("review_start", pipeline=other, round=1, commit=self.commit)
+        self.assertIn("no_acceptance", r["error"]["message"])
 
     def test_no_acceptance_for_this_codex(self):
         self.executor_done()
@@ -410,6 +452,78 @@ class RefusalTests(ReviewCase):
         self.assertIn("quota", r["error"]["message"])
         self.assertEqual(self.dm._ledger.reservations, {})
         self.assertEqual(self.exec_calls(), [])
+
+
+class CreationFailureTests(ReviewCase):
+    """Codex 3d A3: whatever fails before the job has a manifest, what was
+    created is removed (by what is on disk, not by a variable that may not
+    have been set), a removal that fails is reported and holds the flow, and
+    the quota reservation is released by measurement."""
+
+    def test_a_stat_that_fails_right_after_the_scratch_was_made_still_removes_it(self):
+        self.executor_done()
+        real = os.stat
+
+        def stat(path, *a, **kw):
+            if isinstance(path, str) and path.startswith("/private/tmp/sr-") and not path.endswith("/repo"):
+                raise OSError(5, "Input/output error")
+            return real(path, *a, **kw)
+        with mock.patch.object(daemon_review.os, "stat", stat):
+            r = self.start_review()
+        self.assertFalse(r["ok"], r)
+        self.assertEqual([p for p in self.made if os.path.basename(p).startswith("sr-") and os.path.exists(p)], [])                # nothing left in /private/tmp
+        self.assertFalse(self.held())                                                    # and nothing a person must look at
+        self.assertEqual(self.dm._ledger.reservations, {})
+        self.assertEqual(self.exec_calls(), [])
+
+    def test_a_removal_that_fails_is_reported_and_holds_the_flow(self):
+        self.executor_done()
+        real = os.stat
+
+        def stat(path, *a, **kw):
+            if isinstance(path, str) and path.startswith("/private/tmp/sr-"):
+                raise OSError(5, "Input/output error")
+            return real(path, *a, **kw)
+        with mock.patch.object(daemon_review.os, "stat", stat), \
+                mock.patch.object(daemon_review.review_finish, "_remove_child", return_value="boom: cannot delete"):
+            r = self.start_review()
+        self.assertFalse(r["ok"], r)
+        self.assertIn("boom: cannot delete", r["error"]["message"])
+        self.assertTrue(self.held())
+        self.assertTrue(any("boom" in line for line in self.logs))
+        self.assertEqual(self.dm._ledger.reservations, {})
+        left = [p for p in self.made if os.path.basename(p).startswith("sr-") and os.path.exists(p)]
+        self.assertEqual(len(left), 1)                               # the left-behind scratch; remove_made tidies it
+
+    def test_a_job_directory_left_by_a_failed_creation_is_removed(self):
+        self.executor_done()
+
+        def create(base, job_id):
+            os.makedirs(review_store.reviews_root(base), mode=0o700, exist_ok=True)
+            os.mkdir(review_store.job_dir(base, job_id), 0o700)
+            raise OSError(5, "fsync failed")
+        with mock.patch.object(daemon_review.review_store, "create_job_dir", create):
+            r = self.start_review()
+        self.assertFalse(r["ok"])
+        self.assertEqual(os.listdir(review_store.reviews_root(self.base)), [])           # no manifest-less directory
+        self.assertEqual([p for p in self.made if os.path.basename(p).startswith("sr-") and os.path.exists(p)], [])
+        self.assertEqual(os.listdir(self.base / "codex-run-homes"), [])
+        self.assertFalse(self.held())
+
+    def test_the_release_is_measured_not_assumed(self):
+        self.executor_done()
+        seen = []
+        real = self.dm._ledger.release
+        self.dm._ledger.release = lambda key, written: (seen.append((key, written)), real(key, written))[1]
+        with mock.patch.object(daemon_review.review_store, "create_job_dir", side_effect=OSError(28, "No space")):
+            self.start_review()
+        [(key, written)] = seen
+        self.assertTrue(key.startswith("review:"))
+        self.assertEqual(written, 0)                                                      # measured: there is nothing there
+        with mock.patch.object(self.dm, "_review_bytes", return_value=None):
+            with mock.patch.object(daemon_review.review_store, "create_job_dir", side_effect=OSError(28, "No space")):
+                self.start_review()
+        self.assertIsNone(seen[-1][1])                                                    # unmeasurable stays unknown
 
 
 class FailureTests(ReviewCase):
@@ -608,6 +722,49 @@ class ShutdownAndRecoveryTests(ReviewCase):
         self.wait_state(job, "cleaned")
         self.dm._rebuild_ledger()
         self.assertNotIn(f"review:{job}", self.dm._ledger.reservations)
+
+    def test_only_a_cleaned_job_is_done_with_its_reservation(self):
+        # Codex 3d B3: manual_review keeps its full reservation (design 9)
+        from tests.test_review_store import state_manifest
+        for n, state in enumerate(("prepared", "launching", "running", "finished", "invalid", "manual_review",
+                                   "cleaned")):
+            job = f"r-{n + 1:016x}"
+            review_store.create_job_dir(self.base, job)
+            review_store.write_new_manifest(self.base, state_manifest(state, job_id=job, pipeline_id=self.fid,
+                                                                      task_id=self.tid, round=n + 1))
+        out = self.dm._review_outstanding()
+        self.assertEqual(sorted(out), [f"review:r-{n:016x}" for n in range(1, 7)])        # everything but cleaned
+        self.assertEqual(set(out.values()), {quota.RESERVE_REVIEW})
+        # a cleaned job that is not decided cannot exist, and is not trusted to be done either
+        review_store.read_manifest(self.base, f"r-{7:016x}")
+
+    def test_a_manual_review_job_keeps_its_reservation_across_a_restart(self):
+        self.executor_done()
+        job = self.run_review("hang")
+        self.wait_for(lambda: (self.fake_dir / "hang-ready").exists(), msg="hang")
+        self.pids.append(self.exec_calls()[0]["pid"])
+        self.crash_daemon()
+        self.restart_daemon()
+        self.assertEqual(self.review_status(job)["state"], "manual_review")
+        self.assertEqual(self.dm._ledger.reservations.get(f"review:{job}"), quota.RESERVE_REVIEW)
+
+    def test_a_decided_invalid_job_found_at_start_holds_its_flow_again(self):
+        # Codex 3d B4: the daemon died after deciding, before the clean-up and the hold
+        self.executor_done()
+        with mock.patch.object(daemon_review.review_finish, "cleanup_job", return_value="the daemon died here"):
+            job = self.run_review("exit3")
+            end = self.wait_state(job, "invalid")
+        self.assertEqual(end["outcome"], "invalid")
+        self.assertTrue(self.held())
+        self.dm.stop()
+        self.thread.join(5)
+        self.dm.close()
+        os.unlink(self.base / "holds" / self.fid)                                          # the hold never reached the disk
+        self.assertFalse(self.held())
+        self.restart_daemon()
+        self.assertEqual(self.review_status(job)["state"], "cleaned")
+        self.assertTrue(self.held())
+        self.assertTrue(any("held after a failure" in line for line in self.logs))
 
     def test_an_unreadable_review_job_means_no_quota_is_granted(self):
         self.executor_done()
