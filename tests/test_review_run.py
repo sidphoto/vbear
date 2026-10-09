@@ -329,6 +329,43 @@ class GroupEndTests(RunCase):
         self.assertTrue(out["leader_held"])
         self.assertFalse(run.reaped)
 
+    def test_an_unexpected_waitid_error_gives_the_run_up_without_signals(self):
+        # Codex S2b part 3 review #6: not an exception out of tick
+        sent = []
+        run = self.spawn("import time; time.sleep(600)")
+        real_waitid = os.waitid
+        with mock.patch.object(rr.os, "killpg", lambda p, sg: sent.append((p, sg))), \
+                mock.patch.object(rr.os, "waitid", side_effect=OSError(22, "Invalid argument")):
+            run.tick(time.monotonic())
+        self.assertTrue(run.finished)
+        self.assertIn("無法確認 leader 是否結束", run.outcome["manual_review"])
+        self.assertIn("不送訊號", run.outcome["manual_review"])
+        self.assertTrue(run.outcome["leader_held"])
+        self.assertFalse(run.reaped)
+        self.assertEqual(sent, [])
+        os.kill(run.pid, 0)                                       # alive, untouched
+
+    def test_an_unexpected_waitpid_error_leaves_the_leader_held(self):
+        run = self.spawn("import sys; sys.exit(0)")
+        reaped = []
+        with mock.patch.object(rr.os, "waitpid", side_effect=OSError(22, "Invalid argument")):
+            out = self.drive(run)
+        self.assertIn("回收 leader 失敗", out["manual_review"])
+        self.assertTrue(out["leader_held"])
+        self.assertFalse(run.reaped)
+        self.assertTrue(stream_session.leader_exited(run.pid))    # still our unreaped zombie
+
+    def test_a_leader_that_is_no_longer_our_child_is_not_an_error(self):
+        run = self.spawn("import sys; sys.exit(0)")
+        real = os.waitid
+
+        def waitid(*a, **kw):
+            raise ChildProcessError(10, "No child processes")
+        with mock.patch.object(rr.os, "waitid", waitid):
+            run.tick(time.monotonic())
+        self.assertFalse(run.finished)                            # logged, not given up on (the old rule)
+        self.assertTrue(any("not our child" in line for line in self.logs))
+
     def test_a_review_that_ends_by_itself_is_not_signalled_at_all(self):
         sent = []
         real = os.killpg

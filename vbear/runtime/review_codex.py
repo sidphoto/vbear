@@ -26,8 +26,8 @@ RUN_HOMES = "codex-run-homes"
 HOME_LIMIT = 512 << 20            # the monitoring threshold for CODEX_HOME (5.1): not a hard cap
 WORK_LIMIT = 2 << 30              # review scratch + run home together (5.4): not a hard cap
 SCAN_MAX_ENTRIES = 100_000
-WORKDIR_RE = re.compile(r"^/[^\x00-\x1f\x7f]{0,1023}\Z")
-VERSION_OUT = re.compile(r"codex-cli ([0-9]+\.[0-9]+\.[0-9]+)")
+WORKDIR_RE = review_store.WORKDIR_RE
+VERSION_OUT = re.compile(r"codex-cli ([0-9]+\.[0-9]+\.[0-9]+)\n?")     # the whole output, nothing else
 ENV_KEYS = ("PATH", "USER", "LOGNAME", "LANG", "CODEX_HOME", "HOME")
 
 
@@ -69,7 +69,11 @@ def read_version(binary: str, run) -> str | None:
         return None
     if code != 0 or err:
         return None
-    m = VERSION_OUT.search(out.decode("utf-8", "replace")[:1000])
+    try:
+        text = out.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    m = VERSION_OUT.fullmatch(text)
     return m.group(1) if m else None
 
 
@@ -82,10 +86,17 @@ def build_env(codex_home: str, run_home: str) -> dict:
     API endpoint (OPENAI_BASE_URL and the like) is passed on."""
     from .daemon import build_env as daemon_env
     src = daemon_env()
-    env = {k: src[k] for k in ("PATH", "USER", "LOGNAME", "LANG") if src.get(k)}
-    env["CODEX_HOME"] = str(codex_home)
-    env["HOME"] = str(run_home)
-    assert set(env) <= set(ENV_KEYS)
+    env = {}
+    for k in ("PATH", "USER", "LOGNAME", "LANG"):
+        if not (isinstance(src.get(k), str) and src[k]):
+            raise CodexRefused("bad_env", f"環境變數 {k} 缺少或是空值，不啟動審查")
+        env[k] = src[k]
+    for k, v in (("CODEX_HOME", codex_home), ("HOME", run_home)):
+        if not (isinstance(v, (str, os.PathLike)) and str(v)):
+            raise CodexRefused("bad_env", f"環境變數 {k} 缺少或是空值，不啟動審查")
+        env[k] = str(v)
+    if set(env) != set(ENV_KEYS):
+        raise CodexRefused("bad_env", "環境變數不是固定的六個")
     return env
 
 
@@ -102,8 +113,10 @@ def prompt_for(c: cc.CodexConstants, *, workdir: str, commit: str, base: str) ->
 
 
 def common_flags(c: cc.CodexConstants) -> list[str]:
+    """The -c settings and --disable features, for `codex mcp list` (the
+    exec argv places -s between the two -c groups)."""
     out: list[str] = []
-    for item in c.config:
+    for item in (*c.config_head, *c.config_tail):
         out += ["-c", item]
     for feature in c.disable:
         out += ["--disable", feature]
@@ -114,9 +127,15 @@ def review_argv(c: cc.CodexConstants, binary: str, *, model: str, scratch: str, 
     """The fixed argv of design 5.2."""
     if model not in c.models or not review_store.MODEL_RE.match(model):
         raise CodexRefused("bad_request", "審查模型不在已驗證的清單內")
-    flags = common_flags(c)
-    return [binary, "exec", "--json", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-            "-m", model, "-s", "workspace-write", *flags, "-C", scratch, prompt]
+    argv = [binary, "exec", "--json", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "-m", model]
+    for item in c.config_head:
+        argv += ["-c", item]
+    argv += ["-s", c.sandbox_type]
+    for item in c.config_tail:
+        argv += ["-c", item]
+    for feature in c.disable:
+        argv += ["--disable", feature]
+    return argv + ["-C", scratch, prompt]
 
 
 def mcp_list_argv(c: cc.CodexConstants, binary: str) -> list[str]:
@@ -142,21 +161,27 @@ def mcp_list_is_empty(c: cc.CodexConstants, binary: str, env: dict, run_argv) ->
 # ---- CODEX_HOME and the sizes that are watched ---------------------------------------------------
 
 def codex_home_path(base) -> Path:
-    return Path(os.path.realpath(base)) / CODEX_HOME_NAME
+    """<state>/codex-home, as the state directory was given (not resolved:
+    check_codex_home looks for a symlink on the way instead of hiding it)."""
+    return Path(os.fspath(base)) / CODEX_HOME_NAME
 
 
 def check_codex_home(base) -> Path:
-    """The dedicated CODEX_HOME: ours, 0700, a plain directory with no
-    symlink on its path (design 5.1). CodexRefused otherwise."""
+    """The dedicated CODEX_HOME: ours, 0700, a plain directory, opened from
+    "/" one component at a time without following any symlink (design 5.1):
+    a symlink anywhere on its path is refused. CodexRefused otherwise."""
     path = codex_home_path(base)
     try:
-        st = os.lstat(path)
-    except OSError as exc:
-        raise CodexRefused("no_codex_home", f"VBear 專用的 CODEX_HOME 不存在或無法檢查（{exc.strerror}）") from exc
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        fd = review_store.open_dir_chain(path)
+    except (OSError, ValueError) as exc:
+        raise CodexRefused("unsafe_path", "專用的 CODEX_HOME 不存在，或路徑上有符號連結、不是資料夾"
+                           f"（{type(exc).__name__}）") from exc
+    try:
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
         raise CodexRefused("unsafe_path", "專用的 CODEX_HOME 必須是本人的 0700 一般資料夾")
-    if os.path.realpath(path) != str(path):
-        raise CodexRefused("unsafe_path", "專用的 CODEX_HOME 路徑上有符號連結")
     return path
 
 

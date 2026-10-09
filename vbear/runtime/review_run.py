@@ -340,6 +340,11 @@ class ReviewRun:
         except ChildProcessError:
             info = None
             self._log(f"{self.job_id}: leader is not our child any more")
+        except OSError as exc:
+            # We cannot tell whether the leader is gone: nothing is signalled,
+            # nothing is reaped, the daemon keeps holding it (design 5.8).
+            self._abandon(f"無法確認 leader 是否結束（{exc.strerror or type(exc).__name__}），不送訊號、不回收，交人工處理")
+            return
         if info is not None:
             self.exit_info, self.exit_seen = info, now
 
@@ -425,6 +430,11 @@ class ReviewRun:
                 self.proc.returncode = self.exit_code
             except ChildProcessError:
                 self.reaped = True
+            except OSError as exc:
+                # Not reaped, and it cannot be proven it is: the daemon holds
+                # the leader and a person looks (design 5.8).
+                manual_review = (manual_review or
+                                 f"回收 leader 失敗（{exc.strerror or type(exc).__name__}），交人工處理")
         self._close_ends()
         self.outcome = self._outcome(manual_review)
         self.finished = True                    # last: whoever sees finished sees the outcome

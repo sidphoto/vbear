@@ -420,6 +420,18 @@ class Pipeline:
             os.close(rfd)
         return out
 
+    def review_dir_fd(self, round_: int) -> int:
+        """A descriptor on pipelines/<task>/reviews/<round>/, where a finished
+        review's record is saved; the caller closes it. The round's job.json
+        must be there (the daemon wrote it when it created the job)."""
+        if not (isinstance(round_, int) and not isinstance(round_, bool) and 1 <= round_ <= ROUND_MAX):
+            raise StoreRefused("輪次不合法")
+        rfd = _open_dir(REVIEWS, self.fd, create=False)
+        try:
+            return _open_dir(str(round_), rfd, create=False)
+        finally:
+            os.close(rfd)
+
     def write_review_link(self, round_: int, job_id: str, pipeline_id: str, commit: str) -> None:
         """The flow's record of a review job, exclusive and durable. A failure
         leaves nothing half written (the file is removed)."""

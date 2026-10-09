@@ -49,6 +49,7 @@ THREAD_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_\-]{7,63}\Z")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}\Z")
 VERSION_RE = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\Z")
 HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
+WORKDIR_RE = re.compile(r"^/[^\x00-\x1f\x7f]{0,1023}\Z")      # the task's work directory: no control characters
 ROUND_MAX = 1000
 STATES = ("prepared", "launching", "running", "finished", "invalid", "manual_review", "cleaned")
 TERMINAL = ("finished", "invalid", "manual_review", "cleaned")
@@ -59,7 +60,7 @@ EARLIEST = 1577836800.0                                   # 2020-01-01
 REQUIRED = frozenset({
     "review_manifest_version", "job_id", "pipeline_id", "task_id", "round", "commit", "model", "codex_version",
     "argv_sha256", "scratch", "run_home", "leader", "observed", "thread_id", "exit_code", "state", "created",
-    "process", "outcome"})
+    "process", "outcome", "workdir"})
 OPTIONAL = frozenset({"retained_reason", "retained_at", "ended_at", "invalid_reasons"})
 # which state each outcome goes with, and which outcome each terminal state may carry
 STATE_OUTCOMES = {"prepared": (None,), "launching": (None,), "running": (None,), "finished": ("valid",),
@@ -73,6 +74,32 @@ class ReviewRefused(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def open_dir_chain(path) -> int:
+    """A descriptor on the directory ``path``, opened from "/" one component
+    at a time with O_NOFOLLOW, so a symlink anywhere on the way (not only at
+    the end) is refused, and nothing is resolved first (Codex S2b part 3
+    review #4). ``path`` must be absolute with no "." or ".." component.
+    OSError for a symlink (ELOOP), a non-directory or anything missing;
+    ValueError for a path of the wrong shape. The caller closes the fd."""
+    text = os.fspath(path)
+    if not isinstance(text, str) or not text.startswith("/") or "\0" in text:
+        raise ValueError("路徑必須是絕對路徑")
+    parts = [p for p in text.split("/")[1:] if p != ""]
+    if any(p in (".", "..") for p in parts):
+        raise ValueError("路徑不能含 . 或 ..")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open("/", flags)
+    try:
+        for name in parts:
+            nxt = os.open(name, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def reviews_root(base) -> Path:
@@ -153,6 +180,8 @@ def manifest_problem(m, job_id: str | None = None) -> str | None:
         ("invalid_reasons", "invalid_reasons" not in m
                             or (isinstance(m["invalid_reasons"], list) and len(m["invalid_reasons"]) <= 16
                                 and all(isinstance(x, str) and len(x) <= 256 for x in m["invalid_reasons"]))),
+        ("workdir", isinstance(m["workdir"], str) and WORKDIR_RE.match(m["workdir"]) is not None
+                    and os.path.normpath(m["workdir"]) == m["workdir"]),
         ("process", m["process"] in PROCESS),
         ("outcome", m["outcome"] is None or m["outcome"] in OUTCOMES),
     ]

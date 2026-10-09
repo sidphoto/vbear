@@ -21,7 +21,8 @@ def manifest(**over):
          "round": 1, "commit": "a" * 40, "model": "gpt-6-luna", "codex_version": "0.160.0",
          "argv_sha256": "c" * 64, "scratch": {"path": "/private/tmp/sr-abcd1234", "inode": 7, "dev": 9},
          "run_home": {"inode": 8, "dev": 9}, "leader": None, "observed": [], "thread_id": None,
-         "exit_code": None, "state": "prepared", "created": time.time(), "process": "none", "outcome": None}
+         "exit_code": None, "state": "prepared", "created": time.time(), "process": "none", "outcome": None,
+         "workdir": "/Users/me/work"}
     m.update(over)
     return m
 
@@ -78,6 +79,9 @@ class ManifestSchemaTests(unittest.TestCase):
             "scratch extra key": {"scratch": {"path": "/private/tmp/sr-abcd1234", "inode": 7, "dev": 9, "x": 1}},
             "scratch inode neg": {"scratch": {"path": "/private/tmp/sr-abcd1234", "inode": -1, "dev": 9}},
             "run_home missing key": {"run_home": {"inode": 8}},
+            "workdir relative": {"workdir": "work"}, "workdir with newline": {"workdir": "/a\nb"},
+            "workdir not normal": {"workdir": "/a/../b"}, "workdir trailing slash": {"workdir": "/a/"},
+            "workdir none": {"workdir": None}, "workdir long": {"workdir": "/" + "x" * 2000},
             "leader empty start": {"leader": {"pid": 4242, "start": "", "source": "ps"}},
             "leader pid 0": {"leader": {"pid": 0, "start": f"{int(time.time())}.000000", "source": "ps"}},
             "leader source": {"leader": {"pid": 4242, "start": f"{int(time.time())}.000000", "source": "x"}},

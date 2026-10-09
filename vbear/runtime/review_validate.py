@@ -267,9 +267,9 @@ def _open_rollout(codex_home, c: cc.CodexConstants, thread_id: str, dates) -> tu
     found: list[tuple[str, int]] = []
     seen_dirs = set()
     try:
-        root = os.open(str(codex_home), _DIR_FLAGS)
-    except OSError as exc:
-        raise ReviewInvalid(f"CODEX_HOME 無法開啟（{exc.strerror}）") from exc
+        root = review_store.open_dir_chain(codex_home)       # from "/", no symlink anywhere on the way
+    except (OSError, ValueError) as exc:
+        raise ReviewInvalid(f"CODEX_HOME 無法安全開啟（{type(exc).__name__}）") from exc
     try:
         for when in dates:
             parts = [c.rollout_dir, *(when.strftime(p) for p in c.rollout_date_parts)]
