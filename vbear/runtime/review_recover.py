@@ -27,7 +27,8 @@ trusted is a failure, not only a job's own outcome:
   invalid          True   (interrupted, judged)
   manual_review    True
   error            True   (an unexpected exception for this job)
-  link_problem     True   (the flow's link could not be checked or written back)
+  link_problem     True   (the flow's link could not be checked or written back, or
+                          is there but names another job, flow or commit)
   cleaned/kept     True when the job is a failure by its outcome (invalid), or
                           its record is not whole (no marker, damaged, a
                           marker that disagrees); False for a valid job with a
@@ -53,12 +54,21 @@ def _item(m: dict | None, name: str, action: str, why: str = "", failure: bool =
 
 
 def _repair_link(base, m: dict) -> str | None:
-    """None when the flow-side link is there (or was put back); else why not."""
+    """None when the flow-side link is there and says what the manifest says
+    (or was put back); else why not. A link that is there but names another
+    job, flow or commit is not repaired (nothing is overwritten) and is a
+    problem like a missing one that cannot be written (Codex 3d B-R3)."""
     try:
         with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
             links = p.review_links()
             if m["round"] not in links:
                 p.write_review_link(m["round"], m["job_id"], m["pipeline_id"], m["commit"])
+            else:
+                link = links[m["round"]]
+                differs = [k for k, v in (("job_id", m["job_id"]), ("pipeline_id", m["pipeline_id"]),
+                                           ("commit", m["commit"])) if link.get(k) != v]
+                if differs:
+                    return f"流程對輪次 {m['round']} 的審查紀錄與 manifest 不符（{'、'.join(differs)}）"
     except (OSError, pipeline_store.StoreRefused) as exc:
         return f"流程的審查紀錄無法核對或補寫（{type(exc).__name__}）"
     return None

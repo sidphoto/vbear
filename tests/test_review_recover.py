@@ -227,6 +227,27 @@ class FailureFlagTests(RecoverCase):
                 self.assertTrue(problems[0]["failure"], problems)
                 self.assertEqual(problems[0]["pipeline_id"], FID)
 
+    def test_a_link_that_disagrees_with_the_manifest_is_a_failure(self):
+        # Codex 3d B-R3: there, but not saying what the manifest says
+        for field, value in (("job_id", "r-" + "7" * 16), ("pipeline_id", "flow-ffffffffffff"), ("commit", "e" * 40)):
+            with self.subTest(field=field):
+                self.tearDown_and_setUp()
+                link = self.base / "pipelines" / TID / "reviews" / "1" / "job.json"
+                body = json.loads(link.read_text())
+                body[field] = value
+                link.write_text(json.dumps(body))
+                before = link.read_text()
+                items = self.recover(self.alive_rows())
+                problems = [i for i in items if i["action"] == "link_problem"]
+                self.assertEqual(len(problems), 1, items)
+                self.assertTrue(problems[0]["failure"])
+                self.assertIn(field, problems[0]["why"])
+                self.assertEqual(link.read_text(), before)                  # nothing is overwritten
+
+    def test_a_link_that_agrees_is_not_a_problem(self):
+        items = self.recover(self.alive_rows())
+        self.assertEqual([i["action"] for i in items], ["manual_review"])
+
     def test_the_second_recovery_still_holds_when_the_first_one_could_not_write_the_hold(self):
         # the reviewer's injection: manual_review already decided, link missing, link write fails
         self.recover(self.alive_rows())
