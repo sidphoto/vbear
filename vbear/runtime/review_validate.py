@@ -155,6 +155,11 @@ CONTROL_KEYS = ("REVIEWED_COMMIT", "BASE_IS_ANCESTOR", "VERDICT")
 CONTROL_LINE_IN_FENCE = "控制欄位出現在 code fence 裡面"
 CONTROL_LINE_WRAPPED = "控制欄位被引用、清單、加粗或行內 code 包起來，不是獨立的一行"
 UNCLOSED_FENCE = "code fence 沒有關閉"
+UNCLOSED_CONSTRUCT = "報告最後三行之前，還有沒關閉的 code fence 或 HTML 註解"
+CONTROL_LINE_ELSEWHERE = "控制欄位的前綴出現在報告最後三行以外的地方"
+TAIL_FORMAT = "報告最後三個非空行不是依序剛好 REVIEWED_COMMIT、BASE_IS_ANCESTOR、VERDICT"
+_ANY_CONTROL = re.compile(r"(?:" + "|".join(CONTROL_KEYS) + r")[*_`\s]*:")
+_TAIL_VERDICTS = "|".join(re.escape(v) for v in VERDICTS)
 _FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 # a line that is, or is dressed up as, a control line: any run of quote,
 # list, heading, bold, italic or code markers (or numbering) in front of
@@ -181,6 +186,39 @@ def _split_fences(lines: list[str]) -> tuple[list[str], list[str], bool]:
         else:
             inside.append(ln)
     return outside, inside, opener is not None
+
+
+def _open_construct_before(lines: list[str], upto: int) -> bool:
+    """Whether a code fence or an HTML comment (<!-- ... -->) is still open at
+    the start of line ``upto``. Inside a fence a comment marker is only text,
+    and inside a comment a fence marker is; text after a closing marker is
+    read again."""
+    fence: tuple[str, int] | None = None
+    comment = False
+    for ln in lines[:upto]:
+        i = 0
+        if fence is not None:
+            m = _FENCE.match(ln)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not ln.strip().strip(fence[0]):
+                fence = None
+            continue
+        while True:
+            if comment:
+                end = ln.find("-->", i)
+                if end < 0:
+                    break
+                comment, i = False, end + 3
+                continue
+            if i == 0:
+                m = _FENCE.match(ln)
+                if m:
+                    fence = (m.group(1)[0], len(m.group(1)))
+                    break
+            start = ln.find("<!--", i)
+            if start < 0:
+                break
+            comment, i = True, start + 4
+    return fence is not None or comment
 
 
 def check_report(text, commit: str) -> ReportResult:
@@ -228,6 +266,29 @@ def check_report(text, commit: str) -> ReportResult:
         out.verdict = verdicts[0][len("VERDICT: "):]
     else:
         out.problems.append("VERDICT 不是剛好一行，或不是最後一個非空行")
+    # The whitelist rule (planner, after the HTML-comment bypass): the last
+    # three non-empty lines are exactly the three control lines in order;
+    # everything before them is closed; no control key appears anywhere else.
+    idx = [i for i, ln in enumerate(lines) if ln.strip()]
+    tail_ok = False
+    if len(idx) >= 3:
+        a, b, c3 = idx[-3:]
+        patterns = (re.compile(r"REVIEWED_COMMIT: ([0-9a-f]{40}|[0-9a-f]{64})"), re.compile(r"BASE_IS_ANCESTOR: (yes|no)"),
+                    re.compile(r"VERDICT: (" + _TAIL_VERDICTS + ")"))
+        tail_ok = (all(lines[i].isascii() and p.fullmatch(lines[i]) for i, p in zip((a, b, c3), patterns))
+                   and lines[a] == f"REVIEWED_COMMIT: {commit}")
+        if tail_ok:
+            if _open_construct_before(lines, a):
+                out.problems.append(UNCLOSED_CONSTRUCT)
+            for i, ln in enumerate(lines):
+                if i not in (a, b, c3) and _ANY_CONTROL.search(ln):
+                    out.problems.append(CONTROL_LINE_ELSEWHERE)
+                    break
+    if not tail_ok:
+        out.problems.append(TAIL_FORMAT)
+        if any(_ANY_CONTROL.search(ln) for ln in lines[:max(0, (idx[-3] if len(idx) >= 3 else 0))]):
+            out.problems.append(CONTROL_LINE_ELSEWHERE)
+    out.problems = list(dict.fromkeys(out.problems))
     return out
 
 

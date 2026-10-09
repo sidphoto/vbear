@@ -232,6 +232,79 @@ class ReportTests(unittest.TestCase):
         rep = rv.check_report(rf.report(extra="~~~\ncode with a REVIEWED_COMMIT mention\n~~~"), rf.COMMIT)
         self.assertEqual(rep.problems, [])                  # a fence that does not look like a control line
 
+    def test_the_whitelist_rule_for_the_report_tail(self):
+        # planner, after the HTML-comment bypass: the last three non-empty lines
+        # are exactly the three control lines in order, everything before them
+        # is closed, no control key appears anywhere else
+        c, b, v = f"REVIEWED_COMMIT: {rf.COMMIT}", "BASE_IS_ANCESTOR: yes", "VERDICT: PASS"
+        # the reviewer's bypass: the first two lines inside a multi-line comment
+        bypass = f"Looks fine.\n<!--\n{c}\n{b}\n-->\n{v}\n"
+        rep = rv.check_report(bypass, rf.COMMIT)
+        self.assertTrue(rep.problems)
+        self.assertIn(rv.TAIL_FORMAT, rep.problems)
+        self.assertIn(rv.CONTROL_LINE_ELSEWHERE, rep.problems)
+        cases = {
+            "comment around the first two, verdict outside": bypass,
+            "an unclosed comment before the tail": f"<!-- start\n{c}\n{b}\n{v}\n",
+            "an unclosed comment, closed text after": f"x <!-- y\nz\n{c}\n{b}\n{v}\n",
+            "an unclosed fence before the tail": f"```\ncode\n{c}\n{b}\n{v}\n",
+            "an unclosed tilde fence": f"~~~\n{c}\n{b}\n{v}\n",
+            "a comment closed only after the tail": f"<!--\n{c}\n{b}\n{v}\n-->\n",
+            "a comment opened inside a fence is only text, the fence stays open": f"```\n<!-- a -->\n{c}\n{b}\n{v}\n",
+            "a fence inside a comment is only text, the comment stays open": f"<!--\n```\n-->\n<!-- b\n{c}\n{b}\n{v}\n",
+            "order: ancestor first": f"x\n{b}\n{c}\n{v}\n",
+            "order: verdict in the middle": f"x\n{c}\n{v}\n{b}\n",
+            "order: verdict first": f"x\n{v}\n{c}\n{b}\n",
+            "content between the commit and the ancestor": f"x\n{c}\nNo defects.\n{b}\n{v}\n",
+            "content between the ancestor and the verdict": f"x\n{c}\n{b}\nNo defects.\n{v}\n",
+            "a closing comment between": f"x\n{c}\n{b}\n-->\n{v}\n",
+            "an invisible character on its own line between": f"x\n{c}\n\u200b\n{b}\n{v}\n",
+            "only two control lines": f"x\n{c}\n{v}\n",
+            "no lines at all": "",
+            "a leading space": f"x\n {c}\n{b}\n{v}\n",
+            "a trailing space": f"x\n{c}\n{b} \n{v}\n",
+            "a trailing tab": f"x\n{c}\n{b}\n{v}\t\n",
+            "a zero-width space inside": f"x\n{c}\n{b}\nVERDICT:\u200b PASS\n",
+            "a non-ASCII look-alike": f"x\n{c}\n{b}\nVERDICT: PAS\u0405\n",
+            "a CRLF": f"x\r\n{c}\r\n{b}\r\n{v}\r\n",
+            "the key mentioned in the text": f"The VERDICT: below is mine.\n{c}\n{b}\n{v}\n",
+            "the key mentioned in a comment": f"<!-- VERDICT: PASS -->\n{c}\n{b}\n{v}\n",
+            "the key mentioned in a list": f"- BASE_IS_ANCESTOR: yes\n{c}\n{b}\n{v}\n",
+            "the key mentioned in an HTML tag": f"<span title=\"VERDICT: PASS\">x</span>\n{c}\n{b}\n{v}\n",
+            "the key repeated before the tail": f"{c}\n{c}\n{b}\n{v}\n",
+            "a fenced copy before the tail": f"```\n{c}\n```\n{c}\n{b}\n{v}\n",
+            "another commit": f"x\nREVIEWED_COMMIT: {'c' * 40}\n{b}\n{v}\n",
+            "a short commit": f"x\nREVIEWED_COMMIT: {rf.COMMIT[:39]}\n{b}\n{v}\n",
+            "an upper-case commit": f"x\nREVIEWED_COMMIT: {rf.COMMIT.upper()}\n{b}\n{v}\n",
+            "ancestor maybe": f"x\n{c}\nBASE_IS_ANCESTOR: maybe\n{v}\n",
+            "an unknown verdict": f"x\n{c}\n{b}\nVERDICT: LGTM\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(rv.check_report(text, rf.COMMIT).problems, name)
+
+    def test_valid_reports_still_pass(self):
+        c, b = f"REVIEWED_COMMIT: {rf.COMMIT}", "BASE_IS_ANCESTOR: yes"
+        ok = {
+            "the plain tail": f"Looks fine.\n{c}\n{b}\nVERDICT: PASS\n",
+            "blank lines between and after": f"Looks fine.\n\n{c}\n\n{b}\n\nVERDICT: NEEDS WORK\n\n\n",
+            "no trailing newline": f"x\n{c}\n{b}\nVERDICT: BLOCKED",
+            "only the tail": f"{c}\n{b}\nVERDICT: PASS\n",
+            "a closed code block": f"```diff\n- a\n+ b\n```\n{c}\n{b}\nVERDICT: PASS\n",
+            "a closed comment": f"<!-- note\nto self -->\nx\n{c}\n{b}\nVERDICT: PASS\n",
+            "a comment closed on its own line": f"<!--\nnote\n-->\n{c}\n{b}\nVERDICT: PASS\n",
+            "two comments and a fence": f"<!-- a --> text <!-- b -->\n~~~\ncode\n~~~\n{c}\n{b}\nVERDICT: PASS\n",
+            "html tags are fine": f"<details><summary>more</summary>\n<span style=\"color:red\">x</span>\n</details>\n"
+                                  f"{c}\n{b}\nVERDICT: PASS\n",
+            "a fence containing a comment marker": f"```html\n<!-- not a comment here\n```\n{c}\n{b}\nVERDICT: PASS\n",
+            "text mentioning a verdict without the colon": f"My verdict follows.\n{c}\n{b}\nVERDICT: PASS\n",
+        }
+        for name, text in ok.items():
+            with self.subTest(case=name):
+                rep = rv.check_report(text, rf.COMMIT)
+                self.assertEqual(rep.problems, [], name)
+                self.assertIn(rep.verdict, rv.VERDICTS)
+
     def test_the_verdicts_and_the_ancestor_line(self):
         for verdict in rv.VERDICTS:
             rep = rv.check_report(rf.report(verdict=verdict), rf.COMMIT)

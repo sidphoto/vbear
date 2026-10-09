@@ -19,8 +19,8 @@ SCRATCH = "/private/tmp/sr-abcd1234"
 
 
 def report(commit=COMMIT, verdict="PASS", ancestor="yes", extra=""):
-    return (f"Review of the change.\n{extra}\nREVIEWED_COMMIT: {commit}\nBASE_IS_ANCESTOR: {ancestor}\n"
-            f"No defects found.\nVERDICT: {verdict}\n")
+    return (f"Review of the change.\n{extra}\nNo defects found.\n"
+            f"REVIEWED_COMMIT: {commit}\nBASE_IS_ANCESTOR: {ancestor}\nVERDICT: {verdict}\n")
 
 
 def _usage(i):
