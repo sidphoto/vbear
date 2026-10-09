@@ -47,6 +47,26 @@ class ProbeToolTests(unittest.TestCase):
         self.assertIn("turn.completed", obs["events"]["sequence"])
         self.assertIn("session_meta", obs["rollout"]["record_types"])
         self.assertEqual(report["codex_mcp_list"]["stdout"].strip(), "[]")
+        self.assertIn("No such file", report["temp_ls"])                        # the proof the temp directory is gone
+        self.assertEqual((report["leak_check"]["found"], report["leak_check"]["hard"], report["leak_check"]["soft"]),
+                         (0, [], []))
+        self.assertGreaterEqual(report["leak_check"]["files_scanned"], 3)
+
+    def test_the_leak_scan_catches_what_it_is_for(self):
+        sys.path.insert(0, str(Path(REPO) / "tools"))
+        import review_daemon_probe as probe
+        root = Path(tempfile.mkdtemp(prefix="vbp-", dir="/private/tmp"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "a.jsonl").write_text('{"x": "acct-secret-0001"}\n')
+        (root / "b.jsonl").write_text("fine " + "a" * 63 + "\n")
+        (root / "c.jsonl").write_text("digest " + "0123456789abcdef" * 4 + "\n")
+        (root / "d.jsonl").write_text("t eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig\n")
+        res = probe._leak_scan(root, ["acct-secret-0001"], "{}")
+        names = sorted(f.split(":")[0] for f in res["found"])
+        self.assertEqual(names, ["a.jsonl", "c.jsonl", "d.jsonl"])                # b has only 63 hex characters
+        self.assertEqual([h.split(":")[0] for h in res["hard"]], ["a.jsonl"])      # the real identifier is a hard hit
+        self.assertEqual(sorted(h.split(":")[0] for h in res["soft"]), ["c.jsonl", "d.jsonl"])
+        self.assertEqual(probe._secret_values(root / "none"), [])
 
     def test_without_a_login_it_stops_before_doing_anything(self):
         root = Path(tempfile.mkdtemp(prefix="vbp-", dir="/private/tmp"))

@@ -73,6 +73,7 @@ def main() -> int:
     report: dict = {"tool": "review_daemon_probe", "started": time.time(), "version": args.version,
                     "model": args.model, "model_calls": 0, "cleanup_errors": []}
     before = set(os.listdir(state)) if state.is_dir() else set()
+    secrets = _secret_values(state / "codex-home" / "auth.json")      # in memory, only to prove nothing leaks
     root = Path(tempfile.mkdtemp(prefix="vbe-", dir="/private/tmp"))
     try:
         if "codex-home" not in before or not (state / "codex-home" / "auth.json").exists():
@@ -83,14 +84,77 @@ def main() -> int:
     finally:
         _cleanup(state, before, root, report["cleanup_errors"])
     report["temp_removed"] = not root.exists()
+    # the proof that the temporary directory is gone (ls -ld says "No such file")
+    report["temp_ls"] = subprocess.run(["ls", "-ld", str(root)], capture_output=True, text=True).stderr.strip()
     report["finished"] = time.time()
     report["passed"] = bool(report.get("review", {}).get("outcome") == "valid" and not report.get("error")
                             and report["temp_removed"] and not report["cleanup_errors"])
-    (out_dir / "review-probe-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n")
+    body = json.dumps(report, ensure_ascii=False, indent=1) + "\n"
+    leaks = _leak_scan(out_dir, secrets, body)
+    report["leak_check"] = {"files_scanned": leaks["scanned"], "found": len(leaks["found"]),
+                            "hard": leaks["hard"], "soft": leaks["soft"]}
+    if leaks["hard"]:
+        # an identifier or token of auth.json is in a file: that file does not stay on disk
+        for name in sorted({h.split(":")[0] for h in leaks["hard"]}):
+            if name != "review-probe-report.json" and (out_dir / name).exists():
+                (out_dir / name).unlink()
+        report = {"tool": report["tool"], "error": "leak check failed: " + "; ".join(leaks["hard"]),
+                  "passed": False, "model_calls": report["model_calls"], "leak_check": report["leak_check"]}
+    elif leaks["soft"]:
+        report["passed"] = False                         # a hit of a heuristic check: a person looks before it is shared
+        report["error"] = report.get("error") or "leak check: heuristic hits to examine: " + "; ".join(leaks["soft"])
+    body = json.dumps(report, ensure_ascii=False, indent=1) + "\n"
+    (out_dir / "review-probe-report.json").write_text(body)
     os.chmod(out_dir / "review-probe-report.json", 0o600)
-    print(json.dumps({k: report.get(k) for k in ("passed", "review", "model_calls", "error", "temp_removed")},
-                     ensure_ascii=False, indent=1))
+    print(json.dumps({k: report.get(k) for k in ("passed", "review", "model_calls", "error", "temp_removed",
+                                                  "temp_ls", "leak_check")}, ensure_ascii=False, indent=1))
     return 0 if report["passed"] else 1
+
+
+def _secret_values(auth: Path) -> list[str]:
+    """The identifiers and tokens in auth.json that must never reach an
+    output file, only for the leak scan below. Never printed or stored."""
+    out: list[str] = []
+    try:
+        data = json.loads(auth.read_text())
+    except (OSError, ValueError):
+        return out
+
+    def walk(v):
+        if isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+        elif isinstance(v, str) and len(v) >= 8:
+            out.append(v)
+    walk(data)
+    return out
+
+
+def _leak_scan(out_dir: Path, secrets: list[str], report_body: str) -> dict:
+    """Every file the tool keeps, and the report itself, must hold none of
+    the identifiers and tokens of auth.json, no 64-hex fingerprint (HMACs
+    and sha256 digests alike) and no JWT-shaped string. (No hex digest is
+    expected in what is kept; a hit is examined by hand.)"""
+    import re
+    texts = {"review-probe-report.json": report_body}
+    for p in out_dir.iterdir():
+        if p.is_file() and p.name != "review-probe-report.json":
+            try:
+                texts[p.name] = p.read_text()
+            except OSError:
+                texts[p.name] = ""
+    hard, soft = [], []
+    for name, text in texts.items():
+        if any(s in text for s in secrets):
+            hard.append(f"{name}: an identifier or token of auth.json")
+        if re.search(r"(?<![0-9a-fA-F])[0-9a-f]{64}(?![0-9a-fA-F])", text):
+            soft.append(f"{name}: a 64-hex string")
+        if re.search(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.", text):
+            soft.append(f"{name}: a JWT-shaped string")
+    return {"scanned": len(texts), "found": hard + soft, "hard": hard, "soft": soft}
 
 
 def _cleanup(state: Path, before: set, root: Path, errors: list) -> None:
