@@ -70,6 +70,17 @@ def _open_dir(name: str, parent: int, *, create: bool) -> int:
     return fd
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """Every byte or an error (review round 7: a short write is never taken
+    for a complete one). A write that makes no progress is an error."""
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError(5, "寫入沒有進展")
+        view = view[n:]
+
+
 def _fsync_dir(fd: int):
     """Make a rename/link/unlink in this directory durable. A failure is
     reported, never swallowed (Codex S2a-2 p1 #5): the caller treats the
@@ -262,10 +273,13 @@ class Pipeline:
         fd = os.open(STARTED, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
                      dir_fd=self.fd)
         try:
-            os.write(fd, data)
+            _write_all(fd, data)
             os.fsync(fd)
-        finally:
+        except BaseException:
             os.close(fd)
+            os.unlink(STARTED, dir_fd=self.fd)     # just created by us: never leave a half record
+            raise
+        os.close(fd)
         _fsync_dir(self.fd)
         return now
 
@@ -329,10 +343,13 @@ class Pipeline:
                      dir_fd=self.fd)
         try:
             data = json.dumps({"v": 2, "pipeline_id": pipeline_id, "released_at": now, "resolved": resolved})
-            os.write(fd, data.encode())
+            _write_all(fd, data.encode())
             os.fsync(fd)
-        finally:
+        except BaseException:
             os.close(fd)
+            os.unlink(tmp, dir_fd=self.fd)         # the old record stays as it was
+            raise
+        os.close(fd)
         os.replace(tmp, RELEASED, src_dir_fd=self.fd, dst_dir_fd=self.fd)
         _fsync_dir(self.fd)
 
@@ -408,10 +425,13 @@ def hold(base, pipeline_id: str, reason: str) -> None:
         tmp = f".{pipeline_id}.{os.getpid()}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=holds)
         try:
-            os.write(fd, json.dumps({"v": 1, "reason": reason, "at": time.time()}, ensure_ascii=False).encode())
+            _write_all(fd, json.dumps({"v": 1, "reason": reason, "at": time.time()}, ensure_ascii=False).encode())
             os.fsync(fd)
-        finally:
+        except BaseException:
             os.close(fd)
+            os.unlink(tmp, dir_fd=holds)
+            raise
+        os.close(fd)
         os.replace(tmp, pipeline_id, src_dir_fd=holds, dst_dir_fd=holds)
         _fsync_dir(holds)
     finally:

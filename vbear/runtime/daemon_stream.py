@@ -193,11 +193,13 @@ class StreamOps:
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     cwd=m["canonical_workspace"], env=env, start_new_session=True, close_fds=True)
         except (OSError, stream_journal.JournalCorrupt) as exc:
+            self._record_spawn_failure(writer, exc)
             try:
                 writer.append("exited", {"returncode": None, "signal": None, "stderr_tail": f"無法啟動：{exc}"[:500]})
             except (OSError, stream_journal.JournalCorrupt):
                 pass
             writer.close()
+            self._hold_for_failure(m["pipeline_id"], launch_id, f"無法啟動（{exc}）"[:200])
             if writer.state.started is not None and writer.state.exit is not None:
                 agent_sessions.cleanup_launch(self.base, launch_id, proven_dead=True)
             else:
@@ -252,6 +254,8 @@ class StreamOps:
             for which in list(s.registered):
                 self._unregister_stream(s, which)
         problem = stream_session.end_spawned(proc, leader_start, s.descendants if s is not None else None)
+        self._record_spawn_failure(writer, why)
+        self._hold_for_failure(m["pipeline_id"], launch_id, f"啟動後初始化失敗（{why}）"[:200])
         if writer.state.exit is None:
             try:
                 writer.append("exited", {"returncode": None, "signal": None,
@@ -280,6 +284,20 @@ class StreamOps:
         except (OSError, pipeline_store.StoreRefused) as exc:
             self._log(f"dispatch {d}: bytes on disk cannot be measured ({exc})")
             return None
+
+    @staticmethod
+    def _record_spawn_failure(writer, exc) -> None:
+        """Review round 7: a session that could not start ended in error, a
+        v29.8 failure with its own (launch, seq) identity, recorded before
+        "exited" whenever the journal has session_started."""
+        if writer.state.started is None or writer.state.exit is not None:
+            return
+        errno = getattr(exc, "errno", None)
+        detail = (f"errno {errno}: " if errno is not None else "") + str(exc)
+        try:
+            writer.append("protocol_error", {"reason": "spawn_failed", "detail": detail[:1024]})
+        except (OSError, stream_journal.JournalCorrupt):
+            pass                          # the launch is then kept for review: also a failure
 
     @staticmethod
     def _manifest_bytes(m: dict) -> int:

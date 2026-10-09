@@ -182,6 +182,51 @@ class PipelineStoreTests(StateDir):
                 with ps.Pipeline(self.base, "task-1", create=False) as p, self.assertRaises(ps.StoreRefused):
                     p.release_record(fid)
 
+    def test_writes_are_complete_or_fail(self):
+        # Review round 7 B-1: short writes are continued; a failure leaves
+        # neither a half record nor a temp file, and the old record stays.
+        fid = "flow-0123456789ab"
+        real = os.write
+
+        def halves(fd, data):
+            data = bytes(data)
+            return real(fd, data[:max(1, len(data) // 2)])
+        with mock.patch.object(ps.os, "write", halves), mock.patch.object(a.os, "write", halves):
+            with ps.Pipeline(self.base, "task-1", create=True) as p:
+                t = p.record_start(fid, time.time(), launch_id=LID)
+                p.record_release(fid, time.time(), [f"{LID}#3"])
+                self.assertEqual(p.started_at(fid), t)
+                self.assertEqual(p.release_record(fid)["resolved"], {f"{LID}#3"})
+            ps.hold(self.base, fid, "stop")
+            self.assertTrue(ps.is_held(self.base, fid))
+            a._write_private(self.base / "x.json", json.dumps({"k": "v" * 100}))
+            self.assertEqual(json.loads((self.base / "x.json").read_text()), {"k": "v" * 100})
+        calls = []
+
+        def half_then_fail(fd, data):
+            calls.append(fd)
+            if len(calls) % 2 == 1:
+                return real(fd, bytes(data)[:len(data) // 2])
+            raise OSError(28, "No space left on device")
+        with mock.patch.object(ps.os, "write", half_then_fail), mock.patch.object(a.os, "write", half_then_fail):
+            with ps.Pipeline(self.base, "task-2", create=True) as p:
+                with self.assertRaises(OSError):
+                    p.record_start(fid, time.time(), launch_id=LID)
+                self.assertIsNone(p.start_record())                           # no half record
+            with ps.Pipeline(self.base, "task-1", create=False) as p:
+                with self.assertRaises(OSError):
+                    p.record_release(fid, time.time(), [f"{LID}#4"])
+                self.assertEqual(p.release_record(fid)["resolved"], {f"{LID}#3"})   # the old one stays
+            ps.release(self.base, fid)
+            with self.assertRaises(OSError):
+                ps.hold(self.base, fid, "stop")
+            self.assertFalse(ps.is_held(self.base, fid))
+            with self.assertRaises(OSError):
+                a._write_private(self.base / "y.json", json.dumps({"k": "v" * 100}))
+            self.assertFalse((self.base / "y.json").exists())
+        leftovers = [p.name for p in self.base.rglob("*") if p.name.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
+
     def test_holds(self):
         fid = "flow-0123456789ab"
         self.assertFalse(ps.is_held(self.base, fid))

@@ -748,7 +748,7 @@ class JournalOrderTests(StreamCase):
         self.assertFalse(r["ok"])
         ldir = self.base / "sessions" / m["launch_id"]
         kinds = [json.loads(l)["kind"] for l in (ldir / "journal.jsonl").read_text().splitlines()]
-        self.assertEqual(kinds, ["session_started", "exited"])
+        self.assertEqual(kinds, ["session_started", "protocol_error", "exited"])   # spawn_failed (round 7)
         self.assertEqual(json.loads((ldir / "manifest.json").read_text())["state"], "ended")
         self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
 
@@ -1089,7 +1089,7 @@ class SetupFailureTests(StreamCase):
             os.kill(pid, 0)                                   # killed and reaped
         ldir = self.base / "sessions" / m["launch_id"]
         kinds = [json.loads(x)["kind"] for x in (ldir / "journal.jsonl").read_text().splitlines()]
-        self.assertEqual(kinds, ["session_started", "exited"])
+        self.assertEqual(kinds, ["session_started", "protocol_error", "exited"])   # spawn_failed (round 7)
         self.assertEqual(self.manifest(m["launch_id"])["state"], "ended")
         self.assertNotIn(m["launch_id"], self.dm._streams)
         self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
@@ -1395,6 +1395,57 @@ class FailureHoldTests(StreamCase):
 
     def test_a_failure_stamped_with_the_release_time_is_not_released(self):
         self.released_then_fail_again(lambda released_at: released_at)
+
+    def test_a_failed_spawn_is_a_failure(self):
+        # Review round 7 A-1: a CLI that cannot start must not be retried
+        # without the user's "continue".
+        import vbear.runtime.daemon_stream as ds
+        m = self.prepare()
+        with mock.patch.object(ds.subprocess, "Popen", side_effect=OSError(8, "Exec format error")):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertFalse(r["ok"])
+        res = self.journal(m["launch_id"])
+        self.assertEqual(res.state.protocol_errors[0]["reason"], "spawn_failed")
+        self.assertIn("errno 8", res.state.protocol_errors[0]["detail"])
+        self.assertIn(m["launch_id"], self.hold_reason())
+        nxt = self.prepare()["launch_id"]
+        (self.base / "holds" / self.fid).unlink()                           # even without the hold file
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertFalse(r["ok"])
+        self.assertIn("繼續", r["error"]["message"])
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+
+    def test_a_short_write_never_releases(self):
+        # Review round 7 B-1.
+        from vbear.runtime import pipeline_store as ps
+        self.fail_once("is_error")
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        record = self.base / "pipelines" / self.tid / "released.json"
+        before = record.read_bytes()
+        nxt, _ = self.open("is_error")
+        self.dispatch(nxt)
+        self.wait_for(lambda: nxt in (self.hold_reason() or ""), msg="held again")
+        self.rpc("stream_close", launch_id=nxt)
+        self.wait_for(lambda: nxt not in self.dm._streams, msg="closed")
+        real = os.write
+        calls = []
+
+        def half_then_full_disk(fd, data):
+            calls.append(fd)
+            if len(calls) == 1:
+                return real(fd, bytes(data)[:len(data) // 2])
+            raise OSError(28, "No space left on device")
+        with mock.patch.object(ps.os, "write", half_then_full_disk):
+            r = self.rpc("pipeline_release", pipeline=self.fid)
+        self.assertFalse(r["ok"])
+        self.assertIn(nxt, self.hold_reason())                             # the hold stays
+        self.assertEqual(record.read_bytes(), before)                      # not replaced
+        self.assertFalse((record.parent / ".released.json.tmp").exists())
+        r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
+        self.assertFalse(r["ok"])
 
     def test_recovery_holds_the_flow(self):
         launch_id, _ = self.open("hang")

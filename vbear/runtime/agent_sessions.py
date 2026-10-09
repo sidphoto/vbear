@@ -100,10 +100,18 @@ def _write_private(path: Path, text: str, *, replace: bool = False) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_TRUNC if replace else os.O_EXCL)
     fd = os.open(target, flags, 0o600)
     try:
-        os.write(fd, text.encode("utf-8"))
+        data = memoryview(text.encode("utf-8"))
+        while data:                               # every byte (review round 7)
+            n = os.write(fd, data)
+            if n <= 0:
+                raise OSError(5, "寫入沒有進展")
+            data = data[n:]
         os.fsync(fd)
-    finally:
+    except BaseException:
         os.close(fd)
+        os.unlink(target)                         # the temp file, or the new file just created
+        raise
+    os.close(fd)
     if replace:
         os.replace(target, path)
 
