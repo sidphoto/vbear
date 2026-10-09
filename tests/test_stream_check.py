@@ -40,6 +40,23 @@ class StreamCheckTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def test_probe_result_is_bounded_strict_json_with_exact_schema(self):
+        path = self.tmp / "probe-result.json"
+        good = {name: {"allowed": True} for name in stream_check.EXPECT}
+        good["tmpdir_is_own_scratch"]["detail"] = "/private/tmp/sc-test/"
+        path.write_text(json.dumps(good))
+        self.assertEqual(stream_check.read_probe_result(path), good)
+
+        path.write_text(json.dumps({**good, "unexpected": {"allowed": True}}))
+        self.assertEqual(stream_check.read_probe_result(path), {})
+        path.write_text('{"own_work_write":{"allowed":true,"allowed":false}}')
+        self.assertEqual(stream_check.read_probe_result(path), {})
+        path.unlink()
+        outside = self.tmp / "outside-result.json"
+        outside.write_text(json.dumps(good))
+        path.symlink_to(outside)
+        self.assertEqual(stream_check.read_probe_result(path), {})
+
     def test_run_against_the_fake(self):
         out = self.tmp / "report.json"
         private = self.tmp / "t"                                        # this test's own temp root

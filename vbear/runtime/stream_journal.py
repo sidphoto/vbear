@@ -56,6 +56,15 @@ def _str(v, limit):
     return isinstance(v, str) and len(v) <= limit
 
 
+def _utf8_text(v, limit):
+    if not isinstance(v, str):
+        return False
+    try:
+        return len(v.encode("utf-8")) <= limit
+    except (UnicodeEncodeError, MemoryError):
+        return False
+
+
 def _money(v):
     if isinstance(v, bool):
         return False
@@ -100,9 +109,9 @@ def _turn_result(d):
             and all(_tool_call(c) for c in d["tool_calls"])
             and (d["structured_output"] is None or isinstance(d["structured_output"], dict))
             and isinstance(d["result_too_large"], bool)
-            and (d["result_text"] is None or (isinstance(d["result_text"], str)
-                                              and len(d["result_text"].encode("utf-8")) <= sp.MAX_RESULT_TEXT))
-            and not (d["result_too_large"] and d["result_text"] is not None))
+            and ((d["result_text"] is None and d["result_too_large"] is True)
+                 or (_utf8_text(d["result_text"], sp.MAX_RESULT_TEXT)
+                     and d["result_too_large"] is False)))
 
 
 SCHEMAS = {

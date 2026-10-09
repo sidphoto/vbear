@@ -187,7 +187,10 @@ class Pipeline:
         try:
             view = memoryview(data)
             while view:
-                view = view[os.write(fd, view):]
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError(5, "寫入沒有進展")
+                view = view[written:]
             os.fsync(fd)
         except BaseException:
             os.close(fd)
@@ -419,7 +422,9 @@ def is_held(base, pipeline_id: str) -> bool:
 def hold(base, pipeline_id: str, reason: str) -> None:
     if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
         raise StoreRefused("流程 id 格式不符")
-    reason = sp.sanitize(reason if isinstance(reason, str) else "")[:256]
+    if not isinstance(reason, str):
+        raise StoreRefused("停止原因必須是字串")
+    reason = sp.sanitize(reason)[:256]
     state, holds = _holds_dir(base, create=True)
     try:
         tmp = f".{pipeline_id}.{os.getpid()}.tmp"
@@ -447,11 +452,22 @@ def release(base, pipeline_id: str) -> bool:
     except FileNotFoundError:
         return False
     try:
-        os.unlink(pipeline_id, dir_fd=holds)
-        _fsync_dir(holds)
+        try:
+            os.unlink(pipeline_id, dir_fd=holds)
+        except FileNotFoundError:
+            return False
+        try:
+            _fsync_dir(holds)
+        except StoreRefused:
+            # The unlink may not survive a crash. Restore the stopped state before
+            # reporting failure; if syncing also fails, the marker still exists in
+            # the current namespace and the original durability error is preserved.
+            try:
+                hold(base, pipeline_id, "release durability failed; flow remains held")
+            except (OSError, StoreRefused):
+                pass
+            raise
         return True
-    except FileNotFoundError:
-        return False
     finally:
         os.close(holds)
         os.close(state)

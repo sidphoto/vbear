@@ -275,12 +275,21 @@ class EventTracker:
             label = f"{ev.get('type')}/{ev.get('subtype')}" if ev.get("type") == "system" else str(ev.get("type"))
             return [("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "unknown_type",
                                       "event_type": label[:MAX_EVENT_TYPE]})]
-        extra = set(ev) - self.c.allowed[kind]
-        if extra:
-            out.append(("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "extra_fields",
-                                         "event_type": kind[:MAX_EVENT_TYPE]}))
-        handler = getattr(self, "_on_" + kind.replace("/", "_"))
-        out += handler(ev, t)
+        try:
+            extra = set(ev) - self.c.allowed[kind]
+            if extra:
+                out.append(("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "extra_fields",
+                                             "event_type": kind[:MAX_EVENT_TYPE]}))
+            handler = getattr(self, "_on_" + kind.replace("/", "_"))
+            out += handler(ev, t)
+        except ProtocolError:
+            raise
+        except Exception as exc:
+            # Strict JSON can still decode escaped lone surrogates. Any
+            # schema/hash/encoding exception while interpreting such input
+            # is a protocol failure, never an exception out of the daemon
+            # selector loop (design 2.3).
+            raise ProtocolError("bad_json", f"event could not be validated ({type(exc).__name__})") from exc
         return out
 
     def _need(self, ok: bool, what: str):
@@ -455,6 +464,12 @@ class EventTracker:
                    "queued_turn_count")
         structured = ev.get("structured_output")
         self._need("structured_output" not in ev or isinstance(structured, dict), "structured_output")
+        text = ev.get("result")
+        self._need(isinstance(text, str), "result")
+        try:
+            encoded_text = text.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ProtocolError("missing_field", "result is not valid Unicode") from exc
         if ev.get("user_message_uuid") != t.dispatch_id or ev.get("user_message_uuids") != [t.dispatch_id]:
             raise ProtocolError("attribution", "result")
         if ev["result_index"] != self.result_index + 1:
@@ -462,7 +477,6 @@ class EventTracker:
         if cost < self.last_cost:
             raise ProtocolError("out_of_order", "total_cost_usd decreased")
         self.result_index, self.last_cost = ev["result_index"], cost
-        text = ev.get("result")
         data = {"dispatch_id": t.dispatch_id, "subtype": ev["subtype"], "is_error": ev["is_error"],
                 "num_turns": ev["num_turns"], "total_cost_usd": cost, "result_index": ev["result_index"],
                 "user_message_uuids": [t.dispatch_id], "assistant_events": t.assistant_events,
@@ -473,7 +487,7 @@ class EventTracker:
         # from this text, so an oversized text does not make the turn invalid
         # (planner ruling on S2a-2 part 2 review A1; the 512 KiB journal line
         # limit, review difference 3, is a different rule).
-        fits = isinstance(text, str) and len(text.encode("utf-8")) <= MAX_RESULT_TEXT
+        fits = len(encoded_text) <= MAX_RESULT_TEXT
         data["result_text"] = text if fits else None
         data["result_too_large"] = isinstance(text, str) and not fits
         self.phase = "finishing"

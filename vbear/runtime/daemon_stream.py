@@ -67,7 +67,8 @@ class StreamOps:
                 names = []                # never created: no launch at all (not Path.is_dir(), which reads errors as False)
             for name in names:
                 if not agent_sessions.LAUNCH_RE.match(name):
-                    continue
+                    raise agent_sessions.LaunchRefused(
+                        "manifest_invalid", f"sessions/ 裡有不認得的項目 {name[:64]!r}")
                 m = agent_sessions._read_manifest(agent_sessions.launch_dir(self.base, name), os.getuid())
                 if m.get("engine") == "claude-stream" and m.get("state") not in ("prepared", "ended"):
                     outstanding["session:" + name] = quota.RESERVE_SESSION
@@ -609,8 +610,11 @@ class StreamOps:
         return _ok(rid, {"launch_id": s.launch_id, "closing": True})
 
     def _op_pipeline_hold(self, rid: str, req: dict) -> dict:
+        reason = req.get("reason")
+        if not isinstance(reason, str):
+            return _err(rid, "bad_request", "停止原因必須是字串")
         try:
-            pipeline_store.hold(self.base, req.get("pipeline"), req.get("reason") or "")
+            pipeline_store.hold(self.base, req.get("pipeline"), reason)
         except (OSError, ValueError, pipeline_store.StoreRefused) as exc:
             return _err(rid, "refused", f"無法停止：{exc}")
         # Review jobs of the flow end here once they exist (S2b); a running
@@ -818,4 +822,5 @@ class StreamOps:
                 agent_sessions._retain(self.base, s.launch_id, "背景程序關閉時程序未能證明已結束")
             except Exception:
                 pass
+            self._hold_leader(s.proc, s.launch_id)       # keep Popen alive; its destructor may reap the leader
             self._streams.pop(s.launch_id, None)

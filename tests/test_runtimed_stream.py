@@ -772,6 +772,20 @@ class JournalOrderTests(StreamCase):
 
 
 class ProcessTests(StreamCase):
+    def test_shutdown_timeout_keeps_the_unproven_leader_owned(self):
+        import vbear.runtime.daemon_stream as ds
+        launch_id, _ = self.open("hang")
+        s = self.dm._streams[launch_id]
+        proc = s.proc
+        s.terminate = mock.Mock()
+        s.tick = mock.Mock()
+        s._killpg = mock.Mock()
+        with mock.patch.object(ds.time, "monotonic", side_effect=(0.0, 10.0)):
+            self.dm._kill_all_streams()
+        self.assertNotIn(launch_id, self.dm._streams)
+        self.assertTrue(any(h["proc"] is proc and h["launch_id"] == launch_id
+                            for h in self.dm._held_leaders))
+
     def test_leader_is_not_reaped_while_its_group_lives(self):
         """Design 5.8: the exit is seen with waitid(WNOWAIT); the leader stays
         a zombie (its PID and group id cannot be reused) until the rest of
@@ -1242,6 +1256,15 @@ class HoldTests(StreamCase):
     """Part 2 review A-3 / design v29.1: after a hold every dispatch RPC is
     refused, an idempotent repeat included; the status rides along."""
 
+    def test_pipeline_hold_requires_a_string_reason(self):
+        for kwargs in ({"pipeline": self.fid}, {"pipeline": self.fid, "reason": None},
+                       {"pipeline": self.fid, "reason": 1}):
+            with self.subTest(kwargs=kwargs):
+                r = self.rpc("pipeline_hold", **kwargs)
+                self.assertFalse(r["ok"])
+                self.assertEqual(r["error"]["code"], "bad_request")
+                self.assertFalse((self.base / "holds" / self.fid).exists())
+
     def test_idempotent_repeats_recheck_the_acceptance(self):
         # Review round 4 #3: a repeat is answered only when a new request
         # would pass the acceptance and limits; nothing is sent either way.
@@ -1518,6 +1541,13 @@ class LedgerTests(StreamCase):
                 self.assertIsNone(self.dm._ledger.used)
                 self.assertIn("額度無法核算", self.dm._ledger.problem)
         self.assertTrue(self.dm._rebuild_ledger())
+
+    def test_rebuild_refuses_an_unrecognized_sessions_entry(self):
+        (self.base / "sessions").mkdir(mode=0o700, exist_ok=True)
+        (self.base / "sessions" / "notes").mkdir(mode=0o700)
+        self.assertFalse(self.dm._rebuild_ledger())
+        self.assertIsNone(self.dm._ledger.used)
+        self.assertIn("無法判斷哪些寫入者仍在進行", self.dm._ledger.problem)
 
     def test_the_reservation_covers_more_than_the_journal(self):
         # Review B4: room for exactly the journal is not enough.

@@ -160,6 +160,40 @@ class UnfinishedTurnTests(unittest.TestCase):
 
 
 class HappyPathTests(unittest.TestCase):
+    def test_result_text_must_be_a_valid_string(self):
+        for bad in (None, 7, {"text": "missing"}, "\ud800"):
+            with self.subTest(result=repr(bad)):
+                h = Harness()
+                d, text = h.dispatch()
+                events = fx.turn(h.sid, d, text, cwd=CWD, prefix="badresult")
+                result = next(e for e in events if e.get("type") == "result")
+                result["result"] = bad
+                with self.assertRaises(sp.ProtocolError) as cm:
+                    h.feed(events)
+                h.record("protocol_error", {"reason": cm.exception.reason, "detail": cm.exception.detail})
+                self.assertEqual(h.js.state, "error")
+                self.assertIsNone(h.js.turns[d].result)
+                self.assertFalse(h.validity(d)[0])
+
+    def test_invalid_unicode_in_tool_input_is_a_protocol_error(self):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="badunicode")
+        tool = next(x for e in events if e.get("type") == "assistant"
+                    for x in e["message"]["content"] if x.get("type") == "tool_use")
+        tool["input"] = {"bad": "\ud800"}
+        with self.assertRaises(sp.ProtocolError) as cm:
+            h.feed(events)
+        self.assertEqual(cm.exception.reason, "bad_json")
+
+    def test_journal_rejects_null_result_text_unless_it_was_too_large(self):
+        h = Harness()
+        d = h.run_turn()
+        data = dict(h.js.turns[d].result)
+        self.assertTrue(sj.SCHEMAS["turn_result"](data))
+        data["result_text"], data["result_too_large"] = None, False
+        self.assertFalse(sj.SCHEMAS["turn_result"](data))
+
     def test_an_oversized_result_text_does_not_invalidate_the_turn(self):
         # Planner ruling (part 2 review A1): design 2.5 records an oversized
         # result as result_text=null, result_too_large=true; the report is the

@@ -50,6 +50,7 @@ from .runtime import agent_sessions, daemon, stream_journal, stream_session, str
 TURN_TIMEOUT = 300.0
 CONTROL_TIMEOUT = 60.0
 TURN_CAP = acceptance.DEFAULT_LIMITS["executor_turn_max_responses"]
+PROBE_RESULT_LIMITS = strictjson.Limits(64 << 10, 2_000, 8, 64 << 10)
 
 
 class _Endpoint:
@@ -128,6 +129,32 @@ def endpoint_pinned(connections: int, control_connections: int, protocol_ok: boo
     VBear's env block, did connect: otherwise nothing shows the project
     file was read at all."""
     return protocol_ok and connections == 0 and control_connections >= 1
+
+
+def read_probe_result(path) -> dict:
+    """Read the CLI-created sandbox result as bounded, strict JSON. A missing,
+    malformed, symlinked or schema-invalid result yields no usable checks."""
+    parsed = strictjson.load_owned_object(path, PROBE_RESULT_LIMITS)
+    if not parsed.ok or set(parsed.value) != set(EXPECT):
+        return {}
+    observed = parsed.value
+    for name, value in observed.items():
+        if not isinstance(value, dict) or "allowed" not in value or not isinstance(value["allowed"], bool):
+            return {}
+        allowed_keys = {"allowed", "error", "errno", "detail"}
+        if set(value) - allowed_keys:
+            return {}
+        if "error" in value and not (isinstance(value["error"], str) and len(value["error"]) <= 128):
+            return {}
+        if "errno" in value and value["errno"] is not None and not (
+                isinstance(value["errno"], int) and not isinstance(value["errno"], bool)
+                and 0 <= value["errno"] <= 2**31 - 1):
+            return {}
+        if "detail" in value and not (isinstance(value["detail"], str) and len(value["detail"]) <= 4096):
+            return {}
+        if name == "tmpdir_is_own_scratch" and "detail" not in value:
+            return {}
+    return observed
 
 
 def remove_tree(path, errors: list) -> None:
@@ -380,7 +407,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                                      if k in consts.allowed and v - consts.allowed[k]}
         # sandbox, from the probe's own output file
         result = work / "probe-result.json"
-        observed = json.loads(result.read_text()) if result.exists() else {}
+        observed = read_probe_result(result)
         sandbox = {}
         for name, expect in EXPECT.items():
             got = observed.get(name)

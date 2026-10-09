@@ -362,8 +362,16 @@ def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_
         raise FlowRefused("failed", f"流程有尚未「繼續」的失敗（{failed}），需要使用者先按「繼續」")
     if not (isinstance(tot.spent_usd, (int, float)) and math.isfinite(tot.spent_usd)):
         raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")   # NaN passes every comparison
-    if ctx.started_at is not None and now - ctx.started_at > lim["max_elapsed_h"] * 3600:
-        raise FlowRefused("limit", f"已達經過時間上限（{lim['max_elapsed_h']} 小時）")
+    if ctx.started_at is not None:
+        if (not isinstance(now, (int, float)) or isinstance(now, bool) or not math.isfinite(now)
+                or not isinstance(ctx.started_at, (int, float)) or isinstance(ctx.started_at, bool)
+                or not math.isfinite(ctx.started_at)):
+            raise FlowRefused("count_unavailable", "流程經過時間無法核對")
+        elapsed = now - ctx.started_at
+        if not math.isfinite(elapsed) or elapsed < 0:
+            raise FlowRefused("count_unavailable", "系統時鐘異常，流程經過時間無法核對")
+        if elapsed >= lim["max_elapsed_h"] * 3600:
+            raise FlowRefused("limit", f"已達經過時間上限（{lim['max_elapsed_h']} 小時）")
     if counting_dispatch and tot.dispatches >= lim["max_dispatches"]:
         raise FlowRefused("limit", f"已達派工則數上限（{lim['max_dispatches']}）")
     if tot.responses + live_responses >= lim["executor_total_max_responses"]:

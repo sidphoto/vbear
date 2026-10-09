@@ -38,6 +38,16 @@ class StateDir(unittest.TestCase):
 
 
 class PipelineStoreTests(StateDir):
+    def test_text_write_zero_progress_fails_and_cleans_partial(self):
+        d = fx.new_uuid()
+        with ps.Pipeline(self.base, "task-1", create=True) as p:
+            with mock.patch.object(ps.os, "write", return_value=0) as write:
+                with self.assertRaises(OSError):
+                    p.write_text(d, b"hello")
+            write.assert_called_once()
+            dispatches = self.base / "pipelines" / "task-1" / "dispatches"
+            self.assertEqual(os.listdir(dispatches), [])
+
     def test_text_write_order_and_no_overwrite(self):
         d = fx.new_uuid()
         with ps.Pipeline(self.base, "task-1", create=True) as p:
@@ -143,6 +153,14 @@ class PipelineStoreTests(StateDir):
             d = fx.new_uuid()
             p.write_text(d, b"ok")
             self.assertEqual(p.read_text(d), b"ok")
+
+    def test_failed_hold_release_keeps_flow_held(self):
+        fid = "flow-0123456789ab"
+        ps.hold(self.base, fid, "stop")
+        with mock.patch.object(ps, "_fsync_dir", side_effect=ps.StoreRefused("sync failed")):
+            with self.assertRaises(ps.StoreRefused):
+                ps.release(self.base, fid)
+        self.assertTrue(ps.is_held(self.base, fid))
 
     def test_remove_start_only_undoes_the_record_just_written(self):
         fid = "flow-0123456789ab"
@@ -469,6 +487,28 @@ class FlowContextTests(StateDir):
         ctx.totals.spent_usd = 5.0
         with self.assertRaises(stream_flow.FlowRefused):
             stream_flow.remaining_budget(ctx)
+
+    def test_elapsed_limit_fails_on_clock_rollback_and_exact_boundary(self):
+        self.accept(limits={**acc.DEFAULT_LIMITS, "max_elapsed_h": 1})
+        ctx = stream_flow.load(self.base, self.fid)
+        now = time.time()
+        ctx.started_at = now + 1
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.check_limits(ctx, now=now, counting_dispatch=False)
+        self.assertEqual(cm.exception.code, "count_unavailable")
+
+        ctx.started_at = now - 3600
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.check_limits(ctx, now=now, counting_dispatch=False)
+        self.assertEqual(cm.exception.code, "limit")
+
+    def test_elapsed_limit_rejects_nonfinite_clock(self):
+        self.accept(limits={**acc.DEFAULT_LIMITS, "max_elapsed_h": 1})
+        ctx = stream_flow.load(self.base, self.fid)
+        ctx.started_at = time.time()
+        for now in (float("nan"), float("inf"), True):
+            with self.subTest(now=now), self.assertRaises(stream_flow.FlowRefused):
+                stream_flow.check_limits(ctx, now=now, counting_dispatch=False)
 
     def flow_with_one_session(self, cost=0.25):
         """A started flow with one session whose journal accepted one
