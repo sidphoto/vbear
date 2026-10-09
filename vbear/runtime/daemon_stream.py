@@ -645,7 +645,7 @@ class StreamOps:
         if flow is None:
             return _err(rid, "refused", "找不到這個流程")
         try:
-            current = stream_flow.failure_ids(self.base, pipeline)      # review round 6: by identity
+            current = stream_flow.failure_ids(self.base, pipeline, flow["task_id"])      # by identity
         except stream_flow.FlowRefused as exc:
             return _err(rid, "refused", f"無法核對流程的失敗（{exc}），不能繼續")
         key = f"release:{pipeline}"
@@ -816,7 +816,8 @@ class StreamOps:
                          lambda: agent_sessions._retain(self.base, s.launch_id, why),
                          # not a leader the normal clean-up already reaped
                          lambda: self._hold_leader(s.proc, s.launch_id)
-                         if not isinstance(s.outcome, dict) or s.outcome.get("leader_held", True) else None):
+                         if not s.reaped and (not isinstance(s.outcome, dict)
+                                              or s.outcome.get("leader_held", True)) else None):
                 try:
                     step()
                 except Exception:
@@ -832,7 +833,7 @@ class StreamOps:
         # A finished session always has an outcome; if not, nothing proves
         # it ended cleanly, so it is kept for a person, not cleaned up.
         outcome = s.outcome if isinstance(s.outcome, dict) else {"manual_review": "session 結束時沒有留下結果",
-                                                                                  "leader_held": True}
+                                                                                  "leader_held": not s.reaped}
         if s.journal_broken and not outcome.get("manual_review"):
             # The journal stops mid-session: what it shows is not how the
             # session ended. Keep everything for a person to look at.

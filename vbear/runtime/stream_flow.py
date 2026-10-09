@@ -216,7 +216,7 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
     if not math.isfinite(t.spent_usd):
         raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")
     t.pending_or_orphan_texts = sorted(set(texts) - t.accepted)
-    for rm in flow_reviews(base, pipeline_id):
+    for rm in flow_reviews(base, pipeline_id, task_id):
         t.reviews.append({"job_id": rm["job_id"], "round": rm["round"], "commit": rm["commit"],
                           "state": rm["state"], **_review_failure(rm)})
     return t
@@ -249,7 +249,7 @@ def load(base, pipeline_id: str) -> FlowContext:
                        frozenset(view[2]["resolved"]) if view is not None and view[2] is not None else frozenset())
 
 
-def flow_reviews(base, pipeline_id: str) -> list[dict]:
+def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
     """This flow's review jobs, from their manifests (design 5.3). Anything
     that could hide a job or a failure refuses, like sessions/: an entry that
     is not a job directory, a manifest that cannot be read or is not exactly
@@ -258,6 +258,8 @@ def flow_reviews(base, pipeline_id: str) -> list[dict]:
     out = []
     try:
         names = review_store.list_jobs(base)
+    except review_store.ReviewRefused as exc:
+        raise FlowRefused("count_unavailable", f"reviews/ 無法核對（{exc}）") from exc
     except OSError as exc:
         raise FlowRefused("count_unavailable", f"reviews/ 無法列出（{exc.strerror}）") from exc
     for name in names:
@@ -271,6 +273,30 @@ def flow_reviews(base, pipeline_id: str) -> list[dict]:
             raise FlowRefused("count_unavailable", f"審查工作 {name} 無法讀取（{exc.strerror}）") from exc
         if m["pipeline_id"] == pipeline_id:
             out.append(m)
+    # The flow's own record of each job (design 5.4): both sides must agree,
+    # so a job (and its failure) cannot be lost by replacing reviews/ or
+    # deleting a job directory (S2b part 1 review P2).
+    try:
+        with pipeline_store.Pipeline(base, task_id, create=False) as p:
+            links = p.review_links()
+    except pipeline_store.StoreRefused as exc:
+        if not exc.missing:
+            raise FlowRefused("count_unavailable", f"流程的審查紀錄無法讀取（{exc}）") from exc
+        links = {}
+    except OSError as exc:
+        raise FlowRefused("count_unavailable", f"流程的審查紀錄無法讀取（{exc.strerror}）") from exc
+    rounds = [m["round"] for m in out]
+    if len(set(rounds)) != len(rounds):
+        raise FlowRefused("count_unavailable", "同一輪有不只一個審查工作，無法核算流程用量")
+    for m in out:
+        link = links.get(m["round"])
+        if (link is None or link["job_id"] != m["job_id"] or link["commit"] != m["commit"]
+                or link["pipeline_id"] != pipeline_id):
+            raise FlowRefused("count_unavailable",
+                              f"審查工作 {m['job_id']} 與流程的審查紀錄對不上，無法核算流程用量")
+    for rnd, link in links.items():
+        if link["pipeline_id"] != pipeline_id or rnd not in rounds:
+            raise FlowRefused("count_unavailable", f"流程的審查紀錄 {rnd} 找不到對應的審查工作，無法核算流程用量")
     return out
 
 
@@ -315,7 +341,7 @@ def unresolved_failure(ctx: FlowContext) -> str | None:
     return None
 
 
-def failure_ids(base, pipeline_id: str) -> list[str]:
+def failure_ids(base, pipeline_id: str, task_id: str) -> list[str]:
     """Every failure identity of the flow on disk now, for pipeline_release.
     Anything unreadable refuses (a release never assumes)."""
     out = []
@@ -324,7 +350,7 @@ def failure_ids(base, pipeline_id: str) -> list[str]:
         if res.problem:
             raise FlowRefused("count_unavailable", f"session {m['launch_id']} 的日誌無法使用（{res.problem}）")
         out += _failure(m, res.state)["failure_ids"]
-    for rm in flow_reviews(base, pipeline_id):
+    for rm in flow_reviews(base, pipeline_id, task_id):
         out += _review_failure(rm)["failure_ids"]
     return out
 

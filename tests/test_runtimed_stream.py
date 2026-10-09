@@ -1680,6 +1680,21 @@ class OuterGuardTests(StreamCase):
             self.crashed(launch_id)
         self.assertIn(s.pid, [h["pid"] for h in self.dm._held_leaders])
 
+    def test_a_failure_after_the_leader_was_reaped_holds_no_phantom(self):
+        # S2b part 1 review (boundary case): _finish reaps the leader and then
+        # fails; the outer guard must not put the already reaped leader on the
+        # held list, where it would keep a session slot for good.
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        with mock.patch.object(s.writer, "close", side_effect=RuntimeError("synthetic failure after the reap")):
+            self.rpc("stream_close", launch_id=launch_id)
+            self.wait_for(lambda: launch_id not in self.dm._streams, msg="given up")
+        self.assertTrue(s.reaped)
+        self.assertFalse(stream_session.leader_exited(s.pid))              # really reaped
+        self.assertNotIn(s.pid, [h["pid"] for h in self.dm._held_leaders])
+        self.assertEqual(self.manifest(launch_id)["state"], "manual_review")
+        self.assertIn("未預期的錯誤", self.hold_reason())
+
     def test_a_hold_reason_that_cannot_be_encoded_does_not_escape(self):
         self.dm._hold_for_failure(self.fid, "l-0000000000000000", "x\ud800")    # sanitize raises ValueError
         self.assertTrue(self.rpc("hello")["ok"])

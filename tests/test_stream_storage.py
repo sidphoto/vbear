@@ -204,6 +204,45 @@ class PipelineStoreTests(StateDir):
                     stream_journal.JournalWriter(p.fd)
             self.assertFalse((self.base / "pipelines" / "task-1" / "journal.jsonl").exists())
 
+    def test_review_links(self):
+        # the flow's own record of each review job (S2b part 1 review P2)
+        fid, job = "flow-0123456789ab", "r-0123456789abcdef"
+        with ps.Pipeline(self.base, "task-1", create=True) as p:
+            self.assertEqual(p.review_links(), {})
+            p.write_review_link(1, job, fid, "a" * 40)
+            p.write_review_link(7, "r-0123456789abcdee", fid, "b" * 64)
+            self.assertEqual(p.review_links()[1], {"job_id": job, "pipeline_id": fid, "commit": "a" * 40})
+            self.assertEqual(sorted(p.review_links()), [1, 7])
+            with self.assertRaises(FileExistsError):                      # exclusive: a round has one record
+                p.write_review_link(1, "r-0123456789abcdee", fid, "a" * 40)
+            self.assertEqual(p.review_links()[1]["job_id"], job)
+            for bad in ((0, job, fid, "a" * 40), (ps.ROUND_MAX + 1, job, fid, "a" * 40), (True, job, fid, "a" * 40),
+                        (2, "r-xyz", fid, "a" * 40), (2, job, "flow-x", "a" * 40), (2, job, fid, "xyz"),
+                        (2, job + "\n", fid, "a" * 40)):
+                with self.subTest(bad=bad), self.assertRaises(ps.StoreRefused):
+                    p.write_review_link(*bad)
+            real = os.write
+
+            def half_then_fail(fd, data):
+                if not hasattr(half_then_fail, "n"):
+                    half_then_fail.n = 1
+                    return real(fd, bytes(data)[:5])
+                raise OSError(28, "No space left on device")
+            with mock.patch.object(ps.os, "write", half_then_fail), self.assertRaises(OSError):
+                p.write_review_link(9, job, fid, "a" * 40)
+            self.assertEqual(sorted(p.review_links()), [1, 7])               # no half record, no empty round either
+            self.assertEqual(sorted(n.name for n in (self.base / "pipelines" / "task-1" / "reviews").iterdir()),
+                             ["1", "7"])
+        for name in (".", "0", "01", "1001", "x"):
+            d = self.base / "pipelines" / "task-1" / "reviews" / name
+            if name in (".",):
+                continue
+            d.mkdir(mode=0o700, exist_ok=True)
+            with self.subTest(entry=name), ps.Pipeline(self.base, "task-1", create=False) as p, \
+                    self.assertRaises(ps.StoreRefused):
+                p.review_links()
+            d.rmdir()
+
     def test_remove_start_only_undoes_the_record_just_written(self):
         fid = "flow-0123456789ab"
         with ps.Pipeline(self.base, "task-abc", create=True) as p:
@@ -750,20 +789,26 @@ class FlowContextTests(StateDir):
 
     # ---- review jobs in the flow's accounting (design 5.3, v29.8.1, v29.9)
 
-    def review(self, n: int, **over):
+    def review(self, n: int, state="finished", link=True, **over):
+        """A review job of this flow with a manifest whose fields agree, and
+        (link) the flow's own record of it."""
         from vbear.runtime import review_store as rs
-        from tests.test_review_store import manifest as review_manifest
+        from tests.test_review_store import state_manifest
         job = f"r-{n:016x}"
         rs.create_job_dir(self.base, job)
         fields = {"job_id": job, "pipeline_id": self.fid, "task_id": self.tid, "round": n, **over}
-        rs.write_new_manifest(self.base, review_manifest(**fields))
+        m = state_manifest(state, **fields)
+        rs.write_new_manifest(self.base, m)
+        if link:
+            with ps.Pipeline(self.base, self.tid, create=True) as p:
+                p.write_review_link(n, job, self.fid, m["commit"])
         return job
 
     def test_reviews_are_counted_and_limited(self):
         self.accept(limits={**acc.DEFAULT_LIMITS, "max_reviews": 2})
         self.review(1, state="finished")
         self.review(2, state="cleaned")
-        self.review(3, state="finished", pipeline_id="flow-ffffffffffff")       # another flow's: not ours
+        self.review(3, state="finished", pipeline_id="flow-ffffffffffff", link=False)   # another flow's: not ours
         ctx = stream_flow.load(self.base, self.fid)
         self.assertEqual([x["round"] for x in ctx.totals.reviews], [1, 2])
         stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)               # not counting a review
@@ -779,7 +824,7 @@ class FlowContextTests(StateDir):
         with self.assertRaises(stream_flow.FlowRefused) as cm:
             stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)
         self.assertEqual(cm.exception.code, "failed")
-        self.assertEqual(stream_flow.failure_ids(self.base, self.fid), [f"{job}#invalid"])
+        self.assertEqual(stream_flow.failure_ids(self.base, self.fid, self.tid), [f"{job}#invalid"])
         with ps.Pipeline(self.base, self.tid, create=True) as p:
             p.record_release(self.fid, time.time(), [f"{job}#invalid"])
         ctx = stream_flow.load(self.base, self.fid)
@@ -787,11 +832,32 @@ class FlowContextTests(StateDir):
         later = self.review(2, state="manual_review", retained_reason="group alive", retained_at=1791467063.473483)
         ctx = stream_flow.load(self.base, self.fid)                       # a new failure is not resolved
         self.assertIn(later, stream_flow.unresolved_failure(ctx))
-        self.assertEqual(stream_flow.failure_ids(self.base, self.fid),
+        self.assertEqual(stream_flow.failure_ids(self.base, self.fid, self.tid),
                          [f"{job}#invalid", f"{later}#manual_review#1791467063.473483"])
         with ps.Pipeline(self.base, self.tid, create=True) as p:
-            p.record_release(self.fid, time.time(), stream_flow.failure_ids(self.base, self.fid))
+            p.record_release(self.fid, time.time(), stream_flow.failure_ids(self.base, self.fid, self.tid))
         self.assertIsNone(stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
+
+    def test_a_failure_survives_the_clean_up(self):
+        # S2b part 1 review P1: cleaned must not make the failure vanish
+        from vbear.runtime import review_store as rs
+        self.accept()
+        job = self.review(1, state="invalid", invalid_reasons=["rollout 不符"])
+        self.assertIsNotNone(stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
+        rs.update_manifest(self.base, job, state="cleaned")
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertIn(job, stream_flow.unresolved_failure(ctx))             # still held
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)
+        self.assertEqual(cm.exception.code, "failed")
+        self.assertEqual(stream_flow.failure_ids(self.base, self.fid, self.tid), [f"{job}#invalid"])
+        with ps.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_release(self.fid, time.time(), [f"{job}#invalid"])     # only the user's "continue" lets it go
+        self.assertIsNone(stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
+        # the same for a review kept for a person and cleaned up later
+        other = self.review(2, state="cleaned", outcome="manual_review", retained_at=1791467063.473483,
+                            retained_reason="x")
+        self.assertIn(other, stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
 
     def test_a_review_that_cannot_be_read_refuses_the_count(self):
         from vbear.runtime import review_store as rs
@@ -809,13 +875,109 @@ class FlowContextTests(StateDir):
         for name, damage in cases.items():
             with self.subTest(case=name):
                 shutil.rmtree(rs.reviews_root(self.base))
+                shutil.rmtree(self.base / "pipelines" / self.tid / "reviews", ignore_errors=True)
                 job = self.review(1, state="finished")
                 damage()
                 with self.assertRaises(stream_flow.FlowRefused) as cm:
                     stream_flow.load(self.base, self.fid)
                 self.assertEqual(cm.exception.code, "count_unavailable")
                 with self.assertRaises(stream_flow.FlowRefused):
-                    stream_flow.failure_ids(self.base, self.fid)
+                    stream_flow.failure_ids(self.base, self.fid, self.tid)
+
+    def test_the_two_sides_of_a_review_must_agree(self):
+        # S2b part 1 review P2: neither a replaced reviews/ nor a deleted job
+        # can make the flow's reviews and failures count as zero
+        from vbear.runtime import review_store as rs
+        self.accept()
+        links = self.base / "pipelines" / self.tid / "reviews"
+
+        def reset():
+            shutil.rmtree(rs.reviews_root(self.base), ignore_errors=True)
+            shutil.rmtree(links, ignore_errors=True)
+            if rs.reviews_root(self.base).is_symlink():
+                rs.reviews_root(self.base).unlink()
+        cases = {}
+
+        def a_job_without_its_record():
+            self.review(1, state="invalid", link=False)
+        cases["a job without the flow's record"] = a_job_without_its_record
+
+        def a_record_without_its_job():
+            job = self.review(1, state="invalid")
+            shutil.rmtree(rs.job_dir(self.base, job))
+        cases["a record whose job directory was deleted"] = a_record_without_its_job
+
+        def a_replaced_root():
+            self.review(1, state="invalid")
+            empty = self.base / "empty-root"
+            empty.mkdir(mode=0o700)
+            shutil.rmtree(rs.reviews_root(self.base))
+            rs.reviews_root(self.base).symlink_to(empty)
+        cases["reviews/ replaced by a link to an empty directory"] = a_replaced_root
+
+        def a_vanished_root():
+            self.review(1, state="invalid")
+            shutil.rmtree(rs.reviews_root(self.base))
+        cases["reviews/ gone"] = a_vanished_root
+
+        def another_commit():
+            job = self.review(1, state="invalid")
+            (links / "1" / "job.json").write_text(json.dumps(
+                {"v": 1, "job_id": job, "pipeline_id": self.fid, "round": 1, "commit": "b" * 40}))
+        cases["a record naming another commit"] = another_commit
+
+        def another_job():
+            self.review(1, state="invalid")
+            (links / "1" / "job.json").write_text(json.dumps(
+                {"v": 1, "job_id": "r-ffffffffffffffff", "pipeline_id": self.fid, "round": 1, "commit": "a" * 40}))
+        cases["a record naming another job"] = another_job
+
+        def another_flow():
+            job = self.review(1, state="invalid")
+            (links / "1" / "job.json").write_text(json.dumps(
+                {"v": 1, "job_id": job, "pipeline_id": "flow-ffffffffffff", "round": 1, "commit": "a" * 40}))
+        cases["a record naming another flow"] = another_flow
+
+        def a_bad_record():
+            self.review(1, state="invalid")
+            (links / "1" / "job.json").write_text("{")
+        cases["an unreadable record"] = a_bad_record
+
+        def a_wrong_round_in_the_record():
+            job = self.review(1, state="invalid")
+            (links / "1" / "job.json").write_text(json.dumps(
+                {"v": 1, "job_id": job, "pipeline_id": self.fid, "round": 2, "commit": "a" * 40}))
+        cases["a record of another round"] = a_wrong_round_in_the_record
+
+        def junk_in_the_records():
+            self.review(1, state="invalid")
+            (links / "notes").mkdir()
+        cases["an unknown entry among the records"] = junk_in_the_records
+
+        def a_round_without_a_record():
+            self.review(1, state="invalid")
+            (links / "2").mkdir(mode=0o700)
+        cases["a round directory without job.json"] = a_round_without_a_record
+
+        def two_jobs_one_round():
+            self.review(1, state="invalid")
+            from tests.test_review_store import state_manifest
+            rs.create_job_dir(self.base, "r-00000000000000aa")
+            rs.write_new_manifest(self.base, state_manifest("invalid", job_id="r-00000000000000aa",
+                                                            pipeline_id=self.fid, task_id=self.tid, round=1))
+        cases["two jobs in one round"] = two_jobs_one_round
+        for name, make in cases.items():
+            with self.subTest(case=name):
+                reset()
+                make()
+                with self.assertRaises(stream_flow.FlowRefused) as cm:
+                    stream_flow.load(self.base, self.fid)
+                self.assertEqual(cm.exception.code, "count_unavailable")
+                with self.assertRaises(stream_flow.FlowRefused):
+                    stream_flow.failure_ids(self.base, self.fid, self.tid)
+        reset()
+        self.review(1, state="invalid")                                   # and the intact pair is believed
+        self.assertEqual(len(stream_flow.load(self.base, self.fid).totals.reviews), 1)
 
     def test_spend_that_is_not_finite_refuses(self):
         self.accept()

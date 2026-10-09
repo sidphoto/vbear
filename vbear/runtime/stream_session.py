@@ -203,6 +203,7 @@ class StreamSession:
         self.phase_deadline = 0.0
         self.close_reason = ""
         self.finished = False
+        self.reaped = False                       # set the moment waitpid returns: from then the leader is no one's to hold
         self.outcome: dict | None = None
         self.descendants = proctrack.DescendantTracker(self.pid)
         self.next_observe = now
@@ -266,7 +267,7 @@ class StreamSession:
                 # A failed safety action is still a session error; the daemon
                 # must keep running and retain the launch for manual review.
                 self.finished = True
-                self.outcome = {"manual_review": "日誌無法寫入且無法安全結束程序", "leader_held": True}
+                self.outcome = {"manual_review": "日誌無法寫入且無法安全結束程序", "leader_held": not self.reaped}
             return False
 
     def protocol_error(self, reason: str, detail: str = ""):
@@ -371,7 +372,7 @@ class StreamSession:
                 self.interpreting = False
                 self.journal_broken = self.journal_broken or f"{type(exc).__name__}: event processing failed"
                 self.finished = True
-                self.outcome = {"manual_review": "事件處理失敗，交人工處理", "leader_held": True}
+                self.outcome = {"manual_review": "事件處理失敗，交人工處理", "leader_held": not self.reaped}
 
     def _process_line(self, line: bytes, now: float) -> None:
         self.events_total += 1
@@ -482,7 +483,7 @@ class StreamSession:
         self.writer.close()
         self.outcome = {"launch_id": self.launch_id, "manual_review": reason,
                         "journal_bytes": self.writer.size, "close_reason": self.close_reason or reason,
-                        "leader_held": True}
+                        "leader_held": not self.reaped}
         self.finished = True
 
     def _poll_exit(self, now: float) -> None:
@@ -595,9 +596,10 @@ class StreamSession:
         if reap:
             try:
                 os.waitpid(self.pid, 0)
+                self.reaped = True
                 self.proc.returncode = self._returncode()
             except ChildProcessError:
-                pass
+                self.reaped = True                # not our child any more: nothing to hold
         for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
             try:
                 f.close()
@@ -606,5 +608,5 @@ class StreamSession:
         self.writer.close()
         self.outcome = {"launch_id": self.launch_id, "manual_review": manual_review,
                         "journal_bytes": self.writer.size, "close_reason": self.close_reason,
-                        "leader_held": not reap}
+                        "leader_held": not self.reaped}
         self.finished = True              # last: whoever sees finished sees the outcome

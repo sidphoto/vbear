@@ -21,9 +21,27 @@ def manifest(**over):
          "round": 1, "commit": "a" * 40, "model": "gpt-6-luna", "codex_version": "0.160.0",
          "argv_sha256": "c" * 64, "scratch": {"path": "/private/tmp/sr-abcd1234", "inode": 7, "dev": 9},
          "run_home": {"inode": 8, "dev": 9}, "leader": None, "observed": [], "thread_id": None,
-         "exit_code": None, "state": "prepared", "created": time.time()}
+         "exit_code": None, "state": "prepared", "created": time.time(), "process": "none", "outcome": None}
     m.update(over)
     return m
+
+
+def state_manifest(state, **over):
+    """A manifest whose state, outcome and process fields agree, for any state."""
+    now = time.time()
+    leader = {"pid": 4242, "start": f"{int(now)}.000000", "source": "libproc"}
+    fields = {
+        "prepared": {},
+        "launching": {"process": "maybe"},
+        "running": {"process": "started", "leader": leader},
+        "finished": {"process": "started", "leader": leader, "exit_code": 0, "ended_at": now, "outcome": "valid"},
+        "invalid": {"process": "started", "leader": leader, "exit_code": 0, "ended_at": now, "outcome": "invalid",
+                    "invalid_reasons": ["rollout 不符"]},
+        "manual_review": {"process": "started", "leader": leader, "ended_at": now, "outcome": "manual_review",
+                          "retained_at": now, "retained_reason": "程序群組還活著"},
+        "cleaned": {"process": "started", "leader": leader, "exit_code": 0, "ended_at": now, "outcome": "valid"},
+    }[state]
+    return manifest(state=state, **{**fields, **over})
 
 
 class Base(unittest.TestCase):
@@ -36,11 +54,12 @@ class Base(unittest.TestCase):
 class ManifestSchemaTests(unittest.TestCase):
     def test_a_good_manifest_has_no_problem(self):
         self.assertIsNone(rs.manifest_problem(manifest(), JOB))
-        self.assertIsNone(rs.manifest_problem(manifest(
-            state="manual_review", retained_reason="r", retained_at=time.time(), ended_at=time.time(),
-            invalid_reasons=["a"], thread_id="01a11921-aaaa-bbbb", exit_code=0,
-            leader={"pid": 4242, "start": f"{int(time.time())}.000000", "source": "libproc"},
-            observed=[[4243, f"{int(time.time())}.000000"]])))
+        for state in rs.STATES:
+            with self.subTest(state=state):
+                self.assertIsNone(rs.manifest_problem(state_manifest(state), JOB))
+        self.assertIsNone(rs.manifest_problem(state_manifest(
+            "manual_review", invalid_reasons=["a"], thread_id="01a11921-aaaa-bbbb", exit_code=0,
+            observed=[[4243, f"{int(time.time())}.000000"]]), JOB))
 
     def test_every_field_is_exact(self):
         bad = {
@@ -92,8 +111,42 @@ class StoreTests(Base):
         mode = os.stat(rs.job_dir(self.base, JOB) / rs.MANIFEST).st_mode
         self.assertEqual(stat.S_IMODE(mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(rs.job_dir(self.base, JOB)).st_mode), 0o700)
-        m = rs.update_manifest(self.base, JOB, state="running", thread_id="01a11921-aaaa-bbbb")
+        # the real sequence: launching (a process may exist), then running with the leader recorded
+        rs.update_manifest(self.base, JOB, state="launching", process="maybe")
+        leader = {"pid": 4242, "start": f"{int(time.time())}.000000", "source": "libproc"}
+        m = rs.update_manifest(self.base, JOB, state="running", process="started", leader=leader,
+                               thread_id="01a11921-aaaa-bbbb")
         self.assertEqual((m["state"], rs.read_manifest(self.base, JOB)["thread_id"]), ("running", "01a11921-aaaa-bbbb"))
+        with self.assertRaises(rs.ReviewRefused):                 # a state the fields do not support
+            rs.update_manifest(self.base, JOB, state="finished")
+
+    def test_the_outcome_is_decided_once(self):
+        self.make(**state_manifest("running"))
+        now = time.time()
+        rs.update_manifest(self.base, JOB, state="invalid", outcome="invalid", ended_at=now, exit_code=1,
+                           invalid_reasons=["rollout 不符"])
+        # it can go on to cleaned, keeping its identity
+        m = rs.update_manifest(self.base, JOB, state="cleaned")
+        self.assertEqual((m["state"], m["outcome"], rs.failure_id(m)), ("cleaned", "invalid", f"{JOB}#invalid"))
+        for change in ({"outcome": "valid"}, {"outcome": "manual_review", "retained_at": now, "retained_reason": "x"},
+                       {"outcome": None}, {"state": "running"}, {"invalid_reasons": ["another"]},
+                       {"state": "finished"}):
+            with self.subTest(change=change), self.assertRaises(rs.ReviewRefused):
+                rs.update_manifest(self.base, JOB, **change)
+        self.assertEqual(rs.read_manifest(self.base, JOB)["outcome"], "invalid")
+
+    def test_a_manual_review_identity_does_not_move(self):
+        self.make(**state_manifest("running"))
+        rs.retain(self.base, JOB, "first")
+        first = rs.read_manifest(self.base, JOB)
+        rs.retain(self.base, JOB, "second")                        # a later look only adds a reason
+        second = rs.read_manifest(self.base, JOB)
+        self.assertEqual((rs.failure_id(first), second["retained_reason"]), (rs.failure_id(second), "second"))
+        self.assertEqual(second["retained_at"], first["retained_at"])
+        with self.assertRaises(rs.ReviewRefused):
+            rs.update_manifest(self.base, JOB, retained_at=first["retained_at"] + 1)
+        done = rs.update_manifest(self.base, JOB, state="cleaned")
+        self.assertEqual(rs.failure_id(done), rs.failure_id(first))
 
     def test_nothing_invalid_is_written(self):
         self.make()
@@ -158,10 +211,11 @@ class StoreTests(Base):
                     rs.run_home(self.base, bad)
 
     def test_retain_keeps_the_job_for_a_person(self):
-        self.make(state="running")
+        self.make(**{k: v for k, v in state_manifest("running").items()})
         rs.retain(self.base, JOB, "why")
         m = rs.read_manifest(self.base, JOB)
-        self.assertEqual((m["state"], m["retained_reason"]), ("manual_review", "why"))
+        self.assertEqual((m["state"], m["outcome"], m["retained_reason"]), ("manual_review", "manual_review", "why"))
+        self.assertIn("ended_at", m)
         # when even that cannot be written, nothing is raised
         with mock.patch.object(rs.agent_sessions, "_write_private", side_effect=OSError(5, "Input/output error")):
             rs.retain(self.base, JOB, "again")
@@ -172,18 +226,45 @@ class StoreTests(Base):
         (rs.reviews_root(self.base) / "notes").mkdir()
         self.assertEqual(rs.list_jobs(self.base), ["notes", JOB])         # the caller refuses what is not a job
         with mock.patch.object(rs.os, "listdir", side_effect=PermissionError(13, "Permission denied")):
-            with self.assertRaises(PermissionError):
+            with self.assertRaises(rs.ReviewRefused):
                 rs.list_jobs(self.base)                                   # never read as "no jobs"
+
+    def test_the_root_is_checked_like_sessions(self):
+        # S2b part 1 review P2: a symlink to an empty directory was "no jobs"
+        self.make()
+        root = rs.reviews_root(self.base)
+        empty = self.base / "empty"
+        empty.mkdir(mode=0o700)
+        moved = self.base / "moved"
+        root.rename(moved)
+        root.symlink_to(empty)
+        with self.assertRaises(rs.ReviewRefused):
+            rs.list_jobs(self.base)
+        root.unlink()
+        moved.rename(root)
+        root.chmod(0o755)
+        with self.assertRaises(rs.ReviewRefused):
+            rs.list_jobs(self.base)
+        root.chmod(0o700)
+        shutil.rmtree(root)
+        root.write_text("a file")
+        with self.assertRaises(rs.ReviewRefused):
+            rs.list_jobs(self.base)
 
 
 class FailureIdentityTests(unittest.TestCase):
     def test_identities(self):
-        self.assertIsNone(rs.failure_id(manifest(state="finished")))
-        self.assertIsNone(rs.failure_id(manifest(state="cleaned")))
-        self.assertEqual(rs.failure_id(manifest(state="invalid")), f"{JOB}#invalid")
+        self.assertIsNone(rs.failure_id(state_manifest("finished")))
+        self.assertIsNone(rs.failure_id(state_manifest("cleaned")))                 # cleaned after a valid review
+        self.assertEqual(rs.failure_id(state_manifest("invalid")), f"{JOB}#invalid")
+        # the failure outlives the clean-up: the outcome, not the state, decides (S2b part 1 review P1)
+        self.assertEqual(rs.failure_id(state_manifest("cleaned", outcome="invalid", invalid_reasons=["x"])),
+                         f"{JOB}#invalid")
         at = 1791467063.473483
-        ident = rs.failure_id(manifest(state="manual_review", retained_at=at))
+        ident = rs.failure_id(state_manifest("manual_review", retained_at=at))
         self.assertEqual(ident, f"{JOB}#manual_review#1791467063.473483")
+        self.assertEqual(rs.failure_id(state_manifest("cleaned", outcome="manual_review", retained_at=at,
+                                                       retained_reason="x")), ident)
         for i in (f"{JOB}#invalid", ident, "l-0123456789abcdef#3"):
             self.assertIsNotNone(pipeline_store.FAILURE_ID_RE.match(i), i)
         for i in (f"{JOB}#valid", f"{JOB}#0", f"{JOB}#invalid\n", "r-xyz#invalid", f"{JOB}#manual_review#x",
@@ -198,9 +279,13 @@ class ProcessCheckTests(unittest.TestCase):
     def row(self, pid, pgid, start="1791467063.000000", stat="R"):
         return {"pid": pid, "ppid": 1, "pgid": pgid, "uid": os.getuid(), "stat": stat, "start": start}
 
+    def running(self, pid=500, **over):
+        return state_manifest("running", leader=self.leader(pid), **over)
+
     def test_decisions(self):
-        m = manifest(leader=self.leader(500))
+        m = self.running()
         self.assertEqual(rs.processes_gone(manifest(), [])[0], "gone")                     # never had a process
+        self.assertEqual(rs.processes_gone(manifest(), None)[0], "gone")
         self.assertEqual(rs.processes_gone(m, [self.row(1, 1)])[0], "gone")
         self.assertEqual(rs.processes_gone(m, None)[0], "unknown")
         self.assertEqual(rs.processes_gone(m, [self.row(500, 500)])[0], "alive")           # the recorded leader
@@ -211,11 +296,80 @@ class ProcessCheckTests(unittest.TestCase):
         self.assertEqual(rs.processes_gone(m, [self.row(500, 500, start="1791467099.000000")])[0], "alive")
         self.assertEqual(rs.processes_gone(m, [self.row(777, 500)])[0], "alive")           # an unrecorded member
         self.assertEqual(rs.processes_gone(m, [self.row(777, 500, stat="Z")])[0], "gone")  # only a zombie
-        seen = manifest(leader=self.leader(500), observed=[[600, "1791467070.000000"]])
+        seen = self.running(observed=[[600, "1791467070.000000"]])
         self.assertEqual(rs.processes_gone(seen, [self.row(600, 999, start="1791467070.000000")])[0], "alive")
-        other = manifest(leader={"pid": 500, "start": "1791467063.000000",
-                                 "source": "ps" if proctrack.SOURCE == "libproc" else "libproc"})
+        other = state_manifest("running", leader={"pid": 500, "start": "1791467063.000000",
+                                                  "source": "ps" if proctrack.SOURCE == "libproc" else "libproc"})
         self.assertEqual(rs.processes_gone(other, [])[0], "unknown")
+
+    def test_a_launch_that_may_have_started_a_process_is_never_gone(self):
+        # the crash window between "launching" and the recorded leader
+        launching = state_manifest("launching")
+        for rows in ([], None, [self.row(1, 1)]):
+            self.assertEqual(rs.processes_gone(launching, rows)[0], "unknown")
+        crashed_terminal = state_manifest("invalid", process="maybe", leader=None)
+        self.assertEqual(rs.processes_gone(crashed_terminal, [])[0], "unknown")
+
+    def test_a_manifest_whose_process_fields_disagree_is_not_trusted(self):
+        # P1: leader null while a process was started, or the reverse, never reads as "gone"
+        bad = {
+            "started without a leader": state_manifest("running", leader=None),
+            "leader without a started process": state_manifest("running", process="none"),
+            "running without a process": state_manifest("running", process="none", leader=None),
+            "launching with a leader": state_manifest("launching", leader=self.leader(500), process="started"),
+            "prepared with a process": manifest(process="maybe"),
+            "prepared with a leader": manifest(leader=self.leader(500), process="started"),
+            "observed without a process": manifest(observed=[[600, "1791467070.000000"]]),
+            "finished without a process": state_manifest("finished", process="none", leader=None),
+            "leader but process maybe": state_manifest("invalid", process="maybe"),
+        }
+        for name, m in bad.items():
+            with self.subTest(case=name):
+                self.assertIsNotNone(rs.manifest_problem(m, JOB), name)
+
+
+class StateDependentFieldTests(unittest.TestCase):
+    """P2: what each outcome and each final state requires, so a failure's
+    identity cannot be made from a missing value and change later."""
+
+    def test_required_fields_per_state_and_outcome(self):
+        missing = {
+            "manual_review without retained_at": ("manual_review", "retained_at"),
+            "manual_review without retained_reason": ("manual_review", "retained_reason"),
+            "manual_review without ended_at": ("manual_review", "ended_at"),
+            "invalid without invalid_reasons": ("invalid", "invalid_reasons"),
+            "invalid without ended_at": ("invalid", "ended_at"),
+            "finished without ended_at": ("finished", "ended_at"),
+            "finished without exit_code": ("finished", "exit_code"),
+            "cleaned without ended_at": ("cleaned", "ended_at"),
+            "outcome invalid kept by cleaned, without reasons": ("cleaned", "invalid_reasons"),
+        }
+        for name, (state, field) in missing.items():
+            with self.subTest(case=name):
+                m = state_manifest("cleaned", outcome="invalid", invalid_reasons=["x"]) if "outcome invalid" in name \
+                    else state_manifest(state)
+                m.pop(field)
+                if field == "exit_code":
+                    m["exit_code"] = None
+                self.assertIsNotNone(rs.manifest_problem(m, JOB), name)
+        for field, value in (("invalid_reasons", []), ("retained_reason", "")):
+            m = state_manifest("invalid" if field == "invalid_reasons" else "manual_review", **{field: value})
+            self.assertIsNotNone(rs.manifest_problem(m, JOB), field)
+
+    def test_state_and_outcome_go_together(self):
+        bad = {
+            "prepared with an outcome": manifest(outcome="valid"),
+            "running with an outcome": state_manifest("running", outcome="invalid"),
+            "finished invalid": state_manifest("finished", outcome="invalid"),
+            "invalid but valid": state_manifest("invalid", outcome="valid"),
+            "manual_review but invalid": state_manifest("manual_review", outcome="invalid"),
+            "finished without an outcome": state_manifest("finished", outcome=None),
+            "cleaned without an outcome": state_manifest("cleaned", outcome=None),
+            "an outcome nobody knows": state_manifest("finished", outcome="maybe"),
+        }
+        for name, m in bad.items():
+            with self.subTest(case=name):
+                self.assertIsNotNone(rs.manifest_problem(m, JOB), name)
 
 
 if __name__ == "__main__":

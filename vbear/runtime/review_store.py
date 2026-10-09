@@ -9,10 +9,17 @@ there are no extra fields: a manifest that is not exactly that is *invalid*,
 and nothing is cleaned up or signalled on its say-so (``read`` reports why and
 the caller marks the job for manual review).
 
-Failure identities (design v29.8.1): a review that ended invalid is
+Failure identities (design v29.8.1): a review whose *outcome* is invalid is
 ``<job>#invalid``; one kept for a person is ``<job>#manual_review#<retained_at
-as stored>``. The manifest outlives the job's clean-up, so neither disappears
-with it.
+as stored>``. The outcome is decided once, after the review's processes are
+dealt with, and never changes; the state may go on to ``cleaned`` without
+touching it, so a failure does not disappear with the clean-up.
+
+Process fields are tied to the state (Codex S2b part 1 review P1): ``process``
+says whether a process was never started ("none"), may have been
+("maybe": the manifest says launching, the pid is not recorded yet) or was
+("started": the leader's identity is recorded). A manifest whose state and
+process fields do not agree is not trusted.
 """
 
 from __future__ import annotations
@@ -43,13 +50,23 @@ MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,63}\Z")
 VERSION_RE = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\Z")
 HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
 ROUND_MAX = 1000
-STATES = ("prepared", "running", "finished", "invalid", "manual_review", "cleaned")
+STATES = ("prepared", "launching", "running", "finished", "invalid", "manual_review", "cleaned")
+TERMINAL = ("finished", "invalid", "manual_review", "cleaned")
+OUTCOMES = ("valid", "invalid", "manual_review")
+PROCESS = ("none", "maybe", "started")
 EARLIEST = 1577836800.0                                   # 2020-01-01
 
 REQUIRED = frozenset({
     "review_manifest_version", "job_id", "pipeline_id", "task_id", "round", "commit", "model", "codex_version",
-    "argv_sha256", "scratch", "run_home", "leader", "observed", "thread_id", "exit_code", "state", "created"})
+    "argv_sha256", "scratch", "run_home", "leader", "observed", "thread_id", "exit_code", "state", "created",
+    "process", "outcome"})
 OPTIONAL = frozenset({"retained_reason", "retained_at", "ended_at", "invalid_reasons"})
+# which state each outcome goes with, and which outcome each terminal state may carry
+STATE_OUTCOMES = {"prepared": (None,), "launching": (None,), "running": (None,), "finished": ("valid",),
+                  "invalid": ("invalid",), "manual_review": ("manual_review",),
+                  "cleaned": OUTCOMES}
+STATE_PROCESS = {"prepared": ("none",), "launching": ("maybe",), "running": ("started",),
+                 "finished": ("started",), "invalid": PROCESS, "manual_review": PROCESS, "cleaned": PROCESS}
 
 
 class ReviewRefused(Exception):
@@ -136,10 +153,37 @@ def manifest_problem(m, job_id: str | None = None) -> str | None:
         ("invalid_reasons", "invalid_reasons" not in m
                             or (isinstance(m["invalid_reasons"], list) and len(m["invalid_reasons"]) <= 16
                                 and all(isinstance(x, str) and len(x) <= 256 for x in m["invalid_reasons"]))),
+        ("process", m["process"] in PROCESS),
+        ("outcome", m["outcome"] is None or m["outcome"] in OUTCOMES),
     ]
     for name, ok in checks:
         if not ok:
             return f"{name} 不合法"
+    return _consistency_problem(m)
+
+
+def _consistency_problem(m: dict) -> str | None:
+    """The fields that must agree with each other (review P1, P2): state with
+    outcome and process; process with leader and observed; the fields an
+    outcome or a final state requires. Nothing is cleaned up or signalled
+    from a manifest that fails any of these."""
+    state, outcome, process = m["state"], m["outcome"], m["process"]
+    if outcome not in STATE_OUTCOMES[state]:
+        return "state 與 outcome 不相容"
+    if process not in STATE_PROCESS[state]:
+        return "state 與 process 不相容"
+    if (process == "started") != (m["leader"] is not None):
+        return "process 與 leader 不相容（啟動過程序就必須有 leader）"
+    if m["observed"] and process != "started":
+        return "沒有啟動過程序卻有已觀察到的後代"
+    if state in TERMINAL and "ended_at" not in m:
+        return "終態缺少 ended_at"
+    if state == "finished" and m["exit_code"] is None:
+        return "finished 缺少 exit_code"
+    if outcome == "invalid" and not m.get("invalid_reasons"):
+        return "invalid 缺少 invalid_reasons"
+    if outcome == "manual_review" and ("retained_at" not in m or not m.get("retained_reason")):
+        return "manual_review 缺少 retained_at 或 retained_reason"
     return None
 
 
@@ -203,10 +247,17 @@ def update_manifest(base, job_id: str, **fields) -> dict:
     """Read, change, validate, replace: a change that would make the manifest
     invalid is refused before anything is written."""
     m = read_manifest(base, job_id)
+    old = dict(m)
     m.update(fields)
     problem = manifest_problem(m, job_id)
     if problem:
         raise ReviewRefused("manifest_invalid", f"更新後的 manifest 不符（{problem}）")
+    if old["outcome"] is not None:
+        # decided once (v29.8.1): what the failure identity is made of cannot change
+        same = (m["outcome"] == old["outcome"] and m.get("retained_at") == old.get("retained_at")
+                and m.get("invalid_reasons") == old.get("invalid_reasons") and m["job_id"] == old["job_id"])
+        if not same or (old["state"] in TERMINAL and m["state"] not in ("cleaned", old["state"])):
+            raise ReviewRefused("manifest_invalid", "審查結果已決定，不能再改")
     agent_sessions._write_private(job_dir(base, job_id) / MANIFEST,
                                   json.dumps(m, ensure_ascii=False, sort_keys=True, indent=2) + "\n", replace=True)
     return m
@@ -218,28 +269,44 @@ def retain(base, job_id: str, reason: str) -> None:
     failure identity of a manifest that cannot be read is recomputed from the
     directory itself (stream_flow)."""
     try:
-        update_manifest(base, job_id, state="manual_review", retained_reason=str(reason)[:4096],
-                        retained_at=time.time())
+        m = read_manifest(base, job_id)
+        now = time.time()
+        if m["outcome"] is None:
+            update_manifest(base, job_id, state="manual_review", outcome="manual_review",
+                            retained_reason=str(reason)[:4096] or "交人工處理", retained_at=now, ended_at=now)
+        else:
+            # already decided (its identity cannot change): only say why a person should look
+            update_manifest(base, job_id, retained_reason=str(reason)[:4096])
     except (OSError, ReviewRefused):
         pass
 
 
 def list_jobs(base) -> list[str]:
-    """Every entry under reviews/, job-shaped or not. An unreadable root
-    raises (nothing is read as "no jobs" on an error); a root that was never
-    created has none."""
+    """Every entry under reviews/, job-shaped or not. The root is checked as
+    sessions/ is (Codex S2b part 1 review P2): a private plain directory of
+    ours, not a symlink. A root that does not exist has no jobs, which is
+    believed only together with the flow side (flow_links): a flow with a
+    review record whose job is gone is refused by the caller. Anything else
+    raises; nothing is read as "no jobs" on an error."""
+    root = reviews_root(base)
     try:
-        return sorted(os.listdir(reviews_root(base)))
+        st = os.lstat(root)
     except FileNotFoundError:
         return []
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise ReviewRefused("unsafe_path", "reviews/ 不是本人的 0700 一般資料夾")
+    try:
+        return sorted(os.listdir(root))
+    except OSError as exc:
+        raise ReviewRefused("unsafe_path", f"reviews/ 無法列出（{exc.strerror}）") from exc
 
 
 def failure_id(m: dict) -> str | None:
     """The v29.8.1 identity of this job's failure, or None when it has none."""
-    if m["state"] == "invalid":
+    if m["outcome"] == "invalid":
         return f"{m['job_id']}#invalid"
-    if m["state"] == "manual_review":
-        return f"{m['job_id']}#manual_review#{json.dumps(m.get('retained_at'))}"
+    if m["outcome"] == "manual_review":
+        return f"{m['job_id']}#manual_review#{json.dumps(m['retained_at'])}"
     return None
 
 
@@ -248,11 +315,13 @@ def processes_gone(m: dict, rows) -> tuple[str, str]:
     from a process table (None: unavailable). Nothing is signalled. The same
     rule as stream recovery: recorded identities, and live members of the
     leader's group that were never recorded."""
-    leader = m["leader"]
+    leader, process = m["leader"], m["process"]
+    if process == "none":
+        return "gone", ""                           # no process was ever started (the schema ties this to leader None)
+    if process == "maybe" or leader is None:
+        return "unknown", "啟動程序前後當機，無法得知 pid"
     if rows is None:
         return "unknown", "無法取得程序表"
-    if leader is None:
-        return "gone", ""
     if leader["source"] != proctrack.SOURCE:
         return "unknown", "程序身分紀錄的來源與目前不同，無法比對"
     identities = list(m["observed"]) + [[leader["pid"], leader["start"]]]

@@ -31,6 +31,10 @@ DISPATCHES = "dispatches"
 HOLDS = "holds"
 STARTED = "started.json"
 RELEASED = "released.json"                 # v29.8: the flow's last pipeline_release
+REVIEWS = "reviews"                        # pipelines/<task>/reviews/<round>/: the flow's side of each review
+REVIEW_LINK = "job.json"
+ROUND_NAME = re.compile(r"^[1-9][0-9]{0,3}\Z")
+ROUND_MAX = 1000
 RESOLVED_MAX = 4096                        # failure identities one flow may have released
 # "<launch>#<seq>" (a journal record) or "<launch>#manual_review#<retained_at as stored>"
 FAILURE_ID_RE = re.compile(r"^(?:l-[0-9a-f]{16}#(?:[1-9][0-9]{0,8}|manual_review#[0-9eE.+\-]{1,40})"
@@ -364,6 +368,93 @@ class Pipeline:
             raise
         os.close(fd)
         os.replace(tmp, RELEASED, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+        _fsync_dir(self.fd)
+
+    # the flow's record of each review job (design 5.4; S2b part 1 review P2) ---------------
+
+    def review_links(self) -> dict[int, dict]:
+        """{round: {"job_id", "pipeline_id", "commit"}} from
+        reviews/<round>/job.json. The daemon writes one when it creates a
+        review job; the flow accounting compares them with the jobs under
+        <state>/reviews/ (stream_flow.flow_reviews), so neither side can lose
+        a job unnoticed. Anything unexpected here refuses."""
+        try:
+            rfd = _open_dir(REVIEWS, self.fd, create=False)
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            raise StoreRefused(f"審查紀錄資料夾無法開啟（{exc.strerror}）") from exc
+        out: dict[int, dict] = {}
+        try:
+            with os.scandir(rfd) as it:
+                names = sorted(e.name for e in it)
+            if len(names) > ROUND_MAX:
+                raise StoreRefused("審查紀錄過多")
+            for name in names:
+                if not ROUND_NAME.match(name) or int(name) > ROUND_MAX:
+                    raise StoreRefused(f"審查紀錄資料夾裡有不認得的項目：{name[:32]!r}")
+                try:
+                    dfd = _open_dir(name, rfd, create=False)
+                except OSError as exc:
+                    raise StoreRefused(f"審查紀錄 {name} 無法開啟（{exc.strerror}）") from exc
+                try:
+                    try:
+                        fd, _ = strictjson.open_owned(REVIEW_LINK, dir_fd=dfd, max_bytes=strictjson.MANIFEST.file_bytes)
+                        raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
+                        os.close(fd)
+                    except strictjson.ReadRefused as exc:
+                        raise StoreRefused(f"審查紀錄 {name} 的 job.json 無法讀取（{exc}）") from exc
+                finally:
+                    os.close(dfd)
+                parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+                d = parsed.value if parsed.ok else None
+                if not (isinstance(d, dict) and set(d) == {"v", "job_id", "pipeline_id", "round", "commit"}
+                        and d["v"] == 1 and not isinstance(d["v"], bool) and isinstance(d["job_id"], str)
+                        and re.match(r"^r-[0-9a-f]{16}\Z", d["job_id"]) and isinstance(d["pipeline_id"], str)
+                        and FLOW_RE.match(d["pipeline_id"]) and isinstance(d["round"], int)
+                        and not isinstance(d["round"], bool) and d["round"] == int(name)
+                        and isinstance(d["commit"], str) and COMMIT_RE.match(d["commit"])):
+                    raise StoreRefused(f"審查紀錄 {name} 的 job.json 不符")
+                out[int(name)] = {"job_id": d["job_id"], "pipeline_id": d["pipeline_id"], "commit": d["commit"]}
+        finally:
+            os.close(rfd)
+        return out
+
+    def write_review_link(self, round_: int, job_id: str, pipeline_id: str, commit: str) -> None:
+        """The flow's record of a review job, exclusive and durable. A failure
+        leaves nothing half written (the file is removed)."""
+        if not (isinstance(round_, int) and not isinstance(round_, bool) and 1 <= round_ <= ROUND_MAX
+                and re.match(r"^r-[0-9a-f]{16}\Z", str(job_id)) and FLOW_RE.match(str(pipeline_id))
+                and COMMIT_RE.match(str(commit))):
+            raise StoreRefused("審查紀錄的欄位不合法")
+        rfd = _open_dir(REVIEWS, self.fd, create=True)
+        try:
+            dfd = _open_dir(str(round_), rfd, create=True)
+            done = False
+            try:
+                fd = os.open(REVIEW_LINK, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                             dir_fd=dfd)
+                try:
+                    _write_all(fd, json.dumps({"v": 1, "job_id": job_id, "pipeline_id": pipeline_id,
+                                               "round": round_, "commit": commit}).encode())
+                    os.fsync(fd)
+                except BaseException:
+                    os.close(fd)
+                    os.unlink(REVIEW_LINK, dir_fd=dfd)
+                    raise
+                os.close(fd)
+                _fsync_dir(dfd)
+                done = True
+            finally:
+                os.close(dfd)
+                if not done:
+                    try:
+                        os.rmdir(str(round_), dir_fd=rfd)      # an empty round directory would stop every count
+                    except OSError:
+                        pass                                    # not empty: it holds another record
+            _fsync_dir(rfd)
+        finally:
+            os.close(rfd)
         _fsync_dir(self.fd)
 
     def release_record_bytes(self) -> int:
