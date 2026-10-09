@@ -31,10 +31,11 @@ READ_CHUNK = 1 << 20
 
 
 class ReviewInvalid(Exception):
-    def __init__(self, reasons):
+    def __init__(self, reasons, code: str | None = None):
         reasons = [reasons] if isinstance(reasons, str) else list(reasons)
         super().__init__("；".join(reasons[:3]))
         self.reasons = reasons[:MAX_REASONS]
+        self.code = code                     # e.g. "not_found": the rollout is not there (yet)
 
 
 def _int(v, low=0, high=cc.TOKEN_MAX) -> bool:
@@ -245,7 +246,8 @@ def open_rollout(codex_home, c: cc.CodexConstants, thread_id: str, dates) -> tup
                 for f in fds:
                     os.close(f)
         if len(found) != 1:
-            raise ReviewInvalid("找不到 rollout" if not found else "找到不只一份 rollout")
+            raise ReviewInvalid("找不到 rollout" if not found else "找到不只一份 rollout",
+                                code="not_found" if not found else "multiple")
         relpath = found[0][0]
         fds = []
         try:
