@@ -26,6 +26,7 @@ REPORT_MAX = 256 << 10
 ROLLOUT_MAX = 64 << 20
 MAX_REASONS = 16
 VERDICTS = ("PASS", "NEEDS WORK", "BLOCKED")
+BASE_NOT_ANCESTOR = "審查範圍不可信：base 不是被審 commit 的祖先"
 READ_CHUNK = 1 << 20
 
 
@@ -169,6 +170,11 @@ def check_report(text, commit: str) -> ReportResult:
     anc = only("BASE_IS_ANCESTOR:")
     if len(anc) == 1 and anc[0] in ("BASE_IS_ANCESTOR: yes", "BASE_IS_ANCESTOR: no"):
         out.base_is_ancestor = anc[0].endswith("yes")
+        if not out.base_is_ancestor:
+            # v29.9: the range cannot be trusted, so the review is not usable
+            # (not a basis for the merge gate). A problem, so "no problems"
+            # always means the report can be taken as it is.
+            out.problems.append(BASE_NOT_ANCESTOR)
     else:
         out.problems.append("BASE_IS_ANCESTOR 不是剛好一行 yes 或 no")
     verdicts = only("VERDICT:")
@@ -273,50 +279,83 @@ def open_rollout(codex_home, c: cc.CodexConstants, thread_id: str, dates) -> tup
         os.close(root)
 
 
-def copy_rollout(src_fd: int, dst_dir_fd: int, name: str, *, expect_sha256: str, src_before) -> dict:
+@dataclass
+class CopyResult:
+    ok: bool
+    info: dict | None = None
+    reasons: list = field(default_factory=list)
+    leftover: str | None = None          # a partial copy that could not be removed: where it is
+    leftover_bytes: int = 0              # its size, for the quota (0 when there is none)
+
+
+def copy_rollout(src_fd: int, dst_dir_fd: int, name: str, *, expect_sha256: str, src_before,
+                 dst_path: str = "") -> CopyResult:
     """Copy the verified rollout (from the same descriptor, rewound) into a
     file created exclusively in the review record directory (O_EXCL |
     O_NOFOLLOW, 0600), hashing the copy. The two hashes must be equal and the
     source's (dev, inode, size, mtime, ctime) must not have changed; else the
     copy is removed and the review is invalid. The source is never deleted
-    (the name could be swapped between matching and deleting)."""
+    (the name could be swapped between matching and deleting).
+
+    Nothing is raised (Codex S2b part 2 review #2): every failure is a reason
+    in the result. If the failed copy cannot be removed, ``leftover`` says
+    where it is (``dst_path``/``name``) and ``leftover_bytes`` how big, so the
+    caller can keep the job for a person and count the bytes."""
+    res = CopyResult(False)
     digest = hashlib.sha256()
-    out_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
-                     dir_fd=dst_dir_fd)
-    ok = False
     try:
-        os.lseek(src_fd, 0, os.SEEK_SET)
-        size = 0
-        while True:
-            chunk = os.read(src_fd, READ_CHUNK)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > ROLLOUT_MAX:
-                raise ReviewInvalid("rollout 超過 64 MiB")
-            digest.update(chunk)
-            view = memoryview(chunk)
-            while view:
-                n = os.write(out_fd, view)
-                if n <= 0:
-                    raise OSError(5, "寫入沒有進展")
-                view = view[n:]
-        os.fsync(out_fd)
-        after = os.fstat(src_fd)
-        if digest.hexdigest() != expect_sha256:
-            raise ReviewInvalid("rollout 複製時的雜湊與核對時不同")
-        if _stat_key(after) != _stat_key(src_before):
-            raise ReviewInvalid("rollout 在核對與複製之間被改動")
-        os.fsync(dst_dir_fd)                       # the new name is durable too; a failure removes the copy
-        ok = True
-        return {"sha256": digest.hexdigest(), "size": size, "source_dev": after.st_dev, "source_inode": after.st_ino}
+        out_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                         dir_fd=dst_dir_fd)
+    except OSError as exc:                  # nothing of ours exists: the name was taken or cannot be made
+        res.reasons.append(f"rollout 複本無法建立（{exc.strerror or type(exc).__name__}）")
+        return res
+    created_size = 0
+    try:
+        try:
+            os.lseek(src_fd, 0, os.SEEK_SET)
+            size = 0
+            while True:
+                chunk = os.read(src_fd, READ_CHUNK)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > ROLLOUT_MAX:
+                    raise ReviewInvalid("rollout 超過 64 MiB")
+                digest.update(chunk)
+                view = memoryview(chunk)
+                while view:
+                    n = os.write(out_fd, view)
+                    if n <= 0:
+                        raise OSError(5, "寫入沒有進展")
+                    created_size += n
+                    view = view[n:]
+            os.fsync(out_fd)
+            after = os.fstat(src_fd)
+            if digest.hexdigest() != expect_sha256:
+                raise ReviewInvalid("rollout 複製時的雜湊與核對時不同")
+            if _stat_key(after) != _stat_key(src_before):
+                raise ReviewInvalid("rollout 在核對與複製之間被改動")
+            os.fsync(dst_dir_fd)                 # the new name is durable too; a failure removes the copy
+            res.ok = True
+            res.info = {"sha256": digest.hexdigest(), "size": size, "source_dev": after.st_dev,
+                        "source_inode": after.st_ino}
+        except ReviewInvalid as exc:
+            res.reasons += exc.reasons
+        except Exception as exc:
+            res.reasons.append(f"rollout 複製失敗（{type(exc).__name__}）")
     finally:
-        os.close(out_fd)
-        if not ok:
+        try:
+            os.close(out_fd)
+        except OSError:
+            pass
+        if not res.ok:
             try:
                 os.unlink(name, dir_fd=dst_dir_fd)
-            except OSError:
-                pass
+            except Exception as exc:
+                res.leftover = f"{dst_path.rstrip('/')}/{name}" if dst_path else name
+                res.leftover_bytes = created_size
+                res.reasons.append(f"rollout 的不完整複本無法移除（{type(exc).__name__}），交人工處理")
+    return res
 
 
 # ---- the rollout (5.6) ----------------------------------------------------------------------------
@@ -328,6 +367,35 @@ class RolloutResult:
     responses: int
     turn_id: str | None
     reasons: list
+    complete: bool = True        # sha256 and size cover the whole file (always, unless it is over the limit)
+
+
+class _Counting:
+    """A sha256 that also counts the bytes it was given."""
+
+    def __init__(self):
+        self.h = hashlib.sha256()
+        self.size = 0
+
+    def update(self, chunk: bytes) -> None:
+        self.h.update(chunk)
+        self.size += len(chunk)
+
+
+def _drain(fd: int, digest: _Counting) -> bool:
+    """Read the rest of the file into the hash. True when the whole file was
+    read; False when it is over the limit or cannot be read (the hash then
+    stops short and the result says so)."""
+    while True:
+        try:
+            chunk = os.read(fd, READ_CHUNK)
+        except OSError:
+            return False
+        if not chunk:
+            return True
+        digest.update(chunk)
+        if digest.size > ROLLOUT_MAX:
+            return False
 
 
 def _lines(fd: int, limits: strictjson.Limits, digest):
@@ -345,7 +413,7 @@ def _lines(fd: int, limits: strictjson.Limits, digest):
             break
         digest.update(chunk)
         total += len(chunk)
-        if total > limits.file_bytes:
+        if total > min(limits.file_bytes, ROLLOUT_MAX):
             raise strictjson.LineError("檔案超過上限")
         buf += chunk
         while True:
@@ -368,13 +436,11 @@ def validate_rollout(fd: int, c: cc.CodexConstants, *, thread_id: str, scratch: 
     """The rollout read through one already verified descriptor (the caller
     opened it O_NOFOLLOW and checked owner, type and size). ``RolloutResult
     .reasons`` is empty only when every rule of design 5.6 holds."""
-    digest = hashlib.sha256()
+    digest = _Counting()
     reasons: list[str] = []
     v = _Walk(c, thread_id, scratch, model, events_usage, last_message, reasons)
-    size = 0
     try:
         for raw in _lines(fd, strictjson.ROLLOUT, digest):
-            size += len(raw) + 1
             parsed = strictjson.loads_object(raw, strictjson.ROLLOUT)
             if not parsed.ok:
                 reasons.append("有一行不是嚴格的 JSON 物件")
@@ -393,7 +459,15 @@ def validate_rollout(fd: int, c: cc.CodexConstants, *, thread_id: str, scratch: 
             v.finish()
         except Exception as exc:
             reasons.append(f"rollout 無法檢查（{type(exc).__name__}）")
-    return RolloutResult(digest.hexdigest(), size, v.token_records, v.turn_id, list(dict.fromkeys(reasons))[:MAX_REASONS])
+    # The hash always stands for the whole file, even when the checks stopped
+    # at the first bad record: an invalid review still keeps its only source
+    # (design 5.6), and copy_rollout compares against this (Codex S2b part 2
+    # review #1).
+    complete = _drain(fd, digest) and digest.size <= ROLLOUT_MAX
+    if not complete:
+        reasons.append("rollout 讀不完整或超過 64 MiB，雜湊不涵蓋整個檔案")
+    return RolloutResult(digest.h.hexdigest(), digest.size, v.token_records, v.turn_id,
+                         list(dict.fromkeys(reasons))[:MAX_REASONS], complete)
 
 
 class _Walk:

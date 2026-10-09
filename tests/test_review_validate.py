@@ -3,6 +3,7 @@ rollout. A valid fake run (tests/review_fixtures) with one rule broken at a
 time. No Codex, no model."""
 
 import json
+import os
 import unittest
 
 from tests import review_fixtures as rf
@@ -49,6 +50,29 @@ class ValidRunTests(unittest.TestCase):
         raw = rf.lines(recs)
         self.assertEqual(run_rollout(recs).sha256, hashlib.sha256(raw).hexdigest())
         self.assertEqual(run_rollout(None, raw=raw).size, len(raw))
+
+    def test_the_hash_covers_the_whole_file_even_when_the_first_line_is_bad(self):
+        # Codex S2b part 2 review #1: an invalid review still keeps its only source
+        import hashlib
+        _, recs, _ = rf.valid_run()
+        for name, raw in (("first line not json, 3 MiB behind", b"{not json\n" + b"x" * (3 << 20) + b"\n"),
+                          ("a line over the limit first", b'{"a":"' + b"x" * (5 << 20) + b'"}\n' + rf.lines(recs)),
+                          ("bad ordinal first, valid after", rf.lines([dict(recs[0], ordinal=5)] + recs[1:])),
+                          ("no final newline", rf.lines(recs)[:-1]),
+                          ("many reasons", rf.lines([dict(r, ordinal=7) for r in recs]))):
+            with self.subTest(case=name):
+                out = run_rollout(None, raw=raw)
+                self.assertTrue(out.reasons)
+                self.assertTrue(out.complete)
+                self.assertEqual((out.sha256, out.size), (hashlib.sha256(raw).hexdigest(), len(raw)))
+
+    def test_a_file_that_cannot_be_read_whole_says_so(self):
+        from unittest import mock
+        _, recs, _ = rf.valid_run()
+        with mock.patch.object(rv, "ROLLOUT_MAX", 100):
+            out = run_rollout(recs)
+        self.assertFalse(out.complete)
+        self.assertTrue(any("64 MiB" in r for r in out.reasons))
 
     def test_fields_vbear_does_not_read_are_allowed(self):
         evs, recs, _ = rf.valid_run()
@@ -152,8 +176,11 @@ class ReportTests(unittest.TestCase):
         for verdict in rv.VERDICTS:
             rep = rv.check_report(rf.report(verdict=verdict), rf.COMMIT)
             self.assertEqual((rep.verdict, rep.problems), (verdict, []))
-        rep = rv.check_report(rf.report(ancestor="no"), rf.COMMIT)
-        self.assertEqual((rep.base_is_ancestor, rep.problems), (False, []))      # the caller makes this invalid
+        # v29.9 / Codex S2b part 2 review #3: "no" is a problem by itself, so an
+        # empty problems list always means the report can be taken as it is
+        for verdict in rv.VERDICTS:
+            rep = rv.check_report(rf.report(ancestor="no", verdict=verdict), rf.COMMIT)
+            self.assertEqual((rep.base_is_ancestor, rep.verdict, rep.problems), (False, verdict, [rv.BASE_NOT_ANCESTOR]))
         rep = rv.check_report(rf.report() + "\n\n", rf.COMMIT)
         self.assertEqual(rep.problems, [])                                       # blank lines after are fine
 
@@ -464,23 +491,27 @@ class LocateAndCopyTests(unittest.TestCase):
 
     def test_the_copy_is_exact_exclusive_and_leaves_the_source(self):
         path, out, fd, st, dfd, sha = self.copy_setup(b"a\nb\n")
-        info = rv.copy_rollout(fd, dfd, "rollout.jsonl", expect_sha256=sha, src_before=st)
-        self.assertEqual((info["sha256"], info["size"], info["source_inode"]), (sha, 4, st.st_ino))
+        res = rv.copy_rollout(fd, dfd, "rollout.jsonl", expect_sha256=sha, src_before=st, dst_path=str(out))
+        self.assertTrue(res.ok)
+        self.assertEqual((res.info["sha256"], res.info["size"], res.info["source_inode"]), (sha, 4, st.st_ino))
+        self.assertEqual((res.reasons, res.leftover, res.leftover_bytes), ([], None, 0))
         self.assertEqual((out / "rollout.jsonl").read_bytes(), b"a\nb\n")
         self.assertEqual(oct((out / "rollout.jsonl").stat().st_mode & 0o777), "0o600")
         self.assertTrue(path.exists())                            # never deleted
-        with self.assertRaises(FileExistsError):                  # exclusive
-            rv.copy_rollout(fd, dfd, "rollout.jsonl", expect_sha256=sha, src_before=st)
+        again = rv.copy_rollout(fd, dfd, "rollout.jsonl", expect_sha256=sha, src_before=st, dst_path=str(out))
+        self.assertFalse(again.ok)                                # exclusive, and nothing raised
+        self.assertIsNone(again.leftover)                         # the existing file is not ours to remove
         self.assertEqual((out / "rollout.jsonl").read_bytes(), b"a\nb\n")
 
     def test_a_source_that_changed_or_a_hash_that_differs_leaves_no_copy(self):
         path, out, fd, st, dfd, sha = self.copy_setup(b"a\nb\n")
-        with self.assertRaises(rv.ReviewInvalid):
-            rv.copy_rollout(fd, dfd, "x.jsonl", expect_sha256="0" * 64, src_before=st)     # not what was validated
+        res = rv.copy_rollout(fd, dfd, "x.jsonl", expect_sha256="0" * 64, src_before=st, dst_path=str(out))
+        self.assertFalse(res.ok)                                  # not what was validated
+        self.assertTrue(res.reasons)
         with open(path, "ab") as f:
             f.write(b"c\n")                                       # grown after validation
-        with self.assertRaises(rv.ReviewInvalid):
-            rv.copy_rollout(fd, dfd, "y.jsonl", expect_sha256=sha, src_before=st)
+        res = rv.copy_rollout(fd, dfd, "y.jsonl", expect_sha256=sha, src_before=st, dst_path=str(out))
+        self.assertFalse(res.ok)
         self.assertEqual(list(out.iterdir()), [])
 
     def test_a_failing_write_or_sync_leaves_no_copy(self):
@@ -489,9 +520,55 @@ class LocateAndCopyTests(unittest.TestCase):
         for patch in (mock.patch.object(rv.os, "write", side_effect=OSError(28, "No space left on device")),
                       mock.patch.object(rv.os, "fsync", side_effect=OSError(5, "Input/output error")),
                       mock.patch.object(rv.os, "write", return_value=0)):
-            with self.subTest(patch=str(patch)[:40]), patch, self.assertRaises(OSError):
-                rv.copy_rollout(fd, dfd, "z.jsonl", expect_sha256=sha, src_before=st)
+            with self.subTest(patch=str(patch)[:40]), patch:
+                res = rv.copy_rollout(fd, dfd, "z.jsonl", expect_sha256=sha, src_before=st, dst_path=str(out))
+            self.assertFalse(res.ok)
+            self.assertTrue(res.reasons)
+            self.assertIsNone(res.leftover)
             self.assertEqual(list(out.iterdir()), [])
+
+    def test_a_copy_that_cannot_be_removed_is_reported_not_hidden(self):
+        # Codex S2b part 2 review #2: write fails, then the unlink fails too
+        from unittest import mock
+        path, out, fd, st, dfd, sha = self.copy_setup(b"a\nb\n" * 1000)
+        real_write = os.write
+        calls = []
+
+        def write_some_then_fail(fd_, data):
+            calls.append(1)
+            if len(calls) == 1:
+                return real_write(fd_, bytes(data)[:1000])
+            raise OSError(28, "No space left on device")
+        with mock.patch.object(rv.os, "write", write_some_then_fail), \
+                mock.patch.object(rv.os, "unlink", side_effect=PermissionError(13, "Permission denied")):
+            res = rv.copy_rollout(fd, dfd, "stuck.jsonl", expect_sha256=sha, src_before=st, dst_path=str(out))
+        self.assertFalse(res.ok)
+        self.assertEqual(res.leftover, f"{out}/stuck.jsonl")
+        self.assertEqual(res.leftover_bytes, 1000)                       # what was written: to be counted
+        self.assertTrue((out / "stuck.jsonl").exists())                  # and it really is still there
+        self.assertTrue(any("無法移除" in r for r in res.reasons))
+        self.assertNotIn("Permission denied", " ".join(res.reasons))      # the message is not echoed
+
+    def test_an_invalid_rollout_is_still_kept(self):
+        # the whole path of review #1: a 3 MiB file whose first line is bad
+        import hashlib
+        raw = b"{not json\n" + b"x" * (3 << 20) + b"\n"
+        path = self.put(self.day1, data=raw)
+        out = self.tmp / "record"
+        out.mkdir(mode=0o700)
+        fd, st, _ = self.open_()
+        import os
+        dfd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        self.addCleanup(os.close, dfd)
+        checked = rv.validate_rollout(fd, C, thread_id=rf.THREAD, scratch=rf.SCRATCH, model=rf.MODEL,
+                                      events_usage={}, last_message="x")
+        self.assertTrue(checked.reasons)
+        res = rv.copy_rollout(fd, dfd, "rollout.jsonl", expect_sha256=checked.sha256, src_before=st,
+                              dst_path=str(out))
+        self.assertTrue(res.ok, res.reasons)
+        self.assertEqual((out / "rollout.jsonl").read_bytes(), raw)
+        self.assertEqual(checked.sha256, hashlib.sha256(raw).hexdigest())
 
 
 if __name__ == "__main__":
