@@ -218,7 +218,8 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
     t.pending_or_orphan_texts = sorted(set(texts) - t.accepted)
     for rm in flow_reviews(base, pipeline_id, task_id):
         t.reviews.append({"job_id": rm["job_id"], "round": rm["round"], "commit": rm["commit"],
-                          "state": rm["state"], **_review_failure(rm)})
+                          "state": rm["state"], "outcome": rm["outcome"], "record": rm["record"],
+                          **_review_failure(rm)})
     return t
 
 
@@ -276,9 +277,16 @@ def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
     # The flow's own record of each job (design 5.4): both sides must agree,
     # so a job (and its failure) cannot be lost by replacing reviews/ or
     # deleting a job directory (S2b part 1 review P2).
+    results: dict[int, object] = {}
     try:
         with pipeline_store.Pipeline(base, task_id, create=False) as p:
             links = p.review_links()
+            for m in out:
+                if m["outcome"] in ("valid", "invalid") and m["round"] in links:
+                    try:
+                        results[m["round"]] = p.review_result(m["round"])
+                    except (pipeline_store.StoreRefused, OSError):
+                        results[m["round"]] = _DAMAGED
     except pipeline_store.StoreRefused as exc:
         if not exc.missing:
             raise FlowRefused("count_unavailable", f"流程的審查紀錄無法讀取（{exc}）") from exc
@@ -297,7 +305,32 @@ def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
     for rnd, link in links.items():
         if link["pipeline_id"] != pipeline_id or rnd not in rounds:
             raise FlowRefused("count_unavailable", f"流程的審查紀錄 {rnd} 找不到對應的審查工作，無法核算流程用量")
-    return out
+    return [dict(m, record=_record_state(m, results.get(m["round"]))) for m in out]
+
+
+_DAMAGED = object()
+
+
+def _record_state(m: dict, res) -> str:
+    """result.json is the commit marker of a decided review (written after the
+    manifest holds the outcome; Codex S2b part 3c review #1). "complete":
+    present and agreeing with the manifest. "absent": not there; allowed for
+    an invalid review (its failure comes from the manifest), never for a valid
+    one. Present but disagreeing or unreadable is damage: refused."""
+    if m["outcome"] not in ("valid", "invalid"):
+        return "none"
+    if res is _DAMAGED:
+        raise FlowRefused("count_unavailable", f"審查 {m['job_id']} 的 result.json 無法讀取，無法核算流程用量")
+    if res is None:
+        if m["outcome"] == "valid":
+            raise FlowRefused("count_unavailable", f"審查 {m['job_id']} 的結果是 valid，但審查紀錄沒有 result.json")
+        return "absent"
+    agree = (isinstance(res, dict) and res.get("v") == 1 and res.get("job_id") == m["job_id"]
+             and res.get("round") == m["round"] and res.get("commit") == m["commit"]
+             and isinstance(res.get("valid"), bool) and res["valid"] == (m["outcome"] == "valid"))
+    if not agree:
+        raise FlowRefused("count_unavailable", f"審查 {m['job_id']} 的 result.json 與 manifest 的結果不一致")
+    return "complete"
 
 
 def _review_failure(m: dict) -> dict:

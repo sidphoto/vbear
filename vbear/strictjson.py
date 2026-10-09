@@ -280,6 +280,24 @@ def iter_lines(fd: int, limits: Limits) -> Iterator[bytes]:
         raise LineError("最後一行沒有以換行結尾")
 
 
+def iter_data_lines(data: bytes, limits: Limits) -> Iterator[bytes]:
+    """``iter_lines`` for bytes that were read once already (so that what is
+    judged and what is saved are the same bytes). Same errors."""
+    if limits.file_bytes is not None and len(data) > limits.file_bytes:
+        raise LineError(f"檔案超過 {limits.file_bytes} bytes")
+    pos = 0
+    while pos < len(data):
+        cut = data.find(b"\n", pos)
+        if cut < 0:
+            if len(data) - pos > limits.unit_bytes:
+                raise LineError(f"有一行超過 {limits.unit_bytes} bytes")
+            raise LineError("最後一行沒有以換行結尾")
+        if cut - pos > limits.unit_bytes:
+            raise LineError(f"有一行超過 {limits.unit_bytes} bytes")
+        yield data[pos:cut]
+        pos = cut + 1
+
+
 def iter_json_lines(fd: int, limits: Limits) -> Iterator[Parsed]:
     """``loads_object`` for each line. A whole-file problem (LineError) ends
     the iteration with one failed result after the lines before it."""

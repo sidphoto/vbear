@@ -20,6 +20,7 @@ from vbear.runtime import pipeline_store as ps
 from vbear.runtime import review_finish as rfn
 from vbear.runtime import review_store as rs
 from vbear.runtime import review_validate as rv
+from vbear.runtime import stream_flow as sfl
 
 C = rf.C
 JOB = "r-0123456789abcdef"
@@ -245,6 +246,132 @@ class InvalidReviewTests(Scenario):
         self.invalid("detached")
 
 
+class CommitOrderTests(Scenario):
+    def test_result_json_is_written_after_the_manifest_holds_the_outcome(self):
+        seen = []
+        real_update, real_write = rs.update_manifest, rfn._write_new
+
+        def update(base, job_id, **fields):
+            if fields.get("outcome"):
+                seen.append(("manifest", (self.record() / "result.json").exists()))
+            return real_update(base, job_id, **fields)
+
+        def write(dir_fd, name, data, dst):
+            if name == "result.json":
+                seen.append(("result", self.manifest()["outcome"]))
+            return real_write(dir_fd, name, data, dst)
+        with mock.patch.object(rs, "update_manifest", update), mock.patch.object(rfn, "_write_new", write):
+            out = self.finish()
+        self.assertEqual(seen, [("manifest", False), ("result", "valid")])
+        self.assertTrue(out.record_complete)
+        self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+
+    def test_a_result_json_that_cannot_be_written_leaves_a_decided_manifest_and_no_marker(self):
+        real = rfn._write_new
+
+        def write(dir_fd, name, data, dst):
+            if name == "result.json":
+                return rfn._Saved(False, "審查紀錄的 result.json 無法寫入（OSError）")
+            return real(dir_fd, name, data, dst)
+        with mock.patch.object(rfn, "_write_new", write):
+            out = self.finish()
+        m = self.manifest()
+        self.assertEqual((out.outcome, out.record_complete, m["outcome"]), ("valid", False, "valid"))
+        self.assertIn("result.json", out.problem)
+        self.assertIn("審查紀錄不完整", m["retained_reason"])
+        self.assertTrue((self.job / "events.jsonl").exists())                  # the originals are kept
+        with self.assertRaises(sfl.FlowRefused) as cm:                          # a valid review without its marker is not believed
+            sfl.flow_reviews(self.base, FID, TID)
+        self.assertEqual(cm.exception.code, "count_unavailable")
+
+
+class SameBytesTests(Scenario):
+    """Codex 3c review #2: what is judged is what is saved, and a file
+    replaced in between is noticed."""
+
+    def swap_after_judging(self, change):
+        real = rfn.git_objects.commit_exists
+
+        def later(*a, **kw):                       # runs after events.jsonl was read and judged
+            change()
+            return real(*a, **kw)
+        return mock.patch.object(rfn.git_objects, "commit_exists", later)
+
+    def test_a_replaced_events_file_is_invalid_and_the_record_holds_what_was_judged(self):
+        original = (self.job / "events.jsonl").read_bytes()
+
+        def replace():
+            (self.job / "events.jsonl.new").write_bytes(b'{"type":"thread.started","thread_id":"x"}\n')
+            os.rename(self.job / "events.jsonl.new", self.job / "events.jsonl")
+        with self.swap_after_judging(replace):
+            out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+        self.assertIn("被替換或改動", " | ".join(out.reasons))
+        self.assertEqual((self.record() / "events.jsonl").read_bytes(), original)   # the judged bytes
+        self.assertTrue((self.job / "events.jsonl").exists())                        # the stranger is kept for a person
+        self.assertNotEqual(self.manifest()["state"], "valid")
+
+    def test_a_file_changed_in_place_is_noticed(self):
+        def append():
+            with open(self.job / "events.jsonl", "ab") as f:
+                f.write(b"\n")
+        with self.swap_after_judging(append):
+            out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+        self.assertIn("events.jsonl", " | ".join(out.reasons))
+
+    def test_stderr_is_treated_the_same_way(self):
+        original = (self.job / "stderr.log").read_bytes()
+
+        def replace():
+            os.unlink(self.job / "stderr.log")
+            (self.job / "stderr.log").write_text("something else\n")
+        with self.swap_after_judging(replace):
+            out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+        self.assertIn("stderr.log", " | ".join(out.reasons))
+        self.assertEqual((self.record() / "stderr.log").read_bytes(), original)
+
+    def test_the_file_is_read_only_once(self):
+        opened = []
+        real = rfn.strictjson.open_owned
+
+        def spy(path, **kw):
+            opened.append(str(path))
+            return real(path, **kw)
+        with mock.patch.object(rfn.strictjson, "open_owned", spy):
+            self.finish()
+        self.assertEqual(sorted(x for x in opened if x in ("events.jsonl", "stderr.log")),
+                         ["events.jsonl", "stderr.log"])             # once each, not once to judge and once to save
+
+
+class HoldTests(Scenario):
+    """Codex 3c review #3: a review that ran while its flow was stopped is
+    invalid even when the process ended well and every file is fine."""
+
+    def test_a_hold_makes_a_good_review_invalid(self):
+        ps.hold(self.base, FID, "user stop")
+        out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+        self.assertIn("被停止", " | ".join(out.reasons))
+        self.assertEqual(self.manifest()["outcome"], "invalid")
+        self.assertFalse(json.loads((self.record() / "result.json").read_text())["valid"])
+
+    def test_the_daemon_can_say_it_saw_a_hold_that_was_released_since(self):
+        out = self.finish(held=True)
+        self.assertEqual(out.outcome, "invalid")
+        self.assertIn("被停止", " | ".join(out.reasons))
+
+    def test_a_hold_state_that_cannot_be_read_counts_as_held(self):
+        with mock.patch.object(ps, "is_held", side_effect=OSError(5, "io")):
+            out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+
+    def test_another_flows_hold_does_not_matter(self):
+        ps.hold(self.base, "flow-ffffffffffff", "other")
+        self.assertEqual(self.finish().outcome, "valid")
+
+
 class UnprovenAndFailureTests(Scenario):
     def test_a_group_not_proven_gone_keeps_everything(self):
         out = self.finish(manual_review="程序群組在 SIGKILL 後仍有程序存活")
@@ -280,7 +407,16 @@ class UnprovenAndFailureTests(Scenario):
         self.assertEqual(out.outcome, "manual_review")
         self.assertIn("無法寫入 manifest", out.problem)
         self.assertTrue(self.scratch.exists())
-        self.assertEqual(self.manifest()["state"] == "manual_review" or self.manifest()["state"] == "running", True)
+        m = self.manifest()
+        self.assertEqual((m["state"], m["outcome"]), ("manual_review", "manual_review"))
+        # Codex 3c review #1: result.json is written after the outcome, so
+        # without the outcome there is none; the saved files stay and are named
+        self.assertFalse((self.record() / "result.json").exists())
+        self.assertTrue((self.record() / "last.md").exists() and (self.record() / "events.jsonl").exists())
+        self.assertIn("沒有 result.json", m["retained_reason"])
+        self.assertFalse(out.record_complete)
+        self.assertTrue(rs.failure_id(m))                                   # the flow is blocked by it
+        self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["none"])
 
     def test_a_record_that_cannot_be_saved_keeps_the_originals(self):
         shutil.rmtree(self.record())

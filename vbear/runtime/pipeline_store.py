@@ -400,8 +400,10 @@ class Pipeline:
                 try:
                     try:
                         fd, _ = strictjson.open_owned(REVIEW_LINK, dir_fd=dfd, max_bytes=strictjson.MANIFEST.file_bytes)
-                        raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
-                        os.close(fd)
+                        try:
+                            raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
+                        finally:
+                            os.close(fd)
                     except strictjson.ReadRefused as exc:
                         raise StoreRefused(f"審查紀錄 {name} 的 job.json 無法讀取（{exc}）") from exc
                 finally:
@@ -431,6 +433,34 @@ class Pipeline:
             return _open_dir(str(round_), rfd, create=False)
         finally:
             os.close(rfd)
+
+    def review_result(self, round_: int) -> dict | None:
+        """The record's result.json, the commit marker of a finished review
+        (written last, after the manifest holds the outcome). None when the
+        file is not there; StoreRefused for anything else that is wrong with
+        it (not ours, not a plain file, not an object, unreadable)."""
+        dfd = self.review_dir_fd(round_)
+        try:
+            try:
+                fd, _ = strictjson.open_owned("result.json", dir_fd=dfd, max_bytes=strictjson.MANIFEST.file_bytes)
+            except strictjson.ReadRefused as exc:
+                if exc.missing:
+                    return None
+                raise StoreRefused(f"審查紀錄 {round_} 的 result.json 無法讀取（{exc}）") from exc
+            except OSError as exc:
+                raise StoreRefused(f"審查紀錄 {round_} 的 result.json 無法讀取（{exc}）") from exc
+            try:
+                raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
+            except (strictjson.ReadRefused, OSError) as exc:
+                raise StoreRefused(f"審查紀錄 {round_} 的 result.json 無法讀取（{exc}）") from exc
+            finally:
+                os.close(fd)
+        finally:
+            os.close(dfd)
+        parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+        if not parsed.ok:
+            raise StoreRefused(f"審查紀錄 {round_} 的 result.json 不是合法的 JSON 物件（{parsed.problem}）")
+        return parsed.value
 
     def write_review_link(self, round_: int, job_id: str, pipeline_id: str, commit: str) -> None:
         """The flow's record of a review job, exclusive and durable. A failure

@@ -789,9 +789,10 @@ class FlowContextTests(StateDir):
 
     # ---- review jobs in the flow's accounting (design 5.3, v29.8.1, v29.9)
 
-    def review(self, n: int, state="finished", link=True, **over):
-        """A review job of this flow with a manifest whose fields agree, and
-        (link) the flow's own record of it."""
+    def review(self, n: int, state="finished", link=True, record=True, **over):
+        """A review job of this flow with a manifest whose fields agree, the
+        flow's own record of it (link) and, for a decided review, the
+        record's result.json (record), the commit marker."""
         from vbear.runtime import review_store as rs
         from tests.test_review_store import state_manifest
         job = f"r-{n:016x}"
@@ -802,7 +803,65 @@ class FlowContextTests(StateDir):
         if link:
             with ps.Pipeline(self.base, self.tid, create=True) as p:
                 p.write_review_link(n, job, self.fid, m["commit"])
+            if record and m["outcome"] in ("valid", "invalid"):
+                self.write_result(n, job, m["commit"], m["outcome"] == "valid")
         return job
+
+    def write_result(self, n: int, job: str, commit: str, valid: bool, **over) -> None:
+        body = {"v": 1, "job_id": job, "round": n, "commit": commit, "valid": valid, **over}
+        d = self.base / "pipelines" / self.tid / "reviews" / str(n)
+        (d / "result.json").write_text(json.dumps(body))
+        os.chmod(d / "result.json", 0o600)
+
+    def test_result_json_is_the_commit_marker_of_a_decided_review(self):
+        # Codex S2b part 3c review #1: the reader believes a decided review's
+        # record only with a result.json that agrees with the manifest
+        from vbear.runtime import review_store as rs
+        self.accept()
+        job = self.review(1, state="finished", record=False)            # valid, but no marker
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.load(self.base, self.fid)
+        self.assertIn("result.json", str(cm.exception))
+        d = self.base / "pipelines" / self.tid / "reviews" / "1"
+        damage = {
+            "valid disagrees (valid manifest, valid=false)": lambda: self.write_result(1, job, rs.read_manifest(self.base, job)["commit"], False),
+            "another job": lambda: self.write_result(1, "r-" + "9" * 16, rs.read_manifest(self.base, job)["commit"], True),
+            "another commit": lambda: self.write_result(1, job, "e" * 40, True),
+            "another round": lambda: self.write_result(1, job, rs.read_manifest(self.base, job)["commit"], True, round=2),
+            "valid not a bool": lambda: self.write_result(1, job, rs.read_manifest(self.base, job)["commit"], "yes"),
+            "not json": lambda: (d / "result.json").write_text("{"),
+            "a symlink": lambda: (d / "result.json").symlink_to("/etc/hosts"),
+            "a directory": lambda: (d / "result.json").mkdir(),
+        }
+        def clear():
+            for f in d.glob("result.json"):
+                if f.is_dir() and not f.is_symlink():
+                    f.rmdir()
+                else:
+                    f.unlink()
+        for name, make in damage.items():
+            with self.subTest(case=name):
+                clear()
+                make()
+                with self.assertRaises(stream_flow.FlowRefused) as cm:
+                    stream_flow.load(self.base, self.fid)
+                self.assertEqual(cm.exception.code, "count_unavailable")
+        clear()
+        self.write_result(1, job, rs.read_manifest(self.base, job)["commit"], True)
+        ctx = stream_flow.load(self.base, self.fid)                       # agreeing: believed
+        self.assertEqual([x["record"] for x in ctx.totals.reviews], ["complete"])
+
+    def test_an_invalid_review_without_result_json_still_counts_as_a_failure(self):
+        self.accept()
+        job = self.review(1, state="invalid", invalid_reasons=["x"], record=False)
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertEqual([x["record"] for x in ctx.totals.reviews], ["absent"])
+        self.assertIn(job, stream_flow.unresolved_failure(ctx))
+        d = self.base / "pipelines" / self.tid / "reviews" / "1"
+        from vbear.runtime import review_store as rs
+        self.write_result(1, job, rs.read_manifest(self.base, job)["commit"], True)
+        with self.assertRaises(stream_flow.FlowRefused):                  # present but says valid: damage
+            stream_flow.load(self.base, self.fid)
 
     def test_reviews_are_counted_and_limited(self):
         self.accept(limits={**acc.DEFAULT_LIMITS, "max_reviews": 2})

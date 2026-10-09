@@ -128,9 +128,9 @@ class NormalEndTests(RunCase):
         self.assertEqual((out["exit_code"], out["terminated_for"]), (3, None))
 
     def test_a_signal_death_is_recorded(self):
-        run = self.spawn("import os,signal; os.kill(os.getpid(), signal.SIGABRT)")
+        run = self.spawn("import os,signal; os.kill(os.getpid(), signal.SIGUSR1)")
         out = self.drive(run)
-        self.assertEqual((out["exit_code"], out["exit_signal"]), (None, signal.SIGABRT))
+        self.assertEqual((out["exit_code"], out["exit_signal"]), (None, signal.SIGUSR1))
 
     def test_a_partial_last_line_is_noted(self):
         run = self.spawn("import sys; sys.stdout.write('{\"type\":\"thread.started\",\"thread_id\":\"" + rf.THREAD + "\"}\\n{\"type\"')")
