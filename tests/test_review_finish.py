@@ -320,6 +320,28 @@ class SameBytesTests(Scenario):
         self.assertEqual(out.outcome, "invalid")
         self.assertIn("events.jsonl", " | ".join(out.reasons))
 
+    def test_a_same_size_rewrite_in_place_is_noticed(self):
+        # Codex 3c R2: device, inode and size do not change when the bytes are
+        # overwritten with others of the same length; the SHA-256 does
+        for name in ("events.jsonl", "stderr.log"):
+            with self.subTest(file=name):
+                self.tearDown_and_setUp()
+
+                def rewrite(name=name):
+                    path = self.job / name
+                    data = bytearray(path.read_bytes())
+                    data[0] = data[0] ^ 0x01 if data[0] not in b"\n" else data[0]
+                    with open(path, "r+b") as f:             # same inode, same size
+                        f.write(bytes(data))
+                    self.assertNotEqual(bytes(data), self.expected[name])
+                self.expected = {name: (self.job / name).read_bytes()}
+                with self.swap_after_judging(rewrite):
+                    out = self.finish()
+                self.assertEqual(out.outcome, "invalid")
+                self.assertIn(name, " | ".join(out.reasons))
+                self.assertEqual((self.record() / name).read_bytes(), self.expected[name])   # what was judged
+                self.assertTrue((self.job / name).exists())                                     # kept for a person
+
     def test_stderr_is_treated_the_same_way(self):
         original = (self.job / "stderr.log").read_bytes()
 

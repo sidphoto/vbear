@@ -107,13 +107,30 @@ def _read_blob(job_fd: int, name: str, limit: int) -> _Blob:
 
 
 def _unchanged(job_fd: int, name: str, blob: _Blob) -> bool:
-    """Whether ``name`` is still the very file that was read (same device,
-    inode and size, not a link). An error is "no"."""
+    """Whether ``name`` is still exactly what was read: a regular file (not a
+    link) with the same device, inode and size, and the same SHA-256 of its
+    bytes (a same-size rewrite in place keeps the first three; Codex 3c R2).
+    Anything else, and any error, is "no"."""
     try:
-        st = os.stat(name, dir_fd=job_fd, follow_symlinks=False)
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=job_fd)
     except OSError:
         return False
-    return stat.S_ISREG(st.st_mode) and (st.st_dev, st.st_ino, st.st_size) == (blob.dev, blob.ino, blob.size)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino, st.st_size) != (blob.dev, blob.ino, blob.size):
+            return False
+        h, left = hashlib.sha256(), blob.size + 1             # one byte more than expected: a longer file shows
+        while left > 0:
+            chunk = os.read(fd, min(left, 1 << 20))
+            if not chunk:
+                break
+            h.update(chunk)
+            left -= len(chunk)
+        return left == 1 and h.hexdigest() == blob.sha256
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def judge_events(data: bytes, c: cc.CodexConstants):
