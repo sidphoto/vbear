@@ -35,6 +35,7 @@ from vbear.runtime import stream_session
 REPO = str(Path(__file__).resolve().parent.parent)
 TIMEOUT = 20.0
 STARTUP_TIMEOUT = 60.0
+HEAVY_TIMEOUT = 180.0        # the 12 000-event turn: CPU work that grows with a busy Mac
 
 FAKE_STREAM_CLI = r'''#!%(py)s
 import json, os, signal, subprocess, sys, time
@@ -651,9 +652,13 @@ class ReviewDifferenceTests(StreamCase):
         # Difference 3: turn_result past the journal's line/node limit.
         launch_id, _ = self.open("huge_turn")
         self.dispatch(launch_id)
+        # The daemon has to take in 12 000 events one by one (past the journal's
+        # 100 000-node limit takes about that many; each costs 1-1.5 ms of
+        # parsing and validation), so this is 13-18 s of work on an idle Mac and
+        # more on a busy one: a bound for the work, not for one step of it.
         self.wait_for(lambda: (s := self.dm._streams.get(launch_id)) is None or s.state == "error",
-                      msg="error state")
-        self.wait_for(lambda: launch_id not in self.dm._streams, msg="session ended")
+                      timeout=HEAVY_TIMEOUT, msg="error state")
+        self.wait_for(lambda: launch_id not in self.dm._streams, timeout=HEAVY_TIMEOUT, msg="session ended")
         m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
         self.assertEqual(m["state"], "manual_review")
         self.assertIn("日誌無法寫入", m["retained_reason"])
