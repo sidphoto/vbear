@@ -107,25 +107,35 @@ class PipelineStoreTests(StateDir):
         fid = "flow-0123456789ab"
         with ps.Pipeline(self.base, "task-1", create=True) as p:
             self.assertIsNone(p.started_at(fid))
-            t = p.record_start(fid, time.time(), launch_id=LID)
+            t = p.record_start(fid, time.time(), launch_id=LID, base_commit=fx.BASE_COMMIT)
             self.assertEqual(p.started_at(fid), t)
-            self.assertEqual(p.start_record(), {"pipeline_id": fid, "launch_id": LID, "started_at": t})
-            self.assertEqual(p.record_start(fid, time.time() + 100, launch_id=LID), t)   # first start is kept
+            self.assertEqual(p.start_record(), {"pipeline_id": fid, "launch_id": LID, "base_commit": fx.BASE_COMMIT,
+                                                "started_at": t})
+            self.assertEqual(p.record_start(fid, time.time() + 100, launch_id=LID, base_commit=fx.BASE_COMMIT), t)   # first start is kept
             for bad_id in ("l-xyz", LID + "\n", None):
                 with self.assertRaises(ps.StoreRefused):
-                    p.record_start(fid, time.time(), launch_id=bad_id)
+                    p.record_start(fid, time.time(), launch_id=bad_id, base_commit=fx.BASE_COMMIT)
+            for bad_base in ("xyz", fx.BASE_COMMIT + "\n", fx.BASE_COMMIT[:39], None, "B" * 40):
+                with self.assertRaises(ps.StoreRefused):
+                    p.record_start(fid, time.time(), launch_id=LID, base_commit=bad_base)
+            self.assertEqual(p.start_record()["base_commit"], fx.BASE_COMMIT)
         path = self.base / "pipelines" / "task-1" / "started.json"
-        good = {"v": 1, "pipeline_id": fid, "launch_id": LID}
+        good = {"v": 2, "pipeline_id": fid, "launch_id": LID, "base_commit": fx.BASE_COMMIT}
         bad = [{**good, "pipeline_id": "flow-ffffffffffff", "started_at": t}, dict(good),
-               {**good, "v": 2, "started_at": t}, {**good, "v": True, "started_at": t},
+               {**good, "v": 1, "started_at": t}, {**good, "v": True, "started_at": t},
                {**good, "started_at": 1.0}, {**good, "started_at": time.time() + 10 * 86400},
                {**good, "started_at": True}, {**good, "started_at": "1"}, {**good, "started_at": t, "x": 1},
+               {"v": 2, "pipeline_id": fid, "launch_id": LID, "started_at": t},    # no base_commit
+               {"v": 1, "pipeline_id": fid, "launch_id": LID, "started_at": t},    # the v1 record (v29.7/8)
+               {**good, "base_commit": "xyz", "started_at": t}, {**good, "base_commit": None, "started_at": t},
+               {**good, "base_commit": fx.BASE_COMMIT.upper(), "started_at": t},
                {"v": 1, "pipeline_id": fid, "started_at": t},                      # no launch id (pre-v29.7)
                {**good, "launch_id": "l-xyz", "started_at": t}, {**good, "launch_id": None, "started_at": t}]
         for value in bad + ["NaN", "Infinity"]:
             with self.subTest(value=repr(value)[:60]):
                 raw = json.dumps(value).encode() if isinstance(value, dict) else \
-                    f'{{"v": 1, "pipeline_id": "{fid}", "launch_id": "{LID}", "started_at": {value}}}'.encode()
+                    f'{{"v": 2, "pipeline_id": "{fid}", "launch_id": "{LID}", "base_commit": "{fx.BASE_COMMIT}", '\
+                    f'"started_at": {value}}}'.encode()
                 path.chmod(0o600)
                 path.write_bytes(raw)
                 with ps.Pipeline(self.base, "task-1", create=False) as p, self.assertRaises(ps.StoreRefused):
@@ -145,7 +155,7 @@ class PipelineStoreTests(StateDir):
                 with self.assertRaises(ps.StoreRefused):
                     p.write_text(fx.new_uuid(), b"text")
                 with self.assertRaises(ps.StoreRefused):
-                    p.record_start(fid, time.time(), launch_id=LID)
+                    p.record_start(fid, time.time(), launch_id=LID, base_commit=fx.BASE_COMMIT)
                 with self.assertRaises(ps.StoreRefused):
                     ps.hold(self.base, fid, "stop")
                 warnings = []
@@ -197,7 +207,7 @@ class PipelineStoreTests(StateDir):
     def test_remove_start_only_undoes_the_record_just_written(self):
         fid = "flow-0123456789ab"
         with ps.Pipeline(self.base, "task-abc", create=True) as p:
-            t = p.record_start(fid, time.time(), launch_id=LID)
+            t = p.record_start(fid, time.time(), launch_id=LID, base_commit=fx.BASE_COMMIT)
             with self.assertRaises(ps.StoreRefused):
                 p.remove_start(fid, t - 1)                                  # not the one written
             with self.assertRaises(ps.StoreRefused):
@@ -243,7 +253,7 @@ class PipelineStoreTests(StateDir):
             return real(fd, data[:max(1, len(data) // 2)])
         with mock.patch.object(ps.os, "write", halves), mock.patch.object(a.os, "write", halves):
             with ps.Pipeline(self.base, "task-1", create=True) as p:
-                t = p.record_start(fid, time.time(), launch_id=LID)
+                t = p.record_start(fid, time.time(), launch_id=LID, base_commit=fx.BASE_COMMIT)
                 p.record_release(fid, time.time(), [f"{LID}#3"])
                 self.assertEqual(p.started_at(fid), t)
                 self.assertEqual(p.release_record(fid)["resolved"], {f"{LID}#3"})
@@ -261,7 +271,7 @@ class PipelineStoreTests(StateDir):
         with mock.patch.object(ps.os, "write", half_then_fail), mock.patch.object(a.os, "write", half_then_fail):
             with ps.Pipeline(self.base, "task-2", create=True) as p:
                 with self.assertRaises(OSError):
-                    p.record_start(fid, time.time(), launch_id=LID)
+                    p.record_start(fid, time.time(), launch_id=LID, base_commit=fx.BASE_COMMIT)
                 self.assertIsNone(p.start_record())                           # no half record
             with ps.Pipeline(self.base, "task-1", create=False) as p:
                 with self.assertRaises(OSError):
@@ -506,7 +516,7 @@ class FlowContextTests(StateDir):
         # a started flow whose sessions are gone: through load()
         self.accept()
         with ps.Pipeline(self.base, self.tid, create=True) as p:
-            p.record_start(self.fid, time.time(), launch_id=LID)
+            p.record_start(self.fid, time.time(), launch_id=LID, base_commit=fx.BASE_COMMIT)
         with self.assertRaises(stream_flow.FlowRefused) as cm:
             stream_flow.load(self.base, self.fid)
         self.assertEqual(cm.exception.code, "count_unavailable")
@@ -574,7 +584,7 @@ class FlowContextTests(StateDir):
         with ps.Pipeline(self.base, self.tid, create=True) as p:
             p.write_text(d, "please do the work".encode())            # the text Harness.dispatch accepted
             p.write_text(fx.new_uuid(), b"orphan")                      # saved, never accepted
-            p.record_start(self.fid, time.time(), launch_id=root.name)
+            p.record_start(self.fid, time.time(), launch_id=root.name, base_commit=fx.BASE_COMMIT)
         return root, d
 
     def test_totals_come_from_journals_and_texts(self):
@@ -709,7 +719,7 @@ class FlowContextTests(StateDir):
         # exactly; anything else is kept.
         def start_for(launch_id):
             with ps.Pipeline(self.base, self.tid, create=True) as p:
-                p.record_start(self.fid, time.time(), launch_id=launch_id)
+                p.record_start(self.fid, time.time(), launch_id=launch_id, base_commit=fx.BASE_COMMIT)
 
         def has_start():
             return (self.base / "pipelines" / self.tid / "started.json").exists()
@@ -737,6 +747,75 @@ class FlowContextTests(StateDir):
                 out = stream_flow.recover_start_records(self.base)
                 self.assertTrue(has_start())
                 (self.base / "pipelines" / self.tid / "started.json").unlink()
+
+    # ---- review jobs in the flow's accounting (design 5.3, v29.8.1, v29.9)
+
+    def review(self, n: int, **over):
+        from vbear.runtime import review_store as rs
+        from tests.test_review_store import manifest as review_manifest
+        job = f"r-{n:016x}"
+        rs.create_job_dir(self.base, job)
+        fields = {"job_id": job, "pipeline_id": self.fid, "task_id": self.tid, "round": n, **over}
+        rs.write_new_manifest(self.base, review_manifest(**fields))
+        return job
+
+    def test_reviews_are_counted_and_limited(self):
+        self.accept(limits={**acc.DEFAULT_LIMITS, "max_reviews": 2})
+        self.review(1, state="finished")
+        self.review(2, state="cleaned")
+        self.review(3, state="finished", pipeline_id="flow-ffffffffffff")       # another flow's: not ours
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertEqual([x["round"] for x in ctx.totals.reviews], [1, 2])
+        stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)               # not counting a review
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False, counting_review=True)
+        self.assertIn("審查次數", str(cm.exception))
+
+    def test_a_failed_review_holds_the_flow_until_it_is_released_by_identity(self):
+        self.accept()
+        job = self.review(1, state="invalid", invalid_reasons=["rollout 不符"])
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertIn(job, stream_flow.unresolved_failure(ctx))
+        with self.assertRaises(stream_flow.FlowRefused) as cm:
+            stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False)
+        self.assertEqual(cm.exception.code, "failed")
+        self.assertEqual(stream_flow.failure_ids(self.base, self.fid), [f"{job}#invalid"])
+        with ps.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_release(self.fid, time.time(), [f"{job}#invalid"])
+        ctx = stream_flow.load(self.base, self.fid)
+        self.assertIsNone(stream_flow.unresolved_failure(ctx))
+        later = self.review(2, state="manual_review", retained_reason="group alive", retained_at=1791467063.473483)
+        ctx = stream_flow.load(self.base, self.fid)                       # a new failure is not resolved
+        self.assertIn(later, stream_flow.unresolved_failure(ctx))
+        self.assertEqual(stream_flow.failure_ids(self.base, self.fid),
+                         [f"{job}#invalid", f"{later}#manual_review#1791467063.473483"])
+        with ps.Pipeline(self.base, self.tid, create=True) as p:
+            p.record_release(self.fid, time.time(), stream_flow.failure_ids(self.base, self.fid))
+        self.assertIsNone(stream_flow.unresolved_failure(stream_flow.load(self.base, self.fid)))
+
+    def test_a_review_that_cannot_be_read_refuses_the_count(self):
+        from vbear.runtime import review_store as rs
+        self.accept()
+        job = self.review(1, state="finished")
+        stream_flow.load(self.base, self.fid)
+        cases = {
+            "an entry that is not a job": lambda: (rs.reviews_root(self.base) / "notes").mkdir(),
+            "a manifest that is not json": lambda: (rs.job_dir(self.base, job) / rs.MANIFEST).write_text("{"),
+            "a manifest with an extra field": lambda: (rs.job_dir(self.base, job) / rs.MANIFEST).write_text(
+                json.dumps({**rs.read_manifest(self.base, job), "x": 1})),
+            "a job directory renamed": lambda: rs.job_dir(self.base, job).rename(rs.reviews_root(self.base) / "r-ffffffffffffffff"),
+            "a missing manifest": lambda: (rs.job_dir(self.base, job) / rs.MANIFEST).unlink(),
+        }
+        for name, damage in cases.items():
+            with self.subTest(case=name):
+                shutil.rmtree(rs.reviews_root(self.base))
+                job = self.review(1, state="finished")
+                damage()
+                with self.assertRaises(stream_flow.FlowRefused) as cm:
+                    stream_flow.load(self.base, self.fid)
+                self.assertEqual(cm.exception.code, "count_unavailable")
+                with self.assertRaises(stream_flow.FlowRefused):
+                    stream_flow.failure_ids(self.base, self.fid)
 
     def test_spend_that_is_not_finite_refuses(self):
         self.accept()

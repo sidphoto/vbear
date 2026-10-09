@@ -95,3 +95,16 @@ def turn(sid, d, text, *, cwd, result_index=0, cost=0.01, prefix="a", rep=None, 
     ev.append({"type": "command_lifecycle", "command_uuid": d, "state": "completed", "uuid": new_uuid(),
                "session_id": sid})
     return ev
+
+
+BASE_COMMIT = "b" * 40
+
+
+def fake_repo(path, commit: str = BASE_COMMIT):
+    """A work directory whose HEAD git_head can read from files: a detached
+    ``.git/HEAD``. No git is run and no object exists (git_head reads refs only)."""
+    from pathlib import Path
+    git = Path(path) / ".git"
+    git.mkdir(parents=True, exist_ok=True)
+    (git / "HEAD").write_text(commit + "\n")
+    return commit

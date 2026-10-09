@@ -26,7 +26,7 @@ import subprocess
 import time
 import uuid
 
-from .. import admin_policy, executor_report
+from .. import admin_policy, executor_report, git_head
 from . import (agent_sessions, cli_versions, pipeline_store, proctrack, quota, stream_flow, stream_journal,
                stream_protocol as sp, stream_session)
 
@@ -153,7 +153,14 @@ class StreamOps:
             with pipeline_store.Pipeline(self.base, m["task_id"], create=True) as p:
                 if p.started_at(m["pipeline_id"]) is None:
                     start_mine = True             # from here a start record on disk may be this open's
-                    started_here = p.record_start(m["pipeline_id"], now, launch_id=launch_id)
+                    # v29.9: where a review's range begins. Read from the files
+                    # (git_head, never git); without it the flow cannot start.
+                    head = git_head.read_head(m["canonical_workspace"])
+                    if not (isinstance(head.get("commit"), str) and pipeline_store.COMMIT_RE.match(head["commit"])):
+                        raise agent_sessions.LaunchRefused(
+                            "no_base", f"讀不到工作目錄的 HEAD（{head.get('error')}），無法記錄審查範圍的起點")
+                    started_here = p.record_start(m["pipeline_id"], now, launch_id=launch_id,
+                                                  base_commit=head["commit"])
                     start_bytes = p.start_record_bytes()
             agent_sessions.update_manifest(self.base, launch_id, state="launching",
                                            claude_session_id=str(uuid.uuid4()), budget_usd=budget)

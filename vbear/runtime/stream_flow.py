@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from .. import acceptance, flows, login_identity
 from ..jsonstore import StoreError
-from . import agent_sessions, pipeline_store, stream_journal
+from . import agent_sessions, pipeline_store, review_store, stream_journal
 from . import stream_protocol as sp
 
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -44,6 +44,7 @@ class Totals:
     responses: int = 0
     spent_usd: float = 0.0
     sessions: list = field(default_factory=list)
+    reviews: list = field(default_factory=list)          # this flow's review jobs (design 5.3, v29.9)
     accepted: set = field(default_factory=set)                  # dispatch ids some session of the flow accepted
     pending_or_orphan_texts: list = field(default_factory=list)  # saved texts no journal accepted (sorted ids)
 
@@ -215,6 +216,9 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
     if not math.isfinite(t.spent_usd):
         raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")
     t.pending_or_orphan_texts = sorted(set(texts) - t.accepted)
+    for rm in flow_reviews(base, pipeline_id):
+        t.reviews.append({"job_id": rm["job_id"], "round": rm["round"], "commit": rm["commit"],
+                          "state": rm["state"], **_review_failure(rm)})
     return t
 
 
@@ -245,6 +249,42 @@ def load(base, pipeline_id: str) -> FlowContext:
                        frozenset(view[2]["resolved"]) if view is not None and view[2] is not None else frozenset())
 
 
+def flow_reviews(base, pipeline_id: str) -> list[dict]:
+    """This flow's review jobs, from their manifests (design 5.3). Anything
+    that could hide a job or a failure refuses, like sessions/: an entry that
+    is not a job directory, a manifest that cannot be read or is not exactly
+    the schema, a directory that is not the job its manifest names. Only a
+    job of another flow is skipped."""
+    out = []
+    try:
+        names = review_store.list_jobs(base)
+    except OSError as exc:
+        raise FlowRefused("count_unavailable", f"reviews/ 無法列出（{exc.strerror}）") from exc
+    for name in names:
+        if not review_store.JOB_RE.match(name):
+            raise FlowRefused("count_unavailable", f"reviews/ 裡有不認得的項目 {name[:64]!r}，無法核算流程用量")
+        try:
+            m = review_store.read_manifest(base, name)
+        except review_store.ReviewRefused as exc:
+            raise FlowRefused("count_unavailable", f"審查工作 {name} 無法核對（{exc}），無法核算流程用量") from exc
+        except OSError as exc:
+            raise FlowRefused("count_unavailable", f"審查工作 {name} 無法讀取（{exc.strerror}）") from exc
+        if m["pipeline_id"] == pipeline_id:
+            out.append(m)
+    return out
+
+
+def _review_failure(m: dict) -> dict:
+    ident = review_store.failure_id(m)
+    why = {"invalid": "審查無效", "manual_review": "審查交人工處理"}.get(m["state"])
+    reasons = (m.get("invalid_reasons") or [])[:3]
+    if m["state"] == "manual_review":
+        reasons = [str(m.get("retained_reason"))[:200]]
+    return {"failure_ids": [ident] if ident else [],
+            "failures": [{"id": ident, "why": f"{why}：{'；'.join(reasons)}"[:300],
+                          "at": m.get("retained_at") or m.get("ended_at")}] if ident else []}
+
+
 def _failure(m: dict, js: stream_journal.JournalState) -> dict:
     """A session's failures (design v29.8) with their identities (review
     round 6): "<launch>#<seq>" for each failure fact in its journal, and
@@ -268,6 +308,10 @@ def unresolved_failure(ctx: FlowContext) -> str | None:
         for f in x["failures"]:
             if f["id"] not in ctx.resolved:
                 return f"session {x['launch_id']}：{f['why']}"
+    for x in ctx.totals.reviews:
+        for f in x["failures"]:
+            if f["id"] not in ctx.resolved:
+                return f"審查 {x['job_id']}：{f['why']}"
     return None
 
 
@@ -280,6 +324,8 @@ def failure_ids(base, pipeline_id: str) -> list[str]:
         if res.problem:
             raise FlowRefused("count_unavailable", f"session {m['launch_id']} 的日誌無法使用（{res.problem}）")
         out += _failure(m, res.state)["failure_ids"]
+    for rm in flow_reviews(base, pipeline_id):
+        out += _review_failure(rm)["failure_ids"]
     return out
 
 
@@ -354,7 +400,8 @@ def _flow_has_journal(base, pipeline_id: str) -> bool:
         return False
 
 
-def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0) -> None:
+def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0,
+                 counting_review: bool = False) -> None:
     """Design 6, for dispatch_prepare (counting_dispatch) and stream_send."""
     lim, tot = ctx.limits, ctx.totals
     failed = unresolved_failure(ctx)                     # v29.8: one failure stops the flow
@@ -372,6 +419,8 @@ def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_
             raise FlowRefused("count_unavailable", "系統時鐘異常，流程經過時間無法核對")
         if elapsed >= lim["max_elapsed_h"] * 3600:
             raise FlowRefused("limit", f"已達經過時間上限（{lim['max_elapsed_h']} 小時）")
+    if counting_review and len(tot.reviews) >= lim["max_reviews"]:
+        raise FlowRefused("limit", f"已達審查次數上限（{lim['max_reviews']}）")
     if counting_dispatch and tot.dispatches >= lim["max_dispatches"]:
         raise FlowRefused("limit", f"已達派工則數上限（{lim['max_dispatches']}）")
     if tot.responses + live_responses >= lim["executor_total_max_responses"]:

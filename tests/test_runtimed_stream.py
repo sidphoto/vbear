@@ -144,6 +144,7 @@ class StreamCase(unittest.TestCase):
         self.root.mkdir()
         self.work = self.tmp / "work"
         self.work.mkdir()
+        fx.fake_repo(self.work)                               # HEAD readable from files (v29.9 base_commit)
         env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.base), "HOME": str(self.home)})
         env.start()
         self.addCleanup(env.stop)
@@ -784,6 +785,28 @@ class JournalOrderTests(StreamCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(seen, {"sessions": [m["launch_id"]], "started": True})
 
+    def test_the_first_start_records_the_work_directorys_head(self):
+        # v29.9: the origin of a review's range, read from files, never git.
+        self.open()
+        rec = json.loads((self.base / "pipelines" / self.tid / "started.json").read_text())
+        self.assertEqual((rec["v"], rec["base_commit"]), (2, fx.BASE_COMMIT))
+
+    def test_an_unreadable_head_refuses_the_first_start(self):
+        for name, damage in (("no repository", lambda: shutil.rmtree(self.work / ".git")),
+                             ("HEAD is not a commit", lambda: (self.work / ".git" / "HEAD").write_text("nonsense\n")),
+                             ("HEAD is a dangling ref",
+                              lambda: (self.work / ".git" / "HEAD").write_text("ref: refs/heads/none\n"))):
+            with self.subTest(case=name):
+                fx.fake_repo(self.work)
+                damage()
+                m = self.prepare()
+                r = self.rpc("open_stream", launch_id=m["launch_id"])
+                self.assertFalse(r["ok"])
+                self.assertIn("HEAD", r["error"]["message"])
+                self.assertFalse((self.base / "pipelines" / self.tid / "started.json").exists())
+                self.assertEqual(self.manifest(m["launch_id"])["state"], "prepared")
+                shutil.rmtree(self.base / "sessions" / m["launch_id"], ignore_errors=True)
+
     def test_a_failed_start_record_leaves_the_launch_prepared(self):
         import vbear.runtime.daemon_stream as ds
         m = self.prepare()
@@ -1073,7 +1096,7 @@ class RecoveryTests(StreamCase):
             w.append(kind, data)
         w.close()
         with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
-            p.record_start(self.fid, time.time(), launch_id=launch_id)
+            p.record_start(self.fid, time.time(), launch_id=launch_id, base_commit=fx.BASE_COMMIT)
         return launch_id
 
     def test_crash_between_writing_and_written(self):
@@ -1152,7 +1175,7 @@ class RecoveryTests(StreamCase):
         # B3: the open died after record_start, before anything else changed.
         m = self.prepare()
         with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
-            p.record_start(self.fid, time.time(), launch_id=m["launch_id"])
+            p.record_start(self.fid, time.time(), launch_id=m["launch_id"], base_commit=fx.BASE_COMMIT)
         from vbear.runtime import stream_flow
         with self.assertRaises(stream_flow.FlowRefused):                     # stuck until recovery
             stream_flow.load(self.base, self.fid)
@@ -1166,7 +1189,7 @@ class RecoveryTests(StreamCase):
     def test_crash_after_launching_before_the_journal(self):
         m = self.prepare()
         with pipeline_store.Pipeline(self.base, self.tid, create=True) as p:
-            p.record_start(self.fid, time.time(), launch_id=m["launch_id"])
+            p.record_start(self.fid, time.time(), launch_id=m["launch_id"], base_commit=fx.BASE_COMMIT)
         a.update_manifest(self.base, m["launch_id"], state="launching", claude_session_id=fx.new_uuid(),
                           budget_usd=5.0)
         self.crash_daemon()

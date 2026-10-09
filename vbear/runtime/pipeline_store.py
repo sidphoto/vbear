@@ -33,12 +33,14 @@ STARTED = "started.json"
 RELEASED = "released.json"                 # v29.8: the flow's last pipeline_release
 RESOLVED_MAX = 4096                        # failure identities one flow may have released
 # "<launch>#<seq>" (a journal record) or "<launch>#manual_review#<retained_at as stored>"
-FAILURE_ID_RE = re.compile(r"^l-[0-9a-f]{16}#(?:[1-9][0-9]{0,8}|manual_review#[0-9eE.+\-]{1,40})\Z")
+FAILURE_ID_RE = re.compile(r"^(?:l-[0-9a-f]{16}#(?:[1-9][0-9]{0,8}|manual_review#[0-9eE.+\-]{1,40})"
+                           r"|r-[0-9a-f]{16}#(?:invalid|manual_review#[0-9eE.+\-]{1,40}))\Z")
 RELEASE_FILE_MAX = 256 << 10
 RELEASE_LIMITS = strictjson.Limits(RELEASE_FILE_MAX, RESOLVED_MAX + 64, 8, None)
 TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 FLOW_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
 LAUNCH_RE = re.compile(r"^l-[0-9a-f]{16}\Z")              # agent_sessions.LAUNCH_RE
+COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 TEXT_NAME = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.txt\Z")
 PARTIAL_NAME = re.compile(r"^\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.partial\Z")
 MAX_TEXT = sp.MAX_DISPATCH_LINE
@@ -248,12 +250,17 @@ class Pipeline:
             raise StoreRefused(f"流程開始時間無法讀取（{parsed.problem}）")
         d = parsed.value
         t = finite_real(d.get("started_at")) if not isinstance(d.get("started_at"), bool) else None
-        if (set(d) != {"v", "pipeline_id", "launch_id", "started_at"} or d.get("v") != 1
+        # v2 (design v29.9): base_commit, the work directory's HEAD when the
+        # flow first started, is what a review's range begins at. The v1
+        # record (no base_commit) is refused.
+        if (set(d) != {"v", "pipeline_id", "launch_id", "base_commit", "started_at"} or d.get("v") != 2
                 or isinstance(d.get("v"), bool) or not isinstance(d.get("pipeline_id"), str)
                 or not FLOW_RE.match(d["pipeline_id"]) or not isinstance(d.get("launch_id"), str)
-                or not LAUNCH_RE.match(d["launch_id"]) or t is None or not EARLIEST <= t <= time.time() + 86400):
+                or not LAUNCH_RE.match(d["launch_id"]) or not isinstance(d.get("base_commit"), str)
+                or not COMMIT_RE.match(d["base_commit"]) or t is None or not EARLIEST <= t <= time.time() + 86400):
             raise StoreRefused("流程開始時間的紀錄不符")
-        return {"pipeline_id": d["pipeline_id"], "launch_id": d["launch_id"], "started_at": t}
+        return {"pipeline_id": d["pipeline_id"], "launch_id": d["launch_id"], "base_commit": d["base_commit"],
+                "started_at": t}
 
     def started_at(self, pipeline_id: str) -> float | None:
         """None when no stream session has started yet; StoreRefused when the
@@ -265,14 +272,17 @@ class Pipeline:
             raise StoreRefused("流程開始時間的紀錄不符")
         return rec["started_at"]
 
-    def record_start(self, pipeline_id: str, now: float, *, launch_id: str) -> float:
+    def record_start(self, pipeline_id: str, now: float, *, launch_id: str, base_commit: str) -> float:
         """Write the first start once; an existing record is kept."""
         if not (isinstance(launch_id, str) and LAUNCH_RE.match(launch_id)):
             raise StoreRefused("launch id 格式不符")
+        if not (isinstance(base_commit, str) and COMMIT_RE.match(base_commit)):
+            raise StoreRefused("base_commit 格式不符")
         existing = self.started_at(pipeline_id)
         if existing is not None:
             return existing
-        data = json.dumps({"v": 1, "pipeline_id": pipeline_id, "launch_id": launch_id, "started_at": now}).encode()
+        data = json.dumps({"v": 2, "pipeline_id": pipeline_id, "launch_id": launch_id,
+                           "base_commit": base_commit, "started_at": now}).encode()
         fd = os.open(STARTED, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
                      dir_fd=self.fd)
         try:
