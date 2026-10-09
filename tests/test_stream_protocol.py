@@ -186,6 +186,26 @@ class HappyPathTests(unittest.TestCase):
             h.feed(events)
         self.assertEqual(cm.exception.reason, "bad_json")
 
+    def test_invalid_unicode_in_nested_structured_output_is_a_protocol_error(self):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="badstructuredunicode")
+        result = next(e for e in events if e.get("type") == "result")
+        result["structured_output"] = {"nested": ["\ud800"]}
+        with self.assertRaises(sp.ProtocolError) as cm:
+            h.feed(events)
+        self.assertEqual(cm.exception.reason, "bad_json")
+
+    def test_invalid_unicode_in_event_key_is_a_protocol_error(self):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="badkeyunicode")
+        result = next(e for e in events if e.get("type") == "result")
+        result["\ud800"] = "value"
+        with self.assertRaises(sp.ProtocolError) as cm:
+            h.feed(events)
+        self.assertEqual(cm.exception.reason, "bad_json")
+
     def test_journal_rejects_null_result_text_unless_it_was_too_large(self):
         h = Harness()
         d = h.run_turn()

@@ -41,7 +41,7 @@ class PipelineStoreTests(StateDir):
     def test_text_write_zero_progress_fails_and_cleans_partial(self):
         d = fx.new_uuid()
         with ps.Pipeline(self.base, "task-1", create=True) as p:
-            with mock.patch.object(ps.os, "write", return_value=0) as write:
+            with mock.patch.object(ps.os, "write", side_effect=[0, 0, 0, OSError(5, "stop test loop")]) as write:
                 with self.assertRaises(OSError):
                     p.write_text(d, b"hello")
             write.assert_called_once()
@@ -139,6 +139,7 @@ class PipelineStoreTests(StateDir):
                 raise OSError(5, "Input/output error")
             return real(fd)
         fid = "flow-0123456789ab"
+        ps.hold(self.base, fid, "prior")
         with ps.Pipeline(self.base, "task-1", create=True) as p:
             with mock.patch("vbear.runtime.pipeline_store.os.fsync", dir_fsync_fails):
                 with self.assertRaises(ps.StoreRefused):
@@ -147,20 +148,51 @@ class PipelineStoreTests(StateDir):
                     p.record_start(fid, time.time(), launch_id=LID)
                 with self.assertRaises(ps.StoreRefused):
                     ps.hold(self.base, fid, "stop")
-                with self.assertRaises(ps.StoreRefused):
-                    ps.release(self.base, fid)
+                warnings = []
+                self.assertTrue(ps.release(self.base, fid, warnings=warnings))
+                self.assertEqual(warnings, ["hold_removal_not_durable"])
             # outside the injection everything works again
             d = fx.new_uuid()
             p.write_text(d, b"ok")
             self.assertEqual(p.read_text(d), b"ok")
 
-    def test_failed_hold_release_keeps_flow_held(self):
+    def test_failed_hold_release_reports_warning_after_durable_release_record(self):
         fid = "flow-0123456789ab"
         ps.hold(self.base, fid, "stop")
+        warnings = []
         with mock.patch.object(ps, "_fsync_dir", side_effect=ps.StoreRefused("sync failed")):
-            with self.assertRaises(ps.StoreRefused):
-                ps.release(self.base, fid)
+            self.assertTrue(ps.release(self.base, fid, warnings=warnings))
+        self.assertEqual(warnings, ["hold_removal_not_durable"])
+        self.assertFalse(ps.is_held(self.base, fid))
+
+    def test_release_does_not_recreate_hold_after_directory_sync_failure(self):
+        fid = "flow-0123456789ab"
+        ps.hold(self.base, fid, "stop")
+        warnings = []
+        with mock.patch.object(ps, "_fsync_dir", side_effect=ps.StoreRefused("sync failed")), \
+                mock.patch.object(ps, "hold", side_effect=OSError(28, "disk full")) as restore:
+            self.assertTrue(ps.release(self.base, fid, warnings=warnings))
+        restore.assert_not_called()
+        self.assertEqual(warnings, ["hold_removal_not_durable"])
+        self.assertFalse(ps.is_held(self.base, fid))
+
+    def test_release_crash_replay_prefers_reappearing_hold(self):
+        fid = "flow-0123456789ab"
+        ps.hold(self.base, fid, "stop")
+        warnings = []
+        with mock.patch.object(ps, "_fsync_dir", side_effect=ps.StoreRefused("sync failed")):
+            self.assertTrue(ps.release(self.base, fid, warnings=warnings))
+        # Model a crash in which the unsynced unlink is lost. The marker is
+        # visible again, so a restarted daemon still stops the flow.
+        ps.hold(self.base, fid, "stop")
         self.assertTrue(ps.is_held(self.base, fid))
+
+    def test_journal_creation_syncs_directory_and_fails_closed(self):
+        with ps.Pipeline(self.base, "task-1", create=True) as p:
+            with mock.patch.object(stream_journal.os, "fsync", side_effect=OSError(5, "sync failed")):
+                with self.assertRaises(OSError):
+                    stream_journal.JournalWriter(p.fd)
+            self.assertFalse((self.base / "pipelines" / "task-1" / "journal.jsonl").exists())
 
     def test_remove_start_only_undoes_the_record_just_written(self):
         fid = "flow-0123456789ab"
@@ -218,7 +250,7 @@ class PipelineStoreTests(StateDir):
             ps.hold(self.base, fid, "stop")
             self.assertTrue(ps.is_held(self.base, fid))
             a._write_private(self.base / "x.json", json.dumps({"k": "v" * 100}))
-            self.assertEqual(json.loads((self.base / "x.json").read_text()), {"k": "v" * 100})
+        self.assertEqual(json.loads((self.base / "x.json").read_text()), {"k": "v" * 100})
         calls = []
 
         def half_then_fail(fd, data):
@@ -244,6 +276,21 @@ class PipelineStoreTests(StateDir):
             self.assertFalse((self.base / "y.json").exists())
         leftovers = [p.name for p in self.base.rglob("*") if p.name.endswith(".tmp")]
         self.assertEqual(leftovers, [])
+
+    def test_private_replace_syncs_parent_directory(self):
+        path = self.base / "replace.json"
+        a._write_private(path, '{"old": true}')
+        real_fsync = os.fsync
+
+        def fail_directory_sync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(5, "directory sync failed")
+            return real_fsync(fd)
+
+        with mock.patch.object(a.os, "fsync", fail_directory_sync):
+            with self.assertRaises(OSError):
+                a._write_private(path, '{"new": true}', replace=True)
+        self.assertEqual(path.read_text(), '{"new": true}')
 
     def test_holds(self):
         fid = "flow-0123456789ab"

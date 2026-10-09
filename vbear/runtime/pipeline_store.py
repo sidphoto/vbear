@@ -444,7 +444,7 @@ def hold(base, pipeline_id: str, reason: str) -> None:
         os.close(state)
 
 
-def release(base, pipeline_id: str) -> bool:
+def release(base, pipeline_id: str, *, warnings: list[str] | None = None) -> bool:
     if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
         raise StoreRefused("流程 id 格式不符")
     try:
@@ -459,14 +459,13 @@ def release(base, pipeline_id: str) -> bool:
         try:
             _fsync_dir(holds)
         except StoreRefused:
-            # The unlink may not survive a crash. Restore the stopped state before
-            # reporting failure; if syncing also fails, the marker still exists in
-            # the current namespace and the original durability error is preserved.
-            try:
-                hold(base, pipeline_id, "release durability failed; flow remains held")
-            except (OSError, StoreRefused):
-                pass
-            raise
+            # released.json was durably written first, so the user's continue
+            # action has taken effect. Do not recreate the hold: a crash may
+            # make the unlink disappear and restore the marker, which safely
+            # stops the flow until the user presses continue again.
+            if warnings is not None:
+                warnings.append("hold_removal_not_durable")
+            return True
         return True
     finally:
         os.close(holds)

@@ -215,6 +215,19 @@ class TurnFacts:
     events: int = 0
 
 
+def _validate_utf8_tree(value) -> None:
+    """Reject escaped lone surrogates anywhere in an event, including keys."""
+    if isinstance(value, str):
+        value.encode("utf-8")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _validate_utf8_tree(key)
+            _validate_utf8_tree(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_utf8_tree(item)
+
+
 class EventTracker:
     """Per stream session. ``on_event`` returns the journal facts the event
     produces, as (kind, data) pairs, and raises ProtocolError for a protocol
@@ -255,6 +268,10 @@ class EventTracker:
     def on_event(self, ev) -> list[tuple[str, dict]]:
         if not isinstance(ev, dict):
             raise ProtocolError("bad_json", "event is not an object")
+        try:
+            _validate_utf8_tree(ev)
+        except Exception as exc:
+            raise ProtocolError("bad_json", "event contains invalid Unicode") from exc
         if self.phase == "idle":
             raise ProtocolError("event_while_idle", str(ev.get("type"))[:64])
         if self.phase == "closed":

@@ -249,11 +249,24 @@ class StreamSession:
         try:
             self.writer.append(kind, data)
             return True
-        except (stream_journal.JournalCorrupt, OSError) as exc:
-            self.journal_broken = f"{type(exc).__name__}: {exc}"
-            self._log(f"{self.sid}: journal write failed, ending the session: {self.journal_broken}")
+        except Exception as exc:
+            try:
+                detail = str(exc).encode("utf-8", "replace").decode("utf-8")[:200]
+            except Exception:
+                detail = "journal append failed"
+            self.journal_broken = f"{type(exc).__name__}: {detail}"
             self.interpreting = False
-            self.terminate("日誌無法寫入")
+            try:
+                self._log(f"{self.sid}: journal write failed, ending the session: {self.journal_broken}")
+            except Exception:
+                pass
+            try:
+                self.terminate("日誌無法寫入")
+            except Exception:
+                # A failed safety action is still a session error; the daemon
+                # must keep running and retain the launch for manual review.
+                self.finished = True
+                self.outcome = {"manual_review": "日誌無法寫入且無法安全結束程序", "leader_held": True}
             return False
 
     def protocol_error(self, reason: str, detail: str = ""):
@@ -347,6 +360,20 @@ class StreamSession:
                 self.buf.clear()
 
     def _on_line(self, line: bytes, now: float) -> None:
+        try:
+            self._process_line(line, now)
+        except Exception as exc:
+            # Includes parser, tracker, journal serialization and unexpected
+            # state errors: no event data may escape the daemon loop.
+            try:
+                self.protocol_error("bad_json", f"{type(exc).__name__}")
+            except Exception:
+                self.interpreting = False
+                self.journal_broken = self.journal_broken or f"{type(exc).__name__}: event processing failed"
+                self.finished = True
+                self.outcome = {"manual_review": "事件處理失敗，交人工處理", "leader_held": True}
+
+    def _process_line(self, line: bytes, now: float) -> None:
         self.events_total += 1
         if self.events_total > EVENTS_MAX and self.interpreting:
             self.over_limit("event_limit")

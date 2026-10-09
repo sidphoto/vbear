@@ -114,6 +114,11 @@ def _write_private(path: Path, text: str, *, replace: bool = False) -> None:
     os.close(fd)
     if replace:
         os.replace(target, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def _sha256(path: Path) -> str:

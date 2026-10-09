@@ -587,6 +587,19 @@ class JournalWriter:
     def __init__(self, dir_fd: int, *, identity: dict | None = None, now=time.time):
         self.fd = os.open(JOURNAL_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_NOFOLLOW
                           | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
+        try:
+            os.fsync(dir_fd)
+        except BaseException:
+            try:
+                os.close(self.fd)
+            finally:
+                self.fd = -1
+                try:
+                    os.unlink(JOURNAL_NAME, dir_fd=dir_fd)
+                    os.fsync(dir_fd)
+                except OSError:
+                    pass
+            raise
         self.size = 0
         self.state = JournalState(identity=identity)
         self._now = now

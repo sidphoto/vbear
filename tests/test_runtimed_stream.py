@@ -361,6 +361,26 @@ class HappyPathTests(StreamCase):
 
 
 class RefusalTests(StreamCase):
+    def test_unexpected_non_stream_rpc_exception_returns_error_without_stopping_daemon(self):
+        with mock.patch.object(self.dm, "_op_open", side_effect=ValueError("synthetic RPC failure")):
+            r = self.rpc("open")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"]["code"], "internal")
+        self.assertIsNotNone(self.dm._sel)
+
+    def test_invalid_rpc_id_cannot_escape_response_encoding(self):
+        import socket
+        req = {"v": 1, "id": "\ud800", "op": "hello"}
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+            c.settimeout(TIMEOUT)
+            c.connect(str(d.socket_path(self.base)))
+            c.sendall(json.dumps(req).encode("ascii") + b"\n")
+            response = json.loads(c.recv(65536).split(b"\n", 1)[0])
+        self.assertFalse(response["ok"])
+        self.assertIsNone(response["id"])
+        self.assertEqual(response["error"]["code"], "internal")
+        self.assertIsNotNone(self.dm._sel)
+
     def test_an_unknown_or_malformed_launch_is_refused_not_an_internal_error(self):
         for launch_id in ("l-0000000000000000", "l-xyz", None):
             with self.subTest(launch_id=launch_id):
@@ -680,6 +700,38 @@ class JournalOrderTests(StreamCase):
         self.assertIn("日誌無法寫入", man["retained_reason"])
         self.assertNotIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)
 
+    def test_unexpected_record_exception_errors_session_and_holds_flow(self):
+        import vbear.runtime.daemon_stream as ds
+        launch_id, _ = self.open()
+        s = self.dm._streams[launch_id]
+        real_append = s.writer.append
+
+        def fail_result(kind, data):
+            if kind == "turn_result":
+                raise ValueError("synthetic serializer failure")
+            return real_append(kind, data)
+
+        with mock.patch.object(s.writer, "append", side_effect=fail_result):
+            self.dispatch(launch_id)
+            self.wait_for(lambda: s.state == "error", msg="session error")
+            self.wait_for(lambda: launch_id not in self.dm._streams, msg="failed stream finalized")
+        self.assertTrue(self.dm._sel is not None)                 # daemon loop resources remain alive
+        self.assertTrue(ds.pipeline_store.is_held(self.base, self.fid))
+        self.assertEqual(self.manifest(launch_id)["state"], "manual_review")
+
+    def test_nested_surrogate_event_is_contained_and_holds_flow(self):
+        import vbear.runtime.daemon_stream as ds
+        launch_id, _ = self.open("hang")
+        s = self.dm._streams[launch_id]
+        s._on_line(b'{"type":"result","structured_output":{"nested":["\\ud800"]}}',
+                   time.monotonic())
+        self.assertEqual(s.state, "error")
+        self.dm._check_failure(s)
+        self.assertTrue(ds.pipeline_store.is_held(self.base, self.fid))
+        self.assertIsNotNone(self.dm._sel)                 # malformed event did not take down daemon
+        self.rpc("stream_close", launch_id=launch_id)
+        self.wait_for(lambda: launch_id not in self.dm._streams, msg="closed")
+
     def test_at_spawn_the_flow_counts_this_launch(self):
         # The prepared exception (a launch without a journal never had a
         # process): at the moment of spawn the start record and the journal
@@ -781,6 +833,22 @@ class ProcessTests(StreamCase):
         s.tick = mock.Mock()
         s._killpg = mock.Mock()
         with mock.patch.object(ds.time, "monotonic", side_effect=(0.0, 10.0)):
+            self.dm._kill_all_streams()
+        self.assertNotIn(launch_id, self.dm._streams)
+        self.assertTrue(any(h["proc"] is proc and h["launch_id"] == launch_id
+                            for h in self.dm._held_leaders))
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+
+    def test_shutdown_continues_when_failure_hold_write_raises(self):
+        import vbear.runtime.daemon_stream as ds
+        launch_id, _ = self.open("hang")
+        s = self.dm._streams[launch_id]
+        proc = s.proc
+        s.terminate = mock.Mock()
+        s.tick = mock.Mock()
+        s._killpg = mock.Mock()
+        with mock.patch.object(ds.time, "monotonic", side_effect=(0.0, 10.0)), \
+                mock.patch.object(self.dm, "_hold_for_failure", side_effect=ValueError("synthetic hold failure")):
             self.dm._kill_all_streams()
         self.assertNotIn(launch_id, self.dm._streams)
         self.assertTrue(any(h["proc"] is proc and h["launch_id"] == launch_id
@@ -1391,6 +1459,34 @@ class FailureHoldTests(StreamCase):
         self.assertEqual(self.manifest(launch_id)["state"], "manual_review")
         self.assertIn(launch_id, self.hold_reason())
         self.assertIn("不送訊號", self.hold_reason())
+
+    def test_release_reports_durable_continue_with_hold_removal_warning(self):
+        import vbear.runtime.daemon_stream as ds
+        self.fail_once("is_error")
+        real_sync = ds.pipeline_store._fsync_dir
+        calls = []
+
+        def fail_hold_directory_sync(fd):
+            calls.append(fd)
+            if len(calls) == 2:  # released.json sync succeeds; unlink sync fails
+                raise ds.pipeline_store.StoreRefused("sync failed")
+            return real_sync(fd)
+
+        with mock.patch.object(ds.pipeline_store, "_fsync_dir", fail_hold_directory_sync):
+            r = self.rpc("pipeline_release", pipeline=self.fid)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["result"]["warning"], "hold_removal_not_durable")
+        self.assertFalse(ds.pipeline_store.is_held(self.base, self.fid))
+        self.assertGreaterEqual(len(calls), 2)
+        nxt = self.prepare()["launch_id"]
+        ds.pipeline_store.hold(self.base, self.fid, "reappeared after crash")
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertFalse(r["ok"])
+        self.assertIn("已停止", r["error"]["message"])
+        self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
+        r = self.rpc("open_stream", launch_id=nxt)
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
 
     def released_then_fail_again(self, clock):
         """One failure, closed and released; a second session fails with its

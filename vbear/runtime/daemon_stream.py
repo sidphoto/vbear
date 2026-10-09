@@ -646,6 +646,7 @@ class StreamOps:
         if why:
             return _err(rid, "refused", why)
         before, written = None, 0
+        release_warnings = []
         try:
             with pipeline_store.Pipeline(self.base, flow["task_id"], create=True) as p:
                 before = p.release_record_bytes()
@@ -658,14 +659,17 @@ class StreamOps:
                         written = max(0, p.release_record_bytes() - before)
                     except OSError:
                         written = None                       # unknown: the reservation, ledger over
-            released = pipeline_store.release(self.base, pipeline)
+            released = pipeline_store.release(self.base, pipeline, warnings=release_warnings)
         except (OSError, pipeline_store.StoreRefused) as exc:
             if before is None:
                 written = 0
             return _err(rid, "refused", f"無法繼續：{exc}")
         finally:
             self._ledger.release(key, written)
-        return _ok(rid, {"pipeline": pipeline, "held": False, "released": released})
+        result = {"pipeline": pipeline, "held": False, "released": released}
+        if release_warnings:
+            result["warning"] = release_warnings[0]
+        return _ok(rid, result)
 
     # ---- loop hooks ---------------------------------------------------------------------------
 
@@ -822,5 +826,10 @@ class StreamOps:
                 agent_sessions._retain(self.base, s.launch_id, "背景程序關閉時程序未能證明已結束")
             except Exception:
                 pass
+            try:
+                s.failure_held = True
+                self._hold_for_failure(s.pipeline_id, s.launch_id, "背景程序關閉時程序未能證明已結束")
+            except Exception as exc:
+                self._log(f"{s.launch_id}: failed to hold flow during shutdown ({type(exc).__name__})")
             self._hold_leader(s.proc, s.launch_id)       # keep Popen alive; its destructor may reap the leader
             self._streams.pop(s.launch_id, None)

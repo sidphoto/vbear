@@ -957,9 +957,29 @@ class Daemon(daemon_stream.StreamOps):
 
     def _respond(self, conn: _Conn, resp: dict) -> None:
         conn.buf.clear()
-        conn.out = bytearray(json.dumps(resp, ensure_ascii=False).encode("utf-8") + b"\n")
-        self._sel.modify(conn.sock, selectors.EVENT_WRITE, conn)
-        self._flush(conn)
+        try:
+            payload = json.dumps(resp, ensure_ascii=False).encode("utf-8") + b"\n"
+        except Exception as exc:
+            # A malformed request id or an unexpected response value must not
+            # escape the socket event handler while encoding the reply.
+            try:
+                self._log(f"RPC response encoding failed: {type(exc).__name__}")
+            except Exception:
+                pass
+            payload = b'{"v":1,"id":null,"ok":false,"error":{"code":"internal","message":"RPC response encoding failed"}}\n'
+        conn.out = bytearray(payload)
+        try:
+            self._sel.modify(conn.sock, selectors.EVENT_WRITE, conn)
+            self._flush(conn)
+        except Exception as exc:
+            try:
+                self._log(f"RPC response delivery failed: {type(exc).__name__}")
+            except Exception:
+                pass
+            try:
+                self._drop(conn)
+            except Exception:
+                pass
 
     def _flush(self, conn: _Conn) -> None:
         try:
@@ -976,6 +996,17 @@ class Daemon(daemon_stream.StreamOps):
     # ---- RPC ----
 
     def _dispatch(self, line: bytes, conn: _Conn) -> dict | None:
+        try:
+            return self._dispatch_inner(line, conn)
+        except Exception as exc:
+            try:
+                self._log(f"RPC dispatch failed: {type(exc).__name__}")
+            except Exception:
+                pass
+            return _err(conn.rid if isinstance(conn.rid, str) else None, "internal",
+                        f"內部錯誤：{type(exc).__name__}")
+
+    def _dispatch_inner(self, line: bytes, conn: _Conn) -> dict | None:
         try:
             req = json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
