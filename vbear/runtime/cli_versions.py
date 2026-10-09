@@ -341,6 +341,15 @@ def _run_probe(binary_path: str, engine: str, cwd: str, env: dict[str, str],
                timeout: float) -> tuple[int | None, bytes, str | None]:
     argv = ([binary_path, "--version"] if engine == "codex"
             else [binary_path, "--safe-mode", "--version"])
+    return run_capture(argv, cwd, env, timeout, VERSION_PROBE_MAX_OUTPUT_BYTES)
+
+
+def run_capture(argv: list[str], cwd: str, env: dict[str, str], timeout: float,
+                max_bytes: int) -> tuple[int | None, bytes, str | None]:
+    """Run ``argv`` in its own session with no stdin, read stdout and stderr
+    (each at most ``max_bytes``), and end its whole group afterwards.
+    (exit code, stdout, error): the error is ours ("probe_timeout",
+    "output_too_large"), never the program's own stderr."""
     proc = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -373,7 +382,7 @@ def _run_probe(binary_path: str, engine: str, cwd: str, env: dict[str, str],
                     selector.unregister(key.fileobj)
                     continue
                 buf = output[key.data]
-                if len(buf) + len(chunk) > VERSION_PROBE_MAX_OUTPUT_BYTES:
+                if len(buf) + len(chunk) > max_bytes:
                     return None, bytes(output["stdout"]), "output_too_large"
                 buf.extend(chunk)
         exit_code = _wait_without_reaping(proc, deadline)

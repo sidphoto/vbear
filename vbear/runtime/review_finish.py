@@ -245,6 +245,7 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
     elif not run.get("interrupted") and run.get("exit_code") != 0:
         reasons.append("Codex 沒有以 0 結束")
     reasons += list(run.get("invalid_reasons") or [])
+    before_files = list(reasons)
     # A review that ran while its flow was stopped is invalid (design 7, v29.9),
     # even if the process ended well and every file is fine. The daemon says
     # so when it saw the hold; the hold file is read here as well (recovery
@@ -254,8 +255,9 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
         held = bool(run.get("held")) or pipeline_store.is_held(base, m["pipeline_id"])
     except Exception:
         held = True
-    if held:
-        reasons.append("流程在審查期間被停止，或無法確認沒有被停止，審查無效")
+    held_reason = "流程在審查期間被停止，或無法確認沒有被停止，審查無效" if held else None
+    if held_reason:
+        reasons.append(held_reason)
     leftover = None
     leftover_bytes = 0
     saved_all = True
@@ -357,6 +359,12 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
         if record_fd is not None:
             os.close(record_fd)
         raise
+    if run.get("never_started"):
+        # Recovery of a job that never got a process: there is nothing to
+        # read, so the missing files and rollout are not reasons of their own
+        note = run["never_started"] if isinstance(run["never_started"], str) else "daemon 重啟時審查尚未啟動，沒有程序也沒有輸出"
+        reasons = before_files + ([held_reason] if held_reason else []) + [note]
+        saved_all = record_fd is not None
     reasons = _short(reasons)
     valid = not reasons and not leftover
     result = {"v": 1, "job_id": job_id, "round": m["round"], "commit": m["commit"], "valid": valid,

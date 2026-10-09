@@ -143,6 +143,18 @@ def mcp_list_argv(c: cc.CodexConstants, binary: str) -> list[str]:
     return [binary, *common_flags(c), "mcp", "list", "--json"]
 
 
+def run_argv(argv: list[str], env: dict, timeout: float):
+    """(exit code, stdout, error) of a short Codex command (`codex mcp list
+    --json`): its own session, no stdin, output capped, the whole group ended
+    afterwards. The working directory is "/" (nothing there is read or
+    written). Never raises."""
+    from . import cli_versions
+    try:
+        return cli_versions.run_capture(argv, "/", env, timeout, 64 << 10)
+    except Exception as exc:
+        return None, b"", type(exc).__name__
+
+
 def mcp_list_is_empty(c: cc.CodexConstants, binary: str, env: dict, run_argv) -> bool:
     """True only when it exits 0 and prints exactly the empty JSON array.
     ``run_argv(argv, env, timeout) -> (code, stdout, error)``."""

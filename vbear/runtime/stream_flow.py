@@ -305,13 +305,13 @@ def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
     for rnd, link in links.items():
         if link["pipeline_id"] != pipeline_id or rnd not in rounds:
             raise FlowRefused("count_unavailable", f"流程的審查紀錄 {rnd} 找不到對應的審查工作，無法核算流程用量")
-    return [dict(m, record=_record_state(m, results.get(m["round"]))) for m in out]
+    return [dict(m, record=record_state(m, results.get(m["round"]))) for m in out]
 
 
 _DAMAGED = object()
 
 
-def _record_state(m: dict, res) -> str:
+def record_state(m: dict, res) -> str:
     """result.json is the commit marker of a decided review (written after the
     manifest holds the outcome; Codex S2b part 3c review #1). "complete":
     present and agreeing with the manifest. "absent": not there; allowed for

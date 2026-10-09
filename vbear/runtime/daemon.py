@@ -78,7 +78,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
-from . import agent_sessions, daemon_stream, osc_title, proctrack, quota, stream_flow
+from . import agent_sessions, daemon_review, daemon_stream, osc_title, proctrack, quota, stream_flow
 
 PROTOCOL_VERSION = 1
 DAEMON_VERSION = "native-r2-s4"  # s4: stream executor sessions (claude-stream)
@@ -139,6 +139,10 @@ RPC_OPS: dict[str, frozenset] = {
     "stream_close": frozenset({"launch_id"}),
     "pipeline_hold": frozenset({"pipeline", "reason"}),
     "pipeline_release": frozenset({"pipeline"}),
+    # Codex review jobs (design 5; daemon_review)
+    "review_start": frozenset({"pipeline", "round", "commit"}),
+    "review_status": frozenset({"job_id"}),
+    "review_cancel": frozenset({"job_id"}),
 }
 _ATTACHED = object()  # _dispatch result: the connection became an attachment
 
@@ -448,7 +452,7 @@ class _Conn:
         self.waiting = False
 
 
-class Daemon(daemon_stream.StreamOps):
+class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
     """Single-threaded selectors loop. ``stop()`` / ``wake()`` are the only
     thread-safe entry points (they only set a flag and poke the wake pipe)."""
 
@@ -479,6 +483,9 @@ class Daemon(daemon_stream.StreamOps):
         self._streams: dict = {}                  # launch id -> stream_session.StreamSession
         self._held_leaders: list = []             # unreaped leaders of sessions given up (design 5.8)
         self._held_next = 0.0
+        self._reviews: dict = {}                  # job id -> daemon_review.ReviewJob
+        self.review_admin_root = "/"              # where the administrator-settings check looks (tests inject)
+        self.review_home: str | None = None       # the home the pinned Codex is installed under (None: the user's)
         self._ledger = quota.Ledger(self.base)    # design 9; rebuilt at start()
 
     # ---- lifecycle ----
@@ -536,6 +543,7 @@ class Daemon(daemon_stream.StreamOps):
                            else f"kept ({item.get('kept')})"))
         except Exception as exc:
             self._log(f"flow start record recovery failed: {exc}")
+        self._recover_reviews()                   # jobs of a previous daemon (design 5.3); holds the flows it fails
         self._rebuild_ledger()
 
     def wake(self) -> None:
@@ -553,7 +561,8 @@ class Daemon(daemon_stream.StreamOps):
         assert self._sel is not None, "start() first"
         while not self._stopping:
             busy = (self._shutdown_requested or any(s.phase for s in self._sessions.values())
-                    or any(s.phase or s.writing or s.exit_info for s in self._streams.values()))
+                    or any(s.phase or s.writing or s.exit_info for s in self._streams.values())
+                    or any(j.run.phase or j.run.exit_info for j in self._reviews.values()))
             for key, mask in self._sel.select(timeout=0.05 if busy else 0.25):
                 data = key.data
                 if isinstance(data, Session):
@@ -576,6 +585,9 @@ class Daemon(daemon_stream.StreamOps):
                 elif isinstance(data, tuple) and data[0] == "stream":
                     if data[1].launch_id in self._streams:
                         self._stream_ready(data[1], data[2], time.monotonic())
+                elif isinstance(data, tuple) and data[0] == "review":
+                    if self._reviews.get(data[1].job_id) is data[1]:
+                        self._review_ready(data[1], data[2], time.monotonic())
                 elif data == "listen":
                     self._accept()
                 elif data == "wake":
@@ -591,6 +603,7 @@ class Daemon(daemon_stream.StreamOps):
     def close(self) -> None:
         """Tear everything down. Idempotent. Sessions are killed here: with
         the daemon gone nobody could manage them, and orphans are worse."""
+        self._kill_all_reviews()
         self._kill_all_streams()
         self._kill_all_sessions()
         for att in list(self._attachments.values()):
@@ -769,6 +782,7 @@ class Daemon(daemon_stream.StreamOps):
 
     def _tick(self, now: float) -> None:
         self._stream_tick(now)
+        self._review_tick(now)
         if now >= self._next_prepared_sweep:
             self._next_prepared_sweep = now + PREPARED_SWEEP
             try:  # previews nobody confirmed; they never had a process
@@ -814,7 +828,7 @@ class Daemon(daemon_stream.StreamOps):
                 self._log(f"{s.sid}: process group still present after SIGKILL; finalizing")
                 s.poll()
                 self._finalize(s)
-        if (self._shutdown_requested and not self._sessions and not self._streams
+        if (self._shutdown_requested and not self._sessions and not self._streams and not self._reviews
                 and not any(c.stop_after for c in self._conns.values())):
             self.stop()
 
@@ -1067,7 +1081,8 @@ class Daemon(daemon_stream.StreamOps):
         stream_ops = {"open_stream": self._op_open_stream, "dispatch_prepare": self._op_dispatch_prepare,
                       "stream_send": self._op_stream_send, "stream_status": self._op_stream_status,
                       "stream_close": self._op_stream_close, "pipeline_hold": self._op_pipeline_hold,
-                      "pipeline_release": self._op_pipeline_release}
+                      "pipeline_release": self._op_pipeline_release, "review_start": self._op_review_start,
+                      "review_status": self._op_review_status, "review_cancel": self._op_review_cancel}
         if op in stream_ops:
             try:
                 return stream_ops[op](rid, req)

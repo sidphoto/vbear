@@ -75,6 +75,9 @@ class StreamOps:
         except (OSError, agent_sessions.LaunchRefused) as exc:
             self._log(f"quota rebuild: manifests unreadable: {exc}")
             outstanding = None
+        if outstanding is not None:
+            reviews = self._review_outstanding()          # None: not established, so nothing is granted
+            outstanding = None if reviews is None else {**outstanding, **reviews}
         ok = self._ledger.rebuild(outstanding)
         if not ok:
             self._log(f"quota rebuild failed: {self._ledger.problem}")
@@ -624,8 +627,9 @@ class StreamOps:
             pipeline_store.hold(self.base, req.get("pipeline"), reason)
         except (OSError, ValueError, pipeline_store.StoreRefused) as exc:
             return _err(rid, "refused", f"無法停止：{exc}")
-        # Review jobs of the flow end here once they exist (S2b); a running
-        # executor turn is not affected (design 7).
+        # The flow's running review ends here; a running executor turn is not
+        # affected (design 7).
+        self._review_hold(req["pipeline"])
         return _ok(rid, {"pipeline": req["pipeline"], "held": True})
 
     def _op_pipeline_release(self, rid: str, req: dict) -> dict:
@@ -716,7 +720,7 @@ class StreamOps:
         held = len(self._held_leaders)
         if held >= MAX_HELD_LEADERS:
             return _err(rid, "limit", f"有 {held} 個無法證明已結束的程序群組，需要人工處理後才能開啟新的 session")
-        if len(self._sessions) + len(self._streams) + held >= self.max_sessions:
+        if len(self._sessions) + len(self._streams) + len(self._reviews) + held >= self.max_sessions:
             return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}，含 {held} 個待確認的程序群組）")
         return None
 
@@ -749,13 +753,14 @@ class StreamOps:
             self._held_leaders.remove(h)
             self._log(f"{h['launch_id']}: group of leader {pid} proven empty, leader reaped")
 
-    def _hold_for_failure(self, pipeline_id: str, launch_id: str, why: str) -> None:
+    def _hold_for_failure(self, pipeline_id: str, launch_id: str, why: str, kind: str = "session") -> None:
         """v29.8: any failure holds the flow (reason "failure"). If the hold
         cannot be written, open_stream still refuses: it recomputes the
-        failures from the journals."""
+        failures from the journals. A review running for the flow ends too."""
         try:
-            pipeline_store.hold(self.base, pipeline_id, f"failure: session {launch_id}: {why}")
+            pipeline_store.hold(self.base, pipeline_id, f"failure: {kind} {launch_id}: {why}")
             self._log(f"{launch_id}: flow {pipeline_id} held after a failure: {why}")
+            self._review_hold(pipeline_id)
         except Exception as exc:          # e.g. ValueError from sanitize: never out of the event loop
             try:
                 self._log(f"{launch_id}: cannot hold flow {pipeline_id} after a failure ({type(exc).__name__})")
