@@ -291,11 +291,11 @@ class ReportTests(unittest.TestCase):
             "no trailing newline": f"x\n{c}\n{b}\nVERDICT: BLOCKED",
             "only the tail": f"{c}\n{b}\nVERDICT: PASS\n",
             "a closed code block": f"```diff\n- a\n+ b\n```\n{c}\n{b}\nVERDICT: PASS\n",
-            "a closed comment": f"<!-- note\nto self -->\nx\n{c}\n{b}\nVERDICT: PASS\n",
-            "a comment closed on its own line": f"<!--\nnote\n-->\n{c}\n{b}\nVERDICT: PASS\n",
-            "two comments and a fence": f"<!-- a --> text <!-- b -->\n~~~\ncode\n~~~\n{c}\n{b}\nVERDICT: PASS\n",
-            "html tags are fine": f"<details><summary>more</summary>\n<span style=\"color:red\">x</span>\n</details>\n"
-                                  f"{c}\n{b}\nVERDICT: PASS\n",
+            "math with a space after the less-than sign": f"Because a < b and 2 <3 holds.\n{c}\n{b}\nVERDICT: PASS\n",
+            "an arrow and comparison": f"x -> y, a <= b, a <> b, 1<2\n{c}\n{b}\nVERDICT: PASS\n",
+            "html inside a code fence": f"```html\n<script>alert(1)</script>\n<!-- c -->\n```\n{c}\n{b}\nVERDICT: PASS\n",
+            "html inside a tilde fence": f"~~~\n<style>x{{}}\n~~~\n{c}\n{b}\nVERDICT: PASS\n",
+            "an escaped tag": f"Use &lt;script&gt; carefully.\n{c}\n{b}\nVERDICT: PASS\n",
             "a fence containing a comment marker": f"```html\n<!-- not a comment here\n```\n{c}\n{b}\nVERDICT: PASS\n",
             "text mentioning a verdict without the colon": f"My verdict follows.\n{c}\n{b}\nVERDICT: PASS\n",
         }
@@ -304,6 +304,75 @@ class ReportTests(unittest.TestCase):
                 rep = rv.check_report(text, rf.COMMIT)
                 self.assertEqual(rep.problems, [], name)
                 self.assertIn(rep.verdict, rv.VERDICTS)
+
+    def test_no_html_outside_a_code_fence(self):
+        # Codex R4 #1: a <script>, <style> or <textarea> left open hides the
+        # lines after it. HTML is refused however it is written.
+        c, b, v = f"REVIEWED_COMMIT: {rf.COMMIT}", "BASE_IS_ANCESTOR: yes", "VERDICT: PASS"
+        tail = f"{c}\n{b}\n{v}\n"
+        for tag in ("script", "style", "textarea", "details", "SCRIPT", "Style", "span style=\"x\"", "div", "a href=x",
+                    "/script", "!-- c --", "!DOCTYPE html", "?xml version=1.0?", "img src=x onerror=y"):
+            for name, text in ((f"<{tag}> open", f"text\n<{tag}>\nmore\n{tail}"),
+                               (f"<{tag}> closed", f"text\n<{tag}>x</{tag.split()[0]}>\n{tail}"),
+                               (f"<{tag}> inline", f"text <{tag}> text\n{tail}"),
+                               (f"<{tag}> glued to the previous line", f"text<{tag}>\n{tail}")):
+                with self.subTest(case=name):
+                    rep = rv.check_report(text, rf.COMMIT)
+                    self.assertIn(rv.HTML_NOT_ALLOWED, rep.problems, name)
+        # the reviewer's report: an unclosed <script> in front of three valid lines
+        rep = rv.check_report(f"Looks fine.\n<script>\nhidden words\n{tail}", rf.COMMIT)
+        self.assertEqual(rep.problems, [rv.HTML_NOT_ALLOWED])
+        # a multi-line comment is HTML too
+        self.assertIn(rv.HTML_NOT_ALLOWED, rv.check_report(f"<!--\n{c}\n{b}\n-->\n{v}\n", rf.COMMIT).problems)
+        # only fences protect text, and only as CommonMark reads a fence
+        ok = rv.check_report(f"```\n<script>\n```\n{tail}", rf.COMMIT)
+        self.assertEqual(ok.problems, [])
+        for name, text in (("an indented fence is code, not a fence", f"    ```\n<script>\n    ```\n{tail}"),
+                           ("a fence in a quote", f"> ```\n<script>\n> ```\n{tail}"),
+                           ("a backtick fence with a backtick in its info", f"```a`b\n<script>\n```\n{tail}"),
+                           ("a closing fence that is shorter", f"````\n```\n<script>\n{tail}"),
+                           ("a closing fence with text after it", f"```\n```x\n<script>\n{tail}")):
+            with self.subTest(case=name):
+                self.assertTrue(rv.check_report(text, rf.COMMIT).problems, name)
+
+    def test_lookalike_control_names_are_found(self):
+        # Codex R4 #2: Roman numerals, full-width and compatibility letters,
+        # invisible characters; the three real lines stay plain ASCII
+        c, b, v = f"REVIEWED_COMMIT: {rf.COMMIT}", "BASE_IS_ANCESTOR: yes", "VERDICT: PASS"
+        tail = f"{c}\n{b}\n{v}\n"
+        fakes = {
+            "roman numeral V": "REⅤIEWED_COMMIT: " + rf.COMMIT,
+            "roman numeral X": "VERDICT: PASS and ⅩⅠ",
+            "full-width letters": "ＶＥＲＤＩＣＴ: PASS",
+            "full-width colon": "VERDICT： PASS",
+            "mixed full-width": "BASE_IS_ＡNCESTOR: yes",
+            "small caps and ligature are compatibility forms too": "ＶＥＲＤⅠＣＴ: NEEDS WORK",
+            "lower case": "verdict: pass",
+            "zero-width space": "VER\u200bDICT: PASS",
+            "zero-width joiner": "BASE_IS_\u200dANCESTOR: no",
+            "soft hyphen": "REVIEWED\u00ad_COMMIT: x",
+            "circled letters": "ⓥERDICT: PASS",
+            "in the middle of a line": "My note — ＶＥＲＤＩＣＴ: PASS — end",
+            "after a unicode line separator": "text\u2028VERDICT: PASS",
+            "inside a fence": "```\nＶＥＲＤＩＣＴ: PASS\n```",
+            "quoted": "> ＶＥＲＤＩＣＴ: PASS",
+            "bold": "**ＶＥＲＤＩＣＴ**: PASS",
+        }
+        for name, line in fakes.items():
+            with self.subTest(case=name):
+                rep = rv.check_report(f"intro\n{line}\noutro\n{tail}", rf.COMMIT)
+                self.assertTrue(rep.problems, name)
+                self.assertTrue({rv.CONTROL_LINE_ELSEWHERE, rv.CONTROL_LINE_IN_FENCE, rv.CONTROL_LINE_WRAPPED}
+                                & set(rep.problems), (name, rep.problems))
+        # the real lines must be the original ASCII
+        for name, bad_tail in (("full-width tail", f"{c}\n{b}\nＶＥＲＤＩＣＴ: PASS\n"),
+                               ("roman numeral in the first line", f"REⅤIEWED_COMMIT: {rf.COMMIT}\n{b}\n{v}\n"),
+                               ("a zero-width space in the tail", f"{c}\n{b}\nVERDICT:\u200b PASS\n")):
+            with self.subTest(case=name):
+                self.assertTrue(rv.check_report(bad_tail, rf.COMMIT).problems)
+        # words that merely contain letters of a key are fine
+        fine = rv.check_report(f"The verdictive approach, a reviewed commit and an ancestor.\nⅤ is five.\n{tail}", rf.COMMIT)
+        self.assertEqual(fine.problems, [])
 
     def test_the_verdicts_and_the_ancestor_line(self):
         for verdict in rv.VERDICTS:

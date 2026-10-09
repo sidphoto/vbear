@@ -78,7 +78,8 @@ class CodexConstants:
         "commands there.\n"
         "The last three non-empty lines of your reply must be exactly the following, in this order, and no other "
         "line of your reply may contain REVIEWED_COMMIT:, BASE_IS_ANCESTOR: or VERDICT: (do not quote, list, "
-        "bold, comment out or fence them either); close every code block and every HTML comment before them:\n"
+        "bold or fence them either). Write the reply in plain Markdown only: no HTML at all (no tags, no comments, "
+        "no <script>), put any code in fenced code blocks, and close every code block before those three lines:\n"
         "REVIEWED_COMMIT: {commit}\n"
         "BASE_IS_ANCESTOR: yes   (write no instead of yes if step 3 failed)\n"
         "VERDICT: PASS   (or VERDICT: NEEDS WORK, or VERDICT: BLOCKED)\n")

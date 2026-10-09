@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from .. import strictjson
@@ -155,70 +156,62 @@ CONTROL_KEYS = ("REVIEWED_COMMIT", "BASE_IS_ANCESTOR", "VERDICT")
 CONTROL_LINE_IN_FENCE = "控制欄位出現在 code fence 裡面"
 CONTROL_LINE_WRAPPED = "控制欄位被引用、清單、加粗或行內 code 包起來，不是獨立的一行"
 UNCLOSED_FENCE = "code fence 沒有關閉"
-UNCLOSED_CONSTRUCT = "報告最後三行之前，還有沒關閉的 code fence 或 HTML 註解"
+UNCLOSED_CONSTRUCT = "報告最後三行之前，還有沒關閉的 code fence"
+HTML_NOT_ALLOWED = "報告在 code fence 以外使用了 HTML（標籤、註解或 <script> 之類），審查報告只能用 Markdown"
 CONTROL_LINE_ELSEWHERE = "控制欄位的前綴出現在報告最後三行以外的地方"
 TAIL_FORMAT = "報告最後三個非空行不是依序剛好 REVIEWED_COMMIT、BASE_IS_ANCESTOR、VERDICT"
 _ANY_CONTROL = re.compile(r"(?:" + "|".join(CONTROL_KEYS) + r")[*_`\s]*:")
 _TAIL_VERDICTS = "|".join(re.escape(v) for v in VERDICTS)
-_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)\Z")
+# anything that starts HTML: < and then a letter, / ! or ? (comments, tags, <script>, <?xml ...)
+_HTML = re.compile(r"<[A-Za-z/!?]")
 # a line that is, or is dressed up as, a control line: any run of quote,
 # list, heading, bold, italic or code markers (or numbering) in front of
 # the key, then the colon
 _CONTROL_LIKE = re.compile(r"^[\s>*+\-`_#~\d.)(\[\]]*(?:" + "|".join(CONTROL_KEYS) + r")[*_`\s]*:")
 
 
+def _fence_line(ln: str, closing_of: tuple[str, int] | None = None):
+    """A code fence line as CommonMark reads it: at most three spaces of
+    indentation (four make an indented code block, which is not a fence), at
+    least three ` or ~. An opening backtick fence has no backtick in its info
+    string. A closing fence is the same character, at least as long, and
+    nothing after it but spaces or tabs. Returns (char, length) or None."""
+    m = _FENCE.match(ln)
+    if not m:
+        return None
+    ch, n, rest = m.group(1)[0], len(m.group(1)), m.group(2)
+    if closing_of is None:
+        return None if (ch == "`" and "`" in rest) else (ch, n)
+    if ch == closing_of[0] and n >= closing_of[1] and not rest.strip(" \t"):
+        return ch, n
+    return None
+
+
 def _split_fences(lines: list[str]) -> tuple[list[str], list[str], bool]:
     """(lines outside any code fence, lines inside one, a fence is left
-    open). ``` and ~~~ fences; a fence closes on a line of the same
-    character at least as long; the fence lines themselves are neither."""
+    open). The fence lines themselves are neither."""
     outside, inside = [], []
     opener: tuple[str, int] | None = None
     for ln in lines:
-        m = _FENCE.match(ln)
         if opener is None:
-            if m:
-                opener = (m.group(1)[0], len(m.group(1)))
-            else:
+            opener = _fence_line(ln)
+            if opener is None:
                 outside.append(ln)
-        elif m and m.group(1)[0] == opener[0] and len(m.group(1)) >= opener[1] \
-                and not ln.strip().strip(opener[0]):
+        elif _fence_line(ln, opener):
             opener = None
         else:
             inside.append(ln)
     return outside, inside, opener is not None
 
 
-def _open_construct_before(lines: list[str], upto: int) -> bool:
-    """Whether a code fence or an HTML comment (<!-- ... -->) is still open at
-    the start of line ``upto``. Inside a fence a comment marker is only text,
-    and inside a comment a fence marker is; text after a closing marker is
-    read again."""
-    fence: tuple[str, int] | None = None
-    comment = False
-    for ln in lines[:upto]:
-        i = 0
-        if fence is not None:
-            m = _FENCE.match(ln)
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not ln.strip().strip(fence[0]):
-                fence = None
-            continue
-        while True:
-            if comment:
-                end = ln.find("-->", i)
-                if end < 0:
-                    break
-                comment, i = False, end + 3
-                continue
-            if i == 0:
-                m = _FENCE.match(ln)
-                if m:
-                    fence = (m.group(1)[0], len(m.group(1)))
-                    break
-            start = ln.find("<!--", i)
-            if start < 0:
-                break
-            comment, i = True, start + 4
-    return fence is not None or comment
+def _fold(ln: str) -> str:
+    """The line as a person would read the letters: NFKC (Roman numerals,
+    full-width letters and other compatibility forms become plain ones), the
+    invisible formatting characters dropped, upper case. Only for finding
+    something dressed up as a control line; the three real lines are
+    compared as the original ASCII."""
+    return "".join(ch for ch in unicodedata.normalize("NFKC", ln) if unicodedata.category(ch) != "Cf").upper()
 
 
 def check_report(text, commit: str) -> ReportResult:
@@ -237,11 +230,16 @@ def check_report(text, commit: str) -> ReportResult:
     outside, inside, open_fence = _split_fences(lines)
     if open_fence:
         out.problems.append(UNCLOSED_FENCE)
-    if any(_CONTROL_LIKE.match(ln) for ln in inside):
+    if any(_CONTROL_LIKE.match(_fold(ln)) for ln in inside):
         out.problems.append(CONTROL_LINE_IN_FENCE)
     exact = tuple(f"{k}:" for k in CONTROL_KEYS)
-    if any(_CONTROL_LIKE.match(ln) and not ln.startswith(exact) for ln in outside):
+    if any(_CONTROL_LIKE.match(_fold(ln)) and not ln.startswith(exact) for ln in outside):
         out.problems.append(CONTROL_LINE_WRAPPED)
+    # Codex S2b part 2 R4: no HTML outside a code fence, however it is
+    # written (a comment, an unclosed <script>/<style>/<textarea>, a tag):
+    # such text can hide the lines around it. Markdown is enough for a review.
+    if any(_HTML.search(ln) for ln in outside):
+        out.problems.append(HTML_NOT_ALLOWED)
 
     def only(prefix: str) -> list[str]:
         return [ln for ln in outside if ln.startswith(prefix)]
@@ -278,15 +276,15 @@ def check_report(text, commit: str) -> ReportResult:
         tail_ok = (all(lines[i].isascii() and p.fullmatch(lines[i]) for i, p in zip((a, b, c3), patterns))
                    and lines[a] == f"REVIEWED_COMMIT: {commit}")
         if tail_ok:
-            if _open_construct_before(lines, a):
+            if _split_fences(lines[:a])[2]:
                 out.problems.append(UNCLOSED_CONSTRUCT)
             for i, ln in enumerate(lines):
-                if i not in (a, b, c3) and _ANY_CONTROL.search(ln):
+                if i not in (a, b, c3) and _ANY_CONTROL.search(_fold(ln)):
                     out.problems.append(CONTROL_LINE_ELSEWHERE)
                     break
     if not tail_ok:
         out.problems.append(TAIL_FORMAT)
-        if any(_ANY_CONTROL.search(ln) for ln in lines[:max(0, (idx[-3] if len(idx) >= 3 else 0))]):
+        if any(_ANY_CONTROL.search(_fold(ln)) for ln in lines[:max(0, (idx[-3] if len(idx) >= 3 else 0))]):
             out.problems.append(CONTROL_LINE_ELSEWHERE)
     out.problems = list(dict.fromkeys(out.problems))
     return out
