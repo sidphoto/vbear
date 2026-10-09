@@ -36,7 +36,7 @@ import tempfile
 import time
 
 from .. import admin_policy, login_identity, tasks
-from . import (cli_versions, codex_constants as cc, pipeline_store, proctrack, quota, review_codex, review_finish,
+from . import (agent_sessions, cli_versions, codex_constants as cc, pipeline_store, proctrack, quota, review_codex, review_finish,
                review_recover, review_run, review_store, stream_flow, stream_session)
 from .daemon_stream import _err, _ok
 
@@ -105,6 +105,8 @@ class ReviewOps:
         except _Refused as exc:
             return _err(rid, "limit" if exc.code == "limit" else "refused", f"{exc.code}: {exc}")
         except review_codex.CodexRefused as exc:
+            return _err(rid, "refused", f"{exc.code}: {exc}")
+        except agent_sessions.LaunchRefused as exc:
             return _err(rid, "refused", f"{exc.code}: {exc}")
         except (review_store.ReviewRefused, pipeline_store.StoreRefused) as exc:
             return _err(rid, "refused", f"{getattr(exc, 'code', 'refused')}: {exc}")
@@ -202,11 +204,22 @@ class ReviewOps:
                 "timeout_s": float(ctx.limits["review_timeout_min"]) * 60.0,
                 "max_responses": int(ctx.limits["review_max_responses"])}
 
+    def _run_homes_root(self) -> str:
+        """<state>/codex-run-homes: ours, 0700, a plain directory (created if
+        missing), like reviews/ itself."""
+        parent = os.path.join(os.path.realpath(self.base), review_codex.RUN_HOMES)
+        old = os.umask(0o077)
+        try:
+            os.makedirs(parent, mode=0o700, exist_ok=True)
+        finally:
+            os.umask(old)
+        agent_sessions._owned_dir(parent, os.getuid())            # LaunchRefused: not ours, not 0700, a link
+        return parent
+
     def _mcp_must_be_empty(self, c, binary: str, home) -> None:
         """`codex mcp list --json` with the review's own settings must print
         an empty array (design 5.2). HOME is a throwaway empty directory."""
-        parent = os.path.join(os.path.realpath(self.base), review_codex.RUN_HOMES)
-        os.makedirs(parent, mode=0o700, exist_ok=True)
+        parent = self._run_homes_root()
         with tempfile.TemporaryDirectory(prefix="mcp-", dir=parent) as tmp_home:
             os.chmod(tmp_home, 0o700)
             env = review_codex.build_env(str(home), tmp_home)
@@ -232,7 +245,7 @@ class ReviewOps:
             st = os.stat(spath)
             scratch = (spath, {"inode": st.st_ino, "dev": st.st_dev})
             hpath = str(review_store.run_home(self.base, job_id))
-            os.makedirs(os.path.dirname(hpath), mode=0o700, exist_ok=True)
+            self._run_homes_root()
             os.mkdir(hpath, 0o700)
             st = os.stat(hpath)
             run_home = (hpath, {"inode": st.st_ino, "dev": st.st_dev})

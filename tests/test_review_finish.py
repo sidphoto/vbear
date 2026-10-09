@@ -227,10 +227,8 @@ class InvalidReviewTests(Scenario):
         evs, recs, _ = rf.valid_run(text=text, scratch=str(self.scratch))
         self.events, self.recs = evs, recs
         self.write_files()
-        m = rs.read_manifest(self.base, JOB)
-        rs.update_manifest(self.base, JOB)                                     # manifest unchanged; use a copy of it
-        mm = dict(m, commit=other)
-        out = rfn.finish_review(self.base, mm, {"manual_review": None, "exit_code": 0, "invalid_reasons": []}, c=C)
+        rs.update_manifest(self.base, JOB, commit=other)                       # the job names a commit the work dir lacks
+        out = self.finish()
         self.assertEqual(out.outcome, "invalid")
         self.assertIn("不存在", " | ".join(out.reasons))
 
@@ -283,6 +281,167 @@ class CommitOrderTests(Scenario):
         with self.assertRaises(sfl.FlowRefused) as cm:                          # a valid review without its marker is not believed
             sfl.flow_reviews(self.base, FID, TID)
         self.assertEqual(cm.exception.code, "count_unavailable")
+
+
+class ResumeTests(Scenario):
+    """Codex 3c R4 P1: finish_review looks at the manifest before it opens
+    anything for writing. A job decided before is never judged or saved
+    again, so EEXIST is not on the normal path and an outcome is not
+    rewritten."""
+
+    def no_judging(self):
+        """Judging, saving the process's files or looking at the clone again
+        fails the test. Reading the record's own saved copies is allowed (it
+        is how result.json is rebuilt), and so is writing result.json."""
+        def boom(*a, **kw):
+            raise AssertionError("the job was judged or saved again")
+        real = rfn._write_new
+
+        def only_the_marker(dir_fd, name, data, dst):
+            assert name == "result.json", f"{name} was written again"
+            return real(dir_fd, name, data, dst)
+        return (mock.patch.object(rfn, "judge_events", boom), mock.patch.object(rv, "open_rollout", boom),
+                mock.patch.object(rv, "validate_rollout", boom), mock.patch.object(rv, "copy_rollout", boom),
+                mock.patch.object(rfn.git_objects, "commit_exists", boom), mock.patch.object(rfn.git_head, "read_head", boom),
+                mock.patch.object(rfn, "_write_new", only_the_marker))
+
+    def finish_without_result_json(self):
+        real = rfn._write_new
+
+        def write(dir_fd, name, data, dst):
+            if name == "result.json":
+                return rfn._Saved(False, "審查紀錄的 result.json 無法寫入（OSError）")
+            return real(dir_fd, name, data, dst)
+        with mock.patch.object(rfn, "_write_new", write):
+            out = self.finish()
+        self.assertEqual((out.outcome, out.record_complete), ("valid", False))
+        self.assertFalse((self.record() / "result.json").exists())
+        return out
+
+    def snapshot(self):
+        return {p.name: (p.stat().st_ino, p.stat().st_mtime_ns, p.read_bytes()) for p in self.record().iterdir()}
+
+    def second_call(self, **run):
+        patches = self.no_judging()
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return rfn.finish_review(self.base, rs.read_manifest(self.base, JOB), {"interrupted": True, **run}, c=C)
+
+    def test_a_job_decided_and_recorded_is_a_no_op(self):
+        first = self.finish()
+        self.assertEqual((first.outcome, first.record_complete, first.cleaned), ("valid", True, True))
+        before, manifest = self.snapshot(), self.manifest()
+        again = self.second_call()
+        self.assertEqual((again.outcome, again.record_complete, again.cleaned), ("valid", True, True))
+        self.assertEqual(self.snapshot(), before)                                  # no file touched
+        self.assertEqual(self.manifest(), manifest)                                # the outcome is not rewritten
+        self.assertEqual(again.result["valid"], True)
+
+    def test_a_decided_invalid_job_is_a_no_op_too(self):
+        self.finish(exit_code=3)
+        before, manifest = self.snapshot(), self.manifest()
+        again = self.second_call()
+        self.assertEqual((again.outcome, again.record_complete), ("invalid", True))
+        self.assertEqual((self.snapshot(), self.manifest()), (before, manifest))
+        self.assertTrue(again.reasons)
+
+    def test_saved_copies_and_outcome_but_no_result_json_gets_only_the_marker(self):
+        first = self.finish_without_result_json()
+        self.assertIn("result.json", first.problem)
+        before = self.snapshot()
+        manifest_before = self.manifest()
+        self.assertEqual(manifest_before["outcome"], "valid")
+        again = self.second_call()                                                 # judge/save functions fail the test if used
+        self.assertEqual((again.outcome, again.record_complete, again.cleaned), ("valid", True, True))
+        after = self.snapshot()
+        self.assertEqual({k: v for k, v in after.items() if k != "result.json"}, before)   # copies untouched (same inode, mtime)
+        result = json.loads(after["result.json"][2])
+        self.assertEqual((result["valid"], result["verdict"], result["rebuilt"], result["job_id"]),
+                         (True, "PASS", True, JOB))
+        self.assertEqual(self.manifest()["outcome"], "valid")
+        self.assertEqual(self.manifest()["state"], "cleaned")
+        self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+        self.assertFalse(self.scratch.exists())
+
+    def test_an_invalid_job_gets_its_marker_back_with_the_recorded_reasons(self):
+        real = rfn._write_new
+
+        def write(dir_fd, name, data, dst):
+            return (rfn._Saved(False, "x") if name == "result.json" else real(dir_fd, name, data, dst))
+        with mock.patch.object(rfn, "_write_new", write):
+            self.finish(exit_code=3)
+        again = self.second_call()
+        self.assertEqual((again.outcome, again.record_complete), ("invalid", True))
+        result = json.loads((self.record() / "result.json").read_text())
+        self.assertEqual((result["valid"], result["reasons"]), (False, self.manifest()["invalid_reasons"]))
+
+    def test_unreadable_copies_leave_the_outcome_as_it_is(self):
+        self.finish_without_result_json()
+        os.unlink(self.record() / "events.jsonl")                                   # a saved copy is gone
+        again = self.second_call()
+        self.assertEqual((again.outcome, again.record_complete), ("valid", False))   # not upgraded, not downgraded
+        self.assertIn("events.jsonl", again.problem)
+        self.assertFalse((self.record() / "result.json").exists())
+        self.assertEqual(self.manifest()["outcome"], "valid")
+        self.assertIn("無法補寫", self.manifest()["retained_reason"])
+        self.assertTrue((self.job / "events.jsonl").exists())                       # the job's own originals are kept
+
+    def test_a_last_md_that_contradicts_a_valid_outcome_is_not_trusted(self):
+        self.finish_without_result_json()
+        (self.record() / "last.md").write_text("no control lines at all\n")
+        again = self.second_call()
+        self.assertFalse(again.record_complete)
+        self.assertIn("last.md", again.problem)
+        self.assertFalse((self.record() / "result.json").exists())
+
+    def test_a_marker_that_disagrees_is_left_alone(self):
+        self.finish()
+        (self.record() / "result.json").write_text(json.dumps({"v": 1, "job_id": JOB, "round": 1,
+                                                               "commit": self.commit, "valid": False}))
+        before = self.snapshot()
+        again = self.second_call()
+        self.assertFalse(again.record_complete)
+        self.assertIn("不一致", again.problem)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_manual_review_job_is_left_alone(self):
+        self.finish(manual_review="group still alive")
+        manifest = self.manifest()
+        again = self.second_call()
+        self.assertEqual(again.outcome, "manual_review")
+        self.assertIn("group still alive", again.reasons[0])
+        self.assertEqual(self.manifest(), manifest)
+        self.assertTrue(self.scratch.exists())
+
+    def test_an_unreadable_manifest_writes_nothing(self):
+        (self.job / "manifest.json").write_text("{")
+        out = rfn.finish_review(self.base, state_manifest("running", job_id=JOB), {"exit_code": 0}, c=C)
+        self.assertEqual(out.outcome, "manual_review")
+        self.assertFalse((self.record() / "last.md").exists())
+
+
+class StderrLimitTests(Scenario):
+    """Codex 3c R4 P2: stderr.log is bounded by its own 1 MiB, not events' 8 MiB."""
+
+    def test_stderr_larger_than_its_cap_is_refused_and_not_saved(self):
+        (self.job / "stderr.log").write_bytes(b"x" * ((1 << 20) + 1))
+        out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+        self.assertIn("stderr.log", " | ".join(out.reasons))
+        self.assertFalse((self.record() / "stderr.log").exists())
+        self.assertTrue((self.job / "stderr.log").exists())                         # kept for a person
+
+    def test_stderr_of_exactly_its_cap_is_read(self):
+        (self.job / "stderr.log").write_bytes(b"x" * (1 << 20))
+        out = self.finish()
+        self.assertEqual(out.outcome, "valid")
+        self.assertEqual((self.record() / "stderr.log").stat().st_size, 1 << 20)
+
+    def test_the_limits_are_the_runs_own(self):
+        from vbear.runtime import review_run
+        self.assertEqual((rfn.EVENTS_LIMIT, rfn.STDERR_LIMIT), (review_run.EVENTS_CAP, review_run.STDERR_CAP))
+        self.assertLess(rfn.STDERR_LIMIT, rfn.EVENTS_LIMIT)
 
 
 class SameBytesTests(Scenario):
@@ -473,6 +632,52 @@ class UnprovenAndFailureTests(Scenario):
         self.assertTrue((target / "f").exists())
         self.assertTrue(out.problem)
         self.scratch.unlink()
+
+    def test_a_directory_swapped_in_before_the_rename_is_put_back_not_deleted(self):
+        # the identity check and the delete are separated by a rename to a
+        # private name, which is checked again
+        stranger = Path(tempfile.mkdtemp(prefix="sr-", dir="/private/tmp"))
+        self.addCleanup(shutil.rmtree, stranger, True)
+        (stranger / "keep-me").write_text("x")
+        real = os.rename
+        swapped = []
+
+        def rename(src, dst, *a, **kw):
+            if not swapped and str(src) == self.scratch.name:
+                swapped.append(1)
+                shutil.rmtree(self.scratch)                  # after the check, before the rename
+                real(stranger, self.scratch)
+            return real(src, dst, *a, **kw)
+        with mock.patch.object(rfn.os, "rename", rename):
+            out = self.finish()
+        self.assertTrue((self.scratch / "keep-me").exists())                 # put back, not deleted
+        self.assertFalse(Path("/private/tmp", f".{self.scratch.name}.deleting").exists())
+        self.assertIn("被換成別的東西", out.problem)
+        self.assertEqual(self.manifest()["outcome"], "valid")                # decided; not cleaned
+        self.assertNotEqual(self.manifest()["state"], "cleaned")
+
+    def test_nothing_is_left_under_the_private_name(self):
+        self.finish()
+        self.assertFalse(Path("/private/tmp", f".{self.scratch.name}.deleting").exists())
+        self.assertFalse((self.base / "codex-run-homes" / f".{JOB}.deleting").exists())
+
+    def test_an_earlier_attempt_that_died_after_the_rename_is_finished(self):
+        private = Path("/private/tmp") / f".{self.scratch.name}.deleting"
+        os.rename(self.scratch, private)                                      # as if the daemon died right here
+        (private / "leftover").write_text("x")
+        # the manifest identity is the renamed directory's: it is the same inode
+        self.assertEqual(rfn.cleanup_job(self.base, self.manifest()), None)
+        self.assertFalse(private.exists())
+
+    def test_a_private_name_that_is_not_ours_is_not_touched(self):
+        private = Path("/private/tmp") / f".{self.scratch.name}.deleting"
+        private.mkdir()
+        self.addCleanup(shutil.rmtree, private, True)
+        (private / "keep-me").write_text("x")
+        problem = rfn.cleanup_job(self.base, self.manifest())
+        self.assertIn("身分不符", problem)
+        self.assertTrue((private / "keep-me").exists())
+        self.assertTrue(self.scratch.exists())
 
     def test_cleaning_up_twice_is_fine(self):
         self.finish()

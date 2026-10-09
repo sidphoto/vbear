@@ -48,27 +48,17 @@ def _repair_link(base, m: dict) -> str | None:
     return None
 
 
-def _finish_decided(base, m: dict) -> dict:
+def _finish_decided(base, m: dict, constants) -> dict:
     """finished / invalid but not cleaned: the daemon ended in the middle of
-    ending the review. Clean up only when the record is whole."""
+    ending the review. finish_review resumes it without judging or saving
+    again (Codex 3c R4): the clean-up when the record is whole, result.json
+    rebuilt from the saved copies when only that is missing."""
     name = m["job_id"]
-    try:
-        with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
-            res = p.review_result(m["round"])
-        state = stream_flow.record_state(m, res)
-    except (OSError, pipeline_store.StoreRefused, stream_flow.FlowRefused) as exc:
-        return _item(m, name, "kept", f"審查紀錄無法核對（{type(exc).__name__}），不清理")
-    if state != "complete":
-        return _item(m, name, "kept", "審查紀錄沒有 result.json，保留原檔，不清理")
-    problem = review_finish.cleanup_job(base, m)
-    if problem:
-        review_store.retain(base, name, problem)
-        return _item(m, name, "kept", problem)
-    try:
-        review_store.update_manifest(base, name, state="cleaned")
-    except (OSError, review_store.ReviewRefused) as exc:
-        return _item(m, name, "kept", f"manifest 無法改成 cleaned（{type(exc).__name__}）")
-    return _item(m, name, "cleaned")
+    out = review_finish.finish_review(base, m, {"interrupted": True, "manual_review": None},
+                                      c=constants.get(m["codex_version"]))
+    if out.cleaned:
+        return _item(m, name, "cleaned")
+    return _item(m, name, "kept", out.problem or "審查紀錄不完整，保留原檔，不清理")
 
 
 def _recover_active(base, m: dict, rows, constants, now: float) -> dict:
@@ -119,7 +109,7 @@ def recover(base, *, constants=None, rows=None, now: float | None = None) -> lis
             if m["state"] in ("manual_review", "cleaned"):
                 continue
             if m["state"] in ("finished", "invalid"):
-                out.append(_finish_decided(base, m))
+                out.append(_finish_decided(base, m, constants))
             else:
                 out.append(_recover_active(base, m, rows, constants, now))
         except Exception as exc:                  # one job never stops the others, nor the daemon's start

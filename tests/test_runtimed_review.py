@@ -356,6 +356,23 @@ class RefusalTests(ReviewCase):
         shutil.rmtree(self.codex_home)
         self.refused("unsafe_path")
 
+    def test_the_run_homes_root_must_be_ours_and_private(self):
+        self.executor_done()
+        root = self.base / "codex-run-homes"
+        root.mkdir(mode=0o755)
+        os.chmod(root, 0o755)
+        r = self.start_review()
+        self.assertFalse(r["ok"])
+        self.assertIn("unsafe_path", r["error"]["message"])
+        self.assertEqual(self.exec_calls(), [])
+        root.rmdir()
+        link_target = self.tmp / "elsewhere"
+        link_target.mkdir(mode=0o700)
+        os.symlink(link_target, root)
+        self.assertFalse(self.start_review()["ok"])
+        self.assertEqual(os.listdir(link_target), [])                                   # nothing was put through the link
+        os.unlink(root)
+
     def test_the_work_directory_must_be_the_executors(self):
         self.executor_done()
         other = self.tmp / "other"

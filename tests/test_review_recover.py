@@ -154,14 +154,27 @@ class LinkAndDecidedTests(RecoverCase):
         self.assertFalse(self.scratch.exists() or self.run_home.exists())
         self.assertEqual(sorted(p.name for p in self.job.iterdir()), ["manifest.json"])
 
-    def test_a_decided_job_without_a_marker_is_kept(self):
+    def test_a_decided_job_without_a_marker_gets_it_back_from_the_saved_copies(self):
         self.decided_but_not_cleaned()
         os.unlink(self.record() / "result.json")
-        # valid without its marker: the flow refuses to count it, and recovery leaves it alone
+        items = self.recover([])
+        self.assertEqual([(i["action"], i["failure"]) for i in items], [("cleaned", False)])
+        result = json.loads((self.record() / "result.json").read_text())
+        self.assertEqual((result["valid"], result["verdict"], result["rebuilt"]), (True, "PASS", True))
+        self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+        self.assertEqual(self.manifest()["state"], "cleaned")
+
+    def test_a_decided_job_whose_saved_copies_are_gone_is_kept_as_it_is(self):
+        self.decided_but_not_cleaned()
+        os.unlink(self.record() / "result.json")
+        os.unlink(self.record() / "last.md")
         items = self.recover([])
         self.assertEqual([i["action"] for i in items], ["kept"])
+        m = self.manifest()
+        self.assertEqual(m["outcome"], "valid")                                    # neither upgraded nor downgraded
+        self.assertIn("無法補寫", m["retained_reason"])
         self.assertTrue(self.scratch.exists())
-        self.assertNotEqual(self.manifest()["state"], "cleaned")
+        self.assertFalse((self.record() / "result.json").exists())
 
     def test_a_damaged_marker_is_kept(self):
         self.decided_but_not_cleaned()

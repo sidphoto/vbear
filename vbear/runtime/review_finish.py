@@ -37,9 +37,12 @@ from dataclasses import dataclass, field
 
 from .. import git_head, git_objects, strictjson
 from . import codex_constants as cc
-from . import pipeline_store, review_codex, review_store, review_validate
+from . import pipeline_store, review_codex, review_run, review_store, review_validate, stream_flow
 
 EVENTS_NAME, STDERR_NAME = "events.jsonl", "stderr.log"
+# what the run itself may write (review_run), so what is read back is bounded the same way (Codex 3c R4 P2)
+EVENTS_LIMIT = review_run.EVENTS_CAP
+STDERR_LIMIT = review_run.STDERR_CAP
 SCRATCH_PARENT = review_store.SCRATCH_PARENT
 MAX_REASON = 256
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -165,29 +168,64 @@ def _write_new(dir_fd: int, name: str, data: bytes, dst_path: str) -> _Saved:
 def _remove_child(parent_path, name: str, ident: dict) -> str | None:
     """Remove the directory ``name`` under ``parent_path``, only if it is the
     one the manifest recorded (a directory, not a symlink, same inode and
-    device). None when it is gone afterwards (or was never there)."""
+    device). None when it is gone afterwards (or was never there).
+
+    The identity is checked, then the directory is renamed to a private name
+    and checked again before anything is deleted: what is removed is what was
+    verified at the private name, which nobody else is looking for, not
+    whatever the public name points at by then (the same idea as the
+    ".partial" names elsewhere). A directory that turns out not to be ours
+    is renamed back. A leftover from an earlier attempt that died after the
+    rename is recognised by the same identity and finished."""
+    private = f".{name}.deleting"
     try:
         pfd = os.open(str(parent_path), _DIR)
     except FileNotFoundError:
         return None
     except OSError as exc:
         return f"{name} 的上層資料夾無法開啟（{exc.strerror}）"
-    try:
+
+    def is_ours(n: str) -> bool | None:
+        """True / False, or None when there is no such entry."""
         try:
-            st = os.stat(name, dir_fd=pfd, follow_symlinks=False)
+            st = os.stat(n, dir_fd=pfd, follow_symlinks=False)
         except FileNotFoundError:
             return None
-        if not stat.S_ISDIR(st.st_mode) or (st.st_ino, st.st_dev) != (ident["inode"], ident["dev"]):
-            return f"{name} 不是紀錄中的那個資料夾（身分不符），不刪除"
+        return stat.S_ISDIR(st.st_mode) and (st.st_ino, st.st_dev) == (ident["inode"], ident["dev"])
+
+    def remove(n: str) -> str | None:
         try:
-            shutil.rmtree(name, dir_fd=pfd)
+            shutil.rmtree(n, dir_fd=pfd)
         except OSError as exc:
             return f"{name} 無法刪除（{exc.strerror or type(exc).__name__}）"
-        try:
-            os.stat(name, dir_fd=pfd, follow_symlinks=False)
+        if is_ours(n) is not None:
             return f"{name} 刪除後仍然存在"
-        except FileNotFoundError:
+        return None
+
+    try:
+        left = is_ours(private)
+        if left is False:
+            return f"{private} 不是紀錄中的那個資料夾（身分不符），不刪除"
+        if left:                                           # an earlier attempt died after the rename
+            problem = remove(private)
+            if problem:
+                return problem
+        ours = is_ours(name)
+        if ours is None:
             return None
+        if not ours:
+            return f"{name} 不是紀錄中的那個資料夾（身分不符），不刪除"
+        try:
+            os.rename(name, private, src_dir_fd=pfd, dst_dir_fd=pfd)
+        except OSError as exc:
+            return f"{name} 無法改成私有名稱以便刪除（{exc.strerror or type(exc).__name__}）"
+        if not is_ours(private):                           # the public name was swapped before the rename
+            try:
+                os.rename(private, name, src_dir_fd=pfd, dst_dir_fd=pfd)
+            except OSError:
+                pass
+            return f"{name} 在驗證與刪除之間被換成別的東西（身分不符），已放回，不刪除"
+        return remove(private)
     finally:
         os.close(pfd)
 
@@ -231,6 +269,17 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
     terminated_for, invalid_reasons (what the run itself saw)."""
     now = time.time() if now is None else now
     job_id = m["job_id"]
+    # Before anything is opened for writing (Codex 3c R4 P1): a job that was
+    # decided already is never judged or saved again. The manifest says
+    # which of the three situations this call is in.
+    try:
+        current = review_store.read_manifest(base, job_id)
+    except (OSError, review_store.ReviewRefused) as exc:
+        problem = f"審查工作的 manifest 無法讀取（{type(exc).__name__}），不判定也不寫入"
+        return Finish("manual_review", [problem], problem=problem)
+    if current["outcome"] is not None:
+        return _resume_decided(base, current, now)
+    m = current
     if run.get("manual_review"):
         review_store.retain(base, job_id, run["manual_review"])
         return Finish("manual_review", [str(run["manual_review"])[:MAX_REASON]])
@@ -282,9 +331,9 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
     try:
         with _Dir(jdir) as job_fd:
             blobs: dict[str, bytes] = {}
-            for fname in (EVENTS_NAME, STDERR_NAME):
+            for fname, limit in ((EVENTS_NAME, EVENTS_LIMIT), (STDERR_NAME, STDERR_LIMIT)):
                 try:
-                    blobs[fname] = _read_once(job_fd, fname, strictjson.CODEX_EVENTS.file_bytes)
+                    blobs[fname] = _read_once(job_fd, fname, limit)
                 except (strictjson.ReadRefused, OSError) as exc:
                     reasons.append(f"{fname} 無法讀取（{type(exc).__name__}），不能判定或保存到審查紀錄")
                     saved_all = False
@@ -440,3 +489,120 @@ def _decide(base, m, run, out: Finish, result: dict, thread, record_fd, record_p
     except (OSError, review_store.ReviewRefused) as exc:
         out.problem = f"manifest 無法改成 cleaned（{type(exc).__name__}）"
     return out
+
+
+# ---- a job that was decided before (a restart in the middle of finishing) -----------------------------------
+
+def _resume_cleanup(base, m: dict, fin: Finish) -> None:
+    """The record is whole: remove what the manifest recorded, then say so."""
+    if m["state"] == "cleaned":
+        fin.cleaned = True
+        return
+    problem = cleanup_job(base, m)
+    if problem:
+        fin.problem = "；".join(x for x in (fin.problem, problem) if x)
+        review_store.retain(base, m["job_id"], fin.problem)
+        return
+    try:
+        review_store.update_manifest(base, m["job_id"], state="cleaned")
+        fin.cleaned = True
+    except (OSError, review_store.ReviewRefused) as exc:
+        fin.problem = f"manifest 無法改成 cleaned（{type(exc).__name__}）"
+
+
+def _rebuild_result(base, m: dict, now: float):
+    """result.json from the outcome in the manifest and the copies already in
+    the record (never from the files Codex left, which may be gone). (result
+    dict or None, problem or None, leftover). A copy that cannot be read, or
+    one that contradicts the outcome, is a problem: nothing is guessed."""
+    valid = m["outcome"] == "valid"
+    with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
+        rfd = p.review_dir_fd(m["round"])
+    try:
+        copies: dict[str, bytes | None] = {}
+        for name, limit in (("last.md", review_validate.REPORT_MAX), (EVENTS_NAME, EVENTS_LIMIT),
+                            (STDERR_NAME, STDERR_LIMIT)):
+            try:
+                copies[name] = _read_once(rfd, name, limit)
+            except (strictjson.ReadRefused, OSError) as exc:
+                copies[name] = None
+                if valid or not (isinstance(exc, strictjson.ReadRefused) and exc.missing):
+                    return None, f"審查紀錄裡已保存的 {name} 讀不到或損壞（{type(exc).__name__}）", None
+        rollout = None
+        try:
+            fd, st = strictjson.open_owned("rollout.jsonl", dir_fd=rfd, max_bytes=review_validate.ROLLOUT_MAX)
+            os.close(fd)
+            rollout = {"copied": True, "size": st.st_size}
+        except (strictjson.ReadRefused, OSError) as exc:
+            if valid or not (isinstance(exc, strictjson.ReadRefused) and exc.missing):
+                return None, f"審查紀錄裡已保存的 rollout.jsonl 讀不到或損壞（{type(exc).__name__}）", None
+        verdict = ancestor = None
+        if copies["last.md"] is not None:
+            try:
+                text = copies["last.md"].decode("utf-8")
+            except UnicodeDecodeError:
+                return None, "審查紀錄裡已保存的 last.md 不是合法的 UTF-8", None
+            rep = review_validate.check_report(text, m["commit"])
+            verdict, ancestor = rep.verdict, rep.base_is_ancestor
+            if valid and rep.problems:
+                return None, "已保存的 last.md 與 valid 的結果不符：" + "；".join(rep.problems[:2]), None
+        reasons = [] if valid else list(m.get("invalid_reasons") or [])
+        result = {"v": 1, "job_id": m["job_id"], "round": m["round"], "commit": m["commit"], "valid": valid,
+                  "verdict": verdict, "base_is_ancestor": ancestor, "reasons": reasons, "thread_id": m["thread_id"],
+                  "exit_code": m["exit_code"], "exit_signal": None, "terminated_for": None, "rollout": rollout,
+                  "finished_at": m.get("ended_at", now), "rebuilt": True}
+        record_path = f"pipelines/{m['task_id']}/reviews/{m['round']}"
+        saved = _write_new(rfd, "result.json", json.dumps(result, ensure_ascii=False, sort_keys=True).encode(),
+                           record_path)
+        if not saved.ok:
+            return None, saved.reason, saved
+        return result, None, None
+    finally:
+        os.close(rfd)
+
+
+def _resume_decided(base, m: dict, now: float) -> Finish:
+    """finish_review for a job whose outcome is already in the manifest. The
+    decision, the saved files and the outcome are never touched again:
+      * manual_review: nothing to do (a person looks);
+      * the record is whole (result.json agrees): only the clean-up is
+        finished, when it was not;
+      * the record is not whole (no result.json): the saved copies are read
+        back and result.json is written from them and the outcome; when that
+        cannot be done the outcome stays as it is and the reason is kept."""
+    job_id, outcome = m["job_id"], m["outcome"]
+    fin = Finish(outcome, list(m.get("invalid_reasons") or []))
+    if outcome == "manual_review":
+        fin.reasons = [str(m.get("retained_reason") or "")[:MAX_REASON]]
+        return fin
+    try:
+        with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
+            res = p.review_result(m["round"])
+    except (OSError, pipeline_store.StoreRefused) as exc:
+        fin.problem = f"審查紀錄的 result.json 無法讀取（{type(exc).__name__}）"
+        review_store.retain(base, job_id, fin.problem)
+        return fin
+    if res is not None:
+        try:
+            stream_flow.record_state(m, res)
+        except stream_flow.FlowRefused as exc:
+            fin.problem = f"審查紀錄的 result.json 與 manifest 不一致（{exc}）"
+            review_store.retain(base, job_id, fin.problem)
+            return fin
+        fin.record_complete = True
+        fin.result = res
+        _resume_cleanup(base, m, fin)
+        return fin
+    try:
+        result, problem, saved = _rebuild_result(base, m, now)
+    except (OSError, pipeline_store.StoreRefused) as exc:
+        result, problem, saved = None, f"審查紀錄無法開啟（{type(exc).__name__}）", None
+    if result is None:
+        fin.problem = f"審查紀錄不完整，且無法補寫 result.json：{problem}"
+        if saved is not None and saved.leftover:
+            fin.leftover, fin.leftover_bytes = saved.leftover, saved.leftover_bytes
+        review_store.retain(base, job_id, fin.problem)
+        return fin
+    fin.record_complete, fin.result = True, result
+    _resume_cleanup(base, m, fin)
+    return fin
