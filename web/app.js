@@ -2608,6 +2608,7 @@ function mountCoordinator(flowId) {
       if (!alive || mine !== seq) return;
       const key = JSON.stringify(next);
       if (!force && key === last) return;
+      const later = last !== null;
       last = key;
       state = next;
       let parts = [];
@@ -2627,6 +2628,9 @@ function mountCoordinator(flowId) {
         parts = [notice("bad", "無法顯示伺服器的回應（格式不符）：" + (e && e.message ? e.message : String(e)))];
       }
       setKids(data, parts);
+      // what is kept (and whether the flow can be deleted) follows what changed here: a session that was closed
+      // makes the delete button appear without a manual refresh (AGY QA)
+      if (later && storage) storage.reload();
     } finally {
       inflight = false;
       if (again && alive) {

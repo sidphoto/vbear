@@ -147,6 +147,20 @@ test("a stopped flow shows why, and continue is the way out", async () => {
   assert(posts().some((x) => x.url.endsWith("/continue")));
 });
 
+test("closing a session reads the stored-data panel again, so its delete button follows", async () => {
+  const c = await mount({ executor: executor({ sessions: [liveSession()] }) });
+  const reads = () => FETCH_LOG.filter((x) => x.url.endsWith("/api/flows/storage")).length;
+  const before = reads();
+  assert(before >= 1, "read once when the page was drawn");
+  button(byS2(c.node, "executor"), "關閉 session").click();
+  await settle();
+  button(byS2(c.node, "executor"), "確定").click();
+  await settle();
+  assert(posts().some((x) => x.url.endsWith("/executor/close")), "the session was closed");
+  assert(reads() > before, "the storage panel was read again after the close");
+  c.stop();
+});
+
 test("stopping takes two steps and cancel does nothing", async () => {
   const c = await mount();
   const ex = byS2(c.node, "executor");
