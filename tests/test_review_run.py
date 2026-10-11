@@ -94,14 +94,20 @@ class RunCase(unittest.TestCase):
         self.assertTrue(run.finished, f"the run did not finish; logs {self.logs[-3:]}")
         return run.outcome
 
-    def group_gone(self, pid):
-        try:
-            os.killpg(pid, 0)
-            return False
-        except ProcessLookupError:
-            return True
-        except PermissionError:
-            return False
+    def group_gone(self, pid, wait=10.0):
+        """The group has no member left. A killed member stays a zombie until init reaps it, which on a busy machine
+        takes a moment (the group still answers signal 0 meanwhile), so this waits for it instead of asking once."""
+        end = time.monotonic() + wait
+        while True:
+            try:
+                os.killpg(pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
 
 
 WRITE_EVENTS = "import os,sys;sys.stdout.buffer.write(open(os.environ['TMPD']+'/events.bin','rb').read());sys.stdout.flush()"
