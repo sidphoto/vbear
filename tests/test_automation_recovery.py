@@ -222,3 +222,138 @@ class DaemonRestartTests(Boundary):
         self.assertEqual(after[len(before):], ["auto_stopped"])                # said once, then silence
         self.assertEqual(flows.get_flow(self.fid)["events"][-1]["reason_code"], "daemon_hold")
         self.assertEqual(pipeline_store.mode_info(self.base, self.fid)["mode"], "auto")   # the mode itself stays
+
+
+class WritingBoundaryTests(Boundary):
+    """S3 design 10: the dispatch is still being written when the console restarts."""
+
+    def test_a_dispatch_still_in_writing_is_waited_for_not_queued_or_sent_again(self):
+        from vbear.runtime import stream_session
+        self.setup_run()
+        calls = []
+        real_call, real_send = self.console.executor._call, self.console.executor._send
+
+        def counting_call(op, **kw):
+            calls.append(op)
+            return real_call(op, **kw)
+
+        def counting_send(fields):
+            calls.append("stream_send")
+            return real_send(fields)
+        with mock.patch.object(stream_session.StreamSession, "on_writable", return_value=False):
+            # the daemon has the line but the pipe does not take it: the turn stays in "writing"
+            self.tick_until_died(self.after_real_call("_send"))
+            self.assertEqual(self.kinds(), ["auto_dispatch_intent"])
+            d = next(e for e in flows.get_flow(self.fid)["events"] if e["kind"] == "auto_dispatch_intent")["dispatch_id"]
+            self.wait_for(lambda: any(x["dispatch_id"] == d and x["status"] == "writing"
+                                      for x in self.executor_status()["sessions"][-1]["status"]["dispatches"]),
+                          msg="the dispatch to be in writing")
+            self.fresh_runner()                                               # the console restarted
+            with mock.patch.object(self.console.executor, "_call", counting_call), \
+                    mock.patch.object(self.console.executor, "_send", counting_send):
+                actions = [self.runner.tick()[self.fid] for _ in range(6)]
+            self.assertTrue(all(a.startswith("waiting:") for a in actions), actions)
+            self.assertNotIn("dispatch_prepare", calls)                       # not prepared again
+            self.assertNotIn("stream_send", calls)                            # not queued again
+            self.assertEqual(self.kinds(), ["auto_dispatch_intent"])          # and nothing was claimed
+        # the original write goes on and completes: the same dispatch id is found, recorded, and the run ends
+        self.finish_to_gate()
+        self.assertEqual(len(self.journal().turns), 1)
+        self.assertEqual(self.kinds().count("auto_dispatch_intent"), 1)
+        self.assertEqual(self.kinds().count("auto_dispatch_sent"), 1)
+        self.assertEqual(list(self.journal().turns), [d])
+
+
+class FinishedTurnAcrossARestartTests(Boundary):
+    def test_a_turn_that_ended_before_the_daemon_restart_is_validated_after_the_user_continues(self):
+        self.setup_run()
+        self.tick_until_died(self.after_real_call("_send"))                    # sent, not yet recorded as sent
+        self.wait_for(lambda: self.executor_status()["sessions"][-1]["status"]["dispatches"][0]["status"] == "ended",
+                      msg="the turn to end")
+        pid = self.launched()["pid"]
+        self.crash_daemon()
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+        time.sleep(0.3)
+        self.restart_daemon()
+        self.fresh_runner()
+        before = self.kinds()
+        for _ in range(3):
+            self.assertEqual(self.runner.tick()[self.fid], "held")            # stopped: nothing is done
+        self.assertEqual(self.kinds(), before + ["auto_stopped"])
+        self.assertFalse(self.executor_status()["unresolved_failure"])        # it had a result: no failure to release
+        st, r = self.call(f"/api/flows/{self.fid}/continue", "POST", {})
+        self.assertEqual(st, 200, r)
+        self.start_executor()                                                  # the user's new executor
+        self.finish_to_gate()
+        # the finished turn was validated as it was; no second dispatch; one review of that commit
+        self.assertEqual(self.kinds().count("auto_dispatch_intent"), 1)
+        self.assertEqual(len(self.executor_status()["sessions"][-1]["status"]["dispatches"]), 0)
+        self.assertEqual([r["round"] for r in self.reviews()], [1])
+        report = next(e for e in flows.get_flow(self.fid)["events"] if e["kind"] == "auto_report")
+        self.assertEqual(report["commit"], self.commit)
+
+
+class ReviewStateTable(Boundary):
+    """What the runner does for every state a review job's manifest can be in (S3 design 3, table row 4)."""
+
+    ABORT = "流程被停止，審查中止"
+
+    def run_with(self, entry):
+        r = runner_mod.AutomationRunner(self.console.executor, self.console.review)
+        recorded = {"events": [], "stops": []}
+
+        class Review:
+            def reviews(_self, flow_id):
+                return {"reviews": [] if entry is None else [entry]}
+        r.review = Review()
+        r._event = lambda flow_id, kind, fields: recorded["events"].append((kind, fields))
+        r._stop = lambda flow_id, code, detail: recorded["stops"].append(code) or f"stopped:{code}"
+        action = r._await_review(self.fid, {"round": 1, "job_id": "r-" + "1" * 16, "commit": "a" * 40})
+        return action, recorded
+
+    def entry(self, state, outcome, verdict=None, record="complete", reasons=None):
+        return {"job_id": "r-" + "1" * 16, "round": 1, "commit": "a" * 40, "state": state, "outcome": outcome,
+                "record": record, "invalid_reasons": reasons,
+                "result": {"valid": outcome == "valid", "verdict": verdict} if verdict else None}
+
+    def test_every_state_has_one_action(self):
+        cases = [
+            # (state, outcome, verdict, record, reasons) -> ("waiting" | ("stop", code) | ("event", kind, ...))
+            (("prepared", None), "waiting"),
+            (("launching", None), "waiting"),
+            (("running", None), "waiting"),
+            (("finished", "valid", "PASS"), ("event", "auto_review_result", "PASS")),
+            (("finished", "valid", "NEEDS WORK"), ("event", "auto_review_result", "NEEDS WORK")),
+            (("finished", "valid", "BLOCKED"), ("event", "auto_review_result", "BLOCKED")),      # then derive says blocked
+            (("cleaned", "valid", "PASS"), ("event", "auto_review_result", "PASS")),
+            (("cleaned", "valid", "NEEDS WORK"), ("event", "auto_review_result", "NEEDS WORK")),
+            (("finished", "valid", "PASS", "absent"), ("stop", "review_record")),
+            (("finished", "valid", "MAYBE"), ("stop", "review_verdict")),
+            (("invalid", "invalid", None, "absent", ["rollout 不符"]), ("stop", "review_invalid")),
+            (("cleaned", "invalid", None, "complete", ["審查逾時"]), ("stop", "review_invalid")),
+            (("cleaned", "invalid", None, "complete", [self.ABORT]), ("event", "auto_review_aborted")),
+            (("invalid", "invalid", None, "complete", ["x", self.ABORT]), ("event", "auto_review_aborted")),
+            (("manual_review", "manual_review"), ("stop", "review_manual")),
+            (("cleaned", "manual_review"), ("stop", "review_manual")),
+        ]
+        for spec, want in cases:
+            with self.subTest(spec=spec):
+                state, outcome, *rest = spec
+                action, rec = self.run_with(self.entry(state, outcome, *rest))
+                if want == "waiting":
+                    self.assertTrue(action.startswith("waiting:"), action)
+                    self.assertEqual((rec["events"], rec["stops"]), ([], []))
+                elif want[0] == "stop":
+                    self.assertEqual(rec["stops"], [want[1]], (action, rec))
+                    self.assertEqual(rec["events"], [])
+                else:
+                    self.assertEqual(rec["stops"], [])
+                    self.assertEqual(len(rec["events"]), 1)
+                    self.assertEqual(rec["events"][0][0], want[1])
+                    if len(want) > 2:
+                        self.assertEqual(rec["events"][0][1]["verdict"], want[2])
+        action, rec = self.run_with(None)                                       # a job that is not there at all
+        self.assertEqual(rec["stops"], ["review_missing"])
