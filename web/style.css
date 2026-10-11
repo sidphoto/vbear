@@ -844,3 +844,28 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .flow-path { overflow-wrap: anywhere; }
 .table-scroll { max-width: 100%; overflow-x: auto; }
 .flow-rounds th, .flow-rounds td.mono { white-space: nowrap; }
+
+/* ---- the VBear-managed executor, reviews and merge gate (S2c-4) ---- */
+.s2 { display: grid; gap: 4px; }
+.s2-panel .row { gap: 8px; align-items: center; flex-wrap: wrap; }
+.s2-plain { margin: 6px 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px;
+  font: 13px/1.5 var(--mono, ui-monospace, monospace); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  max-height: 24rem; overflow: auto; color: var(--ink); }
+.s2-plain:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+.s2-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 14px; margin-top: 8px; }
+.s2-cols h4 { margin: 0 0 6px; font-size: 14px; }
+.s2-reports, .s2-reviews, .s2-sessions, .s2-checks, .s2-commands { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.s2-report, .s2-review, .s2-session { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); }
+.s2-checks li { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+.s2-meters { list-style: none; margin: 8px 0; padding: 0; display: flex; gap: 6px 18px; flex-wrap: wrap; }
+.s2-over { color: var(--bad); }
+.s2-risk { margin: 10px 0; }
+.s2-risk h3 { margin: 0 0 4px; font-size: 15px; }
+.s2-risk-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; color: var(--ink); }
+.s2-check { display: flex; gap: 8px; align-items: flex-start; padding: 10px 0; font-weight: 600; }
+.s2-limits td { padding: 4px 10px 4px 0; vertical-align: middle; }
+.s2-limit { width: 7rem; }
+.s2-preview { margin-top: 8px; }
+.s2-confirm { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.btn.bad { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+@media (max-width: 640px) { .s2-cols { grid-template-columns: 1fr; } .s2-limit { width: 100%; } }

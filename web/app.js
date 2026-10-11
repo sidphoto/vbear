@@ -644,6 +644,8 @@ const api = {
       if (!res.ok) {
         const error = new Error(data.error || `HTTP ${res.status}`);
         error.status = res.status;
+        error.code = data.code;
+        error.data = data;
         throw error;
       }
       return data;
@@ -665,6 +667,8 @@ const api = {
     if (!res.ok) {
       const error = new Error(data.error || `HTTP ${res.status}`);
       error.status = res.status;
+      error.code = data.code;
+      error.data = data;
       throw error;
     }
     return data;
@@ -1780,7 +1784,9 @@ function cleanupActiveTerminal() {
 // entering any view so a view that is navigated away from cannot leak a
 // stale window listener holding its old DOM/closures alive (L1).
 let activeViewCleanup = null;
+let flowCoordinator = null;    // the flow page's S2 panels, for the page's own timer (S2c-4)
 function cleanupActiveView() {
+  flowCoordinator = null;
   // Close any open modal (e.g. a task create/edit dialog) through its own
   // registered teardown before the view's own cleanup runs. This lives in
   // its own composable registry (openModalCloses), not folded into this
@@ -1983,6 +1989,11 @@ async function viewFlowDetail(flowId) {
   } } }, el("label", { class: "small" }, "事件 ", kindSel), commitRow, reviewRow, note,
     el("p", { class: "small muted" }, "這筆會標示為「手動記錄（未驗證）」。記錄事件只會寫入流程紀錄，不會派工、輸入指令或執行 git。"), add);
 
+  // The VBear-managed executor, reviews and merge gate (S2c-4). It stops its
+  // own refreshing when the page is left (cleanupActiveView).
+  const coordinator = mountCoordinator(f.id);
+  activeViewCleanup = () => coordinator.stop();
+  flowCoordinator = coordinator;
   const rounds = f.rounds || [];
   const roundTable = rounds.length ? el("div", { class: "table-scroll" }, el("table", { class: "flow-rounds" },
     el("thead", null, el("tr", null, ["輪次", "回報的 commit", "審查者", "家族", "結論", "算通過", "說明"].map((h) => el("th", null, h)))),
@@ -2019,11 +2030,484 @@ async function viewFlowDetail(flowId) {
           flowLiveText(f.executor_live, liveLoadError()))),
         el("dt", null, "工作目錄"), el("dd", { class: "mono flow-path" }, f.roles.executor.workdir || "（未設定，無法核對 HEAD）"),
         el("dt", null, "審查"), el("dd", null, f.roles.reviewers.map(roleText).join("、")))),
+    coordinator.node,
     el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
       (f.stray_reviews || []).length ? notice("info", `另有 ${f.stray_reviews.length} 筆審查的 commit 不是最新一次回報的 commit，未列入輪次。`) : null),
     el("section", { class: "section" }, sectionHead("時間軸", `${(f.events || []).length} 筆`),
       (f.events || []).length ? timeline : emptyState("還沒有事件", null)),
     el("section", { class: "section" }, sectionHead("手動記錄事件", null), form));
+}
+
+// ---------- the VBear-managed executor, reviews and merge gate (S2c-4) ------------
+//
+// Everything the server or a reviewer wrote is shown with textContent (el()
+// only ever makes text nodes): a review report is "plain_text" and stays
+// plain text here, whatever it contains. Every action goes through the
+// server's preview-then-approve routes; nothing is sent from the browser
+// that the server did not store first. The buttons are hints: the server and
+// the daemon decide again, and what they say is shown as it is.
+
+const S2_ACCEPTANCE = {
+  none: ["尚未接受風險", "b-mute", "還沒有接受殘餘風險，不能由 VBear 啟動執行者或 Codex 審查。"],
+  valid: ["風險已接受", "b-ok", ""],
+  stale: ["接受已失效", "b-warn", ""],
+  unknown: ["無法確認接受", "b-warn", ""],
+};
+const S2_REVIEW_OUTCOME = {
+  valid: ["有效", "b-ok"], invalid: ["無效", "b-bad"], manual_review: ["待人工處理", "b-warn"],
+};
+const S2_VERDICT_CLASS = { PASS: "b-ok", "NEEDS WORK": "b-warn", BLOCKED: "b-bad" };
+const S2_SESSION_STATE = {
+  idle: "閒置（可派工）", turn_running: "執行中", running: "執行中", finishing: "收尾中", uncertain: "狀態不確定",
+  error: "錯誤", exited: "已結束", starting: "啟動中",
+};
+
+function s2Url(flowId, suffix) { return `/api/flows/${encodeURIComponent(flowId)}/${suffix}`; }
+
+// One GET that cannot take the page down: {ok, data} or {ok:false, message}.
+async function s2Get(path) {
+  try { return { ok: true, data: await api.get(path) }; }
+  catch (e) { return { ok: false, message: e.message, status: e.status }; }
+}
+
+async function s2Load(flowId) {
+  const [executor, reports, reviews, gate] = await Promise.all([
+    s2Get(s2Url(flowId, "executor")), s2Get(s2Url(flowId, "reports")),
+    s2Get(s2Url(flowId, "reviews")), s2Get(s2Url(flowId, "merge-gate"))]);
+  return { executor, reports, reviews, gate };
+}
+
+function s2Pre(text, cls) {
+  return el("pre", { class: `s2-plain ${cls || ""}`.trim(), tabindex: "0" }, text == null ? "" : String(text));
+}
+
+function s2Copy(text, label) {
+  return el("button", { class: "btn small", type: "button", on: { click: async () => {
+    try { await navigator.clipboard.writeText(text); toast("已複製"); }
+    catch (_) { toast("無法複製，請手動選取"); }
+  } } }, label || "複製");
+}
+
+// Two-step confirmation on the button itself (no browser dialogs).
+function s2Confirm(label, question, action, cls) {
+  const host = el("span", { class: "s2-confirm" });
+  const ask = () => {
+    const yes = el("button", { class: "btn small bad", type: "button", on: { click: async () => {
+      yes.disabled = true;
+      try { await action(); } finally { setKids(host, btn); }
+    } } }, "確定");
+    const no = el("button", { class: "btn small", type: "button", on: { click: () => setKids(host, btn) } }, "取消");
+    setKids(host, el("span", { class: "small" }, question + " "), yes, no);
+    no.focus();
+  };
+  const btn = el("button", { class: `btn small ${cls || ""}`.trim(), type: "button", on: { click: ask } }, label);
+  host.append(btn);
+  return host;
+}
+
+function s2Meter(label, used, limit, unit) {
+  const over = typeof used === "number" && typeof limit === "number" && used >= limit;
+  return el("li", null, `${label}：`, el("b", { class: over ? "s2-over" : "" }, `${used ?? "?"}${unit || ""}`),
+    ` ／ 上限 ${limit ?? "?"}${unit || ""}`);
+}
+
+// ---- the risk acceptance dialog ----------------------------------------------------------------
+
+function openAcceptanceDialog(flowId, onDone) {
+  let modal; let previewId = null; let current = null;
+  const body = el("div", { class: "s2-accept-body" });
+  const problem = el("div", { class: "s2-accept-problem", role: "alert" });   // what the server said to the last confirmation
+  const status = el("p", { class: "small muted", role: "status" }, "正在讀取…");
+  const accept = el("button", { class: "btn primary", type: "button", disabled: true, on: { click: submit } }, "接受並記錄");
+  const cancel = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
+  const again = el("button", { class: "btn", type: "button", on: { click: () => load(null) } }, "重新預覽");
+  modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "s2-accept-title" },
+    el("div", { class: "modal-box", style: "max-width: 760px; max-height: 88vh; overflow-y: auto;" },
+      el("h2", { id: "s2-accept-title" }, "接受殘餘風險"), status, problem, body,
+      el("div", { class: "modal-actions" }, cancel, again, accept)));
+  document.body.append(modal);
+  const closeModal = withModalA11y(modal, () => modal.remove());
+  cancel.focus();
+
+  const num = (v) => (typeof v === "number" ? String(v) : "");
+  async function load(over) {
+    previewId = null;
+    accept.disabled = true;
+    setKids(problem);
+    setKids(status, "正在讀取…");
+    try {
+      const res = await api.post(s2Url(flowId, "acceptance-preview"), over || {});
+      current = res;
+      previewId = res.preview_id;
+      render(res);
+      setKids(status, `這份預覽只能用一次，5 分鐘內有效（到 ${fmtTime(res.expires_at)}）。接受的是下面這一組值；` +
+        "任何一項在你按下之前改變，就必須重新預覽。");
+    } catch (e) {
+      current = null;
+      setKids(body);
+      if (e.code === "needs_login" && e.data) {
+        setKids(status, "");
+        setKids(body, notice("warn", e.message),
+          el("p", null, "請在終端機自己執行下面這行指令（VBear 不會替你登入，也不會讀取憑證）："),
+          s2Pre(e.data.login_command), s2Copy(e.data.login_command),
+          el("p", { class: "small muted" }, `設定目錄：${e.data.codex_home}。登入完成後按「重新預覽」。`));
+      } else {
+        setKids(status, "");
+        setKids(body, notice("bad", e.message));
+      }
+    }
+  }
+  function render(res) {
+    const v = res.values;
+    const limitRows = v.limits.map((x) => {
+      const input = el("input", { type: "number", class: "input s2-limit", "aria-label": x.label,
+        value: String(x.value), min: "1", max: String(x.cap), step: x.name === "executor_budget_usd" ? "0.01" : "1",
+        dataset: { limit: x.name } });
+      input.value = String(x.value);
+      return el("tr", null, el("td", null, x.label), el("td", null, input, ` ${x.unit}`),
+        el("td", { class: "small muted" }, `預設 ${x.default}，上限 ${x.cap}`));
+    });
+    const modelIn = el("input", { type: "text", class: "input mono", value: v.executor_model, list: "s2-exec-models",
+      "aria-label": "執行者模型（完整的 Claude 模型 id）", spellcheck: "false" });
+    modelIn.value = v.executor_model;
+    const lists = el("datalist", { id: "s2-exec-models" }, (res.suggested_executor_models || []).map((m) => el("option", { value: m })));
+    const reviewIn = el("select", { "aria-label": "審查模型" }, (res.review_models || [v.review_model]).map(
+      (m) => el("option", { value: m, selected: m === v.review_model }, m)));
+    const check = el("input", { type: "checkbox", id: "s2-accept-check", on: { change: () => {
+      accept.disabled = !(check.checked && previewId);
+    } } });
+    const zh = res.risk_text.zh;
+    setKids(body,
+      el("p", null, zh.intro),
+      zh.items.map((it, i) => el("section", { class: "s2-risk" }, el("h3", null, `${i + 1}. ${it.title}`),
+        el("p", { class: "s2-risk-body" }, it.body))),
+      el("details", { class: "s2-risk-en" }, el("summary", null, "English text (same version)"),
+        res.risk_text.en.items.map((it, i) => el("section", { class: "s2-risk" }, el("h3", null, `${i + 1}. ${it.title}`),
+          el("p", { class: "s2-risk-body" }, it.body)))),
+      el("p", { class: "small muted" }, `風險文字版本 ${v.text_version}`),
+      el("h3", null, "這次接受涵蓋的設定"),
+      el("dl", { class: "kv small" },
+        el("dt", null, "Codex 版本"), el("dd", { class: "mono" }, v.codex_version),
+        el("dt", null, "審查模型"), el("dd", null, reviewIn),
+        el("dt", null, "Claude Code 版本"), el("dd", { class: "mono" }, v.executor_claude_version),
+        el("dt", null, "執行者模型"), el("dd", null, modelIn, lists),
+        el("dt", null, "執行者的 Claude 帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, v.executor_account),
+        el("dt", null, "審查者的 Codex 帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, v.review_account),
+        el("dt", null, "指紋金鑰 id"), el("dd", { class: "mono" }, v.login_key_id)),
+      el("h3", null, "上限（全部九項）"),
+      el("div", { class: "table-scroll" }, el("table", { class: "s2-limits" }, el("tbody", null, limitRows))),
+      el("p", { class: "small" }, "改了模型或上限，要按「套用並重新預覽」才會產生新的預覽。",
+        " ", el("button", { class: "btn small", type: "button", on: { click: () => {
+          const limits = {};
+          body.querySelectorAll("input").forEach((i) => {
+            const name = i.dataset && i.dataset.limit;
+            if (name) limits[name] = Number(i.value);
+          });
+          load({ executor_model: modelIn.value.trim(), review_model: reviewIn.value, limits });
+        } } }, "套用並重新預覽")),
+      el("label", { class: "s2-check" }, check, " ", zh.confirm));
+  }
+  async function submit() {
+    if (!previewId) return;
+    accept.disabled = true;
+    try {
+      await api.post(s2Url(flowId, "acceptance"), { preview_id: previewId });
+      toast("已記錄風險接受");
+      closeModal();
+      if (onDone) onDone();
+    } catch (e) {
+      setKids(status, "");
+      previewId = null;
+      setKids(problem, notice(e.status === 409 ? "warn" : "bad", e.message +
+        (e.status === 409 ? "（這份預覽已作廢，請重新預覽）" : "")));
+    }
+  }
+  load(null);
+  return closeModal;
+}
+
+// ---- the panels -------------------------------------------------------------------------------------
+
+function s2AcceptancePanel(flowId, ex, refresh) {
+  const a = ex.acceptance || { state: "none" };
+  const [label, cls, tip] = S2_ACCEPTANCE[a.state] || S2_ACCEPTANCE.unknown;
+  const v = a.values;
+  return el("section", { class: "section s2-panel", "data-s2": "acceptance" },
+    sectionHead("風險接受", null, el("div", { class: "row" }, badge(label, cls, tip),
+      el("button", { class: "btn small primary", type: "button", on: { click: () => openAcceptanceDialog(flowId, refresh) } },
+        a.state === "valid" ? "重新接受…" : "接受殘餘風險…"))),
+    a.reason ? notice(a.state === "valid" ? "info" : "warn", a.reason) : (tip ? el("p", { class: "small muted" }, tip) : null),
+    v ? el("dl", { class: "kv small" },
+      el("dt", null, "記錄於"), el("dd", null, fmtTime(a.accepted_at)),
+      el("dt", null, "風險文字版本"), el("dd", { class: "mono" }, v.text_version),
+      el("dt", null, "Codex／審查模型"), el("dd", { class: "mono" }, `${v.codex_version}／${v.review_model}`),
+      el("dt", null, "Claude Code／執行者模型"), el("dd", { class: "mono" }, `${v.executor_claude_version}／${v.executor_model}`),
+      el("dt", null, "帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, `執行者 ${v.executor_account}　審查者 ${v.review_account}`)) : null);
+}
+
+function s2ExecutorPanel(flowId, ex, refresh) {
+  const sessions = (ex.sessions || []).slice().reverse();
+  const live = sessions.find((s) => s.manifest_state === "running" || s.manifest_state === "launching");
+  const start = el("button", { class: "btn small primary", type: "button", disabled: !ex.can_start, on: { click: async (ev) => {
+    ev.target.disabled = true;
+    try { await api.post(s2Url(flowId, "executor"), {}); toast("已啟動執行者"); } catch (e) { toast("無法啟動：" + e.message); }
+    refresh();
+  } } }, "啟動執行者");
+  const why = [];
+  if (!ex.can_start) {
+    if (ex.acceptance.state !== "valid") why.push("需要有效的風險接受");
+    if (ex.hold && ex.hold.held) why.push("流程已停止");
+    if (live) why.push("已有執行中的 session");
+    if (ex.workdir_problem) why.push(ex.workdir_problem);
+    if (ex.unresolved_failure) why.push("有尚未「繼續」的失敗");
+    if (!ex.accounting || !ex.accounting.ok) why.push("用量無法核算");
+  }
+  const held = ex.hold && ex.hold.held;
+  const stop = held ? el("button", { class: "btn small primary", type: "button", on: { click: async (ev) => {
+    ev.target.disabled = true;
+    try { await api.post(s2Url(flowId, "continue"), {}); toast("已繼續"); } catch (e) { toast("無法繼續：" + e.message); }
+    refresh();
+  } } }, "繼續")
+    : s2Confirm("停止這個流程", "停止後不會再派工或審查；進行中的審查會被結束。", async () => {
+      try { await api.post(s2Url(flowId, "hold"), {}); toast("已停止"); } catch (e) { toast("無法停止：" + e.message); }
+      refresh();
+    });
+  const acct = ex.accounting;
+  const sessionRows = sessions.map((s) => {
+    const st = s.status || {};
+    const closeBtn = (s.manifest_state === "running" || s.manifest_state === "launching") && st.live
+      ? s2Confirm("關閉 session", "確定要關閉這個執行者 session？", async () => {
+        try { await api.post(s2Url(flowId, "executor/close"), { launch_id: s.launch_id }); toast("已要求關閉"); }
+        catch (e) { toast("無法關閉：" + e.message); }
+        refresh();
+      }) : null;
+    return el("li", { class: "s2-session" },
+      el("div", { class: "row" }, el("b", { class: "mono" }, s.launch_id),
+        badge(S2_SESSION_STATE[st.state] || (s.manifest_state === "ended" ? "已結束" : (s.manifest_state || "?")),
+          st.live ? "b-info" : "b-mute"),
+        s.manifest_state === "manual_review" ? badge("待人工處理", "b-warn", s.retained_reason || "") : null,
+        closeBtn),
+      el("div", { class: "small muted" }, `${s.model_id || ""}　Claude Code ${s.cli_version || "?"}　` +
+        `回應 ${st.responses ?? "?"}　費用 ${st.total_cost_usd ?? "?"} USD`),
+      s.status_problem ? notice("warn", s.status_problem) : null,
+      st.journal_problem ? notice("bad", "日誌有問題：" + st.journal_problem) : null,
+      s.worst_case ? notice("warn", s.worst_case.text) : null);
+  });
+  return el("section", { class: "section s2-panel", "data-s2": "executor" },
+    sectionHead("串流執行者", "由 VBear 啟動的 Claude Code；你逐則核准派工。", el("div", { class: "row" }, start, stop)),
+    why.length ? el("p", { class: "small muted" }, "現在不能啟動：" + why.join("；") + "。") : null,
+    held ? notice("warn", `流程已停止：${ex.hold.reason || "（沒有說明）"}${ex.hold.at ? `（${fmtTime(ex.hold.at)}）` : ""}`) : null,
+    ex.sessions_problem ? notice("bad", "無法列出 session：" + ex.sessions_problem) : null,
+    ex.sessions_order_problem ? notice("warn", "無法判斷 session 的先後：" + ex.sessions_order_problem + "。在這之前不會判定哪一份回報是最新的。") : null,
+    acct && acct.ok ? el("ul", { class: "small s2-meters" },
+      s2Meter("派工", acct.dispatches, acct.limits.max_dispatches, " 則"),
+      s2Meter("執行者模型回應", acct.responses, acct.limits.executor_total_max_responses),
+      s2Meter("執行者費用", acct.spent_usd, acct.limits.executor_budget_usd, " USD"),
+      s2Meter("審查", acct.reviews, acct.limits.max_reviews, " 次"),
+      el("li", null, `經過時間：${acct.elapsed_s == null ? "尚未開始" : (acct.elapsed_s / 3600).toFixed(2) + " 小時"}` +
+        ` ／ 上限 ${acct.limits.max_elapsed_h} 小時`))
+      : (acct ? notice("bad", `用量無法核算（${acct.code}）：${acct.message}`) : null),
+    (ex.failures || []).length ? el("div", null, el("h3", null, "失敗"),
+      el("ul", { class: "small" }, ex.failures.map((f) => el("li", null,
+        badge(f.released ? "已繼續" : "未繼續", f.released ? "b-mute" : "b-warn"), ` ${f.kind === "review" ? "審查 " + f.job_id : "session " + f.launch_id}：${f.why}`)))) : null,
+    sessions.length ? el("ul", { class: "s2-sessions" }, sessionRows) : emptyState("還沒有執行者 session", null));
+}
+
+function s2DispatchComposer(flowId, getExecutor, refresh) {
+  const text = el("textarea", { class: "input", rows: "5", maxlength: "60000", "aria-label": "派工內容",
+    placeholder: "寫下要請執行者做的事（會先預覽，核准後才送出）" });
+  const out = el("div", { class: "s2-preview" });
+  const previewBtn = el("button", { class: "btn small primary", type: "button", on: { click: doPreview } }, "預覽");
+  const node = el("section", { class: "section s2-panel", "data-s2": "dispatch" },
+    sectionHead("派工", "每一則都要你核准；送出的就是預覽裡顯示的那一份。"), text,
+    el("div", { class: "row" }, previewBtn), out);
+  function target() {
+    const ex = getExecutor();
+    const live = ((ex && ex.sessions) || []).filter((s) => s.manifest_state === "running" && s.status && s.status.live);
+    return live.length ? live[live.length - 1].launch_id : null;
+  }
+  async function doPreview() {
+    const launch = target();
+    if (!launch) { toast("目前沒有執行中的執行者 session"); return; }
+    previewBtn.disabled = true;
+    try {
+      const pre = await api.post(s2Url(flowId, "dispatch-preview"), { launch_id: launch, text: text.value });
+      showPreview(pre);
+    } catch (e) { setKids(out, notice("bad", e.message)); }
+    previewBtn.disabled = false;
+  }
+  function showPreview(pre) {
+    const approve = el("button", { class: "btn small primary", type: "button", disabled: !pre.ready, on: { click: async () => {
+      approve.disabled = true;
+      try {
+        await api.post(s2Url(flowId, "dispatch"), { preview_id: pre.preview_id });
+        toast("已送出");
+        text.value = "";
+        setKids(out);
+      } catch (e) {
+        setKids(out, notice(e.status === 409 ? "warn" : "bad", e.message + (e.status === 409 ? "（這份預覽已作廢，請重新預覽）" : "")));
+      }
+      refresh();
+    } } }, "核准並送出");
+    const drop = el("button", { class: "btn small", type: "button", on: { click: () => setKids(out) } }, "放棄這份預覽");
+    setKids(out,
+      el("p", { class: "small" }, `將送出的內容（${pre.bytes} bytes，sha256 ${pre.text_sha256.slice(0, 12)}…）：`),
+      pre.rewritten ? notice("info", "有不可見或控制字元，已改寫成可見的 \\uXXXX（設計 3.3），下面就是實際送出的內容。") : null,
+      s2Pre(pre.text),
+      pre.ready ? null : notice("warn", "現在還不能送出：" + pre.not_ready_reason),
+      el("p", { class: "small muted" }, `這份預覽只能用一次，到 ${fmtTime(pre.expires_at)} 前有效。`),
+      el("div", { class: "row" }, approve, drop));
+  }
+  return { node, setText(t) { text.value = t; text.focus(); }, hasText: () => text.value.length > 0 };
+}
+
+function s2ReportsPanel(rp) {
+  if (!rp.ok) return el("section", { class: "section s2-panel", "data-s2": "reports" }, sectionHead("執行者回報", null),
+    notice("bad", "無法讀取回報：" + rp.message));
+  const entries = (rp.data.reports || []).slice().reverse();
+  return el("section", { class: "section s2-panel", "data-s2": "reports" },
+    sectionHead("執行者回報", "左邊是執行者自己說的；右邊是 VBear 自己讀檔核對的結果。"),
+    rp.data.order_problem ? notice("warn", "無法判定最新的回報：" + rp.data.order_problem + "。不會啟動審查。") : null,
+    entries.length ? el("ul", { class: "s2-reports" }, entries.map((e) => {
+      const r = e.report;
+      return el("li", { class: "s2-report" },
+        el("div", { class: "row" }, el("b", { class: "mono" }, shortCommit(e.dispatch_id)),
+          badge(e.valid ? "有效回合" : (e.status === "ended" ? "回合無效" : e.status), e.valid ? "b-ok" : "b-mute"),
+          e.latest ? badge(e.usable ? "可用來啟動審查" : "核對沒有全部通過", e.usable ? "b-ok" : "b-warn") : null),
+        (e.reasons || []).length ? el("div", { class: "small" }, "原因：" + e.reasons.join("；")) : null,
+        r ? el("div", { class: "s2-cols" },
+          el("div", null, el("h4", null, "執行者自述"),
+            el("dl", { class: "kv small" },
+              el("dt", null, "狀態"), el("dd", null, r.status),
+              el("dt", null, "head"), el("dd", { class: "mono" }, r.head),
+              el("dt", null, "測試"), el("dd", null, `${r.tests.result}：${r.tests.command}`),
+              el("dt", null, "測試摘要"), el("dd", null, s2Pre(r.tests.summary)),
+              el("dt", null, "備註"), el("dd", null, s2Pre(r.notes)))),
+          el("div", null, el("h4", null, "VBear 讀檔核對"),
+            e.checks ? el("ul", { class: "s2-checks" }, e.checks.map((c) => el("li", null,
+              badge(c.ok === true ? "通過" : (c.ok === false ? "不符" : "讀不到"),
+                c.ok === true ? "b-ok" : (c.ok === false ? "b-bad" : "b-warn")), ` ${c.label}`,
+              c.detail ? el("span", { class: "small muted" }, `（${c.detail}）`) : null)))
+              : el("p", { class: "small muted" }, "較早的回報，不再核對目前的 HEAD。"))) : null);
+    })) : emptyState("還沒有回報", "派工並等執行者回合結束後，有效的回報會顯示在這裡。"));
+}
+
+function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
+  if (!rv.ok) return el("section", { class: "section s2-panel", "data-s2": "reviews" }, sectionHead("Codex 審查", null),
+    notice("bad", "無法讀取審查：" + rv.message));
+  const reviews = (rv.data.reviews || []).slice().reverse();
+  const latest = rp && rp.ok ? (rp.data.reports || []).find((e) => e.latest) : null;
+  const running = reviews.find((x) => ["prepared", "launching", "running"].includes(x.state));
+  const why = [];
+  if (ex && ex.acceptance && ex.acceptance.state !== "valid") why.push("風險接受目前不算數");
+  if (ex && ex.hold && ex.hold.held) why.push("流程已停止");
+  if (!latest) why.push("還沒有有效的執行者回報");
+  else if (!latest.usable) why.push("最新回報的讀檔核對沒有全部通過");
+  if (running) why.push("已有審查在進行");
+  const start = el("button", { class: "btn small primary", type: "button", disabled: why.length > 0, on: { click: async (ev) => {
+    ev.target.disabled = true;
+    try { const r = await api.post(s2Url(flowId, "review"), {}); toast(`已啟動第 ${r.round} 輪審查`); }
+    catch (e) { toast("無法啟動審查：" + e.message); }
+    refresh();
+  } } }, "請 Codex 審查最新回報");
+  const items = reviews.map((x) => {
+    const [oLabel, oCls] = S2_REVIEW_OUTCOME[x.outcome] || [x.outcome ? x.outcome : x.state, "b-info"];
+    const res = x.result || {};
+    const rep = x.report;
+    const cancel = running && running.job_id === x.job_id
+      ? s2Confirm("取消審查", "取消後這次審查無效，流程會停止。", async () => {
+        try { await api.post(s2Url(flowId, "review/cancel"), { job_id: x.job_id }); toast("已要求取消"); }
+        catch (e) { toast("無法取消：" + e.message); }
+        refresh();
+      }) : null;
+    const forward = rep && rep.usable ? el("button", { class: "btn small", type: "button", on: { click: async () => {
+      try {
+        const d = await api.get(s2Url(flowId, `reviews/${encodeURIComponent(x.job_id)}/draft`));
+        composer.setText(d.text);
+        toast("已放進派工框；請檢查、預覽並核准後才會送出");
+      } catch (e) { toast("無法轉送：" + e.message); }
+    } } }, "把意見轉給執行者…") : null;
+    return el("li", { class: "s2-review" },
+      el("div", { class: "row" }, el("b", null, `第 ${x.round} 輪`), el("span", { class: "mono small" }, shortCommit(x.commit)),
+        badge(oLabel, oCls), res.verdict ? badge(res.verdict, S2_VERDICT_CLASS[res.verdict] || "b-mute") : null,
+        x.live ? badge(`進行中：回應 ${x.live.responses_seen ?? "?"}`, "b-info") : null, cancel, forward),
+      (x.invalid_reasons || []).length ? el("div", { class: "small" }, "無效的原因：" + x.invalid_reasons.join("；")) : null,
+      x.retained_reason ? notice("warn", "待人工處理：" + x.retained_reason) : null,
+      x.record && x.record !== "complete" && x.record !== "none" ? notice("warn", "審查紀錄：" + x.record) : null,
+      res.base_is_ancestor !== undefined && res.base_is_ancestor !== null
+        ? el("p", { class: "small" }, `BASE_IS_ANCESTOR：${res.base_is_ancestor ? "yes" : "no"}　`,
+          el("span", { class: "muted" }, res.base_is_ancestor_note || "")) : null,
+      rep && rep.text ? el("details", { class: "s2-report-text", open: x.outcome === "valid" && !running },
+        el("summary", null, `審查者的報告（純文字顯示${rep.usable ? "" : "；這次審查無效，僅供參考"}）`),
+        s2Pre(rep.text)) : (rep && rep.problem ? el("p", { class: "small muted" }, rep.problem) : null));
+  });
+  return el("section", { class: "section s2-panel", "data-s2": "reviews" },
+    sectionHead("Codex 審查", "審查者寫的內容一律以純文字顯示；BASE_IS_ANCESTOR 是審查者自行回報的，VBear 沒有獨立驗證。", start),
+    why.length ? el("p", { class: "small muted" }, "現在不能啟動審查：" + why.join("；") + "。") : null,
+    items.length ? el("ul", { class: "s2-reviews" }, items) : emptyState("還沒有審查", null));
+}
+
+function s2GatePanel(g) {
+  if (!g.ok) return el("section", { class: "section s2-panel", "data-s2": "gate" }, sectionHead("合併與 push 關卡", null),
+    notice("bad", "無法讀取關卡：" + g.message));
+  const d = g.data;
+  return el("section", { class: "section s2-panel", "data-s2": "gate" },
+    sectionHead("合併與 push 關卡", d.note, badge(d.open ? "條件都符合" : "尚未符合", d.open ? "b-ok" : "b-mute")),
+    el("ul", { class: "s2-checks" }, d.conditions.map((c) => el("li", null,
+      badge(c.ok === true ? "符合" : (c.ok === false ? "不符" : "不明"), c.ok === true ? "b-ok" : (c.ok === false ? "b-bad" : "b-warn")),
+      ` ${c.label}`, c.detail ? el("span", { class: "small muted" }, `（${c.detail}）`) : null))),
+    d.open ? el("div", null, el("h3", null, "指令（由你自己執行；VBear 不會執行 git）"),
+      d.commands.length ? el("ol", { class: "s2-commands" }, d.commands.map((c) => el("li", null,
+        el("div", { class: "small" }, c.label), s2Pre(c.command, "mono"), s2Copy(c.command))))
+        : notice("info", d.commands_note || "沒有可給的指令。")) : null,
+    el("h3", null, "目前本機的狀態（讀檔所得）"),
+    el("ul", { class: "small" }, (d.after || []).map((a) => el("li", null, a.text,
+      a.is_reviewed_commit ? el("span", null, " ", badge("就是被審的 commit", "b-ok")) : null,
+      a.caveat ? el("span", { class: "muted" }, `（${a.caveat}）`) : null))));
+}
+
+// ---- the section the flow page mounts ------------------------------------------------------------------------
+
+function mountCoordinator(flowId) {
+  const data = el("div", { class: "s2-data" });
+  let last = null; let state = null; let composer = null; let alive = true;
+  const getExecutor = () => (state && state.executor.ok ? state.executor.data : null);
+  const host = el("div", { class: "s2", "data-s2": "root" });
+  async function refresh(force) {
+    if (!alive) return;
+    const next = await s2Load(flowId);
+    if (!alive) return;
+    const key = JSON.stringify(next);
+    if (!force && key === last) return;
+    last = key;
+    state = next;
+    const parts = [];
+    if (next.executor.ok) {
+      parts.push(s2AcceptancePanel(flowId, next.executor.data, () => refresh(true)),
+        s2ExecutorPanel(flowId, next.executor.data, () => refresh(true)));
+    } else {
+      parts.push(el("section", { class: "section s2-panel" }, sectionHead("串流執行者", null),
+        notice("bad", "無法讀取執行者狀態：" + next.executor.message)));
+    }
+    parts.push(s2ReportsPanel(next.reports),
+      s2ReviewsPanel(flowId, getExecutor(), next.reports, next.reviews, composer, () => refresh(true)),
+      s2GatePanel(next.gate));
+    setKids(data, parts);
+  }
+  composer = s2DispatchComposer(flowId, getExecutor, () => refresh(true));
+  host.append(el("div", { class: "section" }, el("h2", null, "VBear 管理的執行與審查"),
+    el("p", { class: "small muted" }, "以下由 VBear 的背景程序執行；每一個動作都先預覽、再由你核准。上面「手動記錄事件」那一區沒有改變，仍然只是記錄。")),
+    data, composer.node);
+  refresh(true);
+  return {
+    node: host, refresh, composer,
+    // quiet refresh for the timer: not while a dialog is open or the user is in a field of the panels
+    tick() {
+      if (typeof document !== "undefined" && document.querySelector && document.querySelector(".modal-backdrop")) return Promise.resolve();
+      return refresh(false);
+    },
+    stop() { alive = false; },
+  };
 }
 
 // Built-in terminals: the user's own login shell, opened from VBear. They are
@@ -4825,6 +5309,10 @@ async function route() {
       if (before !== after && !busy) { const y = scrollY; await route(); scrollTo(0, y); }
     };
   }
+  if (top === "flows" && parts[1]) {
+    // the executor, reviews and gate change without the user doing anything: refresh them quietly
+    liveTick = async () => { if (flowCoordinator) await flowCoordinator.tick(); };
+  }
   if (top === "terminals") {
     liveTick = async () => {
       const ids = () => JSON.stringify(shellPanes().map((p) => p.pane_id));
@@ -4903,6 +5391,8 @@ if (typeof module !== "undefined" && module.exports) {
     flowBindingNote,
     flowLiveText,
     api,
+    mountCoordinator,
+    openAcceptanceDialog,
     cleanupActiveView,
     cleanupActiveTerminal,
     // Exported so the modal registry's two subtle invariants can be tested
