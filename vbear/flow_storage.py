@@ -76,7 +76,8 @@ class FlowStorage:
             if why:
                 raise ApiError(409, "not_deletable", "不能刪除：" + "；".join(why[:6]), reasons=why)
             removed = None
-            if pl.sessions or pl.reviews or pl.pipeline_dir or pl.held or pl.deleting:
+            if (pl.sessions or pl.reviews or pl.pipeline_dir or pl.held or pl.deleting or pl.auto
+                    or pl.automation_inode is not None):
                 try:
                     res = daemon_client.call(ex.runtime, "flow_delete", timeout=DELETE_TIMEOUT_S, pipeline=flow_id)
                 except DaemonError as exc:
@@ -89,4 +90,11 @@ class FlowStorage:
             except Exception as exc:
                 raise ApiError(500, "internal",
                                f"流程的資料已刪除，但流程紀錄無法移除（{type(exc).__name__}）；再按一次即可完成") from exc
+            if removed is not None or pl.deleting:
+                # the record is gone: the deletion marker (which kept anything new out until now) may go. A
+                # failure here leaves an empty marker the daemon sweeps at its next start; nothing depends on it.
+                try:
+                    daemon_client.call(ex.runtime, "flow_delete_done", timeout=30.0, pipeline=flow_id)
+                except DaemonError:
+                    pass
         return {"deleted": flow_id, "bytes": pl.total_bytes, "removed": removed}

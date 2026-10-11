@@ -149,6 +149,8 @@ RPC_OPS: dict[str, frozenset] = {
     "flow_delete": frozenset({"pipeline"}),
     # a flow's mode, manual or auto (S3 design 2)
     "pipeline_mode_set": frozenset({"pipeline", "mode", "approval"}),
+    # the console removed the flow's record: the deletion marker may go (flow_data.finish)
+    "flow_delete_done": frozenset({"pipeline"}),
 }
 _ATTACHED = object()  # _dispatch result: the connection became an attachment
 
@@ -582,6 +584,13 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         except BaseException:
             self.close()
             raise
+        try:  # deletion markers of flows whose record is already gone
+            from .. import flows as flows_mod
+            from . import flow_data
+            for name in flow_data.sweep_orphans(self.base, set(flows_mod.read_only_snapshot(self.base))):
+                self._log(f"deletion marker of {name}: removed (its flow record is gone)")
+        except Exception as exc:
+            self._log(f"deletion marker sweep failed: {exc}")
         try:  # launches left behind by a previous daemon; never fatal
             for item in agent_sessions.recover(self.base):
                 self._log(f"managed launch {item['launch_id']}: " +
@@ -1157,7 +1166,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                       "stream_close": self._op_stream_close, "pipeline_hold": self._op_pipeline_hold,
                       "pipeline_release": self._op_pipeline_release, "review_start": self._op_review_start,
                       "review_status": self._op_review_status, "review_cancel": self._op_review_cancel,
-                      "flow_delete": self._op_flow_delete, "pipeline_mode_set": self._op_pipeline_mode_set}
+                      "flow_delete": self._op_flow_delete, "pipeline_mode_set": self._op_pipeline_mode_set,
+                      "flow_delete_done": self._op_flow_delete_done}
         if op in stream_ops:
             try:
                 return stream_ops[op](rid, req)

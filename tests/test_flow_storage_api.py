@@ -348,7 +348,7 @@ class CrashMatrixTests(StorageCase):
         return {"sessions": os.listdir(base / "sessions") if (base / "sessions").exists() else [],
                 "reviews": os.listdir(base / "reviews") if (base / "reviews").exists() else [],
                 "pipeline": (base / "pipelines" / self.tid).exists(),
-                "tomb": (base / "deleting" / self.fid).exists()}
+                "tomb": bool(os.listdir(base / "deleting" / self.fid)) if (base / "deleting" / self.fid).exists() else False}
 
     def disk_bytes(self, base):
         """Every regular file under the four data roots, summed independently of quota.scan."""
@@ -419,11 +419,8 @@ class CrashMatrixTests(StorageCase):
                         return real[name](*a, **kw)
                     return f
                 with mock.patch.multiple(flow_data.os, **{n: crashing(n) for n in names}):
-                    if k == total - 1:                    # the very last rmdir (an empty deleting/) is allowed to fail
+                    with self.assertRaises((flow_data.FlowDataRefused, OSError)):
                         flow_data.remove(base, pl)
-                    else:
-                        with self.assertRaises((flow_data.FlowDataRefused, OSError)):
-                            flow_data.remove(base, pl)
                 # after the stop: what other flows read is intact; a begun deletion counts as stopped
                 self.others_ok(base)
                 self.assertEqual(quota.scan(base), self.disk_bytes(base))   # the deletion area is counted
@@ -436,7 +433,11 @@ class CrashMatrixTests(StorageCase):
                 flow_data.remove(base, pl2)
                 self.assertEqual(self.gone(base), {"sessions": [], "reviews": [], "pipeline": False, "tomb": False})
                 self.others_ok(base)
+                # the marker stays until the console says the record is gone: nothing new can start meanwhile
+                self.assertTrue(pipeline_store.is_held(base, self.fid))
+                self.assertTrue(flow_data.finish(base, self.fid))
                 self.assertFalse(pipeline_store.is_held(base, self.fid))
+                self.assertFalse((base / "deleting").exists())
                 shutil.rmtree(base)
 
 

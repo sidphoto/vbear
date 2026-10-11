@@ -206,6 +206,62 @@ test("an open stop question is not rebuilt away by the timer", async () => {
   c.stop();
 });
 
+test("a round already on its way does not take an open question away", async () => {
+  FETCH_LOG.length = 0;
+  const pending = deferredExecutor();
+  const c = mountCoordinator(FLOW);
+  await settle();
+  pending[0](executor());                              // the first round arrives and draws the panels
+  await settle();
+  const next = c.refresh(false);                       // a quiet round goes out and waits
+  await settle();
+  button(byS2(c.node, "executor"), "停止這個流程").click();
+  await settle();
+  assert(text(byS2(c.node, "executor")).includes("確定"), "the question is open");
+  pending[1](executor({ accounting: { ...executor().accounting, elapsed_s: 12345 } }));
+  await next;
+  await settle();
+  assert(text(byS2(c.node, "executor")).includes("確定"), "the answer that came meanwhile did not remove it");
+  c.stop();
+});
+
+test("a manual preview request that was on its way when the mode switched is dropped when it arrives", async () => {
+  reset({ executor: executor({ sessions: [liveSession()] }) });
+  let release;
+  setHandler((url, opts) => {
+    const p = url.split("?")[0];
+    if ((opts.method || "GET") === "POST" && p.endsWith("/dispatch-preview")) {
+      return new Promise((resolve) => { release = () => resolve(jsonResponse({ ok: true, preview_id: "p".repeat(32),
+        expires_at: 1791000300, dispatch_id: "x", launch_id: "l-" + "1".repeat(16), text: "手動的文字",
+        text_sha256: "f".repeat(64), bytes: 9, rewritten: false, ready: true, not_ready_reason: "" }, true)); });
+    }
+    if (p.endsWith("/executor")) return jsonResponse(state.executor, true);
+    if (p.endsWith("/automation")) return jsonResponse(state.automation, true);
+    if (p.endsWith("/reports")) return jsonResponse(state.reports, true);
+    if (p.endsWith("/reviews")) return jsonResponse(state.reviews, true);
+    if (p.endsWith("/merge-gate")) return jsonResponse(state.gate, true);
+    if (p.endsWith("/api/flows/storage")) return jsonResponse(state.storage, true);
+    return null;
+  });
+  const c = mountCoordinator(FLOW);
+  await settle();
+  find(byS2(c.node, "dispatch"), (n) => n.tag === "textarea").value = "手動的文字";
+  button(byS2(c.node, "dispatch"), "預覽").click();
+  await settle();
+  assert(release, "the request is out");
+  state.executor = executor({ sessions: [liveSession()], automation: { mode: "auto", approval_id: "auto-7", problem: null } });
+  state.automation = { ok: true, flow_id: FLOW, mode: "auto", approval_id: "auto-7", problem: null, since: 1, approval: null,
+    step: { step: "first_dispatch", label: "x", after: "y", held: false, hold_reason: "", awaiting_merge: false } };
+  await c.refresh(true);                                // the page now knows: automatic
+  release();                                            // and the late answer arrives
+  await settle();
+  const d = byS2(c.node, "dispatch");
+  assert(!button(d, "核准並送出"), "no approve button appears");
+  assert(find(d, (n) => n.tag === "textarea").disabled, "the controls stay off");
+  assert(button(d, "預覽").disabled);
+  c.stop();
+});
+
 test("the executor panel's stop says when its event could not be written", async () => {
   const c = await mount();
   state.post.hold = [{ ok: true, event_written: false, event_problem: "流程已停止，但「停止」事件無法寫入時間軸（x）" }];

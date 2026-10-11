@@ -2135,20 +2135,27 @@ function s2Copy(text, label) {
   } } }, label || "複製");
 }
 
-// Two-step confirmation on the button itself (no browser dialogs). While one is asking, the timer does not rebuild
-// the panels under it (s2Asking), or the question would vanish before it could be answered.
-let s2Asking = 0;
+// Two-step confirmation on the button itself (no browser dialogs). While one is asking it carries the class
+// "s2-asking", and the quiet refresh looks for that class in the page itself (no counter that could be left
+// behind): it does not rebuild the panels under an open question.
+function s2QuestionOpen(root) {
+  if (!root) return false;
+  if (typeof root.querySelector === "function") {
+    try { if (root.querySelector(".s2-asking")) return true; } catch (_) { /* fall through */ }
+  }
+  return typeof root.find === "function" ? !!root.find((n) => n.hasClass && n.hasClass("s2-asking")) : false;
+}
+
 function s2Confirm(label, question, action, cls) {
   const host = el("span", { class: "s2-confirm" });
-  let open = false;
-  const settle = () => { if (open) { open = false; s2Asking = Math.max(0, s2Asking - 1); } };
   const ask = () => {
-    if (!open) { open = true; s2Asking += 1; }
+    host.classList.add("s2-asking");
+    const done = () => host.classList.remove("s2-asking");
     const yes = el("button", { class: "btn small bad", type: "button", on: { click: async () => {
       yes.disabled = true;
-      try { await action(); } finally { settle(); setKids(host, btn); }
+      try { await action(); } finally { done(); setKids(host, btn); }
     } } }, "確定");
-    const no = el("button", { class: "btn small", type: "button", on: { click: () => { settle(); setKids(host, btn); } } }, "取消");
+    const no = el("button", { class: "btn small", type: "button", on: { click: () => { done(); setKids(host, btn); } } }, "取消");
     setKids(host, el("span", { class: "small" }, question + " "), yes, no);
     no.focus();
   };
@@ -2497,6 +2504,7 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
   function setAutomatic(on) {
     if (on === automatic) return;
     automatic = on;
+    generation += 1;                            // a preview request already on its way is void
     text.disabled = on;
     previewBtn.disabled = on;
     if (on) setKids(out);                       // a preview made before the switch can no longer be approved here
@@ -2508,15 +2516,17 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
     const live = ((ex && ex.sessions) || []).filter((s) => s.manifest_state === "running" && s.status && s.status.live);
     return live.length ? live[live.length - 1].launch_id : null;
   }
+  let generation = 0;                           // bumped when the mode switches: an answer from before is dropped
   async function doPreview() {
     const launch = target();
     if (!launch) { toast("目前沒有執行中的執行者 session"); return; }
     previewBtn.disabled = true;
+    const mine = generation;
     try {
       const pre = await api.post(s2Url(flowId, "dispatch-preview"), { launch_id: launch, text: text.value });
-      showPreview(pre);
-    } catch (e) { setKids(out, notice("bad", e.message)); }
-    previewBtn.disabled = false;
+      if (mine === generation && !automatic) showPreview(pre);
+    } catch (e) { if (mine === generation && !automatic) setKids(out, notice("bad", e.message)); }
+    if (mine === generation && !automatic) previewBtn.disabled = false;
   }
   function showPreview(pre) {
     const approve = el("button", { class: "btn small primary", type: "button", disabled: !pre.ready, on: { click: async () => {
@@ -2743,6 +2753,7 @@ function mountCoordinator(flowId) {
     try {
       const next = await s2Load(flowId, leaving.signal);
       if (!alive || mine !== seq) return;
+      if (!force && s2QuestionOpen(host)) return;               // asked while this round was on its way
       const key = JSON.stringify(next);
       if (!force && key === last) return;
       last = key;
@@ -2800,7 +2811,7 @@ function mountCoordinator(flowId) {
     // quiet refresh for the timer: not while a dialog is open or the user is in a field of the panels
     tick() {
       if (typeof document !== "undefined" && document.querySelector && document.querySelector(".modal-backdrop")) return Promise.resolve();
-      if (s2Asking > 0) return Promise.resolve();            // a question is open: the panels stay as they are
+      if (s2QuestionOpen(host)) return Promise.resolve();    // a question is open: the panels stay as they are
       return refresh(false);
     },
     stop() { alive = false; leaving.abort(); storage.stop(); },

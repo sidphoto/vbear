@@ -410,3 +410,57 @@ class ApprovalFailureTests(AutoApiCase):
         self.assertEqual(st, 409, r)
         self.assertEqual(len(flows.get_flow(self.fid)["events"]), n)
         self.assertFalse((self.base / "automation" / self.fid / "plan.txt").exists())
+
+
+class DeletionWindowTests(AutoApiCase):
+    def test_nothing_new_can_be_created_for_a_flow_between_its_purge_and_the_removal_of_its_record(self):
+        """The window the S3-2 review found: the data is purged, the record is not yet removed. An approval from
+        another console that starts then must be refused and must create nothing."""
+        from unittest import mock
+        from vbear import automation as automation_mod
+        from vbear.api_error import ApiError
+        self.enable()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/automation/disable", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+        real = flows.delete_flow
+        seen = {}
+
+        def probe(flow_id):
+            seen["marker"] = (self.base / "deleting" / flow_id).is_dir()
+            seen["automation_dir"] = (self.base / "automation" / flow_id).exists()
+            try:
+                with automation_mod.plan_lock(self.base, flow_id):
+                    seen["got"] = True
+            except ApiError as exc:
+                seen["error"] = (exc.status, exc.code)
+            seen["created"] = (self.base / "automation" / flow_id).exists()
+            return real(flow_id)
+        with mock.patch.object(flows, "delete_flow", probe):
+            st, r = self.call(f"/api/flows/{self.fid}/delete", "POST", {"flow_id": self.fid})
+        self.assertEqual(st, 200, r)
+        self.assertTrue(seen["marker"], "the marker is still there when the record is about to go")
+        self.assertFalse(seen["automation_dir"])
+        self.assertEqual(seen["error"], (409, "deleting"))
+        self.assertNotIn("got", seen)
+        self.assertFalse(seen["created"], "the refused approval created nothing")
+        # afterwards the marker is gone with the record, and nothing of the flow is left
+        self.assertFalse((self.base / "deleting" / self.fid).exists())
+        self.assertFalse((self.base / "automation" / self.fid).exists())
+
+    def test_an_orphan_marker_of_a_flow_whose_record_is_gone_is_swept_when_the_daemon_starts(self):
+        from vbear.runtime import flow_data
+        orphan = self.base / "deleting" / "flow-aaaaaaaaaaaa"
+        orphan.mkdir(parents=True, mode=0o700)
+        os.chmod(orphan.parent, 0o700)
+        kept = self.base / "deleting" / "flow-bbbbbbbbbbbb"
+        kept.mkdir(mode=0o700)
+        (kept / "left").write_text("x")                                     # not empty: not ours to remove
+        swept = flow_data.sweep_orphans(self.base, {self.fid})
+        self.assertEqual(swept, ["flow-aaaaaaaaaaaa"])
+        self.assertFalse(orphan.exists())
+        self.assertTrue(kept.exists())
+        # the daemon refuses to remove the marker of a flow whose record is still there
+        from vbear import daemon_client
+        with self.assertRaises(daemon_client.DaemonError):
+            daemon_client.call(self.console.executor.runtime, "flow_delete_done", pipeline=self.fid)

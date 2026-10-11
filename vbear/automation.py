@@ -111,32 +111,53 @@ def _lock_is_current(state, flow_id: str, fd: int) -> bool:
         os.close(dfd)
 
 
+HELD, BUSY, UNAVAILABLE = "held", "busy", "unavailable"
+
+
 @contextlib.contextmanager
 def try_plan_lock(state, flow_id: str):
-    """The same lock taken without waiting: yields True when held, False when
-    an approval has it (or there is no such flow directory)."""
+    """The same lock taken without waiting. Yields (HELD, ""): we hold it, and
+    what is read under it is what no approval can be changing; (BUSY, ""):
+    an approval holds it (only EWOULDBLOCK/EAGAIN mean this); (UNAVAILABLE,
+    why): there is no lock file or directory, it cannot be opened, or it is
+    not a plain file of ours. Only BUSY is ever waited for."""
     try:
         dfd = _plan_dir(state, flow_id, create=False)
-    except OSError:
-        yield False
+    except FileNotFoundError:
+        yield UNAVAILABLE, "核准用的資料夾不存在"
+        return
+    except (OSError, ApiError) as exc:
+        yield UNAVAILABLE, f"核准用的資料夾無法開啟（{getattr(exc, 'strerror', None) or exc}）"
         return
     try:
         try:
             fd = os.open(LOCK_FILE, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
-        except OSError:
+        except OSError as exc:
             fd = None
+            why = f"核准用的鎖檔無法開啟（{exc.strerror}）"
     finally:
         os.close(dfd)
     if fd is None:
-        yield False
+        yield UNAVAILABLE, why
         return
     try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            yield UNAVAILABLE, "核准用的鎖檔不是本人的一般檔案"
+            return
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            yield False
+        except OSError as exc:
+            import errno
+            if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                yield BUSY, ""
+            else:
+                yield UNAVAILABLE, f"核准用的鎖無法取得（{exc.strerror}）"
             return
-        yield True
+        if not _lock_is_current(state, flow_id, fd):
+            yield UNAVAILABLE, "核准用的鎖檔已被替換或搬走"
+            return
+        yield HELD, ""
     finally:
         os.close(fd)
 
@@ -148,6 +169,13 @@ def plan_lock(state, flow_id: str):
     approval are done as one unit, so two consoles confirming two previews
     cannot interleave and leave a plan that is not the one the mode is bound
     to. flock on automation/<flow>/.lock."""
+    # nothing is created for a flow that is going away: look first, then create, then (below) look again under the lock
+    if pipeline_store.deleting_exists(state, flow_id):
+        raise ApiError(409, "deleting", "這個流程正在刪除，不能開啟自動執行")
+    try:
+        flows.get_flow(flow_id)
+    except KeyError:
+        raise ApiError(404, "no_flow", "找不到這個流程") from None
     dfd = _plan_dir(state, flow_id, create=True)
     try:
         fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)

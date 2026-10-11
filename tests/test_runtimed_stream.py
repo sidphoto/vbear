@@ -197,12 +197,37 @@ class StreamCase(unittest.TestCase):
                 if done == pid:
                     break
                 time.sleep(0.01)
+        procs = self._popens()
         self.dm.stop()
         self.thread.join(5)
         self.dm.close()
+        self._record_exits(procs)
         for p in self.scratches:
             if p.startswith("/private/tmp/sc-") and not os.path.islink(p):
                 shutil.rmtree(p, ignore_errors=True)
+
+    def _popens(self):
+        """Every Popen this test's daemons hold (running, kept after a crash, a review's, a held leader)."""
+        procs = list(getattr(self, "orphans", []))
+        procs += [s.proc for s in list(self.dm._streams.values())]
+        procs += [getattr(getattr(j, "run", None), "proc", None) for j in list(getattr(self.dm, "_reviews", {}).values())]
+        procs += [h.get("proc") for h in list(getattr(self.dm, "_held_leaders", []))]
+        return [p for p in procs if p is not None]
+
+    @staticmethod
+    def _record_exits(procs):
+        """Let every Popen see that its process is gone (waiting for it if the daemon's close is still ending it).
+        A process killed and waited for with os.waitpid leaves its Popen with no return code, and CPython then
+        warns "still running" when the object is collected, though nothing is."""
+        for proc in procs:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
 
     def accept(self, **limits):
         fp = login_identity.claude_login_fingerprint(self.home / ".claude.json", self.key).hmac
@@ -1397,7 +1422,8 @@ class FlowConcurrencyTests(StreamCase):
     def test_manual_review_blocks_until_a_person_resolves_it(self):
         first, _ = self.open()
         a._retain(self.base, first, "test")                               # as after an escaped child
-        self.dm._streams.pop(first)
+        self.orphans = getattr(self, "orphans", [])
+        self.orphans.append(self.dm._streams.pop(first).proc)             # kept: tearDown waits for it
         r = self.rpc("open_stream", launch_id=self.prepare()["launch_id"])
         self.assertFalse(r["ok"])
         self.assertIn(first, r["error"]["message"])

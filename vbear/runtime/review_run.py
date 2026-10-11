@@ -418,6 +418,14 @@ class ReviewRun:
                 "partial_line": bool(self.buf), "write_failed": self.write_failed,
                 "responses_seen": self.watch.responses}
 
+    def _returncode(self) -> int:
+        """What Popen would have recorded: the exit code, or minus the signal that ended it."""
+        if self.exit_code is not None:
+            return self.exit_code
+        if self.exit_signal:
+            return -int(self.exit_signal)
+        return 0
+
     def _finish(self, *, manual_review: str | None, reap: bool = True) -> None:
         """The group is empty (or given up on): reap the leader only when the
         group is proven empty, close our ends."""
@@ -427,9 +435,11 @@ class ReviewRun:
             try:
                 os.waitpid(self.pid, 0)
                 self.reaped = True
-                self.proc.returncode = self.exit_code
+                self.proc.returncode = self._returncode()        # Popen's own convention; it is never left None
             except ChildProcessError:
                 self.reaped = True
+                if self.proc.returncode is None:
+                    self.proc.returncode = self._returncode()
             except OSError as exc:
                 # Not reaped, and it cannot be proven it is: the daemon holds
                 # the leader and a person looks (design 5.8).

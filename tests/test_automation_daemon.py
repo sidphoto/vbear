@@ -332,6 +332,8 @@ class DeletionInterplayTests(AutoCase):
         self.assertEqual(pl.automation_bytes, len("計畫全文".encode()))
         flow_data.remove(self.base, pl)
         self.assertFalse((self.base / "automation" / self.fid).exists())
+        self.assertEqual(os.listdir(self.base / "deleting" / self.fid), [])      # the marker stays until finish()
+        self.assertTrue(flow_data.finish(self.base, self.fid))
         self.assertFalse((self.base / "deleting" / self.fid).exists())
 
     def test_a_mode_record_left_by_a_begun_deletion_is_removed_with_it(self):

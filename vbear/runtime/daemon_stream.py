@@ -830,6 +830,25 @@ class StreamOps:
         self._rebuild_ledger()                                  # from a scan: the freed room is real
         return _ok(rid, {"pipeline": pipeline, "deleted": True, "removed": removed, "bytes": pl.total_bytes})
 
+    def _op_flow_delete_done(self, rid: str, req: dict) -> dict:
+        """The console has removed the flow's record: the deletion marker goes. Refused while the record is
+        still there (the marker is what keeps new work out until then)."""
+        from .. import flows
+        pipeline = req.get("pipeline")
+        if not (isinstance(pipeline, str) and pipeline_store.FLOW_RE.match(pipeline)):
+            return _err(rid, "bad_request", "流程 id 格式不符")
+        try:
+            snapshot = flows.read_only_snapshot(self.base)
+        except Exception as exc:
+            return _err(rid, "refused", f"無法讀取流程（{exc}）")
+        if pipeline in snapshot:
+            return _err(rid, "refused", "流程紀錄還在，刪除標記不能拿掉")
+        try:
+            done = flow_data.finish(self.base, pipeline)
+        except flow_data.FlowDataRefused as exc:
+            return _err(rid, "refused", str(exc))
+        return _ok(rid, {"pipeline": pipeline, "finished": done})
+
     def _op_pipeline_release(self, rid: str, req: dict) -> dict:
         """The user's "continue" (design 7, v29.8): the time is recorded in
         the daemon's own record first (open_stream compares failures with
@@ -953,6 +972,9 @@ class StreamOps:
                 os.waitpid(pid, 0)
             except ChildProcessError:
                 pass
+            proc = h.get("proc")
+            if proc is not None and getattr(proc, "returncode", 0) is None:
+                proc.returncode = 0                       # reaped here: the Popen is told (no "still running" later)
             self._held_leaders.remove(h)
             self._log(f"{h['launch_id']}: group of leader {pid} proven empty, leader reaped")
 

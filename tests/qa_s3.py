@@ -113,6 +113,9 @@ class Serve(_Harness):
     def test_serve(self):
         seconds = float(os.environ.get("VBEAR_QA_SECONDS", "3600"))
         stop = threading.Event()
+        # The synthetic work directory needs a commit the executor "has made": without one the executor's report
+        # does not match the files and the flow is (rightly) stopped on the first turn (AGY QA).
+        self.commit_work("initial work")
         started = self.console.runner.start()
         helper = None
         if os.environ.get("VBEAR_QA_NEEDS_WORK") == "1":

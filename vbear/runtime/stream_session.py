@@ -153,6 +153,8 @@ def end_spawned(proc, leader_start: str | None, descendants=None) -> str | None:
         if escaped:
             return "有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8])
     os.waitpid(pid, 0)
+    if proc.returncode is None:
+        proc.returncode = -signal.SIGKILL             # what Popen would have recorded: reaped, ended by our SIGKILL
     return None
 
 

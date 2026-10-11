@@ -33,7 +33,7 @@ import threading
 import time
 import uuid
 
-from . import acceptance, automation, config as cfg, flows, risk_acceptance
+from . import acceptance, automation, config as cfg, flows, login_identity, risk_acceptance
 from .api_error import ApiError
 from .flow_executor import FlowExecutor
 from .flow_review import FlowReview
@@ -41,6 +41,7 @@ from .runtime import pipeline_store, stream_flow
 from .runtime import stream_protocol as sp
 
 TICK_S = 2.0
+BUSY_LIMIT_S = 60.0                       # an approval that has held its lock this long is not "in progress"
 LOCK_NAME = "runner.lock"
 MAX_TEXT_BYTES = 60 << 10                 # under the daemon's 64 KiB line, with room for the envelope
 REPORT_REQUEST = ("\n\n---\n回報要求：完成後請用結構化輸出回報 status（done / blocked / needs_input）、head（你目前 HEAD 的"
@@ -128,6 +129,7 @@ class AutomationRunner:
         self.last_error: str | None = None
         self.log: list[str] = []
         self._why: tuple[str, str] | None = None
+        self._busy_since: dict[str, float] = {}
 
     # ---- lifecycle -------------------------------------------------------------------------------------
 
@@ -238,11 +240,43 @@ class AutomationRunner:
 
     # ---- one flow --------------------------------------------------------------------------------------------
 
-    def step(self, flow_id: str) -> str:
+    def _checked(self, flow_id: str) -> tuple[dict | None, tuple[str, str] | None]:
+        """Fresh reads of everything a stop for "the approval, the acceptance, the mode or the record do not agree"
+        would rest on: (context, None) when they agree, (None, (code, why)) when they do not."""
+        base = cfg.state_dir()
         flow = flows.get_flow(flow_id)
+        mode = pipeline_store.mode_info(base, flow_id)
+        if mode["mode"] != "auto":
+            return {"manual": True}, None
+        if mode["problem"]:
+            return None, ("mode_record", f"自動執行的模式紀錄不可信（{mode['problem']}）")
+        acc = risk_acceptance.status(flow)
+        if acc["state"] != "valid":
+            return None, ("acceptance", f"風險接受目前不算數（{acc.get('reason') or acc['state']}）")
+        seq = acceptance.approval_seq(mode["approval_id"])
+        events = flow["events"]
+        if seq is None or not (1 <= seq <= len(events)) or not acceptance.is_auto_event(events[seq - 1]):
+            return None, ("approval", "找不到自動執行核准的那一筆接受")
+        newest = None
+        try:
+            key = login_identity.load_login_key(base)
+            newest = acceptance.latest_valid(flow, key.key_id)
+        except login_identity.KeyUnavailable as exc:
+            return None, ("acceptance", f"登入指紋金鑰不可用（{exc}）")
+        if newest is None or newest.get("seq") != seq:
+            return None, ("approval_replaced", "自動執行核准的那一筆接受已被更新的接受取代")
+        # The mode must be on the record: an "auto" the daemon holds that no automation_mode event of this approval
+        # accounts for is not something to act on (the switch-on could not be audited)
+        if not self._mode_event_present(events, seq):
+            return None, ("mode_event_missing", "daemon 的模式是自動，但時間軸沒有對應這次核准的開啟紀錄")
+        return {"flow": flow, "mode": mode, "events": events, "approval_event": events[seq - 1], "seq": seq,
+                "approval": {"kind": "automation", "id": mode["approval_id"]}}, None
+
+    def step(self, flow_id: str) -> str:
         base = cfg.state_dir()
         mode = pipeline_store.mode_info(base, flow_id)
         if mode["mode"] != "auto":
+            self._busy_since.pop(flow_id, None)
             return "manual"
         hold = pipeline_store.hold_info(base, flow_id)
         if hold["held"]:
@@ -254,41 +288,30 @@ class AutomationRunner:
                 except ValueError:
                     pass
             return "held"
-        if mode["problem"]:
-            return self._stop(flow_id, "mode_record", f"自動執行的模式紀錄不可信（{mode['problem']}）")
-        acc = risk_acceptance.status(flow)
-        if acc["state"] != "valid":
-            return self._stop(flow_id, "acceptance", f"風險接受目前不算數（{acc.get('reason') or acc['state']}）")
-        seq = acceptance.approval_seq(mode["approval_id"])
-        events = flow["events"]
-        if seq is None or not (1 <= seq <= len(events)) or not acceptance.is_auto_event(events[seq - 1]):
-            return self._stop(flow_id, "approval", "找不到自動執行核准的那一筆接受")
-        approval_event = events[seq - 1]
-        # The mode must be on the record: an "auto" the daemon holds that no automation_mode event of this
-        # approval accounts for is not something to act on (the switch-on could not be audited)
-        if not self._mode_event_present(events, seq):
-            # The timeline and the mode were read one after the other: an approval that finished between the two
-            # reads looks like this. Do not conclude from that: if an approval holds the lock, wait; with the lock,
-            # read both again, and only a mode that is still unaccounted for is a stop.
-            with automation.try_plan_lock(base, flow_id) as got:
-                if not got:
+        ctx, problem = self._checked(flow_id)
+        if problem is not None:
+            # These reads were made one after another, and an approval in progress (in this console or another)
+            # changes exactly these things. No stop is concluded from them alone: with the approval lock held
+            # (nothing is then being approved) they are read again, and only what still does not agree stops the
+            # flow. Busy = an approval is in progress: wait (for a bounded time). Not there / not ours = stop.
+            with automation.try_plan_lock(base, flow_id) as (lock, why):
+                if lock == automation.BUSY:
+                    since = self._busy_since.setdefault(flow_id, self.clock())
+                    if self.clock() - since > BUSY_LIMIT_S:
+                        self._busy_since.pop(flow_id, None)
+                        return self._stop(flow_id, "approval_stuck",
+                                          f"核准已經進行超過 {int(BUSY_LIMIT_S)} 秒仍沒有結束，停止並請你檢查")
                     return "waiting:核准進行中"
-                flow = flows.get_flow(flow_id)
-                events = flow["events"]
-                mode = pipeline_store.mode_info(base, flow_id)
-                seq = acceptance.approval_seq(mode["approval_id"]) if mode["approval_id"] else None
-                if mode["mode"] != "auto" or seq is None or not (1 <= seq <= len(events)):
-                    return "manual" if mode["mode"] != "auto" else self._stop(
-                        flow_id, "approval", "找不到自動執行核准的那一筆接受")
-                approval_event = events[seq - 1]
-                if not acceptance.is_auto_event(approval_event):
-                    return self._stop(flow_id, "approval", "找不到自動執行核准的那一筆接受")
-                if not self._mode_event_present(events, seq):
-                    return self._stop(flow_id, "mode_event_missing",
-                                      "daemon 的模式是自動，但時間軸沒有對應這次核准的開啟紀錄")
-            approval = {"kind": "automation", "id": mode["approval_id"]}
-        else:
-            approval = {"kind": "automation", "id": mode["approval_id"]}
+                self._busy_since.pop(flow_id, None)
+                if lock == automation.UNAVAILABLE:
+                    return self._stop(flow_id, "approval_lock_unavailable", why)
+                ctx, problem = self._checked(flow_id)
+            if problem is not None:
+                return self._stop(flow_id, *problem)
+        self._busy_since.pop(flow_id, None)
+        if ctx.get("manual"):
+            return "manual"
+        flow, events, approval_event, approval = ctx["flow"], ctx["events"], ctx["approval_event"], ctx["approval"]
         state = derive(events)
         step = state["step"]
         if step == "first_dispatch":

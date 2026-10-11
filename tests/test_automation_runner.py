@@ -318,11 +318,21 @@ class LockInodeTests(RunnerCase):
         import threading
         from vbear import automation
         from vbear.api_error import ApiError
+        from unittest import mock
         automation.write_plan(self.base, self.fid, "計畫")
         lock = self.base / "automation" / self.fid / ".lock"
         holder = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
         fcntl.flock(holder, fcntl.LOCK_EX)                                   # another console holds it
         out = {}
+        blocked = threading.Event()
+        real_flock = fcntl.flock
+
+        def flock(fd, op):
+            try:
+                return real_flock(fd, op)
+            except BlockingIOError:
+                blocked.set()                                                # the waiter has really met the lock
+                raise
 
         def waiter():
             try:
@@ -330,9 +340,10 @@ class LockInodeTests(RunnerCase):
                     out["got"] = True
             except ApiError as exc:
                 out["error"] = (exc.status, exc.code)
-        t = threading.Thread(target=waiter)
-        t.start()
-        time.sleep(0.4)                                                      # it is blocked on the lock
+        with mock.patch.object(automation.fcntl, "flock", flock):
+            t = threading.Thread(target=waiter)
+            t.start()
+            self.assertTrue(blocked.wait(10), "the waiter never reached the lock")
         self.assertEqual(out, {})
         moved = self.tmp / "taken-away"
         os.rename(self.base / "automation" / self.fid, moved)                # the deletion moved the directory
@@ -356,3 +367,91 @@ class LockInodeTests(RunnerCase):
 def mock_flow_gone(flow_id):
     from unittest import mock
     return mock.patch.object(flows, "get_flow", side_effect=KeyError(flow_id))
+
+
+class StaleSnapshotTests(RunnerCase):
+    """The S3-5 review, round 2: no stop is concluded from reads that an approval in progress could have made
+    stale; the lock is taken, the reads are made again, and only what still disagrees stops the flow."""
+
+    def make_auto_flow(self):
+        self.enable()
+        self.start_executor()
+        self.commit_work("work")
+
+    def test_a_disagreement_that_the_second_read_does_not_confirm_is_not_a_stop(self):
+        from unittest import mock
+        self.make_auto_flow()
+        real = runner_mod.AutomationRunner._checked
+        calls = []
+
+        def stale_first(self_, flow_id):
+            calls.append(1)
+            if len(calls) == 1:                                   # what a read racing an approval would have seen
+                return None, ("approval", "找不到自動執行核准的那一筆接受")
+            return real(self_, flow_id)
+        with mock.patch.object(runner_mod.AutomationRunner, "_checked", stale_first):
+            action = self.runner.step(self.fid)
+        self.assertEqual(len(calls), 2)                           # read again, under the lock
+        self.assertFalse(action.startswith("stopped:"), action)
+        self.assertIsNone(self.stop_reason())
+        self.assertFalse(pipeline_store.is_held(self.base, self.fid))
+
+    def test_a_disagreement_that_the_second_read_confirms_is_a_stop_with_its_own_reason(self):
+        from unittest import mock
+        self.make_auto_flow()
+        with mock.patch.object(runner_mod.AutomationRunner, "_checked",
+                               return_value=(None, ("acceptance", "風險接受目前不算數（測試）"))):
+            action = self.runner.step(self.fid)
+        self.assertEqual(action, "stopped:acceptance")
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+
+    def test_a_newer_acceptance_than_the_one_the_mode_was_approved_with_is_a_stop(self):
+        self.make_auto_flow()
+        self.accept()                                             # a later acceptance appears (not by the console's route)
+        action = self.runner.step(self.fid)
+        self.assertEqual(action, "stopped:approval_replaced")
+
+    def make_disagreeing_flow(self):
+        """A flow whose timeline lacks the switch-on record (so the first read disagrees)."""
+        from unittest import mock
+        pre = self.call(f"/api/flows/{self.fid}/automation-preview", "POST", {})[1]
+        with mock.patch.object(flows, "append_automation_event", side_effect=OSError(5, "io")):
+            self.call(f"/api/flows/{self.fid}/automation", "POST", {"preview_id": pre["preview_id"]})
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+
+    def test_a_lock_file_that_is_not_there_is_a_stop_not_an_approval_in_progress(self):
+        self.make_disagreeing_flow()
+        (self.base / "automation" / self.fid / ".lock").unlink()
+        self.assertEqual(self.runner.step(self.fid), "stopped:approval_lock_unavailable")
+        self.assertIn("鎖檔", self.stop_reason()["detail"])
+
+    def test_a_directory_that_is_not_there_is_a_stop(self):
+        import shutil
+        self.make_disagreeing_flow()
+        shutil.rmtree(self.base / "automation" / self.fid)
+        self.assertEqual(self.runner.step(self.fid), "stopped:approval_lock_unavailable")
+
+    def test_a_lock_that_is_not_a_plain_file_of_ours_is_a_stop(self):
+        self.make_disagreeing_flow()
+        lock = self.base / "automation" / self.fid / ".lock"
+        lock.unlink()
+        os.symlink(self.work, lock)                               # a link where the lock file should be
+        self.assertEqual(self.runner.step(self.fid), "stopped:approval_lock_unavailable")
+
+    def test_an_approval_that_never_ends_is_waited_for_a_while_and_then_stopped(self):
+        import fcntl
+        self.make_disagreeing_flow()
+        lock = self.base / "automation" / self.fid / ".lock"
+        fd = os.open(lock, os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)                            # an approval that has been inside its unit
+        now = [1000.0]
+        self.runner.clock = lambda: now[0]
+        try:
+            self.assertTrue(self.runner.step(self.fid).startswith("waiting:"))
+            now[0] += runner_mod.BUSY_LIMIT_S - 1
+            self.assertTrue(self.runner.step(self.fid).startswith("waiting:"))      # still within the limit
+            now[0] += 2
+            self.assertEqual(self.runner.step(self.fid), "stopped:approval_stuck")
+        finally:
+            os.close(fd)
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))

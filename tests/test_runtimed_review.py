@@ -192,7 +192,9 @@ class ReviewCase(StreamCase):
     def crash_daemon(self):
         """As the stream version: nothing is cleaned up, signalled or reaped;
         the review process lives on in its own group."""
+        self.orphans = getattr(self, "orphans", [])
         for job in self.dm._reviews.values():
+            self.orphans.append(job.run.proc)                     # kept until the test has waited for it
             for f in (job.run.proc.stdin, job.run.proc.stdout, job.run.proc.stderr):
                 try:
                     if f is not None:

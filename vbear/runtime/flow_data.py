@@ -628,19 +628,20 @@ def _remove(base, pl: Plan, removed: dict) -> dict:
                 if _move(src, pl.pipeline_dir, tomb, "pipeline", root_dev, pl.pipeline_inode):
                     removed["pipeline"] = True
         _fsync(tomb)
-        # purge: no manifest is needed from here; the tomb itself goes last
-        if _purge(deleting, pl.pipeline_id, root_dev, [WALK_MAX_ENTRIES]):
-            removed["purged"] = True
+        # purge: no manifest is needed from here. The tomb itself STAYS (empty) until finish(): it is the visible
+        # "this flow is being deleted" that stops anyone creating something new for it, and it goes only after
+        # the console has removed the flow's own record (S3-2 review, deletion vs a not-yet-locked approval).
+        budget = [WALK_MAX_ENTRIES]
+        for child in os.listdir(tomb):
+            if _purge(tomb, child, root_dev, budget):
+                removed["purged"] = True
+        _fsync(tomb)
         _fsync(deleting)
         if pl.held or pl.deleting:
             removed["hold"] = _remove_hold(state, pl.pipeline_id, root_dev)
         try:                                                    # a mode record has no meaning once the flow is gone
             pipeline_store.mode_remove(base, pl.pipeline_id)
         except pipeline_store.StoreRefused:
-            pass
-        try:                                                    # an empty deleting/ is not kept
-            os.rmdir(DELETING, dir_fd=state)
-        except OSError:
             pass
     finally:
         for fd in open_fds:
@@ -649,6 +650,56 @@ def _remove(base, pl: Plan, removed: dict) -> dict:
             except OSError:
                 pass
     return removed
+
+
+def finish(base, pipeline_id: str) -> bool:
+    """The last step of a deletion: the (empty) deletion marker goes. The
+    caller has removed the flow's record. False when there is no marker;
+    FlowDataRefused when it still holds something (then the deletion is not
+    done)."""
+    try:
+        state = os.open(str(base), _DIR)
+    except OSError as exc:
+        raise FlowDataRefused(f"狀態目錄無法開啟（{exc.strerror}）") from exc
+    try:
+        deleting = _root_fd(state, DELETING, os.fstat(state).st_dev)
+        if deleting is None:
+            return False
+        try:
+            try:
+                os.rmdir(pipeline_id, dir_fd=deleting)
+            except FileNotFoundError:
+                return False
+            except OSError as exc:
+                raise FlowDataRefused(f"刪除標記裡還有東西（{exc.strerror}），刪除還沒完成") from exc
+            _fsync(deleting)
+        finally:
+            os.close(deleting)
+        try:
+            os.rmdir(DELETING, dir_fd=state)                     # an empty deleting/ is not kept
+        except OSError:
+            pass
+        return True
+    finally:
+        os.close(state)
+
+
+def sweep_orphans(base, known_flow_ids) -> list[str]:
+    """Empty deletion markers of flows that no longer exist (the console
+    died between removing the record and asking for finish): removed."""
+    out = []
+    try:
+        names = os.listdir(os.path.join(str(base), DELETING))
+    except OSError:
+        return out
+    for name in names:
+        if pipeline_store.FLOW_RE.match(name) and name not in known_flow_ids:
+            try:
+                if finish(base, name):
+                    out.append(name)
+            except FlowDataRefused:
+                pass
+    return out
 
 
 def _remove_hold(state: int, pipeline_id: str, root_dev: int) -> bool:
