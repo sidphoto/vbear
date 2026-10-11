@@ -344,6 +344,33 @@ The first three items appear in full in the per-flow approval dialog under `RISK
     UID that rewrites them could make VBear delete another flow's data; such programs are outside the threat
     model (see assumptions).
 
+### When a flow cannot be deleted
+
+The console gives the reason next to the flow in 「保存的資料」, and it is the daemon that decides again when you
+press delete. There is **no forced delete**: it would bypass the proof that a directory is the flow's, and an
+irreversible action is not given a shortcut around its own checks. The reasons and what they ask of you:
+
+| Reason shown | What it means | What to do |
+|---|---|---|
+| The flow is stopped / has failures you have not released | A stop marker (`holds/<flow>`) exists or a failed turn or review is unreleased. | Press 「繼續」 on the flow page (close a failed session first), then delete. |
+| A session or review is running, launching, in `manual_review` or not yet cleaned | Something may still be running or was kept for a person. | Close the session or cancel the review and wait for it to end. For `manual_review`, read `retained_reason` in the item's `manifest.json`, confirm that no process of it is alive (`ps`) and decide yourself. |
+| A process group is not proven finished | The daemon could not prove every process of an ended session or review gone. | Check with `ps` that nothing of that launch is alive; VBear does not signal it for you after a restart. |
+| A manifest or journal cannot be read, an entry is not shaped like a session or review job, or a record does not agree with another (the message names the entry) | VBear cannot tell which data is this flow's, so it refuses to touch any of it. | Inspect the named files by hand (below). |
+
+The files involved, all under the state directory (`~/.vbear` by default), are
+`sessions/<launch-id>/manifest.json` and `journal.jsonl`, `reviews/<job-id>/manifest.json`,
+`pipelines/<task-id>/started.json`, `released.json` and `reviews/<round>/job.json`, `holds/<flow-id>` and
+`deleting/<flow-id>/`. A session or job belongs to the flow named in its manifest (`pipeline_id`); the task
+directory belongs to the flow named in `started.json`; each review's `job.json` must name the same job, commit and
+flow as the review's own manifest.
+
+If you have confirmed that nothing of the flow is running and that the data really is the flow's, you can remove
+the named directories yourself with ordinary file commands. VBear does not offer to do this: nothing here is
+undoable, and only you can tell a damaged flow from someone else's data. Once the damaged entry is gone, the
+console's delete works again (a flow with nothing left on disk needs no daemon and only has its record removed).
+A deletion that was begun and not finished (`deleting/<flow-id>/` exists) is finished by pressing delete again;
+it is not a damaged flow.
+
 ### What you must remember
 
 - **A VBear review PASS does not mean the code has no problems.** It means a reviewer reported PASS and the

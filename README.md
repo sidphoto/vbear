@@ -145,8 +145,10 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
 - **A review PASS is not proof.** The managed executor and Codex review have residual risks you must accept per
   flow (Codex's tools cannot be enumerated in advance and its multi-agent mode cannot be turned off, only
   detected; limits differ in strength; organization-managed Claude settings cannot be detected locally). Review
-  conclusions can differ for the same content. Deleting a flow cannot be undone. The full list is in the
-  [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
+  conclusions can differ for the same content. Deleting a flow cannot be undone, and a flow whose records are
+  damaged or cannot be proven to be its own is refused with the reason: there is no forced delete, so such a
+  flow is cleaned up by hand (see [when a flow cannot be deleted](docs/SECURITY-MODEL.md#when-a-flow-cannot-be-deleted)).
+  The full list is in the [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
 - **Programs running as your own user can drive VBear.** Other websites and other user accounts are kept out:
   every API call needs a per-launch token stored in a file only you can read. A program running under your
   account can read that file. See the [security model](docs/SECURITY-MODEL.md).

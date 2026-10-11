@@ -22,7 +22,8 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 - 任務卡的版本綁定只比對 commit：核准之後未提交的修改，不會讓結果失效。
 - **審查 PASS 不是證明**：受管執行者與 Codex 審查有殘餘風險，每個流程都要你先接受（Codex 的工具集合無法事先證明、多 agent
   能力關不掉只能偵測、各項上限強度不一、組織管理的 Claude 設定無法在本機偵測）。同一份內容兩次審查的結論可能不同。刪除流程
-  無法復原。完整清單見[安全模型](docs/SECURITY-MODEL.md#phase-2-coordination)。
+  無法復原；紀錄損壞或無法證明屬於這個流程的資料會被拒絕刪除並說明原因，沒有「強制刪除」，需要自己動手處理
+  （見[流程無法刪除時](docs/SECURITY-MODEL.md#when-a-flow-cannot-be-deleted)）。完整清單見[安全模型](docs/SECURITY-MODEL.md#phase-2-coordination)。
 - **以你的帳號執行的程式可以操作 VBear**：其他網站和其他使用者帳號會被擋下，因為每次呼叫 API 都要帶一組
   每次啟動都會更換的通行證，通行證存在只有你能讀的檔案裡。但以你的帳號執行的程式，也讀得到這個檔案。
 - **沒有遙測**：VBear 不對外連線，也沒有帳號或雲端服務。
