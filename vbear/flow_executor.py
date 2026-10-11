@@ -33,7 +33,8 @@ import time
 import uuid
 from pathlib import Path
 
-from . import acceptance, config as cfg, daemon_client, flows, login_identity, previews, risk_acceptance, tasks
+from . import (acceptance, config as cfg, daemon_client, flows, git_head, login_identity, previews, risk_acceptance,
+               tasks)
 from .api_error import ApiError
 from .runtime import agent_sessions, pipeline_store, stream_flow
 from .runtime import stream_protocol as sp
@@ -221,8 +222,40 @@ class FlowExecutor:
         failed session is still open and says so."""
         if body not in (None, {}):
             raise ApiError(400, "bad_request", "不接受任何欄位")
-        self._flow(flow_id)
+        flow = self._flow(flow_id)
+        if pipeline_store.mode_info(cfg.state_dir(), flow_id)["mode"] == "auto":
+            problems = self._continue_problems(flow)
+            if problems:
+                raise ApiError(409, "cannot_continue", "不能繼續：" + "；".join(problems), reasons=problems)
         return self._call("pipeline_release", pipeline=flow_id)
+
+    def _continue_problems(self, flow: dict) -> list[str]:
+        """S3 design 6: what has to hold before an automatic flow is let go
+        again. (The daemon refuses a release while a failed session is open;
+        that, and a usable quota ledger, are its to say.)"""
+        why: list[str] = []
+        base = cfg.state_dir()
+        acc = risk_acceptance.status(flow)
+        if acc["state"] != "valid":
+            why.append(f"風險接受目前不算數（{acc.get('reason') or acc['state']}）")
+        try:
+            workdir = self._workdir(flow)
+            if git_head.read_head(workdir).get("commit") is None:
+                why.append("讀不到執行者工作目錄的 HEAD")
+        except ApiError as exc:
+            why.append(str(exc))
+        try:
+            reviews = stream_flow.flow_reviews(base, flow["id"], flow["task_id"])
+            if any(m["state"] == "manual_review" or m["outcome"] == "manual_review" for m in reviews):
+                why.append("有審查在 manual_review，要先由人處理")
+        except stream_flow.FlowRefused as exc:
+            why.append(f"審查紀錄無法核對（{exc}）")
+        try:
+            ctx = stream_flow.load(base, flow["id"])
+            stream_flow.check_limits(ctx, now=time.time(), counting_dispatch=False, ignore_unresolved=True)
+        except stream_flow.FlowRefused as exc:
+            why.append(f"上限或接受：{exc}")
+        return why
 
     # ---- dispatch ----------------------------------------------------------------------------------------
 

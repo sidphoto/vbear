@@ -538,10 +538,12 @@ def _flow_has_journal(base, pipeline_id: str) -> bool:
 
 
 def check_limits(ctx: FlowContext, *, now: float, counting_dispatch: bool, live_responses: int = 0,
-                 counting_review: bool = False) -> None:
-    """Design 6, for dispatch_prepare (counting_dispatch) and stream_send."""
+                 counting_review: bool = False, ignore_unresolved: bool = False) -> None:
+    """Design 6, for dispatch_prepare (counting_dispatch) and stream_send.
+    ``ignore_unresolved``: only the limits (what the console asks before it
+    lets the user's "continue" through: the failure is what "continue" ends)."""
     lim, tot = ctx.limits, ctx.totals
-    failed = unresolved_failure(ctx)                     # v29.8: one failure stops the flow
+    failed = None if ignore_unresolved else unresolved_failure(ctx)     # v29.8: one failure stops the flow
     if failed:
         raise FlowRefused("failed", f"流程有尚未「繼續」的失敗（{failed}），需要使用者先按「繼續」")
     if not (isinstance(tot.spent_usd, (int, float)) and math.isfinite(tot.spent_usd)):

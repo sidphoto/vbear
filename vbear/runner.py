@@ -47,6 +47,7 @@ REPORT_REQUEST = ("\n\n---\n回報要求：完成後請用結構化輸出回報 
                   "完整 commit）、tests.result（passed / failed / not_run）、tests.summary 與 notes。")
 FORWARD_REQUEST = "\n\n---\n請依上面標明為資料的審查意見修正，修正後 commit，並重新回報。"
 _WAITING = ("accepted", "writing", "written", "confirmed")
+ABORT_MARK = "流程被停止，審查中止"          # daemon_review._review_hold: what a stop writes into the review's reasons
 
 
 def derive(events: list[dict]) -> dict:
@@ -78,7 +79,12 @@ def derive(events: list[dict]) -> dict:
     if k == "auto_review_intent":
         return {"step": "resume_review", "round": last["round"], "commit": last["commit"]}
     if k == "auto_review_started":
-        return {"step": "await_review", "round": last["round"], "job_id": last["job_id"]}
+        return {"step": "await_review", "round": last["round"], "job_id": last["job_id"],
+                "commit": last["commit"] if "commit" in last else None}
+    if k == "auto_review_aborted":
+        # S3 design 6: the stop ended that round (it is invalid and a round is never run twice); after the
+        # user's continue the same commit is reviewed again in the NEXT round, if HEAD is still it
+        return {"step": "start_review", "commit": last["commit"], "aborted_round": last["round"]}
     if k == "auto_review_result":
         if last["verdict"] == "NEEDS WORK":
             return {"step": "forward", "round": last["round"], "job_id": last["job_id"], "commit": last["commit"]}
@@ -259,12 +265,18 @@ class AutomationRunner:
     def _text(self, flow_id: str, approval_event: dict, forward_job: str | None) -> str | None:
         """The dispatch text, or None (the caller stops) with ``self._why`` set. Deterministic: the same inputs
         give the same text, which is what lets a recovery check it against the intent's hash."""
-        if forward_job is None:
-            plan = automation.read_plan(cfg.state_dir(), flow_id, sha256=approval_event["plan_sha256"],
-                                        size=approval_event["plan_bytes"])
-            text = plan + REPORT_REQUEST
-        else:
-            draft = self.review.opinion_draft(flow_id, forward_job)
+        try:
+            if forward_job is None:
+                plan = automation.read_plan(cfg.state_dir(), flow_id, sha256=approval_event["plan_sha256"],
+                                            size=approval_event["plan_bytes"])
+                text = plan + REPORT_REQUEST
+            else:
+                draft = self.review.opinion_draft(flow_id, forward_job)
+        except ApiError as exc:
+            self._why = (exc.code if exc.code.startswith(("plan_", "no_")) else "text_unavailable",
+                         f"派工全文無法產生：{exc}")
+            return None
+        if forward_job is not None:
             if draft.get("truncated"):
                 self._why = ("review_too_long", "要轉送的審查意見過長，派工全文會超過上限（不截斷），要由你處理")
                 return None
@@ -444,6 +456,10 @@ class AutomationRunner:
             return "waiting:審查進行中"
         if entry["state"] == "manual_review" or entry["outcome"] == "manual_review":
             return self._stop(flow_id, "review_manual", "審查需要人工處理（manual_review）")
+        if entry["outcome"] == "invalid" and any(ABORT_MARK in str(r) for r in entry.get("invalid_reasons") or []):
+            self._event(flow_id, "auto_review_aborted",
+                        {"round": entry["round"], "job_id": entry["job_id"], "commit": entry["commit"]})
+            return "review_aborted"
         if entry["outcome"] != "valid":
             return self._stop(flow_id, "review_invalid", "審查無效：" + "；".join(entry.get("invalid_reasons") or ["原因不明"]))
         if entry.get("record") != "complete":

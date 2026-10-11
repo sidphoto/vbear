@@ -57,7 +57,7 @@ VERDICTS = ("PASS", "NEEDS_WORK", "BLOCKED")
 SOURCES = ("manual", "console", "automation")
 CONSOLE_KINDS = ("risk_acknowledged", "automation_mode")
 AUTOMATION_KINDS = ("auto_dispatch_intent", "auto_dispatch_sent", "auto_report", "auto_review_intent",
-                    "auto_review_started", "auto_review_result", "auto_stopped")
+                    "auto_review_started", "auto_review_result", "auto_review_aborted", "auto_stopped")
 EVENT_KINDS = ("plan_submitted", "plan_approved", "implementation_started", "executor_report",
                "review_result", "merge_done", "push_done", "note", "roles_changed", "risk_acknowledged",
                ) + CONSOLE_KINDS[1:] + AUTOMATION_KINDS
@@ -70,6 +70,7 @@ KIND_LABELS = {"plan_submitted": "提出計畫", "plan_approved": "計畫核准"
                "auto_dispatch_intent": "自動派工（意圖）", "auto_dispatch_sent": "自動派工（已送出）",
                "auto_report": "執行者回報（自動核對）", "auto_review_intent": "自動審查（意圖）",
                "auto_review_started": "自動審查（已啟動）", "auto_review_result": "審查結果（自動讀取）",
+               "auto_review_aborted": "審查被停止中止（該輪無效）",
                "auto_stopped": "自動執行停止"}
 # Fields a client may send per kind (besides kind and note).
 KIND_FIELDS = {"executor_report": frozenset({"commit"}),
@@ -113,6 +114,7 @@ _STORED_KIND_KEYS = {
     "auto_review_intent": frozenset({"round", "commit"}),
     "auto_review_started": frozenset({"round", "job_id"}),
     "auto_review_result": frozenset({"round", "job_id", "commit", "verdict", "valid"}),
+    "auto_review_aborted": frozenset({"round", "job_id", "commit"}),
     "auto_stopped": frozenset({"reason_code", "detail"}),
 }
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
