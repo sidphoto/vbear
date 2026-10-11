@@ -475,6 +475,149 @@ test("changed limits and models are sent to a new preview, never to the confirma
   assert(!posts().some((x) => x.url.endsWith("/acceptance")), "nothing recorded by applying");
 });
 
+test("changing any setting voids the preview: the box is cleared and accepting sends nothing", async () => {
+  for (const which of ["limit", "model", "review"]) {
+    const d = openDialog({ preview: [preview()], confirm: [{ ok: true }] });
+    await settle();
+    const m = d.modal();
+    const tick = find(m, (n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+    tick.checked = true;
+    tick.dispatch("change");
+    const accept = button(m, "接受並記錄");
+    assert(!accept.disabled, "ticked: accept is on");
+    if (which === "limit") {
+      const i = m.findAll((n) => n.tag === "input" && n.dataset && n.dataset.limit)[0];
+      i.value = "3";
+      i.dispatch("input");
+    } else if (which === "model") {
+      const i = find(m, (n) => n.tag === "input" && n.getAttribute("list") === "s2-exec-models");
+      i.value = "claude-sonnet-5-5";
+      i.dispatch("input");
+    } else {
+      const sel = find(m, (n) => n.tag === "select");
+      sel.value = "gpt-6.1-sol";
+      sel.dispatch("change");
+    }
+    assert(accept.disabled, `${which}: accept is off`);
+    assert(!tick.checked && tick.disabled, `${which}: the tick is cleared and cannot be set`);
+    assert(text(m).includes("設定已變更，這份預覽已作廢"), which);
+    accept.click();
+    await settle();
+    assert(!posts().some((x) => x.url.endsWith("/acceptance")), `${which}: nothing is sent`);
+    // a new preview of the new values is what can be accepted
+    button(m, "套用並重新預覽").click();
+    await settle();
+    assert(!text(m).includes("設定已變更"), `${which}: the notice goes with the new preview`);
+    assert(button(m, "接受並記錄").disabled, `${which}: still off until the tick`);
+    FETCH_LOG.length = 0;
+  }
+});
+
+// ---- refresh rounds ----------------------------------------------------------------------------------------
+
+function deferredExecutor() {
+  const pending = [];
+  setHandler((url, opts) => {
+    const p = url.split("?")[0];
+    if ((opts.method || "GET") === "GET" && p.endsWith("/executor")) {
+      return new Promise((resolve) => pending.push((data) => resolve(jsonResponse(data, true))));
+    }
+    if ((opts.method || "GET") === "GET" && p.endsWith("/reports")) return jsonResponse({ ok: true, reports: [], latest_dispatch_id: null }, true);
+    if ((opts.method || "GET") === "GET" && p.endsWith("/reviews")) return jsonResponse({ ok: true, reviews: [] }, true);
+    if ((opts.method || "GET") === "GET" && p.endsWith("/merge-gate")) return jsonResponse(gate(), true);
+    return null;
+  });
+  return pending;
+}
+
+test("a tick that finds a round running is dropped; no requests pile up", async () => {
+  FETCH_LOG.length = 0;
+  const pending = deferredExecutor();
+  const c = mountCoordinator(FLOW);
+  await settle();
+  assert.strictEqual(pending.length, 1, "the first round is waiting on a slow executor read");
+  const n = FETCH_LOG.length;
+  await c.tick();
+  await c.tick();
+  await c.refresh(false);
+  assert.strictEqual(FETCH_LOG.length, n, "no new requests while a round is running");
+  pending[0](executor());
+  await settle();
+  assert(text(byS2(c.node, "acceptance")).includes("風險已接受"));
+  const next = c.tick();                             // the round is over: the next one runs
+  await settle();
+  assert.strictEqual(pending.length, 2);
+  pending[1](executor());
+  await next;
+});
+
+test("an action's refresh is not lost while a round is running, and it shows the newer state", async () => {
+  FETCH_LOG.length = 0;
+  const pending = deferredExecutor();
+  const c = mountCoordinator(FLOW);
+  await settle();
+  const old = executor({ sessions: [liveSession({ status: { live: true, state: "idle", responses: 1, total_cost_usd: 0.01, dispatches: [] } })] });
+  const fresh = executor({ sessions: [liveSession({ status: { live: true, state: "turn_running", responses: 9, total_cost_usd: 0.5, dispatches: [] } })] });
+  c.refresh(true);                                   // an action finished while the first round is still waiting
+  await settle();
+  assert.strictEqual(pending.length, 1, "still one request: it is remembered, not sent");
+  pending[0](old);                                   // the slow, older answer arrives
+  await settle();
+  assert.strictEqual(pending.length, 2, "and then the remembered round runs");
+  pending[1](fresh);
+  await settle();
+  const t = text(byS2(c.node, "executor"));
+  assert(t.includes("執行中") && !t.includes("閒置"), "the page ends on the newer state");
+});
+
+test("a stopped page applies nothing that arrives late", async () => {
+  FETCH_LOG.length = 0;
+  const pending = deferredExecutor();
+  const c = mountCoordinator(FLOW);
+  await settle();
+  c.stop();
+  pending[0](executor());
+  await settle();
+  assert.strictEqual(byS2(c.node, "acceptance"), null, "nothing was drawn");
+});
+
+test("each read has a time limit", async () => {
+  reset();
+  const seen = [];
+  const inner = FETCH_LOG;                            // reset() installed the handler; wrap it to look at the options
+  setHandler((url, opts) => {
+    seen.push(!!opts.signal);
+    const p = url.split("?")[0];
+    if (p.endsWith("/executor")) return jsonResponse(executor(), true);
+    if (p.endsWith("/reports")) return jsonResponse({ ok: true, reports: [], latest_dispatch_id: null }, true);
+    if (p.endsWith("/reviews")) return jsonResponse({ ok: true, reviews: [] }, true);
+    return jsonResponse(gate(), true);
+  });
+  const c = mountCoordinator(FLOW);
+  await settle();
+  assert(inner && seen.length >= 4 && seen.every(Boolean), "every GET carries an abort signal");
+  c.stop();
+});
+
+test("an answer in a shape the page does not know is said, not a crash", async () => {
+  reset();
+  setHandler(() => null);                             // every read answers {ok: true}
+  const c = mountCoordinator(FLOW);
+  await settle();
+  assert(text(c.node).includes("無法顯示伺服器的回應"));
+  state.executor = executor();
+  setHandler((url) => {
+    const p = url.split("?")[0];
+    if (p.endsWith("/executor")) return jsonResponse(executor(), true);
+    if (p.endsWith("/reports")) return jsonResponse({ ok: true, reports: [], latest_dispatch_id: null }, true);
+    if (p.endsWith("/reviews")) return jsonResponse({ ok: true, reviews: [] }, true);
+    return jsonResponse(gate(), true);
+  });
+  await c.refresh(true);
+  assert(text(byS2(c.node, "acceptance")).includes("風險已接受"), "and it recovers on the next round");
+  c.stop();
+});
+
 // ---- run ------------------------------------------------------------------------------------------------------
 
 (async () => {

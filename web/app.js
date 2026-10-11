@@ -2065,8 +2065,9 @@ const S2_SESSION_STATE = {
 function s2Url(flowId, suffix) { return `/api/flows/${encodeURIComponent(flowId)}/${suffix}`; }
 
 // One GET that cannot take the page down: {ok, data} or {ok:false, message}.
+const S2_REQUEST_TIMEOUT_MS = 15000;
 async function s2Get(path) {
-  try { return { ok: true, data: await api.get(path) }; }
+  try { return { ok: true, data: await api.get(path, { timeoutMs: S2_REQUEST_TIMEOUT_MS }) }; }
   catch (e) { return { ok: false, message: e.message, status: e.status }; }
 }
 
@@ -2159,23 +2160,34 @@ function openAcceptanceDialog(flowId, onDone) {
   }
   function render(res) {
     const v = res.values;
+    // Whatever is changed here, the preview that is still held is for the OLD values: it is voided at once, the
+    // box is cleared and "accept" stays off until a new preview of the new values has been made.
+    const check = el("input", { type: "checkbox", id: "s2-accept-check", on: { change: () => {
+      accept.disabled = !(check.checked && previewId);
+    } } });
+    const voided = () => {
+      previewId = null;
+      check.checked = false;
+      check.disabled = true;
+      accept.disabled = true;
+      setKids(problem, notice("warn", "設定已變更，這份預覽已作廢。請按「套用並重新預覽」，檢查新的預覽後再接受。"));
+    };
+    const changed = { input: voided, change: voided };
     const limitRows = v.limits.map((x) => {
       const input = el("input", { type: "number", class: "input s2-limit", "aria-label": x.label,
         value: String(x.value), min: "1", max: String(x.cap), step: x.name === "executor_budget_usd" ? "0.01" : "1",
-        dataset: { limit: x.name } });
+        dataset: { limit: x.name }, on: changed });
       input.value = String(x.value);
       return el("tr", null, el("td", null, x.label), el("td", null, input, ` ${x.unit}`),
         el("td", { class: "small muted" }, `預設 ${x.default}，上限 ${x.cap}`));
     });
     const modelIn = el("input", { type: "text", class: "input mono", value: v.executor_model, list: "s2-exec-models",
-      "aria-label": "執行者模型（完整的 Claude 模型 id）", spellcheck: "false" });
+      "aria-label": "執行者模型（完整的 Claude 模型 id）", spellcheck: "false", on: changed });
     modelIn.value = v.executor_model;
     const lists = el("datalist", { id: "s2-exec-models" }, (res.suggested_executor_models || []).map((m) => el("option", { value: m })));
-    const reviewIn = el("select", { "aria-label": "審查模型" }, (res.review_models || [v.review_model]).map(
-      (m) => el("option", { value: m, selected: m === v.review_model }, m)));
-    const check = el("input", { type: "checkbox", id: "s2-accept-check", on: { change: () => {
-      accept.disabled = !(check.checked && previewId);
-    } } });
+    const reviewIn = el("select", { "aria-label": "審查模型", on: { change: voided } },
+      (res.review_models || [v.review_model]).map(
+        (m) => el("option", { value: m, selected: m === v.review_model }, m)));
     const zh = res.risk_text.zh;
     setKids(body,
       el("p", null, zh.intro),
@@ -2471,28 +2483,50 @@ function s2GatePanel(g) {
 function mountCoordinator(flowId) {
   const data = el("div", { class: "s2-data" });
   let last = null; let state = null; let composer = null; let alive = true;
+  let inflight = false; let again = false; let seq = 0;
   const getExecutor = () => (state && state.executor.ok ? state.executor.data : null);
   const host = el("div", { class: "s2", "data-s2": "root" });
+  // One round at a time: a timer tick that finds one running is dropped, an action's refresh is remembered and
+  // runs right after it; every round has a number and only the newest answer is applied (Codex S2c-4 review).
   async function refresh(force) {
     if (!alive) return;
-    const next = await s2Load(flowId);
-    if (!alive) return;
-    const key = JSON.stringify(next);
-    if (!force && key === last) return;
-    last = key;
-    state = next;
-    const parts = [];
-    if (next.executor.ok) {
-      parts.push(s2AcceptancePanel(flowId, next.executor.data, () => refresh(true)),
-        s2ExecutorPanel(flowId, next.executor.data, () => refresh(true)));
-    } else {
-      parts.push(el("section", { class: "section s2-panel" }, sectionHead("串流執行者", null),
-        notice("bad", "無法讀取執行者狀態：" + next.executor.message)));
+    if (inflight) {
+      if (force) again = true;
+      return;
     }
-    parts.push(s2ReportsPanel(next.reports),
-      s2ReviewsPanel(flowId, getExecutor(), next.reports, next.reviews, composer, () => refresh(true)),
-      s2GatePanel(next.gate));
-    setKids(data, parts);
+    inflight = true;
+    const mine = ++seq;
+    try {
+      const next = await s2Load(flowId);
+      if (!alive || mine !== seq) return;
+      const key = JSON.stringify(next);
+      if (!force && key === last) return;
+      last = key;
+      state = next;
+      let parts = [];
+      try {
+        if (next.executor.ok) {
+          parts.push(s2AcceptancePanel(flowId, next.executor.data, () => refresh(true)),
+            s2ExecutorPanel(flowId, next.executor.data, () => refresh(true)));
+        } else {
+          parts.push(el("section", { class: "section s2-panel" }, sectionHead("串流執行者", null),
+            notice("bad", "無法讀取執行者狀態：" + next.executor.message)));
+        }
+        parts.push(s2ReportsPanel(next.reports),
+          s2ReviewsPanel(flowId, getExecutor(), next.reports, next.reviews, composer, () => refresh(true)),
+          s2GatePanel(next.gate));
+      } catch (e) {
+        // an answer in a shape this page does not know: say so, never leave a half page or a dead refresh
+        parts = [notice("bad", "無法顯示伺服器的回應（格式不符）：" + (e && e.message ? e.message : String(e)))];
+      }
+      setKids(data, parts);
+    } finally {
+      inflight = false;
+      if (again && alive) {
+        again = false;
+        refresh(true);
+      }
+    }
   }
   composer = s2DispatchComposer(flowId, getExecutor, () => refresh(true));
   host.append(el("div", { class: "section" }, el("h2", null, "VBear 管理的執行與審查"),
