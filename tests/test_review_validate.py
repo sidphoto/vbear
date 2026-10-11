@@ -467,6 +467,21 @@ class SubagentActivityTests(unittest.TestCase):
                         t.feed(json.dumps(e).encode())
                 self.assertEqual(cm.exception.reasons, [rv.SUBAGENT_ACTIVITY])
 
+    def test_the_world_state_shape_of_the_passing_real_run_is_accepted(self):
+        # probe 2026-10-11, run 2: host_skills is only {"includeInstructions": false}
+        _, recs, _ = rf.valid_run()
+        ws = [x for x in recs if x["type"] == "world_state"][0]["payload"]["state"]
+        ws["host_skills"] = {"includeInstructions": False}
+        self.assertEqual(run_rollout(recs).reasons, [])
+        for shape in (None, [], {}, {"body": "", "includeInstructions": False}):
+            ws["host_skills"] = shape
+            self.assertEqual(run_rollout(recs).reasons, [], shape)
+        del ws["host_skills"]
+        self.assertEqual(run_rollout(recs).reasons, [])                      # absent is as good as empty
+        for bad in ({"includeInstructions": True}, {"body": "x"}, {"body": "x", "includeInstructions": False}):
+            ws["host_skills"] = bad
+            self.assertTrue(any("skills" in r for r in run_rollout(recs).reasons), bad)
+
     def test_ordinary_records_do_not_trip_it(self):
         # the real run (probe 2026-10-11) had agent_message items, messages and exec calls
         evs, recs, _ = rf.valid_run()

@@ -6,19 +6,20 @@ the permission profile.
 Every key name and every value the validators (review_validate) read is in
 one place, ``VERSIONS``, so the real probe corrects it once. Until a probe
 has passed for a version, it is not in ``VERIFIED_VERSIONS`` and no review
-starts with it (design 5.2: "the version must be in the verified list"); the
-local record of a passing probe is read like the stream one
-(cli_versions.local_*). Fields marked "(probe)" are not yet observed in a
-real 0.160.0 run: the design or an incomplete sample names them, and the
-probe confirms or changes them.
+starts with it (design 5.2: "the version must be in the verified list").
+0.160.0 passed on 2026-10-11 (docs/evidence/codex-0.160.0-review.md); the
+constants below were confirmed or corrected by that run, which is what the
+comments "probe 2026-10-11" say. A version is built in only together with an
+evidence file of that name (a test holds the two together).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# The versions a passing review probe has verified, built in (none yet).
-VERIFIED_VERSIONS: tuple[str, ...] = ()
+# The versions a passing review probe has verified, built in, each backed by
+# docs/evidence/codex-<version>-review.md.
+VERIFIED_VERSIONS: tuple[str, ...] = ("0.160.0",)
 
 TOKEN_MAX = 10 ** 12                      # a token count above this is not believed
 
@@ -41,7 +42,7 @@ class CodexConstants:
     tools: frozenset                      # allowed tool names
     tool_call_kind: tuple                 # (type, payload.type) of a tool call
     tool_name_key: str                    # payload key holding the tool name
-    network_restricted: object            # turn_context.payload.permission_profile.network (probe)
+    network_restricted: object            # turn_context.payload.permission_profile.network
     multi_agent_mode: str                 # world_state.payload.state.multi_agent_mode.mode (probe 2026-10-11: cannot be "disabled")
     collaboration_mode: str               # world_state.payload.state.collaboration_mode.mode (probe 2026-10-11)
     usage_fields: tuple                   # the six counts of a token_usage_record's usage objects
@@ -49,12 +50,12 @@ class CodexConstants:
     model_message_kinds: frozenset        # what a model produces: counts as a model response item
     approval_policy: str
     sandbox_type: str
-    rollout_dir: str = "sessions"                     # under CODEX_HOME (probe)
-    rollout_date_parts: tuple = ("%Y", "%m", "%d")    # one directory per part, local time (probe)
-    rollout_prefix: str = "rollout-"                  # the file is <prefix>...-<thread_id>.jsonl (probe)
+    rollout_dir: str = "sessions"                     # under CODEX_HOME (confirmed by the 2026-10-11 run)
+    rollout_date_parts: tuple = ("%Y", "%m", "%d")    # one directory per part, local time (confirmed)
+    rollout_prefix: str = "rollout-"                  # the file is <prefix>...-<thread_id>.jsonl (confirmed)
     # The review's argv (design 5.2): the -c settings and the --disable
     # features, in this order; the same settings are used for `codex mcp
-    # list --json` (probe: whether it takes them).
+    # list --json` (it takes them: exit 0 and `[]`, probe 2026-10-11).
     # Design 5.2 word for word: -m, the first two -c, -s workspace-write, the
     # other -c, then the --disable features, -C and the prompt.
     config_head: tuple = ("model_reasoning_effort=high", "cli_auth_credentials_store=file")
@@ -94,8 +95,8 @@ VERSIONS: dict[str, CodexConstants] = {
         event_kinds=frozenset({"thread.started", "turn.started", "item.started", "item.completed",
                                "turn.completed", "turn.failed", "error"}),
         failure_events=frozenset({"turn.failed", "error"}),
-        message_item_type="agent_message",        # (probe: the item's inner shape was not recorded)
-        message_text_key="text",                  # (probe)
+        message_item_type="agent_message",        # probe 2026-10-11: {"id", "type": "agent_message", "text"}
+        message_text_key="text",                  # probe 2026-10-11
         events_usage_fields=("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
                              "output_tokens", "reasoning_output_tokens"),
         rollout_kinds=frozenset({

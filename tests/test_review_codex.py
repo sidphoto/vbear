@@ -203,6 +203,30 @@ class CodexHomeTests(Tmp):
             rc.check_codex_home(self.tmp)
 
 
+class VerifiedVersionTests(unittest.TestCase):
+    def test_a_built_in_verified_version_has_its_evidence_and_its_constants(self):
+        from vbear.runtime import codex_constants as cc
+        root = Path(__file__).resolve().parent.parent
+        self.assertIn("0.160.0", cc.VERIFIED_VERSIONS)
+        for version in cc.VERIFIED_VERSIONS:
+            self.assertIn(version, cc.VERSIONS)
+            self.assertEqual(cc.VERSIONS[version].version, version)
+            doc = root / "docs" / "evidence" / f"codex-{version}-review.md"
+            self.assertTrue(doc.is_file(), f"{doc.name} backs the verified version")
+            text = doc.read_text()
+            self.assertIn(f"Codex {version}", text)
+            self.assertIn("Run 2 (passing)", text)
+        self.assertFalse(set(cc.VERSIONS) - set(cc.VERIFIED_VERSIONS) and False)      # others may exist unverified
+
+    def test_the_constants_say_what_the_real_run_reported(self):
+        c = rf.C
+        self.assertEqual((c.multi_agent_mode, c.collaboration_mode, c.network_restricted, c.approval_policy),
+                         ("explicitRequestOnly", "default", "restricted", "never"))
+        self.assertEqual(c.tools, frozenset({"exec"}))
+        self.assertEqual((c.session_originator, c.session_source, c.model_provider),
+                         ("codex_exec", "exec", "openai"))
+
+
 class RunCaptureTests(unittest.TestCase):
     def test_a_read_error_is_a_failure_not_the_end_of_the_output(self):
         # Codex 3d A4: "[]" followed by a failed read is not a complete "[]"
