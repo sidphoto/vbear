@@ -194,8 +194,14 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   read by no flow's accounting) and then purges that tomb with
   every directory pinned (`O_NOFOLLOW|O_DIRECTORY`, owner, device, inode, re-checked before `rmdir`). While the
   tomb exists `pipeline_store.is_held` is true, so nothing new starts; asking again re-plans what is left and
-  purges, with no dependence on a record already removed. It runs on the daemon's single thread, so a very
-  large flow delays other requests while it goes; the ledger is rebuilt after.
+  purges, with no dependence on a record already removed. The (empty) tomb is kept until the console has
+  removed the flow's record and says so (`flow_delete_done`, refused while the record exists): that is what keeps
+  a not-yet-locked approval out in between. A marker left behind (the console died after the record) is finished
+  when the storage list is read, when a delete names the flow, when the console starts and when the daemon starts
+  (`flow_data.sweep_orphans`, which also removes an `automation/<flow>/` holding only the approval lock of a flow
+  that is gone); a marker that is not empty is left for a person. The table in the security model lists every
+  interruption and its way out. It runs on the daemon's single thread, so a very large flow delays other requests
+  while it goes; the ledger is rebuilt after.
 - **The page.** `web/app.js` builds the panels with `el()`/`textContent` only (no `innerHTML`; review text is
   plain text), refreshes the data panels every 5 s one round at a time (a tick that finds a round running is
   dropped, each read has a 15 s limit and is aborted when the page is left, only the newest answer is applied),

@@ -445,7 +445,7 @@ class StaleSnapshotTests(RunnerCase):
         fd = os.open(lock, os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX)                            # an approval that has been inside its unit
         now = [1000.0]
-        self.runner.clock = lambda: now[0]
+        self.runner.monotonic = lambda: now[0]
         try:
             self.assertTrue(self.runner.step(self.fid).startswith("waiting:"))
             now[0] += runner_mod.BUSY_LIMIT_S - 1

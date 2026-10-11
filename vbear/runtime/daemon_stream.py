@@ -968,13 +968,17 @@ class StreamOps:
                 continue
             if any(r["pgid"] == pid and "Z" not in r["stat"] for r in rows):
                 continue
-            try:
-                os.waitpid(pid, 0)
-            except ChildProcessError:
-                pass
             proc = h.get("proc")
-            if proc is not None and getattr(proc, "returncode", 0) is None:
-                proc.returncode = 0                       # reaped here: the Popen is told (no "still running" later)
+            try:
+                _, status = os.waitpid(pid, 0)
+                if proc is not None and getattr(proc, "returncode", 0) is None:
+                    proc.returncode = os.waitstatus_to_exitcode(status)    # what it really ended with
+            except ChildProcessError:
+                if proc is not None:
+                    try:
+                        proc.poll()                       # not ours to wait for any more: the Popen learns that
+                    except Exception:
+                        pass
             self._held_leaders.remove(h)
             self._log(f"{h['launch_id']}: group of leader {pid} proven empty, leader reaped")
 

@@ -228,6 +228,12 @@ class StreamCase(unittest.TestCase):
                     proc.wait(timeout=5)
                 except Exception:
                     pass
+            for f in (proc.stdin, proc.stdout, proc.stderr):      # and its pipe ends (else "unclosed file")
+                try:
+                    if f is not None:
+                        f.close()
+                except OSError:
+                    pass
 
     def accept(self, **limits):
         fp = login_identity.claude_login_fingerprint(self.home / ".claude.json", self.key).hmac
@@ -2079,3 +2085,15 @@ class LedgerTests(StreamCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeldLeaderExitCodeTests(StreamCase):
+    def test_a_reaped_held_leader_keeps_its_real_exit_status(self):
+        import vbear.runtime.daemon_stream as ds
+        p = subprocess.Popen(["/bin/sleep", "600"], start_new_session=True)
+        self.pids.append(p.pid)
+        self.dm._held_leaders.append({"proc": p, "pid": p.pid, "launch_id": "l-test"})
+        os.kill(p.pid, 9)
+        self.dm._held_next = 0.0
+        self.wait_for(lambda: not self.dm._held_leaders, msg="the held leader to be reaped")
+        self.assertEqual(p.returncode, -9)                                # ended by SIGKILL, not "0"

@@ -464,3 +464,107 @@ class DeletionWindowTests(AutoApiCase):
         from vbear import daemon_client
         with self.assertRaises(daemon_client.DaemonError):
             daemon_client.call(self.console.executor.runtime, "flow_delete_done", pipeline=self.fid)
+
+
+class DeletionLifecycleTests(AutoApiCase):
+    """S3-5 review round 3: every place a deletion can stop has a way out that needs no restart."""
+
+    def deletable(self):
+        self.enable()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/automation/disable", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+
+    def stop_after_the_record(self):
+        """Delete, but the console 'dies' before it asks the daemon to finish: the record is gone, the marker stays."""
+        from unittest import mock
+        from vbear import daemon_client
+        real = daemon_client.call
+
+        def refuse_done(runtime, op, **kw):
+            if op == "flow_delete_done":
+                raise daemon_client.DaemonError(503, "unavailable", "背景程序沒有回應")
+            return real(runtime, op, **kw)
+        with mock.patch("vbear.flow_storage.daemon_client.call", refuse_done):
+            st, r = self.call(f"/api/flows/{self.fid}/delete", "POST", {"flow_id": self.fid})
+        self.assertEqual(st, 200, r)
+        self.assertTrue((self.base / "deleting" / self.fid).is_dir())
+        with self.assertRaises(KeyError):
+            flows.get_flow(self.fid)
+
+    def test_delete_of_a_flow_whose_record_is_gone_finishes_its_marker(self):
+        self.deletable()
+        self.stop_after_the_record()
+        st, r = self.call(f"/api/flows/{self.fid}/delete", "POST", {"flow_id": self.fid})
+        self.assertEqual(st, 200, r)                                   # not a 404: this IS the way out
+        self.assertTrue(r["marker_finished"])
+        self.assertFalse((self.base / "deleting" / self.fid).exists())
+
+    def test_reading_the_list_finishes_orphan_markers(self):
+        self.deletable()
+        self.stop_after_the_record()
+        st, r = self.call("/api/flows/storage")
+        self.assertEqual(st, 200, r)
+        self.assertFalse((self.base / "deleting" / self.fid).exists())
+
+    def test_a_marker_that_holds_something_is_left_for_a_person_and_says_so(self):
+        self.deletable()
+        self.stop_after_the_record()
+        (self.base / "deleting" / self.fid / "left-over").write_text("x")
+        st, r = self.call(f"/api/flows/{self.fid}/delete", "POST", {"flow_id": self.fid})
+        self.assertNotEqual(st, 200, r)
+        self.assertIn("交人工處理", r["error"])
+        self.assertTrue((self.base / "deleting" / self.fid / "left-over").exists())
+        self.assertEqual(self.call("/api/flows/storage")[0], 200)       # listing is not broken by it
+
+    def test_an_unknown_flow_without_a_marker_is_still_a_404(self):
+        st, r = self.call("/api/flows/flow-ffffffffffff/delete", "POST", {"flow_id": "flow-ffffffffffff"})
+        self.assertEqual(st, 404, r)
+
+    def test_an_approval_that_arrives_after_the_deletion_leaves_nothing_behind(self):
+        from vbear import automation as automation_mod
+        from vbear.api_error import ApiError
+        gone = "flow-abcabcabcabc"                                       # a flow whose record is not there (any more)
+        with self.assertRaises(ApiError) as cm:
+            with automation_mod.plan_lock(self.base, gone):
+                pass
+        self.assertEqual((cm.exception.status, cm.exception.code), (404, "no_flow"))
+        self.assertFalse((self.base / "automation" / gone).exists())
+
+    def test_the_daemon_sweeps_a_lock_only_directory_of_a_flow_that_is_gone_and_nothing_else(self):
+        from vbear.runtime import flow_data
+        base = self.base / "automation"
+        base.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(base, 0o700)
+        lock_only = base / "flow-111111111111"
+        lock_only.mkdir(mode=0o700)
+        (lock_only / ".lock").write_text("")
+        with_plan = base / "flow-222222222222"
+        with_plan.mkdir(mode=0o700)
+        (with_plan / ".lock").write_text("")
+        (with_plan / "plan.txt").write_text("a plan")
+        known = base / self.fid
+        swept = flow_data.sweep_orphans(self.base, {self.fid})
+        self.assertIn("automation/flow-111111111111", swept)
+        self.assertFalse(lock_only.exists())
+        self.assertTrue(with_plan.exists())                              # something of value: left for a person
+        self.assertNotIn(f"automation/{self.fid}", swept)
+
+    def test_finishing_a_marker_checks_what_it_removes(self):
+        from vbear.runtime import flow_data
+        deleting = self.base / "deleting"
+        deleting.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(deleting, 0o700)
+        link_target = self.tmp / "elsewhere"
+        link_target.mkdir(mode=0o700)
+        os.symlink(link_target, deleting / "flow-333333333333")          # a link where the marker should be
+        with self.assertRaises(flow_data.FlowDataRefused):
+            flow_data.finish(self.base, "flow-333333333333")
+        self.assertTrue(link_target.exists())
+        os.unlink(deleting / "flow-333333333333")
+        public = deleting / "flow-444444444444"
+        public.mkdir(mode=0o755)
+        os.chmod(public, 0o755)                                          # not private: not ours to remove
+        with self.assertRaises(flow_data.FlowDataRefused):
+            flow_data.finish(self.base, "flow-444444444444")
+        self.assertTrue(public.exists())

@@ -258,7 +258,8 @@ also names the flow in its body and asks twice on screen.
   (owner, same device as the state directory so a mount point is refused, the inode seen a moment before); a
   special file refuses. While `deleting/<flow>` exists the flow counts as stopped, and asking again finishes the
   deletion from wherever it stopped, without needing any record that was already removed. Deleting is
-  irreversible and also removes the flow's events from `flows.json`.
+  irreversible and also removes the flow's events from `flows.json`. The lifecycle, and the way out of each
+  interruption, are in [How a deletion ends](#how-a-deletion-ends).
 
 ### Safeguards: prevention and detection
 
@@ -375,7 +376,22 @@ the named directories yourself with ordinary file commands. VBear does not offer
 undoable, and only you can tell a damaged flow from someone else's data. Once the damaged entry is gone, the
 console's delete works again (a flow with nothing left on disk needs no daemon and only has its record removed).
 A deletion that was begun and not finished (`deleting/<flow-id>/` exists) is finished by pressing delete again;
-it is not a damaged flow.
+it is not a damaged flow (see [How a deletion ends](#how-a-deletion-ends)).
+
+### How a deletion ends
+
+| Where it stopped | State on disk | The way out |
+|---|---|---|
+| Refused before anything | nothing changed | fix the reason shown, then delete |
+| After the marker, before or between the moves | `deleting/<flow>/` (possibly empty), the rest in place | press delete again: it is planned again from what is left |
+| Between the moves and the purge, or during the purge | everything in `deleting/<flow>/` or partly purged | press delete again: the purge needs no record that was already removed |
+| After the data is gone, before the record is removed | empty `deleting/<flow>/`, the flow record still there | press delete again: nothing is left to do, the record is removed |
+| After the record is removed, before the marker is | empty `deleting/<flow>/` and no flow record | nothing to do by hand: the console asks the daemon to remove the marker when the storage list is read, when a delete names the flow, and when it starts; the daemon does it itself when it starts |
+| A marker that is not empty | files in `deleting/<flow>/` | left for a person: the daemon says "刪除標記裡還有東西，交人工處理"; look at them and remove them by hand |
+| An approval that arrives after (or during) the deletion | — | refused (409 deleting / 404), and nothing is created; a directory `automation/<flow>/` that holds only the approval lock of a flow that no longer exists is removed when the daemon starts, one that holds a plan is left for a person |
+
+While the marker exists the flow counts as stopped, so nothing new starts in it, and the quota scan counts what is
+inside. No step needs a restart of the daemon.
 
 ### What you must remember
 

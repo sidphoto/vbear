@@ -1431,6 +1431,10 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
     url = f"http://127.0.0.1:{port}/"
     write_access_files(port, console.auth_token)
+    try:
+        console.storage.finish_orphans()          # a deletion that stopped after its record went is finished
+    except Exception:
+        pass
     if not console.runner.start():
         print(f"提示：這個主控台不執行自動流程（{console.runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)

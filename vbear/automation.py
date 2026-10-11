@@ -30,6 +30,7 @@ import hashlib
 import os
 import stat
 import time
+from pathlib import Path
 
 from . import acceptance, config as cfg, flows, login_identity, previews, risk_acceptance, risk_text, tasks
 from .api_error import ApiError
@@ -176,11 +177,37 @@ def plan_lock(state, flow_id: str):
         flows.get_flow(flow_id)
     except KeyError:
         raise ApiError(404, "no_flow", "找不到這個流程") from None
+    existed = (Path(str(state)) / "automation" / flow_id).exists()
     dfd = _plan_dir(state, flow_id, create=True)
     try:
         fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)
     finally:
         os.close(dfd)
+
+    def forget_what_we_made():
+        """Refused after we had created the directory and the lock file (the flow was deleted meanwhile): remove
+        them again, but only what this call made and only while nothing else is in the directory."""
+        if existed:
+            return
+        try:
+            d = _plan_dir(state, flow_id, create=False)
+        except (OSError, ApiError):
+            return
+        try:
+            if os.listdir(d) == [LOCK_FILE]:
+                os.unlink(LOCK_FILE, dir_fd=d)
+                os.close(d)
+                d = -1
+                parent = os.open(str(Path(str(state)) / "automation"), _DIR)
+                try:
+                    os.rmdir(flow_id, dir_fd=parent)
+                finally:
+                    os.close(parent)
+        except OSError:
+            pass
+        finally:
+            if d >= 0:
+                os.close(d)
     try:
         end = time.monotonic() + LOCK_WAIT_S
         while True:
@@ -196,10 +223,12 @@ def plan_lock(state, flow_id: str):
         if not _lock_is_current(state, flow_id, fd):
             raise ApiError(409, "deleting", "這個流程的資料夾已被搬走或正在刪除，不能開啟自動執行")
         if pipeline_store.deleting_exists(state, flow_id):
+            forget_what_we_made()
             raise ApiError(409, "deleting", "這個流程正在刪除，不能開啟自動執行")
         try:
             flows.get_flow(flow_id)
         except KeyError:
+            forget_what_we_made()
             raise ApiError(404, "no_flow", "找不到這個流程") from None
         yield
     finally:

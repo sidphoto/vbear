@@ -119,10 +119,11 @@ def describe(events: list[dict]) -> dict:
 
 
 class AutomationRunner:
-    def __init__(self, executor: FlowExecutor, review: FlowReview, *, clock=time.time):
+    def __init__(self, executor: FlowExecutor, review: FlowReview, *, clock=time.time, monotonic=time.monotonic):
         self.executor = executor
         self.review = review
-        self.clock = clock
+        self.clock = clock                    # wall time: what the limits are compared with
+        self.monotonic = monotonic            # durations (how long an approval has been "in progress")
         self._lock_fd: int | None = None
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
@@ -296,8 +297,8 @@ class AutomationRunner:
             # flow. Busy = an approval is in progress: wait (for a bounded time). Not there / not ours = stop.
             with automation.try_plan_lock(base, flow_id) as (lock, why):
                 if lock == automation.BUSY:
-                    since = self._busy_since.setdefault(flow_id, self.clock())
-                    if self.clock() - since > BUSY_LIMIT_S:
+                    since = self._busy_since.setdefault(flow_id, self.monotonic())
+                    if self.monotonic() - since > BUSY_LIMIT_S:
                         self._busy_since.pop(flow_id, None)
                         return self._stop(flow_id, "approval_stuck",
                                           f"核准已經進行超過 {int(BUSY_LIMIT_S)} 秒仍沒有結束，停止並請你檢查")

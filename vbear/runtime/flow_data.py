@@ -662,16 +662,33 @@ def finish(base, pipeline_id: str) -> bool:
     except OSError as exc:
         raise FlowDataRefused(f"狀態目錄無法開啟（{exc.strerror}）") from exc
     try:
-        deleting = _root_fd(state, DELETING, os.fstat(state).st_dev)
+        root_dev = os.fstat(state).st_dev
+        deleting = _root_fd(state, DELETING, root_dev)
         if deleting is None:
             return False
         try:
+            # pinned like every other level: opened without following a link, ours, private, on this device,
+            # empty, and still the inode that was looked at when it is removed
             try:
-                os.rmdir(pipeline_id, dir_fd=deleting)
+                fd = _open_pinned(deleting, pipeline_id, root_dev, private=True)
+            except _Missing:
+                return False
+            try:
+                st = os.fstat(fd)
+                if os.listdir(fd):
+                    raise FlowDataRefused("刪除標記裡還有東西，刪除還沒完成（交人工處理）")
+            finally:
+                os.close(fd)
+            try:
+                now = os.stat(pipeline_id, dir_fd=deleting, follow_symlinks=False)
             except FileNotFoundError:
                 return False
+            if (now.st_ino, now.st_dev) != (st.st_ino, st.st_dev):
+                raise FlowDataRefused("刪除標記在檢查之後被替換了，不處理")
+            try:
+                os.rmdir(pipeline_id, dir_fd=deleting)
             except OSError as exc:
-                raise FlowDataRefused(f"刪除標記裡還有東西（{exc.strerror}），刪除還沒完成") from exc
+                raise FlowDataRefused(f"刪除標記無法移除（{exc.strerror}）") from exc
             _fsync(deleting)
         finally:
             os.close(deleting)
@@ -685,13 +702,17 @@ def finish(base, pipeline_id: str) -> bool:
 
 
 def sweep_orphans(base, known_flow_ids) -> list[str]:
-    """Empty deletion markers of flows that no longer exist (the console
-    died between removing the record and asking for finish): removed."""
+    """What a flow that no longer exists can have left, when the console died
+    between removing the record and finishing, or an approval arrived after
+    the deletion: its empty deletion marker, and an automation/<flow>/ that
+    holds nothing but the approval lock. Both only when pinned checks pass;
+    anything else (a marker that is not empty, a directory with a plan) is
+    left for a person."""
     out = []
     try:
         names = os.listdir(os.path.join(str(base), DELETING))
     except OSError:
-        return out
+        names = []
     for name in names:
         if pipeline_store.FLOW_RE.match(name) and name not in known_flow_ids:
             try:
@@ -699,6 +720,41 @@ def sweep_orphans(base, known_flow_ids) -> list[str]:
                     out.append(name)
             except FlowDataRefused:
                 pass
+    try:
+        state = os.open(str(base), _DIR)
+    except OSError:
+        return out
+    try:
+        root_dev = os.fstat(state).st_dev
+        aroot = _root_fd(state, AUTOMATION, root_dev)
+        if aroot is None:
+            return out
+        try:
+            for name in os.listdir(aroot):
+                if not pipeline_store.FLOW_RE.match(name) or name in known_flow_ids:
+                    continue
+                try:
+                    fd = _open_pinned(aroot, name, root_dev, private=True)
+                except FlowDataRefused:
+                    continue
+                try:
+                    if os.listdir(fd) != [".lock"]:
+                        continue
+                    st = os.stat(".lock", dir_fd=fd, follow_symlinks=False)
+                    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+                        continue
+                    os.unlink(".lock", dir_fd=fd)
+                finally:
+                    os.close(fd)
+                try:
+                    os.rmdir(name, dir_fd=aroot)
+                    out.append(f"automation/{name}")
+                except OSError:
+                    pass
+        finally:
+            os.close(aroot)
+    finally:
+        os.close(state)
     return out
 
 

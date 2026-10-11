@@ -13,6 +13,9 @@ asks twice. A flow that never started has no data and needs no daemon.
 
 from __future__ import annotations
 
+import os
+import re
+
 from . import config as cfg, flows
 from .api_error import ApiError
 from .daemon_client import DaemonError
@@ -27,6 +30,29 @@ class FlowStorage:
     def __init__(self, executor: FlowExecutor):
         self.executor = executor
 
+    # ---- the way out of a deletion that stopped after the record went -----------------------------------------
+
+    def finish_orphans(self) -> list[str]:
+        """Deletion markers (<state>/deleting/<flow>) of flows whose record is already gone: the daemon is asked to
+        remove them (flow_delete_done), once and best-effort, whenever the list is read, a delete names such a flow,
+        or the console starts. A marker that is not empty is left for a person (the daemon says so)."""
+        base = cfg.state_dir()
+        try:
+            names = os.listdir(base / "deleting")
+        except OSError:
+            return []
+        known = {f["id"] for f in flows.list_flows()}
+        done = []
+        for name in names:
+            if name in known or not re.match(r"^flow-[0-9a-f]{12}\Z", name):
+                continue
+            try:
+                daemon_client.call(self.executor.runtime, "flow_delete_done", timeout=10.0, pipeline=name)
+                done.append(name)
+            except DaemonError:
+                pass
+        return done
+
     # ---- what is kept ---------------------------------------------------------------------------------------
 
     def usage(self) -> dict:
@@ -34,6 +60,7 @@ class FlowStorage:
         Read-only. A flow whose data cannot be attributed is listed with the
         reason and no size, never skipped."""
         base = cfg.state_dir()
+        self.finish_orphans()
         try:
             used, problem = quota.scan(base), ""
         except quota.ScanFailed as exc:
@@ -63,7 +90,19 @@ class FlowStorage:
 
     def delete(self, flow_id: str, body) -> dict:
         ex = self.executor
-        flow = ex._flow(flow_id)
+        try:
+            flow = ex._flow(flow_id)
+        except ApiError as exc:
+            # The record is already gone. If its deletion marker is still there, finishing it IS the deletion
+            # (the way out of a deletion that stopped between the record and the marker).
+            if exc.code == "no_flow" and isinstance(body, dict) and body == {"flow_id": flow_id} \
+                    and (cfg.state_dir() / "deleting" / flow_id).exists():
+                try:
+                    daemon_client.call(ex.runtime, "flow_delete_done", timeout=30.0, pipeline=flow_id)
+                except DaemonError as exc2:
+                    raise _daemon(exc2) from exc2
+                return {"deleted": flow_id, "bytes": 0, "removed": None, "marker_finished": True}
+            raise
         if not isinstance(body, dict) or set(body) != {"flow_id"} or body.get("flow_id") != flow_id:
             raise ApiError(400, "bad_request", "刪除必須指名這個流程：{\"flow_id\": \"<流程 id>\"}")
         base = cfg.state_dir()
