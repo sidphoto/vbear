@@ -1850,8 +1850,12 @@ function flowCard(f) {
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" }, f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title),
-        el("div", { class: "card-sub" }, f.phase.reason)),
+        el("div", { class: "card-sub" }, f.attention_reason || f.phase.reason)),
       flowPhaseBadge(f.phase)),
+    f.automation && f.automation.mode === "auto"
+      ? el("div", { class: "stat-line" }, badge(f.automation.held ? "自動（已停止）" : "自動執行中",
+        f.automation.held ? "b-warn" : "b-info"),
+      f.automation.step_label ? el("span", { class: "small" }, f.automation.step_label) : null) : null,
     el("div", { class: "stat-line" },
       el("span", null, "執行 ", el("b", null, roleText(f.roles.executor))),
       el("span", null, "session ", el("b", { title: flowLiveText(f.executor_live, liveLoadError()).reason },
@@ -1949,6 +1953,29 @@ async function viewFlows() {
     mountStorage().node);
 }
 
+const FLOW_SOURCE_TITLES = {
+  manual: "由表單記錄，VBear 沒有核對",
+  console: "由主控台依預覽紀錄或你在畫面上的操作寫入",
+  automation: "由自動執行依事實寫入：意圖 → daemon 動作 → 結果；內容是 VBear 自己讀到的，不是執行者的自述",
+};
+
+// What an automatic-mode event says, as lines (every value was checked by the server before it was stored).
+function flowAutomationDetail(e) {
+  const id = (v) => (typeof v === "string" ? v.slice(0, 8) : "");
+  switch (e.kind) {
+    case "automation_mode": return [e.mode === "auto" ? `切到自動執行（核准 auto-${e.approval_seq}）` : "切回手動"];
+    case "auto_dispatch_intent": return [`派工 ${id(e.dispatch_id)}・${e.length} bytes・sha256 ${String(e.text_sha256).slice(0, 12)}…`];
+    case "auto_dispatch_sent": return [`派工 ${id(e.dispatch_id)} 已送出`];
+    case "auto_report": return [`派工 ${id(e.dispatch_id)} 的回報：${e.status}，測試 ${e.tests_result}，commit ${shortCommit(e.commit)}（VBear 讀檔核對通過）`];
+    case "auto_review_intent": return [`第 ${e.round} 輪審查（commit ${shortCommit(e.commit)}）`];
+    case "auto_review_started": return [`第 ${e.round} 輪審查已啟動（${e.job_id}）`];
+    case "auto_review_result": return [`第 ${e.round} 輪結論：${e.verdict}（commit ${shortCommit(e.commit)}）`];
+    case "auto_review_aborted": return [`第 ${e.round} 輪被停止中止，該輪無效（${e.job_id}）`];
+    case "auto_stopped": return [`原因代碼 ${e.reason_code}`, e.detail];
+    default: return [];
+  }
+}
+
 function flowEventBody(kind, values) {
   // Only the fields the server accepts for this kind are sent.
   const body = { kind, note: values.note || "" };
@@ -2019,10 +2046,13 @@ async function viewFlowDetail(flowId) {
         el("td", null, rv ? (rv.counts_as_pass ? "是" : "否") : ""),
         el("td", { class: "small" }, rv ? rv.why : ""))))))) : emptyState("還沒有執行者回報", "執行者回報 commit 後，審查結果會依輪次列在這裡。");
   const timeline = el("ol", { class: "flow-timeline" }, (f.events || []).map((e) => el("li", null,
-    el("div", { class: "row" }, el("b", null, e.label), badge(e.source_label, "b-mute", "由表單記錄，VBear 沒有核對"),
+    el("div", { class: "row" }, el("b", null, e.label),
+      badge(e.source_label, e.source === "manual" ? "b-mute" : (e.source === "automation" ? "b-info" : "b-ok"),
+        FLOW_SOURCE_TITLES[e.source] || ""),
       el("span", { class: "small muted" }, fmtTime(e.at))),
     e.commit ? el("div", { class: "small mono" }, `commit ${shortCommit(e.commit)}`) : null,
-    e.verdict ? el("div", { class: "small" }, `${e.reviewer.name}：${e.verdict}`) : null,
+    e.verdict && e.reviewer ? el("div", { class: "small" }, `${e.reviewer.name}：${e.verdict}`) : null,
+    flowAutomationDetail(e).map((line) => el("div", { class: "small" }, line)),
     e.note ? el("div", { class: "small" }, e.note) : null)));
 
   setKids(main,
@@ -2030,7 +2060,7 @@ async function viewFlowDetail(flowId) {
     el("div", { class: "row", style: "justify-content:space-between" },
       el("h1", null, f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title), flowPhaseBadge(f.phase)),
     flowNotice(),
-    f.attention ? notice("warn", "等你處理：" + f.phase.reason)
+    f.attention ? notice("warn", "等你處理：" + (f.attention_reason || f.phase.reason))
       : f.phase.key === "review_stale" ? notice("warn", f.phase.reason) : el("p", { class: "lede" }, f.phase.reason),
     flowBindingNote(f) ? el("p", { class: "small muted" }, flowBindingNote(f)) : null,
     (f.warnings || []).map((w) => notice("warn", w)),
@@ -2084,10 +2114,11 @@ async function s2Get(path, signal) {
 }
 
 async function s2Load(flowId, signal) {
-  const [executor, reports, reviews, gate] = await Promise.all([
+  const [executor, reports, reviews, gate, automationState] = await Promise.all([
     s2Get(s2Url(flowId, "executor"), signal), s2Get(s2Url(flowId, "reports"), signal),
-    s2Get(s2Url(flowId, "reviews"), signal), s2Get(s2Url(flowId, "merge-gate"), signal)]);
-  return { executor, reports, reviews, gate };
+    s2Get(s2Url(flowId, "reviews"), signal), s2Get(s2Url(flowId, "merge-gate"), signal),
+    s2Get(s2Url(flowId, "automation"), signal)]);
+  return { executor, reports, reviews, gate, automation: automationState };
 }
 
 function s2Pre(text, cls) {
@@ -2126,17 +2157,23 @@ function s2Meter(label, used, limit, unit) {
 
 // ---- the risk acceptance dialog ----------------------------------------------------------------
 
-function openAcceptanceDialog(flowId, onDone) {
+// opts.auto: the approval of a plan and the switch to automatic mode (S3 design 9): the same dialog, with the plan
+// text and the automatic-mode text added, and its own preview and confirmation routes.
+function openAcceptanceDialog(flowId, onDone, opts = {}) {
+  const auto = !!opts.auto;
+  const previewPath = auto ? "automation-preview" : "acceptance-preview";
+  const confirmPath = auto ? "automation" : "acceptance";
   let modal; let previewId = null; let current = null; let fields = null;
   const body = el("div", { class: "s2-accept-body" });
   const problem = el("div", { class: "s2-accept-problem", role: "alert" });   // what the server said to the last confirmation
   const status = el("p", { class: "small muted", role: "status" }, "正在讀取…");
-  const accept = el("button", { class: "btn primary", type: "button", disabled: true, on: { click: submit } }, "接受並記錄");
+  const accept = el("button", { class: "btn primary", type: "button", disabled: true, on: { click: submit } },
+    auto ? "核准並開啟自動執行" : "接受並記錄");
   const cancel = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
   const again = el("button", { class: "btn", type: "button", on: { click: () => load(null) } }, "重新預覽");
   modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "s2-accept-title" },
     el("div", { class: "modal-box", style: "max-width: 760px; max-height: 88vh; overflow-y: auto;" },
-      el("h2", { id: "s2-accept-title" }, "接受殘餘風險"), status, problem, body,
+      el("h2", { id: "s2-accept-title" }, auto ? "核准計畫並開啟自動執行" : "接受殘餘風險"), status, problem, body,
       el("div", { class: "modal-actions" }, cancel, again, accept)));
   document.body.append(modal);
   const closeModal = withModalA11y(modal, () => modal.remove());
@@ -2149,7 +2186,7 @@ function openAcceptanceDialog(flowId, onDone) {
     setKids(problem);
     setKids(status, "正在讀取…");
     try {
-      const res = await api.post(s2Url(flowId, "acceptance-preview"), over || {});
+      const res = await api.post(s2Url(flowId, previewPath), over || {});
       current = res;
       previewId = res.preview_id;
       render(res);
@@ -2206,8 +2243,26 @@ function openAcceptanceDialog(flowId, onDone) {
     reviewIn.value = v.review_model;
     fields.review = reviewIn;
     const zh = res.risk_text.zh;
+    const az = auto ? res.auto_text.zh : null;
+    const autoParts = auto ? [
+      el("p", null, az.intro),
+      el("h3", null, "這份計畫（核准的就是這一份）"),
+      s2Pre(res.plan_text),
+      el("p", { class: "small muted" }, `計畫文字 ${res.plan_bytes} bytes，sha256 前 16 碼 ${String(res.plan_sha256).slice(0, 16)}；` +
+        "核准之後任務卡再改，不會影響已核准的這一份。"),
+      az.sections.map((s, i) => el("section", { class: "s2-risk", "data-s2-auto": s.id },
+        el("h3", null, `${String.fromCharCode(65 + i)}. ${s.title}`), el("p", { class: "s2-risk-body" }, s.body))),
+      el("h3", null, "固定規則"),
+      el("ul", { class: "small" }, (res.fixed_rules || []).map((r) => el("li", null, r))),
+      el("details", { class: "s2-risk-en" }, el("summary", null, "English text (same version)"),
+        res.auto_text.en.sections.map((s, i) => el("section", { class: "s2-risk" },
+          el("h3", null, `${String.fromCharCode(65 + i)}. ${s.title}`), el("p", { class: "s2-risk-body" }, s.body)))),
+      el("p", { class: "small muted" }, `自動執行文字版本 ${az.version}`),
+      el("h3", null, "第 2 階段的殘餘風險（同時接受）"),
+    ] : [];
     setKids(body,
-      el("p", null, zh.intro),
+      el("p", null, auto ? "" : zh.intro),
+      autoParts,
       zh.items.map((it, i) => el("section", { class: "s2-risk" }, el("h3", null, `${i + 1}. ${it.title}`),
         el("p", { class: "s2-risk-body" }, it.body))),
       el("details", { class: "s2-risk-en" }, el("summary", null, "English text (same version)"),
@@ -2234,7 +2289,7 @@ function openAcceptanceDialog(flowId, onDone) {
           });
           load({ executor_model: modelIn.value.trim(), review_model: reviewIn.value, limits });
         } } }, "套用並重新預覽")),
-      el("label", { class: "s2-check" }, check, " ", zh.confirm));
+      el("label", { class: "s2-check" }, check, " ", auto ? az.confirm : zh.confirm));
   }
   // The values on the screen against the ones this preview is of. A field set by a script (no input event) is
   // caught here: nothing is sent, a new preview is asked for (Codex S2c-4 round 2).
@@ -2258,8 +2313,8 @@ function openAcceptanceDialog(flowId, onDone) {
     }
     accept.disabled = true;
     try {
-      await api.post(s2Url(flowId, "acceptance"), { preview_id: previewId });
-      toast("已記錄風險接受");
+      await api.post(s2Url(flowId, confirmPath), { preview_id: previewId });
+      toast(auto ? "已核准計畫並開啟自動執行；接著請啟動執行者" : "已記錄風險接受");
       closeModal();
       if (onDone) onDone();
     } catch (e) {
@@ -2281,7 +2336,10 @@ function s2AcceptancePanel(flowId, ex, refresh) {
   const v = a.values;
   return el("section", { class: "section s2-panel", "data-s2": "acceptance" },
     sectionHead("風險接受", null, el("div", { class: "row" }, badge(label, cls, tip),
-      el("button", { class: "btn small primary", type: "button", on: { click: () => openAcceptanceDialog(flowId, refresh) } },
+      el("button", { class: "btn small primary", type: "button",
+        disabled: ex.automation && ex.automation.mode === "auto",
+        title: ex.automation && ex.automation.mode === "auto" ? "自動執行中；要改上限或重新接受，先停止流程並切回手動" : "",
+        on: { click: () => openAcceptanceDialog(flowId, refresh) } },
         a.state === "valid" ? "重新接受…" : "接受殘餘風險…"))),
     a.reason ? notice(a.state === "valid" ? "info" : "warn", a.reason) : (tip ? el("p", { class: "small muted" }, tip) : null),
     v ? el("dl", { class: "kv small" },
@@ -2290,6 +2348,59 @@ function s2AcceptancePanel(flowId, ex, refresh) {
       el("dt", null, "Codex／審查模型"), el("dd", { class: "mono" }, `${v.codex_version}／${v.review_model}`),
       el("dt", null, "Claude Code／執行者模型"), el("dd", { class: "mono" }, `${v.executor_claude_version}／${v.executor_model}`),
       el("dt", null, "帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, `執行者 ${v.executor_account}　審查者 ${v.review_account}`)) : null);
+}
+
+// ---- automatic mode (S3 design 7, 9) ---------------------------------------------------------------------------
+
+function s2AutomationPanel(flowId, au, refresh) {
+  if (!au.ok) {
+    return el("section", { class: "section s2-panel", "data-s2": "automation" }, sectionHead("自動執行", null),
+      notice("bad", "無法讀取自動執行的狀態：" + au.message));
+  }
+  const a = au.data;
+  const step = a.step;
+  if (a.mode !== "auto") {
+    return el("section", { class: "section s2-panel", "data-s2": "automation" },
+      sectionHead("自動執行", "核准計畫之後，VBear 自己派工、審查、轉送審查意見，停在合併關卡。",
+        el("div", { class: "row" }, badge("手動", "b-mute"),
+          el("button", { class: "btn small primary", type: "button",
+            on: { click: () => openAcceptanceDialog(flowId, refresh, { auto: true }) } }, "核准計畫並開啟自動執行…"))),
+      el("p", { class: "small muted" },
+        "開啟前會完整顯示計畫全文、上限、使用的帳號與全部風險；開啟後手動派工與手動審查會被拒絕。啟動執行者仍由你按。"));
+  }
+  const held = step && step.held;
+  const disable = held ? el("button", { class: "btn small", type: "button", on: { click: async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const r = await api.post(s2Url(flowId, "automation/disable"), {});
+      toast(r.event_written === false ? r.event_problem : "已切回手動");
+    } catch (e) { toast("無法切回手動：" + e.message); }
+    refresh();
+  } } }, "切回手動") : null;
+  const stop = !held ? s2Confirm("停止流程", "停止後不再派工或審查；執行者正在進行的一輪會自己跑完。", async () => {
+    try {
+      const r = await api.post(s2Url(flowId, "hold"), {});
+      if (r && r.event_written === false) toast(r.event_problem);
+      else toast("已停止");
+    } catch (e) { toast("無法停止：" + e.message); }
+    refresh();
+  }, "bad") : null;
+  const ap = a.approval;
+  return el("section", { class: "section s2-panel", "data-s2": "automation" },
+    sectionHead("自動執行", null, el("div", { class: "row" },
+      badge(held ? "自動（已停止）" : "自動執行中", held ? "b-warn" : "b-info"), stop, disable)),
+    a.problem ? notice("bad", "自動執行的模式紀錄不可信：" + a.problem) : null,
+    held ? notice("warn", `已停止：${step.hold_reason || "原因不明"}。停止後不會自動恢復；要繼續請在下面的執行者面板按「繼續」，` +
+      "或先切回手動。執行者正在進行的一輪可能還會繼續執行並寫入工作目錄，直到它自己結束，或你關閉 session。") : null,
+    step ? el("div", null, el("p", null, el("b", null, "目前步驟："), step.label),
+      el("p", { class: "small muted" }, "接著：" + step.after)) : null,
+    step && step.awaiting_merge ? notice("info", "審查通過，各項核對成立：到下面「合併與 push 關卡」取得指令，由你自己執行。") : null,
+    ap ? el("dl", { class: "kv small" },
+      el("dt", null, "核准於"), el("dd", null, fmtTime(ap.at)),
+      el("dt", null, "核准的計畫"), el("dd", { class: "mono" }, `${ap.plan_bytes} bytes・sha256 ${String(ap.plan_sha256).slice(0, 16)}…`),
+      el("dt", null, "自動執行文字版本"), el("dd", { class: "mono" }, ap.auto_text_version),
+      el("dt", null, "核准 id"), el("dd", { class: "mono" }, a.approval_id)) : null,
+    el("p", { class: "small muted" }, "用量與上限見下面的「串流執行者」；固定規則：連續失敗 1 次就停止。"));
 }
 
 function s2ExecutorPanel(flowId, ex, refresh) {
@@ -2365,9 +2476,21 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
     placeholder: "寫下要請執行者做的事（會先預覽，核准後才送出）" });
   const out = el("div", { class: "s2-preview" });
   const previewBtn = el("button", { class: "btn small primary", type: "button", on: { click: doPreview } }, "預覽");
+  const autoNote = el("div", { class: "s2-auto-note" });
   const node = el("section", { class: "section s2-panel", "data-s2": "dispatch" },
-    sectionHead("派工", "每一則都要你核准；送出的就是預覽裡顯示的那一份。"), text,
+    sectionHead("派工", "每一則都要你核准；送出的就是預覽裡顯示的那一份。"), autoNote, text,
     el("div", { class: "row" }, previewBtn), out);
+  // In automatic mode the dispatches are the runner's: a manual one is refused by the server and the daemon, so
+  // the box says so instead of offering it.
+  let automatic = false;
+  function setAutomatic(on) {
+    if (on === automatic) return;
+    automatic = on;
+    text.disabled = on;
+    previewBtn.disabled = on;
+    setKids(autoNote, on ? notice("info", "自動執行中：派工由 VBear 依核准的計畫進行，手動派工一律拒絕。" +
+      "要手動派工，請先停止流程並切回手動。") : null);
+  }
   function target() {
     const ex = getExecutor();
     const live = ((ex && ex.sessions) || []).filter((s) => s.manifest_state === "running" && s.status && s.status.live);
@@ -2405,7 +2528,7 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
       el("p", { class: "small muted" }, `這份預覽只能用一次，到 ${fmtTime(pre.expires_at)} 前有效。`),
       el("div", { class: "row" }, approve, drop));
   }
-  return { node, setText(t) { text.value = t; text.focus(); }, hasText: () => text.value.length > 0 };
+  return { node, setAutomatic, setText(t) { text.value = t; text.focus(); }, hasText: () => text.value.length > 0 };
 }
 
 function s2ReportsPanel(rp) {
@@ -2448,6 +2571,7 @@ function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
   const why = [];
   if (ex && ex.acceptance && ex.acceptance.state !== "valid") why.push("風險接受目前不算數");
   if (ex && ex.hold && ex.hold.held) why.push("流程已停止");
+  if (ex && ex.automation && ex.automation.mode === "auto") why.push("自動執行中，手動審查一律拒絕");
   if (!latest) why.push("還沒有有效的執行者回報");
   else if (!latest.usable) why.push("最新回報的讀檔核對沒有全部通過");
   if (running) why.push("已有審查在進行");
@@ -2613,6 +2737,9 @@ function mountCoordinator(flowId) {
       state = next;
       let parts = [];
       try {
+        parts.push(s2AutomationPanel(flowId, next.automation, () => refresh(true)));
+        composer.setAutomatic(next.executor.ok && next.executor.data.automation
+          && next.executor.data.automation.mode === "auto");
         if (next.executor.ok) {
           parts.push(s2AcceptancePanel(flowId, next.executor.data, () => refresh(true)),
             s2ExecutorPanel(flowId, next.executor.data, () => refresh(true)));
@@ -2635,7 +2762,8 @@ function mountCoordinator(flowId) {
       const kept = JSON.stringify([
         next.executor.ok ? [(next.executor.data.sessions || []).map((s) => [s.launch_id, s.manifest_state,
           s.status && s.status.live]), next.executor.data.hold && next.executor.data.hold.held] : null,
-        next.reviews.ok ? (next.reviews.data.reviews || []).map((r) => [r.job_id, r.state, r.outcome]) : null]);
+        next.reviews.ok ? (next.reviews.data.reviews || []).map((r) => [r.job_id, r.state, r.outcome]) : null,
+        next.automation && next.automation.ok ? next.automation.data.mode : null]);
       const reloadStorage = keptKey !== null && (force || kept !== keptKey);   // an action's own refresh counts
       keptKey = kept;
       if (reloadStorage && storage) storage.reload();
@@ -2651,7 +2779,8 @@ function mountCoordinator(flowId) {
   // deleting this flow, from its own page; afterwards there is nothing here to show
   const storage = mountStorage({ onlyFlowId: flowId, afterDelete: () => { location.hash = "#/flows"; } });
   host.append(el("div", { class: "section" }, el("h2", null, "VBear 管理的執行與審查"),
-    el("p", { class: "small muted" }, "以下由 VBear 的背景程序執行；每一個動作都先預覽、再由你核准。上面「手動記錄事件」那一區沒有改變，仍然只是記錄。")),
+    el("p", { class: "small muted" }, "以下由 VBear 的背景程序執行。手動模式下，風險接受與每一則派工都先預覽、再由你核准；" +
+      "自動執行模式下，派工與審查由 VBear 依你核准的計畫進行，每個動作都有稽核事件。「手動記錄事件」那一區沒有改變，仍然只是記錄。")),
     data, composer.node, storage.node);
   refresh(true);
   return {
@@ -5447,7 +5576,7 @@ async function route() {
   if (top === "home") {
     liveTick = async () => {
       const gateKey = () => JSON.stringify(((D.flows && D.flows.flows) || [])
-        .filter((f) => f.attention).map((f) => [f.id, f.phase.key]));
+        .filter((f) => f.attention).map((f) => [f.id, f.phase.key, f.attention_reason]));
       const before = JSON.stringify(D.live.attention) + gateKey();
       await loadLive();
       await loadFlows();
@@ -5548,6 +5677,7 @@ if (typeof module !== "undefined" && module.exports) {
     api,
     mountCoordinator,
     mountStorage,
+    flowAutomationDetail,
     openAcceptanceDialog,
     cleanupActiveView,
     cleanupActiveTerminal,

@@ -300,3 +300,46 @@ class ApprovalUnitTests(AutoApiCase):
         self.assertEqual(sorted(p.name for p in d.iterdir()), [".lock", "plan.txt"])
         pl = flow_data.plan(self.base, self.fid, self.tid)
         self.assertIsNotNone(pl.automation_inode)
+
+
+class ScreenDataTests(AutoApiCase):
+    """S3-5: what the flow view and the automation status carry for the screens."""
+
+    def view(self):
+        st, r = self.call(f"/api/flows/{self.fid}")
+        self.assertEqual(st, 200, r)
+        return r["flow"]
+
+    def test_a_manual_flow_has_no_automatic_attention(self):
+        v = self.view()
+        self.assertEqual(v["automation"]["mode"], "manual")
+        self.assertEqual(v["attention_reason"], v["phase"]["reason"])
+
+    def test_an_automatic_flow_shows_its_step_and_is_for_the_user_when_stopped_or_at_the_gate(self):
+        self.enable()
+        v = self.view()
+        self.assertEqual((v["automation"]["mode"], v["automation"]["step"], v["automation"]["held"]),
+                         ("auto", "first_dispatch", False))
+        self.assertIn("計畫全文", v["automation"]["step_label"])
+        self.assertFalse(v["attention"])
+        st, au = self.call(f"/api/flows/{self.fid}/automation")
+        self.assertEqual(au["step"]["step"], "first_dispatch")
+        self.assertIn("接著", "接著" + au["step"]["after"])
+        # stopped: for the user, with the reason
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        v = self.view()
+        self.assertTrue(v["attention"])
+        self.assertIn("自動執行已停止", v["attention_reason"])
+        self.assertTrue(self.call(f"/api/flows/{self.fid}/automation")[1]["step"]["held"])
+        # at the merge gate: a PASS and the runner's announcement
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+        j = "r-" + "1" * 16
+        flows.append_automation_event(self.fid, "auto_review_result",
+                                      {"round": 1, "job_id": j, "commit": "a" * 40, "verdict": "PASS", "valid": True})
+        flows.append_automation_event(self.fid, "auto_stopped",
+                                      {"reason_code": "awaiting_merge", "detail": "審查通過"})
+        v = self.view()
+        self.assertTrue(v["attention"])
+        self.assertTrue(v["automation"]["awaiting_merge"])
+        self.assertIn("合併關卡", v["attention_reason"])
+        self.assertTrue(any(e["source_label"] == flows.AUTOMATION_LABEL for e in v["events"]))

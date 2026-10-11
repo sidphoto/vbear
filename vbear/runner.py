@@ -95,6 +95,28 @@ def derive(events: list[dict]) -> dict:
     return {"step": "unknown"}
 
 
+STEP_LABELS = {
+    "first_dispatch": ("下一步：把核准的計畫全文派給執行者", "等執行者 session 回到 idle 就派工"),
+    "resume_dispatch": ("派工意圖已寫入，確認它是否已送出", "以同一個派工 id 補完，不會重複派工"),
+    "await_turn": ("等執行者這一輪結束，並核對它的回報", "回報通過 VBear 讀檔核對後啟動審查"),
+    "start_review": ("下一步：啟動 Codex 審查回報的 commit", "審查次數與上限一併檢查"),
+    "resume_review": ("審查意圖已寫入，確認它是否已啟動", "以同一個輪次補完，不會重複審查"),
+    "await_review": ("等 Codex 審查結束", "有效的結論才會被採用"),
+    "forward": ("下一步：把審查意見（標明為資料）轉給執行者", "不再逐則核准；全文過長就停止，不截斷"),
+    "gate": ("審查通過，停在合併關卡", "合併與 push 由你決定，VBear 只顯示指令"),
+    "blocked": ("審查的結論是 BLOCKED，等你處理", "停止後不會自動恢復"),
+    "unknown": ("狀態無法對應", "停止，等你處理"),
+}
+
+
+def describe(events: list[dict]) -> dict:
+    """What the screen says about the cycle: the step, in words, and what comes after."""
+    state = derive(events)
+    label, after = STEP_LABELS.get(state["step"], STEP_LABELS["unknown"])
+    return {"step": state["step"], "label": label, "after": after,
+            "awaiting_merge": state["step"] == "gate" and bool(state.get("announced"))}
+
+
 class AutomationRunner:
     def __init__(self, executor: FlowExecutor, review: FlowReview, *, clock=time.time):
         self.executor = executor

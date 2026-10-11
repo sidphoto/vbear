@@ -862,6 +862,19 @@ def make_handler(console: Console):
             view["acceptance"] = risk_acceptance.status(flow)
             mode = pipeline_store.mode_info(cfg.state_dir(), flow["id"])
             view["automation"] = {"mode": mode["mode"], "approval_id": mode["approval_id"], "problem": mode["problem"]}
+            view["attention_reason"] = view["phase"]["reason"]
+            if mode["mode"] == "auto":
+                # S3 design 7: an automatic flow that stopped, or that waits at the merge gate, is for the user
+                described = runner_mod.describe(flow.get("events") or [])
+                hold = pipeline_store.hold_info(cfg.state_dir(), flow["id"])
+                view["automation"].update(step=described["step"], step_label=described["label"], held=hold["held"],
+                                          hold_reason=hold["reason"], awaiting_merge=described["awaiting_merge"])
+                if hold["held"]:
+                    view["attention"] = True
+                    view["attention_reason"] = f"自動執行已停止：{hold['reason'] or '原因不明'}"
+                elif described["awaiting_merge"]:
+                    view["attention"] = True
+                    view["attention_reason"] = "自動執行完成：審查通過、各項核對成立，停在合併關卡等你"
             return view
 
         def _flows_view(self) -> dict:

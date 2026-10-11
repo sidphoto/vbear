@@ -232,7 +232,12 @@ class FlowAutomation:
         base = cfg.state_dir()
         info = pipeline_store.mode_info(base, flow_id)
         out = {"flow_id": flow_id, "mode": info["mode"], "approval_id": info["approval_id"],
-               "problem": info["problem"], "since": info["at"], "approval": None}
+               "problem": info["problem"], "since": info["at"], "approval": None, "step": None}
+        if info["mode"] == "auto":
+            from . import runner as runner_mod                    # (runner imports this module)
+            hold = pipeline_store.hold_info(base, flow_id)
+            out["step"] = {**runner_mod.describe(flow.get("events") or []), "held": hold["held"],
+                           "hold_reason": hold["reason"]}
         seq = acceptance.approval_seq(info["approval_id"]) if info["approval_id"] else None
         events = flow.get("events") or []
         if seq is not None and 1 <= seq <= len(events):

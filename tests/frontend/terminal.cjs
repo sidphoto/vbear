@@ -849,8 +849,8 @@ async function runAllTests() {
     assert.strictEqual(flowBindingNote({ phase: { reason: "等你合併" }, binding: { detail: "只比對 commit" } }), "只比對 commit");
     assert.strictEqual(flowBindingNote({ phase: { reason: "x" }, binding: null }), "");
     assert(!appSource.includes("f.binding ? notice("), "the detail page no longer repeats the binding as its own notice");
-    assert(appSource.includes('badge(e.source_label, "b-mute", "由表單記錄，VBear 沒有核對")'),
-      "every event shows it was recorded by hand and not checked");
+    assert(appSource.includes('manual: "由表單記錄，VBear 沒有核對"') && appSource.includes("FLOW_SOURCE_TITLES[e.source]"),
+      "every manual event shows it was recorded by hand and not checked; the other sources say what they are");
     assert(appSource.includes("const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);"),
       "the home page lists flow gates waiting for the user");
     // Live state: shown as current only when fresh, never after this page's own load failed (Codex S1 r2).

@@ -66,6 +66,8 @@ let state;
 function reset(over = {}) {
   state = { executor: executor(), reports: { ok: true, reports: [], latest_dispatch_id: null }, reviews: { ok: true, reviews: [] },
     gate: gate(), preview: null, accept: null, post: {},
+    automation: { ok: true, flow_id: FLOW, mode: "manual", approval_id: null, problem: null, since: null, approval: null,
+      step: null },
     storage: { ok: true, limit_bytes: 4294967296, used_bytes: 1048576, problem: "", note: "只有沒有程序在執行的流程才能刪除。",
       flows: [{ flow_id: FLOW, task_id: "task-1", bytes: 1048576, sessions: 1, reviews: 2, has_data: true, held: false,
         deletable: true, reasons: [], note: "" }] }, ...over };
@@ -80,6 +82,7 @@ function reset(over = {}) {
       if (p.endsWith("/reviews")) return answer(state.reviews);
       if (p.endsWith("/merge-gate")) return answer(state.gate);
       if (p.endsWith("/api/flows/storage")) return answer(state.storage);
+      if (p.endsWith("/automation")) return answer(state.automation);
       const m = /\/reviews\/(r-[0-9a-f]{16})\/draft$/.exec(p);
       if (m) return answer({ ok: true, text: "DRAFT\n" + m[1], truncated: false, format: "plain_text" });
       return null;
@@ -553,6 +556,137 @@ test("changing any setting voids the preview: the box is cleared and accepting s
     assert(button(m, "接受並記錄").disabled, `${which}: still off until the tick`);
     FETCH_LOG.length = 0;
   }
+});
+
+// ---- automatic mode (S3-5) ---------------------------------------------------------------------------------
+
+const autoPreview = () => preview({
+  plan_text: "任務：實作 add()\n目標：完成 add 函式", plan_sha256: "d".repeat(64), plan_bytes: 31,
+  auto_text: {
+    zh: { version: "2026-10-11.1", title: "核准計畫並開啟自動執行", intro: "核准這份計畫之後，VBear 會自動進行。",
+      confirm: "我核准這份計畫，了解並接受自動執行的風險與以上全部殘餘風險",
+      sections: ["does", "limits", "accounts", "not_auto", "forwarding", "git_writable", "stop", "residual"].map((id) => ({
+        id, title: `區段 ${id}`, body: `內文 ${id}` })) },
+    en: { version: "2026-10-11.1", sections: [{ id: "does", title: "What it does", body: "English" }] } },
+  fixed_rules: ["連續失敗 1 次就停止（不能調整）"],
+});
+
+test("the approval dialog shows the plan, every automatic-mode part, the fixed rule and the same S2 risks", async () => {
+  reset();
+  state.post["automation-preview"] = [autoPreview()];
+  state.post.automation = [{ ok: true, mode: "auto", approval_id: "auto-9" }];
+  let done = 0;
+  app.openAcceptanceDialog(FLOW, () => { done += 1; }, { auto: true });
+  await settle();
+  const m = dom().bodyEl.children[dom().bodyEl.children.length - 1];
+  const t = text(m);
+  assert(posts().some((x) => x.url.endsWith("/automation-preview")), "its own preview route");
+  assert(!posts().some((x) => x.url.endsWith("/acceptance-preview")));
+  assert(t.includes("核准計畫並開啟自動執行") && t.includes("任務：實作 add()") && t.includes("sha256 前 16 碼 dddddddddddddddd"));
+  for (const id of ["does", "limits", "accounts", "not_auto", "forwarding", "git_writable", "stop", "residual"]) {
+    assert(t.includes(`內文 ${id}`), id);
+  }
+  assert(t.includes("連續失敗 1 次就停止（不能調整）"));
+  for (const s of ["第一項的全文。", "第二項的全文，512 MiB。", "第三項的全文。"]) assert(t.includes(s), s);
+  assert(t.includes("a1b2c3d4e5f60718") && t.includes("0f1e2d3c4b5a6978"), "both account prefixes");
+  assert.strictEqual(m.findAll((n) => n.tag === "input" && n.dataset && n.dataset.limit).length, 9);
+  const accept = button(m, "核准並開啟自動執行");
+  assert(accept.disabled, "off until the tick");
+  const tick = find(m, (n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+  tick.checked = true;
+  tick.dispatch("change");
+  assert(!accept.disabled);
+  accept.click();
+  await settle();
+  const p = posts().find((x) => x.url.endsWith("/automation"));
+  assert(p, "confirmed");
+  assert.deepStrictEqual(p.body, { preview_id: "a".repeat(32) }, "only the preview id");
+  assert.strictEqual(done, 1);
+});
+
+test("the approval dialog voids its preview when a limit changes, as the S2 one does", async () => {
+  reset();
+  state.post["automation-preview"] = [autoPreview()];
+  app.openAcceptanceDialog(FLOW, () => {}, { auto: true });
+  await settle();
+  const m = dom().bodyEl.children[dom().bodyEl.children.length - 1];
+  const tick = find(m, (n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+  tick.checked = true;
+  tick.dispatch("change");
+  const i = m.findAll((n) => n.tag === "input" && n.dataset && n.dataset.limit)[0];
+  i.value = "2";
+  i.dispatch("input");
+  assert(button(m, "核准並開啟自動執行").disabled);
+  assert(text(m).includes("設定已變更"));
+  button(m, "核准並開啟自動執行").click();
+  await settle();
+  assert(!posts().some((x) => x.url.endsWith("/automation")));
+});
+
+test("a manual flow offers the approval; an automatic one shows its step, the stop and (when stopped) the way back", async () => {
+  let c = await mount();
+  const manual = byS2(c.node, "automation");
+  assert(text(manual).includes("手動"));
+  assert(button(manual, "核准計畫並開啟自動執行…"));
+  c.stop();
+  const auto = { ok: true, flow_id: FLOW, mode: "auto", approval_id: "auto-7", problem: null, since: 1791000000,
+    approval: { seq: 7, at: 1791000000, auto_text_version: "2026-10-11.1", plan_sha256: "e".repeat(64), plan_bytes: 31,
+      limits: {} },
+    step: { step: "await_review", label: "等 Codex 審查結束", after: "有效的結論才會被採用", held: false, hold_reason: "",
+      awaiting_merge: false } };
+  c = await mount({ automation: auto, executor: executor({ automation: { mode: "auto", approval_id: "auto-7", problem: null } }) });
+  let panel = byS2(c.node, "automation");
+  let t = text(panel);
+  assert(t.includes("自動執行中") && t.includes("等 Codex 審查結束") && t.includes("有效的結論才會被採用"));
+  assert(t.includes("eeeeeeeeeeeeeeee") && t.includes("auto-7"));
+  assert(!button(panel, "切回手動"), "not while it runs");
+  button(panel, "停止流程").click();
+  await settle();
+  assert(!posts().some((x) => x.url.endsWith("/hold")), "a question first");
+  button(byS2(c.node, "automation"), "確定").click();
+  await settle();
+  assert(posts().some((x) => x.url.endsWith("/hold")));
+  c.stop();
+  state.automation = { ...auto, step: { ...auto.step, held: true, hold_reason: "自動執行停止：tests failed" } };
+  c = await mount({ automation: state.automation, executor: executor({ automation: { mode: "auto", approval_id: "auto-7", problem: null } }) });
+  panel = byS2(c.node, "automation");
+  t = text(panel);
+  assert(t.includes("自動（已停止）") && t.includes("自動執行停止：tests failed") && t.includes("不會自動恢復"));
+  button(panel, "切回手動").click();
+  await settle();
+  assert(posts().some((x) => x.url.endsWith("/automation/disable")));
+  c.stop();
+});
+
+test("in automatic mode the manual dispatch box, review start and manual acceptance are off and say why", async () => {
+  const auto = { ok: true, flow_id: FLOW, mode: "auto", approval_id: "auto-7", problem: null, since: 1, approval: null,
+    step: { step: "first_dispatch", label: "x", after: "y", held: false, hold_reason: "", awaiting_merge: false } };
+  const c = await mount({ automation: auto, executor: executor({ sessions: [liveSession()],
+    automation: { mode: "auto", approval_id: "auto-7", problem: null } }),
+    reports: { ok: true, latest_dispatch_id: "d", reports: [reportEntry()] } });
+  const dispatch = byS2(c.node, "dispatch");
+  assert(text(dispatch).includes("手動派工一律拒絕"));
+  assert(find(dispatch, (n) => n.tag === "textarea").disabled);
+  assert(button(dispatch, "預覽").disabled);
+  const rv = byS2(c.node, "reviews");
+  assert(button(rv, "請 Codex 審查最新回報").disabled);
+  assert(text(rv).includes("自動執行中，手動審查一律拒絕"));
+  assert(button(byS2(c.node, "acceptance"), "重新接受…").disabled);
+  c.stop();
+});
+
+test("what an automatic event says is shown from its fixed fields", () => {
+  const e = (o) => app.flowAutomationDetail(o).join(" | ");
+  assert(e({ kind: "automation_mode", mode: "auto", approval_seq: 7 }).includes("auto-7"));
+  assert(e({ kind: "automation_mode", mode: "manual", approval_seq: null }).includes("切回手動"));
+  assert(e({ kind: "auto_dispatch_intent", dispatch_id: "0b1c2d3e-0000", length: 12, text_sha256: "a".repeat(64) }).includes("12 bytes"));
+  assert(e({ kind: "auto_report", dispatch_id: "0b1c2d3e-0000", commit: "b".repeat(40), status: "done",
+    tests_result: "passed" }).includes("VBear 讀檔核對通過"));
+  assert(e({ kind: "auto_review_result", round: 2, commit: "c".repeat(40), verdict: "NEEDS WORK" }).includes("第 2 輪結論：NEEDS WORK"));
+  assert(e({ kind: "auto_review_aborted", round: 1, job_id: "r-" + "1".repeat(16) }).includes("該輪無效"));
+  const stop = e({ kind: "auto_stopped", reason_code: "tests_not_passed", detail: "測試結果是 failed" });
+  assert(stop.includes("tests_not_passed") && stop.includes("測試結果是 failed"));
+  assert.deepStrictEqual(app.flowAutomationDetail({ kind: "note" }), []);
 });
 
 // ---- storage and deleting a flow (S2c-5) ---------------------------------------------------------------------
