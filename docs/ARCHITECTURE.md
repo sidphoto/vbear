@@ -157,8 +157,10 @@ routes.
 
 ### Managed executor and review (Phase 2, S2c)
 
-The console is a thin, validating layer over the daemon's RPCs. Everything that sends or starts something goes
-preview first, then approval with only the preview's id.
+The console is a thin, validating layer over the daemon's RPCs. The two things that carry content, the risk
+acceptance and each dispatch, are previewed first (a one-use server-held record) and approved with only the
+preview's id. Starting the executor and starting a review are empty-bodied POSTs: they have no preview record, and
+rest on the valid acceptance and the daemon's own re-verification of everything it binds.
 
 ```
 UI ── POST …/acceptance-preview ──▶ preview file (<state>/previews/, 300 s, single use)

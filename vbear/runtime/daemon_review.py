@@ -89,6 +89,11 @@ class ReviewOps:
                 if same_round[0]["commit"] != commit:
                     raise _Refused("conflict", f"輪次 {round_} 已有針對另一個 commit 的審查")
                 return _ok(rid, self._review_view(same_round[0]["job_id"], existing=True))
+            # design 4 (defence in depth: the console says it too): after a valid NEEDS WORK or BLOCKED
+            # the same commit is not reviewed again; a result that cannot be read refuses as well
+            verdict, prior_commit = stream_flow.latest_valid_verdict(self.base, pipeline, ctx.task_id)
+            if verdict in ("NEEDS WORK", "BLOCKED") and prior_commit == commit:
+                raise _Refused("conflict", f"最近一次有效審查的結論是 {verdict}，同一個 commit 不再審查，要有新的 commit")
             stream_flow.check_limits(ctx, now=now, counting_dispatch=False, counting_review=True)
             if self._reviews:
                 raise _Refused("limit", "已有審查在執行（全域同時最多一個）")

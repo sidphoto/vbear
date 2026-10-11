@@ -17,7 +17,8 @@
   out), 「即時狀態時間不明」 (the cache's time is missing, invalid or in the future), 「即時狀態已過期」 (older than
   30 s), 「runtime 未連線」 (the runtime did not answer) or 「runtime 狀態不明」 (the cache does not say).
 - **Managed Claude stream executor and Codex review (Phase 2).** A flow can now run a pipe-based Claude Code
-  `claude-stream` executor and daemon-managed Codex review jobs, each step previewed and approved in the console.
+  `claude-stream` executor and daemon-managed Codex review jobs, started and driven from the console (risk
+    acceptance and every dispatch are previewed and approved).
   - *Risk acceptance.* A per-flow dialog shows the three residual risks in full (text version `2026-10-11.1`),
     the CLI versions, models and account fingerprints (first 16 hex digits) it binds to, and nine limits with
     defaults and caps. The preview is stored server-side (five minutes, one use) and confirming carries only its

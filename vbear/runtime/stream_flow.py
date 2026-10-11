@@ -386,6 +386,30 @@ def record_state(m: dict, res) -> str:
     return "complete"
 
 
+def latest_valid_verdict(base, pipeline_id: str, task_id: str) -> tuple[str | None, str | None]:
+    """(verdict, commit) of the newest review of the flow that ended valid, or
+    (None, None) when none has. design 4: after NEEDS WORK / BLOCKED the next
+    review needs a new commit. A review list, a result or a verdict that
+    cannot be read or is not one of the three known ones refuses
+    (FlowRefused): "cannot read" is never "there was none"."""
+    reviews = flow_reviews(base, pipeline_id, task_id)
+    for m in sorted(reviews, key=lambda x: x["round"], reverse=True):
+        if m["outcome"] != "valid":
+            continue
+        try:
+            with pipeline_store.Pipeline(base, task_id, create=False) as p:
+                res = p.review_result(m["round"])
+        except (pipeline_store.StoreRefused, OSError) as exc:
+            raise FlowRefused("count_unavailable",
+                              f"審查 {m['job_id']} 的結果無法讀取（{type(exc).__name__}），不能確認是否需要新的 commit") from exc
+        verdict = res.get("verdict") if isinstance(res, dict) else None
+        if verdict not in ("PASS", "NEEDS WORK", "BLOCKED"):
+            raise FlowRefused("count_unavailable",
+                              f"審查 {m['job_id']} 的結果沒有可辨識的結論，不能確認是否需要新的 commit")
+        return verdict, m["commit"]
+    return None, None
+
+
 def _review_failure(m: dict) -> dict:
     ident = review_store.failure_id(m)
     # by the outcome, which a clean-up does not change (S2b part 1 review R2)

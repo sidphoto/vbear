@@ -14,6 +14,7 @@ from unittest import mock
 from tests.console_fixtures import ConsoleMixin
 from tests.test_runtimed_review import ReviewCase
 from vbear import flow_review, flows, risk_acceptance as ra
+from vbear.api_error import ApiError
 from vbear.runtime import pipeline_store, review_store
 
 
@@ -363,6 +364,87 @@ class MergeGateTests(ReviewApiCase):
         g = self.gate()
         self.assertFalse(g["open"])
         self.assertIn("BLOCKED", {c["id"]: c for c in g["conditions"]}["review_pass"]["detail"])
+
+
+class FailClosedTests(ReviewApiCase):
+    """Codex S2c final review: a review record that cannot be read is not
+    "there was none". After a NEEDS WORK, the same commit is not reviewed
+    again because a read failed at the wrong moment."""
+
+    def needs_work_at_head(self):
+        self.start_executor()
+        self.commit_work()
+        self.turn()
+        job, entry = self.run_review("needs_work")
+        self.assertEqual(entry["result"]["verdict"], "NEEDS WORK")
+        return job
+
+    def latest(self):
+        return next(e for e in self.reports()["reports"] if e["latest"])
+
+    def assertRefusedNotUnchecked(self, count=True):
+        st, r = self.start_review()
+        self.assertEqual(st, 409, r)
+        if count:
+            self.assertEqual(r["code"], "report_unchecked", r)
+            self.assertEqual(len(self.reviews()), 1)                # nothing was started
+
+    def test_a_review_list_that_cannot_be_read_makes_the_report_unusable(self):
+        self.needs_work_at_head()
+        with mock.patch.object(flow_review.FlowReview, "_review_manifests",
+                               side_effect=ApiError(409, "count_unavailable", "審查紀錄無法讀取")):
+            e = self.latest()
+            check = next(c for c in e["checks"] if c["id"] == "new_commit")
+            self.assertEqual((e["usable"], check["ok"]), (False, False))
+            self.assertIn("無法讀取前次審查紀錄，不能確認是否需要新的 commit", check["detail"])
+            st, r = self.call(f"/api/flows/{self.fid}/review", "POST", {})
+            self.assertEqual(st, 409, r)
+        self.assertEqual(len(self.reviews()), 1)
+
+    def test_a_result_that_cannot_be_read_makes_the_report_unusable_and_start_refuses(self):
+        self.needs_work_at_head()
+        real = pipeline_store.Pipeline.review_result
+
+        def failing(self_, round_):
+            raise pipeline_store.StoreRefused("result.json 無法讀取")
+        with mock.patch.object(pipeline_store.Pipeline, "review_result", failing):
+            e = self.latest()
+            check = next(c for c in e["checks"] if c["id"] == "new_commit")
+            self.assertEqual((e["usable"], check["ok"]), (False, False))
+            self.assertRefusedNotUnchecked(count=False)
+        self.assertEqual(real.__name__, "review_result")
+        self.assertRefusedNotUnchecked()                            # and with everything readable: the same commit
+
+    def test_start_decides_again_on_its_own_read(self):
+        # the report was judged usable on a good read; the read start makes itself fails: no review
+        self.needs_work_at_head()
+        self.git("commit", "-q", "--allow-empty", "-m", "fix")
+        self.commit = self.git("rev-parse", "HEAD")
+        (self.work / "fake-head").write_text(self.commit)
+        self.turn("修好了")
+        self.assertTrue(self.latest()["usable"])
+        calls = {"n": 0}
+        real = flow_review.FlowReview._review_manifests
+
+        def flaky(self_, flow):
+            calls["n"] += 1
+            if calls["n"] == 1:                                     # reports() inside start() reads fine ...
+                return real(self_, flow)
+            raise ApiError(409, "count_unavailable", "審查紀錄無法讀取")   # ... start's own read does not
+        with mock.patch.object(flow_review.FlowReview, "_review_manifests", flaky):
+            st, r = self.call(f"/api/flows/{self.fid}/review", "POST", {})
+        self.assertEqual(st, 409, r)
+        self.assertEqual(len(self.reviews()), 1)
+
+    def test_the_daemon_refuses_the_same_commit_even_when_the_console_asks(self):
+        self.needs_work_at_head()
+        before = len(self.reviews())
+        from vbear import daemon_client
+        with self.assertRaises(daemon_client.DaemonError) as cm:
+            daemon_client.call(self.console.executor.runtime, "review_start", timeout=30.0,
+                               pipeline=self.fid, round=2, commit=self.commit)
+        self.assertIn("同一個 commit 不再審查", str(cm.exception))
+        self.assertEqual(len(self.reviews()), before)
 
 
 class SessionOrderTests(ReviewApiCase):

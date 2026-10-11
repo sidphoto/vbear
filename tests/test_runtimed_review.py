@@ -316,10 +316,64 @@ class HappyPathTests(ReviewCase):
     def test_a_negative_verdict_is_a_valid_review_and_does_not_stop_the_flow(self):
         self.executor_done()
         for round_, mode, verdict in ((1, "needs_work", "NEEDS WORK"), (2, "blocked", "BLOCKED")):
+            if round_ > 1:                                        # after NEEDS WORK the next review needs a new commit
+                self.git("commit", "-q", "--allow-empty", "-m", f"fix {round_}")
+                self.commit = self.git("rev-parse", "HEAD")
             job = self.run_review(mode, round_)
             end = self.wait_state(job, "cleaned")
             self.assertEqual((end["outcome"], end["result"]["verdict"]), ("valid", verdict))
             self.assertFalse(self.held())
+
+    def test_after_needs_work_or_blocked_the_same_commit_is_not_reviewed_again(self):
+        # Codex S2c final review: the daemon says it too, whatever the console decided
+        self.executor_done()
+        for round_, mode in ((1, "needs_work"), (3, "blocked")):
+            if round_ == 3:
+                self.git("commit", "-q", "--allow-empty", "-m", "fix")
+                self.commit = self.git("rev-parse", "HEAD")
+            job = self.run_review(mode, round_)
+            self.wait_state(job, "cleaned")
+            r = self.start_review(round_ + 1)                     # the same commit, the next round
+            self.assertFalse(r.get("ok"), r)
+            self.assertIn("同一個 commit 不再審查", r["error"]["message"])
+        # a new commit is reviewed (and a PASS of the same commit may be asked about again)
+        self.git("commit", "-q", "--allow-empty", "-m", "again")
+        self.commit = self.git("rev-parse", "HEAD")
+        job = self.run_review("ok", 5)
+        end = self.wait_state(job, "cleaned")
+        self.assertEqual(end["result"]["verdict"], "PASS")
+        job = self.run_review("ok", 6)                              # after a PASS the same commit is not refused
+        self.wait_state(job, "cleaned")
+
+    def test_a_result_that_cannot_be_read_refuses_instead_of_being_taken_for_none(self):
+        self.executor_done()
+        job = self.run_review("needs_work", 1)
+        self.wait_state(job, "cleaned")
+        self.git("commit", "-q", "--allow-empty", "-m", "fix")
+        self.commit = self.git("rev-parse", "HEAD")
+        for damage in ("corrupt", "unknown verdict", "missing"):
+            with self.subTest(damage):
+                path = self.base / "pipelines" / self.tid / "reviews" / "1" / "result.json"
+                saved = path.read_bytes()
+                try:
+                    if damage == "corrupt":
+                        path.write_text("{")
+                    elif damage == "unknown verdict":
+                        d = json.loads(saved)
+                        d["verdict"] = "MAYBE"
+                        path.write_text(json.dumps(d))
+                    else:
+                        path.unlink()
+                    r = self.start_review(2)
+                    self.assertFalse(r.get("ok"), r)
+                    if damage == "unknown verdict":                # a whole record with a verdict nobody knows
+                        self.assertIn("不能確認是否需要新的 commit", r["error"]["message"])
+                    else:                                          # the flow's accounting refuses before that
+                        self.assertIn("result.json", r["error"]["message"])
+                finally:
+                    path.write_bytes(saved)
+        r = self.start_review(2)                                    # whole again: the new commit is accepted
+        self.assertTrue(r.get("ok"), r)
 
     def test_a_resend_returns_the_same_job_and_another_commit_is_refused(self):
         self.executor_done()

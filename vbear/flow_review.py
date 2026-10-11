@@ -88,16 +88,17 @@ class FlowReview:
                                 "usable": False, "latest": False})
         # the newest turn with a valid report is the one that can be reviewed
         with_report = [e for e in entries if e["valid"] and isinstance(e["report"], dict)]
-        reviews = []
+        # Whether the executor has to produce a new commit depends on the newest valid review. A review list or a
+        # result that cannot be read is NOT "there was none": it makes the report unusable (fail closed; Codex S2c
+        # final review).
         try:
-            reviews = self._review_manifests(flow)
-        except ApiError:
-            pass
-        reviewed = self._last_non_pass(reviews)
+            prior = self._last_non_pass(self._review_manifests(flow))
+        except ApiError as exc:
+            prior = ("unreadable", str(exc))
         if with_report and workdir and order_problem is None:
             latest = with_report[-1]
             latest["latest"] = True
-            latest["checks"] = self._checks(latest["report"], workdir, reviewed)
+            latest["checks"] = self._checks(latest["report"], workdir, prior)
             latest["usable"] = all(c["ok"] is True for c in latest["checks"])
         return {"flow_id": flow_id, "workdir": workdir, "reports": entries, "order_problem": order_problem,
                 "latest_dispatch_id": (with_report[-1]["dispatch_id"] if with_report and order_problem is None
@@ -118,25 +119,32 @@ class FlowReview:
             return True
 
     @staticmethod
-    def _last_non_pass(reviews: list[dict]) -> str | None:
-        """The commit of the newest review that ended valid with a verdict
-        other than PASS: the executor has to produce something new after it."""
+    def _last_non_pass(reviews: list[dict]) -> tuple[str, str | None]:
+        """What the newest review that ended valid says the executor has to do
+        next: ("none", None) when there is no valid review or it passed;
+        ("found", commit) when it ended NEEDS WORK or BLOCKED (something new
+        is needed after that commit); ("unreadable", why) when its result
+        cannot be read or is not one of the known verdicts. "Cannot read" is
+        never "none"."""
         for m in reversed(reviews):
             if m["outcome"] == "valid":
                 try:
                     with pipeline_store.Pipeline(cfg.state_dir(), m["task_id"], create=False) as p:
                         res = p.review_result(m["round"])
-                except (OSError, pipeline_store.StoreRefused):
-                    return None
-                if isinstance(res, dict) and res.get("verdict") in ("NEEDS WORK", "BLOCKED"):
-                    return m["commit"]
-                return None
+                except (OSError, pipeline_store.StoreRefused) as exc:
+                    return ("unreadable", f"審查 {m['job_id']} 的結果無法讀取（{type(exc).__name__}）")
+                verdict = res.get("verdict") if isinstance(res, dict) else None
+                if verdict in ("NEEDS WORK", "BLOCKED"):
+                    return ("found", m["commit"])
+                if verdict == "PASS":
+                    return ("none", None)
+                return ("unreadable", f"審查 {m['job_id']} 的結果沒有可辨識的結論")
             if m["outcome"] is None:
-                return None
-        return None
+                return ("none", None)
+        return ("none", None)
 
     @staticmethod
-    def _checks(report: dict, workdir: str, reviewed_commit: str | None) -> list[dict]:
+    def _checks(report: dict, workdir: str, prior: tuple[str, str | None] = ("none", None)) -> list[dict]:
         """VBear's own reading of the files, one entry per check
         (ok True / False / None when it could not be read)."""
         head = report.get("head")
@@ -153,10 +161,15 @@ class FlowReview:
         exists = git_objects.commit_exists(workdir, head)
         checks.append({"id": "commit_exists", "ok": exists, "label": "回報的 commit 物件存在",
                        "detail": "" if exists else ("無法核對" if exists is None else "找不到這個 commit")})
-        if reviewed_commit is not None:
-            checks.append({"id": "new_commit", "ok": head != reviewed_commit,
+        kind, value = prior
+        if kind == "unreadable":
+            checks.append({"id": "new_commit", "ok": False, "label": "NEEDS WORK／BLOCKED 之後有新的 commit",
+                           "detail": "無法讀取前次審查紀錄，不能確認是否需要新的 commit"
+                                     + (f"（{value}）" if value else "")})
+        elif kind == "found":
+            checks.append({"id": "new_commit", "ok": head != value,
                            "label": "NEEDS WORK／BLOCKED 之後有新的 commit",
-                           "detail": "" if head != reviewed_commit else "回報的 head 仍是被審查過的那個 commit"})
+                           "detail": "" if head != value else "回報的 head 仍是被審查過的那個 commit"})
         return checks
 
     # ---- reviews --------------------------------------------------------------------------------------------
@@ -221,6 +234,13 @@ class FlowReview:
                 raise ApiError(409, "report_unchecked", "最新回報的 VBear 讀檔核對沒有全部通過：" + "；".join(bad))
             commit = latest["report"]["head"]
             reviews = self._review_manifests(flow)
+            # decided again on this read, not on the one the report was judged with: the answer must hold now
+            kind, value = self._last_non_pass(reviews)
+            if kind == "unreadable":
+                raise ApiError(409, "report_unchecked",
+                               f"無法讀取前次審查紀錄，不能確認是否需要新的 commit（{value}）")
+            if kind == "found" and value == commit:
+                raise ApiError(409, "report_unchecked", "NEEDS WORK／BLOCKED 之後要有新的 commit 才能再審")
             if any(m["outcome"] is None for m in reviews):
                 raise ApiError(409, "busy", "這個流程已有尚未結束的審查")
             rnd = (max((m["round"] for m in reviews), default=0)) + 1

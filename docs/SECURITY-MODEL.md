@@ -210,8 +210,14 @@ worktree or the executor's scratch directory.
 
 ### What the console does
 
-Every action goes preview first, then approval; nothing the browser sends is recorded or executed except through a
-record the server stored first.
+Two things have a server-held, one-use preview record that the approval must name: the risk acceptance and each
+dispatch (the text to be sent). What the browser sends with the approval is only that record's id; nothing else it
+sends is recorded or executed. The other actions carry no content to preview, so they have no preview record of their
+own and rest on other checks: starting the executor and starting a review are POSTs with empty bodies that the
+server refuses without a valid risk acceptance and that the daemon verifies again (acceptance values, versions,
+accounts, limits, holds, unresolved failures); a review takes its commit from the latest usable report, never from
+the request; stopping, continuing and closing a session act on the flow or session the request names, and deleting
+also names the flow in its body and asks twice on screen.
 
 - **Risk acceptance.** `POST /api/flows/<id>/acceptance-preview` stores a preview (`<state>/previews/`, five
   minutes, one use). The dialog shows the three residual risks in full (text version `2026-10-11.1`), the CLI
