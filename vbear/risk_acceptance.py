@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import acceptance, config as cfg, flows, login_identity, previews, risk_text
 from .api_error import ApiError
-from .runtime import cli_versions, codex_constants, review_codex
+from .runtime import cli_versions, codex_constants, pipeline_store, review_codex
 from .runtime import native as rt_native
 
 DEFAULT_EXECUTOR_MODEL = "claude-haiku-4-5-20251001"
@@ -85,6 +85,17 @@ class Host:
 
 
 DEFAULT_HOST = Host()
+
+
+def refuse_if_automatic(flow_id: str, what: str) -> None:
+    """S3 v11.1 G4: while a flow is in automatic mode its manual dispatches,
+    manual reviews and manual acceptances are refused (the daemon refuses the
+    first two as well). To change something: stop, switch back to manual,
+    approve again."""
+    info = pipeline_store.mode_info(cfg.state_dir(), flow_id)
+    if info["mode"] == "auto":
+        raise AcceptanceError(409, "automation_active",
+                              f"這個流程在自動執行模式，{what}一律拒絕；要先停止流程並切回手動")
 
 
 # ---- the facts --------------------------------------------------------------------------------------------
@@ -196,6 +207,7 @@ def preview(flow_id: str, body, *, store: previews.PreviewStore, host: Host | No
     if not isinstance(body, dict) or set(body) - PREVIEW_KEYS:
         raise AcceptanceError(400, "bad_request", "只接受 executor_model、review_model、limits")
     flow = _flow(flow_id)
+    refuse_if_automatic(flow_id, "手動接受風險")
     _check_families(flow)
     state = cfg.state_dir()
     key = _key(state)
@@ -223,6 +235,7 @@ def confirm(flow_id: str, body, *, store: previews.PreviewStore, host: Host | No
     if not isinstance(body, dict) or set(body) != {"preview_id"}:
         raise AcceptanceError(400, "bad_request", "只接受 preview_id；要記錄的值一律取自預覽紀錄")
     _flow(flow_id)
+    refuse_if_automatic(flow_id, "手動接受風險")
 
     def check(rec: dict) -> None:
         stored = rec["data"]["fields"]

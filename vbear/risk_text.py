@@ -76,3 +76,147 @@ def render(lang: str = "zh") -> dict:
     n = numbers()
     items = [{"id": it["id"], "title": it["title"][lang], "body": it["body"][lang].format(**n)} for it in _ITEMS]
     return {"version": VERSION, "lang": lang, **_CHROME[lang], "items": items}
+
+
+# ---- the automation text (S3 design 9, v11.1 G3) ---------------------------------------------------------------
+#
+# Shown in the same preview as the three residual risks above, and recorded
+# with the acceptance as ``auto_text_version``. A changed word is a changed
+# version (acceptance.AUTO_RISK_TEXT_VERSION): every earlier automatic
+# approval is then void and the mode has to be switched on again.
+
+AUTO_VERSION = acceptance.AUTO_RISK_TEXT_VERSION
+
+_AUTO_SECTIONS = (
+    {
+        "id": "does",
+        "title": {"zh": "會自動做的事", "en": "What it will do by itself"},
+        "body": {
+            "zh": "開啟之後，VBear 會依序自己做：把上面列出的計畫全文派給執行者；等那一輪結束並核對執行者的回報；"
+                  "以那份回報的 commit 啟動 Codex 審查；審查結論是 NEEDS WORK 時，把審查意見放進資料區塊再派給執行者，"
+                  "回到前一步；結論是 PASS 而且各項核對通過時，停在合併關卡等你。派工、啟動審查、把審查意見轉給執行者，"
+                  "都不再逐則由你核准。",
+            "en": "Once it is on, VBear will, in order: send the plan above to the executor; wait for the turn to end and "
+                  "check the executor's report; start a Codex review of the commit in that report; when the verdict is "
+                  "NEEDS WORK, put the review comments in a data block and send them to the executor, going back a step; "
+                  "when the verdict is PASS and every check passes, stop at the merge gate and wait for you. Sending "
+                  "work, starting reviews and forwarding review comments are no longer approved one by one.",
+        },
+    },
+    {
+        "id": "limits",
+        "title": {"zh": "上限、固定規則與用量", "en": "Limits, the fixed rule and usage"},
+        "body": {
+            "zh": "上面「這次接受涵蓋的設定」列出全部九項上限的實際值，改變任何一項就必須重新核准。另有一條不能調整的固定規則："
+                  "連續失敗 1 次就停止，等你處理。每一輪約使用 1 次 Codex 審查，加上執行者一輪的 Claude 用量；"
+                  "執行者的費用（total_cost_usd 是用量金額，不是實際帳單）會即時顯示。到達任何一項上限就停止。"
+                  "沒有結果的一輪會以最壞情況計入用量，要繼續可能需要調高上限並重新核准。",
+            "en": "The values above list the actual value of all nine limits; changing any of them needs a new approval. "
+                  "One rule is fixed and cannot be changed: a single failure stops everything until you act. Each "
+                  "round uses about one Codex review plus one executor turn of Claude usage; the executor's cost "
+                  "(total_cost_usd is a usage valuation, not a bill) is shown as it happens. Reaching any limit stops "
+                  "it. A turn with no result is counted at its worst case, so continuing may need a higher limit and "
+                  "a new approval.",
+        },
+    },
+    {
+        "id": "accounts",
+        "title": {"zh": "使用的帳號", "en": "Accounts used"},
+        "body": {
+            "zh": "執行者使用你的 Claude 帳號，用量計入那個帳號；審查者使用 VBear 專用 Codex 設定目錄登入的帳號。"
+                  "兩個帳號的指紋前 16 碼顯示在上面；帳號、版本或指紋任何一項和這次核准時不同，就會停止。",
+            "en": "The executor uses your Claude account and the usage is charged to it; the reviewer uses the account "
+                  "logged in to VBear's dedicated Codex configuration directory. The first 16 digits of both account "
+                  "fingerprints are shown above; if the account, a version or a fingerprint differs from this "
+                  "approval, it stops.",
+        },
+    },
+    {
+        "id": "not_auto",
+        "title": {"zh": "不會自動做的事", "en": "What it will not do"},
+        "body": {
+            "zh": "合併、push、tag、發版永遠由你決定，VBear 不執行這些 git 指令，只顯示指令。啟動執行者 session、"
+                  "停止之後按「繼續」、調整上限、接受風險，也都只由你做。",
+            "en": "Merging, pushing, tagging and releasing are always yours; VBear does not run those git commands, it "
+                  "only shows them. Starting the executor session, pressing \"continue\" after a stop, changing limits "
+                  "and accepting risks are also only done by you.",
+        },
+    },
+    {
+        "id": "forwarding",
+        "title": {"zh": "自動轉送審查意見的風險", "en": "The risk of forwarding review comments automatically"},
+        "body": {
+            "zh": "審查意見的內容受被審 repo 的內容影響，可能夾帶誘導執行者的指令；自動執行會在沒有逐則核准的情況下，"
+                  "把它送給執行者。緩解方式是把意見放進標明為資料的區塊並清洗控制字元、執行者在沙盒內且不能連網、"
+                  "各項上限，以及合併與 push 永遠由人決定。這些緩解不是保證，也無法證明意見不含惡意指令。"
+                  "接受這項風險，表示你了解執行者可能依被審內容所誘導的指令，在工作目錄內做你沒有逐則核准的事。",
+            "en": "What a review comment says is influenced by the content of the reviewed repository and may carry "
+                  "instructions meant to steer the executor; automatic mode sends it to the executor without "
+                  "per-item approval. The mitigations are a block labelled as data with control characters made "
+                  "visible, the executor running in a sandbox without network access, the limits, and that merge and "
+                  "push stay human. They are not guarantees, and they cannot prove a comment holds no hostile "
+                  "instruction. Accepting means understanding that the executor may act in the work directory on "
+                  "instructions steered by the reviewed content, without you approving each one.",
+        },
+    },
+    {
+        "id": "git_writable",
+        "title": {"zh": "工作目錄的 .git 可寫", "en": "The work directory's .git is writable"},
+        "body": {
+            "zh": "執行者在你的任務工作目錄內可以寫檔，也可以 commit，包括該目錄的 .git；VBear 目前無法阻擋 commit，"
+                  "也不限制執行者在那個目錄與它的暫存區的磁碟用量。審查通過不代表工作目錄之外沒有被讀取或洩漏：沙盒限制寫入與網路，"
+                  "但讀取沒有隔離。",
+            "en": "The executor can write files and commit inside your task work directory, including its .git; VBear "
+                  "cannot currently block a commit and does not limit the executor's disk use in that directory or "
+                  "its scratch directory. A review pass does not mean nothing outside the work directory was read: "
+                  "the sandbox restricts writes and the network, but reads are not isolated.",
+        },
+    },
+    {
+        "id": "stop",
+        "title": {"zh": "怎麼停止，以及停止之後", "en": "How to stop, and after a stop"},
+        "body": {
+            "zh": "在流程頁按「停止流程」，生效之後不會再有派工或審查，進行中的審查會被結束並記為無效。"
+                  "停止或逾時之後，執行者正在進行的那一輪可能還會繼續執行並寫入工作目錄，直到它自己結束，"
+                  "或你在流程頁關閉那個 session。停止之後不會自動恢復；重新啟動 VBear 的主控台或背景程序也不算繼續，"
+                  "背景程序重啟時所有自動執行的流程都會被標成停止，只有你按「繼續」才會解除。",
+            "en": "Press \"stop flow\" on the flow page. Once it has taken effect there are no more dispatches or "
+                  "reviews, and a review in progress is ended and counted invalid. After a stop or a timeout, the "
+                  "executor's turn in progress may keep running and writing in the work directory until it ends or "
+                  "you close that session on the flow page. A stop is never undone by itself; restarting the console "
+                  "or the background process does not count as continuing, and a restart of the background process "
+                  "marks every automatic flow as stopped until you press \"continue\".",
+        },
+    },
+    {
+        "id": "residual",
+        "title": {"zh": "同時接受第 2 階段的全部殘餘風險", "en": "The residual risks of phase 2, all of them"},
+        "body": {
+            "zh": "核准自動執行，同時就是接受上面三項殘餘風險的全文（Codex 工具集合無法事先證明且多 agent 能力關不掉、"
+                  "各項上限強度不一、伺服器管理設定）。它們與自動轉送的風險一起寫進同一筆接受紀錄。",
+            "en": "Approving automatic mode is also accepting the three residual risks above in full (Codex's tool set "
+                  "cannot be proved in advance and its multi-agent capability cannot be turned off, the limits differ "
+                  "in strength, and server-managed settings). They are recorded with the risk of automatic "
+                  "forwarding in the same acceptance.",
+        },
+    },
+)
+
+_AUTO_CHROME = {
+    "zh": {"title": "核准計畫並開啟自動執行",
+           "intro": "核准這份計畫之後，VBear 會依下列方式自動進行，不再逐則請你核准。請完整閱讀；要開啟，必須勾選最後的確認。",
+           "confirm": "我核准這份計畫，了解並接受自動執行的風險與以上全部殘餘風險"},
+    "en": {"title": "Approve the plan and turn on automatic mode",
+           "intro": ("After you approve this plan, VBear proceeds as described below without asking you to approve each "
+                     "step. Read it in full; to turn it on you must tick the confirmation at the end."),
+           "confirm": "I approve this plan and understand and accept the risks of automatic mode and all the residual "
+                      "risks above"},
+}
+
+
+def render_auto(lang: str = "zh") -> dict:
+    """{"version", "lang", "title", "intro", "sections": [{"id", "title", "body"}], "confirm"}."""
+    if lang not in ("zh", "en"):
+        raise ValueError("lang 必須是 zh 或 en")
+    return {"version": AUTO_VERSION, "lang": lang, **_AUTO_CHROME[lang],
+            "sections": [{"id": s["id"], "title": s["title"][lang], "body": s["body"][lang]} for s in _AUTO_SECTIONS]}

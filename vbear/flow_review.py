@@ -216,6 +216,7 @@ class FlowReview:
             raise ApiError(400, "bad_request", "不接受任何欄位：被審的 commit 取自執行者最新的有效回報")
         with self._lock(flow_id):
             flow = self._flow(flow_id)
+            risk_acceptance.refuse_if_automatic(flow_id, "手動審查")
             acc = risk_acceptance.status(flow)
             if acc["state"] != "valid":
                 raise ApiError(409, "no_acceptance", f"風險接受目前不算數（{acc.get('reason') or acc['state']}）")

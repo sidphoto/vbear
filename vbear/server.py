@@ -45,13 +45,14 @@ from . import config as cfg
 from . import flow_executor
 from . import flow_review
 from . import flow_storage
+from . import automation as automation_mod
 from . import flows
 from . import previews as previews_mod
 from .api_error import ApiError
 from . import risk_acceptance
 from . import tasks
 from . import runtime as rt
-from .runtime import cli_versions
+from .runtime import cli_versions, pipeline_store
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import document
@@ -92,7 +93,7 @@ MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
 # GET /api/flows/<id>/reports | reviews | reviews/<job>/draft | merge-gate (S2c-3)
 FLOW_GET_RE = re.compile(
-    r"^/api/flows/(flow-[0-9a-f]{12})/(reports|merge-gate|reviews)(?:/(r-[0-9a-f]{16})/draft)?\Z")
+    r"^/api/flows/(flow-[0-9a-f]{12})/(reports|merge-gate|reviews|automation)(?:/(r-[0-9a-f]{16})/draft)?\Z")
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
 FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localhost ports
 # A terminal this narrow or short cannot render anything usable: a stray
@@ -135,6 +136,7 @@ class Console:
                                                    managed_root=self.managed_root)
         self.review = flow_review.FlowReview(self.executor)
         self.storage = flow_storage.FlowStorage(self.executor)
+        self.automation = automation_mod.FlowAutomation(self.executor, self.preview_records)
         self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
@@ -436,6 +438,8 @@ def make_handler(console: Console):
                         return self._flow_action(lambda: console.review.opinion_draft(fid, job))
                     if what == "merge-gate" and job is None:
                         return self._flow_action(lambda: console.review.merge_gate(fid))
+                    if what == "automation" and job is None:
+                        return self._flow_action(lambda: console.automation.status(fid))
                     return self._error(404, "not found")
                 if path.startswith("/api/flows/") and path.endswith("/executor"):
                     return self._flow_action(lambda: console.executor.status(path[len("/api/flows/"):-len("/executor")]))
@@ -853,6 +857,8 @@ def make_handler(console: Console):
             live = console.store.live_cached()   # never builds: reading a flow starts nothing
             view = flows.view(flow, heads=flows.head_reader, task_title=task_title, live=live, now=time.time())
             view["acceptance"] = risk_acceptance.status(flow)
+            mode = pipeline_store.mode_info(cfg.state_dir(), flow["id"])
+            view["automation"] = {"mode": mode["mode"], "approval_id": mode["approval_id"], "problem": mode["problem"]}
             return view
 
         def _flows_view(self) -> dict:
@@ -910,6 +916,14 @@ def make_handler(console: Console):
                             lambda: console.executor.dispatch_preview(rest[:-len("/dispatch-preview")], body))
                     elif rest.endswith("/dispatch"):
                         return self._flow_action(lambda: console.executor.dispatch_confirm(rest[:-len("/dispatch")], body))
+                    elif rest.endswith("/automation-preview"):
+                        return self._flow_action(
+                            lambda: console.automation.preview(rest[:-len("/automation-preview")], body))
+                    elif rest.endswith("/automation/disable"):
+                        return self._flow_action(
+                            lambda: console.automation.disable(rest[:-len("/automation/disable")], body))
+                    elif rest.endswith("/automation"):
+                        return self._flow_action(lambda: console.automation.confirm(rest[:-len("/automation")], body))
                     elif rest.endswith("/delete"):
                         return self._flow_action(lambda: console.storage.delete(rest[:-len("/delete")], body))
                     elif rest.endswith("/hold"):

@@ -207,7 +207,14 @@ class FlowExecutor:
                 raise ApiError(400, "bad_request", "只接受 reason（字串）")
             reason = (body.get("reason") or reason)[:200]
         self._flow(flow_id)
-        return self._call("pipeline_hold", pipeline=flow_id, reason=reason)
+        result = self._call("pipeline_hold", pipeline=flow_id, reason=reason)
+        # a stop of an automatic flow is a record of its own (S3 design 6): the console writes it after the daemon did
+        if pipeline_store.mode_info(cfg.state_dir(), flow_id)["mode"] == "auto":
+            try:
+                flows.append_automation_event(flow_id, "auto_stopped", {"reason_code": "user_stop", "detail": reason})
+            except ValueError:
+                pass                                       # the hold itself is the daemon's and has taken effect
+        return result
 
     def release(self, flow_id: str, body) -> dict:
         """The user's "continue" (design 7, v29.8). The daemon refuses while a
@@ -237,6 +244,7 @@ class FlowExecutor:
         if not isinstance(body, dict) or set(body) != DISPATCH_KEYS:
             raise ApiError(400, "bad_request", "只接受 launch_id 與 text")
         flow = self._flow(flow_id)
+        risk_acceptance.refuse_if_automatic(flow_id, "手動派工")
         self._valid_acceptance(flow)
         m = self._own_launch(flow_id, body["launch_id"])
         try:
@@ -268,6 +276,7 @@ class FlowExecutor:
             raise ApiError(400, "bad_request", "只接受 preview_id；派工內容一律取自預覽紀錄")
         with self._lock(flow_id):
             flow = self._flow(flow_id)
+            risk_acceptance.refuse_if_automatic(flow_id, "手動派工")
 
             def check(rec: dict) -> None:
                 data = rec["data"]
@@ -318,7 +327,10 @@ class FlowExecutor:
     def status(self, flow_id: str) -> dict:
         flow = self._flow(flow_id)
         base = cfg.state_dir()
+        mode = pipeline_store.mode_info(base, flow_id)
         out: dict = {"flow_id": flow_id, "acceptance": risk_acceptance.status(flow),
+                     "automation": {"mode": mode["mode"], "approval_id": mode["approval_id"],
+                                    "problem": mode["problem"]},
                      "hold": pipeline_store.hold_info(base, flow_id), "workdir": None, "workdir_problem": None,
                      "accounting": None, "failures": [], "unresolved_failure": None, "sessions": [],
                      "sessions_problem": None}

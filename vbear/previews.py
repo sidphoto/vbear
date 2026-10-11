@@ -106,7 +106,33 @@ def _dispatch_data_problem(data) -> str | None:
     return None
 
 
-KINDS = {"acceptance": _acceptance_data_problem, "dispatch": _dispatch_data_problem}
+def _automation_data_problem(data) -> str | None:
+    """An automatic-mode approval: the thirteen acceptance fields and the plan
+    text those fields name by hash and size (S3 v11.1 G1, G2)."""
+    if not (isinstance(data, dict) and set(data) == {"fields", "plan_text"}):
+        return "automation 的資料欄位不符"
+    fields = data["fields"]
+    problem = acceptance.record_problem(fields)
+    if problem:
+        return f"接受內容不合法（{problem}）"
+    if not acceptance.AUTO_FIELDS <= set(fields):
+        return "沒有自動執行的欄位"
+    text = data["plan_text"]
+    if not isinstance(text, str):
+        return "plan_text 不是字串"
+    try:
+        raw = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "plan_text 含孤立的 surrogate"
+    if not 0 < len(raw) <= acceptance.PLAN_MAX_BYTES:
+        return "plan_text 的長度不合法"
+    if hashlib.sha256(raw).hexdigest() != fields["plan_sha256"] or len(raw) != fields["plan_bytes"]:
+        return "plan_text 與接受的雜湊或大小不符"
+    return None
+
+
+KINDS = {"acceptance": _acceptance_data_problem, "dispatch": _dispatch_data_problem,
+         "automation": _automation_data_problem}
 
 
 def _num(value) -> float | None:
