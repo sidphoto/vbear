@@ -51,15 +51,26 @@ FAMILY_LABELS = {"anthropic": "Anthropic（Claude）", "openai": "OpenAI（Codex
                  "minimax": "MiniMax", "other": "其他", "unknown": "不明"}
 VERDICTS = ("PASS", "NEEDS_WORK", "BLOCKED")
 # "manual": typed into a form (unverified). "console": written by the console
-# itself from a server-held preview; only risk_acknowledged (design 10, S2c).
-SOURCES = ("manual", "console")
+# itself from a server-held preview or a user's action on the screen
+# (risk_acknowledged, automation_mode). "automation": written by the runner
+# (S3 design 7), always as the three-step intent -> daemon RPC -> result.
+SOURCES = ("manual", "console", "automation")
+CONSOLE_KINDS = ("risk_acknowledged", "automation_mode")
+AUTOMATION_KINDS = ("auto_dispatch_intent", "auto_dispatch_sent", "auto_report", "auto_review_intent",
+                    "auto_review_started", "auto_review_result", "auto_stopped")
 EVENT_KINDS = ("plan_submitted", "plan_approved", "implementation_started", "executor_report",
-               "review_result", "merge_done", "push_done", "note", "roles_changed", "risk_acknowledged")
-CLIENT_KINDS = tuple(k for k in EVENT_KINDS if k not in ("roles_changed", "risk_acknowledged"))
+               "review_result", "merge_done", "push_done", "note", "roles_changed", "risk_acknowledged",
+               ) + CONSOLE_KINDS[1:] + AUTOMATION_KINDS
+CLIENT_KINDS = tuple(k for k in EVENT_KINDS
+                     if k not in ("roles_changed",) + CONSOLE_KINDS + AUTOMATION_KINDS)
 KIND_LABELS = {"plan_submitted": "提出計畫", "plan_approved": "計畫核准", "implementation_started": "開始實作",
                "executor_report": "執行者回報", "review_result": "審查結果", "merge_done": "已合併",
                "push_done": "已 push", "note": "備註", "roles_changed": "角色變更",
-               "risk_acknowledged": "接受殘餘風險"}
+               "risk_acknowledged": "接受殘餘風險", "automation_mode": "自動執行模式",
+               "auto_dispatch_intent": "自動派工（意圖）", "auto_dispatch_sent": "自動派工（已送出）",
+               "auto_report": "執行者回報（自動核對）", "auto_review_intent": "自動審查（意圖）",
+               "auto_review_started": "自動審查（已啟動）", "auto_review_result": "審查結果（自動讀取）",
+               "auto_stopped": "自動執行停止"}
 # Fields a client may send per kind (besides kind and note).
 KIND_FIELDS = {"executor_report": frozenset({"commit"}),
                "review_result": frozenset({"reviewer", "verdict", "commit"})}
@@ -72,6 +83,7 @@ PHASES = {
 ATTENTION_PHASES = frozenset({"awaiting_approval", "awaiting_merge", "awaiting_push", "review_unverified"})
 MANUAL_LABEL = "手動記錄（未驗證）"
 CONSOLE_LABEL = "主控台依預覽記錄"
+AUTOMATION_LABEL = "自動（runner）"
 
 MAX_FLOWS = 200
 MAX_EVENTS = 500
@@ -93,8 +105,26 @@ _STORED_KIND_KEYS = {
     "executor_report": frozenset({"commit"}),
     "review_result": frozenset({"reviewer", "verdict", "commit", "executor_family"}),
     "roles_changed": frozenset({"roles"}),
-    "risk_acknowledged": acceptance.FIELDS,
+    "risk_acknowledged": acceptance.FIELDS,          # or with the four automation fields (see _event_problem)
+    "automation_mode": frozenset({"mode", "approval_seq"}),
+    "auto_dispatch_intent": frozenset({"dispatch_id", "text_sha256", "length"}),
+    "auto_dispatch_sent": frozenset({"dispatch_id"}),
+    "auto_report": frozenset({"dispatch_id", "commit", "status", "tests_result"}),
+    "auto_review_intent": frozenset({"round", "commit"}),
+    "auto_review_started": frozenset({"round", "job_id"}),
+    "auto_review_result": frozenset({"round", "job_id", "commit", "verdict", "valid"}),
+    "auto_stopped": frozenset({"reason_code", "detail"}),
 }
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}\Z")
+_JOB_RE = re.compile(r"^r-[0-9a-f]{16}\Z")
+_REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}\Z")
+REPORT_STATUSES = ("done", "blocked", "needs_input")
+TESTS_RESULTS = ("passed", "failed", "not_run")
+AUTO_VERDICTS = ("PASS", "NEEDS WORK", "BLOCKED")
+MAX_DISPATCH_BYTES = 64 << 10
+MAX_DETAIL = 300
+ROUND_MAX = 1000
 
 
 def _epoch(value) -> float | None:
@@ -156,7 +186,10 @@ def _event_problem(event, index: int, prev_at: float | None) -> str | None:
     kind = event.get("kind")
     if kind not in EVENT_KINDS:
         return "事件種類不合法"
-    if set(event) != _BASE_EVENT_KEYS | _STORED_KIND_KEYS.get(kind, frozenset()):
+    keys = _BASE_EVENT_KEYS | _STORED_KIND_KEYS.get(kind, frozenset())
+    if kind == "risk_acknowledged" and set(event) == keys | acceptance.AUTO_FIELDS:
+        keys = keys | acceptance.AUTO_FIELDS          # the acceptance that also approved a plan (S3)
+    if set(event) != keys:
         return "事件欄位不符"
     if not _is_int(event.get("seq"), index + 1, index + 1):
         return "事件序號不連續"
@@ -167,7 +200,8 @@ def _event_problem(event, index: int, prev_at: float | None) -> str | None:
         return "事件時間倒退"
     if event.get("source") not in SOURCES:
         return "事件來源不合法"
-    if (event["source"] == "console") != (kind == "risk_acknowledged"):
+    expected = "console" if kind in CONSOLE_KINDS else ("automation" if kind in AUTOMATION_KINDS else "manual")
+    if event["source"] != expected:
         return "事件來源與種類不符"
     if not _short_text(event.get("note"), MAX_NOTE):
         return "備註不合法"
@@ -190,6 +224,50 @@ def _event_problem(event, index: int, prev_at: float | None) -> str | None:
         problem = acceptance.record_problem(acceptance.acceptance_fields(event))
         if problem:
             return f"風險接受紀錄不合法（{problem}）"
+    if kind == "automation_mode" or kind in AUTOMATION_KINDS:
+        problem = _automation_problem(event, index)
+        if problem:
+            return f"自動執行紀錄不合法（{problem}）"
+    return None
+
+
+def _automation_problem(event: dict, index: int) -> str | None:
+    """The fixed fields of the console's automation_mode and the runner's
+    intent / result / stop events (S3 design 2, 7)."""
+    kind = event["kind"]
+    if kind == "automation_mode":
+        if event.get("mode") not in ("auto", "manual"):
+            return "mode 不合法"
+        seq = event.get("approval_seq")
+        if event["mode"] == "auto":
+            if not (_is_int(seq, 1, index) ):
+                return "approval_seq 不合法"        # the acceptance event that approved it comes before
+        elif seq is not None:
+            return "切回手動不帶 approval_seq"
+        return None
+    if "dispatch_id" in event and not (isinstance(event["dispatch_id"], str) and _UUID_RE.match(event["dispatch_id"])):
+        return "dispatch_id 不合法"
+    if "text_sha256" in event and not (isinstance(event["text_sha256"], str) and _SHA256_RE.match(event["text_sha256"])):
+        return "text_sha256 不合法"
+    if "length" in event and not _is_int(event["length"], 1, MAX_DISPATCH_BYTES):
+        return "length 不合法"
+    if "commit" in event and not (isinstance(event["commit"], str) and COMMIT_RE.match(event["commit"])):
+        return "commit 不合法"
+    if "round" in event and not _is_int(event["round"], 1, ROUND_MAX):
+        return "round 不合法"
+    if "job_id" in event and not (isinstance(event["job_id"], str) and _JOB_RE.match(event["job_id"])):
+        return "job_id 不合法"
+    if kind == "auto_report":
+        if event["status"] not in REPORT_STATUSES or event["tests_result"] not in TESTS_RESULTS:
+            return "回報的 status 或 tests_result 不合法"
+    if kind == "auto_review_result":
+        if event["verdict"] not in AUTO_VERDICTS or not isinstance(event["valid"], bool):
+            return "審查結果不合法"
+    if kind == "auto_stopped":
+        if not (isinstance(event["reason_code"], str) and _REASON_RE.match(event["reason_code"])):
+            return "reason_code 不合法"
+        if not _short_text(event["detail"], MAX_DETAIL):
+            return "detail 不合法"
     return None
 
 
@@ -403,6 +481,30 @@ def append_risk_acknowledged(flow_id, fields) -> dict:
                                "kind": "risk_acknowledged", "source": "console", "note": "", **fields})
         store.save(flows)
         return flow
+
+
+def append_automation_event(flow_id, kind: str, fields: dict) -> dict:
+    """One automation event (S3 design 2, 7): the console's ``automation_mode``
+    or the runner's intent / result / stop kinds. The source follows the
+    kind; the fields are exactly the stored ones and validated as on load.
+    ValueError on anything else."""
+    if kind != "automation_mode" and kind not in AUTOMATION_KINDS:
+        raise ValueError("不是自動執行的事件種類")
+    if not isinstance(fields, dict) or set(fields) != _STORED_KIND_KEYS[kind]:
+        raise ValueError("自動執行事件的欄位不符")
+    with store.locked():
+        flows = store.load()
+        flow = _get(flows, flow_id)
+        if len(flow["events"]) >= MAX_EVENTS:
+            raise ValueError(f"這個流程的事件已達上限 {MAX_EVENTS} 筆")
+        event = {"seq": len(flow["events"]) + 1, "at": _now_after(flow["events"]), "kind": kind,
+                 "source": "console" if kind in CONSOLE_KINDS else "automation", "note": "", **fields}
+        problem = _event_problem(event, len(flow["events"]), None)
+        if problem:
+            raise ValueError(problem)
+        flow["events"].append(event)
+        store.save(flows)
+        return event
 
 
 def set_roles(flow_id, body) -> dict:
@@ -625,7 +727,8 @@ def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str]
         "latest_review": next((r for rnd in reversed(derived["rounds"]) for r in reversed(rnd["reviews"])), None),
         "executor_live": executor_live(roles["executor"].get("session_id"), live, now),
         "events": [{**public_event(e), "label": KIND_LABELS[e["kind"]],
-                    "source_label": CONSOLE_LABEL if e["source"] == "console" else MANUAL_LABEL}
+                    "source_label": {"console": CONSOLE_LABEL, "automation": AUTOMATION_LABEL}.get(
+                        e["source"], MANUAL_LABEL)}
                    for e in flow["events"]],
     }
 

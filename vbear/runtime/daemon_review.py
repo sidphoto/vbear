@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 import selectors
 import signal
@@ -70,12 +71,21 @@ class ReviewOps:
         if self._shutdown_requested:
             return _err(rid, "limit", "背景程序正在關閉，不接受新的審查")
         pipeline, round_, commit = req.get("pipeline"), req.get("round"), req.get("commit")
+        approval = req.get("approval")
         if not (isinstance(pipeline, str) and review_store.FLOW_RE.match(pipeline)):
             return _err(rid, "bad_request", "流程 id 格式不符")
+        if approval is not None and not (
+                isinstance(approval, dict) and set(approval) == {"kind", "id"}
+                and approval["kind"] in ("preview", "automation")
+                and isinstance(approval["id"], str) and re.match(r"^[A-Za-z0-9_-]{1,128}\Z", approval["id"])):
+            return _err(rid, "bad_request", "approval 格式不符")
         if not (isinstance(round_, int) and not isinstance(round_, bool) and 1 <= round_ <= review_store.ROUND_MAX):
             return _err(rid, "bad_request", f"輪次必須是 1 到 {review_store.ROUND_MAX} 的整數")
         if not (isinstance(commit, str) and review_store.COMMIT_RE.match(commit)):
             return _err(rid, "bad_request", "commit 必須是 40 或 64 碼小寫十六進位")
+        refused = self._mode_gate(rid, pipeline, approval, required=False)     # S3 design 2: the mode decides
+        if refused:
+            return refused
         try:
             if pipeline_store.is_held(self.base, pipeline):           # first of all: a hold refuses a resend too
                 raise _Refused("held", "這個流程已停止")

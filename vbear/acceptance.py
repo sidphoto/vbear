@@ -44,6 +44,15 @@ DEFAULT_LIMITS = {k: v[0] for k, v in LIMITS.items()}
 FIELDS = frozenset({"text_version", "codex_version", "model", "executor_claude_version", "executor_model",
                     "executor_login_fingerprint", "login_fingerprint", "login_key_id", "limits"})
 
+# Phase 3 (S3 design 9, v11.1 G1): the acceptance that also approves the plan and turns automation on. Four more
+# fields, all there or none. The first version of the automation text is 2026-10-11.1 (it differs from v11's draft
+# because ".git is writable" is part of it, v11.1 G3).
+AUTO_RISK_TEXT_VERSION = "2026-10-11.1"
+AUTO_SCOPE = ["dispatch", "review", "forward_review_opinion"]       # dispatch, start reviews, forward review comments
+AUTO_FIELDS = frozenset({"auto_text_version", "automation_scope", "plan_sha256", "plan_bytes"})
+PLAN_MAX_BYTES = 32 << 10                                           # plan.txt
+AUTO_APPROVAL_RE = re.compile(r"^auto-([1-9][0-9]{0,8})\Z")
+
 _VERSION = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}\Z")
 _TEXT_VERSION = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]{1,4}\Z")
 _HMAC = re.compile(r"^[0-9a-f]{64}\Z")
@@ -85,7 +94,8 @@ def record_problem(fields) -> str | None:
     is a well-formed acceptance."""
     if not isinstance(fields, dict):
         return "不是物件"
-    if set(fields) != FIELDS:
+    keys = set(fields)
+    if keys != FIELDS and keys != FIELDS | AUTO_FIELDS:       # the auto fields are all there or all absent
         return "欄位不符"
     checks = (
         ("text_version", _TEXT_VERSION), ("codex_version", _VERSION), ("model", _OPENAI_MODEL),
@@ -96,11 +106,49 @@ def record_problem(fields) -> str | None:
         value = fields.get(name)
         if not (isinstance(value, str) and pattern.match(value)):
             return f"{name} 格式不符"
-    return limits_problem(fields["limits"])
+    problem = limits_problem(fields["limits"])
+    if problem:
+        return problem
+    if AUTO_FIELDS <= keys:
+        return auto_problem(fields)
+    return None
+
+
+def auto_problem(fields: dict) -> str | None:
+    """The four automation fields: the text version is a well-formed version
+    string (whether it is the current one is is_auto_valid_now's question),
+    the scope is exactly the fixed list, the plan hash is sha256 hex and its
+    size is 1..PLAN_MAX_BYTES."""
+    if not (isinstance(fields.get("auto_text_version"), str) and _TEXT_VERSION.match(fields["auto_text_version"])):
+        return "auto_text_version 格式不符"
+    if fields.get("automation_scope") != AUTO_SCOPE:
+        return "automation_scope 不是固定值"
+    if not (isinstance(fields.get("plan_sha256"), str) and _HMAC.match(fields["plan_sha256"])):
+        return "plan_sha256 格式不符"
+    if not _int_in(fields.get("plan_bytes"), 1, PLAN_MAX_BYTES):
+        return f"plan_bytes 必須是 1–{PLAN_MAX_BYTES}"
+    return None
 
 
 def acceptance_fields(event: dict) -> dict:
-    return {k: event.get(k) for k in FIELDS}
+    """The event's acceptance fields: the nine, and the automation four when
+    the event carries any of them."""
+    names = FIELDS | (AUTO_FIELDS if any(k in event for k in AUTO_FIELDS) else frozenset())
+    return {k: event.get(k) for k in names}
+
+
+def is_auto_event(event) -> bool:
+    return isinstance(event, dict) and any(k in event for k in AUTO_FIELDS)
+
+
+def approval_id(event: dict) -> str:
+    """The approval id the automation uses for this acceptance event."""
+    return f"auto-{event['seq']}"
+
+
+def approval_seq(approval: str) -> int | None:
+    m = AUTO_APPROVAL_RE.match(approval) if isinstance(approval, str) else None
+    return int(m.group(1)) if m else None
 
 
 def is_valid_now(event, key_id: str | None) -> bool:
@@ -111,6 +159,14 @@ def is_valid_now(event, key_id: str | None) -> bool:
     fields = acceptance_fields(event)
     return (record_problem(fields) is None and fields["text_version"] == RISK_TEXT_VERSION
             and isinstance(key_id, str) and fields["login_key_id"] == key_id)
+
+
+def is_auto_valid_now(event, key_id: str | None) -> bool:
+    """An acceptance that is valid now and carries the current automation
+    text: all four fields, the text version equal to AUTO_RISK_TEXT_VERSION."""
+    return (is_valid_now(event, key_id) and AUTO_FIELDS <= set(event)
+            and event.get("auto_text_version") == AUTO_RISK_TEXT_VERSION
+            and auto_problem(event) is None)
 
 
 def latest_valid(flow: dict, key_id: str | None) -> dict | None:

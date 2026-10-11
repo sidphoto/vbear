@@ -29,6 +29,9 @@ from . import stream_protocol as sp
 PIPELINES = "pipelines"
 DISPATCHES = "dispatches"
 HOLDS = "holds"
+MODES = "modes"                            # <state>/modes/<flow-id>: a flow in automatic mode (S3 design 2)
+MODE_FILE_MAX = 4096
+AUTO_APPROVAL_RE = re.compile(r"^auto-[1-9][0-9]{0,8}\Z")
 DELETING = "deleting"                      # <state>/deleting/<flow-id>/: a flow's data being deleted (flow_data)
 STARTED = "started.json"
 RELEASED = "released.json"                 # v29.8: the flow's last pipeline_release
@@ -674,6 +677,151 @@ def hold(base, pipeline_id: str, reason: str) -> None:
         _fsync_dir(holds)
     finally:
         os.close(holds)
+        os.close(state)
+
+
+# ---- the flow's mode: manual (no file) or auto (S3 design 2) ---------------------------------------------------
+
+def _mode_problem_info(problem: str) -> dict:
+    """A mode record that is there but cannot be trusted counts as auto with no
+    approval it could match (so nothing is accepted) and, at daemon start, as a
+    reason to stop the flow, until a person has looked."""
+    return {"mode": "auto", "approval_id": None, "at": None, "problem": problem}
+
+
+def mode_info(base, pipeline_id: str) -> dict:
+    """{"mode": "manual"|"auto", "approval_id": str|None, "at": float|None,
+    "problem": str|None}. No ``modes/`` or no file for the flow: manual. A
+    file that is not ours, not a plain file, not exactly the record, or does
+    not parse: auto with ``problem`` (design 2: "格式不符就當成 auto 加上停止").
+    Read-only."""
+    if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
+        return _mode_problem_info("流程 id 格式不符")
+    try:
+        state = os.open(str(base), _DIR)
+    except OSError as exc:
+        return _mode_problem_info(f"狀態目錄無法開啟（{exc.strerror}）")
+    try:
+        try:
+            modes = _open_dir(MODES, state, create=False)
+        except FileNotFoundError:
+            return {"mode": "manual", "approval_id": None, "at": None, "problem": None}
+        except (OSError, StoreRefused) as exc:
+            return _mode_problem_info(f"modes/ 無法開啟（{type(exc).__name__}）")
+        try:
+            try:
+                fd, _ = strictjson.open_owned(pipeline_id, dir_fd=modes, max_bytes=MODE_FILE_MAX)
+            except strictjson.ReadRefused as exc:
+                if exc.missing:
+                    return {"mode": "manual", "approval_id": None, "at": None, "problem": None}
+                return _mode_problem_info(f"模式紀錄無法讀取（{exc}）")
+            try:
+                raw = strictjson.read_fd(fd, MODE_FILE_MAX)
+            except (strictjson.ReadRefused, OSError) as exc:
+                return _mode_problem_info(f"模式紀錄無法讀取（{type(exc).__name__}）")
+            finally:
+                os.close(fd)
+            parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+            d = parsed.value if parsed.ok else None
+            at = finite_real(d.get("at")) if isinstance(d, dict) and not isinstance(d.get("at"), bool) else None
+            if not (isinstance(d, dict) and set(d) == {"v", "mode", "approval_id", "at"} and d["v"] == 1
+                    and not isinstance(d["v"], bool) and d["mode"] == "auto" and isinstance(d["approval_id"], str)
+                    and AUTO_APPROVAL_RE.match(d["approval_id"]) and at is not None and EARLIEST <= at <= time.time() + 86400):
+                return _mode_problem_info("模式紀錄的內容不符")
+            return {"mode": "auto", "approval_id": d["approval_id"], "at": at, "problem": None}
+        finally:
+            os.close(modes)
+    finally:
+        os.close(state)
+
+
+def mode_flows(base) -> list[str]:
+    """Every flow id that has a mode record (so, in automatic mode, readable or
+    not), for the daemon's start. StoreRefused when ``modes/`` cannot be
+    listed: the caller cannot then say which flows are automatic."""
+    try:
+        state = os.open(str(base), _DIR)
+    except OSError as exc:
+        raise StoreRefused(f"狀態目錄無法開啟（{exc.strerror}）") from exc
+    try:
+        try:
+            modes = _open_dir(MODES, state, create=False)
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise StoreRefused(f"modes/ 無法開啟（{exc.strerror}）") from exc
+        try:
+            names = os.listdir(modes)
+        except OSError as exc:
+            raise StoreRefused(f"modes/ 無法列出（{exc.strerror}）") from exc
+        finally:
+            os.close(modes)
+        bad = [n for n in names if not FLOW_RE.match(n) and not n.startswith(".")]
+        if bad:
+            raise StoreRefused(f"modes/ 裡有不認得的項目 {bad[0][:48]!r}")
+        return sorted(n for n in names if FLOW_RE.match(n))
+    finally:
+        os.close(state)
+
+
+def mode_set(base, pipeline_id: str, mode: str, approval_id: str | None = None) -> None:
+    """Write the flow's mode. "auto" needs the approval id it was approved
+    with (atomic: temp file, fsync, rename, directory sync). "manual" removes
+    the record (no file is manual)."""
+    if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
+        raise StoreRefused("流程 id 格式不符")
+    if mode == "manual":
+        mode_remove(base, pipeline_id)
+        return
+    if mode != "auto" or not (isinstance(approval_id, str) and AUTO_APPROVAL_RE.match(approval_id)):
+        raise StoreRefused("模式或核准 id 不合法")
+    state = os.open(str(base), _DIR)
+    try:
+        modes = _open_dir(MODES, state, create=True)
+        try:
+            tmp = f".{pipeline_id}.{os.getpid()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=modes)
+            try:
+                _write_all(fd, json.dumps({"v": 1, "mode": "auto", "approval_id": approval_id,
+                                           "at": time.time()}).encode())
+                os.fsync(fd)
+            except BaseException:
+                os.close(fd)
+                os.unlink(tmp, dir_fd=modes)
+                raise
+            os.close(fd)
+            os.replace(tmp, pipeline_id, src_dir_fd=modes, dst_dir_fd=modes)
+            _fsync_dir(modes)
+        finally:
+            os.close(modes)
+    finally:
+        os.close(state)
+
+
+def mode_remove(base, pipeline_id: str) -> bool:
+    """Back to manual (or at the end of a flow's deletion). True when a
+    record was removed."""
+    if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
+        raise StoreRefused("流程 id 格式不符")
+    try:
+        state = os.open(str(base), _DIR)
+    except OSError as exc:
+        raise StoreRefused(f"狀態目錄無法開啟（{exc.strerror}）") from exc
+    try:
+        try:
+            modes = _open_dir(MODES, state, create=False)
+        except FileNotFoundError:
+            return False
+        try:
+            try:
+                os.unlink(pipeline_id, dir_fd=modes)
+            except FileNotFoundError:
+                return False
+            _fsync_dir(modes)
+            return True
+        finally:
+            os.close(modes)
+    finally:
         os.close(state)
 
 

@@ -54,6 +54,7 @@ SESSIONS = "sessions"
 REVIEWS = "reviews"
 PIPELINES = "pipelines"
 HOLDS = "holds"
+AUTOMATION = "automation"         # <state>/automation/<flow-id>/plan.txt (S3 v11.1 G2), written by the console
 DELETING = pipeline_store.DELETING
 WALK_MAX_ENTRIES = 200_000        # one flow: far above the design's worst case (about 730 MiB of a few hundred files)
 WALK_MAX_DEPTH = 12
@@ -80,6 +81,9 @@ class Plan:
     pipeline_dir: str | None = None                         # the task directory when it is proven this flow's
     pipeline_bytes: int = 0
     pipeline_inode: int | None = None
+    automation_inode: int | None = None                     # automation/<flow>/ (plan.txt), when there is one
+    automation_bytes: int = 0
+    auto: bool = False                                      # the flow is in automatic mode (S3)
     held: bool = False                                      # a stop marker exists (any reason, or unknown)
     deleting: bool = False                                  # a deletion of this flow was begun and not finished
     tomb_bytes: int = 0
@@ -219,6 +223,8 @@ def plan(base, pipeline_id: str, task_id: str, *, flows=None) -> Plan:
             for fd in (sroot, rroot, proot):
                 if fd is not None:
                     os.close(fd)
+        _automation_side(state, pipeline_id, root_dev, out)
+        out.auto = pipeline_store.mode_info(base, pipeline_id)["mode"] == "auto"
         if out.deleting:
             droot = _root_fd(state, DELETING, root_dev)
             if droot is not None:
@@ -234,8 +240,38 @@ def plan(base, pipeline_id: str, task_id: str, *, flows=None) -> Plan:
     finally:
         os.close(state)
     out.total_bytes = (sum(s["bytes"] for s in out.sessions) + sum(r["bytes"] for r in out.reviews)
-                       + out.pipeline_bytes + out.tomb_bytes)
+                       + out.pipeline_bytes + out.automation_bytes + out.tomb_bytes)
     return out
+
+
+def _automation_side(state: int, pipeline_id: str, root_dev: int, out: Plan) -> None:
+    """automation/<flow>/ holds the approved plan text (plan.txt) and nothing
+    else; it is named by the flow id the console wrote it for. Anything else
+    in it refuses: it is not something this module wrote."""
+    aroot = _root_fd(state, AUTOMATION, root_dev)
+    if aroot is None:
+        return
+    try:
+        try:
+            fd = _open_pinned(aroot, pipeline_id, root_dev, private=True)
+        except _Missing:
+            return
+        try:
+            st = os.fstat(fd)
+            names = os.listdir(fd)
+            total = 0
+            for name in names:
+                if name != "plan.txt":
+                    raise FlowDataRefused(f"automation/{pipeline_id} 裡有不認得的項目 {name[:48]!r}，不處理")
+                fst = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if not stat.S_ISREG(fst.st_mode):
+                    raise FlowDataRefused("plan.txt 不是一般檔案，不處理")
+                total += fst.st_size
+            out.automation_inode, out.automation_bytes = st.st_ino, total
+        finally:
+            os.close(fd)
+    finally:
+        os.close(aroot)
 
 
 def _proven_inode(sroot: int, name: str, root_dev: int, m: dict) -> int:
@@ -395,6 +431,8 @@ def blockers(pl: Plan, *, live_launches=(), live_jobs=(), held_leaders=()) -> li
         elif r["state"] != "cleaned":
             why.append(f"審查 {r['job_id']} 尚未清理完成（{r['state']}）")
     if not pl.deleting:                       # a deletion already begun is finished, not re-decided
+        if pl.auto:
+            why.append("流程在自動執行模式，請先停止流程並切回手動")
         if pl.held:
             why.append("流程已停止（含失敗後的停止），請先按「繼續」，或處理失敗後再刪除")
         if pl.failure_problem:
@@ -542,6 +580,11 @@ def _remove(base, pl: Plan, removed: dict) -> dict:
             for x in live:
                 if _move(src, x[idname], dst, x[idname], root_dev, x["inode"]):
                     removed[key].append(x[idname])
+        if pl.automation_inode is not None:
+            src = _root_fd(state, AUTOMATION, root_dev)
+            if src is not None:
+                open_fds.append(src)
+                _move(src, pl.pipeline_id, tomb, "automation", root_dev, pl.automation_inode)
         if pl.pipeline_dir:
             src = _root_fd(state, PIPELINES, root_dev)
             if src is not None:
@@ -555,6 +598,10 @@ def _remove(base, pl: Plan, removed: dict) -> dict:
         _fsync(deleting)
         if pl.held or pl.deleting:
             removed["hold"] = _remove_hold(state, pl.pipeline_id, root_dev)
+        try:                                                    # a mode record has no meaning once the flow is gone
+            pipeline_store.mode_remove(base, pl.pipeline_id)
+        except pipeline_store.StoreRefused:
+            pass
         try:                                                    # an empty deleting/ is not kept
             os.rmdir(DELETING, dir_fd=state)
         except OSError:

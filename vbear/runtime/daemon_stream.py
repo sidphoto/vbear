@@ -28,7 +28,7 @@ import subprocess
 import time
 import uuid
 
-from .. import admin_policy, executor_report, git_head
+from .. import acceptance, admin_policy, executor_report, git_head, login_identity
 from . import (agent_sessions, cli_versions, flow_data, pipeline_store, proctrack, quota, stream_flow,
                stream_journal, stream_protocol as sp, stream_session)
 
@@ -414,6 +414,9 @@ class StreamOps:
                 and approval["kind"] in ("preview", "automation")
                 and isinstance(approval["id"], str) and _APPROVAL_ID.match(approval["id"])):
             return _err(rid, "bad_request", "approval 格式不符")
+        refused = self._mode_gate(rid, s.pipeline_id, approval)
+        if refused:
+            return refused
         try:
             if sp.sanitize(text) != text:
                 return _err(rid, "bad_request", "文字必須是清洗後、與預覽相同的版本")
@@ -655,6 +658,98 @@ class StreamOps:
         # affected (design 7).
         self._review_hold(req["pipeline"])
         return _ok(rid, {"pipeline": req["pipeline"], "held": True})
+
+    # ---- the flow's mode (S3 design 2) ------------------------------------------------------------------
+
+    def _auto_acceptance_problem(self, pipeline: str, approval_id: str) -> str | None:
+        """None when ``approval_id`` is the acceptance event of this flow that
+        approved the plan and turned automation on, and it is still valid now
+        and still the newest valid acceptance (v11.1 G1, G4): the event exists,
+        its automation fields equal the program's constants, and no later
+        acceptance replaced it."""
+        from .. import flows
+        try:
+            flow = flows.read_only_snapshot(self.base).get(pipeline)
+        except Exception as exc:
+            return f"無法讀取流程（{exc}）"
+        if flow is None:
+            return "找不到這個流程"
+        try:
+            key = login_identity.load_login_key(self.base)
+        except login_identity.KeyUnavailable as exc:
+            return f"沒有有效的風險接受（{exc}）"
+        latest = acceptance.latest_valid(flow, key.key_id)
+        seq = acceptance.approval_seq(approval_id)
+        if latest is None or seq is None:
+            return "這個流程沒有有效的風險接受"
+        if latest.get("seq") != seq:
+            return "自動執行核准的那一筆接受已被更新的接受取代，需要重新核准自動執行"
+        if not acceptance.is_auto_valid_now(latest, key.key_id):
+            return "自動執行核准的接受與目前的自動執行風險文字不符，需要重新核准"
+        return None
+
+    def _mode_gate(self, rid: str, pipeline: str, approval, *, required: bool = True) -> dict | None:
+        """The mode decides which approval a dispatch or review may carry
+        (S3 design 2): in "manual" never an automation one; in "auto" only the
+        automation approval the mode was switched on with. ``required`` False:
+        a manual review carries no approval at all (it has no preview)."""
+        info = pipeline_store.mode_info(self.base, pipeline)
+        kind = approval.get("kind") if isinstance(approval, dict) else None
+        if info["mode"] == "manual":
+            if kind == "automation":
+                return _err(rid, "refused", "這個流程是手動模式，不接受自動執行的核准")
+            if approval is None and required:
+                return _err(rid, "bad_request", "approval 格式不符")
+            return None
+        if info["problem"]:
+            return _err(rid, "refused", f"自動執行的模式紀錄不可信，流程需要人工處理（{info['problem']}）")
+        if kind != "automation" or approval.get("id") != info["approval_id"]:
+            return _err(rid, "refused", "這個流程在自動執行模式，手動派工與手動審查一律拒絕"
+                                         "（要先停止流程並切回手動）")
+        why = self._auto_acceptance_problem(pipeline, info["approval_id"])
+        if why:
+            return _err(rid, "refused", why)
+        return None
+
+    def _op_pipeline_mode_set(self, rid: str, req: dict) -> dict:
+        """manual -> auto only with the approval of the acceptance event that
+        approved the plan, and only on a flow that is not stopped and has no
+        unreleased failure; auto -> manual only while the flow is stopped."""
+        pipeline, mode, approval = req.get("pipeline"), req.get("mode"), req.get("approval")
+        if not (isinstance(pipeline, str) and pipeline_store.FLOW_RE.match(pipeline)):
+            return _err(rid, "bad_request", "流程 id 格式不符")
+        if mode not in ("auto", "manual"):
+            return _err(rid, "bad_request", "mode 必須是 auto 或 manual")
+        if mode == "manual":
+            if approval is not None:
+                return _err(rid, "bad_request", "切回手動不帶 approval")
+            if not pipeline_store.is_held(self.base, pipeline):
+                return _err(rid, "refused", "切回手動只能在流程已停止時進行")
+            try:
+                pipeline_store.mode_set(self.base, pipeline, "manual")
+            except (OSError, pipeline_store.StoreRefused) as exc:
+                return _err(rid, "refused", f"無法切回手動：{exc}")
+            return _ok(rid, {"pipeline": pipeline, "mode": "manual"})
+        if not (isinstance(approval, dict) and set(approval) == {"kind", "id"} and approval["kind"] == "automation"
+                and isinstance(approval["id"], str) and acceptance.approval_seq(approval["id"]) is not None):
+            return _err(rid, "bad_request", "approval 必須是 {kind: automation, id: auto-<seq>}")
+        if pipeline_store.is_held(self.base, pipeline):
+            return _err(rid, "refused", "流程已停止，要先按「繼續」才能開啟自動執行")
+        why = self._auto_acceptance_problem(pipeline, approval["id"])
+        if why:
+            return _err(rid, "refused", why)
+        try:
+            ctx = stream_flow.load(self.base, pipeline)
+            failure = stream_flow.unresolved_failure(ctx)
+        except stream_flow.FlowRefused as exc:
+            return _err(rid, "refused", f"{exc.code}: {exc}")
+        if failure:
+            return _err(rid, "refused", f"還有尚未解除的失敗（{failure}），要先按「繼續」")
+        try:
+            pipeline_store.mode_set(self.base, pipeline, "auto", approval["id"])
+        except (OSError, pipeline_store.StoreRefused) as exc:
+            return _err(rid, "refused", f"無法開啟自動執行：{exc}")
+        return _ok(rid, {"pipeline": pipeline, "mode": "auto", "approval_id": approval["id"]})
 
     def _op_flow_delete(self, rid: str, req: dict) -> dict:
         """Design 9: "data is kept until the user deletes the flow; only when

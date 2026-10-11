@@ -79,7 +79,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
-from . import agent_sessions, daemon_review, daemon_stream, osc_title, proctrack, quota, stream_flow
+from . import agent_sessions, daemon_review, daemon_stream, osc_title, pipeline_store, proctrack, quota, stream_flow
 
 PROTOCOL_VERSION = 1
 DAEMON_VERSION = "native-r2-s4"  # s4: stream executor sessions (claude-stream)
@@ -142,11 +142,13 @@ RPC_OPS: dict[str, frozenset] = {
     "pipeline_hold": frozenset({"pipeline", "reason"}),
     "pipeline_release": frozenset({"pipeline"}),
     # Codex review jobs (design 5; daemon_review)
-    "review_start": frozenset({"pipeline", "round", "commit"}),
+    "review_start": frozenset({"pipeline", "round", "commit", "approval"}),
     "review_status": frozenset({"job_id"}),
     "review_cancel": frozenset({"job_id"}),
     # the user's deletion of a flow's data (design 9; flow_data)
     "flow_delete": frozenset({"pipeline"}),
+    # a flow's mode, manual or auto (S3 design 2)
+    "pipeline_mode_set": frozenset({"pipeline", "mode", "approval"}),
 }
 _ATTACHED = object()  # _dispatch result: the connection became an attachment
 
@@ -572,6 +574,14 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             self.close()
             raise
         self._log(f"listening on {self.sock_path} (pid {os.getpid()})")
+        try:
+            # S3 design 3: every automatic flow is persistently stopped before any RPC is answered (requests are
+            # not read until serve_forever), so a runner that reconnects meets a stopped flow, never a flow it
+            # could continue by replaying its recovery table. If that cannot be done the daemon does not run.
+            self._hold_auto_flows()
+        except BaseException:
+            self.close()
+            raise
         try:  # launches left behind by a previous daemon; never fatal
             for item in agent_sessions.recover(self.base):
                 self._log(f"managed launch {item['launch_id']}: " +
@@ -587,6 +597,20 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             self._log(f"flow start record recovery failed: {exc}")
         self._recover_reviews()                   # jobs of a previous daemon (design 5.3); holds the flows it fails
         self._rebuild_ledger()
+
+    def _hold_auto_flows(self) -> None:
+        try:
+            names = pipeline_store.mode_flows(self.base)
+        except pipeline_store.StoreRefused as exc:
+            raise RuntimedError(f"無法判斷哪些流程是自動執行，不啟動：{exc}") from exc
+        for flow_id in names:
+            info = pipeline_store.mode_info(self.base, flow_id)
+            reason = "daemon 重啟" + (f"；模式紀錄不可信（{info['problem']}）" if info["problem"] else "")
+            try:
+                pipeline_store.hold(self.base, flow_id, reason)
+            except (OSError, ValueError, pipeline_store.StoreRefused) as exc:
+                raise RuntimedError(f"無法把自動執行的流程 {flow_id} 標成停止，不啟動：{exc}") from exc
+            self._log(f"flow {flow_id}: automatic mode, stopped by the daemon restart")
 
     def wake(self) -> None:
         if self._wake_w >= 0:
@@ -1133,7 +1157,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                       "stream_close": self._op_stream_close, "pipeline_hold": self._op_pipeline_hold,
                       "pipeline_release": self._op_pipeline_release, "review_start": self._op_review_start,
                       "review_status": self._op_review_status, "review_cancel": self._op_review_cancel,
-                      "flow_delete": self._op_flow_delete}
+                      "flow_delete": self._op_flow_delete, "pipeline_mode_set": self._op_pipeline_mode_set}
         if op in stream_ops:
             try:
                 return stream_ops[op](rid, req)
