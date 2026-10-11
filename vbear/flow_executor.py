@@ -151,8 +151,15 @@ class FlowExecutor:
                 raise ApiError(500, "prepare", f"無法準備執行者（{exc.strerror or type(exc).__name__}）") from exc
             try:
                 result = self._call("open_stream", timeout=60.0, launch_id=m["launch_id"])
-            except ApiError:
-                agent_sessions.discard_prepared(base, m["launch_id"])     # prepared, never opened: take it back
+            except BaseException as exc:
+                # Prepared, never opened: take it back, whatever went wrong (Gemini S2c-2 review: not only the
+                # errors this module raises itself). A launch the daemon did open is not "prepared" any more
+                # and discard_prepared leaves it alone.
+                agent_sessions.discard_prepared(base, m["launch_id"])
+                if isinstance(exc, ApiError):
+                    raise
+                if isinstance(exc, Exception):
+                    raise ApiError(500, "internal", f"啟動執行者時發生未預期的錯誤（{type(exc).__name__}）") from exc
                 raise
             return {"launch_id": m["launch_id"], "session": result}
 
@@ -256,8 +263,11 @@ class FlowExecutor:
             fields = {"launch_id": d["launch_id"], "pipeline": flow_id, "dispatch_id": d["dispatch_id"]}
             self._call("dispatch_prepare", timeout=30.0, text=d["text"],
                        approval={"kind": "preview", "id": rec["preview_id"]}, **fields)
-            result = self._send(fields)
-            return {"dispatch_id": d["dispatch_id"], "launch_id": d["launch_id"], "result": result}
+        # The critical section ends here: the dispatch is prepared, and the daemon accepts at most one prepared,
+        # unsent dispatch per session, so nothing can slip in before this one is sent. Waiting between attempts
+        # to reach the daemon must not hold up every other action on the flow (Gemini S2c-2 review).
+        result = self._send(fields)
+        return {"dispatch_id": d["dispatch_id"], "launch_id": d["launch_id"], "result": result}
 
     def _send(self, fields: dict) -> dict:
         """stream_send is idempotent, so a lost answer is asked again; a

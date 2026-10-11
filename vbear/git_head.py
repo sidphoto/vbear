@@ -154,6 +154,46 @@ def _resolve(gitdir: Path, common: Path, ref: str) -> str | None:
     raise _Unreadable("符號 ref 層數過多")
 
 
+def read_ref(workdir: str, ref: str) -> dict:
+    """Where an arbitrary ref points, from the repository's files (design 8,
+    the read after a merge or a push): ``{"commit", "ref", "repo", "error"}``.
+    ``commit`` is None whenever it cannot be read, with ``error`` saying why
+    (a name that is not a ref, no such ref, an unreadable repository); it is
+    never guessed. A symbolic ref is followed as git does."""
+    out = {"commit": None, "ref": ref if isinstance(ref, str) else None, "repo": None, "error": None}
+    if not isinstance(ref, str) or not REF_RE.match(ref) or ".." in ref or "@{" in ref or ref.endswith((".lock", ".")):
+        out["error"] = "ref 名稱格式不符"
+        return out
+    if not isinstance(workdir, str) or not workdir or "\0" in workdir or not os.path.isabs(workdir):
+        out["error"] = "工作目錄必須是絕對路徑"
+        return out
+    start = Path(os.path.realpath(workdir))
+    if not start.is_dir():
+        out["error"] = "工作目錄不存在"
+        return out
+    try:
+        found = _find_repo(start)
+        if found is None:
+            out["error"] = "工作目錄不在 git 儲存庫內"
+            return out
+        root, entry = found
+        out["repo"] = str(root)
+        gitdir, common = _git_dirs(entry)
+        if _is_dir(common / "reftable"):
+            out["error"] = "此儲存庫使用 reftable 格式，無法讀取 ref"
+            return out
+        commit = _resolve(gitdir, common, ref)
+        if commit is None:
+            out["error"] = "這個本機 ref 不存在"
+        else:
+            out["commit"] = commit
+    except _Unreadable as exc:
+        out["error"] = str(exc)
+    except OSError as exc:
+        out["error"] = f"無法讀取儲存庫（{exc.strerror or exc}）"
+    return out
+
+
 def read_head(workdir: str) -> dict:
     """``{"commit", "ref", "repo", "error"}``. ``commit`` is None whenever it
     cannot be read, with ``error`` saying why; it is never guessed."""

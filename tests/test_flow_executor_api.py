@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import stream_fixtures as fx
-from tests.test_risk_acceptance import FakeHost
+from tests.console_fixtures import ConsoleMixin
 from tests.test_runtimed_stream import StreamCase
 from vbear import acceptance as acc
 from vbear import config as cfg
@@ -24,63 +24,8 @@ from vbear.runtime import agent_sessions as a
 from vbear.runtime import pipeline_store
 
 
-class ApiCase(StreamCase):
+class ApiCase(ConsoleMixin, StreamCase):
     """StreamCase's daemon, flow, acceptance and fake CLI, behind the console's HTTP surface."""
-
-    def setUp(self):
-        super().setUp()
-        from http.server import ThreadingHTTPServer
-        from vbear.server import Console, make_handler
-        tasks.save_task(self.tid, {"title": "t", "workdir": str(self.work)})
-        conf = json.loads(json.dumps(cfg.DEFAULT_CONFIG))
-        for src in conf["sources"]:
-            src["enabled"] = False
-        conf.update(project_roots=[], usage_enabled=False)
-        cfg.save(conf)
-        env = mock.patch.dict(os.environ, {"VBEAR_RUNTIME_AUTOSTART": "0"})
-        env.start()
-        self.addCleanup(env.stop)
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
-        self.port = self.httpd.server_address[1]
-        self.console = Console(self.port)
-        self.console.executor.managed_root = self.tmp
-        self.token = self.console.auth_token
-        self.httpd.RequestHandlerClass = make_handler(self.console)
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        self.addCleanup(self._stop_http)
-        self.host = FakeHost(self.tmp)
-        self.host.binary = str(self.binary)
-        self.host.claude_binary = lambda cwd=None: (self.host.binary, self.host.claude, "")
-        self.host.claude_json = lambda: self.home / ".claude.json"                # the account the acceptance bound
-        # a logged-in dedicated Codex home, and an acceptance that binds to it, so that the facts the
-        # screen compares (status) are the ones that were accepted
-        codex_home = self.base / "codex-home"
-        codex_home.mkdir(mode=0o700, exist_ok=True)
-        (codex_home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {"account_id": "acct-0001"}}))
-        os.chmod(codex_home / "auth.json", 0o600)
-        self.accept()
-        ra._facts_cache.clear()
-        p = mock.patch.object(ra, "DEFAULT_HOST", self.host)
-        p.start()
-        self.addCleanup(p.stop)
-
-    def _stop_http(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-
-    def call(self, path, method="GET", body=None, token=True):
-        h = {"X-VBear": "1", "Content-Type": "application/json"}
-        if token:
-            h["Authorization"] = f"Bearer {self.token}"
-        r = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method, headers=h,
-                                   data=json.dumps(body).encode() if body is not None else None)
-        try:
-            with urllib.request.urlopen(r, timeout=60) as resp:
-                return resp.status, json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            data = json.loads(e.read() or b"null")
-            e.close()
-            return e.code, data
 
     def api_start(self, mode="ok"):
         (self.work / "fake-mode").write_text(mode)
@@ -162,12 +107,37 @@ class StartTests(ApiCase):
         self.host.claude_binary = lambda cwd=None: (None, None, "找不到")
         refused("claude_version")
 
+    def test_any_exception_after_prepare_takes_the_prepared_launch_back(self):
+        # Gemini S2c-2 review: not only the errors the module raises itself
+        (self.work / "fake-mode").write_text("ok")
+        with mock.patch.object(self.console.executor, "_call", side_effect=RuntimeError("boom")):
+            st, r = self.call(f"/api/flows/{self.fid}/executor", "POST", {})
+        self.assertEqual((st, r["code"]), (500, "internal"))
+        self.assertIn("RuntimeError", r["error"])
+        self.assertFalse((self.base / "sessions").exists() and os.listdir(self.base / "sessions"))   # nothing left
+        st, r = self.call(f"/api/flows/{self.fid}/executor", "POST", {})                              # and it still works
+        self.assertEqual(st, 200, r)
+        self.pids.append(self.launched()["pid"])
+
     def test_no_valid_acceptance_no_executor(self):
         with mock.patch.object(acc, "RISK_TEXT_VERSION", "2099-01-01.1"):
             st, r = self.call(f"/api/flows/{self.fid}/executor", "POST", {})
         self.assertEqual((st, r["code"]), (409, "no_acceptance"))
         st, r = self.call(f"/api/flows/{self.fid}/executor", "POST", {"model": "claude-opus-5-5"})
         self.assertEqual((st, r["code"]), (400, "bad_request"))                    # the model is the accepted one
+
+    def test_a_body_that_is_not_an_object_is_never_read_as_no_fields(self):
+        for route in ("executor", "hold", "continue", "dispatch", "executor/close"):
+            for raw in (b"[1]", b"not json", b"7", b"{"):
+                r = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/flows/{self.fid}/{route}", method="POST",
+                                           headers={"X-VBear": "1", "Authorization": f"Bearer {self.token}",
+                                                    "Content-Type": "application/json"}, data=raw)
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    urllib.request.urlopen(r, timeout=20)
+                self.assertEqual((cm.exception.code, json.loads(cm.exception.read())["code"]), (400, "bad_body"))
+                cm.exception.close()
+        self.assertFalse((self.base / "sessions").exists() and os.listdir(self.base / "sessions"))   # nothing was prepared
+        self.assertFalse(self.executor()["hold"]["held"])                                              # and nothing stopped
 
     def test_the_status_of_an_unknown_flow_and_token_rules(self):
         self.assertEqual(self.call("/api/flows/flow-ffffffffffff/executor")[0], 404)
@@ -242,6 +212,65 @@ class DispatchTests(ApiCase):
         self.assertEqual((st, r["code"]), (409, "expired"))
         st, r = self.call("/api/flows/flow-ffffffffffff/dispatch", "POST", {"preview_id": self.preview(launch_id)[1]["preview_id"]})
         self.assertEqual(st, 404)
+
+    def test_a_lost_answer_to_stream_send_is_retried_outside_the_flow_lock(self):
+        launch_id = self.api_start()
+        pre = self.preview(launch_id)[1]
+        real = self.console.runtime._rpc
+        sends = []
+        held_during_send = []
+
+        def rpc(op, timeout=2.0, **fields):
+            if op == "stream_send":
+                sends.append(1)
+                held_during_send.append(self.console.executor._lock(self.fid).locked())
+                if len(sends) == 1:
+                    raise ConnectionRefusedError(61, "refused")             # the answer is lost
+            return real(op, timeout=timeout, **fields)
+        with mock.patch.object(self.console.runtime, "_rpc", rpc), \
+                mock.patch.object(self.console.runtime, "ensure_daemon", return_value=True):
+            st, r = self.approve(pre["preview_id"])
+        self.assertEqual(st, 200, r)
+        self.assertEqual(len(sends), 2)                                          # retried, and it was one dispatch
+        self.assertEqual(held_during_send, [False, False])                       # the flow's lock was not held
+        self.wait_turn(launch_id, pre["dispatch_id"])
+        self.assertEqual(self.executor()["accounting"]["dispatches"], 1)
+
+    def test_a_hold_or_a_close_between_the_prepare_and_the_send_stops_the_send(self):
+        # the flow lock is released after the prepare; the daemon still decides at stream_send
+        for what in ("hold", "close"):
+            with self.subTest(what=what):
+                launch_id = self.api_start()
+                pre = self.preview(launch_id, f"第 {what} 則")[1]
+                real = self.console.executor._send
+
+                def send_after(fields, what=what, launch_id=launch_id, real=real):
+                    if what == "hold":
+                        st, r = self.call(f"/api/flows/{self.fid}/hold", "POST", {"reason": "between"})
+                        self.assertEqual(st, 200, r)
+                    else:
+                        st, r = self.call(f"/api/flows/{self.fid}/executor/close", "POST", {"launch_id": launch_id})
+                        self.assertEqual(st, 200, r)
+                        self.wait_for(lambda: self.session(launch_id)["manifest_state"] in ("ended", "manual_review"),
+                                      msg="closed")
+                    return real(fields)
+                with mock.patch.object(self.console.executor, "_send", send_after):
+                    st, r = self.approve(pre["preview_id"])
+                self.assertEqual(st, 409, r)
+                self.assertTrue(r.get("prepared"), r)                               # said plainly: prepared, not sent
+                self.assertIn("派工已準備但還沒送出", r["error"])
+                self.assertEqual(r["dispatch_id"], pre["dispatch_id"])
+                # nothing reached the CLI: the journal has no written line for it
+                sess = self.session(launch_id)
+                turn = next(d for d in sess["status"]["dispatches"] if d["dispatch_id"] == pre["dispatch_id"])
+                self.assertEqual(turn["status"], "accepted" if what == "hold" else "failed")   # a close fails what was unsent
+                self.assertNotIn("written", turn["times"])                                    # and it was never written
+                self.assertNotIn("confirmed", turn["times"])
+                if what == "hold":
+                    self.call(f"/api/flows/{self.fid}/continue", "POST", {})
+                    self.call(f"/api/flows/{self.fid}/executor/close", "POST", {"launch_id": launch_id})
+                    self.wait_for(lambda: self.session(launch_id)["manifest_state"] in ("ended", "manual_review"),
+                                  msg="closed")
 
     def test_a_busy_session_flags_the_preview_and_refuses_the_approval(self):
         launch_id = self.api_start("hang")

@@ -43,6 +43,7 @@ from . import armory
 from . import claude_verify
 from . import config as cfg
 from . import flow_executor
+from . import flow_review
 from . import flows
 from . import previews as previews_mod
 from .api_error import ApiError
@@ -88,6 +89,9 @@ CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_root
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
+# GET /api/flows/<id>/reports | reviews | reviews/<job>/draft | merge-gate (S2c-3)
+FLOW_GET_RE = re.compile(
+    r"^/api/flows/(flow-[0-9a-f]{12})/(reports|merge-gate|reviews)(?:/(r-[0-9a-f]{16})/draft)?\Z")
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
 FETCH_SITE_OK = {"same-origin", "none"}  # "same-site" would admit other localhost ports
 # A terminal this narrow or short cannot render anything usable: a stray
@@ -128,6 +132,7 @@ class Console:
         self.preview_records = previews_mod.PreviewStore()
         self.executor = flow_executor.FlowExecutor(self.runtime, self.preview_records,
                                                    managed_root=self.managed_root)
+        self.review = flow_review.FlowReview(self.executor)
         self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
@@ -353,6 +358,22 @@ def make_handler(console: Console):
                 return {}
             return data if isinstance(data, dict) else {}
 
+        def _body_strict(self):
+            """Like _body, but a body that is there and is not one JSON object
+            is an error (None), not an empty request. For the flow actions
+            (start, send, review, stop...): garbage must never read as "no
+            fields, go ahead"."""
+            length = self._read_content_length()
+            if length <= 0:
+                return {}
+            try:
+                data = json.loads(self._read_body_bytes(length).decode("utf-8"))
+            except TimeoutError:
+                raise
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                return None
+            return data if isinstance(data, dict) else None
+
         # routes -----------------------------------------------------------
 
         def do_GET(self):
@@ -400,6 +421,18 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "task": self._with_pickup([t])[0]})
                 if path == "/api/flows":
                     return self._json(self._flows_view())
+                m_flow = FLOW_GET_RE.match(path)
+                if m_flow:
+                    fid, what, job = m_flow.group(1), m_flow.group(2), m_flow.group(3)
+                    if what == "reports" and job is None:
+                        return self._flow_action(lambda: console.review.reports(fid))
+                    if what == "reviews" and job is None:
+                        return self._flow_action(lambda: console.review.reviews(fid))
+                    if what == "reviews":
+                        return self._flow_action(lambda: console.review.opinion_draft(fid, job))
+                    if what == "merge-gate" and job is None:
+                        return self._flow_action(lambda: console.review.merge_gate(fid))
+                    return self._error(404, "not found")
                 if path.startswith("/api/flows/") and path.endswith("/executor"):
                     return self._flow_action(lambda: console.executor.status(path[len("/api/flows/"):-len("/executor")]))
                 if path.startswith("/api/flows/"):
@@ -515,7 +548,10 @@ def make_handler(console: Console):
                 if path.startswith("/api/native/sessions/") and path.endswith("/close"):
                     return self._native_close(unquote(path[len("/api/native/sessions/"):-len("/close")]))
                 if path == "/api/flows" or path.startswith("/api/flows/"):
-                    return self._flows_post(path, self._body())
+                    body = self._body_strict()
+                    if body is None:
+                        return self._json({"error": "請求本文必須是一個 JSON 物件", "code": "bad_body"}, 400)
+                    return self._flows_post(path, body)
                 if path == "/api/tasks":
                     try:
                         saved = tasks.save_task(None, self._body())
@@ -857,6 +893,10 @@ def make_handler(console: Console):
                         flow = flows.append_event(rest[:-len("/events")], body)
                     elif rest.endswith("/roles"):
                         flow = flows.set_roles(rest[:-len("/roles")], body)
+                    elif rest.endswith("/review/cancel"):
+                        return self._flow_action(lambda: console.review.cancel(rest[:-len("/review/cancel")], body))
+                    elif rest.endswith("/review"):
+                        return self._flow_action(lambda: console.review.start(rest[:-len("/review")], body))
                     elif rest.endswith("/executor/close"):
                         return self._flow_action(lambda: console.executor.close(rest[:-len("/executor/close")], body))
                     elif rest.endswith("/executor"):

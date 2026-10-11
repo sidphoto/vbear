@@ -87,8 +87,9 @@ for line in sys.stdin:
     if mode == "stderr_flood":
         sys.stderr.write("x" * 4096 * 64); sys.stderr.flush()
     cost += 0.01
+    head = open("fake-head").read().strip() if os.path.exists("fake-head") else None
     events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
-                     model=model)
+                     model=model, **({"rep": fx.report(d, head=head)} if head else {}))
     if mode == "many_responses":
         rep = fx.report(d)
         responses = [[{"type": "thinking", "thinking": "."}] for _ in range(5)]

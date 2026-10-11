@@ -434,6 +434,32 @@ class Pipeline:
         finally:
             os.close(rfd)
 
+    def review_report_text(self, round_: int) -> tuple[str | None, str]:
+        """The saved last.md of a round, for the screen to show as plain text:
+        (text, "") or (None, why not). Read-only; at most 256 KiB, strict
+        UTF-8, a plain file of ours opened without following a link."""
+        try:
+            dfd = self.review_dir_fd(round_)
+        except (OSError, StoreRefused) as exc:
+            return None, f"審查紀錄資料夾無法開啟（{type(exc).__name__}）"
+        try:
+            try:
+                fd, _ = strictjson.open_owned("last.md", dir_fd=dfd, max_bytes=256 << 10)
+            except strictjson.ReadRefused as exc:
+                return None, ("沒有 last.md" if exc.missing else f"last.md 無法讀取（{exc}）")
+            try:
+                raw = strictjson.read_fd(fd, 256 << 10)
+            except (strictjson.ReadRefused, OSError) as exc:
+                return None, f"last.md 無法讀取（{type(exc).__name__}）"
+            finally:
+                os.close(fd)
+        finally:
+            os.close(dfd)
+        try:
+            return raw.decode("utf-8"), ""
+        except UnicodeDecodeError:
+            return None, "last.md 不是合法的 UTF-8"
+
     def review_result(self, round_: int) -> dict | None:
         """The record's result.json, the commit marker of a finished review
         (written last, after the manifest holds the outcome). None when the
