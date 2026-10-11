@@ -11,7 +11,7 @@ client carries only frames (``terminal.frame`` / ``control_lost`` /
 ``terminal.input`` / ``resize`` / ``release``. Control is bound to the
 attach connection: a new control attach demotes the previous holder, and a
 dropped connection releases control at once. Per-attachment output is
-bounded; on overflow the queue is discarded and exactly one full replay
+bounded; on overflow only queued terminal frames are discarded and exactly one full replay
 (<= 64 KiB, UTF-8 aligned) is produced once the socket drains again. An
 attachment whose writes make no progress for WRITE_STALL seconds is dropped.
 
@@ -105,6 +105,7 @@ SESSION_RE = re.compile(r"^n-[0-9a-f]{12}\Z")
 MAX_ATTACHMENTS = 4           # per session (contract v2 §6)
 ATTACH_QUEUE_MAX = 256        # frames queued per attachment before resync
 ATTACH_QUEUE_BYTES = 4 << 20  # ... or this many encoded bytes
+ATTACH_NOTICE_MAX = 256       # pause client commands until queued notices drain
 FULL_REPLAY_MAX = 64 * 1024   # full-frame replay cap incl. the reset (§10 S2)
 WRITE_STALL = 10.0            # seconds without write progress -> drop
 INPUT_MAX = 16 * 1024         # decoded bytes per terminal.input
@@ -1175,7 +1176,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         # The handshake reply (with attachment_id) precedes the first frame.
         self._att_push(att, _line(_ok(rid, {"attachment_id": att.aid, "session_id": sid,
                                             "mode": mode, "cols": s.cols, "rows": s.rows})))
-        self._att_push(att, self._full_line(s))
+        self._att_push(att, self._full_line(s), frame=True)
         if s.exit_notified:
             self._att_close_with(att, s.exit_reason)
         return _ATTACHED
@@ -1183,10 +1184,10 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
     def _full_line(self, s: Session) -> bytes:
         return _line(_frame(s, replay_bytes(s.scrollback), True))
 
-    def _att_push(self, att: Attachment, line: bytes) -> None:
+    def _att_push(self, att: Attachment, line: bytes, frame: bool = False) -> None:
         if not att.out and not att.cur:
             att.last_progress = time.monotonic()
-        att.out.append(line)
+        att.out.append((line, frame))
         att.out_bytes += len(line)
         self._att_want_write(att)
 
@@ -1197,37 +1198,43 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             if att.resync:
                 return  # the pending full replay will cover this output
             if len(att.out) >= ATTACH_QUEUE_MAX or att.out_bytes + len(line) > ATTACH_QUEUE_BYTES:
-                # Slow reader: discard, and replay once the socket drains.
+                # Slow reader: discard only frames; preserve protocol notices in order.
                 # Never build a full frame while the socket is still blocked.
-                att.out.clear()
-                att.out_bytes = 0
+                att.out = deque((data, is_frame) for data, is_frame in att.out if not is_frame)
+                att.out_bytes = sum(len(data) for data, _ in att.out)
                 att.resync = True
                 self._att_want_write(att)
                 return
-        self._att_push(att, line)
+        self._att_push(att, line, frame=frame)
 
     def _att_close_with(self, att: Attachment, reason: str) -> None:
         if att.closing:
             return
         if att.resync and att.sess is not None:
             att.resync = False
-            self._att_push(att, self._full_line(att.sess))
+            self._att_push(att, self._full_line(att.sess), frame=True)
         self._att_push(att, _line({"type": "terminal.closed", "reason": reason}))
         att.closing = True
 
     def _att_error(self, att: Attachment, code: str) -> None:
         self._att_enqueue(att, _line({"type": "terminal.error", "code": code}), frame=False)
 
+    def _att_notices_full(self, att: Attachment) -> bool:
+        return sum(not frame for _, frame in att.out) >= ATTACH_NOTICE_MAX
+
     def _att_want_write(self, att: Attachment) -> None:
-        if not att.writing and self._sel is not None:
+        if self._sel is not None:
             att.writing = True
-            self._sel.modify(att.sock, selectors.EVENT_READ | selectors.EVENT_WRITE, att)
+            events = selectors.EVENT_WRITE
+            if not self._att_notices_full(att):
+                events |= selectors.EVENT_READ
+            self._sel.modify(att.sock, events, att)
 
     def _att_flush(self, att: Attachment) -> None:
         while True:
             if not att.cur:
                 if att.out:
-                    line = att.out.popleft()
+                    line, _ = att.out.popleft()
                     att.out_bytes -= len(line)
                     att.cur = bytearray(line)
                 elif att.resync and att.sess is not None and not att.closing:
@@ -1248,11 +1255,19 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                 return
         if att.closing:
             return self._drop_att(att)
+        # Resume buffered commands only after output drains. Each command can
+        # produce at most one error; takeover and close add at most two notices.
+        if att.inbuf:
+            self._att_process(att)
+            if att.out or self._attachments.get(att.sock) is not att:
+                return
         if att.writing and self._sel is not None:
             att.writing = False
             self._sel.modify(att.sock, selectors.EVENT_READ, att)
 
     def _att_read(self, att: Attachment) -> None:
+        if self._att_notices_full(att):
+            return  # a stale readable event must not bypass notice backpressure
         try:
             chunk = att.sock.recv(65536)
         except (BlockingIOError, InterruptedError):
@@ -1267,7 +1282,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         self._att_process(att)
 
     def _att_process(self, att: Attachment) -> None:
-        while self._attachments.get(att.sock) is att and not att.closing:
+        while (self._attachments.get(att.sock) is att and not att.closing
+               and not self._att_notices_full(att)):
             nl = att.inbuf.find(b"\n")
             if nl < 0:
                 if len(att.inbuf) > MAX_LINE:

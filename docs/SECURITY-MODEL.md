@@ -43,6 +43,20 @@ but their network access to `127.0.0.1` is refused by the sandbox (see the table
 
 The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connections from your own uid.
 
+Attachment backpressure discards only queued `terminal.frame` lines (delta or full).
+The handshake and protocol notices remain in their original order, with `out_bytes`
+recomputed from the retained lines. A partially sent line is finished before one
+capped full replay is built after the queue drains; overflow never splices a JSON line.
+
+Client command processing and socket reads pause at 256 queued non-frame notices,
+and resume after output drains. Each command generates at most one error. A takeover
+can add one `control_lost` per attachment (it then remains observe-only), and session
+closure can add one `closed`, so at most 258 notices can be queued, plus one current
+partially sent line. These server-generated notices have bounded fields. Buffered input
+is bounded by `MAX_LINE` plus one 65,536-byte read; paused reads cannot grow it.
+The existing frame count/byte caps, 64 KiB replay cap and write-stall timeout still apply.
+
+
 ## Terminals
 
 - **Built-in terminals** (`POST /api/native/terminals`) run your login shell (`/etc/shells`-listed

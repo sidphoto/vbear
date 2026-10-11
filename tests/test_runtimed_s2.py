@@ -150,25 +150,80 @@ class AttachBackpressureTests(unittest.TestCase):
         self.sock = mock.Mock(spec=socket.socket)
         self.att = d.Attachment(self.sock, self.sess, "observe")
 
-    def overflow(self):
+    def queued_lines(self):
+        # Also exercise these regression assertions against the old byte queue.
+        return [entry[0] if isinstance(entry, tuple) else entry for entry in self.att.out]
+
+    def overflow(self, retained=()):
         with mock.patch.object(d, "ATTACH_QUEUE_MAX", 8):
             for _ in range(9):
                 self.dm._att_enqueue(self.att, b"delta\n")
         self.assertTrue(self.att.resync)
-        self.assertFalse(self.att.out)
-        self.assertEqual(self.att.out_bytes, 0)
+        self.assertEqual(self.queued_lines(), list(retained))
+        self.assertEqual(self.att.out_bytes, sum(map(len, retained)))
 
     def test_overflow_can_precede_first_socket_write(self):
         # A PTY read batch can exceed the queue cap before EVENT_WRITE is
         # handled. resync alone is not evidence that send() would block.
+        handshake = d._line(d._ok("h", {"attachment_id": self.att.aid}))
+        self.dm._att_push(self.att, handshake)
+        self.dm._att_enqueue(self.att, self.dm._full_line(self.sess))
+        sent = []
         with mock.patch.object(self.dm, "_full_line", wraps=self.dm._full_line) as full:
-            self.overflow()
+            self.overflow((handshake,))
             full.assert_not_called()
             self.assertFalse(self.att.cur)
-            self.sock.send.side_effect = lambda data: len(data)
+            def drain(data):
+                sent.append(bytes(data))
+                return len(data)
+            self.sock.send.side_effect = drain
             self.dm._att_flush(self.att)
             full.assert_called_once_with(self.sess)
+        self.assertEqual(sent[0], handshake)
+        self.assertTrue(json.loads(sent[1])["full"])
+        self.assertEqual(self.att.out_bytes, 0)
         self.assertFalse(self.att.resync)
+
+    def test_overflow_preserves_notices_in_order_and_counts_bytes(self):
+        handshake = d._line(d._ok("h", {"attachment_id": self.att.aid}))
+        lost = d._line({"type": "terminal.control_lost"})
+        error = d._line({"type": "terminal.error", "code": "bad_request"})
+        for cap in ("ATTACH_QUEUE_MAX", "ATTACH_QUEUE_BYTES"):
+            with self.subTest(cap=cap):
+                self.setUp()
+                self.dm._att_push(self.att, handshake)
+                self.dm._att_enqueue(self.att, self.dm._full_line(self.sess))
+                self.dm._att_enqueue(self.att, lost, frame=False)
+                self.dm._att_enqueue(self.att, b"delta\n")
+                self.dm._att_enqueue(self.att, error, frame=False)
+                with mock.patch.object(d, cap, 5 if cap.endswith("MAX") else self.att.out_bytes):
+                    self.dm._att_enqueue(self.att, b"overflow\n")
+                self.assertTrue(self.att.resync)
+                self.assertEqual(self.queued_lines(), [handshake, lost, error])
+                self.assertEqual(self.att.out_bytes, len(handshake) + len(lost) + len(error))
+                self.sock.send.side_effect = lambda data: len(data)
+                self.dm._att_flush(self.att)
+                self.assertEqual(self.att.out_bytes, 0)
+
+    def test_notice_backpressure_bounds_errors_and_resumes_buffered_commands(self):
+        self.dm._attachments = {self.sock: self.att}
+        self.att.inbuf = bytearray(b"{}\n" * 20)
+        with mock.patch.object(d, "ATTACH_NOTICE_MAX", 4):
+            self.dm._att_process(self.att)
+            self.assertEqual(len(self.att.out), 4)
+            self.assertEqual(len(self.att.inbuf), 16 * 3)
+            self.assertEqual(self.att.out_bytes, sum(len(line) for line, _ in self.att.out))
+            self.dm._sel.modify.assert_called_with(self.sock, d.selectors.EVENT_WRITE, self.att)
+            self.dm._att_read(self.att)
+            self.sock.recv.assert_not_called()
+            self.sock.send.side_effect = lambda data: len(data)
+            for _ in range(5):
+                self.dm._att_flush(self.att)
+                self.assertLessEqual(len(self.att.out), 4)
+            self.assertFalse(self.att.out)
+            self.assertFalse(self.att.inbuf)
+            self.assertEqual(self.att.out_bytes, 0)
+            self.dm._sel.modify.assert_called_with(self.sock, d.selectors.EVENT_READ, self.att)
 
     def test_blocked_and_partial_writes_defer_full_until_current_frame_drains(self):
         self.att.cur = bytearray(b"unfinished frame\n")
@@ -342,7 +397,9 @@ class AttachProtocolTests(DaemonCase):
         with mock.patch.object(d, "ATTACH_QUEUE_MAX", 8), \
              mock.patch.object(self.dm, "_full_line", side_effect=counting_full):
             a = self.raw(sid, rcvbuf=4096)
-            a.line()
+            handshake = a.line()
+            self.assertTrue(handshake.get("ok"), f"first line keys: {list(handshake)}")
+            self.assertIn("attachment_id", handshake["result"])
             att = next(iter(self.dm._attachments.values()))
             self.wait_for(lambda: att.resync, 5, "resync flagged")
             # Not reading does not prove the socket is blocked: line() can
@@ -360,6 +417,27 @@ class AttachProtocolTests(DaemonCase):
                     self.assertLessEqual(len(raw), d.FULL_REPLAY_MAX)
                     self.assertTrue(raw.startswith(d.RIS))
             self.assertGreaterEqual(fulls, 1)  # not just the initial attach replay
+        self.rpc("close", session_id=sid)
+
+    def test_handshake_first_under_small_queue_repeated_attaches(self):
+        spew = [PY, "-c", "import sys\nwhile True: sys.stdout.write('z'*4000+'\\n')"]
+        sid = self.open(spew)
+        self.wait_out(sid, b"z" * 4000)
+        with mock.patch.object(d, "ATTACH_QUEUE_MAX", 8):
+            for attempt in range(50):
+                with self.subTest(attempt=attempt):
+                    a = self.raw(sid, rcvbuf=4096)
+                    try:
+                        handshake = a.line()
+                        self.assertTrue(handshake.get("ok"), f"first line keys: {list(handshake)}")
+                        self.assertEqual(handshake["id"], "h")
+                        self.assertEqual(handshake["result"]["session_id"], sid)
+                        self.assertIn("attachment_id", handshake["result"])
+                        self.assertEqual(a.line()["type"], "terminal.frame")
+                    finally:
+                        a.close()
+                    self.wait_for(lambda: not self.dm._sessions[sid].attachments,
+                                  msg="attachment disconnect")
         self.rpc("close", session_id=sid)
 
     def test_resync_pending_counts_as_stalled(self):
