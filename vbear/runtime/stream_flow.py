@@ -261,9 +261,10 @@ def settling(seconds: float):
     """Within this block (this thread only) flow_reviews() gives a review that
     is still being finished a short grace before it calls its record missing
     or damaged. The daemon writes the manifest's outcome first and result.json
-    after it (created, then written, then synced), so a reader that looks in
-    between sees a record that is simply not done yet. Callers that wait on a
-    person (the console's screens, refreshed every few seconds) set this; the
+    after it (written and synced privately, then linked into place), so a
+    reader that looks in between sees a record that is simply not done yet.
+    Callers that wait on a person (the console's screens, refreshed every few
+    seconds) set this; the
     daemon never does, and a job that is already "cleaned" never waits: only
     the wait is added, the refusal after it is the same."""
     before = getattr(_settle, "seconds", 0.0)

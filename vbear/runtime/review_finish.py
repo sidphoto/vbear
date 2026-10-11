@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import secrets
 import shutil
 import stat
 import time
@@ -132,7 +133,10 @@ class _Saved:
 
 def _write_new(dir_fd: int, name: str, data: bytes, dst_path: str) -> _Saved:
     """A file created exclusively, written whole, synced (file and directory).
-    A failure removes it; if that fails too the leftover is reported."""
+    result.json is published atomically. A failure removes what this call
+    created; if that fails too the leftover is reported."""
+    if name == "result.json":
+        return _write_marker(dir_fd, name, data, dst_path)
     try:
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
                      dir_fd=dir_fd)
@@ -160,6 +164,62 @@ def _write_new(dir_fd: int, name: str, data: bytes, dst_path: str) -> _Saved:
         except Exception:
             out.leftover = f"{dst_path.rstrip('/')}/{name}"
             out.leftover_bytes = written
+        return out
+
+
+def _write_marker(dir_fd: int, name: str, data: bytes, dst_path: str) -> _Saved:
+    """Publish complete bytes without replacing an existing marker. link()
+    checks destination absence atomically, unlike a check followed by rename.
+    Both names are relative to the same pinned directory descriptor. Old
+    temporary files are never reused or trusted; recovery rebuilds from the
+    saved copies and quota counts every remaining file."""
+    tmp = f".{name}.{secrets.token_hex(16)}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                     dir_fd=dir_fd)
+    except OSError as exc:
+        return _Saved(False, f"審查紀錄的 {name} 暫存檔無法建立（{exc.strerror or type(exc).__name__}）")
+    written, linked = 0, False
+    try:
+        try:
+            view = memoryview(data)
+            while view:
+                n = os.write(fd, view)
+                if n <= 0:
+                    raise OSError(5, "寫入沒有進展")
+                written += n
+                view = view[n:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False)
+        linked = True
+        os.unlink(tmp, dir_fd=dir_fd)
+        os.fsync(dir_fd)
+        return _Saved(True)
+    except Exception as exc:
+        out = _Saved(False, f"審查紀錄的 {name} 無法寫入（{type(exc).__name__}）")
+        # Only remove the public name if this call created it. In particular,
+        # EEXIST must leave the earlier marker untouched.
+        for entry in ([name, tmp] if linked else [tmp]):
+            try:
+                os.unlink(entry, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                path = f"{dst_path.rstrip('/')}/{entry}"
+                try:
+                    size = os.stat(entry, dir_fd=dir_fd, follow_symlinks=False).st_size
+                except OSError:
+                    size = written
+                if out.leftover is None:
+                    out.leftover = path
+                out.leftover_bytes += size
+                out.reason += f"；不完整的檔案無法移除：{path}（{size} bytes）"
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            out.reason += "；移除後資料夾無法同步，需人工確認"
         return out
 
 
@@ -473,6 +533,8 @@ def _decide(base, m, run, out: Finish, result: dict, thread, record_fd, record_p
             out.problem = saved.reason
             out.leftover, out.leftover_bytes = saved.leftover, saved.leftover_bytes
             review_store.retain(base, job_id, f"{saved.reason}；審查紀錄不完整")
+            if saved.leftover:
+                return out                         # retain the job for a person
     else:
         saved_all = False
         out.problem = "沒有審查紀錄資料夾，無法寫入 result.json"

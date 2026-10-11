@@ -245,6 +245,201 @@ class InvalidReviewTests(Scenario):
         self.invalid("detached")
 
 
+class AtomicMarkerTests(Scenario):
+    def write_marker(self, data=b'{"v":1}'):
+        with ps.Pipeline(self.base, TID, create=False) as p:
+            fd = p.review_dir_fd(1)
+        try:
+            return rfn._write_new(fd, "result.json", data, str(self.record()))
+        finally:
+            os.close(fd)
+
+    def test_a_partial_write_is_never_visible_at_the_formal_name(self):
+        seen = []
+        real_write = os.write
+        with ps.Pipeline(self.base, TID, create=False) as p:
+            fd = p.review_dir_fd(1)
+            try:
+                def partial_write(dst, data):
+                    n = real_write(dst, data[:1])
+                    seen.append((self.record() / "result.json").exists())
+                    return n
+                with mock.patch.object(os, "write", partial_write):
+                    saved = rfn._write_new(fd, "result.json", b'{"v":1}', str(self.record()))
+                self.assertTrue(saved.ok)
+                self.assertTrue(seen)
+                self.assertFalse(any(seen), "a partial result.json was visible to readers")
+                self.assertEqual(p.review_result(1), {"v": 1})
+            finally:
+                os.close(fd)
+
+    def test_after_file_sync_the_reader_still_sees_no_marker(self):
+        seen = []
+        real_sync = os.fsync
+        with ps.Pipeline(self.base, TID, create=False) as p:
+            fd = p.review_dir_fd(1)
+            try:
+                def synced(dst):
+                    real_sync(dst)
+                    if dst != fd:
+                        seen.append(p.review_result(1))
+                with mock.patch.object(os, "fsync", synced):
+                    saved = rfn._write_new(fd, "result.json", b'{"v":1}', str(self.record()))
+                self.assertTrue(saved.ok)
+                self.assertEqual(seen, [None])
+                self.assertEqual(p.review_result(1), {"v": 1})
+            finally:
+                os.close(fd)
+
+    def test_publication_is_exclusive_and_the_reader_ignores_the_temp_name(self):
+        real_link, real_open = os.link, os.open
+        seen, opens = [], []
+
+        def opened(name, flags, *a, **kw):
+            if str(name).startswith(".result.json."):
+                opens.append((flags, a[0]))
+            return real_open(name, flags, *a, **kw)
+
+        def publish(src, dst, **kw):
+            tmp = self.record() / src
+            seen.append((tmp.read_bytes(), tmp.stat().st_mode & 0o777))
+            with ps.Pipeline(self.base, TID, create=False) as p:
+                seen.append(p.review_result(1))
+            self.assertEqual(self.manifest()["outcome"], "valid")
+            real_link(src, dst, **kw)
+            with ps.Pipeline(self.base, TID, create=False) as p:
+                seen.append(p.review_result(1)["valid"])
+            self.assertEqual(kw["src_dir_fd"], kw["dst_dir_fd"])
+            self.assertFalse(kw["follow_symlinks"])
+
+        with mock.patch.object(os, "link", publish), mock.patch.object(os, "open", opened):
+            out = self.finish()
+        self.assertTrue(out.record_complete)
+        self.assertEqual(seen[0][1], 0o600)
+        self.assertEqual(seen[1:], [None, True])
+        flags, mode = opens[0]
+        self.assertEqual(flags & (os.O_EXCL | os.O_NOFOLLOW | os.O_CREAT),
+                         os.O_EXCL | os.O_NOFOLLOW | os.O_CREAT)
+        self.assertEqual(mode, 0o600)
+        self.assertEqual(list(self.record().glob(".result.json.*.tmp")), [])
+        self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+
+    def test_existing_marker_and_racing_destination_are_never_overwritten(self):
+        marker = self.record() / "result.json"
+        marker.write_bytes(b"earlier marker")
+        before = marker.stat().st_ino
+        self.assertFalse(self.write_marker().ok)
+        self.assertEqual((marker.read_bytes(), marker.stat().st_ino), (b"earlier marker", before))
+        marker.unlink()
+        real_link = os.link
+
+        def competing_writer(src, dst, **kw):
+            marker.write_bytes(b"concurrent marker")
+            return real_link(src, dst, **kw)
+
+        with mock.patch.object(os, "link", competing_writer):
+            self.assertFalse(self.write_marker().ok)
+        self.assertEqual(marker.read_bytes(), b"concurrent marker")
+        self.assertEqual(list(self.record().glob(".result.json.*.tmp")), [])
+
+    def test_an_existing_symlink_is_never_followed_or_replaced(self):
+        target = self.tmp / "target"
+        target.write_bytes(b"original")
+        marker = self.record() / "result.json"
+        marker.symlink_to(target)
+        self.assertFalse(self.write_marker().ok)
+        self.assertTrue(marker.is_symlink())
+        self.assertEqual(target.read_bytes(), b"original")
+        self.assertEqual(list(self.record().glob(".result.json.*.tmp")), [])
+
+    def test_write_file_sync_link_unlink_and_directory_sync_failures_roll_back(self):
+        real_write, real_sync, real_unlink = os.write, os.fsync, os.unlink
+        for step in ("write", "zero_write", "file_sync", "link", "unlink", "directory_sync"):
+            with self.subTest(step=step):
+                calls = []
+
+                def write(fd, data):
+                    if step == "zero_write":
+                        return 0
+                    if calls:
+                        raise OSError(5, "injected write error")
+                    calls.append(fd)
+                    return real_write(fd, data[:1])
+
+                def sync(fd):
+                    is_dir = stat.S_ISDIR(os.fstat(fd).st_mode)
+                    if (step == "directory_sync") == is_dir:
+                        raise OSError(5, "injected sync error")
+                    return real_sync(fd)
+
+                def unlink(name, **kw):
+                    if not calls:
+                        calls.append(name)
+                        raise OSError(5, "injected unlink error")
+                    return real_unlink(name, **kw)
+
+                if step in ("write", "zero_write"):
+                    patch = mock.patch.object(os, "write", write)
+                elif step in ("file_sync", "directory_sync"):
+                    patch = mock.patch.object(os, "fsync", sync)
+                elif step == "unlink":
+                    patch = mock.patch.object(os, "unlink", unlink)
+                else:
+                    patch = mock.patch.object(os, "link", side_effect=OSError(5, "injected link error"))
+                with patch:
+                    saved = self.write_marker()
+                self.assertFalse(saved.ok)
+                self.assertIsNone(saved.leftover)
+                self.assertFalse((self.record() / "result.json").exists())
+                self.assertEqual(list(self.record().glob(".result.json.*.tmp")), [])
+
+    def test_temp_creation_failure_does_not_remove_an_existing_temp_file(self):
+        tmp = self.record() / (".result.json." + "a" * 32 + ".tmp")
+        tmp.write_bytes(b"previous failed write")
+        with mock.patch.object(rfn.secrets, "token_hex", return_value="a" * 32):
+            saved = self.write_marker()
+        self.assertFalse(saved.ok)
+        self.assertEqual(tmp.read_bytes(), b"previous failed write")
+        self.assertFalse((self.record() / "result.json").exists())
+
+    def test_unremovable_temp_is_reported_with_its_actual_size(self):
+        with mock.patch.object(os, "link", side_effect=OSError(5, "injected link error")), \
+                mock.patch.object(os, "unlink", side_effect=OSError(13, "injected cleanup error")):
+            saved = self.write_marker()
+        self.assertFalse(saved.ok)
+        tmp, = self.record().glob(".result.json.*.tmp")
+        self.assertEqual((saved.leftover, saved.leftover_bytes), (str(tmp), tmp.stat().st_size))
+        self.assertIn(str(tmp), saved.reason)
+        self.assertFalse((self.record() / "result.json").exists())
+
+    def test_unremovable_public_and_temp_names_are_both_reported(self):
+        with mock.patch.object(os, "unlink", side_effect=OSError(13, "injected cleanup error")):
+            saved = self.write_marker()
+        tmp, = self.record().glob(".result.json.*.tmp")
+        marker = self.record() / "result.json"
+        self.assertFalse(saved.ok)
+        self.assertEqual(saved.leftover, str(marker))
+        self.assertEqual(saved.leftover_bytes, marker.stat().st_size + tmp.stat().st_size)
+        self.assertIn(str(marker), saved.reason)
+        self.assertIn(str(tmp), saved.reason)
+
+    def test_a_marker_leftover_retains_the_job_and_the_decided_outcome(self):
+        real_unlink = os.unlink
+
+        def unlink(name, **kw):
+            if str(name).startswith(".result.json."):
+                raise OSError(13, "injected cleanup error")
+            return real_unlink(name, **kw)
+
+        with mock.patch.object(os, "unlink", unlink):
+            out = self.finish()
+        self.assertEqual(out.outcome, "valid")
+        self.assertFalse(out.cleaned or out.record_complete)
+        self.assertTrue(out.leftover.endswith(".tmp"))
+        self.assertTrue(self.scratch.exists() and self.run_home.exists())
+        self.assertIn(out.leftover, self.manifest()["retained_reason"])
+
+
 class CommitOrderTests(Scenario):
     def test_result_json_is_written_after_the_manifest_holds_the_outcome(self):
         seen = []

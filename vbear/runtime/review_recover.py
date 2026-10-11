@@ -11,7 +11,8 @@ when the daemon starts. Nothing is ever signalled here.
   finished / invalid, not yet cleaned (the daemon died in the middle of
                   ending the review): cleaned now, but only when the record
                   is whole (a result.json that agrees with the manifest).
-  manual_review / cleaned: left alone.
+  manual_review: left alone. A cleaned job without result.json is resumed:
+                  its marker may have failed before cleanup.
 
 A job whose flow-side link is missing (the daemon died between writing the
 manifest and the link) gets its link written back, from the manifest. A
@@ -137,9 +138,13 @@ def recover(base, *, constants=None, rows=None, now: float | None = None) -> lis
             if problem:
                 # the flow cannot be shown to agree with this job: fail closed
                 out.append(_item(m, name, "link_problem", problem, failure=True))
-            if m["state"] in ("manual_review", "cleaned"):
+            if m["state"] == "manual_review":
                 continue
-            if m["state"] in ("finished", "invalid"):
+            if m["state"] == "cleaned":
+                with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
+                    if p.review_result(m["round"]) is not None:
+                        continue
+            if m["state"] in ("finished", "invalid", "cleaned"):
                 out.append(_finish_decided(base, m, constants))
             else:
                 out.append(_recover_active(base, m, rows, constants, now))

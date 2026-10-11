@@ -15,6 +15,7 @@ from vbear.runtime import codex_constants as cc
 from vbear.runtime import pipeline_store as ps
 from vbear.runtime import proctrack, review_recover as rr, review_store as rs
 from vbear.runtime import stream_flow as sfl
+from vbear.runtime import quota
 
 CONSTANTS = {"0.160.0": C}
 
@@ -131,6 +132,38 @@ class ActiveJobTests(RecoverCase):
 
 
 class LinkAndDecidedTests(RecoverCase):
+    def test_a_leftover_temp_is_counted_and_rebuilt_without_being_trusted(self):
+        for cleaned in (False, True):
+            with self.subTest(cleaned=cleaned):
+                self.tearDown_and_setUp()
+                self.decided_but_not_cleaned()
+                (self.record() / "result.json").unlink()
+                if cleaned:
+                    rs.update_manifest(self.base, JOB, state="cleaned")
+                before = quota.scan(self.base)
+                tmp = self.record() / ".result.json.crashed.tmp"
+                tmp.write_bytes(b'{"valid":false,"torn":')
+                self.assertEqual(quota.scan(self.base), before + tmp.stat().st_size)
+                with ps.Pipeline(self.base, TID, create=False) as p:
+                    self.assertIsNone(p.review_result(1))
+                self.recover([])
+                result = json.loads((self.record() / "result.json").read_text())
+                self.assertEqual((result["valid"], result["rebuilt"]), (True, True))
+                self.assertEqual(tmp.read_bytes(), b'{"valid":false,"torn":')
+                self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+
+    def test_a_temp_next_to_a_whole_marker_is_ignored_but_still_counted(self):
+        self.finish()
+        marker = self.record() / "result.json"
+        before_marker = marker.read_bytes(), marker.stat().st_ino
+        before = quota.scan(self.base)
+        tmp = self.record() / ".result.json.crashed.tmp"
+        tmp.write_bytes(b"not json")
+        self.assertEqual(quota.scan(self.base), before + len(b"not json"))
+        self.assertEqual(self.recover([]), [])
+        self.assertEqual((marker.read_bytes(), marker.stat().st_ino), before_marker)
+        self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+
     def test_a_missing_flow_link_is_written_back(self):
         shutil.rmtree(self.base / "pipelines" / TID / "reviews")
         with self.assertRaises(sfl.FlowRefused):                       # the two sides disagree
