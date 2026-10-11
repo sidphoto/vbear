@@ -213,6 +213,30 @@ class StopAndContinueTests(Boundary):
         self.assertIn("review_", self.stop_reason()["reason_code"])
         self.assertTrue(pipeline_store.is_held(self.base, self.fid))
 
+    def test_continue_waits_for_a_review_that_the_stop_is_still_ending(self):
+        # the late failure of an aborted review would undo a release made before it: refused until it is over
+        from unittest import mock
+        self.setup_run()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        running = {"job_id": "r-" + "9" * 16, "state": "running", "outcome": None, "round": 1}
+        with mock.patch.object(self.console.executor, "_flow_reviews", return_value=[running]):
+            st, r = self.call(f"/api/flows/{self.fid}/continue", "POST", {})
+        self.assertEqual((st, r["code"]), (409, "cannot_continue"))
+        self.assertTrue(any("審查沒有結束" in x for x in r["reasons"]), r)
+        # and the daemon says the same to a console that did not check
+        from vbear import daemon_client
+
+        class Job:
+            job_id, pipeline_id = "r-" + "9" * 16, self.fid
+        self.dm._reviews["r-" + "9" * 16] = Job()
+        try:
+            with self.assertRaises(daemon_client.DaemonError) as cm:
+                daemon_client.call(self.console.executor.runtime, "pipeline_release", pipeline=self.fid)
+            self.assertIn("審查正在結束", str(cm.exception))
+        finally:
+            self.dm._reviews.pop("r-" + "9" * 16, None)
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+
     def test_continue_checks_its_premises_for_an_automatic_flow(self):
         self.setup_run()
         self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)

@@ -174,8 +174,11 @@ class StopTests(RunnerCase):
         self.assertEqual(self.kinds(), before)                                       # the route wrote the stop; no more
         self.assertTrue(pipeline_store.is_held(self.base, self.fid))
         self.assertEqual(self.stop_reason()["reason_code"], "user_stop")
-        # the user presses continue (the runner never does): it picks up from the events
+        # the user presses continue (the runner never does) once the stopped review has ended (it is invalid
+        # then: pressing earlier is refused, because that review would hold the flow again when it ends)
         self.wait_for(lambda: self.executor_status()["sessions"][-1]["status"]["state"] == "idle", msg="idle")
+        self.wait_for(lambda: self.reviews() and self.reviews()[-1]["state"] in ("cleaned", "manual_review"),
+                      msg="the stopped review to end")
         st, r = self.call(f"/api/flows/{self.fid}/continue", "POST", {})
         self.assertEqual(st, 200, r)
         self.run_until(lambda: self.last_event()["kind"] == "auto_stopped"

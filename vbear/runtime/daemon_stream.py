@@ -840,6 +840,11 @@ class StreamOps:
                        if x.pipeline_id == pipeline and x.js.failures]
         if open_failed:
             return _err(rid, "refused", f"請先關閉失敗的 session（{', '.join(open_failed)}），再按「繼續」")
+        # A review that a stop is still ending will, when it ends, be an invalid review (a failure) and hold the flow
+        # again: releasing now would be undone a moment later. Wait for it.
+        ending = [j.job_id for j in self._reviews.values() if j.pipeline_id == pipeline]
+        if ending:
+            return _err(rid, "refused", f"還有審查正在結束（{', '.join(ending)}），等它結束再按「繼續」")
         try:
             flow = flows.read_only_snapshot(self.base).get(pipeline) if isinstance(pipeline, str) else None
         except Exception as exc:

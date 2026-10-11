@@ -231,6 +231,10 @@ class FlowExecutor:
                 raise ApiError(409, "cannot_continue", "不能繼續：" + "；".join(problems), reasons=problems)
         return self._call("pipeline_release", pipeline=flow_id)
 
+    @staticmethod
+    def _flow_reviews(flow: dict) -> list[dict]:
+        return stream_flow.flow_reviews(cfg.state_dir(), flow["id"], flow["task_id"])
+
     def _continue_problems(self, flow: dict) -> list[str]:
         """S3 design 6: what has to hold before an automatic flow is let go
         again. (The daemon refuses a release while a failed session is open;
@@ -247,9 +251,11 @@ class FlowExecutor:
         except ApiError as exc:
             why.append(str(exc))
         try:
-            reviews = stream_flow.flow_reviews(base, flow["id"], flow["task_id"])
+            reviews = self._flow_reviews(flow)
             if any(m["state"] == "manual_review" or m["outcome"] == "manual_review" for m in reviews):
                 why.append("有審查在 manual_review，要先由人處理")
+            if any(m["state"] in ("prepared", "launching", "running", "finished", "invalid") for m in reviews):
+                why.append("還有審查沒有結束（剛被停止中止的審查要等它收尾；結束後會是無效審查，到時再按繼續）")
         except stream_flow.FlowRefused as exc:
             why.append(f"審查紀錄無法核對（{exc}）")
         try:
