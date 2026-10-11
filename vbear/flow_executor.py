@@ -49,6 +49,30 @@ def _daemon(exc: DaemonError) -> ApiError:
     return ApiError(exc.status, exc.code, str(exc))
 
 
+def ordered_sessions(manifests: list[dict]) -> tuple[list[dict], str | None]:
+    """The flow's stream sessions oldest first, by the time the daemon-side
+    manifest says they were created, never by name (a launch id is random).
+    (sessions, problem): ``problem`` is a sentence when the order cannot be
+    told (a time that is missing, not a finite number, or the same for two
+    sessions); nothing then treats any session as "the newest" (fail closed,
+    Gemini S2c-3 review). The list is still returned, in a stable order, for
+    showing."""
+    def key(m):
+        c = m.get("created")
+        ok = isinstance(c, (int, float)) and not isinstance(c, bool) and c == c and abs(c) != float("inf")
+        return (0 if ok else 1, c if ok else 0.0, m.get("launch_id", ""))
+    ordered = sorted(manifests, key=key)
+    times = [m.get("created") for m in ordered]
+    bad = [m.get("launch_id") for m in ordered
+           if not (isinstance(m.get("created"), (int, float)) and not isinstance(m.get("created"), bool)
+                   and m["created"] == m["created"] and abs(m["created"]) != float("inf"))]
+    if bad:
+        return ordered, f"session {bad[0]} 沒有可用的建立時間，無法判斷哪一個是最新的"
+    if len(manifests) > 1 and len(set(times)) != len(times):
+        return ordered, "有兩個 session 的建立時間相同，無法判斷哪一個是最新的"
+    return ordered, None
+
+
 class FlowExecutor:
     def __init__(self, runtime, store: previews.PreviewStore, *, managed_root, host=None):
         self.runtime, self.store = runtime, store
@@ -313,10 +337,13 @@ class FlowExecutor:
         except stream_flow.FlowRefused as exc:
             out["sessions_problem"] = str(exc)
             manifests = []
+        manifests, order_problem = ordered_sessions(manifests)         # oldest first, by creation time
+        out["sessions_order_problem"] = order_problem
         for m in manifests:
             out["sessions"].append(self._session_view(m))
         live = [s for s in out["sessions"] if s["manifest_state"] in ("launching", "running")]
-        out["current_launch_id"] = live[-1]["launch_id"] if live else None
+        # one non-ended session per flow is the rule; if the files show more, none is called "current"
+        out["current_launch_id"] = live[0]["launch_id"] if len(live) == 1 else None
         # a hint for the screen, never the authority: the daemon decides again at open_stream
         out["can_start"] = bool(out["acceptance"]["state"] == "valid" and not out["hold"]["held"] and not live
                                 and out["workdir"] and not out["unresolved_failure"]

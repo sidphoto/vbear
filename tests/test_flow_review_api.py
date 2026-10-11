@@ -2,6 +2,7 @@
 daemon, the synthetic stream CLI, the synthetic Codex and a real git
 repository. No Claude, no Codex, no model."""
 
+import sys
 import json
 import os
 import re
@@ -362,6 +363,42 @@ class MergeGateTests(ReviewApiCase):
         g = self.gate()
         self.assertFalse(g["open"])
         self.assertIn("BLOCKED", {c["id"]: c for c in g["conditions"]}["review_pass"]["detail"])
+
+
+class SessionOrderTests(ReviewApiCase):
+    def test_sessions_and_the_newest_report_follow_time_even_when_names_say_otherwise(self):
+        # Gemini S2c-3 review: launch ids are random; the first session gets the LARGER id here
+        from vbear.runtime import agent_sessions
+        ids = iter(["f" * 16, "0" * 16])
+        real = agent_sessions.secrets.token_hex
+
+        def token_hex(n=32):
+            # only the launch-id call sites in agent_sessions get ours (request ids etc. use the same function)
+            if n == 8 and sys._getframe(1).f_code.co_filename == agent_sessions.__file__:
+                forced = next(ids, None)
+                if forced is not None:
+                    return forced
+            return real(n)
+        with mock.patch.object(agent_sessions.secrets, "token_hex", token_hex):
+            first = self.start_executor()
+            self.commit_work("first")
+            self.turn("一")
+            st, r = self.call(f"/api/flows/{self.fid}/executor/close", "POST", {"launch_id": first})
+            self.assertEqual(st, 200, r)
+            self.wait_for(lambda: self.executor_status()["sessions"][0]["manifest_state"] == "ended", msg="first ended")
+            second = self.start_executor()
+        self.assertEqual((first, second), ("l-" + "f" * 16, "l-" + "0" * 16))
+        self.commit_work("second")
+        newest, entry = self.turn("二")
+        self.assertEqual([s["launch_id"] for s in self.executor_status()["sessions"]], [first, second])
+        r = self.reports()
+        heads = [e["report"]["head"] for e in r["reports"]]
+        self.assertEqual(heads[-1], self.commit)                                       # the newest session's report is last
+        self.assertEqual(r["latest_dispatch_id"], newest)
+        self.assertTrue(entry["latest"] and entry["usable"])
+        st, rev = self.start_review()
+        self.assertEqual((st, rev["commit"]), (200, self.commit))                      # the review is of the newest commit
+        self.assertEqual(self.executor_status()["current_launch_id"], second)
 
 
 class RouteTests(ReviewApiCase):
