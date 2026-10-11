@@ -304,6 +304,87 @@ class SizeTests(Tmp):
         with mock.patch.object(rc.os, "scandir", side_effect=PermissionError(13, "Permission denied")):
             self.assertIsNone(rc.tree_size(d))
 
+    def test_codex_homes_own_links_count_and_are_not_followed(self):
+        # design v29.10: only tmp/arg0/<one directory>/<name>, by the link's own size
+        home = self.tmp / "home"
+        helpers = home / "tmp" / "arg0" / "codex-arg0abc"
+        helpers.mkdir(parents=True)
+        (home / "auth.json").write_bytes(b"x" * 10)
+        big = self.tmp / "outside-big"
+        big.write_bytes(b"y" * 100_000)
+        for name in ("apply_patch", "applypatch", "codex-execve-wrapper"):
+            (helpers / name).symlink_to(big)
+        names = []
+        size = rc.home_size(home, names)
+        self.assertEqual(size, 10 + 3 * len(str(big)))                      # the links' own sizes; the big file is not counted
+        self.assertEqual(sorted(names), sorted(f"tmp/arg0/codex-arg0abc/{n}" for n in
+                                               ("apply_patch", "applypatch", "codex-execve-wrapper")))
+        self.assertLess(size, 1000)
+        # a link to a directory outside is not entered either
+        (helpers / "dirlink").symlink_to(self.tmp)
+        self.assertEqual(rc.home_size(home), size + len(str(self.tmp)))
+        # a dangling one is just a link
+        (helpers / "dangling").symlink_to(self.tmp / "nowhere")
+        self.assertIsNotNone(rc.home_size(home))
+
+    def test_a_link_anywhere_else_in_codex_home_is_over(self):
+        for where in (".", "log", "tmp", "tmp/arg0", "tmp/arg0/a/b", "tmp/other/a", "sessions/2026"):
+            with self.subTest(where=where):
+                home = self.tmp / ("h-" + where.replace("/", "-"))
+                (home / where).mkdir(parents=True, exist_ok=True)
+                (home / "tmp" / "arg0" / "a").mkdir(parents=True, exist_ok=True)
+                (home / where / "link").symlink_to(self.tmp)
+                self.assertIsNone(rc.home_size(home))
+        # directly inside tmp/arg0/<dir> it is fine, and one level deeper is not
+        home = self.tmp / "ok"
+        (home / "tmp/arg0/a/deeper").mkdir(parents=True)
+        (home / "tmp/arg0/a/link").symlink_to(self.tmp)
+        self.assertIsNotNone(rc.home_size(home))
+        (home / "tmp/arg0/a/deeper/link").symlink_to(self.tmp)
+        self.assertIsNone(rc.home_size(home))
+
+    def test_other_special_files_in_codex_homes_link_directory_are_still_over(self):
+        home = self.tmp / "home"
+        d = home / "tmp" / "arg0" / "a"
+        d.mkdir(parents=True)
+        (d / "ok").symlink_to(self.tmp)
+        self.assertIsNotNone(rc.home_size(home))
+        os.mkfifo(d / "fifo")
+        self.assertIsNone(rc.home_size(home))
+        os.unlink(d / "fifo")
+        import socket
+        s = socket.socket(socket.AF_UNIX)
+        self.addCleanup(s.close)
+        s.bind(str(d / "sock")) if len(str(d / "sock")) < 100 else None
+        if (d / "sock").exists():
+            self.assertIsNone(rc.home_size(home))
+
+    def test_the_strict_default_still_refuses_any_link(self):
+        d = self.tmp / "d"
+        d.mkdir()
+        (d / "l").symlink_to(self.tmp)
+        self.assertIsNone(rc.tree_size(d))
+        self.assertIsNone(rc.tree_size(d, links="codex_home"))
+        self.assertEqual(rc.tree_size(d, links="any"), len(str(self.tmp)))
+
+    def test_a_reviewed_repository_may_hold_links(self):
+        # design 5.4: scratch plus HOME, links counted by their own size, never followed
+        scratch, home = self.tmp / "scratch", self.tmp / "run-home"
+        (scratch / "repo" / "src").mkdir(parents=True)
+        home.mkdir()
+        outside = self.tmp / "outside-huge"
+        outside.write_bytes(b"z" * 5_000_000)
+        (scratch / "repo" / "src" / "main.py").write_bytes(b"x" * 40)
+        (scratch / "repo" / "link-to-file").symlink_to(outside)
+        (scratch / "repo" / "link-to-dir").symlink_to(self.tmp)
+        (scratch / "repo" / "dangling").symlink_to("../nowhere")
+        (scratch / "repo" / "src" / "relative").symlink_to("main.py")
+        size = rc.work_size(scratch, home)
+        self.assertEqual(size, 40 + len(str(outside)) + len(str(self.tmp)) + len("../nowhere") + len("main.py"))
+        self.assertFalse(rc.over_limit(size, rc.WORK_LIMIT))
+        os.mkfifo(scratch / "repo" / "fifo")
+        self.assertIsNone(rc.work_size(scratch, home))                              # a special file is still uncountable
+
     def test_none_counts_as_over(self):
         self.assertTrue(rc.over_limit(None, 10))
         self.assertTrue(rc.over_limit(11, 10))

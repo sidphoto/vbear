@@ -291,6 +291,11 @@ def _run(args, root: Path, state: Path, out_dir: Path, report: dict) -> dict:
         record = state / "pipelines" / tid / "reviews" / "1"
         out["observed"] = _observe(record, out_dir)
         out["codex_mcp_list"] = _mcp_list(args, state)
+        # what CODEX_HOME holds now, by name and kind (never contents): the links Codex made
+        from vbear.runtime import review_codex
+        links: list = []
+        out["codex_home_size"] = review_codex.home_size(state / "codex-home", links)
+        out["codex_home_links_counted"] = links
     finally:
         dm.stop()
         thread.join(10)

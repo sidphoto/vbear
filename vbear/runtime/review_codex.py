@@ -205,18 +205,36 @@ def check_codex_home(base) -> Path:
     return path
 
 
-def tree_size(*paths) -> int | None:
+def _link_allowed(links: str, parts: tuple) -> bool:
+    """Whether a symlink in the directory ``parts`` (relative to the root) may be
+    counted. "none": never (the strict default). "any": anywhere, because a
+    reviewed repository can hold links (design 5.4). "codex_home": only in
+    tmp/arg0/<one directory>/, where Codex itself puts its helper links at
+    every start (design v29.10); a link anywhere else in CODEX_HOME is not
+    something Codex made and counts as over."""
+    if links == "any":
+        return True
+    if links == "codex_home":
+        return len(parts) == 3 and parts[0] == "tmp" and parts[1] == "arg0"
+    return False
+
+
+def tree_size(*paths, links: str = "none", seen_links: list | None = None) -> int | None:
     """Bytes in these directory trees, walked by descriptor, nothing followed.
     None for anything not exactly countable (an error, a vanished entry, a
-    symlink, a special file, more than 100 000 entries): the caller treats
-    it as over the limit and never as a partial count (design 5.1, 5.4)."""
+    special file, more than 100 000 entries, and a symlink where ``links``
+    does not allow one): the caller treats it as over the limit and never as
+    a partial count (design 5.1, 5.4). A symlink that is allowed is counted
+    at the size of the link itself (lstat) and never followed, so nothing
+    outside the tree is counted or reached. ``seen_links``, when given,
+    collects the relative paths of the links that were counted."""
     total, seen = 0, 0
-    stack: list[int] = []
+    stack: list[tuple[int, tuple]] = []
     try:
         for p in paths:
-            stack.append(os.open(str(p), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC))
+            stack.append((os.open(str(p), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC), ()))
         while stack:
-            fd = stack.pop()
+            fd, parts = stack.pop()
             try:
                 with os.scandir(fd) as it:
                     for entry in it:
@@ -225,10 +243,14 @@ def tree_size(*paths) -> int | None:
                             return None
                         st = entry.stat(follow_symlinks=False)
                         if stat.S_ISDIR(st.st_mode):
-                            stack.append(os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-                                                 | os.O_CLOEXEC, dir_fd=fd))
+                            stack.append((os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                                                  | os.O_CLOEXEC, dir_fd=fd), (*parts, entry.name)))
                         elif stat.S_ISREG(st.st_mode):
                             total += st.st_size
+                        elif stat.S_ISLNK(st.st_mode) and _link_allowed(links, parts):
+                            total += st.st_size
+                            if seen_links is not None and len(seen_links) < 64:
+                                seen_links.append("/".join((*parts, entry.name)))
                         else:
                             return None
             finally:
@@ -237,11 +259,22 @@ def tree_size(*paths) -> int | None:
     except OSError:
         return None
     finally:
-        for fd in stack:
+        for fd, _ in stack:
             try:
                 os.close(fd)
             except OSError:
                 pass
+
+
+def home_size(home, seen_links: list | None = None) -> int | None:
+    """CODEX_HOME's size for the 512 MiB threshold (design 5.1, v29.10)."""
+    return tree_size(home, links="codex_home", seen_links=seen_links)
+
+
+def work_size(scratch, run_home) -> int | None:
+    """The review scratch and its HOME together, for the 2 GiB threshold
+    (design 5.4): links in the reviewed repository are ordinary content."""
+    return tree_size(scratch, run_home, links="any")
 
 
 def over_limit(size: int | None, limit: int) -> bool:

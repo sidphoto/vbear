@@ -232,6 +232,17 @@ class EndedEarlyTests(RunCase):
             out = self.drive(run)
         self.assertEqual(out["terminated_for"], "disk_scratch")
 
+    def test_links_in_the_scratch_do_not_end_a_review(self):
+        # design 5.4: a reviewed repository can hold links; they are content, not a reason
+        cmd = ("import os,time; os.symlink('/etc/hosts','l1'); os.symlink('/nonexistent','l2'); "
+               "os.symlink('.','l3'); time.sleep(1.5)")
+        with mock.patch.object(rr, "DISK_EVERY", 0.2):
+            run = self.spawn(cmd)
+            run.next_disk = time.monotonic() + 0.2
+            out = self.drive(run)
+        self.assertIsNone(out["terminated_for"])
+        self.assertEqual(out["exit_code"], 0)
+
     def test_a_directory_that_cannot_be_counted_counts_as_over(self):
         with mock.patch.object(rr.review_codex, "tree_size", return_value=None), mock.patch.object(rr, "DISK_EVERY", 0.1):
             run = self.spawn(self.HANG)

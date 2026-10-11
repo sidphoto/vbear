@@ -299,10 +299,10 @@ class ReviewRun:
                 return
         if now >= self.next_disk:
             self.next_disk = now + DISK_EVERY
-            if review_codex.over_limit(review_codex.tree_size(self.codex_home), review_codex.HOME_LIMIT):
+            if review_codex.over_limit(review_codex.home_size(self.codex_home), review_codex.HOME_LIMIT):
                 self.bad("CODEX_HOME 超過監測門檻，或無法完整計算")
                 self.terminate("disk_home")
-            elif review_codex.over_limit(review_codex.tree_size(self.scratch, self.run_home),
+            elif review_codex.over_limit(review_codex.work_size(self.scratch, self.run_home),
                                          review_codex.WORK_LIMIT):
                 self.bad("審查暫存區與 HOME 合計超過 2 GiB，或無法完整計算")
                 self.terminate("disk_scratch")

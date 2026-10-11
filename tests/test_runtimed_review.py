@@ -74,6 +74,14 @@ def emit(events):
     for e in events:
         sys.stdout.write(json.dumps(e) + "\n")
     sys.stdout.flush()
+if mode == "links":
+    # what a real run has: a reviewed repository with links, and Codex's own helper links
+    os.symlink("/etc/hosts", os.path.join(scratch, "repo", "link-to-file"))
+    os.symlink("/nonexistent", os.path.join(scratch, "repo", "dangling"))
+    helpers = os.path.join(codex_home, "tmp", "arg0", "codex-arg0new")
+    os.makedirs(helpers, exist_ok=True)
+    os.symlink("/bin/ls", os.path.join(helpers, "apply_patch"))
+    time.sleep(2.5)                      # long enough for the daemon's size monitor to look
 if mode == "hang":
     emit(evs[:2]); open(os.path.join(here, "hang-ready"), "w").close(); time.sleep(600)
 if mode == "stderr_flood":
@@ -230,6 +238,33 @@ class ReviewCase(StreamCase):
         r = self.start_review(round_)
         self.assertTrue(r.get("ok"), r)
         return r["result"]["job_id"]
+
+
+class LinkTests(ReviewCase):
+    """Design 5.1 (v29.10) and 5.4: Codex's own helper links in codex-home and
+    links in the reviewed repository are not a reason to refuse or to end a review."""
+
+    def test_codex_helper_links_and_repository_links_do_not_fail_a_review(self):
+        from vbear.runtime import review_run
+        helpers = self.codex_home / "tmp" / "arg0" / "codex-arg0old"
+        helpers.mkdir(parents=True)
+        for n in ("apply_patch", "applypatch", "codex-execve-wrapper"):
+            os.symlink("/bin/ls", helpers / n)                      # as `codex login` left them
+        self.executor_done()
+        with mock.patch.object(review_run, "DISK_EVERY", 0.5):
+            job = self.run_review("links")
+            end = self.wait_state(job, "cleaned")
+        self.assertEqual((end["outcome"], end["exit_code"]), ("valid", 0), self.why(end))
+        self.assertFalse(self.held())
+
+    def test_a_link_somewhere_else_in_codex_home_refuses_the_start(self):
+        self.executor_done()
+        (self.codex_home / "log").mkdir(mode=0o755)                    # as the real one has after `codex login`
+        os.symlink("/bin/ls", self.codex_home / "log" / "stray")
+        r = self.start_review()
+        self.assertFalse(r["ok"])
+        self.assertIn("codex_home_full", r["error"]["message"])
+        self.assertEqual(self.exec_calls(), [])
 
 
 class HappyPathTests(ReviewCase):

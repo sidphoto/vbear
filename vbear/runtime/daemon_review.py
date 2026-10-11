@@ -191,7 +191,7 @@ class ReviewOps:
             raise _Refused("version_mismatch", f"固定位置的 Codex 不是 {version}（"
                            + (f"實際是 {seen}" if seen else f"讀不到版本：{why}") + "）")
         home = review_codex.check_codex_home(self.base)
-        if review_codex.over_limit(review_codex.tree_size(home), review_codex.HOME_LIMIT):
+        if review_codex.over_limit(review_codex.home_size(home), review_codex.HOME_LIMIT):
             raise _Refused("codex_home_full", "專用的 CODEX_HOME 超過 512 MiB（或無法完整計算），請先清理")
         fp = login_identity.codex_login_fingerprint(home, ctx.key)
         if not fp.ok:
