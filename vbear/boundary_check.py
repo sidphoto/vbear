@@ -235,6 +235,43 @@ class TitleObservation:
         return self.tracker.state
 
 
+def _end_pty_probe(pid: int) -> None:
+    """Hold the forked leader until its group is empty (design 5.8).
+
+    This probe owns a forked child, not a Popen/StreamSession. Keep its small
+    cleanup loop local rather than importing the stage-2 session machinery.
+    """
+    from .runtime import proctrack
+
+    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            print("PTY probe: leader 已被回收，不再送訊號，交人工確認", file=sys.stderr)
+            return
+        try:
+            os.killpg(pid, sig)  # pty.fork creates a session with pgid == pid
+        except (ProcessLookupError, PermissionError):
+            pass  # macOS: EPERM when only the zombie leader remains
+        end = time.monotonic() + 2
+        while time.monotonic() < end:
+            try:
+                info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except ChildProcessError:
+                print("PTY probe: leader 已被回收，不再送訊號，交人工確認", file=sys.stderr)
+                return
+            if info is not None:
+                try:
+                    rows = proctrack.process_table()
+                except proctrack.ProcessTableUnavailable:
+                    rows = None
+                if rows is not None and not any(r["pgid"] == pid and "Z" not in r["stat"] for r in rows):
+                    os.waitpid(pid, 0)
+                    return  # From this point on the pgid must never be used.
+            time.sleep(0.1)
+    print("PTY probe: 程序群組未證明已空，leader 未回收，交人工處理", file=sys.stderr)
+
+
 def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
                     idle_wait: float = IDLE_WAIT, prompt_wait: float = PROMPT_WAIT) -> tuple[str, dict]:
     """The real launch shape: Claude Code's TUI in a PTY, prompt typed in.
@@ -285,36 +322,10 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
                 if now - result_at > idle_wait:
                     break
     finally:
-        # Close the PTY first: a child blocked writing to a full PTY cannot exit
-        # while we wait on it. Then reap with a deadline, never blocking forever.
-        try:
-            pgid = os.getpgid(pid)
-        except OSError:
-            pgid = None
+        # Close first so a writer blocked on the PTY can exit, but keep the
+        # leader unreaped until all signals and group cleanup have completed.
         os.close(fd)
-        for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
-            if pgid is not None:
-                try:
-                    os.killpg(pgid, sig)
-                except OSError:
-                    pass
-            end = time.monotonic() + 2
-            while time.monotonic() < end:
-                try:
-                    done, _ = os.waitpid(pid, os.WNOHANG)
-                except ChildProcessError:
-                    done = pid
-                if done:
-                    break
-                time.sleep(0.1)
-            else:
-                continue
-            break
-        if pgid is not None:  # leftovers that ignored SIGHUP/SIGTERM
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except OSError:
-                pass
+        _end_pty_probe(pid)
     raw = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", bytes(transcript))  # titles: class only, above
     text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", raw).decode("utf-8", "replace")
     return f"typed={typed_at is not None}\n{text[-2000:]}", title_checks(titles.events, typed_at)

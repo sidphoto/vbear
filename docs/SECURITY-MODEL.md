@@ -56,6 +56,18 @@ The runtime socket (`~/.vbear/runtime.sock`) is narrower: it accepts only connec
   output is replayed, up to 64 KiB.
 - xterm.js runs with `linkHandler: null` and with window operations disabled. No clipboard (OSC 52) or link addon is loaded.
 
+Terminal sessions and interactive boundary probes detect leader exits with
+`waitid(WEXITED | WNOHANG | WNOWAIT)`, without reaping. Group signals are sent
+only while the leader remains an unreaped child, keeping its PID/PGID from
+being reused. The process table must prove that no non-zombie group member
+remains before `waitpid` reaps the leader. On macOS, EPERM from signalling a
+zombie-only group is tolerated; it does not prove cleanup. If the table is
+unavailable or members survive, cleanup logs manual review and retains the
+leader (and managed launch files). If ownership of the child is lost, no more
+signals are sent, including to managed descendant groups. Spawn-setup failures
+and daemon shutdown follow the same order. RPC/output/exit-code semantics and
+the HUP → TERM → KILL close sequence are unchanged.
+
 ## Agent activity evidence
 
 - For managed Claude sessions, the daemon classifies the terminal title Claude Code sets (evidence for

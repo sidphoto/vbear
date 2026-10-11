@@ -373,5 +373,135 @@ class ShutdownTests(SessionCase):
         self.assertEqual(self.dm._sessions, {})
 
 
+class ReapOrderingTests(unittest.TestCase):
+    """No live runtime; synthetic child identity and process-table snapshots."""
+
+    def setUp(self):
+        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.dict(os.environ, HOME=self.tmp, VBEAR_HOME=self.tmp,
+                                          VBEAR_RUNTIME_AUTOSTART="0"))
+        self.events = []
+        self.proc = mock.Mock(pid=43210, returncode=None)
+        self.proc.poll.side_effect = lambda: self.events.append("popen.poll") or 7
+        self.proc.wait.side_effect = lambda **kw: self.events.append("popen.wait") or 7
+        self.s = d.Session("synthetic", self.proc, -1, [], self.tmp, 80, 24)
+        self.info = type("Exit", (), {"si_status": 7, "si_code": os.CLD_EXITED})()
+        self.enterContext(mock.patch.object(d.os, "waitid", return_value=self.info))
+        self.enterContext(mock.patch.object(d.os, "waitpid", side_effect=self.reap))
+        self.enterContext(mock.patch.object(d.os, "killpg", side_effect=lambda pg, sig: self.events.append(sig)))
+        self.table = self.enterContext(mock.patch.object(d.proctrack, "process_table", return_value=[]))
+        self.dm = d.Daemon(Path(self.tmp) / "runtime", log=mock.Mock())
+        self.dm._sessions[self.s.sid] = self.s
+        self.dm._next_prepared_sweep = float("inf")
+        self.dm._stream_tick = mock.Mock()
+        self.dm._review_tick = mock.Mock()
+
+    def reap(self, pid, flags):
+        self.events.append("waitpid")
+        return pid, 7 << 8
+
+    def test_tick_signals_live_child_before_reaping_leader(self):
+        self.table.return_value = [{"pgid": self.s.pgid, "stat": "R"}]
+        self.dm._begin_close(self.s)
+        self.dm._tick(self.s.deadline + 0.1)
+        self.dm._tick(self.s.deadline + 0.1)
+        self.assertEqual(self.events, [signal.SIGHUP, signal.SIGTERM, signal.SIGKILL])
+        self.table.return_value = [{"pgid": self.s.pgid, "stat": "Z"}]
+        self.dm._tick(self.s.deadline + 0.1)
+        self.s.signal(signal.SIGKILL)
+        self.assertEqual(self.events, [signal.SIGHUP, signal.SIGTERM, signal.SIGKILL, "waitpid"])
+        self.assertEqual(self.s.exit_code, 7)
+        self.assertEqual(self.proc.returncode, 7)
+
+    def test_shutdown_signals_before_reap(self):
+        def kill(pg, sig):
+            self.events.append(sig)
+            self.table.return_value = []
+        self.table.return_value = [{"pgid": self.s.pgid, "stat": "R"}]
+        with mock.patch.object(d.os, "killpg", side_effect=kill):
+            self.dm._kill_all_sessions()
+        self.s.signal(signal.SIGKILL)
+        self.assertEqual(self.events, [signal.SIGTERM, "waitpid"])
+
+    def test_lost_leader_refuses_all_groups_and_logs_review(self):
+        self.s.extra_groups = [43211]
+        with mock.patch.object(d.os, "waitid", side_effect=ChildProcessError):
+            self.dm._begin_close(self.s)
+            self.dm._tick(self.s.deadline + 0.1)
+            self.dm._finalize(self.s)
+        self.assertEqual(self.events, [])
+        self.assertTrue(self.dm._log.called)
+        self.assertTrue(self.s.manual_review)
+
+    def test_unavailable_table_retains_popen_without_reaping(self):
+        self.table.side_effect = d.proctrack.ProcessTableUnavailable("synthetic")
+        self.s.poll()
+        self.dm._finalize(self.s)
+        self.assertEqual(self.events, [])
+        self.assertIs(self.dm._held_leaders[0]["proc"], self.proc)
+
+    def test_natural_exit_reaps_once_and_preserves_signalled_exit_code(self):
+        self.info.si_code, self.info.si_status = os.CLD_KILLED, signal.SIGTERM
+        self.dm._tick(0)
+        self.dm._tick(0)
+        self.s.signal(signal.SIGKILL)
+        self.assertEqual(self.events, ["waitpid"])
+        self.assertEqual(self.s.exit_code, -signal.SIGTERM)
+        self.assertEqual(self.proc.returncode, -signal.SIGTERM)
+
+    def test_managed_extra_group_keeps_leader_until_signals_complete(self):
+        self.s.extra_alive = True
+        self.s.extra_groups = [43211]
+        self.s.poll()
+        self.assertFalse(self.s.reap_if_empty())
+        self.s.signal(signal.SIGTERM)
+        self.s.extra_alive = False
+        self.assertTrue(self.s.reap_if_empty())
+        self.s.signal(signal.SIGKILL)
+        self.assertEqual(self.events, [signal.SIGTERM, signal.SIGTERM, "waitpid"])
+
+    def test_zombie_only_eperm_reaps_after_signal(self):
+        self.table.return_value = [{"pgid": self.s.pgid, "stat": "Z"}]
+        def kill(pg, sig):
+            self.events.append(sig)
+            raise PermissionError()
+        with mock.patch.object(d.os, "killpg", side_effect=kill):
+            self.s.signal(signal.SIGTERM)
+            self.assertTrue(self.s.reap_if_empty())
+            self.s.signal(signal.SIGKILL)
+        self.assertEqual(self.events, [signal.SIGTERM, "waitpid"])
+
+    def test_spawn_setup_failure_signals_and_proves_empty_before_reap(self):
+        self.table.side_effect = [[{"pgid": self.s.pgid, "stat": "R"}], []]
+        with mock.patch.object(d.os, "openpty", return_value=(42, 43)), \
+             mock.patch.object(d, "_set_winsize"), mock.patch.object(d.os, "close"), \
+             mock.patch.object(d.os, "set_blocking", side_effect=OSError("synthetic")), \
+             mock.patch.object(d.subprocess, "Popen", return_value=self.proc):
+            with self.assertRaisesRegex(OSError, "synthetic"):
+                self.dm._spawn(["unused"], self.tmp, 80, 24, {})
+        self.assertEqual(self.events, [signal.SIGKILL, "waitpid"])
+        self.assertEqual(self.dm._held_leaders, [])
+
+
+class WaitidOwnershipTests(unittest.TestCase):
+    def test_poll_keeps_real_exited_leader_waitable(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+                os.environ, HOME=tmp, VBEAR_HOME=tmp, VBEAR_RUNTIME_AUTOSTART="0"):
+            proc = subprocess.Popen([PY, "-I", "-S", "-c", "raise SystemExit(7)"],
+                                    env=dict(os.environ), start_new_session=True)
+            s = d.Session("synthetic", proc, -1, [], tmp, 80, 24)
+            try:
+                deadline = time.monotonic() + 3
+                while s.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(s.exit_code, 7)
+                self.assertIsNone(proc.returncode)
+                pid, status = os.waitpid(proc.pid, os.WNOHANG)
+                self.assertEqual(pid, proc.pid)  # poll did not consume the exit
+                proc.returncode = os.waitstatus_to_exitcode(status)
+            finally:
+                proc.wait(timeout=3)
+
+
 if __name__ == "__main__":
     unittest.main()

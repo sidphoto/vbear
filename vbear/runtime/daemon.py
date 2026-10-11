@@ -34,7 +34,8 @@ Process model (contract v2 §4, §10 S1):
   * Children are spawned with ``subprocess`` (start_new_session=True) via
     the ``_ptyexec`` trampoline, never ``os.fork`` from this possibly
     threaded process. The leader's pid is the process-group id.
-  * Reaping polls each session leader (``Popen.poll``) on every loop turn;
+  * Exit detection uses ``waitid(WNOWAIT)`` on every loop turn; leaders are
+    reaped only after their group is proven empty;
     we deliberately do not ``waitpid(-1)`` so an embedding process's other
     children are never stolen. SIGCHLD (installed by ``main``) only wakes
     the loop so natural exits are noticed promptly.
@@ -298,6 +299,9 @@ class Session:
         self.eof = False
         self.registered = False
         self.exit_code: int | None = None
+        self.reaped = False
+        self.group_proven_empty = False
+        self.manual_review = ""
         self.phase: str | None = None  # None | "hup" | "term" | "kill"
         self.deadline = 0.0
         self.forced = False
@@ -326,34 +330,69 @@ class Session:
         self.titles: osc_title.TitleTracker | None = None
 
     def poll(self) -> int | None:
-        if self.exit_code is None:
-            rc = self.proc.poll()
-            if rc is not None:
-                self.exit_code = rc
+        # Keep this local: stage-2 exit_returncode excludes signal exits, while
+        # terminal sessions must preserve Popen's negative signal return codes.
+        # Keep the Popen object, but never call poll/wait before group cleanup.
+        if self.reaped:
+            return self.exit_code
+        if self.proc.returncode is not None:
+            self.reaped = True
+            self.exit_code = self.proc.returncode
+            self.manual_review = "leader 已被回收，不再送訊號，交人工確認程序群組"
+            return self.exit_code
+        try:
+            info = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            self.reaped = True
+            self.manual_review = "leader 已不是未回收的子程序，不再送訊號，交人工確認"
+            return self.exit_code
+        if info is not None:
+            self.exit_code = info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
         return self.exit_code
+
+    def reap_if_empty(self) -> bool:
+        self.poll()
+        if self.reaped:
+            return self.group_proven_empty
+        if self.exit_code is None or self.group_alive() or (self.tracker is not None and self.unproven):
+            return False
+        try:
+            done, _ = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            self.reaped = True
+            self.manual_review = "leader 在回收前已失去，交人工確認"
+            return False
+        if done != self.pid:
+            return False
+        self.reaped = self.group_proven_empty = True
+        self.proc.returncode = self.exit_code
+        return True
 
     def group_alive(self) -> bool:
         return self.leader_group_alive() or self.extra_alive
 
     def leader_group_alive(self) -> bool:
+        if self.group_proven_empty:
+            return False  # Never probe a pgid after reaping; it may be reused.
         if self.pgid <= 1 or self.pgid == os.getpgrp():
-            return False  # symmetric with signal(): never probe ourselves/init
-        try:
-            os.killpg(self.pgid, 0)
-            return True
-        except ProcessLookupError:
             return False
-        except PermissionError:
-            return True
+        # killpg(0) also sees our zombie leader (and may return EPERM on macOS).
+        # Like stream_session, use the process table to exclude zombies.
+        try:
+            rows = proctrack.process_table()
+        except proctrack.ProcessTableUnavailable:
+            return True  # unknown: retain the leader, never claim cleanup
+        return any(r["pgid"] == self.pgid and "Z" not in r["stat"] for r in rows)
 
     def signal(self, sig: int) -> None:
-        # Never signal ourselves or init, whatever the bookkeeping says.
-        if self.pgid <= 1 or self.pgid == os.getpgrp():
+        # waitid also proves a running leader is still our unreaped child.
+        self.poll()
+        if self.reaped or self.pgid != self.pid or self.pgid <= 1 or self.pgid == os.getpgrp():
             return
         try:
             os.killpg(self.pgid, sig)
         except (ProcessLookupError, PermissionError):
-            pass
+            pass  # macOS: EPERM when only the zombie leader remains
         for pgid in self.extra_groups:  # managed only; refreshed right before signalling
             if pgid <= 1 or pgid == os.getpgrp() or pgid == self.pgid:
                 continue
@@ -652,11 +691,12 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         finally:
             os.close(slave)
         try:
+            sess = Session("untracked", proc, master, list(argv), cwd, cols, rows)
             os.set_blocking(master, False)
             sid = "n-" + secrets.token_hex(6)
             while sid in self._sessions:
                 sid = "n-" + secrets.token_hex(6)
-            sess = Session(sid, proc, master, list(argv), cwd, cols, rows)
+            sess.sid = sid
             self._sel.register(master, selectors.EVENT_READ, sess)
             sess.registered = True
             self._sessions[sid] = sess
@@ -664,14 +704,14 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         except BaseException:
             # Not tracked yet: nobody else would ever reap it (AGY S1 P2).
             os.close(master)
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
+            sess.signal(signal.SIGKILL)
+            end = time.monotonic() + 1
+            while time.monotonic() < end and not sess.reap_if_empty():
+                time.sleep(0.02)
+            if not sess.group_proven_empty:
+                self._log(f"{sess.sid}: manual_review: untracked group not proven empty")
+                if not sess.reaped:
+                    self._hold_leader(proc, sess.sid)
             raise
 
     def _observe_managed(self, s: Session, *, force: bool = False, rows: list | None = None) -> None:
@@ -709,7 +749,9 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             return None
         self._observe_managed(s, force=True)
         reason = ""
-        if s.exit_code is None:
+        if s.manual_review:
+            reason = s.manual_review
+        elif s.exit_code is None:
             reason = "leader 尚未結束"
         elif s.leader_group_alive():
             reason = "leader 的 process group 仍有程序"
@@ -800,7 +842,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             for s in due:
                 self._observe_managed(s, rows=table)
         for s in list(self._sessions.values()):
-            s.poll()  # reaps natural exits too (no zombies)
+            s.poll()  # detect exit without releasing the PID/PGID
+            s.reap_if_empty()
             if (s.exit_code is not None and not s.exit_notified
                     and (s.eof or not s.registered or not s.group_alive())):
                 if s.registered:
@@ -837,6 +880,11 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             self._read_master(s, budget=64)  # last output before the master closes
         self._close_master(s)
         self._sessions.pop(s.sid, None)
+        s.reap_if_empty()
+        if not s.group_proven_empty:
+            self._log(f"{s.sid}: manual_review: {s.manual_review or '程序群組未證明已空，保留 leader'}")
+            if not s.reaped:
+                self._hold_leader(s.proc, s.launch_id or s.sid)
         for att in list(s.attachments):
             self._att_close_with(att, s.exit_reason or "session 已關閉")
             att.sess = None
@@ -868,18 +916,17 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         for s in sessions:
             if alive(s):
                 s.signal(signal.SIGKILL)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and any(alive(s) for s in sessions):
+            time.sleep(0.05)
         for s in sessions:
-            try:
-                s.proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self._log(f"{s.sid}: leader did not exit after SIGKILL")
-            s.poll()
+            s.reap_if_empty()
+            if not s.group_proven_empty:
+                self._log(f"{s.sid}: manual_review: {s.manual_review or 'SIGKILL 後程序群組未證明已空'}")
+                if not s.reaped:
+                    self._hold_leader(s.proc, s.launch_id or s.sid)
             self._close_master(s)
-            if s.launch_id is not None:
-                end = time.monotonic() + 1.0  # let SIGKILLed descendants disappear
-                while time.monotonic() < end and alive(s):
-                    time.sleep(0.05)
-                self._finish_managed(s)
+            self._finish_managed(s)
         self._sessions.clear()
 
     # ---- connections ----
