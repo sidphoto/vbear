@@ -44,6 +44,7 @@ from . import claude_verify
 from . import config as cfg
 from . import flow_executor
 from . import flow_review
+from . import flow_storage
 from . import flows
 from . import previews as previews_mod
 from .api_error import ApiError
@@ -133,6 +134,7 @@ class Console:
         self.executor = flow_executor.FlowExecutor(self.runtime, self.preview_records,
                                                    managed_root=self.managed_root)
         self.review = flow_review.FlowReview(self.executor)
+        self.storage = flow_storage.FlowStorage(self.executor)
         self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
@@ -421,6 +423,8 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "task": self._with_pickup([t])[0]})
                 if path == "/api/flows":
                     return self._json(self._flows_view())
+                if path == "/api/flows/storage":
+                    return self._flow_action(console.storage.usage)
                 m_flow = FLOW_GET_RE.match(path)
                 if m_flow:
                     fid, what, job = m_flow.group(1), m_flow.group(2), m_flow.group(3)
@@ -906,6 +910,8 @@ def make_handler(console: Console):
                             lambda: console.executor.dispatch_preview(rest[:-len("/dispatch-preview")], body))
                     elif rest.endswith("/dispatch"):
                         return self._flow_action(lambda: console.executor.dispatch_confirm(rest[:-len("/dispatch")], body))
+                    elif rest.endswith("/delete"):
+                        return self._flow_action(lambda: console.storage.delete(rest[:-len("/delete")], body))
                     elif rest.endswith("/hold"):
                         return self._flow_action(lambda: console.executor.hold(rest[:-len("/hold")], body))
                     elif rest.endswith("/continue"):

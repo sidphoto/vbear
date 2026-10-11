@@ -869,3 +869,6 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .s2-confirm { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .btn.bad { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
 @media (max-width: 640px) { .s2-cols { grid-template-columns: 1fr; } .s2-limit { width: 100%; } }
+.s2-storage { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.s2-storage-item { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); }
+.s2-reasons { margin: 6px 0 0; padding-left: 1.2em; color: var(--ink-2); }

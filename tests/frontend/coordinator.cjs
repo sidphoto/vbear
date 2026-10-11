@@ -65,7 +65,10 @@ const gate = (over = {}) => ({
 let state;
 function reset(over = {}) {
   state = { executor: executor(), reports: { ok: true, reports: [], latest_dispatch_id: null }, reviews: { ok: true, reviews: [] },
-    gate: gate(), preview: null, accept: null, post: {}, ...over };
+    gate: gate(), preview: null, accept: null, post: {},
+    storage: { ok: true, limit_bytes: 4294967296, used_bytes: 1048576, problem: "", note: "只有沒有程序在執行的流程才能刪除。",
+      flows: [{ flow_id: FLOW, task_id: "task-1", bytes: 1048576, sessions: 1, reviews: 2, has_data: true, held: false,
+        deletable: true, reasons: [], note: "" }] }, ...over };
   FETCH_LOG.length = 0;
   setHandler((url, opts) => {
     const p = url.split("?")[0];
@@ -76,6 +79,7 @@ function reset(over = {}) {
       if (p.endsWith("/reports")) return answer(state.reports);
       if (p.endsWith("/reviews")) return answer(state.reviews);
       if (p.endsWith("/merge-gate")) return answer(state.gate);
+      if (p.endsWith("/api/flows/storage")) return answer(state.storage);
       const m = /\/reviews\/(r-[0-9a-f]{16})\/draft$/.exec(p);
       if (m) return answer({ ok: true, text: "DRAFT\n" + m[1], truncated: false, format: "plain_text" });
       return null;
@@ -511,6 +515,73 @@ test("changing any setting voids the preview: the box is cleared and accepting s
     assert(button(m, "接受並記錄").disabled, `${which}: still off until the tick`);
     FETCH_LOG.length = 0;
   }
+});
+
+// ---- storage and deleting a flow (S2c-5) ---------------------------------------------------------------------
+
+test("storage shows size and counts, and deleting takes two steps and names the flow", async () => {
+  reset();
+  let gone = null;
+  const s = app.mountStorage({ afterDelete: (id) => { gone = id; } });
+  await settle();
+  const t = text(s.node);
+  assert(t.includes("1.0 MiB") && t.includes("4.00 GiB") && t.includes("1 個 session、2 次審查"), t);
+  button(s.node, "刪除這個流程…").click();
+  await settle();
+  assert(!posts().some((x) => x.url.endsWith("/delete")), "one click is a question");
+  assert(text(s.node).includes("無法復原"));
+  button(s.node, "取消").click();
+  await settle();
+  assert(!posts().some((x) => x.url.endsWith("/delete")));
+  button(s.node, "刪除這個流程…").click();
+  button(s.node, "確定").click();
+  await settle();
+  const p = posts().find((x) => x.url.endsWith("/delete"));
+  assert(p && p.url.includes(FLOW), "the delete of this flow");
+  assert.deepStrictEqual(p.body, { flow_id: FLOW });
+  assert.strictEqual(gone, FLOW);
+  s.stop();
+});
+
+test("a flow that cannot go is shown with the reasons and no delete button", async () => {
+  reset({ storage: { ok: true, limit_bytes: 4294967296, used_bytes: 2000000000, problem: "", note: "n", flows: [
+    { flow_id: FLOW, task_id: "task-1", bytes: 1000, sessions: 1, reviews: 0, has_data: true, held: true, deletable: false,
+      reasons: ["串流 session l-1111111111111111 仍在執行"], note: "" },
+    { flow_id: "flow-ffffffffffff", task_id: "t2", bytes: null, sessions: 0, reviews: 0, has_data: false, held: false,
+      deletable: false, reasons: ["session l-x 的 manifest 無法讀取，無法判斷哪些資料屬於這個流程"], note: "" }] } });
+  const s = app.mountStorage();
+  await settle();
+  const t = text(s.node);
+  assert(t.includes("仍在執行") && t.includes("無法判斷哪些資料屬於這個流程") && t.includes("未知"));
+  assert.strictEqual(s.node.findAll((n) => n.tag === "button" && n.textContent.includes("刪除這個流程")).length, 0);
+  s.stop();
+});
+
+test("a nearly full quota says so; a flow's own page shows only that flow", async () => {
+  reset({ storage: { ok: true, limit_bytes: 4294967296, used_bytes: 4200000000, problem: "", note: "n", flows: [
+    { flow_id: FLOW, task_id: "task-1", bytes: 10, sessions: 1, reviews: 0, has_data: true, held: false, deletable: true, reasons: [], note: "" },
+    { flow_id: "flow-ffffffffffff", task_id: "t2", bytes: 99, sessions: 1, reviews: 0, has_data: true, held: false, deletable: true, reasons: [], note: "" }] } });
+  const all = app.mountStorage();
+  await settle();
+  assert(text(all.node).includes("快滿了"));
+  assert.strictEqual(all.node.findAll((n) => n.tag === "li" && n.hasClass("s2-storage-item")).length, 2);
+  const one = app.mountStorage({ onlyFlowId: FLOW });
+  await settle();
+  assert.strictEqual(one.node.findAll((n) => n.tag === "li" && n.hasClass("s2-storage-item")).length, 1);
+  all.stop(); one.stop();
+});
+
+test("a refused deletion is said and the list is read again", async () => {
+  reset();
+  state.post["delete"] = [{ error: "不能刪除：串流 session l-1111111111111111 仍在執行", code: "not_deletable" }, 409];
+  const s = app.mountStorage();
+  await settle();
+  const reads = FETCH_LOG.filter((x) => x.url.endsWith("/api/flows/storage")).length;
+  button(s.node, "刪除這個流程…").click();
+  button(s.node, "確定").click();
+  await settle();
+  assert(FETCH_LOG.filter((x) => x.url.endsWith("/api/flows/storage")).length > reads, "read again after the answer");
+  s.stop();
 });
 
 // ---- refresh rounds ----------------------------------------------------------------------------------------

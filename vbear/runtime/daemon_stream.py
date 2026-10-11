@@ -10,6 +10,7 @@ strictly ordered (design 7).
   stream_close      {launch_id}
   pipeline_hold     {pipeline, reason}
   pipeline_release  {pipeline}
+  flow_delete       {pipeline}                          remove a flow's data (design 9; flow_data)
 
 ``pipeline`` in the two dispatch RPCs is what design 3.1 checks against the
 manifest ("manifest 綁定的流程等於請求的流程").
@@ -28,8 +29,8 @@ import time
 import uuid
 
 from .. import admin_policy, executor_report, git_head
-from . import (agent_sessions, cli_versions, pipeline_store, proctrack, quota, stream_flow, stream_journal,
-               stream_protocol as sp, stream_session)
+from . import (agent_sessions, cli_versions, flow_data, pipeline_store, proctrack, quota, stream_flow,
+               stream_journal, stream_protocol as sp, stream_session)
 
 _APPROVAL_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}\Z")
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -654,6 +655,49 @@ class StreamOps:
         # affected (design 7).
         self._review_hold(req["pipeline"])
         return _ok(rid, {"pipeline": req["pipeline"], "held": True})
+
+    def _op_flow_delete(self, rid: str, req: dict) -> dict:
+        """Design 9: "data is kept until the user deletes the flow; only when
+        no process is running and nothing is in manual_review; path and
+        identity checked first". The daemon alone writes these directories, so
+        it alone removes them. Idempotent: what is already gone is skipped,
+        so a deletion that stopped half way is finished by asking again. The
+        flow record itself is the console's (flows.json); it is removed by
+        the console after this answers ok."""
+        from .. import flows
+        pipeline = req.get("pipeline")
+        if not (isinstance(pipeline, str) and pipeline_store.FLOW_RE.match(pipeline)):
+            return _err(rid, "bad_request", "流程 id 格式不符")
+        try:
+            flow = flows.read_only_snapshot(self.base).get(pipeline)
+        except Exception as exc:
+            return _err(rid, "refused", f"無法讀取流程（{exc}）")
+        if flow is None:
+            return _err(rid, "refused", "找不到這個流程")
+        live_launches = {x.launch_id for x in self._streams.values() if x.pipeline_id == pipeline}
+        live_jobs = {j.job_id for j in self._reviews.values() if j.pipeline_id == pipeline}
+        try:
+            pl = flow_data.plan(self.base, pipeline, flow["task_id"])
+        except flow_data.FlowDataRefused as exc:
+            return _err(rid, "refused", f"不能刪除：{exc}")
+        why = flow_data.blockers(pl, live_launches=live_launches, live_jobs=live_jobs)
+        if why:
+            return _err(rid, "refused", "不能刪除：" + "；".join(why[:6]))
+        try:
+            removed = flow_data.remove(self.base, pl)
+        except flow_data.FlowDataRefused as exc:
+            self._log(f"flow_delete {pipeline}: {exc}")
+            self._rebuild_ledger()
+            note = "（已刪除一部分，再按一次可繼續）" if exc.partial else ""
+            return _err(rid, "refused", f"刪除失敗：{exc}{note}")
+        except OSError as exc:
+            self._log(f"flow_delete {pipeline}: {type(exc).__name__}: {exc}")
+            self._rebuild_ledger()
+            return _err(rid, "refused", f"刪除失敗：{exc.strerror or type(exc).__name__}（已刪除一部分，再按一次可繼續）")
+        self._log(f"flow_delete {pipeline}: {len(removed['sessions'])} sessions, {len(removed['reviews'])} reviews"
+                  f"{', pipeline' if removed['pipeline'] else ''}, {pl.total_bytes} bytes")
+        self._rebuild_ledger()                                  # from a scan: the freed room is real
+        return _ok(rid, {"pipeline": pipeline, "deleted": True, "removed": removed, "bytes": pl.total_bytes})
 
     def _op_pipeline_release(self, rid: str, req: dict) -> dict:
         """The user's "continue" (design 7, v29.8): the time is recorded in

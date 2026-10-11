@@ -1934,7 +1934,8 @@ async function viewFlows() {
     el("section", { class: "section" },
       sectionHead("進行中的流程", `${list.length} 個`),
       list.length ? el("div", { class: "grid" }, list.map(flowCard)) : emptyState("還沒有流程", "在下方選一張任務卡建立。")),
-    el("section", { class: "section" }, sectionHead("建立流程", null), form));
+    el("section", { class: "section" }, sectionHead("建立流程", null), form),
+    mountStorage().node);
 }
 
 function flowEventBody(kind, values) {
@@ -2262,7 +2263,7 @@ function s2ExecutorPanel(flowId, ex, refresh) {
   const live = sessions.find((s) => s.manifest_state === "running" || s.manifest_state === "launching");
   const start = el("button", { class: "btn small primary", type: "button", disabled: !ex.can_start, on: { click: async (ev) => {
     ev.target.disabled = true;
-    try { await api.post(s2Url(flowId, "executor"), {}); toast("已啟動執行者"); } catch (e) { toast("無法啟動：" + e.message); }
+    try { await api.post(s2Url(flowId, "executor"), {}); toast("已啟動執行者"); } catch (e) { s2Fail("無法啟動：", e); }
     refresh();
   } } }, "啟動執行者");
   const why = [];
@@ -2419,7 +2420,7 @@ function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
   const start = el("button", { class: "btn small primary", type: "button", disabled: why.length > 0, on: { click: async (ev) => {
     ev.target.disabled = true;
     try { const r = await api.post(s2Url(flowId, "review"), {}); toast(`已啟動第 ${r.round} 輪審查`); }
-    catch (e) { toast("無法啟動審查：" + e.message); }
+    catch (e) { s2Fail("無法啟動審查：", e); }
     refresh();
   } } }, "請 Codex 審查最新回報");
   const items = reviews.map((x) => {
@@ -2478,6 +2479,75 @@ function s2GatePanel(g) {
       a.caveat ? el("span", { class: "muted" }, `（${a.caveat}）`) : null))));
 }
 
+
+// ---- what flows keep on disk, and deleting a flow (S2c-5) ---------------------------------------------------------
+//
+// The sizes and the reasons come from the server (which reads the same files the daemon will re-check);
+// "deletable" is only a hint for the button. The daemon decides again, and says why when it refuses.
+
+function s2Bytes(n) {
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return "未知";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KiB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MiB`;
+  return `${(n / 1073741824).toFixed(2)} GiB`;
+}
+
+// A failed action; a full quota points at the place where old flows can be deleted.
+function s2Fail(prefix, e) {
+  const hint = e && e.data && e.data.storage ? "（保存的資料已滿：請到「流程」頁下方的「保存的資料」刪除不再需要的舊流程）" : "";
+  toast(prefix + e.message + hint);
+}
+
+// onlyFlowId: show just that flow (its own page); otherwise every flow that keeps data.
+function mountStorage(opts = {}) {
+  const body = el("div", { class: "s2-storage-body" });
+  let alive = true;
+  async function load() {
+    let res;
+    try { res = await api.get("/api/flows/storage", { timeoutMs: S2_REQUEST_TIMEOUT_MS }); }
+    catch (e) { if (alive) setKids(body, notice("bad", "無法讀取保存的資料：" + e.message)); return; }
+    if (!alive) return;
+    let items = res.flows || [];
+    if (opts.onlyFlowId) items = items.filter((x) => x.flow_id === opts.onlyFlowId);
+    else items = items.filter((x) => x.has_data || x.bytes == null || !x.deletable);
+    const full = typeof res.used_bytes === "number" && res.used_bytes >= res.limit_bytes * 0.9;
+    const rows = items.map((x) => {
+      const del = s2Confirm("刪除這個流程…",
+        `刪除「${x.task_id}」這個流程的全部資料（${s2Bytes(x.bytes)}：日誌、派工全文、審查紀錄）與流程紀錄，無法復原。`,
+        async () => {
+          try {
+            const r = await api.post(`/api/flows/${encodeURIComponent(x.flow_id)}/delete`, { flow_id: x.flow_id });
+            toast(`已刪除，釋出 ${s2Bytes(r.bytes)}`);
+            if (opts.afterDelete) opts.afterDelete(x.flow_id);
+          } catch (e) { toast("無法刪除：" + e.message); }
+          load();
+        }, "bad");
+      const button = x.deletable ? del : null;
+      return el("li", { class: "s2-storage-item" },
+        el("div", { class: "row" }, el("b", { class: "mono" }, x.flow_id), el("span", { class: "small" }, `任務 ${x.task_id}`),
+          badge(s2Bytes(x.bytes), x.bytes == null ? "b-warn" : "b-mute"),
+          x.has_data ? el("span", { class: "small muted" }, `${x.sessions} 個 session、${x.reviews} 次審查`) : el("span", { class: "small muted" }, "沒有保存的資料"),
+          x.held ? badge("已停止", "b-warn") : null, button),
+        x.reasons && x.reasons.length
+          ? el("ul", { class: "small s2-reasons" }, x.reasons.map((r) => el("li", null, r))) : null,
+        x.note ? el("p", { class: "small muted" }, x.note) : null);
+    });
+    setKids(body,
+      el("p", { class: "small" }, `VBear 保存的資料 ${s2Bytes(res.used_bytes)} ／ 上限 ${s2Bytes(res.limit_bytes)}。` +
+        "資料會一直保存，直到你刪除流程。"),
+      res.problem ? notice("bad", res.problem) : null,
+      full ? notice("warn", "保存的資料快滿了，滿了之後不能再啟動執行者或審查。請刪除不再需要的舊流程。") : null,
+      el("p", { class: "small muted" }, res.note),
+      rows.length ? el("ul", { class: "s2-storage" }, rows) : emptyState("沒有保存的資料", null));
+  }
+  const refresh = el("button", { class: "btn small", type: "button", on: { click: load } }, "重新整理");
+  const node = el("section", { class: "section s2-panel", "data-s2": "storage" },
+    sectionHead(opts.onlyFlowId ? "這個流程保存的資料" : "保存的資料", null, refresh), body);
+  load();
+  return { node, reload: load, stop() { alive = false; } };
+}
+
 // ---- the section the flow page mounts ------------------------------------------------------------------------
 
 function mountCoordinator(flowId) {
@@ -2529,9 +2599,11 @@ function mountCoordinator(flowId) {
     }
   }
   composer = s2DispatchComposer(flowId, getExecutor, () => refresh(true));
+  // deleting this flow, from its own page; afterwards there is nothing here to show
+  const storage = mountStorage({ onlyFlowId: flowId, afterDelete: () => { location.hash = "#/flows"; } });
   host.append(el("div", { class: "section" }, el("h2", null, "VBear 管理的執行與審查"),
     el("p", { class: "small muted" }, "以下由 VBear 的背景程序執行；每一個動作都先預覽、再由你核准。上面「手動記錄事件」那一區沒有改變，仍然只是記錄。")),
-    data, composer.node);
+    data, composer.node, storage.node);
   refresh(true);
   return {
     node: host, refresh, composer,
@@ -2540,7 +2612,7 @@ function mountCoordinator(flowId) {
       if (typeof document !== "undefined" && document.querySelector && document.querySelector(".modal-backdrop")) return Promise.resolve();
       return refresh(false);
     },
-    stop() { alive = false; },
+    stop() { alive = false; storage.stop(); },
   };
 }
 
@@ -5426,6 +5498,7 @@ if (typeof module !== "undefined" && module.exports) {
     flowLiveText,
     api,
     mountCoordinator,
+    mountStorage,
     openAcceptanceDialog,
     cleanupActiveView,
     cleanupActiveTerminal,

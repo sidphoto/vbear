@@ -630,6 +630,17 @@ def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str]
     }
 
 
+def delete_flow(flow_id) -> dict:
+    """Remove a flow's own record (S2c-5). Its data on disk is the daemon's and
+    is deleted first (flow_storage); KeyError when there is no such flow."""
+    with store.locked():
+        flows = store.load()
+        flow = _get(flows, flow_id)
+        del flows[flow_id]
+        store.save(flows)
+        return flow
+
+
 def list_flows() -> list[dict]:
     return list(store.load().values())
 

@@ -145,6 +145,8 @@ RPC_OPS: dict[str, frozenset] = {
     "review_start": frozenset({"pipeline", "round", "commit"}),
     "review_status": frozenset({"job_id"}),
     "review_cancel": frozenset({"job_id"}),
+    # the user's deletion of a flow's data (design 9; flow_data)
+    "flow_delete": frozenset({"pipeline"}),
 }
 _ATTACHED = object()  # _dispatch result: the connection became an attachment
 
@@ -1130,7 +1132,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                       "stream_send": self._op_stream_send, "stream_status": self._op_stream_status,
                       "stream_close": self._op_stream_close, "pipeline_hold": self._op_pipeline_hold,
                       "pipeline_release": self._op_pipeline_release, "review_start": self._op_review_start,
-                      "review_status": self._op_review_status, "review_cancel": self._op_review_cancel}
+                      "review_status": self._op_review_status, "review_cancel": self._op_review_cancel,
+                      "flow_delete": self._op_flow_delete}
         if op in stream_ops:
             try:
                 return stream_ops[op](rid, req)
