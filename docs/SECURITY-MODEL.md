@@ -448,8 +448,14 @@ That is what the approval has to be informed consent for.
 - **The daemon, not the console, has the last word.** It switches the flow to automatic only when the event named by
   the approval id (`auto-<seq>`) exists, is valid now, carries the program's current automatic-mode text version, is
   the newest valid acceptance, `plan.txt` is a plain file whose size and sha256 are the event's, the flow is not
-  stopped and has no unreleased failure. It re-checks the newest-acceptance and plan conditions on every automatic
-  dispatch and review.
+  stopped and has no unreleased failure. Afterwards it re-checks, on every automatic action and not from a cache:
+  at `dispatch_prepare` and again at `stream_send` (judged with the approval the dispatch was prepared with) that
+  the approval is still the one the mode was switched on with, still the newest valid acceptance and `plan.txt`
+  is still its hash; and that the executor's Claude Code version and model (from the session's manifest) and the
+  Claude account fingerprint in `~/.claude.json` are the accepted ones. A difference refuses the action, writes
+  nothing, and stops the flow with the reason. `review_start` re-checks the approval the same way and, as for a
+  manual review, the Codex version, model and the dedicated login's fingerprint. (Manual dispatches re-check the
+  executor's account when a session starts, as in Phase 2, not on every dispatch.)
 - **Changing anything means starting over.** While a flow is automatic, manual dispatches, manual reviews and manual
   acceptances are refused (by the console and by the daemon); to change a limit you stop the flow, switch back to
   manual, accept again and approve again.

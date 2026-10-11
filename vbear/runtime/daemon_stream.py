@@ -414,7 +414,7 @@ class StreamOps:
                 and approval["kind"] in ("preview", "automation")
                 and isinstance(approval["id"], str) and _APPROVAL_ID.match(approval["id"])):
             return _err(rid, "bad_request", "approval 格式不符")
-        refused = self._mode_gate(rid, s.pipeline_id, approval)
+        refused = self._mode_gate(rid, s.pipeline_id, approval, stream=s)
         if refused:
             return refused
         try:
@@ -496,6 +496,14 @@ class StreamOps:
         if pipeline_store.is_held(self.base, s.pipeline_id):
             return self._held(rid, s, d)                  # before any idempotent answer (A-3)
         turn = s.js.turns.get(d)
+        if turn is not None and turn.status == "accepted" and s.writing != d:
+            # Between prepare and send the mode, the approval, the plan, the account or the CLI may have changed:
+            # in automatic mode the dispatch is judged again, with the approval it was prepared with (a manual
+            # preview prepared before the switch is refused here). An answer for a dispatch that is already
+            # written is a status, not an action, and is not judged again.
+            refused = self._mode_gate(rid, s.pipeline_id, dict(turn.approval), required=False, stream=s)
+            if refused:
+                return refused
         if s.writing == d or (turn is not None and turn.status != "accepted"):
             refused = self._revalidate(rid, s, d)
             if refused:
@@ -716,7 +724,35 @@ class StreamOps:
             return "plan.txt 與核准時記錄的雜湊或大小不符，需要重新核准"
         return None
 
-    def _mode_gate(self, rid: str, pipeline: str, approval, *, required: bool = True) -> dict | None:
+    def _auto_live_problem(self, s) -> str | None:
+        """Automatic mode only (S3 design 2: "before every action ... every bound value unchanged, the account
+        fingerprints included"): what this session runs and who it runs as, looked at NOW and never from a
+        cache: the Claude Code version and model of the session's manifest and the Claude login in
+        ~/.claude.json against the acceptance. None when they are what was accepted."""
+        from .daemon import build_env
+        try:
+            ctx = stream_flow.load(self.base, s.pipeline_id)
+            home = build_env().get("HOME", "")
+            m = s.manifest
+            stream_flow.check_executor(ctx, cli_version=m["cli_version"], model_id=m["model_id"],
+                                       claude_json=os.path.join(home, ".claude.json"))
+        except stream_flow.FlowRefused as exc:
+            return f"自動執行的核對沒有通過：{exc}"
+        except (KeyError, OSError) as exc:
+            return f"自動執行的核對無法完成（{type(exc).__name__}）"
+        return None
+
+    def _auto_refuse(self, rid: str, s, why: str) -> dict:
+        """A live fact differs from what the automatic mode was approved with: nothing is written, the flow is
+        stopped (and a review in progress ended) with the reason, and the answer says so."""
+        try:
+            pipeline_store.hold(self.base, s.pipeline_id, f"自動執行停止：{why}"[:256])
+        except (OSError, ValueError, pipeline_store.StoreRefused) as exc:
+            self._log(f"{s.pipeline_id}: could not hold after an automatic-mode refusal: {exc}")
+        self._review_hold(s.pipeline_id)
+        return _err(rid, "refused", f"{why}（流程已停止）")
+
+    def _mode_gate(self, rid: str, pipeline: str, approval, *, required: bool = True, stream=None) -> dict | None:
         """The mode decides which approval a dispatch or review may carry
         (S3 design 2): in "manual" never an automation one; in "auto" only the
         automation approval the mode was switched on with. ``required`` False:
@@ -737,6 +773,10 @@ class StreamOps:
         why = self._auto_acceptance_problem(pipeline, info["approval_id"])
         if why:
             return _err(rid, "refused", why)
+        if stream is not None:
+            why = self._auto_live_problem(stream)
+            if why:
+                return self._auto_refuse(rid, stream, why)
         return None
 
     def _op_pipeline_mode_set(self, rid: str, req: dict) -> dict:

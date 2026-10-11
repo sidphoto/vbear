@@ -353,3 +353,106 @@ class DeletionInterplayTests(AutoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveCheckTests(AutoCase):
+    """S3 final review: in automatic mode the daemon looks at the executor's account and CLI now, before the
+    prepare and again before the send, and judges the approval again before the send."""
+
+    def switch_on(self):
+        seq = self.accept_auto()
+        launch, _ = self.open()
+        self.assertTrue(self.set_mode("auto", seq=seq)["ok"])
+        return seq, launch
+
+    def change_account(self):
+        (self.home / ".claude.json").write_text(json.dumps({"oauthAccount": {
+            "accountUuid": "99999999-2222-3333-4444-555555555555",
+            "organizationUuid": "66666666-7777-8888-9999-000000000000"}}))
+
+    def prepared(self, launch, seq):
+        d = fx.new_uuid()
+        r = self.rpc("dispatch_prepare", launch_id=launch, pipeline=self.fid, dispatch_id=d, text="請完成工作",
+                     approval={"kind": "automation", "id": f"auto-{seq}"})
+        return d, r
+
+    def test_a_changed_account_before_the_prepare_is_refused_and_stops_the_flow(self):
+        seq, launch = self.switch_on()
+        self.change_account()
+        d, r = self.prepared(launch, seq)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("帳號", r["error"]["message"])
+        self.assertIn("流程已停止", r["error"]["message"])
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+        self.assertIn("自動執行停止", pipeline_store.hold_info(self.base, self.fid)["reason"])
+        self.assertEqual(self.journal(launch).state.turns, {})                       # nothing was written
+
+    def test_a_changed_account_between_the_prepare_and_the_send_is_refused_and_stops_the_flow(self):
+        seq, launch = self.switch_on()
+        d, r = self.prepared(launch, seq)
+        self.assertTrue(r["ok"], r)
+        self.change_account()
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("帳號", r["error"]["message"])
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+        self.assertEqual(self.journal(launch).state.turns[d].status, "accepted")      # never written to the CLI
+        self.assertFalse(self.dm._streams[launch].writing)
+
+    def test_a_newer_acceptance_between_the_prepare_and_the_send_is_refused(self):
+        seq, launch = self.switch_on()
+        d, r = self.prepared(launch, seq)
+        self.assertTrue(r["ok"], r)
+        self.accept()                                                          # a manual acceptance replaces it
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("取代", r["error"]["message"])
+        self.assertEqual(self.journal(launch).state.turns[d].status, "accepted")
+
+    def test_a_changed_plan_file_between_the_prepare_and_the_send_is_refused(self):
+        seq, launch = self.switch_on()
+        d, r = self.prepared(launch, seq)
+        self.assertTrue(r["ok"], r)
+        plan = self.base / "automation" / self.fid / "plan.txt"
+        plan.write_text(plan.read_text() + "x")
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("plan.txt", r["error"]["message"])
+        self.assertEqual(self.journal(launch).state.turns[d].status, "accepted")
+
+    def test_everything_unchanged_sends(self):
+        seq, launch = self.switch_on()
+        d, r = self.prepared(launch, seq)
+        self.assertTrue(r["ok"], r)
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertTrue(r["ok"], r)
+        self.wait_for(lambda: self.journal(launch).state.turns[d].status in ("written", "confirmed", "ended"), msg="sent")
+        # a send repeated for a dispatch that is already written is a status, whatever happened since
+        self.change_account()
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertTrue(r["ok"], r)
+
+    def test_a_manual_dispatch_prepared_before_the_switch_cannot_be_sent_in_automatic_mode(self):
+        launch, _ = self.open()
+        d = self.dispatch_prepare_only(launch)
+        seq = self.accept_auto()
+        self.assertTrue(self.set_mode("auto", seq=seq)["ok"])
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("手動派工與手動審查一律拒絕", r["error"]["message"])
+
+    def dispatch_prepare_only(self, launch):
+        d = fx.new_uuid()
+        r = self.rpc("dispatch_prepare", launch_id=launch, pipeline=self.fid, dispatch_id=d, text="手動",
+                     approval={"kind": "preview", "id": "pv-1"})
+        self.assertTrue(r["ok"], r)
+        return d
+
+    def test_manual_mode_is_not_judged_by_the_live_account_at_send(self):
+        # S2 design 3.1 re-checks the executor's account when a session starts, not on every dispatch; the live
+        # check is the automatic mode's own requirement (S3 design 2)
+        launch, _ = self.open()
+        d = self.dispatch_prepare_only(launch)
+        self.change_account()
+        r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
+        self.assertTrue(r["ok"], r)
