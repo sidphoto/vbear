@@ -55,6 +55,8 @@ closure can add one `closed`, so at most 258 notices can be queued, plus one cur
 partially sent line. These server-generated notices have bounded fields. Buffered input
 is bounded by `MAX_LINE` plus one 65,536-byte read; paused reads cannot grow it.
 The existing frame count/byte caps, 64 KiB replay cap and write-stall timeout still apply.
+While an attachment's command processing is paused, client commands that have not been processed yet are
+discarded if the session closes in the meantime.
 
 
 ## Terminals
@@ -159,8 +161,10 @@ Other safeguards:
 
 ## Flows
 
-- **No new execution capability.** The flows board records and shows. Its routes write only `flows.json`; nothing
-  in `vbear/flows.py` starts a process, sends input to a terminal, runs `git` or contacts the network. The only
+- **The board's recording routes add no execution capability.** The Phase 1 board records and shows. Its routes
+  (`POST /api/flows`, `/events`, `/roles`) write only `flows.json`; nothing in `vbear/flows.py` starts a process,
+  sends input to a terminal, runs `git` or contacts the network. The managed executor and review of Phase 2 are
+  separate routes with their own gates, described in [Phase 2 coordination](#phase-2-coordination). The only
   outside reads are the executor directory's HEAD through `git_head` (plain bounded file reads, as for task cards)
   and the last live view already built (`Store.live_cached()`). The flows routes never build a live view, so they
   never reach the runtime and cannot start its daemon; a test holds them to that.
@@ -178,6 +182,187 @@ Other safeguards:
 - **Malformed data fails closed.** Stored values that are non-finite, out of range, of the wrong type, out of order
   or unknown block the store instead of being shown or repaired; tests feed each entry point NaN, ±inf, huge
   integers, booleans, wrong containers and unknown fields.
+
+## Phase 2 coordination
+
+Phase 2 adds a managed Claude stream executor and daemon-managed Codex review jobs to a flow. This is a different
+execution path from the Phase 1 look-only board above and from the interactive profile-launch path. VBear can send
+an approved message to a stream executor and start a review using your accounts and usage allowance. It does not
+create worktrees or run `git` in the task repository. Git commands for a review run inside Codex's sandbox against
+a separate clone. Merge and push stay yours: the console shows the commands and never runs them.
+
+### Trust boundaries
+
+| Component | What is trusted; what is not |
+|---|---|
+| You | Trusted to choose the task worktree, inspect approvals, accept residual risks and decide merge and push. A click records a decision; it is not proof of code correctness or independently authenticated human identity. |
+| VBear runtime daemon | Trusted to build fixed launch arguments, validate inputs and evidence, enforce gates, keep records, account for limits and manage processes. It re-reads and checks state rather than trusting caller-supplied launch details. |
+| Console server and browser UI | VBear's server and shipped UI are trusted to present the exact server-held preview and to display output safely. Browser requests and submitted values remain untrusted; the daemon independently checks the accepted configuration and flow state. The access token protects local API access, not against programs running as the same user. |
+| Managed Claude executor | Its generated content, completion statements, test results and protocol events are untrusted inputs. VBear checks protocol attribution and selected filesystem facts. A reported test pass is still the executor's statement; VBear does not rerun the tests. |
+| Codex reviewer | Its report, verdict, tool calls and recorded state are untrusted inputs checked against version-specific rules. A valid review means those checks passed, not that its findings are complete or correct. |
+| Reviewed repository | Files, comments, instructions, Git configuration and Git objects are untrusted data. Instructions in them are not authority for the reviewer or VBear. Repository code may execute when the reviewer runs commands inside its sandbox. |
+| Codex and Claude CLI executables, their providers and the OS | Trusted to implement their documented behaviour, sandbox and model transport. Version checks and pinned paths are compatibility and launch checks, not vendor authentication. VBear does not defend against a malicious CLI vendor, a compromised OS, root, or hostile programs running as your UID. Known local administrator-policy sources are nevertheless checked and cause refusal. |
+
+Sandbox restrictions on agent commands do **not** mean that the CLI itself makes no network connections: the
+trusted CLI must contact its model provider. Reads are not isolated; a session may read files your account can
+read. The executor may write and commit inside its task worktree, and VBear does not limit disk use in that
+worktree or the executor's scratch directory.
+
+### What the console does
+
+Every action goes preview first, then approval; nothing the browser sends is recorded or executed except through a
+record the server stored first.
+
+- **Risk acceptance.** `POST /api/flows/<id>/acceptance-preview` stores a preview (`<state>/previews/`, five
+  minutes, one use). The dialog shows the three residual risks in full (text version `2026-10-11.1`), the CLI
+  versions, models and the first 16 hex digits of the account fingerprints they bind to, and the nine limits with
+  their defaults and caps. Confirming (`POST .../acceptance`) carries only the preview id. The preview is consumed
+  before anything is recorded; if the account, version, key or text changed since, the answer is 409 and nothing is
+  recorded. Changing any field in the dialog voids the held preview at once, and the screen's values are compared
+  with the preview's once more just before sending. Without a login in the dedicated `CODEX_HOME` the dialog shows
+  the exact `codex login` command and path and offers no acceptance: VBear never logs in for you and never reads
+  credentials into a prompt, report or log.
+- **Dispatch.** `POST .../dispatch-preview` stores the sanitized full text (control and format characters become
+  visible `\uXXXX`) with its hash and shows exactly that text, its size and whether the session is ready.
+  `POST .../dispatch` carries only the preview id. A dispatch the daemon refuses is not written; a lost answer is
+  retried with the same id and never becomes a second dispatch.
+- **Reports.** The executor's own statement (status, head, tests, notes) is shown apart from VBear's reading of
+  the files: whether the reported head is the work directory's HEAD now and whether the commit object exists. A
+  failed check is not shown as a pass, and a check that cannot be read is shown as unreadable. A review can only
+  be started from a latest report whose checks all passed. "Latest" is by the creation time the daemon wrote for
+  each session; if that order cannot be told, nothing is called the latest and no review starts.
+- **Reviews.** The reviewer's report is shown as plain text (`textContent`; the page builds no element from it,
+  and this is tested with hostile text). `BASE_IS_ANCESTOR` is labelled self-reported. Forwarding review comments
+  to the executor only fills the dispatch box with a bounded, marked-as-data draft: you still preview and approve
+  it as a dispatch.
+- **Merge gate.** Three conditions (the latest review is valid, complete and PASS; the commit it is bound to is
+  the work directory's HEAD now; that commit object exists) must hold before any command is shown. The commands are
+  exact, shell-quoted text with a copy button; VBear does not run them. Local refs (`refs/heads/main`,
+  `refs/remotes/origin/main`) are labelled as what this machine last recorded, not as the remote's state.
+- **Retention and deletion.** A flow's data (stream sessions with their journals and dispatch texts, review
+  records, the flow's directory and its stop marker) is kept until you delete the flow. Deleting is refused while
+  any session or review of the flow is running, launching or in manual review, or when a manifest cannot be read
+  (it could be this flow's). The daemon, the only writer of that data, removes it by directory descriptors without
+  following links, after checking owner, mode and the inode its manifest recorded; the manifest goes last, so a
+  deletion that stopped half way is finished by asking again. Deleting is irreversible and also removes the
+  flow's events from `flows.json`.
+
+### Safeguards: prevention and detection
+
+"Prevention" below blocks a prohibited launch, input, write or subsequent action within the stated boundary.
+"Detection" checks observations and invalidates or stops work; it cannot undo earlier actions. Neither label
+promises protection against components outside the trust boundary.
+
+| Threat or condition | Safeguard and type | Limit of the claim |
+|---|---|---|
+| Launch settings controlled by the caller or repository | **Prevention:** server-built arguments and environment allow-lists; launch manifests are read and validated by the daemon. Stream launches require a stream-verified version; there is no unverified-version override for this path. | Trusts the CLI and OS. Known policy sources are version-specific. |
+| Claude tools bypassing the Bash boundary | **Prevention:** `--safe-mode`, `--tools Bash`, `--disallowedTools Edit,Write`, `--strict-mcp-config` and the OS sandbox; `StructuredOutput` is used for reports. Bash writes are confined to the task worktree and its scratch directory; Bash network access, loopback and the runtime socket are denied. | Does not isolate reads, prevent commits in the worktree, or cap executor disk use. No interactive typing is available in a stream session. |
+| Local settings redirecting Claude's provider | **Prevention:** fixed endpoint settings; launch refusal if a known administrator-policy source or `~/.claude/remote-settings.json` exists, or existence cannot be determined. | Uncached server-managed settings remain a residual risk. |
+| Forged, injected or misattributed stream results | **Detection:** strict event schemas, closed event/tool sets, dispatch/session identity, order, unique response IDs, tool/result correspondence and a completed lifecycle; validity is reconstructed from journal facts. Unexpected messages through Claude's local messaging channel fail attribution checks. | Checks recorded protocol behaviour, not the truth of generated content; detection can follow execution. |
+| Duplicate or changed dispatches | **Prevention:** `dispatch_prepare` stores the sanitized full text and its hash before `stream_send`; the send step reads and rechecks it. IDs are idempotent for the same text and reject different text. Partial or uncertain delivery is not resent. Each human approval is bound to the exact one-use server-held preview. | Sanitizing control and format characters makes them visible; it does not remove persuasive instructions. |
+| Fabricated completion or commit | **Detection:** independent report-schema validation, `git_head` comparison and `git_objects.commit_exists`, including recomputed commit hashes and pack/idx checksums with read/resource limits. These are bounded file reads, not daemon-run Git commands. | Does not prove test success, authenticate history, or include uncommitted edits. An indeterminate check is not a pass. |
+| Repository content steering Codex | **Prevention:** dedicated `CODEX_HOME`, empty per-job `HOME`, fixed arguments, ignored user configuration and execpolicy rules, disabled known features and bundled skill instructions, restricted network and scratch writes for sandboxed commands. **Detection:** empty configured MCP list before launch, then recorded state, permissions and tool calls checked against version constants. | A prompt asks for a read-only review, but the sandbox permits scratch writes. Available tools cannot be enumerated in advance; multi-agent capability cannot be disabled on 0.160.0. |
+| Forged or incomplete review evidence | **Detection:** successful exit and final completion, strict event/rollout checks, sequential ordinals, identity/model/provider/family checks, usage accumulation, matching final reports, required report control lines and detached clone HEAD equal to the reviewed commit. | The CLI writes both evidence sources. VBear checks their consistency, not review quality or every command's intent. `BASE_IS_ANCESTOR` remains self-report. |
+| Account, version, model or limits changing after acceptance | **Prevention:** valid per-flow `risk_acknowledged` required for stream launch and review; current risk text, HMAC key, account fingerprints, versions, models and limits are checked at their relevant launch/RPC/turn points. Display and acceptance come from the same one-use, five-minute server preview, and drift refuses. | A fingerprint binds the account locally; it is not a public account identifier or independent identity authentication. Secrets and account IDs do not enter reports, display or log summaries (the screen shows the first 16 hex digits only). |
+| Excessive output or retained records | **Prevention:** bounded parsing; daemon-written review outputs capped while writing (`events.jsonl` 8 MiB, `stderr.log` 1 MiB, `last.md` 256 KiB); bounded rollout copying; reservation-based 4 GiB limit for protected daemon-written pipeline/session/review data, and the files a launch's preparation wrote count as used when the daemon opens it. When the room is used up, the answer says so and the console lists the flows that can be deleted with their sizes. **Detection:** periodic thresholds for Codex-written directories. | The 4 GiB limit is not a quota for all VBear state or all CLI disk writes. The ledger may count a prepared launch's files twice until its next rebuild (never too little). |
+| Continued work after failure or stop | **Prevention of later actions:** failures hold the flow; unresolved failures are recomputed from disk, and opening a stream, preparing/sending new dispatches or starting reviews is refused until you continue. A hold ends an active review. **Detection:** missing-result usage is conservatively reconstructed. | A user-requested hold does not interrupt a Claude turn already running. A failed or uncertain dispatch is not automatically retried. |
+| Unsafe signaling or cleanup | **Prevention:** validate process and directory identity; keep a live-owned leader unreaped until group signaling is complete; signal only its process group. **Detection:** escaped descendants or uncertain recovery become `manual_review`, retaining data and blocking new reviews and deletion. | After daemon restart, uncertain/live processes are left for manual handling rather than signaled. Tracking cannot prove that every possible descendant was observed. |
+| Review text hiding content or injecting browser markup | **Detection:** report format/control-line allow-list, rejection of HTML outside code fences and malformed fences. **Prevention:** `last.md` and all reviewer output are shown as plain text, with no HTML or Markdown rendering. | Format checks do not establish whether prose is truthful, safe or free of prompt injection. HTML source inside a code fence is allowed as literal text. |
+
+The stream boundary evidence is for [Claude Code 2.1.292](evidence/claude-code-2.1.292-stream.md). The review
+evidence is for [Codex 0.160.0](evidence/codex-0.160.0-review.md). These are bounded probes, not proof for every
+repository, tool or later CLI version. Probes confirm predefined constants; they do not automatically expand the
+tool allow-list.
+
+### Residual risks
+
+The first three items appear in full in the per-flow approval dialog under `RISK_TEXT_VERSION = "2026-10-11.1"`
+(`vbear/risk_text.py`); the others are documented here.
+
+1. **Codex's tool set cannot be proved in advance.** Codex 0.160.0 cannot enumerate all tools available to the
+   review model. Known feature flags are preventive attempts; recorded state and calls are checked afterwards. An
+   unused unknown tool is invisible to VBear. A called unknown tool invalidates the review, but its action has
+   already happened and cannot be undone. Depending on the tool, repository-induced actions could reach connected
+   services, make external connections, or read/write outside the sandbox. Multi-agent capability cannot be
+   disabled on 0.160.0, despite `--disable multi_agent`. VBear pins `explicitRequestOnly` and detects sub-agent
+   activity using closed record kinds and an `exec`-only tool allow-list. `SUBAGENT_ACTIVITY` invalidates the
+   entire review. Sub-agents share the same sandbox and permissions, but invalidation does not reverse their
+   actions.
+2. **Limits have different strengths.** Claude main-conversation responses have a real-time hard limit, with the
+   one response in progress possibly completing; auxiliary calls are excluded. Claude's budget is checked at turn
+   end and has no guaranteed monetary ceiling within a turn. Subscription cost values are usage valuations, not
+   actual bills. Codex response counts are monitored once per second, with no provable bound on responses between
+   checks; its hard execution limit is time. `CODEX_HOME` at 512 MiB and scratch plus temporary `HOME` at 2 GiB
+   are checked every 5 seconds, not enforced by disk quotas. Counting errors count as over-limit and end/refuse
+   reviews. Writes between checks could exhaust remaining disk space and cause other programs' writes to fail.
+   Daemon-written outputs have separate write-time hard limits.
+3. **Server-managed settings (Team / Enterprise).** An organization Owner can supply cloud settings that override
+   the fixed Claude endpoint or add hooks. The CLI could send data to an unexpected endpoint or run hooks VBear
+   intended to disable. Known local policy sources and a present or indeterminate `~/.claude/remote-settings.json`
+   cause refusal, but absence of the cache cannot establish absence of cloud settings. VBear cannot reliably
+   detect uncached settings locally. Personal Pro/Max plans are not subject to this organization-managed
+   mechanism.
+4. **Same-UID binary replacement race.** `codex_binary` checks the pinned executable's path and file type before
+   launch, but the subsequent execution is not atomic with that check. A program running as the same UID could
+   replace it between check and execution. Such programs are outside this threat model; a pinned path and version
+   output are not binary authentication.
+5. **Report formatting is not semantic safety.** The format allow-list checks control lines and display hazards,
+   not the report's truth or intent. The console always shows reviewer output as plain text. Transferred review
+   comments are marked as data, with instructions not to execute commands within them, but this is not a guarantee
+   against prompt injection. Each transfer requires your approval.
+6. **Ancestry is self-reported.** The reviewer is asked to run `git merge-base --is-ancestor` and emit
+   `BASE_IS_ANCESTOR: yes`. Missing, malformed or `no` results invalidate the review, but VBear does not
+   independently verify ancestry. A false `yes` can survive the format check, and the screen says "self-reported".
+7. **Codex helper symlinks (v29.10).** Codex creates links under `CODEX_HOME/tmp/arg0/<one-directory>/<name>`.
+   Capacity scans count those links by their own `lstat` size and do not follow them; links elsewhere in
+   `CODEX_HOME` still count as over-limit. This exception matches the fixed path structure, not a cryptographic
+   proof that Codex created each link. Scratch and temporary `HOME` scans also count symlinks without following
+   them. Counting a link does not account for its target's size or guarantee how the trusted CLI will use it.
+8. **Review conclusions can differ for the same content.** The Codex probe received NEEDS WORK and PASS for the
+   same source content. Its first run was procedurally invalid on `world_state` checks; its second was valid. The
+   differing model conclusions still demonstrate why a verdict cannot establish correctness. VBear validates
+   format and procedure; it does not judge review quality.
+9. **Failures use worst-case accounting (v29.7).** If a dispatch may have reached the CLI but has no
+   `turn_result`, its response count is charged at the sent turn cap and session cost is
+   `max(last result total_cost_usd, session_started budget_usd)`. The same rule applies to runtime failures and
+   restart recovery. It can consume the session's entire remaining budget in the flow ledger even if actual use
+   was lower. Actual cost is unknown, and because budget checks occur at turn end this is not a guaranteed upper
+   bound on real use. The flow stops; continuing requires renewed acceptance, with budget adjustment if needed.
+   The screen says this is an estimate, not an observed bill.
+10. **Deleting a flow is final.** The data and the flow's events are removed, with no trash. Files the
+    executor wrote in its own worktree and the Codex-written areas (`CODEX_HOME`, which can hold copies of
+    rollouts) are not VBear's to delete and stay where they are.
+
+### What you must remember
+
+- **A VBear review PASS does not mean the code has no problems.** It means a reviewer reported PASS and the
+  required evidence checks passed. An executor's test statement is not an independently rerun test.
+- **Merge and push remain human decisions.** Phase 2 has human gates for the plan, each dispatch, each review,
+  merge and push. VBear does not execute merge or push commands. A locally read `refs/remotes/origin/main` is a
+  local ref, not proof that the remote has been updated.
+- Keep the distinction between a manual Phase 1 record, a valid managed review and your own approval. None is
+  interchangeable with proof of correctness. Recheck the reviewed commit and any uncommitted work before deciding
+  to merge.
+
+### 繁體中文摘要
+
+第 2 階段在流程裡新增受管 Claude 串流執行者與 Codex 審查工作。VBear 信任你、自己的 daemon／主控台、CLI 執行檔與
+供應商及作業系統；不把模型輸出、被審 repo 的內容或審查結論當成可信指令。同 UID 的其他程式、root 與惡意 CLI 供應商
+不在防護範圍。沙盒限制的是 Agent 指令，CLI 本身仍須連線到模型供應商，讀取也沒有隔離。Claude 可以在工作目錄內寫檔
+與 commit；VBear 不限制執行者工作目錄與暫存區的磁碟用量。
+
+預防措施包括固定啟動參數、沙盒、已知管理設定存在即拒絕、精確文字綁定與冪等派工、寫入時上限，以及失敗後阻止後續動作。
+偵測措施包括事件歸屬與順序核對、commit 物件雜湊核對、rollout 逐筆核對、工具允許清單和定期容量監測。偵測後判無效或
+停止，不能撤銷已發生的動作。停止流程也不會中斷正在執行的 Claude 回合；程序或清理身分不明時保留資料，交人工處理。
+
+核准畫面完整揭露三項風險：工具集合無法事先證明（Codex 0.160.0 多 agent 關不掉，僅能偵測，`SUBAGENT_ACTIVITY`
+使整次審查無效）、上限強度不一（費用可能超額，磁碟最壞會用光剩餘空間）、Team／Enterprise 伺服器管理設定。另有同 UID
+替換執行檔競態、報告只核對格式、祖先關係自行回報、`tmp/arg0` 符號連結例外、同內容審查結論不同、失敗回合的最壞計數，
+以及刪除流程無法復原。主控台一律以純文字顯示審查輸出；格式檢查不能保證內容正確或沒有誘導指令。沒有結果時，估計可能把整份
+session 剩餘額度計入已用，但不代表實際帳單，也不是實際費用的保證上界；要繼續須重新接受。
+
+VBear 審查 PASS 不等於程式沒問題。第 2 階段的計畫、派工、審查、合併與 push 都保留人工關卡；合併與 push 永遠由你決定，
+VBear 不執行這些 Git 指令，只顯示指令。
 
 ## Data handling
 

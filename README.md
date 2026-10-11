@@ -45,8 +45,16 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
   and the home page lists the gates waiting for you. Phases are derived on every read, never stored. A review
   counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
   date as soon as the executor's directory moves off the reviewed commit. Every event is entered by hand and
-  labelled 「手動記錄（未驗證）」. VBear does not dispatch work, type into a terminal, run `git` or start an agent for
-  a flow. Like the home page, the flows pages read the live view, which can start VBear's own runtime.
+  labelled 「手動記錄（未驗證）」. The board's recording routes do not dispatch work, type into a terminal, run `git`
+  or start an agent (the managed executor below is separate). Like the home page, the flows pages read the live
+  view, which can start VBear's own runtime.
+- **Managed executor and review (Phase 2).** From a flow you can start a Claude Code executor that VBear runs in
+  the background (no terminal) and ask Codex to review its latest commit in a separate sandboxed clone. You accept
+  three residual risks per flow, approve each dispatch as the exact text that will be sent, see the executor's own
+  report apart from VBear's file checks, read the reviewer's report as plain text, and get the merge and push
+  commands to run yourself: VBear never runs `git` for you. Needs Claude Code 2.1.292 and Codex 0.160.0 (the
+  verified versions) and costs usage on your own accounts. Data stays until you delete the flow. See the
+  [security model](docs/SECURITY-MODEL.md#phase-2-coordination) before using it.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 
@@ -134,6 +142,11 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   「驗證這個版本」. It cannot tell waiting for your next message from waiting on a dialog. Other terminals and Codex
   show *unknown*.
 - A task card's commit binding sees commits only: uncommitted changes after an approval do not make it stale.
+- **A review PASS is not proof.** The managed executor and Codex review have residual risks you must accept per
+  flow (Codex's tools cannot be enumerated in advance and its multi-agent mode cannot be turned off, only
+  detected; limits differ in strength; organization-managed Claude settings cannot be detected locally). Review
+  conclusions can differ for the same content. Deleting a flow cannot be undone. The full list is in the
+  [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
 - **Programs running as your own user can drive VBear.** Other websites and other user accounts are kept out:
   every API call needs a per-launch token stored in a file only you can read. A program running under your
   account can read that file. See the [security model](docs/SECURITY-MODEL.md).

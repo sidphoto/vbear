@@ -8,14 +8,41 @@
   known families, and a pass goes out of date when the executor's directory moves off the reviewed commit. The
   home page's 「需要你處理」 lists flow gates (approval, merge, push, a pass whose HEAD cannot be checked). Stored
   in `flows.json` under the same fail-closed rules as `tasks.json`, now shared in `vbear/jsonstore.py`. VBear does
-  not dispatch work, type into a terminal, run `git` or start an agent for a flow; the flows API reads live state
-  only from the console's cache and never starts anything. Like the home page, the flows pages load the live view,
+  not dispatch work, type into a terminal, run `git` or start an agent through the board's recording routes; those
+  routes read live state only from the console's cache and never start anything (the managed executor and review
+  below are separate, gated routes). Like the home page, the flows pages load the live view,
   which can start VBear's own runtime; they wait for it at most 10 s. A session state from that cache is shown as
   current only when the cache is at most 30 s old, its time is valid, the runtime answered, and this page's own
   load succeeded. Otherwise the executor reads 「即時狀態未載入」 (no cache yet, or this page's load failed or timed
   out), 「即時狀態時間不明」 (the cache's time is missing, invalid or in the future), 「即時狀態已過期」 (older than
   30 s), 「runtime 未連線」 (the runtime did not answer) or 「runtime 狀態不明」 (the cache does not say).
+- **Managed Claude stream executor and Codex review (Phase 2).** A flow can now run a pipe-based Claude Code
+  `claude-stream` executor and daemon-managed Codex review jobs, each step previewed and approved in the console.
+  - *Risk acceptance.* A per-flow dialog shows the three residual risks in full (text version `2026-10-11.1`),
+    the CLI versions, models and account fingerprints (first 16 hex digits) it binds to, and nine limits with
+    defaults and caps. The preview is stored server-side (five minutes, one use) and confirming carries only its
+    id; a change in account, version, key or text voids it. Editing any field voids the held preview.
+  - *Executor and dispatch.* Start, stop and continue the executor; each dispatch is previewed as the exact
+    sanitized text and approved separately. Strict event attribution, order and tool/result checks decide valid
+    turns; failures hold the flow, and a turn with no result is charged at its worst case (an estimate, not a
+    bill). Boundary evidence: [Claude Code 2.1.292](docs/evidence/claude-code-2.1.292-stream.md).
+  - *Reports.* The executor's own statement is shown apart from VBear's file checks (HEAD and commit object, read
+    without running `git`); a check that fails or cannot be read is not shown as a pass.
+  - *Codex review.* Runs in a separate sandboxed clone with a dedicated `CODEX_HOME` and temporary `HOME`; the
+    daemon checks completion, report format, events, rollout, usage, model family and the reviewed commit before
+    accepting a result. Reports are shown as plain text; `BASE_IS_ANCESTOR` is labelled self-reported. Codex
+    0.160.0 cannot disable multi-agent: closed record kinds and an `exec`-only allow-list detect it and
+    `SUBAGENT_ACTIVITY` invalidates the whole review without undoing anything. Evidence:
+    [Codex 0.160.0](docs/evidence/codex-0.160.0-review.md).
+  - *Merge gate.* Three conditions must hold before commands are shown; VBear never runs them, and local refs
+    are labelled as local.
+  - *Data.* Stream and review records are bounded by a 4 GiB reservation ledger and write-time caps; they are
+    kept until you delete the flow, which is refused while anything runs or awaits manual review. When the room
+    is used up the console lists the deletable flows with their sizes.
+  - *Known limits.* See the residual-risk list in the [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
 - At phone width a long sidebar now scrolls inside the nav instead of widening every page.
+- Terminal attachments under backpressure now drop only frames and keep the handshake and protocol notices in
+  order; client commands pause at 256 queued notices.
 - Four timing-sensitive tests no longer fail on a busy machine: the abandoned-launch expiry log and the open/close
   round trip's hang-up grace no longer race; the linear-parse test budgets CPU time instead of wall time; the
   streaming-during-close test allows half a grace period instead of 0.2 s.

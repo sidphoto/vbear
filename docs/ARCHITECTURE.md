@@ -38,8 +38,22 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   terminals survive a console restart.
 - **Protocol.** Newline-delimited JSON on `~/.vbear/runtime.sock`. Only connections from the same
   uid are accepted; the daemon reads the peer's credentials with `LOCAL_PEERCRED`. Operations: `hello`,
-  `open`, `open_managed`, `list`, `close`, `attach`, `shutdown`.
-- **Sessions.** Each session is a PTY child with a 1 MiB scrollback ring. At most 16 sessions run at
+  `open`, `open_managed`, `list`, `close`, `attach`, `shutdown` (terminals); `open_stream`,
+  `dispatch_prepare`, `stream_send`, `stream_status`, `stream_close`, `pipeline_hold`, `pipeline_release`
+  (the managed stream executor); `review_start`, `review_status`, `review_cancel` (Codex review jobs);
+  `flow_delete` (a flow's data). Each request is validated against a per-operation field list.
+- **Three kinds of work, one daemon.** *Terminals* (`open`, `open_managed`) are PTY children. *Stream
+  sessions* (`claude-stream`, `daemon_stream.py`, `stream_session.py`, `stream_journal.py`) are pipe-based, with
+  no terminal and no typing: a dispatch is a sanitized line written to stdin and the answer is a stream of
+  events, attributed, ordered and journalled. *Review jobs* (`daemon_review.py`, `review_*.py`) run Codex once,
+  in a separate clone with a dedicated `CODEX_HOME` and a temporary `HOME`, and are judged afterwards from their
+  events and rollout. Stream and review state lives in files only the daemon writes: `sessions/<launch>/`,
+  `reviews/<job>/`, `pipelines/<task>/` and `holds/<flow>`; the console only reads them.
+- **Quota ledger (`quota.py`).** The three directories together may not pass 4 GiB. A writer reserves its
+  maximum first and returns what it did not use; the ledger lives in the daemon's memory and is rebuilt from a
+  scan on start and after a deletion (any error counts as over the limit). Files a launch's preparation wrote
+  count as used when the daemon opens the launch.
+- **Sessions.** Each terminal session is a PTY child with a 1 MiB scrollback ring. At most 16 sessions run at
   once, with at most 4 attachments per session. An attachment that falls behind is resynchronised with
   one full frame of at most 64 KiB (a terminal reset followed by the recent output), so the full history
   is never replayed.
@@ -100,7 +114,9 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
 
 ## Flows — `vbear/flows.py`
 
-Stage 1 of multi-agent support: a board. It adds no way to dispatch work, send input, run `git` or start an agent.
+Phase 1 of multi-agent support is a board; its recording routes add no way to dispatch work, send input, run
+`git` or start an agent. Phase 2 (below, "Managed executor and review") adds those through separate, gated
+routes.
 
 - **Record.** One flow per task card in `flows.json`: `roles` (planner, executor, 1–4 reviewers, each with a model
   family from a fixed list; the executor may name a runtime session id and a work directory) and an append-only
@@ -138,6 +154,49 @@ Stage 1 of multi-agent support: a board. It adds no way to dispatch work, send i
   (`task_id`, `roles`), `POST /api/flows/<id>/events`, `POST /api/flows/<id>/roles`. Unknown fields are rejected
   per event kind; `roles_changed` is written only by the roles route. Bad input → 400, unknown flow → 404, a
   blocked store → 503.
+
+### Managed executor and review (Phase 2, S2c)
+
+The console is a thin, validating layer over the daemon's RPCs. Everything that sends or starts something goes
+preview first, then approval with only the preview's id.
+
+```
+UI ── POST …/acceptance-preview ──▶ preview file (<state>/previews/, 300 s, single use)
+UI ── POST …/acceptance {preview_id} ──▶ consume ──▶ risk_acknowledged event (server's values, never the browser's)
+UI ── POST …/executor ──▶ FlowExecutor.start ──▶ prepare launch ──▶ daemon open_stream
+UI ── POST …/dispatch-preview {launch_id, text} ──▶ preview ──▶ daemon dispatch_prepare … POST …/dispatch {preview_id} ──▶ stream_send
+UI ── POST …/review ──▶ FlowReview.start ──▶ daemon review_start ──▶ Codex in a clone ──▶ validated result
+UI ── GET  …/reports | reviews | merge-gate ──▶ read models from the files (nothing is run)
+UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemon flow_delete ──▶ flows.delete_flow
+```
+
+- **Modules.** `previews.py` (the one-use preview files), `risk_text.py` (the three residual-risk texts, versioned),
+  `risk_acceptance.py` (preview/confirm/status; the acceptance is compared with the live Claude/Codex versions
+  and accounts, cached ≤ 10 s), `flow_executor.py` (start, close, dispatch preview/approve, hold/continue,
+  status with accounting against the nine limits), `flow_review.py` (reports with the executor's statement and
+  VBear's file checks apart, review start/cancel, reviews, opinion draft, merge gate), `flow_storage.py`
+  (sizes, reasons, deletion), `daemon_client.py` (the RPC client), `api_error.py` (one error type: status, code,
+  message, safe extras). Server routes only parse and dispatch to them; a flows POST body that is not exactly one
+  JSON object is 400.
+- **Order of sessions.** "Newest" is decided from the `created` time in each daemon-written manifest, never from
+  a launch id (random); an order that cannot be told is reported and nothing is called the newest.
+- **Reading a review in flight.** The daemon records a review's outcome in its manifest first and `result.json`
+  after it. The console's readers give a review not yet "cleaned" a short grace (`stream_flow.settling`, 2 s)
+  before calling its record missing; the daemon's own reads never wait, and the refusal after the grace is the
+  same as before.
+- **Deleting.** `runtime/flow_data.py` builds a plan from the manifests alone (so a half-finished deletion can be
+  finished), lists blockers (running, launching, manual review, not yet cleaned, unreadable manifests) and
+  removes by directory descriptor with the manifest last. It runs on the daemon's single thread, so a very
+  large flow delays other requests while it goes; the ledger is rebuilt after.
+- **The page.** `web/app.js` builds the panels with `el()`/`textContent` only (no `innerHTML`; review text is
+  plain text), refreshes the data panels every 5 s one round at a time (a tick that finds a round running is
+  dropped, each read has a 15 s limit and is aborted when the page is left, only the newest answer is applied),
+  never refreshes under an open dialog and never rebuilds the dispatch box.
+- **API** (behind the access token). GET: `/api/flows/<id>/executor`, `.../reports`, `.../reviews`,
+  `.../reviews/<job>/draft`, `.../merge-gate`, `/api/flows/storage`. POST: `.../acceptance-preview`,
+  `.../acceptance`, `.../executor`, `.../executor/close`, `.../dispatch-preview`, `.../dispatch`, `.../hold`,
+  `.../continue`, `.../review`, `.../review/cancel`, `.../delete`. Errors carry `code` and, where safe, extra
+  fields (for example the exact `codex login` command when a login is missing).
 
 ## Profile-managed Claude launch
 
