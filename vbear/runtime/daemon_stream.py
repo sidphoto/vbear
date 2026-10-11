@@ -660,27 +660,35 @@ class StreamOps:
         """Design 9: "data is kept until the user deletes the flow; only when
         no process is running and nothing is in manual_review; path and
         identity checked first". The daemon alone writes these directories, so
-        it alone removes them. Idempotent: what is already gone is skipped,
-        so a deletion that stopped half way is finished by asking again. The
-        flow record itself is the console's (flows.json); it is removed by
-        the console after this answers ok."""
+        it alone removes them, on its own thread, re-deciding everything:
+        proven ownership (flow_data.plan), no live stream or review, no held
+        process group, no stop marker and no unreleased failure. The data is
+        moved into deleting/<flow>/ and purged from there, so a deletion that
+        stopped at any point is finished by asking again (flow_data module
+        docstring). The flow record itself is the console's (flows.json); it
+        is removed by the console after this answers ok."""
         from .. import flows
         pipeline = req.get("pipeline")
         if not (isinstance(pipeline, str) and pipeline_store.FLOW_RE.match(pipeline)):
             return _err(rid, "bad_request", "流程 id 格式不符")
         try:
-            flow = flows.read_only_snapshot(self.base).get(pipeline)
+            snapshot = flows.read_only_snapshot(self.base)
         except Exception as exc:
             return _err(rid, "refused", f"無法讀取流程（{exc}）")
+        flow = snapshot.get(pipeline)
         if flow is None:
             return _err(rid, "refused", "找不到這個流程")
         live_launches = {x.launch_id for x in self._streams.values() if x.pipeline_id == pipeline}
         live_jobs = {j.job_id for j in self._reviews.values() if j.pipeline_id == pipeline}
+        held = {h.get("launch_id") for h in self._held_leaders}        # process groups not proven finished
         try:
-            pl = flow_data.plan(self.base, pipeline, flow["task_id"])
+            pl = flow_data.plan(self.base, pipeline, flow["task_id"], flows=snapshot)
         except flow_data.FlowDataRefused as exc:
             return _err(rid, "refused", f"不能刪除：{exc}")
-        why = flow_data.blockers(pl, live_launches=live_launches, live_jobs=live_jobs)
+        except Exception as exc:
+            return _err(rid, "refused", f"無法讀取流程（{exc}）")
+        mine = {s["launch_id"] for s in pl.sessions} | {r["job_id"] for r in pl.reviews}
+        why = flow_data.blockers(pl, live_launches=live_launches, live_jobs=live_jobs, held_leaders=held & mine)
         if why:
             return _err(rid, "refused", "不能刪除：" + "；".join(why[:6]))
         try:

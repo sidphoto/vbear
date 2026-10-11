@@ -184,9 +184,14 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   after it. The console's readers give a review not yet "cleaned" a short grace (`stream_flow.settling`, 2 s)
   before calling its record missing; the daemon's own reads never wait, and the refusal after the grace is the
   same as before.
-- **Deleting.** `runtime/flow_data.py` builds a plan from the manifests alone (so a half-finished deletion can be
-  finished), lists blockers (running, launching, manual review, not yet cleaned, unreadable manifests) and
-  removes by directory descriptor with the manifest last. It runs on the daemon's single thread, so a very
+- **Deleting.** `runtime/flow_data.py`. `plan()` proves what is the flow's (session directory = the inode its
+  manifest recorded; review job = manifest *and* the flow-side `job.json` of its round; task directory = start
+  record naming the flow, or only empty scaffolding), `blockers()` lists why not (running, launching, manual
+  review, not cleaned, an unproven process group, a stop marker, an unreleased failure, anything unprovable).
+  `remove()` first renames the proven directories into `<state>/deleting/<flow>/` and then purges that tomb with
+  every directory pinned (`O_NOFOLLOW|O_DIRECTORY`, owner, device, inode, re-checked before `rmdir`). While the
+  tomb exists `pipeline_store.is_held` is true, so nothing new starts; asking again re-plans what is left and
+  purges, with no dependence on a record already removed. It runs on the daemon's single thread, so a very
   large flow delays other requests while it goes; the ledger is rebuilt after.
 - **The page.** `web/app.js` builds the panels with `el()`/`textContent` only (no `innerHTML`; review text is
   plain text), refreshes the data panels every 5 s one round at a time (a tick that finds a round running is

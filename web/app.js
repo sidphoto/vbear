@@ -2563,7 +2563,8 @@ function mountStorage(opts = {}) {
         el("div", { class: "row" }, el("b", { class: "mono" }, x.flow_id), el("span", { class: "small" }, `任務 ${x.task_id}`),
           badge(s2Bytes(x.bytes), x.bytes == null ? "b-warn" : "b-mute"),
           x.has_data ? el("span", { class: "small muted" }, `${x.sessions} 個 session、${x.reviews} 次審查`) : el("span", { class: "small muted" }, "沒有保存的資料"),
-          x.held ? badge("已停止", "b-warn") : null, button),
+          x.held ? badge("已停止", "b-warn") : null,
+          x.deleting ? badge("上次刪除沒有完成", "b-warn", "再按一次刪除即可完成") : null, button),
         x.reasons && x.reasons.length
           ? el("ul", { class: "small s2-reasons" }, x.reasons.map((r) => el("li", null, r))) : null,
         x.note ? el("p", { class: "small muted" }, x.note) : null);

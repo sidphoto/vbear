@@ -39,21 +39,21 @@ class FlowStorage:
         except quota.ScanFailed as exc:
             used, problem = None, f"額度無法核算，需要人工檢查（{exc}）"
         items = []
-        for flow in flows.list_flows():
+        everyone = {f["id"]: f for f in flows.list_flows()}
+        for flow in everyone.values():
             item = {"flow_id": flow["id"], "task_id": flow["task_id"], "created_at": flow.get("created_at"),
                     "bytes": None, "sessions": 0, "reviews": 0, "has_data": False, "held": False,
-                    "deletable": False, "reasons": []}
+                    "deleting": False, "deletable": False, "reasons": []}
             try:
-                pl = flow_data.plan(base, flow["id"], flow["task_id"])
+                pl = flow_data.plan(base, flow["id"], flow["task_id"], flows=everyone)
             except flow_data.FlowDataRefused as exc:
                 item["reasons"] = [str(exc)]
                 items.append(item)
                 continue
             why = flow_data.blockers(pl)
             item.update({"bytes": pl.total_bytes, "sessions": len(pl.sessions), "reviews": len(pl.reviews),
-                         "has_data": bool(pl.sessions or pl.reviews or pl.pipeline_dir or pl.held),
-                         "held": pl.held, "deletable": not why, "reasons": why,
-                         "note": pl.pipeline_note})
+                         "has_data": bool(pl.sessions or pl.reviews or pl.pipeline_dir or pl.held or pl.deleting),
+                         "held": pl.held, "deleting": pl.deleting, "deletable": not why, "reasons": why})
             items.append(item)
         items.sort(key=lambda x: (-(x["bytes"] or 0), x["flow_id"]))
         return {"limit_bytes": quota.HARD_LIMIT, "used_bytes": used, "problem": problem, "flows": items,
@@ -69,14 +69,14 @@ class FlowStorage:
         base = cfg.state_dir()
         with ex._lock(flow_id):
             try:
-                pl = flow_data.plan(base, flow_id, flow["task_id"])
+                pl = flow_data.plan(base, flow_id, flow["task_id"], flows={f["id"]: f for f in flows.list_flows()})
             except flow_data.FlowDataRefused as exc:
                 raise ApiError(409, "not_deletable", f"不能刪除：{exc}") from exc
             why = flow_data.blockers(pl)
             if why:
                 raise ApiError(409, "not_deletable", "不能刪除：" + "；".join(why[:6]), reasons=why)
             removed = None
-            if pl.sessions or pl.reviews or pl.pipeline_dir or pl.held:
+            if pl.sessions or pl.reviews or pl.pipeline_dir or pl.held or pl.deleting:
                 try:
                     res = daemon_client.call(ex.runtime, "flow_delete", timeout=DELETE_TIMEOUT_S, pipeline=flow_id)
                 except DaemonError as exc:

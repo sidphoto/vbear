@@ -29,6 +29,7 @@ from . import stream_protocol as sp
 PIPELINES = "pipelines"
 DISPATCHES = "dispatches"
 HOLDS = "holds"
+DELETING = "deleting"                      # <state>/deleting/<flow-id>/: a flow's data being deleted (flow_data)
 STARTED = "started.json"
 RELEASED = "released.json"                 # v29.8: the flow's last pipeline_release
 REVIEWS = "reviews"                        # pipelines/<task>/reviews/<round>/: the flow's side of each review
@@ -558,10 +559,31 @@ def _holds_dir(base, *, create: bool) -> tuple[int, int]:
         raise
 
 
+def deleting_exists(base, pipeline_id: str) -> bool:
+    """True when a deletion of the flow was begun (its directory under
+    ``deleting/`` exists), or when that cannot be ruled out. Only "no such
+    entry" means no."""
+    if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
+        return True
+    try:
+        os.lstat(os.path.join(str(base), DELETING, pipeline_id))
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
 def is_held(base, pipeline_id: str) -> bool:
-    """True when the flow is stopped, or when that cannot be ruled out.
-    Only a missing ``holds/`` (inside a state directory that opened) or a
-    missing hold file means "not held"."""
+    """True when the flow is stopped, a deletion of it is under way, or when
+    that cannot be ruled out. Only a missing ``holds/`` (inside a state
+    directory that opened) or a missing hold file, and no deletion, means
+    "not held"."""
+    return hold_marker_exists(base, pipeline_id) or deleting_exists(base, pipeline_id)
+
+
+def hold_marker_exists(base, pipeline_id: str) -> bool:
+    """The stop marker only: present, or not ruled out."""
     if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
         return True
     try:
@@ -596,6 +618,8 @@ def hold_info(base, pipeline_id: str) -> dict:
     that they could not be read. Read-only."""
     if not is_held(base, pipeline_id):
         return {"held": False, "reason": "", "at": None}
+    if not hold_marker_exists(base, pipeline_id) and deleting_exists(base, pipeline_id):
+        return {"held": True, "reason": "流程正在刪除（上一次沒有完成），請再按一次刪除", "at": None}
     unreadable = {"held": True, "reason": "（停止紀錄無法讀取）", "at": None}
     try:
         state = os.open(str(base), _DIR)

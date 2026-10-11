@@ -240,12 +240,19 @@ record the server stored first.
   exact, shell-quoted text with a copy button; VBear does not run them. Local refs (`refs/heads/main`,
   `refs/remotes/origin/main`) are labelled as what this machine last recorded, not as the remote's state.
 - **Retention and deletion.** A flow's data (stream sessions with their journals and dispatch texts, review
-  records, the flow's directory and its stop marker) is kept until you delete the flow. Deleting is refused while
-  any session or review of the flow is running, launching or in manual review, or when a manifest cannot be read
-  (it could be this flow's). The daemon, the only writer of that data, removes it by directory descriptors without
-  following links, after checking owner, mode and the inode its manifest recorded; the manifest goes last, so a
-  deletion that stopped half way is finished by asking again. Deleting is irreversible and also removes the
-  flow's events from `flows.json`.
+  records, the flow's directory) is kept until you delete the flow. Deleting is refused while any session or
+  review of the flow is running, launching, in manual review or not yet cleaned, while a process group of it is
+  not proven finished, while the flow is stopped or has a failure you have not released ("continue" first), and
+  whenever something cannot be proven to be the flow's: a session directory must be the inode its manifest
+  recorded, a review job must be named by both its manifest and the flow's own record of that round, and the
+  task directory must have a start record naming the flow (there is one flow per task card). The daemon, the only
+  writer of that data, re-decides all of this on its own thread, then moves the proven directories into
+  `deleting/<flow>/` (an atomic rename; outside every accounted directory, so no other flow's accounting meets a
+  half-removed one) and purges them from there. Every directory is opened without following a link and checked
+  (owner, same device as the state directory so a mount point is refused, the inode seen a moment before); a
+  special file refuses. While `deleting/<flow>` exists the flow counts as stopped, and asking again finishes the
+  deletion from wherever it stopped, without needing any record that was already removed. Deleting is
+  irreversible and also removes the flow's events from `flows.json`.
 
 ### Safeguards: prevention and detection
 
@@ -329,9 +336,13 @@ The first three items appear in full in the per-flow approval dialog under `RISK
    was lower. Actual cost is unknown, and because budget checks occur at turn end this is not a guaranteed upper
    bound on real use. The flow stops; continuing requires renewed acceptance, with budget adjustment if needed.
    The screen says this is an estimate, not an observed bill.
-10. **Deleting a flow is final.** The data and the flow's events are removed, with no trash. Files the
-    executor wrote in its own worktree and the Codex-written areas (`CODEX_HOME`, which can hold copies of
-    rollouts) are not VBear's to delete and stay where they are.
+10. **Deleting a flow is final, and ownership rests on records only the daemon writes.** The data and the flow's
+    events are removed, with no trash. Files the executor wrote in its own worktree and the Codex-written
+    areas (`CODEX_HOME`, which can hold copies of rollouts) are not VBear's to delete and stay where they are.
+    Which directories are a flow's is proven from manifests, start and review records and directory inodes;
+    those are plain files under the state directory, which only the daemon writes. A program running as your own
+    UID that rewrites them could make VBear delete another flow's data; such programs are outside the threat
+    model (see assumptions).
 
 ### What you must remember
 

@@ -5,26 +5,39 @@ A flow's data lives in three places the daemon alone writes:
   <state>/sessions/<launch-id>/      its stream sessions (manifest, journal, settings)
   <state>/reviews/<job-id>/          its review jobs (manifest and the kept outputs)
   <state>/pipelines/<task-id>/       dispatch texts, start/release records and the
-                                     flow's copies of its reviews
+                                     flow's copies of its reviews (one task, one flow)
   <state>/holds/<flow-id>            the stop marker
 
-"Data is kept until the user deletes the flow. Only when no process is running
-and nothing is in manual_review; the path and identity are checked before
-anything is removed." This module is that rule in one place: ``plan()`` reads
-(it is what the console shows and what the daemon re-reads), ``blockers()``
-says why a flow cannot go now, ``remove()`` does it.
+"Data is kept until the user deletes the flow, only when no process is running,
+nothing is in manual_review and no failure or stop is outstanding; path and
+identity are checked before anything is removed."
 
-Everything is attributed through the same strict readers the quota ledger and
-the flow's accounting use (stream_flow.flow_sessions / flow_reviews): one
-manifest that cannot be read or does not fit its schema, or an entry that is
-not shaped like a session or job, refuses the whole plan, because it could be
-this flow's data. Nothing is guessed.
+How a deletion is made safe (the reasoning is also in the commit that
+introduced it):
 
-Removal never follows a link and never lets a half-removed record look like a
-whole one: inside each directory the manifest (the identity record) goes last,
-in the pipeline directory the start record goes last, and the directory itself
-only after it is empty. A deletion that stops half way is finished by running
-it again (it is idempotent); the daemon's ledger is rebuilt from a scan after.
+1. **Nothing is guessed.** An item is the flow's only when it is proven:
+   a session directory by its manifest (flow id, launch id) *and* the
+   directory inode the manifest recorded; a review job by its manifest *and*
+   the flow-side record ``pipelines/<task>/reviews/<round>/job.json`` naming
+   the same job, commit and flow; the task directory by its start record
+   naming the flow (or, for a flow that never started, by holding nothing but
+   empty scaffolding and a release record naming it). Anything else refuses
+   the whole deletion and says why: a person looks.
+2. **Move, then purge.** The proven directories are first *moved* (atomic
+   ``rename``, same file system) into ``<state>/deleting/<flow-id>/``, which is
+   outside the three accounted roots and is where nothing else looks. From
+   then on nothing but the flow's own deletion can see them; no accounting of
+   another flow (``flow_sessions``/``flow_reviews`` refuse unknown entries)
+   ever meets a half-removed directory. The tomb is then emptied by a
+   recursive walk that needs no manifest, so it can be resumed from any
+   point. While ``deleting/<flow-id>`` exists the flow counts as stopped
+   (``pipeline_store.is_held``): nothing new can be started in it.
+3. **Every level is pinned.** Each directory is opened with
+   ``O_NOFOLLOW|O_DIRECTORY`` and ``fstat``-checked: owner, the same device as
+   the state directory (a mount point is refused before it is entered), and
+   the inode seen by the ``lstat`` just before; before ``rmdir`` the name is
+   looked at again and must still be that inode (``rmdir`` only removes an
+   empty directory anyway).
 """
 
 from __future__ import annotations
@@ -34,20 +47,23 @@ import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import agent_sessions, pipeline_store, review_store
+from . import agent_sessions, pipeline_store, review_store, stream_flow
 
 SESSIONS = "sessions"
 REVIEWS = "reviews"
 PIPELINES = "pipelines"
 HOLDS = "holds"
+DELETING = pipeline_store.DELETING
 WALK_MAX_ENTRIES = 200_000        # one flow: far above the design's worst case (about 730 MiB of a few hundred files)
-WALK_MAX_DEPTH = 8
+WALK_MAX_DEPTH = 12
+SCAFFOLD_NAMES = ("dispatches", "reviews")
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
 class FlowDataRefused(Exception):
     """The plan or the removal cannot be done safely; the message says why
-    (user-facing). Nothing was removed unless ``partial`` is True."""
+    (user-facing). ``partial`` is True when something was already moved or
+    removed (asking again continues)."""
 
     def __init__(self, message: str, *, partial: bool = False):
         super().__init__(message)
@@ -58,129 +74,236 @@ class FlowDataRefused(Exception):
 class Plan:
     pipeline_id: str
     task_id: str
-    sessions: list[dict] = field(default_factory=list)      # {launch_id, state, bytes}
-    reviews: list[dict] = field(default_factory=list)       # {job_id, state, outcome, bytes}
-    pipeline_dir: str | None = None                         # the task directory when it is this flow's
+    sessions: list[dict] = field(default_factory=list)      # {launch_id, state, bytes, inode}
+    reviews: list[dict] = field(default_factory=list)       # {job_id, state, outcome, bytes, inode}
+    pipeline_dir: str | None = None                         # the task directory when it is proven this flow's
     pipeline_bytes: int = 0
-    pipeline_note: str = ""                                 # why the task directory is left alone
-    held: bool = False
+    pipeline_inode: int | None = None
+    held: bool = False                                      # a stop marker exists (any reason, or unknown)
+    deleting: bool = False                                  # a deletion of this flow was begun and not finished
+    tomb_bytes: int = 0
+    unresolved: list[str] = field(default_factory=list)     # failures the user has not released (not when deleting)
+    failure_problem: str = ""                               # why failures could not be told (not when deleting)
     total_bytes: int = 0
 
 
-# ---- measuring -----------------------------------------------------------------------------------------
+# ---- opening and measuring: every level pinned ------------------------------------------------------------
 
-def _walk_bytes(fd: int, budget: list[int], depth: int = 0) -> int:
+class _Missing(FlowDataRefused):
+    """The directory is not there (not an error for a retry)."""
+
+
+def _open_pinned(parent_fd: int, name: str, root_dev: int, *, inode: int | None = None, private: bool = False) -> int:
+    """The directory ``name`` under ``parent_fd``, opened without following a
+    link, and checked: ours, on the root's device, the inode expected, and
+    (``private``) with no group/other permission bits."""
+    try:
+        fd = os.open(name, _DIR, dir_fd=parent_fd)
+    except FileNotFoundError as exc:
+        raise _Missing(f"{name[:64]} 不存在") from exc
+    except OSError as exc:
+        raise FlowDataRefused(f"{name[:64]} 不是一般資料夾（{exc.strerror}），不處理") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+            raise FlowDataRefused(f"{name[:64]} 不是本人的資料夾，不處理")
+        if st.st_dev != root_dev:
+            raise FlowDataRefused(f"{name[:64]} 在另一個檔案系統（掛載點），不處理")
+        if inode is not None and st.st_ino != inode:
+            raise FlowDataRefused(f"{name[:64]} 在檢查之後被替換了，不處理")
+        if private and stat.S_IMODE(st.st_mode) & 0o077:
+            raise FlowDataRefused(f"{name[:64]} 不是私有（0700）資料夾，不處理")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _walk_bytes(fd: int, root_dev: int, budget: list[int], depth: int = 0) -> int:
     """Bytes of the regular files under the directory ``fd``. A link, a special
-    file, too deep or too many entries refuses; nothing is skipped quietly."""
+    file, a mount point, too deep or too many entries refuses."""
     if depth > WALK_MAX_DEPTH:
         raise FlowDataRefused("資料夾層數過深，無法核對")
     total = 0
-    with os.scandir(fd) as entries:
-        for entry in entries:
-            budget[0] -= 1
-            if budget[0] < 0:
-                raise FlowDataRefused("項目過多，無法核對")
-            st = entry.stat(follow_symlinks=False)
-            if stat.S_ISREG(st.st_mode):
-                total += st.st_size
-            elif stat.S_ISDIR(st.st_mode):
-                sub = os.open(entry.name, _DIR, dir_fd=fd)
-                try:
-                    total += _walk_bytes(sub, budget, depth + 1)
-                finally:
-                    os.close(sub)
-            else:
-                raise FlowDataRefused(f"不是一般檔案或資料夾：{entry.name[:64]!r}")
+    for name in os.listdir(fd):
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise FlowDataRefused("項目過多，無法核對")
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISREG(st.st_mode):
+            total += st.st_size
+        elif stat.S_ISDIR(st.st_mode):
+            sub = _open_pinned(fd, name, root_dev, inode=st.st_ino)
+            try:
+                total += _walk_bytes(sub, root_dev, budget, depth + 1)
+            finally:
+                os.close(sub)
+        else:
+            raise FlowDataRefused(f"不是一般檔案或資料夾：{name[:64]!r}")
     return total
 
 
-def dir_bytes(parent_fd: int, name: str) -> int:
+def dir_bytes(parent_fd: int, name: str, root_dev: int) -> int:
     """Bytes under ``parent_fd``/``name``; FlowDataRefused when it cannot be
-    measured as a plain tree of ours."""
+    measured as a plain tree of ours on one device."""
+    fd = _open_pinned(parent_fd, name, root_dev)
     try:
-        fd = os.open(name, _DIR, dir_fd=parent_fd)
-    except OSError as exc:
-        raise FlowDataRefused(f"{name[:64]} 無法開啟（{exc.strerror}）") from exc
-    try:
-        return _walk_bytes(fd, [WALK_MAX_ENTRIES])
+        return _walk_bytes(fd, root_dev, [WALK_MAX_ENTRIES])
     except OSError as exc:
         raise FlowDataRefused(f"{name[:64]} 無法核對（{exc.strerror}）") from exc
     finally:
         os.close(fd)
 
 
-def _root_fd(state: int, name: str) -> int | None:
+def _root_fd(state: int, name: str, root_dev: int) -> int | None:
     try:
-        return os.open(name, _DIR, dir_fd=state)
-    except FileNotFoundError:
+        return _open_pinned(state, name, root_dev)
+    except _Missing:
         return None
-    except OSError as exc:
-        raise FlowDataRefused(f"{name}/ 無法開啟（{exc.strerror}）") from exc
 
 
 # ---- the plan --------------------------------------------------------------------------------------------
 
-def plan(base, pipeline_id: str, task_id: str) -> Plan:
-    """What the flow owns. Read-only."""
+def plan(base, pipeline_id: str, task_id: str, *, flows=None) -> Plan:
+    """What the flow owns, proven. Read-only. ``flows`` (the flows.json
+    snapshot) lets it refuse a task that more than one flow names."""
     if not (isinstance(pipeline_id, str) and pipeline_store.FLOW_RE.match(pipeline_id)):
         raise FlowDataRefused("流程 id 格式不符")
     if not (isinstance(task_id, str) and pipeline_store.TASK_RE.match(task_id)) or task_id in (".", ".."):
         raise FlowDataRefused("任務 id 格式不符")
+    if flows is not None:
+        sharing = sorted(f["id"] for f in flows.values()
+                         if isinstance(f, dict) and f.get("task_id") == task_id and f.get("id") != pipeline_id)
+        if sharing:
+            raise FlowDataRefused(f"另一個流程（{sharing[0]}）也使用這個任務的資料夾，無法判斷哪些資料屬於這個流程")
     out = Plan(pipeline_id, task_id)
     try:
         state = os.open(str(base), _DIR)
     except OSError as exc:
         raise FlowDataRefused(f"狀態目錄無法開啟（{exc.strerror}）") from exc
     try:
-        # pipelines/<task>: this flow's only when its start record says so
-        try:
-            with pipeline_store.Pipeline(base, task_id, create=False) as p:
-                rec = p.start_record()
-                links = p.review_links()
-            foreign = rec is not None and rec["pipeline_id"] != pipeline_id
-            owned_links = all(v["pipeline_id"] == pipeline_id for v in links.values())
-            if foreign or not owned_links:
-                out.pipeline_note = "這個任務的資料夾屬於另一個流程，不會動它"
-            else:
-                out.pipeline_dir = task_id
-        except pipeline_store.StoreRefused as exc:
-            if not exc.missing:
-                raise FlowDataRefused(f"流程資料夾無法核對（{exc}）") from exc
-        except OSError as exc:
-            raise FlowDataRefused(f"流程資料夾無法核對（{exc.strerror}）") from exc
+        root_dev = os.fstat(state).st_dev
+        out.deleting = pipeline_store.deleting_exists(base, pipeline_id)
+        links = _pipeline_side(base, pipeline_id, task_id, out)
         manifests = _flow_sessions(base, pipeline_id)
-        jobs = _flow_reviews(base, pipeline_id)
-        sroot = _root_fd(state, SESSIONS)
-        rroot = _root_fd(state, REVIEWS)
-        proot = _root_fd(state, PIPELINES)
+        jobs = _flow_reviews(base, pipeline_id, links)
+        sroot = _root_fd(state, SESSIONS, root_dev)
+        rroot = _root_fd(state, REVIEWS, root_dev)
+        proot = _root_fd(state, PIPELINES, root_dev)
         try:
             for m in manifests:
-                size = dir_bytes(sroot, m["launch_id"]) if sroot is not None else 0
-                out.sessions.append({"launch_id": m["launch_id"], "state": m["state"], "bytes": size})
+                if sroot is None:
+                    raise FlowDataRefused(f"session {m['launch_id']} 的資料夾不見了")
+                ino = _proven_inode(sroot, m["launch_id"], root_dev, m)
+                out.sessions.append({"launch_id": m["launch_id"], "state": m["state"], "inode": ino,
+                                     "bytes": dir_bytes(sroot, m["launch_id"], root_dev)})
             for m in jobs:
-                size = dir_bytes(rroot, m["job_id"]) if rroot is not None else 0
+                if rroot is None:
+                    raise FlowDataRefused(f"審查 {m['job_id']} 的資料夾不見了")
+                fd = _open_pinned(rroot, m["job_id"], root_dev, private=True)
+                try:
+                    ino = os.fstat(fd).st_ino
+                finally:
+                    os.close(fd)
                 out.reviews.append({"job_id": m["job_id"], "state": m["state"], "outcome": m["outcome"],
-                                    "bytes": size})
+                                    "inode": ino, "bytes": dir_bytes(rroot, m["job_id"], root_dev)})
             if out.pipeline_dir and proot is not None:
-                out.pipeline_bytes = dir_bytes(proot, out.pipeline_dir)
+                fd = _open_pinned(proot, out.pipeline_dir, root_dev, private=True)
+                try:
+                    out.pipeline_inode = os.fstat(fd).st_ino
+                finally:
+                    os.close(fd)
+                out.pipeline_bytes = dir_bytes(proot, out.pipeline_dir, root_dev)
         finally:
             for fd in (sroot, rroot, proot):
                 if fd is not None:
                     os.close(fd)
-        out.held = pipeline_store.is_held(base, pipeline_id)
+        if out.deleting:
+            droot = _root_fd(state, DELETING, root_dev)
+            if droot is not None:
+                try:
+                    out.tomb_bytes = dir_bytes(droot, pipeline_id, root_dev)
+                except _Missing:
+                    pass
+                finally:
+                    os.close(droot)
+        out.held = pipeline_store.hold_marker_exists(base, pipeline_id)
+        if not out.deleting:
+            _failures(base, pipeline_id, task_id, out)
     finally:
         os.close(state)
     out.total_bytes = (sum(s["bytes"] for s in out.sessions) + sum(r["bytes"] for r in out.reviews)
-                       + out.pipeline_bytes)
+                       + out.pipeline_bytes + out.tomb_bytes)
     return out
 
 
+def _proven_inode(sroot: int, name: str, root_dev: int, m: dict) -> int:
+    """The session directory's inode, which must be the one its manifest
+    recorded (the manifest says which directory it is the record of)."""
+    rec = m.get("launch_dir")
+    if not (isinstance(rec, dict) and isinstance(rec.get("inode"), int) and not isinstance(rec.get("inode"), bool)):
+        raise FlowDataRefused(f"session {name} 的 manifest 沒有資料夾身分，無法證明它屬於這個流程")
+    fd = _open_pinned(sroot, name, root_dev, inode=rec["inode"], private=True)
+    try:
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if rec.get("uid") != st.st_uid:
+        raise FlowDataRefused(f"session {name} 的資料夾身分與 manifest 不符")
+    return st.st_ino
+
+
+def _pipeline_side(base, pipeline_id: str, task_id: str, out: Plan) -> dict:
+    """Prove (or refuse) that the task directory is this flow's, and return
+    the flow-side review links. A flow's directory is proven by its start
+    record naming the flow; nothing else is ever deleted on a guess."""
+    try:
+        with pipeline_store.Pipeline(base, task_id, create=False) as p:
+            rec = p.start_record()
+            links = p.review_links()
+            if rec is not None and rec["pipeline_id"] != pipeline_id:
+                raise FlowDataRefused(f"這個任務的資料夾屬於另一個流程（{rec['pipeline_id']}），不處理")
+            if any(v["pipeline_id"] != pipeline_id for v in links.values()):
+                raise FlowDataRefused("這個任務的審查紀錄屬於另一個流程，不處理")
+            if rec is None:
+                _scaffold_only(p, pipeline_id)
+            out.pipeline_dir = task_id
+            return links
+    except pipeline_store.StoreRefused as exc:
+        if exc.missing:
+            return {}
+        raise FlowDataRefused(f"這個任務的資料夾無法核對（{exc}），無法證明它屬於這個流程") from exc
+    except OSError as exc:
+        raise FlowDataRefused(f"這個任務的資料夾無法核對（{exc.strerror}）") from exc
+
+
+def _scaffold_only(p, pipeline_id: str) -> None:
+    """A flow that never started has no start record. Its directory is then
+    deleted only when it holds nothing but empty scaffolding and, at most, a
+    release record that names this flow; any file or any record that cannot
+    be read or names someone else refuses."""
+    for name in os.listdir(p.fd):
+        if name == pipeline_store.RELEASED:
+            try:
+                if p.release_record(pipeline_id) is None:
+                    raise FlowDataRefused("流程資料夾沒有開始紀錄，無法證明它屬於這個流程")
+            except pipeline_store.StoreRefused as exc:
+                raise FlowDataRefused(f"流程資料夾沒有開始紀錄，而且繼續紀錄無法證明歸屬（{exc}）") from exc
+        elif name in SCAFFOLD_NAMES:
+            sub = os.open(name, _DIR, dir_fd=p.fd)
+            try:
+                if os.listdir(sub):
+                    raise FlowDataRefused(f"流程資料夾沒有開始紀錄，但 {name}/ 裡有資料，無法證明它屬於這個流程")
+            finally:
+                os.close(sub)
+        else:
+            raise FlowDataRefused(f"流程資料夾沒有開始紀錄，但有不認得的項目 {name[:64]!r}，無法證明它屬於這個流程")
+
+
 def _flow_sessions(base, pipeline_id: str) -> list[dict]:
-    """The flow's stream sessions from their manifests alone (not the journals:
-    a deletion that stopped half way may have taken a journal already, and
-    finishing it must still be possible). An entry that is not shaped like a
-    launch, or a manifest that cannot be read, refuses: it could be this
-    flow's."""
+    """The flow's stream sessions from their manifests alone (not the journals).
+    An entry that is not shaped like a launch, or a manifest that cannot be
+    read, refuses: it could be this flow's."""
     root = agent_sessions.sessions_root(Path(os.fspath(base)))
     try:
         names = sorted(os.listdir(root))
@@ -203,7 +326,10 @@ def _flow_sessions(base, pipeline_id: str) -> list[dict]:
     return out
 
 
-def _flow_reviews(base, pipeline_id: str) -> list[dict]:
+def _flow_reviews(base, pipeline_id: str, links: dict) -> list[dict]:
+    """The flow's review jobs: a manifest naming the flow *and* the flow-side
+    record of its round naming the same job, commit and flow. One record
+    alone is not proof."""
     try:
         names = review_store.list_jobs(base)
     except (review_store.ReviewRefused, OSError) as exc:
@@ -216,17 +342,44 @@ def _flow_reviews(base, pipeline_id: str) -> list[dict]:
             m = review_store.read_manifest(base, name)
         except (review_store.ReviewRefused, OSError) as exc:
             raise FlowDataRefused(f"審查 {name} 的 manifest 無法讀取（{exc}），無法判斷哪些資料屬於這個流程") from exc
-        if m["pipeline_id"] == pipeline_id:
-            out.append(m)
+        if m["pipeline_id"] != pipeline_id:
+            continue
+        link = links.get(m["round"])
+        if (link is None or link["job_id"] != name or link["commit"] != m["commit"]
+                or link["pipeline_id"] != pipeline_id):
+            raise FlowDataRefused(f"審查 {name} 與流程的審查紀錄對不上，無法證明它屬於這個流程")
+        out.append(m)
     return out
 
 
-def blockers(pl: Plan, *, live_launches=(), live_jobs=()) -> list[str]:
+def _failures(base, pipeline_id: str, task_id: str, out: Plan) -> None:
+    """The failures of the flow that the user has not released (v29.8), by
+    identity, recomputed from the journals and manifests."""
+    try:
+        current = stream_flow.failure_ids(base, pipeline_id, task_id)
+    except stream_flow.FlowRefused as exc:
+        out.failure_problem = f"無法確認失敗是否都已處理（{exc}）"
+        return
+    resolved: set = set()
+    if out.pipeline_dir:
+        try:
+            with pipeline_store.Pipeline(base, task_id, create=False) as p:
+                rec = p.release_record(pipeline_id)
+            resolved = rec["resolved"] if rec else set()
+        except (pipeline_store.StoreRefused, OSError) as exc:
+            out.failure_problem = f"無法確認失敗是否都已處理（繼續紀錄無法讀取：{exc}）"
+            return
+    out.unresolved = [i for i in current if i not in resolved]
+
+
+def blockers(pl: Plan, *, live_launches=(), live_jobs=(), held_leaders=()) -> list[str]:
     """Why this flow cannot be deleted now; empty when it can."""
     why: list[str] = []
     for s in pl.sessions:
         if s["launch_id"] in live_launches or s["state"] in ("launching", "running"):
             why.append(f"串流 session {s['launch_id']} 仍在執行")
+        elif s["launch_id"] in held_leaders:
+            why.append(f"串流 session {s['launch_id']} 的程序群組尚未證明已結束（需要人工處理）")
         elif s["state"] == "manual_review":
             why.append(f"串流 session {s['launch_id']} 需要人工處理（manual_review）")
         elif s["state"] not in ("ended", "prepared"):
@@ -234,172 +387,190 @@ def blockers(pl: Plan, *, live_launches=(), live_jobs=()) -> list[str]:
     for r in pl.reviews:
         if r["job_id"] in live_jobs or r["state"] in ("prepared", "launching", "running"):
             why.append(f"審查 {r['job_id']} 仍在進行")
+        elif r["job_id"] in held_leaders:
+            why.append(f"審查 {r['job_id']} 的程序群組尚未證明已結束（需要人工處理）")
         elif r["state"] == "manual_review" or r["outcome"] == "manual_review":
             why.append(f"審查 {r['job_id']} 需要人工處理（manual_review）")
         elif r["state"] != "cleaned":
             why.append(f"審查 {r['job_id']} 尚未清理完成（{r['state']}）")
+    if not pl.deleting:                       # a deletion already begun is finished, not re-decided
+        if pl.held:
+            why.append("流程已停止（含失敗後的停止），請先按「繼續」，或處理失敗後再刪除")
+        if pl.failure_problem:
+            why.append(pl.failure_problem)
+        if pl.unresolved:
+            why.append(f"還有 {len(pl.unresolved)} 個尚未解除的失敗（{pl.unresolved[0]}），請先處理並按「繼續」")
     return why
 
 
-# ---- removing ------------------------------------------------------------------------------------------
+# ---- removing: move, then purge --------------------------------------------------------------------------
 
-def _empty(fd: int, *, keep: str | None, last: tuple[str, ...] = (), depth: int = 0,
-           budget: list[int] | None = None) -> None:
-    """Remove everything under the directory ``fd`` except the name ``keep``;
-    names in ``last`` go after everything else. Links are removed as links,
-    never followed; a special file refuses."""
-    budget = budget if budget is not None else [WALK_MAX_ENTRIES]
-    if depth > WALK_MAX_DEPTH:
-        raise FlowDataRefused("資料夾層數過深，無法刪除")
-    names = os.listdir(fd)
-    budget[0] -= len(names)
-    if budget[0] < 0:
-        raise FlowDataRefused("項目過多，無法刪除")
-    ordered = ([n for n in names if n != keep and n not in last]
-               + [n for n in last if n in names and n != keep])
-    for name in ordered:
-        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
-        if stat.S_ISDIR(st.st_mode):
-            sub = os.open(name, _DIR, dir_fd=fd)
-            try:
-                _empty(sub, keep=None, depth=depth + 1, budget=budget)
-            finally:
-                os.close(sub)
-            os.rmdir(name, dir_fd=fd)
-        elif stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
-            os.unlink(name, dir_fd=fd)
-        else:
-            raise FlowDataRefused(f"不是一般檔案或資料夾，不刪除：{name[:64]!r}")
-
-
-def _remove_dir(parent_fd: int, name: str, *, identity: dict | None = None, manifest: str | None = None,
-                last: tuple[str, ...] = ()) -> bool:
-    """Remove the directory ``name`` under ``parent_fd``: opened without
-    following a link, ours, private, and (when given) the very inode the
-    manifest recorded. ``manifest`` (and ``last``) are removed after
-    everything else. True when something was removed; False when it was
-    already gone."""
+def _mkdir_private(parent_fd: int, name: str, root_dev: int) -> int:
     try:
-        fd = os.open(name, _DIR, dir_fd=parent_fd)
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise FlowDataRefused(f"{name} 無法建立（{exc.strerror}）") from exc
+    return _open_pinned(parent_fd, name, root_dev, private=True)
+
+
+def _fsync(fd: int) -> None:
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+
+
+def _move(src_parent: int, name: str, dst_parent: int, dst_name: str, root_dev: int, inode) -> bool:
+    """Atomically move the directory ``name`` into the tomb as ``dst_name``.
+    True when moved, False when it was not there (already moved). The inode
+    seen when planning must still be the directory's, before and after."""
+    try:
+        os.stat(name, dir_fd=src_parent, follow_symlinks=False)
     except FileNotFoundError:
         return False
-    except OSError as exc:
-        raise FlowDataRefused(f"{name[:64]} 不是一般資料夾（{exc.strerror}），不刪除") from exc
+    if not isinstance(inode, int) or isinstance(inode, bool):
+        raise FlowDataRefused(f"{name[:64]} 沒有計畫時的身分，不處理")
+    fd = _open_pinned(src_parent, name, root_dev, inode=inode, private=True)
+    os.close(fd)
     try:
-        st = os.fstat(fd)
-        if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) & 0o077:
-            raise FlowDataRefused(f"{name[:64]} 不是本人的私有資料夾，不刪除")
-        if identity is not None and (identity.get("inode") != st.st_ino or identity.get("uid") != st.st_uid):
-            raise FlowDataRefused(f"{name[:64]} 的資料夾身分與 manifest 不符，不刪除")
+        os.stat(dst_name, dir_fd=dst_parent, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise FlowDataRefused(f"{dst_name[:64]} 在刪除區裡已經有同名的項目，不處理")
+    try:
+        os.rename(name, dst_name, src_dir_fd=src_parent, dst_dir_fd=dst_parent)
+    except OSError as exc:
+        raise FlowDataRefused(f"{name[:64]} 無法移到刪除區（{exc.strerror}）") from exc
+    st = os.stat(dst_name, dir_fd=dst_parent, follow_symlinks=False)
+    if st.st_ino != inode or st.st_dev != root_dev:
         try:
-            _empty(fd, keep=manifest, last=last)
-            if manifest is not None:
-                try:
-                    os.unlink(manifest, dir_fd=fd)
-                except FileNotFoundError:
-                    pass
-        except OSError as exc:
-            raise FlowDataRefused(f"{name[:64]} 刪除到一半失敗（{exc.strerror}）", partial=True) from exc
+            os.rename(dst_name, name, src_dir_fd=dst_parent, dst_dir_fd=src_parent)
+        except OSError:
+            pass
+        raise FlowDataRefused(f"{name[:64]} 在移動時被替換了，不處理")
+    return True
+
+
+def _purge(parent_fd: int, name: str, root_dev: int, budget: list[int], depth: int = 0) -> bool:
+    """Remove ``name`` under ``parent_fd`` and everything in it. No manifest is
+    read: this works from any point. Every directory is opened pinned; a
+    link is removed as a link; a special file or a mount point refuses."""
+    if depth > WALK_MAX_DEPTH:
+        raise FlowDataRefused("資料夾層數過深，不刪除")
+    try:
+        st0 = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise FlowDataRefused("項目過多，不刪除")
+    if stat.S_ISREG(st0.st_mode) or stat.S_ISLNK(st0.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return True
+    if not stat.S_ISDIR(st0.st_mode):
+        raise FlowDataRefused(f"不是一般檔案或資料夾，不刪除：{name[:64]!r}")
+    fd = _open_pinned(parent_fd, name, root_dev, inode=st0.st_ino)
+    try:
+        for child in os.listdir(fd):
+            _purge(fd, child, root_dev, budget, depth + 1)
     finally:
         os.close(fd)
-    try:
-        os.rmdir(name, dir_fd=parent_fd)
-    except OSError as exc:
-        raise FlowDataRefused(f"{name[:64]} 刪除後仍存在（{exc.strerror}）", partial=True) from exc
+    st1 = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if st1.st_ino != st0.st_ino or st1.st_dev != st0.st_dev:
+        raise FlowDataRefused(f"{name[:64]} 在清空之後被替換了，不刪除")
+    os.rmdir(name, dir_fd=parent_fd)
     return True
 
 
 def remove(base, pl: Plan) -> dict:
-    """Delete what ``pl`` lists. The caller has checked blockers() and that
-    no process of the flow is alive. Raises FlowDataRefused (``partial`` when
-    something was already removed; run again to finish)."""
-    removed = {"sessions": [], "reviews": [], "pipeline": False, "hold": False}
+    """Delete what ``pl`` lists: move every proven directory into the flow's
+    tomb, then purge the tomb. The caller has checked blockers() and that no
+    process of the flow is alive. Raises FlowDataRefused (``partial`` when
+    something was already moved or removed; asking again continues)."""
+    removed = {"sessions": [], "reviews": [], "pipeline": False, "hold": False, "purged": False}
+
+    def began() -> bool:
+        return bool(removed["sessions"] or removed["reviews"] or removed["pipeline"] or removed["purged"]
+                    or pl.deleting)
     try:
         return _remove(base, pl, removed)
     except FlowDataRefused as exc:
-        if removed["sessions"] or removed["reviews"] or removed["pipeline"] or removed["hold"]:
-            exc.partial = True
+        exc.partial = exc.partial or began()
         raise
+    except OSError as exc:
+        raise FlowDataRefused(f"刪除失敗（{exc.strerror or type(exc).__name__}）", partial=began()) from exc
 
 
 def _remove(base, pl: Plan, removed: dict) -> dict:
-    uid = os.getuid()
     try:
         state = os.open(str(base), _DIR)
     except OSError as exc:
         raise FlowDataRefused(f"狀態目錄無法開啟（{exc.strerror}）") from exc
+    open_fds = [state]
     try:
-        # a launch that was prepared and never run still has its scratch: the
-        # launch's own discard removes both, exactly what the manifest records
+        root_dev = os.fstat(state).st_dev
+        # A launch that was prepared and never run still has its scratch outside
+        # the state directory: the launch's own discard removes both.
         for s in pl.sessions:
             if s["state"] == "prepared":
                 res = agent_sessions.discard_prepared(Path(os.fspath(base)), s["launch_id"])
                 if not res.get("cleaned"):
-                    raise FlowDataRefused(f"未啟動的 session {s['launch_id']} 無法移除（{res.get('retained_reason', '')}）",
-                                          partial=bool(removed["sessions"]))
+                    raise FlowDataRefused(f"未啟動的 session {s['launch_id']} 無法移除（{res.get('retained_reason', '')}）")
                 removed["sessions"].append(s["launch_id"])
-        sroot = _root_fd(state, SESSIONS)
-        rroot = _root_fd(state, REVIEWS)
-        proot = _root_fd(state, PIPELINES)
-        try:
-            for s in pl.sessions:
-                if s["state"] == "prepared" or sroot is None:
-                    continue
-                ldir = agent_sessions.launch_dir(Path(os.fspath(base)), s["launch_id"])
-                try:
-                    m = agent_sessions._read_manifest(ldir, uid)
-                except FileNotFoundError:
-                    m = None                                      # the manifest goes last: a finished removal
-                except (OSError, agent_sessions.LaunchRefused) as exc:
-                    raise FlowDataRefused(f"session {s['launch_id']} 的 manifest 無法讀取（{exc}）",
-                                          partial=bool(removed["sessions"])) from exc
-                ident = None
-                if m is not None:
-                    if m.get("pipeline_id") != pl.pipeline_id or m.get("launch_id") != s["launch_id"]:
-                        raise FlowDataRefused(f"session {s['launch_id']} 不屬於這個流程，不刪除")
-                    scratch = Path(m["scratch"]["path"])
-                    if os.path.lexists(scratch):
-                        raise FlowDataRefused(f"session {s['launch_id']} 的暫存區還在，不刪除")
-                    rec = m.get("launch_dir")
-                    ident = {"inode": rec.get("inode"), "uid": rec.get("uid")} if isinstance(rec, dict) else None
-                    if ident is None:
-                        raise FlowDataRefused(f"session {s['launch_id']} 的 manifest 沒有資料夾身分，不刪除")
-                if _remove_dir(sroot, s["launch_id"], identity=ident, manifest=agent_sessions.MANIFEST):
-                    removed["sessions"].append(s["launch_id"])
-            for r in pl.reviews:
-                if rroot is None:
-                    break
-                try:
-                    m = review_store.read_manifest(base, r["job_id"])
-                except review_store.ReviewRefused as exc:
-                    if os.path.lexists(review_store.job_dir(base, r["job_id"])):
-                        raise FlowDataRefused(f"審查 {r['job_id']} 的 manifest 無法讀取（{exc}）",
-                                              partial=bool(removed["sessions"] or removed["reviews"])) from exc
-                    continue
-                if m["pipeline_id"] != pl.pipeline_id or m["job_id"] != r["job_id"]:
-                    raise FlowDataRefused(f"審查 {r['job_id']} 不屬於這個流程，不刪除")
-                if m["state"] != "cleaned":
-                    raise FlowDataRefused(f"審查 {r['job_id']} 尚未清理完成，不刪除")
-                if _remove_dir(rroot, r["job_id"], manifest=review_store.MANIFEST):
-                    removed["reviews"].append(r["job_id"])
-            if pl.pipeline_dir and proot is not None:
-                if _remove_dir(proot, pl.pipeline_dir, last=(pipeline_store.STARTED,)):
+        # the tomb: from here on the flow counts as stopped (is_held) and a retry finishes it
+        deleting = _mkdir_private(state, DELETING, root_dev)
+        open_fds.append(deleting)
+        tomb = _mkdir_private(deleting, pl.pipeline_id, root_dev)
+        open_fds.append(tomb)
+        _fsync(state)
+        _fsync(deleting)
+        for sub, items, key, idname in (("sessions", pl.sessions, "sessions", "launch_id"),
+                                        ("reviews", pl.reviews, "reviews", "job_id")):
+            live = [x for x in items if not (key == "sessions" and x["state"] == "prepared")]
+            if not live:
+                continue
+            src = _root_fd(state, sub, root_dev)
+            if src is None:
+                continue
+            open_fds.append(src)
+            dst = _mkdir_private(tomb, sub, root_dev)
+            open_fds.append(dst)
+            for x in live:
+                if _move(src, x[idname], dst, x[idname], root_dev, x["inode"]):
+                    removed[key].append(x[idname])
+        if pl.pipeline_dir:
+            src = _root_fd(state, PIPELINES, root_dev)
+            if src is not None:
+                open_fds.append(src)
+                if _move(src, pl.pipeline_dir, tomb, "pipeline", root_dev, pl.pipeline_inode):
                     removed["pipeline"] = True
-        finally:
-            for fd in (sroot, rroot, proot):
-                if fd is not None:
-                    os.close(fd)
-        try:
-            removed["hold"] = _remove_hold(state, pl.pipeline_id)
-        except OSError as exc:
-            raise FlowDataRefused(f"停止紀錄無法移除（{exc.strerror}）", partial=True) from exc
+        _fsync(tomb)
+        # purge: no manifest is needed from here; the tomb itself goes last
+        if _purge(deleting, pl.pipeline_id, root_dev, [WALK_MAX_ENTRIES]):
+            removed["purged"] = True
+        _fsync(deleting)
+        if pl.held or pl.deleting:
+            removed["hold"] = _remove_hold(state, pl.pipeline_id, root_dev)
+        try:                                                    # an empty deleting/ is not kept
+            os.rmdir(DELETING, dir_fd=state)
+        except OSError:
+            pass
     finally:
-        os.close(state)
+        for fd in open_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     return removed
 
 
-def _remove_hold(state: int, pipeline_id: str) -> bool:
-    holds = _root_fd(state, HOLDS)
+def _remove_hold(state: int, pipeline_id: str, root_dev: int) -> bool:
+    """The stop marker of a flow whose deletion is under way (a flow that was
+    stopped by the user is refused before this)."""
+    holds = _root_fd(state, HOLDS, root_dev)
     if holds is None:
         return False
     try:
