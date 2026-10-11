@@ -150,6 +150,7 @@ class ArgvTests(Tmp):
             "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
             "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
             "-c", "check_for_update_on_startup=false", "-c", "web_search=disabled",
+            "-c", "skills.bundled.enabled=false", "-c", "skills.include_instructions=false",       # v29.11
             "--disable", "apps", "--disable", "plugins", "--disable", "remote_plugin", "--disable", "hooks",
             "--disable", "shell_snapshot", "--disable", "browser_use", "--disable", "browser_use_external",
             "--disable", "computer_use", "--disable", "image_generation", "--disable", "memories",

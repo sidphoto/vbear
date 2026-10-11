@@ -42,7 +42,8 @@ class CodexConstants:
     tool_call_kind: tuple                 # (type, payload.type) of a tool call
     tool_name_key: str                    # payload key holding the tool name
     network_restricted: object            # turn_context.payload.permission_profile.network (probe)
-    multi_agent_disabled: object          # world_state.payload.multi_agent_mode (probe)
+    multi_agent_mode: str                 # world_state.payload.state.multi_agent_mode.mode (probe 2026-10-11: cannot be "disabled")
+    collaboration_mode: str               # world_state.payload.state.collaboration_mode.mode (probe 2026-10-11)
     usage_fields: tuple                   # the six counts of a token_usage_record's usage objects
     cache_fields: tuple                   # which of them are cache counts: each must be <= input_tokens
     model_message_kinds: frozenset        # what a model produces: counts as a model response item
@@ -60,7 +61,9 @@ class CodexConstants:
     config_tail: tuple = (
         "sandbox_workspace_write.network_access=false", "sandbox_workspace_write.exclude_slash_tmp=true",
         "sandbox_workspace_write.exclude_tmpdir_env_var=true", "check_for_update_on_startup=false",
-        "web_search=disabled")
+        "web_search=disabled",
+        # v29.11 (probe 2026-10-11): without these Codex puts its four bundled system skills into the prompt
+        "skills.bundled.enabled=false", "skills.include_instructions=false")
     disable: tuple = ("apps", "plugins", "remote_plugin", "hooks", "shell_snapshot", "browser_use",
                       "browser_use_external", "computer_use", "image_generation", "memories", "multi_agent",
                       "skill_mcp_dependency_install", "tool_suggest")
@@ -105,11 +108,15 @@ VERSIONS: dict[str, CodexConstants] = {
         session_source="exec",
         model_provider="openai",
         models=frozenset({"gpt-6-luna", "gpt-6.1-sol"}),
-        tools=frozenset({"exec", "write_stdin", "apply_patch", "update_plan"}),   # (probe)
+        tools=frozenset({"exec"}),                # probe 2026-10-11: the only tool the model used (6 custom_tool_calls); v29.11
         tool_call_kind=("response_item", "custom_tool_call"),
-        tool_name_key="name",                     # (probe)
-        network_restricted="restricted",          # (probe)
-        multi_agent_disabled="disabled",          # (probe)
+        tool_name_key="name",                     # probe 2026-10-11
+        network_restricted="restricted",          # probe 2026-10-11
+        # Codex 0.160.0 cannot switch multi-agent off (every flag tried leaves the prompt's multi_agent text):
+        # what it reports is "explicitRequestOnly". The protection is the closed set of record kinds and the
+        # tool allow-list (a spawn is SUBAGENT_ACTIVITY and makes the review invalid), design v29.11.
+        multi_agent_mode="explicitRequestOnly",
+        collaboration_mode="default",
         usage_fields=("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
                       "reasoning_output_tokens", "total_tokens"),
         cache_fields=("cached_input_tokens", "cache_write_input_tokens"),

@@ -25,7 +25,7 @@ import re
 
 from .numbers import finite_real
 
-RISK_TEXT_VERSION = "2026-10-08.1"
+RISK_TEXT_VERSION = "2026-10-11.1"      # v29.11: Codex 0.160.0 cannot turn multi-agent off (design 10, item 1)
 
 # name -> (default, hard cap). Design 6; integers unless noted.
 LIMITS = {

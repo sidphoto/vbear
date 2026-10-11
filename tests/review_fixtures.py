@@ -38,8 +38,15 @@ def rollout_records(c=C, *, thread=THREAD, turn=TURN, scratch=SCRATCH, model=MOD
     recs = [
         ("session_meta", {"id": thread, "cwd": scratch, "cli_version": c.version, "originator": c.session_originator,
                           "source": c.session_source, "model_provider": c.model_provider, "extra": "ignored"}),
-        ("world_state", {"apps_instructions": False, "plugins_instructions": False, "host_skills": [],
-                         "multi_agent_mode": c.multi_agent_disabled, "agents_md": None}),
+        # the shape Codex 0.160.0 really wrote (probe 2026-10-11), with the skills text off (v29.11)
+        ("world_state", {"full": True, "state": {
+            "agents_md": {}, "apps_instructions": False, "plugins_instructions": False,
+            "collaboration_mode": {"mode": c.collaboration_mode, "model": model, "instructions": "0" * 40},
+            "context_window_guidance": "", "environments_instructions": False, "git_attribution": False,
+            "host_skills": {"body": "", "includeInstructions": False}, "managed_developer_instructions": {},
+            "model": model, "multi_agent_mode": {"mode": c.multi_agent_mode, "usage_hint_hash": "1" * 40},
+            "persistent_mode": {}, "plugins_instructions_extra": None, "realtime": {"active": False},
+            "skills": {"includeInstructions": False}}}),
         ("event_msg", {"type": "task_started", "turn_id": turn, "started_at": 1791467000}),
         ("turn_context", {"cwd": scratch, "approval_policy": c.approval_policy, "model": model, "turn_id": turn,
                           "sandbox_policy": {"type": c.sandbox_type, "network_access": False,

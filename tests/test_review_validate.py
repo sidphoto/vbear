@@ -423,6 +423,60 @@ class CacheFieldTests(unittest.TestCase):
                     self.assertTrue(run_rollout(recs).reasons)
 
 
+class SubagentActivityTests(unittest.TestCase):
+    """Design v29.11: Codex 0.160.0 cannot turn multi-agent off, so any sign of
+    it makes the review invalid with a reason of its own."""
+
+    def test_a_sub_agent_tool_or_record_has_its_own_reason(self):
+        names = ("spawn_agent", "followup_task", "send_message", "wait_agent", "interrupt_agent", "list_agents",
+                 "close_agent", "resume_agent", "send_input")
+        for name in names:
+            for how, make in (
+                    ("custom_tool_call", lambda r, n=name: r.insert(5, {"ordinal": 5, "type": "response_item", "payload": {
+                        "type": "custom_tool_call", "name": n, "input": "{}"}})),
+                    ("function_call", lambda r, n=name: r.insert(5, {"ordinal": 5, "type": "response_item", "payload": {
+                        "type": "function_call", "name": n, "arguments": "{}"}})),
+                    ("recipient", lambda r, n=name: r.insert(5, {"ordinal": 5, "type": "response_item", "payload": {
+                        "type": "message", "role": "assistant", "recipient": f"functions.collaboration.{n}"}}))):
+                with self.subTest(tool=name, record=how):
+                    _, recs, _ = rf.valid_run()
+                    make(recs)
+                    for i, r in enumerate(recs):
+                        r["ordinal"] = i
+                    reasons = run_rollout(recs).reasons
+                    self.assertIn(rv.SUBAGENT_ACTIVITY, reasons)
+                    self.assertNotIn("有一筆紀錄的種類不在常數內", " ".join(reasons))     # not the generic reason
+        for kind in ("collab_agent_spawn_end", "subagent_started", "collab_waiting_begin"):
+            with self.subTest(event=kind):
+                _, recs, _ = rf.valid_run()
+                recs.insert(5, {"ordinal": 5, "type": "event_msg", "payload": {"type": kind}})
+                for i, r in enumerate(recs):
+                    r["ordinal"] = i
+                self.assertIn(rv.SUBAGENT_ACTIVITY, run_rollout(recs).reasons)
+
+    def test_the_events_stream_has_the_same_rule(self):
+        for item in ({"id": "i", "type": "collab_tool_call", "tool": "spawn_agent"},
+                     {"id": "i", "type": "mcp_tool_call", "name": "spawn_agent"},
+                     {"id": "i", "type": "subagent_message"}):
+            with self.subTest(item=item):
+                evs, _, _ = rf.valid_run()
+                evs.insert(3, {"type": "item.started", "item": item})
+                t = rv.EventsTracker(rf.C)
+                with self.assertRaises(rv.ReviewInvalid) as cm:
+                    for e in evs:
+                        t.feed(json.dumps(e).encode())
+                self.assertEqual(cm.exception.reasons, [rv.SUBAGENT_ACTIVITY])
+
+    def test_ordinary_records_do_not_trip_it(self):
+        # the real run (probe 2026-10-11) had agent_message items, messages and exec calls
+        evs, recs, _ = rf.valid_run()
+        self.assertEqual(run_rollout(recs).reasons, [])
+        t = rv.EventsTracker(rf.C)
+        for e in evs:
+            t.feed(json.dumps(e).encode())
+        t.finish()
+
+
 class RolloutTests(unittest.TestCase):
     def reasons(self, mutate, **over):
         evs, recs, text = rf.valid_run()
@@ -497,15 +551,33 @@ class RolloutTests(unittest.TestCase):
             "no turn_context": lambda r: (r.pop(3), renumber(r)),
             "no world_state": lambda r: (r.pop(1), renumber(r)),
             "world_state after turn_context": lambda r: (r.insert(3, r.pop(1)), renumber(r)),
-            "apps on": set_("world_state", "apps_instructions", True),
-            "apps missing": del_("world_state", "apps_instructions"),
-            "plugins on": set_("world_state", "plugins_instructions", True),
-            "host skills": set_("world_state", "host_skills", ["x"]),
-            "host skills missing": del_("world_state", "host_skills"),
-            "multi agent missing": del_("world_state", "multi_agent_mode"),
-            "multi agent on": set_("world_state", "multi_agent_mode", "enabled"),
+            "apps on": set_("world_state", "apps_instructions", True, nested="state"),
+            "apps missing": del_("world_state", "apps_instructions", nested="state"),
+            "plugins on": set_("world_state", "plugins_instructions", True, nested="state"),
+            "host skills listed": set_("world_state", "host_skills", {"body": "<skills_instructions>", "includeInstructions": True},
+                                       nested="state"),
+            "host skills body only": set_("world_state", "host_skills", {"body": "x", "includeInstructions": False},
+                                          nested="state"),
+            "host skills as a list": set_("world_state", "host_skills", ["x"], nested="state"),
+            "skills instructions on": set_("world_state", "skills", {"includeInstructions": True}, nested="state"),
+            "multi agent missing": del_("world_state", "multi_agent_mode", nested="state"),
+            "multi agent proactive": set_("world_state", "multi_agent_mode", {"mode": "proactive"}, nested="state"),
+            "multi agent not an object": set_("world_state", "multi_agent_mode", "explicitRequestOnly", nested="state"),
+            "collaboration mode plan": set_("world_state", "collaboration_mode", {"mode": "plan"}, nested="state"),
+            "collaboration mode missing": del_("world_state", "collaboration_mode", nested="state"),
+            "agents_md loaded": set_("world_state", "agents_md", {"path": "AGENTS.md"}, nested="state"),
+            "agents_md missing": del_("world_state", "agents_md", nested="state"),
+            "managed instructions": set_("world_state", "managed_developer_instructions", {"x": 1}, nested="state"),
+            "persistent mode": set_("world_state", "persistent_mode", {"x": 1}, nested="state"),
+            "git attribution": set_("world_state", "git_attribution", True, nested="state"),
+            "environments instructions": set_("world_state", "environments_instructions", True, nested="state"),
+            "realtime active": set_("world_state", "realtime", {"active": True}, nested="state"),
+            "realtime missing": del_("world_state", "realtime", nested="state"),
+            "no state object": lambda r: r[1].update(payload={"full": True}),
+            "state not an object": set_("world_state", "state", [1]),
             "second world_state bad": lambda r: (r.insert(2, {"ordinal": 2, "type": "world_state", "payload": {
-                **json.loads(json.dumps(r[1]["payload"])), "multi_agent_mode": "enabled"}}), renumber(r)),
+                "full": True, "state": {**json.loads(json.dumps(r[1]["payload"]["state"])),
+                                        "multi_agent_mode": {"mode": "proactive"}}}}), renumber(r)),
             "task_started twice": lambda r: (r.insert(3, json.loads(json.dumps(r[2]))), renumber(r)),
             "no task_started": lambda r: (r.pop(2), renumber(r)),
             "task_started turn id": set_("event_msg", "turn_id", "turn-0002", sub="task_started"),
@@ -569,8 +641,10 @@ class RolloutTests(unittest.TestCase):
         tok = lambda r: [x for x in r if x["type"] == "token_usage_record"]
         one(lambda r: tc(r)["sandbox_policy"].update(network_access=True), "sandbox_policy")
         one(lambda r: tc(r)["permission_profile"].update(network="enabled"), "permission_profile.network")
-        one(lambda r: ws(r).pop("multi_agent_mode"), "multi_agent_mode")
-        one(lambda r: ws(r).update(apps_instructions=True), "apps")
+        one(lambda r: ws(r)["state"].pop("multi_agent_mode"), "multi_agent_mode")
+        one(lambda r: ws(r)["state"].update(apps_instructions=True), "apps")
+        one(lambda r: ws(r)["state"].update(host_skills={"body": "x"}), "skills")
+        one(lambda r: ws(r)["state"].update(agents_md={"x": 1}), "agents_md")
         one(lambda r: tc(r).update(approval_policy="on-request"), "approval_policy")
         one(lambda r: tc(r).update(cwd="/Users/someone"), "turn_context.cwd")
         one(lambda r: [x for x in r if x["payload"].get("type") == "custom_tool_call"][0]["payload"].update(name="browser"),

@@ -29,6 +29,17 @@ MAX_REASONS = 16
 VERDICTS = ("PASS", "NEEDS WORK", "BLOCKED")
 BASE_NOT_ANCESTOR = "審查範圍不可信：base 不是被審 commit 的祖先"
 READ_CHUNK = 1 << 20
+# Codex 0.160.0 cannot turn multi-agent off (every flag tried leaves its prompt text in place); the
+# protection is that any sign of it makes the whole review invalid, with a reason that says so
+# (design v29.11). A tool name or record kind that names a sub-agent tool or collaboration.
+SUBAGENT_ACTIVITY = ("審查中出現子 agent 相關的工具或紀錄（SUBAGENT_ACTIVITY）：Codex 0.160.0 無法關閉多 agent 能力，"
+                     "出現就整次審查無效")
+_SUBAGENT = re.compile(r"spawn_agent|followup_task|send_message|wait_agent|interrupt_agent|list_agents|close_agent"
+                       r"|resume_agent|send_input|sub_?agent|collab", re.I)
+
+
+def _mentions_subagent(*values) -> bool:
+    return any(isinstance(v, str) and _SUBAGENT.search(v) for v in values)
 
 
 class ReviewInvalid(Exception):
@@ -120,6 +131,8 @@ class EventsTracker:
             item = ev.get("item")
             if not isinstance(item, dict) or not isinstance(item.get("type"), str):
                 raise ReviewInvalid("item 的格式不符")
+            if _mentions_subagent(item.get("type"), item.get("name"), item.get("tool")):
+                raise ReviewInvalid(SUBAGENT_ACTIVITY)
             if kind == "item.completed" and item["type"] == c.message_item_type:
                 text = item.get(c.message_text_key)
                 if not _text(text, REPORT_MAX):
@@ -632,6 +645,10 @@ class _Walk:
         if not isinstance(typ, str) or not isinstance(payload, dict):
             self.bad("有一筆紀錄缺少 type 或 payload")
             return
+        if _mentions_subagent(typ, payload.get("type"), payload.get("name"), payload.get("tool"),
+                              payload.get("recipient")):
+            self.bad(SUBAGENT_ACTIVITY)           # a reason of its own, not "kind not in the constants"
+            return
         sub = None
         if (typ, None) not in c.rollout_kinds:
             sub = payload.get("type")
@@ -673,14 +690,39 @@ class _Walk:
             self.bad("session_meta.model_provider 不是 openai")
 
     def _world_state(self, p):
+        """Codex 0.160.0 (probe 2026-10-11): {"full": bool, "state": {...}}. What
+        is read is under "state"; every value is a fact about what the model
+        is told and may load."""
         c = self.c
         self.world_state += 1
-        if p.get("apps_instructions") is not False or p.get("plugins_instructions") is not False:
+        st = p.get("state")
+        if not isinstance(st, dict):
+            self.bad("world_state 沒有 state 物件")
+            return
+        if st.get("apps_instructions") is not False or st.get("plugins_instructions") is not False:
             self.bad("world_state 的 apps 或 plugins 指示不是 false")
-        if p.get("host_skills") not in ([], {}, None) or "host_skills" not in p:
-            self.bad("world_state.host_skills 有內容或缺少")
-        if "multi_agent_mode" not in p or p["multi_agent_mode"] != c.multi_agent_disabled:
-            self.bad("world_state.multi_agent_mode 缺少或不是停用值")
+        # no skills text in the prompt (v29.11: skills.bundled.enabled/include_instructions are false)
+        hs = st.get("host_skills")
+        hs_empty = hs in (None, [], {}) or (isinstance(hs, dict) and hs.get("body") in (None, "")
+                                           and hs.get("includeInstructions") is not True)
+        sk = st.get("skills")
+        if not hs_empty or (isinstance(sk, dict) and sk.get("includeInstructions") is True):
+            self.bad("world_state 的 skills 指示不是關閉的（host_skills 有內容，或 includeInstructions 為 true）")
+        mam = st.get("multi_agent_mode")
+        if not (isinstance(mam, dict) and mam.get("mode") == c.multi_agent_mode):
+            self.bad("world_state.multi_agent_mode.mode 缺少或不是已驗證的值")
+        cm = st.get("collaboration_mode")
+        if not (isinstance(cm, dict) and cm.get("mode") == c.collaboration_mode):
+            self.bad("world_state.collaboration_mode.mode 缺少或不是已驗證的值")
+        # nothing loaded from files or the account on top of the fixed prompt
+        for key in ("agents_md", "managed_developer_instructions", "persistent_mode"):
+            if st.get(key) not in ({}, None) or key not in st:
+                self.bad(f"world_state.{key} 不是空的")
+        if st.get("environments_instructions") is not False or st.get("git_attribution") is not False:
+            self.bad("world_state 的 environments_instructions 或 git_attribution 不是 false")
+        rt = st.get("realtime")
+        if not (isinstance(rt, dict) and rt.get("active") is False):
+            self.bad("world_state.realtime.active 不是 false")
 
     def _turn_context(self, p):
         c = self.c
