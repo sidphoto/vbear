@@ -217,38 +217,47 @@ class FlowReview:
         with self._lock(flow_id):
             flow = self._flow(flow_id)
             risk_acceptance.refuse_if_automatic(flow_id, "手動審查")
-            acc = risk_acceptance.status(flow)
-            if acc["state"] != "valid":
-                raise ApiError(409, "no_acceptance", f"風險接受目前不算數（{acc.get('reason') or acc['state']}）")
-            hold = pipeline_store.hold_info(cfg.state_dir(), flow_id)
-            if hold["held"]:
-                raise ApiError(409, "held", f"這個流程已停止（{hold['reason']}），要先按「繼續」")
-            reports = self.reports(flow_id)
-            if reports.get("order_problem"):
-                raise ApiError(409, "order_unknown", f"無法判定最新的回報（{reports['order_problem']}），不啟動審查")
-            latest = next((e for e in reversed(reports["reports"]) if e["latest"]), None)
-            if latest is None:
-                raise ApiError(409, "no_report", "還沒有有效的執行者回報，不能啟動審查")
-            if not latest["usable"]:
-                bad = [c["label"] + (f"（{c['detail']}）" if c["detail"] else "") for c in latest["checks"] or []
-                       if c["ok"] is not True]
-                raise ApiError(409, "report_unchecked", "最新回報的 VBear 讀檔核對沒有全部通過：" + "；".join(bad))
-            commit = latest["report"]["head"]
-            reviews = self._review_manifests(flow)
-            # decided again on this read, not on the one the report was judged with: the answer must hold now
-            kind, value = self._last_non_pass(reviews)
-            if kind == "unreadable":
-                raise ApiError(409, "report_unchecked",
-                               f"無法讀取前次審查紀錄，不能確認是否需要新的 commit（{value}）")
-            if kind == "found" and value == commit:
-                raise ApiError(409, "report_unchecked", "NEEDS WORK／BLOCKED 之後要有新的 commit 才能再審")
-            if any(m["outcome"] is None for m in reviews):
-                raise ApiError(409, "busy", "這個流程已有尚未結束的審查")
-            rnd = (max((m["round"] for m in reviews), default=0)) + 1
-            if rnd > review_store.ROUND_MAX:
-                raise ApiError(409, "limit", "審查輪次已達上限")
+            rnd, commit = self.plan_start(flow_id)
             result = self.executor._call("review_start", timeout=120.0, pipeline=flow_id, round=rnd, commit=commit)
             return {"round": rnd, "commit": commit, "review": result}
+
+    def plan_start(self, flow_id: str) -> tuple[int, str]:
+        """(round, commit) of the review that may be started now, or an
+        ApiError (409) that says why none may. Everything start() checks,
+        shared with the runner (which then asks the daemon with its own
+        approval); the caller holds the flow's lock."""
+        flow = self._flow(flow_id)
+        acc = risk_acceptance.status(flow)
+        if acc["state"] != "valid":
+            raise ApiError(409, "no_acceptance", f"風險接受目前不算數（{acc.get('reason') or acc['state']}）")
+        hold = pipeline_store.hold_info(cfg.state_dir(), flow_id)
+        if hold["held"]:
+            raise ApiError(409, "held", f"這個流程已停止（{hold['reason']}），要先按「繼續」")
+        reports = self.reports(flow_id)
+        if reports.get("order_problem"):
+            raise ApiError(409, "order_unknown", f"無法判定最新的回報（{reports['order_problem']}），不啟動審查")
+        latest = next((e for e in reversed(reports["reports"]) if e["latest"]), None)
+        if latest is None:
+            raise ApiError(409, "no_report", "還沒有有效的執行者回報，不能啟動審查")
+        if not latest["usable"]:
+            bad = [c["label"] + (f"（{c['detail']}）" if c["detail"] else "") for c in latest["checks"] or []
+                   if c["ok"] is not True]
+            raise ApiError(409, "report_unchecked", "最新回報的 VBear 讀檔核對沒有全部通過：" + "；".join(bad))
+        commit = latest["report"]["head"]
+        reviews = self._review_manifests(flow)
+        # decided again on this read, not on the one the report was judged with: the answer must hold now
+        kind, value = self._last_non_pass(reviews)
+        if kind == "unreadable":
+            raise ApiError(409, "report_unchecked",
+                           f"無法讀取前次審查紀錄，不能確認是否需要新的 commit（{value}）")
+        if kind == "found" and value == commit:
+            raise ApiError(409, "report_unchecked", "NEEDS WORK／BLOCKED 之後要有新的 commit 才能再審")
+        if any(m["outcome"] is None for m in reviews):
+            raise ApiError(409, "busy", "這個流程已有尚未結束的審查")
+        rnd = (max((m["round"] for m in reviews), default=0)) + 1
+        if rnd > review_store.ROUND_MAX:
+            raise ApiError(409, "limit", "審查輪次已達上限")
+        return rnd, commit
 
     def cancel(self, flow_id: str, body) -> dict:
         if not isinstance(body, dict) or set(body) != {"job_id"}:

@@ -46,6 +46,7 @@ from . import flow_executor
 from . import flow_review
 from . import flow_storage
 from . import automation as automation_mod
+from . import runner as runner_mod
 from . import flows
 from . import previews as previews_mod
 from .api_error import ApiError
@@ -137,6 +138,8 @@ class Console:
         self.review = flow_review.FlowReview(self.executor)
         self.storage = flow_storage.FlowStorage(self.executor)
         self.automation = automation_mod.FlowAutomation(self.executor, self.preview_records)
+        # the runner of automatic flows (S3): started by serve() only, never by constructing a Console
+        self.runner = runner_mod.AutomationRunner(self.executor, self.review)
         self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
@@ -1415,6 +1418,8 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(console))
     url = f"http://127.0.0.1:{port}/"
     write_access_files(port, console.auth_token)
+    if not console.runner.start():
+        print(f"提示：這個主控台不執行自動流程（{console.runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         threading.Timer(0.4, lambda: open_in_browser(port)).start()
@@ -1427,6 +1432,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        console.runner.stop()
         if console._previews is not None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit
