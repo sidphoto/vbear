@@ -81,11 +81,7 @@ class RestartThenRecoveryTests(E2E):
         self.run_until(lambda: "auto_dispatch_sent" in self.kinds(), "the dispatch to be sent")
         old_pid = self.launched()["pid"]
         self.crash_daemon()
-        try:
-            os.kill(old_pid, 9)                                    # the executor of the old daemon is gone
-        except OSError:
-            pass
-        time.sleep(0.3)
+        self.kill_and_reap(old_pid)                                # the executor of the old daemon is gone, and waited for
         self.restart_daemon()
         self.fresh_runner()                                        # the console restarts too
         before = self.kinds()
@@ -98,6 +94,7 @@ class RestartThenRecoveryTests(E2E):
         # needs more room, which is a new acceptance (and so a new approval of the automatic mode).
         s = self.executor_status()
         self.assertTrue(s["unresolved_failure"], s["failures"])
+        self.old_session_after_restart()                                            # look at it, close it, then continue
         st, r = self.call(f"/api/flows/{self.fid}/continue", "POST", {})
         self.assertEqual((st, r["code"]), (409, "cannot_continue"), r)
         self.assertIn("已用完執行者額度", r["error"])

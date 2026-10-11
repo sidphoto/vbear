@@ -180,14 +180,26 @@ class StreamCase(unittest.TestCase):
         self.thread.start()
 
     def tearDown(self):
-        self.dm.stop()
-        self.thread.join(5)
-        self.dm.close()
+        # The executors first, and waited for: a Popen the daemon still holds must not be collected while its
+        # process runs (ResourceWarning "still running"); then the daemon.
         for pid in self.pids:
             try:
                 os.kill(pid, 9)
             except OSError:
                 pass
+        for pid in self.pids:
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end:
+                try:
+                    done, _ = os.waitpid(pid, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if done == pid:
+                    break
+                time.sleep(0.01)
+        self.dm.stop()
+        self.thread.join(5)
+        self.dm.close()
         for p in self.scratches:
             if p.startswith("/private/tmp/sc-") and not os.path.islink(p):
                 shutil.rmtree(p, ignore_errors=True)
@@ -280,7 +292,9 @@ class StreamCase(unittest.TestCase):
         lives on in its own session."""
         self.dm.stop()
         self.thread.join(5)
+        self.orphans = getattr(self, "orphans", [])
         for s in list(self.dm._streams.values()):
+            self.orphans.append(s.proc)              # kept: a Popen collected while its process runs warns
             for f in (s.proc.stdin, s.proc.stdout, s.proc.stderr):
                 try:
                     f.close()

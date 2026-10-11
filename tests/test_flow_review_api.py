@@ -28,6 +28,7 @@ class ReviewApiCase(ConsoleMixin, ReviewCase):
 
     def start_executor(self, mode="ok"):
         (self.work / "fake-mode").write_text(mode)
+        (self.work / "fake-launch.json").unlink(missing_ok=True)       # so launched() waits for THIS executor's pid
         st, r = self.call(f"/api/flows/{self.fid}/executor", "POST", {})
         self.assertEqual(st, 200, r)
         self.launch = r["launch_id"]

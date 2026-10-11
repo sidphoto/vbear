@@ -45,6 +45,40 @@ class Boundary(RunnerCase):
             return result
         return mock.patch.object(self.console.executor, executor_attr, wrapper)
 
+    def kill_and_reap(self, pid, timeout=15.0):
+        """The executor dies with the daemon that held it: kill it and WAIT until it is gone (we are its parent:
+        the daemon runs in this process), so that nothing is left running and no later step races its death."""
+        import signal
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        end = time.monotonic() + timeout
+        while True:
+            try:
+                done, _ = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                return                                  # already reaped
+            if done == pid:
+                return
+            if time.monotonic() >= end:
+                self.fail(f"process {pid} did not exit")
+            time.sleep(0.02)
+
+    def old_session_after_restart(self):
+        """The user's view of the old session after the daemon restarted: its terminal state, then the user's own
+        'close session' (which has nothing left to stop and says so), before anything else is done."""
+        s = self.executor_status()["sessions"][-1]
+        self.assertEqual(s["manifest_state"], "ended", s)                     # the daemon's recovery ended it
+        self.assertFalse(s["status"]["live"])
+        self.assertEqual(s["status"]["state"], "recovered")
+        st, r = self.call(f"/api/flows/{self.fid}/executor/close", "POST", {"launch_id": s["launch_id"]})
+        self.assertNotEqual(st, 500, r)                                       # a clear answer, not a crash
+        self.assertIn(st, (200, 404, 409), r)
+        after = self.executor_status()["sessions"][-1]
+        self.assertEqual((after["launch_id"], after["manifest_state"]), (s["launch_id"], "ended"))
+        return s["launch_id"], st, r
+
     def journal(self):
         fd = os.open(self.base / "sessions" / self.launch, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -272,11 +306,7 @@ class FinishedTurnAcrossARestartTests(Boundary):
                       msg="the turn to end")
         pid = self.launched()["pid"]
         self.crash_daemon()
-        try:
-            os.kill(pid, 9)
-        except OSError:
-            pass
-        time.sleep(0.3)
+        self.kill_and_reap(pid)
         self.restart_daemon()
         self.fresh_runner()
         before = self.kinds()
@@ -284,6 +314,7 @@ class FinishedTurnAcrossARestartTests(Boundary):
             self.assertEqual(self.runner.tick()[self.fid], "held")            # stopped: nothing is done
         self.assertEqual(self.kinds(), before + ["auto_stopped"])
         self.assertFalse(self.executor_status()["unresolved_failure"])        # it had a result: no failure to release
+        self.old_session_after_restart()                                      # the user's order: look, close, then continue
         st, r = self.call(f"/api/flows/{self.fid}/continue", "POST", {})
         self.assertEqual(st, 200, r)
         self.start_executor()                                                  # the user's new executor
