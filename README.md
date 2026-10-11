@@ -55,6 +55,11 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
   commands to run yourself: VBear never runs `git` for you. Needs Claude Code 2.1.292 and Codex 0.160.0 (the
   verified versions) and costs usage on your own accounts. Data stays until you delete the flow. See the
   [security model](docs/SECURITY-MODEL.md#phase-2-coordination) before using it.
+- **Automatic mode (Phase 3).** After you approve a plan, VBear can run the loop itself: dispatch the plan, check
+  the executor's report against the files, ask Codex to review, forward NEEDS WORK comments back (as marked data),
+  and stop at the merge gate for you. The approval shows the whole plan, the limits, the accounts and every risk
+  at once; you can stop it at any time; nothing resumes by itself; a restart stops every automatic flow. VBear
+  still never runs `git` for you. It has been verified with synthetic CLIs, not yet with the real models.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 
@@ -142,6 +147,10 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   「驗證這個版本」. It cannot tell waiting for your next message from waiting on a dialog. Other terminals and Codex
   show *unknown*.
 - A task card's commit binding sees commits only: uncommitted changes after an approval do not make it stale.
+- **Automatic mode runs without you.** It spends usage on your accounts up to the limits you approved, sends review
+  comments (which the reviewed repository can influence) to the executor without per-item approval, and an
+  executor turn that is stopped can keep running until it ends. See the
+  [security model](docs/SECURITY-MODEL.md#phase-3-automatic-mode) before turning it on.
 - **A review PASS is not proof.** The managed executor and Codex review have residual risks you must accept per
   flow (Codex's tools cannot be enumerated in advance and its multi-agent mode cannot be turned off, only
   detected; limits differ in strength; organization-managed Claude settings cannot be detected locally). Review

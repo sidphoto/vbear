@@ -206,6 +206,42 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   `.../continue`, `.../review`, `.../review/cancel`, `.../delete`. Errors carry `code` and, where safe, extra
   fields (for example the exact `codex login` command when a login is missing).
 
+### Automatic mode (Phase 3, S3)
+
+- **Mode.** `<state>/modes/<flow>` (0600, atomic) holds `{mode: auto, approval_id: "auto-<seq>"}`; no file is
+  manual. RPC `pipeline_mode_set {pipeline, mode, approval}`. `dispatch_prepare` and `review_start` (which gained an
+  optional `approval`) go through one gate in the daemon: manual refuses an automation approval; auto accepts only
+  the approval the mode was switched on with, and re-verifies on every call that it is still the newest valid
+  acceptance and that `plan.txt` is the hash it names. At daemon start every flow with a mode record is
+  persistently held ("daemon 重啟") before any request is answered; a mode record that cannot be read is auto with
+  no approval that can match.
+- **Approval.** `automation.py`: preview (plan text from the task card, the acceptance facts, one record of kind
+  `automation`), confirm (under `<state>/automation/<flow>/.lock`: stage `plan.txt`, append the acceptance event
+  naming its hash, rename it into place, `pipeline_mode_set`, `automation_mode` event), `disable`, `read_plan`.
+  Texts: `risk_text.render_auto` (version `AUTO_RISK_TEXT_VERSION`).
+- **Events** (flows.json, strict fields): `automation_mode` (console); `auto_dispatch_intent`, `auto_dispatch_sent`,
+  `auto_report`, `auto_review_intent`, `auto_review_started`, `auto_review_result`, `auto_review_aborted`,
+  `auto_stopped` (automation).
+- **Runner** (`runner.py`). `derive(events)` gives the step from the events since the mode was last switched on
+  (`auto_stopped` is a barrier, not a step); `step()` performs at most one action per flow per tick under the
+  flow's lock: it checks not-held, a trustworthy mode record, a valid acceptance, the approval event and its
+  `automation_mode` event; then dispatch / await turn / start review / await review / forward / gate as described
+  in the security model. The reads are the manual screens' own (`FlowReview.reports`, `reviews`, `plan_start`,
+  `merge_gate`, `FlowExecutor.status`), so the runner and the person see the same facts. `stream_flow.check_limits`
+  gives it the daemon's own numbers, worst case included.
+- **Continue** (`FlowExecutor.release`) on an automatic flow checks the premises first (`_continue_problems`);
+  the runner has no call to `pipeline_release`.
+- **Deletion.** An automatic flow is a blocker; `modes/<flow>` and `automation/<flow>/` (which holds `plan.txt`,
+  `.lock` and a temp name) go through the deletion area like the rest; the deleting side takes the approval lock
+  without waiting.
+- **Routes.** GET `/api/flows/<id>/automation`; POST `.../automation-preview`, `.../automation`,
+  `.../automation/disable`. The flow view carries `automation` (mode, step, held, awaiting_merge) and an
+  `attention_reason` the home list shows.
+- **Tests.** `test_automation_daemon` (mode, gate, restart, schema), `_api` (approval, locks, screens' data),
+  `_runner` (the cycle, the stops, derive), `_recovery` (every action boundary, aborted review, continue,
+  restart), `_e2e` (second console, stop during a turn, restarts, ledger); `tests/qa_s3.py` for a person or a
+  browser tool.
+
 ## Profile-managed Claude launch
 
 ```

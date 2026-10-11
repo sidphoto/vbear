@@ -41,6 +41,24 @@
     kept until you delete the flow, which is refused while anything runs or awaits manual review. When the room
     is used up the console lists the deletable flows with their sizes.
   - *Known limits.* See the residual-risk list in the [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
+- **Automatic mode (Phase 3).** After you approve a plan, VBear dispatches it, starts the reviews, forwards NEEDS
+  WORK comments (in a block marked as data) and stops at the merge gate, with no per-item approval.
+  - *Approval.* One preview shows the plan text in full, the automatic-mode text, the three residual risks, both
+    account prefixes and the nine limits (4 h elapsed prefilled); confirming records one event that is both plan
+    approval and risk acceptance, saves `plan.txt` and names its hash. The daemon re-verifies the event, the plan
+    hash and "newest acceptance" on every automatic action; manual dispatches, reviews and acceptances are refused
+    meanwhile (console and daemon).
+  - *Runner.* A console thread (one per state directory) writes intent, daemon call, result for every action;
+    stops on any invalid turn, failed tests, a report that does not match the files, a bad review, a limit or a
+    changed account, an event it cannot write, or anything unexpected; never releases a stop, never starts a
+    session, never runs git. A console restart resumes from the events; a daemon restart stops every automatic
+    flow until you continue.
+  - *Stopping.* Stop is yours, takes effect for new actions at once and lets the executor's turn in progress finish
+    by itself. After a turn without a result, continuing needs a higher limit and a new approval (worst-case
+    charge). A review ended by a stop is run again as the next round if HEAD is unchanged.
+  - *Screens.* The flow page shows the mode, the current step, the approval it runs on and who wrote each event;
+    the home list shows stopped flows and flows waiting at the merge gate.
+  - Verified with synthetic CLIs; see the [security model](docs/SECURITY-MODEL.md#phase-3-automatic-mode).
 - At phone width a long sidebar now scrolls inside the nav instead of widening every page.
 - Terminal attachments under backpressure now drop only frames and keep the handshake and protocol notices in
   order; client commands pause at 256 queued notices.

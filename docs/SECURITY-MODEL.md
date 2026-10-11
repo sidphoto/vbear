@@ -408,6 +408,90 @@ session 剩餘額度計入已用，但不代表實際帳單，也不是實際費
 VBear 審查 PASS 不等於程式沒問題。第 2 階段的計畫、派工、審查、合併與 push 都保留人工關卡；合併與 push 永遠由你決定，
 VBear 不執行這些 Git 指令，只顯示指令。
 
+## Phase 3 automatic mode
+
+Phase 3 adds one thing to a flow: after you approve a plan, VBear itself sends the plan to the executor, starts the
+reviews and forwards NEEDS WORK comments back, one step after another, and stops at the merge gate. It adds no
+capability that Phase 2 did not have: everything it does is what you could do by hand, minus the per-item approval.
+That is what the approval has to be informed consent for.
+
+### The approval
+
+- **One preview, one confirmation.** `POST /api/flows/<id>/automation-preview` stores a one-use, five-minute record
+  holding the plan text (built from the task card: title, goal, scope, out of scope, deliverables, acceptance
+  criteria, evidence; control characters made visible; at most 32 KiB), the thirteen acceptance values, and the text
+  versions. The dialog shows the plan in full, the automatic-mode text (what it does by itself, the limits and the
+  fixed rule that one failure stops it, the accounts, what it will not do, the risk of forwarding review comments,
+  that `.git` is writable, how to stop and what happens after a stop), the three residual risks of Phase 2 in full,
+  both account fingerprint prefixes and the nine limits (elapsed time is prefilled at 4 hours). Confirming
+  (`POST .../automation`) carries only the preview id.
+- **One event is the plan approval and the risk acceptance.** It is a `risk_acknowledged` event with four more
+  fields (`auto_text_version`, `automation_scope`, `plan_sha256`, `plan_bytes`). The plan text is saved
+  (`<state>/automation/<flow>/plan.txt`, 0600, atomically, under one cross-process lock together with the event and
+  the mode switch), and the event names its hash. A later change of the task card does not change what was approved.
+- **The daemon, not the console, has the last word.** It switches the flow to automatic only when the event named by
+  the approval id (`auto-<seq>`) exists, is valid now, carries the program's current automatic-mode text version, is
+  the newest valid acceptance, `plan.txt` is a plain file whose size and sha256 are the event's, the flow is not
+  stopped and has no unreleased failure. It re-checks the newest-acceptance and plan conditions on every automatic
+  dispatch and review.
+- **Changing anything means starting over.** While a flow is automatic, manual dispatches, manual reviews and manual
+  acceptances are refused (by the console and by the daemon); to change a limit you stop the flow, switch back to
+  manual, accept again and approve again.
+
+### What the runner does and never does
+
+The runner is a thread of the console (one per state directory: `<state>/runner.lock`). Each step is written as an
+intent event, then the daemon is asked, then the result is written; a restart re-derives the flow's position from
+the events and the daemon, and completes an interrupted step with the same dispatch id or review round, which
+the daemon makes idempotent.
+
+It sends the approved plan, waits for the turn, checks the executor's report against VBear's own reading of the
+files, starts a review of that commit, forwards NEEDS WORK comments inside a block marked as data (never
+truncated: too long is a stop), and stops at the merge gate. It **never** calls `pipeline_release` (continuing after
+a stop is yours), never starts an executor session, never runs git, and never writes the quota-protected
+directories. It stops the flow (the daemon's hold, then an event saying why) when: a turn is invalid or failed; the
+report is missing, `blocked`, `needs_input`, has tests that did not pass, is not the newest, or fails VBear's file
+checks (including "a new commit after NEEDS WORK"); a review is invalid, incomplete, in manual review or BLOCKED;
+a limit, the acceptance, an account or a version no longer holds; a text is too long or cannot be made again
+identically; an event cannot be written; or anything it did not expect happens.
+
+### Stopping, restarting, continuing
+
+- **Stop** (`POST .../hold`, the daemon applies it, then an event): no new dispatch or review; a review in
+  progress ends and is counted invalid. The executor's turn already running is not interrupted: it may keep running
+  and writing in the work directory until it ends or you close the session.
+- **Nothing resumes by itself.** Restarting the console does not continue a stopped flow. Restarting the daemon
+  marks every automatic flow stopped before it answers any request. Only your "continue" releases it, and it first
+  checks that the acceptance still counts, HEAD is readable, no review is waiting for a person and no limit is
+  reached.
+- **A turn without a result is charged at its worst case** (Phase 2, v29.7): the session's whole budget. So after
+  such a failure continuing needs a higher limit, which is a new acceptance and a new approval of automatic mode.
+- **A review ended by a stop** is invalid and a round is never run twice: after you continue, the same commit is
+  reviewed again as the next round if HEAD is still it (counted as a review); if HEAD moved, no review is started
+  and the flow stops waiting for you.
+
+### What is recorded
+
+Every automatic event is written by the runner with source `automation`; the mode switch and the acceptance by the
+console; manual events keep "manual (unverified)". The timeline shows who wrote each. A flow's events are limited
+to 500; the approval is refused when the chosen limits could write more than the flow has room for (at most
+`3 × dispatches + 4 × reviews + 22`; 182 at the caps).
+
+### Residual risks of automatic mode
+
+11. **Review comments reach the executor unreviewed.** What a review says is influenced by the reviewed
+    repository. The data block, control-character visibility, the sandbox without network, the limits and the human
+    merge gate reduce this; none of them proves a comment holds no hostile instruction. You accept this
+    explicitly (the automatic-mode text, recorded as `auto_text_version`).
+12. **A run is unattended.** It spends usage on your two accounts up to the limits you approved, including a turn
+    that was stopped but keeps running, and the worst-case rule can use up a whole session budget on one failure.
+13. **The plan and the mode are files.** `plan.txt`, `modes/<flow>` and the events are plain files of your user.
+    The daemon verifies the plan's hash and the approval on every automatic action, but a program running as your
+    own UID is outside the threat model (see assumptions).
+14. **Verified with synthetic CLIs.** The loop, the interruptions at every action boundary, the restarts and the
+    stops are tested against synthetic Claude and Codex programs; runs against the real models are a separate
+    step that needs your authorisation and are not claimed here.
+
 ## Data handling
 
 - No telemetry, analytics, crash reporting or update checks. The only HTTP client in the code talks to
