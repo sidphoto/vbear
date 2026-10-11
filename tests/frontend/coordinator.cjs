@@ -164,6 +164,31 @@ test("closing a session reads the stored-data panel again, so its delete button 
   c.stop();
 });
 
+test("a dispatch that was prepared and not sent can be sent from the session row, in manual mode only", async () => {
+  const D = "d2d2d2d2-aaaa-4bbb-8ccc-0123456789ab";
+  const withUnsent = (over = {}) => executor({ sessions: [liveSession({
+    status: { live: true, state: "idle", responses: 0, total_cost_usd: 0, dispatches: [{ dispatch_id: D, status: "accepted" }], unsent: D } })], ...over });
+  const c = await mount({ executor: withUnsent() });
+  const panel = byS2(c.node, "executor");
+  assert(/已準備好但還沒送出/.test(panel.textContent), "the row says there is an unsent dispatch");
+  assert(/不能開啟自動執行/.test(panel.textContent), "and what it blocks");
+  FETCH_LOG.length = 0;
+  button(panel, "送出這則派工").click();
+  await settle();
+  assert(!posts().some((x) => x.url.endsWith("/dispatch-send")), "nothing is sent by the first press");
+  button(byS2(c.node, "executor"), "確定").click();
+  await settle();
+  const p = posts().find((x) => x.url.endsWith("/dispatch-send"));
+  assert(p, "the dispatch was sent");
+  assert.deepStrictEqual(p.body, { launch_id: "l-" + "1".repeat(16), dispatch_id: D },
+    "only the session and the dispatch id; the text is the server's");
+  c.stop();
+  // in automatic mode the runner owns dispatches: the notice is not an offer
+  const a = await mount({ executor: withUnsent({ automation: { mode: "auto", approval_id: "auto-7", problem: null } }) });
+  assert(!/送出這則派工/.test(byS2(a.node, "executor").textContent), "no manual send in automatic mode");
+  a.stop();
+});
+
 test("only what the flow keeps reloads the stored-data panel, not the clock", async () => {
   const ex = executor({ sessions: [liveSession()] });
   const c = await mount({ executor: ex });

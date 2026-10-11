@@ -436,7 +436,9 @@ class LiveCheckTests(AutoCase):
         launch, _ = self.open()
         d = self.dispatch_prepare_only(launch)
         seq = self.accept_auto()
-        self.assertTrue(self.set_mode("auto", seq=seq)["ok"])
+        # the daemon's own switch now refuses while a dispatch is unsent (UnsentDispatchTests); the send's gate is
+        # the second line, so the mode is set here as a record that was already auto would be
+        pipeline_store.mode_set(self.base, self.fid, "auto", f"auto-{seq}")
         r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
         self.assertFalse(r["ok"], r)
         self.assertIn("手動派工與手動審查一律拒絕", r["error"]["message"])
@@ -456,3 +458,84 @@ class LiveCheckTests(AutoCase):
         self.change_account()
         r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
         self.assertTrue(r["ok"], r)
+
+
+class UnsentDispatchTests(AutoCase):
+    """S3 final review round 2: a dispatch that is prepared and not sent blocks the switch to automatic mode (its
+    approval is a manual preview that automatic mode refuses, and a session accepts one unsent dispatch only)."""
+
+    def prepare_manual(self, launch):
+        d = fx.new_uuid()
+        r = self.rpc("dispatch_prepare", launch_id=launch, pipeline=self.fid, dispatch_id=d, text="手動",
+                     approval={"kind": "preview", "id": "pv-1"})
+        self.assertTrue(r["ok"], r)
+        return d
+
+    def test_a_prepared_manual_dispatch_blocks_the_switch_and_a_sent_one_does_not(self):
+        launch, _ = self.open()
+        seq = self.accept_auto()
+        d = self.prepare_manual(launch)
+        r = self.set_mode("auto", seq=seq)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("還有一則手動派工已準備但還沒送出", r["error"]["message"])
+        self.assertIn("請先送出或處理它，再開啟自動執行", r["error"]["message"])
+        self.assertEqual(pipeline_store.mode_info(self.base, self.fid)["mode"], "manual")
+        self.assertEqual(self.status(launch)["unsent"], d)                       # the console can see it
+        self.assertTrue(self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)["ok"])
+        self.wait_for(lambda: self.status(launch)["unsent"] is None, msg="the dispatch to be written")
+        r = self.set_mode("auto", seq=seq)
+        self.assertTrue(r["ok"], r)
+
+    def test_closing_the_session_is_the_other_way_out(self):
+        launch, _ = self.open()
+        seq = self.accept_auto()
+        self.prepare_manual(launch)
+        self.assertFalse(self.set_mode("auto", seq=seq)["ok"])
+        self.assertTrue(self.rpc("stream_close", launch_id=launch)["ok"])
+        self.wait_for(lambda: launch not in self.dm._streams, msg="the session to end")
+        self.assertTrue(self.set_mode("auto", seq=seq)["ok"])
+
+    def test_a_prepare_and_the_switch_asked_at_once_are_not_both_granted(self):
+        import threading
+        launch, _ = self.open()
+        seq = self.accept_auto()
+        answers, barrier = {}, threading.Barrier(2)
+
+        def prepare():
+            barrier.wait()
+            answers["prepare"] = self.rpc("dispatch_prepare", launch_id=launch, pipeline=self.fid,
+                                          dispatch_id=fx.new_uuid(), text="手動",
+                                          approval={"kind": "preview", "id": "pv-1"})
+
+        def switch():
+            barrier.wait()
+            answers["switch"] = self.set_mode("auto", seq=seq)
+        threads = [threading.Thread(target=prepare), threading.Thread(target=switch)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        self.assertEqual(set(answers), {"prepare", "switch"})
+        granted = [k for k, v in answers.items() if v["ok"]]
+        self.assertEqual(len(granted), 1, answers)                              # exactly one of the two
+        if granted == ["switch"]:
+            self.assertIn("手動派工與手動審查一律拒絕", answers["prepare"]["error"]["message"])
+        else:
+            self.assertIn("已準備但還沒送出", answers["switch"]["error"]["message"])
+
+    def test_the_other_direction_an_unsent_automatic_dispatch_blocks_switching_back(self):
+        launch, _ = self.open()
+        seq = self.accept_auto()
+        self.assertTrue(self.set_mode("auto", seq=seq)["ok"])
+        d = fx.new_uuid()
+        r = self.rpc("dispatch_prepare", launch_id=launch, pipeline=self.fid, dispatch_id=d, text="自動",
+                     approval={"kind": "automation", "id": f"auto-{seq}"})
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(self.rpc("pipeline_hold", pipeline=self.fid, reason="測試")["ok"])
+        r = self.set_mode("manual")
+        self.assertFalse(r["ok"], r)
+        self.assertIn("還有一則自動派工已準備但還沒送出", r["error"]["message"])
+        self.assertEqual(pipeline_store.mode_info(self.base, self.fid)["mode"], "auto")
+        self.assertTrue(self.rpc("stream_close", launch_id=launch)["ok"])
+        self.wait_for(lambda: launch not in self.dm._streams, msg="the session to end")
+        self.assertTrue(self.set_mode("manual")["ok"])

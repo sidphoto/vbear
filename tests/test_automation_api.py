@@ -568,3 +568,99 @@ class DeletionLifecycleTests(AutoApiCase):
         with self.assertRaises(flow_data.FlowDataRefused):
             flow_data.finish(self.base, "flow-444444444444")
         self.assertTrue(public.exists())
+
+
+class UnsentDispatchTests(AutoApiCase):
+    """S3 final review round 2: a manual dispatch that was prepared and not sent. The console says so before it
+    offers automatic mode, and has a way to send exactly that dispatch (or the session can be closed)."""
+
+    def prepared_unsent(self):
+        from unittest import mock
+        from vbear import flow_executor
+        from vbear.api_error import ApiError
+        launch_id = self.start_executor()
+        st, pre = self.preview_dispatch(launch_id)
+        self.assertEqual(st, 200, pre)
+        with mock.patch.object(flow_executor.FlowExecutor, "_send",
+                               side_effect=ApiError(503, "unavailable", "背景程序沒有回應")):
+            st, r = self.call(f"/api/flows/{self.fid}/dispatch", "POST", {"preview_id": pre["preview_id"]})
+        self.assertNotEqual(st, 200, r)                                          # prepared, and not sent
+        return launch_id, pre["dispatch_id"]
+
+    def preview_dispatch(self, launch_id, text="請完成工作"):
+        return self.call(f"/api/flows/{self.fid}/dispatch-preview", "POST", {"launch_id": launch_id, "text": text})
+
+    def send(self, launch_id, dispatch_id):
+        return self.call(f"/api/flows/{self.fid}/dispatch-send", "POST",
+                         {"launch_id": launch_id, "dispatch_id": dispatch_id})
+
+    def session(self, launch_id):
+        return next(x for x in self.executor_status()["sessions"] if x["launch_id"] == launch_id)
+
+    def approve(self, preview_id):
+        return self.call(f"/api/flows/{self.fid}/dispatch", "POST", {"preview_id": preview_id})
+
+    def wait_turn(self, launch_id, dispatch_id):
+        def done():
+            st = self.session(launch_id)["status"] or {}
+            t = next((x for x in st.get("dispatches", []) if x["dispatch_id"] == dispatch_id), None)
+            return t if t and t["status"] in ("ended", "failed") else None
+        return self.wait_for(done, msg="the turn to end")
+
+    def test_the_view_shows_it_and_automatic_mode_is_not_offered(self):
+        launch_id, d = self.prepared_unsent()
+        s = self.session(launch_id)
+        self.assertEqual(s["status"]["unsent"], d)
+        st, r = self.preview()
+        self.assertEqual((st, r["code"]), (409, "unsent_dispatch"), r)
+        self.assertEqual(r["dispatch_id"], d)
+        self.assertIn("請先送出或處理它", r["error"])
+
+    def test_a_second_prepare_is_refused_and_the_first_one_can_be_sent(self):
+        launch_id, d = self.prepared_unsent()
+        st, pre = self.preview_dispatch(launch_id, "第二則")
+        st, r = self.approve(pre["preview_id"])
+        self.assertEqual(st, 409, r)
+        self.assertIn("已有一則準備好但還沒送出", r["error"])
+        st, r = self.send(launch_id, d)
+        self.assertEqual(st, 200, r)
+        self.assertEqual(r["dispatch_id"], d)
+        self.wait_turn(launch_id, d)
+        self.assertIsNone(self.session(launch_id)["status"]["unsent"])
+        st, r = self.send(launch_id, d)                                          # nothing is unsent now
+        self.assertEqual((st, r["code"]), (409, "not_unsent"), r)
+        self.assertEqual(self.preview()[0], 200)                                 # and the mode can be offered again
+
+    def test_only_the_dispatch_that_is_unsent_can_be_sent_here(self):
+        launch_id, d = self.prepared_unsent()
+        import uuid
+        st, r = self.send(launch_id, str(uuid.uuid4()))
+        self.assertEqual((st, r["code"]), (409, "not_unsent"), r)
+        for body in ({"launch_id": launch_id}, {"launch_id": launch_id, "dispatch_id": d, "text": "改過"},
+                     {"launch_id": launch_id, "dispatch_id": "x"}):
+            st, r = self.call(f"/api/flows/{self.fid}/dispatch-send", "POST", body)
+            self.assertEqual(st, 400, body)
+        st, r = self.send("l-" + "0" * 16, d)
+        self.assertEqual((st, r["code"]), (404, "no_session"))
+        self.assertEqual(self.session(launch_id)["status"]["unsent"], d)         # still there, still the same one
+
+    def test_a_stopped_flow_does_not_send_it_and_continue_does(self):
+        launch_id, d = self.prepared_unsent()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        st, r = self.send(launch_id, d)
+        self.assertEqual((st, r["code"]), (409, "held"), r)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+        self.assertEqual(self.send(launch_id, d)[0], 200)
+
+    def test_closing_the_session_is_the_other_way_out(self):
+        launch_id, d = self.prepared_unsent()
+        st, r = self.call(f"/api/flows/{self.fid}/executor/close", "POST", {"launch_id": launch_id})
+        self.assertEqual(st, 200, r)
+        self.wait_for(lambda: self.session(launch_id)["manifest_state"] == "ended", msg="the session to end")
+        self.assertEqual(self.preview()[0], 200)                                 # nothing unsent in a live session
+
+    def test_in_automatic_mode_the_manual_send_is_refused(self):
+        self.enable()
+        import uuid
+        st, r = self.send("l-" + "0" * 16, str(uuid.uuid4()))
+        self.assertEqual((st, r["code"]), (409, "automation_active"), r)

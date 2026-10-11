@@ -2457,6 +2457,18 @@ function s2ExecutorPanel(flowId, ex, refresh) {
         catch (e) { toast("無法關閉：" + e.message); }
         refresh();
       }) : null;
+    // A dispatch that was prepared and not sent (the console lost the daemon after the prepare, or the send was
+    // refused for a reason that has passed): the way out is to send THAT one, or to close the session. In
+    // automatic mode the runner owns dispatches and the daemon would refuse a manual send.
+    const unsent = st.live && st.unsent && !(ex.automation && ex.automation.mode === "auto") ? st.unsent : null;
+    const sendBtn = unsent
+      ? s2Confirm("送出這則派工", "送出的就是你當時在預覽裡核准的那一份內容。", async () => {
+        try {
+          await api.post(s2Url(flowId, "dispatch-send"), { launch_id: s.launch_id, dispatch_id: unsent });
+          toast("已送出");
+        } catch (e) { toast("無法送出：" + e.message); }
+        refresh();
+      }, "primary") : null;
     return el("li", { class: "s2-session" },
       el("div", { class: "row" }, el("b", { class: "mono" }, s.launch_id),
         badge(S2_SESSION_STATE[st.state] || (s.manifest_state === "ended" ? "已結束" : (s.manifest_state || "?")),
@@ -2466,6 +2478,9 @@ function s2ExecutorPanel(flowId, ex, refresh) {
       el("div", { class: "small muted" }, `${s.model_id || ""}　Claude Code ${s.cli_version || "?"}　` +
         `回應 ${st.responses ?? "?"}　費用 ${st.total_cost_usd ?? "?"} USD`),
       s.status_problem ? notice("warn", s.status_problem) : null,
+      unsent ? el("div", { class: "s2-unsent" },
+        notice("warn", `有一則派工（${String(unsent).slice(0, 8)}…）已準備好但還沒送出；在它送出或這個 session 關閉之前，不能再準備新的派工，也不能開啟自動執行。`),
+        el("div", { class: "row" }, sendBtn)) : null,
       st.journal_problem ? notice("bad", "日誌有問題：" + st.journal_problem) : null,
       s.worst_case ? notice("warn", s.worst_case.text) : null);
   });

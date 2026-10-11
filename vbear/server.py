@@ -930,6 +930,8 @@ def make_handler(console: Console):
                     elif rest.endswith("/dispatch-preview"):
                         return self._flow_action(
                             lambda: console.executor.dispatch_preview(rest[:-len("/dispatch-preview")], body))
+                    elif rest.endswith("/dispatch-send"):
+                        return self._flow_action(lambda: console.executor.dispatch_send(rest[:-len("/dispatch-send")], body))
                     elif rest.endswith("/dispatch"):
                         return self._flow_action(lambda: console.executor.dispatch_confirm(rest[:-len("/dispatch")], body))
                     elif rest.endswith("/automation-preview"):

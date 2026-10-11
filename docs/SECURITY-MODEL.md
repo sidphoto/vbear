@@ -456,6 +456,18 @@ That is what the approval has to be informed consent for.
   nothing, and stops the flow with the reason. `review_start` re-checks the approval the same way and, as for a
   manual review, the Codex version, model and the dedicated login's fingerprint. (Manual dispatches re-check the
   executor's account when a session starts, as in Phase 2, not on every dispatch.)
+- **A prepared and unsent dispatch is settled before the mode changes.** A manual dispatch is two steps (prepare,
+  then send); in between, its approval is a manual preview that automatic mode refuses, and a session accepts one
+  unsent dispatch only. So the daemon refuses `pipeline_mode_set` to automatic while a live session of the flow has
+  one ("還有一則手動派工已準備但還沒送出…請先送出或處理它，再開啟自動執行"), and the console does not offer the
+  approval dialog meanwhile (409 `unsent_dispatch`). It is the same on the way back: an automatic dispatch that was
+  prepared and not sent blocks switching to manual (press "continue" to let the runner send it, or close the
+  session). The check and `dispatch_prepare` run on the daemon's one thread, so they cannot interleave. The ways
+  out for a manual one: "send this dispatch" in the session row (`POST …/dispatch-send {launch_id, dispatch_id}`;
+  it sends THAT dispatch with the text the person approved in the preview that made it, the daemon re-reads it and
+  checks its hash and judges everything as for any send; nothing new is accepted, and it is refused in automatic
+  mode, for a stopped flow, and for any dispatch that is not the session's unsent one), or closing the session
+  (the dispatch ends with it and stays counted, at the worst case, as v29.7 says).
 - **Changing anything means starting over.** While a flow is automatic, manual dispatches, manual reviews and manual
   acceptances are refused (by the console and by the daemon); to change a limit you stop the flow, switch back to
   manual, accept again and approve again.

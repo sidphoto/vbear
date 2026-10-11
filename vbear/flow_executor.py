@@ -148,6 +148,24 @@ class FlowExecutor:
                 return m
         raise ApiError(404, "no_session", "這個流程沒有這個串流 session")
 
+    def unsent_dispatch(self, flow_id: str) -> dict | None:
+        """A dispatch of this flow that is prepared and not yet sent, in a live session (the daemon says), or
+        None. A flow keeps at most one: each session accepts one, and a flow has one live session."""
+        try:
+            manifests = self._sessions(flow_id, started=True)
+        except ApiError:
+            return None                   # no session folder: nothing can be pending (the daemon decides again)
+        for m in manifests:
+            if m.get("state") not in ("launching", "running"):
+                continue
+            try:
+                st = daemon_client.call(self.runtime, "stream_status", launch_id=m["launch_id"])
+            except DaemonError as exc:
+                raise _daemon(exc) from exc
+            if st.get("live") and st.get("unsent"):
+                return {"launch_id": m["launch_id"], "dispatch_id": st["unsent"]}
+        return None
+
     # ---- the executor ----------------------------------------------------------------------------------
 
     def start(self, flow_id: str, body) -> dict:
@@ -346,6 +364,31 @@ class FlowExecutor:
         result = self._send(fields)
         return {"dispatch_id": d["dispatch_id"], "launch_id": d["launch_id"], "result": result}
 
+    def dispatch_send(self, flow_id: str, body) -> dict:
+        """The way out of a dispatch that was prepared and not sent (the console could not reach the daemon after
+        the prepare, or the send was refused for a reason that has passed): send THAT dispatch, with the text the
+        person approved in the preview that made it. Nothing new is accepted here: the daemon re-reads the saved
+        text and checks its hash, and judges everything again as for any send. Closing the session is the other
+        way out; it ends the dispatch with the session."""
+        if not isinstance(body, dict) or set(body) != {"launch_id", "dispatch_id"}:
+            raise ApiError(400, "bad_request", "只接受 launch_id 與 dispatch_id")
+        d = body["dispatch_id"]
+        if not (isinstance(d, str) and sp.UUID_RE.match(d)):
+            raise ApiError(400, "bad_request", "dispatch_id 必須是小寫 UUID")
+        with self._lock(flow_id):
+            flow = self._flow(flow_id)
+            risk_acceptance.refuse_if_automatic(flow_id, "手動派工")
+            self._valid_acceptance(flow)
+            m = self._own_launch(flow_id, body["launch_id"])
+            hold = pipeline_store.hold_info(cfg.state_dir(), flow_id)
+            if hold["held"]:
+                raise ApiError(409, "held", f"這個流程已停止（{hold['reason']}），要先按「繼續」")
+            st = self._call("stream_status", launch_id=m["launch_id"])
+            if not st.get("live") or st.get("unsent") != d:
+                raise ApiError(409, "not_unsent", "這則派工不是「已準備但還沒送出」的狀態，沒有東西可以送出")
+            fields = {"launch_id": m["launch_id"], "pipeline": flow_id, "dispatch_id": d}
+        return {"dispatch_id": d, "launch_id": m["launch_id"], "result": self._send(fields)}
+
     def _send(self, fields: dict) -> dict:
         """stream_send is idempotent, so a lost answer is asked again; a
         refusal is final (the dispatch stays prepared and counted, and the
@@ -417,8 +460,8 @@ class FlowExecutor:
             view["status_problem"] = str(exc)
             return view
         view["status"] = {k: st.get(k) for k in (
-            "live", "state", "journal_problem", "journal_write_failed", "dispatches", "total_cost_usd", "responses",
-            "num_turns", "closed_reasons", "exit")}
+            "live", "state", "journal_problem", "journal_write_failed", "dispatches", "unsent", "total_cost_usd",
+            "responses", "num_turns", "closed_reasons", "exit")}
         view["worst_case"] = _worst_case(st)
         return view
 

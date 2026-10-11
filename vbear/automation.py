@@ -379,6 +379,13 @@ class FlowAutomation:
             raise ApiError(409, "no_task", f"任務卡無法讀取（{exc}）") from exc
         if task is None:
             raise ApiError(409, "no_task", "找不到這個流程的任務卡")
+        unsent = self.executor.unsent_dispatch(flow["id"])
+        if unsent:
+            # its approval is a manual preview, which automatic mode refuses, and the session accepts only one
+            # unsent dispatch: the runner would stop on it. The person decides first (S3 final review r2).
+            raise ApiError(409, "unsent_dispatch",
+                           "還有一則手動派工已準備但還沒送出，請先送出或處理它，再開啟自動執行",
+                           dispatch_id=unsent["dispatch_id"], launch_id=unsent["launch_id"])
         return task
 
     def preview(self, flow_id: str, body) -> dict:

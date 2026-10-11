@@ -221,7 +221,11 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   acceptance and that `plan.txt` is the hash it names, at both `dispatch_prepare` and `stream_send` (a send is
   judged again with the approval its dispatch was prepared with); for a stream it also re-reads the executor's
   Claude fingerprint and compares the session manifest's CLI version and model with the acceptance
-  (`_auto_live_problem`), and a difference stops the flow (`_auto_refuse`). At daemon start every flow with a mode record is
+  (`_auto_live_problem`), and a difference stops the flow (`_auto_refuse`). `pipeline_mode_set` also refuses
+  while a live session of the flow has a prepared and unsent dispatch (`_unsent_dispatch`, from the journal's
+  `pending`; in either direction), on the same thread as `dispatch_prepare`; `stream_status` reports it as
+  `unsent`, and `POST …/dispatch-send` (`FlowExecutor.dispatch_send`) sends exactly that dispatch in manual mode.
+  At daemon start every flow with a mode record is
   persistently held ("daemon 重啟") before any request is answered; a mode record that cannot be read is auto with
   no approval that can match.
 - **Approval.** `automation.py`: preview (plan text from the task card, the acceptance facts, one record of kind

@@ -601,7 +601,8 @@ class StreamOps:
         return _ok(rid, {"launch_id": launch_id, "live": s is not None, "state": state,
                          "manifest_state": manifest_state, "journal_problem": problem,
                          "journal_write_failed": write_failed,
-                         "dispatches": dispatches, "total_cost_usd": js.cost, "responses": js.responses,
+                         "dispatches": dispatches, "unsent": js.pending,
+                         "total_cost_usd": js.cost, "responses": js.responses,
                          # v29.7: what the flow's limits count; an unfinished
                          # dispatch has no result, so its cost is unknown and
                          # counted at the worst case
@@ -779,6 +780,15 @@ class StreamOps:
                 return self._auto_refuse(rid, stream, why)
         return None
 
+    def _unsent_dispatch(self, pipeline: str) -> tuple[str, str] | None:
+        """(launch_id, dispatch_id) of a dispatch of this flow that is prepared and not yet written (pending, or
+        being written), in a live stream session. Everything here runs on the daemon's one thread, so this and the
+        mode switch that asks it, or a dispatch_prepare, never interleave."""
+        for x in self._streams.values():
+            if x.pipeline_id == pipeline and x.js.pending is not None:
+                return x.launch_id, x.js.pending
+        return None
+
     def _op_pipeline_mode_set(self, rid: str, req: dict) -> dict:
         """manual -> auto only with the approval of the acceptance event that
         approved the plan, and only on a flow that is not stopped and has no
@@ -793,6 +803,10 @@ class StreamOps:
                 return _err(rid, "bad_request", "切回手動不帶 approval")
             if not pipeline_store.is_held(self.base, pipeline):
                 return _err(rid, "refused", "切回手動只能在流程已停止時進行")
+            unsent = self._unsent_dispatch(pipeline)
+            if unsent:
+                return _err(rid, "refused", f"還有一則自動派工已準備但還沒送出（{unsent[1][:8]}），"
+                                            "請先按「繼續」讓它送出，或關閉那個 session，再切回手動")
             try:
                 pipeline_store.mode_set(self.base, pipeline, "manual")
             except (OSError, pipeline_store.StoreRefused) as exc:
@@ -813,6 +827,12 @@ class StreamOps:
             return _err(rid, "refused", f"{exc.code}: {exc}")
         if failure:
             return _err(rid, "refused", f"還有尚未解除的失敗（{failure}），要先按「繼續」")
+        unsent = self._unsent_dispatch(pipeline)
+        if unsent:
+            # a manual dispatch's two steps are prepare and send; in between, its approval is a manual preview
+            # that automatic mode refuses, and the session accepts one unsent dispatch only
+            return _err(rid, "refused", f"還有一則手動派工已準備但還沒送出（{unsent[1][:8]}），"
+                                        "請先送出或處理它，再開啟自動執行")
         try:
             pipeline_store.mode_set(self.base, pipeline, "auto", approval["id"])
         except (OSError, pipeline_store.StoreRefused) as exc:
