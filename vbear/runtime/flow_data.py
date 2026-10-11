@@ -544,6 +544,38 @@ def remove(base, pl: Plan) -> dict:
         raise FlowDataRefused(f"刪除失敗（{exc.strerror or type(exc).__name__}）", partial=began()) from exc
 
 
+def _approval_lock(state: int, flow_id: str, root_dev: int) -> int | None:
+    """The console's approval lock of this flow (automation/<flow>/.lock),
+    taken without waiting: a flow whose automatic mode is being turned on is
+    not deleted under it. None when there is no such file."""
+    import fcntl
+    aroot = _root_fd(state, AUTOMATION, root_dev)
+    if aroot is None:
+        return None
+    try:
+        try:
+            dfd = _open_pinned(aroot, flow_id, root_dev, private=True)
+        except _Missing:
+            return None
+        try:
+            try:
+                fd = os.open(".lock", os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+            except FileNotFoundError:
+                return None
+            except OSError as exc:
+                raise FlowDataRefused(f"核准用的鎖檔無法開啟（{exc.strerror}），不刪除") from exc
+        finally:
+            os.close(dfd)
+    finally:
+        os.close(aroot)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise FlowDataRefused("正在開啟自動執行（核准進行中），不刪除；請稍後再試") from None
+    return fd
+
+
 def _remove(base, pl: Plan, removed: dict) -> dict:
     try:
         state = os.open(str(base), _DIR)
@@ -552,6 +584,9 @@ def _remove(base, pl: Plan, removed: dict) -> dict:
     open_fds = [state]
     try:
         root_dev = os.fstat(state).st_dev
+        lock = _approval_lock(state, pl.pipeline_id, root_dev)       # before anything is moved
+        if lock is not None:
+            open_fds.append(lock)
         # A launch that was prepared and never run still has its scratch outside
         # the state directory: the launch's own discard removes both.
         for s in pl.sessions:

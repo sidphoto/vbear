@@ -257,3 +257,22 @@ class EventWriteTests(RunnerCase):
         self.assertTrue(pipeline_store.is_held(self.base, self.fid))
         self.assertNotIn("auto_dispatch_intent", self.kinds())
         self.assertEqual(len(self.executor_status()["sessions"][-1]["status"]["dispatches"]), 0)
+
+
+class ModeEventTests(RunnerCase):
+    def test_a_mode_that_the_timeline_does_not_account_for_is_not_acted_on(self):
+        # on in the daemon, with a valid approval, but no automation_mode event (the write that failed)
+        pre = self.call(f"/api/flows/{self.fid}/automation-preview", "POST", {})[1]
+        from unittest import mock
+        with mock.patch.object(flows, "append_automation_event", side_effect=OSError(5, "io")):
+            self.call(f"/api/flows/{self.fid}/automation", "POST", {"preview_id": pre["preview_id"]})
+        # the flow was held by the confirmation; the user continues, as they would
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+        self.assertEqual(pipeline_store.mode_info(self.base, self.fid)["mode"], "auto")
+        self.start_executor()
+        self.commit_work("work")
+        action = self.runner.tick()[self.fid]
+        self.assertEqual(action, "stopped:mode_event_missing")
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+        self.assertNotIn("auto_dispatch_intent", self.kinds())
+        self.assertEqual(self.stop_reason()["reason_code"], "mode_event_missing")

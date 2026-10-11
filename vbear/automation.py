@@ -352,6 +352,10 @@ class FlowAutomation:
             # One unit across processes: the plan file, the acceptance that names its hash, and the daemon's
             # mode switch (which reads the file again). Two consoles cannot interleave their approvals.
             with plan_lock(state, flow_id):
+                # a deletion that began while the preview was open (it asked for this lock first and did not get
+                # it, or began just before): nothing is written into a flow that is going away
+                if pipeline_store.deleting_exists(state, flow_id):
+                    raise ApiError(409, "deleting", "這個流程正在刪除，不能開啟自動執行")
                 try:
                     stage_plan(state, flow_id, plan)
                 except OSError as exc:
@@ -374,15 +378,19 @@ class FlowAutomation:
                 self.executor._call("pipeline_mode_set", pipeline=flow_id, mode="auto", approval=approval)
                 try:
                     flows.append_automation_event(flow_id, "automation_mode", {"mode": "auto", "approval_seq": seq})
-                except (ValueError, KeyError) as exc:
-                    # on but not on the record: stop it and say so (never a success that cannot be audited)
+                except Exception as exc:                  # any failure: on but not on the record is never a success
+                    held = True
                     try:
                         self.executor._call("pipeline_hold", pipeline=flow_id,
-                                            reason=f"自動執行的開啟無法記錄（{exc}）")
-                    except ApiError:
-                        pass
-                    raise ApiError(500, "event_write", f"自動執行已開啟但無法寫入事件紀錄（{exc}），流程已停止，"
-                                   "請切回手動後處理") from exc
+                                            reason=f"自動執行的開啟無法記錄（{type(exc).__name__}）")
+                    except Exception:
+                        held = False
+                    if held:
+                        raise ApiError(500, "event_write", f"自動執行已開啟但無法寫入事件紀錄（{exc}），流程已停止，"
+                                       "請切回手動後處理") from exc
+                    raise ApiError(500, "event_write_not_stopped",
+                                   f"自動執行已開啟但無法寫入事件紀錄（{exc}），而且無法要求停止：流程可能仍在自動模式，"
+                                   "請立刻按「停止流程」") from exc
             return {"mode": "auto", "approval_id": approval["id"], "approval_seq": seq,
                     "plan_sha256": fields["plan_sha256"], "plan_bytes": fields["plan_bytes"]}
 
@@ -397,6 +405,6 @@ class FlowAutomation:
             result = {"mode": "manual", "event_written": True}
             try:
                 flows.append_automation_event(flow_id, "automation_mode", {"mode": "manual", "approval_seq": None})
-            except (ValueError, KeyError) as exc:
+            except Exception as exc:
                 result.update(event_written=False, event_problem=f"模式已切回手動，但事件無法記錄（{exc}）")
             return result

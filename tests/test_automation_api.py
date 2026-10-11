@@ -343,3 +343,70 @@ class ScreenDataTests(AutoApiCase):
         self.assertTrue(v["automation"]["awaiting_merge"])
         self.assertIn("合併關卡", v["attention_reason"])
         self.assertTrue(any(e["source_label"] == flows.AUTOMATION_LABEL for e in v["events"]))
+
+
+class ApprovalFailureTests(AutoApiCase):
+    """S3-2 review round 2."""
+
+    def test_any_failure_writing_the_switch_on_event_holds_the_flow(self):
+        from unittest import mock
+        st, pre = self.preview()
+        with mock.patch.object(flows, "append_automation_event", side_effect=OSError(28, "disk full")):
+            st, r = self.confirm(pre["preview_id"])
+        self.assertEqual((st, r["code"]), (500, "event_write"))
+        self.assertIn("流程已停止", r["error"])
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+        self.assertEqual(pipeline_store.mode_info(self.base, self.fid)["mode"], "auto")      # on, and held
+
+    def test_when_even_the_stop_cannot_be_asked_for_it_says_so(self):
+        from unittest import mock
+        from vbear import daemon_client
+        st, pre = self.preview()
+        real = self.console.executor._call
+
+        def calls(op, **kw):
+            if op == "pipeline_hold":
+                raise ApiError(503, "unavailable", "背景程序沒有回應")
+            return real(op, **kw)
+        with mock.patch.object(flows, "append_automation_event", side_effect=OSError(5, "io")), \
+                mock.patch.object(self.console.executor, "_call", side_effect=calls):
+            st, r = self.confirm(pre["preview_id"])
+        self.assertEqual((st, r["code"]), (500, "event_write_not_stopped"))
+        self.assertIn("可能仍在自動模式", r["error"])
+        self.assertIn("停止流程", r["error"])
+
+    def test_a_deletion_does_not_take_a_flow_whose_approval_is_in_progress(self):
+        import fcntl
+        from vbear.runtime import flow_data
+        self.enable()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/automation/disable", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+        pl = flow_data.plan(self.base, self.fid, self.tid)
+        self.assertEqual(flow_data.blockers(pl), [])
+        fd = os.open(self.base / "automation" / self.fid / ".lock", os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)                                   # an approval is inside its unit
+        try:
+            with self.assertRaises(flow_data.FlowDataRefused) as cm:
+                flow_data.remove(self.base, pl)
+            self.assertIn("正在開啟自動執行", str(cm.exception))
+            self.assertFalse(cm.exception.partial)                       # nothing was moved
+            self.assertTrue((self.base / "automation" / self.fid / "plan.txt").exists())
+            st, r = self.call(f"/api/flows/{self.fid}/delete", "POST", {"flow_id": self.fid})
+            self.assertEqual(st, 409, r)
+            self.assertIn("正在開啟自動執行", r["error"])
+        finally:
+            os.close(fd)
+        st, r = self.call(f"/api/flows/{self.fid}/delete", "POST", {"flow_id": self.fid})     # the lock is free: it goes
+        self.assertEqual(st, 200, r)
+
+    def test_an_approval_that_finds_the_flow_being_deleted_writes_nothing(self):
+        st, pre = self.preview()
+        tomb = self.base / "deleting" / self.fid
+        tomb.mkdir(parents=True, mode=0o700)
+        os.chmod(tomb.parent, 0o700)
+        n = len(flows.get_flow(self.fid)["events"])
+        st, r = self.confirm(pre["preview_id"])
+        self.assertEqual(st, 409, r)
+        self.assertEqual(len(flows.get_flow(self.fid)["events"]), n)
+        self.assertFalse((self.base / "automation" / self.fid / "plan.txt").exists())

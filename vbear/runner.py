@@ -259,6 +259,11 @@ class AutomationRunner:
         if seq is None or not (1 <= seq <= len(events)) or not acceptance.is_auto_event(events[seq - 1]):
             return self._stop(flow_id, "approval", "找不到自動執行核准的那一筆接受")
         approval_event = events[seq - 1]
+        # The mode must be on the record: an "auto" the daemon holds that no automation_mode event of this
+        # approval accounts for is not something to act on (the switch-on could not be audited)
+        if not any(e["kind"] == "automation_mode" and e.get("mode") == "auto" and e.get("approval_seq") == seq
+                   for e in events):
+            return self._stop(flow_id, "mode_event_missing", "daemon 的模式是自動，但時間軸沒有對應這次核准的開啟紀錄")
         approval = {"kind": "automation", "id": mode["approval_id"]}
         state = derive(events)
         step = state["step"]
