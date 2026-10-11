@@ -161,6 +161,30 @@ test("closing a session reads the stored-data panel again, so its delete button 
   c.stop();
 });
 
+test("only what the flow keeps reloads the stored-data panel, not the clock", async () => {
+  const ex = executor({ sessions: [liveSession()] });
+  const c = await mount({ executor: ex });
+  const reads = () => FETCH_LOG.filter((x) => x.url.endsWith("/api/flows/storage")).length;
+  const first = reads();
+  for (let i = 1; i <= 3; i += 1) {                 // the elapsed time and the counters move every round
+    state.executor = executor({ sessions: [liveSession({ status: { live: true, state: "idle", responses: 5 + i,
+      total_cost_usd: 0.12 + i / 100, dispatches: [] } })] });
+    state.executor.accounting.elapsed_s = 600 + i * 5;
+    state.executor.accounting.responses = 5 + i;
+    await c.refresh(false);
+  }
+  assert.strictEqual(reads(), first, "no inventory for numbers that only count up");
+  state.executor = executor({ sessions: [liveSession({ manifest_state: "ended", status: { live: false, state: "exited",
+    dispatches: [] } })] });
+  await c.refresh(false);
+  assert.strictEqual(reads(), first + 1, "a session that ended does");
+  state.executor = executor({ sessions: [liveSession({ manifest_state: "ended", status: { live: false, state: "exited",
+    dispatches: [] } })], hold: { held: true, reason: "x", at: 1 } });
+  await c.refresh(false);
+  assert.strictEqual(reads(), first + 2, "so does a stop");
+  c.stop();
+});
+
 test("stopping takes two steps and cancel does nothing", async () => {
   const c = await mount();
   const ex = byS2(c.node, "executor");

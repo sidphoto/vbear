@@ -2590,6 +2590,7 @@ function mountCoordinator(flowId) {
   const data = el("div", { class: "s2-data" });
   let last = null; let state = null; let composer = null; let alive = true;
   let inflight = false; let again = false; let seq = 0;
+  let keptKey = null;                            // what decides what the flow keeps: not the clock or the counters
   const leaving = new AbortController();         // the page is left: whatever is on its way is cancelled
   const getExecutor = () => (state && state.executor.ok ? state.executor.data : null);
   const host = el("div", { class: "s2", "data-s2": "root" });
@@ -2608,7 +2609,6 @@ function mountCoordinator(flowId) {
       if (!alive || mine !== seq) return;
       const key = JSON.stringify(next);
       if (!force && key === last) return;
-      const later = last !== null;
       last = key;
       state = next;
       let parts = [];
@@ -2628,9 +2628,17 @@ function mountCoordinator(flowId) {
         parts = [notice("bad", "無法顯示伺服器的回應（格式不符）：" + (e && e.message ? e.message : String(e)))];
       }
       setKids(data, parts);
-      // what is kept (and whether the flow can be deleted) follows what changed here: a session that was closed
-      // makes the delete button appear without a manual refresh (AGY QA)
-      if (later && storage) storage.reload();
+      // What is kept (and whether the flow can be deleted) follows the sessions, the reviews and the stop
+      // marker: a session that was closed makes the delete button appear without a manual refresh (AGY QA).
+      // Elapsed time and the usage counters change every round and say nothing about that, so they do not
+      // count (the inventory is a disk walk).
+      const kept = JSON.stringify([
+        next.executor.ok ? [(next.executor.data.sessions || []).map((s) => [s.launch_id, s.manifest_state,
+          s.status && s.status.live]), next.executor.data.hold && next.executor.data.hold.held] : null,
+        next.reviews.ok ? (next.reviews.data.reviews || []).map((r) => [r.job_id, r.state, r.outcome]) : null]);
+      const reloadStorage = keptKey !== null && (force || kept !== keptKey);   // an action's own refresh counts
+      keptKey = kept;
+      if (reloadStorage && storage) storage.reload();
     } finally {
       inflight = false;
       if (again && alive) {
