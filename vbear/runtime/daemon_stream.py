@@ -22,6 +22,7 @@ import re
 import secrets
 import selectors
 import signal
+import stat
 import subprocess
 import time
 import uuid
@@ -148,6 +149,11 @@ class StreamOps:
             if why:
                 raise agent_sessions.LaunchRefused("quota", why)
             reserved = True
+            # S2c: the console wrote the launch's manifest and settings when it
+            # prepared it, outside any reservation. They are on disk, so they
+            # count (measured, not assumed); an unmeasurable folder grants
+            # nothing more until the ledger is rebuilt.
+            self._ledger.add_used(self._prepared_bytes(m))
             # The flow's first start (planner Q1) is recorded before anything
             # else changes: if it fails the launch is still "prepared"; if the
             # daemon dies right after, the clock has started a little early.
@@ -309,6 +315,23 @@ class StreamOps:
             writer.append("protocol_error", {"reason": "spawn_failed", "detail": detail[:1024]})
         except (OSError, stream_journal.JournalCorrupt):
             pass                          # the launch is then kept for review: also a failure
+
+    def _prepared_bytes(self, m: dict):
+        """What is in the launch folder when the daemon is asked to open it:
+        the files the console's prepare wrote. None when it cannot be
+        measured exactly (a special file, an error)."""
+        total = 0
+        try:
+            with os.scandir(m["launch_dir"]["path"]) as it:
+                for entry in it:
+                    st = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(st.st_mode):
+                        return None
+                    total += st.st_size
+        except OSError as exc:
+            self._log(f"{m.get('launch_id')}: prepared files cannot be measured ({exc})")
+            return None
+        return total
 
     @staticmethod
     def _manifest_bytes(m: dict) -> int:

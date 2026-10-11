@@ -645,6 +645,42 @@ class FailureTests(StreamCase):
         self.run_mode("ok", ("error", "exited"), TURN_EVENTS_MAX=3)
 
 
+class PreparedFilesQuotaTests(StreamCase):
+    """S2c: the console prepares a launch (manifest and settings) outside any
+    reservation; opening it counts those files as used."""
+
+    def test_opening_a_prepared_launch_counts_its_files(self):
+        m = self.prepare()
+        folder = Path(m["launch_dir"]["path"])
+        files = sorted(p.name for p in folder.iterdir())
+        self.assertEqual(files, ["manifest.json", "settings.json"])
+        size = sum(p.stat().st_size for p in folder.iterdir())
+        before = self.dm._ledger.used
+        r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+        self.assertEqual(self.dm._ledger.used - before, size)                       # exactly what was on disk
+        self.assertIn(f"session:{m['launch_id']}", self.dm._ledger.reservations)    # and the reservation as before
+
+    def test_a_folder_that_cannot_be_measured_grants_nothing_more(self):
+        from vbear.runtime import daemon_stream
+        m = self.prepare()
+        with mock.patch.object(daemon_stream.StreamOps, "_prepared_bytes", return_value=None):
+            r = self.rpc("open_stream", launch_id=m["launch_id"])
+        self.assertTrue(r["ok"], r)
+        self.pids.append(self.launched()["pid"])
+        self.assertIn("額度需要重新核算", self.dm._ledger.overrun)
+        m2 = a.prepare_stream_launch(self.base, str(self.work), cli_binary=str(self.binary), cli_version="2.1.292",
+                                     cli_identity=a.binary_identity(str(self.binary)), model_id=fx.MODEL,
+                                     pipeline_id=self.fid, task_id=self.tid, allowed_root=str(self.tmp))
+        self.scratches.append(m2["scratch"]["path"])
+        self.rpc("stream_close", launch_id=m["launch_id"])
+        self.wait_for(lambda: self.manifest(m["launch_id"])["state"] == "ended", msg="first session to end")
+        r = self.rpc("open_stream", launch_id=m2["launch_id"])
+        self.assertFalse(r["ok"])
+        self.assertIn("額度", r["error"]["message"])
+
+
 class ReviewDifferenceTests(StreamCase):
     """The two S2a-2 part-1 review differences that only the daemon can show."""
 
@@ -1794,6 +1830,7 @@ class LedgerTests(StreamCase):
         m = self.prepare()
         ldir = self.base / "sessions" / m["launch_id"]
         before_manifest, before_used = (ldir / "manifest.json").stat().st_size, led.used
+        prepared = sum(p.stat().st_size for p in ldir.iterdir())     # the console wrote these; open counts them (S2c)
         r = self.rpc("open_stream", launch_id=m["launch_id"])
         self.assertTrue(r["ok"], r)
         self.pids.append(self.launched()["pid"])
@@ -1801,7 +1838,7 @@ class LedgerTests(StreamCase):
         self.wait_for(lambda: m["launch_id"] not in self.dm._streams, msg="ended")
         added = ((ldir / "journal.jsonl").stat().st_size + (ldir / "manifest.json").stat().st_size - before_manifest
                  + (self.base / "pipelines" / self.tid / "started.json").stat().st_size)
-        self.assertEqual(led.used - before_used, added)
+        self.assertEqual(led.used - before_used, added + prepared)
         self.assertEqual(led.overrun, "")
 
     # ---- review B-1: a failed write still counts what reached the disk
@@ -1877,6 +1914,7 @@ class LedgerTests(StreamCase):
         m = self.prepare()
         ldir = self.base / "sessions" / m["launch_id"]
         before_manifest, before_used = (ldir / "manifest.json").stat().st_size, led.used
+        prepared = sum(p.stat().st_size for p in ldir.iterdir())     # the console wrote these; open counts them (S2c)
         r = self.rpc("open_stream", launch_id=m["launch_id"])
         self.assertTrue(r["ok"], r)
         self.pids.append(self.launched()["pid"])
@@ -1886,7 +1924,7 @@ class LedgerTests(StreamCase):
         texts = sum(p.stat().st_size for p in (self.base / "pipelines" / self.tid / "dispatches").iterdir())
         added = ((ldir / "journal.jsonl").stat().st_size + (ldir / "manifest.json").stat().st_size - before_manifest
                  + (self.base / "pipelines" / self.tid / "started.json").stat().st_size + texts)
-        self.assertEqual(led.used - before_used, added)
+        self.assertEqual(led.used - before_used, added + prepared)
         self.assertEqual(self.manifest(m["launch_id"])["state"], "manual_review")
 
     def test_a_short_journal_write_is_counted(self):
@@ -1927,6 +1965,8 @@ class LedgerTests(StreamCase):
         led = self.dm._ledger
         m = self.prepare()
         before = led.used
+        # what the console's prepare wrote is counted at open (S2c); the tests below are about what the open itself added
+        prepared = sum(p.stat().st_size for p in (self.base / "sessions" / m["launch_id"]).iterdir())
         for p in patches:
             p.start()
         try:
@@ -1936,7 +1976,7 @@ class LedgerTests(StreamCase):
                 p.stop()
         self.assertFalse(r["ok"])
         self.assertNotIn(f"session:{m['launch_id']}", led.reservations)
-        return m, led.used - before
+        return m, led.used - before - prepared
 
     def test_a_manifest_temp_file_left_by_a_failed_rewrite_is_counted(self):
         real = a._write_private

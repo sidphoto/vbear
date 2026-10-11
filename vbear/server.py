@@ -42,8 +42,10 @@ from . import agent_profiles
 from . import armory
 from . import claude_verify
 from . import config as cfg
+from . import flow_executor
 from . import flows
 from . import previews as previews_mod
+from .api_error import ApiError
 from . import risk_acceptance
 from . import tasks
 from . import runtime as rt
@@ -124,6 +126,8 @@ class Console:
         # Server-held preview records for dispatches and risk acceptances
         # (design 3.1, 10): files under <state>/previews/, not memory.
         self.preview_records = previews_mod.PreviewStore()
+        self.executor = flow_executor.FlowExecutor(self.runtime, self.preview_records,
+                                                   managed_root=self.managed_root)
         self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
@@ -396,6 +400,8 @@ def make_handler(console: Console):
                     return self._json({"ok": True, "task": self._with_pickup([t])[0]})
                 if path == "/api/flows":
                     return self._json(self._flows_view())
+                if path.startswith("/api/flows/") and path.endswith("/executor"):
+                    return self._flow_action(lambda: console.executor.status(path[len("/api/flows/"):-len("/executor")]))
                 if path.startswith("/api/flows/"):
                     try:
                         flow = flows.get_flow(path[len("/api/flows/"):])
@@ -817,6 +823,15 @@ def make_handler(console: Console):
                     "kinds": [{"key": k, "label": flows.KIND_LABELS[k]} for k in flows.CLIENT_KINDS],
                     "verdicts": list(flows.VERDICTS), "manual_label": flows.MANUAL_LABEL}
 
+        def _flow_action(self, fn):
+            """Run one flow action and answer {"ok": true, ...result} or the
+            error it raised as {error, code, ...} with its status. Nothing the
+            action raises beyond that is turned into a success."""
+            try:
+                return self._json({"ok": True, **fn()})
+            except ApiError as exc:
+                return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
+
         def _acceptance(self, flow_id: str, body, *, preview: bool):
             """Risk acceptance (design 10): a preview the server keeps, then a
             confirmation that carries only its id. The values come from the
@@ -827,7 +842,7 @@ def make_handler(console: Console):
                     return self._json({"ok": True, **result})
                 flow = risk_acceptance.confirm(flow_id, body, store=console.preview_records)
                 return self._json({"ok": True, "flow": self._flow_view(flow)})
-            except risk_acceptance.AcceptanceError as exc:
+            except ApiError as exc:
                 return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
 
         def _flows_post(self, path: str, body: dict):
@@ -842,6 +857,19 @@ def make_handler(console: Console):
                         flow = flows.append_event(rest[:-len("/events")], body)
                     elif rest.endswith("/roles"):
                         flow = flows.set_roles(rest[:-len("/roles")], body)
+                    elif rest.endswith("/executor/close"):
+                        return self._flow_action(lambda: console.executor.close(rest[:-len("/executor/close")], body))
+                    elif rest.endswith("/executor"):
+                        return self._flow_action(lambda: console.executor.start(rest[:-len("/executor")], body))
+                    elif rest.endswith("/dispatch-preview"):
+                        return self._flow_action(
+                            lambda: console.executor.dispatch_preview(rest[:-len("/dispatch-preview")], body))
+                    elif rest.endswith("/dispatch"):
+                        return self._flow_action(lambda: console.executor.dispatch_confirm(rest[:-len("/dispatch")], body))
+                    elif rest.endswith("/hold"):
+                        return self._flow_action(lambda: console.executor.hold(rest[:-len("/hold")], body))
+                    elif rest.endswith("/continue"):
+                        return self._flow_action(lambda: console.executor.release(rest[:-len("/continue")], body))
                     elif rest.endswith("/acceptance-preview"):
                         return self._acceptance(rest[:-len("/acceptance-preview")], body, preview=True)
                     elif rest.endswith("/acceptance"):

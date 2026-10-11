@@ -122,6 +122,20 @@ class Ledger:
         self.used, self.reservations, self.problem, self.overrun = used, dict(outstanding), "", ""
         return True
 
+    def add_used(self, written) -> None:
+        """Bytes that are already on disk without having been reserved: a
+        launch prepared by the console before the daemon was asked to start
+        it (S2c). They count as used from now; a rebuild scans them anyway
+        (so a count made after a rebuild is, at worst, taken twice until the
+        next one: never too small). Not a byte count: nothing more is granted
+        until the ledger is rebuilt."""
+        if self.used is None:
+            return
+        if not _amount(written):
+            self.overrun = "寫入量無法核對，額度需要重新核算"
+            return
+        self.used += written
+
     def free(self) -> int | None:
         if self.used is None:
             return None

@@ -22,6 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import acceptance, config as cfg, flows, login_identity, previews, risk_text
+from .api_error import ApiError
 from .runtime import cli_versions, codex_constants, review_codex
 from .runtime import native as rt_native
 
@@ -39,23 +40,25 @@ LIMIT_LABELS = {
 }
 
 
-class AcceptanceError(Exception):
-    """``status`` is the HTTP status; ``extra`` goes to the client as is
-    (never anything secret)."""
-
-    def __init__(self, status: int, code: str, message: str, **extra):
-        super().__init__(message)
-        self.status, self.code, self.extra = status, code, extra
+class AcceptanceError(ApiError):
+    """An acceptance step that cannot be done; see ApiError."""
 
 
 class Host:
     """What this machine says. The default reads the pinned binaries and the
     login files; tests subclass it."""
 
-    def claude_version(self) -> tuple[str | None, str]:
+    def claude_binary(self, cwd: str | None = None) -> tuple[str | None, str | None, str]:
+        """(path, version, why not): the pinned Claude Code that would run."""
         binary = rt_native._pinned_claude_binary()
-        res = cli_versions.check_cli_version("claude", binary, cwd=str(Path.home()), allow_unverified=True)
-        return (res.observed_version, "") if res.compatible and res.observed_version else (None, res.reason)
+        res = cli_versions.check_cli_version("claude", binary, cwd=cwd or str(Path.home()), allow_unverified=True)
+        if res.compatible and res.observed_version and res.binary_path:
+            return res.binary_path, res.observed_version, ""
+        return None, None, res.reason
+
+    def claude_version(self) -> tuple[str | None, str]:
+        _, version, why = self.claude_binary()
+        return (version, "") if version else (None, why)
 
     def claude_json(self) -> Path:
         return Path.home() / ".claude.json"

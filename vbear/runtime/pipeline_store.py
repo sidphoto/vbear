@@ -562,6 +562,46 @@ def is_held(base, pipeline_id: str) -> bool:
         os.close(state)
 
 
+def hold_info(base, pipeline_id: str) -> dict:
+    """What the screen shows of a flow's stop: {"held": bool, "reason": str,
+    "at": float | None}. The question is answered like is_held (anything that
+    cannot be ruled out is held); the reason and time are read from the hold
+    file when it is a plain file of ours that parses, else a plain statement
+    that they could not be read. Read-only."""
+    if not is_held(base, pipeline_id):
+        return {"held": False, "reason": "", "at": None}
+    unreadable = {"held": True, "reason": "（停止紀錄無法讀取）", "at": None}
+    try:
+        state = os.open(str(base), _DIR)
+    except OSError:
+        return unreadable
+    try:
+        holds = _open_dir(HOLDS, state, create=False)
+    except (OSError, StoreRefused):
+        os.close(state)
+        return unreadable
+    try:
+        try:
+            fd, _ = strictjson.open_owned(pipeline_id, dir_fd=holds, max_bytes=strictjson.MANIFEST.file_bytes)
+        except (strictjson.ReadRefused, OSError):
+            return unreadable
+        try:
+            raw = strictjson.read_fd(fd, strictjson.MANIFEST.file_bytes)
+        except (strictjson.ReadRefused, OSError):
+            return unreadable
+        finally:
+            os.close(fd)
+        parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+        d = parsed.value if parsed.ok else None
+        if not (isinstance(d, dict) and isinstance(d.get("reason"), str)):
+            return unreadable
+        at = finite_real(d.get("at")) if not isinstance(d.get("at"), bool) else None
+        return {"held": True, "reason": d["reason"][:300], "at": at}
+    finally:
+        os.close(holds)
+        os.close(state)
+
+
 def hold(base, pipeline_id: str, reason: str) -> None:
     if not (isinstance(pipeline_id, str) and FLOW_RE.match(pipeline_id)):
         raise StoreRefused("流程 id 格式不符")
