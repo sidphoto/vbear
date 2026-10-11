@@ -141,6 +141,78 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(d.replay_bytes(b"abc"), d.RIS + b"abc")
 
 
+class AttachBackpressureTests(unittest.TestCase):
+    def setUp(self):
+        # Drive only the attachment state machine: no daemon, PTY or real socket.
+        self.dm = object.__new__(d.Daemon)
+        self.dm._sel = mock.Mock()
+        self.sess = mock.Mock(scrollback=bytearray(b"old"), seq=1, cols=80, rows=24)
+        self.sock = mock.Mock(spec=socket.socket)
+        self.att = d.Attachment(self.sock, self.sess, "observe")
+
+    def overflow(self):
+        with mock.patch.object(d, "ATTACH_QUEUE_MAX", 8):
+            for _ in range(9):
+                self.dm._att_enqueue(self.att, b"delta\n")
+        self.assertTrue(self.att.resync)
+        self.assertFalse(self.att.out)
+        self.assertEqual(self.att.out_bytes, 0)
+
+    def test_overflow_can_precede_first_socket_write(self):
+        # A PTY read batch can exceed the queue cap before EVENT_WRITE is
+        # handled. resync alone is not evidence that send() would block.
+        with mock.patch.object(self.dm, "_full_line", wraps=self.dm._full_line) as full:
+            self.overflow()
+            full.assert_not_called()
+            self.assertFalse(self.att.cur)
+            self.sock.send.side_effect = lambda data: len(data)
+            self.dm._att_flush(self.att)
+            full.assert_called_once_with(self.sess)
+        self.assertFalse(self.att.resync)
+
+    def test_blocked_and_partial_writes_defer_full_until_current_frame_drains(self):
+        self.att.cur = bytearray(b"unfinished frame\n")
+        pending = bytes(self.att.cur)
+        self.sock.send.side_effect = BlockingIOError
+        self.overflow()
+        with mock.patch.object(self.dm, "_full_line", wraps=self.dm._full_line) as full:
+            for seq in range(2, 102):
+                self.sess.seq = seq
+                self.sess.scrollback += b"new" * 1000
+                self.dm._att_enqueue(self.att, b"discarded delta\n")
+                self.dm._att_flush(self.att)
+                full.assert_not_called()
+                self.assertTrue(self.att.resync)
+                self.assertEqual(bytes(self.att.cur), pending)
+                self.assertFalse(self.att.out)
+                self.assertEqual(self.att.out_bytes, 0)
+            self.assertEqual(self.sock.send.call_count, 100)
+            self.sock.send.side_effect = lambda data: 1
+            self.dm._att_flush(self.att)
+            full.assert_not_called()
+            self.assertEqual(bytes(self.att.cur), pending[1:])
+            self.assertTrue(self.att.resync)
+            sent = []
+
+            def drain(data):
+                sent.append(bytes(data))
+                return len(data)
+
+            self.sock.send.side_effect = drain
+            self.dm._att_flush(self.att)
+            full.assert_called_once_with(self.sess)
+        self.assertEqual(sent[0], pending[1:])
+        frame = json.loads(sent[1])
+        self.assertTrue(frame["full"])
+        self.assertEqual(frame["seq"], self.sess.seq)
+        raw = base64.b64decode(frame["bytes"])
+        self.assertEqual(raw, d.replay_bytes(self.sess.scrollback))
+        self.assertLessEqual(len(raw), d.FULL_REPLAY_MAX)
+        self.assertTrue(raw.startswith(d.RIS))
+        self.assertFalse(self.att.resync)
+        self.assertFalse(self.att.cur)
+
+
 class SynthFullTests(unittest.TestCase):
     def test_synth_full_utf8_aligned_and_tracks_size(self):
         v = n.NativeAttachment("n-0123456789ab", "observe", 80, 24, fail_reason="x")
@@ -265,7 +337,7 @@ class AttachProtocolTests(DaemonCase):
         real_full = self.dm._full_line
 
         def counting_full(s):
-            built.append(time.monotonic())
+            built.append(s.seq)
             return real_full(s)
         with mock.patch.object(d, "ATTACH_QUEUE_MAX", 8), \
              mock.patch.object(self.dm, "_full_line", side_effect=counting_full):
@@ -273,20 +345,21 @@ class AttachProtocolTests(DaemonCase):
             a.line()
             att = next(iter(self.dm._attachments.values()))
             self.wait_for(lambda: att.resync, 5, "resync flagged")
-            # §10 S2: while the socket stays blocked, no full frame is rebuilt,
-            # however much output keeps arriving.
-            before = len(built)
-            time.sleep(1.0)  # still not reading
-            self.assertEqual(len(built), before, "full frame rebuilt while socket blocked")
+            # Not reading does not prove the socket is blocked: line() can
+            # drain several frames, and overflow can precede a writable event.
+            # The state-machine test above proves deferred building under
+            # backpressure; here prove a fresh capped replay reaches the reader.
+            time.sleep(1.0)
             fulls = 0
             for _ in range(50):
                 m = a.line()
                 if m and m.get("full"):
-                    fulls += 1
+                    if m["seq"] > built[0]:
+                        fulls += 1
                     raw = base64.b64decode(m["bytes"])
                     self.assertLessEqual(len(raw), d.FULL_REPLAY_MAX)
                     self.assertTrue(raw.startswith(d.RIS))
-            self.assertGreaterEqual(fulls, 1)  # resync delivered once the reader resumes
+            self.assertGreaterEqual(fulls, 1)  # not just the initial attach replay
         self.rpc("close", session_id=sid)
 
     def test_resync_pending_counts_as_stalled(self):
