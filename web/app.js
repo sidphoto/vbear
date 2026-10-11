@@ -1956,7 +1956,7 @@ async function viewFlows() {
 const FLOW_SOURCE_TITLES = {
   manual: "由表單記錄，VBear 沒有核對",
   console: "由主控台依預覽紀錄或你在畫面上的操作寫入",
-  automation: "由自動執行依事實寫入：意圖 → daemon 動作 → 結果；內容是 VBear 自己讀到的，不是執行者的自述",
+  automation: "由自動執行寫入：意圖 → daemon 動作 → 結果。哪些欄位是執行者自述、哪些是 VBear 讀檔核對，在該筆事件裡分開標明",
 };
 
 // What an automatic-mode event says, as lines (every value was checked by the server before it was stored).
@@ -1966,7 +1966,10 @@ function flowAutomationDetail(e) {
     case "automation_mode": return [e.mode === "auto" ? `切到自動執行（核准 auto-${e.approval_seq}）` : "切回手動"];
     case "auto_dispatch_intent": return [`派工 ${id(e.dispatch_id)}・${e.length} bytes・sha256 ${String(e.text_sha256).slice(0, 12)}…`];
     case "auto_dispatch_sent": return [`派工 ${id(e.dispatch_id)} 已送出`];
-    case "auto_report": return [`派工 ${id(e.dispatch_id)} 的回報：${e.status}，測試 ${e.tests_result}，commit ${shortCommit(e.commit)}（VBear 讀檔核對通過）`];
+    case "auto_report": return [
+      `派工 ${id(e.dispatch_id)}：`,
+      `執行者自述：狀態 ${e.status}、測試 ${e.tests_result}、head ${shortCommit(e.commit)}`,
+      "VBear 讀檔核對：head 等於工作目錄目前的 commit、commit 物件存在（沒有全部通過就不會有這一筆）"];
     case "auto_review_intent": return [`第 ${e.round} 輪審查（commit ${shortCommit(e.commit)}）`];
     case "auto_review_started": return [`第 ${e.round} 輪審查已啟動（${e.job_id}）`];
     case "auto_review_result": return [`第 ${e.round} 輪結論：${e.verdict}（commit ${shortCommit(e.commit)}）`];
@@ -2132,15 +2135,20 @@ function s2Copy(text, label) {
   } } }, label || "複製");
 }
 
-// Two-step confirmation on the button itself (no browser dialogs).
+// Two-step confirmation on the button itself (no browser dialogs). While one is asking, the timer does not rebuild
+// the panels under it (s2Asking), or the question would vanish before it could be answered.
+let s2Asking = 0;
 function s2Confirm(label, question, action, cls) {
   const host = el("span", { class: "s2-confirm" });
+  let open = false;
+  const settle = () => { if (open) { open = false; s2Asking = Math.max(0, s2Asking - 1); } };
   const ask = () => {
+    if (!open) { open = true; s2Asking += 1; }
     const yes = el("button", { class: "btn small bad", type: "button", on: { click: async () => {
       yes.disabled = true;
-      try { await action(); } finally { setKids(host, btn); }
+      try { await action(); } finally { settle(); setKids(host, btn); }
     } } }, "確定");
-    const no = el("button", { class: "btn small", type: "button", on: { click: () => setKids(host, btn) } }, "取消");
+    const no = el("button", { class: "btn small", type: "button", on: { click: () => { settle(); setKids(host, btn); } } }, "取消");
     setKids(host, el("span", { class: "small" }, question + " "), yes, no);
     no.focus();
   };
@@ -2427,7 +2435,10 @@ function s2ExecutorPanel(flowId, ex, refresh) {
     refresh();
   } } }, "繼續")
     : s2Confirm("停止這個流程", "停止後不會再派工或審查；進行中的審查會被結束。", async () => {
-      try { await api.post(s2Url(flowId, "hold"), {}); toast("已停止"); } catch (e) { toast("無法停止：" + e.message); }
+      try {
+        const r = await api.post(s2Url(flowId, "hold"), {});
+        toast(r && r.event_written === false ? r.event_problem : "已停止");
+      } catch (e) { toast("無法停止：" + e.message); }
       refresh();
     });
   const acct = ex.accounting;
@@ -2488,6 +2499,7 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
     automatic = on;
     text.disabled = on;
     previewBtn.disabled = on;
+    if (on) setKids(out);                       // a preview made before the switch can no longer be approved here
     setKids(autoNote, on ? notice("info", "自動執行中：派工由 VBear 依核准的計畫進行，手動派工一律拒絕。" +
       "要手動派工，請先停止流程並切回手動。") : null);
   }
@@ -2788,6 +2800,7 @@ function mountCoordinator(flowId) {
     // quiet refresh for the timer: not while a dialog is open or the user is in a field of the panels
     tick() {
       if (typeof document !== "undefined" && document.querySelector && document.querySelector(".modal-backdrop")) return Promise.resolve();
+      if (s2Asking > 0) return Promise.resolve();            // a question is open: the panels stay as they are
       return refresh(false);
     },
     stop() { alive = false; leaving.abort(); storage.stop(); },

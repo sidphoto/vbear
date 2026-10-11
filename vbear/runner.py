@@ -201,6 +201,11 @@ class AutomationRunner:
 
     # ---- events and stops --------------------------------------------------------------------------------
 
+    @staticmethod
+    def _mode_event_present(events: list[dict], seq: int) -> bool:
+        return any(e["kind"] == "automation_mode" and e.get("mode") == "auto" and e.get("approval_seq") == seq
+                   for e in events)
+
     def _event(self, flow_id: str, kind: str, fields: dict) -> None:
         flows.append_automation_event(flow_id, kind, fields)
 
@@ -261,10 +266,29 @@ class AutomationRunner:
         approval_event = events[seq - 1]
         # The mode must be on the record: an "auto" the daemon holds that no automation_mode event of this
         # approval accounts for is not something to act on (the switch-on could not be audited)
-        if not any(e["kind"] == "automation_mode" and e.get("mode") == "auto" and e.get("approval_seq") == seq
-                   for e in events):
-            return self._stop(flow_id, "mode_event_missing", "daemon 的模式是自動，但時間軸沒有對應這次核准的開啟紀錄")
-        approval = {"kind": "automation", "id": mode["approval_id"]}
+        if not self._mode_event_present(events, seq):
+            # The timeline and the mode were read one after the other: an approval that finished between the two
+            # reads looks like this. Do not conclude from that: if an approval holds the lock, wait; with the lock,
+            # read both again, and only a mode that is still unaccounted for is a stop.
+            with automation.try_plan_lock(base, flow_id) as got:
+                if not got:
+                    return "waiting:核准進行中"
+                flow = flows.get_flow(flow_id)
+                events = flow["events"]
+                mode = pipeline_store.mode_info(base, flow_id)
+                seq = acceptance.approval_seq(mode["approval_id"]) if mode["approval_id"] else None
+                if mode["mode"] != "auto" or seq is None or not (1 <= seq <= len(events)):
+                    return "manual" if mode["mode"] != "auto" else self._stop(
+                        flow_id, "approval", "找不到自動執行核准的那一筆接受")
+                approval_event = events[seq - 1]
+                if not acceptance.is_auto_event(approval_event):
+                    return self._stop(flow_id, "approval", "找不到自動執行核准的那一筆接受")
+                if not self._mode_event_present(events, seq):
+                    return self._stop(flow_id, "mode_event_missing",
+                                      "daemon 的模式是自動，但時間軸沒有對應這次核准的開啟紀錄")
+            approval = {"kind": "automation", "id": mode["approval_id"]}
+        else:
+            approval = {"kind": "automation", "id": mode["approval_id"]}
         state = derive(events)
         step = state["step"]
         if step == "first_dispatch":

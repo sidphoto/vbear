@@ -3,6 +3,7 @@ real daemon, the synthetic Claude and Codex and a real git repository. The
 runner is driven tick by tick (its thread is not started); no model."""
 
 import json
+import os
 import time
 
 from tests.test_flow_review_api import ReviewApiCase
@@ -276,3 +277,79 @@ class ModeEventTests(RunnerCase):
         self.assertTrue(pipeline_store.is_held(self.base, self.fid))
         self.assertNotIn("auto_dispatch_intent", self.kinds())
         self.assertEqual(self.stop_reason()["reason_code"], "mode_event_missing")
+
+
+class ApprovalRaceTests(RunnerCase):
+    def test_a_runner_that_sees_an_approval_half_done_waits_it_does_not_stop_the_flow(self):
+        """The daemon has switched the mode and the console has not yet written the timeline's record: the runner,
+        looking in that window, must wait (the approval holds the lock), not conclude and stop."""
+        from unittest import mock
+        from vbear import automation
+        st, pre = self.call(f"/api/flows/{self.fid}/automation-preview", "POST", {})
+        self.assertEqual(st, 200, pre)
+        seen = {}
+        real = flows.append_automation_event
+
+        def barrier(flow_id, kind, fields):
+            if kind == "automation_mode" and fields["mode"] == "auto":
+                seen["action"] = self.runner.step(self.fid)              # the runner looks right here
+                seen["mode"] = pipeline_store.mode_info(self.base, self.fid)["mode"]
+                seen["events"] = [e["kind"] for e in flows.get_flow(self.fid)["events"]]
+            return real(flow_id, kind, fields)
+        with mock.patch.object(automation.flows, "append_automation_event", barrier):
+            st, r = self.call(f"/api/flows/{self.fid}/automation", "POST", {"preview_id": pre["preview_id"]})
+        self.assertEqual(st, 200, r)
+        self.assertEqual(seen["mode"], "auto")                                # the window was real
+        self.assertNotIn("automation_mode", seen["events"])
+        self.assertTrue(seen["action"].startswith("waiting:"), seen["action"])
+        self.assertFalse(pipeline_store.is_held(self.base, self.fid))
+        self.assertIsNone(self.stop_reason())
+        # and once the approval is whole, the runner proceeds as usual
+        self.assertTrue(self.runner.step(self.fid).startswith("waiting:"))     # (no session yet: nothing to do)
+        self.assertIsNone(self.stop_reason())
+
+
+class LockInodeTests(RunnerCase):
+    def test_an_approval_that_waited_while_the_directory_was_taken_away_is_refused(self):
+        import fcntl
+        import threading
+        from vbear import automation
+        from vbear.api_error import ApiError
+        automation.write_plan(self.base, self.fid, "計畫")
+        lock = self.base / "automation" / self.fid / ".lock"
+        holder = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)                                   # another console holds it
+        out = {}
+
+        def waiter():
+            try:
+                with automation.plan_lock(self.base, self.fid):
+                    out["got"] = True
+            except ApiError as exc:
+                out["error"] = (exc.status, exc.code)
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.4)                                                      # it is blocked on the lock
+        self.assertEqual(out, {})
+        moved = self.tmp / "taken-away"
+        os.rename(self.base / "automation" / self.fid, moved)                # the deletion moved the directory
+        os.close(holder)                                                     # the lock is released
+        t.join(10)
+        self.assertEqual(out.get("error"), (409, "deleting"), out)
+        self.assertNotIn("got", out)
+        self.assertFalse((self.base / "automation" / self.fid / "plan.txt").exists())
+
+    def test_an_approval_for_a_flow_that_is_gone_is_refused_under_the_lock(self):
+        from vbear import automation
+        from vbear.api_error import ApiError
+        automation.write_plan(self.base, self.fid, "計畫")
+        with mock_flow_gone(self.fid):
+            with self.assertRaises(ApiError) as cm:
+                with automation.plan_lock(self.base, self.fid):
+                    pass
+        self.assertEqual((cm.exception.status, cm.exception.code), (404, "no_flow"))
+
+
+def mock_flow_gone(flow_id):
+    from unittest import mock
+    return mock.patch.object(flows, "get_flow", side_effect=KeyError(flow_id))

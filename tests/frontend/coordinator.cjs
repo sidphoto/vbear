@@ -188,6 +188,54 @@ test("only what the flow keeps reloads the stored-data panel, not the clock", as
   c.stop();
 });
 
+test("an open stop question is not rebuilt away by the timer", async () => {
+  const c = await mount();
+  button(byS2(c.node, "executor"), "停止這個流程").click();
+  await settle();
+  assert(text(byS2(c.node, "executor")).includes("確定"), "the question is open");
+  state.executor = executor({ accounting: { ...executor().accounting, elapsed_s: 9999, responses: 77 } });
+  await c.tick();
+  await settle();
+  assert(text(byS2(c.node, "executor")).includes("確定"), "a quiet round did not take it away");
+  button(byS2(c.node, "executor"), "取消").click();
+  await settle();
+  state.executor = executor({ accounting: { ...executor().accounting, elapsed_s: 10005 } });
+  await c.tick();                                    // answered: rounds are rebuilt again
+  await settle();
+  assert(text(byS2(c.node, "executor")).includes("10005") || !text(byS2(c.node, "executor")).includes("確定"));
+  c.stop();
+});
+
+test("the executor panel's stop says when its event could not be written", async () => {
+  const c = await mount();
+  state.post.hold = [{ ok: true, event_written: false, event_problem: "流程已停止，但「停止」事件無法寫入時間軸（x）" }];
+  button(byS2(c.node, "executor"), "停止這個流程").click();
+  button(byS2(c.node, "executor"), "確定").click();
+  await settle();
+  assert(posts().some((x) => x.url.endsWith("/hold")));
+  const toastNode = global.document.getElementById("toast");
+  assert(toastNode && String(toastNode.textContent).includes("無法寫入時間軸"), "the answer's problem is shown, not 已停止");
+  c.stop();
+});
+
+test("a manual preview made before the switch to automatic mode is cleared", async () => {
+  const c = await mount({ executor: executor({ sessions: [liveSession()] }) });
+  state.post["dispatch-preview"] = [{ ok: true, preview_id: "p".repeat(32), expires_at: 1791000300, dispatch_id: "x",
+    launch_id: "l-" + "1".repeat(16), text: "手動的文字", text_sha256: "f".repeat(64), bytes: 9, rewritten: false,
+    ready: true, not_ready_reason: "" }];
+  find(byS2(c.node, "dispatch"), (n) => n.tag === "textarea").value = "手動的文字";
+  button(byS2(c.node, "dispatch"), "預覽").click();
+  await settle();
+  assert(button(byS2(c.node, "dispatch"), "核准並送出"), "a preview is on screen");
+  state.executor = executor({ sessions: [liveSession()], automation: { mode: "auto", approval_id: "auto-7", problem: null } });
+  state.automation = { ok: true, flow_id: FLOW, mode: "auto", approval_id: "auto-7", problem: null, since: 1, approval: null,
+    step: { step: "first_dispatch", label: "x", after: "y", held: false, hold_reason: "", awaiting_merge: false } };
+  await c.refresh(true);
+  assert(!button(byS2(c.node, "dispatch"), "核准並送出"), "it cannot be approved any more");
+  assert(text(byS2(c.node, "dispatch")).includes("手動派工一律拒絕"));
+  c.stop();
+});
+
 test("stopping takes two steps and cancel does nothing", async () => {
   const c = await mount();
   const ex = byS2(c.node, "executor");
@@ -680,8 +728,11 @@ test("what an automatic event says is shown from its fixed fields", () => {
   assert(e({ kind: "automation_mode", mode: "auto", approval_seq: 7 }).includes("auto-7"));
   assert(e({ kind: "automation_mode", mode: "manual", approval_seq: null }).includes("切回手動"));
   assert(e({ kind: "auto_dispatch_intent", dispatch_id: "0b1c2d3e-0000", length: 12, text_sha256: "a".repeat(64) }).includes("12 bytes"));
-  assert(e({ kind: "auto_report", dispatch_id: "0b1c2d3e-0000", commit: "b".repeat(40), status: "done",
-    tests_result: "passed" }).includes("VBear 讀檔核對通過"));
+  const report = e({ kind: "auto_report", dispatch_id: "0b1c2d3e-0000", commit: "b".repeat(40), status: "done",
+    tests_result: "passed" });
+  assert(report.includes("執行者自述：狀態 done、測試 passed"), "the status and the tests are the executor's words");
+  assert(report.includes("VBear 讀檔核對：head 等於工作目錄目前的 commit"), "the checks are VBear's own");
+  assert(!report.includes("VBear 讀檔核對通過"), "no claim that the executor's fields were read by VBear");
   assert(e({ kind: "auto_review_result", round: 2, commit: "c".repeat(40), verdict: "NEEDS WORK" }).includes("第 2 輪結論：NEEDS WORK"));
   assert(e({ kind: "auto_review_aborted", round: 1, job_id: "r-" + "1".repeat(16) }).includes("該輪無效"));
   const stop = e({ kind: "auto_stopped", reason_code: "tests_not_passed", detail: "測試結果是 failed" });

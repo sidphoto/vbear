@@ -92,6 +92,55 @@ def _plan_dir(state, flow_id: str, *, create: bool) -> int:
         raise
 
 
+def _lock_is_current(state, flow_id: str, fd: int) -> bool:
+    """After flock: the file we hold is still the one at the path (a deletion
+    may have moved its directory away while we waited, and then we hold a lock
+    on a file nobody else will ever look at)."""
+    try:
+        dfd = _plan_dir(state, flow_id, create=False)
+    except OSError:
+        return False
+    try:
+        try:
+            now = os.stat(LOCK_FILE, dir_fd=dfd, follow_symlinks=False)
+        except OSError:
+            return False
+        mine = os.fstat(fd)
+        return (now.st_dev, now.st_ino) == (mine.st_dev, mine.st_ino)
+    finally:
+        os.close(dfd)
+
+
+@contextlib.contextmanager
+def try_plan_lock(state, flow_id: str):
+    """The same lock taken without waiting: yields True when held, False when
+    an approval has it (or there is no such flow directory)."""
+    try:
+        dfd = _plan_dir(state, flow_id, create=False)
+    except OSError:
+        yield False
+        return
+    try:
+        try:
+            fd = os.open(LOCK_FILE, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+        except OSError:
+            fd = None
+    finally:
+        os.close(dfd)
+    if fd is None:
+        yield False
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
 @contextlib.contextmanager
 def plan_lock(state, flow_id: str):
     """The cross-process lock of this flow's approval (v11.1 / S3-2 review): the
@@ -114,6 +163,16 @@ def plan_lock(state, flow_id: str):
                 if time.monotonic() >= end:
                     raise ApiError(409, "busy", "另一個主控台正在核准這個流程的自動執行，請稍後再試") from None
                 time.sleep(0.05)
+        # The standard flock discipline: what we hold must still be what the path names, and the flow must still
+        # exist and not be on its way out (a deletion that took the directory while we waited).
+        if not _lock_is_current(state, flow_id, fd):
+            raise ApiError(409, "deleting", "這個流程的資料夾已被搬走或正在刪除，不能開啟自動執行")
+        if pipeline_store.deleting_exists(state, flow_id):
+            raise ApiError(409, "deleting", "這個流程正在刪除，不能開啟自動執行")
+        try:
+            flows.get_flow(flow_id)
+        except KeyError:
+            raise ApiError(404, "no_flow", "找不到這個流程") from None
         yield
     finally:
         os.close(fd)                                   # closing releases the flock
