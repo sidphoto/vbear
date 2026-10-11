@@ -1,7 +1,9 @@
 """The quota ledger for data VBear writes (design 9).
 
 ``<state>/pipelines``, ``<state>/sessions`` and ``<state>/reviews`` together
-may never pass 4 GiB. The daemon is their only writer. Every writer reserves
+may never pass 4 GiB. The daemon is their only writer. ``<state>/deleting``
+(a flow's data moved there while it is purged, flow_data) is counted too: it
+still occupies the disk until the purge is done. Every writer reserves
 its maximum before it starts (a stream session: its journal limit; a
 dispatch: one text; a review: its outputs), writes only within that, and on
 finishing returns the unused part. A new reservation is granted only when
@@ -34,7 +36,7 @@ RESERVE_SESSION = JOURNAL_MAX + 2 * MANIFEST_MAX + START_RECORD_MAX
 RESERVE_DISPATCH = 64 << 10       # one dispatch text (3.5)
 RESERVE_REVIEW = 96 << 20         # one review's outputs (5.2, 5.4, 5.6)
 SCAN_MAX_ENTRIES = 1_000_000
-ROOTS = ("pipelines", "sessions", "reviews")
+ROOTS = ("pipelines", "sessions", "reviews", "deleting")
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -43,7 +45,7 @@ class ScanFailed(Exception):
 
 
 def scan(base) -> int:
-    """Bytes in the three roots. ScanFailed for anything unexpected."""
+    """Bytes in the roots. ScanFailed for anything unexpected."""
     total, seen = 0, 0
     try:
         state = os.open(str(base), _DIR)

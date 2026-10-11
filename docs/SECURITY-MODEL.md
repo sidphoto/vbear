@@ -247,8 +247,8 @@ record the server stored first.
   recorded, a review job must be named by both its manifest and the flow's own record of that round, and the
   task directory must have a start record naming the flow (there is one flow per task card). The daemon, the only
   writer of that data, re-decides all of this on its own thread, then moves the proven directories into
-  `deleting/<flow>/` (an atomic rename; outside every accounted directory, so no other flow's accounting meets a
-  half-removed one) and purges them from there. Every directory is opened without following a link and checked
+  `deleting/<flow>/` (an atomic rename; no flow's accounting reads that directory, so none meets a half-removed
+  one, while the quota scan counts its bytes) and purges them from there. Every directory is opened without following a link and checked
   (owner, same device as the state directory so a mount point is refused, the inode seen a moment before); a
   special file refuses. While `deleting/<flow>` exists the flow counts as stopped, and asking again finishes the
   deletion from wherever it stopped, without needing any record that was already removed. Deleting is

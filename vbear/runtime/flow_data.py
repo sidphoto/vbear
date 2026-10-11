@@ -24,9 +24,10 @@ introduced it):
    empty scaffolding and a release record naming it). Anything else refuses
    the whole deletion and says why: a person looks.
 2. **Move, then purge.** The proven directories are first *moved* (atomic
-   ``rename``, same file system) into ``<state>/deleting/<flow-id>/``, which is
-   outside the three accounted roots and is where nothing else looks. From
-   then on nothing but the flow's own deletion can see them; no accounting of
+   ``rename``, same file system) into ``<state>/deleting/<flow-id>/``, which
+   no flow's accounting reads (the quota scan does count it: the bytes are
+   on the disk until purged) and is where nothing else looks. From then on
+   nothing but the flow's own deletion can see them; no accounting of
    another flow (``flow_sessions``/``flow_reviews`` refuse unknown entries)
    ever meets a half-removed directory. The tomb is then emptied by a
    recursive walk that needs no manifest, so it can be resumed from any

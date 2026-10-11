@@ -188,7 +188,8 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   manifest recorded; review job = manifest *and* the flow-side `job.json` of its round; task directory = start
   record naming the flow, or only empty scaffolding), `blockers()` lists why not (running, launching, manual
   review, not cleaned, an unproven process group, a stop marker, an unreleased failure, anything unprovable).
-  `remove()` first renames the proven directories into `<state>/deleting/<flow>/` and then purges that tomb with
+  `remove()` first renames the proven directories into `<state>/deleting/<flow>/` (counted by the quota scan,
+  read by no flow's accounting) and then purges that tomb with
   every directory pinned (`O_NOFOLLOW|O_DIRECTORY`, owner, device, inode, re-checked before `rmdir`). While the
   tomb exists `pipeline_store.is_held` is true, so nothing new starts; asking again re-plans what is left and
   purges, with no dependence on a record already removed. It runs on the daemon's single thread, so a very

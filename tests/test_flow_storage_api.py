@@ -350,6 +350,38 @@ class CrashMatrixTests(StorageCase):
                 "pipeline": (base / "pipelines" / self.tid).exists(),
                 "tomb": (base / "deleting" / self.fid).exists()}
 
+    def disk_bytes(self, base):
+        """Every regular file under the four data roots, summed independently of quota.scan."""
+        total = 0
+        for root in ("sessions", "reviews", "pipelines", "deleting"):
+            for dirpath, _dirs, files in os.walk(base / root):
+                total += sum(os.lstat(os.path.join(dirpath, f)).st_size for f in files)
+        return total
+
+    def test_the_quota_scan_counts_what_waits_in_the_deletion_area(self):
+        self.flow_with_a_review()
+        self.end_executor()
+        base = self.copy_state("half")
+        before = quota.scan(base)
+        self.assertEqual(before, self.disk_bytes(base))
+        pl = flow_data.plan(base, self.fid, self.tid)
+        real_purge = flow_data._purge
+
+        def stop_before_purge(*a, **kw):                      # everything moved, nothing purged yet
+            raise flow_data.FlowDataRefused("stopped here")
+        with mock.patch.object(flow_data, "_purge", stop_before_purge):
+            with self.assertRaises(flow_data.FlowDataRefused):
+                flow_data.remove(base, pl)
+        self.assertEqual(os.listdir(base / "sessions"), [])
+        self.assertTrue((base / "deleting" / self.fid / "sessions").exists())
+        self.assertEqual(quota.scan(base), before)            # the room is still taken, not given away
+        self.assertEqual(quota.scan(base), self.disk_bytes(base))
+        ledger = quota.Ledger(base)
+        self.assertTrue(ledger.rebuild({}))
+        self.assertEqual(ledger.used, before)
+        flow_data.remove(base, flow_data.plan(base, self.fid, self.tid))
+        self.assertEqual(quota.scan(base), 0)
+
     def test_every_stopping_point_is_finished_by_asking_again(self):
         self.flow_with_a_review()
         self.end_executor()
@@ -394,6 +426,7 @@ class CrashMatrixTests(StorageCase):
                             flow_data.remove(base, pl)
                 # after the stop: what other flows read is intact; a begun deletion counts as stopped
                 self.others_ok(base)
+                self.assertEqual(quota.scan(base), self.disk_bytes(base))   # the deletion area is counted
                 if (base / "deleting" / self.fid).exists():
                     self.assertTrue(pipeline_store.is_held(base, self.fid))
                     self.assertTrue(pipeline_store.hold_info(base, self.fid)["held"])
