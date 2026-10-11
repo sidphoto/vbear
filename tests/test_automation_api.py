@@ -193,3 +193,110 @@ class PlanFileTests(AutoApiCase):
         t = {"title": "T", "goal": "G", "scope": ["a", "b"], "acceptance_criteria": ["c"], "evidence": []}
         self.assertEqual(automation.build_plan_text(t), "任務：T\n目標：G\n範圍：\n- a\n- b\n驗收條件：\n- c")
         self.assertEqual(automation.build_plan_text({"title": "只有標題"}), "任務：只有標題")
+
+
+class ApprovalUnitTests(AutoApiCase):
+    """The S3-2 review: one approval is one unit across processes; the daemon reads the plan file itself; an
+    event that cannot be written is not a success."""
+
+    def test_two_approvals_confirmed_at_once_leave_a_plan_that_is_the_one_the_mode_is_bound_to(self):
+        import threading
+        from unittest import mock
+        st, a = self.preview()
+        tasks.save_task(self.tid, {"title": "實作 add()", "workdir": str(self.work), "goal": "另一個目標"})
+        st, b = self.preview()
+        self.assertNotEqual(a["plan_sha256"], b["plan_sha256"])
+        real = flows.append_risk_acknowledged
+        order = []
+
+        def slow(flow_id, fields):
+            order.append(fields["plan_sha256"])
+            time.sleep(0.4)                                  # A is inside the unit when B arrives
+            return real(flow_id, fields)
+        out = {}
+        with mock.patch.object(flows, "append_risk_acknowledged", slow):
+            def go(name, pre):
+                out[name] = self.call(f"/api/flows/{self.fid}/automation", "POST", {"preview_id": pre["preview_id"]})
+            ta = threading.Thread(target=go, args=("a", a))
+            tb = threading.Thread(target=go, args=("b", b))
+            ta.start()
+            time.sleep(0.1)
+            tb.start()
+            ta.join(60)
+            tb.join(60)
+        self.assertEqual(out["a"][0], 200, out)
+        info = pipeline_store.mode_info(self.base, self.fid)
+        self.assertEqual(info["mode"], "auto")
+        seq = int(info["approval_id"].split("-")[1])
+        ev = flows.get_flow(self.fid)["events"][seq - 1]
+        plan = (self.base / "automation" / self.fid / "plan.txt").read_bytes()
+        self.assertEqual(hashlib.sha256(plan).hexdigest(), ev["plan_sha256"])        # file and mode agree
+        # the two did not interleave: each event's plan was written whole before the next began
+        self.assertEqual(len(order), len(set(order)))
+
+    def test_the_daemon_reads_the_plan_file_before_switching_on_and_on_every_automatic_dispatch(self):
+        from vbear import daemon_client
+        pre, r = self.enable()
+        plan = self.base / "automation" / self.fid / "plan.txt"
+        # switched on: tamper -> an automatic dispatch is refused by the daemon
+        self.start_executor()
+        mode = pipeline_store.mode_info(self.base, self.fid)
+        good = plan.read_bytes()
+        plan.write_bytes(good + b"\n")
+        with self.assertRaises(daemon_client.DaemonError) as cm:
+            daemon_client.call(self.console.executor.runtime, "dispatch_prepare", launch_id=self.launch,
+                               pipeline=self.fid, dispatch_id="0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", text="x",
+                               approval={"kind": "automation", "id": mode["approval_id"]})
+        self.assertIn("plan.txt", str(cm.exception))
+        # stopped, back to manual, the file gone: it cannot be switched on again with that approval
+        plan.write_bytes(good)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/automation/disable", "POST", {})[0], 200)
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/continue", "POST", {})[0], 200)
+        plan.unlink()
+        with self.assertRaises(daemon_client.DaemonError) as cm:
+            daemon_client.call(self.console.executor.runtime, "pipeline_mode_set", pipeline=self.fid, mode="auto",
+                               approval={"kind": "automation", "id": mode["approval_id"]})
+        self.assertIn("計畫文字", str(cm.exception))
+        self.assertEqual(pipeline_store.mode_info(self.base, self.fid)["mode"], "manual")
+
+    def test_not_enough_room_for_the_events_a_run_can_write_is_refused_up_front(self):
+        with flows.store.locked():
+            data = flows.store.load()
+            ev = data[self.fid]["events"]
+            while len(ev) < flows.MAX_EVENTS - 30:
+                ev.append({"seq": len(ev) + 1, "at": time.time(), "kind": "note", "source": "manual", "note": "x"})
+            flows.store.save(data)
+        st, r = self.preview()
+        self.assertEqual((st, r["code"]), (409, "no_event_room"))
+        # a smaller run fits: 2 dispatches, 1 review = 2*3 + 1*4 + 22 = 32 > 30 still not; 1 and 1 = 29
+        st, r = self.preview({"limits": {"max_dispatches": 1, "max_reviews": 1}})
+        self.assertEqual(st, 200, r)
+
+    def test_a_switch_on_that_cannot_be_recorded_stops_the_flow_and_says_so(self):
+        from unittest import mock
+        st, pre = self.preview()
+        with mock.patch.object(flows, "append_automation_event", side_effect=ValueError("事件已達上限")):
+            st, r = self.confirm(pre["preview_id"])
+        self.assertEqual((st, r["code"]), (500, "event_write"))
+        self.assertIn("流程已停止", r["error"])
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))          # on, but held: it does nothing
+
+    def test_a_stop_whose_event_cannot_be_written_says_so_in_the_answer(self):
+        from unittest import mock
+        self.enable()
+        with mock.patch.object(flows, "append_automation_event", side_effect=ValueError("事件已達上限")):
+            st, r = self.call(f"/api/flows/{self.fid}/hold", "POST", {})
+        self.assertEqual(st, 200, r)
+        self.assertFalse(r["event_written"])
+        self.assertIn("無法寫入時間軸", r["event_problem"])
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+
+    def test_the_lock_file_is_part_of_the_flows_own_data(self):
+        from vbear.runtime import flow_data
+        self.enable()
+        d = self.base / "automation" / self.fid
+        self.assertTrue((d / ".lock").exists())
+        self.assertEqual(sorted(p.name for p in d.iterdir()), [".lock", "plan.txt"])
+        pl = flow_data.plan(self.base, self.fid, self.tid)
+        self.assertIsNotNone(pl.automation_inode)

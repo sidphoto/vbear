@@ -16,16 +16,28 @@ from vbear.runtime import flow_data, pipeline_store
 
 
 class AutoCase(StreamCase):
-    def accept_auto(self, **override):
-        """An acceptance that also approves the plan: the nine fields and the four automation ones."""
+    def accept_auto(self, plan_text="計畫全文", write_plan=True, **override):
+        """An acceptance that also approves the plan: the nine fields and the four automation ones, and the plan
+        file those name (the daemon reads it again before it switches the mode on)."""
+        import hashlib
         from vbear import login_identity
+        raw = plan_text.encode()
+        if write_plan:
+            d = self.base / "automation" / self.fid
+            d.mkdir(parents=True, exist_ok=True)
+            os.chmod(d.parent, 0o700)
+            os.chmod(d, 0o700)
+            (d / "plan.txt").write_bytes(raw)
+            os.chmod(d / "plan.txt", 0o600)
+        override.setdefault("plan_sha256", hashlib.sha256(raw).hexdigest())
+        override.setdefault("plan_bytes", len(raw))
         fp = login_identity.claude_login_fingerprint(self.home / ".claude.json", self.key).hmac
         fields = {"text_version": acc.RISK_TEXT_VERSION, "codex_version": "0.160.0", "model": "gpt-6-luna",
                   "executor_claude_version": "2.1.292", "executor_model": fx.MODEL,
                   "executor_login_fingerprint": fp, "login_fingerprint": "b" * 64, "login_key_id": self.key.key_id,
                   "limits": {**acc.DEFAULT_LIMITS, "max_elapsed_h": 4},
                   "auto_text_version": acc.AUTO_RISK_TEXT_VERSION, "automation_scope": list(acc.AUTO_SCOPE),
-                  "plan_sha256": "c" * 64, "plan_bytes": 1234, **override}
+                  **override}
         with flows.store.locked():
             data = flows.store.load()
             ev = data[self.fid]["events"]
@@ -314,13 +326,10 @@ class DeletionInterplayTests(AutoCase):
         self.assertTrue(self.rpc("pipeline_hold", pipeline=self.fid, reason="u")["ok"])
         self.assertTrue(self.set_mode("manual")["ok"])
         self.assertTrue(self.rpc("pipeline_release", pipeline=self.fid)["ok"])
-        (self.base / "automation" / self.fid).mkdir(parents=True, mode=0o700)
-        os.chmod(self.base / "automation", 0o700)
-        (self.base / "automation" / self.fid / "plan.txt").write_text("the plan")
-        pl = flow_data.plan(self.base, self.fid, self.tid)
+        pl = flow_data.plan(self.base, self.fid, self.tid)          # accept_auto() wrote automation/<flow>/plan.txt
         self.assertFalse(pl.auto)
         self.assertEqual(flow_data.blockers(pl), [])
-        self.assertEqual(pl.automation_bytes, len("the plan"))
+        self.assertEqual(pl.automation_bytes, len("計畫全文".encode()))
         flow_data.remove(self.base, pl)
         self.assertFalse((self.base / "automation" / self.fid).exists())
         self.assertFalse((self.base / "deleting" / self.fid).exists())

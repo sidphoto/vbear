@@ -213,8 +213,10 @@ class FlowExecutor:
         if pipeline_store.mode_info(cfg.state_dir(), flow_id)["mode"] == "auto":
             try:
                 flows.append_automation_event(flow_id, "auto_stopped", {"reason_code": "user_stop", "detail": reason})
-            except ValueError:
-                pass                                       # the hold itself is the daemon's and has taken effect
+            except (ValueError, KeyError) as exc:
+                # the daemon's stop has taken effect; what could not be written is said, not swallowed
+                result = {**result, "event_written": False,
+                          "event_problem": f"流程已停止，但「停止」事件無法寫入時間軸（{exc}）"}
         return result
 
     def release(self, flow_id: str, body) -> dict:

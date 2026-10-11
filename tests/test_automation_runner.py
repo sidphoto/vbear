@@ -237,3 +237,23 @@ class LockTests(RunnerCase):
         self.runner.release()
         self.assertTrue(other.acquire())
         other.release()
+
+
+class EventWriteTests(RunnerCase):
+    def test_when_an_event_cannot_be_written_the_flow_is_stopped_not_continued(self):
+        from unittest import mock
+        self.enable()
+        self.start_executor()
+        self.commit_work("work")
+        real = flows.append_automation_event
+
+        def refuse_intents(flow_id, kind, fields):
+            if kind == "auto_dispatch_intent":
+                raise ValueError("這個流程的事件已達上限")
+            return real(flow_id, kind, fields)
+        with mock.patch.object(flows, "append_automation_event", refuse_intents):
+            action = self.runner.tick()[self.fid]
+        self.assertTrue(action.startswith("stopped:"), action)
+        self.assertTrue(pipeline_store.is_held(self.base, self.fid))
+        self.assertNotIn("auto_dispatch_intent", self.kinds())
+        self.assertEqual(len(self.executor_status()["sessions"][-1]["status"]["dispatches"]), 0)

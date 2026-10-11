@@ -686,6 +686,34 @@ class StreamOps:
             return "自動執行核准的那一筆接受已被更新的接受取代，需要重新核准自動執行"
         if not acceptance.is_auto_valid_now(latest, key.key_id):
             return "自動執行核准的接受與目前的自動執行風險文字不符，需要重新核准"
+        return self._plan_problem(pipeline, latest)
+
+    def _plan_problem(self, pipeline: str, event: dict) -> str | None:
+        """None when automation/<flow>/plan.txt is a plain file of ours whose
+        size and sha256 are the ones the acceptance recorded (v11.1 G2): the
+        daemon does not take the console's word for what was approved."""
+        import hashlib
+        path = f"{self.base}/automation/{pipeline}/plan.txt"
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as exc:
+            return f"找不到核准時保存的計畫文字（{exc.strerror}），需要重新核准"
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_size > acceptance.PLAN_MAX_BYTES:
+                return "plan.txt 不是核准時寫入的一般檔案"
+            data = b""
+            while len(data) <= acceptance.PLAN_MAX_BYTES:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                data += chunk
+        except OSError as exc:
+            return f"計畫文字無法讀取（{exc.strerror}）"
+        finally:
+            os.close(fd)
+        if len(data) != event.get("plan_bytes") or hashlib.sha256(data).hexdigest() != event.get("plan_sha256"):
+            return "plan.txt 與核准時記錄的雜湊或大小不符，需要重新核准"
         return None
 
     def _mode_gate(self, rid: str, pipeline: str, approval, *, required: bool = True) -> dict | None:

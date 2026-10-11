@@ -59,6 +59,7 @@ DELETING = pipeline_store.DELETING
 WALK_MAX_ENTRIES = 200_000        # one flow: far above the design's worst case (about 730 MiB of a few hundred files)
 WALK_MAX_DEPTH = 12
 SCAFFOLD_NAMES = ("dispatches", "reviews")
+AUTOMATION_FILES = ("plan.txt", ".lock", ".plan.txt.tmp")     # what the console keeps in automation/<flow>/
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -261,11 +262,11 @@ def _automation_side(state: int, pipeline_id: str, root_dev: int, out: Plan) -> 
             names = os.listdir(fd)
             total = 0
             for name in names:
-                if name != "plan.txt":
+                if name not in AUTOMATION_FILES:
                     raise FlowDataRefused(f"automation/{pipeline_id} 裡有不認得的項目 {name[:48]!r}，不處理")
                 fst = os.stat(name, dir_fd=fd, follow_symlinks=False)
                 if not stat.S_ISREG(fst.st_mode):
-                    raise FlowDataRefused("plan.txt 不是一般檔案，不處理")
+                    raise FlowDataRefused(f"{name} 不是一般檔案，不處理")
                 total += fst.st_size
             out.automation_inode, out.automation_bytes = st.st_ino, total
         finally:

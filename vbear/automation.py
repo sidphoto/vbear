@@ -24,9 +24,12 @@ daemon requires.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import os
 import stat
+import time
 
 from . import acceptance, config as cfg, flows, login_identity, previews, risk_acceptance, risk_text, tasks
 from .api_error import ApiError
@@ -36,6 +39,8 @@ from .runtime import stream_protocol as sp
 
 AUTO_DEFAULT_LIMITS = {**acceptance.DEFAULT_LIMITS, "max_elapsed_h": 4}      # S3 design 4: 4 hours prefilled
 PLAN_FILE = "plan.txt"
+LOCK_FILE = ".lock"
+LOCK_WAIT_S = 15.0
 FIXED_RULES = ("連續失敗 1 次就停止（不能調整）",)
 _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -87,8 +92,36 @@ def _plan_dir(state, flow_id: str, *, create: bool) -> int:
         raise
 
 
-def write_plan(state, flow_id: str, text: str) -> None:
-    """plan.txt, whole or not at all (temp file, fsync, rename, directory sync)."""
+@contextlib.contextmanager
+def plan_lock(state, flow_id: str):
+    """The cross-process lock of this flow's approval (v11.1 / S3-2 review): the
+    plan file, the acceptance event and the daemon's mode switch of one
+    approval are done as one unit, so two consoles confirming two previews
+    cannot interleave and leave a plan that is not the one the mode is bound
+    to. flock on automation/<flow>/.lock."""
+    dfd = _plan_dir(state, flow_id, create=True)
+    try:
+        fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)
+    finally:
+        os.close(dfd)
+    try:
+        end = time.monotonic() + LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= end:
+                    raise ApiError(409, "busy", "另一個主控台正在核准這個流程的自動執行，請稍後再試") from None
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)                                   # closing releases the flock
+
+
+def stage_plan(state, flow_id: str, text: str) -> None:
+    """The new plan in a temp file (fsynced), not yet the plan: publish_plan
+    renames it into place once the acceptance that names it is recorded."""
     data = text.encode("utf-8")
     dfd = _plan_dir(state, flow_id, create=True)
     try:
@@ -106,11 +139,46 @@ def write_plan(state, flow_id: str, text: str) -> None:
             os.fsync(fd)
         finally:
             os.close(fd)
-        os.replace(tmp, PLAN_FILE, src_dir_fd=dfd, dst_dir_fd=dfd)
+    finally:
+        os.close(dfd)
+
+
+def publish_plan(state, flow_id: str) -> None:
+    dfd = _plan_dir(state, flow_id, create=False)
+    try:
+        os.replace(f".{PLAN_FILE}.tmp", PLAN_FILE, src_dir_fd=dfd, dst_dir_fd=dfd)
         os.fsync(dfd)
     finally:
         os.close(dfd)
 
+
+def discard_staged_plan(state, flow_id: str) -> None:
+    try:
+        dfd = _plan_dir(state, flow_id, create=False)
+    except OSError:
+        return
+    try:
+        try:
+            os.unlink(f".{PLAN_FILE}.tmp", dir_fd=dfd)
+        except FileNotFoundError:
+            pass
+    finally:
+        os.close(dfd)
+
+
+def write_plan(state, flow_id: str, text: str) -> None:
+    """plan.txt, whole or not at all (stage + publish)."""
+    stage_plan(state, flow_id, text)
+    publish_plan(state, flow_id)
+
+
+def events_needed(limits: dict) -> int:
+    """How many events one approved run can write at most: per dispatch an
+    intent, a sent and a report; per review an intent, a started, a result and
+    maybe an aborted; the acceptance and the mode; some stops (each of which
+    the user has to end). With the caps (40 dispatches, 10 reviews) that is
+    40*3 + 10*4 + 2 + 20 = 182; flows allow 500."""
+    return limits["max_dispatches"] * 3 + limits["max_reviews"] * 4 + 2 + 20
 
 def read_plan(state, flow_id: str, *, sha256: str, size: int) -> str:
     """The approved plan text; ApiError (409) when the file is missing, not a
@@ -220,6 +288,11 @@ class FlowAutomation:
             problem = acceptance.limits_problem(limits)
             if problem:
                 raise ApiError(400, "bad_limits", f"上限不合法（{problem}）")
+            room = flows.MAX_EVENTS - len(flow["events"])
+            if room < events_needed(limits):
+                raise ApiError(409, "no_event_room",
+                               f"這個流程的事件紀錄剩 {room} 筆，這組上限最多可能寫 {events_needed(limits)} 筆，"
+                               "不足以安全地自動執行（調低派工則數或審查次數，或改用手動）")
             values = risk_acceptance._gather(host, state, key,
                                              body.get("executor_model", risk_acceptance.DEFAULT_EXECUTOR_MODEL),
                                              body.get("review_model", risk_acceptance.DEFAULT_REVIEW_MODEL))
@@ -271,24 +344,40 @@ class FlowAutomation:
             except previews.PreviewError as exc:
                 raise ApiError(exc.status, exc.code, str(exc)) from exc
             fields, plan = rec["data"]["fields"], rec["data"]["plan_text"]
-            try:
-                write_plan(state, flow_id, plan)
-            except OSError as exc:
-                raise ApiError(500, "plan_write", f"計畫文字無法保存（{exc.strerror}）") from exc
-            try:
-                flows.append_risk_acknowledged(flow_id, fields)
-            except ValueError as exc:
-                raise ApiError(400, "bad_request", str(exc)) from exc
-            except KeyError:
-                raise ApiError(404, "no_flow", "找不到這個流程") from None
-            events = flows.get_flow(flow_id)["events"]
-            seq = events[-1]["seq"]
-            approval = {"kind": "automation", "id": acceptance.approval_id(events[-1])}
-            self.executor._call("pipeline_mode_set", pipeline=flow_id, mode="auto", approval=approval)
-            try:
-                flows.append_automation_event(flow_id, "automation_mode", {"mode": "auto", "approval_seq": seq})
-            except ValueError:
-                pass                      # the mode itself is the daemon's; the record can be read back from it
+            # One unit across processes: the plan file, the acceptance that names its hash, and the daemon's
+            # mode switch (which reads the file again). Two consoles cannot interleave their approvals.
+            with plan_lock(state, flow_id):
+                try:
+                    stage_plan(state, flow_id, plan)
+                except OSError as exc:
+                    raise ApiError(500, "plan_write", f"計畫文字無法保存（{exc.strerror}）") from exc
+                try:
+                    flows.append_risk_acknowledged(flow_id, fields)
+                except ValueError as exc:
+                    discard_staged_plan(state, flow_id)
+                    raise ApiError(409, "event_write", f"接受無法記錄：{exc}") from exc
+                except KeyError:
+                    discard_staged_plan(state, flow_id)
+                    raise ApiError(404, "no_flow", "找不到這個流程") from None
+                try:
+                    publish_plan(state, flow_id)
+                except OSError as exc:
+                    raise ApiError(500, "plan_write", f"計畫文字無法保存（{exc.strerror}）；沒有開啟自動執行") from exc
+                events = flows.get_flow(flow_id)["events"]
+                seq = events[-1]["seq"]
+                approval = {"kind": "automation", "id": acceptance.approval_id(events[-1])}
+                self.executor._call("pipeline_mode_set", pipeline=flow_id, mode="auto", approval=approval)
+                try:
+                    flows.append_automation_event(flow_id, "automation_mode", {"mode": "auto", "approval_seq": seq})
+                except (ValueError, KeyError) as exc:
+                    # on but not on the record: stop it and say so (never a success that cannot be audited)
+                    try:
+                        self.executor._call("pipeline_hold", pipeline=flow_id,
+                                            reason=f"自動執行的開啟無法記錄（{exc}）")
+                    except ApiError:
+                        pass
+                    raise ApiError(500, "event_write", f"自動執行已開啟但無法寫入事件紀錄（{exc}），流程已停止，"
+                                   "請切回手動後處理") from exc
             return {"mode": "auto", "approval_id": approval["id"], "approval_seq": seq,
                     "plan_sha256": fields["plan_sha256"], "plan_bytes": fields["plan_bytes"]}
 
@@ -300,8 +389,9 @@ class FlowAutomation:
         with self.executor._lock(flow_id):
             self.executor._flow(flow_id)
             self.executor._call("pipeline_mode_set", pipeline=flow_id, mode="manual", approval=None)
+            result = {"mode": "manual", "event_written": True}
             try:
                 flows.append_automation_event(flow_id, "automation_mode", {"mode": "manual", "approval_seq": None})
-            except ValueError:
-                pass
-            return {"mode": "manual"}
+            except (ValueError, KeyError) as exc:
+                result.update(event_written=False, event_problem=f"模式已切回手動，但事件無法記錄（{exc}）")
+            return result

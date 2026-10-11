@@ -214,7 +214,7 @@ class DaemonRestartTests(Boundary):
         self.crash_daemon()
         self.restart_daemon()
         self.assertTrue(pipeline_store.is_held(self.base, self.fid))
-        self.assertEqual(pipeline_store.hold_info(self.base, self.fid)["reason"], "daemon 重啟")
+        self.assertIn("daemon 重啟", pipeline_store.hold_info(self.base, self.fid)["reason"])   # (or the recovery's own)
         for _ in range(4):
             self.assertEqual(self.runner.tick()[self.fid], "held")
         after = self.kinds()
