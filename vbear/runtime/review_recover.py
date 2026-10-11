@@ -141,9 +141,22 @@ def recover(base, *, constants=None, rows=None, now: float | None = None) -> lis
             if m["state"] == "manual_review":
                 continue
             if m["state"] == "cleaned":
-                with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
-                    if p.review_result(m["round"]) is not None:
-                        continue
+                # A cleaned job is done with, but its marker is still looked at: a damaged marker, or one that
+                # disagrees with the manifest, is kept for a person and holds the flow, like a finished job's.
+                try:
+                    with pipeline_store.Pipeline(base, m["task_id"], create=False) as p:
+                        res = p.review_result(m["round"])
+                except (pipeline_store.StoreRefused, OSError) as exc:
+                    out.append(_item(m, name, "kept", f"審查紀錄的 result.json 損毀或無法讀取（{type(exc).__name__}）",
+                                     failure=True))
+                    continue
+                if res is not None:
+                    try:
+                        stream_flow.record_state(m, res)
+                    except stream_flow.FlowRefused as exc:
+                        out.append(_item(m, name, "kept", f"審查紀錄的 result.json 與 manifest 不一致（{exc}）",
+                                         failure=True))
+                    continue
             if m["state"] in ("finished", "invalid", "cleaned"):
                 out.append(_finish_decided(base, m, constants))
             else:

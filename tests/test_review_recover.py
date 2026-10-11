@@ -231,6 +231,33 @@ class LinkAndDecidedTests(RecoverCase):
         self.assertEqual([i["action"] for i in items], ["kept"])
         self.assertTrue(self.scratch.exists())
 
+    def test_a_cleaned_job_whose_marker_disagrees_with_the_manifest_is_kept_and_holds_the_flow(self):
+        # Gemini/Claude review of result.json atomicity: it used to be skipped silently
+        self.finish()
+        self.assertEqual(self.manifest()["state"], "cleaned")
+        path = self.record() / "result.json"
+        res = json.loads(path.read_text())
+        res["valid"] = not res["valid"]                                 # says the opposite of the manifest
+        path.write_text(json.dumps(res))
+        items = self.recover([])
+        self.assertEqual([(i["action"], i["failure"]) for i in items], [("kept", True)])
+        self.assertIn("不一致", items[0]["why"])
+        self.assertEqual(self.manifest()["state"], "cleaned")           # nothing was rewritten
+
+    def test_a_cleaned_job_with_a_damaged_marker_is_kept_with_its_reason_not_a_generic_error(self):
+        self.finish()
+        self.assertEqual(self.manifest()["state"], "cleaned")
+        (self.record() / "result.json").write_text("{")
+        items = self.recover([])
+        self.assertEqual([(i["action"], i["failure"]) for i in items], [("kept", True)])
+        self.assertIn("result.json 損毀", items[0]["why"])
+        self.assertNotIn("未預期", items[0]["why"])
+        self.assertEqual(self.manifest().get("retained_reason"), None)  # a cleaned job is not turned into manual_review
+        # and a whole marker is left alone, as before
+        self.tearDown_and_setUp()
+        self.finish()
+        self.assertEqual(self.recover([]), [])
+
     def test_a_manual_review_and_a_cleaned_job_are_left_alone(self):
         self.recover(self.alive_rows())                                # now manual_review
         before = self.manifest()
