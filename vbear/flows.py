@@ -591,6 +591,26 @@ def executor_live(session_id, live, now) -> dict:
     return {"state": state, "label": label, "reason": reason, "freshness": fresh}
 
 
+# Whole login fingerprints are secrets of the user's accounts (an HMAC of the
+# account identity): the server keeps them in the stored event and in the
+# preview record and nothing that leaves it carries one. The projection of an
+# event does the cutting in this one place (Codex S2c-1 review): the first 16
+# hex digits under a *_prefix name, never the whole value.
+_FINGERPRINT_FIELDS = {"executor_login_fingerprint": "executor_login_fingerprint_prefix",
+                       "login_fingerprint": "login_fingerprint_prefix"}
+FINGERPRINT_PREFIX = 16
+
+
+def public_event(event: dict) -> dict:
+    """A stored event as the API may show it."""
+    out = dict(event)
+    for name, shown in _FINGERPRINT_FIELDS.items():
+        if name in out:
+            value = out.pop(name)
+            out[shown] = value[:FINGERPRINT_PREFIX] if isinstance(value, str) else None
+    return out
+
+
 def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str], str | None],
          live: dict | None, now: float) -> dict:
     derived = derive(flow, heads)
@@ -604,7 +624,7 @@ def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str]
         **derived,
         "latest_review": next((r for rnd in reversed(derived["rounds"]) for r in reversed(rnd["reviews"])), None),
         "executor_live": executor_live(roles["executor"].get("session_id"), live, now),
-        "events": [{**e, "label": KIND_LABELS[e["kind"]],
+        "events": [{**public_event(e), "label": KIND_LABELS[e["kind"]],
                     "source_label": CONSOLE_LABEL if e["source"] == "console" else MANUAL_LABEL}
                    for e in flow["events"]],
     }

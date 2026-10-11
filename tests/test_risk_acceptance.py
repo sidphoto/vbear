@@ -84,6 +84,14 @@ class Case(unittest.TestCase):
         return ra.confirm(flow or self.fid, {"preview_id": preview_id} if body is self._DEFAULT else body,
                           store=self.store, host=self.host)
 
+    _clock = [1_800_000_000.0]
+
+    def status(self, advance=11.0):
+        """ra.status with this test's host and a clock that moves past the
+        10 second fact cache each call (unless told otherwise)."""
+        self._clock[0] += advance
+        return ra.status(flows.get_flow(self.fid), self.state, host=self.host, now=self._clock[0])
+
     def error(self, fn, *a, **kw):
         with self.assertRaises(ra.AcceptanceError) as cm:
             fn(*a, **kw)
@@ -211,7 +219,7 @@ class ConfirmTests(Case):
         self.assertEqual(flow["events"][-1]["seq"], event["seq"])
         key = login_identity.load_login_key(self.state)
         self.assertTrue(acc.is_valid_now(event, key.key_id))
-        self.assertEqual(ra.status(flows.get_flow(self.fid))["state"], "valid")
+        self.assertEqual(self.status()["state"], "valid")
 
     def test_only_the_id_is_accepted_nothing_the_browser_sends_is_recorded(self):
         r = self.preview()
@@ -303,28 +311,105 @@ class ConfirmTests(Case):
 
 class StatusTests(Case):
     def test_none_valid_and_stale(self):
-        flow = lambda: flows.get_flow(self.fid)
-        self.assertEqual(ra.status(flow())["state"], "none")
+        self.assertEqual(self.status()["state"], "none")
         self.confirm(self.preview()["preview_id"])
-        s = ra.status(flow())
+        s = self.status()
         self.assertEqual(s["state"], "valid")
         self.assertEqual(s["values"]["codex_version"], "0.160.0")
         self.assertNotRegex(json.dumps(s), r"[0-9a-f]{64}")
         with mock.patch.object(acc, "RISK_TEXT_VERSION", "2099-01-01.1"):
-            s = ra.status(flow())
+            s = self.status()
         self.assertEqual((s["state"], "風險文字已改版" in s["reason"]), ("stale", True))
         os.unlink(login_identity.key_path(self.state))
-        s = ra.status(flow())
+        s = self.status()
         self.assertEqual(s["state"], "stale")
         self.assertIn("金鑰", s["reason"])
         login_identity.create_login_key(self.state, valid_acceptances=0)         # another key: the old record's id differs
-        self.assertIn("金鑰已更換", ra.status(flow())["reason"])
+        self.assertIn("金鑰已更換", self.status()["reason"])
 
     def test_the_newest_acceptance_counts(self):
         self.confirm(self.preview({"limits": {"max_reviews": 2}})["preview_id"])
         self.confirm(self.preview({"limits": {"max_reviews": 4}})["preview_id"])
-        limits = {x["name"]: x["value"] for x in ra.status(flows.get_flow(self.fid))["values"]["limits"]}
+        limits = {x["name"]: x["value"] for x in self.status()["values"]["limits"]}
         self.assertEqual(limits["max_reviews"], 4)
+
+    # ---- Codex S2c-1 review #2: the screen follows what changed after the confirmation
+
+    def accepted(self):
+        self.confirm(self.preview()["preview_id"])
+        self.assertEqual(self.status()["state"], "valid")
+
+    def test_a_changed_account_or_cli_version_is_stale_and_says_which(self):
+        self.accepted()
+        self.write_claude("99999999-2222-3333-4444-555555555555")
+        s = self.status()
+        self.assertEqual((s["state"], s["changed"]), ("stale", ["claude_account"]))
+        self.assertIn("執行者的 Claude 帳號", s["reason"])
+        self.write_claude()
+        self.assertEqual(self.status()["state"], "valid")                          # restored: valid again
+        self.write_codex_login("acct-secret-OTHER")
+        s = self.status()
+        self.assertEqual((s["state"], s["changed"]), ("stale", ["codex_account"]))
+        self.write_codex_login()
+        with mock.patch("vbear.runtime.cli_versions.stream_verified_versions", return_value=("2.1.292", "2.1.299")):
+            self.host.claude = "2.1.299"
+            s = self.status()
+        self.assertEqual((s["state"], s["changed"]), ("stale", ["claude_version"]))
+        self.host.claude = "2.1.292"
+        self.host.codex = "0.161.0"
+        s = self.status()
+        self.assertEqual((s["state"], s["changed"]), ("stale", ["codex_version"]))
+        self.host.codex = "0.160.0"
+        self.write_claude("99999999-2222-3333-4444-555555555555")
+        self.host.codex = "0.161.0"
+        s = self.status()
+        self.assertEqual(sorted(s["changed"]), ["claude_account", "codex_version"])      # all of them, named
+
+    def test_a_fact_that_cannot_be_had_is_unknown_never_valid(self):
+        self.accepted()
+        os.unlink(self.state / "codex-home" / "auth.json")
+        s = self.status()
+        self.assertEqual((s["state"], s["unavailable"]), ("unknown", ["codex_account"]))
+        self.write_codex_login()
+        (self.tmp / "claude.json").write_text("{}")
+        s = self.status()
+        self.assertEqual((s["state"], s["unavailable"]), ("unknown", ["claude_account"]))
+        self.write_claude()
+        self.host.claude = None
+        self.host.claude_why = "逾時"
+        s = self.status()
+        self.assertEqual((s["state"], s["unavailable"]), ("unknown", ["claude_version"]))
+        self.assertIn("逾時", s["reason"])
+        self.host.claude = "2.1.292"
+        self.host.codex = None
+        self.assertEqual(self.status()["unavailable"], ["codex_version"])
+
+    def test_a_difference_that_can_be_seen_wins_over_a_fact_that_cannot(self):
+        self.accepted()
+        self.write_claude("99999999-2222-3333-4444-555555555555")
+        os.unlink(self.state / "codex-home" / "auth.json")
+        s = self.status()
+        self.assertEqual((s["state"], s["changed"]), ("stale", ["claude_account"]))
+
+    def test_the_facts_are_reused_for_ten_seconds_and_not_longer(self):
+        self.accepted()
+        calls = []
+        real = self.host.claude_version
+        self.host.claude_version = lambda: (calls.append(1), real())[1]
+        self.status(advance=11)                                                      # gathers
+        self.status(advance=5)                                                       # within ten seconds: reused
+        self.status(advance=4.9)                                                     # 9.9 s after the gather: reused
+        self.assertEqual(len(calls), 1)
+        self.status(advance=0.2)                                                     # 10.1 s: gathered again
+        self.assertEqual(len(calls), 2)
+        self.status(advance=-1000)                                                   # a clock set back: gathered, not trusted
+        self.assertEqual(len(calls), 3)
+
+    def test_a_change_inside_the_window_shows_after_it(self):
+        self.accepted()
+        self.write_claude("99999999-2222-3333-4444-555555555555")
+        self.assertEqual(self.status(advance=3)["state"], "valid")                  # still the cached facts
+        self.assertEqual(self.status(advance=8)["state"], "stale")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,15 @@ class ApiCase(StreamCase):
         self.host = FakeHost(self.tmp)
         self.host.binary = str(self.binary)
         self.host.claude_binary = lambda cwd=None: (self.host.binary, self.host.claude, "")
+        self.host.claude_json = lambda: self.home / ".claude.json"                # the account the acceptance bound
+        # a logged-in dedicated Codex home, and an acceptance that binds to it, so that the facts the
+        # screen compares (status) are the ones that were accepted
+        codex_home = self.base / "codex-home"
+        codex_home.mkdir(mode=0o700, exist_ok=True)
+        (codex_home / "auth.json").write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {"account_id": "acct-0001"}}))
+        os.chmod(codex_home / "auth.json", 0o600)
+        self.accept()
+        ra._facts_cache.clear()
         p = mock.patch.object(ra, "DEFAULT_HOST", self.host)
         p.start()
         self.addCleanup(p.stop)

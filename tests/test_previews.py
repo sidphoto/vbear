@@ -260,6 +260,57 @@ class SchemaTests(Case):
                 self.assertEqual(cm.exception.code, "invalid")
                 self.assertFalse(path.exists())                                       # and gone
 
+    def test_a_kind_that_is_not_a_string_is_damage_not_an_exception(self):
+        # Codex S2c-1 review #3: a list or object used to raise TypeError out of the table lookup and
+        # stop get and purge, so the file was never cleared
+        for kind in ([], ["dispatch"], {}, {"a": 1}, 5, None, True, 1.5, ""):
+            with self.subTest(kind=kind):
+                rec = self.store.create("dispatch", FLOW, dispatch_data())
+                path = self.dir / f"{rec['preview_id']}.json"
+                body = json.loads(path.read_text())
+                body["kind"] = kind
+                path.write_text(json.dumps(body))
+                os.chmod(path, 0o600)
+                with self.assertRaises(pv.PreviewError) as cm:
+                    self.store.get(rec["preview_id"], kind="dispatch", flow_id=FLOW)
+                self.assertEqual(cm.exception.code, "invalid")
+                self.assertFalse(path.exists())
+        # by purge as well, and the store goes on working
+        rec = self.store.create("dispatch", FLOW, dispatch_data())
+        path = self.dir / f"{rec['preview_id']}.json"
+        body = json.loads(path.read_text())
+        body["kind"] = ["x"]
+        path.write_text(json.dumps(body))
+        os.chmod(path, 0o600)
+        self.assertEqual(self.store.purge(), 0)
+        self.assertFalse(path.exists())
+        self.assertTrue(self.store.create("dispatch", FLOW, dispatch_data())["preview_id"])
+
+    def test_no_odd_field_anywhere_stops_the_store(self):
+        odd = {"v": [], "preview_id": {}, "flow_id": [1], "created": "x", "expires": None, "consumed": [],
+               "data": [1, 2], "kind": {"k": 1}}
+        for name, value in odd.items():
+            with self.subTest(field=name):
+                rec = self.store.create("dispatch", FLOW, dispatch_data())
+                path = self.dir / f"{rec['preview_id']}.json"
+                body = json.loads(path.read_text())
+                body[name] = value
+                path.write_text(json.dumps(body))
+                os.chmod(path, 0o600)
+                self.store.purge()
+                self.assertFalse(path.exists())
+        for data in (None, [], "text", 5, {"fields": []}, {"fields": {"limits": []}}):
+            with self.subTest(data=data):
+                rec = self.store.create("acceptance", FLOW, {"fields": accept_fields()})
+                path = self.dir / f"{rec['preview_id']}.json"
+                body = json.loads(path.read_text())
+                body["data"] = data
+                path.write_text(json.dumps(body))
+                os.chmod(path, 0o600)
+                with self.assertRaises(pv.PreviewError):
+                    self.store.consume(rec["preview_id"], kind="acceptance", flow_id=FLOW)
+                self.assertFalse(path.exists())
+
     def test_a_symlink_is_not_followed(self):
         rec = self.store.create("dispatch", FLOW, dispatch_data())
         path = self.dir / f"{rec['preview_id']}.json"

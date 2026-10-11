@@ -126,7 +126,7 @@ def record_problem(rec, name_id: str | None = None) -> str | None:
         return "preview_id 不合法"
     if name_id is not None and rec["preview_id"] != name_id:
         return "preview_id 與檔名不符"
-    if rec["kind"] not in KINDS:
+    if not (isinstance(rec["kind"], str) and rec["kind"] in KINDS):
         return "種類不合法"
     if not (isinstance(rec["flow_id"], str) and FLOW_RE.match(rec["flow_id"])):
         return "flow_id 不合法"
@@ -225,10 +225,13 @@ class PreviewStore:
             return None, f"無法讀取（{type(exc).__name__}）"
         finally:
             os.close(fd)
-        parsed = strictjson.loads_object(raw, strictjson.PREVIEW)
-        if not parsed.ok:
-            return None, f"不是合法的 JSON 物件（{parsed.problem}）"
-        problem = record_problem(parsed.value, preview_id)
+        try:
+            parsed = strictjson.loads_object(raw, strictjson.PREVIEW)
+            if not parsed.ok:
+                return None, f"不是合法的 JSON 物件（{parsed.problem}）"
+            problem = record_problem(parsed.value, preview_id)
+        except Exception as exc:          # whatever a damaged file holds, it is damage: it never stops the store
+            return None, f"紀錄無法檢查（{type(exc).__name__}）"
         return (parsed.value, None) if problem is None else (None, problem)
 
     def _write(self, dfd: int, rec: dict) -> None:

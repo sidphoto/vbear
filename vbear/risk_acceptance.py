@@ -19,6 +19,8 @@ digits.
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 from . import acceptance, config as cfg, flows, login_identity, previews, risk_text
@@ -258,13 +260,64 @@ def confirm(flow_id: str, body, *, store: previews.PreviewStore, host: Host | No
 
 # ---- what a flow shows ---------------------------------------------------------------------------------------
 
-def status(flow: dict, state: Path | None = None) -> dict:
-    """The newest acceptance of a flow and whether it counts now. "valid":
-    it is for the current text and the current key; "stale": there is one,
-    but it no longer counts (and why); "none". Facts that change without the
-    record (a CLI update, a new login) are checked when an action starts, not
-    here."""
+FACT_TTL = 10.0                       # how long the machine's facts are reused for the screen (Codex S2c-1 review)
+_FACT_LABELS = {"claude_version": "Claude Code 版本", "claude_account": "執行者的 Claude 帳號",
+                "codex_version": "Codex 版本", "codex_account": "審查者的 Codex 帳號"}
+_facts_lock = threading.Lock()
+_facts_cache: dict = {}
+
+
+def _machine_facts(host: Host, state: Path, key: login_identity.LoginKey) -> dict:
+    """The four things an acceptance binds that can change without it:
+    {name: (value or None, why not)}. Nothing is a guess: a fact that cannot
+    be had is None with its reason."""
+    facts: dict = {}
+    version, why = host.claude_version()
+    facts["claude_version"] = (version, why)
+    cfp = login_identity.claude_login_fingerprint(host.claude_json(), key)
+    facts["claude_account"] = (cfp.hmac, "") if cfp.ok else (None, cfp.problem)
+    version, why = host.codex_version()
+    facts["codex_version"] = (version, why)
+    try:
+        review_codex.check_codex_home(state)
+        xfp = login_identity.codex_login_fingerprint(review_codex.codex_home_path(state), key)
+        facts["codex_account"] = (xfp.hmac, "") if xfp.ok else (None, xfp.problem)
+    except review_codex.CodexRefused as exc:
+        facts["codex_account"] = (None, str(exc))
+    return facts
+
+
+def _cached_facts(host: Host, state: Path, key: login_identity.LoginKey, now: float) -> dict:
+    """The facts, gathered at most once per FACT_TTL for the whole machine
+    (the screen polls; the CLIs are not run each time). The real protection
+    is the re-check at review_start and open_stream: this only keeps the
+    screen honest."""
+    token = (str(state), key.key_id, id(host))
+    with _facts_lock:
+        hit = _facts_cache.get(token)
+        if hit is not None and 0 <= now - hit[0] < FACT_TTL:
+            return hit[1]
+        facts = _machine_facts(host, state, key)
+        _facts_cache.clear()
+        _facts_cache[token] = (now, facts)
+        return facts
+
+
+def status(flow: dict, state: Path | None = None, *, host: Host | None = None, now: float | None = None) -> dict:
+    """The newest acceptance of a flow and whether it counts now.
+
+      none     there is no acceptance;
+      valid    it is for the current text and key, and every bound fact
+               (both CLI versions, both accounts) is what it was;
+      stale    it no longer counts, and why: a new text or key, or a bound
+               value that is different now (named);
+      unknown  nothing differs that could be seen, but a fact could not be
+               had (no login, a version that cannot be read): never "valid".
+
+    The model and the limits are what was chosen, not facts of the machine."""
     state = state or cfg.state_dir()
+    host = host or DEFAULT_HOST
+    now = time.time() if now is None else now
     events = [e for e in flow.get("events", ()) if isinstance(e, dict) and e.get("kind") == "risk_acknowledged"]
     if not events:
         return {"state": "none", "reason": "還沒有接受殘餘風險"}
@@ -272,7 +325,8 @@ def status(flow: dict, state: Path | None = None) -> dict:
     fields = acceptance.acceptance_fields(last)
     shown = _display(fields) if acceptance.record_problem(fields) is None else None
     try:
-        key_id = login_identity.load_login_key(state).key_id
+        key_obj = login_identity.load_login_key(state)
+        key_id = key_obj.key_id
     except login_identity.KeyUnavailable as exc:
         return {"state": "stale", "reason": f"登入指紋金鑰不可用（{exc}），先前的接受已失效，請重新接受",
                 "accepted_at": last["at"], "values": shown}
@@ -282,4 +336,17 @@ def status(flow: dict, state: Path | None = None) -> dict:
         return {"state": "stale", "reason": "風險文字已改版，請重新接受", "accepted_at": last["at"], "values": shown}
     if fields["login_key_id"] != key_id:
         return {"state": "stale", "reason": "登入指紋金鑰已更換，請重新接受", "accepted_at": last["at"], "values": shown}
+    facts = _cached_facts(host, state, key_obj, now)
+    bound = {"claude_version": fields["executor_claude_version"], "claude_account": fields["executor_login_fingerprint"],
+             "codex_version": fields["codex_version"], "codex_account": fields["login_fingerprint"]}
+    different = [name for name, (value, _) in facts.items() if value is not None and value != bound[name]]
+    missing = [(name, why) for name, (value, why) in facts.items() if value is None]
+    if different:
+        text = "、".join(_FACT_LABELS[n] for n in different)
+        return {"state": "stale", "reason": f"下列內容已和接受時不同：{text}。請重新接受", "changed": different,
+                "accepted_at": last["at"], "values": shown}
+    if missing:
+        text = "；".join(f"{_FACT_LABELS[n]}（{why or '讀不到'}）" for n, why in missing)
+        return {"state": "unknown", "reason": f"無法確認下列內容和接受時相同：{text}", "unavailable": [n for n, _ in missing],
+                "accepted_at": last["at"], "values": shown}
     return {"state": "valid", "reason": "", "accepted_at": last["at"], "values": shown}

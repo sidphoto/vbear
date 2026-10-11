@@ -192,9 +192,12 @@ class StreamCase(unittest.TestCase):
 
     def accept(self, **limits):
         fp = login_identity.claude_login_fingerprint(self.home / ".claude.json", self.key).hmac
+        codex_fp = "b" * 64                                    # (or the dedicated Codex home's, once it is logged in)
+        if (self.base / "codex-home" / "auth.json").exists():
+            codex_fp = login_identity.codex_login_fingerprint(self.base / "codex-home", self.key).hmac
         fields = {"text_version": acc.RISK_TEXT_VERSION, "codex_version": "0.160.0", "model": "gpt-6-luna",
                   "executor_claude_version": "2.1.292", "executor_model": fx.MODEL,
-                  "executor_login_fingerprint": fp, "login_fingerprint": "b" * 64, "login_key_id": self.key.key_id,
+                  "executor_login_fingerprint": fp, "login_fingerprint": codex_fp, "login_key_id": self.key.key_id,
                   "limits": {**acc.DEFAULT_LIMITS, **(self.limits or {}), **limits}}
         with flows.store.locked():
             data = flows.store.load()

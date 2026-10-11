@@ -102,6 +102,38 @@ class AcceptanceApiTests(unittest.TestCase):
         self.assertEqual(self.call(f"/api/flows/{self.fid}")[1]["flow"]["acceptance"]["state"], "valid")
         self.assertIn(self.fid, [x["id"] for x in self.call("/api/flows")[1]["flows"]])
 
+    def test_no_whole_fingerprint_leaves_the_server(self):
+        # Codex S2c-1 review #1: the stored event keeps the whole values; every projection cuts them
+        pre = self.call(f"/api/flows/{self.fid}/acceptance-preview", "POST", {})[1]
+        st, done = self.call(f"/api/flows/{self.fid}/acceptance", "POST", {"preview_id": pre["preview_id"]})
+        self.assertEqual(st, 200, done)
+        responses = {"confirm": done, "flow": self.call(f"/api/flows/{self.fid}")[1],
+                     "list": self.call("/api/flows")[1], "events-post": self.call(
+                         f"/api/flows/{self.fid}/events", "POST", {"kind": "note", "note": "後來的備註"})[1]}
+        for name, body in responses.items():
+            text = json.dumps(body, ensure_ascii=False)
+            self.assertNotRegex(text, r"[0-9a-f]{64}", name)
+            self.assertNotIn('"executor_login_fingerprint"', text, name)
+            self.assertNotIn('"login_fingerprint"', text, name)
+        event = [e for e in responses["flow"]["flow"]["events"] if e["kind"] == "risk_acknowledged"][0]
+        stored = [e for e in flows.get_flow(self.fid)["events"] if e["kind"] == "risk_acknowledged"][0]
+        self.assertRegex(stored["login_fingerprint"], r"^[0-9a-f]{64}$")                  # the file keeps the whole value
+        self.assertEqual(event["login_fingerprint_prefix"], stored["login_fingerprint"][:16])
+        self.assertEqual(event["executor_login_fingerprint_prefix"], stored["executor_login_fingerprint"][:16])
+        self.assertEqual(event["login_key_id"], stored["login_key_id"])                   # 16 hex: not a fingerprint
+        self.assertEqual(event["limits"], stored["limits"])
+
+    def test_the_acceptance_state_follows_a_change_after_the_confirmation(self):
+        pre = self.call(f"/api/flows/{self.fid}/acceptance-preview", "POST", {})[1]
+        self.call(f"/api/flows/{self.fid}/acceptance", "POST", {"preview_id": pre["preview_id"]})
+        ra._facts_cache.clear()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}")[1]["flow"]["acceptance"]["state"], "valid")
+        (self.state / "codex-home" / "auth.json").write_text(json.dumps(
+            {"auth_mode": "chatgpt", "tokens": {"account_id": "acct-NEW"}}))
+        ra._facts_cache.clear()
+        a = self.call(f"/api/flows/{self.fid}")[1]["flow"]["acceptance"]
+        self.assertEqual((a["state"], a["changed"]), ("stale", ["codex_account"]))
+
     def test_errors_carry_a_status_a_message_and_a_code(self):
         st, r = self.call(f"/api/flows/{self.fid}/acceptance", "POST", {"preview_id": "0" * 32})
         self.assertEqual((st, r["code"]), (404, "not_found"))
