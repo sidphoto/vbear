@@ -51,6 +51,12 @@ class RunCase(unittest.TestCase):
                 p.wait(timeout=2)
             except Exception:
                 pass
+            for f in (p.stdin, p.stdout, p.stderr):               # the pipe ends the run did not close
+                try:
+                    if f is not None:
+                        f.close()
+                except OSError:
+                    pass
         for pidfile in self.tmp.glob("*.pid"):
             try:
                 os.kill(int(pidfile.read_text()), signal.SIGKILL)

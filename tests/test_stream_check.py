@@ -229,6 +229,7 @@ class StreamCheckTests(unittest.TestCase):
         self.assertEqual(len(stream_check._HELD), held_before + 1)
         proc = stream_check._HELD.pop()                                    # the test is the person here
         proc.wait()
+        stream_check._close_pipes(proc)
         shutil.rmtree(root)
         shutil.rmtree(scratch)
 

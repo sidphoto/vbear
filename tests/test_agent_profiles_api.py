@@ -93,6 +93,8 @@ def _request(method, port, path, body=None, headers=None):
             data = json.loads(e.read().decode("utf-8"))
         except Exception:
             data = None
+        finally:
+            e.close()                      # the error owns the response body's temp file
         return e.code, data
 
 
@@ -258,6 +260,7 @@ class AgentBuilderAPITests(unittest.TestCase):
                 status = r.status
         except urllib.error.HTTPError as e:
             status = e.code
+            e.close()
         self.assertEqual(status, 421)
 
     def test_oversized_body_is_413(self):

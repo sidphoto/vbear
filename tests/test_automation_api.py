@@ -664,3 +664,31 @@ class UnsentDispatchTests(AutoApiCase):
         import uuid
         st, r = self.send("l-" + "0" * 16, str(uuid.uuid4()))
         self.assertEqual((st, r["code"]), (409, "automation_active"), r)
+
+    def test_the_same_dispatch_is_written_once_however_it_is_sent(self):
+        """dispatch-send is not a second use of the preview's approval: it completes a dispatch the consumed preview
+        already made, and the daemon writes one dispatch id once (a repeat, or two at once, is only a status)."""
+        import threading
+        launch_id, d = self.prepared_unsent()
+        answers, barrier = [], threading.Barrier(3)
+
+        def send():
+            barrier.wait()
+            answers.append(self.send(launch_id, d))
+
+        def confirm_again():                                   # the preview of that dispatch is gone: consumed
+            barrier.wait()
+            answers.append(self.call(f"/api/flows/{self.fid}/dispatch", "POST", {"preview_id": "0" * 32}))
+        threads = [threading.Thread(target=send), threading.Thread(target=send), threading.Thread(target=confirm_again)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        self.assertEqual(len(answers), 3)
+        self.assertTrue(any(st == 200 for st, _ in answers), answers)           # the send was granted to someone
+        self.wait_turn(launch_id, d)
+        lines = (self.base / "sessions" / launch_id / "journal.jsonl").read_text().splitlines()
+        writing = [x for x in lines if '"kind":"dispatch_writing"' in x.replace(" ", "")]
+        self.assertEqual(len(writing), 1, writing)             # one write, whoever asked and however often
+        st, r = self.send(launch_id, d)                         # and a later request is not a resend
+        self.assertEqual((st, r["code"]), (409, "not_unsent"), r)

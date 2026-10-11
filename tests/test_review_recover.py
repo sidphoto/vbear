@@ -335,7 +335,8 @@ class FailureFlagTests(RecoverCase):
 
     def test_the_documented_table_names_every_action_the_module_can_report(self):
         import re
-        actions = set(re.findall(r'_item\([^,]+,[^,]+, "(\w+)"', open(rr.__file__).read()))
+        with open(rr.__file__) as source:
+            actions = set(re.findall(r'_item\([^,]+,[^,]+, "(\w+)"', source.read()))
         actions |= {"invalid", "manual_review"}                       # reported from finish_review's outcome
         for action in sorted(actions):
             self.assertIn(action, rr.__doc__, f"{action} is not in the table of the module docstring")

@@ -350,6 +350,7 @@ class TasksAndGovernanceAPITests(unittest.TestCase):
                 return res.status, json.loads(res.read().decode("utf-8")), res.headers
         except urllib.error.HTTPError as err:
             raw = err.read().decode("utf-8")
+            err.close()
             try:
                 parsed = json.loads(raw)
             except Exception:

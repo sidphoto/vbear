@@ -160,6 +160,8 @@ def _request(method, port, path, body=None, headers=None):
             data = json.loads(e.read().decode("utf-8"))
         except Exception:
             data = None
+        finally:
+            e.close()                      # the error owns the response body's temp file
         return e.code, data
 
 

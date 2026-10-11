@@ -114,6 +114,17 @@ def present(path) -> bool:
 _HELD: list = []        # Popen objects of CLIs not proven gone: never dropped (GC would reap the leader)
 
 
+def _close_pipes(proc) -> None:
+    """The probe's own ends of the CLI's pipes, once the process is proven gone and reaped (never while it is
+    kept for review: that process may still be writing)."""
+    for f in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if f is not None:
+                f.close()
+        except OSError:
+            pass
+
+
 def _keep_for_review(proc, report: dict) -> None:
     """The CLI's group could not be proven gone: no further signal, no
     reap; the Popen object is held until the program ends, and the
@@ -365,6 +376,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         report["checks"]["process"] = {"pass": ended is None, "problem": ended}
         if ended:
             _keep_for_review(proc, report)
+        else:
+            _close_pipes(proc)
         if writer.state.exit is None:
             try:
                 writer.append("exited", {"returncode": rc if isinstance(rc, int) and 0 <= rc <= 255 else None,
@@ -453,6 +466,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
             if problem:
                 report["process_problem"] = problem
                 _keep_for_review(proc, report)
+            else:
+                _close_pipes(proc)
         for x in (listeners, endpoint):
             if x is not None:
                 x.close()
