@@ -21,7 +21,9 @@ import json
 import math
 import os
 import stat
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -250,6 +252,49 @@ def load(base, pipeline_id: str) -> FlowContext:
                        frozenset(view[2]["resolved"]) if view is not None and view[2] is not None else frozenset())
 
 
+_settle = threading.local()
+SETTLE_POLL = 0.05
+
+
+@contextmanager
+def settling(seconds: float):
+    """Within this block (this thread only) flow_reviews() gives a review that
+    is still being finished a short grace before it calls its record missing
+    or damaged. The daemon writes the manifest's outcome first and result.json
+    after it (created, then written, then synced), so a reader that looks in
+    between sees a record that is simply not done yet. Callers that wait on a
+    person (the console's screens, refreshed every few seconds) set this; the
+    daemon never does, and a job that is already "cleaned" never waits: only
+    the wait is added, the refusal after it is the same."""
+    before = getattr(_settle, "seconds", 0.0)
+    _settle.seconds = max(0.0, float(seconds))
+    try:
+        yield
+    finally:
+        _settle.seconds = before
+
+
+def _settled_results(base, task_id: str, pending: dict[int, dict], results: dict) -> None:
+    """Re-read the result.json of reviews that were seen mid-finish, a fresh
+    open (and lock) for every attempt so the daemon's own write is never held
+    up, until each is whole or the grace is over. ``results`` is updated."""
+    deadline = time.monotonic() + getattr(_settle, "seconds", 0.0)
+    while pending and time.monotonic() < deadline:
+        time.sleep(SETTLE_POLL)
+        try:
+            with pipeline_store.Pipeline(base, task_id, create=False) as p:
+                for rnd in list(pending):
+                    try:
+                        res = p.review_result(rnd)
+                    except (pipeline_store.StoreRefused, OSError):
+                        res = _DAMAGED
+                    results[rnd] = res
+                    if res is not None and res is not _DAMAGED:
+                        del pending[rnd]
+        except (pipeline_store.StoreRefused, OSError):
+            return
+
+
 def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
     """This flow's review jobs, from their manifests (design 5.3). Anything
     that could hide a job or a failure refuses, like sessions/: an entry that
@@ -293,6 +338,13 @@ def flow_reviews(base, pipeline_id: str, task_id: str) -> list[dict]:
         links = {}
     except OSError as exc:
         raise FlowRefused("count_unavailable", f"流程的審查紀錄無法讀取（{exc.strerror}）") from exc
+    if getattr(_settle, "seconds", 0.0) > 0:
+        pending = {m["round"]: m for m in out
+                   if m["outcome"] in ("valid", "invalid") and m["state"] != "cleaned" and m["round"] in links
+                   and (results.get(m["round"]) is _DAMAGED
+                        or (results.get(m["round"]) is None and m["outcome"] == "valid"))}
+        if pending:
+            _settled_results(base, task_id, pending, results)
     rounds = [m["round"] for m in out]
     if len(set(rounds)) != len(rounds):
         raise FlowRefused("count_unavailable", "同一輪有不只一個審查工作，無法核算流程用量")

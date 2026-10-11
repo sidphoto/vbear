@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -263,6 +264,66 @@ class CommitOrderTests(Scenario):
         self.assertEqual(seen, [("manifest", False), ("result", "valid")])
         self.assertTrue(out.record_complete)
         self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])
+
+    def test_a_reader_in_the_window_waits_for_the_marker_when_it_asked_to(self):
+        # the daemon's own order leaves a moment with the outcome in the manifest and no (or a torn) result.json;
+        # the console's screens read in that moment (load verification: 2 of 10 runs failed with 409)
+        real = rfn._write_new
+        got = {}
+
+        def reader(settle, key):
+            def run():
+                try:
+                    with sfl.settling(settle):
+                        got[key] = [x["record"] for x in sfl.flow_reviews(self.base, FID, TID)]
+                except sfl.FlowRefused as exc:
+                    got[key] = exc.code
+            t = threading.Thread(target=run)
+            t.start()
+            return t
+
+        def write(dir_fd, name, data, dst):
+            if name != "result.json":
+                return real(dir_fd, name, data, dst)
+            self.assertEqual(self.manifest()["outcome"], "valid")           # the window: decided, no marker yet
+            waits, nows = reader(5.0, "waits"), reader(0.0, "nows")
+            nows.join(10)
+            self.assertEqual(got["nows"], "count_unavailable")              # the daemon's own reading is unchanged
+            time.sleep(0.3)
+            self.assertNotIn("waits", got)                                   # still waiting, not refused
+            out = real(dir_fd, name, data, dst)
+            waits.join(10)
+            return out
+        with mock.patch.object(rfn, "_write_new", write):
+            out = self.finish()
+        self.assertTrue(out.record_complete)
+        self.assertEqual(got["waits"], ["complete"])
+
+    def test_the_wait_is_bounded_and_a_cleaned_job_never_waits(self):
+        real = rfn._write_new
+        timing = {}
+
+        def write(dir_fd, name, data, dst):
+            if name != "result.json":
+                return real(dir_fd, name, data, dst)
+            t0 = time.monotonic()                                            # a window that never closes
+            with sfl.settling(0.4):
+                with self.assertRaises(sfl.FlowRefused) as cm:
+                    sfl.flow_reviews(self.base, FID, TID)
+            timing["open"] = time.monotonic() - t0
+            self.assertEqual(cm.exception.code, "count_unavailable")
+            return rfn._Saved(False, "審查紀錄的 result.json 無法寫入（OSError）")
+        with mock.patch.object(rfn, "_write_new", write):
+            self.finish()
+        self.assertGreaterEqual(timing["open"], 0.35)
+        self.assertLess(timing["open"], 5.0)
+        self.assertEqual(self.manifest()["state"], "cleaned")
+        t0 = time.monotonic()                                                # decided, cleaned, no marker: damage
+        with sfl.settling(3.0):
+            with self.assertRaises(sfl.FlowRefused) as cm:
+                sfl.flow_reviews(self.base, FID, TID)
+        self.assertEqual(cm.exception.code, "count_unavailable")
+        self.assertLess(time.monotonic() - t0, 1.0)
 
     def test_a_result_json_that_cannot_be_written_leaves_a_decided_manifest_and_no_marker(self):
         real = rfn._write_new

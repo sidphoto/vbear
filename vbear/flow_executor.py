@@ -41,6 +41,9 @@ from .daemon_client import DaemonError
 
 DISPATCH_KEYS = frozenset({"launch_id", "text"})
 SEND_ATTEMPTS = 3
+# a review the daemon is finishing may have its outcome in the manifest a moment before result.json; the screens
+# give it this long (stream_flow.settling) before they call the record missing or damaged
+REVIEW_SETTLE_S = 2.0
 SEND_PAUSE = 0.3
 LAUNCH_RE = agent_sessions.LAUNCH_RE
 
@@ -325,7 +328,8 @@ class FlowExecutor:
             out["workdir_problem"] = str(exc)
         ctx = None
         try:
-            ctx = stream_flow.load(base, flow_id)
+            with stream_flow.settling(REVIEW_SETTLE_S):
+                ctx = stream_flow.load(base, flow_id)
         except stream_flow.FlowRefused as exc:
             out["accounting"] = {"ok": False, "code": exc.code, "message": str(exc)}
         if ctx is not None:
