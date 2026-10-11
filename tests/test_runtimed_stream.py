@@ -182,6 +182,9 @@ class StreamCase(unittest.TestCase):
     def tearDown(self):
         # The executors first, and waited for: a Popen the daemon still holds must not be collected while its
         # process runs (ResourceWarning "still running"); then the daemon.
+        # taken first: once the executors are killed the daemon's own thread reaps its held leaders and lets go of
+        # their Popen objects, whose pipes would then be dropped open when the daemon closes its selector
+        procs = self._popens()
         for pid in self.pids:
             try:
                 os.kill(pid, 9)
@@ -197,7 +200,7 @@ class StreamCase(unittest.TestCase):
                 if done == pid:
                     break
                 time.sleep(0.01)
-        procs = self._popens()
+        procs += [p for p in self._popens() if p not in procs]         # and what the daemon still holds now
         self.dm.stop()
         self.thread.join(5)
         self.dm.close()
