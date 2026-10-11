@@ -584,6 +584,58 @@ test("a refused deletion is said and the list is read again", async () => {
   s.stop();
 });
 
+test("a value set by a script without any event is caught before sending", async () => {
+  for (const which of ["limit", "model", "review"]) {
+    const d = openDialog({ preview: [preview()], confirm: [{ ok: true }] });
+    await settle();
+    const m = d.modal();
+    const tick = find(m, (n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+    tick.checked = true;
+    tick.dispatch("change");
+    if (which === "limit") m.findAll((n) => n.tag === "input" && n.dataset && n.dataset.limit)[3].value = "399";
+    else if (which === "model") find(m, (n) => n.tag === "input" && n.getAttribute("list") === "s2-exec-models").value = "claude-opus-5-5";
+    else find(m, (n) => n.tag === "select").value = "gpt-6.1-sol";      // value only: no input/change event
+    const accept = button(m, "接受並記錄");
+    assert(!accept.disabled, "the page has not noticed");
+    accept.click();
+    await settle();
+    assert(!posts().some((x) => x.url.endsWith("/acceptance")), `${which}: nothing is sent`);
+    assert(text(m).includes("畫面上的設定和這份預覽不一致"), which);
+    assert(accept.disabled, `${which}: accept goes off until a new preview`);
+    FETCH_LOG.length = 0;
+  }
+  // and the values as they were are sent, of course
+  const d = openDialog({ preview: [preview()], confirm: [{ ok: true }] });
+  await settle();
+  const m = d.modal();
+  const tick = find(m, (n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+  tick.checked = true;
+  tick.dispatch("change");
+  button(m, "接受並記錄").click();
+  await settle();
+  assert(posts().some((x) => x.url.endsWith("/acceptance")));
+});
+
+test("leaving the page cancels what is on its way", async () => {
+  reset();
+  const signals = [];
+  setHandler((url, opts) => {
+    signals.push(opts.signal);
+    return new Promise(() => {});                    // never answers
+  });
+  const c = mountCoordinator(FLOW);
+  await settle();
+  assert(signals.length >= 4 && signals.every((x) => x && !x.aborted), "four reads on their way");
+  c.stop();
+  assert(signals.every((x) => x.aborted), "all of them are cancelled when the page is left");
+  const s = app.mountStorage();
+  await settle();
+  const sig = signals[signals.length - 1];
+  assert(!sig.aborted);
+  s.stop();
+  assert(sig.aborted, "the storage list too");
+});
+
 // ---- refresh rounds ----------------------------------------------------------------------------------------
 
 function deferredExecutor() {

@@ -627,10 +627,21 @@ function createInputBatcher(sendFn, options = {}) {
 const api = {
   // opts.timeoutMs: give up after that long (the request is aborted) and
   // throw an error with .timeout set, instead of waiting forever.
+  // opts.signal: an AbortSignal of the caller (a page that is left); when it
+  // aborts, so does the request, and the error has .aborted set.
   async get(path, opts = {}) {
-    const ctl = opts.timeoutMs ? new AbortController() : null;
-    const timer = ctl ? setTimeout(() => ctl.abort(), opts.timeoutMs) : null;
+    const ctl = opts.timeoutMs || opts.signal ? new AbortController() : null;
+    const timer = ctl && opts.timeoutMs ? setTimeout(() => ctl.abort(), opts.timeoutMs) : null;
+    if (ctl && opts.signal) {
+      if (opts.signal.aborted) ctl.abort();
+      else opts.signal.addEventListener("abort", () => ctl.abort(), { once: true });
+    }
     const timedOut = () => {
+      if (opts.signal && opts.signal.aborted) {
+        const error = new Error("已取消");
+        error.aborted = true;
+        return error;
+      }
       const error = new Error(`${Math.round(opts.timeoutMs / 1000)} 秒沒有回應，已停止等待`);
       error.timeout = true;
       return error;
@@ -650,7 +661,7 @@ const api = {
       }
       return data;
     } catch (e) {
-      if (ctl && ctl.signal.aborted && !e.timeout) throw timedOut();
+      if (ctl && ctl.signal.aborted && !e.timeout && !e.aborted) throw timedOut();
       throw e;
     } finally {
       if (timer) clearTimeout(timer);
@@ -2067,15 +2078,15 @@ function s2Url(flowId, suffix) { return `/api/flows/${encodeURIComponent(flowId)
 
 // One GET that cannot take the page down: {ok, data} or {ok:false, message}.
 const S2_REQUEST_TIMEOUT_MS = 15000;
-async function s2Get(path) {
-  try { return { ok: true, data: await api.get(path, { timeoutMs: S2_REQUEST_TIMEOUT_MS }) }; }
+async function s2Get(path, signal) {
+  try { return { ok: true, data: await api.get(path, { timeoutMs: S2_REQUEST_TIMEOUT_MS, signal }) }; }
   catch (e) { return { ok: false, message: e.message, status: e.status }; }
 }
 
-async function s2Load(flowId) {
+async function s2Load(flowId, signal) {
   const [executor, reports, reviews, gate] = await Promise.all([
-    s2Get(s2Url(flowId, "executor")), s2Get(s2Url(flowId, "reports")),
-    s2Get(s2Url(flowId, "reviews")), s2Get(s2Url(flowId, "merge-gate"))]);
+    s2Get(s2Url(flowId, "executor"), signal), s2Get(s2Url(flowId, "reports"), signal),
+    s2Get(s2Url(flowId, "reviews"), signal), s2Get(s2Url(flowId, "merge-gate"), signal)]);
   return { executor, reports, reviews, gate };
 }
 
@@ -2116,7 +2127,7 @@ function s2Meter(label, used, limit, unit) {
 // ---- the risk acceptance dialog ----------------------------------------------------------------
 
 function openAcceptanceDialog(flowId, onDone) {
-  let modal; let previewId = null; let current = null;
+  let modal; let previewId = null; let current = null; let fields = null;
   const body = el("div", { class: "s2-accept-body" });
   const problem = el("div", { class: "s2-accept-problem", role: "alert" });   // what the server said to the last confirmation
   const status = el("p", { class: "small muted", role: "status" }, "正在讀取…");
@@ -2174,21 +2185,26 @@ function openAcceptanceDialog(flowId, onDone) {
       setKids(problem, notice("warn", "設定已變更，這份預覽已作廢。請按「套用並重新預覽」，檢查新的預覽後再接受。"));
     };
     const changed = { input: voided, change: voided };
+    fields = { limits: [], model: null, review: null };
     const limitRows = v.limits.map((x) => {
       const input = el("input", { type: "number", class: "input s2-limit", "aria-label": x.label,
         value: String(x.value), min: "1", max: String(x.cap), step: x.name === "executor_budget_usd" ? "0.01" : "1",
         dataset: { limit: x.name }, on: changed });
       input.value = String(x.value);
+      fields.limits.push({ name: x.name, input });
       return el("tr", null, el("td", null, x.label), el("td", null, input, ` ${x.unit}`),
         el("td", { class: "small muted" }, `預設 ${x.default}，上限 ${x.cap}`));
     });
     const modelIn = el("input", { type: "text", class: "input mono", value: v.executor_model, list: "s2-exec-models",
       "aria-label": "執行者模型（完整的 Claude 模型 id）", spellcheck: "false", on: changed });
     modelIn.value = v.executor_model;
+    fields.model = modelIn;
     const lists = el("datalist", { id: "s2-exec-models" }, (res.suggested_executor_models || []).map((m) => el("option", { value: m })));
     const reviewIn = el("select", { "aria-label": "審查模型", on: { change: voided } },
       (res.review_models || [v.review_model]).map(
         (m) => el("option", { value: m, selected: m === v.review_model }, m)));
+    reviewIn.value = v.review_model;
+    fields.review = reviewIn;
     const zh = res.risk_text.zh;
     setKids(body,
       el("p", null, zh.intro),
@@ -2220,8 +2236,26 @@ function openAcceptanceDialog(flowId, onDone) {
         } } }, "套用並重新預覽")),
       el("label", { class: "s2-check" }, check, " ", zh.confirm));
   }
+  // The values on the screen against the ones this preview is of. A field set by a script (no input event) is
+  // caught here: nothing is sent, a new preview is asked for (Codex S2c-4 round 2).
+  function screenDiffers() {
+    if (!current || !fields || !current.values) return true;
+    const v = current.values;
+    if (!fields.model || fields.model.value.trim() !== v.executor_model) return true;
+    if (!fields.review || fields.review.value !== v.review_model) return true;
+    const want = new Map((v.limits || []).map((x) => [x.name, x.value]));
+    if (fields.limits.length !== want.size) return true;
+    return fields.limits.some((f) => !want.has(f.name) || Number(f.input.value) !== want.get(f.name)
+      || f.input.value.trim() === "");
+  }
   async function submit() {
     if (!previewId) return;
+    if (screenDiffers()) {
+      previewId = null;
+      accept.disabled = true;
+      setKids(problem, notice("warn", "畫面上的設定和這份預覽不一致，沒有送出。請按「套用並重新預覽」，檢查新的預覽後再接受。"));
+      return;
+    }
     accept.disabled = true;
     try {
       await api.post(s2Url(flowId, "acceptance"), { preview_id: previewId });
@@ -2503,9 +2537,10 @@ function s2Fail(prefix, e) {
 function mountStorage(opts = {}) {
   const body = el("div", { class: "s2-storage-body" });
   let alive = true;
+  const leaving = new AbortController();
   async function load() {
     let res;
-    try { res = await api.get("/api/flows/storage", { timeoutMs: S2_REQUEST_TIMEOUT_MS }); }
+    try { res = await api.get("/api/flows/storage", { timeoutMs: S2_REQUEST_TIMEOUT_MS, signal: leaving.signal }); }
     catch (e) { if (alive) setKids(body, notice("bad", "無法讀取保存的資料：" + e.message)); return; }
     if (!alive) return;
     let items = res.flows || [];
@@ -2545,7 +2580,7 @@ function mountStorage(opts = {}) {
   const node = el("section", { class: "section s2-panel", "data-s2": "storage" },
     sectionHead(opts.onlyFlowId ? "這個流程保存的資料" : "保存的資料", null, refresh), body);
   load();
-  return { node, reload: load, stop() { alive = false; } };
+  return { node, reload: load, stop() { alive = false; leaving.abort(); } };
 }
 
 // ---- the section the flow page mounts ------------------------------------------------------------------------
@@ -2554,6 +2589,7 @@ function mountCoordinator(flowId) {
   const data = el("div", { class: "s2-data" });
   let last = null; let state = null; let composer = null; let alive = true;
   let inflight = false; let again = false; let seq = 0;
+  const leaving = new AbortController();         // the page is left: whatever is on its way is cancelled
   const getExecutor = () => (state && state.executor.ok ? state.executor.data : null);
   const host = el("div", { class: "s2", "data-s2": "root" });
   // One round at a time: a timer tick that finds one running is dropped, an action's refresh is remembered and
@@ -2567,7 +2603,7 @@ function mountCoordinator(flowId) {
     inflight = true;
     const mine = ++seq;
     try {
-      const next = await s2Load(flowId);
+      const next = await s2Load(flowId, leaving.signal);
       if (!alive || mine !== seq) return;
       const key = JSON.stringify(next);
       if (!force && key === last) return;
@@ -2612,7 +2648,7 @@ function mountCoordinator(flowId) {
       if (typeof document !== "undefined" && document.querySelector && document.querySelector(".modal-backdrop")) return Promise.resolve();
       return refresh(false);
     },
-    stop() { alive = false; storage.stop(); },
+    stop() { alive = false; leaving.abort(); storage.stop(); },
   };
 }
 
