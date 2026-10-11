@@ -385,6 +385,26 @@ def append_event(flow_id, body) -> dict:
         return flow
 
 
+def append_risk_acknowledged(flow_id, fields) -> dict:
+    """Record a risk acceptance (design 10). Only the console's preview
+    confirmation calls this, with the values of a server-held preview: the
+    fields are validated as an acceptance (exactly the nine, each of its type
+    and range) and the event's source is "console", which no manual route can
+    write (append_event refuses the kind)."""
+    problem = acceptance.record_problem(fields)
+    if problem:
+        raise ValueError(f"風險接受的內容不合法（{problem}）")
+    with store.locked():
+        flows = store.load()
+        flow = _get(flows, flow_id)
+        if len(flow["events"]) >= MAX_EVENTS:
+            raise ValueError(f"這個流程的事件已達上限 {MAX_EVENTS} 筆")
+        flow["events"].append({"seq": len(flow["events"]) + 1, "at": _now_after(flow["events"]),
+                               "kind": "risk_acknowledged", "source": "console", "note": "", **fields})
+        store.save(flows)
+        return flow
+
+
 def set_roles(flow_id, body) -> dict:
     if not isinstance(body, dict) or set(body) != {"roles"}:
         raise ValueError("請求必須只有 roles")

@@ -43,6 +43,8 @@ from . import armory
 from . import claude_verify
 from . import config as cfg
 from . import flows
+from . import previews as previews_mod
+from . import risk_acceptance
 from . import tasks
 from . import runtime as rt
 from .runtime import cli_versions
@@ -119,6 +121,9 @@ class Console:
         # Profile-managed launches (R3 S0): work directories must be inside this root.
         self.managed_root = Path.home()
         self._previews = None
+        # Server-held preview records for dispatches and risk acceptances
+        # (design 3.1, 10): files under <state>/previews/, not memory.
+        self.preview_records = previews_mod.PreviewStore()
         self.claude_verifier = claude_verify.ClaudeVerifier()
 
     def previews(self):
@@ -800,7 +805,9 @@ def make_handler(console: Console):
                     return None
                 return task.get("title") if task else None
             live = console.store.live_cached()   # never builds: reading a flow starts nothing
-            return flows.view(flow, heads=flows.head_reader, task_title=task_title, live=live, now=time.time())
+            view = flows.view(flow, heads=flows.head_reader, task_title=task_title, live=live, now=time.time())
+            view["acceptance"] = risk_acceptance.status(flow)
+            return view
 
         def _flows_view(self) -> dict:
             items = [self._flow_view(f) for f in flows.list_flows()]
@@ -809,6 +816,19 @@ def make_handler(console: Console):
                     "families": [{"key": k, "label": flows.FAMILY_LABELS[k]} for k in flows.FAMILIES],
                     "kinds": [{"key": k, "label": flows.KIND_LABELS[k]} for k in flows.CLIENT_KINDS],
                     "verdicts": list(flows.VERDICTS), "manual_label": flows.MANUAL_LABEL}
+
+        def _acceptance(self, flow_id: str, body, *, preview: bool):
+            """Risk acceptance (design 10): a preview the server keeps, then a
+            confirmation that carries only its id. The values come from the
+            preview record; nothing the browser sends is recorded."""
+            try:
+                if preview:
+                    result = risk_acceptance.preview(flow_id, body, store=console.preview_records)
+                    return self._json({"ok": True, **result})
+                flow = risk_acceptance.confirm(flow_id, body, store=console.preview_records)
+                return self._json({"ok": True, "flow": self._flow_view(flow)})
+            except risk_acceptance.AcceptanceError as exc:
+                return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
 
         def _flows_post(self, path: str, body: dict):
             def task_exists(task_id):
@@ -822,6 +842,10 @@ def make_handler(console: Console):
                         flow = flows.append_event(rest[:-len("/events")], body)
                     elif rest.endswith("/roles"):
                         flow = flows.set_roles(rest[:-len("/roles")], body)
+                    elif rest.endswith("/acceptance-preview"):
+                        return self._acceptance(rest[:-len("/acceptance-preview")], body, preview=True)
+                    elif rest.endswith("/acceptance"):
+                        return self._acceptance(rest[:-len("/acceptance")], body, preview=False)
                     else:
                         return self._error(404, "not found")
             except KeyError:

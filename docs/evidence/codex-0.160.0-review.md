@@ -23,9 +23,10 @@ design and one incomplete sample; the real run corrected them (below). The probe
 - The same content was reviewed both times: the probe builds the same throw-away repository on every run (a README
   and `calc.py` with `average(xs)` = `sum(xs) / len(xs)`; only the commit ids differ). The verdicts differ: run 1
   said NEEDS WORK (it pointed at the division by zero for an empty list), run 2 said PASS (it called it a small, correct
-  two-line function and did not run tests). VBear checks the form and the process of a review, not its quality; the
-  two verdicts are both valid reviews by the rules of 5.5 and 5.6, and the difference is a reminder of why the
-  merge gate is the user's.
+  two-line function and did not run tests). VBear checks the form and the process of a review, not its quality. The
+  first run's *process* was invalid (three `world_state` rules, below), so its verdict is not a valid review; the
+  second run's was valid. The two verdicts differ all the same, and that is a reminder of why the merge gate is the
+  user's.
 
 ## What the first run changed
 
