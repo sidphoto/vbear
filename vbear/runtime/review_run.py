@@ -358,9 +358,9 @@ class ReviewRun:
         else:
             self.exit_signal = info.si_status if 1 <= info.si_status <= 31 else None
 
-    def _members(self):
+    def _members(self, ps_timeout: float | None = None):
         try:
-            rows = proctrack.process_table()
+            rows = proctrack.process_table(ps_timeout) if ps_timeout else proctrack.process_table()
         except proctrack.ProcessTableUnavailable:
             return None, None
         return [r for r in rows if r["pgid"] == self.pgid and "Z" not in r["stat"]], rows
@@ -376,7 +376,8 @@ class ReviewRun:
             return
         if self.escape_deadline is not None and mono < self.escape_next:
             return                                # in the grace, between two looks at the process table
-        live, rows = self._members()
+        live, rows = (self._members(stream_session.ESCAPE_PS_TIMEOUT) if self.escape_deadline is not None
+                      else self._members())
         if live:
             if self.phase is None:
                 self.terminated_for = self.terminated_for or "group_left_over"
@@ -401,7 +402,7 @@ class ReviewRun:
             if self.escape_deadline is None:
                 self.escape_deadline = mono + stream_session.ESCAPE_GRACE
             if mono < self.escape_deadline:
-                self.escape_next = mono + stream_session.ESCAPE_EVERY
+                self.escape_next = mono + stream_session.escape_every(proctrack.SOURCE)
                 return
             self._finish(manual_review="有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8]))
             return

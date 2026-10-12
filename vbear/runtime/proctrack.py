@@ -112,10 +112,10 @@ def _table_libproc() -> list[dict]:
     return rows
 
 
-def _table_ps() -> list[dict]:
+def _table_ps(timeout: float | None = None) -> list[dict]:
     try:
         r = subprocess.run([PS, "-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart="],
-                           capture_output=True, text=True, timeout=PS_TIMEOUT,
+                           capture_output=True, text=True, timeout=timeout or PS_TIMEOUT,
                            env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"})
     except (OSError, subprocess.SubprocessError) as exc:
         raise ProcessTableUnavailable(str(exc)) from exc
@@ -135,8 +135,10 @@ def _table_ps() -> list[dict]:
     return rows
 
 
-def process_table() -> list[dict]:
-    return _table_libproc() if SOURCE == "libproc" else _table_ps()
+def process_table(ps_timeout: float | None = None) -> list[dict]:
+    """``ps_timeout`` bounds the ``ps`` fallback only (the libproc source, which macOS uses, is a system call): a
+    timeout is "unavailable", which every caller treats as fail closed."""
+    return _table_libproc() if SOURCE == "libproc" else _table_ps(ps_timeout)
 
 
 def _live_index(rows: list[dict]) -> dict:

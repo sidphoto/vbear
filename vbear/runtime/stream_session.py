@@ -56,6 +56,15 @@ TABLE_GIVE_UP = 30.0      # no process table this long after the exit -> manual 
 # are looked at.
 ESCAPE_GRACE = 10.0
 ESCAPE_EVERY = 0.2
+# The ``ps`` fallback (not macOS, which reads libproc) runs a subprocess on the daemon's one thread: in the grace it
+# is asked at most once a second and given half a second; a timeout is "cannot read the table", fail closed.
+ESCAPE_EVERY_PS = 1.0
+ESCAPE_PS_TIMEOUT = 0.5
+
+
+def escape_every(source: str) -> float:
+    """The interval between two looks at the process table during the grace."""
+    return ESCAPE_EVERY if source == "libproc" else max(ESCAPE_EVERY, ESCAPE_EVERY_PS)
 
 
 # ---- process identity before any signal (design 2.3, 5.8; part 2 review B6) ------------
@@ -556,10 +565,10 @@ class StreamSession:
             self.record("exited", {"returncode": returncode, "signal": sig,
                                    "stderr_tail": self.err_tail.decode("utf-8", "replace")[-STDERR_TAIL // 4:]})
 
-    def _group_members(self):
+    def _group_members(self, ps_timeout: float | None = None):
         """Live members of our group (not zombies), or None when unknown."""
         try:
-            rows = proctrack.process_table()
+            rows = proctrack.process_table(ps_timeout) if ps_timeout else proctrack.process_table()
         except proctrack.ProcessTableUnavailable:
             return None, None
         live = [r for r in rows if r["pgid"] == self.pgid and "Z" not in r["stat"]]
@@ -576,7 +585,8 @@ class StreamSession:
             return
         if self.escape_deadline is not None and now < self.escape_next:
             return                                # in the grace, between two looks at the process table
-        live, rows = self._group_members()
+        live, rows = (self._group_members(ESCAPE_PS_TIMEOUT) if self.escape_deadline is not None
+                      else self._group_members())
         if live:
             if self.phase is None:
                 self.close_reason = self.close_reason or "程序已結束，清理其餘程序"
@@ -597,7 +607,7 @@ class StreamSession:
             if self.escape_deadline is None:
                 self.escape_deadline = now + ESCAPE_GRACE
             if now < self.escape_deadline:
-                self.escape_next = now + ESCAPE_EVERY      # waiting: nothing is signalled, the session is not over
+                self.escape_next = now + escape_every(proctrack.SOURCE)   # nothing is signalled; not over
                 return
             self._finish(manual_review="有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8]))
             return

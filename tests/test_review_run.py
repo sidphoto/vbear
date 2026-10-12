@@ -338,6 +338,31 @@ class GroupEndTests(RunCase):
         self.assertEqual(signals, [])                         # nothing was signalled in or after the grace
         self.assertEqual(out["terminated_for"], None)
 
+    def test_the_ps_fallback_is_asked_at_most_once_a_second_with_a_short_timeout_in_the_grace(self):
+        self.assertEqual(stream_session.escape_every("libproc"), stream_session.ESCAPE_EVERY)
+        self.assertEqual(stream_session.escape_every("ps"), 1.0)
+        code = ("import subprocess,os,time\n"
+                "p=subprocess.Popen(['sleep','600'],start_new_session=True)\n"
+                "time.sleep(1.5)\n")
+        calls = []
+        real = rr.proctrack.process_table
+
+        def table(ps_timeout=None):
+            calls.append((time.monotonic(), ps_timeout))
+            return real()
+        with mock.patch.object(rr.stream_session, "ESCAPE_GRACE", 3.0), \
+                mock.patch.object(rr.proctrack, "SOURCE", "ps"), \
+                mock.patch.object(rr.proctrack, "process_table", table):
+            run = self.spawn(code)
+            out = self.drive(run)
+        self.assertIn("離開了程序群組", out["manual_review"])
+        graced = [c for c in calls if c[0] >= run.exit_seen and c[1] is not None]
+        self.assertTrue(graced)
+        self.assertTrue(all(t == stream_session.ESCAPE_PS_TIMEOUT for _, t in graced))
+        times = [c[0] for c in graced]
+        self.assertTrue(all(b - a >= 0.9 for a, b in zip(times, times[1:])), times)     # one look a second, no more
+        self.assertLessEqual(len(graced), 5)
+
     def test_a_process_table_that_cannot_be_read_is_not_taken_for_gone(self):
         code = ("import subprocess,os,time\n"
                 "p=subprocess.Popen(['sleep','600'],start_new_session=True)\n"
