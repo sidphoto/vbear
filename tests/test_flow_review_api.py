@@ -95,7 +95,7 @@ class ReportTests(ReviewApiCase):
         self.assertEqual((entry["valid"], entry["report"]["head"], entry["report"]["status"]),
                          (True, self.commit, "done"))                                 # the executor's own words
         self.assertTrue(entry["latest"] and entry["usable"])
-        self.assertEqual(entry["denials"], {"count": 0, "items": []})                   # no refused tool call
+        self.assertEqual(entry["denials"], {"count": 0, "at_least": False, "items": []})                   # no refused tool call
         self.assertEqual([(c["id"], c["ok"]) for c in entry["checks"]],
                          [("head_is_current", True), ("commit_exists", True)])        # VBear's own reading
         self.assertEqual(self.reports()["latest_dispatch_id"], dispatch_id)

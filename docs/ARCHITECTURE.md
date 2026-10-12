@@ -49,8 +49,8 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   constants do not list, is journalled as a `turn_anomaly` that names the unexpected top-level fields, at most 16
   names of `[A-Za-z0-9_]`, never a value, so a new Claude Code version can be diagnosed from the journal alone;
   a tool call the permission system refused, `system/permission_denied` in 2.1.296, is journalled as a
-  `permission_denied` fact with the tool's name and the decision's type, filtered the same way, and does not make
-  the turn invalid).
+  `permission_denied` fact with the tool's name and the decision's type, filtered the same way (at most 16 facts
+  per turn; the journal refuses a 17th), and does not make the turn invalid).
   *Review jobs* (`daemon_review.py`, `review_*.py`) run Codex once,
   in a separate clone with a dedicated `CODEX_HOME` and a temporary `HOME`, and are judged afterwards from their
   events and rollout. Stream and review state lives in files only the daemon writes: `sessions/<launch>/`,

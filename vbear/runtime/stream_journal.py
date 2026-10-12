@@ -187,7 +187,7 @@ class Turn:
     lifecycle: list = field(default_factory=list)
     init: dict | None = None
     anomalies: list = field(default_factory=list)
-    denials: list = field(default_factory=list)      # the permission system's refusals: the first 16, names only
+    denials: list = field(default_factory=list)      # the permission system's refusals (at most 16), names only
     denial_count: int = 0
     result: dict | None = None
     failed: str | None = None
@@ -350,9 +350,10 @@ class JournalState:
         turn = self._turn(d)
         if self.state != "running":
             self._bad("權限拒絕不在回合進行中")
+        if turn.denial_count >= sp.MAX_DENIALS:
+            self._bad("一回合的權限拒絕紀錄超過上限")
         turn.denial_count += 1
-        if len(turn.denials) < sp.MAX_ANOMALY_FIELDS:
-            turn.denials.append({"tool_name": d["tool_name"], "reason_type": d["reason_type"]})
+        turn.denials.append({"tool_name": d["tool_name"], "reason_type": d["reason_type"]})
 
     def _turn_result(self, d, t):
         turn = self._turn(d)

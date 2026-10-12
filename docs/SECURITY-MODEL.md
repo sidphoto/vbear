@@ -239,7 +239,8 @@ also names the flow in its body and asks twice on screen.
 - **Refused tool calls.** When Claude Code's permission system refuses a tool call of the executor
   (`system/permission_denied`), that is the safety mechanism working, not a protocol error: the turn stays valid,
   the call did not run, and the report area says how many calls were refused and which tools (names only,
-  filtered to `[A-Za-z0-9_]`, up to 16; never the refusal's message or reason). The event must name a call that the
+  filtered to `[A-Za-z0-9_]`; at most 16 are recorded per turn, so at the limit it says "at least 16"; never the
+  refusal's message or reason, which must be there, be strings and be at most 4096 characters, and are read nowhere). The event must name a call that the
   turn itself made and must arrive while the turn is running; otherwise it is a protocol error and the session
   takes no further dispatch. A refused attempt does not turn a review into a pass: the review and the merge gate
   are unchanged, and the person sees the refusals before merging.

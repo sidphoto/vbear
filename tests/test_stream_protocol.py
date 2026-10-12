@@ -672,7 +672,41 @@ class PermissionDeniedTests(unittest.TestCase):
         h = self.harness()
         d = self.feed(h, *[self.event(h) for _ in range(20)])
         turn = h.js.turns[d]
-        self.assertEqual((turn.denial_count, len(turn.denials)), (20, sp.MAX_ANOMALY_FIELDS))
+        # 20 events, 16 facts: the 17th and later are checked and not written
+        written = [line for line in h.records if b'"kind":"permission_denied"' in line.replace(b'": "', b'":"')]
+        self.assertEqual((turn.denial_count, len(turn.denials), len(written)), (16, 16, 16))
+        self.assertTrue(h.validity(d)[0])
+
+    def test_the_journal_refuses_a_17th_record_in_a_turn(self):
+        h = self.harness()
+        d, text = h.dispatch()
+        evs = fx.turn(h.sid, d, text, cwd=CWD, prefix=self.PREFIX, version="2.1.296")
+        at = next(i for i, e in enumerate(evs) if e["type"] == "rate_limit_event")
+        h.feed(evs[:at])
+        for _ in range(16):
+            h.record("permission_denied", {"dispatch_id": d, "tool_name": "Bash", "reason_type": "mode"})
+        with self.assertRaises(sj.JournalCorrupt):
+            h.record("permission_denied", {"dispatch_id": d, "tool_name": "Bash", "reason_type": "mode"})
+
+    def test_message_and_reason_must_be_there_be_strings_and_be_bounded(self):
+        for name, change in (("message missing", {"message": None}), ("reason missing", {"decision_reason": None}),
+                             ("message not a string", {"message": {"text": "x"}}),
+                             ("reason not a string", {"decision_reason": 5}),
+                             ("message too long", {"message": "x" * (sp.MAX_DENIAL_TEXT + 1)}),
+                             ("reason too long", {"decision_reason": "x" * (sp.MAX_DENIAL_TEXT + 1)})):
+            with self.subTest(case=name):
+                h = self.harness()
+                ev = self.event(h)
+                for k, v in change.items():
+                    if v is None:
+                        ev.pop(k)
+                    else:
+                        ev[k] = v
+                with self.assertRaises(sp.ProtocolError) as cm:
+                    self.feed(h, ev)
+                self.assertEqual(cm.exception.reason, "missing_field")
+        h = self.harness()                                       # the limit itself is fine
+        d = self.feed(h, self.event(h, message="x" * sp.MAX_DENIAL_TEXT, decision_reason="y" * sp.MAX_DENIAL_TEXT))
         self.assertTrue(h.validity(d)[0])
 
     def test_a_denial_that_does_not_fit_the_turn_is_a_protocol_error(self):

@@ -419,6 +419,9 @@ test("a refused tool call is shown by count and name, as text, and does not chan
   const rp = byS2(c.node, "reports");
   const t = text(rp);
   assert(t.includes("這一輪有 3 次工具呼叫被權限系統擋下"));
+  const capped = await mount({ reports: { ok: true, latest_dispatch_id: "d", reports: [
+    reportEntry({ denials: { count: 16, at_least: true, items: [{ tool_name: "Bash", reason_type: "mode" }] } })] } });
+  assert(text(byS2(capped.node, "reports")).includes("這一輪有至少 16 次工具呼叫被權限系統擋下"), "at the limit it says at least");
   assert(t.includes("Bash／mode"));
   assert(t.includes(hostile), "the name is data: it is there as text");
   assert.strictEqual(rp.findAll((n) => n.tag === "img").length, 0, "and it made no element");

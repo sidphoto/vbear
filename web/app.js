@@ -2583,7 +2583,7 @@ function s2ReportsPanel(rp) {
           e.latest ? badge(e.usable ? "可用來啟動審查" : "核對沒有全部通過", e.usable ? "b-ok" : "b-warn") : null),
         (e.reasons || []).length ? el("div", { class: "small" }, "原因：" + e.reasons.join("；")) : null,
         e.denials && e.denials.count > 0 ? el("div", { class: "small s2-denials" },
-          `這一輪有 ${e.denials.count} 次工具呼叫被權限系統擋下（工具：${
+          `這一輪有${e.denials.at_least ? "至少 " : " "}${e.denials.count} 次工具呼叫被權限系統擋下（工具：${
             (e.denials.items || []).map((x) => `${x.tool_name}／${x.reason_type}`).join("、") || "不明"}）。`
           + "被擋下的嘗試沒有執行；回合是否有效、審查與合併關卡不受影響，請在合併前自己看一下。") : null,
         r ? el("div", { class: "s2-cols" },

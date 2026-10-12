@@ -231,6 +231,8 @@ ANOMALY_REASONS = ("unknown_type", "extra_fields")
 # What a turn_anomaly may say about the event: the NAMES of its unexpected top-level fields, never a value, so that
 # a new field of a new Claude Code version can be named from the journal alone (S3 real end-to-end, run 2).
 MAX_ANOMALY_FIELDS = 16
+MAX_DENIALS = 16                    # permission_denied facts per turn; the rest are validated and not written
+MAX_DENIAL_TEXT = 4096              # message and decision_reason: present, strings, bounded, never read
 ANOMALY_FIELD_RE = re.compile(r"^[A-Za-z0-9_]{1,64}\Z")
 
 
@@ -258,6 +260,7 @@ class TurnFacts:
     tool_calls: list = field(default_factory=list)
     responses: int = 0
     events: int = 0
+    denials: int = 0                  # permission_denied facts written for this turn (at most MAX_DENIALS)
 
 
 def _validate_utf8_tree(value) -> None:
@@ -445,6 +448,11 @@ class EventTracker:
             raise ProtocolError("tool_result_unknown", "permission_denied for a tool call this turn did not make")
         for name in ("tool_name", "decision_reason_type"):
             self._need(isinstance(ev.get(name), str), name)
+        for name in ("message", "decision_reason"):      # present, a string, bounded; the value is read nowhere
+            self._need(isinstance(ev.get(name), str) and len(ev[name]) <= MAX_DENIAL_TEXT, name)
+        if t.denials >= MAX_DENIALS:                    # the 17th and later are checked, not written
+            return []
+        t.denials += 1
         return [("permission_denied", {"dispatch_id": t.dispatch_id, "tool_name": safe_name(ev["tool_name"]),
                                        "reason_type": safe_name(ev["decision_reason_type"])})]
 

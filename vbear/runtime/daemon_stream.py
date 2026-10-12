@@ -591,8 +591,10 @@ class StreamOps:
                               if t.status == "ended" and not problem else (None, []))
             entry = {"dispatch_id": d, "status": status, "failed": t.failed, "times": dict(t.times),
                      "valid": valid, "reasons": reasons,
-                     # the permission system's refusals in this turn: how many, and the first 16 as names
-                     "denials": {"count": t.denial_count, "items": [dict(x) for x in t.denials]}}
+                     # the permission system's refusals in this turn, as names; at most 16 are recorded, so at
+                     # the limit the count is "at least"
+                     "denials": {"count": t.denial_count, "at_least": t.denial_count >= stream_journal.sp.MAX_DENIALS,
+                                 "items": [dict(x) for x in t.denials]}}
             if valid:
                 # design 4: the executor's own words and VBear's file checks, apart
                 report = t.result["structured_output"]
