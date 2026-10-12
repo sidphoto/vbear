@@ -34,6 +34,33 @@ VBear 沒有等級、血量或分數。它只顯示讀得到、查得到的事�
 記下你的選擇。VBear 啟動 Claude Code 時用的是它的安全模式，會關掉技能、CLAUDE.md、已安裝的外掛、hooks 與 MCP
 伺服器，所以目前啟動出來的 Claude Code 不會使用技能：Profile 的技能欄只是你的挑選紀錄。
 
+### 畫面長這樣
+
+下面的畫面都是**示範資料**：暫時資料夾裡的合成 Claude Code 與 Codex，不是真實的專案。
+
+<p>
+<img src="docs/images/role-card.png" alt="深色主題的角色卡：職業標籤、工具與已選技能，每項都有來源標記" width="330">
+<img src="docs/images/role-card-armor.png" alt="同一張角色卡的防具五組，以及你的期望" width="330">
+</p>
+
+**角色卡**（示範資料）：Profile 的職業標籤、工具、已選技能（每張都標明啟動時不載入），右邊是分成五組、保留原本等級用語的防具。
+
+<img src="docs/images/skill-card.png" alt="技能卡：效果、發動時機、引用的檔案、缺少的檔案與狀態，每個欄位都有來源標記" width="722">
+
+**技能卡**（示範資料）：每個欄位都標明來源，缺少的檔案會點出來，並說明把它加入角色只是記下你的挑選。
+
+<img src="docs/images/preflight-check.png" alt="出發前檢查：七項標示分成五組、已選清單標明本次不會載入，以及確認按鈕" width="448">
+
+**出發前檢查**（示範資料；圖中已裁掉顯示資料夾與暫存路徑的幾行）：七項標示分成五組，已選技能標明「本次不會載入」，確認前先看。
+
+<img src="docs/images/flow-progress-team.png" alt="流程的任務進度（七個關卡）與隊伍（三張卡）" width="984">
+
+流程的**任務進度與隊伍**（示範資料）：走過的關卡、目前所在的關卡，以及規劃者、執行者、審查者的模型家族，和審查者算不算獨立審查。
+
+<img src="docs/images/role-card-light.png" alt="淺色主題的角色卡" width="330">
+
+同一張角色卡的淺色主題（示範資料）。
+
 ## 你可以用它做什麼
 
 **出發前，先看清楚 Agent 能做什麼。**

@@ -27,6 +27,10 @@
   directory, HEAD is compared in the task's directory (the one the automation uses) and the page says so; if
   it cannot be read the pass stays unverified. The flows notice now says what VBear does in each mode instead
   of 「VBear 不會為流程派工」.
+- **Screenshots in the READMEs.** Six pictures of demo data (a synthetic Claude Code and Codex in a temporary
+  folder; the pre-launch picture has the lines that print the work and temporary folders cut out) are in
+  `docs/images/`. They come from `tests/qa_game_ui.py` with `VBEAR_QA_DEMO=1`, which also drops the HTML probe
+  skill and any path of the machine from the screens.
 - **The pre-launch check of a Codex role speaks for Codex.** The dialog no longer shows Claude Code's version
   notice, the 「驗證這個版本」 button, the terminal-title notice or the Haiku call for a Codex role; it names
   「Codex CLI <version>」, lists the reasons it cannot be launched or the evidence of each label, and its armor

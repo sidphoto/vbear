@@ -38,6 +38,37 @@ cannot. Adding a skill to a profile only records your choice. VBear starts Claud
 switches off skills, CLAUDE.md files, installed plugins, hooks and MCP servers, so a launched Claude Code does not use
 skills for now: a profile's skill list is a record of your picks.
 
+### What it looks like
+
+All screens below show **demo data**: a synthetic Claude Code and Codex in a temporary folder, not a real project.
+
+<p>
+<img src="docs/images/role-card.png" alt="A character card in the dark theme: the role label, the tool, the chosen skills with their source tags" width="330">
+<img src="docs/images/role-card-armor.png" alt="The same card's armor in five groups, then the user's own expectations" width="330">
+</p>
+
+The **character card** (demo data): a profile's role label, tool, chosen skills (each marked as not loaded by a
+launch) and, to the right, its armor in five groups with the original level words.
+
+<img src="docs/images/skill-card.png" alt="A skill card: effect, trigger, referenced files, missing file, status, with a source tag on every field" width="722">
+
+A **skill card** (demo data): every field carries where it came from, a missing file is called out, and the card says
+that adding it to a role only records your pick.
+
+<img src="docs/images/preflight-check.png" alt="The pre-launch check: seven labels in five groups, the chosen list marked not loaded, the confirm button" width="448">
+
+The **pre-launch check** (demo data, the folder and temporary-path lines cut out of the picture): the seven labels in
+five groups and the chosen skills marked 「本次不會載入」, before you confirm.
+
+<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates and its team as three cards" width="984">
+
+A flow's **progress and party** (demo data): the gates passed, the current one, and the planner, executor and
+reviewer with their model families and whether the reviewer counts as independent.
+
+<img src="docs/images/role-card-light.png" alt="The character card in the light theme" width="330">
+
+The same character card in the light theme (demo data).
+
 ## What you can do with it
 
 **See what an agent may do before it starts.**

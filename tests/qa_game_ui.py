@@ -10,6 +10,9 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       Optional VBEAR_QA_NO_MANUAL=1: a purely automatic flow: nothing is recorded by hand and the executor role
       names no work directory, so the page's phase and its HEAD check come from the automatic events and the
       task's directory alone.
+      Optional VBEAR_QA_DEMO=1: the same environment with demo names (「示範」), no HTML probe skill and no
+      skill the index cannot find, and no work directory on the executor role: nothing on the screens is a path
+      of this machine. It is what the README's screenshots are taken from (docs/images/).
       Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
       the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
@@ -46,7 +49,11 @@ from vbear import config as cfg
 PROBE = "<img src=x onerror=alert(document.domain)>"
 GHOST_SKILL_ID = "ghost-0000000000000000"          # no such skill in the index: "the index cannot find it"
 GOOD = {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}
-CLAUDE_PROFILE, CODEX_PROFILE = "qa-claude-role", "qa-codex-role"
+DEMO = os.environ.get("VBEAR_QA_DEMO") == "1"
+CLAUDE_PROFILE, CODEX_PROFILE = ("demo-claude-role", "demo-codex-role") if DEMO else ("qa-claude-role", "qa-codex-role")
+CLAUDE_NAME, CODEX_NAME = ("後端工匠（示範）", "審查員（示範）") if DEMO else ("QA 後端工匠（Claude）", "QA 審查員（Codex）")
+FLOW_NAMES = (("規劃者（示範）", "執行者（示範）", "審查者（示範）") if DEMO
+              else ("QA 規劃者", "QA 執行者（Claude）", "QA 審查者（Codex）"))
 SOURCES = ("claude-user-skills", "claude-user-agents", "codex-skills", "codex-agents")
 
 
@@ -83,10 +90,15 @@ class _Env(RunnerCase):
         _write(sk / "test-writer" / "SKILL.md",
                "---\nname: test-writer\ndescription: Write the missing unit tests for a function.\n---\n"
                "# Test writer\n\nUse after a function is written.\n")
-        # the name and description are HTML-like text: every screen must show them as text, never run them
-        _write(sk / "html-probe" / "SKILL.md",
-               f"---\nname: {json.dumps(PROBE)}\ndescription: {json.dumps('probe ' + PROBE + ' end')}\n---\n"
-               "# Probe\n\nA skill whose name and description look like markup.\n")
+        if DEMO:
+            _write(sk / "doc-helper" / "SKILL.md",
+                   "---\nname: doc-helper\ndescription: Draft short documentation for a finished change.\n---\n"
+                   "# Doc helper\n\nUse when a change is merged.\n")
+        else:
+            # the name and description are HTML-like text: every screen must show them as text, never run them
+            _write(sk / "html-probe" / "SKILL.md",
+                   f"---\nname: {json.dumps(PROBE)}\ndescription: {json.dumps('probe ' + PROBE + ' end')}\n---\n"
+                   "# Probe\n\nA skill whose name and description look like markup.\n")
         _write(sk / "spare-skill" / "SKILL.md",
                "---\nname: spare-skill\ndescription: A skill no role selected.\n---\n# Spare\n")
         _write(self.home / ".claude" / "agents" / "qa-backend.md",
@@ -114,13 +126,14 @@ class _Env(RunnerCase):
         known_skills = set(by_dir.values()) | {GHOST_SKILL_ID}
         known_roles = set(roles.values())
         agent_profiles.save_profile(CLAUDE_PROFILE, {
-            "name": "QA 後端工匠（Claude）", "profession_role_id": roles["qa-backend"],
+            "name": CLAUDE_NAME, "profession_role_id": roles["qa-backend"],
             "model": {"tool": "claude", "model_id": ""}, "enabled": True,
-            "equipped_skill_ids": [by_dir["code-review"], by_dir["test-writer"], by_dir["html-probe"],
-                                   GHOST_SKILL_ID],
+            "equipped_skill_ids": ([by_dir["code-review"], by_dir["test-writer"], by_dir["doc-helper"]] if DEMO
+                                   else [by_dir["code-review"], by_dir["test-writer"], by_dir["html-probe"],
+                                         GHOST_SKILL_ID]),
             "permission_intents": dict(GOOD)}, known_skills=known_skills, known_roles=known_roles)
         agent_profiles.save_profile(CODEX_PROFILE, {
-            "name": "QA 審查員（Codex）", "profession_role_id": roles["qa-reviewer"],
+            "name": CODEX_NAME, "profession_role_id": roles["qa-reviewer"],
             "model": {"tool": "codex", "model_id": ""}, "enabled": True,
             "equipped_skill_ids": [by_dir["codex-triage"]],
             "permission_intents": dict(GOOD)}, known_skills=known_skills, known_roles=known_roles)
@@ -155,11 +168,10 @@ class _Env(RunnerCase):
         with flows.store.locked():
             data = flows.store.load()
             roles = data[self.fid]["roles"]
-            roles["planner"]["name"] = "QA 規劃者"
-            roles["executor"]["name"] = "QA 執行者（Claude）"
-            if not self.no_manual:
+            roles["planner"]["name"], roles["executor"]["name"] = FLOW_NAMES[0], FLOW_NAMES[1]
+            if not self.no_manual and not DEMO:               # a demo shows no path of this machine
                 roles["executor"]["workdir"] = str(self.work)
-            roles["reviewers"][0]["name"] = "QA 審查者（Codex）"
+            roles["reviewers"][0]["name"] = FLOW_NAMES[2]
             flows.store.save(data)
         # what the user records by hand; without it the phase comes from the automatic events alone
         if not self.no_manual:
@@ -188,6 +200,7 @@ class _Env(RunnerCase):
         return body
 
 
+@unittest.skipIf(DEMO, "Check asserts the default environment (the probe skill, the missing skill); not the demo one")
 class Check(_Env):
     def test_the_environment_holds_what_the_checklist_needs(self):
         self.build()
