@@ -426,7 +426,10 @@ class LiveCheckTests(AutoCase):
         self.assertTrue(r["ok"], r)
         r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
         self.assertTrue(r["ok"], r)
-        self.wait_for(lambda: self.journal(launch).state.turns[d].status in ("written", "confirmed", "ended"), msg="sent")
+        # The turn must have its result: until then it is an unfinished dispatch and counts at the session's
+        # whole budget (v29.7), and a repeated send is judged against the limits first (part 2 review round 4 #3),
+        # so on a busy machine "written" is too early and the repeat is refused for the budget.
+        self.wait_for(lambda: self.journal(launch).state.turns[d].status == "ended", msg="the turn to end")
         # a send repeated for a dispatch that is already written is a status, whatever happened since
         self.change_account()
         r = self.rpc("stream_send", launch_id=launch, pipeline=self.fid, dispatch_id=d)
