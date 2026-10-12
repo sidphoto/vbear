@@ -5,8 +5,8 @@
 - **Codex review tokens.** A review's record now keeps the tokens the review used, taken from the rollout's
   cumulative usage chain (input, cached input, cache-write input, output, reasoning output, total), and the
   reviews panel shows them. A turn that did not finish (a stop, a failure) shows "at least" the recorded part;
-  a number that cannot be had (no rollout, a chain that does not add up, a record from before this field or one
-  rebuilt after a crash) reads 「無法取得」 and is never shown as 0. Nothing is converted to money: VBear has no
+  a number that cannot be had (no rollout, a chain that does not add up or disagrees with `turn.completed`, a
+  record from before this field or one rebuilt after a crash) reads 「無法取得」 and is never shown as 0. Nothing is converted to money: VBear has no
   reliable price source. The S3 run summary's whitelist carries the same counts. Older records stay readable.
 - **Test ports and shared directories.** No test names a port: every test listener binds port 0 and reads the real
   one back, and a test fails the suite if one is added that does not. The test that checks a failed launch leaves

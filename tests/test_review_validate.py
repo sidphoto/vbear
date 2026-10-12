@@ -442,9 +442,20 @@ class UsageTests(unittest.TestCase):
         _, recs, _ = rf.valid_run()
         out = run_rollout(recs, events_usage={})                       # no turn.completed (a stop, a failure)
         self.assertEqual(out.usage, {"counts": self.expected(), "complete": False})
-        out = run_rollout(recs, events_usage={f: 1 for f in C.events_usage_fields})     # does not agree
-        self.assertFalse(out.usage["complete"])
-        self.assertEqual(out.usage["counts"], self.expected())
+        self.assertIsNone(out.usage_problem)
+
+    def test_a_turn_completed_that_disagrees_with_the_chain_gives_no_number_not_a_lower_bound(self):
+        _, recs, _ = rf.valid_run()
+        good = {f: self.expected()[f] for f in C.events_usage_fields}
+        for field_name in C.events_usage_fields:
+            with self.subTest(field=field_name):
+                for off in (-1, 1):                        # less or more than the chain: neither is "at least"
+                    bad = dict(good)
+                    bad[field_name] += off
+                    out = run_rollout(recs, events_usage=bad)
+                    self.assertEqual((out.usage, out.usage_problem), (None, "inconsistent"))
+        out = run_rollout(recs, events_usage={f: 1 for f in C.events_usage_fields})
+        self.assertEqual((out.usage, out.usage_problem), (None, "inconsistent"))
 
     def test_no_token_records_is_not_zero(self):
         _, recs, _ = rf.valid_run()
@@ -488,6 +499,9 @@ class UsageTests(unittest.TestCase):
         for result, fragment in ((None, "讀不到"), ({}, "之前寫的"),
                                  ({"usage": None, "usage_problem": "chain_mismatch"}, "累計鏈對不上"),
                                  ({"usage": None, "usage_problem": "rebuilt"}, "重建"),
+                                 ({"usage": None, "usage_problem": "inconsistent"}, "前後不一致"),
+                                 ({"usage": None, "usage_problem": ["chain_mismatch"]}, "原因不明"),
+                                 ({"usage": None, "usage_problem": {"a": 1}}, "原因不明"),
                                  ({"usage": None, "usage_problem": "something new"}, "原因不明"),
                                  ({"usage": None}, "原因不明"),
                                  ({"usage": {"counts": {"input_tokens": -1}, "complete": True}}, "格式不符"),

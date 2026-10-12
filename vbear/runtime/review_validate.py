@@ -511,8 +511,9 @@ class RolloutResult:
     complete: bool = True        # sha256 and size cover the whole file (always, unless it is over the limit)
     # What the rollout's cumulative usage chain says the review used (never a guess): {"counts": {name: n},
     # "complete": bool} or None with usage_problem, one of USAGE_PROBLEMS. "complete" is True when the chain's
-    # last turn total is also what turn.completed reported; False when the turn did not finish (a stop, a
-    # failure): the counts are then what was recorded so far, a lower bound.
+    # last turn total is also what turn.completed reported; False only when there is no turn.completed (a stop,
+    # a failure): the counts are then what was recorded so far, a lower bound. A turn.completed that disagrees
+    # with the chain is "inconsistent": no number.
     usage: dict | None = None
     usage_problem: str | None = "no_rollout"
 
@@ -523,6 +524,7 @@ USAGE_PROBLEMS = {
     "no_rollout": "沒有可讀的 rollout（審查沒有跑到那一步，或檔案找不到）",
     "walk_stopped": "rollout 在檢查中途停止（有一筆不合法或太長的紀錄），後面的用量讀不到",
     "chain_mismatch": "rollout 的用量累計鏈對不上，數字不可信",
+    "inconsistent": "用量紀錄前後不一致（rollout 的累計值和 turn.completed 回報的不同），無法取得",
     "no_token_records": "rollout 裡沒有任何用量紀錄",
     "rebuilt": "這份審查紀錄是事後重建的，沒有重新讀 rollout",
 }
@@ -642,9 +644,13 @@ def _usage_of(v, reached_end: bool, c, events_usage: dict):
     if not v.usage_chain_ok or v.last_turn_usage is None:
         return None, "chain_mismatch"
     counts = {f: v.last_turn_usage[f] for f in c.usage_fields}
-    complete = bool(events_usage) and all(v.last_turn_usage.get(f) == events_usage.get(f)
-                                          for f in c.events_usage_fields)
-    return {"counts": counts, "complete": complete}, None
+    if not events_usage:
+        # no turn.completed to compare with (a stop, a failure): the chain is what was recorded so far
+        return {"counts": counts, "complete": False}, None
+    if any(v.last_turn_usage.get(f) != events_usage.get(f) for f in c.events_usage_fields):
+        # both sources are there and they disagree: neither is "less than the real use", so there is no number
+        return None, "inconsistent"
+    return {"counts": counts, "complete": True}, None
 
 
 def usage_view(result) -> dict:

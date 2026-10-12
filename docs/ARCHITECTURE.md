@@ -193,9 +193,10 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   (`token_usage_record`: `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`,
   `reasoning_output_tokens`, `total_tokens`), taken only when every record was well formed, the chain added up and
   the file was read to its end. `complete` is true when that total is also what `turn.completed` reported; false
-  for a turn that did not finish (a stop, a failure), where it is what was recorded so far, at least that much. When
+  for a turn with no `turn.completed` (a stop, a failure), where it is what was recorded so far, at least that much. When
   it cannot be had, `usage` is `null` and `usage_problem` is one of `no_rollout`, `walk_stopped`,
-  `chain_mismatch`, `no_token_records`, `rebuilt` (a record rebuilt after a crash is not re-read). A record
+  `chain_mismatch`, `inconsistent` (the chain and `turn.completed` both exist and disagree: neither is a bound,
+  so there is no number), `no_token_records`, `rebuilt` (a record rebuilt after a crash is not re-read). A record
   written before this field existed has neither key; readers (`review_validate.usage_view`, the summary tool)
   treat that as "unavailable", never as 0. The screen shows the counts and the note that VBear has no reliable
   price source, so nothing is converted to money. The usage does not decide a review's validity.

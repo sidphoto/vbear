@@ -126,6 +126,11 @@ class WhitelistTests(unittest.TestCase):
         cases = (
             ({"v": 1, "usage": None, "usage_problem": "chain_mismatch"}, "unavailable", "chain_mismatch"),
             ({"v": 1, "usage": None, "usage_problem": h3}, "unavailable", "?"),               # free text never passes
+            ({"v": 1, "usage": None, "usage_problem": "inconsistent"}, "unavailable", "inconsistent"),
+            ({"v": 1, "usage": None, "usage_problem": ["chain_mismatch"]}, "unavailable", "?"),   # not hashable
+            ({"v": 1, "usage": None, "usage_problem": {"a": 1}}, "unavailable", "?"),
+            ({"v": 1, "usage": None, "usage_problem": 5}, "unavailable", "?"),
+            ({"v": 1, "usage": 5, "usage_problem": ["x"]}, "unavailable", "?"),
             ({"v": 1}, "unavailable", "no_usage_field"),                                        # an earlier record
             ({"v": 1, "usage": {"counts": [1, 2], "complete": True}, "usage_problem": None}, "unavailable", "?"),
             ([1, 2], "unavailable", "no_usage_field"),

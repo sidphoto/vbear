@@ -45,7 +45,7 @@ ASSERTIONS = {
 # what a review's record may say about its tokens (vbear.runtime.review_validate: the codes and the count names)
 USAGE_NAMES = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
                "reasoning_output_tokens", "total_tokens")
-USAGE_PROBLEMS = {"no_rollout", "walk_stopped", "chain_mismatch", "no_token_records", "rebuilt"}
+USAGE_PROBLEMS = {"no_rollout", "walk_stopped", "chain_mismatch", "inconsistent", "no_token_records", "rebuilt"}
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}\Z")
 KIND_RE = re.compile(r"^[a-z_]{1,40}\Z")
@@ -98,7 +98,7 @@ def review_usage(state: Path, manifest: dict) -> dict:
     u = res["usage"]
     if not (isinstance(u, dict) and isinstance(u.get("counts"), dict)):
         code = res.get("usage_problem")
-        out["reason"] = code if code in USAGE_PROBLEMS else "?"
+        out["reason"] = code if isinstance(code, str) and code in USAGE_PROBLEMS else "?"      # a list is not hashable
         return out
     out.update({n: count(u["counts"].get(n)) for n in USAGE_NAMES})
     out["state"] = "complete" if u.get("complete") is True else "partial"
