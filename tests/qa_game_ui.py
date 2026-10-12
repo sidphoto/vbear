@@ -7,6 +7,9 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
   VBEAR_QA_SERVE=1 python3 -m unittest tests.qa_game_ui.Serve -v
       the same environment left running for a person or a browser tool. serve.log (the terminal) prints the
       login URL and the item-by-item checklist. Stop with Ctrl-C (or set VBEAR_QA_SECONDS).
+      Optional VBEAR_QA_NO_MANUAL=1: a purely automatic flow: nothing is recorded by hand and the executor role
+      names no work directory, so the page's phase and its HEAD check come from the automatic events and the
+      task's directory alone.
       Optional VBEAR_QA_RUN=1: also start the runner thread, so the flow goes on by itself (the first review is
       NEEDS WORK, a helper commits the "fix", the second says PASS, the merge gate opens). Without it the flow
       stays exactly as built: automatic mode on, one review round done, the runner idle.
@@ -15,7 +18,9 @@ What is built (everything synthetic, all under one temporary directory printed i
   * Claude role「QA 後端工匠（Claude）」: four selected skills; one is not in the current index (a profile
     that still names a skill that is gone), one has an HTML-like name and description (must show as text).
   * Codex role「QA 審查員（Codex）」, with one selected skill.
-  * One flow in automatic mode, the executor started, one review round done (NEEDS WORK).
+  * One flow in automatic mode, the executor started, one review round done (NEEDS WORK). Unless
+    VBEAR_QA_NO_MANUAL=1 the harness also records by hand: plan submitted, approved, work started, the report
+    and the review (and names the work directory on the executor role).
 """
 
 from __future__ import annotations
@@ -52,6 +57,7 @@ class _Env(RunnerCase):
     HOME and VBEAR_HOME in a temporary directory."""
 
     def build(self) -> None:
+        self.no_manual = os.environ.get("VBEAR_QA_NO_MANUAL") == "1"
         self.assertTrue(str(self.home).startswith(str(self.tmp)), "HOME must be the temporary one")
         self.assertEqual(os.environ["HOME"], str(self.home))
         self.assertEqual(os.environ["VBEAR_HOME"], str(self.base))
@@ -144,21 +150,23 @@ class _Env(RunnerCase):
             roles = data[self.fid]["roles"]
             roles["planner"]["name"] = "QA 規劃者"
             roles["executor"]["name"] = "QA 執行者（Claude）"
-            roles["executor"]["workdir"] = str(self.work)
+            if not self.no_manual:
+                roles["executor"]["workdir"] = str(self.work)
             roles["reviewers"][0]["name"] = "QA 審查者（Codex）"
             flows.store.save(data)
-        # what the user records by hand (the phase of the page comes from these records, not from the
-        # automation's own events)
-        for kind in ("plan_submitted", "plan_approved", "implementation_started"):
-            flows.append_event(self.fid, {"kind": kind, "note": "QA"})
+        # what the user records by hand; without it the phase comes from the automatic events alone
+        if not self.no_manual:
+            for kind in ("plan_submitted", "plan_approved", "implementation_started"):
+                flows.append_event(self.fid, {"kind": kind, "note": "QA"})
         self.enable()
         self.start_executor()
         self.commit_work("first")
         self.fake_mode("needs_work")
         self.run_until(lambda: "auto_review_result" in self.kinds(), "the first review's result")
-        flows.append_event(self.fid, {"kind": "executor_report", "commit": self.commit, "note": "QA"})
-        flows.append_event(self.fid, {"kind": "review_result", "commit": self.commit, "verdict": "NEEDS_WORK",
-                                      "reviewer": 0, "note": "QA"})
+        if not self.no_manual:
+            flows.append_event(self.fid, {"kind": "executor_report", "commit": self.commit, "note": "QA"})
+            flows.append_event(self.fid, {"kind": "review_result", "commit": self.commit, "verdict": "NEEDS_WORK",
+                                          "reviewer": 0, "note": "QA"})
 
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/#auth={self.token}"
@@ -204,8 +212,23 @@ class Check(_Env):
         flow = self.api(f"/api/flows/{self.fid}")["flow"]
         self.assertEqual(flow["phase"]["key"], "needs_fix")
         self.assertEqual(len(flow["rounds"]), 1)
-        self.assertEqual(flow["roles"]["executor"]["workdir"], str(self.work))
+        if self.no_manual:
+            self.assertIsNone(flow["roles"]["executor"].get("workdir"))
+            self.assertEqual([e["source"] for e in flow["events"] if e["source"] == "manual"], [])
+        else:
+            self.assertEqual(flow["roles"]["executor"]["workdir"], str(self.work))
         self.assertTrue(flow["roles"]["reviewers"][0]["independent_of_executor"]["counted"])
+
+
+class CheckPurelyAutomatic(Check):
+    """The same environment with nothing recorded by hand: the phase must still be 「等修正」, from the runner's
+    own events alone."""
+
+    def setUp(self):
+        p = mock.patch.dict(os.environ, {"VBEAR_QA_NO_MANUAL": "1"})
+        p.start()
+        self.addCleanup(p.stop)
+        super().setUp()
 
 
 @unittest.skipUnless(os.environ.get("VBEAR_QA_SERVE") == "1", "set VBEAR_QA_SERVE=1 to leave the console running")
@@ -234,6 +257,11 @@ class Serve(_Env):
             threading.Thread(target=autopilot, daemon=True).start()
         print(CHECKLIST.format(url=self.url(), base=self.base, home=self.home, work=self.qa_work,
                                fid=self.fid, claude=CLAUDE_PROFILE, codex=CODEX_PROFILE, probe=PROBE,
+                               manual=("nothing recorded by hand (VBEAR_QA_NO_MANUAL=1): the phase comes from "
+                                       "the automatic events; the executor role names no directory, so HEAD is "
+                                       "checked in the task's directory" if self.no_manual
+                                       else "the harness recorded by hand: plan, approval, start, report, review "
+                                            "NEEDS_WORK; the executor role names the work directory"),
                                runner="running (VBEAR_QA_RUN=1)" if started else "idle (flow stays as built)"),
               flush=True)
         end = time.monotonic() + seconds
@@ -298,11 +326,12 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
 
 == 4. 隊伍與任務 (流程 -> the flow)
   [ ] 任務進度: seven gates 計畫/核准/實作/審查/合併（你來）/push（你來）/完成. The phase is 「等修正」
-      (the harness recorded by hand: plan, approval, start, report, review NEEDS_WORK; the automation's own
-      events do not move the phase), so 計畫/核准/實作 read 已過, 審查 reads 目前：等修正, the rest 未到.
+      ({manual}), so 計畫/核准/實作 read 已過, 審查 reads 目前：等修正, the rest 未到.
+      With VBEAR_QA_RUN=1 the flow reaches the merge gate: the phase becomes 審查通過・等合併 and the line
+      「以任務工作目錄核對」 appears when the role names no directory.
   [ ] 隊伍: 規劃者 card says it is only a record and VBear does not launch it; 執行者 card has its live
       state (this flow's executor is not bound to a terminal session, so it reads 未綁定 session), the work
-      directory (the temporary one) and the session; the 審查者 card says it counts as independent of the
+      directory (the temporary one; 「（未設定，無法核對 HEAD）」 with VBEAR_QA_NO_MANUAL=1) and the session; the 審查者 card says it counts as independent of the
       executor (different families). A field that is not there reads 未提供.
   [ ] 體力 (limits): each limit is a bar plus numbers; nothing unknown is drawn as an empty bar (it says
       無法核算); elapsed time has a bar.

@@ -840,8 +840,10 @@ async function runAllTests() {
       { kind: "executor_report", note: "", commit: "abc" });
     assert.deepStrictEqual(flowEventBody("review_result", { commit: "a".repeat(40), verdict: "NEEDS_WORK", reviewer: "1" }),
       { kind: "review_result", note: "", commit: "a".repeat(40), verdict: "NEEDS_WORK", reviewer: 1 });
-    assert(appSource.includes("VBear 不會為流程派工、輸入指令、執行 git，也不會啟動 Agent；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。"),
-      "the board says what it does not do, and that reading live state may start VBear's own runtime");
+    assert(appSource.includes("手動模式下，VBear 不會為流程派工；開啟自動執行之後，VBear 只會照你核准的計畫派工、送審、轉送審查意見。") &&
+      appSource.includes("不論哪種模式，VBear 都不會執行 git，也不會啟動規劃者；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。"),
+      "the board says what VBear does in each mode, what it never does, and that reading live state may start VBear's own runtime");
+    assert(!appSource.includes("VBear 不會為流程派工、輸入指令、執行 git，也不會啟動 Agent"), "the old sentence is gone");
     assert(!appSource.includes("啟動任何程式"), "no claim that nothing at all is started");
     // A sentence shown once: the binding line only when it adds to the phase reason (planner S1 #4).
     const stale = "審查通過的是 aaaaaaa，執行者目前在 bbbbbbb：審查結果已過期，需要重新審查";

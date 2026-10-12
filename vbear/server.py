@@ -887,9 +887,20 @@ def make_handler(console: Console):
                     return None
                 return task.get("title") if task else None
             live = console.store.live_cached()   # never builds: reading a flow starts nothing
-            view = flows.view(flow, heads=flows.head_reader, task_title=task_title, live=live, now=time.time())
-            view["acceptance"] = risk_acceptance.status(flow)
             mode = pipeline_store.mode_info(cfg.state_dir(), flow["id"])
+            task_workdir = None
+            if mode["mode"] == "auto":
+                # automatic mode compares HEAD with the task's directory; so does the phase when the executor
+                # role names none (read-only, as for the role's own directory)
+                try:
+                    task = tasks.get_task(flow["task_id"])
+                except tasks.TaskStorageError:
+                    task = None
+                wd = task.get("workdir") if isinstance(task, dict) else None
+                task_workdir = wd if isinstance(wd, str) and wd else None
+            view = flows.view(flow, heads=flows.head_reader, task_title=task_title, live=live, now=time.time(),
+                              task_workdir=task_workdir)
+            view["acceptance"] = risk_acceptance.status(flow)
             view["automation"] = {"mode": mode["mode"], "approval_id": mode["approval_id"], "problem": mode["problem"]}
             view["attention_reason"] = view["phase"]["reason"]
             if mode["mode"] == "auto":

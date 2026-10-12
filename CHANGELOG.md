@@ -18,10 +18,14 @@
   reviewed. It now also reads the runner's events: turning automatic mode on counts as the plan's approval, a
   sent dispatch as the start of work, a verified report as the executor's report, and a valid review result as
   a review. The same fact recorded by hand and by the runner is one round and one review, not two; the last
-  event on the timeline wins. This changes only what the page derives and shows: nothing is written, and the
-  merge gate and the 「需要你處理」 list are read as before. A review made by the runner counts as independent only
-  when the executor's model family is known and is not OpenAI, and not when the roles were changed after it was
-  made.
+  event on the timeline wins. An automatic result counts once, only for the job and round the runner started,
+  and a repeated dispatch or job is ignored with a warning on the page. This changes only what the page derives
+  and shows: nothing is written, and the merge gate and the 「需要你處理」 list are read as before. A review made
+  by the runner counts as independent only when the executor's model family is known and is not OpenAI, and not
+  when the roles were changed after it was made. In automatic mode, when the executor role names no work
+  directory, HEAD is compared in the task's directory (the one the automation uses) and the page says so; if
+  it cannot be read the pass stays unverified. The flows notice now says what VBear does in each mode instead
+  of 「VBear 不會為流程派工」.
 - **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,
   every automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk
   acceptance still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at

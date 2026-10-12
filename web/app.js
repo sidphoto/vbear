@@ -2066,7 +2066,8 @@ function flowBindingNote(f) {
 
 function flowNotice() {
   return notice("info", "流程的事件有兩種：你用表單手動記錄的（未驗證），和自動執行時 VBear 自己寫入的稽核事件；任務進度由 VBear 依這兩種事件與即時資料推導。" +
-    "VBear 不會為流程派工、輸入指令、執行 git，也不會啟動 Agent；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。");
+    "手動模式下，VBear 不會為流程派工；開啟自動執行之後，VBear 只會照你核准的計畫派工、送審、轉送審查意見。" +
+    "不論哪種模式，VBear 都不會執行 git，也不會啟動規劃者；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。");
 }
 
 function familyOptions(families, selected) {

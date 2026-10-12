@@ -547,8 +547,9 @@ def _phase_events(flow: dict) -> list[dict]:
       auto_dispatch_sent      -> implementation_started  the executor was sent its work
       auto_report             -> executor_report         (the runner records it only after VBear read the files)
       auto_review_result      -> review_result           (the runner records it only for a valid review)
-    Everything else the runner writes (intents, a started or aborted review, a stop) is not a phase fact: a
-    stop is the user's business (the automation block of the flow view), and the merge gate is read from the
+    A review's intent and start are passed on only so that its result can be bound to them (round, job, commit,
+    the report round it was started in). Everything else the runner writes (an aborted review, a stop) is not a
+    phase fact: a stop is the user's business (the automation block of the flow view), and the merge gate is read from the
     review checks as before."""
     out: list[dict] = []
     reviewer = {"index": None, "name": "自動審查（VBear 啟動的 Codex）", "family": "openai"}
@@ -566,6 +567,8 @@ def _phase_events(flow: dict) -> list[dict]:
         elif kind == "auto_report":
             if isinstance(e.get("commit"), str) and COMMIT_RE.match(e["commit"]):
                 out.append({**e, "kind": "executor_report", "_auto": True})
+        elif kind in ("auto_review_intent", "auto_review_started"):
+            out.append({**e, "_auto": True})            # not a phase fact: what an automatic result is bound to
         elif kind == "auto_review_result":
             verdict = {"PASS": "PASS", "NEEDS WORK": "NEEDS_WORK", "BLOCKED": "BLOCKED"}.get(e.get("verdict"))
             if verdict and e.get("valid") is True and isinstance(e.get("commit"), str) and COMMIT_RE.match(e["commit"]):
@@ -576,14 +579,18 @@ def _phase_events(flow: dict) -> list[dict]:
     return out
 
 
-def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
+def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = None) -> dict:
     """Phase, review rounds and commit binding from the events, plus the
     executor's HEAD read now. ``flow`` is a stored flow (already validated).
 
     Once a merge is recorded, the round's commit is closed: later reviews of
     it, or a report of it again, are kept and shown but never move the phase
     back (a late PASS must not turn 「完成」 into 「等合併」; a late objection is
-    flagged). Only a report of a different commit opens a new round."""
+    flagged). Only a report of a different commit opens a new round.
+
+    ``task_workdir`` is the flow's task's work directory, and only a caller whose flow is in automatic mode
+    passes it: the automatic mode checks HEAD against that directory, so a pass whose executor role names no
+    directory is compared against it (and the page says so) instead of being left unverified."""
     state, reason = "planning", "還沒有提出計畫"
     current_commit, passed_commit = None, None
     closed = False          # the current round's commit has been merged
@@ -592,22 +599,42 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
     warnings: list[str] = []
     _round_origins: dict[int, set] = {}      # round number -> who reported it ("manual", "auto")
     _seen_reviews: set = set()               # (round, commit, verdict, reviewer family, source) already counted
+    _auto_intents: dict[int, str] = {}       # automatic review round -> the commit its intent named
+    _auto_jobs: dict[str, dict] = {}         # job id -> its round and the report round it was started in
+    _auto_counted: set = set()               # job ids whose result is already counted
+    _auto_dispatches: set = set()            # dispatch ids already counted as sent
+    _auto_reports: set = set()               # dispatch ids whose report is already counted
     for e in _phase_events(flow):
         kind = e["kind"]
         if kind == "plan_submitted":
             state, reason = "awaiting_approval", "計畫已提出，等你核准"
         elif kind in ("plan_approved", "implementation_started"):
+            if e.get("_auto") and kind == "implementation_started":
+                if e["dispatch_id"] in _auto_dispatches:
+                    warnings.append(f"派工 {e['dispatch_id'][:8]} 的送出事件重複，只算一次，其餘不納入")
+                    continue
+                _auto_dispatches.add(e["dispatch_id"])
             if state in ("planning", "awaiting_approval", "implementing"):
                 state, reason = "implementing", "執行者實作中"
+        elif kind == "auto_review_intent":
+            _auto_intents[e["round"]] = e["commit"]
+        elif kind == "auto_review_started":
+            _auto_jobs[e["job_id"]] = {"round": e["round"], "report_round": len(rounds)}
         elif kind == "executor_report":
+            if e.get("_auto"):
+                if e["dispatch_id"] in _auto_reports:
+                    warnings.append(f"派工 {e['dispatch_id'][:8]} 的回報事件重複，只算一次，其餘不納入")
+                    continue
+                _auto_reports.add(e["dispatch_id"])
             if closed and e["commit"] == current_commit:
                 warnings.append(f"合併後又回報同一個 commit {_short(e['commit'])}，不開始新一輪")
                 continue
             origin = "auto" if e.get("_auto") else "manual"
-            if (rounds and not closed and e["commit"] == current_commit and not rounds[-1]["reviews"]
+            if (rounds and not closed and e["commit"] == current_commit
                     and origin not in _round_origins[len(rounds)]):
-                # the same fact recorded by hand and by the runner, before any review of it: one round, not two
-                # (a report of the same commit after a review is a new round, as it is when both are by hand)
+                # the same fact recorded by hand and by the runner (in either order, a person often mirrors it
+                # afterwards): one round, not two. Two reports by the same source of one commit are as before
+                # a new round.
                 _round_origins[len(rounds)].add(origin)
                 continue
             current_commit, passed_commit, closed = e["commit"], None, False
@@ -615,6 +642,20 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
             _round_origins[len(rounds)] = {origin}
             state, reason = "in_review", f"等待審查 {_short(e['commit'])}（第 {len(rounds)} 輪）"
         elif kind == "review_result":
+            if e.get("_auto"):
+                # an automatic result is bound to its own review: the job the runner started for that round,
+                # on the commit its intent named, in the report round it was started in; once only
+                job = _auto_jobs.get(e["job_id"])
+                if e["job_id"] in _auto_counted:
+                    warnings.append(f"自動審查 {e['job_id']} 的結果重複，只算一次，其餘不納入")
+                    continue
+                if job is None or job["round"] != e["round"] or _auto_intents.get(e["round"]) != e["commit"]:
+                    warnings.append("自動審查結果的輪次、審查或 commit 與時間軸不符，不納入")
+                    continue
+                if job["report_round"] != len(rounds):
+                    warnings.append("自動審查結果屬於先前的回報輪次，不納入目前這一輪")
+                    continue
+                _auto_counted.add(e["job_id"])
             origin = "auto" if e.get("_auto") else "manual"
             other = "manual" if origin == "auto" else "auto"
             who = (len(rounds), e["commit"], e["verdict"], e["reviewer"]["family"])
@@ -658,6 +699,11 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
     binding = None
     if state == "review_passed":
         workdir = flow["roles"]["executor"].get("workdir")
+        via_task = False
+        if not workdir and task_workdir:
+            workdir, via_task = task_workdir, True
+        note = "（以任務工作目錄核對）" if via_task else ""
+        extra = {"source": "task_workdir"} if via_task else {}
         if not workdir:
             state, reason = "review_unverified", "沒有設定執行者的工作目錄，無法核對審查的 commit 是否仍是目前版本"
             binding = {"state": "unverified", "reviewed": passed_commit, "head": None, "detail": reason}
@@ -666,17 +712,18 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
             commit = head.get("commit")
             if not (isinstance(commit, str) and COMMIT_RE.match(commit)):
                 why = head.get("error") or "原因不明"
-                state, reason = "review_unverified", f"讀不到執行者目前的 commit（{why}）"
-                binding = {"state": "unverified", "reviewed": passed_commit, "head": None, "detail": reason}
+                state, reason = "review_unverified", f"讀不到執行者目前的 commit（{why}）{note}"
+                binding = {"state": "unverified", "reviewed": passed_commit, "head": None, "detail": reason, **extra}
             elif commit != passed_commit:
                 state = "review_stale"
                 reason = (f"審查通過的是 {_short(passed_commit)}，執行者目前在 {_short(commit)}："
-                          "審查結果已過期，需要重新審查")
-                binding = {"state": "stale", "reviewed": passed_commit, "head": commit, "detail": reason}
+                          f"審查結果已過期，需要重新審查{note}")
+                binding = {"state": "stale", "reviewed": passed_commit, "head": commit, "detail": reason, **extra}
             else:
-                state, reason = "awaiting_merge", f"審查通過的 {_short(commit)} 就是執行者目前的 commit，等你合併"
+                state, reason = "awaiting_merge", f"審查通過的 {_short(commit)} 就是執行者目前的 commit，等你合併{note}"
                 binding = {"state": "current", "reviewed": passed_commit, "head": commit,
-                           "detail": "只比對 commit，看不到未提交的修改"}
+                           "detail": "只比對 commit，看不到未提交的修改" + ("；以任務工作目錄核對" if via_task else ""),
+                           **extra}
     label = PHASES[state]
     if state == "in_review" and rounds:
         label = f"審查第 {len(rounds)} 輪"
@@ -776,8 +823,8 @@ def public_event(event: dict) -> dict:
 
 
 def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str], str | None],
-         live: dict | None, now: float) -> dict:
-    derived = derive(flow, heads)
+         live: dict | None, now: float, task_workdir: str | None = None) -> dict:
+    derived = derive(flow, heads, task_workdir)
     roles = flow["roles"]
     title = task_title(flow["task_id"])
     return {

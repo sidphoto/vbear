@@ -290,10 +290,11 @@ class AutomaticPhaseTests(FlowCase):
         self.add(fid, "note", note="approval stands in here")
         self.auto(fid, "automation_mode", mode="auto", approval_seq=1)
 
-    def report(self, fid, commit):
-        self.auto(fid, "auto_dispatch_intent", dispatch_id=DISPATCH, text_sha256="a" * 64, length=10)
-        self.auto(fid, "auto_dispatch_sent", dispatch_id=DISPATCH)
-        self.auto(fid, "auto_report", dispatch_id=DISPATCH, commit=commit, status="done", tests_result="passed")
+    def report(self, fid, commit, dispatch=None):
+        dispatch = dispatch or "11111111-2222-4333-8444-%012x" % (len(flows.get_flow(fid)["events"]) + 1)
+        self.auto(fid, "auto_dispatch_intent", dispatch_id=dispatch, text_sha256="a" * 64, length=10)
+        self.auto(fid, "auto_dispatch_sent", dispatch_id=dispatch)
+        self.auto(fid, "auto_report", dispatch_id=dispatch, commit=commit, status="done", tests_result="passed")
 
     def review(self, fid, round_, commit, verdict, job=JOB1):
         self.auto(fid, "auto_review_intent", round=round_, commit=commit)
@@ -374,10 +375,25 @@ class AutomaticPhaseTests(FlowCase):
         self.assertEqual(self.key(fid), "awaiting_merge")
         self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)     # a person objects after
         self.assertEqual(self.key(fid), "needs_fix")
-        self.add(fid, "executor_report", commit=C1)                 # re-reported by hand: a new round, as before
+        self.add(fid, "executor_report", commit=C1)                 # the report the runner already recorded
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], len(d["rounds"])), ("needs_fix", 1))      # mirrored, not a new round
+        fake_repo(self.repo, C2)
+        self.add(fid, "executor_report", commit=C2)                 # a new commit is a new round
         self.assertEqual((self.key(fid), self.derive(fid)["phase"]["round"]), ("in_review", 2))
-        self.review(fid, 2, C1, "PASS", JOB2)
+        self.review(fid, 2, C2, "PASS", JOB2)
         self.assertEqual(self.key(fid), "awaiting_merge")
+
+    def test_a_person_mirroring_the_automatic_records_afterwards_adds_no_round_and_no_review(self):
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.review(fid, 1, C1, "NEEDS WORK")
+        self.add(fid, "executor_report", commit=C1)
+        self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], len(d["rounds"]), len(d["rounds"][0]["reviews"])), ("needs_fix", 1, 1))
+        self.assertEqual((d["warnings"], d["stray_reviews"]), ([], []))
 
     def test_a_manual_review_by_the_same_family_does_not_hide_the_automatic_one(self):
         fid = self.flow(workdir=self.repo, reviewer_families=("anthropic",))      # same family as the executor
@@ -428,6 +444,103 @@ class AutomaticPhaseTests(FlowCase):
         # switching back to manual is not an approval either
         self.auto(fid, "automation_mode", mode="manual", approval_seq=None)
         self.assertEqual(self.key(fid), "planning")
+
+    def test_the_tasks_directory_stands_in_when_the_role_names_none(self):
+        # automatic mode compares HEAD with the task's directory; a caller in that mode passes it in
+        fid = self.flow()                                                # the executor role has no workdir
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.review(fid, 1, C1, "PASS")
+        flow = flows.get_flow(fid)
+        d = flows.derive(flow, flows.head_reader)
+        self.assertEqual(d["phase"]["key"], "review_unverified")        # without it: as before
+        self.assertNotIn("source", d["binding"])
+        d = flows.derive(flow, flows.head_reader, str(self.repo))
+        self.assertEqual((d["phase"]["key"], d["binding"]["state"]), ("awaiting_merge", "current"))
+        self.assertEqual(d["binding"]["source"], "task_workdir")
+        self.assertIn("以任務工作目錄核對", d["phase"]["reason"])
+        self.assertIn("以任務工作目錄核對", d["binding"]["detail"])
+        self.assertTrue(d["attention"])
+        fake_repo(self.repo, C2)                                         # HEAD moved on
+        d = flows.derive(flow, flows.head_reader, str(self.repo))
+        self.assertEqual((d["phase"]["key"], d["binding"]["state"]), ("review_stale", "stale"))
+        self.assertIn("以任務工作目錄核對", d["phase"]["reason"])
+        # a directory that cannot be read keeps it unverified, and says which directory it was
+        d = flows.derive(flow, flows.head_reader, str(self.root))
+        self.assertEqual((d["phase"]["key"], d["binding"]["state"]), ("review_unverified", "unverified"))
+        self.assertIn("以任務工作目錄核對", d["phase"]["reason"])
+        self.assertIsNone(d["binding"]["head"])
+
+    def test_a_directory_on_the_role_is_never_replaced_by_the_tasks(self):
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.review(fid, 1, C1, "PASS")
+        other = fake_repo(self.root / "other", C2)
+        d = flows.derive(flows.get_flow(fid), flows.head_reader, str(other))
+        self.assertEqual((d["phase"]["key"], d["binding"]["state"]), ("awaiting_merge", "current"))
+        self.assertNotIn("source", d["binding"])
+        self.assertNotIn("任務工作目錄", d["phase"]["reason"])
+
+    def test_a_replayed_automatic_result_is_not_hung_on_a_later_round(self):
+        # the reviewer's sequence: two reports of one commit, then round 1's PASS (same job) again
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.review(fid, 1, C1, "NEEDS WORK")                     # job 1: NEEDS WORK
+        self.report(fid, C1)                                       # reported again (round 2)
+        self.assertEqual(self.derive(fid)["phase"]["round"], 2)
+        self.auto(fid, "auto_review_result", round=1, job_id=JOB1, commit=C1, verdict="PASS", valid=True)
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], d["attention"]), ("in_review", False))
+        self.assertEqual([len(r["reviews"]) for r in d["rounds"]], [1, 0])
+        self.assertTrue(any("重複" in w for w in d["warnings"]), d["warnings"])
+
+    def test_a_result_whose_round_or_job_is_not_the_timelines_is_not_counted(self):
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.auto(fid, "auto_review_intent", round=1, commit=C1)
+        self.auto(fid, "auto_review_started", round=1, job_id=JOB1)
+        # the result names round 2 for job 1; a job nobody started; a commit the intent did not name
+        for fields in ({"round": 2, "job_id": JOB1, "commit": C1}, {"round": 1, "job_id": JOB2, "commit": C1},
+                       {"round": 1, "job_id": JOB1, "commit": C2}):
+            self.auto(fid, "auto_review_result", verdict="PASS", valid=True, **fields)
+            d = self.derive(fid)
+            self.assertEqual((d["phase"]["key"], d["attention"], d["rounds"][0]["reviews"]), ("in_review", False, []))
+        self.assertEqual(len(self.derive(fid)["warnings"]), 3)
+        # the right one is still counted afterwards
+        self.auto(fid, "auto_review_result", round=1, job_id=JOB1, commit=C1, verdict="PASS", valid=True)
+        self.assertEqual(self.key(fid), "awaiting_merge")
+
+    def test_a_result_of_a_job_started_in_an_earlier_report_round_is_not_this_rounds(self):
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.auto(fid, "auto_review_intent", round=1, commit=C1)
+        self.auto(fid, "auto_review_started", round=1, job_id=JOB1)
+        self.add(fid, "executor_report", commit=C1)                # a person re-reports the same commit: round 2
+        self.assertEqual(self.derive(fid)["phase"]["round"], 1)    # one source each: the same fact, no new round
+        fake_repo(self.repo, C2)
+        self.add(fid, "executor_report", commit=C2)
+        self.add(fid, "executor_report", commit=C2)               # (same source again: round 3)
+        self.assertEqual(self.derive(fid)["phase"]["round"], 3)
+        self.auto(fid, "auto_review_result", round=1, job_id=JOB1, commit=C1, verdict="PASS", valid=True)
+        d = self.derive(fid)
+        self.assertEqual(d["phase"]["key"], "in_review")
+        self.assertTrue(any("先前的回報輪次" in w or "不符" in w for w in d["warnings"]), d["warnings"])
+
+    def test_a_dispatch_is_counted_once(self):
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.auto(fid, "auto_dispatch_sent", dispatch_id=DISPATCH)
+        self.auto(fid, "auto_dispatch_sent", dispatch_id=DISPATCH)
+        self.auto(fid, "auto_report", dispatch_id=DISPATCH, commit=C1, status="done", tests_result="passed")
+        fake_repo(self.repo, C2)
+        self.auto(fid, "auto_report", dispatch_id=DISPATCH, commit=C2, status="done", tests_result="passed")
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], len(d["rounds"]), d["rounds"][0]["commit"]), ("in_review", 1, C1))
+        self.assertEqual(len(d["warnings"]), 2, d["warnings"])
 
     def test_deriving_writes_nothing(self):
         fid = self.flow(workdir=self.repo)

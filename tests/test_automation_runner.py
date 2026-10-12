@@ -149,6 +149,51 @@ class PhaseTests(RunnerCase):
         self.assertTrue(self.gate()["open"])
 
 
+class PhaseWithoutRoleDirectoryTests(RunnerCase):
+    """The executor role names no work directory: in automatic mode the page compares HEAD with the task's
+    directory (as the automation does) and says so; in manual mode it stays unverified, as before."""
+
+    def view(self):
+        st, v = self.call(f"/api/flows/{self.fid}")
+        self.assertEqual(st, 200, v)
+        return v["flow"]
+
+    def to_the_gate(self):
+        self.start_executor()
+        self.commit_work("first")
+        self.run_until(lambda: self.last_event()["kind"] == "auto_stopped"
+                       and self.last_event()["reason_code"] == "awaiting_merge", "the merge gate")
+
+    def test_automatic_mode_checks_head_in_the_tasks_directory_and_says_so(self):
+        self.assertIsNone(self.view()["roles"]["executor"].get("workdir"))
+        self.enable()
+        self.to_the_gate()
+        v = self.view()
+        self.assertEqual(v["phase"]["key"], "awaiting_merge")
+        self.assertEqual(v["binding"]["source"], "task_workdir")
+        self.assertIn("以任務工作目錄核對", v["phase"]["reason"])
+        self.assertEqual(v["attention_reason"], "自動執行完成：審查通過、各項核對成立，停在合併關卡等你")
+        self.assertTrue(self.gate()["open"])                        # the gate is what it was
+
+    def test_the_tasks_directory_moving_on_makes_the_pass_stale(self):
+        self.enable()
+        self.to_the_gate()
+        self.commit_work("later")                                    # HEAD moves after the review
+        v = self.view()
+        self.assertEqual((v["phase"]["key"], v["binding"]["state"]), ("review_stale", "stale"))
+
+    def test_manual_mode_does_not_borrow_the_tasks_directory(self):
+        self.enable()
+        self.to_the_gate()
+        self.assertEqual(self.call(f"/api/flows/{self.fid}/hold", "POST", {})[0], 200)   # stopped, then back to manual
+        st, r = self.call(f"/api/flows/{self.fid}/automation/disable", "POST", {})
+        self.assertEqual(st, 200, r)
+        v = self.view()
+        self.assertEqual(v["automation"]["mode"], "manual")
+        self.assertEqual(v["phase"]["key"], "review_unverified")
+        self.assertNotIn("source", v["binding"])
+
+
 class StopTests(RunnerCase):
     def start_with(self, report=None):
         self.enable()
