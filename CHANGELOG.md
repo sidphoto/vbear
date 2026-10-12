@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **README rewritten for first-time readers.** Both READMEs now open with what VBear is and a game-style
+  reading of its screens (character, class, faction, skill cards, gear, party, gates, stamina), then feature
+  cards, the known limitations before the install steps, a 3-step first use, and the earlier details and technical
+  notes below. The automatic mode's note now says it was verified with real models.
+
 ## v0.3.0 — multi-agent flows
 
 Multi-agent flows: a look-only flows board; a coordinator that runs each step only when you press it; after a
@@ -8,10 +15,6 @@ is stream-verified. Evidence of real-model end-to-end runs: `docs/evidence/s3-re
 Merging, pushing and tagging are always done by you, never by VBear. After the daemon restarts, automatic
 execution continues only once you accept the risk again and approve the plan again.
 
-- **README rewritten for first-time readers.** Both READMEs now open with what VBear is and a game-style
-  reading of its screens (character, class, faction, skill cards, gear, party, gates, stamina), then feature
-  cards, the known limitations before the install steps, a 3-step first use, and the earlier details and technical
-  notes below. The automatic mode's note now says it was verified with real models.
 - **Codex review tokens.** A review's record now keeps the tokens the review used, taken from the rollout's
   cumulative usage chain (input, cached input, cache-write input, output, reasoning output, total), and the
   reviews panel shows them. A turn that did not finish (a stop, a failure) shows "at least" the recorded part;
