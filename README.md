@@ -1,67 +1,120 @@
 # VBear
 
-**A local console for running and supervising coding agents on your own machine.**
-VBear keeps your Claude Code and Codex terminals in one place. It explains what an agent
-launch is allowed to do *before* it starts, and it shows your scattered agent skills and roles in plain language.
+**Pick your AI coding agent like a game character: see its class, skills and gear before you send it in.**
+
+VBear is a console that runs on your own Mac. It shows what an agent is allowed to do *before* it starts,
+who is working and who is waiting for you, and where a team of agents stops for your approval.
 
 [繁體中文說明](README.zh-TW.md) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/SECURITY-MODEL.md) · [Contributing](.github/CONTRIBUTING.md)
 
-> **Status: early (v0.2).** It is built and used daily by one person on macOS.
+> **Status: early (v0.3).** It is built and used daily by one person on macOS.
 > The interface is in Traditional Chinese (zh-TW).
 > Expect rough edges, and read [Known limitations](#known-limitations) before relying on it.
 
-## Features
+## What is VBear?
 
-- **Built-in terminal.** Open your login shell in any folder under your home directory from the
-  「終端機」 page and type right away. Multiple terminals show as tabs. These are ordinary terminals
-  under your account, **not sandboxed**, and the UI labels them that way.
-- **Terminal workbench.** Agent terminals run in a small local daemon (the *VBear runtime*), so they keep
-  running when the browser tab or the console closes. You can watch any terminal in the browser.
-  Typing into it takes an explicit takeover, and only one tab can type at a time.
-- **Previewed, sandboxed Claude launches.** You pick an *Agent Profile* and a work directory, and you
-  get a preview of seven permission labels (read, write, test, commit, deploy, network, filesystem).
-  Each label says how strongly it is enforced, with the evidence. The launch starts only after you
-  confirm it. Claude's Bash tool can write only to the work directory and a private temporary directory
-  for that session, and it has no network access. After the session ends, those files are removed only once every
-  process of the session is proven gone.
-- **Skill and role library.** It reads the skills and agent roles installed for Claude Code and Codex.
-  For each one it shows whether the tool actually loads it, where it came from, and what it is
-  for. Every fact carries its source, and it says *unknown* when there is no source.
-- **Projects and team view.** It groups running terminals by git repository and by agent role. It also
-  shows which model and which skills a session actually used, read from the agent's own session logs.
-- **Working or waiting.** For profile-launched Claude Code sessions on a version with recorded evidence
-  (2.1.291 and 2.1.292 built in, plus any version whose title check passed on your Mac), the console shows whether
-  the agent is working or waiting for you, read from the terminal title Claude sets, and lists the waiting ones on
-  the home page. Every status says what it is based on; anything else shows *unknown*. 「驗證這個版本」 in the
-  launch dialog checks the title in the same run as the launch boundary.
-- **Task cards.** Local goal, scope and acceptance checklists. The status shows separately what an agent claimed,
-  what tests reported and what you approved, and the console never labels a card "verified". With a work
-  directory, a test result and an approval are tied to the commit they were given for and go stale when it moves.
-  Marking a card done or blocked asks what follows; a handoff closes the card and opens its successor with the
-  chain of earlier cards; whether anyone is on it is worked out from the linked terminal, not typed in.
-- **Flows (look-only).** One task card carried by several agents: who plans, who executes, who reviews, each
-  with a model family. The 「流程」 page shows the phase (planning, awaiting approval, implementing, review round N,
-  needs fix, passed and awaiting merge, review out of date, awaiting push, done), the review rounds and a timeline,
-  and the home page lists the gates waiting for you. Phases are derived on every read, never stored. A review
-  counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
-  date as soon as the executor's directory moves off the reviewed commit. Every event is entered by hand and
-  labelled 「手動記錄（未驗證）」. The board's recording routes do not dispatch work, type into a terminal, run `git`
-  or start an agent (the managed executor below is separate). Like the home page, the flows pages read the live
-  view, which can start VBear's own runtime.
-- **Managed executor and review (Phase 2).** From a flow you can start a Claude Code executor that VBear runs in
-  the background (no terminal) and ask Codex to review its latest commit in a separate sandboxed clone. You accept
-  three residual risks per flow, approve each dispatch as the exact text that will be sent, see the executor's own
-  report apart from VBear's file checks, read the reviewer's report as plain text, and get the merge and push
-  commands to run yourself: VBear never runs `git` for you. Needs Claude Code 2.1.292 or 2.1.296 and Codex 0.160.0 (the
-  verified versions) and costs usage on your own accounts. Data stays until you delete the flow. See the
-  [security model](docs/SECURITY-MODEL.md#phase-2-coordination) before using it.
-- **Automatic mode (Phase 3).** After you approve a plan, VBear can run the loop itself: dispatch the plan, check
-  the executor's report against the files, ask Codex to review, forward NEEDS WORK comments back (as marked data),
-  and stop at the merge gate for you. The approval shows the whole plan, the limits, the accounts and every risk
-  at once; you can stop it at any time; nothing resumes by itself; a restart stops every automatic flow. VBear
-  still never runs `git` for you. It has been verified with synthetic CLIs, not yet with the real models.
-- **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
-  written into the skill files.
+Claude Code and Codex can edit files and run commands for you, but it is hard to tell what a launch will really be
+allowed to do, or what several agents are up to. VBear puts that on one screen. You choose a character, see its
+gear, and only then send it in. If you give a job to a team, VBear shows who is on it and stops at the gates
+where you decide.
+
+The game words below are only a way to read VBear's screens. Each one points at something VBear really has.
+
+| In a game | In VBear | Where you see it |
+|---|---|---|
+| **Character** | An **Agent Profile**: a saved setup (name, role, tool, skills) that you can launch | Workbench → right column 「[A] 角色裝備」 |
+| **Class** | The **role** you give it, taken from the agent roles installed for Claude Code or Codex | Same place |
+| **Faction** | The **tool** it runs on: Claude Code or Codex CLI. Managed launches from a profile are Claude Code only for now | Same place |
+| **Skill cards** | **Skills** installed on your Mac. The Armory shows, for each one, whether it is available, installed, equipped to a profile, and whether it was ever seen in use | 技能庫 → Armory |
+| **Gear** | The **limits that really apply to this launch**: sandboxed writes, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it is enforced | 「預覽並啟動」 |
+| **Party** | A **flow**: planner, executor and reviewers on one task, each with a model family | 流程 |
+| **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | Home page 「需要你處理」 |
+| **Stamina** | The **limits** you approve for automatic runs: reviews, dispatches, model responses, time, executor budget | The approval screen and the executor panel's meters |
+
+VBear has no levels, hit points or scores. It shows only what it can read or check, and says *unknown* when it
+cannot. A skill "equipped" to a profile is a note of intent: it does not mean a running session has loaded it.
+
+## What you can do with it
+
+**See what an agent may do before it starts.**
+Pick a profile and a work directory and you get a preview of seven permission labels (read, write, test, commit,
+deploy, network, filesystem), each with how strongly it is enforced and the evidence. Nothing starts until you
+confirm. In a Claude Code launch, the Bash tool can write only to the work directory and a private temporary
+folder, and it has no network; where a limit is not enforced (reading files, commits), the label says so.
+
+**Build characters from the skills and roles you already have.**
+VBear reads the skills and agent roles installed for Claude Code and Codex and shows, for each one, whether
+the tool actually loads it, where it came from and what it is for. Every fact carries its source. Your own
+names and notes are stored locally and never written into the skill files.
+
+**See who is working and who is waiting.**
+Agent terminals run in a small local background program, so they keep running when you close the browser tab. You
+can watch any of them, and typing takes an explicit takeover (one tab at a time). For profile-launched Claude Code
+on a version with recorded evidence, the console shows whether the agent is working or waiting for you.
+
+**Put several agents on one task and see where it stands.**
+A flow records who plans, who executes and who reviews. The 「流程」 page shows the phase, the review rounds and a
+timeline, and the home page lists the gates waiting for you. A review counts as a pass only when the reviewer and the
+executor are of different, known model families, and a pass goes out of date when the code moves.
+
+**Let the loop run, and have it stop at the gate.**
+Approve a plan once and VBear can dispatch it to a Claude Code executor, check the executor's report against the
+files, ask Codex to review, send NEEDS WORK comments back, and stop at the merge gate. You can stop it at any time and
+nothing resumes by itself. It has been run end to end with real models
+([evidence](docs/evidence/s3-real-e2e-2026-10-12.md)), it spends your own usage up to the limits you approved, and
+VBear never runs `git`: merging and pushing stay with you.
+
+**Everything stays on your Mac.**
+No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
+`127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear.
+
+## Known limitations
+
+Read these before you install.
+
+- **Reads are not isolated.** A sandboxed Claude session can still read anything your user account can
+  read. Only writes and the network are restricted.
+- **`!` commands bypass the sandbox.** Commands you type yourself after `!` in Claude Code are not sandboxed.
+  The preview says so.
+- Commit cannot be blocked yet: the work directory's `.git` is writable, and you must acknowledge this before launch.
+- Only one launch shape exists (Bash only, Edit and Write disabled, no network). Read-only,
+  network-enabled and Codex launches are planned, not built.
+- Working/waiting is known only for profile-launched Claude Code on a version with recorded evidence (2.1.291,
+  2.1.292, or verified on your Mac). After Claude Code updates itself, the new version shows *unknown* until you run
+  「驗證這個版本」. It cannot tell waiting for your next message from waiting on a dialog. Other terminals and Codex
+  show *unknown*.
+- A task card's commit binding sees commits only: uncommitted changes after an approval do not make it stale.
+- **Automatic mode runs without you.** It spends usage on your accounts up to the limits you approved, sends review
+  comments (which the reviewed repository can influence) to the executor without per-item approval, and an
+  executor turn that is stopped can keep running until it ends. It was verified end to end with real models on a
+  small toy project (Claude Code 2.1.296 as the executor, Codex 0.160.0 as the reviewer; three runs: full loop, stop,
+  console restart): that is evidence it works as designed, not a guarantee for your project. See the
+  [evidence](docs/evidence/s3-real-e2e-2026-10-12.md) and the
+  [security model](docs/SECURITY-MODEL.md#phase-3-automatic-mode) before turning it on.
+- **A review PASS is not proof.** The managed executor and Codex review have residual risks you must accept per
+  flow (Codex's tools cannot be enumerated in advance and its multi-agent mode cannot be turned off, only
+  detected; limits differ in strength; organization-managed Claude settings cannot be detected locally). Review
+  conclusions can differ for the same content. Deleting a flow cannot be undone, and a flow whose records are
+  damaged or cannot be proven to be its own is refused with the reason: there is no forced delete, so such a
+  flow is cleaned up by hand (see [when a flow cannot be deleted](docs/SECURITY-MODEL.md#when-a-flow-cannot-be-deleted)).
+  The full list is in the [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
+- **Programs running as your own user can drive VBear.** Other websites and other user accounts are kept out:
+  every API call needs a per-launch token stored in a file only you can read. A program running under your
+  account can read that file. See the [security model](docs/SECURITY-MODEL.md).
+- **The app is not signed with an Apple Developer ID**, so macOS refuses to open it the first time (see
+  [Install](#install)).
+
+## Your first time: 3 steps
+
+1. **Install.** Download the app from the [latest release](https://github.com/sidphoto/vbear/releases/latest), drag
+   it into Applications and, the first time, allow it under System Settings → Privacy & Security → **Open Anyway**.
+   Details, Homebrew and running from source are in [Install](#install). To launch agents from a profile you also
+   need Claude Code installed.
+2. **Open VBear.** It lists the skills and agent roles it finds on your Mac (read-only; it changes none of them)
+   and shows your terminals, projects and flows.
+3. **Pick a character and preview the launch.** Open 「終端工作台」, then 「[A] 角色裝備」 in the right column,
+   choose **+ 建立 Agent Profile** (a name, a role, Claude Code, and the skills you want) and press **預覽並啟動**.
+   Choose a work directory, read the seven permission labels, and confirm only if you are happy with them.
 
 ## Supported agents
 
@@ -69,6 +122,9 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
 |---|---|---|
 | Claude Code | yes | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, 2.1.296, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
 | Codex CLI | yes | **not yet.** The preview explains why: 0.159.2's interactive mode still loads your global config |
+
+The managed executor (a flow's Claude Code in the background) needs Claude Code 2.1.292 or 2.1.296; Codex review
+needs Codex 0.160.0. Other versions are refused with the reason before anything starts.
 
 Skill and role scanning reads Claude Code (`~/.claude`), Codex (`~/.codex`) and shared skills
 (`~/.agents`). It never modifies them.
@@ -133,34 +189,74 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   timestamps. Conversation content is never read out or stored. You can turn this off in Settings.
 - The agents you launch talk to their own providers under your own login, as they would without VBear.
 
-## Known limitations
+## The details behind the cards
 
-- **Reads are not isolated.** A sandboxed Claude session can still read anything your user account can
-  read. Only writes and the network are restricted.
-- **`!` commands bypass the sandbox.** Commands you type yourself after `!` in Claude Code are not sandboxed.
-  The preview says so.
-- Commit cannot be blocked yet: the work directory's `.git` is writable, and you must acknowledge this before launch.
-- Only one launch shape exists (Bash only, Edit and Write disabled, no network). Read-only,
-  network-enabled and Codex launches are planned, not built.
-- Working/waiting is known only for profile-launched Claude Code on a version with recorded evidence (2.1.291,
-  2.1.292, or verified on your Mac). After Claude Code updates itself, the new version shows *unknown* until you run
-  「驗證這個版本」. It cannot tell waiting for your next message from waiting on a dialog. Other terminals and Codex
-  show *unknown*.
-- A task card's commit binding sees commits only: uncommitted changes after an approval do not make it stale.
-- **Automatic mode runs without you.** It spends usage on your accounts up to the limits you approved, sends review
-  comments (which the reviewed repository can influence) to the executor without per-item approval, and an
-  executor turn that is stopped can keep running until it ends. See the
-  [security model](docs/SECURITY-MODEL.md#phase-3-automatic-mode) before turning it on.
-- **A review PASS is not proof.** The managed executor and Codex review have residual risks you must accept per
-  flow (Codex's tools cannot be enumerated in advance and its multi-agent mode cannot be turned off, only
-  detected; limits differ in strength; organization-managed Claude settings cannot be detected locally). Review
-  conclusions can differ for the same content. Deleting a flow cannot be undone, and a flow whose records are
-  damaged or cannot be proven to be its own is refused with the reason: there is no forced delete, so such a
-  flow is cleaned up by hand (see [when a flow cannot be deleted](docs/SECURITY-MODEL.md#when-a-flow-cannot-be-deleted)).
-  The full list is in the [security model](docs/SECURITY-MODEL.md#phase-2-coordination).
-- **Programs running as your own user can drive VBear.** Other websites and other user accounts are kept out:
-  every API call needs a per-launch token stored in a file only you can read. A program running under your
-  account can read that file. See the [security model](docs/SECURITY-MODEL.md).
+- **Built-in terminal.** Open your login shell in any folder under your home directory from the
+  「終端機」 page and type right away. Multiple terminals show as tabs. These are ordinary terminals
+  under your account, **not sandboxed**, and the UI labels them that way.
+- **Terminal workbench.** Agent terminals run in a small local daemon (the *VBear runtime*), so they keep
+  running when the browser tab or the console closes. You can watch any terminal in the browser.
+  Typing into it takes an explicit takeover, and only one tab can type at a time.
+- **Previewed, sandboxed Claude launches.** You pick an *Agent Profile* and a work directory, and you
+  get a preview of seven permission labels (read, write, test, commit, deploy, network, filesystem).
+  Each label says how strongly it is enforced, with the evidence. The launch starts only after you
+  confirm it. Claude's Bash tool can write only to the work directory and a private temporary directory
+  for that session, and it has no network access. After the session ends, those files are removed only once every
+  process of the session is proven gone.
+- **Skill and role library.** It reads the skills and agent roles installed for Claude Code and Codex.
+  For each one it shows whether the tool actually loads it, where it came from, and what it is
+  for. Every fact carries its source, and it says *unknown* when there is no source.
+- **Projects and team view.** It groups running terminals by git repository and by agent role. It also
+  shows which model and which skills a session actually used, read from the agent's own session logs.
+- **Working or waiting.** For profile-launched Claude Code sessions on a version with recorded evidence
+  (2.1.291 and 2.1.292 built in, plus any version whose title check passed on your Mac), the console shows whether
+  the agent is working or waiting for you, read from the terminal title Claude sets, and lists the waiting ones on
+  the home page. Every status says what it is based on; anything else shows *unknown*. 「驗證這個版本」 in the
+  launch dialog checks the title in the same run as the launch boundary.
+- **Task cards.** Local goal, scope and acceptance checklists. The status shows separately what an agent claimed,
+  what tests reported and what you approved, and the console never labels a card "verified". With a work
+  directory, a test result and an approval are tied to the commit they were given for and go stale when it moves.
+  Marking a card done or blocked asks what follows; a handoff closes the card and opens its successor with the
+  chain of earlier cards; whether anyone is on it is worked out from the linked terminal, not typed in.
+- **Flows (look-only).** One task card carried by several agents: who plans, who executes, who reviews, each
+  with a model family. The 「流程」 page shows the phase (planning, awaiting approval, implementing, review round N,
+  needs fix, passed and awaiting merge, review out of date, awaiting push, done), the review rounds and a timeline,
+  and the home page lists the gates waiting for you. Phases are derived on every read, never stored. A review
+  counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
+  date as soon as the executor's directory moves off the reviewed commit. Every event is entered by hand and
+  labelled 「手動記錄（未驗證）」. The board's recording routes do not dispatch work, type into a terminal, run `git`
+  or start an agent (the managed executor below is separate). Like the home page, the flows pages read the live
+  view, which can start VBear's own runtime.
+- **Managed executor and review (Phase 2).** From a flow you can start a Claude Code executor that VBear runs in
+  the background (no terminal) and ask Codex to review its latest commit in a separate sandboxed clone. You accept
+  three residual risks per flow, approve each dispatch as the exact text that will be sent, see the executor's own
+  report apart from VBear's file checks, read the reviewer's report as plain text, and get the merge and push
+  commands to run yourself: VBear never runs `git` for you. Needs Claude Code 2.1.292 or 2.1.296 and Codex 0.160.0 (the
+  verified versions) and costs usage on your own accounts. Data stays until you delete the flow. See the
+  [security model](docs/SECURITY-MODEL.md#phase-2-coordination) before using it.
+- **Automatic mode (Phase 3).** After you approve a plan, VBear can run the loop itself: dispatch the plan, check
+  the executor's report against the files, ask Codex to review, forward NEEDS WORK comments back (as marked data),
+  and stop at the merge gate for you. The approval shows the whole plan, the limits, the accounts and every risk
+  at once; you can stop it at any time; nothing resumes by itself; a restart stops every automatic flow. VBear
+  still never runs `git` for you. It has been verified end to end with the real models (Claude Code 2.1.296 and
+  Codex 0.160.0: a full run to the merge gate, a stop while a review runs, and a console restart while a review runs;
+  see the [evidence](docs/evidence/s3-real-e2e-2026-10-12.md)). After the daemon restarts, an automatic flow runs
+  again only after you accept the risks and approve the plan again.
+- **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
+  written into the skill files.
+
+## Technical details
+
+- **Standard library only.** The backend uses only the Python 3.13+ standard library (no pip packages, no cloud
+  services). The web UI has no build step. Its one dependency is the MIT-licensed `@xterm/xterm` and
+  `@xterm/addon-fit`, bundled in `web/vendor/xterm/` at a pinned version and checked against fixed SHA-256 hashes by
+  the tests. Nothing is loaded from a CDN, and the content security policy keeps `script-src 'self'`.
+- **Read-only sources.** VBear reads only the external sources you select and changes no skill or role file. It
+  runs no script found in a skill. (VBear's own settings, notes and terminal actions are the exceptions.)
+- **Sourced facts.** Every fact is labelled with where it came from (the author's description, derived by VBear,
+  observed at run time, or not provided), and *unknown* is shown when there is no source.
+- **Where things are.** How it is built is in [ARCHITECTURE](docs/ARCHITECTURE.md); what it defends against and
+  what it cannot is in the [security model](docs/SECURITY-MODEL.md).
 
 ## Developing
 
