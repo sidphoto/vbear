@@ -100,16 +100,15 @@ class ServerCase(unittest.TestCase):
             self.dthread.start()
         from vbear import server
         self.server = server
-        import socket as so
-        with so.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            self.port = s.getsockname()[1]
+        # the OS picks the port: the listening socket is made first (port 0) and its real port is read back
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+        self.port = self.httpd.server_address[1]
         self.console = server.Console(self.port)
         self.console.auth_token = None  # auth has its own tests (AuthTests)
         if isinstance(self.console.runtime, rt.NativeRuntime):
             self.console.runtime.autostart = False  # tests run their own in-thread daemon
         # make_handler reads console.port for the Host allow-list, so build it after.
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), server.make_handler(self.console))
+        self.httpd.RequestHandlerClass = server.make_handler(self.console)
         self.hthread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.hthread.start()
 

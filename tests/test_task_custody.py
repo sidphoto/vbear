@@ -435,10 +435,12 @@ class CustodyAPITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cfg.ensure_state_dir()
-        cls.port = 18891
+        # the OS picks the port (port 0), read back from the listening socket
+        cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), None)
+        cls.port = cls.httpd.server_address[1]
         cls.console = server.Console(cls.port)
         cls.console.auth_token = None  # auth has its own tests (AuthTests)
-        cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", cls.port), server.make_handler(cls.console))
+        cls.httpd.RequestHandlerClass = server.make_handler(cls.console)
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
         cls.H = {"Host": f"127.0.0.1:{cls.port}", "X-VBear": "1", "Origin": f"http://127.0.0.1:{cls.port}"}

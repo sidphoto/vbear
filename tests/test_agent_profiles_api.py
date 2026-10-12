@@ -17,7 +17,6 @@ import json
 import os
 os.environ["VBEAR_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import shutil
-import socket
 import sys
 import tempfile
 import threading
@@ -48,14 +47,6 @@ from vbear.config import state_dir  # noqa: E402
 from vbear.index import Store  # noqa: E402
 
 
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 def _fresh_console():
     sd = state_dir()
     if sd.exists():
@@ -63,15 +54,17 @@ def _fresh_console():
     sd.mkdir(parents=True, exist_ok=True)
     os.chmod(sd, 0o700)
 
+    # the OS picks the port: the listening socket is made first (port 0) and its real port is read back, so no
+    # other process can take it between "find a free port" and "listen on it"
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), None)
+    port = httpd.server_address[1]
     c = server.Console.__new__(server.Console)
-    port = _free_port()
     c.port = port
     c.store = Store()
     c.lock = threading.Lock()
     c.auth_token = None  # auth has its own tests (AuthTests)
     c.runtime = rt_mod.get_runtime()  # native; never autostarts a daemon
-    handler = server.make_handler(c)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    httpd.RequestHandlerClass = server.make_handler(c)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     return c, httpd, port
