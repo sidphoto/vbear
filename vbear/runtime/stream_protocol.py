@@ -221,6 +221,20 @@ PROTOCOL_REASONS = ("session_mismatch", "bad_uuid", "duplicate_uuid", "missing_f
 FAILED_REASONS = ("partial_write", "not_confirmed", "no_progress", "turn_timeout", "no_completed",
                   "response_cap", "process_exited")
 ANOMALY_REASONS = ("unknown_type", "extra_fields")
+# What a turn_anomaly may say about the event: the NAMES of its unexpected top-level fields, never a value, so that
+# a new field of a new Claude Code version can be named from the journal alone (S3 real end-to-end, run 2).
+MAX_ANOMALY_FIELDS = 16
+ANOMALY_FIELD_RE = re.compile(r"^[A-Za-z0-9_]{1,64}\Z")
+
+
+def anomaly_fields(names) -> list[str]:
+    """At most MAX_ANOMALY_FIELDS names, in sorted order; a name that is not 1-64 of [A-Za-z0-9_] is "?"."""
+    out: list[str] = []
+    for name in sorted(str(n) for n in names):
+        if len(out) >= MAX_ANOMALY_FIELDS:
+            break
+        out.append(name if ANOMALY_FIELD_RE.match(name) else "?")
+    return out
 
 
 @dataclass
@@ -322,12 +336,12 @@ class EventTracker:
         if kind is None:
             label = f"{ev.get('type')}/{ev.get('subtype')}" if ev.get("type") == "system" else str(ev.get("type"))
             return [("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "unknown_type",
-                                      "event_type": label[:MAX_EVENT_TYPE]})]
+                                      "event_type": label[:MAX_EVENT_TYPE], "fields": anomaly_fields(ev)})]
         try:
             extra = set(ev) - self.c.allowed[kind]
             if extra:
                 out.append(("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "extra_fields",
-                                             "event_type": kind[:MAX_EVENT_TYPE]}))
+                                             "event_type": kind[:MAX_EVENT_TYPE], "fields": anomaly_fields(extra)}))
             handler = getattr(self, "_on_" + kind.replace("/", "_"))
             out += handler(ev, t)
         except ProtocolError:
@@ -492,8 +506,11 @@ class EventTracker:
                 # "user/tool_result": a wrong type or a missing field reads as
                 # "fields other than allowed". The effect is the design's (turn
                 # invalid, no further dispatch); only the label is coarser.
+                known = {"type", "tool_use_id", "content", "is_error"}
                 out.append(("turn_anomaly", {"dispatch_id": t.dispatch_id, "reason": "extra_fields",
-                                             "event_type": "user/tool_result"}))
+                                             "event_type": "user/tool_result",
+                                             "fields": anomaly_fields(set(item) - known)
+                                             if isinstance(item, dict) else []}))
                 continue
             call = calls.get(item["tool_use_id"])
             if call is None:

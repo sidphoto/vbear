@@ -114,6 +114,11 @@ def _turn_result(d):
                      and d["result_too_large"] is False)))
 
 
+def _anomaly_fields(value) -> bool:
+    return (isinstance(value, list) and len(value) <= sp.MAX_ANOMALY_FIELDS
+            and all(isinstance(x, str) and (x == "?" or sp.ANOMALY_FIELD_RE.match(x) is not None) for x in value))
+
+
 SCHEMAS = {
     "session_started": lambda d: (set(d) == {"claude_session_id", "pipeline_id", "cli_version", "argv_sha256",
                                              "budget_usd"}
@@ -144,8 +149,13 @@ SCHEMAS = {
                             and _str(d["model"], 128) and _str(d["cwd"], 4096)
                             and _str(d["claude_code_version"], 32) and _str(d["apiKeySource"], 64)),
     "dispatch_confirmed": lambda d: set(d) == {"dispatch_id"} and _uuid(d["dispatch_id"]),
-    "turn_anomaly": lambda d: (set(d) == {"dispatch_id", "reason", "event_type"} and _uuid(d["dispatch_id"])
-                               and d["reason"] in sp.ANOMALY_REASONS and _str(d["event_type"], sp.MAX_EVENT_TYPE)),
+    # "fields": the names of the unexpected top-level fields (never values). Records written before it existed have
+    # no such key and stay valid.
+    "turn_anomaly": lambda d: (set(d) in ({"dispatch_id", "reason", "event_type"},
+                                          {"dispatch_id", "reason", "event_type", "fields"})
+                               and _uuid(d["dispatch_id"])
+                               and d["reason"] in sp.ANOMALY_REASONS and _str(d["event_type"], sp.MAX_EVENT_TYPE)
+                               and ("fields" not in d or _anomaly_fields(d["fields"]))),
     "turn_result": _turn_result,
     "dispatch_failed": lambda d: (set(d) == {"dispatch_id", "reason"} and _uuid(d["dispatch_id"])
                                   and d["reason"] in sp.FAILED_REASONS),
@@ -327,7 +337,7 @@ class JournalState:
         turn = self._turn(d)
         if self.state not in ("sent", "running", "finishing"):
             self._bad("anomaly 不在一輪之內")
-        turn.anomalies.append({"reason": d["reason"], "event_type": d["event_type"]})
+        turn.anomalies.append({"reason": d["reason"], "event_type": d["event_type"], "fields": list(d.get("fields", []))})
 
     def _turn_result(self, d, t):
         turn = self._turn(d)

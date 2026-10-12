@@ -611,6 +611,63 @@ class VcsStateChangedTests(unittest.TestCase):
         self.assertEqual(cm.exception.reason, "out_of_order")
 
 
+class AnomalyFieldNameTests(unittest.TestCase):
+    """A turn_anomaly names the unexpected top-level fields: names only, bounded, never a value."""
+
+    def run_with(self, change):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="n")
+        change(events)
+        h.feed(events)
+        return h, d
+
+    def test_the_names_are_recorded_and_the_values_are_not(self):
+        h, d = self.run_with(lambda ev: ev[3].update({"surprise_field": "VALUE-THAT-MUST-NOT-APPEAR", "n_2": 7}))
+        anomaly = h.js.turns[d].anomalies[0]
+        self.assertEqual((anomaly["reason"], anomaly["fields"]), ("extra_fields", ["n_2", "surprise_field"]))
+        self.assertNotIn(b"VALUE-THAT-MUST-NOT-APPEAR", b"".join(h.records))
+
+    def test_more_than_the_limit_is_cut_and_a_bad_name_is_a_question_mark(self):
+        many = {f"f{i:02d}": i for i in range(40)}
+        h, d = self.run_with(lambda ev: ev[3].update(many))
+        fields = h.js.turns[d].anomalies[0]["fields"]
+        self.assertEqual(len(fields), sp.MAX_ANOMALY_FIELDS)
+        self.assertEqual(fields, sorted(many)[:sp.MAX_ANOMALY_FIELDS])
+        bad = {"bad-name!": 1, "x" * 65: 2, "ключ": 3, "with space": 4, "ok_name": 5}
+        h, d = self.run_with(lambda ev: ev[3].update(bad))
+        self.assertEqual(sorted(h.js.turns[d].anomalies[0]["fields"]), ["?", "?", "?", "?", "ok_name"])
+        self.assertNotIn("bad-name".encode(), b"".join(h.records))
+
+    def test_an_unknown_kind_names_all_of_its_top_level_fields(self):
+        h = Harness()
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="u")
+        events.insert(7, {"type": "telemetry_event", "payload": "SECRET-PAYLOAD", "session_id": h.sid,
+                          "uuid": fx.new_uuid()})
+        h.feed(events)
+        anomaly = h.js.turns[d].anomalies[0]
+        self.assertEqual((anomaly["reason"], anomaly["fields"]), ("unknown_type", ["payload", "session_id", "type",
+                                                                                     "uuid"]))
+        self.assertNotIn(b"SECRET-PAYLOAD", b"".join(h.records))
+
+    def test_an_extra_field_of_a_tool_result_item_is_named_too(self):
+        h, d = self.run_with(lambda ev: ev[7]["message"]["content"][0].update({"extra_item": "x"}))
+        anomaly = h.js.turns[d].anomalies[0]
+        self.assertEqual((anomaly["event_type"], anomaly["fields"]), ("user/tool_result", ["extra_item"]))
+
+    def test_the_schema_bounds_the_names_and_old_records_stay_valid(self):
+        d = fx.new_uuid()
+        base = {"dispatch_id": d, "reason": "extra_fields", "event_type": "assistant"}
+        schema = sj.SCHEMAS["turn_anomaly"]
+        self.assertTrue(schema(base))                                    # a record from before the key existed
+        self.assertTrue(schema({**base, "fields": ["a", "?", "b_2"]}))
+        for bad in ("a", [1], ["a-b"], ["x" * 65], ["a"] * 17, [""], ["?x"]):
+            with self.subTest(fields=bad):
+                self.assertFalse(schema({**base, "fields": bad}))
+        self.assertFalse(schema({**base, "fields": [], "extra": 1}))
+
+
 class JournalTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="vbsj-")
