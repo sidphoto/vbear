@@ -3,9 +3,11 @@
 ## Unreleased
 
 - **README rewritten for first-time readers.** Both READMEs now open with what VBear is and a game-style
-  reading of its screens (character, class, faction, skill cards, gear, party, gates, stamina), then feature
-  cards, the known limitations before the install steps, a 3-step first use, and the earlier details and technical
-  notes below. The automatic mode's note now says it was verified with real models.
+  reading of its screens (character, class, faction, skill cards, armor, party, gates, stamina), then feature
+  cards, what to know before you start (the limitations, in plain words) ahead of the install steps, a 3-step
+  first use with the real screen names, and the earlier details and technical notes below. The automatic mode's
+  note now says it was verified with real models, and says what happens after the background program restarts
+  (stopped; you press continue; the limit may need raising and a new acceptance).
 
 ## v0.3.0 — multi-agent flows
 
