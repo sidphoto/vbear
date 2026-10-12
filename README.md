@@ -4,8 +4,8 @@
 
 VBear is a console that runs on your own Mac. When you start Claude Code from one of its profiles, it shows what
 that launch is allowed to do *before* anything starts. It also shows who is working and who is waiting for you,
-and where a team of agents stops for your approval. (A terminal you open yourself is an ordinary shell: VBear
-does not sandbox it.)
+and where a team of agents stops for your approval. (A terminal tab you open yourself inside VBear is an
+ordinary terminal and is not covered by these protections.)
 
 [繁體中文說明](README.zh-TW.md) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/SECURITY-MODEL.md) · [Contributing](.github/CONTRIBUTING.md)
 
@@ -31,11 +31,12 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Armor** | The **protection a launch actually puts on, and the weak spots it does not cover**: writes kept inside the work directory, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it holds | 「預覽並啟動」 |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task, each with a model family. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | 流程 |
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | Home page 「需要你處理」 |
-| **Stamina** | The **limits** you approve for automatic runs: reviews, dispatches, model responses, time, executor budget. VBear uses them to watch the run and stop it; they differ in strength, and your real bill can go past what you set | The approval screen and the executor panel's meters |
+| **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 VBear has no levels, hit points or scores. It shows only what it can read or check, and says *unknown* when it
-cannot. Adding a skill to a profile only records your choice: launching Claude Code from the profile does not load those
-skills.
+cannot. Adding a skill to a profile only records your choice. VBear starts Claude Code in its safe mode, which
+switches off skills, CLAUDE.md files, installed plugins, hooks and MCP servers, so a launched Claude Code does not use
+skills for now: a profile's skill list is a record of your picks.
 
 ## What you can do with it
 
@@ -45,10 +46,10 @@ When you launch Claude Code from a profile, pick a work directory and you get a 
 launch starts only after you confirm. The Bash tool can write only to the work directory and a private temporary
 folder, and it has no network; where a limit does not hold (reading files, commits), the label says so.
 
-**Build characters from the skills and roles you already have.**
+**Keep your skills and roles in one place, and save your picks as characters.**
 VBear reads the skills and agent roles it finds for Claude Code and Codex and shows, for each one, whether
 the tool actually loads it, where it came from and what it is for. Every fact carries its source. You can save a
-choice of skills and a role as a profile (that records your choice; it loads nothing). Your own names and notes are
+choice of skills and a role as a profile (that records your choice; a launch does not load them). Your own names and notes are
 stored locally and never written into the skill files.
 
 **See who is working and who is waiting.**
@@ -67,9 +68,9 @@ work; and a pass is marked out of date as soon as the code changes.
 Approve a plan once and VBear can hand it to a Claude Code executor, check the executor's report against the
 files, ask Codex to review, send NEEDS WORK comments back, and stop at the merge gate. You can stop it at any time and
 nothing resumes by itself. It has been run end to end with real models
-([evidence](docs/evidence/s3-real-e2e-2026-10-12.md)). It spends your own usage; the limits you approved are how
-VBear watches and stops it, and your real bill can go past them. VBear never runs `git`: merging and pushing stay
-with you.
+([evidence](docs/evidence/s3-real-e2e-2026-10-12.md)). It spends your own usage. The limits you set work like a
+stop-loss: when one is reached VBear stops the flow, and since some usage is only known afterwards, the real figure
+can end up above it, so set them low the first time. VBear never runs `git`: merging and pushing stay with you.
 
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
@@ -82,7 +83,11 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
 - **It does not hold:** reading, because Claude Code can still read any file your Mac account can read, and
   commands you type yourself after `!`, which are not sandboxed.
 - **Merging, pushing and publishing are always yours.** VBear never runs `git` for you.
-- **Automatic mode uses your accounts' usage.** The limits you set are not a guarantee of the bill.
+- **Automatic mode uses your accounts' usage.** The limits you set are a stop-loss, not a guarantee of the bill.
+- **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
+- **Deleting a flow cannot be undone.**
+- **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →
+  Privacy & Security → **Open Anyway**.
 - The full list, with what you can do about each, is in
   [Good to know before you start](#good-to-know-before-you-start).
 
@@ -107,8 +112,10 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
      Finder, hold the Option key and choose **Copy “folder” as Pathname**, then paste it into the box.
    - Read the seven labels. Each row has the permission's name and, beside it, a word for how strongly it holds
      (the screen uses words, not colors): 「強制」 and 「部分強制」 mean the limit really holds; 「僅意圖」, 「未限制」,
-     「未驗證」 and 「未知」 mean it is not enforced or not proven; 「不授予」 means it is not given at all. Tick the box
-     about commits, and click **確認啟動** only if you are happy with what you see.
+     「未驗證」 and 「未知」 mean it is not enforced or not proven; 「不授予」 means it is not given at all.
+     The short version: look at the **Write** and **Network** rows. 「強制」 there means VBear really blocked it. Reading
+     is not limited: it can read any file you can read.
+   - Tick the box about commits, and click **確認啟動** only if you are happy with what you see.
 
 ## Good to know before you start
 
@@ -125,14 +132,20 @@ and what you can do about each.
   the history before you merge or push.
 - **One launch shape for now.** Only Bash is allowed, Edit and Write are off, and there is no network. Read-only,
   network-enabled and Codex profile launches are planned, not built.
+- **Skills are switched off in launches for now.** VBear starts Claude Code with `--safe-mode`, which (as Claude
+  Code's own help says) disables skills, CLAUDE.md files, installed plugins, hooks, MCP servers and custom commands
+  and agents; sign-in, model choice and the built-in tools work as usual. A profile's skill list is therefore a
+  record of your picks, not something the launch loads or uses. A Claude Code you start yourself in a terminal is
+  not launched by VBear and is not affected.
 - **"Working / waiting" is not known everywhere.** It is shown only for Claude Code launched from a profile, on a
   version with recorded evidence (2.1.291, 2.1.292, or verified on your Mac). After Claude Code updates itself, the
   new version shows *unknown* until you press 「驗證這個版本」 in the launch dialog. It cannot tell waiting for your
   next message from waiting on a dialog, and other terminals and Codex show *unknown*.
 - **A task card goes out of date only when a commit changes.** Uncommitted changes made after an approval do not
   make it stale, so commit before you approve.
-- **Automatic mode runs while you are away.** It spends usage on your accounts. The limits you approved are how VBear
-  watches the run and stops it; they differ in strength, and your real bill can go past them. Review comments, which
+- **Automatic mode runs while you are away.** It spends usage on your accounts. The limits you set work like a
+  stop-loss: when one is reached VBear stops the flow. Some usage is only known afterwards (cost, for example), so the
+  real figure can end up above a limit, and the limits differ in strength; for the first run, set them low. Review comments, which
   the reviewed code can influence, go to the executor without your approving each one. A turn that was stopped can
   keep running until it ends. After the background program restarts, automatic flows stop and you press 「繼續」:
   VBear first checks the risk acceptance, the limits and the other conditions, and a turn that was cut off is

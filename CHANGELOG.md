@@ -16,6 +16,8 @@
   (stopped; you press continue; the limit may need raising and a new acceptance).
   Skills and roles are described as labels and choices a profile records, not as things a launch loads. The
   Traditional Chinese README's long reference sections moved to `docs/REFERENCE.zh-TW.md`.
+  The README also says that a launch starts Claude Code in its safe mode, which turns skills off, and describes the
+  limits as a stop-loss that real usage can pass.
 
 ## v0.3.0 — multi-agent flows
 
