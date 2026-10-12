@@ -180,6 +180,118 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     return out
 
 
+# --- the armor: what each of the seven labels says -----------------------------------------------------------
+# The groups a label's level falls into on the screen (design game-ui v1.1 #3). Only a frame around the original
+# words: the level text itself is always shown.
+ARMOR_GROUPS = (("blocked", "擋住了"), ("partial", "部分擋住"), ("not_granted", "沒有專用權限"),
+                ("not_blocked", "沒有擋"), ("unproven", "未證明"))
+_LEVEL_GROUP = {ENFORCED: "blocked", PARTIAL: "partial", NOT_GRANTED: "not_granted", INTENT: "not_blocked",
+                UNRESTRICTED: "not_blocked", UNVERIFIED: "unproven", UNKNOWN: "unproven"}
+ARMOR_NAMES = ("Read", "Write", "Test", "Commit", "Deploy", "Network", "Filesystem")
+# What an item still needs from its caller. The semantic function below knows none of these values: it names them,
+# and the caller (a preview, which has a work directory, a manifest and evidence; or the loadout, which has none)
+# supplies or withholds them.
+SCOPE_WRITE = "write_scope"            # the work directory and this launch's scratch directory
+SCOPE_WORKDIR = "workdir"              # the work directory
+SCOPE_CODEX_WRITE = "codex_write"      # Codex: [workdir, scratch] (or the work directory alone)
+SCOPE_CODEX_GIT = "codex_git"          # Codex: the work directory and its .git
+EVIDENCE_WRITES, EVIDENCE_LIFECYCLE, EVIDENCE_NETWORK, EVIDENCE_CODEX = "writes", "lifecycle", "network", "codex"
+WHY_VERSION = "why_version"            # unknown_reason: "this Claude Code version is not verified", with the version
+CODEX_NO_EVIDENCE = "尚無 Codex 0.159.2 OS sandbox 驗收證據"
+VERSION_UNKNOWN_NOTE = "尚未載入這個 Claude Code 版本的驗證資料，無法說明這一項在你的 Mac 上守到什麼程度"
+
+
+def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -> dict:
+    """The meaning of each of the seven labels, and nothing else: name -> level, note, group, unknown_reason and
+    the names of the scope and evidence the caller adds. A pure function of its four inputs, which the caller has
+    already read and checked:
+
+    - ``tool``: "codex", else Claude Code's;
+    - ``claude_verified``: True (this version was verified), False (it was not) or None (not known: nothing was
+      loaded; only the loadout passes this, a preview always knows);
+    - ``network_verified``: the empty-allowlist network shape was verified (``NETWORK_VERIFIED``);
+    - ``codex_os_evidence_ok``: Codex's OS sandbox acceptance record is complete.
+
+    It reads no file, no work directory, no manifest and probes no CLI; ``derive_labels`` and the loadout add the
+    values it names."""
+    def item(level, note, *, scope=None, evidence=(), unknown_reason="none"):
+        return {"level": level, "note": note, "group": _LEVEL_GROUP[level], "scope": scope,
+                "evidence": tuple(evidence), "unknown_reason": unknown_reason}
+
+    if tool == "codex":
+        proven = bool(codex_os_evidence_ok)
+        ev = (EVIDENCE_CODEX,)
+        unknown = "none" if proven else CODEX_NO_EVIDENCE
+        return {
+            "Read": item(INTENT, "CLI 可讀取目前使用者可讀的其他路徑；沒有讀取隔離", evidence=ev,
+                         unknown_reason=unknown),
+            "Write": item(ENFORCED if proven else UNKNOWN,
+                          "Codex 0.159.2 workspace-write 的 Bash 寫入限於工作目錄與本 launch scratch；/tmp 與 TMPDIR 排除路徑已由 OS 拒絕"
+                          if proven else "Codex workspace-write 邊界尚無本輪 OS 證據",
+                          scope=SCOPE_CODEX_WRITE, evidence=ev, unknown_reason=unknown),
+            "Test": item(INTENT, "可執行指令；執行能力由 Codex sandbox 管理，不是 Test-only 權限", evidence=ev,
+                         unknown_reason=unknown),
+            "Commit": item(UNRESTRICTED, "commit=true 明確允許工作目錄與 .git 寫入；沒有命令樣式攔截，也不涵蓋 push",
+                           scope=SCOPE_CODEX_GIT, evidence=ev, unknown_reason=unknown),
+            "Deploy": item(NOT_GRANTED, "沒有 deploy 專用沙盒權限；不得把 shell 命令規則或網路設定當成完整部署隔離",
+                           evidence=ev, unknown_reason=unknown),
+            "Network": item(ENFORCED if proven else UNKNOWN,
+                            "workspace-write 明確設 network_access=false；本輪數字 IP 連線由 OS sandbox 拒絕"
+                            if proven else "network_access=false 尚無本輪 OS 負向證據",
+                            evidence=ev, unknown_reason=unknown),
+            "Filesystem": item(ENFORCED if proven else UNKNOWN,
+                               "僅工作目錄、session scratch 與明確 opt-in 的 .git 可寫；讀取未隔離"
+                               if proven else "Codex filesystem sandbox 尚無本輪 OS 證據",
+                               scope=SCOPE_CODEX_WRITE, evidence=ev, unknown_reason=unknown),
+        }
+    if claude_verified is False:
+        why = WHY_VERSION
+        return {
+            "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到", unknown_reason=why),
+            "Write": item(UNVERIFIED, "設定為只允許寫入工作目錄與本 session 暫存區，但此版本未實測",
+                          scope=SCOPE_WRITE, unknown_reason=why),
+            "Test": item(INTENT, "可用 Bash 執行指令；限制尚未在此版本實測", unknown_reason=why),
+            "Commit": item(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+                           scope=SCOPE_WORKDIR, unknown_reason=why),
+            "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
+            "Network": item(UNVERIFIED, "設定為空 allowlist（不連網），但此版本未實測", unknown_reason=why),
+            "Filesystem": item(UNVERIFIED, "設定為工作目錄與本 session 暫存區之外不可寫，但此版本未實測",
+                               scope=SCOPE_WRITE, unknown_reason=why),
+        }
+    if claude_verified is None:
+        # Only the loadout gets here. What does not depend on the version stays; what does is "unknown".
+        return {
+            "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到"),
+            "Write": item(UNKNOWN, VERSION_UNKNOWN_NOTE),
+            "Test": item(INTENT, "可用 Bash 執行指令；限制是否生效取決於版本驗證，尚未載入"),
+            "Commit": item(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+                           scope=SCOPE_WORKDIR),
+            "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
+            "Network": item(UNKNOWN, VERSION_UNKNOWN_NOTE),
+            "Filesystem": item(UNKNOWN, VERSION_UNKNOWN_NOTE),
+        }
+    net = (item(ENFORCED, "空 allowlist：Bash 工具的對外連線被拒（已測：HTTPS 請求經沙盒 proxy 回 403、"
+                          "直接 TCP 連線與連回本機 EPERM；其他協定未測）", evidence=(EVIDENCE_NETWORK,))
+           if network_verified else
+           item(UNKNOWN, "設定為空 allowlist，但尚未以這組設定實測",
+                unknown_reason="空 allowlist 在此設定形狀下尚無實測證據"))
+    return {
+        "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他 session 的暫存區",
+                     evidence=(EVIDENCE_WRITES,)),
+        "Write": item(PARTIAL, "Bash 工具的寫入由 Claude 沙盒限制在工作目錄與本 session 暫存區（OS 拒絕）；"
+                               "Edit/Write 工具未提供，屬工具層意圖，不是 OS 邊界",
+                      scope=SCOPE_WRITE, evidence=(EVIDENCE_WRITES, EVIDENCE_LIFECYCLE)),
+        "Test": item(INTENT, "可用 Bash 執行指令；只受寫入範圍與網路設定限制", evidence=(EVIDENCE_WRITES,)),
+        "Commit": item(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+                       scope=SCOPE_WORKDIR, unknown_reason="未測試以 denyWrite 排除 .git 的效果"),
+        "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
+        "Network": net,
+        "Filesystem": item(ENFORCED, "Agent 的 Bash 工具寫入邊界：工作目錄與本 session 暫存區之外的寫入被 OS 拒絕"
+                                     "（含家目錄與全域 CLI 設定的已測路徑）。這不是讀取隔離",
+                           scope=SCOPE_WRITE, evidence=(EVIDENCE_WRITES, EVIDENCE_LIFECYCLE)),
+    }
+
+
 def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None = None) -> dict:
     """The seven labels with the contract's metadata fields. ``manifest`` is
     None when nothing was prepared (the Profile is not launchable)."""
@@ -200,75 +312,28 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
                 "bypass": BYPASS_CODEX_PTY if engine == "codex" else BYPASS_PTY,
                 "unknown_reason": unprepared or unknown_reason}
 
-    writes, lifecycle = claude_evidence(version, "writes"), claude_evidence(version, "lifecycle")
+    tool = "codex" if engine == "codex" else "claude"
+    codex_ref = _codex_evidence_reference() if tool == "codex" else None
     unverified = bool(manifest) and engine == "claude" and manifest.get("cli_verified") is False
-    net = (label(ENFORCED, "空 allowlist：Bash 工具的對外連線被拒（已測：HTTPS 請求經沙盒 proxy 回 403、"
-                           "直接 TCP 連線與連回本機 EPERM；其他協定未測）",
-                 evidence=[claude_evidence(version, "network")])
-           if NETWORK_VERIFIED else
-           label(UNKNOWN, "設定為空 allowlist，但尚未以這組設定實測",
-                 unknown_reason="空 allowlist 在此設定形狀下尚無實測證據"))
-    if engine == "codex":
-        codex_ref = _codex_evidence_reference()
-        codex_evidence = [codex_ref] if codex_ref else []
-        codex_unknown = ("尚無 Codex 0.159.2 OS sandbox 驗收證據" if not codex_evidence else "none")
-        codex_proven = bool(codex_evidence)
-        scope = [workdir, scratch] if scratch else (workdir or "不適用")
-        return {
-            "Read": label(INTENT, "CLI 可讀取目前使用者可讀的其他路徑；沒有讀取隔離",
-                           evidence=codex_evidence, unknown_reason=codex_unknown),
-            "Write": label(ENFORCED if codex_proven else UNKNOWN,
-                           "Codex 0.159.2 workspace-write 的 Bash 寫入限於工作目錄與本 launch scratch；/tmp 與 TMPDIR 排除路徑已由 OS 拒絕"
-                           if codex_proven else "Codex workspace-write 邊界尚無本輪 OS 證據",
-                           path_scope=scope, evidence=codex_evidence,
-                           unknown_reason="none" if codex_proven else codex_unknown),
-            "Test": label(INTENT, "可執行指令；執行能力由 Codex sandbox 管理，不是 Test-only 權限",
-                          evidence=codex_evidence, unknown_reason=codex_unknown),
-            "Commit": label(UNRESTRICTED, "commit=true 明確允許工作目錄與 .git 寫入；沒有命令樣式攔截，也不涵蓋 push",
-                            path_scope=[workdir, str(Path(workdir) / ".git")] if workdir else "不適用",
-                            evidence=codex_evidence, unknown_reason="none" if codex_proven else codex_unknown),
-            "Deploy": label(NOT_GRANTED, "沒有 deploy 專用沙盒權限；不得把 shell 命令規則或網路設定當成完整部署隔離",
-                            evidence=codex_evidence, unknown_reason=codex_unknown),
-            "Network": label(ENFORCED if codex_proven else UNKNOWN,
-                             "workspace-write 明確設 network_access=false；本輪數字 IP 連線由 OS sandbox 拒絕"
-                             if codex_proven else "network_access=false 尚無本輪 OS 負向證據",
-                             evidence=codex_evidence, unknown_reason="none" if codex_proven else codex_unknown),
-            "Filesystem": label(ENFORCED if codex_proven else UNKNOWN,
-                                "僅工作目錄、session scratch 與明確 opt-in 的 .git 可寫；讀取未隔離"
-                                if codex_proven else "Codex filesystem sandbox 尚無本輪 OS 證據",
-                                path_scope=scope, evidence=codex_evidence,
-                                unknown_reason="none" if codex_proven else codex_unknown),
-        }
-    if unverified:
-        why = f"Claude Code {version} 尚未驗證（說明見上方提示）"
-        return {
-            "Read": label(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到", unknown_reason=why),
-            "Write": label(UNVERIFIED, "設定為只允許寫入工作目錄與本 session 暫存區，但此版本未實測",
-                           path_scope=write_scope, unknown_reason=why),
-            "Test": label(INTENT, "可用 Bash 執行指令；限制尚未在此版本實測", unknown_reason=why),
-            "Commit": label(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
-                            path_scope=[workdir] if workdir else "不適用", unknown_reason=why),
-            "Deploy": label(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
-            "Network": label(UNVERIFIED, "設定為空 allowlist（不連網），但此版本未實測", unknown_reason=why),
-            "Filesystem": label(UNVERIFIED, "設定為工作目錄與本 session 暫存區之外不可寫，但此版本未實測",
-                                path_scope=write_scope, unknown_reason=why),
-        }
-    return {
-        "Read": label(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他 session 的暫存區",
-                      evidence=[writes]),
-        "Write": label(PARTIAL, "Bash 工具的寫入由 Claude 沙盒限制在工作目錄與本 session 暫存區（OS 拒絕）；"
-                                "Edit/Write 工具未提供，屬工具層意圖，不是 OS 邊界",
-                       path_scope=write_scope, evidence=[writes, lifecycle]),
-        "Test": label(INTENT, "可用 Bash 執行指令；只受寫入範圍與網路設定限制", evidence=[writes]),
-        "Commit": label(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
-                        path_scope=[workdir] if workdir else "不適用",
-                        unknown_reason="未測試以 denyWrite 排除 .git 的效果"),
-        "Deploy": label(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
-        "Network": net,
-        "Filesystem": label(ENFORCED, "Agent 的 Bash 工具寫入邊界：工作目錄與本 session 暫存區之外的寫入被 OS 拒絕"
-                                      "（含家目錄與全域 CLI 設定的已測路徑）。這不是讀取隔離",
-                            path_scope=write_scope, evidence=[writes, lifecycle]),
+    items = armor_items(tool, not unverified, NETWORK_VERIFIED, bool(codex_ref))
+    why = f"Claude Code {version} 尚未驗證（說明見上方提示）"
+    scopes = {
+        None: "不適用",
+        SCOPE_WRITE: write_scope,
+        SCOPE_WORKDIR: [workdir] if workdir else "不適用",
+        SCOPE_CODEX_WRITE: [workdir, scratch] if scratch else (workdir or "不適用"),
+        SCOPE_CODEX_GIT: [workdir, str(Path(workdir) / ".git")] if workdir else "不適用",
     }
+    evidence = {
+        EVIDENCE_WRITES: claude_evidence(version, "writes"),
+        EVIDENCE_LIFECYCLE: claude_evidence(version, "lifecycle"),
+        EVIDENCE_NETWORK: claude_evidence(version, "network"),
+        EVIDENCE_CODEX: codex_ref,
+    }
+    return {name: label(it["level"], it["note"], path_scope=scopes[it["scope"]],
+                        evidence=[evidence[e] for e in it["evidence"]],
+                        unknown_reason=why if it["unknown_reason"] == WHY_VERSION else it["unknown_reason"])
+            for name, it in items.items()}
 
 
 class PreviewStore:
