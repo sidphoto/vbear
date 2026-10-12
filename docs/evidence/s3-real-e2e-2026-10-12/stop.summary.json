@@ -1,0 +1,197 @@
+{
+ "scenario": "stop",
+ "passed": true,
+ "has_error": false,
+ "wall_seconds": 164.8,
+ "cleanup_problem_count": 0,
+ "clean": true,
+ "real_state_unchanged": true,
+ "leftover_process_count": 0,
+ "open_real_state_file_count": 0,
+ "limits": {
+  "executor_budget_usd": 0.5,
+  "executor_total_max_responses": 150.0,
+  "executor_turn_max_responses": 60.0,
+  "executor_turn_timeout_min": 20.0,
+  "max_dispatches": 6.0,
+  "max_elapsed_h": 1.0,
+  "max_reviews": 3.0,
+  "review_max_responses": 100.0,
+  "review_timeout_min": 20.0
+ },
+ "verdicts": [],
+ "counts": {
+  "dispatches": 1,
+  "review_rounds": 1,
+  "review_jobs": 1
+ },
+ "assertions": [
+  {
+   "name": "a review was running when the stop was pressed",
+   "ok": true
+  },
+  {
+   "name": "the flow is held",
+   "ok": true
+  },
+  {
+   "name": "the review's process was cleaned up",
+   "ok": true
+  },
+  {
+   "name": "the stopped review is not a valid review",
+   "ok": true
+  },
+  {
+   "name": "nothing was dispatched or reviewed after the stop",
+   "ok": true
+  },
+  {
+   "name": "the flow did not resume by itself",
+   "ok": true
+  },
+  {
+   "name": "no dispatch id was used twice",
+   "ok": true
+  },
+  {
+   "name": "no review round was started twice",
+   "ok": true
+  },
+  {
+   "name": "no review job was started twice",
+   "ok": true
+  },
+  {
+   "name": "every automatic event is marked as the automation's own",
+   "ok": true
+  }
+ ],
+ "stop": {
+  "review_round": 1,
+  "still_running_when_stopped": true,
+  "held": true,
+  "review_ended_after_s": 0.1,
+  "events_after_the_stop": 0
+ },
+ "restart": {
+  "review_round": null,
+  "still_running": null,
+  "daemon_alive_while_console_down": null,
+  "console_exit_code": null
+ },
+ "sessions": [
+  {
+   "fact_kinds": {
+    "session_started": 1,
+    "dispatch_accepted": 1,
+    "dispatch_writing": 1,
+    "dispatch_written": 1,
+    "turn_lifecycle": 3,
+    "turn_init": 1,
+    "dispatch_confirmed": 1,
+    "turn_result": 1,
+    "exited": 1
+   },
+   "anomalies": [],
+   "permission_denied": [],
+   "turns": [
+    {
+     "subtype": "success",
+     "num_turns": 17,
+     "total_cost_usd": 0.0582,
+     "responses": 16,
+     "tool_calls": 16,
+     "report_status": "done",
+     "report_tests": "passed"
+    }
+   ],
+   "responses": 16,
+   "final_cost_usd": 0.0582
+  }
+ ],
+ "reviews": [
+  {
+   "round": 1,
+   "state": "cleaned",
+   "outcome": "invalid",
+   "model": "gpt-6-luna",
+   "codex_version": "0.160.0",
+   "exit_code": null,
+   "invalid_reason_count": 10
+  }
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "source": "console",
+   "kind": "risk_acknowledged",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 2,
+   "source": "console",
+   "kind": "automation_mode",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 3,
+   "source": "automation",
+   "kind": "auto_dispatch_intent",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 4,
+   "source": "automation",
+   "kind": "auto_dispatch_sent",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 5,
+   "source": "automation",
+   "kind": "auto_report",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 6,
+   "source": "automation",
+   "kind": "auto_review_intent",
+   "round": 1,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 7,
+   "source": "automation",
+   "kind": "auto_review_started",
+   "round": 1,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 8,
+   "source": "automation",
+   "kind": "auto_stopped",
+   "round": null,
+   "verdict": null,
+   "reason_code": "user_stop"
+  }
+ ],
+ "accounting": {
+  "dispatches": 1,
+  "responses": 16,
+  "reviews": 1,
+  "spent_usd": 0.0582,
+  "elapsed_s": 157.5604
+ }
+}

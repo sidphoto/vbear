@@ -1,0 +1,274 @@
+{
+ "scenario": "restart",
+ "passed": true,
+ "has_error": false,
+ "wall_seconds": 282.1,
+ "cleanup_problem_count": 0,
+ "clean": true,
+ "real_state_unchanged": true,
+ "leftover_process_count": 0,
+ "open_real_state_file_count": 0,
+ "limits": {
+  "executor_budget_usd": 0.5,
+  "executor_total_max_responses": 150.0,
+  "executor_turn_max_responses": 60.0,
+  "executor_turn_timeout_min": 20.0,
+  "max_dispatches": 6.0,
+  "max_elapsed_h": 1.0,
+  "max_reviews": 3.0,
+  "review_max_responses": 100.0,
+  "review_timeout_min": 20.0
+ },
+ "verdicts": [
+  "NEEDS WORK",
+  "PASS"
+ ],
+ "counts": {
+  "dispatches": 2,
+  "review_rounds": 2,
+  "review_jobs": 2
+ },
+ "assertions": [
+  {
+   "name": "a review was running when the console was restarted",
+   "ok": true
+  },
+  {
+   "name": "the daemon kept running while the console was down",
+   "ok": true
+  },
+  {
+   "name": "the loop ended at the merge gate",
+   "ok": true
+  },
+  {
+   "name": "the last verdict is PASS",
+   "ok": true
+  },
+  {
+   "name": "every review is valid, complete and cleaned",
+   "ok": true
+  },
+  {
+   "name": "one dispatch per review round",
+   "ok": true
+  },
+  {
+   "name": "no dispatch id was used twice",
+   "ok": true
+  },
+  {
+   "name": "no review round was started twice",
+   "ok": true
+  },
+  {
+   "name": "no review job was started twice",
+   "ok": true
+  },
+  {
+   "name": "every automatic event is marked as the automation's own",
+   "ok": true
+  }
+ ],
+ "stop": {
+  "review_round": null,
+  "still_running_when_stopped": null,
+  "held": null,
+  "review_ended_after_s": null,
+  "events_after_the_stop": 0
+ },
+ "restart": {
+  "review_round": 1,
+  "still_running": true,
+  "daemon_alive_while_console_down": true,
+  "console_exit_code": 0
+ },
+ "sessions": [
+  {
+   "fact_kinds": {
+    "session_started": 1,
+    "dispatch_accepted": 2,
+    "dispatch_writing": 2,
+    "dispatch_written": 2,
+    "turn_lifecycle": 6,
+    "turn_init": 2,
+    "dispatch_confirmed": 2,
+    "turn_result": 2,
+    "exited": 1
+   },
+   "anomalies": [],
+   "permission_denied": [],
+   "turns": [
+    {
+     "subtype": "success",
+     "num_turns": 13,
+     "total_cost_usd": 0.05,
+     "responses": 12,
+     "tool_calls": 12,
+     "report_status": "done",
+     "report_tests": "passed"
+    },
+    {
+     "subtype": "success",
+     "num_turns": 7,
+     "total_cost_usd": 0.0868,
+     "responses": 6,
+     "tool_calls": 6,
+     "report_status": "done",
+     "report_tests": "passed"
+    }
+   ],
+   "responses": 18,
+   "final_cost_usd": 0.0868
+  }
+ ],
+ "reviews": [
+  {
+   "round": 2,
+   "state": "cleaned",
+   "outcome": "valid",
+   "model": "gpt-6-luna",
+   "codex_version": "0.160.0",
+   "exit_code": 0,
+   "invalid_reason_count": 0
+  },
+  {
+   "round": 1,
+   "state": "cleaned",
+   "outcome": "valid",
+   "model": "gpt-6-luna",
+   "codex_version": "0.160.0",
+   "exit_code": 0,
+   "invalid_reason_count": 0
+  }
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "source": "console",
+   "kind": "risk_acknowledged",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 2,
+   "source": "console",
+   "kind": "automation_mode",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 3,
+   "source": "automation",
+   "kind": "auto_dispatch_intent",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 4,
+   "source": "automation",
+   "kind": "auto_dispatch_sent",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 5,
+   "source": "automation",
+   "kind": "auto_report",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 6,
+   "source": "automation",
+   "kind": "auto_review_intent",
+   "round": 1,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 7,
+   "source": "automation",
+   "kind": "auto_review_started",
+   "round": 1,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 8,
+   "source": "automation",
+   "kind": "auto_review_result",
+   "round": 1,
+   "verdict": "NEEDS WORK",
+   "reason_code": null
+  },
+  {
+   "seq": 9,
+   "source": "automation",
+   "kind": "auto_dispatch_intent",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 10,
+   "source": "automation",
+   "kind": "auto_dispatch_sent",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 11,
+   "source": "automation",
+   "kind": "auto_report",
+   "round": null,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 12,
+   "source": "automation",
+   "kind": "auto_review_intent",
+   "round": 2,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 13,
+   "source": "automation",
+   "kind": "auto_review_started",
+   "round": 2,
+   "verdict": null,
+   "reason_code": null
+  },
+  {
+   "seq": 14,
+   "source": "automation",
+   "kind": "auto_review_result",
+   "round": 2,
+   "verdict": "PASS",
+   "reason_code": null
+  },
+  {
+   "seq": 15,
+   "source": "automation",
+   "kind": "auto_stopped",
+   "round": null,
+   "verdict": null,
+   "reason_code": "awaiting_merge"
+  }
+ ],
+ "accounting": {
+  "dispatches": 2,
+  "responses": 18,
+  "reviews": 2,
+  "spent_usd": 0.0868,
+  "elapsed_s": 274.7871
+ }
+}
