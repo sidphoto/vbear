@@ -9,6 +9,10 @@
   the same five groups, the list of chosen skills marked 「本次不會載入」, and a reason beside the button while it is
   off. New read-only answers: `GET /api/agent-profiles/<id>/loadout` and `GET /api/skills/<id>?view=card`
   (from what is already loaded; nothing is scanned or started). Names on the screens changed; see the README.
+  A flow's page shows 任務進度 as a row of gates (by the phase VBear already derives), 隊伍 as cards (the planner
+  marked as only a record; each reviewer says whether it counts as independent of the executor), and 體力 as
+  bars with the words: the executor's cost is split into what the CLI recorded and what is counted for turns
+  without a result, with 「實際費用尚未知」; a figure that cannot be counted is not drawn as zero.
 - **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,
   every automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk
   acceptance still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at

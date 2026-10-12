@@ -303,7 +303,7 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
 - **Names on the screens.** Some names changed to match the game words above (old → new): 「角色裝備」 tab →
   「角色」; 「職業角色」 → 「職業」; 「模型工具」 → 「工具（遊戲用語：陣營）」; 「已裝備技能 (Equipped Skill Loadout)」 →
   「已選技能」; 「加入裝備 →」 → 「選入 →」; 「預覽並啟動」 → 「出發前檢查」; the Armory's 「已裝備到 Profile」 → 「已加入角色」; the limits' heading
-  「上限」 → 「體力（停損設定）」; a flow's 「階段」 → 「任務進度」.
+  「上限」 → 「體力（停損設定）」; a flow's 「階段」 → 「任務進度」 and its 「角色」 section → 「隊伍」.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 

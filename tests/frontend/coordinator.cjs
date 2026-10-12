@@ -1146,6 +1146,102 @@ test("an answer in a shape the page does not know is said, not a crash", async (
   c.stop();
 });
 
+// ---- G4: gates, team and the bars of 體力 (design game-ui 4.5, v1.1 #7) --------------------------------------------
+
+function flowFixture(phaseKey, over = {}) {
+  const role = (name, family, extra = {}) => ({ name, family, family_label: { anthropic: "Anthropic（Claude）", openai: "OpenAI（Codex）",
+    unknown: "不明" }[family] || family, ...extra });
+  return { id: FLOW, phase: { key: phaseKey, label: { planning: "計畫中", awaiting_approval: "等核准", implementing: "實作中",
+      in_review: "審查第 2 輪", needs_fix: "等修正", awaiting_merge: "審查通過・等合併", review_stale: "審查結果已過期",
+      review_unverified: "審查通過・無法核對 HEAD", awaiting_push: "等 push", done: "完成" }[phaseKey] || "？", reason: "" },
+    attention: ["awaiting_approval", "awaiting_merge", "awaiting_push"].includes(phaseKey),
+    roles: { planner: role("規劃 <img src=x onerror=alert(1)>", "anthropic"),
+      executor: role("Claude Code", "anthropic", { model: "haiku", workdir: "/work", session_id: "n-0123456789ab" }),
+      reviewers: [{ ...role("Codex", "openai", { model: "gpt-6-luna" }), independent_of_executor: { counted: true, why: "" } },
+        { ...role("另一個 Claude", "anthropic"), independent_of_executor: { counted: false, why: "審查者與執行者同為 Anthropic（Claude），不算獨立審查，不算通過" } }] },
+    ...over };
+}
+
+test("the gates follow the phase: 已過, 目前 with the phase's own words, 未到", () => {
+  const cases = { planning: 0, awaiting_approval: 1, implementing: 2, in_review: 3, needs_fix: 3, review_stale: 3,
+    review_unverified: 4, awaiting_merge: 4, awaiting_push: 5, done: 6 };
+  for (const [key, at] of Object.entries(cases)) {
+    const grid = app.flowGateGrid(flowFixture(key));
+    const cells = grid.findAll((n) => n.getAttribute && n.getAttribute("data-gate") !== null);
+    assert.strictEqual(cells.length, 7, key);
+    cells.forEach((c, i) => {
+      const want = i < at ? "past" : i === at ? "now" : "next";
+      assert.strictEqual(c.getAttribute("data-state"), want, `${key} gate ${i}`);
+      const words = text(c);
+      assert(words.includes(want === "past" ? "已過" : want === "next" ? "未到" : "目前："), `${key} gate ${i}: ${words}`);
+    });
+  }
+  const now = app.flowGateGrid(flowFixture("needs_fix")).find((n) => n.getAttribute && n.getAttribute("data-state") === "now");
+  assert(text(now).includes("目前：等修正"), "the phase's own label is the words of the current gate");
+  assert(text(app.flowGateGrid(flowFixture("awaiting_merge"))).includes("等你處理"), "a gate waiting for you says so");
+});
+
+test("a phase the gates do not know is not drawn as a gate", () => {
+  const grid = app.flowGateGrid(flowFixture("something_new"));
+  assert.strictEqual(grid.findAll((n) => n.getAttribute && n.getAttribute("data-gate") !== null).length, 0);
+  assert(text(grid).includes("無法對應到關卡"));
+});
+
+test("the team: the planner is only a record, each member has name, family and model, reviewers say if they count", () => {
+  const team = app.flowTeamSection(flowFixture("in_review"), { label: "執行中", reason: "即時狀態 3 秒前" });
+  const t = text(team);
+  assert(t.includes("規劃者（只是記錄，VBear 不會啟動）") && t.includes("沒有狀態：只是記錄"));
+  assert(t.includes("執行者") && t.includes("執行中：即時狀態 3 秒前") && t.includes("/work") && t.includes("n-0123456789ab"));
+  assert(t.includes("審查者 1") && t.includes("審查者 2"));
+  assert(t.includes("不同家族，可算獨立審查"));
+  assert(t.includes("不算獨立審查：審查者與執行者同為 Anthropic（Claude）"));
+  assert(t.includes("OpenAI（Codex）") && t.includes("gpt-6-luna"));
+  // a field that was not given reads 未提供 (the other reviewer has no model)
+  assert(t.includes("未提供"));
+  // text only: the hostile name is shown as text and builds no element
+  assert(t.includes("<img src=x onerror=alert(1)>"));
+  assert.strictEqual(team.findAll((n) => n.tag === "img").length, 0);
+  const missing = app.flowTeamSection(flowFixture("planning", { roles: { planner: { name: "p", family: "unknown", family_label: "不明" },
+    executor: { name: "e", family: "unknown", family_label: "不明" }, reviewers: [{ name: "r", family: "unknown", family_label: "不明" }] } }),
+    { label: "狀態未知", reason: "" });
+  assert(text(missing).includes("未提供"), "no independence data reads 未提供, not 'independent'");
+  assert(!text(missing).includes("可算獨立審查"));
+});
+
+test("the limits are bars with the words; what cannot be counted is not drawn as 0", async () => {
+  const ex = executor();
+  ex.accounting.spent_usd = 7.62; ex.accounting.recorded_usd = 0.12; ex.accounting.unsettled_usd = 7.5;
+  const c = await mount({ executor: ex });
+  const panel = byS2(c.node, "executor");
+  const bars = panel.findAll((n) => n.tag === "progress");
+  assert(bars.length >= 5, `a bar for dispatches, responses, cost, reviews and time (got ${bars.length})`);
+  const cost = bars.find((b) => (b.getAttribute("aria-label") || "").startsWith("執行者費用"));
+  assert.strictEqual(cost.getAttribute("max"), "20");
+  assert.strictEqual(cost.getAttribute("value"), "7.62");
+  const words = text(panel);
+  assert(words.includes("已記錄的花費 USD 0.12（CLI 回報）"), words);
+  assert(words.includes("未結算 USD 7.5（未完成的回合按額度上限計入用量）"));
+  assert(words.includes("實際費用尚未知"));
+  // nothing unsettled
+  const ok = await mount({ executor: executor({ accounting: { ...executor().accounting, recorded_usd: 0.12, unsettled_usd: 0 } }) });
+  assert(text(byS2(ok.node, "executor")).includes("沒有未結算的回合"));
+  // an older answer without the split: it is said, nothing is invented
+  const old = await mount({ executor: executor() });
+  const oldWords = text(byS2(old.node, "executor"));
+  assert(oldWords.includes("已記錄的花費：無法核算") && oldWords.includes("未結算：無法核算"));
+  // an unknown limit: no bar, and it says it cannot be counted
+  const none = await mount({ executor: executor({ accounting: { ...executor().accounting, responses: null } }) });
+  const noneWords = text(byS2(none.node, "executor"));
+  assert(noneWords.includes("無法核算"));
+  const noneBars = byS2(none.node, "executor").findAll((n) => n.tag === "progress");
+  assert(!noneBars.some((b) => (b.getAttribute("aria-label") || "").startsWith("執行者模型回應")), "no bar for an unknown value");
+  // the time has not started: no bar, 尚未開始
+  const fresh = await mount({ executor: executor({ accounting: { ...executor().accounting, elapsed_s: null } }) });
+  const freshPanel = byS2(fresh.node, "executor");
+  assert(text(freshPanel).includes("尚未開始"));
+  assert(!freshPanel.findAll((n) => n.tag === "progress").some((b) => (b.getAttribute("aria-label") || "").startsWith("經過時間")));
+});
+
 // ---- run ------------------------------------------------------------------------------------------------------
 
 (async () => {

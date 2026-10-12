@@ -632,6 +632,13 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
             "stray_reviews": stray, "warnings": warnings}
 
 
+def _independence_view(executor_family: str, reviewer_family: str) -> dict:
+    """Whether a review by this reviewer can count as independent of the executor: the same rule that decides
+    whether a recorded PASS counts, said before any review exists."""
+    counted, why = _independent(executor_family, reviewer_family)
+    return {"counted": counted, "why": why}
+
+
 def _role_view(role: dict) -> dict:
     return {**role, "family_label": FAMILY_LABELS.get(role.get("family"), "不明")}
 
@@ -724,7 +731,8 @@ def view(flow: dict, *, heads: Callable[[str], dict], task_title: Callable[[str]
         "id": flow["id"], "task_id": flow["task_id"], "task_title": title, "task_missing": title is None,
         "created_at": flow["created_at"],
         "roles": {"planner": _role_view(roles["planner"]), "executor": _role_view(roles["executor"]),
-                  "reviewers": [_role_view(r) for r in roles["reviewers"]]},
+                  "reviewers": [{**_role_view(r), "independent_of_executor": _independence_view(
+                                     roles["executor"]["family"], r["family"])} for r in roles["reviewers"]]},
         **derived,
         "latest_review": next((r for rnd in reversed(derived["rounds"]) for r in reversed(rnd["reviews"])), None),
         "executor_live": executor_live(roles["executor"].get("session_id"), live, now),

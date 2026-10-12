@@ -45,6 +45,11 @@ class FlowRefused(Exception):
 class Totals:
     responses: int = 0
     spent_usd: float = 0.0
+    # spent_usd split for the screen (design game-ui 4.5, v1.1 #7): what the CLI recorded, and what is counted
+    # on top of it because a turn has no result (its session's whole budget). spent_usd is still what the limit
+    # reads; these two add up to it.
+    recorded_usd: float = 0.0
+    unsettled_usd: float = 0.0
     sessions: list = field(default_factory=list)
     reviews: list = field(default_factory=list)          # this flow's review jobs (design 5.3, v29.9)
     accepted: set = field(default_factory=set)                  # dispatch ids some session of the flow accepted
@@ -202,6 +207,8 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
         # counts at its worst case (its turn cap; the session's budget).
         t.responses += js.counted_responses
         t.spent_usd += js.counted_cost    # total_cost_usd is per process: the session's last value
+        t.recorded_usd += js.cost
+        t.unsettled_usd += max(0.0, js.counted_cost - js.cost)
         t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "manifest_state": m.get("state"),
                            "dispatches": js.dispatch_count(),
                            "unfinished": js.unfinished(), **_failure(m, js)})

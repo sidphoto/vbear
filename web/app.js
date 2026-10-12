@@ -1969,6 +1969,57 @@ function flowPhaseClass(key) {
 function flowPhaseBadge(phase) {
   return badge(phase.label, flowPhaseClass(phase.key), phase.reason || "");
 }
+// 任務進度 (design game-ui 4.5): the phase VBear already derives, drawn as a row of gates. The words are the
+// phase's own; a gate is 已過 / 目前 / 未到 by position only (it does not claim an approval was recorded).
+const FLOW_GATES = ["計畫", "核准", "實作", "審查", "合併（你來）", "push（你來）", "完成"];
+const FLOW_PHASE_GATE = { planning: 0, awaiting_approval: 1, implementing: 2, in_review: 3, needs_fix: 3,
+  review_stale: 3, review_unverified: 4, awaiting_merge: 4, awaiting_push: 5, done: 6 };
+function flowGateGrid(f) {
+  const at = FLOW_PHASE_GATE[f.phase && f.phase.key];
+  if (at === undefined) {
+    return el("section", { class: "section", "data-flow": "gates" }, sectionHead("任務進度", null),
+      el("p", { class: "small muted" }, "目前的階段無法對應到關卡，只顯示上方的階段文字。"));
+  }
+  return el("section", { class: "section", "data-flow": "gates" }, sectionHead("任務進度", f.phase.label),
+    el("ol", { class: "fg-grid" }, FLOW_GATES.map((name, i) => {
+      const state = i < at ? "past" : i === at ? "now" : "next";
+      return el("li", { class: `fg-cell fg-${state}`, "data-gate": String(i), "data-state": state,
+        "aria-current": state === "now" ? "step" : null },
+        el("strong", null, name),
+        el("span", { class: "fg-state" }, state === "past" ? "已過" : state === "next" ? "未到"
+          : `目前：${f.phase.label}${f.attention ? "（等你處理）" : ""}`));
+    })),
+    el("p", { class: "small muted" }, "關卡只依事件推導出的階段排位；「已過」不代表當時有記錄到核准。"));
+}
+
+// 隊伍: planner, executor and reviewers as small cards. The planner is only a record; VBear never starts one.
+function flowTeamSection(f, liveText) {
+  const card = (kind, role, rows) => el("li", { class: "team-card" },
+    el("h4", null, kind),
+    el("dl", { class: "rc-dl" },
+      el("dt", null, "名稱（工具）"), el("dd", null, role && role.name ? String(role.name) : "未提供"),
+      el("dt", null, "家族（模型出自哪一家）"), el("dd", null, role && role.family_label ? role.family_label : "未提供"),
+      el("dt", null, "模型"), el("dd", null, role && role.model ? String(role.model) : "未提供"),
+      rows));
+  const row = (label, value, cls) => [el("dt", null, label), el("dd", { class: cls || null }, value)];
+  const ex = f.roles.executor;
+  const planner = card("規劃者（只是記錄，VBear 不會啟動）", f.roles.planner,
+    row("狀態", "沒有狀態：只是記錄，不是 VBear 啟動的角色"));
+  const executor = card("執行者", ex, [
+    ...row("狀態", `${liveText.label}${liveText.reason ? "：" + liveText.reason : ""}`),
+    ...row("工作目錄", ex.workdir || "（未設定，無法核對 HEAD）", "mono flow-path"),
+    ...(ex.session_id ? row("session", ex.session_id, "mono") : [])]);
+  const reviewers = (f.roles.reviewers || []).map((r, i) => {
+    const ind = r.independent_of_executor;
+    return card(`審查者 ${i + 1}`, r, [
+      ...row("狀態", "審查的進度與結果見下方「審查輪次」"),
+      ...row("與執行者", !ind ? "未提供" : ind.counted ? "不同家族，可算獨立審查"
+        : `不算獨立審查：${ind.why || "原因未提供"}`)]);
+  });
+  return el("section", { class: "section", "data-flow": "team" }, sectionHead("隊伍", null),
+    el("ul", { class: "team-grid" }, [planner, executor, ...reviewers]));
+}
+
 // The executor's live state as shown. If this page's own /api/live load
 // failed or timed out, nothing from the server's cache is shown as current.
 function flowLiveText(ex, liveError) {
@@ -2207,14 +2258,8 @@ async function viewFlowDetail(flowId) {
       : f.phase.key === "review_stale" ? notice("warn", f.phase.reason) : el("p", { class: "lede" }, f.phase.reason),
     flowBindingNote(f) ? el("p", { class: "small muted" }, flowBindingNote(f)) : null,
     (f.warnings || []).map((w) => notice("warn", w)),
-    el("section", { class: "section" }, sectionHead("角色", null),
-      el("dl", { class: "kv small" },
-        el("dt", null, "規劃"), el("dd", null, roleText(f.roles.planner)),
-        el("dt", null, "執行"), el("dd", null, roleText(f.roles.executor)),
-        el("dt", null, "執行者 session"), el("dd", null, (({ label, reason }) => `${label}${reason ? "：" + reason : ""}`)(
-          flowLiveText(f.executor_live, liveLoadError()))),
-        el("dt", null, "工作目錄"), el("dd", { class: "mono flow-path" }, f.roles.executor.workdir || "（未設定，無法核對 HEAD）"),
-        el("dt", null, "審查"), el("dd", null, f.roles.reviewers.map(roleText).join("、")))),
+    flowGateGrid(f),
+    flowTeamSection(f, flowLiveText(f.executor_live, liveLoadError())),
     coordinator.node,
     el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
       (f.stray_reviews || []).length ? notice("info", `另有 ${f.stray_reviews.length} 筆審查的 commit 不是最新一次回報的 commit，未列入輪次。`) : null),
@@ -2304,10 +2349,31 @@ function s2Confirm(label, question, action, cls) {
   return host;
 }
 
-function s2Meter(label, used, limit, unit) {
-  const over = typeof used === "number" && typeof limit === "number" && used >= limit;
-  return el("li", null, `${label}：`, el("b", { class: over ? "s2-over" : "" }, `${used ?? "?"}${unit || ""}`),
-    ` ／ 上限 ${limit ?? "?"}${unit || ""}`);
+// A meter: the words (always), and a bar when both numbers are known. A number that could not be had is not
+// drawn as an empty bar (that would read as 0): it says it cannot be counted.
+function s2Meter(label, used, limit, unit, why) {
+  const known = typeof used === "number" && typeof limit === "number" && Number.isFinite(used) && Number.isFinite(limit) && limit > 0;
+  const over = known && used >= limit;
+  return el("li", { class: "s2-meter" }, `${label}：`, el("b", { class: over ? "s2-over" : "" }, `${used ?? "?"}${unit || ""}`),
+    ` ／ 上限 ${limit ?? "?"}${unit || ""}`,
+    known ? el("progress", { class: "s2-bar", max: String(limit), value: String(Math.min(used, limit)),
+      "aria-label": `${label}：已用 ${used}${unit || ""}，上限 ${limit}${unit || ""}` })
+      : el("span", { class: "small muted" }, ` 無法核算${why ? "：" + why : "（用量或上限不明）"}`));
+}
+
+// The executor's cost: the figure the limit reads, split into what the CLI recorded and what is counted on
+// top of it for turns that have no result, and the plain statement that the real cost is not known.
+function s2CostMeter(acct) {
+  const li = s2Meter("執行者費用", acct.spent_usd, acct.limits.executor_budget_usd, " USD");
+  const usd = (v) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : null);
+  const rec = usd(acct.recorded_usd), uns = usd(acct.unsettled_usd);
+  li.append(
+    el("div", { class: "small s2-cost-split" },
+      rec === null ? "已記錄的花費：無法核算" : `已記錄的花費 USD ${rec}（CLI 回報）`,
+      uns === null ? "；未結算：無法核算"
+        : (Number(uns) > 0 ? `；未結算 USD ${uns}（未完成的回合按額度上限計入用量）` : "；沒有未結算的回合")),
+    el("div", { class: "small muted" }, "實際費用尚未知；這裡的數字是用量，不是帳單。"));
+  return li;
 }
 
 // ---- the risk acceptance dialog ----------------------------------------------------------------
@@ -2647,10 +2713,13 @@ function s2ExecutorPanel(flowId, ex, refresh) {
     acct && acct.ok ? el("ul", { class: "small s2-meters" },
       s2Meter("派工", acct.dispatches, acct.limits.max_dispatches, " 則"),
       s2Meter("執行者模型回應", acct.responses, acct.limits.executor_total_max_responses),
-      s2Meter("執行者費用", acct.spent_usd, acct.limits.executor_budget_usd, " USD"),
+      s2CostMeter(acct),
       s2Meter("審查", acct.reviews, acct.limits.max_reviews, " 次"),
-      el("li", null, `經過時間：${acct.elapsed_s == null ? "尚未開始" : (acct.elapsed_s / 3600).toFixed(2) + " 小時"}` +
-        ` ／ 上限 ${acct.limits.max_elapsed_h} 小時`))
+      el("li", { class: "s2-meter" }, `經過時間：${acct.elapsed_s == null ? "尚未開始" : (acct.elapsed_s / 3600).toFixed(2) + " 小時"}` +
+        ` ／ 上限 ${acct.limits.max_elapsed_h} 小時`,
+        acct.elapsed_s == null ? null : el("progress", { class: "s2-bar", max: String(acct.limits.max_elapsed_h),
+          value: String(Math.min(acct.elapsed_s / 3600, acct.limits.max_elapsed_h)),
+          "aria-label": `經過時間：${(acct.elapsed_s / 3600).toFixed(2)} 小時，上限 ${acct.limits.max_elapsed_h} 小時` })))
       : (acct ? notice("bad", `用量無法核算（${acct.code}）：${acct.message}`) : null),
     (ex.failures || []).length ? el("div", null, el("h3", null, "失敗"),
       el("ul", { class: "small" }, ex.failures.map((f) => el("li", null,
@@ -6058,6 +6127,8 @@ if (typeof module !== "undefined" && module.exports) {
     flowEventBody,
     flowBindingNote,
     flowLiveText,
+    flowGateGrid,
+    flowTeamSection,
     api,
     mountCoordinator,
     mountStorage,

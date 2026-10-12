@@ -310,6 +310,21 @@ class InputTests(FlowCase):
         with self.assertRaises(KeyError):
             flows.append_event("flow-ffffffffffff", {"kind": "note"})
 
+    def test_the_view_says_whether_a_reviewer_is_independent_of_the_executor(self):
+        # the rule a recorded PASS is judged by, said before any review exists
+        cases = (("anthropic", ("openai", "google"), [True, True]),
+                 ("anthropic", ("anthropic", "unknown"), [False, False]),
+                 ("other", ("openai",), [False]))
+        for executor_family, reviewers, expected in cases:
+            with self.subTest(executor=executor_family, reviewers=reviewers):
+                fid = self.flow(executor_family=executor_family, reviewer_families=reviewers)
+                view = flows.view(flows.get_flow(fid), heads=flows.head_reader, task_title=lambda t: "t",
+                                  live=None, now=0)
+                got = [r["independent_of_executor"] for r in view["roles"]["reviewers"]]
+                self.assertEqual([g["counted"] for g in got], expected)
+                for g in got:
+                    self.assertEqual(bool(g["why"]), not g["counted"])        # a refusal always says why
+
     def test_role_validation(self):
         tid = self.task()
         ok = lambda t: True  # noqa: E731

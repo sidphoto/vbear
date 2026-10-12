@@ -636,6 +636,8 @@ class FlowContextTests(StateDir):
         self.assertNotIn(d, ctx.totals.pending_or_orphan_texts)
         self.assertEqual((ctx.totals.dispatches, ctx.totals.responses), (2, 1))
         self.assertAlmostEqual(ctx.totals.spent_usd, 0.25)
+        self.assertAlmostEqual(ctx.totals.recorded_usd, 0.25)       # what the CLI recorded...
+        self.assertAlmostEqual(ctx.totals.unsettled_usd, 0.0)       # ...and nothing counted on top
         good = (root / "journal.jsonl").read_bytes()
         (root / "journal.jsonl").write_bytes(good[:-3])                     # damaged: counts unknown
         with self.assertRaises(stream_flow.FlowRefused) as cm:
@@ -751,6 +753,11 @@ class FlowContextTests(StateDir):
                 ctx = stream_flow.load(self.base, self.fid)
                 self.assertEqual(ctx.totals.responses, 1 + TURN_CAP)
                 self.assertAlmostEqual(ctx.totals.spent_usd, 0.25 + 7.5)  # the second session's whole budget
+                # the same number, said in two parts: what was recorded, and what is counted for the turns
+                # that have no result; they add up to the figure the limit reads
+                self.assertAlmostEqual(ctx.totals.recorded_usd, 0.25)
+                self.assertAlmostEqual(ctx.totals.unsettled_usd, 7.5)
+                self.assertAlmostEqual(ctx.totals.recorded_usd + ctx.totals.unsettled_usd, ctx.totals.spent_usd)
                 self.assertEqual([x["unfinished"] for x in ctx.totals.sessions if x["unfinished"]], [[d]])
 
     def test_start_record_recovery(self):

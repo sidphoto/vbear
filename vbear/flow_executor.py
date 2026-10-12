@@ -479,6 +479,7 @@ def _accounting(ctx) -> dict:
     elapsed = (now - ctx.started_at) if ctx.started_at is not None else None
     return {"ok": True, "started_at": ctx.started_at, "elapsed_s": elapsed,
             "dispatches": t.dispatches, "responses": t.responses, "spent_usd": t.spent_usd,
+            "recorded_usd": t.recorded_usd, "unsettled_usd": t.unsettled_usd,
             "reviews": len(t.reviews), "limits": dict(lim),
             "remaining": {"dispatches": lim["max_dispatches"] - t.dispatches,
                           "responses": lim["executor_total_max_responses"] - t.responses,
