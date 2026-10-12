@@ -50,10 +50,22 @@ observed, which is listed below.
      embedding host; VBear is the launcher and passes none. The server-managed-settings page
      (`https://code.claude.com/docs/en/server-managed-settings`) names the cache `~/.claude/remote-settings.json`;
      `managed-mcp.json` sits in the system path, inside the checked `ClaudeCode` directory.
-   - *The binary's strings* (method: `strings -a` over the 2.1.296 executable, searched for `Application Support/ClaudeCode`,
-     `com.anthropic.claudecode`, `managed-settings`, `remote-settings`, `managed-mcp`, `managed-policy`,
-     `policyHelper`, and for `/Library/` and `/etc/*claude*` paths; first by the planner, repeated here with the
-     same result): the macOS directory and the domain above are present, as are `managed-settings.json`,
+   - *The binary's strings.* The executable is the file `2.1.296` in Claude Code's `versions` directory, 240664432
+     bytes, SHA-256 `c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937`. Commands (first by the
+     planner, repeated here with the same result):
+
+     ```sh
+     B=~/.local/share/claude/versions/2.1.296
+     strings -a "$B" > claude.strings
+     for p in "Application Support/ClaudeCode" "com.anthropic.claudecode" "managed-settings" "remote-settings" \
+              "managed-mcp" "managed-policy" "policyHelper"; do printf '%s: ' "$p"; grep -c -F -- "$p" claude.strings; done
+     grep -o -E "[A-Za-z0-9_./ -]*managed-settings[A-Za-z0-9_./ -]*" claude.strings | sort | uniq -c | sort -rn
+     grep -o -E "/Library/[A-Za-z0-9_. /-]{3,60}" claude.strings | sort | uniq -c | sort -rn
+     grep -o -E "/etc/[a-z0-9_.-]*claude[a-z0-9_./-]*" claude.strings | sort -u
+     grep -o -E "[A-Za-z0-9_./ -]{0,40}remote-settings[A-Za-z0-9_./ -]{0,30}" claude.strings | sort -u
+     ```
+
+     Result: the macOS directory and the domain above are present, as are `managed-settings.json`,
      `managed-settings.d` (a drop-in directory inside the checked `ClaudeCode` directory, so covered, because the
      check is on the whole directory), `managed-mcp.json`, the managed-policy `CLAUDE.md` (also in that directory),
      the `~/.claude/remote-settings.json` cache and a `remote-settings-consent` record (a consent state, not a source

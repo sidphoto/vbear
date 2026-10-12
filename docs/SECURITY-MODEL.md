@@ -315,8 +315,9 @@ The first three items appear in full in the per-flow approval dialog under `RISK
    intended to disable. Known local policy sources and a present or indeterminate `~/.claude/remote-settings.json`
    cause refusal, but absence of the cache cannot establish absence of cloud settings: according to the vendor's
    documentation (read 2026-10-12), a non-interactive run, which is what VBear's stream executor is, applies
-   server-managed settings that need the user's approval for that one run and does not write them to the cache, so
-   such settings never appear locally. VBear cannot detect them. Personal Pro/Max plans are not subject to this organization-managed
+   server-managed settings that need the user's approval for that one run and does not write them to the cache
+   (`remote-settings.json`), so a missing cache file does not show that none apply. VBear cannot detect them
+   from the cache. Personal Pro/Max plans are not subject to this organization-managed
    mechanism.
 4. **Same-UID binary replacement race.** `codex_binary` checks the pinned executable's path and file type before
    launch, but the subsequent execution is not atomic with that check. A program running as the same UID could
