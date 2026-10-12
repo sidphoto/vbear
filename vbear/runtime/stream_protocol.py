@@ -103,9 +103,10 @@ VERSIONS = {
     ),
 }
 
-# 2.1.296: the 2.1.292 entry plus what the stream probe observed (docs/evidence/claude-code-2.1.296-stream.md, a
-# passing run 2026-10-12). One difference: assistant events carry ``thinking_display`` (a new top-level field; not
-# read).
+# 2.1.296: the 2.1.292 entry plus what was observed (docs/evidence/claude-code-2.1.296-stream.md, 2026-10-12).
+# Assistant events carry two new top-level fields, neither read: ``thinking_display`` (the stream probe) and
+# ``wire_ingest_context`` (an object keyed by tool_use id, each ``{"cwd": string}``; on the events of a longer turn
+# with several Bash calls, found by the second real end-to-end run from its journal and a replay capture).
 #
 # And a new event kind (S3 real end-to-end, run 1, 2026-10-12; raw capture by tools/stream_capture.py): a ``system``
 # event with subtype ``vcs_state_changed`` comes between a tool's call and its result when the tool changed the
@@ -114,7 +115,7 @@ VERSIONS = {
 VERSIONS["2.1.296"] = replace(
     VERSIONS["2.1.292"], version="2.1.296",
     allowed={**VERSIONS["2.1.292"].allowed,
-             "assistant": VERSIONS["2.1.292"].allowed["assistant"] | {"thinking_display"},
+             "assistant": VERSIONS["2.1.292"].allowed["assistant"] | {"thinking_display", "wire_ingest_context"},
              "system/vcs_state_changed": frozenset({"branch", "cwd", "kind", "session_id", "subtype", "type",
                                                     "uuid"})})
 

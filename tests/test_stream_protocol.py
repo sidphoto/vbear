@@ -580,6 +580,21 @@ class VcsStateChangedTests(unittest.TestCase):
                 h.feed(events)
                 self.assertTrue(h.validity(d)[0], h.validity(d))
 
+    def test_assistant_events_with_the_ingest_context_are_accepted_for_2_1_296_only(self):
+        for consts, identity, version, ok in ((C296, IDENTITY296, "2.1.296", True), (C, IDENTITY, "2.1.292", False)):
+            with self.subTest(version=version):
+                h = Harness(consts=consts, identity=identity)
+                d, text = h.dispatch()
+                events = fx.turn(h.sid, d, text, cwd=CWD, prefix="i", version=version)
+                for ev in events:
+                    if ev["type"] == "assistant":
+                        ev["wire_ingest_context"] = {"toolu_x": {"cwd": CWD}}
+                h.feed(events)
+                self.assertEqual(h.validity(d)[0], ok)
+                if not ok:
+                    self.assertEqual({a["reason"] for a in h.js.turns[d].anomalies}, {"extra_fields"})
+                    self.assertEqual(h.js.turns[d].anomalies[0]["fields"], ["wire_ingest_context"])
+
     def test_an_extra_field_is_an_anomaly(self):
         h = self.harness()
         d, events = self.turn_with(h, self.vcs(h, surprise=1))

@@ -95,6 +95,12 @@ observed, which is listed below.
    schema requires `dispatch_id` to be the turn's UUID, which lived only in the transport `uuid` field of the stdin
    line. VBear now appends a fixed report request to every dispatch text that names the id and the report's
    fields (`executor_report.report_request`); see the security model.
+5. **`wire_ingest_context`** (found by the second real end-to-end run, 2026-10-12, whose journal said only that
+   four `assistant` events had extra fields; a replay capture of the same turn, same text and same starting
+   commit, named the field). A new top-level field of `assistant` events: an object keyed by `tool_use` id whose
+   values are objects with one string, `cwd`. It appears on the events of a longer turn (several Bash calls) and
+   was not in any probe turn. It is in 2.1.296's allowed set and is not read. The journal's `turn_anomaly` now
+   names the unexpected fields (names only), so this would have been readable from the run itself.
 
 ## Runs and model use
 
@@ -109,6 +115,8 @@ observed, which is listed below.
 | probe with the commit turn, `sh -c` form | pass, the event was not sent | 5 | USD 0.0198 |
 | probe with the commit turn, `git commit -q` form | pass, the event was not sent | 8 | USD 0.0275 |
 | probe with the commit turn, `git add … && git commit -m …` | all checks pass, the event seen and accepted | 7 | USD 0.0245 |
+| real end-to-end run 2 (full; aborted by the product on finding 5) | 1 dispatch, 4 events with `wire_ingest_context` | 11 | USD 0.0500 |
+| replay capture of that turn (`tools/stream_capture.py --text-file --repo --base`) | one turn, 2 repository-state events | 12 | USD 0.0457 |
 
 The control run sends no request to Anthropic (its endpoint is the local listener, which accepts and closes without
 reading). Boundary runs (headless, interactive) are in [claude-code-2.1.296.md](claude-code-2.1.296.md).
