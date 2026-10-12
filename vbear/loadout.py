@@ -161,10 +161,7 @@ def _armor(tool: str, version_status: dict) -> dict:
            "basis_note": VERSION_BASIS if tool == "claude" else CODEX_BASIS,
            "preview_decides": "實際以出發前檢查為準",
            # a Codex card never carries the Claude-only "this Claude Code version is unverified" wording
-           "groups": [{"id": g, "label": label,
-                       "levels": [lv for lv in agent_launch.ARMOR_GROUP_LEVELS[g]
-                                  if not (tool == "codex" and lv == agent_launch.UNVERIFIED)]}
-                      for g, label in agent_launch.ARMOR_GROUPS],
+           "groups": agent_launch.armor_groups(tool),
            "items": rows}
     return out
 

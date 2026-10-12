@@ -1137,7 +1137,7 @@ async function openSkillCard(skillId, opts = {}) {
   if (profile && (profile.equipped_skill_ids || []).includes(skillId)) {
     kids.push(el("button", { class: "btn", type: "button", on: { click: async () => {
       if (!(await confirmInPage("從這個角色移除",
-        `把「${sk.name || skillId}」從角色「${profile.name || profile.id}」的已選技能移除？這只會改你的挑選紀錄，不會刪除技能。`,
+        `把「${nameText}」從角色「${profile.name || profile.id}」的已選技能移除？這只會改你的挑選紀錄，不會刪除技能。`,
         "移除"))) return;
       try {
         const next = (profile.equipped_skill_ids || []).filter((x) => x !== skillId);
@@ -4876,6 +4876,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   }
 
   function renderAgentProfileDetail(p) {
+    // Why this role cannot be launched, right under the button that opens the check (it comes with the card's
+    // data, so it fills when that arrives)
+    const launchLine = el("div", { class: "rc-launch-line", "data-rc": "launch-line", "aria-live": "polite" });
     return append(el("div", { class: "wb-tab-content" }),
       el("div", { class: "row wb-profile-head", style: "justify-content:space-between" },
         el("h3", { style: "margin:0" }, p.name || p.id),
@@ -4912,7 +4915,20 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
                 toast("更新失敗：" + err.message);
               }
             } } }, p.enabled ? "停用" : "啟用"))),
-      renderRoleCard(p));
+      launchLine,
+      renderRoleCard(p, (d) => setKids(launchLine, ...launchLineParts(d))));
+  }
+
+  // 「目前無法從 VBear 啟動這個角色」 and the reasons, as the loadout carries them.
+  function launchLineParts(d) {
+    const note = d && d.armor && typeof d.armor.launch_note === "string" ? d.armor.launch_note : "";
+    const reasons = ((d && d.blockers) || []).map((b) => (b && b.message ? String(b.message) : "")).filter(Boolean);
+    if (!note && !reasons.length) return [];
+    const kids = [];
+    if (note) kids.push(el("strong", null, note));
+    else kids.push(el("strong", null, "目前無法出發的原因："));
+    if (reasons.length) kids.push(el("ul", { class: "small" }, reasons.map((r) => el("li", null, r))));
+    return [notice("warn", kids)];
   }
 
   // ---- Role card (design game-ui 4.1) ----------------------------------------------------------------------
@@ -5078,13 +5094,13 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     return [info, features, skills, armor, expect, blockers];
   }
 
-  function renderRoleCard(p) {
+  function renderRoleCard(p, onLoadout) {
     const box = el("div", { class: "rc", "data-role-card": p.id });
     rcProfile = p;
     rcChanged = async () => { await reloadAgentProfiles(); renderRightColumn(); };
     setKids(box, el("p", { class: "loading" }, "載入角色卡…"));
     api.get(`/api/agent-profiles/${encodeURIComponent(p.id)}/loadout`)
-      .then((d) => setKids(box, ...roleCardParts(p, d)))
+      .then((d) => { setKids(box, ...roleCardParts(p, d)); if (typeof onLoadout === "function") onLoadout(d); })
       .catch((e) => setKids(box, notice("bad", "無法載入角色卡：" + (e && e.message ? e.message : "未知錯誤"))));
     return box;
   }
@@ -5314,7 +5330,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const why = el("p", { class: "small agent-launch-why", "aria-live": "polite" });
     let lastPreview = null;   // the latest answer, launchable or not, for saying why the button is off
 
-    function needsAck(pv) { return Boolean(pv && pv.cli && pv.cli.verified === false); }
+    // The dialog speaks for the tool of the profile: only a Claude Code launch has a version to verify and a
+    // terminal title to check; a Codex preview shows what it returned (its reasons and its evidence).
+    const tool = p.model && p.model.tool;
+    const isClaude = tool !== "codex";
+    const cliName = tool === "codex" ? "Codex CLI" : "Claude Code";
+    function needsAck(pv) { return Boolean(isClaude && pv && pv.cli && pv.cli.verified === false); }
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
@@ -5374,13 +5395,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
             el("ul", { class: "small" }, (pv.reasons || []).map((r) => el("li", null, r.message))))));
       } else {
         kids.push(el("dl", { class: "kv small" },
-          el("dt", null, "CLI"), el("dd", { class: "mono" }, `${pv.cli.version} · ${pv.cli.binary}`),
+          el("dt", null, "CLI"), el("dd", { class: "mono" }, `${cliName} ${pv.cli.version} · ${pv.cli.binary}`),
           el("dt", null, "版本驗證"),
-          el("dd", null, pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
+          el("dd", null, !isClaude ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
+            : pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
           el("dt", null, "工作目錄"), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
-        if (needsAck(pv)) kids.push(unverifiedBox(pv));
+        if (!isClaude) kids.push(codexEvidenceNote(pv));
+        else if (needsAck(pv)) kids.push(unverifiedBox(pv));
         else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));
       }
       kids.push(el("h4", { class: "agent-launch-h" }, "防具（這次出發前檢查的實際標示）"));
@@ -5404,8 +5427,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         path_scope: scopeText(lab.path_scope), evidence_refs: scopeText(lab.evidence_refs),
         unknown_reason: lab.unknown_reason && lab.unknown_reason !== "none" && lab.unknown_reason !== lab.note
           ? lab.unknown_reason : null }));
+      // the groups with the level words this tool can show (the server knows; the table is the fallback)
+      const groups = Array.isArray(pv.armor_groups) && pv.armor_groups.length ? pv.armor_groups
+        : ARMOR_GROUPS_UI.map((g) => ({ ...g, levels: g.levels.filter((lv) => isClaude || !/Claude/.test(lv)) }));
       kids.push(el("div", { class: "rc-armor-grid agent-launch-labels", "data-armor": "preview" },
-        ARMOR_GROUPS_UI.map((g) => rcArmorGroup(g, items))));
+        groups.map((g) => rcArmorGroup(g, items))));
       kids.push(chosenSkillsList());
       setKids(out, ...kids);
     }
@@ -5423,6 +5449,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           const name = rec && rec.name ? String(rec.name) : `未提供（ID：${sid}）`;
           return el("li", null, name, gone.has(sid) ? "（目前索引找不到此技能）" : "");
         })) : el("p", { class: "rc-note" }, "未選任何技能。"));
+    }
+
+    // A Codex preview: no version to verify and no title check here; the evidence is on each label.
+    function codexEvidenceNote(pv) {
+      return el("div", { class: "notice info" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+        el("div", { class: "small" },
+          el("strong", null, `Codex CLI ${pv.cli.version}`),
+          el("p", { style: "margin:4px 0" },
+            "VBear 對 Codex 只依已記錄的證據標示防具；沒有證據的項目標為「未知」。每一項的證據在下方的「證據」欄。")));
     }
 
     // Claude Code updates itself often; a release nobody verified yet may still

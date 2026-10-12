@@ -10,6 +10,10 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       Optional VBEAR_QA_NO_MANUAL=1: a purely automatic flow: nothing is recorded by hand and the executor role
       names no work directory, so the page's phase and its HEAD check come from the automatic events and the
       task's directory alone.
+      Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
+      the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
+      Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
+      lines of the Codex labels.
       Optional VBEAR_QA_RUN=1: also start the runner thread, so the flow goes on by itself (the first review is
       NEEDS WORK, a helper commits the "fix", the second says PASS, the merge gate opens). Without it the flow
       stays exactly as built: automatic mode on, one review round done, the runner idle.
@@ -133,11 +137,14 @@ class _Env(RunnerCase):
         codex = self.tmp / "qa-codex"
         codex.write_text(FAKE_CODEX_CLI % {"py": sys.executable}, encoding="utf-8")
         codex.chmod(0o700)
-        for p in (mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(claude)),
-                  mock.patch("vbear.runtime.native._pinned_codex_binary", return_value=str(codex)),
-                  mock.patch.object(agent_launch.cli_versions, "CODEX_INTERACTIVE_FLAGS_SUPPORTED", True),
-                  mock.patch.object(agent_launch, "_codex_evidence_reference",
-                                    return_value=".local/qa-synthetic/codex-acceptance.json")):
+        self.codex_blocked = os.environ.get("VBEAR_QA_CODEX_BLOCKED") == "1"
+        patches = [mock.patch("vbear.runtime.native._pinned_claude_binary", return_value=str(claude)),
+                   mock.patch("vbear.runtime.native._pinned_codex_binary", return_value=str(codex))]
+        if not self.codex_blocked:                  # the synthetic Codex evidence (otherwise: as it really is)
+            patches += [mock.patch.object(agent_launch.cli_versions, "CODEX_INTERACTIVE_FLAGS_SUPPORTED", True),
+                        mock.patch.object(agent_launch, "_codex_evidence_reference",
+                                          return_value=".local/qa-synthetic/codex-acceptance.json")]
+        for p in patches:
             p.start()
             self.addCleanup(p.stop)
         self.console.managed_root = self.tmp
@@ -206,6 +213,19 @@ class Check(_Env):
         self.assertTrue(r["preview"]["launchable"], r["preview"]["reasons"])
         self.assertEqual(len(r["preview"]["derived_labels"]), 7)
         self.assertEqual(r["preview"]["cli"]["version"], "2.1.286")
+        # the Codex role's check: launchable with the synthetic evidence, or blocked with its own reasons; never
+        # a word about Claude in what it returns
+        st, cr = self.call("/api/native/agent-previews", "POST",
+                           {"profile_id": CODEX_PROFILE, "workdir": str(self.qa_work), "commit": True})
+        self.assertEqual(st, 200, cr)
+        pv = cr["preview"]
+        self.assertEqual(pv["launchable"], not self.codex_blocked, pv["reasons"])
+        if self.codex_blocked:
+            self.assertIn("codex_interactive_flags_unsupported", [x["code"] for x in pv["reasons"]])
+            self.assertTrue(c["armor"]["launch_note"])
+        else:
+            self.assertEqual(pv["cli"]["version"], "0.159.2")
+        self.assertNotIn("Claude", json.dumps(pv["armor_groups"], ensure_ascii=False))
         # the flow: automatic mode, one automatic review round (NEEDS WORK), the user's own records after it
         self.assertEqual(self.api(f"/api/flows/{self.fid}/automation")["mode"], "auto")
         self.assertEqual(self.kinds().count("auto_review_result"), 1)
@@ -218,6 +238,16 @@ class Check(_Env):
         else:
             self.assertEqual(flow["roles"]["executor"]["workdir"], str(self.work))
         self.assertTrue(flow["roles"]["reviewers"][0]["independent_of_executor"]["counted"])
+
+
+class CheckCodexBlocked(Check):
+    """The Codex checks as they really are: the role cannot be launched, and says why."""
+
+    def setUp(self):
+        p = mock.patch.dict(os.environ, {"VBEAR_QA_CODEX_BLOCKED": "1"})
+        p.start()
+        self.addCleanup(p.stop)
+        super().setUp()
 
 
 class CheckPurelyAutomatic(Check):
@@ -299,8 +329,10 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] 防具：seven items in five groups; each group header carries a level word; the heading says the preview
       decides (實際以出發前檢查為準); no value is printed as "安全" or a bare "OK".
   [ ] 你的期望（意圖）：讀取・允許 寫入・允許 測試・允許 部署・拒絕; the note says it is only a record.
-  [ ] Switch to 「QA 審查員（Codex）」: the card has no Claude-specific wording; the launch note says the role
-      cannot be launched from VBear here (or states its own blocker); its skill list has 1 row.
+  [ ] Switch to 「QA 審查員（Codex）」: the card has no Claude-specific wording; its skill list has 1 row.
+      With VBEAR_QA_CODEX_BLOCKED=1 the line 「目前無法從 VBear 啟動這個角色…」 is right under the row of
+      buttons (above the card), with the reasons; without it this role is launchable on synthetic evidence
+      and the line is absent.
 
 == 2. 技能卡 (角色卡的「技能卡特性」按鈕, or 技能庫 -> Armory)
   [ ] code-review: 名稱 with source tag; 類別; 工具; 來源（位置）; 效果 (author text, tagged 作者); 發動時機
@@ -322,7 +354,12 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] The version-verification row names the CLI version (2.1.286) and whether it is verified.
   [ ] The line beside 確認啟動 says why it is off, until a preview exists. Do not press 確認啟動 unless you
       want a (synthetic) session to open.
-  [ ] Codex role: the preview lists its own blockers or evidence reference; Claude-only words do not appear.
+  [ ] Codex role: the dialog says 「Codex CLI 0.159.2」; there is no 「驗證這個版本」 button, no 「工作中／等你回覆」
+      notice, no mention of Claude or Haiku; the group 「未證明」 lists only 「未知」; each label's 證據 column
+      shows the evidence reference (launchable run) or the reasons are listed and 確認啟動 stays off with
+      「現在不能出發：…」 (VBEAR_QA_CODEX_BLOCKED=1).
+  [ ] Skill card, 從這個角色移除: the question names the skill ( 「未提供（ID：…）」 when it has no name), never
+      「[object Object]」.
 
 == 4. 隊伍與任務 (流程 -> the flow)
   [ ] 任務進度: seven gates 計畫/核准/實作/審查/合併（你來）/push（你來）/完成. The phase is 「等修正」

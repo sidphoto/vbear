@@ -120,6 +120,9 @@ class PreviewApiCase(ServerCase):
             self.assertEqual(labels["Network"]["level"], agent_launch.UNKNOWN)
             self.assertNotEqual(labels["Network"]["unknown_reason"], "none")
         self.assertEqual(self.sessions(), [])
+        self.assertIn(agent_launch.UNVERIFIED, [lv for g in p["armor_groups"] for lv in g["levels"]])
+        self.assertEqual([g["id"] for g in p["armor_groups"]],
+                         ["blocked", "partial", "not_granted", "not_blocked", "unproven"])
         blob = json.dumps(r).lower()
         for word in ("token", "credential", "password", "secret", "keychain"):
             self.assertNotIn(word, blob)
@@ -136,6 +139,10 @@ class PreviewApiCase(ServerCase):
             self.assertEqual(p["cli"], {"binary": str(self.codex_binary), "version": "0.159.2", "verified": True,
                                     "activity_verified": False, "activity_last_failure": None})
             self.assertTrue(p["derived_labels"]["Write"]["bypass"].find("!") >= 0)
+            # the groups a Codex preview shows never hold the Claude-only level; a Claude preview does
+            levels = [lv for g in p["armor_groups"] for lv in g["levels"]]
+            self.assertNotIn(agent_launch.UNVERIFIED, levels)
+            self.assertFalse(any("Claude" in lv for lv in levels), levels)
             self.assertEqual(p["derived_labels"]["Network"]["evidence_refs"],
                              [".local/r3-finish-20261003/codex-acceptance.json"])
             self.assertEqual(self.sessions(), [])

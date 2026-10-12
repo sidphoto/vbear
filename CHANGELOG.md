@@ -26,6 +26,12 @@
   directory, HEAD is compared in the task's directory (the one the automation uses) and the page says so; if
   it cannot be read the pass stays unverified. The flows notice now says what VBear does in each mode instead
   of 「VBear 不會為流程派工」.
+- **The pre-launch check of a Codex role speaks for Codex.** The dialog no longer shows Claude Code's version
+  notice, the 「驗證這個版本」 button, the terminal-title notice or the Haiku call for a Codex role; it names
+  「Codex CLI <version>」, lists the reasons it cannot be launched or the evidence of each label, and its armor
+  groups list only the levels a Codex label can have (the preview now carries `armor_groups`). The reason a role
+  cannot be launched is shown right under the buttons of its profile page. The question that asks whether to
+  remove a skill from a role names the skill (「未提供（ID：…）」 without a name) instead of 「[object Object]」.
 - **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,
   every automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk
   acceptance still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at

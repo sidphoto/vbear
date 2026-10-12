@@ -558,6 +558,150 @@ function findModalInBody() {
     console.log("ok preview → confirm → launch dialog");
   }
 
+  // A nameless skill removed from a role: the confirmation names it by its ID, not by an object.
+  {
+    const miss = (detail = "") => ({ value: null, origin: "missing", detail });
+    const ctx = freshContext({
+      "GET /api/skills/s-7?view=card": () => jsonResponse({ ok: true, index: { loaded: true, generated_at: 1 },
+        skill: { skill_id: "s-7", name: miss(), tool: miss(), scope: miss(), activation: "active", installed: true,
+                 activation_reason: "r", status_source: { origin: "derived", detail: "d" },
+                 description: miss(), when_to_use: miss(), inputs: miss(), outputs: miss(), dependencies: miss(),
+                 categories: { value: null, origin: "missing", detail: "", matches: [] },
+                 referenced_files: { count: 0, items: [], truncated: false, note: "n", origin: "derived", detail: "x" },
+                 missing_files: { items: [], origin: "derived", detail: "掃描結果" },
+                 warnings: { items: [], origin: "derived", detail: "掃描結果" } },
+        added_to_roles: { items: [], effective: false, note: "n", origin: "user", detail: "d" },
+        observation: { state: "unavailable", window_days: null, source: "執行觀察", origin: "runtime", detail: "d" },
+        marketplace_copies: [], marketplace_source: { origin: "derived", detail: "d" }, effect_note: "e" }),
+    });
+    evalAgentBuilderSlice(ctx);
+    await ctx.openSkillCard("s-7", { profile: { id: "p-1", name: "First", equipped_skill_ids: ["s-7"] } });
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    const modal = findModalInBody();
+    const remove = walk(modal).find((n) => n.tag === "button" && (n.textContent || "") === "從這個角色移除");
+    assert.ok(remove, "the remove action is there");
+    remove.dispatch("click");
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    const dialogs = body.children.filter((c) => c !== main && c.tag === "div" && c.getAttribute("role") === "dialog");
+    const confirm = dialogs[dialogs.length - 1];
+    assert.ok(findText(confirm, "把「未提供（ID：s-7）」從角色「First」"), "a missing name reads 未提供（ID：…）");
+    assert.ok(!findText(confirm, "[object Object]"));
+    console.log("ok remove confirmation names a nameless skill by its ID");
+  }
+
+  // The pre-launch dialog of a Codex role: its own words only, the reason beside the button, and nothing about
+  // a Claude Code version, its terminal title or a Haiku call (AGY QA).
+  {
+    const label = (level, note, unknown = "none", evidence = []) => ({ level, note, source_version: { value: "0.159.2" },
+      settings_digest: "d".repeat(64), path_scope: "不適用", evidence_refs: evidence, bypass: "以 ! 開頭的 shell 指令不經沙盒",
+      unknown_reason: unknown });
+    const labels = { Read: label("僅意圖", "讀取不隔離"), Write: label("強制（限已測路徑、版本與執行層）", "限工作目錄",
+        "none", [".local/qa/codex-acceptance.json"]),
+      Test: label("僅意圖", "可執行指令"), Commit: label("未限制", ".git 可寫"), Deploy: label("不授予", "不提供"),
+      Network: label("未知", "network_access=false 尚無本輪 OS 負向證據", "尚無證據"),
+      Filesystem: label("強制（限已測路徑、版本與執行層）", "寫入邊界", "none", [".local/qa/codex-acceptance.json"]) };
+    const groupsNoClaude = [
+      { id: "blocked", label: "擋住了", levels: ["強制（限已測路徑、版本與執行層）"] },
+      { id: "partial", label: "部分擋住", levels: ["部分強制"] },
+      { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
+      { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
+      { id: "unproven", label: "未證明", levels: ["未知"] }];
+    const launchable = { preview_id: "p-" + "b".repeat(32), launchable: true, reasons: [],
+      cli: { binary: "/x/codex", version: "0.159.2", verified: true, activity_verified: false, activity_last_failure: null },
+      settings_digest: "d".repeat(64), canonical_paths: { workdir: "/Users/u/work", scratch: "/private/tmp/sc-abc" },
+      derived_labels: labels, armor_groups: groupsNoClaude, expires_at: 2000000000 };
+    const blocked = { preview_id: null, launchable: false,
+      reasons: [{ code: "codex_interactive_flags_unsupported", message: "Codex 的互動模式還不能安全地受管啟動" }],
+      cli: null, settings_digest: null, canonical_paths: { workdir: "/Users/u/work", scratch: null },
+      derived_labels: Object.fromEntries(Object.keys(labels).map((k) => [k, label("未知", "此 Profile 無法啟動，未產生設定",
+        "此 Profile 無法啟動，未產生設定")])), armor_groups: groupsNoClaude, expires_at: null };
+    let answer = launchable;
+    const loadout = { ok: true,
+      profile: { id: "p-2", name: "Stuck", enabled: false, tool: "codex", model_id: "gpt-test", profession_role_id: "r-2",
+                 permission_intents: {}, intents_note: "只是記錄，不會變成實際權限" },
+      index: { loaded: true, generated_at: 1791770000 }, profession: { state: "none", role_id: null },
+      skills: { title: "已選技能（VBear 啟動時不載入）", items: [], note: "n" },
+      version_status: { state: "unknown", text: "未知（這個畫面不探測 Codex 版本）" },
+      armor: { applicable: true, basis: "verified_setting", title: "防具（以 Codex 已記錄的驗證證據為準）",
+               basis_note: "b", preview_decides: "實際以出發前檢查為準",
+               launch_note: "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）",
+               groups: groupsNoClaude, items: [] },
+      blockers: [{ code: "profile_disabled", message: "這個 Profile 已停用" }], blockers_note: "n" };
+    const ctx = freshContext({
+      "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
+      "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
+      "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
+      "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
+                                                          usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
+      "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
+      "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
+      "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
+      "GET /api/agent-profiles":     () => jsonResponse({ ok: true, profiles: profilesList }),
+      "GET /api/agent-builder/catalog": () => jsonResponse(catalogBody),
+      "GET /api/agent-profiles/p-2/loadout": () => jsonResponse(loadout),
+      "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: answer }),
+    });
+    const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null);
+    await switchToAgentTab();
+    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
+      && /Stuck/.test(n.textContent || "")).dispatch("click");
+    await tick();
+    // the reason sits right under the head row that holds the button
+    const line = walk(main).find((n) => n.getAttribute && n.getAttribute("data-rc") === "launch-line");
+    assert.ok(line, "a line for the reason is beside the 出發前檢查 button");
+    assert.ok(findText(line, "目前無法從 VBear 啟動這個角色") && findText(line, "這個 Profile 已停用"));
+    const detail = walk(main).find((n) => n.className === "wb-tab-content" && walk(n).includes(line));
+    assert.ok(detail, "found the detail");
+    assert.ok(walk(detail.children[0]).some((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查"),
+              "the head row holds the button");
+    assert.strictEqual(detail.children[1], line, "the line comes right after the button's row");
+
+    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查").dispatch("click");
+    await tick();
+    const modal = findModalInBody();
+    const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
+    const workdir = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "text");
+    const commit = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+    workdir.value = "/Users/u/work";
+    commit.checked = true;
+    commit.dispatch("change");
+    button("產生預覽").dispatch("click");
+    await tick();
+    assert.ok(findText(modal, "Codex CLI 0.159.2"), "the version carries the right tool name");
+    for (const word of ["Claude", "Haiku", "工作中／等你回覆", "驗證這個版本", "再驗證一次", "終端標題", "尚未實測"]) {
+      assert.ok(!findText(modal, word), `a Codex preview has no 「${word}」`);
+    }
+    assert.ok(!walk(modal).some((n) => n.tag === "button" && /驗證/.test(n.textContent || "")), "no verify button");
+    const unproven = walk(modal).find((n) => n.getAttribute && n.getAttribute("data-armor-group") === "unproven");
+    assert.ok(findText(unproven, "未證明 · 未知"), "the group lists only the levels this tool can show");
+    assert.ok(findText(modal, ".local/qa/codex-acceptance.json"), "the evidence reference is shown");
+    assert.strictEqual(button("確認啟動").disabled, false, "a launchable Codex preview can be confirmed");
+
+    // a preview with the reasons it cannot be launched: shown, and the confirm button stays off with its reason
+    answer = blocked;
+    workdir.dispatch("input");
+    commit.checked = true;
+    commit.dispatch("change");
+    button("產生預覽").dispatch("click");
+    await tick();
+    assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "Codex 的互動模式還不能安全地受管啟動"));
+    assert.strictEqual(button("確認啟動").disabled, true);
+    assert.ok(findText(modal, "現在不能出發：Codex 的互動模式還不能安全地受管啟動"));
+    for (const word of ["Claude", "Haiku", "尚未實測"]) assert.ok(!findText(modal, word), `blocked: no 「${word}」`);
+
+    // an answer without the server's groups still never lists the Claude-only level on a Codex role
+    answer = { ...launchable, armor_groups: undefined };
+    workdir.dispatch("input");
+    commit.checked = true;
+    commit.dispatch("change");
+    button("產生預覽").dispatch("click");
+    await tick();
+    assert.ok(!findText(modal, "尚未實測") && !findText(modal, "Claude"));
+    console.log("ok Codex pre-launch dialog: its own words, the reason beside the button, no Claude wording");
+  }
+
   // Close button for native sessions (R3 S0 acceptance finding: the console
   // had no way to close a session, so a managed session was never cleaned).
   {
@@ -895,6 +1039,8 @@ function findModalInBody() {
     const dialogs = body.children.filter((c) => c !== main && c.tag === "div" && c.getAttribute("role") === "dialog");
     const confirm = dialogs[dialogs.length - 1];
     assert.strictEqual(dialogs.length, 2, "the confirmation sits on top of the skill card");
+    assert.ok(findText(confirm, `把「${hostile}」從角色「First」`), "the confirmation names the skill by its name");
+    assert.ok(!findText(confirm, "[object Object]"), "no object is printed into the confirmation");
     const yes = walk(confirm).find((n) => n.tag === "button" && (n.textContent || "").trim() === "移除");
     assert.ok(yes, "an in-page confirmation");
     yes.dispatch("click");

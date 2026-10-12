@@ -190,6 +190,14 @@ _LEVEL_GROUP = {ENFORCED: "blocked", PARTIAL: "partial", NOT_GRANTED: "not_grant
 ARMOR_NAMES = ("Read", "Write", "Test", "Commit", "Deploy", "Network", "Filesystem")
 # The level words that belong to each group, in a fixed order: the group header shows them next to its name.
 ARMOR_GROUP_LEVELS = {g: [lv for lv, gid in _LEVEL_GROUP.items() if gid == g] for g, _ in ARMOR_GROUPS}
+def armor_groups(tool) -> list[dict]:
+    """The five groups with the level words each can hold for this tool: a Codex group never lists the
+    Claude-only 「未驗證（此 Claude Code 版本尚未實測）」. One source for the role card and the preview."""
+    return [{"id": g, "label": label,
+             "levels": [lv for lv in ARMOR_GROUP_LEVELS[g] if not (tool == "codex" and lv == UNVERIFIED)]}
+            for g, label in ARMOR_GROUPS]
+
+
 # What an item still needs from its caller. The semantic function below knows none of these values: it names them,
 # and the caller (a preview, which has a work directory, a manifest and evidence; or the loadout, which has none)
 # supplies or withholds them.
@@ -415,6 +423,7 @@ class PreviewStore:
             "settings_digest": manifest["settings_sha256"] if manifest else None,
             "canonical_paths": {"workdir": canonical, "scratch": manifest["scratch"]["path"] if manifest else None},
             "derived_labels": derive_labels(manifest, canonical, (profile.get("model") or {}).get("tool")),
+            "armor_groups": armor_groups(engine),
             "expires_at": None,
             "persisted": "commit 與 network 是本次啟動的輸入，不會寫回 Profile",
         }

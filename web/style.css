@@ -940,3 +940,6 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   .team-grid { grid-template-columns: minmax(0, 1fr); }
   .fg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.rc-launch-line { margin: 8px 0; }
+.rc-launch-line:empty { display: none; }
