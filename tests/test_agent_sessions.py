@@ -175,12 +175,23 @@ class LaunchStateCase(unittest.TestCase):
         self.assertEqual(c.exception.code, "invalid_workdir")
 
     def test_too_long_scratch_path_is_refused_and_leaves_nothing(self):
-        before = {p for p in os.listdir("/private/tmp") if p.startswith("sc-")}
-        with mock.patch.object(a, "CLAUDE_TMP_PATH_LIMIT", 10):
+        # What THIS call made, not a listing of the shared /private/tmp: another copy of the suite (or any other
+        # program) may be making its own sc- directories there at the same time.
+        made: list[str] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def spy(*args, **kw):
+            path = real_mkdtemp(*args, **kw)
+            made.append(path)
+            return path
+
+        with mock.patch.object(tempfile, "mkdtemp", spy), mock.patch.object(a, "CLAUDE_TMP_PATH_LIMIT", 10):
             with self.assertRaises(a.LaunchRefused) as c:
                 self.prepare()
         self.assertEqual(c.exception.code, "scratch_path_too_long")
-        self.assertEqual({p for p in os.listdir("/private/tmp") if p.startswith("sc-")}, before)
+        scratches = [p for p in made if os.path.basename(p).startswith("sc-")]
+        self.assertEqual(len(scratches), 1, made)                    # one was made ...
+        self.assertEqual([p for p in scratches if os.path.exists(p)], [])      # ... and taken back
         self.assertEqual(list((self.base / "sessions").iterdir()), [])
 
     def test_unresolved_binary_is_refused(self):
