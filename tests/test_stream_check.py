@@ -69,8 +69,12 @@ class StreamCheckTests(unittest.TestCase):
         self.assertEqual({k: checks[k] for k in ("protocol", "rapid_second", "admin_policy", "claude_json")},
                          {"protocol": True, "rapid_second": True, "admin_policy": True, "claude_json": True})
         self.assertFalse(checks["sandbox"])
-        self.assertEqual([t["valid"] for t in report["turns"]], [True, True])
-        self.assertEqual(report["live_model_responses"], 2)
+        self.assertEqual([t["valid"] for t in report["turns"]], [True, True, True])
+        self.assertEqual(report["live_model_responses"], 3)
+        # the fake CLI runs no git: its third turn is valid as a turn, but nothing was committed and its report's
+        # head is not the repository's, which is exactly what the check is there to say
+        self.assertFalse(checks["commit_turn"])
+        self.assertTrue(report["checks"]["commit_turn"]["problems"])
         self.assertTrue(report["temp_removed"])
         self.assertIn("No such file", report["temp_ls"])
         text = out.read_text()

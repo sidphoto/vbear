@@ -1,5 +1,6 @@
 """``boundary_check --mode stream``: verify a Claude Code version for the
-stream executor (design 2.2). One real session, two dispatches.
+stream executor (design 2.2). One real session, three dispatches (a probe
+run, a bare report, a commit).
 
 Everything that decides the result is VBear's own production code: the
 launch is prepared by agent_sessions.prepare_stream_launch, argv and
@@ -22,6 +23,9 @@ Checks:
                  shows the project file is read
   admin_policy   no administrator source, no server-managed settings cache
   claude_json    ~/.claude.json has usable oauthAccount ids (true/false only)
+  commit_turn    a third turn runs git add/commit in the work directory (a git
+                 repository); it is valid and its report's head is the
+                 repository's HEAD, by executor_report.verify
 
 A temporary VBEAR_HOME holds the HMAC key and the journal; it is deleted at
 the end. Nothing here prints a value from ~/.claude.json, a fingerprint or
@@ -95,6 +99,29 @@ def _prompt(d: str, *, run_probe: bool) -> str:
         return ("Use the Bash tool to run exactly this command and nothing else: python3 probe.py\n"
                 f"When it has finished, call the StructuredOutput tool with exactly this JSON: {rep}")
     return f"Do not run any command. Call the StructuredOutput tool with exactly this JSON: {rep}"
+
+
+def _commit_prompt(d: str) -> str:
+    """The third turn (S3 real end-to-end, run 1): a turn that changes the repository, as an executor's turn does.
+    The probe's first two turns write a result file but run no git, so an event that only a repository change
+    produces (2.1.296: system/vcs_state_changed) went unseen until a real run committed."""
+    rep = json.dumps(_report_for(d), separators=(",", ":"))
+    return ("Use the Bash tool to run exactly this command and nothing else: "
+            "sh -c 'echo probe > change.txt && git add change.txt && git commit -q -m probe-commit && "
+            "git rev-parse HEAD'\n"
+            "When it has finished, call the StructuredOutput tool with exactly this JSON, replacing the head value "
+            f"with the commit hash the command printed: {rep}")
+
+
+def _init_repo(work: Path) -> None:
+    """The probe's work directory is a git repository with one empty commit and a local identity."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work), "GIT_CONFIG_GLOBAL": "/dev/null",
+           "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "probe", "GIT_AUTHOR_EMAIL": "probe@example.invalid",
+           "GIT_COMMITTER_NAME": "probe", "GIT_COMMITTER_EMAIL": "probe@example.invalid"}
+    for args in (("init", "-q", "-b", "main"), ("config", "user.name", "probe"),
+                 ("config", "user.email", "probe@example.invalid"), ("config", "gc.auto", "0"),
+                 ("config", "maintenance.auto", "false"), ("commit", "-q", "--allow-empty", "-m", "base")):
+        subprocess.run(["git", *args], cwd=work, env=env, check=True, capture_output=True)
 
 
 def present(path) -> bool:
@@ -242,6 +269,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         for d in ("work", "peer", "peer-scratch", "outside"):
             (root / d).mkdir(mode=0o700)
         (work / "to-peer").symlink_to(root / "peer")
+        _init_repo(work)
         listeners, endpoint = Listeners(root), _Endpoint()
         shared_tmp = Path(f"/private/tmp/claude-{os.getuid()}")
         home_probe = Path(home) / f".vbear-boundary-probe-{uuid.uuid4().hex[:8]}"
@@ -288,8 +316,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         # only go to the group of a verified, unreaped leader; it is reaped
         # only when the group is proven empty, and never signalled after.
         leader_start = stream_session.capture_leader(proc.pid)
-        d1, d2 = str(uuid.uuid4()), str(uuid.uuid4())
-        texts = {d1: _prompt(d1, run_probe=True), d2: _prompt(d2, run_probe=False)}
+        d1, d2, d3 = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+        texts = {d1: _prompt(d1, run_probe=True), d2: _prompt(d2, run_probe=False), d3: _commit_prompt(d3)}
         keysets: dict[str, set] = {}
         variants: dict[str, set] = {}          # every distinct key set per kind (keys only, never values)
         last_keys = None
@@ -349,6 +377,14 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                                 writer.append("dispatch_writing", {"dispatch_id": d2, "turn_cap": TURN_CAP})
                                 writer.append("dispatch_written", {"dispatch_id": d2})
                                 tracker.begin(d2, texts[d2])
+                            elif data["dispatch_id"] == d2:
+                                # the third turn, the commit, goes the ordinary way: after the second's end
+                                accept(d3)
+                                writer.append("dispatch_writing", {"dispatch_id": d3, "turn_cap": TURN_CAP})
+                                proc.stdin.write(sp.dispatch_line(texts[d3], sid, d3))
+                                proc.stdin.flush()
+                                writer.append("dispatch_written", {"dispatch_id": d3})
+                                tracker.begin(d3, texts[d3])
                             else:
                                 done = True
                     if done:
@@ -392,7 +428,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         finally:
             os.close(ldir)
         turns = []
-        for d in (d1, d2):
+        for d in (d1, d2, d3):
             valid, reasons = stream_journal.turn_validity(res.state, d, executor_report.problem)
             t = res.state.turns.get(d)
             r = t.result if t else None
@@ -414,6 +450,13 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         protocol["pass"] = protocol["pass"] and protocol["turns_valid"] and not res.problem
         report["checks"]["protocol"] = protocol
         report["checks"]["rapid_second"] = rapid
+        # the commit turn: the reported head is the repository's HEAD and the commit exists, by the product's own
+        # read of the files (executor_report.verify), and the repository really changed
+        t3 = res.state.turns.get(d3)
+        so = t3.result.get("structured_output") if t3 and t3.result else None
+        problems = executor_report.verify(so, str(work)) if isinstance(so, dict) else ["no report"]
+        report["checks"]["commit_turn"] = {"pass": bool(turns[2]["valid"]) and problems == [],
+                                           "problems": problems[:5]}
         report["observed_keys"] = {k: sorted(v) for k, v in sorted(keysets.items())}
         report["observed_key_sets"] = {k: [list(x) for x in sorted(v)] for k, v in sorted(variants.items())}
         report["unexpected_keys"] = {k: sorted(v - consts.allowed.get(k, set())) for k, v in keysets.items()
