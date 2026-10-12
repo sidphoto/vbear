@@ -3,6 +3,7 @@ daemon and the synthetic stream CLI of test_runtimed_stream (S2c-2): start,
 status, preview and approve a dispatch, stop and continue, close. No Claude,
 no Codex, no model."""
 
+import hashlib
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -19,7 +21,7 @@ from tests.console_fixtures import ConsoleMixin
 from tests.test_runtimed_stream import StreamCase
 from vbear import acceptance as acc
 from vbear import config as cfg
-from vbear import flows, previews as pv, risk_acceptance as ra, tasks
+from vbear import executor_report, flows, previews as pv, risk_acceptance as ra, tasks
 from vbear.runtime import agent_sessions as a
 from vbear.runtime import pipeline_store
 
@@ -165,7 +167,10 @@ class DispatchTests(ApiCase):
         st, pre = self.preview(launch_id, "第一行\n\t縮排\x01控制‮反向")
         self.assertEqual(st, 200, pre)
         self.assertTrue(pre["rewritten"])
-        self.assertEqual(pre["text"], "第一行\n\t縮排\\u0001控制\\u202e反向")
+        # what the person typed, rewritten visibly, then the fixed report request that names this dispatch's id
+        request = executor_report.report_request(pre["dispatch_id"])
+        self.assertEqual(pre["text"], "第一行\n\t縮排\\u0001控制\\u202e反向" + request)
+        self.assertEqual(pre["report_request"], request)
         self.assertEqual(pre["bytes"], len(pre["text"].encode()))
         self.assertTrue(pre["ready"])
         self.assertRegex(pre["dispatch_id"], r"^[0-9a-f-]{36}$")
@@ -173,6 +178,31 @@ class DispatchTests(ApiCase):
         self.assertEqual(rec["data"]["text"], pre["text"])                             # the file holds what the screen showed
         st, plain = self.preview(launch_id, "普通文字")
         self.assertFalse(plain["rewritten"])
+
+    def test_the_report_request_names_the_id_the_record_keeps_and_the_executor_reports_for_it(self):
+        launch_id = self.api_start()
+        st, pre = self.preview(launch_id, "請完成工作")
+        self.assertEqual(st, 200, pre)
+        self.assertTrue(pre["text"].startswith("請完成工作\n\n---\n回報要求"))
+        self.assertIn(f'"dispatch_id":"{pre["dispatch_id"]}"', pre["text"])
+        rec = json.loads((self.base / "previews" / f"{pre['preview_id']}.json").read_text())
+        self.assertEqual(rec["data"]["dispatch_id"], pre["dispatch_id"])               # decided at the preview
+        self.assertEqual(rec["data"]["text_sha256"], hashlib.sha256(pre["text"].encode()).hexdigest())
+        self.assertEqual(self.approve(pre["preview_id"])[0], 200)
+        turn = self.wait_turn(launch_id, pre["dispatch_id"])
+        # the synthetic CLI took the id from the TEXT, as a real model has to: the report is for this turn
+        self.assertEqual((turn["valid"], turn["report"]["dispatch_id"]), (True, pre["dispatch_id"]))
+
+    def test_a_text_without_the_request_gets_an_invented_id_and_no_valid_report(self):
+        launch_id = self.api_start()
+        d = str(uuid.uuid4())
+        fields = {"launch_id": launch_id, "pipeline": self.fid, "dispatch_id": d}
+        self.console.executor._call("dispatch_prepare", timeout=30.0, text="只有任務，沒有回報要求",
+                                    approval={"kind": "preview", "id": "pv-direct"}, **fields)
+        self.console.executor._send(fields)
+        turn = self.wait_turn(launch_id, d)
+        self.assertFalse(turn["valid"])
+        self.assertIn("dispatch_id 格式不符", " ".join(turn["reasons"]))
 
     def test_bad_texts_and_bodies(self):
         launch_id = self.api_start()

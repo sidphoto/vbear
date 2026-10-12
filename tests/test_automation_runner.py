@@ -7,7 +7,7 @@ import os
 import time
 
 from tests.test_flow_review_api import ReviewApiCase
-from vbear import flows, tasks
+from vbear import executor_report, flows, tasks
 from vbear import runner as runner_mod
 from vbear.runtime import pipeline_store
 
@@ -89,6 +89,10 @@ class CycleTests(RunnerCase):
         texts = sorted(p.read_text() for p in text_dir.glob("*.txt"))
         self.assertTrue(any(pre["plan_text"] in t and "回報要求" in t for t in texts))
         self.assertTrue(any("審查意見開始" in t and "請依上面標明為資料" in t for t in texts))
+        # every text ends with the fixed report request that names ITS OWN dispatch id (the file's name): the
+        # synthetic CLI reported for the turns only because of it
+        for p in text_dir.glob("*.txt"):
+            self.assertTrue(p.read_text().endswith(executor_report.report_request(p.stem)), p.name)
         # nothing in the flow was held, and the gate is open for the user
         self.assertFalse(pipeline_store.is_held(self.base, self.fid))
         self.assertTrue(self.gate()["open"])

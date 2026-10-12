@@ -47,6 +47,21 @@ JSON_SCHEMA = {
 }
 
 
+def report_request(dispatch_id: str) -> str:
+    """The fixed instruction VBear appends to every dispatch (S3 real end-to-end, run 1: the model has no way to
+    know this turn's dispatch_id unless the text says it, and it made one up). The shape is the schema's; the two
+    values the model cannot know or must not change, ``v`` and ``dispatch_id``, are written out. It is part of the
+    text the person approves (manual) or the plan's text the runner sends (automatic), never added after."""
+    if not (isinstance(dispatch_id, str) and UUID_RE.match(dispatch_id)):
+        raise ValueError("dispatch_id 必須是小寫 UUID")
+    return ("\n\n---\n回報要求（由 VBear 附加）：完成後請呼叫 StructuredOutput，回報這一輪的結果。內容必須是下面這個形狀的 "
+            "JSON 物件，欄位一個都不能多、不能少：\n"
+            f'{{"v":1,"dispatch_id":"{dispatch_id}","status":"done 或 blocked 或 needs_input",'
+            '"head":"git rev-parse HEAD 的完整 commit","tests":{"command":"你跑的測試指令，沒有就寫 none",'
+            '"result":"passed 或 failed 或 not_run","summary":"一兩句"},"notes":"補充說明"}\n'
+            "v 與 dispatch_id 要一字不改照抄。")
+
+
 def _text(value, *, chars: int | None = None, utf8_bytes: int | None = None) -> bool:
     if not isinstance(value, str):
         return False

@@ -166,7 +166,7 @@ rest on the valid acceptance and the daemon's own re-verification of everything 
 UI ── POST …/acceptance-preview ──▶ preview file (<state>/previews/, 300 s, single use)
 UI ── POST …/acceptance {preview_id} ──▶ consume ──▶ risk_acknowledged event (server's values, never the browser's)
 UI ── POST …/executor ──▶ FlowExecutor.start ──▶ prepare launch ──▶ daemon open_stream
-UI ── POST …/dispatch-preview {launch_id, text} ──▶ preview ──▶ daemon dispatch_prepare … POST …/dispatch {preview_id} ──▶ stream_send
+UI ── POST …/dispatch-preview {launch_id, text} ──▶ preview (id decided; text + fixed report request naming it) ──▶ daemon dispatch_prepare … POST …/dispatch {preview_id} ──▶ stream_send
 UI ── POST …/review ──▶ FlowReview.start ──▶ daemon review_start ──▶ Codex in a clone ──▶ validated result
 UI ── GET  …/reports | reviews | merge-gate ──▶ read models from the files (nothing is run)
 UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemon flow_delete ──▶ flows.delete_flow
@@ -235,6 +235,10 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
 - **Events** (flows.json, strict fields): `automation_mode` (console); `auto_dispatch_intent`, `auto_dispatch_sent`,
   `auto_report`, `auto_review_intent`, `auto_review_started`, `auto_review_result`, `auto_review_aborted`,
   `auto_stopped` (automation).
+- **Dispatch text** (`runner._text`). The dispatch id is chosen first; the text is the approved plan (or the
+  review opinion and the request to fix it) followed by `executor_report.report_request(dispatch_id)`, the same
+  fixed report request a manual preview appends. The intent event records the id and the text's hash, and a
+  recovery rebuilds the text from the id in the intent, so the same inputs give the same text.
 - **Runner** (`runner.py`). `derive(events)` gives the step from the events since the mode was last switched on
   (`auto_stopped` is a barrier, not a step); `step()` performs at most one action per flow per tick under the
   flow's lock: it checks not-held, a trustworthy mode record, a valid acceptance, the approval event and its

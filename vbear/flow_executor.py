@@ -33,8 +33,8 @@ import time
 import uuid
 from pathlib import Path
 
-from . import (acceptance, config as cfg, daemon_client, flows, git_head, login_identity, previews, risk_acceptance,
-               tasks)
+from . import (acceptance, config as cfg, daemon_client, executor_report, flows, git_head, login_identity, previews,
+               risk_acceptance, tasks)
 from .api_error import ApiError
 from .runtime import agent_sessions, pipeline_store, stream_flow
 from .runtime import stream_protocol as sp
@@ -307,12 +307,16 @@ class FlowExecutor:
         self._valid_acceptance(flow)
         m = self._own_launch(flow_id, body["launch_id"])
         try:
-            text = sp.sanitize(body["text"])                  # a lone surrogate is refused, never replaced
+            user_text = sp.sanitize(body["text"])             # a lone surrogate is refused, never replaced
         except ValueError as exc:
             raise ApiError(400, "bad_text", str(exc)) from exc
-        if not text.strip():
+        if not user_text.strip():
             raise ApiError(400, "bad_text", "派工內容不能是空的")
+        # The id is decided here and kept in the preview record. The fixed report request names it, so the executor
+        # can report for this turn (it has no other way to know it); the person approves the whole text.
         dispatch_id = str(uuid.uuid4())
+        request = executor_report.report_request(dispatch_id)
+        text = user_text + request
         try:                                                  # the line the daemon will build: never truncated
             sp.dispatch_line(text, str(uuid.uuid4()), dispatch_id)
         except ValueError as exc:
@@ -327,8 +331,9 @@ class FlowExecutor:
         original = body["text"]
         return {"preview_id": rec["preview_id"], "expires_at": rec["expires"], "ttl_s": previews.TTL,
                 "dispatch_id": dispatch_id, "launch_id": m["launch_id"], "text": text,
-                "text_sha256": rec["data"]["text_sha256"], "bytes": len(text.encode("utf-8")),
-                "rewritten": text != original, "ready": ready, "not_ready_reason": why}
+                "report_request": request, "text_sha256": rec["data"]["text_sha256"],
+                "bytes": len(text.encode("utf-8")), "rewritten": user_text != original, "ready": ready,
+                "not_ready_reason": why}
 
     def dispatch_confirm(self, flow_id: str, body) -> dict:
         if not isinstance(body, dict) or set(body) != {"preview_id"}:

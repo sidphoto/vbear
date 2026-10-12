@@ -916,6 +916,20 @@ class ReportTests(unittest.TestCase):
                 self.assertIsNotNone(executor_report.problem(r, d))
         self.assertIsNone(executor_report.problem({**fx.report(d), "notes": "中" * 1365}, d))
 
+    def test_the_report_request_names_the_dispatch_and_the_schema(self):
+        d = fx.new_uuid()
+        text = executor_report.report_request(d)
+        self.assertIn(f'"v":1,"dispatch_id":"{d}"', text)
+        # one JSON object with exactly the schema's fields
+        shape = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        self.assertEqual(set(shape), set(executor_report.JSON_SCHEMA["required"]))
+        self.assertEqual(set(shape["tests"]), {"command", "result", "summary"})
+        # the dispatch line that carries it stays under the limit with a text of the largest accepted size
+        self.assertLess(len(text.encode()), 1024)
+        for bad in (None, "", "not-a-uuid", d.upper(), d + "x"):
+            with self.assertRaises(ValueError):
+                executor_report.report_request(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,7 +38,7 @@ STARTUP_TIMEOUT = 60.0
 HEAVY_TIMEOUT = 180.0        # the 12 000-event turn: CPU work that grows with a busy Mac
 
 FAKE_STREAM_CLI = r'''#!%(py)s
-import json, os, signal, subprocess, sys, time
+import json, os, re, signal, subprocess, sys, time
 sys.path.insert(0, %(repo)r)
 def _term(*_):
     open("got-sigterm", "w").close()                  # evidence that a signal arrived
@@ -89,8 +89,17 @@ for line in sys.stdin:
     cost += 0.01
     head = open("fake-head").read().strip() if os.path.exists("fake-head") else None
     over = json.load(open("fake-report.json")) if os.path.exists("fake-report.json") else {}
+    # "fake-realistic": like the real model, the report's dispatch_id is whatever the TEXT says (the transport
+    # uuid is invisible to it); a text that does not carry the report request gets a made-up id.
+    rid = d
+    if os.path.exists("fake-realistic"):
+        found = re.search(r'"dispatch_id":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"', text)
+        rid = found.group(1) if found else "made-up-id"
+    rep_kw = {}
+    if head or rid != d:
+        rep_kw = {"rep": fx.report(rid, **({"head": head} if head else {}), **over)}
     events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
-                     model=model, **({"rep": fx.report(d, head=head, **over)} if head else {}))
+                     model=model, **rep_kw)
     if mode == "many_responses":
         rep = fx.report(d)
         responses = [[{"type": "thinking", "thinking": "."}] for _ in range(5)]

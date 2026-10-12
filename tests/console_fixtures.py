@@ -24,6 +24,8 @@ class ConsoleMixin:
         from http.server import ThreadingHTTPServer
         from vbear.server import Console, make_handler
         tasks.save_task(self.tid, {"title": "t", "workdir": str(self.work)})
+        # the synthetic CLI reports the dispatch_id its TEXT names, as a real model must (S3 real end-to-end, run 1)
+        (self.work / "fake-realistic").write_text("1")
         conf = json.loads(json.dumps(cfg.DEFAULT_CONFIG))
         for src in conf["sources"]:
             src["enabled"] = False

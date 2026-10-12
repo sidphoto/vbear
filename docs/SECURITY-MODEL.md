@@ -228,8 +228,12 @@ also names the flow in its body and asks twice on screen.
   with the preview's once more just before sending. Without a login in the dedicated `CODEX_HOME` the dialog shows
   the exact `codex login` command and path and offers no acceptance: VBear never logs in for you and never reads
   credentials into a prompt, report or log.
-- **Dispatch.** `POST .../dispatch-preview` stores the sanitized full text (control and format characters become
-  visible `\uXXXX`) with its hash and shows exactly that text, its size and whether the session is ready.
+- **Dispatch.** `POST .../dispatch-preview` decides the dispatch id, stores the sanitized full text (control and
+  format characters become visible `\uXXXX`) with its hash and shows exactly that text, its size and whether the
+  session is ready. The text is what the person typed plus a fixed report request that VBear appends and that
+  names this dispatch's id and the report's fields (`executor_report.report_request`): the executor has no other
+  way to know the id its report must carry, and a report with another id is not a valid report. The person
+  approves the whole text, request included; the automatic mode's dispatch texts end with the same request.
   `POST .../dispatch` carries only the preview id. A dispatch the daemon refuses is not written; a lost answer is
   retried with the same id and never becomes a second dispatch.
 - **Reports.** The executor's own statement (status, head, tests, notes) is shown apart from VBear's reading of

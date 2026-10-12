@@ -33,7 +33,7 @@ import threading
 import time
 import uuid
 
-from . import acceptance, automation, config as cfg, flows, login_identity, risk_acceptance
+from . import acceptance, automation, config as cfg, executor_report, flows, login_identity, risk_acceptance
 from .api_error import ApiError
 from .flow_executor import FlowExecutor
 from .flow_review import FlowReview
@@ -44,8 +44,6 @@ TICK_S = 2.0
 BUSY_LIMIT_S = 60.0                       # an approval that has held its lock this long is not "in progress"
 LOCK_NAME = "runner.lock"
 MAX_TEXT_BYTES = 60 << 10                 # under the daemon's 64 KiB line, with room for the envelope
-REPORT_REQUEST = ("\n\n---\n回報要求：完成後請用結構化輸出回報 status（done / blocked / needs_input）、head（你目前 HEAD 的"
-                  "完整 commit）、tests.result（passed / failed / not_run）、tests.summary 與 notes。")
 FORWARD_REQUEST = "\n\n---\n請依上面標明為資料的審查意見修正，修正後 commit，並重新回報。"
 _WAITING = ("accepted", "writing", "written", "confirmed")
 ABORT_MARK = "流程被停止，審查中止"          # daemon_review._review_hold: what a stop writes into the review's reasons
@@ -337,14 +335,15 @@ class AutomationRunner:
 
     # -- the text of a dispatch ---------------------------------------------------------------------------
 
-    def _text(self, flow_id: str, approval_event: dict, forward_job: str | None) -> str | None:
+    def _text(self, flow_id: str, approval_event: dict, forward_job: str | None, dispatch_id: str) -> str | None:
         """The dispatch text, or None (the caller stops) with ``self._why`` set. Deterministic: the same inputs
-        give the same text, which is what lets a recovery check it against the intent's hash."""
+        (the dispatch id included: it is in the intent) give the same text, which is what lets a recovery check it
+        against the intent's hash. The text ends with the fixed report request that names this dispatch's id."""
         try:
             if forward_job is None:
                 plan = automation.read_plan(cfg.state_dir(), flow_id, sha256=approval_event["plan_sha256"],
                                             size=approval_event["plan_bytes"])
-                text = plan + REPORT_REQUEST
+                text = plan
             else:
                 draft = self.review.opinion_draft(flow_id, forward_job)
         except ApiError as exc:
@@ -356,7 +355,7 @@ class AutomationRunner:
                 self._why = ("review_too_long", "要轉送的審查意見過長，派工全文會超過上限（不截斷），要由你處理")
                 return None
             text = draft["text"] + FORWARD_REQUEST
-        text = sp.sanitize(text)
+        text = sp.sanitize(text + executor_report.report_request(dispatch_id))
         if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             self._why = ("text_too_long", "派工全文超過 64 KiB 上限（不截斷），要由你處理")
             return None
@@ -384,7 +383,8 @@ class AutomationRunner:
 
     def _dispatch(self, flow_id, approval, approval_event, forward_job, state) -> str:
         self._why = None
-        text = self._text(flow_id, approval_event, forward_job)
+        d = str(uuid.uuid4())                       # decided first: the text names it
+        text = self._text(flow_id, approval_event, forward_job, d)
         if text is None:
             return self._stop(flow_id, *self._why)
         problem = self._limits_ok(flow_id)
@@ -393,7 +393,6 @@ class AutomationRunner:
         launch, why = self._session(flow_id)
         if launch is None:
             return f"waiting:{why}"
-        d = str(uuid.uuid4())
         raw = text.encode("utf-8")
         self._event(flow_id, "auto_dispatch_intent",
                     {"dispatch_id": d, "text_sha256": hashlib.sha256(raw).hexdigest(), "length": len(raw)})
@@ -430,7 +429,7 @@ class AutomationRunner:
             return self._stop(flow_id, "dispatch_failed", f"派工 {d[:8]} 沒有送達（狀態 {status}），不重送")
         # not prepared anywhere: the same text again, which must be what the intent says
         self._why = None
-        text = self._text(flow_id, approval_event, state.get("forward_job"))
+        text = self._text(flow_id, approval_event, state.get("forward_job"), d)
         if text is None:
             return self._stop(flow_id, *self._why)
         raw = text.encode("utf-8")
