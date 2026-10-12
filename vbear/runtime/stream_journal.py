@@ -156,6 +156,11 @@ SCHEMAS = {
                                and _uuid(d["dispatch_id"])
                                and d["reason"] in sp.ANOMALY_REASONS and _str(d["event_type"], sp.MAX_EVENT_TYPE)
                                and ("fields" not in d or _anomaly_fields(d["fields"]))),
+    # a tool call the permission system refused: names only, filtered (a name that is not 1-64 of [A-Za-z0-9_] is
+    # "?"), never the message or the reason
+    "permission_denied": lambda d: (set(d) == {"dispatch_id", "tool_name", "reason_type"} and _uuid(d["dispatch_id"])
+                                    and all(isinstance(d[k], str) and (d[k] == "?" or sp.ANOMALY_FIELD_RE.match(d[k]))
+                                            for k in ("tool_name", "reason_type"))),
     "turn_result": _turn_result,
     "dispatch_failed": lambda d: (set(d) == {"dispatch_id", "reason"} and _uuid(d["dispatch_id"])
                                   and d["reason"] in sp.FAILED_REASONS),
@@ -182,6 +187,8 @@ class Turn:
     lifecycle: list = field(default_factory=list)
     init: dict | None = None
     anomalies: list = field(default_factory=list)
+    denials: list = field(default_factory=list)      # the permission system's refusals: the first 16, names only
+    denial_count: int = 0
     result: dict | None = None
     failed: str | None = None
     times: dict = field(default_factory=dict)
@@ -338,6 +345,14 @@ class JournalState:
         if self.state not in ("sent", "running", "finishing"):
             self._bad("anomaly 不在一輪之內")
         turn.anomalies.append({"reason": d["reason"], "event_type": d["event_type"], "fields": list(d.get("fields", []))})
+
+    def _permission_denied(self, d, t):
+        turn = self._turn(d)
+        if self.state != "running":
+            self._bad("權限拒絕不在回合進行中")
+        turn.denial_count += 1
+        if len(turn.denials) < sp.MAX_ANOMALY_FIELDS:
+            turn.denials.append({"tool_name": d["tool_name"], "reason_type": d["reason_type"]})
 
     def _turn_result(self, d, t):
         turn = self._turn(d)

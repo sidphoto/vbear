@@ -411,6 +411,21 @@ test("reports keep the executor's words and VBear's checks apart", async () => {
   assert(text(rp).includes("較早的回報，不再核對目前的 HEAD"));
 });
 
+test("a refused tool call is shown by count and name, as text, and does not change the turn's verdict", async () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const c = await mount({ reports: { ok: true, latest_dispatch_id: "d", reports: [
+    reportEntry({ denials: { count: 3, items: [{ tool_name: "Bash", reason_type: "mode" }, { tool_name: hostile, reason_type: "rule" }] } }),
+    reportEntry({ latest: false, usable: false, checks: null, dispatch_id: "e0e0e0e0-aaaa-4bbb-8ccc-0123456789ab" })] } });
+  const rp = byS2(c.node, "reports");
+  const t = text(rp);
+  assert(t.includes("這一輪有 3 次工具呼叫被權限系統擋下"));
+  assert(t.includes("Bash／mode"));
+  assert(t.includes(hostile), "the name is data: it is there as text");
+  assert.strictEqual(rp.findAll((n) => n.tag === "img").length, 0, "and it made no element");
+  assert(t.includes("有效回合"), "the turn is still a valid turn");
+  assert.strictEqual((t.match(/次工具呼叫被權限系統擋下/g) || []).length, 1, "only the turn that had one says so");
+});
+
 test("an order that cannot be told is said, and no report is called the latest", async () => {
   const c = await mount({ executor: executor({ sessions_order_problem: "有兩個 session 的建立時間相同，無法判斷哪一個是最新的" }),
     reports: { ok: true, latest_dispatch_id: null, order_problem: "有兩個 session 的建立時間相同，無法判斷哪一個是最新的",

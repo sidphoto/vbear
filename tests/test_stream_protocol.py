@@ -626,6 +626,99 @@ class VcsStateChangedTests(unittest.TestCase):
         self.assertEqual(cm.exception.reason, "out_of_order")
 
 
+class PermissionDeniedTests(unittest.TestCase):
+    """2.1.296 ``system/permission_denied``: a refused tool call is the safety mechanism working. The turn stays
+    valid; what is recorded is the tool's name and the type of the decision, filtered, never the message."""
+
+    PREFIX = "p"
+
+    def event(self, h, **over):
+        e = {"type": "system", "subtype": "permission_denied", "tool_name": "Bash",
+             "tool_use_id": f"toolu_{self.PREFIX}_so", "decision_reason_type": "mode",
+             "decision_reason": "SECRET-REASON-TEXT", "message": "SECRET-MESSAGE-TEXT",
+             "session_id": h.sid, "uuid": fx.new_uuid()}
+        e.update(over)
+        return e
+
+    def feed(self, h, *events, **kw):
+        d, text = h.dispatch()
+        evs = fx.turn(h.sid, d, text, cwd=CWD, prefix=self.PREFIX, version="2.1.296", **kw)
+        at = next(i for i, e in enumerate(evs) if e["type"] == "rate_limit_event")
+        evs[at:at] = list(events)
+        h.feed(evs)
+        return d
+
+    def harness(self):
+        return Harness(consts=C296, identity=IDENTITY296)
+
+    def test_a_denial_is_recorded_by_name_and_the_turn_stays_valid(self):
+        h = self.harness()
+        d = self.feed(h, self.event(h), self.event(h, tool_name="Edit", decision_reason_type="rule"))
+        self.assertTrue(h.validity(d)[0], h.validity(d))
+        turn = h.js.turns[d]
+        self.assertEqual((turn.denial_count, turn.anomalies), (2, []))
+        self.assertEqual(turn.denials, [{"tool_name": "Bash", "reason_type": "mode"},
+                                        {"tool_name": "Edit", "reason_type": "rule"}])
+        self.assertEqual(h.tracker.total_responses, 1)                     # not a model response
+        raw = b"".join(h.records)
+        self.assertNotIn(b"SECRET-REASON-TEXT", raw)                       # no text of the decision is kept
+        self.assertNotIn(b"SECRET-MESSAGE-TEXT", raw)
+        h.dispatch()                                                       # the session takes the next dispatch
+
+    def test_the_names_are_filtered_and_the_list_is_bounded(self):
+        h = self.harness()
+        d = self.feed(h, self.event(h, tool_name="bad name; rm -rf", decision_reason_type="x" * 65))
+        self.assertEqual(h.js.turns[d].denials, [{"tool_name": "?", "reason_type": "?"}])
+        h = self.harness()
+        d = self.feed(h, *[self.event(h) for _ in range(20)])
+        turn = h.js.turns[d]
+        self.assertEqual((turn.denial_count, len(turn.denials)), (20, sp.MAX_ANOMALY_FIELDS))
+        self.assertTrue(h.validity(d)[0])
+
+    def test_a_denial_that_does_not_fit_the_turn_is_a_protocol_error(self):
+        cases = (("a call this turn did not make", {"tool_use_id": "toolu_other"}, "tool_result_unknown"),
+                 ("no tool name", {"tool_name": None}, "missing_field"),
+                 ("no reason type", {"decision_reason_type": 7}, "missing_field"),
+                 ("another session", {"session_id": fx.new_uuid()}, "session_mismatch"))
+        for name, change, reason in cases:
+            with self.subTest(case=name):
+                h = self.harness()
+                with self.assertRaises(sp.ProtocolError) as cm:
+                    self.feed(h, self.event(h, **change))
+                self.assertEqual(cm.exception.reason, reason)
+        h = self.harness()
+        d, text = h.dispatch()
+        with self.assertRaises(sp.ProtocolError) as cm:                    # before the turn is running
+            h.feed([self.event(h)])
+        self.assertEqual(cm.exception.reason, "out_of_order")
+
+    def test_a_version_without_the_entry_keeps_it_an_unknown_type_and_names_its_fields(self):
+        h = Harness()
+        d, text = h.dispatch()
+        evs = fx.turn(h.sid, d, text, cwd=CWD, prefix=self.PREFIX)
+        at = next(i for i, e in enumerate(evs) if e["type"] == "rate_limit_event")
+        evs.insert(at, self.event(h))
+        h.feed(evs)
+        self.assertFalse(h.validity(d)[0])
+        a = h.js.turns[d].anomalies[0]
+        self.assertEqual(a["reason"], "unknown_type")
+        self.assertIn("decision_reason_type", a["fields"])
+        self.assertNotIn(b"SECRET-MESSAGE-TEXT", b"".join(h.records))
+
+    def test_the_journal_record_is_names_only(self):
+        d = fx.new_uuid()
+        schema = sj.SCHEMAS["permission_denied"]
+        self.assertTrue(schema({"dispatch_id": d, "tool_name": "Bash", "reason_type": "mode"}))
+        self.assertTrue(schema({"dispatch_id": d, "tool_name": "?", "reason_type": "?"}))
+        for bad in ({"dispatch_id": d, "tool_name": "Bash"},
+                    {"dispatch_id": d, "tool_name": "Bash", "reason_type": "a b"},
+                    {"dispatch_id": d, "tool_name": "x" * 65, "reason_type": "mode"},
+                    {"dispatch_id": d, "tool_name": "Bash", "reason_type": "mode", "message": "text"},
+                    {"dispatch_id": d, "tool_name": 5, "reason_type": "mode"}):
+            with self.subTest(record=str(bad)[:50]):
+                self.assertFalse(schema(bad))
+
+
 class AnomalyFieldNameTests(unittest.TestCase):
     """A turn_anomaly names the unexpected top-level fields: names only, bounded, never a value."""
 

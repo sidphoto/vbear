@@ -236,6 +236,13 @@ also names the flow in its body and asks twice on screen.
   approves the whole text, request included; the automatic mode's dispatch texts end with the same request.
   `POST .../dispatch` carries only the preview id. A dispatch the daemon refuses is not written; a lost answer is
   retried with the same id and never becomes a second dispatch.
+- **Refused tool calls.** When Claude Code's permission system refuses a tool call of the executor
+  (`system/permission_denied`), that is the safety mechanism working, not a protocol error: the turn stays valid,
+  the call did not run, and the report area says how many calls were refused and which tools (names only,
+  filtered to `[A-Za-z0-9_]`, up to 16; never the refusal's message or reason). The event must name a call that the
+  turn itself made and must arrive while the turn is running; otherwise it is a protocol error and the session
+  takes no further dispatch. A refused attempt does not turn a review into a pass: the review and the merge gate
+  are unchanged, and the person sees the refusals before merging.
 - **Reports.** The executor's own statement (status, head, tests, notes) is shown apart from VBear's reading of
   the files: whether the reported head is the work directory's HEAD now and whether the commit object exists. A
   failed check is not shown as a pass, and a check that cannot be read is shown as unreadable. A review can only

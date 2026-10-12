@@ -117,10 +117,15 @@ VERSIONS["2.1.296"] = replace(
     allowed={**VERSIONS["2.1.292"].allowed,
              "assistant": VERSIONS["2.1.292"].allowed["assistant"] | {"thinking_display", "wire_ingest_context"},
              "system/vcs_state_changed": frozenset({"branch", "cwd", "kind", "session_id", "subtype", "type",
+                                                    "uuid"}),
+             # a tool call the permission system refused (S3 real end-to-end, run 3, 2026-10-12: the field names
+             # are from the journal's turn_anomaly; no value of it is read except tool_name and the reason type)
+             "system/permission_denied": frozenset({"decision_reason", "decision_reason_type", "message",
+                                                    "session_id", "subtype", "tool_name", "tool_use_id", "type",
                                                     "uuid"})})
 
-KINDS = ("command_lifecycle", "system/init", "system/thinking_tokens", "system/vcs_state_changed", "user/replay",
-         "user/tool_result",
+KINDS = ("command_lifecycle", "system/init", "system/thinking_tokens", "system/vcs_state_changed",
+         "system/permission_denied", "user/replay", "user/tool_result",
          "assistant", "rate_limit_event", "result")
 
 
@@ -192,7 +197,8 @@ def kind_of(event: dict) -> str | None:
     t = event.get("type")
     if t == "system":
         sub = event.get("subtype")
-        return f"system/{sub}" if sub in ("init", "thinking_tokens", "vcs_state_changed") else None
+        return (f"system/{sub}" if sub in ("init", "thinking_tokens", "vcs_state_changed", "permission_denied")
+                else None)
     if t == "user":
         return "user/replay" if "isReplay" in event else "user/tool_result"
     if t in ("command_lifecycle", "assistant", "rate_limit_event", "result"):
@@ -226,6 +232,11 @@ ANOMALY_REASONS = ("unknown_type", "extra_fields")
 # a new field of a new Claude Code version can be named from the journal alone (S3 real end-to-end, run 2).
 MAX_ANOMALY_FIELDS = 16
 ANOMALY_FIELD_RE = re.compile(r"^[A-Za-z0-9_]{1,64}\Z")
+
+
+def safe_name(value) -> str:
+    """A name taken from an event for the record: 1-64 of [A-Za-z0-9_], else "?"."""
+    return value if isinstance(value, str) and ANOMALY_FIELD_RE.match(value) else "?"
 
 
 def anomaly_fields(names) -> list[str]:
@@ -419,6 +430,23 @@ class EventTracker:
         if not _within(ev["cwd"], self.workdir):
             raise ProtocolError("attribution", "vcs_state_changed cwd")
         return []
+
+    def _on_system_permission_denied(self, ev, t):
+        """Claude Code 2.1.296: the permission system refused a tool call. That is the safety mechanism working,
+        not a protocol error, so the turn stays valid; it is recorded (the tool's name and the type of the
+        decision, filtered, never the message or the reason's text) and shown. Fail closed all the same: the call
+        it names must be one this turn made, and it must come while the turn is running."""
+        if self.phase != "running":
+            raise ProtocolError("out_of_order", f"permission_denied in {self.phase}")
+        known = {c["tool_use_id"] for c in t.tool_calls}
+        tid = ev.get("tool_use_id")
+        self._need(isinstance(tid, str), "tool_use_id")
+        if tid not in known:
+            raise ProtocolError("tool_result_unknown", "permission_denied for a tool call this turn did not make")
+        for name in ("tool_name", "decision_reason_type"):
+            self._need(isinstance(ev.get(name), str), name)
+        return [("permission_denied", {"dispatch_id": t.dispatch_id, "tool_name": safe_name(ev["tool_name"]),
+                                       "reason_type": safe_name(ev["decision_reason_type"])})]
 
     def _on_user_replay(self, ev, t):
         if self.phase != "sent:replay":

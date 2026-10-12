@@ -64,6 +64,7 @@ TASK = {
         "重疊或相接（前一個的 end 等於下一個的 start）的區間要合併",
         "start 大於 end 的區間丟 ValueError，且不改動傳入的串列",
         "已 git commit，回報裡的 head 是該 commit",
+        "之後新增的測試以 python3 -m unittest discover -s tests 執行（這台機器只有 python3：沒有 python，也沒有 pytest）",
     ],
 }
 SPEC = """# merge_ranges

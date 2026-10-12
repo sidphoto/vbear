@@ -102,6 +102,14 @@ observed, which is listed below.
    was not in any probe turn. It is in 2.1.296's allowed set and is not read. The journal's `turn_anomaly` now
    names the unexpected fields (names only), so this would have been readable from the run itself.
 
+6. **`system/permission_denied`** (found by the third real end-to-end run, 2026-10-12, in the second turn, the one
+   that answered the review's comments; the journal named the fields). A `system` event for a tool call the
+   permission system refused. Its fields: `type`, `subtype`, `tool_name`, `tool_use_id`, `decision_reason_type`,
+   `decision_reason`, `message` (strings as far as VBear reads them), `session_id`, `uuid`. It is a known kind for
+   2.1.296 only; the turn stays valid; what is kept is the tool name and the decision's type (filtered), never the
+   message or the reason. It could not be reproduced by a replay capture of the same turn (the model's attempts
+   in that replay were two failed commands, not refusals), so what was refused is not recorded here.
+
 ## Runs and model use
 
 | Run | Outcome | Model responses | Cost reported by the CLI |
@@ -117,6 +125,8 @@ observed, which is listed below.
 | probe with the commit turn, `git add … && git commit -m …` | all checks pass, the event seen and accepted | 7 | USD 0.0245 |
 | real end-to-end run 2 (full; aborted by the product on finding 5) | 1 dispatch, 4 events with `wire_ingest_context` | 11 | USD 0.0500 |
 | replay capture of that turn (`tools/stream_capture.py --text-file --repo --base`) | one turn, 2 repository-state events | 12 | USD 0.0457 |
+| real end-to-end run 3 (full; first run through a review and a forward; aborted by the product on finding 6) | 2 dispatches, 1 review (NEEDS WORK), `permission_denied` in turn 2 | 21 | USD 0.1051 (Codex: 1 review) |
+| replay capture of turn 2 (same text, base = the reviewed commit) | one turn, no refusal | 12 | USD 0.0539 |
 
 The control run sends no request to Anthropic (its endpoint is the local listener, which accepts and closes without
 reading). Boundary runs (headless, interactive) are in [claude-code-2.1.296.md](claude-code-2.1.296.md).

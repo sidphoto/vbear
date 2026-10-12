@@ -85,6 +85,7 @@ class FlowReview:
                 entries.append({"launch_id": m["launch_id"], "dispatch_id": d["dispatch_id"], "status": d["status"],
                                 "failed": d.get("failed"), "times": d.get("times"), "valid": d.get("valid"),
                                 "reasons": d.get("reasons") or [], "report": d.get("report"), "checks": None,
+                                "denials": d.get("denials") or {"count": 0, "items": []},
                                 "usable": False, "latest": False})
         # the newest turn with a valid report is the one that can be reviewed
         with_report = [e for e in entries if e["valid"] and isinstance(e["report"], dict)]
