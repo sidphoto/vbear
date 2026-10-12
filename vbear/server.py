@@ -40,6 +40,7 @@ from . import annotations
 from . import agent_launch
 from . import agent_profiles
 from . import armory
+from . import loadout as loadout_mod
 from . import claude_verify
 from . import config as cfg
 from . import flow_executor
@@ -470,6 +471,11 @@ def make_handler(console: Console):
                         "profiles": agent_profiles.list_profiles(
                             known_skills=known_skills, known_roles=known_roles),
                     })
+                if path.startswith("/api/agent-profiles/") and path.endswith("/loadout"):
+                    out = self._loadout(path[len("/api/agent-profiles/"):-len("/loadout")])
+                    if out is None:
+                        return self._error(404, "找不到此 Agent Profile")
+                    return self._json(out)
                 if path.startswith("/api/agent-profiles/"):
                     rest = path[len("/api/agent-profiles/"):]
                     index = console.skill_index()
@@ -1021,6 +1027,20 @@ def make_handler(console: Console):
             return self._json({"ok": True, "session": info})
 
         # Profile-managed launch (R3 S0): preview, then confirm ---------------
+
+        def _loadout(self, profile_id):
+            """The role card's data, from what is already loaded only: no scan, no runtime call, no live build,
+            no CLI probe, no work directory (vbear/loadout.py)."""
+            static = console.store.static_if_loaded()
+            known_skills = {s.get("skill_id") for s in static.get("skills", [])} if static else None
+            known_roles = ({r.get("role_id") for r in static.get("roles", []) if r.get("role_id")}
+                           if static else None)
+            profile = agent_profiles.get_profile(profile_id, known_skills=known_skills, known_roles=known_roles)
+            if profile is None:
+                return None
+            verifier = getattr(console, "claude_verifier", None)
+            return loadout_mod.build(profile, static, console.store.live_cached(),
+                                     verifier.status() if verifier is not None else None)
 
         def _load_profile(self, profile_id):
             index = console.skill_index()

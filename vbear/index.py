@@ -402,6 +402,12 @@ class Store:
             self._publish(data, stamp)
             return data
 
+    def static_if_loaded(self) -> dict | None:
+        """The static index that is already in memory, or None. It never reads index.json and never scans: a
+        surface that must not start work (the loadout) uses this, and says so when there is nothing loaded."""
+        with self._lock:
+            return self._static
+
     def set_conf(self, conf: dict) -> None:
         with self._lock:
             self.conf = conf
