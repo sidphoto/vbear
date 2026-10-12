@@ -72,19 +72,38 @@ def _short(reasons) -> list[str]:
     return out[:16]
 
 
+SCRATCH_SCAN_MAX = 64                 # entries read from the scratch for the message, never more
+
+
 def _scratch_names(scratch) -> str:
     """For the message that the review's clone is not where it should be: the NAMES of the directories under the
-    scratch, so the next reading says "there is 'toy repo' and no repo" (names only, never content; at most five,
-    each cut to 40 printable characters, and the whole under the reason's limit)."""
+    scratch, so the next reading says "there is 'toy repo' and no repo". Names only, never content; at most 64
+    entries are read (a reviewer may have made many), only directories are listed (a file or a link is not), at
+    most five are shown, each cut to 40 characters with control characters shown as ?."""
+    shown: list[str] = []
+    seen = 0
+    more = False
     try:
-        names = sorted(n for n in os.listdir(str(scratch)) if not n.startswith("."))
+        with os.scandir(str(scratch)) as it:
+            for entry in it:
+                seen += 1
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    is_dir = False
+                if is_dir and not entry.name.startswith("."):
+                    shown.append("".join(ch if ch.isprintable() else "?" for ch in entry.name)[:40])
+                if seen >= SCRATCH_SCAN_MAX:          # the 64th is the last one read: more may follow
+                    more = True
+                    break
     except OSError:
         return ""
-    shown = ["".join(ch if ch.isprintable() else "?" for ch in n)[:40] for n in names[:5]]
-    if not shown:
+    shown.sort()
+    extra = len(shown) > 5 or more
+    shown = shown[:5]
+    if not shown and not more:
         return "（暫存區底下沒有任何資料夾）"
-    more = f"…共 {len(names)} 個" if len(names) > len(shown) else ""
-    return "（暫存區底下的項目：" + "、".join(f"'{n}'" for n in shown) + more + "）"
+    return ("（暫存區底下的資料夾：" + "、".join(f"'{n}'" for n in shown) + ("…以及更多" if extra else "") + "）")
 
 
 class _Dir:

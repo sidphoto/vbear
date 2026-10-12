@@ -257,6 +257,45 @@ class InvalidReviewTests(Scenario):
         self.assertNotIn("SECRET-FILE-CONTENT", reason)
         self.assertLessEqual(len(reason), 256)
 
+    def test_the_names_listing_reads_a_bounded_number_of_entries_and_lists_directories_only(self):
+        from vbear.runtime import review_finish as rfin
+        shutil.rmtree(self.scratch / "repo")
+        for i in range(200):
+            (self.scratch / f"d{i:03d}").mkdir()
+        entered = []
+        real = os.scandir
+
+        class Counting:
+            def __init__(self, it):
+                self.it = it
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return self.it.__exit__(*exc)
+
+            def __iter__(self):
+                for e in self.it:
+                    entered.append(e.name)
+                    yield e
+        with mock.patch.object(rfin.os, "scandir", lambda p: Counting(real(p))):
+            text = rfin._scratch_names(self.scratch)
+        self.assertEqual(len(entered), rfin.SCRATCH_SCAN_MAX)               # it stopped reading
+        self.assertIn("…以及更多", text)
+        self.assertLessEqual(len(text), 200)
+        # files and links are not listed, and a control character is shown as ?
+        shutil.rmtree(self.scratch)
+        self.scratch.mkdir()
+        (self.scratch / "a file").write_text("x")
+        (self.scratch / "a link").symlink_to(self.scratch)
+        (self.scratch / "real\x1bdir").mkdir()
+        text = rfin._scratch_names(self.scratch)
+        self.assertIn("'real?dir'", text)
+        self.assertNotIn("a file", text)
+        self.assertNotIn("a link", text)
+        self.assertNotIn("\x1b", text)
+
 
 class AtomicMarkerTests(Scenario):
     def write_marker(self, data=b'{"v":1}'):
