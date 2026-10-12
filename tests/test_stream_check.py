@@ -91,6 +91,33 @@ class StreamCheckTests(unittest.TestCase):
         self.assertFalse(stream_check.present(root) or stream_check.present(scratch))
         self.assertEqual(report["checks"]["cleanup"], {"pass": True, "left": [], "errors": []})
 
+    def run_with(self, version, vcs_turns):
+        """A run of the fake that reports ``version`` and sends the repository-state event in the given turns."""
+        src = FAKE_STREAM_CLI % {"py": sys.executable, "repo": REPO}
+        src = src.replace("VCS_TURNS = ()", f"VCS_TURNS = {tuple(vcs_turns)!r}", 1)
+        src = src.replace("CLI_VERSION = fx.VERSION", f"CLI_VERSION = {version!r}", 1)
+        binary = self.tmp / f"claude-{version}-{''.join(map(str, vcs_turns))}"
+        binary.write_text(src)
+        binary.chmod(0o700)
+        private = self.tmp / ("t" + binary.name[-3:])
+        private.mkdir()
+        out = self.tmp / (binary.name + ".json")
+        stream_check.run(str(binary), version, "claude-haiku-4-5-20251001", str(out), tmp_root=str(private))
+        return json.loads(out.read_text())
+
+    def test_the_event_must_come_from_the_commit_turn_itself(self):
+        # only in the first two turns: the run saw the event, but not from a commit
+        early = self.run_with("2.1.296", (0, 1))
+        c = early["checks"]["commit_turn"]
+        self.assertEqual((c["vcs_event_required"], c["vcs_event_seen"]), (True, False))
+        self.assertTrue(any("system/vcs_state_changed" in w for w in c["why"]))
+        self.assertEqual([t["valid"] for t in early["turns"]], [True, True, True])
+        # in the third turn: seen (the fake commits nothing, so the report check still fails, for its own reason)
+        late = self.run_with("2.1.296", (2,))
+        c = late["checks"]["commit_turn"]
+        self.assertEqual((c["vcs_event_required"], c["vcs_event_seen"]), (True, True))
+        self.assertFalse(any("system/vcs_state_changed" in w for w in c["why"]))
+
     def test_the_commit_turn_needs_the_event_when_the_constants_know_it(self):
         ok = dict(turn_valid=True, problems=[], vcs_required=True, vcs_seen=True)
         self.assertTrue(stream_check.commit_turn_check(**ok)["pass"])

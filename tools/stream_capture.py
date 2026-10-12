@@ -8,7 +8,8 @@ dispatch that creates a file, commits it and then edits it again, reads stdout u
 process the way the daemon does. Every raw line goes to ``--out`` (owner-only, never committed: it holds the model's
 words and paths); what is printed is only event kinds and field names with types.
 
-    python3 tools/stream_capture.py --claude ~/.local/share/claude/versions/2.1.296 --out _sandbox/e2e-real/raw.jsonl
+    python3 tools/stream_capture.py --claude ~/.local/share/claude/versions/2.1.296 --out raw-events.jsonl
+    # (a file name: it is created in <worktree>/_sandbox/captures/, which is not in the repository)
 
 One real model turn (a few responses, well under USD 0.05: the launch's own budget is USD 0.10).
 """
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
 import subprocess
 import sys
@@ -29,26 +31,46 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 TURN_TIMEOUT = 240.0
-SANDBOX = Path(__file__).resolve().parent.parent / "_sandbox"
+ROOT = Path(__file__).resolve().parent.parent
+CAPTURE_DIR = ("_sandbox", "captures")          # below the worktree root; ``_sandbox`` is not in the repository
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-def check_out(path: str, sandbox: Path = SANDBOX) -> Path:
-    """The raw lines hold the model's words: they go only under the worktree's ``_sandbox`` (which is not in the
-    repository), into a file that does not exist yet. Refused before any model call: a path outside it, anything
-    already there (a link included), or a directory whose real path is not below it."""
-    root = Path(os.path.realpath(sandbox))
-    p = Path(os.path.abspath(path))
-    if os.path.lexists(p):
-        raise SystemExit(f"--out: {p} already exists (nothing is overwritten)")
-    parent = Path(os.path.realpath(p.parent))
-    if not (parent == root or root in parent.parents):
-        raise SystemExit(f"--out must be under {root} (the real path of its directory is {parent})")
-    return parent / p.name
+def open_capture_dir(root: Path = ROOT, parts: tuple = CAPTURE_DIR) -> int:
+    """A descriptor on ``<root>/_sandbox/captures``, opened one component at a time with O_NOFOLLOW from the
+    worktree root (created owner-only when missing), each one checked to be ours and not writable by others. What
+    is written later goes through this descriptor, so replacing a path component with a link afterwards changes
+    nothing: the descriptor still names the directory that was checked."""
+    fd = os.open(root, _DIR)
+    try:
+        for name in parts:
+            try:
+                nfd = os.open(name, _DIR, dir_fd=fd)
+            except FileNotFoundError:
+                os.mkdir(name, 0o700, dir_fd=fd)
+                nfd = os.open(name, _DIR, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+            st = os.fstat(fd)
+            if st.st_uid != os.geteuid() or st.st_mode & 0o022:
+                raise SystemExit(f"{name}: not a directory of this user that others cannot write")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
-def open_out(path: Path) -> int:
-    """A new file, owner-only, never a link and never an existing file."""
-    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+def create_capture(dirfd: int, name: str) -> int:
+    """A new file in that directory: owner-only, never a link and never an existing file (a name only: the raw
+    lines hold the model's words, so they go to one fixed place)."""
+    if not NAME_RE.match(name) or name.startswith("."):
+        raise SystemExit("--out is a file name (letters, digits, . _ -), not a path")
+    try:
+        return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                       dir_fd=dirfd)
+    except FileExistsError:
+        raise SystemExit(f"--out: {name} already exists in _sandbox/captures (nothing is overwritten)") from None
 
 
 def _git(cwd, *a):
@@ -74,7 +96,12 @@ def main() -> int:
     ap.add_argument("--model", default="claude-haiku-4-5-20251001")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    out = check_out(args.out)                    # before anything is launched or any model is called
+    # before anything is launched or any model is called: the directory is checked and the file made
+    dirfd = open_capture_dir()
+    try:
+        raw_fd = create_capture(dirfd, args.out)
+    finally:
+        os.close(dirfd)
     from vbear import strictjson
     from vbear.runtime import agent_sessions, daemon, stream_session
     from vbear.runtime import stream_protocol as sp
@@ -126,9 +153,9 @@ def main() -> int:
         leader = stream_session.capture_leader(proc.pid)
         proc.stdin.write(sp.dispatch_line(text, sid, dispatch))
         proc.stdin.flush()
-        fd = open_out(out)
         buf, deadline, got_result = b"", time.monotonic() + TURN_TIMEOUT, False
-        with os.fdopen(fd, "wb") as raw:
+        fdopened, raw_fd = raw_fd, None                      # the file object owns it from here
+        with os.fdopen(fdopened, "wb") as raw:
             while not got_result and time.monotonic() < deadline:
                 ready, _, _ = select.select([proc.stdout], [], [], 1.0)
                 if not ready:
@@ -174,6 +201,8 @@ def main() -> int:
                 pass
         proc = None
     finally:
+        if raw_fd is not None:
+            os.close(raw_fd)
         if proc is not None:
             summary["process_problem"] = stream_session.end_spawned(proc, leader)
         if scratch and present(scratch):

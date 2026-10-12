@@ -339,6 +339,8 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         texts = {d1: _prompt(d1, run_probe=True), d2: _prompt(d2, run_probe=False), d3: _commit_prompt(d3)}
         keysets: dict[str, set] = {}
         variants: dict[str, set] = {}          # every distinct key set per kind (keys only, never values)
+        turn_kinds: dict[str, set] = {}        # the kinds each turn produced: the commit turn's own, not the run's
+        active = [d1]                          # the turn whose events are being read
         last_keys = None
         protocol = {"pass": False}
         rapid = {"pass": False}
@@ -381,6 +383,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                     kind = sp.kind_of(ev) or f"unknown:{str(ev.get('type'))[:32]}"
                     keysets.setdefault(kind, set()).update(ev.keys())
                     variants.setdefault(kind, set()).add(tuple(sorted(ev.keys())))
+                    turn_kinds.setdefault(active[0], set()).add(kind)
                     last_keys = (kind, sorted(ev.keys()))
                     for k, data in tracker.on_event(ev):
                         writer.append(k, data)
@@ -396,6 +399,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                                 writer.append("dispatch_writing", {"dispatch_id": d2, "turn_cap": TURN_CAP})
                                 writer.append("dispatch_written", {"dispatch_id": d2})
                                 tracker.begin(d2, texts[d2])
+                                active[0] = d2
                             elif data["dispatch_id"] == d2:
                                 # the third turn, the commit, goes the ordinary way: after the second's end
                                 accept(d3)
@@ -404,6 +408,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
                                 proc.stdin.flush()
                                 writer.append("dispatch_written", {"dispatch_id": d3})
                                 tracker.begin(d3, texts[d3])
+                                active[0] = d3
                             else:
                                 done = True
                     if done:
@@ -477,7 +482,7 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         report["checks"]["commit_turn"] = commit_turn_check(
             turn_valid=bool(turns[2]["valid"]), problems=problems,
             vcs_required="system/vcs_state_changed" in consts.allowed,
-            vcs_seen="system/vcs_state_changed" in variants)
+            vcs_seen="system/vcs_state_changed" in turn_kinds.get(d3, ()))
         report["observed_keys"] = {k: sorted(v) for k, v in sorted(keysets.items())}
         report["observed_key_sets"] = {k: [list(x) for x in sorted(v)] for k, v in sorted(variants.items())}
         report["unexpected_keys"] = {k: sorted(v - consts.allowed.get(k, set())) for k, v in keysets.items()

@@ -19,7 +19,7 @@ compared before and after, and the processes' open files are checked), merge, pu
 here as a base commit; the work in it is the executor's.
 
 Caps (a run that goes past one is stopped and reported, not widened): 45 minutes wall clock for the whole run; the
-flow's own limits are in LIMITS (at most 3 reviews, 6 dispatches, a small executor budget).
+flow's own limits are in LIMITS (at most 3 reviews, 6 dispatches, an executor budget of USD 0.50).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ REVIEW_STOP_AFTER_S = 15            # a review must have run this long before th
 
 LIMITS = {"max_reviews": 3, "max_dispatches": 6, "review_max_responses": 100, "executor_turn_max_responses": 60,
           "executor_total_max_responses": 150, "review_timeout_min": 20, "executor_turn_timeout_min": 20,
-          "max_elapsed_h": 1, "executor_budget_usd": 2.0}
+          "max_elapsed_h": 1, "executor_budget_usd": 0.5}
 
 TASK = {
     "title": "合併重疊區間 merge_ranges",
@@ -103,8 +103,36 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def sh(*cmd, env=None, cwd=None, timeout=30) -> str:
-    return subprocess.run(list(cmd), env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout).stdout
+class CommandFailed(RuntimeError):
+    pass
+
+
+def run_cmd(*cmd, timeout=30) -> tuple[int, str, str]:
+    """(returncode, stdout, stderr). A command that cannot run or times out is an error, never "no output"."""
+    try:
+        r = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CommandFailed(f"{cmd[0]}: {type(exc).__name__}") from exc
+    return r.returncode, r.stdout, r.stderr
+
+
+def sh(*cmd, timeout=30) -> str:
+    """stdout of a command that must exit 0."""
+    rc, out, err = run_cmd(*cmd, timeout=timeout)
+    if rc != 0:
+        raise CommandFailed(f"{cmd[0]} exited {rc}: {err.strip()[:120]}")
+    return out
+
+
+def lsof(*args, timeout=30) -> str:
+    """lsof's stdout. Its exit 1 with no output and no message means "nothing found"; anything else that is not
+    exit 0 is a failure of the check itself."""
+    rc, out, err = run_cmd("lsof", *args, timeout=timeout)
+    if rc == 0:
+        return out
+    if rc == 1 and not out.strip() and not err.strip():
+        return ""
+    raise CommandFailed(f"lsof exited {rc}: {err.strip()[:120]}")
 
 
 def git(cwd: Path, *args) -> str:
@@ -169,15 +197,21 @@ def real_state_witness() -> dict:
             out[rel or "."] = {"exists": True, "mtime_ns": st.st_mtime_ns, "inode": st.st_ino, "size": st.st_size}
         except FileNotFoundError:
             out[rel or "."] = {"exists": False}
-    out["port_7788_listeners"] = sorted(sh("lsof", "-nP", "-iTCP:7788", "-sTCP:LISTEN", "-Fp").split())
+    out["port_7788_listeners"] = sorted(lsof("-nP", "-iTCP:7788", "-sTCP:LISTEN", "-Fp").split())
     return out
 
 
 def open_files_touching_real_state(pids: list[int]) -> list[str]:
-    """Names of open files (of the given processes) that are under ~/.vbear or are port 7788; paths only."""
+    """Names of open files (of the given processes) that are under ~/.vbear or are port 7788; paths only. A process
+    that is gone by the time it is looked at has no files; a lookup that fails for a live one is an error."""
     bad = []
     for pid in pids:
-        txt = sh("lsof", "-nP", "-p", str(pid), "-Fn", timeout=20)
+        try:
+            txt = lsof("-nP", "-p", str(pid), "-Fn", timeout=20)
+        except CommandFailed:
+            if _alive(pid):
+                raise
+            continue
         for line in txt.splitlines():
             if line.startswith("n") and (str(REAL_STATE) in line or ":7788" in line):
                 bad.append(f"{pid}:{line[1:]}")
@@ -359,6 +393,35 @@ class Run:
     def say(self, msg: str) -> None:
         log(msg, self.fh)
 
+    def expect(self, name: str, ok: bool, detail: str = "") -> None:
+        """An acceptance target of the scenario, written as an assertion: recorded, and the scenario fails if any is
+        false (settle())."""
+        self.result.setdefault("assertions", []).append({"name": name, "ok": bool(ok), "detail": detail[:300]})
+        self.say(f"{'OK  ' if ok else 'FAIL'} {name}{(' — ' + detail) if detail and not ok else ''}")
+
+    def settle(self) -> None:
+        bad = [a["name"] for a in self.result.get("assertions", []) if not a["ok"]]
+        if bad:
+            raise AssertionError("acceptance not met: " + "; ".join(bad))
+
+    def auto_events(self) -> list[dict]:
+        return [e for e in self.events() if e["kind"].startswith("auto_")]
+
+    def common_expectations(self) -> None:
+        """What every run must show, whatever the scenario: no duplicate dispatch, review round or job; every
+        automatic event marked as the runner's; every review whole and cleaned (or, for an interrupted one, not
+        left holding anything)."""
+        evs = self.events()
+        intents = [e["dispatch_id"] for e in evs if e["kind"] == "auto_dispatch_intent"]
+        rounds = [e["round"] for e in evs if e["kind"] == "auto_review_intent"]
+        jobs = [e.get("job_id") for e in evs if e["kind"] == "auto_review_started"]
+        self.expect("no dispatch id was used twice", len(intents) == len(set(intents)), str(len(intents)))
+        self.expect("no review round was started twice", len(rounds) == len(set(rounds)), str(rounds))
+        self.expect("no review job was started twice", len(jobs) == len(set(jobs)), str(len(jobs)))
+        self.expect("every automatic event is marked as the automation's own",
+                    all(e["source"] == "automation" for e in evs if e["kind"].startswith("auto_")))
+        self.result["counts"] = {"dispatches": len(intents), "review_rounds": len(rounds), "review_jobs": len(jobs)}
+
     def api(self, path, method="GET", body=None, ok=(200,)):
         st, data = self.console.call(path, method, body)
         if st not in ok:
@@ -487,16 +550,23 @@ class Run:
         (self.dir / f"snapshot-{tag}.json").write_text(json.dumps(keep, ensure_ascii=False, indent=1))
 
     def finish(self, error: str | None) -> None:
+        """Always cleans up, and every check of the cleanup and of the real state can fail the run: a leftover
+        process, a difference in ``~/.vbear``, an open file there, a check that could not run."""
         r = self.result
         r["error"] = error
+        problems: list[str] = []
+
+        def attempt(what: str, fn, default=None):
+            try:
+                return fn()
+            except Exception as exc:
+                problems.append(f"{what}: {type(exc).__name__}: {exc}"[:300])
+                return default
         try:
             if self.console.proc and self.console.proc.poll() is None:
-                try:
-                    self.snapshot("final")
-                except Exception as exc:
-                    r["notes"].append(f"final snapshot failed: {exc}")
-                try:
-                    if self.launch:
+                attempt("final snapshot", lambda: self.snapshot("final"))
+                if self.launch:
+                    def close_executor():
                         st, _ = self.console.call(f"/api/flows/{self.fid}/executor/close", "POST",
                                                   {"launch_id": self.launch})
                         r["executor_close_status"] = st
@@ -504,30 +574,47 @@ class Run:
                         while now() < end:
                             sess = self.executor().get("sessions") or []
                             if not sess or sess[-1].get("status", {}).get("state") in ("exited", "ended", "closed"):
-                                break
+                                return
                             time.sleep(1)
-                except Exception as exc:
-                    r["notes"].append(f"executor close: {type(exc).__name__}: {exc}")
+                        raise RuntimeError("the executor session did not end in 60 s")
+                    attempt("executor close", close_executor)
         finally:
+            attempt("tracking", self.track)
             pids_during = [p for p in ([self.console.proc.pid] if self.console.proc else []) + daemon_pids()
                            if _alive(p)]
-            r["open_files_touching_real_state"] = open_files_touching_real_state(pids_during)
-            r["console_exit"] = self.console.stop()
+            r["open_files_touching_real_state"] = attempt(
+                "open files", lambda: open_files_touching_real_state(pids_during), default=[])
+            if r["open_files_touching_real_state"]:
+                problems.append("a process of this run had a file open under ~/.vbear or on port 7788")
+            r["console_exit"] = attempt("console stop", self.console.stop)
+            if r["console_exit"] not in (0, None):
+                problems.append(f"the console exited {r['console_exit']}")
             time.sleep(2)
-            r["daemon_shutdown"] = shutdown_daemon()
+            r["daemon_shutdown"] = attempt("daemon shutdown", shutdown_daemon, default={})
+            if r["daemon_shutdown"].get("still_alive"):
+                problems.append("the runtime daemon is still running")
             time.sleep(2)
-            after = relevant_pids()
+            after = attempt("process listing", relevant_pids, default={})
             r["tracked_processes_seen"] = len(self.tracked)
             r["leftover_processes"] = [redact(c)[:160] for p, c in sorted(self.tracked.items()) if _alive(p)]
+            if r["leftover_processes"]:
+                problems.append(f"{len(r['leftover_processes'])} process(es) of this run are still running")
             # new processes that look related but were never below our console or daemon (other sessions' own CLIs)
             r["unattributed_new_processes"] = [redact(c).split()[0][-60:] for p, c in sorted(after.items())
                                               if p not in self.baseline and p not in self.tracked]
             r["real_state_before"] = self.real_before
-            r["real_state_after"] = real_state_witness()
-            r["real_state_unchanged"] = self.real_before == r["real_state_after"]
+            r["real_state_after"] = attempt("real state", real_state_witness, default={})
+            r["real_state_unchanged"] = bool(r["real_state_after"]) and self.real_before == r["real_state_after"]
+            if not r["real_state_unchanged"]:
+                problems.append("the real ~/.vbear, port 7788 or runtime.sock metadata differs from before the run")
+            r["cleanup_problems"] = problems
+            r["clean"] = not problems
+            if problems and error is None:
+                r["error"] = "cleanup or real-state checks failed: " + "; ".join(problems)[:600]
+            r["passed"] = r["error"] is None
             r["wall_seconds"] = round(time.time() - self.wall0, 1)
             (self.dir / "result.json").write_text(json.dumps(r, ensure_ascii=False, indent=1))
-            self.say(f"result written: {self.dir.name}/result.json")
+            self.say(f"result written: {self.dir.name}/result.json (passed={r['passed']})")
             self.fh.close()
 
 
@@ -539,10 +626,33 @@ def scenario_dry(run: Run) -> None:
     run.result["dry"] = True
 
 
+def final_reviews(run: Run) -> list[dict]:
+    rv = run.reviews()
+    run.result["reviews"] = [{k: r.get(k) for k in ("round", "state", "outcome", "record", "verdict")} for r in rv]
+    return rv
+
+
 def scenario_full(run: Run) -> None:
     run.setup()
     run.approve_and_start(run.preview())
-    run.to_gate()
+    stop = run.to_gate()
+    run.new_events()
+    evs = run.events()
+    verdicts = [e["verdict"] for e in evs if e["kind"] == "auto_review_result"]
+    run.result["verdicts"] = verdicts
+    run.expect("the loop ended at the merge gate", stop.get("reason_code") == "awaiting_merge",
+               str(stop.get("reason_code")))
+    run.expect("a NEEDS WORK came before the PASS",
+               "NEEDS WORK" in verdicts and verdicts[-1] == "PASS" and verdicts.index("NEEDS WORK") < len(verdicts) - 1,
+               str(verdicts))
+    rv = final_reviews(run)
+    run.expect("every review is valid, complete and cleaned",
+               bool(rv) and all((r.get("outcome"), r.get("record"), r.get("state")) == ("valid", "complete", "cleaned")
+                                for r in rv), json.dumps(run.result["reviews"]))
+    run.expect("one dispatch per review round", run.result.get("end") is not None and
+               len([e for e in evs if e["kind"] == "auto_dispatch_intent"]) == len(verdicts))
+    run.common_expectations()
+    run.settle()
 
 
 def scenario_stop(run: Run) -> None:
@@ -552,27 +662,40 @@ def scenario_stop(run: Run) -> None:
     time.sleep(REVIEW_STOP_AFTER_S)
     still = run.review_running()
     run.result["stop"] = {"review_round": started.get("round"), "still_running_when_stopped": bool(still)}
+    run.expect("a review was running when the stop was pressed", bool(still))
     run.snapshot("before-stop")
     t = time.time()
     r = run.api(f"/api/flows/{run.fid}/hold", "POST", {})
-    run.result["stop"]["hold_response_keys"] = sorted(r) if isinstance(r, dict) else None
     run.say("stop pressed (the flow, not the executor session)")
-    # the review process is cleaned and the loop does not move again
+    seq_at_stop = run.events()[-1]["seq"]
+
     def review_done():
         rv = run.reviews()
         return rv and rv[-1]["state"] in ("cleaned", "manual_review")
     run.wait_until(review_done, "the stopped review to end", 5 * 60, every=2.0)
     run.result["stop"]["review_ended_after_s"] = round(time.time() - t, 1)
-    before = [e["seq"] for e in run.events()]
     time.sleep(90)
-    after = [e["seq"] for e in run.events()]
     run.new_events()
+    evs = run.events()
+    after_stop = [e for e in evs if e["seq"] > seq_at_stop]
     st = run.automation()
-    run.result["stop"].update(held=bool((st.get("step") or {}).get("held")), events_before=len(before),
-                              events_after_90s=len(after), nothing_moved=before == after,
-                              reviews=[{k: r_.get(k) for k in ("round", "state", "outcome", "record")}
-                                       for r_ in run.reviews()])
+    rv = final_reviews(run)
+    run.result["stop"].update(held=bool((st.get("step") or {}).get("held")),
+                              kinds_after_the_stop=[e["kind"] for e in after_stop])
+    run.expect("the flow is held", run.result["stop"]["held"])
+    run.expect("the review's process was cleaned up", bool(rv) and rv[-1]["state"] == "cleaned",
+               json.dumps(run.result["reviews"]))
+    run.expect("the stopped review is not a valid review", bool(rv) and rv[-1].get("outcome") != "valid",
+               json.dumps(run.result["reviews"]))
+    run.expect("nothing was dispatched or reviewed after the stop",
+               not any(e["kind"] in ("auto_dispatch_intent", "auto_dispatch_sent", "auto_review_intent",
+                                     "auto_review_started") for e in after_stop),
+               str([e["kind"] for e in after_stop]))
+    run.expect("the flow did not resume by itself", not any(e["kind"] == "automation_mode" for e in after_stop)
+               and run.result["stop"]["held"])
     run.result["end"] = {"kind": "stopped_by_user", "held": run.result["stop"]["held"]}
+    run.common_expectations()
+    run.settle()
 
 
 def scenario_restart(run: Run) -> None:
@@ -582,25 +705,36 @@ def scenario_restart(run: Run) -> None:
     time.sleep(REVIEW_STOP_AFTER_S)
     run.snapshot("before-restart")
     rv = run.reviews()
+    running = bool(run.review_running())
     run.result["restart"] = {"review_round": started.get("round"), "reviews_before": len(rv),
-                             "events_before": len(run.events()), "still_running": bool(run.review_running())}
+                             "events_before": len(run.events()), "still_running": running}
+    run.expect("a review was running when the console was restarted", running)
     old_pid = run.console.proc.pid
     code = run.console.stop(signal.SIGTERM)
     run.result["restart"]["console_exit_code"] = code
     run.say(f"console stopped (SIGTERM, exit {code}); the daemon, the executor and the review keep running")
     time.sleep(5)
     run.result["restart"]["daemon_alive_while_console_down"] = bool(daemon_pids())
+    run.expect("the daemon kept running while the console was down", run.result["restart"]["daemon_alive_while_console_down"])
     run.console.start()
     run.say(f"console restarted (new pid, new temporary port; old {old_pid})")
     run.seen = len(run.events())
-    run.to_gate()
+    stop = run.to_gate()
+    run.new_events()
     evs = run.events()
-    intents = [e["dispatch_id"] for e in evs if e["kind"] == "auto_dispatch_intent"]
-    rounds = [e["round"] for e in evs if e["kind"] == "auto_review_intent"]
-    jobs = [e.get("job_id") for e in evs if e["kind"] == "auto_review_started"]
-    run.result["restart"].update(dispatch_ids_unique=len(intents) == len(set(intents)), dispatches=len(intents),
-                                 review_rounds_unique=len(rounds) == len(set(rounds)), review_rounds=rounds,
-                                 review_jobs_unique=len(jobs) == len(set(jobs)))
+    verdicts = [e["verdict"] for e in evs if e["kind"] == "auto_review_result"]
+    run.result["verdicts"] = verdicts
+    run.expect("the loop ended at the merge gate", stop.get("reason_code") == "awaiting_merge",
+               str(stop.get("reason_code")))
+    run.expect("the last verdict is PASS", bool(verdicts) and verdicts[-1] == "PASS", str(verdicts))
+    rv = final_reviews(run)
+    run.expect("every review is valid, complete and cleaned",
+               bool(rv) and all((r.get("outcome"), r.get("record"), r.get("state")) == ("valid", "complete", "cleaned")
+                                for r in rv), json.dumps(run.result["reviews"]))
+    run.expect("one dispatch per review round",
+               len([e for e in evs if e["kind"] == "auto_dispatch_intent"]) == len(verdicts))
+    run.common_expectations()
+    run.settle()
 
 
 SCENARIOS = {"dry": scenario_dry, "full": scenario_full, "stop": scenario_stop, "restart": scenario_restart}
@@ -628,7 +762,7 @@ def main() -> int:
                 pass
     finally:
         run.finish(error)
-    return 0 if error is None else 1
+    return 0 if run.result.get("passed") else 1
 
 
 if __name__ == "__main__":

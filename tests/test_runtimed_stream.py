@@ -53,6 +53,8 @@ with open("fake-launch.json", "w") as f:
                "env": sorted(os.environ), "home": os.environ.get("HOME"),
                "tmpdir": os.environ.get("CLAUDE_CODE_TMPDIR")}, f)
 index, cost = 0, 0.0
+VCS_TURNS = ()                                        # turn indexes that carry a system/vcs_state_changed event
+CLI_VERSION = fx.VERSION                              # (a test sets both by editing this source before it is written)
 def emit(events):
     for e in events:
         sys.stdout.write(json.dumps(e) + "\n")
@@ -99,7 +101,11 @@ for line in sys.stdin:
     if head or rid != d:
         rep_kw = {"rep": fx.report(rid, **({"head": head} if head else {}), **over)}
     events = fx.turn(sid, d, text, cwd=os.getcwd(), result_index=index, cost=cost, prefix="r%%d" %% index,
-                     model=model, **rep_kw)
+                     model=model, version=CLI_VERSION, **rep_kw)
+    if index in VCS_TURNS:
+        at = next(i for i, e in enumerate(events) if e["type"] == "rate_limit_event")
+        events.insert(at, {"type": "system", "subtype": "vcs_state_changed", "kind": "commit", "branch": "main",
+                           "cwd": os.getcwd(), "session_id": sid, "uuid": fx.new_uuid()})
     if mode == "many_responses":
         rep = fx.report(d)
         responses = [[{"type": "thinking", "thinking": "."}] for _ in range(5)]

@@ -24,47 +24,72 @@ class OutputGuardTests(unittest.TestCase):
         self.cap = load()
         self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbcap-")))
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.sandbox = self.tmp / "_sandbox"
-        (self.sandbox / "e2e-real").mkdir(parents=True)
+        self.root = self.tmp / "worktree"
+        self.root.mkdir()
         (self.tmp / "elsewhere").mkdir()
+        self.fds = []
 
-    def refused(self, path):
+    def tearDown(self):
+        for fd in self.fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def dirfd(self):
+        fd = self.cap.open_capture_dir(self.root)
+        self.fds.append(fd)
+        return fd
+
+    def test_the_directory_is_made_owner_only_and_the_file_is_new_owner_only(self):
+        fd = self.dirfd()
+        made = self.root / "_sandbox" / "captures"
+        self.assertTrue(made.is_dir())
+        self.assertEqual(stat.S_IMODE(os.stat(made).st_mode), 0o700)
+        out = self.cap.create_capture(fd, "raw.jsonl")
+        self.fds.append(out)
+        self.assertEqual(stat.S_IMODE(os.stat(made / "raw.jsonl").st_mode), 0o600)
+        with self.assertRaises(SystemExit):                      # never an existing file, even one it just made
+            self.cap.create_capture(fd, "raw.jsonl")
+
+    def test_only_a_plain_file_name_is_accepted(self):
+        fd = self.dirfd()
+        for bad in ("", "a/b", "../x", "/etc/passwd", ".hidden", "x" * 80, "a b", "..", "a\x00b"):
+            with self.subTest(name=bad):
+                with self.assertRaises(SystemExit):
+                    self.cap.create_capture(fd, bad)
+
+    def test_an_existing_file_or_link_is_refused_and_left_alone(self):
+        fd = self.dirfd()
+        captures = self.root / "_sandbox" / "captures"
+        (captures / "old.jsonl").write_text("old")
+        os.chmod(captures / "old.jsonl", 0o644)
         with self.assertRaises(SystemExit):
-            self.cap.check_out(str(path), self.sandbox)
-
-    def test_a_new_file_under_the_sandbox_is_accepted_and_opened_owner_only_without_following_links(self):
-        out = self.cap.check_out(str(self.sandbox / "e2e-real" / "raw.jsonl"), self.sandbox)
-        self.assertEqual(out, self.sandbox / "e2e-real" / "raw.jsonl")
-        self.assertFalse(out.exists())                           # checking creates nothing
-        fd = self.cap.open_out(out)
-        os.close(fd)
-        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o600)
-        with self.assertRaises(FileExistsError):                 # never an existing file, even one it just made
-            self.cap.open_out(out)
-
-    def test_outside_the_sandbox_is_refused(self):
-        self.refused(self.tmp / "elsewhere" / "raw.jsonl")
-        self.refused(self.tmp / "raw.jsonl")
-        self.refused(self.sandbox / "e2e-real" / ".." / ".." / "raw.jsonl")        # a way out by ".."
-        self.refused(self.sandbox.parent / "_sandbox-other" / "raw.jsonl")          # a similar name
-
-    def test_a_directory_link_that_leaves_the_sandbox_is_refused(self):
-        (self.sandbox / "linkdir").symlink_to(self.tmp / "elsewhere")
-        self.refused(self.sandbox / "linkdir" / "raw.jsonl")
-
-    def test_anything_already_there_is_refused(self):
-        existing = self.sandbox / "e2e-real" / "old.jsonl"
-        existing.write_text("old")
-        os.chmod(existing, 0o644)
-        self.refused(existing)
-        self.assertEqual(existing.read_text(), "old")             # untouched, permissions included
-        self.assertEqual(stat.S_IMODE(os.stat(existing).st_mode), 0o644)
-        dangling = self.sandbox / "e2e-real" / "dangling.jsonl"
-        dangling.symlink_to(self.tmp / "elsewhere" / "target")
-        self.refused(dangling)
-        with self.assertRaises(OSError):                          # and the open itself does not follow it
-            self.cap.open_out(dangling)
+            self.cap.create_capture(fd, "old.jsonl")
+        self.assertEqual((captures / "old.jsonl").read_text(), "old")
+        self.assertEqual(stat.S_IMODE(os.stat(captures / "old.jsonl").st_mode), 0o644)
+        (captures / "dangling.jsonl").symlink_to(self.tmp / "elsewhere" / "target")
+        with self.assertRaises(SystemExit):
+            self.cap.create_capture(fd, "dangling.jsonl")
         self.assertFalse((self.tmp / "elsewhere" / "target").exists())
+
+    def test_a_link_in_place_of_a_directory_is_not_followed(self):
+        (self.root / "_sandbox").symlink_to(self.tmp / "elsewhere")
+        with self.assertRaises(OSError):
+            self.cap.open_capture_dir(self.root)
+        self.assertEqual(os.listdir(self.tmp / "elsewhere"), [])
+
+    def test_replacing_the_directory_by_a_link_after_the_check_writes_nothing_outside(self):
+        fd = self.dirfd()                                        # checked and held
+        captures = self.root / "_sandbox" / "captures"
+        moved = self.root / "_sandbox" / "captures-moved"
+        os.rename(captures, moved)                               # the race: the checked directory is swapped
+        captures.symlink_to(self.tmp / "elsewhere")              # for a link that leaves the worktree
+        out = self.cap.create_capture(fd, "raw.jsonl")
+        self.fds.append(out)
+        os.write(out, b"x")
+        self.assertEqual(os.listdir(self.tmp / "elsewhere"), [])         # nothing went through the link
+        self.assertEqual(os.listdir(moved), ["raw.jsonl"])               # it went where the descriptor points
 
 
 if __name__ == "__main__":
