@@ -97,7 +97,7 @@ VBear 的原則是：守得到哪裡，就說到哪裡；守不到的地方，�
 
 ## 新手村：3 步開始
 
-**出發前準備：** 你的 Mac 已經裝好並登入 Claude Code（[取得 Claude Code](https://claude.com/claude-code)）。VBear 會
+**出發前準備：** 你的 Mac 已經裝好並登入 Claude Code（[取得 Claude Code](https://claude.com/product/claude-code)）。VBear 會
 替你啟動它，但不會替你安裝。
 
 1. **安裝。** 從[最新版本](https://github.com/sidphoto/vbear/releases/latest)下載 `VBear-<版本>-arm64.dmg`，打開後把

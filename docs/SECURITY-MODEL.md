@@ -537,9 +537,12 @@ to 500; the approval is refused when the chosen limits could write more than the
 13. **The plan and the mode are files.** `plan.txt`, `modes/<flow>` and the events are plain files of your user.
     The daemon verifies the plan's hash and the approval on every automatic action, but a program running as your
     own UID is outside the threat model (see assumptions).
-14. **Verified with synthetic CLIs.** The loop, the interruptions at every action boundary, the restarts and the
-    stops are tested against synthetic Claude and Codex programs; runs against the real models are a separate
-    step that needs your authorisation and are not claimed here.
+14. **Verified end to end with real models three times; that shows it works as designed, not that it is right for
+    your project.** The loop, the interruptions at every action boundary, the restarts and the stops are tested
+    against synthetic Claude and Codex programs in the test suite. Three runs with the real models (a full loop to
+    the merge gate, a stop while a review runs, a console restart while a review runs; Claude Code 2.1.296 as the
+    executor and Codex 0.160.0 as the reviewer, on a small toy project) are recorded in
+    [`docs/evidence/s3-real-e2e-2026-10-12.md`](evidence/s3-real-e2e-2026-10-12.md).
 
 ## Data handling
 

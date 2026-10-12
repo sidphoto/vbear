@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,
+  every automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk
+  acceptance still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at
+  its worst case (often the whole budget), and then you raise the limit, accept again and approve automatic mode
+  again. The v0.3.0 summary said acceptance and approval are always needed again; that was too strong. The
+  security model's note on how the loop was verified now names the real-model runs.
 - **README rewritten for first-time readers.** Both READMEs now open with what VBear is and a game-style
   reading of its screens (character, class, faction, skill cards, armor, party, gates, stamina), then feature
   cards, what to know before you start (the limitations, in plain words) ahead of the install steps, a 3-step

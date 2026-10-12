@@ -124,7 +124,7 @@ and what you can do about each.
 ## Getting started: 3 steps
 
 **Before you set out:** Claude Code is installed on your Mac and you are signed in to it
-([get Claude Code](https://claude.com/claude-code)). VBear launches it for you, but it does not install it.
+([get Claude Code](https://claude.com/product/claude-code)). VBear launches it for you, but it does not install it.
 
 1. **Install.** Download `VBear-<version>-arm64.dmg` from the
    [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
