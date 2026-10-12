@@ -110,6 +110,19 @@ TERM_MIN_ROWS = 5
 TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS = 80, 24
 
 
+PROFILE_STORE_UNREADABLE = "角色資料無法讀取，請到角色頁處理"
+PROFILE_STORE_HINT = "請到角色頁處理（損毀的檔案不會在這裡被搬移）"
+
+
+def _log_profile_store_problem(exc: BaseException) -> None:
+    """Server-side note of why the profile store could not be read: the kind of error only. The exception's text
+    can carry a file path, so neither the response nor this line has it."""
+    try:
+        sys.stderr.write(f"profile store unreadable: {type(exc).__name__}\n")
+    except Exception:
+        pass
+
+
 class Console:
     def __init__(self, port: int):
         self.port = port
@@ -477,10 +490,12 @@ def make_handler(console: Console):
                     try:
                         out = self._loadout(path[len("/api/agent-profiles/"):-len("/loadout")])
                     except agent_profiles.AgentProfileStorageError as exc:
-                        # a read that must change nothing found the store damaged or blocked: it says so and
-                        # leaves the file and the marker alone; the profile page is where it is dealt with
-                        return self._json({"error": str(exc), "code": "profile_store_damaged",
-                                           "hint": "請到角色頁處理（損毀的檔案不會在這裡被搬移）"}, 409)
+                        # a read that must change nothing found the store damaged or blocked: it says so, in
+                        # fixed words (the exception's own text can carry a path), and leaves the file and the
+                        # marker alone; the profile page is where it is dealt with
+                        _log_profile_store_problem(exc)
+                        return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "profile_store_damaged",
+                                           "hint": PROFILE_STORE_HINT}, 409)
                     if out is None:
                         return self._error(404, "找不到此 Agent Profile")
                     return self._json(out)
@@ -1191,14 +1206,17 @@ def make_handler(console: Console):
                 profiles = list(agent_profiles.load_all(None, None, mark_corrupt=False).values())
                 profiles_note = None
             except agent_profiles.AgentProfileStorageError as exc:
-                profiles, profiles_note = [], str(exc)
+                _log_profile_store_problem(exc)
+                profiles, profiles_note = [], PROFILE_STORE_UNREADABLE
             card = loadout_mod.skill_card(static, skill_id, profiles, console.store.live_cached())
             if card is None:
                 return self._json({"error": "目前索引找不到此技能", "code": "not_in_index",
                                    "indexed_at": static.get("generated_at")}, 404)
             if profiles_note:
                 card["added_to_roles"] = {"items": [], "effective": False, "unavailable": profiles_note,
-                                          "note": "角色資料目前無法讀取，不知道這張技能卡被哪些角色選入"}
+                                          "code": "profile_store_damaged",
+                                          "note": "角色資料目前無法讀取，不知道這張技能卡被哪些角色選入",
+                                          "origin": "missing", "detail": ""}
             return self._json(card)
 
         def _skill_detail(self, skill_id: str):

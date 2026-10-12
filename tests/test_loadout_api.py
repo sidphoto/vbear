@@ -434,7 +434,17 @@ class SkillCardTests(_Helpers, unittest.TestCase):
         status, body = _get(port, "/api/skills/s-code?view=card")
         self.assertEqual(status, 200)
         sk = body["skill"]
-        self.assertEqual((sk["name"], sk["tool"], sk["scope"], sk["installed"]), ("code-review", "claude", "user", True))
+        self.assertEqual((sk["name"], sk["installed"]), ("code-review", True))
+        # tool, scope and categories are VBear's own reading: they say so, and a missing one is missing
+        self.assertEqual(sk["tool"], {"value": "claude", "origin": "derived", "detail": "掃描位置判讀"})
+        self.assertEqual(sk["scope"], {"value": "user", "origin": "derived", "detail": "掃描位置判讀"})
+        self.assertEqual((sk["categories"]["value"], sk["categories"]["origin"]), (["審查"], "derived"))
+        self.assertEqual(sk["categories"]["matches"], [{"label": "審查", "keyword": "review"}])
+        self.assertEqual(sk["referenced_files"]["origin"], "derived")
+        self.assertEqual(sk["status_source"]["origin"], "derived")
+        self.assertEqual(body["added_to_roles"]["origin"], "user")
+        self.assertEqual(body["marketplace_source"]["origin"], "derived")
+        self.assertEqual(body["observation"]["origin"], "runtime")
         self.assertEqual(sk["inputs"], {"value": "一段 diff", "origin": "derived", "detail": "章節"})
         self.assertEqual(sk["outputs"]["origin"], "missing")
         self.assertIsNone(sk["outputs"]["value"])
@@ -481,6 +491,59 @@ class SkillCardTests(_Helpers, unittest.TestCase):
         self.assertEqual(path.read_bytes(), before)
         self.assertFalse(ap._corrupt_marker_path().exists())
         self.assertEqual([x.name for x in path.parent.iterdir() if ".corrupt-" in x.name], [])
+
+    def test_a_skill_without_those_fields_has_them_missing_not_guessed(self):
+        d = _static()
+        d["skills"][0].pop("categories")
+        d["skills"][0].pop("referenced_files")
+        d["skills"][0]["tool"] = ""
+        d["skills"][0]["scope"] = None
+        c, port = self.serve(static=d)
+        _, body = _get(port, "/api/skills/s-code?view=card")
+        sk = body["skill"]
+        for field in ("tool", "scope", "categories"):
+            self.assertEqual((sk[field]["value"], sk[field]["origin"]), (None, "missing"), field)
+        self.assertEqual(sk["referenced_files"]["count"], 0)
+
+    def _assert_no_internals(self, text):
+        for needle in ("/", "marker", "corrupt", str(FAKE_HOME), "Traceback", "agent_profiles"):
+            self.assertNotIn(needle, text, needle)
+
+    def test_error_answers_carry_no_path_and_the_log_has_the_kind_only(self):
+        import io
+        import vbear.agent_profiles as ap
+        cases = {
+            "a marker is there": lambda: (ap._corrupt_marker_path().parent.mkdir(parents=True, exist_ok=True),
+                                          ap._corrupt_marker_path().write_text("{}")),
+            "the file is a directory": lambda: ap._path().parent.mkdir(parents=True, exist_ok=True)
+            or ap._path().mkdir(),
+            "the file is broken": lambda: (ap._path().parent.mkdir(parents=True, exist_ok=True),
+                                           ap._path().write_text("{broken")),
+        }
+        for name, make in cases.items():
+            with self.subTest(name):
+                c, port = self.serve(static=_static())
+                make()
+                err = io.StringIO()
+                with mock.patch("sys.stderr", err):
+                    status, loadout_body = _get(port, "/api/agent-profiles/prof-a/loadout")
+                    card_status, card = _get(port, "/api/skills/s-code?view=card")
+                self.assertEqual(status, 409)
+                self.assertEqual(loadout_body["code"], "profile_store_damaged")
+                self.assertEqual(loadout_body["error"], "角色資料無法讀取，請到角色頁處理")
+                self._assert_no_internals(json.dumps(loadout_body, ensure_ascii=False))
+                self.assertEqual(card_status, 200)
+                self.assertEqual(card["added_to_roles"]["unavailable"], "角色資料無法讀取，請到角色頁處理")
+                self.assertEqual(card["added_to_roles"]["code"], "profile_store_damaged")
+                self._assert_no_internals(json.dumps(card["added_to_roles"], ensure_ascii=False))
+                log = err.getvalue()
+                self.assertIn("profile store unreadable: AgentProfile", log)
+                self._assert_no_internals_log(log)
+
+    def _assert_no_internals_log(self, text):
+        for needle in ("marker", str(FAKE_HOME), ".json", "Traceback"):
+            self.assertNotIn(needle, text, needle)
+        self.assertNotIn("/", text)
 
     def test_without_the_parameter_the_old_detail_answer_is_unchanged(self):
         c, port = self.serve(static=_static())

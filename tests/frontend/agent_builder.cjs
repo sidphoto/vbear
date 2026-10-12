@@ -776,18 +776,21 @@ function findModalInBody() {
     const sourced = (value, origin = "author", detail = "front matter") => ({ value, origin, detail });
     const card = {
       ok: true, index: { loaded: true, generated_at: 1791770000 },
-      skill: { skill_id: "s-1", name: hostile, invoke_name: "code-review", tool: "claude", scope: "user",
+      skill: { skill_id: "s-1", name: hostile, invoke_name: "code-review",
+               tool: sourced("claude", "derived", "掃描位置判讀"), scope: sourced("user", "derived", "掃描位置判讀"),
                activation: "active", activation_reason: "位於使用者技能目錄", installed: true,
+               status_source: { origin: "derived", detail: "掃描位置與設定檔判讀" },
                description: sourced(hostile), when_to_use: sourced("送出 PR 之前"), inputs: sourced("diff", "derived", "章節"),
                outputs: sourced(null, "missing", ""), dependencies: sourced(null, "missing", ""),
-               categories: [{ label: "審查", keyword: "review" }],
+               categories: { value: ["審查"], origin: "derived", detail: "描述關鍵字", matches: [] },
                referenced_files: { count: 2, items: [{ ref: "a.py", status: "present" }, { ref: "b.sh", status: "missing" }],
-                                   truncated: false, note: "VBear 不會執行這些檔案" },
+                                   truncated: false, note: "VBear 不會執行這些檔案", origin: "derived", detail: "技能檔內容裡的引用" },
                missing_files: ["b.sh"], warnings: ["w1"] },
       added_to_roles: { items: [{ id: "p-1", name: "First", enabled: true }], effective: false,
-                        note: "已加入角色只是挑選紀錄，本次不生效" },
-      observation: { state: "none", window_days: 30, source: "執行觀察" },
+                        note: "已加入角色只是挑選紀錄，本次不生效", origin: "user", detail: "主控台 Profile（使用者意圖）" },
+      observation: { state: "none", window_days: 30, source: "執行觀察", origin: "runtime", detail: "執行觀察" },
       marketplace_copies: [{ skill_id: "s-m", tool: "claude", scope: "marketplace" }],
+      marketplace_source: { origin: "derived", detail: "市集掃描" },
       effect_note: "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具",
     };
     const loadout = {
@@ -841,6 +844,11 @@ function findModalInBody() {
     assert.ok(findText(modal, "已選入 1 個角色：First（本次不生效）"));
     assert.ok(findText(modal, "目前沒有觀察紀錄（最近 30 天；來源：執行觀察）"));
     assert.ok(findText(modal, "市集有其他副本（1 個，尚未安裝）"));
+    assert.ok(findText(modal, "已安裝（可使用）：位於使用者技能目錄"), "the status names the state and the reason");
+    // every field has its source tag: 類別, 工具, 來源, files, status, roles, observation, marketplace
+    const sourceTags = walk(modal).filter((n) => n.className && n.className.includes("prov"));
+    assert.ok(sourceTags.length >= 12, `source tags on the card (got ${sourceTags.length})`);
+    assert.ok(findText(modal, "類別") && findText(modal, "工具（遊戲用語：陣營）") && findText(modal, "來源（位置）"));
     const clickable = walk(modal).filter((n) => (n._listeners.click || []).length);
     assert.ok(clickable.every((n) => n.tag === "button" || n.tag === "a"), "only buttons and links are clickable");
     const file = walk(modal).find((n) => n.tag === "a" && /^#\/skills\/s-1$/.test(n.getAttribute("href") || ""));
@@ -859,6 +867,62 @@ function findModalInBody() {
     await tick();
     assert.deepStrictEqual(posts, [{ equipped_skill_ids: [] }], "the body carries only the new list");
     console.log("ok skill card dialog from the role card, with the remove action");
+  }
+
+  // a nameless skill in an 'unknown' state with no observation data: the ID is shown as an ID, the state is not
+  // turned into "not installed", and the missing period is said
+  {
+    const miss = (detail = "") => ({ value: null, origin: "missing", detail });
+    const ctx = freshContext({
+      "GET /api/skills/s-7?view=card": () => jsonResponse({ ok: true, index: { loaded: true, generated_at: 1 },
+        skill: { skill_id: "s-7", name: null, tool: miss(), scope: miss(), activation: "unknown",
+                 activation_reason: "沒有任何設定檔能證明它是否被載入", installed: false,
+                 status_source: { origin: "derived", detail: "掃描位置與設定檔判讀" },
+                 description: miss(), when_to_use: miss(), inputs: miss(), outputs: miss(), dependencies: miss(),
+                 categories: { value: null, origin: "missing", detail: "", matches: [] },
+                 referenced_files: { count: 0, items: [], truncated: false, note: "VBear 不會執行這些檔案", origin: "derived", detail: "x" },
+                 missing_files: [], warnings: [] },
+        added_to_roles: { items: [], effective: false, note: "n", origin: "user", detail: "d" },
+        observation: { state: "unavailable", window_days: null, source: "執行觀察", origin: "runtime", detail: "執行觀察" },
+        marketplace_copies: [], marketplace_source: { origin: "derived", detail: "市集掃描" },
+        effect_note: "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具" }),
+    });
+    evalAgentBuilderSlice(ctx);
+    await ctx.openSkillCard("s-7");
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    const modal = findModalInBody();
+    assert.ok(findText(modal, "未提供（ID：s-7）"), "a missing name is not replaced by the ID");
+    assert.ok(findText(modal, "無法確認") && findText(modal, "沒有任何設定檔能證明它是否被載入"));
+    assert.ok(!findText(modal, "沒有安裝在這台 Mac"), "unknown is not turned into 'not installed'");
+    assert.ok(findText(modal, "觀察資料不可用（觀察期間：未知；來源：執行觀察）"), "the missing period is said");
+    const said = walk(modal).map((n) => n.tag === "#text" ? n.textContent : "").join("");
+    assert.ok(!said.replace("觀察期間：未知", "").includes("未知"), "a missing field is 未提供, not 未知");
+    console.log("ok skill card with missing fields");
+  }
+
+  // an error from the server is shown in its fixed words, with no path
+  {
+    const ctx = freshContext({
+      "GET /api/skills/s-8?view=card": () => jsonResponse({ ok: true, index: { loaded: true, generated_at: 1 },
+        skill: { skill_id: "s-8", name: "x", tool: { value: "claude", origin: "derived", detail: "d" },
+                 scope: { value: "user", origin: "derived", detail: "d" }, activation: "active", installed: true,
+                 status_source: { origin: "derived", detail: "d" }, description: { value: null, origin: "missing" },
+                 when_to_use: { value: null, origin: "missing" }, inputs: { value: null, origin: "missing" },
+                 outputs: { value: null, origin: "missing" }, dependencies: { value: null, origin: "missing" },
+                 categories: { value: null, origin: "missing" },
+                 referenced_files: { count: 0, items: [], note: "n", origin: "derived", detail: "d" }, missing_files: [], warnings: [] },
+        added_to_roles: { items: [], effective: false, unavailable: "角色資料無法讀取，請到角色頁處理",
+                          code: "profile_store_damaged", note: "n", origin: "missing", detail: "" },
+        observation: { state: "none", window_days: 7, source: "執行觀察", origin: "runtime", detail: "執行觀察" },
+        marketplace_copies: [], marketplace_source: { origin: "derived", detail: "d" }, effect_note: "e" }),
+    });
+    evalAgentBuilderSlice(ctx);
+    await ctx.openSkillCard("s-8");
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    const text = walk(findModalInBody()).map((n) => n.tag === "#text" ? n.textContent : "").join("");
+    assert.ok(text.includes("已選入哪些角色：無法讀取（角色資料無法讀取，請到角色頁處理）"));
+    assert.ok(!/\/(Users|home|private)\//.test(text) && !text.includes("marker"), "no path or marker in the dialog");
+    console.log("ok skill card shows the fixed unreadable-roles words");
   }
 
   // from the Armory there is no role, so no remove action; an unloaded index is said, not guessed

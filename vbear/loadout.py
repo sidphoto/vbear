@@ -40,6 +40,14 @@ def _label_only(tool) -> str:
                                                    "Claude Code" if tool == "claude" else "任何工具")
 
 
+def _derived(value, detail: str) -> dict:
+    """A value VBear worked out itself (from where the skill sits, or from its text), with where from; missing
+    when there is none."""
+    present = value not in (None, "", [], {})
+    return {"value": value if present else None, "origin": "derived" if present else "missing",
+            "detail": detail if present else ""}
+
+
 def _profession(profile: dict, static: dict | None, tool=None) -> dict:
     role_id = profile.get("profession_role_id")
     if not role_id:
@@ -60,7 +68,7 @@ def _profession(profile: dict, static: dict | None, tool=None) -> dict:
 def _observation(skill_id: str, live: dict | None) -> dict:
     """Whether the observed runs (the usage scan, over a window of days) show this skill. "none" is not "never
     used": the scan only sees what was recorded, and it can be off or not built yet."""
-    base = {"source": "執行觀察"}
+    base = {"source": "執行觀察", "origin": "runtime", "detail": "執行觀察"}
     usage = (live or {}).get("usage") if isinstance(live, dict) else None
     if not isinstance(usage, dict) or not isinstance(usage.get("sessions"), list):
         return {**base, "state": "unavailable", "window_days": None}
@@ -218,6 +226,7 @@ def skill_card(static: dict, skill_id: str, profiles, live: dict | None) -> dict
             for r in (rec.get("referenced_files") or []) if isinstance(r, dict)]
     roles = [{"id": p.get("id"), "name": p.get("name"), "enabled": bool(p.get("enabled", True))}
              for p in (profiles or []) if skill_id in (p.get("equipped_skill_ids") or [])]
+    cats = [c for c in (rec.get("categories") or []) if isinstance(c, dict)]
     copies = []
     for other_id in rec.get("duplicate_of") or []:
         other = index.get(other_id)
@@ -228,21 +237,25 @@ def skill_card(static: dict, skill_id: str, profiles, live: dict | None) -> dict
         "index": {"loaded": True, "generated_at": static.get("generated_at")},
         "skill": {
             "skill_id": skill_id, "name": rec.get("name"), "invoke_name": rec.get("invoke_name"),
-            "tool": rec.get("tool"), "scope": rec.get("scope"),
+            "tool": _derived(rec.get("tool"), "掃描位置判讀"), "scope": _derived(rec.get("scope"), "掃描位置判讀"),
             "activation": rec.get("activation"), "activation_reason": rec.get("activation_reason"),
             "installed": rec.get("activation") in INSTALLED_STATES,
+            "status_source": {"origin": "derived", "detail": "掃描位置與設定檔判讀"},
             "description": _sourced(rec.get("description")), "when_to_use": _sourced(rec.get("when_to_use")),
             "inputs": _sourced(rec.get("inputs")), "outputs": _sourced(rec.get("outputs")),
             "dependencies": _sourced(rec.get("dependencies")),
-            "categories": [{"label": c.get("label"), "keyword": c.get("keyword")}
-                           for c in (rec.get("categories") or []) if isinstance(c, dict)],
+            "categories": {**_derived([c.get("label") for c in cats if c.get("label")], "描述關鍵字"),
+                           "matches": [{"label": c.get("label"), "keyword": c.get("keyword")} for c in cats]},
             "referenced_files": {"count": len(refs), "items": refs[:MAX_CARD_REFS],
-                                 "truncated": len(refs) > MAX_CARD_REFS, "note": "VBear 不會執行這些檔案"},
+                                 "truncated": len(refs) > MAX_CARD_REFS, "note": "VBear 不會執行這些檔案",
+                                 "origin": "derived", "detail": "技能檔內容裡的引用"},
             "missing_files": [m for m in (rec.get("missing_files") or []) if isinstance(m, str)][:20],
             "warnings": [w for w in (rec.get("warnings") or []) if isinstance(w, str)][:20],
         },
-        "added_to_roles": {"items": roles, "effective": False, "note": "已加入角色只是挑選紀錄，本次不生效"},
+        "added_to_roles": {"items": roles, "effective": False, "note": "已加入角色只是挑選紀錄，本次不生效",
+                           "origin": "user", "detail": "主控台 Profile（使用者意圖）"},
         "observation": _observation(skill_id, live),
         "marketplace_copies": copies,
+        "marketplace_source": {"origin": "derived", "detail": "市集掃描"},
         "effect_note": "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具",
     }

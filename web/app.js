@@ -1022,11 +1022,21 @@ function confirmInPage(title, message, confirmLabel) {
 // One dialog for the workbench's role card and the Armory. Its data is GET /api/skills/<id>?view=card, which
 // answers from what is already loaded. Every string is set as text; a field that was not provided says so.
 function skillObservationText(o) {
-  if (!o || typeof o !== "object") return "觀察資料不可用";
-  const period = typeof o.window_days === "number" ? `最近 ${o.window_days} 天` : "觀察期間：未知";
-  if (o.state === "observed") return `觀察期間內有紀錄（${period}；來源：執行觀察）`;
-  if (o.state === "none") return `目前沒有觀察紀錄（${period}；來源：執行觀察）。這不代表沒有用過。`;
-  return "觀察資料不可用";
+  const period = o && typeof o.window_days === "number" ? `最近 ${o.window_days} 天` : "觀察期間：未知";
+  if (o && o.state === "observed") return `觀察期間內有紀錄（${period}；來源：執行觀察）`;
+  if (o && o.state === "none") return `目前沒有觀察紀錄（${period}；來源：執行觀察）。這不代表沒有用過。`;
+  return `觀察資料不可用（${period}；來源：執行觀察）`;
+}
+
+// What to say about a skill's installed state: only a not_installed copy is "not installed"; any other state
+// that is not an installed one (unknown, archived, not loaded...) is named with its reason, not inferred.
+function skillStatusText(sk) {
+  const act = sk && sk.activation;
+  const label = (ACT[act] || [])[0] || act || "未提供";
+  const reason = sk && sk.activation_reason ? "：" + sk.activation_reason : "";
+  if (sk && sk.installed) return `已安裝（${label}）${reason}`;
+  if (act === "not_installed") return `沒有安裝在這台 Mac（市集上的副本）${reason}`;
+  return `${label}${reason}`;
 }
 
 function skillCardField(label, src, extra) {
@@ -1062,17 +1072,17 @@ async function openSkillCard(skillId, opts = {}) {
   const sk = d.skill || {};
   const refs = sk.referenced_files || {};
   const roles = (d.added_to_roles && d.added_to_roles.items) || [];
-  const cats = (sk.categories || []).map((c) => c && c.label).filter(Boolean);
+  const scopeSrc = sk.scope ? { ...sk.scope, value: SCOPE[sk.scope.value] || sk.scope.value } : null;
+  const nameText = sk.name ? String(sk.name) : `未提供（ID：${skillId}）`;
   const fixed = d.effect_note || "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具";
   setKids(body,
     el("div", { class: "sc-head" },
-      el("strong", { class: "sc-name" }, sk.name || skillId),
+      el("strong", { class: "sc-name" }, nameText),
       badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
-    el("div", { class: "sc-tags" },
-      el("span", { class: "rc-chip" }, `類別 · ${cats.length ? cats.join("、") : "未提供"}`),
-      el("span", { class: "rc-chip" }, `工具 · ${sk.tool || "未知"}`),
-      el("span", { class: "rc-chip" }, `來源 · ${sk.scope || "未知"}`)),
     notice("info", fixed),
+    skillCardField("類別", sk.categories),
+    skillCardField("工具（遊戲用語：陣營）", sk.tool),
+    skillCardField("來源（位置）", scopeSrc),
     skillCardField("效果（技能作者的說明）", sk.description),
     skillCardField("發動時機", sk.when_to_use),
     skillCardField("需要（輸入）", sk.inputs),
@@ -1081,7 +1091,7 @@ async function openSkillCard(skillId, opts = {}) {
     el("div", { class: "sc-field" },
       el("div", { class: "sc-label" }, "引用的檔案"),
       el("div", { class: "sc-value" },
-        `共 ${refs.count ?? "未知"} 個；${refs.note || "VBear 不會執行這些檔案"}`,
+        `共 ${refs.count ?? "未提供"} 個；${refs.note || "VBear 不會執行這些檔案"} `, prov(refs),
         (refs.items || []).length ? el("ul", { class: "sc-refs" }, refs.items.map((r) =>
           el("li", null, el("span", { class: "mono" }, String(r.ref)), " ",
             el("span", { class: "muted" }, r.status === "present" ? "存在" : r.status === "missing" ? "缺少" : "非套件檔案"))))
@@ -1092,15 +1102,15 @@ async function openSkillCard(skillId, opts = {}) {
     el("div", { class: "sc-field" },
       el("div", { class: "sc-label" }, "這張卡的狀態"),
       el("ul", { class: "sc-status" },
-        el("li", null, sk.installed ? "已安裝（本機掃描到）" : "沒有安裝在這台 Mac",
-          sk.activation_reason ? el("span", { class: "muted" }, "：" + sk.activation_reason) : null),
-        el("li", null, (d.added_to_roles && d.added_to_roles.unavailable)
+        el("li", null, skillStatusText(sk) + " ", prov(sk.status_source)),
+        el("li", null, ((d.added_to_roles && d.added_to_roles.unavailable)
           ? `已選入哪些角色：無法讀取（${d.added_to_roles.unavailable}）`
           : roles.length ? `已選入 ${roles.length} 個角色：${roles.map((r) => r.name || r.id).join("、")}（本次不生效）`
-          : "沒有角色選入這張技能"),
-        el("li", null, "觀察狀態：" + skillObservationText(d.observation)),
-        el("li", null, (d.marketplace_copies || []).length
-          ? `市集有其他副本（${d.marketplace_copies.length} 個，尚未安裝）` : "市集沒有找到其他副本"))));
+          : "沒有角色選入這張技能") + " ", prov(d.added_to_roles)),
+        el("li", null, "觀察狀態：" + skillObservationText(d.observation) + " ", prov(d.observation)),
+        el("li", null, ((d.marketplace_copies || []).length
+          ? `市集有其他副本（${d.marketplace_copies.length} 個，尚未安裝）` : "市集沒有找到其他副本") + " ",
+          prov(d.marketplace_source)))));
   const kids = [];
   const profile = opts.profile;
   if (profile && (profile.equipped_skill_ids || []).includes(skillId)) {
@@ -4838,7 +4848,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
 
   function rcSkillCard(sk) {
     const head = el("div", { class: "rc-skill-head" },
-      el("strong", null, sk.name || sk.skill_id),
+      el("strong", null, sk.name ? String(sk.name) : `未提供（ID：${sk.skill_id}）`),
       badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡"));
     if (sk.state === "not_in_index") {
       return el("li", { class: "rc-skill rc-warn" },
@@ -4860,9 +4870,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         el("dd", null, rcSourced(sk.description)),
         el("dt", null, "時機"), el("dd", null, rcSourced(sk.when_to_use)),
         el("dt", null, "類別"), el("dd", null, cats.length ? cats.join("、") : el("span", { class: "muted" }, "未提供")),
-        el("dt", null, "工具"), el("dd", null, rcText(sk.tool) || "未知"),
+        el("dt", null, "工具"), el("dd", null, rcText(sk.tool) || "未提供"),
         el("dt", null, "引用檔案"),
-        el("dd", null, `共 ${refs.count ?? "未知"} 個（存在 ${refs.present ?? "未知"}、缺少 ${refs.missing ?? "未知"}）；VBear 不會執行這些檔案`),
+        el("dd", null, `共 ${refs.count ?? "未提供"} 個（存在 ${refs.present ?? "未提供"}、缺少 ${refs.missing ?? "未提供"}）；VBear 不會執行這些檔案`),
         el("dt", null, "觀察狀態"), el("dd", null, rcObservation(sk.observed))),
       (sk.warnings || []).length ? el("p", { class: "rc-note" }, "結構檢查：" + sk.warnings.join("；")) : null,
       el("button", { class: "btn small rc-open", type: "button",
