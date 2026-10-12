@@ -109,8 +109,11 @@ class CommandFailed(RuntimeError):
 
 def run_cmd(*cmd, timeout=30) -> tuple[int, str, str]:
     """(returncode, stdout, stderr). A command that cannot run or times out is an error, never "no output"."""
+    # the listing commands must not carry this run's state directory in their own environment (``ps -E`` would list
+    # itself as a holder of it)
+    env = {k: v for k, v in os.environ.items() if k not in ("VBEAR_HOME", "VBEAR_ACCESS_TOKEN")}
     try:
-        r = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise CommandFailed(f"{cmd[0]}: {type(exc).__name__}") from exc
     return r.returncode, r.stdout, r.stderr
@@ -325,17 +328,44 @@ class Console:
         return self.proc.returncode
 
 
+LOCK_RE = re.compile(r"^[0-9]{1,10}\n?\Z")
+
+
 def daemon_pids() -> list[int]:
-    """The runtime daemon(s) running on the dedicated state directory (by its lock file's pid; never another)."""
+    """The runtime daemon on the dedicated state directory, by its lock file's pid. No lock file: none. A lock file
+    that cannot be read or is not a pid is an error (a daemon may be running and unseen), and so is a pid we may not
+    signal (it is someone else's)."""
     try:
-        pid = int((STATE / "runtimed.lock").read_text().split()[0])
-    except (OSError, ValueError, IndexError):
+        text = (STATE / "runtimed.lock").read_text()
+    except FileNotFoundError:
         return []
+    except OSError as exc:
+        raise CommandFailed(f"runtimed.lock cannot be read: {type(exc).__name__}") from exc
+    if not LOCK_RE.match(text):
+        raise CommandFailed("runtimed.lock does not hold a pid")
+    pid = int(text)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return []
+    except OSError as exc:
+        raise CommandFailed(f"pid {pid} of runtimed.lock cannot be checked: {type(exc).__name__}") from exc
     return [pid]
+
+
+def processes_with_state() -> dict[int, str]:
+    """Every process whose command line or environment names this dedicated state directory (the daemon is started
+    with it in its environment, not in its arguments): ``ps -E`` must succeed. This driver is not counted."""
+    rc, out, err = run_cmd("ps", "-axwwE", "-o", "pid=,command=")
+    if rc != 0:
+        raise CommandFailed(f"ps exited {rc}: {err.strip()[:120]}")
+    needle, me = str(STATE), os.getpid()
+    found: dict[int, str] = {}
+    for line in out.splitlines():
+        m = re.match(r"\s*(\d+)\s+(.*)", line)
+        if m and int(m[1]) != me and needle in m[2]:
+            found[int(m[1])] = m[2]
+    return found
 
 
 def daemon_rpc(op: str, timeout: float = 10.0, **fields) -> dict:
@@ -345,21 +375,26 @@ def daemon_rpc(op: str, timeout: float = 10.0, **fields) -> dict:
 
 
 def shutdown_daemon() -> dict:
+    """Shut the daemon down and prove it is gone. "Not running" needs the socket missing (ENOENT) or refusing
+    (ECONNREFUSED) AND no process holding this state directory; any other failure of the hello is an error."""
     out = {"was_running": False}
     try:
         daemon_rpc("hello", timeout=2.0)
         out["was_running"] = True
-    except OSError:
+    except (FileNotFoundError, ConnectionRefusedError):
+        out["still_alive"] = sorted(processes_with_state())
         return out
+    except OSError as exc:
+        raise CommandFailed(f"the daemon's hello failed: {type(exc).__name__}: {exc}") from exc
     pids = daemon_pids()
     try:
         daemon_rpc("shutdown", timeout=30.0, force=True)
     except OSError:
-        pass
+        pass                                  # the daemon may close the connection as it goes; the proof is below
     end = now() + 30
     while now() < end and any(_alive(p) for p in pids):
         time.sleep(0.3)
-    out["still_alive"] = [p for p in pids if _alive(p)]
+    out["still_alive"] = sorted(set(p for p in pids if _alive(p)) | set(processes_with_state()))
     return out
 
 
@@ -491,8 +526,12 @@ class Run:
         return fresh
 
     def track(self) -> None:
-        roots = ([self.console.proc.pid] if self.console.proc and self.console.proc.poll() is None else []) \
-            + daemon_pids()
+        try:
+            daemon = daemon_pids()
+        except CommandFailed as exc:               # the lock is written in two steps; the final check is strict
+            self.result["notes"].append(f"tracking: {exc}")
+            daemon = []
+        roots = ([self.console.proc.pid] if self.console.proc and self.console.proc.poll() is None else []) + daemon
         if roots:
             self.tracked.update(descendants(roots))
 
@@ -580,8 +619,10 @@ class Run:
                     attempt("executor close", close_executor)
         finally:
             attempt("tracking", self.track)
-            pids_during = [p for p in ([self.console.proc.pid] if self.console.proc else []) + daemon_pids()
-                           if _alive(p)]
+            dpids = attempt("the daemon's lock file", daemon_pids, default=[])
+            pids_during = [p for p in ([self.console.proc.pid] if self.console.proc else []) + dpids if _alive(p)]
+            holders = attempt("processes holding the state directory", processes_with_state, default={})
+            r["state_holders_before_shutdown"] = len(holders)
             r["open_files_touching_real_state"] = attempt(
                 "open files", lambda: open_files_touching_real_state(pids_during), default=[])
             if r["open_files_touching_real_state"]:
@@ -592,7 +633,7 @@ class Run:
             time.sleep(2)
             r["daemon_shutdown"] = attempt("daemon shutdown", shutdown_daemon, default={})
             if r["daemon_shutdown"].get("still_alive"):
-                problems.append("the runtime daemon is still running")
+                problems.append("a process of the runtime daemon is still running")
             time.sleep(2)
             after = attempt("process listing", relevant_pids, default={})
             r["tracked_processes_seen"] = len(self.tracked)
@@ -602,6 +643,10 @@ class Run:
             # new processes that look related but were never below our console or daemon (other sessions' own CLIs)
             r["unattributed_new_processes"] = [redact(c).split()[0][-60:] for p, c in sorted(after.items())
                                               if p not in self.baseline and p not in self.tracked]
+            # the last word: nothing at all names this state directory (the daemon's environment included)
+            last = attempt("final process check", processes_with_state, default=None)
+            if last:
+                problems.append(f"{len(last)} process(es) still hold the state directory")
             r["real_state_before"] = self.real_before
             r["real_state_after"] = attempt("real state", real_state_witness, default={})
             r["real_state_unchanged"] = bool(r["real_state_after"]) and self.real_before == r["real_state_after"]
