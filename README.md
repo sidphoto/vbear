@@ -24,18 +24,18 @@ The game words below are only a way to read VBear's screens. Each one points at 
 
 | In a game | In VBear | Where you see it |
 |---|---|---|
-| **Character** | An **Agent Profile**: a saved setup (name, role, tool, skills) that you can launch | Workbench → right column 「[A] 角色裝備」 |
-| **Class** | The **role** you give it, taken from the agent roles installed for Claude Code or Codex | Same place |
+| **Character** | An **Agent Profile**: a saved setup (name, role, tool, skills) that you can launch | Workbench → the 「角色裝備」 tab in the right column |
+| **Class** | A **role label** on the profile, chosen from the agent roles VBear found for Claude Code or Codex. It is only a label: launching does not load the role's instructions into Claude Code | Same place |
 | **Faction** | The **tool** it runs on: Claude Code or Codex CLI. Launching from a profile works with Claude Code only for now | Same place |
-| **Skill cards** | **Skills** installed on your Mac. The Armory shows, for each one, whether it is available, installed, equipped to a profile, and whether it was ever seen in use | 技能庫 → Armory |
+| **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. The Armory marks each one as available, installed, added to a profile, and whether it was ever seen in use | 技能庫 → Armory |
 | **Armor** | The **protection a launch actually puts on, and the weak spots it does not cover**: writes kept inside the work directory, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it holds | 「預覽並啟動」 |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task, each with a model family. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | 流程 |
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | Home page 「需要你處理」 |
 | **Stamina** | The **limits** you approve for automatic runs: reviews, dispatches, model responses, time, executor budget. VBear uses them to watch the run and stop it; they differ in strength, and your real bill can go past what you set | The approval screen and the executor panel's meters |
 
 VBear has no levels, hit points or scores. It shows only what it can read or check, and says *unknown* when it
-cannot. A skill "equipped" to a profile is a note of intent: it does not mean an agent that is already running has
-loaded it.
+cannot. Adding a skill to a profile only records your choice: launching Claude Code from the profile does not load those
+skills.
 
 ## What you can do with it
 
@@ -46,9 +46,10 @@ launch starts only after you confirm. The Bash tool can write only to the work d
 folder, and it has no network; where a limit does not hold (reading files, commits), the label says so.
 
 **Build characters from the skills and roles you already have.**
-VBear reads the skills and agent roles installed for Claude Code and Codex and shows, for each one, whether
-the tool actually loads it, where it came from and what it is for. Every fact carries its source. Your own
-names and notes are stored locally and never written into the skill files.
+VBear reads the skills and agent roles it finds for Claude Code and Codex and shows, for each one, whether
+the tool actually loads it, where it came from and what it is for. Every fact carries its source. You can save a
+choice of skills and a role as a profile (that records your choice; it loads nothing). Your own names and notes are
+stored locally and never written into the skill files.
 
 **See who is working and who is waiting.**
 Agent terminals run in a small background program on your Mac, so they keep running when you close the browser
@@ -73,6 +74,41 @@ with you.
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
 `127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear.
+
+## What VBear promises, in short
+
+- **It holds:** Claude Code that VBear starts can write only inside the work directory, has no network, and changes
+  files only through the Bash tool.
+- **It does not hold:** reading, because Claude Code can still read any file your Mac account can read, and
+  commands you type yourself after `!`, which are not sandboxed.
+- **Merging, pushing and publishing are always yours.** VBear never runs `git` for you.
+- **Automatic mode uses your accounts' usage.** The limits you set are not a guarantee of the bill.
+- The full list, with what you can do about each, is in
+  [Good to know before you start](#good-to-know-before-you-start).
+
+## Getting started: 3 steps
+
+**Before you set out:** Claude Code is installed on your Mac and you are signed in to it
+([get Claude Code](https://claude.com/product/claude-code)). VBear launches it for you, but it does not install it.
+
+1. **Install.** Download `VBear-<version>-arm64.dmg` from the
+   [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
+   Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
+   down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
+2. **Open VBear.** The app opens its own window. The menu on the left has 我的工作台, 終端機, 終端工作台, 流程,
+   技能庫, Agent 團隊, 專案 and 設定. VBear lists the skills and agent roles it finds on your Mac (read-only; it
+   changes none of them).
+3. **Pick a character and preview the launch.**
+   - Click **終端工作台** in the left menu, then the **角色裝備** tab in the right column.
+   - Click **+ 建立 Agent Profile**. Give it a name, optionally a role (職業), the tool `claude`, and the skills you
+     want (**加入裝備 →** adds one), then click **建立 Profile**.
+   - Click **預覽並啟動** on the profile. Type the work directory: the folder's full path, inside your home
+     folder (for example `/Users/you/projects/demo`). To get a path without typing it, right-click the folder in
+     Finder, hold the Option key and choose **Copy “folder” as Pathname**, then paste it into the box.
+   - Read the seven labels. Each row has the permission's name and, beside it, a word for how strongly it holds
+     (the screen uses words, not colors): 「強制」 and 「部分強制」 mean the limit really holds; 「僅意圖」, 「未限制」,
+     「未驗證」 and 「未知」 mean it is not enforced or not proven; 「不授予」 means it is not given at all. Tick the box
+     about commits, and click **確認啟動** only if you are happy with what you see.
 
 ## Good to know before you start
 
@@ -120,28 +156,6 @@ and what you can do about each.
   [security model](docs/SECURITY-MODEL.md).
 - **The app is not signed with an Apple Developer ID**, so macOS refuses to open it the first time. Allow it once
   under System Settings (see [Install](#install)).
-
-## Getting started: 3 steps
-
-**Before you set out:** Claude Code is installed on your Mac and you are signed in to it
-([get Claude Code](https://claude.com/product/claude-code)). VBear launches it for you, but it does not install it.
-
-1. **Install.** Download `VBear-<version>-arm64.dmg` from the
-   [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
-   Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
-   down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
-2. **Open VBear.** The app opens its own window. The menu on the left has 我的工作台, 終端機, 終端工作台, 流程,
-   技能庫, Agent 團隊, 專案 and 設定. VBear lists the skills and agent roles it finds on your Mac (read-only; it
-   changes none of them).
-3. **Pick a character and preview the launch.**
-   - Click **終端工作台** in the left menu, then the **[A] 角色裝備** tab in the right column.
-   - Click **+ 建立 Agent Profile**. Give it a name, optionally a role (職業), the tool `claude`, and the skills you
-     want (**加入裝備 →** adds one), then click **建立 Profile**.
-   - Click **預覽並啟動** on the profile. Type the work directory: the folder's full path, inside your home
-     folder (for example `/Users/you/projects/demo`).
-   - Read the seven labels. 「強制」 and 「部分強制」 mean the limit really holds; 「僅意圖」, 「未限制」, 「未驗證」 and
-     「未知」 mean it is not enforced or not proven; 「不授予」 means it is not given at all. Tick the box about commits,
-     and click **確認啟動** only if you are happy with what you see.
 
 ## Supported agents
 
@@ -288,8 +302,8 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   what it cannot is in the [security model](docs/SECURITY-MODEL.md).
 - **Reference sections only in Traditional Chinese.** The page-by-page tour, where each fact comes from, the skill
   states, the security details, the state directory and the source layout are currently written out only in
-  [README.zh-TW.md](README.zh-TW.md). For the English side, see [ARCHITECTURE](docs/ARCHITECTURE.md) and the
-  [security model](docs/SECURITY-MODEL.md).
+  [docs/REFERENCE.zh-TW.md](docs/REFERENCE.zh-TW.md). For the English side, see
+  [ARCHITECTURE](docs/ARCHITECTURE.md) and the [security model](docs/SECURITY-MODEL.md).
 
 ## Developing
 

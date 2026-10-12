@@ -14,6 +14,8 @@
   first use with the real screen names, and the earlier details and technical notes below. The automatic mode's
   note now says it was verified with real models, and says what happens after the background program restarts
   (stopped; you press continue; the limit may need raising and a new acceptance).
+  Skills and roles are described as labels and choices a profile records, not as things a launch loads. The
+  Traditional Chinese README's long reference sections moved to `docs/REFERENCE.zh-TW.md`.
 
 ## v0.3.0 — multi-agent flows
 
