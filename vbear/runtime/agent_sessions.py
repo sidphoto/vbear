@@ -336,7 +336,8 @@ def prepare_stream_launch(base: Path, workdir: str, *, cli_binary: str, cli_vers
     if not (isinstance(model_id, str) and STREAM_MODEL_RE.match(model_id)):
         raise LaunchRefused("invalid_model", "串流執行者必須以完整的 Claude 模型 id 啟動")
     if stream_protocol.constants_for(cli_version) is None:
-        raise LaunchRefused("unsupported_version", f"Claude Code {cli_version} 沒有串流模式的常數")
+        from . import cli_versions         # here: cli_versions imports daemon, which imports this module
+        raise LaunchRefused("unsupported_version", cli_versions.stream_unverified_text(cli_version))
     return _prepare_claude(base, workdir, cli_binary=cli_binary, cli_version=cli_version,
                            cli_identity=cli_identity, allowed_root=allowed_root, model_id=model_id,
                            cli_verified=True, engine="claude-stream",

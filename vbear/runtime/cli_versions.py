@@ -147,6 +147,46 @@ def local_stream_verified_versions() -> dict:
 def stream_verified_versions() -> tuple[str, ...]:
     built_in = STREAM_VERIFIED_VERSIONS
     return built_in + tuple(v for v in sorted(local_stream_verified_versions()) if v not in built_in)
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in version.split("."))
+    except ValueError:
+        return (0,)
+
+
+def stream_unverified_text(version: str, supported: tuple[str, ...] | None = None) -> str:
+    """The one wording for "this Claude Code has no stream-mode verification":
+    what was found, which versions VBear supports (generated from the lists
+    above, never typed here) and what can be done about it. Facts only."""
+    supported = stream_verified_versions() if supported is None else supported
+    if not supported:
+        return (f"Claude Code {version} 的串流模式還沒有通過驗證。VBear 目前沒有任何支援串流模式的版本。"
+                "處理方式：等 VBear 更新。")
+    listed = "、".join(sorted(supported, key=_version_key))
+    return (f"Claude Code {version} 的串流模式還沒有通過驗證。VBear 目前支援串流模式的版本：{listed}。"
+            f"處理方式：安裝其中一個支援的版本，或等 VBear 更新、支援 {version}。")
+
+
+def stream_support(version: str | None, why: str = "") -> dict:
+    """What the screen shows before the executor is started: the detected
+    version, the supported list and the state.
+
+      verified    the detected version is on the list;
+      unverified  it is not (message says what can be done);
+      unknown     the version could not be read (message says why).
+
+    Never a guess: an unreadable version is "unknown", not "unverified"."""
+    supported = stream_verified_versions()
+    shown = sorted(supported, key=_version_key)
+    if version is None:
+        return {"state": "unknown", "detected": None, "supported": shown,
+                "message": f"讀不到 Claude Code 的版本（{why or '原因不明'}），無法確認串流模式是否已通過驗證"}
+    if version in supported:
+        return {"state": "verified", "detected": version, "supported": shown, "message": ""}
+    return {"state": "unverified", "detected": version, "supported": shown,
+            "message": stream_unverified_text(version, supported)}
 # In 0.159.2, --ignore-user-config and --ephemeral are accepted by `codex exec`
 # but rejected by the interactive TUI command. Managed PTY launches require the
 # interactive command, so they stay disabled until a pinned build supports both.

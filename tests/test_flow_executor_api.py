@@ -66,6 +66,27 @@ class ApiCase(ConsoleMixin, StreamCase):
 
 
 class StartTests(ApiCase):
+    def test_the_status_says_before_start_whether_the_stream_mode_is_verified(self):
+        ss = self.executor()["stream_support"]
+        self.assertEqual((ss["state"], ss["detected"], ss["message"]), ("verified", "2.1.292", ""))
+        self.assertEqual(ss["supported"], ["2.1.292"])
+        self.host.claude = "9.9.9"
+        ra._facts_cache.clear()
+        s = self.executor()
+        self.assertEqual((s["stream_support"]["state"], s["stream_support"]["detected"]), ("unverified", "9.9.9"))
+        self.assertIn("2.1.292", s["stream_support"]["message"])
+        self.assertIn("處理方式", s["stream_support"]["message"])
+        self.assertFalse(s["can_start"], "not offered, and nothing had to be pressed to learn why")
+        self.assertEqual(s["sessions"], [])
+        self.host.claude, self.host.claude_why = None, "沒有"
+        ra._facts_cache.clear()
+        s = self.executor()
+        self.assertEqual(s["stream_support"]["state"], "unknown")
+        self.assertFalse(s["can_start"])
+        self.host.claude = "2.1.292"
+        ra._facts_cache.clear()
+        self.assertTrue(self.executor()["can_start"])
+
     def test_start_prepares_opens_and_the_status_shows_it(self):
         before = self.dm._ledger.used
         st0 = self.executor()

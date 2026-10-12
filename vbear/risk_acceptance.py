@@ -137,7 +137,7 @@ def _gather(host: Host, state: Path, key: login_identity.LoginKey, executor_mode
     if claude is None:
         raise AcceptanceError(409, "claude_version", f"讀不到 Claude Code 的版本（{why}）")
     if claude not in cli_versions.stream_verified_versions():
-        raise AcceptanceError(409, "claude_unverified", f"Claude Code {claude} 的串流模式還沒有通過驗證")
+        raise AcceptanceError(409, "claude_unverified", cli_versions.stream_unverified_text(claude))
     cfp = login_identity.claude_login_fingerprint(host.claude_json(), key)
     if not cfp.ok:
         raise AcceptanceError(409, "no_claude_login", f"取不到執行者的 Claude 帳號指紋（{cfp.problem}）")
@@ -314,6 +314,24 @@ def _cached_facts(host: Host, state: Path, key: login_identity.LoginKey, now: fl
         _facts_cache.clear()
         _facts_cache[token] = (now, facts)
         return facts
+
+
+def claude_stream_support(*, host: Host | None = None, now: float | None = None) -> dict:
+    """The Claude Code version this machine would run and whether its stream
+    mode is verified (cli_versions.stream_support), for the flow screen to
+    show BEFORE the executor is started. The version is read at most once per
+    FACT_TTL, like the facts of the acceptance; the real check is still the
+    one at the acceptance and at open_stream."""
+    host = host or DEFAULT_HOST
+    now = time.time() if now is None else now
+    token = ("claude_stream_support", id(host))
+    with _facts_lock:
+        hit = _facts_cache.get(token)
+        if hit is None or not 0 <= now - hit[0] < FACT_TTL:
+            hit = (now, host.claude_version())
+            _facts_cache[token] = hit
+    version, why = hit[1]
+    return cli_versions.stream_support(version, why)
 
 
 def status(flow: dict, state: Path | None = None, *, host: Host | None = None, now: float | None = None) -> dict:

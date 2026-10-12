@@ -2418,6 +2418,17 @@ function s2AutomationPanel(flowId, au, refresh) {
     el("p", { class: "small muted" }, "用量與上限見下面的「串流執行者」；固定規則：連續失敗 1 次就停止。"));
 }
 
+// Whether the Claude Code this machine would run has a verified stream mode, shown before the executor is started.
+// The message is the server's (it names the detected version, the supported list and what can be done); text only.
+function s2StreamSupport(ss) {
+  if (!ss) return null;
+  if (ss.state === "verified") {
+    return el("p", { class: "small muted", "data-s2": "stream-support" },
+      `Claude Code ${ss.detected}：串流模式已通過驗證（VBear 支援串流模式的版本：${(ss.supported || []).join("、")}）。`);
+  }
+  return el("div", { "data-s2": "stream-support" }, notice("warn", ss.message || "無法確認 Claude Code 的串流模式是否已通過驗證"));
+}
+
 function s2ExecutorPanel(flowId, ex, refresh) {
   const sessions = (ex.sessions || []).slice().reverse();
   const live = sessions.find((s) => s.manifest_state === "running" || s.manifest_state === "launching");
@@ -2429,6 +2440,8 @@ function s2ExecutorPanel(flowId, ex, refresh) {
   const why = [];
   if (!ex.can_start) {
     if (ex.acceptance.state !== "valid") why.push("需要有效的風險接受");
+    if (ex.stream_support && ex.stream_support.state === "unverified") why.push("這個 Claude Code 版本的串流模式還沒有通過驗證");
+    if (ex.stream_support && ex.stream_support.state === "unknown") why.push("讀不到 Claude Code 的版本");
     if (ex.hold && ex.hold.held) why.push("流程已停止");
     if (live) why.push("已有執行中的 session");
     if (ex.workdir_problem) why.push(ex.workdir_problem);
@@ -2486,6 +2499,7 @@ function s2ExecutorPanel(flowId, ex, refresh) {
   });
   return el("section", { class: "section s2-panel", "data-s2": "executor" },
     sectionHead("串流執行者", "由 VBear 啟動的 Claude Code；你逐則核准派工。", el("div", { class: "row" }, start, stop)),
+    s2StreamSupport(ex.stream_support),
     why.length ? el("p", { class: "small muted" }, "現在不能啟動：" + why.join("；") + "。") : null,
     held ? notice("warn", `流程已停止：${ex.hold.reason || "（沒有說明）"}${ex.hold.at ? `（${fmtTime(ex.hold.at)}）` : ""}`) : null,
     ex.sessions_problem ? notice("bad", "無法列出 session：" + ex.sessions_problem) : null,

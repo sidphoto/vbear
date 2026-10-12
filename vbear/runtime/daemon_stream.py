@@ -112,7 +112,7 @@ class StreamOps:
                 raise agent_sessions.LaunchRefused("consumed", "此 launch 不是待啟動的串流 launch")
             version = m["cli_version"]
             if version not in cli_versions.stream_verified_versions():
-                raise agent_sessions.LaunchRefused("unverified", f"Claude Code {version} 的串流模式尚未通過驗證")
+                raise agent_sessions.LaunchRefused("unverified", cli_versions.stream_unverified_text(version))
             env = build_env()
             env["CLAUDE_CODE_TMPDIR"] = m["scratch"]["path"]
             env["DISABLE_AUTOUPDATER"] = "1"

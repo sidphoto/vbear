@@ -176,6 +176,33 @@ class PreviewTests(Case):
         self.host.codex = None
         self.assertEqual(self.error(self.preview).code, "codex_version")
 
+    def test_an_unverified_claude_code_says_what_was_found_the_supported_versions_and_what_to_do(self):
+        self.host.claude = "9.9.9"
+        err = self.error(self.preview)
+        self.assertEqual((err.status, err.code), (409, "claude_unverified"))
+        text = str(err)
+        self.assertIn("Claude Code 9.9.9", text)
+        self.assertIn("2.1.292", text)                                # the list the acceptance is checked against
+        self.assertIn("處理方式", text)
+        with mock.patch("vbear.runtime.cli_versions.stream_verified_versions", return_value=("2.1.292", "2.1.299")):
+            self.assertIn("2.1.292、2.1.299", str(self.error(self.preview)))
+        self.assertEqual(self.events(), [])
+
+    def test_the_stream_support_shown_before_anything_is_started(self):
+        ra._facts_cache.clear()
+        ss = ra.claude_stream_support(host=self.host, now=100.0)
+        self.assertEqual((ss["state"], ss["detected"]), ("verified", "2.1.292"))
+        self.host.claude = "9.9.9"
+        self.assertEqual(ra.claude_stream_support(host=self.host, now=101.0)["detected"], "2.1.292",
+                         "read once per FACT_TTL")
+        ss = ra.claude_stream_support(host=self.host, now=100.0 + ra.FACT_TTL + 1)
+        self.assertEqual((ss["state"], ss["detected"]), ("unverified", "9.9.9"))
+        self.assertIn("處理方式", ss["message"])
+        self.host.claude, self.host.claude_why = None, "找不到執行檔"
+        ss = ra.claude_stream_support(host=self.host, now=100.0 + 2 * ra.FACT_TTL + 2)
+        self.assertEqual((ss["state"], ss["detected"]), ("unknown", None))
+        self.assertIn("找不到執行檔", ss["message"])
+
     def test_a_missing_login_says_how_to_log_in_and_where(self):
         os.unlink(self.state / "codex-home" / "auth.json")
         e = self.error(self.preview)

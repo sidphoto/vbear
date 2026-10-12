@@ -538,6 +538,10 @@ class RefusalTests(StreamCase):
                     m = self.prepare()
                     r = self.rpc("open_stream", launch_id=m["launch_id"])
                     self.assertFalse(r.get("ok"), r)
+                    if name == "unverified version":
+                        # the one wording: what was found, what is supported (none here) and what can be done
+                        self.assertIn("Claude Code 2.1.292 的串流模式還沒有通過驗證", str(r))
+                        self.assertIn("處理方式", str(r))
                 finally:
                     next(gen, None)
         self.assertEqual(self.dm._streams, {})

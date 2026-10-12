@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Unverified Claude Code version, said before start.** When the installed Claude Code has no verified stream mode,
+  the flow page says so in the executor panel before the executor is started, and the start button is off. The
+  message (also the answer to a refused acceptance, preparation or open) names the version found, lists the versions
+  VBear supports (generated from the stream-verified lists) and says what can be done: install one of them, or wait
+  for a VBear update. A version that cannot be read is shown as unreadable, never as unverified. The panel reads
+  the version from the same cached fact the acceptance uses (at most once per ten seconds).
 - **Flows board (look-only).** A new 「流程」 page records multi-agent work on a task card: planner, executor and
   reviewers with their model families, and an append-only event log entered by hand (「手動記錄（未驗證）」). The
   phase, review rounds and commit binding are derived on every read; a review counts as a pass only for different,

@@ -24,6 +24,7 @@ function executor(over = {}) {
       text_version: "2026-10-11.1", codex_version: "0.160.0", review_model: "gpt-6-luna",
       executor_claude_version: "2.1.292", executor_model: "claude-haiku-4-5-20251001",
       executor_account: "a1b2c3d4e5f60718", review_account: "0f1e2d3c4b5a6978", login_key_id: "c".repeat(16), limits: [] } },
+    stream_support: { state: "verified", detected: "2.1.292", supported: ["2.1.292", "2.1.296"], message: "" },
     hold: { held: false, reason: "", at: null }, workdir: "/work", workdir_problem: null,
     accounting: { ok: true, started_at: 1791000000, elapsed_s: 600, dispatches: 1, responses: 5, spent_usd: 0.12, reviews: 0,
       limits: { max_dispatches: 20, executor_total_max_responses: 1000, executor_budget_usd: 20, max_reviews: 6, max_elapsed_h: 8 },
@@ -137,6 +138,41 @@ test("start is offered only when the server says so, and posts nothing but an em
   await settle();
   const p = posts().find((x) => x.url.endsWith("/executor"));
   assert(p && JSON.stringify(p.body) === "{}", "an empty request: the model and version come from the acceptance");
+});
+
+test("a Claude Code version without a verified stream mode is said before start: version, list, what can be done", async () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const message = "Claude Code 2.1.400 的串流模式還沒有通過驗證。VBear 目前支援串流模式的版本：2.1.292、2.1.296。" +
+    "處理方式：安裝其中一個支援的版本，或等 VBear 更新、支援 2.1.400。" + hostile;
+  const c = await mount({ executor: executor({ can_start: false,
+    stream_support: { state: "unverified", detected: "2.1.400", supported: ["2.1.292", "2.1.296"], message } }) });
+  const panel = byS2(c.node, "executor");
+  const t = text(panel);
+  assert(t.includes("2.1.400"), "the detected version");
+  assert(t.includes("2.1.292、2.1.296"), "the supported versions");
+  assert(t.includes("處理方式：安裝其中一個支援的版本，或等 VBear 更新"), "what can be done");
+  assert(t.includes("現在不能啟動：") && t.includes("串流模式還沒有通過驗證"), "and it is among the reasons start is off");
+  assert(button(panel, "啟動執行者").disabled, "start is off before anything is pressed");
+  assert(t.includes(hostile), "the server's text is data: it is there as text");
+  assert.strictEqual(panel.findAll((n) => n.tag === "img").length, 0, "and it made no element");
+  assert(!posts().some((x) => x.url.endsWith("/executor")), "nothing was started to learn this");
+});
+
+test("a Claude Code version that cannot be read is said as unknown, not as unverified", async () => {
+  const c = await mount({ executor: executor({ can_start: false,
+    stream_support: { state: "unknown", detected: null, supported: ["2.1.292"],
+      message: "讀不到 Claude Code 的版本（找不到），無法確認串流模式是否已通過驗證" } }) });
+  const t = text(byS2(c.node, "executor"));
+  assert(t.includes("讀不到 Claude Code 的版本（找不到）"));
+  assert(!t.includes("還沒有通過驗證。"), "it does not claim the version is unverified");
+});
+
+test("a verified version is shown quietly with the supported list", async () => {
+  const c = await mount();
+  const t = text(byS2(c.node, "executor"));
+  assert(t.includes("Claude Code 2.1.292：串流模式已通過驗證"));
+  assert(t.includes("2.1.292、2.1.296"));
+  assert(!t.includes("處理方式"), "no remedy is offered when nothing is wrong");
 });
 
 test("a stopped flow shows why, and continue is the way out", async () => {
@@ -635,6 +671,20 @@ test("a login that is missing says what to run, and offers no acceptance", async
   assert(text(m).includes("CODEX_HOME=/s/codex-home /pinned/codex login -c cli_auth_credentials_store=file"));
   assert(text(m).includes("VBear 不會替你登入，也不會讀取憑證"));
   assert(button(m, "接受並記錄").disabled);
+});
+
+test("an unverified Claude Code version refused at the preview is shown as the server wrote it, as text", async () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const message = "Claude Code 2.1.400 的串流模式還沒有通過驗證。VBear 目前支援串流模式的版本：2.1.292、2.1.296。" +
+    "處理方式：安裝其中一個支援的版本，或等 VBear 更新、支援 2.1.400。" + hostile;
+  const d = openDialog({ preview: [{ error: message, code: "claude_unverified" }, 409] });
+  await settle();
+  const m = d.modal();
+  const t = text(m);
+  assert(t.includes("2.1.400") && t.includes("2.1.292、2.1.296") && t.includes("處理方式"));
+  assert(t.includes(hostile));
+  assert.strictEqual(m.findAll((n) => n.tag === "img").length, 0);
+  assert(button(m, "接受並記錄").disabled, "nothing can be accepted");
 });
 
 test("a conflict at confirmation voids the preview and says so", async () => {

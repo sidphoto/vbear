@@ -418,6 +418,7 @@ class FlowExecutor:
         base = cfg.state_dir()
         mode = pipeline_store.mode_info(base, flow_id)
         out: dict = {"flow_id": flow_id, "acceptance": risk_acceptance.status(flow),
+                     "stream_support": risk_acceptance.claude_stream_support(host=self._host()),
                      "automation": {"mode": mode["mode"], "approval_id": mode["approval_id"],
                                     "problem": mode["problem"]},
                      "hold": pipeline_store.hold_info(base, flow_id), "workdir": None, "workdir_problem": None,
@@ -450,7 +451,8 @@ class FlowExecutor:
         # one non-ended session per flow is the rule; if the files show more, none is called "current"
         out["current_launch_id"] = live[0]["launch_id"] if len(live) == 1 else None
         # a hint for the screen, never the authority: the daemon decides again at open_stream
-        out["can_start"] = bool(out["acceptance"]["state"] == "valid" and not out["hold"]["held"] and not live
+        out["can_start"] = bool(out["acceptance"]["state"] == "valid" and out["stream_support"]["state"] == "verified"
+                                and not out["hold"]["held"] and not live
                                 and out["workdir"] and not out["unresolved_failure"]
                                 and out["accounting"] and out["accounting"].get("ok") and not out["sessions_problem"])
         return out

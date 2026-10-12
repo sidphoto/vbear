@@ -1294,6 +1294,53 @@ class StreamVerificationRecordTests(StateDir):
         self.assertEqual(cli_versions.STREAM_VERIFIED_VERSIONS, ("2.1.292", "2.1.296"))
 
 
+class StreamSupportTextTests(StateDir):
+    """The one wording for "this Claude Code has no verified stream mode" (cli_versions.stream_unverified_text and
+    stream_support): the found version, the supported list generated from the lists, and what can be done."""
+
+    def test_the_list_comes_from_the_verified_versions_not_from_the_text(self):
+        with mock.patch.object(cli_versions, "STREAM_VERIFIED_VERSIONS", ("2.1.9", "2.1.10")):
+            text = cli_versions.stream_unverified_text("3.0.0")
+        self.assertIn("Claude Code 3.0.0", text)
+        self.assertIn("2.1.9、2.1.10", text)                        # numerically ordered: 9 before 10
+        self.assertNotIn("2.1.292", text)
+        self.assertIn("處理方式：安裝其中一個支援的版本，或等 VBear 更新、支援 3.0.0", text)
+        self.assertNotIn("STREAM_VERIFIED", text)                   # nobody is told to edit a constant
+
+    def test_a_version_verified_on_this_mac_is_in_the_list(self):
+        good = {"mode": "stream", "passed": True, "claude_version": "9.9.9"}
+        path = self.base / "report.json"
+        path.write_text(json.dumps(good))
+        path.chmod(0o600)
+        (self.base / cli_versions.LOCAL_STREAM_VERIFIED_FILE).write_text(json.dumps({"versions": {"9.9.9": {
+            "passed": True, "report": str(path), "verified_at": "now"}}}))
+        (self.base / cli_versions.LOCAL_STREAM_VERIFIED_FILE).chmod(0o600)
+        self.assertIn("9.9.9", cli_versions.stream_unverified_text("3.0.0"))
+        self.assertEqual(cli_versions.stream_support("9.9.9")["state"], "verified")
+
+    def test_no_supported_version_says_so_and_offers_only_waiting(self):
+        with mock.patch.object(cli_versions, "STREAM_VERIFIED_VERSIONS", ()):
+            text = cli_versions.stream_unverified_text("3.0.0")
+            ss = cli_versions.stream_support("3.0.0")
+        self.assertIn("沒有任何支援串流模式的版本", text)
+        self.assertIn("等 VBear 更新", text)
+        self.assertNotIn("安裝其中一個", text)
+        self.assertEqual((ss["state"], ss["supported"]), ("unverified", []))
+
+    def test_support_states(self):
+        ok = cli_versions.stream_support("2.1.292")
+        self.assertEqual((ok["state"], ok["detected"], ok["message"]), ("verified", "2.1.292", ""))
+        self.assertEqual(ok["supported"], ["2.1.292", "2.1.296"])
+        bad = cli_versions.stream_support("2.1.400")
+        self.assertEqual((bad["state"], bad["detected"]), ("unverified", "2.1.400"))
+        self.assertIn("2.1.292、2.1.296", bad["message"])
+        unknown = cli_versions.stream_support(None, "找不到")
+        self.assertEqual((unknown["state"], unknown["detected"]), ("unknown", None))
+        self.assertIn("找不到", unknown["message"])
+        self.assertNotIn("還沒有通過驗證", unknown["message"])       # an unreadable version is not called unverified
+        self.assertIn("原因不明", cli_versions.stream_support(None)["message"])
+
+
 class StreamLaunchTests(StateDir):
     def setUp(self):
         super().setUp()
