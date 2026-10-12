@@ -107,6 +107,48 @@ class CycleTests(RunnerCase):
         self.assertFalse(pipeline_store.is_held(self.base, self.fid))
 
 
+class PhaseTests(RunnerCase):
+    """The flow page's phase follows the automatic cycle by itself (S3 alignment item 8), and the user's
+    attention list is still the automation's own: stopped or at the merge gate, nothing in between."""
+
+    def view(self):
+        st, v = self.call(f"/api/flows/{self.fid}")
+        self.assertEqual(st, 200, v)
+        return v["flow"]
+
+    def test_the_phase_follows_approval_dispatch_report_review_fix_and_the_gate(self):
+        with flows.store.locked():                                   # the page can compare HEAD with the review
+            data = flows.store.load()
+            data[self.fid]["roles"]["executor"]["workdir"] = str(self.work)
+            flows.store.save(data)
+        self.assertEqual(self.view()["phase"]["key"], "planning")
+        self.enable()
+        v = self.view()
+        self.assertEqual((v["phase"]["key"], v["attention"]), ("implementing", False))
+        self.start_executor()
+        self.commit_work("first")
+        self.fake_mode("needs_work")
+        self.run_until(lambda: "auto_review_result" in self.kinds(), "the first review's result")
+        v = self.view()
+        self.assertEqual((v["phase"]["key"], v["phase"]["round"], v["attention"]), ("needs_fix", 1, False))
+        self.commit_work("fix")
+        self.fake_mode("ok")
+        self.run_until(lambda: self.last_event()["kind"] == "auto_stopped"
+                       and self.last_event()["reason_code"] == "awaiting_merge", "the merge gate")
+        v = self.view()
+        self.assertEqual((v["phase"]["key"], v["phase"]["round"]), ("awaiting_merge", 2))
+        self.assertEqual([len(r["reviews"]) for r in v["rounds"]], [1, 1])
+        self.assertEqual((v["warnings"], v["stray_reviews"]), ([], []))
+        # the attention list says what the automation says, as before
+        self.assertTrue(v["attention"])
+        self.assertEqual(v["attention_reason"], "自動執行完成：審查通過、各項核對成立，停在合併關卡等你")
+        st, listing = self.call("/api/flows")
+        mine = next(f for f in listing["flows"] if f["id"] == self.fid)
+        self.assertEqual((mine["attention"], mine["attention_reason"]), (True, v["attention_reason"]))
+        # and the merge gate itself is what it was: the same checks, not the phase
+        self.assertTrue(self.gate()["open"])
+
+
 class StopTests(RunnerCase):
     def start_with(self, report=None):
         self.enable()

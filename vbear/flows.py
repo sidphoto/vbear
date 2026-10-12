@@ -539,6 +539,43 @@ def _short(commit) -> str:
     return commit[:7] if isinstance(commit, str) else "—"
 
 
+def _phase_events(flow: dict) -> list[dict]:
+    """The facts the phase is read from, in the order they happened: the manual records as they are, and the
+    automatic mode's own events said as the manual kinds they amount to (S3 alignment item 8). Nothing is
+    written; an event of either source that is the same fact as one of the other is told apart in derive().
+      automation_mode (auto)  -> plan_approved           the plan was approved when automatic mode was turned on
+      auto_dispatch_sent      -> implementation_started  the executor was sent its work
+      auto_report             -> executor_report         (the runner records it only after VBear read the files)
+      auto_review_result      -> review_result           (the runner records it only for a valid review)
+    Everything else the runner writes (intents, a started or aborted review, a stop) is not a phase fact: a
+    stop is the user's business (the automation block of the flow view), and the merge gate is read from the
+    review checks as before."""
+    out: list[dict] = []
+    reviewer = {"index": None, "name": "自動審查（VBear 啟動的 Codex）", "family": "openai"}
+    # A manual review snapshots the executor's family when it is recorded; an automatic one does not. Roles
+    # changed after it make the family it was judged against unknowable (the first roles are not kept), and an
+    # unknown family never passes; with no change after it, today's roles are the ones it was judged against.
+    last_change = max((i for i, x in enumerate(flow["events"]) if x["kind"] == "roles_changed"), default=-1)
+    for i, e in enumerate(flow["events"]):
+        kind = e["kind"]
+        if kind == "automation_mode":
+            if e.get("mode") == "auto":
+                out.append({**e, "kind": "plan_approved", "_auto": True})
+        elif kind == "auto_dispatch_sent":
+            out.append({**e, "kind": "implementation_started", "_auto": True})
+        elif kind == "auto_report":
+            if isinstance(e.get("commit"), str) and COMMIT_RE.match(e["commit"]):
+                out.append({**e, "kind": "executor_report", "_auto": True})
+        elif kind == "auto_review_result":
+            verdict = {"PASS": "PASS", "NEEDS WORK": "NEEDS_WORK", "BLOCKED": "BLOCKED"}.get(e.get("verdict"))
+            if verdict and e.get("valid") is True and isinstance(e.get("commit"), str) and COMMIT_RE.match(e["commit"]):
+                out.append({**e, "kind": "review_result", "verdict": verdict, "_auto": True, "reviewer": reviewer,
+                            "executor_family": "unknown" if last_change > i else flow["roles"]["executor"]["family"]})
+        elif kind not in AUTOMATION_KINDS:
+            out.append(e)
+    return out
+
+
 def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
     """Phase, review rounds and commit binding from the events, plus the
     executor's HEAD read now. ``flow`` is a stored flow (already validated).
@@ -553,7 +590,9 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
     rounds: list[dict] = []
     stray: list[dict] = []
     warnings: list[str] = []
-    for e in flow["events"]:
+    _round_origins: dict[int, set] = {}      # round number -> who reported it ("manual", "auto")
+    _seen_reviews: set = set()               # (round, commit, verdict, reviewer family, source) already counted
+    for e in _phase_events(flow):
         kind = e["kind"]
         if kind == "plan_submitted":
             state, reason = "awaiting_approval", "計畫已提出，等你核准"
@@ -564,10 +603,24 @@ def derive(flow: dict, heads: Callable[[str], dict]) -> dict:
             if closed and e["commit"] == current_commit:
                 warnings.append(f"合併後又回報同一個 commit {_short(e['commit'])}，不開始新一輪")
                 continue
+            origin = "auto" if e.get("_auto") else "manual"
+            if (rounds and not closed and e["commit"] == current_commit and not rounds[-1]["reviews"]
+                    and origin not in _round_origins[len(rounds)]):
+                # the same fact recorded by hand and by the runner, before any review of it: one round, not two
+                # (a report of the same commit after a review is a new round, as it is when both are by hand)
+                _round_origins[len(rounds)].add(origin)
+                continue
             current_commit, passed_commit, closed = e["commit"], None, False
             rounds.append({"round": len(rounds) + 1, "commit": e["commit"], "reported_at": e["at"], "reviews": []})
+            _round_origins[len(rounds)] = {origin}
             state, reason = "in_review", f"等待審查 {_short(e['commit'])}（第 {len(rounds)} 輪）"
         elif kind == "review_result":
+            origin = "auto" if e.get("_auto") else "manual"
+            other = "manual" if origin == "auto" else "auto"
+            who = (len(rounds), e["commit"], e["verdict"], e["reviewer"]["family"])
+            if who + (other,) in _seen_reviews:
+                continue            # the same verdict of the same commit by the same family, by hand and by the runner
+            _seen_reviews.add(who + (origin,))
             counted, why = _independent(e["executor_family"], e["reviewer"]["family"])
             row = {"reviewer": e["reviewer"]["name"], "family": e["reviewer"]["family"],
                    "executor_family": e["executor_family"], "verdict": e["verdict"], "commit": e["commit"],

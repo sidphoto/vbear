@@ -13,6 +13,15 @@
   marked as only a record; each reviewer says whether it counts as independent of the executor), and 體力 as
   bars with the words: the executor's cost is split into what the CLI recorded and what is counted for turns
   without a result, with 「實際費用尚未知」; a figure that cannot be counted is not drawn as zero.
+- **A flow's phase now follows automatic mode's own events.** The phase (and so 任務進度) was read only from the
+  events entered by hand, so a flow that only the runner moved stayed at 「計畫中」 even after it had been
+  reviewed. It now also reads the runner's events: turning automatic mode on counts as the plan's approval, a
+  sent dispatch as the start of work, a verified report as the executor's report, and a valid review result as
+  a review. The same fact recorded by hand and by the runner is one round and one review, not two; the last
+  event on the timeline wins. This changes only what the page derives and shows: nothing is written, and the
+  merge gate and the 「需要你處理」 list are read as before. A review made by the runner counts as independent only
+  when the executor's model family is known and is not OpenAI, and not when the roles were changed after it was
+  made.
 - **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,
   every automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk
   acceptance still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at

@@ -277,9 +277,10 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
 - **Flows (look-only).** One task card carried by several agents: who plans, who executes, who reviews, each
   with a model family (the maker of the model: Anthropic, OpenAI, Google and so on). The 「流程」 page shows the phase (planning, awaiting approval, implementing, review round N,
   needs fix, passed and awaiting merge, review out of date, awaiting push, done), the review rounds and a timeline,
-  and the home page lists the gates waiting for you. Phases are derived on every read, never stored. A review
+  and the home page lists the gates waiting for you. Phases are derived on every read, never stored, from the events (the ones the runner writes in automatic
+  mode included) and the live view. A review
   counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
-  date as soon as the executor's directory moves off the reviewed commit. Every event is entered by hand and
+  date as soon as the executor's directory moves off the reviewed commit. The events you enter by hand are
   labelled 「手動記錄（未驗證）」. The board's recording routes do not dispatch work, type into a terminal, run `git`
   or start an agent (the executor below is separate). Like the home page, the flows pages read the live
   view, which can start VBear's own runtime.
