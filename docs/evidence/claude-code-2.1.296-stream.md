@@ -76,6 +76,25 @@ observed, which is listed below.
    that need the user's approval are applied for that run only and not written to the local cache, so a missing
    `remote-settings.json` does not show that there are none; the security model says so.
 
+3. **`system/vcs_state_changed`** (found by the first real end-to-end run, 2026-10-12, not by the probe above: its
+   turns write a result file but run no git). When a tool call is a `git commit`, 2.1.296 sends a `system` event
+   with this subtype between the tool's call and its result (observed once per commit; `kind` was the commit, the
+   branch and the work directory followed). Its fields, from a raw capture (`tools/stream_capture.py`; the raw
+   lines stay in the throwaway sandbox, only names and types are recorded here): `type` (string), `subtype`
+   (string), `kind` (string), `branch` (string), `cwd` (string, equal to the session's work directory), `uuid`
+   (string, a UUID), `session_id` (string, the session). The tracker did not know the subtype, took it for an
+   unknown type, and the turn was invalid. It is now a known kind **for 2.1.296 only**: shape and place are
+   checked (the turn is running; the three strings are bounded; `cwd` is the work directory), it is neither a model
+   response nor an anomaly, and it adds no journal fact. 2.1.292 and every other `system` subtype stay unknown
+   types. The probe now has a third turn that edits a file and commits it in a git work directory, checks that its
+   report's `head` is the repository's HEAD and the commit exists (`executor_report.verify`), and records whether
+   the event was seen. The CLI sent the event for `git add … && git commit -m "…"` as a Bash call of its own, and
+   not for `sh -c '…'` or `git commit -q -m …`, so the turn is written the first way.
+4. **The executor cannot know the dispatch id** (also found by that run, and not a Claude Code change): the report's
+   schema requires `dispatch_id` to be the turn's UUID, which lived only in the transport `uuid` field of the stdin
+   line. VBear now appends a fixed report request to every dispatch text that names the id and the report's
+   fields (`executor_report.report_request`); see the security model.
+
 ## Runs and model use
 
 | Run | Outcome | Model responses | Cost reported by the CLI |
@@ -84,6 +103,11 @@ observed, which is listed below.
 | 1 | the first turn was valid but for `thinking_display` (finding 1), so the journal refused the second dispatch; the version also had no administrator-source list (finding 2) | 2 | USD 0.0236 |
 | 2 | all checks pass | 3 | USD 0.0135 |
 | end to end | pass | 1 | USD 0.0087 |
+| real end-to-end run 1 (aborted by the product on findings 3 and 4) | 1 dispatch, `vcs_state_changed` and an invented `dispatch_id` | 12 | USD 0.0403 |
+| raw capture of a commit turn (`tools/stream_capture.py`) | one turn | 5 | USD 0.0162 |
+| probe with the commit turn, `sh -c` form | pass, the event was not sent | 5 | USD 0.0198 |
+| probe with the commit turn, `git commit -q` form | pass, the event was not sent | 8 | USD 0.0275 |
+| probe with the commit turn, `git add … && git commit -m …` | all checks pass, the event seen and accepted | 7 | USD 0.0245 |
 
 The control run sends no request to Anthropic (its endpoint is the local listener, which accepts and closes without
 reading). Boundary runs (headless, interactive) are in [claude-code-2.1.296.md](claude-code-2.1.296.md).

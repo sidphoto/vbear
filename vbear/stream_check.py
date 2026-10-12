@@ -106,11 +106,13 @@ def _commit_prompt(d: str) -> str:
     The probe's first two turns write a result file but run no git, so an event that only a repository change
     produces (2.1.296: system/vcs_state_changed) went unseen until a real run committed."""
     rep = json.dumps(_report_for(d), separators=(",", ":"))
-    return ("Use the Bash tool to run exactly this command and nothing else: "
-            "sh -c 'echo probe > change.txt && git add change.txt && git commit -q -m probe-commit && "
-            "git rev-parse HEAD'\n"
-            "When it has finished, call the StructuredOutput tool with exactly this JSON, replacing the head value "
-            f"with the commit hash the command printed: {rep}")
+    # three Bash calls, the commit written as an executor writes it (add and commit in one command, no -q): the CLI
+    # sends its repository-state event for that, and did not for `sh -c '...'` or for `git commit -q -m ...`
+    return ("Use the Bash tool to run these three commands, each as its own Bash call, in this order, and nothing "
+            "else: 1) echo probe > change.txt  2) git add change.txt && git commit -m \"probe commit\"  "
+            "3) git rev-parse HEAD\n"
+            "When they have finished, call the StructuredOutput tool with exactly this JSON, replacing the head "
+            f"value with the commit hash the last command printed: {rep}")
 
 
 def _init_repo(work: Path) -> None:
@@ -456,7 +458,9 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         so = t3.result.get("structured_output") if t3 and t3.result else None
         problems = executor_report.verify(so, str(work)) if isinstance(so, dict) else ["no report"]
         report["checks"]["commit_turn"] = {"pass": bool(turns[2]["valid"]) and problems == [],
-                                           "problems": problems[:5]}
+                                           "problems": problems[:5],
+                                           # informational: the event a repository change makes in 2.1.296
+                                           "vcs_event_seen": "system/vcs_state_changed" in variants}
         report["observed_keys"] = {k: sorted(v) for k, v in sorted(keysets.items())}
         report["observed_key_sets"] = {k: [list(x) for x in sorted(v)] for k, v in sorted(variants.items())}
         report["unexpected_keys"] = {k: sorted(v - consts.allowed.get(k, set())) for k, v in keysets.items()
