@@ -35,7 +35,7 @@ def init_event(sid, cwd, **over):
 
 def turn(sid, d, text, *, cwd, result_index=0, cost=0.01, prefix="a", rep=None, responses=None,
          num_turns=None, subtype="success", is_error=False, extra_tool=None, structured_result=SUCCESS,
-         structured_is_error=None, structured_output="same", model=MODEL):
+         structured_is_error=None, structured_output="same", model=MODEL, version=VERSION):
     """One complete turn. ``responses``: list of response specs, each a list
     of content items for that response's assistant events; by default one
     thinking event and one StructuredOutput call in a single response."""
@@ -45,7 +45,7 @@ def turn(sid, d, text, *, cwd, result_index=0, cost=0.01, prefix="a", rep=None, 
     ev = [
         {"type": "command_lifecycle", "command_uuid": d, "state": "queued", "uuid": new_uuid(), "session_id": sid},
         {"type": "command_lifecycle", "command_uuid": d, "state": "started", "uuid": new_uuid(), "session_id": sid},
-        init_event(sid, cwd, model=model),
+        init_event(sid, cwd, model=model, claude_code_version=version),
         {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 0, "estimated_tokens_delta": 0,
          "user_message_uuid": d, "uuid": new_uuid(), "session_id": sid},
         {"type": "user", "isReplay": True, "message": {"role": "user", "content": [{"type": "text", "text": text}]},

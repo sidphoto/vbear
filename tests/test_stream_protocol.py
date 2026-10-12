@@ -27,14 +27,14 @@ class Harness:
     """Plays the daemon: writes its own records and feeds events through the
     tracker; every record goes through encode -> strict parse -> apply."""
 
-    def __init__(self, model=fx.MODEL, identity=IDENTITY):
+    def __init__(self, model=fx.MODEL, identity=IDENTITY, consts=C):
         self.sid = fx.new_uuid()
-        self.tracker = sp.EventTracker(C, self.sid, CWD, model)
+        self.tracker = sp.EventTracker(consts, self.sid, CWD, model)
         self.js = sj.JournalState(identity=identity)
         self.seq = 0
         self.records = []
         self.record("session_started", {"claude_session_id": self.sid, "pipeline_id": "flow-0123456789ab",
-                                        "cli_version": "2.1.292", "argv_sha256": "a" * 64, "budget_usd": 20.0})
+                                        "cli_version": consts.version, "argv_sha256": "a" * 64, "budget_usd": 20.0})
 
     def record(self, kind, data):
         line = sj.encode(self.seq + 1, time.time(), kind, data)
@@ -521,6 +521,81 @@ class InvalidTurnTests(unittest.TestCase):
                 events[7]["message"]["content"][0].update(change)
                 h.feed(events)
                 self.assertFalse(h.validity(d)[0])
+
+
+C296 = sp.VERSIONS["2.1.296"]
+IDENTITY296 = {**IDENTITY, "executor_claude_version": "2.1.296"}
+
+
+class VcsStateChangedTests(unittest.TestCase):
+    """Claude Code 2.1.296 sends ``system/vcs_state_changed`` between a tool call and its result when a tool changed
+    the repository (S3 real end-to-end, run 1; fields from tools/stream_capture.py)."""
+
+    def vcs(self, h, **over):
+        e = {"type": "system", "subtype": "vcs_state_changed", "kind": "commit", "branch": "main", "cwd": CWD,
+             "session_id": h.sid, "uuid": fx.new_uuid()}
+        e.update(over)
+        return e
+
+    def turn_with(self, h, event, **kw):
+        d, text = h.dispatch()
+        events = fx.turn(h.sid, d, text, cwd=CWD, prefix="g", version="2.1.296", extra_tool=event, **kw)
+        return d, events
+
+    def harness(self):
+        return Harness(consts=C296, identity=IDENTITY296)
+
+    def test_the_event_is_accepted_and_is_neither_a_response_nor_an_anomaly(self):
+        h = self.harness()
+        d, events = self.turn_with(h, self.vcs(h))
+        h.feed(events)
+        self.assertTrue(h.validity(d)[0], h.validity(d))
+        self.assertEqual(h.js.turns[d].anomalies, [])
+        self.assertEqual(h.tracker.total_responses, 1)                  # the one model response, nothing from this event
+        self.assertFalse(h.js.closed_reasons)
+        h.dispatch()                                                    # the session takes the next dispatch
+
+    def test_every_other_system_subtype_is_still_an_unknown_type(self):
+        h = self.harness()
+        d, events = self.turn_with(h, self.vcs(h, subtype="hooks"))
+        h.feed(events)
+        self.assertFalse(h.validity(d)[0])
+        self.assertIn("unknown_type", [a["reason"] for a in h.js.turns[d].anomalies])
+
+    def test_a_version_without_the_entry_does_not_know_it(self):
+        h = Harness()                                                   # the 2.1.292 constants
+        d, events = self.turn_with(h, self.vcs(h))
+        for ev in events:                                               # (2.1.292 sessions report 2.1.292)
+            if ev.get("subtype") == "init":
+                ev["claude_code_version"] = "2.1.292"
+        h.feed(events)
+        self.assertFalse(h.validity(d)[0])
+        self.assertIn("unknown_type", [a["reason"] for a in h.js.turns[d].anomalies])
+
+    def test_an_extra_field_is_an_anomaly(self):
+        h = self.harness()
+        d, events = self.turn_with(h, self.vcs(h, surprise=1))
+        h.feed(events)
+        self.assertFalse(h.validity(d)[0])
+        self.assertIn("extra_fields", [a["reason"] for a in h.js.turns[d].anomalies])
+
+    def test_a_bad_shape_or_place_is_a_protocol_error(self):
+        for name, change, reason in (("kind missing", {"kind": None}, "missing_field"),
+                                     ("branch not a string", {"branch": 5}, "missing_field"),
+                                     ("too long", {"cwd": "/" + "x" * 600}, "missing_field"),
+                                     ("another directory", {"cwd": "/private/tmp/elsewhere"}, "attribution"),
+                                     ("another session", {"session_id": fx.new_uuid()}, "session_mismatch")):
+            with self.subTest(case=name):
+                h = self.harness()
+                d, events = self.turn_with(h, self.vcs(h, **change))
+                with self.assertRaises(sp.ProtocolError) as cm:
+                    h.feed(events)
+                self.assertEqual(cm.exception.reason, reason)
+        h = self.harness()
+        d, text = h.dispatch()
+        with self.assertRaises(sp.ProtocolError) as cm:                  # before the turn's init: not "running"
+            h.feed([self.vcs(h)])
+        self.assertEqual(cm.exception.reason, "out_of_order")
 
 
 class JournalTests(unittest.TestCase):

@@ -33,6 +33,7 @@ MAX_EVENT_TYPE = 64
 MAX_ESTIMATED_TOKENS = 10 ** 8
 MAX_NUM_TURNS = 10 ** 4
 MAX_RESULT_INDEX = 10 ** 6
+MAX_VCS_FIELD = 512                         # system/vcs_state_changed: kind, branch, cwd
 
 
 @dataclass(frozen=True)
@@ -104,12 +105,20 @@ VERSIONS = {
 # 2.1.296: the 2.1.292 entry plus what the stream probe observed (docs/evidence/claude-code-2.1.296-stream.md, a
 # passing run 2026-10-12). One difference: assistant events carry ``thinking_display`` (a new top-level field; not
 # read).
+#
+# And a new event kind (S3 real end-to-end, run 1, 2026-10-12; raw capture by tools/stream_capture.py): a ``system``
+# event with subtype ``vcs_state_changed`` comes between a tool's call and its result when the tool changed the
+# work directory's repository state (seen after a ``git commit``). Fields: type, subtype, kind, branch, cwd (all
+# strings), uuid, session_id. 2.1.292 has no such entry, so there it stays an unknown type and invalidates the turn.
 VERSIONS["2.1.296"] = replace(
     VERSIONS["2.1.292"], version="2.1.296",
     allowed={**VERSIONS["2.1.292"].allowed,
-             "assistant": VERSIONS["2.1.292"].allowed["assistant"] | {"thinking_display"}})
+             "assistant": VERSIONS["2.1.292"].allowed["assistant"] | {"thinking_display"},
+             "system/vcs_state_changed": frozenset({"branch", "cwd", "kind", "session_id", "subtype", "type",
+                                                    "uuid"})})
 
-KINDS = ("command_lifecycle", "system/init", "system/thinking_tokens", "user/replay", "user/tool_result",
+KINDS = ("command_lifecycle", "system/init", "system/thinking_tokens", "system/vcs_state_changed", "user/replay",
+         "user/tool_result",
          "assistant", "rate_limit_event", "result")
 
 
@@ -181,7 +190,7 @@ def kind_of(event: dict) -> str | None:
     t = event.get("type")
     if t == "system":
         sub = event.get("subtype")
-        return f"system/{sub}" if sub in ("init", "thinking_tokens") else None
+        return f"system/{sub}" if sub in ("init", "thinking_tokens", "vcs_state_changed") else None
     if t == "user":
         return "user/replay" if "isReplay" in event else "user/tool_result"
     if t in ("command_lifecycle", "assistant", "rate_limit_event", "result"):
@@ -296,6 +305,8 @@ class EventTracker:
         t = self.turn
         t.events += 1
         kind = kind_of(ev)
+        if kind is not None and kind not in self.c.allowed:     # a kind this version's constants do not know
+            kind = None
         out: list[tuple[str, dict]] = []
         if kind is None:
             label = f"{ev.get('type')}/{ev.get('subtype')}" if ev.get("type") == "system" else str(ev.get("type"))
@@ -369,6 +380,18 @@ class EventTracker:
             raise ProtocolError("attribution", "thinking_tokens")
         if self.phase not in ("sent:replay", "running"):
             raise ProtocolError("out_of_order", f"thinking_tokens in {self.phase}")
+        return []
+
+    def _on_system_vcs_state_changed(self, ev, t):
+        """Claude Code 2.1.296: the repository state of the work directory changed (after a tool call). Not a model
+        response, not an anomaly, and no journal fact (the kinds of design 2.5 are closed): the shape and the place
+        in the turn are checked, and nothing is read from it."""
+        if self.phase != "running":
+            raise ProtocolError("out_of_order", f"vcs_state_changed in {self.phase}")
+        for name in ("kind", "branch", "cwd"):
+            self._need(isinstance(ev.get(name), str) and len(ev[name]) <= MAX_VCS_FIELD, name)
+        if ev["cwd"] != self.workdir:
+            raise ProtocolError("attribution", "vcs_state_changed cwd")
         return []
 
     def _on_user_replay(self, ev, t):
