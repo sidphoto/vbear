@@ -760,6 +760,27 @@ class FlowContextTests(StateDir):
                 self.assertAlmostEqual(ctx.totals.recorded_usd + ctx.totals.unsettled_usd, ctx.totals.spent_usd)
                 self.assertEqual([x["unfinished"] for x in ctx.totals.sessions if x["unfinished"]], [[d]])
 
+    def test_the_cost_split_adds_up_to_the_cent_whatever_the_float_digits(self):
+        # review of G4: summed apart, USD 19.99 + 2.01 recorded and 20.29 + 2.01 counted came out as 22.3 and
+        # 22.299999999999997. The unsettled part is taken once from spent - recorded; spent_usd is the sum it was.
+        from types import SimpleNamespace as NS
+
+        def js(cost, counted):
+            return NS(counted_responses=1, counted_cost=counted, cost=cost, state="idle", failures=[], order=[],
+                      dispatch_count=lambda: 1, unfinished=lambda: [])
+        states = {"s1": js(19.99, 20.29), "s2": js(2.01, 2.01)}
+        with mock.patch.object(stream_flow, "flow_sessions",
+                               return_value=[{"launch_id": k, "state": "ended"} for k in states]), \
+                mock.patch.object(stream_flow, "_journal_state",
+                                  side_effect=lambda base, lid: NS(problem=None, state=states[lid])), \
+                mock.patch.object(stream_flow, "flow_reviews", return_value=[]):
+            t = stream_flow.totals(self.base, self.fid, self.tid, (1.0, {}, None))
+        self.assertEqual(t.spent_usd, 20.29 + 2.01)                      # what the limit reads: unchanged
+        self.assertEqual(round(t.recorded_usd, 2), 22.00)
+        self.assertEqual(round(t.unsettled_usd, 2), 0.30)
+        self.assertEqual(round(t.recorded_usd + t.unsettled_usd, 2), round(t.spent_usd, 2))
+        self.assertGreaterEqual(t.unsettled_usd, 0.0)
+
     def test_start_record_recovery(self):
         # v29.7 / review B3: a start record whose launch never ran is removed
         # exactly; anything else is kept.

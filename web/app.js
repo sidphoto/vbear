@@ -1997,7 +1997,8 @@ function flowTeamSection(f, liveText) {
   const card = (kind, role, rows) => el("li", { class: "team-card" },
     el("h4", null, kind),
     el("dl", { class: "rc-dl" },
-      el("dt", null, "名稱（工具）"), el("dd", null, role && role.name ? String(role.name) : "未提供"),
+      el("dt", null, "名稱"), el("dd", null, role && role.name ? String(role.name) : "未提供"),
+      el("dt", null, "工具"), el("dd", null, "未提供（流程記錄沒有這個欄位）"),
       el("dt", null, "家族（模型出自哪一家）"), el("dd", null, role && role.family_label ? role.family_label : "未提供"),
       el("dt", null, "模型"), el("dd", null, role && role.model ? String(role.model) : "未提供"),
       rows));
@@ -2351,27 +2352,30 @@ function s2Confirm(label, question, action, cls) {
 
 // A meter: the words (always), and a bar when both numbers are known. A number that could not be had is not
 // drawn as an empty bar (that would read as 0): it says it cannot be counted.
-function s2Meter(label, used, limit, unit, why) {
+function s2Meter(label, used, limit, unit, why, fmt) {
   const known = typeof used === "number" && typeof limit === "number" && Number.isFinite(used) && Number.isFinite(limit) && limit > 0;
   const over = known && used >= limit;
-  return el("li", { class: "s2-meter" }, `${label}：`, el("b", { class: over ? "s2-over" : "" }, `${used ?? "?"}${unit || ""}`),
-    ` ／ 上限 ${limit ?? "?"}${unit || ""}`,
+  const show = (v) => (v === null || v === undefined ? "?" : fmt && typeof v === "number" && Number.isFinite(v) ? fmt(v) : String(v));
+  return el("li", { class: "s2-meter" }, `${label}：`, el("b", { class: over ? "s2-over" : "" }, `${show(used)}${unit || ""}`),
+    ` ／ 上限 ${show(limit)}${unit || ""}`,
     known ? el("progress", { class: "s2-bar", max: String(limit), value: String(Math.min(used, limit)),
-      "aria-label": `${label}：已用 ${used}${unit || ""}，上限 ${limit}${unit || ""}` })
+      "aria-label": `${label}：已用 ${show(used)}${unit || ""}，上限 ${show(limit)}${unit || ""}` })
       : el("span", { class: "small muted" }, ` 無法核算${why ? "：" + why : "（用量或上限不明）"}`));
 }
 
 // The executor's cost: the figure the limit reads, split into what the CLI recorded and what is counted on
 // top of it for turns that have no result, and the plain statement that the real cost is not known.
 function s2CostMeter(acct) {
-  const li = s2Meter("執行者費用", acct.spent_usd, acct.limits.executor_budget_usd, " USD");
-  const usd = (v) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : null);
-  const rec = usd(acct.recorded_usd), uns = usd(acct.unsettled_usd);
+  // Every dollar figure is shown to the cent: the parts are floats that add up to the figure only at that scale.
+  const cents = (v) => v.toFixed(2);
+  const li = s2Meter("執行者費用", acct.spent_usd, acct.limits.executor_budget_usd, " USD", undefined, cents);
+  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const rec = num(acct.recorded_usd), uns = num(acct.unsettled_usd);
   li.append(
     el("div", { class: "small s2-cost-split" },
-      rec === null ? "已記錄的花費：無法核算" : `已記錄的花費 USD ${rec}（CLI 回報）`,
+      rec === null ? "已記錄的花費：無法核算" : `已記錄的花費 USD ${cents(rec)}（CLI 回報）`,
       uns === null ? "；未結算：無法核算"
-        : (Number(uns) > 0 ? `；未結算 USD ${uns}（未完成的回合按額度上限計入用量）` : "；沒有未結算的回合")),
+        : (Math.round(uns * 100) > 0 ? `；未結算 USD ${cents(uns)}（未完成的回合按額度上限計入用量）` : "；沒有未結算的回合")),
     el("div", { class: "small muted" }, "實際費用尚未知；這裡的數字是用量，不是帳單。"));
   return li;
 }
@@ -2717,9 +2721,14 @@ function s2ExecutorPanel(flowId, ex, refresh) {
       s2Meter("審查", acct.reviews, acct.limits.max_reviews, " 次"),
       el("li", { class: "s2-meter" }, `經過時間：${acct.elapsed_s == null ? "尚未開始" : (acct.elapsed_s / 3600).toFixed(2) + " 小時"}` +
         ` ／ 上限 ${acct.limits.max_elapsed_h} 小時`,
-        acct.elapsed_s == null ? null : el("progress", { class: "s2-bar", max: String(acct.limits.max_elapsed_h),
-          value: String(Math.min(acct.elapsed_s / 3600, acct.limits.max_elapsed_h)),
-          "aria-label": `經過時間：${(acct.elapsed_s / 3600).toFixed(2)} 小時，上限 ${acct.limits.max_elapsed_h} 小時` })))
+        acct.elapsed_s == null ? null
+          : (typeof acct.elapsed_s === "number" && Number.isFinite(acct.elapsed_s) && acct.elapsed_s >= 0
+             && typeof acct.limits.max_elapsed_h === "number" && Number.isFinite(acct.limits.max_elapsed_h)
+             && acct.limits.max_elapsed_h > 0)
+            ? el("progress", { class: "s2-bar", max: String(acct.limits.max_elapsed_h),
+              value: String(Math.min(acct.elapsed_s / 3600, acct.limits.max_elapsed_h)),
+              "aria-label": `經過時間：${(acct.elapsed_s / 3600).toFixed(2)} 小時，上限 ${acct.limits.max_elapsed_h} 小時` })
+            : el("span", { class: "small muted" }, " 無法核算（用量或上限不明）")))
       : (acct ? notice("bad", `用量無法核算（${acct.code}）：${acct.message}`) : null),
     (ex.failures || []).length ? el("div", null, el("h3", null, "失敗"),
       el("ul", { class: "small" }, ex.failures.map((f) => el("li", null,

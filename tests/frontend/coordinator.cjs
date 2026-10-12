@@ -1198,6 +1198,9 @@ test("the team: the planner is only a record, each member has name, family and m
   assert(t.includes("OpenAI（Codex）") && t.includes("gpt-6-luna"));
   // a field that was not given reads 未提供 (the other reviewer has no model)
   assert(t.includes("未提供"));
+  // the name is a free-typed name, not a tool; the record has no tool field and the card says so
+  assert(!t.includes("名稱（工具）"));
+  assert(t.includes("名稱") && t.includes("工具未提供（流程記錄沒有這個欄位）"), t);
   // text only: the hostile name is shown as text and builds no element
   assert(t.includes("<img src=x onerror=alert(1)>"));
   assert.strictEqual(team.findAll((n) => n.tag === "img").length, 0);
@@ -1220,8 +1223,17 @@ test("the limits are bars with the words; what cannot be counted is not drawn as
   assert.strictEqual(cost.getAttribute("value"), "7.62");
   const words = text(panel);
   assert(words.includes("已記錄的花費 USD 0.12（CLI 回報）"), words);
-  assert(words.includes("未結算 USD 7.5（未完成的回合按額度上限計入用量）"));
+  assert(words.includes("未結算 USD 7.50（未完成的回合按額度上限計入用量）"));
   assert(words.includes("實際費用尚未知"));
+  // the figures are shown to the cent whatever the float digits are (22.3 as 22.299999999999997)
+  const fl = await mount({ executor: executor({ accounting: { ...executor().accounting, spent_usd: 22.299999999999997,
+    recorded_usd: 22, unsettled_usd: 0.2999999999999972 } }) });
+  const flWords = text(byS2(fl.node, "executor"));
+  assert(flWords.includes("22.30 USD") && flWords.includes("已記錄的花費 USD 22.00") && flWords.includes("未結算 USD 0.30"), flWords);
+  assert(!flWords.includes("22.2999") && !flWords.includes("0.2999"), "no float digits past the cent: " + flWords);
+  // a difference that is only float dust is not an unsettled turn
+  const dust = await mount({ executor: executor({ accounting: { ...executor().accounting, recorded_usd: 0.3, unsettled_usd: 5e-17 } }) });
+  assert(text(byS2(dust.node, "executor")).includes("沒有未結算的回合"));
   // nothing unsettled
   const ok = await mount({ executor: executor({ accounting: { ...executor().accounting, recorded_usd: 0.12, unsettled_usd: 0 } }) });
   assert(text(byS2(ok.node, "executor")).includes("沒有未結算的回合"));
@@ -1235,6 +1247,12 @@ test("the limits are bars with the words; what cannot be counted is not drawn as
   assert(noneWords.includes("無法核算"));
   const noneBars = byS2(none.node, "executor").findAll((n) => n.tag === "progress");
   assert(!noneBars.some((b) => (b.getAttribute("aria-label") || "").startsWith("執行者模型回應")), "no bar for an unknown value");
+  // a time limit that is not a positive number: no bar, 無法核算 (like every other meter)
+  const zero = await mount({ executor: executor({ accounting: { ...executor().accounting,
+    limits: { ...executor().accounting.limits, max_elapsed_h: 0 } } }) });
+  const zeroPanel = byS2(zero.node, "executor");
+  assert(!zeroPanel.findAll((n) => n.tag === "progress").some((b) => (b.getAttribute("aria-label") || "").startsWith("經過時間")));
+  assert(text(zeroPanel).includes("經過時間") && text(zeroPanel).includes("無法核算"));
   // the time has not started: no bar, 尚未開始
   const fresh = await mount({ executor: executor({ accounting: { ...executor().accounting, elapsed_s: null } }) });
   const freshPanel = byS2(fresh.node, "executor");

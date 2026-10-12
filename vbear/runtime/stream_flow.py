@@ -47,7 +47,9 @@ class Totals:
     spent_usd: float = 0.0
     # spent_usd split for the screen (design game-ui 4.5, v1.1 #7): what the CLI recorded, and what is counted
     # on top of it because a turn has no result (its session's whole budget). spent_usd is still what the limit
-    # reads; these two add up to it.
+    # reads. unsettled_usd is spent_usd - recorded_usd, taken once at the end (summing the two parts
+    # separately drifts in the last float digits); the screen rounds both to the cent, where they add up to
+    # spent_usd.
     recorded_usd: float = 0.0
     unsettled_usd: float = 0.0
     sessions: list = field(default_factory=list)
@@ -208,7 +210,6 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
         t.responses += js.counted_responses
         t.spent_usd += js.counted_cost    # total_cost_usd is per process: the session's last value
         t.recorded_usd += js.cost
-        t.unsettled_usd += max(0.0, js.counted_cost - js.cost)
         t.sessions.append({"launch_id": m["launch_id"], "state": js.state, "manifest_state": m.get("state"),
                            "dispatches": js.dispatch_count(),
                            "unfinished": js.unfinished(), **_failure(m, js)})
@@ -224,6 +225,7 @@ def totals(base, pipeline_id: str, task_id: str, view) -> Totals:
                 raise FlowRefused("count_unavailable", f"派工 {d} 的全文與接受時的紀錄不同")
     if not math.isfinite(t.spent_usd):
         raise FlowRefused("count_unavailable", "執行者花費的累計值不是有限數")
+    t.unsettled_usd = max(0.0, t.spent_usd - t.recorded_usd)    # display only; shown to the cent
     t.pending_or_orphan_texts = sorted(set(texts) - t.accepted)
     for rm in flow_reviews(base, pipeline_id, task_id):
         t.reviews.append({"job_id": rm["job_id"], "round": rm["round"], "commit": rm["commit"],
