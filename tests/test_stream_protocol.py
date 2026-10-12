@@ -572,6 +572,14 @@ class VcsStateChangedTests(unittest.TestCase):
         self.assertFalse(h.validity(d)[0])
         self.assertIn("unknown_type", [a["reason"] for a in h.js.turns[d].anomalies])
 
+    def test_the_work_directory_and_anything_below_it_are_accepted(self):
+        for cwd in (CWD, CWD + "/", CWD + "/sub", CWD + "/sub/deeper", CWD + "/./sub", CWD + "/sub/../other"):
+            with self.subTest(cwd=cwd):
+                h = self.harness()
+                d, events = self.turn_with(h, self.vcs(h, cwd=cwd))
+                h.feed(events)
+                self.assertTrue(h.validity(d)[0], h.validity(d))
+
     def test_an_extra_field_is_an_anomaly(self):
         h = self.harness()
         d, events = self.turn_with(h, self.vcs(h, surprise=1))
@@ -584,6 +592,11 @@ class VcsStateChangedTests(unittest.TestCase):
                                      ("branch not a string", {"branch": 5}, "missing_field"),
                                      ("too long", {"cwd": "/" + "x" * 600}, "missing_field"),
                                      ("another directory", {"cwd": "/private/tmp/elsewhere"}, "attribution"),
+                                     ("a similar prefix", {"cwd": CWD + "2"}, "attribution"),
+                                     ("the parent", {"cwd": os.path.dirname(CWD)}, "attribution"),
+                                     ("a sibling", {"cwd": os.path.dirname(CWD) + "/other"}, "attribution"),
+                                     ("out by ..", {"cwd": CWD + "/../elsewhere"}, "attribution"),
+                                     ("not absolute", {"cwd": "vbear-task"}, "attribution"),
                                      ("another session", {"session_id": fx.new_uuid()}, "session_mismatch")):
             with self.subTest(case=name):
                 h = self.harness()

@@ -91,6 +91,20 @@ class StreamCheckTests(unittest.TestCase):
         self.assertFalse(stream_check.present(root) or stream_check.present(scratch))
         self.assertEqual(report["checks"]["cleanup"], {"pass": True, "left": [], "errors": []})
 
+    def test_the_commit_turn_needs_the_event_when_the_constants_know_it(self):
+        ok = dict(turn_valid=True, problems=[], vcs_required=True, vcs_seen=True)
+        self.assertTrue(stream_check.commit_turn_check(**ok)["pass"])
+        missed = stream_check.commit_turn_check(**{**ok, "vcs_seen": False})
+        self.assertFalse(missed["pass"])
+        self.assertTrue(any("system/vcs_state_changed" in w for w in missed["why"]))
+        # a version whose constants do not list it keeps the plain condition
+        self.assertTrue(stream_check.commit_turn_check(**{**ok, "vcs_required": False, "vcs_seen": False})["pass"])
+        self.assertFalse(stream_check.commit_turn_check(**{**ok, "turn_valid": False})["pass"])
+        self.assertFalse(stream_check.commit_turn_check(**{**ok, "problems": ["head"]})["pass"])
+        from vbear.runtime import stream_protocol as sp
+        self.assertIn("system/vcs_state_changed", sp.VERSIONS["2.1.296"].allowed)
+        self.assertNotIn("system/vcs_state_changed", sp.VERSIONS["2.1.292"].allowed)
+
     def test_a_failed_cleanup_fails_the_run(self):
         # Part 2 review B5: never ignore_errors; what is left fails the run.
         out = self.tmp / "report.json"

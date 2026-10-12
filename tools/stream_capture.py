@@ -29,6 +29,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 TURN_TIMEOUT = 240.0
+SANDBOX = Path(__file__).resolve().parent.parent / "_sandbox"
+
+
+def check_out(path: str, sandbox: Path = SANDBOX) -> Path:
+    """The raw lines hold the model's words: they go only under the worktree's ``_sandbox`` (which is not in the
+    repository), into a file that does not exist yet. Refused before any model call: a path outside it, anything
+    already there (a link included), or a directory whose real path is not below it."""
+    root = Path(os.path.realpath(sandbox))
+    p = Path(os.path.abspath(path))
+    if os.path.lexists(p):
+        raise SystemExit(f"--out: {p} already exists (nothing is overwritten)")
+    parent = Path(os.path.realpath(p.parent))
+    if not (parent == root or root in parent.parents):
+        raise SystemExit(f"--out must be under {root} (the real path of its directory is {parent})")
+    return parent / p.name
+
+
+def open_out(path: Path) -> int:
+    """A new file, owner-only, never a link and never an existing file."""
+    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
 
 
 def _git(cwd, *a):
@@ -54,6 +74,7 @@ def main() -> int:
     ap.add_argument("--model", default="claude-haiku-4-5-20251001")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    out = check_out(args.out)                    # before anything is launched or any model is called
     from vbear import strictjson
     from vbear.runtime import agent_sessions, daemon, stream_session
     from vbear.runtime import stream_protocol as sp
@@ -105,9 +126,7 @@ def main() -> int:
         leader = stream_session.capture_leader(proc.pid)
         proc.stdin.write(sp.dispatch_line(text, sid, dispatch))
         proc.stdin.flush()
-        out = Path(args.out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = open_out(out)
         buf, deadline, got_result = b"", time.monotonic() + TURN_TIMEOUT, False
         with os.fdopen(fd, "wb") as raw:
             while not got_result and time.monotonic() < deadline:

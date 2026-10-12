@@ -81,14 +81,15 @@ observed, which is listed below.
    with this subtype between the tool's call and its result (observed once per commit; `kind` was the commit, the
    branch and the work directory followed). Its fields, from a raw capture (`tools/stream_capture.py`; the raw
    lines stay in the throwaway sandbox, only names and types are recorded here): `type` (string), `subtype`
-   (string), `kind` (string), `branch` (string), `cwd` (string, equal to the session's work directory), `uuid`
+   (string), `kind` (string), `branch` (string), `cwd` (string, the session's work directory; accepted when it is that directory or below it), `uuid`
    (string, a UUID), `session_id` (string, the session). The tracker did not know the subtype, took it for an
    unknown type, and the turn was invalid. It is now a known kind **for 2.1.296 only**: shape and place are
-   checked (the turn is running; the three strings are bounded; `cwd` is the work directory), it is neither a model
+   checked (the turn is running; the three strings are bounded; `cwd` is the work directory or a directory below it, compared by whole path components), it is neither a model
    response nor an anomaly, and it adds no journal fact. 2.1.292 and every other `system` subtype stay unknown
    types. The probe now has a third turn that edits a file and commits it in a git work directory, checks that its
-   report's `head` is the repository's HEAD and the commit exists (`executor_report.verify`), and records whether
-   the event was seen. The CLI sent the event for `git add … && git commit -m "…"` as a Bash call of its own, and
+   report's `head` is the repository's HEAD and the commit exists (`executor_report.verify`), and, for a version
+   whose constants list the event, fails unless the event was seen (a probe that never saw it proved nothing about
+   it). The CLI sent the event for `git add … && git commit -m "…"` as a Bash call of its own, and
    not for `sh -c '…'` or `git commit -q -m …`, so the turn is written the first way.
 4. **The executor cannot know the dispatch id** (also found by that run, and not a Claude Code change): the report's
    schema requires `dispatch_id` to be the turn's UUID, which lived only in the transport `uuid` field of the stdin

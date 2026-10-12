@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field, replace
@@ -109,7 +110,7 @@ VERSIONS = {
 # And a new event kind (S3 real end-to-end, run 1, 2026-10-12; raw capture by tools/stream_capture.py): a ``system``
 # event with subtype ``vcs_state_changed`` comes between a tool's call and its result when the tool changed the
 # work directory's repository state (seen after a ``git commit``). Fields: type, subtype, kind, branch, cwd (all
-# strings), uuid, session_id. 2.1.292 has no such entry, so there it stays an unknown type and invalidates the turn.
+# strings; cwd is the work directory or below it), uuid, session_id. 2.1.292 has no such entry, so there it stays an unknown type and invalidates the turn.
 VERSIONS["2.1.296"] = replace(
     VERSIONS["2.1.292"], version="2.1.296",
     allowed={**VERSIONS["2.1.292"].allowed,
@@ -244,6 +245,16 @@ def _validate_utf8_tree(value) -> None:
     elif isinstance(value, list):
         for item in value:
             _validate_utf8_tree(item)
+
+
+def _within(path: str, root: str) -> bool:
+    """``path`` is ``root`` or below it, by whole path components, both made absolute and normal first (no file
+    system is read: a link is not followed, a ``..`` is resolved textually, so ``/work/../etc`` is ``/etc``).
+    ``/work2`` is not below ``/work``."""
+    if not (isinstance(path, str) and isinstance(root, str) and os.path.isabs(path) and os.path.isabs(root)):
+        return False
+    path, root = os.path.normpath(path), os.path.normpath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
 class EventTracker:
@@ -390,7 +401,7 @@ class EventTracker:
             raise ProtocolError("out_of_order", f"vcs_state_changed in {self.phase}")
         for name in ("kind", "branch", "cwd"):
             self._need(isinstance(ev.get(name), str) and len(ev[name]) <= MAX_VCS_FIELD, name)
-        if ev["cwd"] != self.workdir:
+        if not _within(ev["cwd"], self.workdir):
             raise ProtocolError("attribution", "vcs_state_changed cwd")
         return []
 

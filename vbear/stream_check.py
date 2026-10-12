@@ -25,7 +25,9 @@ Checks:
   claude_json    ~/.claude.json has usable oauthAccount ids (true/false only)
   commit_turn    a third turn runs git add/commit in the work directory (a git
                  repository); it is valid and its report's head is the
-                 repository's HEAD, by executor_report.verify
+                 repository's HEAD, by executor_report.verify; when the
+                 version's constants list system/vcs_state_changed, the turn
+                 must also have produced it
 
 A temporary VBEAR_HOME holds the HMAC key and the journal; it is deleted at
 the end. Nothing here prints a value from ~/.claude.json, a fingerprint or
@@ -113,6 +115,21 @@ def _commit_prompt(d: str) -> str:
             "3) git rev-parse HEAD\n"
             "When they have finished, call the StructuredOutput tool with exactly this JSON, replacing the head "
             f"value with the commit hash the last command printed: {rep}")
+
+
+def commit_turn_check(*, turn_valid: bool, problems: list, vcs_required: bool, vcs_seen: bool) -> dict:
+    """The commit turn's verdict. A version whose constants list the repository-state event (2.1.296:
+    system/vcs_state_changed) must be seen sending it for a commit: a probe that never saw the event proved
+    nothing about it (S3 real end-to-end review, 2026-10-12). A version without it keeps the plain condition."""
+    why = []
+    if not turn_valid:
+        why.append("the commit turn is not valid")
+    if problems:
+        why.append("the report does not match the repository")
+    if vcs_required and not vcs_seen:
+        why.append("the constants know system/vcs_state_changed but the commit turn never produced it")
+    return {"pass": not why, "problems": list(problems)[:5], "vcs_event_required": vcs_required,
+            "vcs_event_seen": vcs_seen, "why": why}
 
 
 def _init_repo(work: Path) -> None:
@@ -457,10 +474,10 @@ def _run(binary: str, version: str, model: str, consts, root: Path, report: dict
         t3 = res.state.turns.get(d3)
         so = t3.result.get("structured_output") if t3 and t3.result else None
         problems = executor_report.verify(so, str(work)) if isinstance(so, dict) else ["no report"]
-        report["checks"]["commit_turn"] = {"pass": bool(turns[2]["valid"]) and problems == [],
-                                           "problems": problems[:5],
-                                           # informational: the event a repository change makes in 2.1.296
-                                           "vcs_event_seen": "system/vcs_state_changed" in variants}
+        report["checks"]["commit_turn"] = commit_turn_check(
+            turn_valid=bool(turns[2]["valid"]), problems=problems,
+            vcs_required="system/vcs_state_changed" in consts.allowed,
+            vcs_seen="system/vcs_state_changed" in variants)
         report["observed_keys"] = {k: sorted(v) for k, v in sorted(keysets.items())}
         report["observed_key_sets"] = {k: [list(x) for x in sorted(v)] for k, v in sorted(variants.items())}
         report["unexpected_keys"] = {k: sorted(v - consts.allowed.get(k, set())) for k, v in keysets.items()
