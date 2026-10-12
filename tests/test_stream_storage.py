@@ -1291,7 +1291,7 @@ class StreamVerificationRecordTests(StateDir):
                     (self.base / "report.json").unlink()
                 self.record(report, **over)
                 self.assertNotIn("9.9.9", cli_versions.stream_verified_versions())
-        self.assertEqual(cli_versions.STREAM_VERIFIED_VERSIONS, ("2.1.292",))
+        self.assertEqual(cli_versions.STREAM_VERIFIED_VERSIONS, ("2.1.292", "2.1.296"))
 
 
 class StreamLaunchTests(StateDir):

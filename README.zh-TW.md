@@ -51,7 +51,7 @@ VBear runtime 啟動與管理 Agent 終端（Profile 管理的 Claude 啟動含�
 - **受管執行者與審查（第 2 階段）**：在流程裡可以啟動由 VBear 在背景執行的 Claude Code 執行者（沒有終端），並請 Codex
   在獨立的沙盒 clone 裡審查它最新的 commit。每個流程要先接受三項殘餘風險；每則派工都先預覽實際送出的文字、再由你核准；
   執行者自己的回報與 VBear 讀檔核對的結果分開顯示；審查者的報告一律以純文字顯示；合併與 push 的指令只顯示、由你自己執行，
-  VBear 不會替你執行 git。需要 Claude Code 2.1.292 與 Codex 0.160.0（已驗證的版本），會消耗你自己帳號的用量。資料會保存到
+  VBear 不會替你執行 git。需要 Claude Code 2.1.292 或 2.1.296 與 Codex 0.160.0（已驗證的版本），會消耗你自己帳號的用量。資料會保存到
   你刪除流程為止。使用前請先讀[安全模型](docs/SECURITY-MODEL.md#phase-2-coordination)。
 
 ## 安裝與使用

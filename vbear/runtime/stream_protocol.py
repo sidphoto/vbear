@@ -101,9 +101,9 @@ VERSIONS = {
     ),
 }
 
-# 2.1.296: the 2.1.292 entry plus what the stream probe observed (docs/evidence/claude-code-2.1.296-stream.md).
-# PROVISIONAL until that file records a passing run. One difference so far: assistant events carry
-# ``thinking_display`` (a new top-level field; not read).
+# 2.1.296: the 2.1.292 entry plus what the stream probe observed (docs/evidence/claude-code-2.1.296-stream.md, a
+# passing run 2026-10-12). One difference: assistant events carry ``thinking_display`` (a new top-level field; not
+# read).
 VERSIONS["2.1.296"] = replace(
     VERSIONS["2.1.292"], version="2.1.296",
     allowed={**VERSIONS["2.1.292"].allowed,

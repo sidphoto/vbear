@@ -28,7 +28,7 @@ from . import daemon
 # tools/verify_claude_boundary.py run and docs/evidence/<engine>-<version>.md.
 VERIFIED_VERSIONS = MappingProxyType({
     "codex": ("0.159.2",),
-    "claude": ("2.1.286", "2.1.291", "2.1.292"),
+    "claude": ("2.1.286", "2.1.291", "2.1.292", "2.1.296"),
 })
 # The newest verified version per engine (where one fixed install is needed).
 EXPECTED_VERSIONS = MappingProxyType({k: v[-1] for k, v in VERIFIED_VERSIONS.items()})
@@ -116,7 +116,9 @@ def verified_versions(engine: str) -> tuple[str, ...]:
 # is neither cannot start a stream session; there is no "start unverified".
 # 2.1.292: boundary_check --mode stream passed 2026-10-08
 # (docs/evidence/claude-code-2.1.292-stream.md).
-STREAM_VERIFIED_VERSIONS: tuple[str, ...] = ("2.1.292",)
+# 2.1.296: the same, 2026-10-12 (docs/evidence/claude-code-2.1.296-stream.md), after Claude Code's own update left
+# the machine without any stream-verified version.
+STREAM_VERIFIED_VERSIONS: tuple[str, ...] = ("2.1.292", "2.1.296")
 LOCAL_STREAM_VERIFIED_FILE = "claude-stream-verified.json"
 _STREAM_REPORT_MAX = 8 << 20
 

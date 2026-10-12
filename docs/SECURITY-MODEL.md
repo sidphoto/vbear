@@ -108,8 +108,8 @@ These are the claims the launch preview makes, and their status:
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | Evidence for [2.1.292](evidence/claude-code-2.1.292.md#writes), [2.1.291](evidence/claude-code-2.1.291.md#writes) and [2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
-| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | Evidence for [2.1.292](evidence/claude-code-2.1.292.md#network), [2.1.291](evidence/claude-code-2.1.291.md#network) and [2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
+| Bash cannot write outside the work directory and the session's scratch directory | Enforced by Claude Code's OS sandbox (Seatbelt) | Evidence for [2.1.296](evidence/claude-code-2.1.296.md#writes), [2.1.292](evidence/claude-code-2.1.292.md#writes), [2.1.291](evidence/claude-code-2.1.291.md#writes) and [2.1.286](evidence/claude-code-2.1.286.md#writes); the shared `/tmp/claude-<uid>` is explicitly denied |
+| No network from Bash | Enforced: `allowedDomains: []`, `strictAllowlist: true` | Evidence for [2.1.296](evidence/claude-code-2.1.296.md#network), [2.1.292](evidence/claude-code-2.1.292.md#network), [2.1.291](evidence/claude-code-2.1.291.md#network) and [2.1.286](evidence/claude-code-2.1.286.md#network): external connection refused with `EPERM` |
 | Bash cannot reach VBear itself | Enforced by the same sandbox | `127.0.0.1` listener and unix socket both refused with `EPERM`, headless and interactive, on [2.1.291](evidence/claude-code-2.1.291.md#network); headless-only spot check on 2.1.291 for the 2.1.286 page; **not re-run on 2.1.286 itself** |
 | Edit and Write tools are unavailable | `--tools Bash --disallowedTools Edit,Write`; those tools would not be covered by the Bash sandbox | Launch argv is built server-side from trusted values only |
 | No MCP servers or project hooks from the work directory | `--safe-mode --strict-mcp-config` | |
@@ -283,7 +283,7 @@ promises protection against components outside the trust boundary.
 | Unsafe signaling or cleanup | **Prevention:** validate process and directory identity; keep a live-owned leader unreaped until group signaling is complete; signal only its process group. **Detection:** escaped descendants or uncertain recovery become `manual_review`, retaining data and blocking new reviews and deletion. | After daemon restart, uncertain/live processes are left for manual handling rather than signaled. Tracking cannot prove that every possible descendant was observed. |
 | Review text hiding content or injecting browser markup | **Detection:** report format/control-line allow-list, rejection of HTML outside code fences and malformed fences. **Prevention:** `last.md` and all reviewer output are shown as plain text, with no HTML or Markdown rendering. | Format checks do not establish whether prose is truthful, safe or free of prompt injection. HTML source inside a code fence is allowed as literal text. |
 
-The stream boundary evidence is for [Claude Code 2.1.292](evidence/claude-code-2.1.292-stream.md). The review
+The stream boundary evidence is for [Claude Code 2.1.292](evidence/claude-code-2.1.292-stream.md) and [2.1.296](evidence/claude-code-2.1.296-stream.md). The review
 evidence is for [Codex 0.160.0](evidence/codex-0.160.0-review.md). These are bounded probes, not proof for every
 repository, tool or later CLI version. Probes confirm predefined constants; they do not automatically expand the
 tool allow-list.

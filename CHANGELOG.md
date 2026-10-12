@@ -26,7 +26,7 @@
   - *Executor and dispatch.* Start, stop and continue the executor; each dispatch is previewed as the exact
     sanitized text and approved separately. Strict event attribution, order and tool/result checks decide valid
     turns; failures hold the flow, and a turn with no result is charged at its worst case (an estimate, not a
-    bill). Boundary evidence: [Claude Code 2.1.292](docs/evidence/claude-code-2.1.292-stream.md).
+    bill). Boundary evidence: [Claude Code 2.1.292](docs/evidence/claude-code-2.1.292-stream.md) and [2.1.296](docs/evidence/claude-code-2.1.296-stream.md).
   - *Reports.* The executor's own statement is shown apart from VBear's file checks (HEAD and commit object, read
     without running `git`); a check that fails or cannot be read is not shown as a pass.
   - *Codex review.* Runs in a separate sandboxed clone with a dedicated `CODEX_HOME` and temporary `HOME`; the

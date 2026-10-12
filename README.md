@@ -52,7 +52,7 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
   the background (no terminal) and ask Codex to review its latest commit in a separate sandboxed clone. You accept
   three residual risks per flow, approve each dispatch as the exact text that will be sent, see the executor's own
   report apart from VBear's file checks, read the reviewer's report as plain text, and get the merge and push
-  commands to run yourself: VBear never runs `git` for you. Needs Claude Code 2.1.292 and Codex 0.160.0 (the
+  commands to run yourself: VBear never runs `git` for you. Needs Claude Code 2.1.292 or 2.1.296 and Codex 0.160.0 (the
   verified versions) and costs usage on your own accounts. Data stays until you delete the flow. See the
   [security model](docs/SECURITY-MODEL.md#phase-2-coordination) before using it.
 - **Automatic mode (Phase 3).** After you approve a plan, VBear can run the loop itself: dispatch the plan, check
@@ -67,7 +67,7 @@ launch is allowed to do *before* it starts, and it shows your scattered agent sk
 
 | Agent | Watch and type in terminals | Profile launch with preview and sandbox |
 |---|---|---|
-| Claude Code | yes | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
+| Claude Code | yes | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, 2.1.296, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
 | Codex CLI | yes | **not yet.** The preview explains why: 0.159.2's interactive mode still loads your global config |
 
 Skill and role scanning reads Claude Code (`~/.claude`), Codex (`~/.codex`) and shared skills
