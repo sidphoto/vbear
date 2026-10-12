@@ -5331,10 +5331,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     let lastPreview = null;   // the latest answer, launchable or not, for saying why the button is off
 
     // The dialog speaks for the tool of the profile: only a Claude Code launch has a version to verify and a
-    // terminal title to check; a Codex preview shows what it returned (its reasons and its evidence).
+    // terminal title to check; a Codex preview shows what it returned (its reasons and its evidence); any
+    // other tool (shared) has no launch, so it shows only what the preview returned, in no tool's words.
     const tool = p.model && p.model.tool;
-    const isClaude = tool !== "codex";
-    const cliName = tool === "codex" ? "Codex CLI" : "Claude Code";
+    const isClaude = tool === "claude";
+    const isCodex = tool === "codex";
+    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : "";
     function needsAck(pv) { return Boolean(isClaude && pv && pv.cli && pv.cli.verified === false); }
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
@@ -5395,14 +5397,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
             el("ul", { class: "small" }, (pv.reasons || []).map((r) => el("li", null, r.message))))));
       } else {
         kids.push(el("dl", { class: "kv small" },
-          el("dt", null, "CLI"), el("dd", { class: "mono" }, `${cliName} ${pv.cli.version} · ${pv.cli.binary}`),
+          el("dt", null, "CLI"), el("dd", { class: "mono" }, `${cliName ? cliName + " " : ""}${pv.cli.version} · ${pv.cli.binary}`),
           el("dt", null, "版本驗證"),
-          el("dd", null, !isClaude ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
+          el("dd", null, isCodex ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
+            : !isClaude ? "不適用"
             : pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
           el("dt", null, "工作目錄"), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
-        if (!isClaude) kids.push(codexEvidenceNote(pv));
+        if (isCodex) kids.push(codexEvidenceNote(pv));
+        else if (!isClaude) { /* another tool: nothing about a version or a title to say */ }
         else if (needsAck(pv)) kids.push(unverifiedBox(pv));
         else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));
       }

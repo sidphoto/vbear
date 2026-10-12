@@ -34,6 +34,7 @@ PREVIEW_ID_BYTES = 16
 MAX_PREVIEWS = 32
 BYPASS_PTY = ("使用者在進階終端可自行改變 CLI 行為；例如在 Claude Code 以 ! 開頭直接執行的 shell 指令"
               "不經沙盒（S0 驗收實測可寫入家目錄）。此標籤只約束 Agent，不是不可繞過的邊界")
+BYPASS_OTHER_PTY = ("使用者在進階終端可自行改變 CLI 行為；此標籤只約束 Agent，不是不可繞過的邊界")
 BYPASS_CODEX_PTY = ("使用者在 Codex Terminal 可輸入 ! 直接執行使用者 shell，繞過 Codex sandbox；此標籤只描述 Agent 執行層，"
                     "不代表 OS 對使用者 shell 的隔離。")
 # Public evidence per verified Claude Code version: docs/evidence/claude-code-<version>.md,
@@ -191,10 +192,11 @@ ARMOR_NAMES = ("Read", "Write", "Test", "Commit", "Deploy", "Network", "Filesyst
 # The level words that belong to each group, in a fixed order: the group header shows them next to its name.
 ARMOR_GROUP_LEVELS = {g: [lv for lv, gid in _LEVEL_GROUP.items() if gid == g] for g, _ in ARMOR_GROUPS}
 def armor_groups(tool) -> list[dict]:
-    """The five groups with the level words each can hold for this tool: a Codex group never lists the
-    Claude-only 「未驗證（此 Claude Code 版本尚未實測）」. One source for the role card and the preview."""
+    """The five groups with the level words each can hold for this tool: only Claude Code's carry the
+    Claude-only 「未驗證（此 Claude Code 版本尚未實測）」; Codex and any other tool (shared) never list it.
+    One source for the role card and the preview."""
     return [{"id": g, "label": label,
-             "levels": [lv for lv in ARMOR_GROUP_LEVELS[g] if not (tool == "codex" and lv == UNVERIFIED)]}
+             "levels": [lv for lv in ARMOR_GROUP_LEVELS[g] if not (tool != "claude" and lv == UNVERIFIED)]}
             for g, label in ARMOR_GROUPS]
 
 
@@ -319,7 +321,8 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
                 "settings_digest": digest,
                 "path_scope": path_scope if manifest else "不適用",
                 "evidence_refs": [e for e in evidence if e] if manifest else [],
-                "bypass": BYPASS_CODEX_PTY if engine == "codex" else BYPASS_PTY,
+                "bypass": (BYPASS_CODEX_PTY if engine == "codex" else BYPASS_PTY if engine == "claude"
+                           else BYPASS_OTHER_PTY),
                 "unknown_reason": unprepared or unknown_reason}
 
     tool = "codex" if engine == "codex" else "claude"

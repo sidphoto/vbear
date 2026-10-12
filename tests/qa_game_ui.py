@@ -169,9 +169,13 @@ class _Env(RunnerCase):
         self.start_executor()
         self.commit_work("first")
         self.fake_mode("needs_work")
-        self.run_until(lambda: "auto_review_result" in self.kinds(), "the first review's result")
+        # the report is recorded by hand right after the runner's own (before any review of it: the same
+        # fact, one round), and the verdict by hand right after the runner's
+        self.run_until(lambda: "auto_report" in self.kinds(), "the executor's report")
         if not self.no_manual:
             flows.append_event(self.fid, {"kind": "executor_report", "commit": self.commit, "note": "QA"})
+        self.run_until(lambda: "auto_review_result" in self.kinds(), "the first review's result")
+        if not self.no_manual:
             flows.append_event(self.fid, {"kind": "review_result", "commit": self.commit, "verdict": "NEEDS_WORK",
                                           "reviewer": 0, "note": "QA"})
 

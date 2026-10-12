@@ -630,11 +630,11 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
                 warnings.append(f"合併後又回報同一個 commit {_short(e['commit'])}，不開始新一輪")
                 continue
             origin = "auto" if e.get("_auto") else "manual"
-            if (rounds and not closed and e["commit"] == current_commit
+            if (rounds and not closed and e["commit"] == current_commit and not rounds[-1]["reviews"]
                     and origin not in _round_origins[len(rounds)]):
-                # the same fact recorded by hand and by the runner (in either order, a person often mirrors it
-                # afterwards): one round, not two. Two reports by the same source of one commit are as before
-                # a new round.
+                # the same fact recorded by hand and by the runner before any review of it: one round, not two.
+                # After a review a second report of the commit cannot be told from the executor reporting it
+                # again, so it is a new round (as when both are by hand); likewise two reports by one source.
                 _round_origins[len(rounds)].add(origin)
                 continue
             current_commit, passed_commit, closed = e["commit"], None, False

@@ -17,8 +17,9 @@
   events entered by hand, so a flow that only the runner moved stayed at 「計畫中」 even after it had been
   reviewed. It now also reads the runner's events: turning automatic mode on counts as the plan's approval, a
   sent dispatch as the start of work, a verified report as the executor's report, and a valid review result as
-  a review. The same fact recorded by hand and by the runner is one round and one review, not two; the last
-  event on the timeline wins. An automatic result counts once, only for the job and round the runner started,
+  a review. The same fact recorded by hand and by the runner is one round and one review, not two (a report of the
+  same commit after a review of it is a new round, whoever made the first); the last event on the timeline
+  wins. An automatic result counts once, only for the job and round the runner started,
   and a repeated dispatch or job is ignored with a warning on the page. This changes only what the page derives
   and shows: nothing is written, and the merge gate and the 「需要你處理」 list are read as before. A review made
   by the runner counts as independent only when the executor's model family is known and is not OpenAI, and not
@@ -29,7 +30,8 @@
 - **The pre-launch check of a Codex role speaks for Codex.** The dialog no longer shows Claude Code's version
   notice, the 「驗證這個版本」 button, the terminal-title notice or the Haiku call for a Codex role; it names
   「Codex CLI <version>」, lists the reasons it cannot be launched or the evidence of each label, and its armor
-  groups list only the levels a Codex label can have (the preview now carries `armor_groups`). The reason a role
+  groups list only the levels a Codex label can have (the preview now carries `armor_groups`). A profile of
+  another tool (shared) gets neither tool's words and no Claude-only level, only the reasons. The reason a role
   cannot be launched is shown right under the buttons of its profile page. The question that asks whether to
   remove a skill from a role names the skill (「未提供（ID：…）」 without a name) instead of 「[object Object]」.
 - **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,

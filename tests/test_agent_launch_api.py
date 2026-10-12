@@ -203,6 +203,22 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(self.launch_dirs(), [])
         self.assertEqual(self.sessions(), [])
 
+    def test_a_shared_profile_preview_carries_no_tool_words_or_claude_levels(self):
+        st, r = self.preview(self.profile(tool="shared"))
+        self.assertEqual(st, 200, r)
+        p = r["preview"]
+        self.assertFalse(p["launchable"])
+        self.assertIn("tool_not_launchable", [x["code"] for x in p["reasons"]])
+        levels = [lv for g in p["armor_groups"] for lv in g["levels"]]
+        self.assertNotIn(agent_launch.UNVERIFIED, levels)
+        text = json.dumps({"labels": p["derived_labels"], "groups": p["armor_groups"]}, ensure_ascii=False)
+        self.assertNotIn("Claude", text)
+        self.assertNotIn("Codex", text)
+        # Claude's own groups keep the level, and Codex's do not
+        self.assertIn(agent_launch.UNVERIFIED, [lv for g in agent_launch.armor_groups("claude") for lv in g["levels"]])
+        self.assertNotIn(agent_launch.UNVERIFIED, [lv for g in agent_launch.armor_groups("codex") for lv in g["levels"]])
+        self.assertNotIn(agent_launch.UNVERIFIED, [lv for g in agent_launch.armor_groups("shared") for lv in g["levels"]])
+
     def test_unverified_cli_version_launches_only_when_acknowledged(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
         st, r = self.preview()

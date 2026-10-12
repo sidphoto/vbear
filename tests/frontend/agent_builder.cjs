@@ -702,6 +702,79 @@ function findModalInBody() {
     console.log("ok Codex pre-launch dialog: its own words, the reason beside the button, no Claude wording");
   }
 
+  // A profile of another tool (shared): the dialog shows what the preview returned and no tool's words.
+  {
+    const unknown = (note) => ({ level: "未知", note, source_version: { value: "不適用" }, settings_digest: "none",
+      path_scope: "不適用", evidence_refs: [], bypass: "使用者在進階終端可自行改變 CLI 行為；此標籤只約束 Agent，不是不可繞過的邊界",
+      unknown_reason: note });
+    const names = ["Read", "Write", "Test", "Commit", "Deploy", "Network", "Filesystem"];
+    const groups = [
+      { id: "blocked", label: "擋住了", levels: ["強制（限已測路徑、版本與執行層）"] },
+      { id: "partial", label: "部分擋住", levels: ["部分強制"] },
+      { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
+      { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
+      { id: "unproven", label: "未證明", levels: ["未知"] }];
+    const note = "此 Profile 無法啟動，未產生設定";
+    const blocked = { preview_id: null, launchable: false,
+      reasons: [{ code: "tool_not_launchable", message: "shared 不是可啟動的工具" }], cli: null,
+      settings_digest: null, canonical_paths: { workdir: "/Users/u/work", scratch: null },
+      derived_labels: Object.fromEntries(names.map((n) => [n, unknown(note)])), armor_groups: groups, expires_at: null };
+    let answer = blocked;
+    const shared = { id: "p-3", name: "Common", profession_role_id: null, model: { tool: "shared", model_id: "" },
+      equipped_skill_ids: [], permission_intents: { read: "unspecified", write: "unspecified", test: "unspecified",
+        deploy: "unspecified" }, enabled: true, created_at: 1700000020, updated_at: 1700000020,
+      _unresolved: { profession: false, skills: [] } };
+    const ctx = freshContext({
+      "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
+      "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
+      "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
+      "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
+                                                          usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
+      "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
+      "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
+      "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
+      "GET /api/agent-profiles":     () => jsonResponse({ ok: true, profiles: profilesList.concat([shared]) }),
+      "GET /api/agent-builder/catalog": () => jsonResponse(catalogBody),
+      "GET /api/agent-profiles/p-3/loadout": () => jsonResponse({ ok: true,
+        profile: { id: "p-3", name: "Common", enabled: true, tool: "shared", model_id: null, profession_role_id: null,
+                   permission_intents: {}, intents_note: "n" },
+        index: { loaded: true, generated_at: 1 }, profession: { state: "none", role_id: null },
+        skills: { title: "已選技能（VBear 啟動時不載入）", items: [], note: "n" },
+        version_status: { state: "unknown", text: "未知" },
+        armor: { applicable: false, why: "shared 不是可啟動的工具，沒有防具" }, blockers: [] }),
+      "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: answer }),
+    });
+    const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null);
+    await switchToAgentTab();
+    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
+      && /Common/.test(n.textContent || "")).dispatch("click");
+    await tick();
+    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查").dispatch("click");
+    await tick();
+    const modal = findModalInBody();
+    const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
+    const workdir = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "text");
+    const commit = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
+    for (const variant of [blocked, { ...blocked, armor_groups: undefined }]) {
+      answer = variant;
+      workdir.value = "/Users/u/work";
+      workdir.dispatch("input");
+      commit.checked = true;
+      commit.dispatch("change");
+      button("產生預覽").dispatch("click");
+      await tick();
+      assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "shared 不是可啟動的工具"), "the reason is shown");
+      assert.strictEqual(button("確認啟動").disabled, true);
+      assert.ok(findText(modal, "現在不能出發：shared 不是可啟動的工具"));
+      for (const word of ["Claude", "Codex", "Haiku", "尚未實測", "驗證這個版本"]) {
+        assert.ok(!findText(modal, word), `another tool's dialog has no 「${word}」`);
+      }
+    }
+    console.log("ok another tool's pre-launch dialog shows only the reasons, in no tool's words");
+  }
+
   // Close button for native sessions (R3 S0 acceptance finding: the console
   // had no way to close a session, so a managed session was never cleaned).
   {

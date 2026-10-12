@@ -375,22 +375,38 @@ class AutomaticPhaseTests(FlowCase):
         self.assertEqual(self.key(fid), "awaiting_merge")
         self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)     # a person objects after
         self.assertEqual(self.key(fid), "needs_fix")
-        self.add(fid, "executor_report", commit=C1)                 # the report the runner already recorded
-        d = self.derive(fid)
-        self.assertEqual((d["phase"]["key"], len(d["rounds"])), ("needs_fix", 1))      # mirrored, not a new round
-        fake_repo(self.repo, C2)
-        self.add(fid, "executor_report", commit=C2)                 # a new commit is a new round
+        self.add(fid, "executor_report", commit=C1)                 # the executor reports it again: a new round
         self.assertEqual((self.key(fid), self.derive(fid)["phase"]["round"]), ("in_review", 2))
-        self.review(fid, 2, C2, "PASS", JOB2)
+        self.review(fid, 2, C1, "PASS", JOB2)
         self.assertEqual(self.key(fid), "awaiting_merge")
 
-    def test_a_person_mirroring_the_automatic_records_afterwards_adds_no_round_and_no_review(self):
+    def test_a_report_of_the_same_commit_after_a_review_is_a_new_round_whoever_made_the_first(self):
+        # the reviewer's sequence: the runner's report and PASS, then the executor reports the commit again
         fid = self.flow(workdir=self.repo)
         self.turn_on(fid)
         self.report(fid, C1)
-        self.review(fid, 1, C1, "NEEDS WORK")
+        self.review(fid, 1, C1, "PASS")
+        self.assertEqual(self.key(fid), "awaiting_merge")
         self.add(fid, "executor_report", commit=C1)
-        self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], d["phase"]["round"], d["attention"]), ("in_review", 2, False))
+        self.assertEqual([len(r["reviews"]) for r in d["rounds"]], [1, 0])
+        # and by hand first, then the runner: the same
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.add(fid, "executor_report", commit=C1)
+        self.add(fid, "review_result", reviewer=0, verdict="PASS", commit=C1)
+        self.report(fid, C1)
+        d = self.derive(fid)
+        self.assertEqual((d["phase"]["key"], d["phase"]["round"]), ("in_review", 2))
+
+    def test_a_person_mirroring_the_automatic_records_before_the_review_adds_no_round_and_no_review(self):
+        fid = self.flow(workdir=self.repo)
+        self.turn_on(fid)
+        self.report(fid, C1)
+        self.add(fid, "executor_report", commit=C1)                 # mirrored before any review of it
+        self.review(fid, 1, C1, "NEEDS WORK")
+        self.add(fid, "review_result", reviewer=0, verdict="NEEDS_WORK", commit=C1)    # the same verdict
         d = self.derive(fid)
         self.assertEqual((d["phase"]["key"], len(d["rounds"]), len(d["rounds"][0]["reviews"])), ("needs_fix", 1, 1))
         self.assertEqual((d["warnings"], d["stray_reviews"]), ([], []))
