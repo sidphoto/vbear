@@ -50,7 +50,9 @@ _CLAUDE = {"paths": ("Library/Application Support/ClaudeCode",), "domain": "com.
            "home_paths": (".claude/remote-settings.json",)}
 _CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex", "home_paths": ()}
 
-CLAUDE_SOURCES = {"2.1.292": _CLAUDE}
+# 2.1.296: the same sources as 2.1.292 (the vendor's documented managed-settings locations have not changed; to be
+# re-read from the vendor documentation by the reviewer, docs/evidence/claude-code-2.1.296-stream.md).
+CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE}
 CODEX_SOURCES = {"0.160.0": _CODEX}
 
 

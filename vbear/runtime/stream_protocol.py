@@ -101,10 +101,13 @@ VERSIONS = {
     ),
 }
 
-# 2.1.296: PROVISIONAL. Copied from 2.1.292 so that the stream probe can run at all (a version without constants is
-# refused before any request). Nothing here is believed until docs/evidence/claude-code-2.1.296-stream.md says what the
-# probe observed; every difference found is written into the entry above, and this line goes with the evidence.
-VERSIONS["2.1.296"] = replace(VERSIONS["2.1.292"], version="2.1.296")
+# 2.1.296: the 2.1.292 entry plus what the stream probe observed (docs/evidence/claude-code-2.1.296-stream.md).
+# PROVISIONAL until that file records a passing run. One difference so far: assistant events carry
+# ``thinking_display`` (a new top-level field; not read).
+VERSIONS["2.1.296"] = replace(
+    VERSIONS["2.1.292"], version="2.1.296",
+    allowed={**VERSIONS["2.1.292"].allowed,
+             "assistant": VERSIONS["2.1.292"].allowed["assistant"] | {"thinking_display"}})
 
 KINDS = ("command_lifecycle", "system/init", "system/thinking_tokens", "user/replay", "user/tool_result",
          "assistant", "rate_limit_event", "result")

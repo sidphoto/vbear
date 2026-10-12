@@ -197,9 +197,9 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(self.codex().ok)
 
     def test_source_lists_are_the_reviewed_constants(self):
-        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": {"paths": ("Library/Application Support/ClaudeCode",),
-                                                         "domain": "com.anthropic.claudecode",
-                                                         "home_paths": (".claude/remote-settings.json",)}})
+        claude = {"paths": ("Library/Application Support/ClaudeCode",), "domain": "com.anthropic.claudecode",
+                  "home_paths": (".claude/remote-settings.json",)}
+        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude})
         self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
                                                         "home_paths": ()}})
 
