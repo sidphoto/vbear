@@ -56,7 +56,9 @@ LIMITS = {"max_reviews": 3, "max_dispatches": 6, "review_max_responses": 100, "e
 TASK = {
     "title": "合併重疊區間 merge_ranges",
     "goal": ("在 toy/ranges.py 實作 merge_ranges(ranges)，需求見 SPEC.md。這一階段只交最小實作：新增 toy/__init__.py 與 "
-             "toy/ranges.py 並 git commit，不要新增或修改任何測試檔（測試留到下一階段，依審查意見補齊）。"),
+             "toy/ranges.py 並 git commit；不要新增或修改任何測試檔（專案裡已有 tests/test_smoke.py，用它確認沒有弄壞什麼；"
+             "邊界情況的測試留到下一階段，依審查意見補齊）。測試以 python3 -m unittest discover -s tests -t . 執行，"
+             "並如實回報結果。"),
     "scope": ["toy/__init__.py", "toy/ranges.py"],
     "out_of_scope": ["SPEC.md 與 README.md 不要改", "這一階段不新增任何測試檔"],
     "acceptance_criteria": [
@@ -64,7 +66,7 @@ TASK = {
         "重疊或相接（前一個的 end 等於下一個的 start）的區間要合併",
         "start 大於 end 的區間丟 ValueError，且不改動傳入的串列",
         "已 git commit，回報裡的 head 是該 commit",
-        "之後新增的測試以 python3 -m unittest discover -s tests 執行（這台機器只有 python3：沒有 python，也沒有 pytest）",
+        "跑 python3 -m unittest discover -s tests -t .（這台機器只有 python3：沒有 python，也沒有 pytest），回報裡的測試結果照實寫",
     ],
 }
 SPEC = """# merge_ranges
@@ -81,6 +83,21 @@ Requirements:
 Acceptance: a change is not acceptable without unit tests (standard-library `unittest`, `tests/test_ranges.py`)
 that cover each of these edge cases: empty input, unsorted input, touching intervals, nested intervals, an invalid
 interval, and that the input is not modified.
+"""
+
+
+SMOKE_TEST = """import os
+import unittest
+
+
+class Smoke(unittest.TestCase):
+    def test_the_spec_is_there(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        self.assertTrue(os.path.exists(os.path.join(here, "..", "SPEC.md")))
+
+
+if __name__ == "__main__":
+    unittest.main()
 """
 
 
@@ -186,8 +203,11 @@ def make_toy(run_dir: Path) -> Path:
     git(toy, "config", "user.email", "toy@example.invalid")
     git(toy, "config", "gc.auto", "0")
     git(toy, "config", "maintenance.auto", "false")
-    git(toy, "add", "README.md", "SPEC.md")
-    git(toy, "commit", "-q", "-m", "base: spec only")
+    (toy / "tests").mkdir()
+    (toy / "tests" / "__init__.py").write_text("")
+    (toy / "tests" / "test_smoke.py").write_text(SMOKE_TEST)
+    git(toy, "add", "README.md", "SPEC.md", "tests")
+    git(toy, "commit", "-q", "-m", "base: spec and a smoke test")
     return toy
 
 
