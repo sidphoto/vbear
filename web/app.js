@@ -4657,35 +4657,6 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   }
 
   function renderAgentProfileDetail(p) {
-    const { profession } = profileSummary(p);
-    const skills = p.equipped_skill_ids || [];
-    const unresolved = (p._unresolved && p._unresolved.skills) || [];
-    const unresolvedSet = new Set(unresolved);
-    const intentValues = ["allow", "deny", "unspecified"];
-    const intentLabels = { allow: "允許意圖", deny: "拒絕意圖", unspecified: "未定" };
-    const intentBadgeClass = { allow: "b-ok", deny: "b-bad", unspecified: "b-mute" };
-
-    const permRows = (agentBuilderCatalog && agentBuilderCatalog.permission_keys
-                      || ["read", "write", "test", "deploy"]).map((k) => {
-      const v = (p.permission_intents && p.permission_intents[k]) || "unspecified";
-      const safe = intentValues.includes(v) ? v : "unspecified";
-      return el("div", { class: "row", style: "justify-content:space-between; padding:2px 0;" },
-        el("span", { class: "mono" }, k),
-        el("span", null,
-          badge(intentLabels[safe], `${intentBadgeClass[safe]} plain`,
-                "僅為意圖記錄，不會實際執行為 CLI 權限")));
-    });
-
-    const skillList = skills.length
-      ? skills.map((sid) => {
-          const isUnresolved = unresolvedSet.has(sid);
-          return el("li", { class: "small mono" },
-            sid,
-            isUnresolved ? el("span", { class: "b-warn small", style: "margin-left:6px;" },
-                "⚠ 已不存在") : null);
-        })
-      : [el("li", { class: "small muted" }, "未選任何技能")];
-
     return append(el("div", { class: "wb-tab-content" }),
       el("div", { class: "row wb-profile-head", style: "justify-content:space-between" },
         el("h3", { style: "margin:0" }, p.name || p.id),
@@ -4722,29 +4693,179 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
                 toast("更新失敗：" + err.message);
               }
             } } }, p.enabled ? "停用" : "啟用"))),
-      el("dl", { class: "kv small" },
-        el("dt", null, "Profile ID"),
-          el("dd", { class: "mono" }, p.id),
-        el("dt", null, "職業"),
-          el("dd", null, profession),
-        el("dt", null, "工具（遊戲用語：陣營）"),
-          el("dd", null, (p.model && p.model.tool) || "—"),
+      renderRoleCard(p));
+  }
+
+  // ---- Role card (design game-ui 4.1) ----------------------------------------------------------------------
+  // Everything below comes from GET /api/agent-profiles/<id>/loadout, which answers from what is already
+  // loaded. Every string from the scan, from the profile or from an agent is set with textContent (el + text
+  // children); a value that was not provided reads 未提供 / 未知 / 未載入, never a guess.
+  const ARMOR_NAME_ZH = { Read: "讀取", Write: "寫入", Test: "測試", Commit: "commit", Deploy: "部署",
+    Network: "網路", Filesystem: "檔案系統" };
+  const ARMOR_GROUP_HELP = {
+    blocked: "這幾項已實測確實擋住（限已測的路徑、版本與執行層）。",
+    partial: "只擋住一部分；沒擋住的部分寫在每一項的說明裡。",
+    not_granted: "VBear 沒有給這項專用權限，不代表已阻止透過其他工具做到。",
+    not_blocked: "這幾項沒有被擋住：只是意圖，或沒有限制。",
+    unproven: "尚未驗證或不知道，不能當成有保護。",
+  };
+
+  function rcText(v) {
+    if (v === null || v === undefined || v === "") return null;
+    if (Array.isArray(v)) return v.map((x) => String(x)).join("、") || null;
+    return String(v);
+  }
+
+  // A value with where it came from; absent reads 未提供.
+  function rcSourced(src) {
+    const text = src ? rcText(src.value) : null;
+    return el("span", null, text === null ? null : text + " ", prov(src));
+  }
+
+  function rcObservation(o) {
+    if (!o || typeof o !== "object") return "觀察資料不可用";
+    const period = typeof o.window_days === "number" ? `最近 ${o.window_days} 天` : "觀察期間：未知";
+    if (o.state === "observed") return `觀察期間內有紀錄（${period}；來源：執行觀察）`;
+    if (o.state === "none") return `目前沒有觀察紀錄（${period}；來源：執行觀察）。這不代表沒有用過。`;
+    return "觀察資料不可用";
+  }
+
+  function rcSkillCard(sk) {
+    const head = el("div", { class: "rc-skill-head" },
+      el("strong", null, sk.name || sk.skill_id),
+      badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡"));
+    if (sk.state === "not_in_index") {
+      return el("li", { class: "rc-skill rc-warn" },
+        el("div", { class: "rc-skill-head" }, el("strong", { class: "mono" }, sk.skill_id),
+          badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
+        el("p", null, `${sk.note || "目前索引找不到此技能"}（索引時間：${fmtTime(sk.indexed_at)}）`));
+    }
+    if (sk.state === "index_not_loaded") {
+      return el("li", { class: "rc-skill rc-warn" },
+        el("div", { class: "rc-skill-head" }, el("strong", { class: "mono" }, sk.skill_id),
+          badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
+        el("p", null, "索引未載入，無法顯示這張技能卡的內容。"));
+    }
+    const refs = sk.referenced_files || {};
+    const cats = (sk.categories || []).map((c) => c && c.label).filter(Boolean);
+    return el("li", { class: "rc-skill" }, head,
+      el("dl", { class: "rc-dl" },
+        el("dt", null, "效果（技能作者的說明，只適用於你自己啟動並載入這張技能的工具）"),
+        el("dd", null, rcSourced(sk.description)),
+        el("dt", null, "時機"), el("dd", null, rcSourced(sk.when_to_use)),
+        el("dt", null, "類別"), el("dd", null, cats.length ? cats.join("、") : el("span", { class: "muted" }, "未提供")),
+        el("dt", null, "工具"), el("dd", null, rcText(sk.tool) || "未知"),
+        el("dt", null, "引用檔案"),
+        el("dd", null, `共 ${refs.count ?? "未知"} 個（存在 ${refs.present ?? "未知"}、缺少 ${refs.missing ?? "未知"}）；VBear 不會執行這些檔案`),
+        el("dt", null, "觀察狀態"), el("dd", null, rcObservation(sk.observed))),
+      (sk.warnings || []).length ? el("p", { class: "rc-note" }, "結構檢查：" + sk.warnings.join("；")) : null,
+      el("a", { class: "rc-link", href: `#/skills/${encodeURIComponent(sk.skill_id)}` }, "查看技能詳情"));
+  }
+
+  function rcArmorGroup(group, items) {
+    const mine = items.filter((it) => it.group === group.id);
+    return el("section", { class: "rc-armor-group", "data-armor-group": group.id },
+      el("h5", null, group.label),
+      el("p", { class: "rc-armor-sum" }, ARMOR_GROUP_HELP[group.id] || ""),
+      mine.length ? mine.map((it) => el("div", { class: "rc-armor-item" },
+        el("div", { class: "rc-armor-name" },
+          el("strong", null, it.name), ` ${ARMOR_NAME_ZH[it.name] ? "（" + ARMOR_NAME_ZH[it.name] + "）" : ""}`),
+        el("div", { class: "rc-armor-level" }, it.level),
+        el("p", null, it.note),
+        (it.path_scope !== "不適用" || it.evidence_refs !== "不適用")
+          ? el("p", { class: "rc-note" }, `範圍：${it.path_scope}；證據：${it.evidence_refs}`) : null,
+        it.unknown_reason ? el("p", { class: "rc-note" }, `未知或未測：${it.unknown_reason}`) : null))
+        : el("p", { class: "rc-note" }, "（目前沒有項目）"));
+  }
+
+  function rcVersionLine(v) {
+    if (v && v.state === "verified") return `已驗證（Claude Code ${v.version}；${v.source}）`;
+    if (v && v.state === "unverified") return `未驗證（Claude Code ${v.version}；${v.source}）`;
+    return "未知（這個畫面不探測 Claude Code；要到出發前檢查才會讀取版本）";
+  }
+
+  function roleCardParts(p, d) {
+    const { toolLabel } = profileSummary(p);
+    const pr = d.profession || {};
+    const prName = pr.state === "found" ? (pr.name || pr.role_id)
+      : pr.state === "none" ? "（未選職業）"
+      : pr.state === "not_in_index" ? `${pr.role_id}（目前索引找不到這個職業）`
+      : `${pr.role_id || ""}（索引未載入）`;
+    const idx = d.index || {};
+    const info = el("section", { class: "rc-block", "data-rc": "info" },
+      el("div", { class: "rc-sub" }, "Agent Profile · ", el("span", { class: "mono" }, p.id)),
+      el("dl", { class: "rc-dl" },
+        el("dt", null, "職業"), el("dd", null, prName),
+        el("dt", null, "工具（遊戲用語：陣營）"), el("dd", null, toolLabel),
         el("dt", null, "模型設定 (Model ID)"),
-          el("dd", { class: "mono" }, (p.model && p.model.model_id) || "（未指定，視為該工具預設值；非執行環境）"),
-        el("dt", null, "更新時間"),
-          el("dd", null, fmtTime(p.updated_at || p.created_at))),
-      el("div", { class: "wb-field-group" },
-        el("div", { class: "wb-field-label" }, "已選技能（VBear 啟動時不載入）"),
-        el("ul", { class: "wb-field-val", style: "list-style: disc inside; padding-left: 4px;" }, skillList)),
-      el("div", { class: "wb-field-group" },
-        el("div", { class: "wb-field-label" }, "權限意圖 (Permission Intents · 僅意圖)"),
-        el("div", { class: "wb-field-val" }, permRows)),
-      el("div", { class: "notice info", style: "font-size:12.5px" },
-        el("span", { class: "ico" }, "ℹ"),
-        el("div", null,
-          "已選技能 ≠ 已進入任何執行中的 session。儲存 Profile 不會啟動、",
-          "重啟或注入任何東西。權限意圖僅為意圖記錄，不會實際執行為 CLI 工具權限。"))
-    );
+        el("dd", { class: "mono" }, rcText((d.profile || {}).model_id) || "（未指定，視為該工具預設值；非執行環境）"),
+        el("dt", null, "版本驗證狀態"), el("dd", null, rcVersionLine(d.version_status)),
+        el("dt", null, "狀態"), el("dd", null, p.enabled ? "啟用" : "停用"),
+        el("dt", null, "索引時間"), el("dd", null, idx.loaded ? fmtTime(idx.generated_at) : "索引未載入"),
+        el("dt", null, "更新時間"), el("dd", null, fmtTime(p.updated_at || p.created_at))));
+
+    let features;
+    if (pr.state === "found") {
+      features = el("section", { class: "rc-block", "data-rc": "profession" },
+        el("h4", null, "職業特性"),
+        el("dl", { class: "rc-dl" },
+          el("dt", null, "說明"), el("dd", null, rcSourced(pr.description)),
+          el("dt", null, "擅長"), el("dd", null, rcSourced(pr.capabilities)),
+          el("dt", null, "適合的工作"), el("dd", null, rcSourced(pr.suitable_tasks))),
+        el("p", { class: "rc-note" }, pr.label_only || "職業只是標籤，不會把角色指示載入 Claude Code"));
+    } else {
+      features = el("section", { class: "rc-block", "data-rc": "profession" },
+        el("h4", null, "職業特性"),
+        el("p", { class: "rc-note" }, pr.state === "none" ? "未選職業。"
+          : pr.state === "not_in_index" ? "目前索引找不到這個職業，無法顯示特性。"
+          : "索引未載入，無法顯示職業特性。"),
+        el("p", { class: "rc-note" }, "職業只是標籤，不會把角色指示載入 Claude Code"));
+    }
+
+    const sk = d.skills || {};
+    const skills = el("section", { class: "rc-block", "data-rc": "skills" },
+      el("h4", null, sk.title || "已選技能（VBear 啟動時不載入）"),
+      el("p", { class: "rc-note" }, sk.note || ""),
+      el("p", { class: "rc-note" }, sk.safe_mode || ""),
+      (sk.items || []).length ? el("ul", { class: "rc-skills" }, sk.items.map(rcSkillCard))
+        : el("p", { class: "rc-note" }, "未選任何技能。"));
+
+    const ar = d.armor || {};
+    let armor;
+    if (!ar.applicable) {
+      armor = el("section", { class: "rc-block", "data-rc": "armor" },
+        el("h4", null, "防具"), notice("warn", ar.why || "這個角色沒有防具資料。"));
+    } else {
+      armor = el("section", { class: "rc-block", "data-rc": "armor" },
+        el("h4", null, "防具（以已驗證設定為準） ", el("strong", { class: "rc-decides" }, ar.preview_decides || "實際以出發前檢查為準")),
+        el("p", { class: "rc-note" }, ar.basis_note || ""),
+        el("div", { class: "rc-armor-grid" }, (ar.groups || []).map((g) => rcArmorGroup(g, ar.items || []))));
+    }
+
+    const intents = d.profile && d.profile.permission_intents || {};
+    const intentLabel = { allow: "允許", deny: "拒絕", unspecified: "未定" };
+    const KEYS = [["read", "讀取"], ["write", "寫入"], ["test", "測試"], ["deploy", "部署"]];
+    const expect = el("section", { class: "rc-block", "data-rc": "intents" },
+      el("h4", null, "你的期望（意圖）"),
+      el("p", { class: "rc-note" }, (d.profile && d.profile.intents_note) || "只是記錄，不會變成實際權限"),
+      el("div", { class: "rc-chips" }, KEYS.map(([k, zh]) =>
+        el("span", { class: "rc-chip" }, `${zh}・${intentLabel[intents[k]] || "未定"}`))));
+
+    const blockers = (d.blockers || []).length ? el("section", { class: "rc-block", "data-rc": "blockers" },
+      el("h4", null, "目前無法出發的原因"),
+      el("ul", null, d.blockers.map((b) => el("li", null, b && b.message ? String(b.message) : "未知原因"))),
+      el("p", { class: "rc-note" }, d.blockers_note || "")) : null;
+
+    return [info, features, skills, armor, expect, blockers];
+  }
+
+  function renderRoleCard(p) {
+    const box = el("div", { class: "rc", "data-role-card": p.id });
+    setKids(box, el("p", { class: "loading" }, "載入角色卡…"));
+    api.get(`/api/agent-profiles/${encodeURIComponent(p.id)}/loadout`)
+      .then((d) => setKids(box, ...roleCardParts(p, d)))
+      .catch((e) => setKids(box, notice("bad", "無法載入角色卡：" + (e && e.message ? e.message : "未知錯誤"))));
+    return box;
   }
 
   function renderAgentProfileEditor(isNew) {

@@ -604,5 +604,144 @@ function findModalInBody() {
     console.log("ok close button for native sessions");
   }
 
+  // The role card (design game-ui 4.1, 8): the loadout's data, every string as text, nothing guessed.
+  {
+    const hostile = '<img src=x onerror=alert(1)>';
+    const sourced = (value, origin = "author", detail = "front matter") => ({ value, origin, detail });
+    const armorItem = (name, level, group, note, extra = {}) => ({ name, level, group, note,
+      path_scope: "不適用", evidence_refs: "不適用", unknown_reason: null, ...extra });
+    const loadout = (over = {}) => ({
+      ok: true,
+      profile: { id: "p-1", name: "First", enabled: true, created_at: 1700000000, updated_at: 1700000000,
+                 tool: "claude", model_id: "opus-4.1", profession_role_id: "r-1",
+                 permission_intents: { read: "allow", write: "deny", test: "unspecified", deploy: "deny" },
+                 intents_note: "只是記錄，不會變成實際權限" },
+      index: { loaded: true, generated_at: 1791770000 },
+      profession: { state: "found", role_id: "r-1", name: hostile, tool: "claude", kind: "subagent",
+                    description: sourced("寫後端"), capabilities: sourced(null, "missing", ""),
+                    suitable_tasks: sourced(["小功能", "修 bug"], "derived", "標題"),
+                    label_only: "職業只是標籤，不會把角色指示載入 Claude Code" },
+      skills: { title: "已選技能（VBear 啟動時不載入）", note: "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。",
+                safe_mode: "已傳入安全模式旗標；Claude Code 2.1.296 的說明指出安全模式會關閉技能，其他版本是否停用技能未驗證",
+                items: [
+        { skill_id: "s-1", state: "in_index", effective: false, name: hostile, tool: "claude", scope: "user",
+          description: sourced(hostile), when_to_use: sourced(null, "missing", "作者沒有提供"),
+          categories: [{ label: "審查", keyword: "review" }],
+          referenced_files: { count: 2, present: 1, missing: 1, note: "VBear 不會執行這些檔案" },
+          warnings: ["w1"], observed: { state: "observed", window_days: 30, source: "執行觀察" } },
+        { skill_id: "s-gone", state: "not_in_index", effective: false, note: "目前索引找不到此技能", indexed_at: 1791770000 },
+        { skill_id: "s-3", state: "in_index", effective: false, name: "gamma", tool: "codex", scope: "user",
+          description: sourced("g"), when_to_use: sourced("時"), categories: [],
+          referenced_files: { count: 0, present: 0, missing: 0, note: "VBear 不會執行這些檔案" },
+          warnings: [], observed: { state: "unavailable", window_days: null, source: "執行觀察" } },
+      ] },
+      version_status: { state: "unknown", version: null, source: "沒有載入的驗證資料" },
+      armor: { applicable: true, basis: "verified_setting", basis_note: "以已驗證設定為準：說明",
+        preview_decides: "實際以出發前檢查為準",
+        groups: [{ id: "blocked", label: "擋住了" }, { id: "partial", label: "部分擋住" },
+                 { id: "not_granted", label: "沒有專用權限" }, { id: "not_blocked", label: "沒有擋" },
+                 { id: "unproven", label: "未證明" }],
+        items: [
+          armorItem("Network", "強制（限已測路徑、版本與執行層）", "blocked", "空 allowlist", { evidence_refs: "出發前檢查時才知道" }),
+          armorItem("Write", "部分強制", "partial", "Bash 寫入受限；Edit/Write 工具屬工具層意圖", { path_scope: "出發前檢查時才知道" }),
+          armorItem("Deploy", "不授予", "not_granted", "沒有專用權限"),
+          armorItem("Read", "僅意圖", "not_blocked", "讀取不隔離"),
+          armorItem("Commit", "未限制", "not_blocked", ".git 可寫", { unknown_reason: "未測試以 denyWrite 排除 .git 的效果" }),
+        ] },
+      blockers: [{ code: "intent_unspecified", message: "test 未指定；未指定不會被當成允許" }],
+      blockers_note: "假設你已勾選知悉 commit、並維持關閉網路；實際以出發前檢查為準",
+      ...over,
+    });
+    const handlers = (loadoutFn) => ({
+      "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
+      "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
+      "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
+      "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
+                                                          usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
+      "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
+      "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
+      "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
+      "GET /api/agent-profiles":     () => jsonResponse({ ok: true, profiles: profilesList }),
+      "GET /api/agent-builder/catalog": () => jsonResponse(catalogBody),
+      "GET /api/agent-profiles/p-1/loadout": loadoutFn,
+    });
+    const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+    const open = async (loadoutFn) => {
+      const ctx = freshContext(handlers(loadoutFn));
+      evalAgentBuilderSlice(ctx);
+      await ctx.viewWorkbench(null, null);
+      await switchToAgentTab();
+      walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
+        && /First/.test(n.textContent || "")).dispatch("click");
+      await tick();
+      return walk(main).find((n) => n.getAttribute && n.getAttribute("data-role-card") === "p-1");
+    };
+
+    // a full card
+    let card = await open(() => jsonResponse(loadout()));
+    assert.ok(card, "role card rendered");
+    assert.ok(!walk(card).some((n) => n.tag === "img" || n.tag === "script"), "no element is built from the text");
+    assert.ok(findText(card, hostile), "the hostile text is shown, as text");
+    assert.ok(findText(card, "已選技能（VBear 啟動時不載入）"), "the skills title says they are not loaded");
+    assert.ok(findText(card, "Claude Code 2.1.296") && findText(card, "其他版本是否停用技能未驗證"),
+              "the safe-mode statement is conditional on the verified version");
+    const notEffective = walk(card).filter((n) => n.tag === "span" && (n.textContent || "") === "本次不生效");
+    assert.strictEqual(notEffective.length, 3, "every chosen skill card says 本次不生效");
+    assert.ok(findText(card, "目前索引找不到此技能") && findText(card, "索引時間"), "a skill the index lacks says so, with the time");
+    assert.ok(!findText(card, "已消失"), "not worded as 'disappeared'");
+    assert.ok(findText(card, "技能作者的說明，只適用於你自己啟動並載入這張技能的工具"), "the effect is labelled as the author's");
+    assert.ok(findText(card, "未提供"), "a missing field reads 未提供");
+    assert.ok(findText(card, "觀察期間內有紀錄（最近 30 天；來源：執行觀察）"), "observed state with its window");
+    assert.ok(findText(card, "觀察資料不可用"), "unavailable observation");
+    assert.ok(findText(card, "VBear 不會執行這些檔案") && !findText(card, "可執行腳本"), "references only, no script count");
+    assert.ok(findText(card, "職業只是標籤，不會把角色指示載入 Claude Code"), "the role is a label");
+    assert.ok(findText(card, "未知（這個畫面不探測 Claude Code"), "unknown version is said, not guessed");
+    assert.ok(findText(card, "工具（遊戲用語：陣營）"), "first mention of the tool names the game word");
+    for (const word of ["出勤", "曾使用", "使用次數"]) assert.ok(!findText(card, word), `no attendance: ${word}`);
+
+    // armor: five groups, same element kind and class, the original level words, no collapse
+    const groups = walk(card).filter((n) => n.getAttribute && n.getAttribute("data-armor-group"));
+    assert.deepStrictEqual(groups.map((g) => g.getAttribute("data-armor-group")),
+      ["blocked", "partial", "not_granted", "not_blocked", "unproven"]);
+    assert.ok(groups.every((g) => g.tag === "section" && g.className === "rc-armor-group"), "same element and class");
+    assert.ok(groups.every((g) => !g.style.fontSize && !g.style.display), "no per-group inline size or hiding");
+    assert.ok(groups.every((g) => walk(g).filter((n) => n.tag === "h5").length === 1), "each group has the same header");
+    assert.ok(!walk(card).some((n) => n.tag === "details"), "nothing is folded away");
+    for (const word of ["強制（限已測路徑、版本與執行層）", "部分強制", "不授予", "僅意圖", "未限制"]) {
+      assert.ok(findText(card, word), `level text ${word} is shown as is`);
+    }
+    assert.ok(findText(groups[4], "（目前沒有項目）"), "an empty group says so");
+    assert.ok(findText(card, "實際以出發前檢查為準"), "the card says the pre-launch check decides");
+    assert.ok(findText(card, "範圍：出發前檢查時才知道") || findText(card, "出發前檢查時才知道"),
+              "what needs a work directory is 'known at the pre-launch check'");
+    assert.ok(findText(card, "目前無法出發的原因") && findText(card, "test 未指定"), "launch blockers shown");
+    assert.ok(findText(card, "只是記錄，不會變成實際權限"), "intents are labelled as records");
+
+    // everything clickable in the card is a button or a link
+    const clickable = walk(card).filter((n) => (n._listeners.click || []).length);
+    assert.ok(clickable.every((n) => n.tag === "button" || n.tag === "a"), "clickable things are buttons or links");
+    assert.ok(walk(card).filter((n) => n.tag === "a").every((n) => /^#\/skills\//.test(n.getAttribute("href"))),
+              "skill links go to the skill page");
+
+    // the index is not loaded: nothing is guessed
+    card = await open(() => jsonResponse(loadout({
+      index: { loaded: false, generated_at: null },
+      profession: { state: "index_not_loaded", role_id: "r-1" },
+      skills: { title: "已選技能（VBear 啟動時不載入）", note: "n", safe_mode: "s",
+                items: [{ skill_id: "s-1", state: "index_not_loaded", effective: false }] } })));
+    assert.ok(findText(card, "索引未載入"), "index not loaded is said");
+    assert.ok(findText(card, "無法顯示這張技能卡的內容"), "the skill card says it cannot be shown");
+    assert.ok(findText(card, "無法顯示職業特性"), "role features are not invented");
+    assert.strictEqual(walk(card).filter((n) => n.tag === "span" && (n.textContent || "") === "本次不生效").length, 1);
+
+    // a profile without armor (a shared tool) and a failed load
+    card = await open(() => jsonResponse(loadout({ armor: { applicable: false, why: "shared 不是可啟動的工具，沒有防具" } })));
+    assert.ok(findText(card, "shared 不是可啟動的工具，沒有防具"), "no armor is explained");
+    assert.strictEqual(walk(card).filter((n) => n.getAttribute && n.getAttribute("data-armor-group")).length, 0);
+    card = await open(() => jsonResponse({ error: "Agent Profile 儲存檔案損毀" }, 503));
+    assert.ok(findText(card, "無法載入角色卡") && findText(card, "損毀"), "a failed load is shown, not an empty card");
+    console.log("ok role card renders the loadout as text, with every state and no guesses");
+  }
+
   console.log("\nALL AGENT BUILDER FRONTEND TESTS PASSED");
 })().catch((e) => { console.error(e); process.exitCode = 1; });
