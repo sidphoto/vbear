@@ -119,7 +119,7 @@ class ArgvTests(Tmp):
 
     def test_the_prompt_only_takes_validated_values(self):
         text = rc.prompt_for(C, workdir="/Users/me/work tree", commit=COMMIT, base=BASE)
-        self.assertIn("git clone --no-hardlinks '/Users/me/work tree' repo", text)       # shell-quoted
+        self.assertIn("git clone --no-hardlinks -- '/Users/me/work tree' ./repo", text)  # shell-quoted
         self.assertIn(f"git checkout --detach {COMMIT}", text)
         self.assertIn(f"git merge-base --is-ancestor {BASE} {COMMIT}", text)
         self.assertIn(f"REVIEWED_COMMIT: {COMMIT}", text)
@@ -137,6 +137,22 @@ class ArgvTests(Tmp):
         # the template is fixed: nothing but the three fields may be in it
         self.assertEqual(sorted({f for _, f, _, _ in __import__("string").Formatter().parse(C.prompt_template) if f}),
                          ["base", "commit", "workdir"])
+
+    def test_the_source_is_always_one_quoted_argument_and_the_destination_is_dot_slash_repo(self):
+        import shlex
+        # a plain path is quoted too: bare, "…/toy repo" was read by a model as one directory name (S3 run 5)
+        text = rc.prompt_for(C, workdir="/Users/me/toy", commit=COMMIT, base=BASE)
+        self.assertIn("git clone --no-hardlinks -- '/Users/me/toy' ./repo\n", text)
+        self.assertIn("a single path component named repo", text)
+        self.assertIn("In repo, run: git checkout --detach", text)        # the later steps still say "repo"
+        # whatever the path holds, the clone line splits back into exactly: git clone --no-hardlinks -- <path> ./repo
+        for path in ("/a/toy", "/Users/me/work tree", "/a/it's", "/a/b'c'd", "/a/\"q\"", "/a/$HOME;rm", "/a/\\x",
+                     "/a/ü", "/toy repo"):
+            with self.subTest(path=path):
+                text = rc.prompt_for(C, workdir=path, commit=COMMIT, base=BASE)
+                line = next(x for x in text.splitlines() if "git clone" in x)
+                self.assertEqual(shlex.split(line.split("run: ", 1)[1]),
+                                 ["git", "clone", "--no-hardlinks", "--", path, "./repo"])
 
     def test_the_argv_is_the_fixed_one(self):
         # design 5.2, word for word: the whole list, in order (Codex S2b part 3 review #2)

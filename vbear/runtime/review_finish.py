@@ -72,6 +72,21 @@ def _short(reasons) -> list[str]:
     return out[:16]
 
 
+def _scratch_names(scratch) -> str:
+    """For the message that the review's clone is not where it should be: the NAMES of the directories under the
+    scratch, so the next reading says "there is 'toy repo' and no repo" (names only, never content; at most five,
+    each cut to 40 printable characters, and the whole under the reason's limit)."""
+    try:
+        names = sorted(n for n in os.listdir(str(scratch)) if not n.startswith("."))
+    except OSError:
+        return ""
+    shown = ["".join(ch if ch.isprintable() else "?" for ch in n)[:40] for n in names[:5]]
+    if not shown:
+        return "（暫存區底下沒有任何資料夾）"
+    more = f"…共 {len(names)} 個" if len(names) > len(shown) else ""
+    return "（暫存區底下的項目：" + "、".join(f"'{n}'" for n in shown) + more + "）"
+
+
 class _Dir:
     def __init__(self, path):
         self.path, self.fd = path, None
@@ -445,7 +460,7 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
                 reasons.append("被審 commit 不存在於任務工作目錄，或無法核對")
             head = git_head.read_head(os.path.join(m["scratch"]["path"], "repo"))
             if head.get("commit") != m["commit"] or head.get("ref") is not None:
-                reasons.append("審查暫存區的 repo 不是 detached 在被審 commit")
+                reasons.append("審查暫存區的 repo 不是 detached 在被審 commit" + _scratch_names(m["scratch"]["path"]))
             # save the record; result.json last
             if record_fd is not None:
                 files = []

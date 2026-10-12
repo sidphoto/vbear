@@ -117,7 +117,12 @@ def prompt_for(c: cc.CodexConstants, *, workdir: str, commit: str, base: str) ->
             raise CodexRefused("bad_request", "commit 格式不符")
     if not (isinstance(workdir, str) and WORKDIR_RE.match(workdir)):
         raise CodexRefused("bad_request", "任務工作目錄含有不能放進審查說明的字元")
-    return c.prompt_template.format(workdir=shlex.quote(workdir), commit=commit, base=base)
+    # Always quoted (shlex.quote leaves a plain path bare, and a bare path ending in a word read as one name with
+    # the next word: S3 real end-to-end run 5, where "toy" + "repo" became a directory called "toy repo").
+    quoted = shlex.quote(workdir)
+    if quoted == workdir:                    # nothing needed quoting, so it holds no quote character: wrap it
+        quoted = "'" + quoted + "'"
+    return c.prompt_template.format(workdir=quoted, commit=commit, base=base)
 
 
 def common_flags(c: cc.CodexConstants) -> list[str]:

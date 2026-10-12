@@ -73,7 +73,9 @@ class CodexConstants:
     # review_validate.check_report requires.
     prompt_template: str = (
         "This is a read-only code review. Work only inside the current directory.\n"
-        "1. Run: git clone --no-hardlinks {workdir} repo\n"
+        "1. In the current directory, run: git clone --no-hardlinks -- {workdir} ./repo\n"
+        "   The work directory above is ONE quoted argument, the source; the destination is the second argument, "
+        "the new directory ./repo, a single path component named repo (not a name made of words from the path).\n"
         "2. In repo, run: git checkout --detach {commit}\n"
         "3. In repo, run: git merge-base --is-ancestor {base} {commit}  and remember whether it succeeded.\n"
         "Review the whole change from {base} to {commit}. Judge only from the code and the diff. "

@@ -244,6 +244,19 @@ class InvalidReviewTests(Scenario):
         shutil.rmtree(self.scratch / "repo")
         self.invalid("detached")
 
+    def test_the_message_names_what_is_under_the_scratch_instead_of_repo(self):
+        # S3 real end-to-end run 5: the reviewer cloned into "toy repo", not "repo". The strictness stays; the
+        # reason says what was found (names only).
+        shutil.rmtree(self.scratch / "repo")
+        (self.scratch / "toy repo").mkdir()
+        (self.scratch / "toy repo" / "SECRET-FILE-CONTENT.txt").write_text("not a name that is shown")
+        out = self.finish()
+        self.assertEqual(out.outcome, "invalid")
+        reason = next(r for r in out.reasons if "detached" in r)
+        self.assertIn("'toy repo'", reason)
+        self.assertNotIn("SECRET-FILE-CONTENT", reason)
+        self.assertLessEqual(len(reason), 256)
+
 
 class AtomicMarkerTests(Scenario):
     def write_marker(self, data=b'{"v":1}'):
