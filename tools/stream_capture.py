@@ -9,6 +9,7 @@ process the way the daemon does. Every raw line goes to ``--out`` (owner-only, n
 words and paths); what is printed is only event kinds and field names with types.
 
     python3 tools/stream_capture.py --claude ~/.local/share/claude/versions/2.1.296 --out raw-events.jsonl
+    # the same turn as a real run's: --text-file <its saved dispatch text> --repo <its toy repo> --base <commit>
     # (a file name: it is created in <worktree>/_sandbox/captures/, which is not in the repository)
 
 One real model turn (a few responses, well under USD 0.05: the launch's own budget is USD 0.10).
@@ -73,6 +74,31 @@ def create_capture(dirfd: int, name: str) -> int:
         raise SystemExit(f"--out: {name} already exists in _sandbox/captures (nothing is overwritten)") from None
 
 
+UUID_IN_TEXT = re.compile(r'"dispatch_id":"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"')
+BASE_RE = re.compile(r"^[0-9a-f]{7,40}\Z")
+TEXT_MAX = 60 << 10
+
+
+def under_sandbox(path: str, root: Path = ROOT) -> Path:
+    """An existing path whose real location is below ``<root>/_sandbox`` (these inputs are earlier runs' own files:
+    a real dispatch text and the toy repository it worked in)."""
+    sandbox = Path(os.path.realpath(root / "_sandbox"))
+    real = Path(os.path.realpath(path))
+    if sandbox not in real.parents:
+        raise SystemExit(f"{path}: must be under {sandbox}")
+    return real
+
+
+def load_text_file(path: str, root: Path = ROOT) -> tuple[str, str | None]:
+    """(text, the dispatch id the text names, if it does) of a dispatch text saved by an earlier run."""
+    real = under_sandbox(path, root)
+    if not real.is_file() or real.stat().st_size > TEXT_MAX:
+        raise SystemExit(f"{path}: not a regular file of at most {TEXT_MAX} bytes")
+    text = real.read_text(encoding="utf-8")
+    found = UUID_IN_TEXT.search(text)
+    return text, (found.group(1) if found else None)
+
+
 def _git(cwd, *a):
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(cwd), "GIT_CONFIG_GLOBAL": "/dev/null",
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "cap", "GIT_AUTHOR_EMAIL": "cap@example.invalid",
@@ -95,7 +121,14 @@ def main() -> int:
     ap.add_argument("--claude", required=True)
     ap.add_argument("--model", default="claude-haiku-4-5-20251001")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--text-file", help="a dispatch text saved by an earlier run (under _sandbox), sent as is")
+    ap.add_argument("--repo", help="a repository under _sandbox to clone into the work directory (needs --base)")
+    ap.add_argument("--base", help="the commit of --repo the work directory starts at")
     args = ap.parse_args()
+    if bool(args.repo) != bool(args.base) or (args.base and not BASE_RE.match(args.base)):
+        raise SystemExit("--repo and --base go together; --base is a hex commit")
+    given_text, given_id = (load_text_file(args.text_file) if args.text_file else (None, None))
+    repo = under_sandbox(args.repo) if args.repo else None
     # before anything is launched or any model is called: the directory is checked and the file made
     dirfd = open_capture_dir()
     try:
@@ -121,13 +154,21 @@ def main() -> int:
         state.mkdir(mode=0o700)
         os.environ["VBEAR_HOME"] = str(state)
         work = root / "work"
-        work.mkdir(mode=0o700)
-        _git(work, "init", "-q", "-b", "main")
-        _git(work, "config", "user.name", "cap")
-        _git(work, "config", "user.email", "cap@example.invalid")
-        (work / "README.md").write_text("capture\n")
-        _git(work, "add", "README.md")
-        _git(work, "commit", "-q", "-m", "base")
+        if repo is not None:
+            _git(root, "clone", "-q", "--no-hardlinks", str(repo), str(work))
+            _git(work, "reset", "-q", "--hard", args.base)
+            _git(work, "config", "user.name", "cap")
+            _git(work, "config", "user.email", "cap@example.invalid")
+            _git(work, "config", "gc.auto", "0")
+            _git(work, "config", "maintenance.auto", "false")
+        else:
+            work.mkdir(mode=0o700)
+            _git(work, "init", "-q", "-b", "main")
+            _git(work, "config", "user.name", "cap")
+            _git(work, "config", "user.email", "cap@example.invalid")
+            (work / "README.md").write_text("capture\n")
+            _git(work, "add", "README.md")
+            _git(work, "commit", "-q", "-m", "base")
         m = agent_sessions.prepare_stream_launch(state, str(work), cli_binary=binary, cli_version=version,
                                                  cli_identity=agent_sessions.binary_identity(binary),
                                                  model_id=args.model, pipeline_id="flow-" + uuid.uuid4().hex[:12],
@@ -140,7 +181,7 @@ def main() -> int:
         env = daemon.build_env()
         env["CLAUDE_CODE_TMPDIR"] = scratch
         env["DISABLE_AUTOUPDATER"] = "1"
-        dispatch = str(uuid.uuid4())
+        dispatch = given_id or str(uuid.uuid4())
         report = {"v": 1, "dispatch_id": dispatch, "status": "done", "head": "<git rev-parse HEAD>",
                   "tests": {"command": "none", "result": "not_run", "summary": "n/a"}, "notes": "ok"}
         text = ("Do these in the current directory with the Bash tool, in order: 1) create hello.py containing "
@@ -148,6 +189,8 @@ def main() -> int:
                 "3) append the line print('bye') to hello.py and do not commit it. Then call the StructuredOutput "
                 "tool once with exactly this JSON, replacing head with the output of git rev-parse HEAD: "
                 + json.dumps(report, separators=(",", ":")))
+        if given_text is not None:
+            text = given_text
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 cwd=str(work), env=env, start_new_session=True, close_fds=True)
         leader = stream_session.capture_leader(proc.pid)

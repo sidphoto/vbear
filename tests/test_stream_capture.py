@@ -92,5 +92,49 @@ class OutputGuardTests(unittest.TestCase):
         self.assertEqual(os.listdir(moved), ["raw.jsonl"])               # it went where the descriptor points
 
 
+class InputGuardTests(unittest.TestCase):
+    """--text-file and --repo name an earlier run's own files: only under _sandbox, a bounded regular file."""
+
+    def setUp(self):
+        self.cap = load()
+        self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbcap-")))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = self.tmp / "worktree"
+        (self.root / "_sandbox" / "runs").mkdir(parents=True)
+        (self.tmp / "elsewhere").mkdir()
+
+    def test_the_text_file_is_read_with_the_id_it_names(self):
+        d = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+        f = self.root / "_sandbox" / "runs" / "text.txt"
+        f.write_text('task\n{"v":1,"dispatch_id":"' + d + '","status":"x"}\n')
+        text, found = self.cap.load_text_file(str(f), self.root)
+        self.assertEqual(found, d)
+        self.assertIn("task", text)
+        f.write_text("no id here")
+        self.assertEqual(self.cap.load_text_file(str(f), self.root)[1], None)
+
+    def test_a_file_outside_the_sandbox_or_too_large_or_not_a_file_is_refused(self):
+        outside = self.tmp / "elsewhere" / "t.txt"
+        outside.write_text("x")
+        with self.assertRaises(SystemExit):
+            self.cap.load_text_file(str(outside), self.root)
+        link = self.root / "_sandbox" / "runs" / "link.txt"
+        link.symlink_to(outside)
+        with self.assertRaises(SystemExit):                      # a link that leaves the sandbox
+            self.cap.load_text_file(str(link), self.root)
+        big = self.root / "_sandbox" / "runs" / "big.txt"
+        big.write_text("x" * (self.cap.TEXT_MAX + 1))
+        with self.assertRaises(SystemExit):
+            self.cap.load_text_file(str(big), self.root)
+        with self.assertRaises(SystemExit):                      # a directory
+            self.cap.load_text_file(str(self.root / "_sandbox" / "runs"), self.root)
+
+    def test_the_base_is_a_hex_commit(self):
+        for good in ("abcdef1", "a" * 40):
+            self.assertTrue(self.cap.BASE_RE.match(good))
+        for bad in ("", "abc", "g" * 10, "a" * 41, "HEAD", "-x", "abc def", "abcdef1\n"):
+            self.assertFalse(self.cap.BASE_RE.match(bad), bad)
+
+
 if __name__ == "__main__":
     unittest.main()
