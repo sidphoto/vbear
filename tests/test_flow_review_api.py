@@ -149,6 +149,36 @@ class ReviewTests(ReviewApiCase):
         self.assertIn("VERDICT: PASS", rep["text"])
         self.assertIn(f"REVIEWED_COMMIT: {self.commit}", rep["text"])
         self.assertFalse(self.executor_status()["hold"]["held"])
+        # what the review used, in tokens, from its record: a complete turn, counts only, no price
+        usage = entry["usage"]
+        self.assertEqual((usage["state"], usage["reason"]), ("complete", ""))
+        self.assertGreater(usage["counts"]["total_tokens"], 0)
+        self.assertGreater(usage["counts"]["input_tokens"], 0)
+        self.assertNotIn("usd", json.dumps(entry).lower())
+        st, listing = self.call(f"/api/flows/{self.fid}/reviews")
+        self.assertIn("不換算成金額", listing["usage_note"])
+
+    def test_a_record_written_before_usage_was_kept_says_unavailable_not_zero(self):
+        self.start_executor()
+        self.commit_work()
+        self.turn()
+        st, r = self.start_review()
+        job = r["review"]["job_id"]
+        self.wait_for(lambda: (x := next((x for x in self.reviews() if x["job_id"] == job), None))
+                      and x["state"] == "cleaned" and x, msg="the review to end")
+        path = next((self.base / "pipelines").glob("*/reviews/1/result.json"))
+        res = json.loads(path.read_text())
+        del res["usage"], res["usage_problem"]                      # the shape every earlier record has
+        path.write_text(json.dumps(res))
+        entry = next(x for x in self.reviews() if x["job_id"] == job)
+        self.assertEqual((entry["outcome"], entry["record"]), ("valid", "complete"))   # still readable
+        self.assertEqual((entry["usage"]["state"], entry["usage"]["counts"]), ("unavailable", None))
+        self.assertIn("之前寫的", entry["usage"]["reason"])
+        res["usage"], res["usage_problem"] = None, "chain_mismatch"
+        path.write_text(json.dumps(res))
+        entry = next(x for x in self.reviews() if x["job_id"] == job)
+        self.assertEqual((entry["usage"]["state"], entry["usage"]["counts"]), ("unavailable", None))
+        self.assertIn("累計鏈", entry["usage"]["reason"])
 
     def test_only_the_request_with_no_fields_is_accepted(self):
         self.start_executor()

@@ -34,7 +34,7 @@ class WhitelistTests(unittest.TestCase):
         (self.state / "sessions" / "l-0123456789abcdef").mkdir(parents=True)
         (self.state / "reviews" / "r-0123456789abcdef").mkdir(parents=True)
 
-    def write(self, result=None, journal=None, manifest=None, snapshot=None):
+    def write(self, result=None, journal=None, manifest=None, snapshot=None, result_json=None):
         h1, h2, h3, h4 = HOSTILE
         base = {"scenario": "full", "passed": False, "error": f"AssertionError: {h1} {h3}", "wall_seconds": 12.5,
                 "cleanup_problems": [h1, h2], "clean": False, "real_state_unchanged": True,
@@ -65,8 +65,17 @@ class WhitelistTests(unittest.TestCase):
             "".join(json.dumps(f) + "\n" for f in (journal or facts)))
         man = {"round": 1, "state": "cleaned", "outcome": "valid", "model": "gpt-6-luna", "codex_version": "0.160.0",
                "exit_code": 0, "invalid_reasons": [h1, h3], "scratch": {"path": h1}, "workdir": h1, "created": 1.5,
-               "ended_at": 2.5, "retained_reason": h3}
+               "ended_at": 2.5, "retained_reason": h3, "task_id": "task-1"}
         man.update(manifest or {})
+        rec = self.state / "pipelines" / man["task_id"] / "reviews" / "1"
+        rec.mkdir(parents=True, exist_ok=True)
+        (rec / "result.json").write_text(json.dumps(result_json if result_json is not None else {
+            "v": 1, "verdict": "PASS", "reasons": [h1, h3], "thread_id": h2,
+            "usage": {"complete": True, "counts": {"input_tokens": 1500, "cached_input_tokens": 100,
+                                                    "cache_write_input_tokens": 0, "output_tokens": 70,
+                                                    "reasoning_output_tokens": 20, "total_tokens": 1570,
+                                                    "free_text": h3, "extra": h1}},
+            "usage_problem": h2}))
         (self.state / "reviews" / "r-0123456789abcdef" / "manifest.json").write_text(json.dumps(man))
         snap = snapshot or {"flow": {"flow": {"events": [
             {"seq": 1, "source": "console", "kind": "risk_acknowledged", "note": h1},
@@ -99,12 +108,56 @@ class WhitelistTests(unittest.TestCase):
         self.assertEqual((sess["responses"], sess["final_cost_usd"]), (1, 0.0123))
         self.assertEqual(sess["turns"][0]["report_tests"], "passed")
         self.assertEqual(s["reviews"][0], {"round": 1, "state": "cleaned", "outcome": "valid", "model": "gpt-6-luna",
-                                           "codex_version": "0.160.0", "exit_code": 0, "invalid_reason_count": 2})
+                                           "codex_version": "0.160.0", "exit_code": 0, "invalid_reason_count": 2,
+                                           "usage": {"state": "complete", "reason": None, "input_tokens": 1500,
+                                                     "cached_input_tokens": 100, "cache_write_input_tokens": 0,
+                                                     "output_tokens": 70, "reasoning_output_tokens": 20,
+                                                     "total_tokens": 1570}})
         self.assertEqual(s["accounting"]["spent_usd"], 0.0923)
         self.assertEqual([e["kind"] for e in s["events"]], ["risk_acknowledged", "auto_review_result"])
         self.assertEqual(s["events"][1]["source"], "?")
         self.assertEqual(s["stop"]["events_after_the_stop"], 2)
         self.assertNotIn("evil", s["limits"])
+
+    def test_a_review_without_usable_usage_has_none_not_zero(self):
+        names = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
+                 "reasoning_output_tokens", "total_tokens")
+        h1, h2, h3, h4 = HOSTILE
+        cases = (
+            ({"v": 1, "usage": None, "usage_problem": "chain_mismatch"}, "unavailable", "chain_mismatch"),
+            ({"v": 1, "usage": None, "usage_problem": h3}, "unavailable", "?"),               # free text never passes
+            ({"v": 1}, "unavailable", "no_usage_field"),                                        # an earlier record
+            ({"v": 1, "usage": {"counts": [1, 2], "complete": True}, "usage_problem": None}, "unavailable", "?"),
+            ([1, 2], "unavailable", "no_usage_field"),
+        )
+        for rj, state, reason in cases:
+            with self.subTest(rj=rj):
+                self.write(result_json=rj)
+                u = self.m.summarize(self.run, self.state)["reviews"][0]["usage"]
+                self.assertEqual((u["state"], u["reason"]), (state, reason))
+                self.assertEqual([u[n] for n in names], [None] * 6)                              # never 0
+        # a count that is not a plain non-negative integer is not had, the rest are kept
+        self.write(result_json={"v": 1, "usage": {"complete": False, "counts": {
+            "input_tokens": 10, "output_tokens": True, "total_tokens": -5, "cached_input_tokens": 1.5,
+            "cache_write_input_tokens": "9", "reasoning_output_tokens": 3}}})
+        u = self.m.summarize(self.run, self.state)["reviews"][0]["usage"]
+        self.assertEqual((u["state"], u["input_tokens"], u["reasoning_output_tokens"]), ("partial", 10, 3))
+        self.assertEqual([u["output_tokens"], u["total_tokens"], u["cached_input_tokens"], u["cache_write_input_tokens"]],
+                         [None, None, None, None])
+        # no record at all, and a task id that is not a plain id
+        (self.state / "pipelines" / "task-1" / "reviews" / "1" / "result.json").unlink()
+        self.assertEqual(self.m.summarize(self.run, self.state)["reviews"][0]["usage"]["reason"], "no_result")
+        self.write(manifest={"task_id": "../../x"})
+        u = self.m.summarize(self.run, self.state)["reviews"][0]["usage"]
+        self.assertEqual((u["state"], u["reason"], u["input_tokens"]), ("unavailable", "?", None))
+
+    def test_the_summary_names_are_the_products(self):
+        import sys
+        sys.path.insert(0, str(TOOLS.parent))
+        from vbear.runtime import codex_constants as cc, review_validate as rv
+        self.assertEqual(set(self.m.USAGE_PROBLEMS), set(rv.USAGE_PROBLEMS))
+        for version, consts in cc.VERSIONS.items():
+            self.assertEqual(set(self.m.USAGE_NAMES), set(consts.usage_fields), version)
 
     def test_every_assertion_name_of_the_driver_is_on_the_list(self):
         source = (TOOLS / "s3_real_e2e.py").read_text()

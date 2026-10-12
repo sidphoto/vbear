@@ -2617,6 +2617,23 @@ function s2ReportsPanel(rp) {
     })) : emptyState("還沒有回報", "派工並等執行者回合結束後，有效的回報會顯示在這裡。"));
 }
 
+// What a review used, in tokens, from the record (never a price). "unavailable" is said as such: it is not 0.
+const S2_USAGE_LABELS = [["input_tokens", "輸入"], ["cached_input_tokens", "其中快取讀取"],
+  ["cache_write_input_tokens", "寫入快取"], ["output_tokens", "輸出"], ["reasoning_output_tokens", "其中推理"],
+  ["total_tokens", "合計"]];
+function s2UsageLine(u) {
+  if (!u) return null;
+  if (u.state === "unavailable" || !u.counts) {
+    return el("p", { class: "small muted", "data-s2": "review-usage" }, `用量：無法取得（${u.reason || "原因不明"}）`);
+  }
+  const n = (v) => String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const known = S2_USAGE_LABELS.filter(([k]) => Object.prototype.hasOwnProperty.call(u.counts, k)).map(([k, l]) => `${l} ${n(u.counts[k])}`);
+  const other = Object.keys(u.counts).filter((k) => !S2_USAGE_LABELS.some(([x]) => x === k)).sort().map((k) => `${k} ${n(u.counts[k])}`);
+  return el("p", { class: "small", "data-s2": "review-usage" },
+    `用量（token${u.state === "partial" ? "，至少" : ""}）：${known.concat(other).join("　")}`,
+    u.state === "partial" ? el("span", { class: "muted" }, `　${u.reason}`) : null);
+}
+
 function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
   if (!rv.ok) return el("section", { class: "section s2-panel", "data-s2": "reviews" }, sectionHead("Codex 審查", null),
     notice("bad", "無法讀取審查：" + rv.message));
@@ -2663,6 +2680,7 @@ function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
       res.base_is_ancestor !== undefined && res.base_is_ancestor !== null
         ? el("p", { class: "small" }, `BASE_IS_ANCESTOR：${res.base_is_ancestor ? "yes" : "no"}　`,
           el("span", { class: "muted" }, res.base_is_ancestor_note || "")) : null,
+      s2UsageLine(x.usage),
       rep && rep.text ? el("details", { class: "s2-report-text", open: x.outcome === "valid" && !running },
         el("summary", null, `審查者的報告（純文字顯示${rep.usable ? "" : "；這次審查無效，僅供參考"}）`),
         s2Pre(rep.text)) : (rep && rep.problem ? el("p", { class: "small muted" }, rep.problem) : null));
@@ -2670,6 +2688,7 @@ function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
   return el("section", { class: "section s2-panel", "data-s2": "reviews" },
     sectionHead("Codex 審查", "審查者寫的內容一律以純文字顯示；BASE_IS_ANCESTOR 是審查者自行回報的，VBear 沒有獨立驗證。", start),
     why.length ? el("p", { class: "small muted" }, "現在不能啟動審查：" + why.join("；") + "。") : null,
+    reviews.some((x) => x.usage) && rv.data.usage_note ? el("p", { class: "small muted" }, rv.data.usage_note) : null,
     items.length ? el("ul", { class: "s2-reviews" }, items) : emptyState("還沒有審查", null));
 }
 

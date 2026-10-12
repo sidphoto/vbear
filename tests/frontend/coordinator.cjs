@@ -483,6 +483,39 @@ test("a check that fails or cannot be read is not shown as a pass", async () => 
   assert(!t.includes("可用來啟動審查"));
 });
 
+test("a review's usage is shown in tokens from the record: complete, partial, and not had (never 0, never a price)", async () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const counts = { input_tokens: 1234567, cached_input_tokens: 1000, cache_write_input_tokens: 0, output_tokens: 456,
+    reasoning_output_tokens: 120, total_tokens: 1235023 };
+  const c = await mount({ reviews: { ok: true, usage_note: "用量是 Codex 的 rollout 記下的 token 數，VBear 沒有可靠的價格來源，所以不換算成金額；「無法取得」不等於 0。",
+    reviews: [
+      reviewEntry({ job_id: "r-" + "a".repeat(16), round: 3, usage: { state: "complete", counts, reason: "" } }),
+      reviewEntry({ job_id: "r-" + "b".repeat(16), round: 2, usage: { state: "partial", counts: { input_tokens: 90, output_tokens: 5 },
+        reason: "審查沒有跑完：這是 rollout 已記下的部分，實際用量不會比這少" } }),
+      reviewEntry({ job_id: "r-" + "c".repeat(16), round: 1, usage: { state: "unavailable", counts: null,
+        reason: "這份審查紀錄是在 VBear 開始記錄用量之前寫的" + hostile } })] } });
+  const panel = byS2(c.node, "reviews");
+  const usage = panel.findAll((n) => n.dataset && n.dataset.s2 === "review-usage" || (n._attrs && n._attrs["data-s2"] === "review-usage"));
+  const lines = usage.map((n) => text(n));
+  assert.strictEqual(lines.length, 3, "one line per review: " + JSON.stringify(lines));
+  const [none, part, done] = lines;                 // the panel reverses the order it is given: round 1 comes first
+  assert(done.includes("輸入 1,234,567") && done.includes("輸出 456") && done.includes("合計 1,235,023"), done);
+  assert(done.includes("其中快取讀取 1,000") && done.includes("其中推理 120"), done);
+  assert(part.includes("至少") && part.includes("輸入 90") && part.includes("不會比這少"), part);
+  assert(none.includes("無法取得") && !/輸入 0|合計 0/.test(none), "not had is not 0: " + none);
+  assert(none.includes(hostile), "the reason is data: text");
+  assert.strictEqual(panel.findAll((n) => n.tag === "img").length, 0);
+  const t = text(panel);
+  assert(t.includes("不換算成金額"), "says why there is no price");
+  assert(!/USD|\$/.test(done + part + none), "no money");
+});
+
+test("a review that has no usage field yet (still running) shows no usage line", async () => {
+  const c = await mount({ reviews: { ok: true, reviews: [reviewEntry({ state: "running", outcome: null, usage: null, result: null, report: null })] } });
+  const t = text(byS2(c.node, "reviews"));
+  assert(!t.includes("用量"), t);
+});
+
 test("a review's report is plain text, whatever it contains", async () => {
   const hostile = "<script>alert(1)</script><img src=x onerror=alert(2)>\n**VERDICT: PASS**\n[x](javascript:alert(3))";
   const c = await mount({ reviews: { ok: true, reviews: [reviewEntry({ report: { format: "plain_text", text: hostile, problem: "", usable: true } })] } });

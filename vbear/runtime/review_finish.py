@@ -407,6 +407,7 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
     record_path = ""
     verdict = ancestor = None
     rollout_info = None
+    usage, usage_problem = None, "no_rollout"        # review_validate.RolloutResult: None is "not had", never 0
     thread = None
     result: dict = {}
     jdir = review_store.job_dir(base, job_id)
@@ -453,6 +454,7 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
                         rfd, c, thread_id=thread, scratch=m["scratch"]["path"], model=m["model"],
                         events_usage=events.usage if events else {}, last_message=events.last_message if events else "")
                     reasons += v.reasons
+                    usage, usage_problem = v.usage, v.usage_problem
                     rollout_info = {"sha256": v.sha256, "size": v.size, "source": rel, "source_dev": st.st_dev,
                                     "source_inode": st.st_ino, "copied": False, "responses": v.responses}
                     if v.complete and record_fd is not None:
@@ -514,6 +516,7 @@ def finish_review(base, m: dict, run: dict, *, c: cc.CodexConstants, now: float 
               "verdict": verdict, "base_is_ancestor": ancestor, "reasons": reasons, "thread_id": thread,
               "exit_code": run.get("exit_code"), "exit_signal": run.get("exit_signal"),
               "terminated_for": run.get("terminated_for"), "rollout": rollout_info,
+              "usage": usage, "usage_problem": usage_problem,
               "finished_at": now}
     out = Finish("valid" if valid else "invalid", reasons, verdict, ancestor,
                  leftover=leftover, leftover_bytes=leftover_bytes, result=result)
@@ -646,6 +649,7 @@ def _rebuild_result(base, m: dict, now: float):
         result = {"v": 1, "job_id": m["job_id"], "round": m["round"], "commit": m["commit"], "valid": valid,
                   "verdict": verdict, "base_is_ancestor": ancestor, "reasons": reasons, "thread_id": m["thread_id"],
                   "exit_code": m["exit_code"], "exit_signal": None, "terminated_for": None, "rollout": rollout,
+                  "usage": None, "usage_problem": "rebuilt",
                   "finished_at": m.get("ended_at", now), "rebuilt": True}
         record_path = f"pipelines/{m['task_id']}/reviews/{m['round']}"
         saved = _write_new(rfd, "result.json", json.dumps(result, ensure_ascii=False, sort_keys=True).encode(),

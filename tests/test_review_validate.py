@@ -423,6 +423,86 @@ class CacheFieldTests(unittest.TestCase):
                     self.assertTrue(run_rollout(recs).reasons)
 
 
+class UsageTests(unittest.TestCase):
+    """What a review used is read from the rollout's cumulative usage chain: exact only when the chain is intact
+    and read to the end, "partial" when the turn did not finish, and not had (never 0) otherwise."""
+
+    def expected(self):
+        a, b = rf._usage(0), rf._usage(1)
+        return {f: a[f] + b[f] for f in C.usage_fields}
+
+    def test_a_whole_review_has_the_turn_total_and_says_it_is_complete(self):
+        out = run_rollout(rf.valid_run()[1])
+        self.assertEqual(out.reasons, [])
+        self.assertEqual(out.usage, {"counts": self.expected(), "complete": True})
+        self.assertIsNone(out.usage_problem)
+        self.assertEqual(set(out.usage["counts"]), set(C.usage_fields))      # every field the rollout has
+
+    def test_a_turn_that_did_not_finish_has_what_was_recorded_and_says_so(self):
+        _, recs, _ = rf.valid_run()
+        out = run_rollout(recs, events_usage={})                       # no turn.completed (a stop, a failure)
+        self.assertEqual(out.usage, {"counts": self.expected(), "complete": False})
+        out = run_rollout(recs, events_usage={f: 1 for f in C.events_usage_fields})     # does not agree
+        self.assertFalse(out.usage["complete"])
+        self.assertEqual(out.usage["counts"], self.expected())
+
+    def test_no_token_records_is_not_zero(self):
+        _, recs, _ = rf.valid_run()
+        recs = [r for r in recs if r["type"] != "token_usage_record"]
+        for n, r in enumerate(recs):
+            r["ordinal"] = n
+        out = run_rollout(recs)
+        self.assertEqual((out.usage, out.usage_problem), (None, "no_token_records"))
+
+    def test_a_broken_chain_gives_no_numbers(self):
+        _, recs, _ = rf.valid_run()
+        first = [r for r in recs if r["type"] == "token_usage_record"][0]
+        recs.remove(first)
+        for n, r in enumerate(recs):
+            r["ordinal"] = n
+        out = run_rollout(recs)
+        self.assertEqual((out.usage, out.usage_problem), (None, "chain_mismatch"))
+        _, recs, _ = rf.valid_run()
+        recs_tok = [r for r in recs if r["type"] == "token_usage_record"]
+        recs_tok[0]["payload"]["usage"]["output_tokens"] = "many"
+        out = run_rollout(recs)
+        self.assertEqual((out.usage, out.usage_problem), (None, "chain_mismatch"))
+
+    def test_a_walk_that_stopped_gives_no_numbers(self):
+        _, recs, _ = rf.valid_run()
+        raw = rf.lines(recs[:-3]) + b"{not json}\n" + rf.lines(recs[-3:])
+        out = run_rollout(recs, raw=raw)
+        self.assertEqual((out.usage, out.usage_problem), (None, "walk_stopped"))
+
+    def test_no_rollout_is_the_default(self):
+        res = rv.RolloutResult("0" * 64, 0, 0, None, [])
+        self.assertEqual((res.usage, res.usage_problem), (None, "no_rollout"))
+
+    def test_the_view_never_turns_missing_into_zero(self):
+        good = {"usage": {"counts": {"input_tokens": 10, "output_tokens": 2}, "complete": True}}
+        self.assertEqual(rv.usage_view(good), {"state": "complete", "counts": {"input_tokens": 10, "output_tokens": 2},
+                                               "reason": ""})
+        part = rv.usage_view({"usage": {"counts": {"input_tokens": 10}, "complete": False}})
+        self.assertEqual((part["state"], part["counts"]), ("partial", {"input_tokens": 10}))
+        self.assertIn("不會比這少", part["reason"])
+        for result, fragment in ((None, "讀不到"), ({}, "之前寫的"),
+                                 ({"usage": None, "usage_problem": "chain_mismatch"}, "累計鏈對不上"),
+                                 ({"usage": None, "usage_problem": "rebuilt"}, "重建"),
+                                 ({"usage": None, "usage_problem": "something new"}, "原因不明"),
+                                 ({"usage": None}, "原因不明"),
+                                 ({"usage": {"counts": {"input_tokens": -1}, "complete": True}}, "格式不符"),
+                                 ({"usage": {"counts": {"input_tokens": True}, "complete": True}}, "格式不符"),
+                                 ({"usage": {"counts": {"input_tokens": 1.5}, "complete": True}}, "格式不符"),
+                                 ({"usage": {"counts": {}, "complete": True}}, "格式不符"),
+                                 ({"usage": {"counts": {"Input": 1}, "complete": True}}, "格式不符"),
+                                 ({"usage": {"counts": {"input_tokens": 1}, "complete": "yes"}}, "格式不符"),
+                                 ({"usage": [1, 2]}, "格式不符"), ({"usage": 5}, "格式不符")):
+            with self.subTest(result=result):
+                view = rv.usage_view(result)
+                self.assertEqual((view["state"], view["counts"]), ("unavailable", None))
+                self.assertIn(fragment, view["reason"])
+
+
 class SubagentActivityTests(unittest.TestCase):
     """Design v29.11: Codex 0.160.0 cannot turn multi-agent off, so any sign of
     it makes the review invalid with a reason of its own."""

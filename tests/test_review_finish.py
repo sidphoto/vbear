@@ -122,6 +122,10 @@ class ValidReviewTests(Scenario):
         self.assertEqual((result["valid"], result["verdict"], result["reasons"], result["rollout"]["copied"]),
                          (True, "PASS", [], True))
         self.assertEqual(result["rollout"]["responses"], 2)
+        # the review's tokens, from the rollout's usage chain (the fixture's two responses), in the record
+        a, b = rf._usage(0), rf._usage(1)
+        self.assertEqual(result["usage"], {"complete": True, "counts": {f: a[f] + b[f] for f in a}})
+        self.assertIsNone(result["usage_problem"])
         self.assertFalse(self.scratch.exists())
         self.assertFalse(self.run_home.exists())
         self.assertEqual(sorted(p.name for p in self.job.iterdir()), ["manifest.json"])      # only the manifest stays
@@ -198,7 +202,9 @@ class InvalidReviewTests(Scenario):
         src = self.home / "sessions" / time.strftime("%Y/%m/%d") / f"rollout-x-{rf.THREAD}.jsonl"
         src.unlink()
         out = self.invalid("rollout")
-        self.assertFalse(json.loads((self.record() / "result.json").read_text())["rollout"])
+        result = json.loads((self.record() / "result.json").read_text())
+        self.assertFalse(result["rollout"])
+        self.assertEqual((result["usage"], result["usage_problem"]), (None, "no_rollout"))   # not had, never 0
         self.assertFalse((self.record() / "rollout.jsonl").exists())
         self.tearDown_and_setUp()
         src = self.home / "sessions" / time.strftime("%Y/%m/%d") / f"rollout-x-{rf.THREAD}.jsonl"
@@ -667,6 +673,7 @@ class ResumeTests(Scenario):
         result = json.loads(after["result.json"][2])
         self.assertEqual((result["valid"], result["verdict"], result["rebuilt"], result["job_id"]),
                          (True, "PASS", True, JOB))
+        self.assertEqual((result["usage"], result["usage_problem"]), (None, "rebuilt"))      # not re-read, not 0
         self.assertEqual(self.manifest()["outcome"], "valid")
         self.assertEqual(self.manifest()["state"], "cleaned")
         self.assertEqual([x["record"] for x in sfl.flow_reviews(self.base, FID, TID)], ["complete"])

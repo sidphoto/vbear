@@ -42,6 +42,11 @@ ASSERTIONS = {
     "a review was running when the console was restarted", "the daemon kept running while the console was down",
     "the last verdict is PASS",
 }
+# what a review's record may say about its tokens (vbear.runtime.review_validate: the codes and the count names)
+USAGE_NAMES = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
+               "reasoning_output_tokens", "total_tokens")
+USAGE_PROBLEMS = {"no_rollout", "walk_stopped", "chain_mismatch", "no_token_records", "rebuilt"}
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}\Z")
 KIND_RE = re.compile(r"^[a-z_]{1,40}\Z")
 EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9_]+(/[A-Za-z0-9_]+)?\Z")
@@ -66,6 +71,39 @@ def member(v, allowed):
 
 def ident(v, pattern=NAME_RE):
     return v if isinstance(v, str) and pattern.match(v) else "?"
+
+
+def count(v):
+    """A token count: a non-negative int, else None (not had; never 0)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 2 ** 53 else None
+
+
+def review_usage(state: Path, manifest: dict) -> dict:
+    """A review's tokens from its record (result.json under the flow's task): "complete", "partial" (the turn did
+    not finish: at least this much) or "unavailable" with a code from the fixed list; the counts are None, never 0,
+    when they were not had. No price: VBear has no reliable source for one."""
+    task, rnd = manifest.get("task_id"), manifest.get("round")
+    out = {"state": "unavailable", "reason": "?", **{n: None for n in USAGE_NAMES}}
+    if not (isinstance(task, str) and TASK_ID_RE.match(task) and isinstance(rnd, int) and not isinstance(rnd, bool)
+            and 1 <= rnd <= 999):
+        return out
+    try:
+        res = json.loads((state / "pipelines" / task / "reviews" / str(rnd) / "result.json").read_text())
+    except (OSError, ValueError):
+        out["reason"] = "no_result"
+        return out
+    if not isinstance(res, dict) or "usage" not in res:
+        out["reason"] = "no_usage_field"                       # a record from before usage was kept
+        return out
+    u = res["usage"]
+    if not (isinstance(u, dict) and isinstance(u.get("counts"), dict)):
+        code = res.get("usage_problem")
+        out["reason"] = code if code in USAGE_PROBLEMS else "?"
+        return out
+    out.update({n: count(u["counts"].get(n)) for n in USAGE_NAMES})
+    out["state"] = "complete" if u.get("complete") is True else "partial"
+    out["reason"] = None
+    return out
 
 
 def ints(d, names):
@@ -137,7 +175,8 @@ def summarize(run: Path, state: Path = STATE) -> dict:
                         "outcome": member(d.get("outcome"), REVIEW_OUTCOMES),
                         "model": ident(d.get("model"), MODEL_RE), "codex_version": ident(d.get("codex_version"), VERSION_RE),
                         "exit_code": num(d.get("exit_code"), kind=int),
-                        "invalid_reason_count": len(d.get("invalid_reasons") or [])})
+                        "invalid_reason_count": len(d.get("invalid_reasons") or []),
+                        "usage": review_usage(state, d)})
     out["reviews"] = reviews
     snap = run / "snapshot-final.json"
     if snap.exists():

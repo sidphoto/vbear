@@ -188,6 +188,17 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   JSON object is 400.
 - **Order of sessions.** "Newest" is decided from the `created` time in each daemon-written manifest, never from
   a launch id (random); an order that cannot be told is reported and nothing is called the newest.
+- **A review's tokens.** `result.json` of a review record holds `usage` and `usage_problem`. `usage` is
+  `{"counts": {<name>: int}, "complete": bool}`: the last turn total of the rollout's cumulative usage chain
+  (`token_usage_record`: `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`,
+  `reasoning_output_tokens`, `total_tokens`), taken only when every record was well formed, the chain added up and
+  the file was read to its end. `complete` is true when that total is also what `turn.completed` reported; false
+  for a turn that did not finish (a stop, a failure), where it is what was recorded so far, at least that much. When
+  it cannot be had, `usage` is `null` and `usage_problem` is one of `no_rollout`, `walk_stopped`,
+  `chain_mismatch`, `no_token_records`, `rebuilt` (a record rebuilt after a crash is not re-read). A record
+  written before this field existed has neither key; readers (`review_validate.usage_view`, the summary tool)
+  treat that as "unavailable", never as 0. The screen shows the counts and the note that VBear has no reliable
+  price source, so nothing is converted to money. The usage does not decide a review's validity.
 - **Reading a review in flight.** The daemon records a review's outcome in its manifest first and `result.json`
   after it. The console's readers give a review not yet "cleaned" a short grace (`stream_flow.settling`, 2 s)
   before calling its record missing; the daemon's own reads never wait, and the refusal after the grace is the

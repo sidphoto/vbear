@@ -509,6 +509,23 @@ class RolloutResult:
     turn_id: str | None
     reasons: list
     complete: bool = True        # sha256 and size cover the whole file (always, unless it is over the limit)
+    # What the rollout's cumulative usage chain says the review used (never a guess): {"counts": {name: n},
+    # "complete": bool} or None with usage_problem, one of USAGE_PROBLEMS. "complete" is True when the chain's
+    # last turn total is also what turn.completed reported; False when the turn did not finish (a stop, a
+    # failure): the counts are then what was recorded so far, a lower bound.
+    usage: dict | None = None
+    usage_problem: str | None = "no_rollout"
+
+
+# Why a review has no usage numbers, as the codes a result.json holds and the words a screen shows. Nothing is
+# ever shown as 0 for "could not be had".
+USAGE_PROBLEMS = {
+    "no_rollout": "沒有可讀的 rollout（審查沒有跑到那一步，或檔案找不到）",
+    "walk_stopped": "rollout 在檢查中途停止（有一筆不合法或太長的紀錄），後面的用量讀不到",
+    "chain_mismatch": "rollout 的用量累計鏈對不上，數字不可信",
+    "no_token_records": "rollout 裡沒有任何用量紀錄",
+    "rebuilt": "這份審查紀錄是事後重建的，沒有重新讀 rollout",
+}
 
 
 class _Counting:
@@ -580,6 +597,7 @@ def validate_rollout(fd: int, c: cc.CodexConstants, *, thread_id: str, scratch: 
     digest = _Counting()
     reasons: list[str] = []
     v = _Walk(c, thread_id, scratch, model, events_usage, last_message, reasons)
+    reached_end = False
     try:
         for raw in _lines(fd, strictjson.ROLLOUT, digest):
             parsed = strictjson.loads_object(raw, strictjson.ROLLOUT)
@@ -593,6 +611,8 @@ def validate_rollout(fd: int, c: cc.CodexConstants, *, thread_id: str, scratch: 
                 break
             if len(reasons) >= MAX_REASONS:
                 break
+        else:
+            reached_end = True
     except strictjson.LineError as exc:
         reasons.append(f"rollout 檔案不符：{exc}")
     if not reasons:
@@ -607,8 +627,47 @@ def validate_rollout(fd: int, c: cc.CodexConstants, *, thread_id: str, scratch: 
     complete = _drain(fd, digest) and digest.size <= ROLLOUT_MAX
     if not complete:
         reasons.append("rollout 讀不完整或超過 64 MiB，雜湊不涵蓋整個檔案")
+    usage, problem = _usage_of(v, reached_end, c, events_usage)
     return RolloutResult(digest.h.hexdigest(), digest.size, v.token_records, v.turn_id,
-                         list(dict.fromkeys(reasons))[:MAX_REASONS], complete)
+                         list(dict.fromkeys(reasons))[:MAX_REASONS], complete, usage, problem)
+
+
+def _usage_of(v, reached_end: bool, c, events_usage: dict):
+    """(usage, problem): the last turn total of an intact usage chain read to the end of the file, or None with
+    the code that says why not."""
+    if not reached_end:
+        return None, "walk_stopped"
+    if v.token_records < 1:
+        return None, "no_token_records"
+    if not v.usage_chain_ok or v.last_turn_usage is None:
+        return None, "chain_mismatch"
+    counts = {f: v.last_turn_usage[f] for f in c.usage_fields}
+    complete = bool(events_usage) and all(v.last_turn_usage.get(f) == events_usage.get(f)
+                                          for f in c.events_usage_fields)
+    return {"counts": counts, "complete": complete}, None
+
+
+def usage_view(result) -> dict:
+    """What a review's result.json says it used, for a screen or a summary: {"state": "complete" | "partial" |
+    "unavailable", "counts": {name: int} | None, "reason": str}. A record written before usage was kept, a
+    rebuilt one, or one whose usage is not well-formed is "unavailable" with its reason; nothing is ever
+    turned into 0."""
+    if not isinstance(result, dict):
+        return {"state": "unavailable", "counts": None, "reason": "審查紀錄的 result.json 讀不到"}
+    if "usage" not in result:
+        return {"state": "unavailable", "counts": None, "reason": "這份審查紀錄是在 VBear 開始記錄用量之前寫的"}
+    u = result["usage"]
+    if u is None:
+        code = result.get("usage_problem")
+        return {"state": "unavailable", "counts": None,
+                "reason": USAGE_PROBLEMS.get(code, "原因不明") if isinstance(code, str) else "原因不明"}
+    counts = u.get("counts") if isinstance(u, dict) else None
+    ok = (isinstance(counts, dict) and 1 <= len(counts) <= 8 and isinstance(u.get("complete"), bool)
+          and all(isinstance(k, str) and re.match(r"^[a-z_]{1,40}\Z", k) and _int(n) for k, n in counts.items()))
+    if not ok:
+        return {"state": "unavailable", "counts": None, "reason": "審查紀錄裡的用量格式不符"}
+    return {"state": "complete" if u["complete"] else "partial", "counts": dict(counts),
+            "reason": "" if u["complete"] else "審查沒有跑完：這是 rollout 已記下的部分，實際用量不會比這少"}
 
 
 class _Walk:
@@ -627,6 +686,7 @@ class _Walk:
         self.prev_turn = {f: 0 for f in c.usage_fields}
         self.prev_thread = {f: 0 for f in c.usage_fields}
         self.last_turn_usage: dict | None = None
+        self.usage_chain_ok = True            # every token_usage_record was well formed and added up
         self.after_complete = False
 
     def bad(self, why: str) -> None:
@@ -786,6 +846,14 @@ class _Walk:
         return {f: obj[f] for f in c.usage_fields}
 
     def _token_usage_record(self, p):
+        before = len(self.reasons)
+        try:
+            self._token_usage_record_checked(p)
+        finally:
+            if len(self.reasons) > before:
+                self.usage_chain_ok = False
+
+    def _token_usage_record_checked(self, p):
         self.token_records += 1
         usage = self._usage_obj(p.get("usage"), "usage")
         turn = self._usage_obj(p.get("turn_token_usage"), "turn_token_usage")
