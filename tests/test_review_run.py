@@ -306,16 +306,51 @@ class GroupEndTests(RunCase):
         self.assertTrue(self.group_gone(run.pid))
         self.assertTrue(run.reaped)
 
-    def test_a_descendant_that_left_the_group_means_manual_review(self):
+    def test_a_descendant_that_left_the_group_and_stays_means_manual_review_after_the_grace(self):
         code = ("import subprocess,os,time\n"
                 "p=subprocess.Popen(['sleep','600'],start_new_session=True)\n"
                 "open(os.environ['TMPD']+'/escaped.pid','w').write(str(p.pid))\n"
                 "time.sleep(1.5)\n")
-        run = self.spawn(code)
-        out = self.drive(run)
+        with mock.patch.object(rr.stream_session, "ESCAPE_GRACE", 1.0):
+            run = self.spawn(code)
+            out = self.drive(run)
+            waited = time.monotonic() - run.exit_seen
         self.assertIn("離開了程序群組", out["manual_review"])
+        self.assertGreaterEqual(waited, 1.0)                  # it waited the whole grace before giving up
         self.assertTrue(run.reaped)                           # the group itself was empty
-        os.kill(int((self.tmp / "escaped.pid").read_text()), 0)    # and the escaped child was not chased
+        pid = int((self.tmp / "escaped.pid").read_text())
+        os.kill(pid, 0)                                       # and the escaped child was not chased: no signal
+        self.addCleanup(lambda: os.kill(pid, signal.SIGKILL))
+
+    def test_a_descendant_that_left_the_group_and_ends_by_itself_in_the_grace_is_cleaned(self):
+        # a command the CLI ran in a group of its own, still running when the CLI was stopped: it ends a moment later
+        code = ("import subprocess,os,time\n"
+                "p=subprocess.Popen(['sleep','2.5'],start_new_session=True)\n"
+                "open(os.environ['TMPD']+'/escaped.pid','w').write(str(p.pid))\n"
+                "time.sleep(1.5)\n")
+        signals = []
+        real_killpg = os.killpg
+        run = self.spawn(code)
+        with mock.patch.object(rr.os, "killpg", side_effect=lambda *a: signals.append(a) or real_killpg(*a)):
+            out = self.drive(run)
+        self.assertIsNone(out["manual_review"], out)
+        self.assertTrue(run.reaped)
+        self.assertEqual(signals, [])                         # nothing was signalled in or after the grace
+        self.assertEqual(out["terminated_for"], None)
+
+    def test_a_process_table_that_cannot_be_read_is_not_taken_for_gone(self):
+        code = ("import subprocess,os,time\n"
+                "p=subprocess.Popen(['sleep','600'],start_new_session=True)\n"
+                "time.sleep(1.5)\n")
+        run = self.spawn(code)
+        unreadable = mock.patch.object(rr.proctrack, "process_table",
+                                       side_effect=rr.proctrack.ProcessTableUnavailable("ps failed"))
+        with mock.patch.object(rr, "TABLE_GIVE_UP", 1.0):
+            time.sleep(1.2)                                   # the leader is gone; from here the table fails
+            with unreadable:
+                out = self.drive(run)
+        self.assertIn("無法取得程序表", out["manual_review"])      # never "cleaned", and the leader is not reaped
+        self.assertFalse(run.reaped)
 
     def test_a_group_that_cannot_be_proven_empty_keeps_the_leader_unreaped(self):
         reaped = []

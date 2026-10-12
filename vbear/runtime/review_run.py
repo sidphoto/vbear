@@ -146,6 +146,8 @@ class ReviewRun:
         self.exit_signal: int | None = None
         self.phase: str | None = None
         self.phase_deadline = 0.0
+        self.escape_deadline: float | None = None   # see stream_session.ESCAPE_GRACE
+        self.escape_next = 0.0
         self.finished = False
         self.reaped = False
         self.outcome: dict | None = None
@@ -372,6 +374,8 @@ class ReviewRun:
                 self.phase, self.phase_deadline = "kill", mono + KILL_GRACE
                 self._killpg(signal.SIGKILL)
             return
+        if self.escape_deadline is not None and mono < self.escape_next:
+            return                                # in the grace, between two looks at the process table
         live, rows = self._members()
         if live:
             if self.phase is None:
@@ -390,6 +394,15 @@ class ReviewRun:
             return
         escaped = [r for r in self.descendants.live(rows) if r["pgid"] != self.pgid]
         if escaped:
+            # A process we saw below the leader is outside its (empty) group: a command the CLI ran in a group of
+            # its own, or started as it was stopped. It ends by itself once its parent is gone, so wait for it,
+            # polling, without signalling (design v29.15); the run is not over meanwhile, so the flow stays held
+            # and "continue" is refused as for any unfinished review.
+            if self.escape_deadline is None:
+                self.escape_deadline = mono + stream_session.ESCAPE_GRACE
+            if mono < self.escape_deadline:
+                self.escape_next = mono + stream_session.ESCAPE_EVERY
+                return
             self._finish(manual_review="有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8]))
             return
         self._finish(manual_review=None)

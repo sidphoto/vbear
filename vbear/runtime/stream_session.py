@@ -49,6 +49,13 @@ OBSERVE_EVERY = 1.0
 CAPTURE_TRIES = 3
 KILL_GIVE_UP = 10.0       # after SIGKILL: still members -> manual review, the leader is kept unreaped
 TABLE_GIVE_UP = 30.0      # no process table this long after the exit -> manual review, kept unreaped
+# A process we observed under the leader that is outside the (now empty) group: a command the CLI ran in a group of
+# its own, or one it started in the instant it was stopped. It usually ends by itself once its parent is gone, so
+# the end waits for it, polling the process table, before it calls the run a manual review (S3 real end-to-end,
+# run 6; design v29.15). No signal is sent in this time: only identities seen as descendants (pid and start time)
+# are looked at.
+ESCAPE_GRACE = 10.0
+ESCAPE_EVERY = 0.2
 
 
 # ---- process identity before any signal (design 2.3, 5.8; part 2 review B6) ------------
@@ -203,6 +210,8 @@ class StreamSession:
         self.exit_recorded = False
         self.phase: str | None = None             # None | "term" | "kill"
         self.phase_deadline = 0.0
+        self.escape_deadline: float | None = None  # set when an observed descendant is outside the empty group
+        self.escape_next = 0.0
         self.close_reason = ""
         self.finished = False
         self.reaped = False                       # set the moment waitpid returns: from then the leader is no one's to hold
@@ -565,6 +574,8 @@ class StreamSession:
                 self.phase, self.phase_deadline = "kill", now + KILL_GRACE
                 self._killpg(signal.SIGKILL)
             return
+        if self.escape_deadline is not None and now < self.escape_next:
+            return                                # in the grace, between two looks at the process table
         live, rows = self._group_members()
         if live:
             if self.phase is None:
@@ -583,6 +594,11 @@ class StreamSession:
             return
         escaped = [r for r in self.descendants.live(rows) if r["pgid"] != self.pgid]
         if escaped:
+            if self.escape_deadline is None:
+                self.escape_deadline = now + ESCAPE_GRACE
+            if now < self.escape_deadline:
+                self.escape_next = now + ESCAPE_EVERY      # waiting: nothing is signalled, the session is not over
+                return
             self._finish(manual_review="有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8]))
             return
         self._finish(manual_review=None)

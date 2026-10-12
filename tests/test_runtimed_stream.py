@@ -83,6 +83,12 @@ for line in sys.stdin:
         open("escaped.pid", "w").write(str(p.pid))
         time.sleep(3)
         sys.exit(0)
+    if mode == "escape_short_then_exit":
+        # A command in a group of its own that is still running when the CLI ends, and ends by itself a moment later.
+        p = subprocess.Popen(["sleep", "4"], start_new_session=True)
+        open("escaped.pid", "w").write(str(p.pid))
+        time.sleep(3)
+        sys.exit(0)
     if mode == "bad_json":
         sys.stdout.write("{not json\n"); sys.stdout.flush()
         continue
@@ -1039,16 +1045,28 @@ class ProcessTests(StreamCase):
         self.assertEqual(json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())["state"],
                          "ended")
 
-    def test_escaped_descendant_means_manual_review(self):
-        launch_id, _ = self.open("escape_then_exit")
+    def test_escaped_descendant_that_stays_means_manual_review_after_the_grace(self):
+        from vbear.runtime import stream_session
+        with mock.patch.object(stream_session, "ESCAPE_GRACE", 1.0):
+            launch_id, _ = self.open("escape_then_exit")
+            self.dispatch(launch_id)
+            pid = int(self.wait_for(lambda: (self.work / "escaped.pid").exists()
+                                    and (self.work / "escaped.pid").read_text(), msg="escaped child"))
+            self.pids.append(pid)
+            self.wait_for(lambda: launch_id not in self.dm._streams, msg="session finished")
+        m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
+        self.assertEqual(m["state"], "manual_review")
+        os.kill(pid, 0)                                   # not chased: still alive
+
+    def test_escaped_descendant_that_ends_by_itself_in_the_grace_is_cleaned(self):
+        launch_id, _ = self.open("escape_short_then_exit")
         self.dispatch(launch_id)
         pid = int(self.wait_for(lambda: (self.work / "escaped.pid").exists()
                                 and (self.work / "escaped.pid").read_text(), msg="escaped child"))
         self.pids.append(pid)
         self.wait_for(lambda: launch_id not in self.dm._streams, msg="session finished")
         m = json.loads((self.base / "sessions" / launch_id / "manifest.json").read_text())
-        self.assertEqual(m["state"], "manual_review")
-        os.kill(pid, 0)                                   # not chased: still alive
+        self.assertEqual(m["state"], "ended")             # cleaned, not kept for a person
 
     def test_the_manifest_is_final_before_the_session_leaves_tracking(self):
         # The planner's flaky run: a session gone from _streams while its
