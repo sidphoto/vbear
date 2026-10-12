@@ -17,7 +17,9 @@ execution continues only once you accept the risk again and approve the plan aga
 - **Test ports and shared directories.** No test names a port: every test listener binds port 0 and reads the real
   one back, and a test fails the suite if one is added that does not. The test that checks a failed launch leaves
   no scratch directory looks at what its own call made, not at a listing of the shared `/private/tmp`, so two
-  copies of the suite can run at the same time.
+  copies of the suite can run at the same time. The test that a close does not stall another session no longer
+  counts that session's output changes (a CI virtual machine stretched its timer to 48 in a 3 s close); it
+  measures the longest time without output over the whole close, trailing stretch included.
 - **Unverified Claude Code version, said before start.** When the installed Claude Code has no verified stream mode,
   the flow page says so in the executor panel before the executor is started, and the start button is off. The
   message (also the answer to a refused acceptance, preparation or open) names the version found, lists the versions

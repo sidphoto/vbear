@@ -181,28 +181,45 @@ class LifecycleTests(SessionCase):
                            " signal.signal(s,signal.SIG_IGN)\nprint('armed',flush=True);time.sleep(100)"])
         self.wait_out(stuck, b"armed")
         self.wait_out(busy, b"t")
-        samples, done = [], threading.Event()
+        changes, done = [], threading.Event()    # when the other session's output total moved
 
         def sample():
-            last_total, last_change = -1, time.monotonic()
+            last_total = -1
             while not done.is_set():
                 s = self.dm._sessions.get(busy)
-                total, now = (s.total if s else -1), time.monotonic()
+                total = s.total if s else -1
                 if total != last_total:
-                    samples.append(now - last_change)
-                    last_total, last_change = total, now
+                    changes.append(time.monotonic())
+                    last_total = total
                 time.sleep(0.005)
 
         t = threading.Thread(target=sample)
         t.start()
+        begin = time.monotonic()
         self.rpc("close", session_id=stuck)  # ~3s through HUP -> TERM -> KILL
+        end = time.monotonic()
         done.set()
         t.join()
-        self.assertGreater(len(samples), 50)
-        # A close that blocked the daemon loop would stall the other session for
-        # at least a grace period (HUP_GRACE, 1 s); half of it separates that
-        # from a busy machine's scheduling delay (0.27 s seen under load).
-        self.assertLess(max(samples[1:]), d.HUP_GRACE / 2, "other session stalled during close")
+        window = end - begin
+        # How often the other session's output moves is up to that program's own timer, which a CI virtual machine
+        # stretches (a count of 48 or 49 changes in a 3 s close was seen there, 250 on a laptop), so the count is
+        # not the test. What a close that blocked the daemon loop would do is stall the other session for at least a
+        # grace period (HUP_GRACE, 1 s): the longest time without a change over the whole close, including from its
+        # start to the first change and from the last change to its end (a stall that never ends in another change
+        # has no gap between two changes, only a trailing one), must stay under half of it. Half separates a
+        # blocked loop from a busy machine's scheduling delay (0.27 s seen under load).
+        self.assertGreaterEqual(window, d.HUP_GRACE + d.TERM_GRACE - 0.1,
+                                "the close did not go through the escalation, so nothing overlapped it")
+        stamps = [begin] + [c for c in changes if begin <= c <= end] + [end]
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        floor = int(window / (d.HUP_GRACE / 2))   # what "never idle for half a grace period" already implies
+        self.assertGreaterEqual(
+            len(stamps) - 2, floor,
+            f"the other session's output moved {len(stamps) - 2} times in a {window:.1f} s close; fewer than {floor} "
+            f"means it was idle for stretches (longest {max(gaps):.2f} s) while the daemon had no one else to serve")
+        self.assertLess(max(gaps), d.HUP_GRACE / 2,
+                        f"other session stalled during close (longest {max(gaps):.2f} s of {window:.1f} s, "
+                        f"{len(stamps) - 2} changes)")
         self.rpc("close", session_id=busy)
 
     def test_double_close_both_answered_then_not_found(self):
