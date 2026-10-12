@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 — multi-agent flows
+
+Multi-agent flows: a look-only flows board; a coordinator that runs each step only when you press it; after a
+plan is approved, the executor and its reviews run on their own and stop at the merge gate. Claude Code 2.1.296
+is stream-verified. Evidence of real-model end-to-end runs: `docs/evidence/s3-real-e2e-2026-10-12.md`.
+Merging, pushing and tagging are always done by you, never by VBear. After the daemon restarts, automatic
+execution continues only once you accept the risk again and approve the plan again.
 
 - **Codex review tokens.** A review's record now keeps the tokens the review used, taken from the rollout's
   cumulative usage chain (input, cached input, cache-write input, output, reasoning output, total), and the
