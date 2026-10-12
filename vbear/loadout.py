@@ -16,7 +16,13 @@ NOT_KNOWN_AT_PREVIEW = "出發前檢查時才知道"
 INDEX_MISSING = "目前索引找不到此技能"
 VERSION_BASIS = ("以已驗證設定為準：這是 VBear 有實測證據的那組設定會做到的程度；你這台 Mac 的 Claude Code 版本"
                  "實際守到什麼程度，要等出發前檢查才知道")
+CODEX_BASIS = ("以 VBear 已記錄的 Codex 驗證證據為準；證據不全的項目是「未知」。這台 Mac 的 Codex 版本"
+               "實際守到什麼程度，要等出發前檢查才知道")
 ARMOR_NOT_APPLICABLE = {"shared": "shared 不是可啟動的工具，沒有防具"}
+CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）"
+CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
+CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
+SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
 
 
 def _sourced(value) -> dict:
@@ -29,20 +35,26 @@ def _sourced(value) -> dict:
     return {"value": None, "origin": "missing", "detail": ""}
 
 
-def _profession(profile: dict, static: dict | None) -> dict:
+def _label_only(tool) -> str:
+    return "職業只是標籤，不會把角色指示載入 " + ("Codex" if tool == "codex" else
+                                                   "Claude Code" if tool == "claude" else "任何工具")
+
+
+def _profession(profile: dict, static: dict | None, tool=None) -> dict:
     role_id = profile.get("profession_role_id")
     if not role_id:
-        return {"state": "none", "role_id": None}
+        return {"state": "none", "role_id": None, "label_only": _label_only(tool)}
     if static is None:
-        return {"state": "index_not_loaded", "role_id": role_id}
+        return {"state": "index_not_loaded", "role_id": role_id, "label_only": _label_only(tool)}
     role = next((r for r in static.get("roles", []) if r.get("role_id") == role_id), None)
     if role is None:
-        return {"state": "not_in_index", "role_id": role_id, "note": "目前索引找不到這個職業"}
+        return {"state": "not_in_index", "role_id": role_id, "note": "目前索引找不到這個職業",
+                "label_only": _label_only(tool)}
     return {"state": "found", "role_id": role_id, "name": role.get("name"), "tool": role.get("tool"),
             "kind": role.get("kind"), "description": _sourced(role.get("description")),
             "capabilities": _sourced(role.get("capabilities")),
             "suitable_tasks": _sourced(role.get("suitable_tasks")),
-            "label_only": "職業只是標籤，不會把角色指示載入 Claude Code"}
+            "label_only": _label_only(tool)}
 
 
 def _observation(skill_id: str, live: dict | None) -> dict:
@@ -94,16 +106,26 @@ def _skill(skill_id: str, static: dict | None, live: dict | None) -> dict:
     }
 
 
-def _version_status(verification: dict | None) -> dict:
+def _version_status(tool: str, verification: dict | None) -> dict:
     """What this console has verified itself in this run, or unknown. The installed version is not looked up
-    here (that would run the CLI), so "unknown" is the usual answer."""
+    here (that would run the CLI), so "unknown" is the usual answer. Only Claude Code has a verifier here: for
+    any other tool the Claude result is not used and the answer is "unknown" with its own words."""
+    if tool == "codex":
+        return {"state": "unknown", "version": None, "source": "沒有載入的 Codex 驗證資料",
+                "text": "未知（這個畫面不探測 Codex 版本）"}
+    if tool != "claude":
+        return {"state": "unknown", "version": None, "source": "不適用", "text": "不適用（這個工具不能由 VBear 啟動）"}
     v = verification if isinstance(verification, dict) else {}
     version = v.get("version") if isinstance(v.get("version"), str) else None
+    source = "這個主控台剛驗證過的結果"
     if version and v.get("running") is False and v.get("result") == "passed":
-        return {"state": "verified", "version": version, "source": "這個主控台剛驗證過的結果"}
+        return {"state": "verified", "version": version, "source": source,
+                "text": f"已驗證（Claude Code {version}；{source}）"}
     if version and v.get("running") is False and v.get("result") in ("failed", "error"):
-        return {"state": "unverified", "version": version, "source": "這個主控台剛驗證過的結果"}
-    return {"state": "unknown", "version": None, "source": "沒有載入的驗證資料"}
+        return {"state": "unverified", "version": version, "source": source,
+                "text": f"未驗證（Claude Code {version}；{source}）"}
+    return {"state": "unknown", "version": None, "source": "沒有載入的驗證資料",
+            "text": "未知（這個畫面不探測 Claude Code；要到出發前檢查才會讀取版本）"}
 
 
 def _armor(tool: str, version_status: dict) -> dict:
@@ -126,17 +148,42 @@ def _armor(tool: str, version_status: dict) -> dict:
                                "這個版本尚未驗證" if it["unknown_reason"] == agent_launch.WHY_VERSION
                                else it["unknown_reason"]),
         })
-    return {"applicable": True, "basis": "verified_setting", "basis_note": VERSION_BASIS,
-            "preview_decides": "實際以出發前檢查為準",
-            "groups": [{"id": g, "label": label} for g, label in agent_launch.ARMOR_GROUPS],
-            "items": rows}
+    out = {"applicable": True, "basis": "verified_setting",
+           "title": "防具（以已驗證設定為準）" if tool == "claude" else "防具（以 Codex 已記錄的驗證證據為準）",
+           "basis_note": VERSION_BASIS if tool == "claude" else CODEX_BASIS,
+           "preview_decides": "實際以出發前檢查為準",
+           # a Codex card never carries the Claude-only "this Claude Code version is unverified" wording
+           "groups": [{"id": g, "label": label,
+                       "levels": [lv for lv in agent_launch.ARMOR_GROUP_LEVELS[g]
+                                  if not (tool == "codex" and lv == agent_launch.UNVERIFIED)]}
+                      for g, label in agent_launch.ARMOR_GROUPS],
+           "items": rows}
+    return out
+
+
+def _skills_section(tool: str, codex_not_launchable: bool, items: list) -> dict:
+    """The chosen skills with the statement that fits the tool. Only a Claude Code launch passes the safe-mode
+    flag, so only there is the safe-mode statement made (and only as fact for the version it was checked on)."""
+    out = {"title": "已選技能（VBear 啟動時不載入）", "items": items}
+    if tool == "claude":
+        out["note"] = "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。"
+        out["safe_mode"] = ("已傳入安全模式旗標；Claude Code 2.1.296 的說明指出安全模式會關閉技能，"
+                            "其他版本是否停用技能未驗證")
+    elif tool == "codex":
+        out["note"] = CODEX_SKILLS_NOTE if codex_not_launchable else CODEX_SKILLS_NOTE_LAUNCHABLE
+    else:
+        out["note"] = SHARED_SKILLS_NOTE
+    return out
 
 
 def build(profile: dict, static: dict | None, live: dict | None, verification: dict | None) -> dict:
     """The loadout of one Profile from what is already loaded (see the module note)."""
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
     tool = model.get("tool")
-    version = _version_status(verification)
+    version = _version_status(tool, verification)
+    blockers = agent_launch.launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
+    codex_not_launchable = tool == "codex" and any(
+        b.get("code") == "codex_interactive_flags_unsupported" for b in blockers)
     equipped = [s for s in (profile.get("equipped_skill_ids") or []) if isinstance(s, str)]
     return {
         "ok": True,
@@ -146,14 +193,10 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
             "permission_intents": profile.get("permission_intents") or {},
             "intents_note": "只是記錄，不會變成實際權限"},
         "index": {"loaded": static is not None, "generated_at": static.get("generated_at") if static else None},
-        "profession": _profession(profile, static),
-        "skills": {"title": "已選技能（VBear 啟動時不載入）",
-                   "note": "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。",
-                   "safe_mode": "已傳入安全模式旗標；Claude Code 2.1.296 的說明指出安全模式會關閉技能，其他版本是否停用技能未驗證",
-                   "items": [_skill(sid, static, live) for sid in equipped]},
+        "profession": _profession(profile, static, tool),
+        "skills": _skills_section(tool, codex_not_launchable, [_skill(sid, static, live) for sid in equipped]),
         "version_status": version,
-        "armor": _armor(tool, version),
-        "blockers": agent_launch.launch_blockers(
-            profile, True, {"enabled": False, "approved_domains": []}),
+        "armor": _armor(tool, version) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),
+        "blockers": blockers,
         "blockers_note": "假設你已勾選知悉 commit、並維持關閉網路；實際以出發前檢查為準",
     }

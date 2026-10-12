@@ -472,7 +472,13 @@ def make_handler(console: Console):
                             known_skills=known_skills, known_roles=known_roles),
                     })
                 if path.startswith("/api/agent-profiles/") and path.endswith("/loadout"):
-                    out = self._loadout(path[len("/api/agent-profiles/"):-len("/loadout")])
+                    try:
+                        out = self._loadout(path[len("/api/agent-profiles/"):-len("/loadout")])
+                    except agent_profiles.AgentProfileStorageError as exc:
+                        # a read that must change nothing found the store damaged or blocked: it says so and
+                        # leaves the file and the marker alone; the profile page is where it is dealt with
+                        return self._json({"error": str(exc), "code": "profile_store_damaged",
+                                           "hint": "請到角色頁處理（損毀的檔案不會在這裡被搬移）"}, 409)
                     if out is None:
                         return self._error(404, "找不到此 Agent Profile")
                     return self._json(out)
@@ -1035,7 +1041,8 @@ def make_handler(console: Console):
             known_skills = {s.get("skill_id") for s in static.get("skills", [])} if static else None
             known_roles = ({r.get("role_id") for r in static.get("roles", []) if r.get("role_id")}
                            if static else None)
-            profile = agent_profiles.get_profile(profile_id, known_skills=known_skills, known_roles=known_roles)
+            profile = agent_profiles.get_profile_readonly(profile_id, known_skills=known_skills,
+                                                          known_roles=known_roles)
             if profile is None:
                 return None
             verifier = getattr(console, "claude_verifier", None)

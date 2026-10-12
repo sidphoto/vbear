@@ -334,7 +334,8 @@ function findModalInBody() {
     const right = findRightColumn();
     assert.ok(findText(right, "First"), "first profile name in list");
     assert.ok(findText(right, "Stuck"), "second profile name in list");
-    assert.ok(findText(right, "已從掃描結果中消失"), "unresolved warning surfaced in list view");
+    assert.ok(findText(right, "目前索引找不到 1 項已選技能"), "unresolved warning surfaced in list view");
+    assert.ok(!findText(right, "已從掃描結果中消失"), "not worded as 'disappeared' (design v1.1 #6)");
     console.log("ok list+unresolved-warning");
   }
 
@@ -635,12 +636,15 @@ function findModalInBody() {
           referenced_files: { count: 0, present: 0, missing: 0, note: "VBear 不會執行這些檔案" },
           warnings: [], observed: { state: "unavailable", window_days: null, source: "執行觀察" } },
       ] },
-      version_status: { state: "unknown", version: null, source: "沒有載入的驗證資料" },
-      armor: { applicable: true, basis: "verified_setting", basis_note: "以已驗證設定為準：說明",
-        preview_decides: "實際以出發前檢查為準",
-        groups: [{ id: "blocked", label: "擋住了" }, { id: "partial", label: "部分擋住" },
-                 { id: "not_granted", label: "沒有專用權限" }, { id: "not_blocked", label: "沒有擋" },
-                 { id: "unproven", label: "未證明" }],
+      version_status: { state: "unknown", version: null, source: "沒有載入的驗證資料",
+                        text: "未知（這個畫面不探測 Claude Code；要到出發前檢查才會讀取版本）" },
+      armor: { applicable: true, basis: "verified_setting", title: "防具（以已驗證設定為準）",
+        basis_note: "以已驗證設定為準：說明", preview_decides: "實際以出發前檢查為準",
+        groups: [{ id: "blocked", label: "擋住了", levels: ["強制（限已測路徑、版本與執行層）"] },
+                 { id: "partial", label: "部分擋住", levels: ["部分強制"] },
+                 { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
+                 { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
+                 { id: "unproven", label: "未證明", levels: ["未驗證（此 Claude Code 版本尚未實測）", "未知"] }],
         items: [
           armorItem("Network", "強制（限已測路徑、版本與執行層）", "blocked", "空 allowlist", { evidence_refs: "出發前檢查時才知道" }),
           armorItem("Write", "部分強制", "partial", "Bash 寫入受限；Edit/Write 工具屬工具層意圖", { path_scope: "出發前檢查時才知道" }),
@@ -711,6 +715,11 @@ function findModalInBody() {
       assert.ok(findText(card, word), `level text ${word} is shown as is`);
     }
     assert.ok(findText(groups[4], "（目前沒有項目）"), "an empty group says so");
+    // the group's name has its original level words right beside it (design v1.3)
+    const header = (g) => walk(g).find((n) => n.tag === "h5").textContent;
+    assert.strictEqual(header(groups[0]), "擋住了 · 強制（限已測路徑、版本與執行層）");
+    assert.strictEqual(header(groups[3]), "沒有擋 · 僅意圖、未限制");
+    assert.ok(header(groups[4]).startsWith("未證明 · 未驗證（此 Claude Code 版本尚未實測）"));
     assert.ok(findText(card, "實際以出發前檢查為準"), "the card says the pre-launch check decides");
     assert.ok(findText(card, "範圍：出發前檢查時才知道") || findText(card, "出發前檢查時才知道"),
               "what needs a work directory is 'known at the pre-launch check'");
@@ -733,6 +742,24 @@ function findModalInBody() {
     assert.ok(findText(card, "無法顯示這張技能卡的內容"), "the skill card says it cannot be shown");
     assert.ok(findText(card, "無法顯示職業特性"), "role features are not invented");
     assert.strictEqual(walk(card).filter((n) => n.tag === "span" && (n.textContent || "") === "本次不生效").length, 1);
+
+    // a Codex role: no Claude version, no safe-mode words, and it says it cannot be launched
+    card = await open(() => jsonResponse(loadout({
+      version_status: { state: "unknown", version: null, source: "沒有載入的 Codex 驗證資料",
+                        text: "未知（這個畫面不探測 Codex 版本）" },
+      skills: { title: "已選技能（VBear 啟動時不載入）", items: [],
+                note: "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。" },
+      armor: { applicable: true, basis: "verified_setting", title: "防具（以 Codex 已記錄的驗證證據為準）",
+               basis_note: "以 VBear 已記錄的 Codex 驗證證據為準", preview_decides: "實際以出發前檢查為準",
+               launch_note: "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）",
+               groups: [{ id: "unproven", label: "未證明", levels: ["未知"] }],
+               items: [armorItem("Network", "未知", "unproven", "network_access=false 尚無本輪 OS 負向證據")] } })));
+    assert.ok(findText(card, "VBear 目前不提供 Codex 角色的受管啟動") && findText(card, "目前無法從 VBear 啟動這個角色"));
+    assert.ok(findText(card, "未知（這個畫面不探測 Codex 版本）"));
+    for (const word of ["Claude Code 2.1.296", "安全模式", "已傳入安全模式旗標"]) {
+      assert.ok(!findText(card, word), `a Codex card has no ${word}`);
+    }
+    assert.ok(findText(card, "防具（以 Codex 已記錄的驗證證據為準）"));
 
     // a profile without armor (a shared tool) and a failed load
     card = await open(() => jsonResponse(loadout({ armor: { applicable: false, why: "shared 不是可啟動的工具，沒有防具" } })));

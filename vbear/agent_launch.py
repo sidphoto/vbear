@@ -188,6 +188,8 @@ ARMOR_GROUPS = (("blocked", "擋住了"), ("partial", "部分擋住"), ("not_gra
 _LEVEL_GROUP = {ENFORCED: "blocked", PARTIAL: "partial", NOT_GRANTED: "not_granted", INTENT: "not_blocked",
                 UNRESTRICTED: "not_blocked", UNVERIFIED: "unproven", UNKNOWN: "unproven"}
 ARMOR_NAMES = ("Read", "Write", "Test", "Commit", "Deploy", "Network", "Filesystem")
+# The level words that belong to each group, in a fixed order: the group header shows them next to its name.
+ARMOR_GROUP_LEVELS = {g: [lv for lv, gid in _LEVEL_GROUP.items() if gid == g] for g, _ in ARMOR_GROUPS}
 # What an item still needs from its caller. The semantic function below knows none of these values: it names them,
 # and the caller (a preview, which has a work directory, a manifest and evidence; or the loadout, which has none)
 # supplies or withholds them.

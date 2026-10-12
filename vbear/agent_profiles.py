@@ -79,6 +79,11 @@ class AgentProfileStorageError(RuntimeError):
     """
 
 
+class AgentProfileDamaged(AgentProfileStorageError):
+    """The profile file is damaged or holds an entry this module could not have written, found by a read that is
+    not allowed to quarantine it (``load_all(mark_corrupt=False)``). Nothing was moved or written."""
+
+
 _lock = threading.Lock()
 
 
@@ -464,7 +469,7 @@ def _clean_str(value: Any, max_len: int = MAX_TEXT_NAME) -> str:
 
 
 def load_all(known_skills: set[str] | None = None,
-             known_roles: set[str] | None = None) -> dict[str, dict[str, Any]]:
+             known_roles: set[str] | None = None, *, mark_corrupt: bool = True) -> dict[str, dict[str, Any]]:
     """Load every stored Agent Profile from disk.
 
     `known_skills` and `known_roles` are the *current* scanner-derived
@@ -477,6 +482,9 @@ def load_all(known_skills: set[str] | None = None,
     entry) if the storage file exists but cannot be safely read, is
     corrupt, or holds an entry this module could never have written. A
     missing file is a normal empty/fresh state, not corruption.
+
+    ``mark_corrupt=False`` is for a read that must change nothing (the role card): damage is reported as
+    AgentProfileDamaged and the file is neither quarantined nor marked.
     """
     skills = known_skills if known_skills is not None else set()
     roles = known_roles if known_roles is not None else set()
@@ -504,6 +512,10 @@ def load_all(known_skills: set[str] | None = None,
         if not isinstance(data, dict):
             raise ValueError("agent_profiles.json 根節點必須為物件")
     except (ValueError, RecursionError) as exc:
+        if not mark_corrupt:
+            raise AgentProfileDamaged(
+                f"Agent Profile 儲存檔案損毀（{type(exc).__name__}）；這個畫面只讀取，不會搬移或修改檔案"
+            ) from exc
         quarantine_path = _mark_corrupt(path, marker, exc)
         raise AgentProfileStorageError(
             f"Agent Profile 儲存檔案損毀，已隔離至 {quarantine_path}，"
@@ -515,6 +527,11 @@ def load_all(known_skills: set[str] | None = None,
         problem = _entry_schema_problem(k, v, skills, roles)
         if problem is not None:
             exc = ValueError(f"Profile 項目 {k!r} 結構不符：{problem}")
+            if not mark_corrupt:
+                raise AgentProfileDamaged(
+                    f"Agent Profile 儲存檔案含有不符結構的項目（{k!r}：{problem}）；"
+                    "這個畫面只讀取，不會搬移或修改檔案"
+                ) from exc
             quarantine_path = _mark_corrupt(path, marker, exc)
             raise AgentProfileStorageError(
                 f"Agent Profile 儲存檔案含有不符結構的項目（{k!r}：{problem}），"
@@ -549,6 +566,16 @@ def get_profile(profile_id: str, known_skills: set[str] | None = None,
         return None
     with _lock:
         return load_all(known_skills, known_roles).get(profile_id)
+
+
+def get_profile_readonly(profile_id: str, known_skills: set[str] | None = None,
+                         known_roles: set[str] | None = None) -> dict[str, Any] | None:
+    """get_profile that never quarantines or marks: damage raises AgentProfileDamaged (and a marker an earlier
+    read left raises AgentProfileStorageError), and nothing is written."""
+    if not isinstance(profile_id, str) or not profile_id:
+        return None
+    with _lock:
+        return load_all(known_skills, known_roles, mark_corrupt=False).get(profile_id)
 
 
 def save_profile(profile_id: str | None, body: dict[str, Any],

@@ -266,8 +266,9 @@ class LoadoutTests(unittest.TestCase):
                              verification={"running": False, "result": "failed", "version": "2.1.999"})
         self.save(c)
         _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
-        self.assertEqual(body["version_status"], {"state": "unverified", "version": "2.1.999",
-                                                  "source": "這個主控台剛驗證過的結果"})
+        self.assertEqual(body["version_status"]["state"], "unverified")
+        self.assertEqual(body["version_status"]["version"], "2.1.999")
+        self.assertIn("未驗證（Claude Code 2.1.999", body["version_status"]["text"])
         net = next(i for i in body["armor"]["items"] if i["name"] == "Network")
         self.assertEqual(net["group"], "unproven")
 
@@ -277,6 +278,92 @@ class LoadoutTests(unittest.TestCase):
         _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
         self.assertFalse(body["armor"]["applicable"])
         self.assertTrue(any(b["code"] == "tool_not_launchable" for b in body["blockers"]))
+
+    def snapshot(self):
+        """Every file under the state directory: size, mtime and content hash, so that 'nothing changed' is
+        a comparison and not a hope."""
+        import hashlib
+        out = {}
+        for path in sorted(state_dir().rglob("*")):
+            rel = str(path.relative_to(state_dir()))
+            if path.is_file() and not path.is_symlink():
+                st = path.stat()
+                out[rel] = (st.st_size, st.st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest())
+            else:
+                out[rel] = ("dir" if path.is_dir() else "other",)
+        return out
+
+    def test_a_damaged_profile_file_is_reported_and_left_alone(self):
+        import vbear.agent_profiles as ap
+        for name, content in (("not json", "{not json"),
+                              ("not an object", "[1, 2]"),
+                              ("a bad entry", json.dumps({"prof-a": {"id": "prof-a", "name": 5}}))):
+            with self.subTest(name):
+                c, port = self.serve(static=_static())
+                path = ap._path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+                before = self.snapshot()
+                status, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+                after = self.snapshot()
+                self.assertEqual(status, 409, body)
+                self.assertEqual(body["code"], "profile_store_damaged")
+                self.assertIn("角色頁", body["hint"])
+                self.assertEqual(after, before, "the read changed the file system")
+                self.assertTrue(path.exists(), "the file was moved")
+                self.assertFalse(any(".corrupt-" in n for n in after), "a quarantine copy was made")
+                self.assertFalse(ap._corrupt_marker_path().exists(), "a marker was written")
+
+    def test_a_marker_left_by_an_earlier_read_is_reported_without_writing(self):
+        import vbear.agent_profiles as ap
+        c, port = self.serve(static=_static())
+        ap._corrupt_marker_path().parent.mkdir(parents=True, exist_ok=True)
+        ap._corrupt_marker_path().write_text("{}")
+        before = self.snapshot()
+        status, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        self.assertEqual((status, body["code"]), (409, "profile_store_damaged"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_the_groups_carry_the_original_level_words(self):
+        c, port = self.serve(static=_static())
+        self.save(c)
+        _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        levels = {g["id"]: g["levels"] for g in body["armor"]["groups"]}
+        self.assertEqual(levels["blocked"], [agent_launch.ENFORCED])
+        self.assertEqual(levels["partial"], [agent_launch.PARTIAL])
+        self.assertEqual(levels["not_granted"], [agent_launch.NOT_GRANTED])
+        self.assertEqual(levels["not_blocked"], [agent_launch.INTENT, agent_launch.UNRESTRICTED])
+        self.assertEqual(levels["unproven"], [agent_launch.UNVERIFIED, agent_launch.UNKNOWN])
+        self.assertEqual(body["armor"]["title"], "防具（以已驗證設定為準）")
+
+    def test_a_codex_role_gets_nothing_from_claude(self):
+        # Claude Code was verified in this console; the role is a Codex one.
+        static = _static()
+        for rec in static["skills"] + static["roles"]:
+            rec["tool"] = "codex"                 # the index's own tool field is data; keep the words ours
+        c, port = self.serve(static=static, verification={"running": False, "result": "passed", "version": "2.1.296"})
+        self.save(c, model={"tool": "codex", "model_id": ""})
+        status, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        self.assertEqual(status, 200)
+        text = json.dumps(body, ensure_ascii=False)
+        for word in ("Claude", "claude", "2.1.296", "安全模式", "safe-mode", "--safe", "safe_mode"):
+            self.assertNotIn(word, text, word)
+        self.assertEqual(body["version_status"]["state"], "unknown")
+        self.assertIn("Codex", body["version_status"]["text"])
+        self.assertEqual(body["profession"]["label_only"], "職業只是標籤，不會把角色指示載入 Codex")
+        unproven = next(g for g in body["armor"]["groups"] if g["id"] == "unproven")
+        self.assertEqual(unproven["levels"], [agent_launch.UNKNOWN])
+        self.assertNotIn("safe_mode", body["skills"])
+        self.assertEqual(body["skills"]["note"], "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。")
+        self.assertEqual(body["armor"]["launch_note"],
+                         "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）")
+        self.assertTrue(any(b["code"] == "codex_interactive_flags_unsupported" for b in body["blockers"]))
+        # the armor is the Codex one: evidence for its Network and Filesystem items is what decides them
+        items = {i["name"]: i for i in body["armor"]["items"]}
+        expected = agent_launch.armor_items("codex", None, True, bool(agent_launch._codex_evidence_reference()))
+        for name, it in expected.items():
+            self.assertEqual((items[name]["level"], items[name]["note"]), (it["level"], it["note"]))
+        self.assertTrue(all(s["effective"] is False for s in body["skills"]["items"]))
 
     def test_skill_notice_names_the_verified_version_only(self):
         c, port = self.serve(static=_static())

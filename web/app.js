@@ -4651,7 +4651,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         `${profession} · ${toolLabel}`),
       el("div", { class: "small muted mono" }, p.id),
       unresolved.length ? el("div", { class: "small", style: "color:#b85" },
-        `⚠ ${unresolved.length} 項技能已從掃描結果中消失`) : null
+        `⚠ 目前索引找不到 ${unresolved.length} 項已選技能`) : null
     );
     return item;
   }
@@ -4765,7 +4765,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   function rcArmorGroup(group, items) {
     const mine = items.filter((it) => it.group === group.id);
     return el("section", { class: "rc-armor-group", "data-armor-group": group.id },
-      el("h5", null, group.label),
+      el("h5", null, group.levels && group.levels.length ? `${group.label} · ${group.levels.join("、")}` : group.label),
       el("p", { class: "rc-armor-sum" }, ARMOR_GROUP_HELP[group.id] || ""),
       mine.length ? mine.map((it) => el("div", { class: "rc-armor-item" },
         el("div", { class: "rc-armor-name" },
@@ -4778,10 +4778,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         : el("p", { class: "rc-note" }, "（目前沒有項目）"));
   }
 
+  // The sentence comes from the server, which knows which tool's data it is (a Codex card never carries a
+  // Claude version).
   function rcVersionLine(v) {
-    if (v && v.state === "verified") return `已驗證（Claude Code ${v.version}；${v.source}）`;
-    if (v && v.state === "unverified") return `未驗證（Claude Code ${v.version}；${v.source}）`;
-    return "未知（這個畫面不探測 Claude Code；要到出發前檢查才會讀取版本）";
+    return v && typeof v.text === "string" && v.text ? v.text : "未知";
   }
 
   function roleCardParts(p, d) {
@@ -4812,21 +4812,21 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("dt", null, "說明"), el("dd", null, rcSourced(pr.description)),
           el("dt", null, "擅長"), el("dd", null, rcSourced(pr.capabilities)),
           el("dt", null, "適合的工作"), el("dd", null, rcSourced(pr.suitable_tasks))),
-        el("p", { class: "rc-note" }, pr.label_only || "職業只是標籤，不會把角色指示載入 Claude Code"));
+        el("p", { class: "rc-note" }, pr.label_only || "職業只是標籤，不會把角色指示載入工具"));
     } else {
       features = el("section", { class: "rc-block", "data-rc": "profession" },
         el("h4", null, "職業特性"),
         el("p", { class: "rc-note" }, pr.state === "none" ? "未選職業。"
           : pr.state === "not_in_index" ? "目前索引找不到這個職業，無法顯示特性。"
           : "索引未載入，無法顯示職業特性。"),
-        el("p", { class: "rc-note" }, "職業只是標籤，不會把角色指示載入 Claude Code"));
+        el("p", { class: "rc-note" }, pr.label_only || "職業只是標籤，不會把角色指示載入工具"));
     }
 
     const sk = d.skills || {};
     const skills = el("section", { class: "rc-block", "data-rc": "skills" },
       el("h4", null, sk.title || "已選技能（VBear 啟動時不載入）"),
       el("p", { class: "rc-note" }, sk.note || ""),
-      el("p", { class: "rc-note" }, sk.safe_mode || ""),
+      sk.safe_mode ? el("p", { class: "rc-note" }, sk.safe_mode) : null,
       (sk.items || []).length ? el("ul", { class: "rc-skills" }, sk.items.map(rcSkillCard))
         : el("p", { class: "rc-note" }, "未選任何技能。"));
 
@@ -4837,8 +4837,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         el("h4", null, "防具"), notice("warn", ar.why || "這個角色沒有防具資料。"));
     } else {
       armor = el("section", { class: "rc-block", "data-rc": "armor" },
-        el("h4", null, "防具（以已驗證設定為準） ", el("strong", { class: "rc-decides" }, ar.preview_decides || "實際以出發前檢查為準")),
+        el("h4", null, (ar.title || "防具") + " ", el("strong", { class: "rc-decides" }, ar.preview_decides || "實際以出發前檢查為準")),
         el("p", { class: "rc-note" }, ar.basis_note || ""),
+        ar.launch_note ? notice("warn", ar.launch_note) : null,
         el("div", { class: "rc-armor-grid" }, (ar.groups || []).map((g) => rcArmorGroup(g, ar.items || []))));
     }
 
@@ -4943,7 +4944,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         Array.from(equippedIds).length
           ? Array.from(equippedIds).map((sid) => {
               const s = skillById.get(sid);
-              const label = s ? `${s.tool} · ${s.name}` : `${sid}（已不存在）`;
+              const label = s ? `${s.tool} · ${s.name}` : `${sid}（目前索引找不到）`;
               return el("li", { class: "row", style: "justify-content:space-between; padding:2px 4px;" },
                 el("span", { class: "small mono" }, label),
                 el("button", { class: "btn small", type: "button",
