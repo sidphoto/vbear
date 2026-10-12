@@ -24,7 +24,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 
 | In a game | In VBear | Where you see it |
 |---|---|---|
-| **Character** | An **Agent Profile**: a saved setup (name, role, tool, skills) that you can launch | Workbench → the 「角色裝備」 tab in the right column |
+| **Character** | An **Agent Profile**: a saved setup (name, role, tool, skills) that you can launch | Workbench → the 「角色」 tab in the right column |
 | **Class** | A **role label** on the profile, chosen from the agent roles VBear found for Claude Code or Codex. It is only a label: launching does not load the role's instructions into Claude Code | Same place |
 | **Faction** | The **tool** it runs on: Claude Code or Codex CLI. Launching from a profile works with Claude Code only for now | Same place |
 | **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. The Armory marks each one as available, installed, added to a profile, and whether it was ever seen in use | 技能庫 → Armory |
@@ -104,9 +104,9 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
    技能庫, Agent 團隊, 專案 and 設定. VBear lists the skills and agent roles it finds on your Mac (read-only; it
    changes none of them).
 3. **Pick a character and preview the launch.**
-   - Click **終端工作台** in the left menu, then the **角色裝備** tab in the right column.
+   - Click **終端工作台** in the left menu, then the **角色** tab in the right column.
    - Click **+ 建立 Agent Profile**. Give it a name, optionally a role (職業), the tool `claude`, and the skills you
-     want (**加入裝備 →** adds one), then click **建立 Profile**.
+     want (**選入 →** adds one), then click **建立 Profile**.
    - Click **預覽並啟動** on the profile. Type the work directory: the folder's full path, inside your home
      folder (for example `/Users/you/projects/demo`). To get a path without typing it, right-click the folder in
      Finder, hold the Option key and choose **Copy “folder” as Pathname**, then paste it into the box.
@@ -298,6 +298,10 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk acceptance
   still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at its worst
   case (often the session's whole budget): then you raise the limit, accept again and approve automatic mode again.
+- **Names on the screens.** Some names changed to match the game words above (old → new): 「角色裝備」 tab →
+  「角色」; 「職業角色」 → 「職業」; 「模型工具」 → 「工具（遊戲用語：陣營）」; 「已裝備技能 (Equipped Skill Loadout)」 →
+  「已選技能」; 「加入裝備 →」 → 「選入 →」; the Armory's 「已裝備到 Profile」 → 「已加入角色」; the limits' heading
+  「上限」 → 「體力（停損設定）」; a flow's 「階段」 → 「任務進度」.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 

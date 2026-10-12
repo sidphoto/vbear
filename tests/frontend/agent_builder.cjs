@@ -262,7 +262,7 @@ function findRightColumn() {
 async function switchToAgentTab() {
   // Find a button whose text starts with the agent tab label.
   const btn = walk(main).find((n) =>
-    n.tag === "button" && /\[A\] 角色裝備/.test(n.textContent || ""));
+    n.tag === "button" && /^角色$/.test((n.textContent || "").trim()));
   if (!btn) throw new Error("agent tab button not found");
   btn.dispatch("click");
   // yield microtasks
@@ -307,7 +307,7 @@ function findModalInBody() {
     const right = findRightColumn();
     assert.ok(right, "right column present");
     assert.ok(findText(right, "Agent Builder"), "title rendered");
-    assert.ok(findText(right, "Equipped Skill Loadout"), "honest disclosure present");
+    assert.ok(findText(right, "已選技能"), "honest disclosure present");
     assert.ok(findText(right, "絕對不會寫入 ~/.codex"), "boundary disclosure present");
     assert.ok(findText(right, "建立 Agent Profile"), "create button visible");
     console.log("ok empty-state renders title, disclosures, create button");

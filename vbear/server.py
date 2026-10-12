@@ -1319,7 +1319,7 @@ def make_handler(console: Console):
                 # This text is shown to the user verbatim, never as an HTML
                 # permission warning or as an enforced UI block.
                 "disclosures": [
-                    "Equipped Skill Loadout ≠ Loaded into any running session. "
+                    "已選技能（舊稱 Equipped Skill Loadout）≠ Loaded into any running session. "
                     "Saving a Profile never starts, restarts, or injects anything.",
                     "Permission Intents are intent-only and are NOT enforced. "
                     "They are descriptive records of what this Profile is composed "

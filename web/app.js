@@ -1294,7 +1294,7 @@ async function viewSkills(params) {
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
     el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "Armory 四態總覽")),
-    el("p", { class: "lede" }, "這裡是掃描到的 Skill 清單。預設只顯示目前可使用的副本；想看安裝、裝備與使用證據，請開啟 Armory。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
+    el("p", { class: "lede" }, "這裡是掃描到的 Skill 清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟 Armory。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
     el("div", { class: "search" }, q),
@@ -1326,7 +1326,7 @@ async function viewArmory() {
   setKids(main,
     crumbs([["技能庫", "#/skills"], ["Armory"]]),
     el("div", { class: "row" }, el("h1", null, "VBear Armory"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
-    el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、已裝備與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
+    el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、已加入角色與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
     data.unresolved_equipped && data.unresolved_equipped.length
       ? notice("warn", `有 ${data.unresolved_equipped.length} 筆 Profile 引用找不到對應技能；不會自動刪除。`) : null,
     el("div", { class: "grid armory-grid" }, rows.map((s) => {
@@ -1339,10 +1339,10 @@ async function viewArmory() {
             "只有市集中的未安裝副本才會顯示「可取得」；這不代表目前可用。", "b-info"),
           state("本機已安裝", x.installed ? badge("已安裝", "b-ok") : badge("未安裝／其他", "b-mute"), s.sources.installed,
             "已安裝代表掃描到本機副本；不代表正在被任何 Agent 使用。", "b-ok"),
-          state("已裝備到 Profile", equipped.length
+          state("已加入角色", equipped.length
             ? el("div", { class: "chips" }, equipped.map((p) => el("a", { class: "tag", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id, p.enabled ? null : "（已停用）")))
-            : badge("未裝備", "b-mute"), s.sources.equipped,
-            "裝備是 Profile 的使用者意圖；它不會自動啟動、載入或套用這個 Skill。", "b-accent"),
+            : badge("未加入角色", "b-mute"), s.sources.equipped,
+            "加入角色只是你替角色做的挑選紀錄；它不會自動啟動、載入或套用這個 Skill。", "b-accent"),
           state("使用證據", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("尚無證據", "b-mute"), s.sources.loaded,
             "只有執行紀錄確實觀察到使用時才會顯示；尚無證據不代表沒有載入。", "b-warn")));
     })));
@@ -1393,12 +1393,12 @@ async function viewSkillDetail(id) {
       el("div", { style: "display:grid;gap:16px;align-content:start" },
         annotationPanel(s, d.annotation_key, d.annotation),
         el("div", { class: "panel pad" },
-          el("h2", { style: "margin-bottom:10px" }, "被哪些 Agent Profile 裝備"),
+          el("h2", { style: "margin-bottom:10px" }, "已加入哪些角色（Agent Profile）"),
           d.equipped_by && d.equipped_by.length ? el("ul", { class: "tree" }, d.equipped_by.map((p) => el("li", null,
             el("a", { href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id),
             " ", p.enabled ? badge("啟用", "b-ok") : badge("已停用", "b-mute"),
             el("span", { class: "small muted" }, "・主控台 Profile（使用者意圖）"))))
-            : el("p", { class: "muted small" }, "沒有 Agent Profile 裝備此技能。")),
+            : el("p", { class: "muted small" }, "沒有角色加入此技能。")),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "誰可以使用"),
           d.roles.length ? el("ul", { class: "tree" }, d.roles.map((r) => el("li", null,
@@ -1522,7 +1522,7 @@ async function viewTeam() {
     runtimeNotice(),
     el("section", { class: "section" },
       sectionHead("工作中的 Terminal", `${sessions.length} 個，由 VBear runtime 管理`, seg),
-      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「[A] 角色裝備」的 Agent Profile 按「預覽並啟動」後會出現在這裡" : "VBear runtime 未連線")),
+      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「角色」分頁的 Agent Profile 按「預覽並啟動」後會出現在這裡" : "VBear runtime 未連線")),
     el("section", { class: "section" },
       sectionHead("主代理", "直接在終端機執行的工具本身"),
       el("div", { class: "grid" }, cli.map(roleCard))),
@@ -1873,7 +1873,7 @@ function flowBindingNote(f) {
 }
 
 function flowNotice() {
-  return notice("info", "這一版的流程只記錄與顯示：事件都由表單手動記錄（未驗證），階段由 VBear 依事件與即時資料推導。" +
+  return notice("info", "這一版的流程只記錄與顯示：事件都由表單手動記錄（未驗證），任務進度由 VBear 依事件與即時資料推導。" +
     "VBear 不會為流程派工、輸入指令、執行 git，也不會啟動 Agent；這一頁和首頁一樣會讀取即時狀態，可能因此啟動 VBear 自己的 runtime。");
 }
 
@@ -2293,9 +2293,9 @@ function openAcceptanceDialog(flowId, onDone, opts = {}) {
         el("dt", null, "執行者的 Claude 帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, v.executor_account),
         el("dt", null, "審查者的 Codex 帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, v.review_account),
         el("dt", null, "指紋金鑰 id"), el("dd", { class: "mono" }, v.login_key_id)),
-      el("h3", null, "上限（全部九項）"),
+      el("h3", null, "體力（停損設定，全部九項）"),
       el("div", { class: "table-scroll" }, el("table", { class: "s2-limits" }, el("tbody", null, limitRows))),
-      el("p", { class: "small" }, "改了模型或上限，要按「套用並重新預覽」才會產生新的預覽。",
+      el("p", { class: "small" }, "改了模型或體力設定，要按「套用並重新預覽」才會產生新的預覽。",
         " ", el("button", { class: "btn small", type: "button", on: { click: () => {
           const limits = {};
           body.querySelectorAll("input").forEach((i) => {
@@ -2353,7 +2353,7 @@ function s2AcceptancePanel(flowId, ex, refresh) {
     sectionHead("風險接受", null, el("div", { class: "row" }, badge(label, cls, tip),
       el("button", { class: "btn small primary", type: "button",
         disabled: ex.automation && ex.automation.mode === "auto",
-        title: ex.automation && ex.automation.mode === "auto" ? "自動執行中；要改上限或重新接受，先停止流程並切回手動" : "",
+        title: ex.automation && ex.automation.mode === "auto" ? "自動執行中；要改體力設定或重新接受，先停止流程並切回手動" : "",
         on: { click: () => openAcceptanceDialog(flowId, refresh) } },
         a.state === "valid" ? "重新接受…" : "接受殘餘風險…"))),
     a.reason ? notice(a.state === "valid" ? "info" : "warn", a.reason) : (tip ? el("p", { class: "small muted" }, tip) : null),
@@ -2381,7 +2381,7 @@ function s2AutomationPanel(flowId, au, refresh) {
           el("button", { class: "btn small primary", type: "button",
             on: { click: () => openAcceptanceDialog(flowId, refresh, { auto: true }) } }, "核准計畫並開啟自動執行…"))),
       el("p", { class: "small muted" },
-        "開啟前會完整顯示計畫全文、上限、使用的帳號與全部風險；開啟後手動派工與手動審查會被拒絕。啟動執行者仍由你按。"));
+        "開啟前會完整顯示計畫全文、體力（停損設定）、使用的帳號與全部風險；開啟後手動派工與手動審查會被拒絕。啟動執行者仍由你按。"));
   }
   const held = step && step.held;
   const disable = held ? el("button", { class: "btn small", type: "button", on: { click: async (ev) => {
@@ -2415,7 +2415,7 @@ function s2AutomationPanel(flowId, au, refresh) {
       el("dt", null, "核准的計畫"), el("dd", { class: "mono" }, `${ap.plan_bytes} bytes・sha256 ${String(ap.plan_sha256).slice(0, 16)}…`),
       el("dt", null, "自動執行文字版本"), el("dd", { class: "mono" }, ap.auto_text_version),
       el("dt", null, "核准 id"), el("dd", { class: "mono" }, a.approval_id)) : null,
-    el("p", { class: "small muted" }, "用量與上限見下面的「串流執行者」；固定規則：連續失敗 1 次就停止。"));
+    el("p", { class: "small muted" }, "用量與體力（停損設定）見下面的「串流執行者」；固定規則：連續失敗 1 次就停止。"));
 }
 
 // Whether the Claude Code this machine would run has a verified stream mode, shown before the executor is started.
@@ -4272,7 +4272,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
   // pattern (L4) from drifting out of sync across the two.
   const RIGHT_TABS = [
     ["task", "[T] 任務卡"],
-    ["agent", "[A] 角色裝備"],
+    ["agent", "角色"],
     ["project", "[P] 專案契約"],
     ["global", "[G] 全域底線"],
   ];
@@ -4684,7 +4684,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
             isUnresolved ? el("span", { class: "b-warn small", style: "margin-left:6px;" },
                 "⚠ 已不存在") : null);
         })
-      : [el("li", { class: "small muted" }, "未裝備任何技能")];
+      : [el("li", { class: "small muted" }, "未選任何技能")];
 
     return append(el("div", { class: "wb-tab-content" }),
       el("div", { class: "row wb-profile-head", style: "justify-content:space-between" },
@@ -4725,16 +4725,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       el("dl", { class: "kv small" },
         el("dt", null, "Profile ID"),
           el("dd", { class: "mono" }, p.id),
-        el("dt", null, "職業角色"),
+        el("dt", null, "職業"),
           el("dd", null, profession),
-        el("dt", null, "模型工具"),
+        el("dt", null, "工具（遊戲用語：陣營）"),
           el("dd", null, (p.model && p.model.tool) || "—"),
         el("dt", null, "模型設定 (Model ID)"),
           el("dd", { class: "mono" }, (p.model && p.model.model_id) || "（未指定，視為該工具預設值；非執行環境）"),
         el("dt", null, "更新時間"),
           el("dd", null, fmtTime(p.updated_at || p.created_at))),
       el("div", { class: "wb-field-group" },
-        el("div", { class: "wb-field-label" }, "已裝備技能 (Equipped Skill Loadout)"),
+        el("div", { class: "wb-field-label" }, "已選技能（VBear 啟動時不載入）"),
         el("ul", { class: "wb-field-val", style: "list-style: disc inside; padding-left: 4px;" }, skillList)),
       el("div", { class: "wb-field-group" },
         el("div", { class: "wb-field-label" }, "權限意圖 (Permission Intents · 僅意圖)"),
@@ -4742,7 +4742,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       el("div", { class: "notice info", style: "font-size:12.5px" },
         el("span", { class: "ico" }, "ℹ"),
         el("div", null,
-          "Equipped Skill Loadout ≠ 已進入任何執行中的 session。儲存 Profile 不會啟動、",
+          "已選技能 ≠ 已進入任何執行中的 session。儲存 Profile 不會啟動、",
           "重啟或注入任何東西。權限意圖僅為意圖記錄，不會實際執行為 CLI 工具權限。"))
     );
   }
@@ -4781,7 +4781,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const nameInput = el("input", { type: "text", maxlength: "200",
       value: initial.name || "" });
     const profSelect = el("select", null,
-      el("option", { value: "" }, "（不綁定職業角色）"),
+      el("option", { value: "" }, "（不綁定職業）"),
       (catalog.professions || []).map((r) => {
         const opt = el("option", { value: r.role_id || "" },
           `${r.name || r.role_id} (${r.tool || "?"})`);
@@ -4811,11 +4811,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const equippedIds = new Set(initial.equipped_skill_ids || []);
 
     const skillPicker = el("select", { size: "8", multiple: "multiple",
-      "aria-label": "可加入裝備的技能", style: "width: 100%;" },
+      "aria-label": "可選入的技能", style: "width: 100%;" },
       skillOptions.map((s) => el("option", { value: s.skill_id },
         `${s.tool} · ${s.name}${s.activation === "disabled" ? "（停用）" : ""}`)));
     const equippedList = el("ul", { class: "wb-equipped",
-      "aria-label": "已裝備技能", style: "list-style: none; padding-left: 0;" });
+      "aria-label": "已選技能", style: "list-style: none; padding-left: 0;" });
 
     function rebuildEquippedList() {
       setKids(equippedList,
@@ -4832,7 +4832,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
                   } } }, "移除"));
             })
           : [el("li", { class: "small muted", style: "padding:4px;" },
-              "未加入任何技能。Equipped ≠ Loaded，僅為意圖記錄")]);
+              "未選入任何技能。已選技能不會被載入，僅為挑選紀錄")]);
     }
     rebuildEquippedList();
 
@@ -4842,7 +4842,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           if (!equippedIds.has(opt.value)) equippedIds.add(opt.value);
         }
         rebuildEquippedList();
-      } } }, "加入裝備 →");
+      } } }, "選入 →");
 
     const permissionKeys = catalog.permission_keys || ["read", "write", "test", "deploy"];
     const permissionValues = catalog.permission_values || ["allow", "deny", "unspecified"];
@@ -4888,14 +4888,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           isNew ? "建立 Agent Profile" : `編輯 Agent Profile：${existingProfile.name || existingProfile.id}`),
         el("div", { class: "wb-form" },
           el("label", null, "名稱 *", nameInput),
-          el("label", null, "職業角色 (僅選用掃描器找到的角色，不會寫回來源)",
+          el("label", null, "職業（僅選用掃描器找到的角色，只是標籤，不會寫回來源）",
             profSelect),
-          el("label", null, "模型工具 (Tool ID)", toolSelect),
+          el("label", null, "工具（遊戲用語：陣營；Tool ID）", toolSelect),
           el("label", null, "模型設定 (Model ID · 非執行環境)", modelIdInput),
           el("fieldset", { style: "border: 1px solid var(--border, #ccc); padding: 8px; margin: 6px 0;" },
-            el("legend", null, "Skill Loadout (裝備清單)"),
+            el("legend", null, "已選技能（VBear 啟動時不載入）"),
             el("div", { class: "small muted", style: "margin-bottom:4px;" },
-              "Equipped Skill Loadout ≠ 已進入任何 session；儲存 Profile 不會注入或啟動技能"),
+              "已選技能 ≠ 已進入任何 session；儲存 Profile 不會注入或啟動技能"),
             el("select", null, skillPicker.options
               ? [] : []), // placeholder so the multi-select stays mounted
             skillPicker,
@@ -5196,9 +5196,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       on: { click: () => renderAgentProfileEditor(true) } }, "+ 建立 Agent Profile");
 
     const sub = el("div", { class: "small muted", style: "margin: 4px 0;" },
-      "Profile 是一份使用你自選職業、模型工具與裝備清單的設定組合，");
+      "Profile 是一份使用你自選職業、工具（遊戲用語：陣營）與已選技能的設定組合，");
     const sub2 = el("div", { class: "small muted", style: "margin-bottom: 8px;" },
-      "與掃描到的 AgentRole 名單（只讀）並存。Equipped Skill Loadout 僅為意圖，");
+      "與掃描到的 AgentRole 名單（只讀）並存。已選技能僅為挑選紀錄，");
 
     const selected = agentProfiles.find((p) => p.id === selectedProfileId);
 

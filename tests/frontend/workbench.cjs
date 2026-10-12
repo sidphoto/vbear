@@ -466,7 +466,7 @@ async function runWorkbenchTests() {
     // all called the non-variadic append() with multiple loose arguments,
     // which silently dropped content (or threw for a lone child) in every
     // one of them; clicking through all four is what catches that.
-    for (const marker of ["[A]", "[P]", "[G]", "[T]"]) {
+    for (const marker of ["角色", "[P]", "[G]", "[T]"]) {
       const tab = mainEl.find((n) => n.getAttribute("role") === "tab" && n.textContent.includes(marker));
       tab.click();
       const nowSelected = mainEl
