@@ -1039,6 +1039,21 @@ function skillStatusText(sk) {
   return `${label}${reason}`;
 }
 
+// The five armor groups and the level words each holds (agent_launch.ARMOR_GROUPS / ARMOR_GROUP_LEVELS; a test
+// compares this table with the server's). Only a frame: the level words and notes are always shown as they are.
+const ARMOR_GROUPS_UI = [
+  { id: "blocked", label: "擋住了", levels: ["強制（限已測路徑、版本與執行層）"] },
+  { id: "partial", label: "部分擋住", levels: ["部分強制"] },
+  { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
+  { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
+  { id: "unproven", label: "未證明", levels: ["未驗證（此 Claude Code 版本尚未實測）", "未知"] },
+];
+// A level this table does not know is put in the last group (not proven), never in a protective one.
+function armorGroupOf(level) {
+  const g = ARMOR_GROUPS_UI.find((x) => x.levels.includes(level));
+  return g ? g.id : "unproven";
+}
+
 function skillCardField(label, src, extra) {
   const v = src && src.value;
   const has = !(v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length));
@@ -1237,7 +1252,7 @@ function herdrMigrationNotice() {
   } } }, "知道了");
   const wrap = el("div", { class: "notice info" },
     el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從 Agent Profile 的「預覽並啟動」開啟。 ", ack));
+    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從 Agent Profile 的「出發前檢查」開啟。 ", ack));
   return wrap;
 }
 function sectionHead(title, sub, action) {
@@ -1647,7 +1662,7 @@ async function viewTeam() {
     runtimeNotice(),
     el("section", { class: "section" },
       sectionHead("工作中的 Terminal", `${sessions.length} 個，由 VBear runtime 管理`, seg),
-      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「角色」分頁的 Agent Profile 按「預覽並啟動」後會出現在這裡" : "VBear runtime 未連線")),
+      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從工作台「角色」分頁的 Agent Profile 按「出發前檢查」後會出現在這裡" : "VBear runtime 未連線")),
     el("section", { class: "section" },
       sectionHead("主代理", "直接在終端機執行的工具本身"),
       el("div", { class: "grid" }, cli.map(roleCard))),
@@ -3165,7 +3180,7 @@ async function viewTerminal(paneId) {
     }
     if (connState === "closed") {
       notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的 Terminal 時，請從 Agent Profile 的「預覽並啟動」開啟。")
+        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的 Terminal 時，請從 Agent Profile 的「出發前檢查」開啟。")
         : "如需重新開啟請點選右上方「重新連線」。"}`));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
@@ -3993,7 +4008,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       }
       if (connState === "closed") {
         notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? "需要新的 Terminal 時，請從 Agent Profile 的「預覽並啟動」開啟。"
+        ? "需要新的 Terminal 時，請從 Agent Profile 的「出發前檢查」開啟。"
         : "如需重新開啟請點選右上方「重新連線」。"}`));
       } else if (connState === "disconnected") {
         const attempts = reconnectPolicy.getRetryCount();
@@ -4788,7 +4803,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         el("div", { class: "wb-profile-actions" },
           el("button", { class: "btn small primary", type: "button",
             title: "先看這次啟動實際會套用什麼，確認後才啟動",
-            on: { click: () => promptAgentLaunch(p) } }, "預覽並啟動"),
+            on: { click: () => promptAgentLaunch(p) } }, "出發前檢查"),
           el("button", { class: "btn small", type: "button",
             on: { click: () => promptAgentProfileEditor(p) } }, "編輯"),
           el("button", { class: "btn small", type: "button",
@@ -5217,35 +5232,58 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
     confirmBtn.disabled = true;
 
+    const why = el("p", { class: "small agent-launch-why", "aria-live": "polite" });
+    let lastPreview = null;   // the latest answer, launchable or not, for saying why the button is off
+
     function needsAck(pv) { return Boolean(pv && pv.cli && pv.cli.verified === false); }
+    // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
+    function whyOff() {
+      if (busy) return "";
+      if (!current) {
+        if (lastPreview && !lastPreview.launchable) {
+          const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
+          return "現在不能出發：" + (reasons.join("；") || "這個 Profile 目前無法啟動") + "。";
+        }
+        return "現在不能出發：還沒有產生這次的預覽。先填工作目錄、勾選 commit 的知悉，再按「產生預覽」。";
+      }
+      if (needsAck(current) && !(ackBox && ackBox.checked)) {
+        return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
+      }
+      return "";
+    }
     function syncConfirm() {
       confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked));
+      why.textContent = whyOff();
     }
 
     function invalidate(message) {
       current = null;
+      lastPreview = null;
       ackBox = null;
       confirmBtn.disabled = true;
       setKids(out, message ? el("p", { class: "small muted" }, message) : null);
+      why.textContent = busy ? "" : whyOff();
     }
     workdirInput.addEventListener("input", () => invalidate("輸入已變更，請重新產生預覽。"));
     commitBox.addEventListener("change", () => invalidate("輸入已變更，請重新產生預覽。"));
 
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
-        el("h2", { id: titleId }, `預覽並啟動：${p.name || p.id}`),
+        el("h2", { id: titleId }, `出發前檢查：${p.name || p.id}`),
         el("p", { class: "small muted" },
-          "啟動前先顯示這次實際會套用的設定與每一項權限的套用程度。確認後才會啟動 Agent。"),
+          "出發前先看這次實際會套上的防具，和它擋不到的地方。確認後才會啟動 Agent。"),
         el("label", { class: "small", for: "agent-launch-workdir" }, "工作目錄"),
         workdirInput,
         el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
           el("span", null, "我知道這個設定無法阻止 commit（工作目錄的 .git 在可寫範圍內）。不勾選就無法啟動。")),
         out,
+        why,
         el("div", { class: "modal-actions" }, cancelBtn, previewBtn, confirmBtn)));
     document.body.append(modalElem);
     const closeModal = withModalA11y(modalElem, () => modalElem.remove());
     workdirInput.focus();
+    why.textContent = whyOff();
 
     function renderPreview(pv) {
       const kids = [];
@@ -5258,12 +5296,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       } else {
         kids.push(el("dl", { class: "kv small" },
           el("dt", null, "CLI"), el("dd", { class: "mono" }, `${pv.cli.version} · ${pv.cli.binary}`),
+          el("dt", null, "版本驗證"),
+          el("dd", null, pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
           el("dt", null, "工作目錄"), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
         if (needsAck(pv)) kids.push(unverifiedBox(pv));
         else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));
       }
+      kids.push(el("h4", { class: "agent-launch-h" }, "防具（這次出發前檢查的實際標示）"));
       kids.push(el("p", { class: "small muted" },
         "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是 Profile 的設定值。" +
         "使用者在進階終端仍可自行改變 CLI 行為，沒有一項是不可繞過的邊界。"));
@@ -5276,16 +5317,33 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
           el("div", { class: "small" }, el("strong", null, "可繞過："), bypasses.join(" "))));
       }
-      kids.push(el("div", { class: "agent-launch-labels" },
-        Object.entries(pv.derived_labels || {}).map(([name, lab]) =>
-          el("div", { class: "agent-launch-label" },
-            el("div", { class: "row", style: "justify-content:space-between" },
-              el("strong", null, name),
-              badge(lab.level, "b-mute plain", "套用程度")),
-            el("div", { class: "small" }, lab.note),
-            lab.unknown_reason && lab.unknown_reason !== "none" && lab.unknown_reason !== lab.note
-              ? el("div", { class: "small muted" }, `未知或未測：${lab.unknown_reason}`) : null))));
+      // The seven labels of THIS preview, in the five groups; a group is only a frame, every item keeps its
+      // level words, note and limits, and an empty group says so.
+      const scopeText = (v) => Array.isArray(v) ? (v.filter(Boolean).join("、") || "不適用") : (v || "不適用");
+      const items = Object.entries(pv.derived_labels || {}).map(([name, lab]) => ({
+        name, level: lab.level, group: armorGroupOf(lab.level), note: lab.note,
+        path_scope: scopeText(lab.path_scope), evidence_refs: scopeText(lab.evidence_refs),
+        unknown_reason: lab.unknown_reason && lab.unknown_reason !== "none" && lab.unknown_reason !== lab.note
+          ? lab.unknown_reason : null }));
+      kids.push(el("div", { class: "rc-armor-grid agent-launch-labels", "data-armor": "preview" },
+        ARMOR_GROUPS_UI.map((g) => rcArmorGroup(g, items))));
+      kids.push(chosenSkillsList());
       setKids(out, ...kids);
+    }
+
+    // The profile's chosen skills as a list that is only a record: they do not go with the launch.
+    function chosenSkillsList() {
+      const ids = (p.equipped_skill_ids || []).filter((x) => typeof x === "string");
+      const catalog = (agentBuilderCatalog && agentBuilderCatalog.skills) || [];
+      const gone = new Set((p._unresolved && p._unresolved.skills) || []);
+      return el("section", { class: "rc-block", "data-launch": "chosen-skills" },
+        el("h4", null, "已選清單，本次不會載入"),
+        el("p", { class: "rc-note" }, "這是你替這個角色挑的清單，只是紀錄；這次出發不會把這些技能帶上。"),
+        ids.length ? el("ul", null, ids.map((sid) => {
+          const rec = catalog.find((x) => x.skill_id === sid);
+          const name = rec && rec.name ? String(rec.name) : `未提供（ID：${sid}）`;
+          return el("li", null, name, gone.has(sid) ? "（目前索引找不到此技能）" : "");
+        })) : el("p", { class: "rc-note" }, "未選任何技能。"));
     }
 
     // Claude Code updates itself often; a release nobody verified yet may still
@@ -5386,6 +5444,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         const res = await api.post("/api/native/agent-previews", {
           profile_id: p.id, workdir: workdirInput.value.trim(), commit: !!commitBox.checked });
         current = res.preview.launchable ? res.preview : null;
+        lastPreview = res.preview;
         renderPreview(res.preview);
         syncConfirm();
       } catch (err) {
@@ -5393,6 +5452,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
       } finally {
         busy = false;
         previewBtn.disabled = false;
+        syncConfirm();   // the reason line is empty while busy; say it now
         // Disabling the focused button moved focus to <body>, outside the dialog,
         // so Escape no longer reached it (S0 browser QA). Put focus back inside.
         const active = document.activeElement;

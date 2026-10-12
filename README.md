@@ -28,7 +28,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Class** | A **role label** on the profile, chosen from the agent roles VBear found for Claude Code or Codex. It is only a label: launching does not load the role's instructions into Claude Code | Same place |
 | **Faction** | The **tool** it runs on: Claude Code or Codex CLI. Launching from a profile works with Claude Code only for now | Same place |
 | **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. The Armory marks each one as available, installed, added to a profile, and whether it was ever seen in use | 技能庫 → Armory |
-| **Armor** | The **protection a launch actually puts on, and the weak spots it does not cover**: writes kept inside the work directory, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it holds | 「預覽並啟動」 |
+| **Armor** | The **protection a launch actually puts on, and the weak spots it does not cover**: writes kept inside the work directory, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it holds | 「出發前檢查」 |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task, each with a model family. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | 流程 |
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | Home page 「需要你處理」 |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
@@ -107,11 +107,13 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
    - Click **終端工作台** in the left menu, then the **角色** tab in the right column.
    - Click **+ 建立 Agent Profile**. Give it a name, optionally a role (職業), the tool `claude`, and the skills you
      want (**選入 →** adds one), then click **建立 Profile**.
-   - Click **預覽並啟動** on the profile. Type the work directory: the folder's full path, inside your home
+   - Click **出發前檢查** on the profile. Type the work directory: the folder's full path, inside your home
      folder (for example `/Users/you/projects/demo`). To get a path without typing it, right-click the folder in
      Finder, hold the Option key and choose **Copy “folder” as Pathname**, then paste it into the box.
-   - Read the seven labels. Each row has the permission's name and, beside it, a word for how strongly it holds
-     (the screen uses words, not colors): 「強制」 and 「部分強制」 mean the limit really holds; 「僅意圖」, 「未限制」,
+   - Read the seven labels. They sit in five boxes (擋住了 blocked, 部分擋住 partly blocked, 沒有專用權限 no
+     dedicated permission, 沒有擋 not blocked, 未證明 not proven); in each box a label keeps its own name and the
+     word for how strongly it holds (the screen uses words, not colors). Below them is the list of skills you
+     chose, marked as not going with the launch. The words: 「強制」 and 「部分強制」 mean the limit really holds; 「僅意圖」, 「未限制」,
      「未驗證」 and 「未知」 mean it is not enforced or not proven; 「不授予」 means it is not given at all.
      The short version: look at the **Write** and **Network** rows. 「強制」 there means VBear really blocked it. Reading
      is not limited: it can read any file you can read.
@@ -300,7 +302,7 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   case (often the session's whole budget): then you raise the limit, accept again and approve automatic mode again.
 - **Names on the screens.** Some names changed to match the game words above (old → new): 「角色裝備」 tab →
   「角色」; 「職業角色」 → 「職業」; 「模型工具」 → 「工具（遊戲用語：陣營）」; 「已裝備技能 (Equipped Skill Loadout)」 →
-  「已選技能」; 「加入裝備 →」 → 「選入 →」; the Armory's 「已裝備到 Profile」 → 「已加入角色」; the limits' heading
+  「已選技能」; 「加入裝備 →」 → 「選入 →」; 「預覽並啟動」 → 「出發前檢查」; the Armory's 「已裝備到 Profile」 → 「已加入角色」; the limits' heading
   「上限」 → 「體力（停損設定）」; a flow's 「階段」 → 「任務進度」.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.

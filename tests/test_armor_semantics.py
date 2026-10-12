@@ -95,5 +95,27 @@ class PureTests(unittest.TestCase):
         self.assertEqual(items["Commit"]["level"], al.UNRESTRICTED)       # a weakness is stated whatever the version
 
 
+class PageTableTests(unittest.TestCase):
+    def test_the_pages_group_table_is_the_servers(self):
+        """web/app.js frames a preview's labels in five groups from its own table (the preview carries no group);
+        the table must be the one agent_launch defines, so a new level cannot land in the wrong group."""
+        import re
+        source = (Path(__file__).resolve().parent.parent / "web" / "app.js").read_text(encoding="utf-8")
+        block = source[source.index("const ARMOR_GROUPS_UI = ["):]
+        block = block[:block.index("];")]
+        rows = re.findall(r'\{ id: "(\w+)", label: "([^"]+)", levels: \[([^\]]*)\] \}', block)
+        page = [(i, label, re.findall(r'"([^"]+)"', levels)) for i, label, levels in rows]
+        server = [(g, label, list(al.ARMOR_GROUP_LEVELS[g])) for g, label in al.ARMOR_GROUPS]
+        self.assertEqual(page, server)
+        # every level the pure function can emit is in one of the groups
+        known = {lv for _, _, levels in server for lv in levels}
+        emitted = set()
+        for tool, verified in (("claude", True), ("claude", False), ("claude", None), ("codex", None)):
+            for net in (True, False):
+                for ok in (True, False):
+                    emitted |= {it["level"] for it in al.armor_items(tool, verified, net, ok).values()}
+        self.assertTrue(emitted <= known, emitted - known)
+
+
 if __name__ == "__main__":
     unittest.main()

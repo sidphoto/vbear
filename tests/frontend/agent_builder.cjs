@@ -486,12 +486,15 @@ function findModalInBody() {
     walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
       && /First/.test(n.textContent || "")).dispatch("click");
     await tick();
-    const openBtn = walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "預覽並啟動");
-    assert.ok(openBtn, "detail view offers 預覽並啟動");
+    const openBtn = walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查");
+    assert.ok(openBtn, "detail view offers 出發前檢查");
+    assert.ok(!walk(main).some((n) => (n.textContent || "").trim() === "預覽並啟動"), "the old name is gone");
     openBtn.dispatch("click");
     await tick();
     const modal = findModalInBody();
     assert.ok(modal, "launch dialog opened");
+    assert.ok(findText(modal, "出發前檢查：First"), "the dialog is named like the button");
+    assert.ok(findText(modal, "現在不能出發：還沒有產生這次的預覽"), "the button is off with a reason beside it");
     const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
     const workdir = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "text");
     const commit = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
@@ -503,6 +506,7 @@ function findModalInBody() {
     assert.deepStrictEqual(posts[0].body, { profile_id: "p-1", workdir: "/Users/u/work", commit: false });
     assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "目前無法強制不 commit"),
               "non-launchable preview shows the reason");
+    assert.ok(findText(modal, "現在不能出發：目前無法強制不 commit"), "the reason is also beside the off button");
     assert.strictEqual(button("確認啟動").disabled, true, "confirm stays disabled when not launchable");
 
     commit.checked = true;
@@ -511,6 +515,21 @@ function findModalInBody() {
     await tick();
     assert.strictEqual(posts[1].body.commit, true);
     for (const name of Object.keys(labels)) assert.ok(findText(modal, name), `label ${name} rendered`);
+    // the actual labels of this preview, in the five groups, with their own level words
+    const groups = walk(modal).filter((n) => n.getAttribute && n.getAttribute("data-armor-group"));
+    assert.deepStrictEqual(groups.map((g) => g.getAttribute("data-armor-group")),
+      ["blocked", "partial", "not_granted", "not_blocked", "unproven"]);
+    const inGroup = (id) => walk(groups.find((g) => g.getAttribute("data-armor-group") === id))
+      .filter((n) => n.tag === "strong").map((n) => n.textContent);
+    assert.deepStrictEqual(inGroup("blocked"), ["Network", "Filesystem"]);
+    assert.deepStrictEqual(inGroup("partial"), ["Write"]);
+    assert.deepStrictEqual(inGroup("not_granted"), ["Deploy"]);
+    assert.deepStrictEqual(inGroup("not_blocked"), ["Read", "Test", "Commit"]);
+    assert.deepStrictEqual(inGroup("unproven"), []);
+    assert.ok(groups.every((g) => g.tag === "section" && g.className === "rc-armor-group"), "same element and class");
+    assert.ok(findText(modal, "已選清單，本次不會載入") && findText(modal, "這次出發不會把這些技能帶上"));
+    assert.ok(findText(modal, "alpha"), "the chosen skill is listed by name");
+    assert.ok(findText(modal, "版本驗證"), "the version verification row");
     assert.ok(findText(modal, "未限制") && findText(modal, "未測試 denyWrite .git"), "level and unknown reason shown");
     assert.ok(findText(modal, "沒有一項是不可繞過的邊界"), "bypass disclosure shown");
     assert.ok(findText(modal, "可繞過") && findText(modal, "以 ! 開頭的 shell 指令不經沙盒"),

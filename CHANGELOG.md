@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Game-style role card, skill card and pre-launch check.** The workbench's right tab 「角色」 shows a profile as a
+  card: its role (a label), its chosen skills (each marked as not loaded by a launch, with the author's text and
+  where it came from) and its armor in five groups with the original level words; the same skill card opens from
+  the Armory. 「預覽並啟動」 is now 「出發前檢查」: the same one-time preview and confirmation, with the seven labels in
+  the same five groups, the list of chosen skills marked 「本次不會載入」, and a reason beside the button while it is
+  off. New read-only answers: `GET /api/agent-profiles/<id>/loadout` and `GET /api/skills/<id>?view=card`
+  (from what is already loaded; nothing is scanned or started). Names on the screens changed; see the README.
 - **Correction to the v0.3.0 summary: what a daemon restart needs.** After the background program restarts,
   every automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk
   acceptance still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at
