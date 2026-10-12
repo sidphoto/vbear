@@ -50,8 +50,11 @@ _CLAUDE = {"paths": ("Library/Application Support/ClaudeCode",), "domain": "com.
            "home_paths": (".claude/remote-settings.json",)}
 _CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex", "home_paths": ()}
 
-# 2.1.296: the same sources as 2.1.292, copied (not re-read from the vendor's documentation; the review is asked to
-# check it, docs/evidence/claude-code-2.1.296-stream.md).
+# 2.1.296: the same sources as 2.1.292. Checked on 2026-10-12 against the vendor's documentation (the managed-settings
+# page: /Library/Application Support/ClaudeCode/managed-settings.json and the MDM domain com.anthropic.claudecode;
+# the server-managed-settings page: the cache ~/.claude/remote-settings.json) and against the strings of the 2.1.296
+# binary, which names no other source (managed-settings.d is a drop-in directory inside the checked ClaudeCode
+# directory). Method and result: docs/evidence/claude-code-2.1.296-stream.md.
 CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE}
 CODEX_SOURCES = {"0.160.0": _CODEX}
 

@@ -42,8 +42,27 @@ observed, which is listed below.
 2. **No administrator-source list for the version.** `admin_policy.CLAUDE_SOURCES` is a second per-version table
    (the first run reported "沒有管理員政策來源清單，不能啟動"). The 2.1.296 entry is 2.1.292's: the directory
    `/Library/Application Support/ClaudeCode`, the managed-preferences domain `com.anthropic.claudecode` and
-   `~/.claude/remote-settings.json`. This is a copy, not a re-reading of the vendor's documentation; the reviewer is
-   asked to check that.
+   `~/.claude/remote-settings.json`. It was checked for 2.1.296 on 2026-10-12 in two ways:
+   - *Vendor documentation* (read 2026-10-12): the managed-settings page
+     (`https://code.claude.com/docs/en/managed-settings`) names, on macOS, `/Library/Application Support/ClaudeCode/managed-settings.json`
+     and the MDM managed-preferences domain `com.anthropic.claudecode`; its policy-helper source can only be
+     configured through those two, so it is covered. Parent settings (the SDK's `managedSettings`) apply only to an
+     embedding host; VBear is the launcher and passes none. The server-managed-settings page
+     (`https://code.claude.com/docs/en/server-managed-settings`) names the cache `~/.claude/remote-settings.json`;
+     `managed-mcp.json` sits in the system path, inside the checked `ClaudeCode` directory.
+   - *The binary's strings* (method: `strings -a` over the 2.1.296 executable, searched for `Application Support/ClaudeCode`,
+     `com.anthropic.claudecode`, `managed-settings`, `remote-settings`, `managed-mcp`, `managed-policy`,
+     `policyHelper`, and for `/Library/` and `/etc/*claude*` paths; first by the planner, repeated here with the
+     same result): the macOS directory and the domain above are present, as are `managed-settings.json`,
+     `managed-settings.d` (a drop-in directory inside the checked `ClaudeCode` directory, so covered, because the
+     check is on the whole directory), `managed-mcp.json`, the managed-policy `CLAUDE.md` (also in that directory),
+     the `~/.claude/remote-settings.json` cache and a `remote-settings-consent` record (a consent state, not a source
+     of settings), `/Library/Managed Preferences/` (the MDM location the check already reads), and a
+     `--managed-settings` flag (VBear builds the argv itself and passes none). `/etc/claude-code` is the Linux
+     location and does not apply on macOS. No other source was found.
+   The documentation also says that in a non-interactive run (VBear's stream mode, `-p`) server-managed settings
+   that need the user's approval are applied for that run only and not written to the local cache, so a missing
+   `remote-settings.json` does not show that there are none; the security model says so.
 
 ## Runs and model use
 
