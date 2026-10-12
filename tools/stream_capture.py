@@ -22,6 +22,7 @@ import json
 import os
 import re
 import select
+import stat
 import subprocess
 import sys
 import tempfile
@@ -79,24 +80,69 @@ BASE_RE = re.compile(r"^[0-9a-f]{7,40}\Z")
 TEXT_MAX = 60 << 10
 
 
-def under_sandbox(path: str, root: Path = ROOT) -> Path:
-    """An existing path whose real location is below ``<root>/_sandbox`` (these inputs are earlier runs' own files:
-    a real dispatch text and the toy repository it worked in)."""
-    sandbox = Path(os.path.realpath(root / "_sandbox"))
-    real = Path(os.path.realpath(path))
-    if sandbox not in real.parents:
-        raise SystemExit(f"{path}: must be under {sandbox}")
-    return real
+def sandbox_parts(path: str, root: Path = ROOT) -> tuple[str, ...]:
+    """The components of ``path`` below ``<root>/_sandbox``, taken lexically (``..`` is resolved textually first).
+    Nothing is looked up here: what each component IS is decided only when it is opened without following links."""
+    base = Path(os.path.abspath(root))
+    try:
+        rel = Path(os.path.abspath(path)).relative_to(base)
+    except ValueError:
+        raise SystemExit(f"{path}: must be under {base / '_sandbox'}") from None
+    parts = rel.parts
+    if len(parts) < 2 or parts[0] != "_sandbox":
+        raise SystemExit(f"{path}: must be under {base / '_sandbox'}")
+    return parts
+
+
+def open_chain(parts: tuple[str, ...], root: Path = ROOT, *, directory: bool) -> int:
+    """A descriptor on the last component, every component opened from the worktree root with O_NOFOLLOW (a link
+    anywhere in the chain, ``_sandbox`` itself included, is an error), each directory owned by this user."""
+    fd = os.open(root, _DIR)
+    try:
+        for i, name in enumerate(parts):
+            last = i == len(parts) - 1
+            flags = _DIR if (directory or not last) else (os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                nfd = os.open(name, flags, dir_fd=fd)
+            except OSError as exc:
+                raise SystemExit(f"{'/'.join(parts)}: {name} cannot be opened without following a link "
+                                 f"({type(exc).__name__})") from None
+            os.close(fd)
+            fd = nfd
+            st = os.fstat(fd)
+            if (directory or not last) and st.st_uid != os.geteuid():
+                raise SystemExit(f"{'/'.join(parts)}: {name} is not a directory of this user")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def load_text_file(path: str, root: Path = ROOT) -> tuple[str, str | None]:
-    """(text, the dispatch id the text names, if it does) of a dispatch text saved by an earlier run."""
-    real = under_sandbox(path, root)
-    if not real.is_file() or real.stat().st_size > TEXT_MAX:
-        raise SystemExit(f"{path}: not a regular file of at most {TEXT_MAX} bytes")
-    text = real.read_text(encoding="utf-8")
+    """(text, the dispatch id the text names, if it does) of a dispatch text saved by an earlier run: a regular
+    file opened through the chain of descriptors, bounded."""
+    fd = open_chain(sandbox_parts(path, root), root, directory=False)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > TEXT_MAX:
+            raise SystemExit(f"{path}: not a regular file of at most {TEXT_MAX} bytes")
+        with os.fdopen(os.dup(fd), "rb") as f:
+            text = f.read(TEXT_MAX + 1).decode("utf-8")
+    finally:
+        os.close(fd)
     found = UUID_IN_TEXT.search(text)
     return text, (found.group(1) if found else None)
+
+
+def verified_repo(path: str, root: Path = ROOT) -> tuple[Path, tuple[int, int]]:
+    """The toy repository to clone: its chain is opened without following links, and (device, inode) is returned
+    so the caller can see it is the same directory again when it clones."""
+    fd = open_chain(sandbox_parts(path, root), root, directory=True)
+    try:
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
+    return Path(os.path.abspath(path)), (st.st_dev, st.st_ino)
 
 
 def _git(cwd, *a):
@@ -128,7 +174,7 @@ def main() -> int:
     if bool(args.repo) != bool(args.base) or (args.base and not BASE_RE.match(args.base)):
         raise SystemExit("--repo and --base go together; --base is a hex commit")
     given_text, given_id = (load_text_file(args.text_file) if args.text_file else (None, None))
-    repo = under_sandbox(args.repo) if args.repo else None
+    repo, repo_id = verified_repo(args.repo) if args.repo else (None, None)
     # before anything is launched or any model is called: the directory is checked and the file made
     dirfd = open_capture_dir()
     try:
@@ -155,6 +201,9 @@ def main() -> int:
         os.environ["VBEAR_HOME"] = str(state)
         work = root / "work"
         if repo is not None:
+            again = os.lstat(repo)                       # the directory checked at the start is the one cloned
+            if not stat.S_ISDIR(again.st_mode) or (again.st_dev, again.st_ino) != repo_id:
+                raise SystemExit("--repo changed after it was checked")
             _git(root, "clone", "-q", "--no-hardlinks", str(repo), str(work))
             _git(work, "reset", "-q", "--hard", args.base)
             _git(work, "config", "user.name", "cap")

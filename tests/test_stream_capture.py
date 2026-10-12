@@ -93,7 +93,8 @@ class OutputGuardTests(unittest.TestCase):
 
 
 class InputGuardTests(unittest.TestCase):
-    """--text-file and --repo name an earlier run's own files: only under _sandbox, a bounded regular file."""
+    """--text-file and --repo name an earlier run's own files: below _sandbox, reached without following a link at
+    any level, a bounded regular file."""
 
     def setUp(self):
         self.cap = load()
@@ -102,32 +103,65 @@ class InputGuardTests(unittest.TestCase):
         self.root = self.tmp / "worktree"
         (self.root / "_sandbox" / "runs").mkdir(parents=True)
         (self.tmp / "elsewhere").mkdir()
+        (self.tmp / "elsewhere" / "t.txt").write_text("OUTSIDE")
+
+    def load(self, path):
+        return self.cap.load_text_file(str(path), self.root)
 
     def test_the_text_file_is_read_with_the_id_it_names(self):
         d = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
         f = self.root / "_sandbox" / "runs" / "text.txt"
         f.write_text('task\n{"v":1,"dispatch_id":"' + d + '","status":"x"}\n')
-        text, found = self.cap.load_text_file(str(f), self.root)
+        text, found = self.load(f)
         self.assertEqual(found, d)
         self.assertIn("task", text)
         f.write_text("no id here")
-        self.assertEqual(self.cap.load_text_file(str(f), self.root)[1], None)
+        self.assertEqual(self.load(f)[1], None)
 
-    def test_a_file_outside_the_sandbox_or_too_large_or_not_a_file_is_refused(self):
-        outside = self.tmp / "elsewhere" / "t.txt"
-        outside.write_text("x")
+    def test_outside_the_sandbox_is_refused(self):
+        for path in (self.tmp / "elsewhere" / "t.txt", self.root / "README.md",
+                     self.root / "_sandbox" / ".." / "x", self.root / "_sandbox", Path("/etc/hosts")):
+            with self.subTest(path=str(path)):
+                with self.assertRaises(SystemExit):
+                    self.load(path)
+
+    def test_a_link_at_any_level_is_refused_and_nothing_outside_is_read(self):
+        outside = self.tmp / "elsewhere"
+        # the file itself
+        (self.root / "_sandbox" / "runs" / "link.txt").symlink_to(outside / "t.txt")
+        # a directory in the middle
+        (self.root / "_sandbox" / "dirlink").symlink_to(outside)
         with self.assertRaises(SystemExit):
-            self.cap.load_text_file(str(outside), self.root)
-        link = self.root / "_sandbox" / "runs" / "link.txt"
-        link.symlink_to(outside)
-        with self.assertRaises(SystemExit):                      # a link that leaves the sandbox
-            self.cap.load_text_file(str(link), self.root)
+            self.load(self.root / "_sandbox" / "runs" / "link.txt")
+        with self.assertRaises(SystemExit):
+            self.load(self.root / "_sandbox" / "dirlink" / "t.txt")
+        # _sandbox itself a link to a directory outside the worktree
+        shutil.rmtree(self.root / "_sandbox")
+        (self.root / "_sandbox").symlink_to(outside)
+        with self.assertRaises(SystemExit):
+            self.load(self.root / "_sandbox" / "t.txt")
+        with self.assertRaises(SystemExit):
+            self.cap.verified_repo(str(self.root / "_sandbox"), self.root)
+
+    def test_too_large_or_not_a_file_is_refused(self):
         big = self.root / "_sandbox" / "runs" / "big.txt"
         big.write_text("x" * (self.cap.TEXT_MAX + 1))
         with self.assertRaises(SystemExit):
-            self.cap.load_text_file(str(big), self.root)
+            self.load(big)
         with self.assertRaises(SystemExit):                      # a directory
-            self.cap.load_text_file(str(self.root / "_sandbox" / "runs"), self.root)
+            self.load(self.root / "_sandbox" / "runs")
+
+    def test_the_repository_directory_is_verified_the_same_way(self):
+        repo = self.root / "_sandbox" / "runs" / "toy"
+        repo.mkdir()
+        path, ident = self.cap.verified_repo(str(repo), self.root)
+        self.assertEqual(path, repo)
+        self.assertEqual(ident, (os.stat(repo).st_dev, os.stat(repo).st_ino))
+        (self.root / "_sandbox" / "runs" / "toylink").symlink_to(self.tmp / "elsewhere")
+        with self.assertRaises(SystemExit):
+            self.cap.verified_repo(str(self.root / "_sandbox" / "runs" / "toylink"), self.root)
+        with self.assertRaises(SystemExit):
+            self.cap.verified_repo(str(self.tmp / "elsewhere"), self.root)
 
     def test_the_base_is_a_hex_commit(self):
         for good in ("abcdef1", "a" * 40):
