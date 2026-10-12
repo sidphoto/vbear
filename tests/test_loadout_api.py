@@ -434,7 +434,10 @@ class SkillCardTests(_Helpers, unittest.TestCase):
         status, body = _get(port, "/api/skills/s-code?view=card")
         self.assertEqual(status, 200)
         sk = body["skill"]
-        self.assertEqual((sk["name"], sk["installed"]), ("code-review", True))
+        self.assertEqual(sk["installed"], True)
+        self.assertEqual(sk["name"], {"value": "code-review", "origin": "derived", "detail": "技能檔案（掃描整理）"})
+        self.assertEqual(sk["missing_files"], {"items": ["b.sh"], "origin": "derived", "detail": "掃描結果"})
+        self.assertEqual(sk["warnings"], {"items": ["w1"], "origin": "derived", "detail": "掃描結果"})
         # tool, scope and categories are VBear's own reading: they say so, and a missing one is missing
         self.assertEqual(sk["tool"], {"value": "claude", "origin": "derived", "detail": "掃描位置判讀"})
         self.assertEqual(sk["scope"], {"value": "user", "origin": "derived", "detail": "掃描位置判讀"})
@@ -453,7 +456,6 @@ class SkillCardTests(_Helpers, unittest.TestCase):
                                                           {"ref": "b.sh", "status": "missing"}])
         self.assertIn("不會執行", sk["referenced_files"]["note"])
         self.assertNotIn("executable", json.dumps(body))
-        self.assertEqual(sk["missing_files"], ["b.sh"])
         self.assertEqual(body["added_to_roles"]["items"], [{"id": "prof-a", "name": "後端工匠", "enabled": True}])
         self.assertIs(body["added_to_roles"]["effective"], False)
         self.assertIn("本次不生效", body["added_to_roles"]["note"])

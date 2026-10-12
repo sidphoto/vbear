@@ -1073,11 +1073,17 @@ async function openSkillCard(skillId, opts = {}) {
   const refs = sk.referenced_files || {};
   const roles = (d.added_to_roles && d.added_to_roles.items) || [];
   const scopeSrc = sk.scope ? { ...sk.scope, value: SCOPE[sk.scope.value] || sk.scope.value } : null;
-  const nameText = sk.name ? String(sk.name) : `未提供（ID：${skillId}）`;
+  const nameValue = sk.name && typeof sk.name === "object" ? sk.name.value : sk.name;
+  const nameText = nameValue ? String(nameValue) : `未提供（ID：${skillId}）`;
+  const nameSrc = sk.name && typeof sk.name === "object" ? sk.name : { origin: "missing", detail: "" };
+  const listOf = (x) => (x && Array.isArray(x.items) ? x.items : Array.isArray(x) ? x : []);
+  const missingFiles = listOf(sk.missing_files);
+  const warnings = listOf(sk.warnings);
   const fixed = d.effect_note || "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具";
   setKids(body,
     el("div", { class: "sc-head" },
       el("strong", { class: "sc-name" }, nameText),
+      prov(nameSrc),
       badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
     notice("info", fixed),
     skillCardField("類別", sk.categories),
@@ -1097,8 +1103,8 @@ async function openSkillCard(skillId, opts = {}) {
             el("span", { class: "muted" }, r.status === "present" ? "存在" : r.status === "missing" ? "缺少" : "非套件檔案"))))
           : null,
         refs.truncated ? el("p", { class: "rc-note" }, "清單過長，只列出前面的部分。") : null)),
-    (sk.missing_files || []).length ? notice("warn", "缺少的檔案：" + sk.missing_files.join("、")) : null,
-    (sk.warnings || []).length ? notice("warn", "結構檢查：" + sk.warnings.join("；")) : null,
+    missingFiles.length ? notice("warn", ["缺少的檔案：" + missingFiles.join("、") + " ", prov(sk.missing_files)]) : null,
+    warnings.length ? notice("warn", ["結構檢查：" + warnings.join("；") + " ", prov(sk.warnings)]) : null,
     el("div", { class: "sc-field" },
       el("div", { class: "sc-label" }, "這張卡的狀態"),
       el("ul", { class: "sc-status" },

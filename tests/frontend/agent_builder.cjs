@@ -776,7 +776,7 @@ function findModalInBody() {
     const sourced = (value, origin = "author", detail = "front matter") => ({ value, origin, detail });
     const card = {
       ok: true, index: { loaded: true, generated_at: 1791770000 },
-      skill: { skill_id: "s-1", name: hostile, invoke_name: "code-review",
+      skill: { skill_id: "s-1", name: sourced(hostile, "derived", "技能檔案（掃描整理）"), invoke_name: "code-review",
                tool: sourced("claude", "derived", "掃描位置判讀"), scope: sourced("user", "derived", "掃描位置判讀"),
                activation: "active", activation_reason: "位於使用者技能目錄", installed: true,
                status_source: { origin: "derived", detail: "掃描位置與設定檔判讀" },
@@ -785,7 +785,8 @@ function findModalInBody() {
                categories: { value: ["審查"], origin: "derived", detail: "描述關鍵字", matches: [] },
                referenced_files: { count: 2, items: [{ ref: "a.py", status: "present" }, { ref: "b.sh", status: "missing" }],
                                    truncated: false, note: "VBear 不會執行這些檔案", origin: "derived", detail: "技能檔內容裡的引用" },
-               missing_files: ["b.sh"], warnings: ["w1"] },
+               missing_files: { items: ["b.sh"], origin: "derived", detail: "掃描結果" },
+               warnings: { items: ["w1"], origin: "derived", detail: "掃描結果" } },
       added_to_roles: { items: [{ id: "p-1", name: "First", enabled: true }], effective: false,
                         note: "已加入角色只是挑選紀錄，本次不生效", origin: "user", detail: "主控台 Profile（使用者意圖）" },
       observation: { state: "none", window_days: 30, source: "執行觀察", origin: "runtime", detail: "執行觀察" },
@@ -849,6 +850,20 @@ function findModalInBody() {
     const sourceTags = walk(modal).filter((n) => n.className && n.className.includes("prov"));
     assert.ok(sourceTags.length >= 12, `source tags on the card (got ${sourceTags.length})`);
     assert.ok(findText(modal, "類別") && findText(modal, "工具（遊戲用語：陣營）") && findText(modal, "來源（位置）"));
+    // the name, the missing files and the structure warnings carry their source too
+    const provOf = (needle) => walk(modal).filter((n) => n.className && n.className.includes("prov")
+      && (n.getAttribute("title") || "").includes(needle));
+    const nameHead = walk(modal).find((n) => n.className && n.className.includes("sc-head"));
+    assert.ok(walk(nameHead).some((n) => n.className && n.className.includes("prov") && /技能檔案（掃描整理）/.test(n.textContent || "")),
+              "the name has a source tag");
+    const missingNotice = walk(modal).find((n) => n.className && n.className.includes("notice")
+      && (n.textContent || "").includes("缺少的檔案：b.sh"));
+    assert.ok(missingNotice && walk(missingNotice).some((n) => n.className && n.className.includes("prov")
+      && (n.textContent || "").includes("掃描結果")), "missing files carry 掃描結果");
+    const warnNotice = walk(modal).find((n) => n.className && n.className.includes("notice")
+      && (n.textContent || "").includes("結構檢查：w1"));
+    assert.ok(warnNotice && walk(warnNotice).some((n) => n.className && n.className.includes("prov")
+      && (n.textContent || "").includes("掃描結果")), "warnings carry 掃描結果");
     const clickable = walk(modal).filter((n) => (n._listeners.click || []).length);
     assert.ok(clickable.every((n) => n.tag === "button" || n.tag === "a"), "only buttons and links are clickable");
     const file = walk(modal).find((n) => n.tag === "a" && /^#\/skills\/s-1$/.test(n.getAttribute("href") || ""));
@@ -875,13 +890,14 @@ function findModalInBody() {
     const miss = (detail = "") => ({ value: null, origin: "missing", detail });
     const ctx = freshContext({
       "GET /api/skills/s-7?view=card": () => jsonResponse({ ok: true, index: { loaded: true, generated_at: 1 },
-        skill: { skill_id: "s-7", name: null, tool: miss(), scope: miss(), activation: "unknown",
+        skill: { skill_id: "s-7", name: miss(), tool: miss(), scope: miss(), activation: "unknown",
                  activation_reason: "沒有任何設定檔能證明它是否被載入", installed: false,
                  status_source: { origin: "derived", detail: "掃描位置與設定檔判讀" },
                  description: miss(), when_to_use: miss(), inputs: miss(), outputs: miss(), dependencies: miss(),
                  categories: { value: null, origin: "missing", detail: "", matches: [] },
                  referenced_files: { count: 0, items: [], truncated: false, note: "VBear 不會執行這些檔案", origin: "derived", detail: "x" },
-                 missing_files: [], warnings: [] },
+                 missing_files: { items: [], origin: "derived", detail: "掃描結果" },
+                 warnings: { items: [], origin: "derived", detail: "掃描結果" } },
         added_to_roles: { items: [], effective: false, note: "n", origin: "user", detail: "d" },
         observation: { state: "unavailable", window_days: null, source: "執行觀察", origin: "runtime", detail: "執行觀察" },
         marketplace_copies: [], marketplace_source: { origin: "derived", detail: "市集掃描" },
