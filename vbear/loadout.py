@@ -200,3 +200,49 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
         "blockers": blockers,
         "blockers_note": "假設你已勾選知悉 commit、並維持關閉網路；實際以出發前檢查為準",
     }
+
+
+INSTALLED_STATES = frozenset({"active", "disabled", "superseded"})
+MAX_CARD_REFS = 100
+
+
+def skill_card(static: dict, skill_id: str, profiles, live: dict | None) -> dict | None:
+    """The skill card's features (design game-ui 4.2) from the index in memory, the stored profiles and the last
+    live view. None when the current index does not have the skill. Nothing is scanned or built; the raw
+    SKILL.md is not read; no file under the skill is opened or run."""
+    index = {s.get("skill_id"): s for s in static.get("skills", []) if isinstance(s, dict)}
+    rec = index.get(skill_id)
+    if rec is None:
+        return None
+    refs = [{"ref": r.get("ref"), "status": r.get("status")}
+            for r in (rec.get("referenced_files") or []) if isinstance(r, dict)]
+    roles = [{"id": p.get("id"), "name": p.get("name"), "enabled": bool(p.get("enabled", True))}
+             for p in (profiles or []) if skill_id in (p.get("equipped_skill_ids") or [])]
+    copies = []
+    for other_id in rec.get("duplicate_of") or []:
+        other = index.get(other_id)
+        if other and other.get("activation") == "not_installed":
+            copies.append({"skill_id": other_id, "tool": other.get("tool"), "scope": other.get("scope")})
+    return {
+        "ok": True,
+        "index": {"loaded": True, "generated_at": static.get("generated_at")},
+        "skill": {
+            "skill_id": skill_id, "name": rec.get("name"), "invoke_name": rec.get("invoke_name"),
+            "tool": rec.get("tool"), "scope": rec.get("scope"),
+            "activation": rec.get("activation"), "activation_reason": rec.get("activation_reason"),
+            "installed": rec.get("activation") in INSTALLED_STATES,
+            "description": _sourced(rec.get("description")), "when_to_use": _sourced(rec.get("when_to_use")),
+            "inputs": _sourced(rec.get("inputs")), "outputs": _sourced(rec.get("outputs")),
+            "dependencies": _sourced(rec.get("dependencies")),
+            "categories": [{"label": c.get("label"), "keyword": c.get("keyword")}
+                           for c in (rec.get("categories") or []) if isinstance(c, dict)],
+            "referenced_files": {"count": len(refs), "items": refs[:MAX_CARD_REFS],
+                                 "truncated": len(refs) > MAX_CARD_REFS, "note": "VBear 不會執行這些檔案"},
+            "missing_files": [m for m in (rec.get("missing_files") or []) if isinstance(m, str)][:20],
+            "warnings": [w for w in (rec.get("warnings") or []) if isinstance(w, str)][:20],
+        },
+        "added_to_roles": {"items": roles, "effective": False, "note": "已加入角色只是挑選紀錄，本次不生效"},
+        "observation": _observation(skill_id, live),
+        "marketplace_copies": copies,
+        "effect_note": "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具",
+    }

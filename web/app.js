@@ -1018,6 +1018,113 @@ function confirmInPage(title, message, confirmLabel) {
     cancelBtn.focus();
   });
 }
+// ---- Skill card (design game-ui 4.2) -----------------------------------------------------------------------
+// One dialog for the workbench's role card and the Armory. Its data is GET /api/skills/<id>?view=card, which
+// answers from what is already loaded. Every string is set as text; a field that was not provided says so.
+function skillObservationText(o) {
+  if (!o || typeof o !== "object") return "觀察資料不可用";
+  const period = typeof o.window_days === "number" ? `最近 ${o.window_days} 天` : "觀察期間：未知";
+  if (o.state === "observed") return `觀察期間內有紀錄（${period}；來源：執行觀察）`;
+  if (o.state === "none") return `目前沒有觀察紀錄（${period}；來源：執行觀察）。這不代表沒有用過。`;
+  return "觀察資料不可用";
+}
+
+function skillCardField(label, src, extra) {
+  const v = src && src.value;
+  const has = !(v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length));
+  return el("div", { class: "sc-field" },
+    el("div", { class: "sc-label" }, label),
+    el("div", { class: "sc-value" }, has ? (Array.isArray(v) ? v.map(String).join("、") : String(v)) : null,
+      has ? " " : null, prov(src)),
+    extra || null);
+}
+
+// opts: { profile } when it is opened from a role card (adds 「從這個角色移除」), { onChanged } after a change.
+async function openSkillCard(skillId, opts = {}) {
+  const titleId = "modal-skill-card-title";
+  const body = el("div", { class: "sc-body" }, el("p", { class: "loading" }, "載入技能卡…"));
+  const actions = el("div", { class: "modal-actions" });
+  const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+    el("div", { class: "modal-box sc-box" },
+      el("h2", { id: titleId }, "技能卡"), body, actions));
+  document.body.append(modalElem);
+  const closeModal = withModalA11y(modalElem, () => { modalElem.remove(); });
+  const backBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "返回");
+  setKids(actions, backBtn);
+  backBtn.focus();
+  let d;
+  try {
+    d = await api.get(`/api/skills/${encodeURIComponent(skillId)}?view=card`);
+  } catch (e) {
+    setKids(body, notice("bad", "無法顯示技能卡：" + (e && e.message ? e.message : "未知錯誤")));
+    return;
+  }
+  const sk = d.skill || {};
+  const refs = sk.referenced_files || {};
+  const roles = (d.added_to_roles && d.added_to_roles.items) || [];
+  const cats = (sk.categories || []).map((c) => c && c.label).filter(Boolean);
+  const fixed = d.effect_note || "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具";
+  setKids(body,
+    el("div", { class: "sc-head" },
+      el("strong", { class: "sc-name" }, sk.name || skillId),
+      badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
+    el("div", { class: "sc-tags" },
+      el("span", { class: "rc-chip" }, `類別 · ${cats.length ? cats.join("、") : "未提供"}`),
+      el("span", { class: "rc-chip" }, `工具 · ${sk.tool || "未知"}`),
+      el("span", { class: "rc-chip" }, `來源 · ${sk.scope || "未知"}`)),
+    notice("info", fixed),
+    skillCardField("效果（技能作者的說明）", sk.description),
+    skillCardField("發動時機", sk.when_to_use),
+    skillCardField("需要（輸入）", sk.inputs),
+    skillCardField("產出", sk.outputs),
+    skillCardField("依賴", sk.dependencies),
+    el("div", { class: "sc-field" },
+      el("div", { class: "sc-label" }, "引用的檔案"),
+      el("div", { class: "sc-value" },
+        `共 ${refs.count ?? "未知"} 個；${refs.note || "VBear 不會執行這些檔案"}`,
+        (refs.items || []).length ? el("ul", { class: "sc-refs" }, refs.items.map((r) =>
+          el("li", null, el("span", { class: "mono" }, String(r.ref)), " ",
+            el("span", { class: "muted" }, r.status === "present" ? "存在" : r.status === "missing" ? "缺少" : "非套件檔案"))))
+          : null,
+        refs.truncated ? el("p", { class: "rc-note" }, "清單過長，只列出前面的部分。") : null)),
+    (sk.missing_files || []).length ? notice("warn", "缺少的檔案：" + sk.missing_files.join("、")) : null,
+    (sk.warnings || []).length ? notice("warn", "結構檢查：" + sk.warnings.join("；")) : null,
+    el("div", { class: "sc-field" },
+      el("div", { class: "sc-label" }, "這張卡的狀態"),
+      el("ul", { class: "sc-status" },
+        el("li", null, sk.installed ? "已安裝（本機掃描到）" : "沒有安裝在這台 Mac",
+          sk.activation_reason ? el("span", { class: "muted" }, "：" + sk.activation_reason) : null),
+        el("li", null, (d.added_to_roles && d.added_to_roles.unavailable)
+          ? `已選入哪些角色：無法讀取（${d.added_to_roles.unavailable}）`
+          : roles.length ? `已選入 ${roles.length} 個角色：${roles.map((r) => r.name || r.id).join("、")}（本次不生效）`
+          : "沒有角色選入這張技能"),
+        el("li", null, "觀察狀態：" + skillObservationText(d.observation)),
+        el("li", null, (d.marketplace_copies || []).length
+          ? `市集有其他副本（${d.marketplace_copies.length} 個，尚未安裝）` : "市集沒有找到其他副本"))));
+  const kids = [];
+  const profile = opts.profile;
+  if (profile && (profile.equipped_skill_ids || []).includes(skillId)) {
+    kids.push(el("button", { class: "btn", type: "button", on: { click: async () => {
+      if (!(await confirmInPage("從這個角色移除",
+        `把「${sk.name || skillId}」從角色「${profile.name || profile.id}」的已選技能移除？這只會改你的挑選紀錄，不會刪除技能。`,
+        "移除"))) return;
+      try {
+        const next = (profile.equipped_skill_ids || []).filter((x) => x !== skillId);
+        await api.post(`/api/agent-profiles/${encodeURIComponent(profile.id)}`, { equipped_skill_ids: next });
+        toast("已從角色移除");
+        closeModal();
+        if (typeof opts.onChanged === "function") await opts.onChanged();
+      } catch (err) {
+        toast("移除失敗：" + err.message);
+      }
+    } } }, "從這個角色移除"));
+  }
+  kids.push(el("a", { class: "btn", href: `#/skills/${encodeURIComponent(skillId)}`,
+    on: { click: () => closeModal() } }, "打開技能檔案"));
+  kids.push(backBtn);
+  setKids(actions, ...kids);
+}
+
 // Plain-language names for the terminal-title checks of 「驗證這個版本」.
 const TITLE_CHECK_TEXT = {
   idle_before_prompt: "送出提示前沒有出現閒置符號 ✳",
@@ -1333,6 +1440,8 @@ async function viewArmory() {
       const x = s.states || {}, loaded = x.loaded || {}, equipped = x.equipped || [];
       return el("div", { class: "card" },
         el("div", { class: "card-top" }, el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name), actBadge(s.activation)),
+        el("div", null, el("button", { class: "btn small", type: "button",
+          on: { click: () => openSkillCard(s.skill_id) } }, "技能卡特性")),
         el("div", { class: "card-sub mono" }, s.invoke_name || s.skill_id),
         el("div", { class: "armory-states" },
           state("市集可取得", x.available ? badge("可取得", "b-info") : badge("不適用", "b-mute"), s.sources.available,
@@ -4722,13 +4831,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
     return el("span", null, text === null ? null : text + " ", prov(src));
   }
 
-  function rcObservation(o) {
-    if (!o || typeof o !== "object") return "觀察資料不可用";
-    const period = typeof o.window_days === "number" ? `最近 ${o.window_days} 天` : "觀察期間：未知";
-    if (o.state === "observed") return `觀察期間內有紀錄（${period}；來源：執行觀察）`;
-    if (o.state === "none") return `目前沒有觀察紀錄（${period}；來源：執行觀察）。這不代表沒有用過。`;
-    return "觀察資料不可用";
-  }
+  function rcObservation(o) { return skillObservationText(o); }
+
+  let rcProfile = null;
+  let rcChanged = async () => {};
 
   function rcSkillCard(sk) {
     const head = el("div", { class: "rc-skill-head" },
@@ -4759,7 +4865,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
         el("dd", null, `共 ${refs.count ?? "未知"} 個（存在 ${refs.present ?? "未知"}、缺少 ${refs.missing ?? "未知"}）；VBear 不會執行這些檔案`),
         el("dt", null, "觀察狀態"), el("dd", null, rcObservation(sk.observed))),
       (sk.warnings || []).length ? el("p", { class: "rc-note" }, "結構檢查：" + sk.warnings.join("；")) : null,
-      el("a", { class: "rc-link", href: `#/skills/${encodeURIComponent(sk.skill_id)}` }, "查看技能詳情"));
+      el("button", { class: "btn small rc-open", type: "button",
+        on: { click: () => openSkillCard(sk.skill_id, { profile: rcProfile, onChanged: rcChanged }) } },
+        "技能卡特性"));
   }
 
   function rcArmorGroup(group, items) {
@@ -4862,6 +4970,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId) {
 
   function renderRoleCard(p) {
     const box = el("div", { class: "rc", "data-role-card": p.id });
+    rcProfile = p;
+    rcChanged = async () => { await reloadAgentProfiles(); renderRightColumn(); };
     setKids(box, el("p", { class: "loading" }, "載入角色卡…"));
     api.get(`/api/agent-profiles/${encodeURIComponent(p.id)}/loadout`)
       .then((d) => setKids(box, ...roleCardParts(p, d)))

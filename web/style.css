@@ -909,3 +909,16 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   .rc-dl dt { margin-top: 6px; }
   .rc-skills, .rc-armor-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Skill card dialog (design game-ui 4.2). */
+.sc-box { max-width: 720px; max-height: 85vh; overflow-y: auto; }
+.sc-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sc-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.sc-name { font-size: 18px; overflow-wrap: anywhere; }
+.sc-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.sc-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sc-label { font-size: 13px; color: var(--ink-3); }
+.sc-value { font-size: 14px; overflow-wrap: anywhere; }
+.sc-refs, .sc-status { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; }
+.sc-refs li, .sc-status li { margin: 2px 0; }
+.rc-open { min-height: 44px; align-self: flex-start; }

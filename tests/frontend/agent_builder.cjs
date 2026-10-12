@@ -770,5 +770,111 @@ function findModalInBody() {
     console.log("ok role card renders the loadout as text, with every state and no guesses");
   }
 
+  // The skill card dialog (design game-ui 4.2): opened from the role card, from ?view=card, text only.
+  {
+    const hostile = '<img src=x onerror=alert(1)>';
+    const sourced = (value, origin = "author", detail = "front matter") => ({ value, origin, detail });
+    const card = {
+      ok: true, index: { loaded: true, generated_at: 1791770000 },
+      skill: { skill_id: "s-1", name: hostile, invoke_name: "code-review", tool: "claude", scope: "user",
+               activation: "active", activation_reason: "位於使用者技能目錄", installed: true,
+               description: sourced(hostile), when_to_use: sourced("送出 PR 之前"), inputs: sourced("diff", "derived", "章節"),
+               outputs: sourced(null, "missing", ""), dependencies: sourced(null, "missing", ""),
+               categories: [{ label: "審查", keyword: "review" }],
+               referenced_files: { count: 2, items: [{ ref: "a.py", status: "present" }, { ref: "b.sh", status: "missing" }],
+                                   truncated: false, note: "VBear 不會執行這些檔案" },
+               missing_files: ["b.sh"], warnings: ["w1"] },
+      added_to_roles: { items: [{ id: "p-1", name: "First", enabled: true }], effective: false,
+                        note: "已加入角色只是挑選紀錄，本次不生效" },
+      observation: { state: "none", window_days: 30, source: "執行觀察" },
+      marketplace_copies: [{ skill_id: "s-m", tool: "claude", scope: "marketplace" }],
+      effect_note: "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具",
+    };
+    const loadout = {
+      ok: true,
+      profile: { id: "p-1", name: "First", enabled: true, tool: "claude", model_id: null, profession_role_id: null,
+                 permission_intents: {}, intents_note: "只是記錄，不會變成實際權限" },
+      index: { loaded: true, generated_at: 1791770000 }, profession: { state: "none", role_id: null },
+      skills: { title: "已選技能（VBear 啟動時不載入）", note: "n", safe_mode: "s", items: [
+        { skill_id: "s-1", state: "in_index", effective: false, name: hostile, tool: "claude", scope: "user",
+          description: sourced(hostile), when_to_use: sourced("t"), categories: [],
+          referenced_files: { count: 0, present: 0, missing: 0 }, warnings: [],
+          observed: { state: "none", window_days: 30, source: "執行觀察" } }] },
+      version_status: { state: "unknown", text: "未知" }, armor: { applicable: false, why: "x" }, blockers: [],
+    };
+    const posts = [];
+    const ctx = freshContext({
+      "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
+      "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
+      "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
+      "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
+                                                          usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
+      "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
+      "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
+      "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
+      "GET /api/agent-profiles":     () => jsonResponse({ ok: true, profiles: profilesList }),
+      "GET /api/agent-builder/catalog": () => jsonResponse(catalogBody),
+      "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadout),
+      "GET /api/skills/s-1?view=card": () => jsonResponse(card),
+      "POST /api/agent-profiles/p-1": (_u, o) => { posts.push(JSON.parse(o.body)); return jsonResponse({ ok: true }); },
+    });
+    const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null);
+    await switchToAgentTab();
+    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
+      && /First/.test(n.textContent || "")).dispatch("click");
+    await tick();
+    const open = walk(main).find((n) => n.tag === "button" && (n.textContent || "") === "技能卡特性");
+    assert.ok(open, "the role card's skill has a 技能卡特性 button");
+    open.dispatch("click");
+    await tick();
+    const modal = findModalInBody();
+    assert.ok(modal, "skill card dialog opened");
+    assert.ok(!walk(modal).some((n) => n.tag === "img" || n.tag === "script"), "no element is built from text");
+    assert.ok(findText(modal, hostile), "the hostile name is shown as text");
+    assert.ok(walk(modal).some((n) => n.tag === "span" && (n.textContent || "") === "本次不生效"), "本次不生效 is fixed");
+    assert.ok(findText(modal, "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具"));
+    assert.ok(findText(modal, "未提供"), "a missing field reads 未提供");
+    assert.ok(findText(modal, "a.py") && findText(modal, "存在") && findText(modal, "缺少") && findText(modal, "VBear 不會執行這些檔案"));
+    assert.ok(!findText(modal, "可執行腳本"), "no script count");
+    assert.ok(findText(modal, "已選入 1 個角色：First（本次不生效）"));
+    assert.ok(findText(modal, "目前沒有觀察紀錄（最近 30 天；來源：執行觀察）"));
+    assert.ok(findText(modal, "市集有其他副本（1 個，尚未安裝）"));
+    const clickable = walk(modal).filter((n) => (n._listeners.click || []).length);
+    assert.ok(clickable.every((n) => n.tag === "button" || n.tag === "a"), "only buttons and links are clickable");
+    const file = walk(modal).find((n) => n.tag === "a" && /^#\/skills\/s-1$/.test(n.getAttribute("href") || ""));
+    assert.ok(file && file.textContent === "打開技能檔案", "the file action goes to the existing skill page");
+    const remove = walk(modal).find((n) => n.tag === "button" && (n.textContent || "") === "從這個角色移除");
+    assert.ok(remove, "the remove action is offered from a role card");
+    remove.dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts, [], "nothing is sent before the confirmation");
+    const dialogs = body.children.filter((c) => c !== main && c.tag === "div" && c.getAttribute("role") === "dialog");
+    const confirm = dialogs[dialogs.length - 1];
+    assert.strictEqual(dialogs.length, 2, "the confirmation sits on top of the skill card");
+    const yes = walk(confirm).find((n) => n.tag === "button" && (n.textContent || "").trim() === "移除");
+    assert.ok(yes, "an in-page confirmation");
+    yes.dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts, [{ equipped_skill_ids: [] }], "the body carries only the new list");
+    console.log("ok skill card dialog from the role card, with the remove action");
+  }
+
+  // from the Armory there is no role, so no remove action; an unloaded index is said, not guessed
+  {
+    const ctx = freshContext({
+      "GET /api/skills/s-9?view=card": () => jsonResponse({ error: "索引未載入，無法顯示技能卡", code: "index_not_loaded" }, 409),
+    });
+    evalAgentBuilderSlice(ctx);
+    const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+    await ctx.openSkillCard("s-9");
+    await tick();
+    const modal = findModalInBody();
+    assert.ok(modal && findText(modal, "無法顯示技能卡") && findText(modal, "索引未載入"), "a failed load is said");
+    assert.ok(!walk(modal).some((n) => (n.textContent || "") === "從這個角色移除"));
+    console.log("ok skill card without a role or an index");
+  }
+
   console.log("\nALL AGENT BUILDER FRONTEND TESTS PASSED");
 })().catch((e) => { console.error(e); process.exitCode = 1; });

@@ -407,6 +407,8 @@ def make_handler(console: Console):
                     if rest.endswith("/file"):
                         ref = parse_qs(url.query).get("ref", [""])[0]
                         return self._skill_file(rest[:-5], ref)
+                    if parse_qs(url.query).get("view", [""])[0] == "card":
+                        return self._skill_card(rest)
                     return self._skill_detail(rest)
                 if path == "/api/roles":
                     return self._json(self._roles())
@@ -1177,6 +1179,27 @@ def make_handler(console: Console):
                                        "origin": when.get("origin")}
                 items.append(item)
             return {"skills": items, "categories": console.store.static().get("category_table", [])}
+
+        def _skill_card(self, skill_id: str):
+            """?view=card: the skill card's data from what is already loaded: the index in memory, the stored
+            profiles (read without quarantining) and the last live view. No scan, no runtime call, no live build,
+            and the SKILL.md is not read (vbear/loadout.py)."""
+            static = console.store.static_if_loaded()
+            if static is None:
+                return self._json({"error": "索引未載入，無法顯示技能卡", "code": "index_not_loaded"}, 409)
+            try:
+                profiles = list(agent_profiles.load_all(None, None, mark_corrupt=False).values())
+                profiles_note = None
+            except agent_profiles.AgentProfileStorageError as exc:
+                profiles, profiles_note = [], str(exc)
+            card = loadout_mod.skill_card(static, skill_id, profiles, console.store.live_cached())
+            if card is None:
+                return self._json({"error": "目前索引找不到此技能", "code": "not_in_index",
+                                   "indexed_at": static.get("generated_at")}, 404)
+            if profiles_note:
+                card["added_to_roles"] = {"items": [], "effective": False, "unavailable": profiles_note,
+                                          "note": "角色資料目前無法讀取，不知道這張技能卡被哪些角色選入"}
+            return self._json(card)
 
         def _skill_detail(self, skill_id: str):
             skill = console.skill_index().get(skill_id)

@@ -102,7 +102,7 @@ def _profile(**kw):
     return body
 
 
-class LoadoutTests(unittest.TestCase):
+class _Helpers:
     def serve(self, **kw):
         c, httpd = _fresh(**kw)
         self.addCleanup(httpd.server_close)
@@ -114,6 +114,9 @@ class LoadoutTests(unittest.TestCase):
         skills = {s["skill_id"] for s in static["skills"]} | {"s-gone"} if static else set()
         roles = {r["role_id"] for r in static["roles"]} if static else set()
         agent_profiles.save_profile(None, _profile(**kw), known_skills=skills, known_roles=roles)
+
+
+class LoadoutTests(_Helpers, unittest.TestCase):
 
     def forbid_everything(self):
         """Every way the loadout could start work fails the test."""
@@ -373,6 +376,122 @@ class LoadoutTests(unittest.TestCase):
         self.assertIn("其他版本是否停用技能未驗證", body["skills"]["safe_mode"])
         self.assertTrue(all(s["effective"] is False for s in body["skills"]["items"]))
         self.assertEqual(body["skills"]["title"], "已選技能（VBear 啟動時不載入）")
+
+
+class SkillCardTests(_Helpers, unittest.TestCase):
+    """GET /api/skills/<id>?view=card (design game-ui 4.2, 6)."""
+
+    def _static_with_copy(self):
+        d = _static()
+        d["skills"][0]["inputs"] = {"value": "一段 diff", "origin": "derived", "detail": "章節"}
+        d["skills"][0]["outputs"] = {"value": None, "origin": "missing", "detail": ""}
+        d["skills"][0]["duplicate_of"] = ["s-market", "s-other-installed"]
+        d["skills"].append({"skill_id": "s-market", "name": "code-review", "tool": "claude", "scope": "marketplace",
+                            "activation": "not_installed", "path": "/m/SKILL.md"})
+        d["skills"].append({"skill_id": "s-other-installed", "name": "code-review", "tool": "claude",
+                            "scope": "project", "activation": "active", "path": "/p/SKILL.md"})
+        return d
+
+    def forbid(self):
+        for p in (mock.patch.object(Store, "_scan", side_effect=AssertionError("scan")),
+                  mock.patch.object(Store, "_load_or_scan", side_effect=AssertionError("load_or_scan")),
+                  mock.patch.object(Store, "static", side_effect=AssertionError("static")),
+                  mock.patch.object(Store, "live", side_effect=AssertionError("live build")),
+                  mock.patch.object(Store, "rescan", side_effect=AssertionError("rescan")),
+                  mock.patch.object(server.Console, "armory_view", side_effect=AssertionError("armory_view"),
+                                    create=True),
+                  mock.patch.object(server.Console, "usage_for_skill", side_effect=AssertionError("usage"),
+                                    create=True),
+                  mock.patch("subprocess.run", side_effect=AssertionError("subprocess")),
+                  mock.patch("subprocess.Popen", side_effect=AssertionError("Popen"))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_card_mode_starts_nothing_and_does_not_read_the_skill_file(self):
+        c, port = self.serve(static=self._static_with_copy())
+        self.save(c)
+        self.forbid()
+        opened = []
+        real_open = open
+
+        def spy(file, *a, **k):
+            opened.append(str(file))
+            return real_open(file, *a, **k)
+
+        with mock.patch("builtins.open", spy):
+            status, body = _get(port, "/api/skills/s-code?view=card")
+        self.assertEqual(status, 200, body)
+        self.assertFalse(any("SKILL.md" in f for f in opened), opened)
+        self.assertNotIn("raw", body)
+        self.assertNotIn("usage", body)               # the old field is not computed in this mode
+        self.assertNotIn("/skills/code-review", json.dumps(body))    # and no path leaves the server
+
+    def test_card_fields(self):
+        live = {"usage": {"window_days": 14, "problems": [], "sessions": [
+            {"skills": [{"skill_ids": ["s-code"], "last_ts": 1791760000.0}]}]}}
+        c, port = self.serve(static=self._static_with_copy(), live=live)
+        self.save(c)
+        status, body = _get(port, "/api/skills/s-code?view=card")
+        self.assertEqual(status, 200)
+        sk = body["skill"]
+        self.assertEqual((sk["name"], sk["tool"], sk["scope"], sk["installed"]), ("code-review", "claude", "user", True))
+        self.assertEqual(sk["inputs"], {"value": "一段 diff", "origin": "derived", "detail": "章節"})
+        self.assertEqual(sk["outputs"]["origin"], "missing")
+        self.assertIsNone(sk["outputs"]["value"])
+        self.assertEqual(sk["referenced_files"]["count"], 2)
+        self.assertEqual(sk["referenced_files"]["items"], [{"ref": "a.py", "status": "present"},
+                                                          {"ref": "b.sh", "status": "missing"}])
+        self.assertIn("不會執行", sk["referenced_files"]["note"])
+        self.assertNotIn("executable", json.dumps(body))
+        self.assertEqual(sk["missing_files"], ["b.sh"])
+        self.assertEqual(body["added_to_roles"]["items"], [{"id": "prof-a", "name": "後端工匠", "enabled": True}])
+        self.assertIs(body["added_to_roles"]["effective"], False)
+        self.assertIn("本次不生效", body["added_to_roles"]["note"])
+        self.assertEqual(body["observation"]["state"], "observed")
+        self.assertEqual(body["observation"]["window_days"], 14)
+        # only an uninstalled copy counts as 'the marketplace has another copy'
+        self.assertEqual(body["marketplace_copies"], [{"skill_id": "s-market", "tool": "claude", "scope": "marketplace"}])
+        self.assertIn("只適用於你自己啟動並載入這張技能的工具", body["effect_note"])
+
+    def test_no_index_in_memory_and_unknown_skill(self):
+        c, port = self.serve(static=None)
+        status, body = _get(port, "/api/skills/s-code?view=card")
+        self.assertEqual((status, body["code"]), (409, "index_not_loaded"))
+        self.assertIsNone(c.store._static)
+        c2, port2 = self.serve(static=_static())
+        status, body = _get(port2, "/api/skills/nope?view=card")
+        self.assertEqual((status, body["code"]), (404, "not_in_index"))
+        self.assertEqual(body["indexed_at"], 1791770000.0)
+
+    def test_observation_is_not_available_without_a_live_view(self):
+        c, port = self.serve(static=_static(), live=None)
+        _, body = _get(port, "/api/skills/s-code?view=card")
+        self.assertEqual(body["observation"]["state"], "unavailable")
+
+    def test_a_damaged_profile_store_does_not_break_the_card_or_get_touched(self):
+        import vbear.agent_profiles as ap
+        c, port = self.serve(static=_static())
+        path = ap._path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{broken")
+        before = path.read_bytes()
+        status, body = _get(port, "/api/skills/s-code?view=card")
+        self.assertEqual(status, 200)
+        self.assertIn("unavailable", body["added_to_roles"])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(ap._corrupt_marker_path().exists())
+        self.assertEqual([x.name for x in path.parent.iterdir() if ".corrupt-" in x.name], [])
+
+    def test_without_the_parameter_the_old_detail_answer_is_unchanged(self):
+        c, port = self.serve(static=_static())
+        self.save(c)
+        with mock.patch.object(server.Console, "usage_for_skill", return_value=[], create=True) as usage, \
+             mock.patch.object(server.Console, "armory_view", return_value={"skills": []}, create=True):
+            status, body = _get(port, "/api/skills/s-code")
+        self.assertEqual(status, 200)
+        for key in ("skill", "equipped_by", "usage", "raw", "roles", "duplicates"):
+            self.assertIn(key, body)
+        usage.assert_called()
 
 
 if __name__ == "__main__":
