@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — game-style screens
+
+The READMEs were rewritten for first-time readers around a game-style vocabulary (character, class, skill card,
+armor, party, gates, stamina), with screenshots of demo data. The role card, the skill card, the pre-launch check
+and a flow's 任務進度 / 隊伍 / 體力 follow that vocabulary, and a flow's phase now also reads automatic mode's own
+events. The README says what to do after Claude Code updates itself (the new version shows *unknown* until you
+verify it), and the Codex review token figures from v0.3.0 (see below) are unchanged. A role VBear launches runs in
+Claude Code's safe mode, so a role's skill list is only a record of your picks, not something a launch loads.
 
 - **Game-style role card, skill card and pre-launch check.** The workbench's right tab 「角色」 shows a profile as a
   card: its role (a label), its chosen skills (each marked as not loaded by a launch, with the author's text and
