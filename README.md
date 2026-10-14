@@ -35,9 +35,10 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 VBear has no levels, hit points or scores. It shows only what it can read or check, and says *unknown* when it
-cannot. Adding a skill to a profile only records your choice. VBear starts Claude Code in its safe mode, which
-switches off skills, CLAUDE.md files, installed plugins, hooks and MCP servers, so a launched Claude Code does not use
-skills for now: a profile's skill list is a record of your picks.
+cannot. Adding a skill to a profile only records your choice. VBear starts Claude Code in its safe mode. By Claude
+Code's own help, that switches off skills, CLAUDE.md files, installed plugins, hooks and MCP servers; for skills, a
+test on Claude Code 2.1.299 confirmed it. So a launched Claude Code does not use skills for now: a profile's skill
+list is a record of your picks.
 
 ### What it looks like
 
@@ -174,7 +175,8 @@ and what you can do about each.
   network-enabled and Codex profile launches are planned, not built.
 - **Skills are switched off in launches for now.** VBear starts Claude Code with `--safe-mode`, which (as Claude
   Code's own help says) disables skills, CLAUDE.md files, installed plugins, hooks, MCP servers and custom commands
-  and agents; sign-in, model choice and the built-in tools work as usual. A profile's skill list is therefore a
+  and agents, and leaves sign-in and model choice as they are. VBear's launch also opens only the Bash tool, so no
+  other built-in tool is available in it. A profile's skill list is therefore a
   record of your picks, not something the launch loads or uses. A Claude Code you start yourself in a terminal is
   not launched by VBear and is not affected. Tested on Claude Code 2.1.299 (2026-10-14): in a throwaway project that
   had a project-level skill, a launch with VBear's flags listed none of the user's or the project's skills (a plain
