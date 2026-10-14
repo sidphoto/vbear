@@ -15,7 +15,12 @@ const timers = new Map();
 
 class Node {
   constructor(tag) { this.tag = tag; this.children = []; this.listeners = {}; this.style = {}; this.dataset = {}; this.value = ""; this.hidden = false; }
-  append(n) { this.children.push(n); }
+  // like the real DOM: a node has one parent, so adding it here takes it away from the old one
+  append(n) {
+    if (n && n.parent) { const i = n.parent.children.indexOf(n); if (i >= 0) n.parent.children.splice(i, 1); }
+    if (n && typeof n === "object") n.parent = this;
+    this.children.push(n);
+  }
   replaceChildren() { this.children = []; }
   setAttribute(k, v) { this[k] = v; }
   addEventListener(k, f) { this.listeners[k] = f; }

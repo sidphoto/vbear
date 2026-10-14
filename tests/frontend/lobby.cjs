@@ -405,6 +405,15 @@ test("a flows error says so in both blocks, is not 'no tasks', and the agent car
   assert.strictEqual(b.split("讀不到流程：讀不到 flows.json").length - 1, 2, "once in each block");
   assert(!b.includes("沒有輪到你的任務") && !b.includes("沒有其他進行中的任務") && !b.includes("大廳目前沒有任務"));
   const turn = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "turn");
+  const going = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "going");
+  // each block holds its own copy: one node is never in two parents (the fake DOM moves a node like the real one)
+  for (const [name, block] of [["輪到你", turn], ["其他進行中", going]]) {
+    assert.strictEqual(text(block).split("讀不到流程：讀不到 flows.json").length - 1, 1, `${name} has the error text`);
+  }
+  const notices = board(main).findAll((n) => n.hasClass && n.hasClass("notice"));
+  assert.strictEqual(notices.length, 2);
+  assert.notStrictEqual(notices[0], notices[1], "two nodes");
+  assert.notStrictEqual(notices[0].parentNode, notices[1].parentNode);
   assert(text(turn).includes("Claude 工人"), "the agent is still drawn");
   // no agent either: still no 'no tasks'
   setPage({ flowsError: "讀不到 flows.json" });

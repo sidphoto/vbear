@@ -82,7 +82,14 @@ class Node {
   click() { this.dispatch("click"); }
   append(...kids) {
     for (const kid of kids) {
-      if (kid instanceof Node) kid.parentNode = this;
+      if (kid instanceof Node) {
+        // like the real DOM: a node has one parent, so adding it here takes it away from the old one
+        if (kid.parentNode) {
+          const i = kid.parentNode.children.indexOf(kid);
+          if (i >= 0) kid.parentNode.children.splice(i, 1);
+        }
+        kid.parentNode = this;
+      }
       this.children.push(kid);
     }
   }

@@ -65,7 +65,14 @@ class SyntheticNode {
   withText(t) { this._text = t; return this; }
   append(...kids) {
     for (const kid of kids) {
-      if (kid instanceof SyntheticNode) kid.parentNode = this;
+      if (kid instanceof SyntheticNode) {
+        // like the real DOM: a node has one parent, so adding it here takes it away from the old one
+        if (kid.parentNode) {
+          const i = kid.parentNode.children.indexOf(kid);
+          if (i >= 0) kid.parentNode.children.splice(i, 1);
+        }
+        kid.parentNode = this;
+      }
       this.children.push(kid);
     }
   }

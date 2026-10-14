@@ -1445,7 +1445,8 @@ function questCard(f, yourTurn) {
 }
 
 function boardSection(g) {
-  const flowsError = g.error ? notice("warn", `讀不到流程：${g.error}`) : null;
+  // one node per block: a node has one parent, so a shared one would be taken away from the first block
+  const flowsError = () => (g.error ? notice("warn", `讀不到流程：${g.error}`) : null);
   if (g.allEmpty) {
     return el("section", { class: "section", "data-board": "start" },
       sectionHead("任務告示板", "每 5 秒更新"),
@@ -1474,11 +1475,11 @@ function boardSection(g) {
   return [
     el("section", { class: "section", "data-board": "turn" },
       sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到 Agent 團隊頁查看`),
-      g.error ? flowsError : null,
+      flowsError(),
       turnBody),
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
-      g.error ? flowsError : null,
+      flowsError(),
       goingBody),
   ];
 }

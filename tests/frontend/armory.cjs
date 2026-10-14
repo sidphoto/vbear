@@ -4,7 +4,13 @@ const fs = require("fs"), path = require("path"), vm = require("vm"), assert = r
 const source = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
 class Node {
   constructor(tag) { this.tag = tag; this.children = []; this.listeners = {}; this.style = {}; this.dataset = {}; }
-  append(n) { this.children.push(n); } replaceChildren(...n) { this.children = n; }
+  // like the real DOM: a node has one parent, so adding it here takes it away from the old one
+  append(n) {
+    if (n && n.parent) { const i = n.parent.children.indexOf(n); if (i >= 0) n.parent.children.splice(i, 1); }
+    if (n && typeof n === "object") n.parent = this;
+    this.children.push(n);
+  }
+  replaceChildren(...n) { this.children = n; }
   setAttribute(k, v) { this[k] = v; } addEventListener(k, f) { this.listeners[k] = f; }
 }
 function walk(n) { return [n, ...(n.children || []).flatMap(walk)]; }
