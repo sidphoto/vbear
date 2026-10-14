@@ -13,6 +13,9 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       Optional VBEAR_QA_DEMO=1: the same environment with demo names (「示範」), no HTML probe skill and no
       skill the index cannot find, and no work directory on the executor role: nothing on the screens is a path
       of this machine. It is what the README's screenshots are taken from (docs/images/).
+      Optional VBEAR_QA_LOBBY=1: more flows for the home page's quest board (one waits for approval, one waits
+      for a merge, four more are being worked on by hand, next to the automatic one, so 「還有 1 則」 shows). VBEAR_QA_LOBBY=empty
+      deletes the flow instead, so the board is in its first-run state (no flow, no waiting Agent).
       Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
       the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
@@ -43,7 +46,7 @@ from unittest import mock
 
 from tests.test_automation_runner import RunnerCase
 from tests.test_runtimed_managed import FAKE_CLI, FAKE_CODEX_CLI
-from vbear import agent_launch, agent_profiles, flows
+from vbear import agent_launch, agent_profiles, flows, tasks
 from vbear import config as cfg
 
 PROBE = "<img src=x onerror=alert(document.domain)>"
@@ -76,6 +79,7 @@ class _Env(RunnerCase):
         self._profiles()
         self._launch_environment()
         self._flow()
+        self._lobby()
 
     # ---- the index: skills and professions, as files in the temporary HOME
 
@@ -190,6 +194,42 @@ class _Env(RunnerCase):
         if not self.no_manual:
             flows.append_event(self.fid, {"kind": "review_result", "commit": self.commit, "verdict": "NEEDS_WORK",
                                           "reviewer": 0, "note": "QA"})
+
+    # ---- the home page's quest board: more flows, or none
+
+    def _lobby(self) -> None:
+        mode = os.environ.get("VBEAR_QA_LOBBY", "")
+        if mode == "empty":
+            flows.delete_flow(self.fid)
+            return
+        if mode != "1":
+            return
+        import copy
+        base_roles = copy.deepcopy(flows.get_flow(self.fid)["roles"])
+        base_roles["executor"].pop("session_id", None)
+        names = ("整理首頁文案", "補上登入流程的測試", "更新安裝說明", "調整深色主題的對比", "修正列表的排序", "改寫設定頁的說明")
+
+        def add(title, events, workdir=None):
+            tid = tasks.save_task(None, {"title": title, "workdir": str(self.work), "goal": "（示範）" + title,
+                                         "acceptance_criteria": ["相關測試通過"]})["id"]
+            roles = copy.deepcopy(base_roles)
+            if workdir:
+                roles["executor"]["workdir"] = workdir
+            else:
+                roles["executor"].pop("workdir", None)
+            fid = flows.create_flow({"task_id": tid, "roles": roles}, lambda t: True)["id"]
+            for body in events:
+                flows.append_event(fid, {"note": "QA", **body})
+            return fid
+
+        plan = [{"kind": "plan_submitted"}]
+        approved = plan + [{"kind": "plan_approved"}, {"kind": "implementation_started"}]
+        add(names[0], plan)                                                     # 等核准: waits for you
+        add(names[1], approved + [{"kind": "executor_report", "commit": self.commit},
+                                  {"kind": "review_result", "commit": self.commit, "verdict": "PASS", "reviewer": 0}],
+            workdir=str(self.work))                                              # 等合併: waits for you
+        for title in names[2:]:
+            add(title, approved)                                                 # worked on by hand
 
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/#auth={self.token}"
@@ -394,6 +434,26 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] 審查輪次: 1 round, verdict NEEDS WORK, the commit it reviewed.
   [ ] In automatic mode the dispatch box, review start and manual acceptance are off and say why.
   [ ] 停止流程 asks twice; after it, the gates and the team still render.
+
+== 5. 冒險者大廳 (the first page; the nav's first item is 「冒險者大廳」, the title is 「冒險者大廳」)
+  Start with VBEAR_QA_LOBBY=1 for the full board, and with VBEAR_QA_LOBBY=empty for the first-run state.
+  [ ] 「輪到你」 comes first: the flows waiting for you (VBEAR_QA_LOBBY=1: 「等核准」 and 「審查通過・等合併」),
+      then an Agent that waits for you if there is one. Each flow card has one link (its title), the whole
+      card is clickable, Tab stops on the card once and shows a focus ring; the type label is the phase's own
+      words; the hint reads 「前往處理 →」. The cards have a 2px frame and a bar on the left, and the words
+      come with them (colour is not the only sign).
+  [ ] 「其他進行中的任務」: at most 4 cards, then 「還有 N 則 →」 to the flows page. The automatic flow says
+      「自動執行中」 with its step; a manual one says 「手動模式：VBear 不會替你推進…」. The hint reads 「查看流程 →」.
+      A flow that is 完成 is on neither list.
+  [ ] The small line beside 「輪到你」 says where the data comes from, that it refreshes every 5 seconds and
+      where an Agent whose state is unknown is to be looked at.
+  [ ] Wait more than 5 seconds with the search box focused and some text typed: the box keeps its focus and
+      text while the board changes (stop the runner or record an event by hand to see a change).
+  [ ] VBEAR_QA_LOBBY=empty: one start block: 「大廳目前沒有任務。想開始第一個任務？」, one link 「到終端工作台」
+      and the sentence that a task card must be added first.
+  [ ] Break the flows file (or stop the console's runtime) and look: 「讀不到流程：…」 in both blocks, never
+      「沒有任務」; with the runtime away and no flow card, 「…無法判斷有沒有 Agent 在等你」.
+  [ ] 390 px wide: one column, no sideways scroll, every card still one tap; light and dark both readable.
 """
 
 

@@ -172,6 +172,7 @@ global.fetch = async (url, opts = {}) => {
 let dom = resetDom();
 global.document = {
   createElement: (tag) => new SyntheticNode(tag),
+  createElementNS: (ns, tag) => new SyntheticNode(tag),
   createTextNode: (text) => new SyntheticNode("#text").withText(String(text)),
   getElementById: (id) => idRegistry.get(id) || null,
   querySelectorAll: () => [],

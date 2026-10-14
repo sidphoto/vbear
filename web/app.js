@@ -1282,17 +1282,19 @@ async function viewHome() {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
+  const board = boardGroups(L, D.flows);
+  boardShownKey = boardKey(board);
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
 
   setKids(main, 
-    el("h1", null, "我的工作台"),
-    el("p", { class: "lede" }, "先看需要你處理的事，再找適合這次任務的技能。"),
+    el("h1", null, "冒險者大廳"),
+    el("p", { class: "lede" }, "先看告示板上輪到你的任務，再看其他進行中的任務。"),
     corruptNotice(),
     staleNotice(),
     herdrMigrationNotice(),
     runtimeNotice(),
-    el("section", { class: "section", id: "h-att-wrap" }, attentionSection()),
+    el("div", { id: "h-board" }, boardSection(board)),
     el("section", { class: "section" },
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
       el("div", { class: "search" }, input),
@@ -1309,18 +1311,168 @@ async function viewHome() {
   setTimeout(() => input.focus(), 0);
 }
 
-function attentionSection() {
-  const L = D.live;
-  const attention = (L.attention || []).map((id) => L.sessions.find((s) => s.terminal_id === id)).filter(Boolean);
-  const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);
-  const parts = [attention.length ? `${attention.length} 個 Agent 在等你` : "",
-    gates.length ? `${gates.length} 個流程關卡等你` : ""].filter(Boolean);
+// ---------- the quest board (design lobby v1.2) ------------------------------------------------------------
+// The home page's first block. Every card is data VBear already has; nothing here invents progress. The grouping
+// is made only in boardGroups, from what the server says (f.attention is the server's own judgement, so the page
+// never re-derives it from the phase); boardKey is made of exactly what the board shows, so a 5-second refresh
+// repaints only when something visible changed.
+const BOARD_IN_PROGRESS_MAX = 4;
+let boardShownKey = null;
+
+function boardGroups(live, flowsData) {
+  const L = live || {};
+  const runtimeAvailable = !!(L.runtime && L.runtime.available);
+  const sessions = Array.isArray(L.sessions) ? L.sessions : [];
+  const yourTurnSessions = (Array.isArray(L.attention) ? L.attention : [])
+    .map((id) => sessions.find((s) => s.terminal_id === id)).filter(Boolean);
+  let error = "";
+  let flows = [];
+  if (!flowsData) error = "還沒有讀取到流程";
+  else if (flowsData.error) error = String(flowsData.error);
+  else if (!Array.isArray(flowsData.flows)) error = "流程資料的格式無法辨識";
+  else flows = flowsData.flows.filter((f) => f && typeof f === "object");
+  // A finished flow is never on the board, even when the server still marks it as needing attention.
+  const open = flows.filter((f) => !(f.phase && f.phase.key === "done"));
+  const waitsForYou = (f) => {
+    if (f.attention === true) return true;
+    // Nothing re-sends a stale review by itself when the mode is manual or the automatic run has stopped.
+    const a = f.automation;
+    return !!(f.phase && f.phase.key === "review_stale" && (!a || a.mode !== "auto" || a.held));
+  };
+  const yourTurnFlows = open.filter(waitsForYou);
+  const rest = open.filter((f) => !waitsForYou(f));
+  return {
+    error, yourTurnFlows, yourTurnSessions,
+    inProgress: rest.slice(0, BOARD_IN_PROGRESS_MAX),
+    moreInProgress: Math.max(0, rest.length - BOARD_IN_PROGRESS_MAX),
+    runtimeAvailable,
+    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable,
+  };
+}
+
+// ctx is only for tests and for callers that already hold the values; by default it reads the page's live data.
+function boardKey(g, ctx) {
+  const c = ctx || {};
+  const liveError = c.liveError !== undefined ? c.liveError : liveLoadError();
+  const projects = c.projects || (D.live && D.live.projects) || [];
+  const flowFields = (f) => {
+    const ph = f.phase || {};
+    const a = f.automation || {};
+    const r = f.latest_review;
+    const roles = f.roles || {};
+    const live = flowLiveText(f.executor_live, liveError);
+    return [f.id, f.task_title, !!f.task_missing, ph.key, ph.label, ph.reason, f.attention === true, f.attention_reason || "",
+      a.mode || "", !!a.held, a.step_label || "", roleText(roles.executor), (roles.reviewers || []).map(roleText),
+      live.label, live.reason, r ? [r.verdict, !!r.counts_as_pass, r.commit, r.why || ""] : null,
+      f.phase ? flowBindingNote(f) : ""];
+  };
+  const sessionFields = (x) => {
+    const project = projects.find((p) => p.project_id === x.project_id);
+    return [x.terminal_id, x.status, x.title || "", x.activity || null, x.role_label || "", x.role_label_source || "",
+      x.agent || "", x.models_observed || null, x.skills_used || [], !!x.usage_matched, !!x.supported_tool,
+      x.workspace_label || "", x.workspace_id || "", x.pane_id || "", x.project_id || "", project ? project.name : null];
+  };
+  return JSON.stringify({ error: g.error || "", runtime: !!g.runtimeAvailable, liveError: liveError || "",
+    more: g.moreInProgress || 0, allEmpty: !!g.allEmpty,
+    turn: g.yourTurnFlows.map(flowFields), sessions: g.yourTurnSessions.map(sessionFields),
+    progress: g.inProgress.map(flowFields) });
+}
+
+// Inline SVG, drawn with the DOM (no innerHTML); decoration only, so it is hidden from assistive technology.
+function questIcon(kind) {
+  const NS = "http://www.w3.org/2000/svg";
+  const make = (tag, attrs) => {
+    const n = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+  const svg = make("svg", { class: "quest-ico", viewBox: "0 0 24 24", width: "14", height: "14", fill: "none",
+    stroke: "currentColor", "stroke-width": "2.4", "stroke-linecap": "round", "stroke-linejoin": "round",
+    "aria-hidden": "true", focusable: "false" });
+  svg.append(make("circle", { cx: "12", cy: "12", r: "9" }));
+  if (kind === "turn") {   // an exclamation mark: it is your move
+    svg.append(make("path", { d: "M12 7.5v5.5" }));
+    svg.append(make("path", { d: "M12 16.4v.1" }));
+  } else {                 // a clock: it is under way
+    svg.append(make("path", { d: "M12 7.5V12l3 2" }));
+  }
+  return svg;
+}
+
+// A flow on the home board. One article with one link (the title, stretched over the card by CSS), so the card
+// is clickable as a whole and Tab stops on it once; nothing inside is a link or a control.
+function questCard(f, yourTurn) {
+  const ph = f.phase || {};
+  const a = f.automation || {};
+  const rev = f.latest_review;
+  const roles = f.roles || {};
+  const live = flowLiveText(f.executor_live, liveLoadError());
+  const note = f.phase ? flowBindingNote(f) : "";
+  const modeLine = yourTurn
+    ? (a.mode === "auto" && a.held ? el("div", { class: "stat-line" }, badge("自動（已停止）", "b-warn"),
+      a.step_label ? el("span", { class: "small" }, a.step_label) : null) : null)
+    : (a.mode === "auto"
+      ? el("div", { class: "stat-line" }, badge(a.held ? "自動（已停止）" : "自動執行中", a.held ? "b-warn" : "b-info"),
+        a.step_label ? el("span", { class: "small" }, a.step_label) : null)
+      : el("div", { class: "small muted" }, "手動模式：VBear 不會替你推進，下一步由你或你啟動的 Agent 處理"));
+  return el("article", { class: `card quest ${yourTurn ? "quest-turn" : "quest-going"}`,
+    "data-quest": "flow", "data-flow-id": f.id || "" },
+    el("div", { class: "card-top" },
+      el("div", { style: "min-width:0" },
+        el("div", { class: "card-title" },
+          el("a", { class: "quest-link", href: `#/flows/${encodeURIComponent(f.id)}` },
+            f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title)),
+        el("div", { class: "card-sub" }, f.attention_reason || ph.reason || "")),
+      el("span", { class: `badge ${flowPhaseClass(ph.key)} quest-type`, title: ph.reason || "" },
+        questIcon(yourTurn ? "turn" : "going"), ph.label || "階段不明")),
+    modeLine,
+    el("div", { class: "stat-line" },
+      el("span", null, "執行 ", el("b", null, roleText(roles.executor))),
+      el("span", null, "session ", el("b", { title: live.reason }, live.label))),
+    el("div", { class: "stat-line" },
+      el("span", null, "審查 ", el("b", null, (roles.reviewers || []).map(roleText).join("、"))),
+      rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
+        rev.counts_as_pass ? "算通過" : (rev.why || "")), ` ${shortCommit(rev.commit)}`) : null),
+    note ? el("div", { class: "small muted" }, note) : null,
+    el("div", { class: "quest-go" }, yourTurn ? "前往處理 →" : "查看流程 →"));
+}
+
+function boardSection(g) {
+  const flowsError = g.error ? notice("warn", `讀不到流程：${g.error}`) : null;
+  if (g.allEmpty) {
+    return el("section", { class: "section", "data-board": "start" },
+      sectionHead("任務告示板", "每 5 秒更新"),
+      el("div", { class: "empty-state quest-start" },
+        el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
+        el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台"),
+        el("span", null, "在那裡挑角色出發；想讓多個 Agent 合作，先在右側「任務卡」分頁新增任務卡，再到「流程」頁建立流程。")));
+  }
+  const nTurn = g.yourTurnFlows.length;
+  const nAgents = g.yourTurnSessions.length;
+  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nAgents ? `${nAgents} 個 Agent 在等你` : ""].filter(Boolean).join("・");
+  const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...g.yourTurnSessions.map(sessionCard)];
+  let turnBody;
+  if (cards.length) turnBody = el("div", { class: "grid" }, cards);
+  else if (g.error) {
+    turnBody = g.runtimeAvailable
+      ? emptyState("目前沒有可判斷為在等你的 Agent", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到 Agent 團隊查看。")
+      : emptyState("VBear runtime 未連線，無法判斷有沒有 Agent 在等你", null);
+  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear runtime 未連線，無法判斷有沒有 Agent 在等你", null);
+  else turnBody = emptyState("告示板上目前沒有輪到你的任務",
+    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到 Agent 團隊查看。");
+  const goingBody = g.inProgress.length
+    ? [el("div", { class: "grid" }, g.inProgress.map((f) => questCard(f, false))),
+      g.moreInProgress ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreInProgress} 則 →`) : null]
+    : (g.error ? null : emptyState("目前沒有其他進行中的任務", null));
   return [
-    sectionHead("需要你處理", parts.length ? `${parts.join("・")}・每 5 秒更新` : "每 5 秒更新"),
-    gates.length ? el("div", { class: "grid flow-gates" }, gates.map(flowCard)) : null,
-    attention.length || gates.length ? el("div", { class: "grid" }, attention.map(sessionCard))
-      : emptyState(L.runtime && L.runtime.available ? "目前沒有可判斷為在等你的 Agent" : "VBear runtime 未連線，無法判斷",
-        L.runtime && L.runtime.available ? "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到 Agent 團隊查看。" : null),
+    el("section", { class: "section", "data-board": "turn" },
+      sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到 Agent 團隊頁查看`),
+      g.error ? flowsError : null,
+      turnBody),
+    el("section", { class: "section", "data-board": "going" },
+      sectionHead("其他進行中的任務", null),
+      g.error ? flowsError : null,
+      goingBody),
   ];
 }
 
@@ -6078,13 +6230,15 @@ async function route() {
   liveTick = null;
   if (top === "home") {
     liveTick = async () => {
-      const gateKey = () => JSON.stringify(((D.flows && D.flows.flows) || [])
-        .filter((f) => f.attention).map((f) => [f.id, f.phase.key, f.attention_reason]));
-      const before = JSON.stringify(D.live.attention) + gateKey();
       await loadLive();
       await loadFlows();
-      const box = document.getElementById("h-att-wrap");
-      if (box && JSON.stringify(D.live.attention) + gateKey() !== before) setKids(box, attentionSection());
+      const box = document.getElementById("h-board");
+      if (!box) return;
+      const g = boardGroups(D.live, D.flows);
+      const key = boardKey(g);
+      if (key === boardShownKey) return;
+      boardShownKey = key;
+      setKids(box, boardSection(g));
     };
   }
   if (top === "team" || top === "projects") {
@@ -6179,6 +6333,12 @@ if (typeof module !== "undefined" && module.exports) {
     flowLiveText,
     flowGateGrid,
     flowTeamSection,
+    boardGroups,
+    boardKey,
+    boardSection,
+    questCard,
+    flowCard,
+    sessionCard,
     api,
     mountCoordinator,
     mountStorage,

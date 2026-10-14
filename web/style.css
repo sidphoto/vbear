@@ -17,6 +17,10 @@
   --info: #2f5f8f;     --info-soft: #e1ebf5;
   --mute: #6b6f6c;     --mute-soft: #ebe8e1;
   --shadow: 0 1px 2px rgba(40, 35, 25, .06), 0 4px 14px rgba(40, 35, 25, .05);
+  /* the home board's cards (design lobby v1.2): the frame and bar of a card that waits for you, and badge ink
+     dark enough for 4.5:1 on the soft backgrounds */
+  --quest-edge: #8a5a00; --quest-bar: #8a5a00;
+  --quest-ok: #256a42; --quest-warn: #7a5500; --quest-mute: #585c59;
   --radius: 12px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", "Segoe UI", sans-serif;
@@ -30,6 +34,7 @@
     --ok: #74c793; --ok-soft: #1d3326; --warn: #e4b54f; --warn-soft: #3a2f14;
     --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
     --mute: #9aa09c; --mute-soft: #2a2f2d;
+    --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
     color-scheme: dark;
   }
@@ -41,6 +46,7 @@
   --ok: #74c793; --ok-soft: #1d3326; --warn: #e4b54f; --warn-soft: #3a2f14;
   --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
   --mute: #9aa09c; --mute-soft: #2a2f2d;
+  --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
   color-scheme: dark;
 }
@@ -943,3 +949,25 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 
 .rc-launch-line { margin: 8px 0; }
 .rc-launch-line:empty { display: none; }
+
+/* ---- the home board (design lobby v1.2) ---- */
+.quest { position: relative; }
+.quest .card-title a.quest-link { color: var(--ink); text-decoration: none; }
+.quest-link::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
+.quest-link:focus-visible { outline: none; }
+.quest-link:focus-visible::after { outline: 2px solid var(--gold); outline-offset: 2px; }
+.quest:hover { border-color: var(--line-2); }
+.quest-turn { border: 2px solid var(--quest-edge); padding: 14px 15px 14px 15px; box-shadow: inset 4px 0 0 var(--quest-bar), var(--shadow); }
+.quest-turn:hover { border-color: var(--quest-edge); }
+.quest .card-sub, .quest .muted { color: var(--ink-2); }
+.quest-type { gap: 6px; }
+.quest-type::before { display: none; }
+.quest-ico { flex: none; }
+.quest .badge.b-ok { color: var(--quest-ok); }
+.quest .badge.b-warn { color: var(--quest-warn); }
+.quest .badge.b-mute { color: var(--quest-mute); }
+.quest-go { margin-top: auto; padding-top: 4px; font-size: 13.5px; font-weight: 650; color: var(--accent); }
+.quest-start { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.quest-start strong { margin-bottom: 0; }
+.quest-start .btn, .quest-more { min-height: 44px; justify-content: center; }
+.quest-more { margin-top: 12px; }

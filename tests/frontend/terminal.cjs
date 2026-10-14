@@ -853,8 +853,11 @@ async function runAllTests() {
     assert(!appSource.includes("f.binding ? notice("), "the detail page no longer repeats the binding as its own notice");
     assert(appSource.includes('manual: "由表單記錄，VBear 沒有核對"') && appSource.includes("FLOW_SOURCE_TITLES[e.source]"),
       "every manual event shows it was recorded by hand and not checked; the other sources say what they are");
-    assert(appSource.includes("const gates = ((D.flows && D.flows.flows) || []).filter((f) => f.attention);"),
-      "the home page lists flow gates waiting for the user");
+    // the home page's board (design lobby v1.2; its own tests are in lobby.cjs): a flow the server marks as
+    // needing attention is in the first group
+    const board = app.boardGroups({ runtime: { available: true }, sessions: [], attention: [] },
+      { flows: [{ id: "f1", phase: { key: "awaiting_merge" }, attention: true }, { id: "f2", phase: { key: "implementing" }, attention: false }] });
+    assert.deepStrictEqual(board.yourTurnFlows.map((f) => f.id), ["f1"], "the home page lists flow gates waiting for the user");
     // Live state: shown as current only when fresh, never after this page's own load failed (Codex S1 r2).
     const { flowLiveText, api } = app;
     const fresh = { label: "工作中", reason: "標題顯示工作中", freshness: { state: "fresh", age_s: 3 } };
