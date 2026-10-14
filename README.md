@@ -30,7 +30,8 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. The Armory marks each one as available, installed, added to a profile, and whether it was ever seen in use | 技能庫 → Armory |
 | **Armor** | The **protection a launch actually puts on, and the weak spots it does not cover**: writes kept inside the work directory, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it holds | 「出發前檢查」 |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task, each with a model family. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | 流程 |
-| **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | Home page 「需要你處理」 |
+| **Quest board** | The **home page** (冒險者大廳): what waits for you first (flows at a gate, agents waiting for your reply), then the other tasks in progress. Each card is something VBear already has; nothing is scored | Home page |
+| **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | The board's 「輪到你」 and the flow page |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 VBear has no levels, hit points or scores. It shows only what it can read or check, and says *unknown* when it
@@ -41,6 +42,12 @@ skills for now: a profile's skill list is a record of your picks.
 ### What it looks like
 
 All screens below show **demo data**: a synthetic Claude Code and Codex in a temporary folder, not a real project.
+
+<img src="docs/images/lobby.png" alt="The home page, 冒險者大廳: the quest board with what waits for you first, then the other tasks in progress" width="992">
+
+The **quest board** (demo data), the home page: 「輪到你」 first, with the flows at a gate and any agent that waits for
+your reply (a framed card, with the words that say why), then 「其他進行中的任務」. A card is one flow; the whole card
+opens it. Manual flows say that VBear will not move them for you, and nothing is shown that VBear cannot read.
 
 <p>
 <img src="docs/images/role-card.png" alt="A character card in the dark theme: the role label, the tool, the chosen skills with their source tags" width="330">
@@ -91,7 +98,7 @@ for you.
 
 **Put several agents on one task and see where it stands.**
 A flow records who plans, who does the work and who checks it, and which AI maker each one is from. The 「流程」 page
-shows the phase, the review rounds and a timeline, and the home page lists the gates waiting for you. A review counts
+shows the phase, the review rounds and a timeline, and the home page's quest board lists the gates waiting for you first. A review counts
 as a pass only when the checker and the one who did the work are from different makers, so nobody grades their own
 work; and a pass is marked out of date as soon as the code changes.
 
@@ -131,7 +138,7 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
    [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
    Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
    down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
-2. **Open VBear.** The app opens its own window. The menu on the left has 我的工作台, 終端機, 終端工作台, 流程,
+2. **Open VBear.** The app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 終端機, 終端工作台, 流程,
    技能庫, Agent 團隊, 專案 and 設定. VBear lists the skills and agent roles it finds on your Mac (read-only; it
    changes none of them).
 3. **Pick a character and preview the launch.**
@@ -169,7 +176,9 @@ and what you can do about each.
   Code's own help says) disables skills, CLAUDE.md files, installed plugins, hooks, MCP servers and custom commands
   and agents; sign-in, model choice and the built-in tools work as usual. A profile's skill list is therefore a
   record of your picks, not something the launch loads or uses. A Claude Code you start yourself in a terminal is
-  not launched by VBear and is not affected.
+  not launched by VBear and is not affected. Tested on Claude Code 2.1.299 (2026-10-14): in a throwaway project that
+  had a project-level skill, a launch with VBear's flags listed none of the user's or the project's skills (a plain
+  launch listed them), and its tool list held only Bash, so there is no Skill tool to call even a built-in skill.
 - **"Working / waiting" is not known everywhere.** It is shown only for Claude Code launched from a profile, on a
   version with recorded evidence (2.1.291, 2.1.292, or verified on your Mac). After Claude Code updates itself, the
   new version shows *unknown* until you press 「驗證這個版本」 in the launch dialog. It cannot tell waiting for your
@@ -308,7 +317,7 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
 - **Flows (look-only).** One task card carried by several agents: who plans, who executes, who reviews, each
   with a model family (the maker of the model: Anthropic, OpenAI, Google and so on). The 「流程」 page shows the phase (planning, awaiting approval, implementing, review round N,
   needs fix, passed and awaiting merge, review out of date, awaiting push, done), the review rounds and a timeline,
-  and the home page lists the gates waiting for you. Phases are derived on every read, never stored, from the events (the ones the runner writes in automatic
+  and the home page's board lists the gates waiting for you first. Phases are derived on every read, never stored, from the events (the ones the runner writes in automatic
   mode included) and the live view. A review
   counts as a pass only when reviewer and executor are of different, known model families, and a pass goes out of
   date as soon as the executor's directory moves off the reviewed commit. The events you enter by hand are

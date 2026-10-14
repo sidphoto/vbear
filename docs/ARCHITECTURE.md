@@ -97,7 +97,7 @@ Agent session it lists. The vocabulary is adapted from OpenRig's agent state tax
 - **Working freshness.** A working title counts while `-CLOCK_SKEW_S <= now - last_seen <= SPINNER_STALE_S`, so
   "working" can still show for up to `SPINNER_STALE_S + CLOCK_SKEW_S` (about 7 s) after the spinner stops.
 - The result carries `decided_by`, a reason and every piece of evidence. The UI's status badges, the home page's
-  「需要你處理」 list (only `waiting` / `needs-input`) and task-card pickup all read this one answer; without
+  quest board 「輪到你」 (only `waiting` / `needs-input` agents) and task-card pickup all read this one answer; without
   usable evidence it is `unknown`.
 
 ## Task cards — `vbear/tasks.py`

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **The home page is the quest board, 冒險者大廳.** 「我的工作台」 (the home page and the first menu item) is now
+  冒險者大廳. Its first block, 「需要你處理」, became two blocks: 「輪到你」 (the flows the server marks as needing
+  you, a stale review of a manual or stopped flow, and the agents that wait for your reply) and
+  「其他進行中的任務」 (the other open flows, at most 4, then 「還有 N 則」 to the flows page). A flow card is one
+  card with one link: the title, stretched over the card; its type label is the phase's own words and its
+  frame is drawn with words beside it, so colour is never the only sign. A finished flow is never on the board.
+  Manual flows say that VBear will not move them for you. It reads only what the flows and live APIs already
+  return: no new API, no change to launches, dispatch or the state files. A failed flows read says so in both
+  blocks and is never drawn as 「沒有任務」; with nothing at all, the board becomes a first-run block that points to
+  the terminal workbench. It repaints on the 5-second refresh only when a shown field changed, so the search box
+  keeps its focus. The other pages' flow and agent cards are unchanged. `tests/qa_game_ui.py` has
+  `VBEAR_QA_LOBBY=1` (more flows) and `VBEAR_QA_LOBBY=empty` for it.
+- **Safe-mode launches tested on Claude Code 2.1.299.** In a throwaway project with a project-level skill, a launch
+  with VBear's flags listed none of the user's or the project's skills (a plain launch did), and its only tool was
+  Bash, so there is no Skill tool to call even a built-in skill. The READMEs say so; the skill list of a profile
+  is still only a record of your picks.
+- **README: a picture of the home page.** `docs/images/lobby.png` (demo data).
+
 ## v0.4.0 — game-style screens
 
 The READMEs were rewritten for first-time readers around a game-style vocabulary (character, class, skill card,
