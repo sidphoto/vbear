@@ -1283,7 +1283,7 @@ async function viewHome() {
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   const board = boardGroups(L, D.flows);
-  boardShownKey = boardKey(board);
+  boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
 
@@ -1350,7 +1350,14 @@ function boardGroups(live, flowsData) {
   };
 }
 
-// ctx is only for tests and for callers that already hold the values; by default it reads the page's live data.
+// What the key reads besides the groups: the live load's error (it rewords the executor column) and the
+// projects (an agent card shows its project's name). The page passes them explicitly, so what the key is made
+// of is visible at the call site.
+function boardKeyContext() {
+  return { liveError: liveLoadError(), projects: (D.live && D.live.projects) || [] };
+}
+// ctx is for the callers (the page passes boardKeyContext()) and for tests; without it the same values are read
+// from the page's live data.
 function boardKey(g, ctx) {
   const c = ctx || {};
   const liveError = c.liveError !== undefined ? c.liveError : liveLoadError();
@@ -6235,7 +6242,7 @@ async function route() {
       const box = document.getElementById("h-board");
       if (!box) return;
       const g = boardGroups(D.live, D.flows);
-      const key = boardKey(g);
+      const key = boardKey(g, boardKeyContext());
       if (key === boardShownKey) return;
       boardShownKey = key;
       setKids(box, boardSection(g));
@@ -6335,6 +6342,7 @@ if (typeof module !== "undefined" && module.exports) {
     flowTeamSection,
     boardGroups,
     boardKey,
+    boardKeyContext,
     boardSection,
     questCard,
     flowCard,

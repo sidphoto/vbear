@@ -485,6 +485,33 @@ test("a refresh repaints the board only when something it shows changed, and the
   assert(text(box).includes("即時狀態未載入"));
 });
 
+test("runtime already away: only the live error's words change, and the board repaints with them", async () => {
+  const f = flow("awaiting_approval", { attention: true });
+  const other = flow("implementing");
+  setPage({ liveError: "逾時了", flows: flowsOf([f, other]) });
+  const main = await open();
+  const box = board(main);
+  const titled = (text) => box.findAll((n) => n.getAttribute && (n.getAttribute("title") || "").includes(text));
+  assert(titled("這次讀取即時狀態失敗：逾時了").length >= 2, "the executor column carries the live error");
+  assert(text(box).includes("VBear runtime 未連線") || text(box).includes("即時狀態未載入"));
+  const before = box.children.slice();
+  // same data again: no repaint
+  await refresh();
+  assert(box.children.every((c, i) => c === before[i]), "nothing changed, nothing repainted");
+  // only the live error's text changes: the runtime stays away, the flows are the same
+  handlerState.liveError = "拒絕連線";
+  await refresh();
+  assert(box.children.some((c, i) => c !== before[i]), "the board was repainted");
+  assert.strictEqual(titled("逾時了").length, 0, "the old words are gone");
+  assert(titled("這次讀取即時狀態失敗：拒絕連線").length >= 2, "the new words are shown");
+  // the key's default reads the same values the page passes
+  const g = group(handlerState.live, handlerState.flows);
+  const ctx = app.boardKeyContext();
+  assert.strictEqual(ctx.liveError, "拒絕連線");
+  assert.strictEqual(app.boardKey(g), app.boardKey(g, ctx), "without a context the key reads the live error itself");
+  assert.notStrictEqual(app.boardKey(g, ctx), app.boardKey(g, { ...ctx, liveError: "" }));
+});
+
 test("the CSS defines the new tokens in light and in both dark blocks, with enough contrast", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
   const blocks = {
