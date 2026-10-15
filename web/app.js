@@ -1512,34 +1512,174 @@ const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot" };
 // The camp is the maker of the model; its shirt colour is lighter than every species' fur (tested), so a
 // character reads the same whichever species it was given.
 const OFFICE_CAMPS = {
-  anthropic: { label: "Anthropic", shirt: "#f3b07a", badge: "#e0b25c" },
-  openai: { label: "OpenAI", shirt: "#9cc8f5", badge: "#e0b25c" },
-  google: { label: "Google", shirt: "#9be0a8", badge: "#e0b25c" },
-  other: { label: "其他", shirt: "#d0d4d1", badge: "#8c948f" },
+  anthropic: { label: "Anthropic", shirt: "#f59e0b", badge: "#fef3c7" },
+  openai: { label: "OpenAI", shirt: "#14b8a6", badge: "#ccfbf1" },
+  google: { label: "Google", shirt: "#38bdf8", badge: "#e0f2fe" },
+  other: { label: "其他", shirt: "#a855f7", badge: "#f3e8ff" },
 };
 const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai" };
-// 16x16 rows, original art. K outline, E eye, W white, N nose, B bear fur, M muzzle, F fox fur, w fox white,
-// S robot steel, s robot shadow, L robot eye, A antenna (gold), V alien skin, P legs, C shirt, R shirt badge.
+// 16x16 supplied frames. C is the camp shirt; R is its badge.
 const OFFICE_SPRITES = {
-  bear: ["..KKK......KKK..", ".KBBBK....KBBBK.", ".KBMBKKKKKKBMBK.", "..KBBBBBBBBBBK..",
-    ".KBBBBBBBBBBBBK.", ".KBBEBBBBBBEBBK.", ".KBBEBBBBBBEBBK.", ".KBBBBMMMMBBBBK.",
-    "..KBBBMNNMBBBK..", "...KKBBMMBBKK...", "..KBKCCRRCCKBK..", "..KBKCCCCCCKBK..",
-    "...KKCCCCCCKK...", "....KBBBBBBK....", "....KBBKKBBK....", ".....KK..KK....."],
-  robot: [".......AA.......", ".......KK.......", "....KKKKKKKK....", "...KSSSSSSSSK...",
-    "...KSKKKKKKSK...", "...KSKLKKLKSK...", "...KSKKKKKKSK...", "...KSSssssSSK...",
-    "....KKKKKKKK....", "...KKCCRRCCKK...", "..KSKCCCCCCKSK..", "..KSKCCCCCCKSK..",
-    "...KKCCCCCCKK...", "....KSSSSSSK....", "....KSSKKSSK....", "....KKK..KKK...."],
-  alien: ["......KKKK......", "....KKVVVVKK....", "...KVVVVVVVVK...", "..KVVVVVVVVVVK..",
-    "..KVEEVVVVEEVK..", "..KVEWVVVVWEVK..", "..KVEEVVVVEEVK..", "...KVVVVVVVVK...",
-    "....KVVMMVVK....", "...KKCCRRCCKK...", "..KVKCCCCCCKVK..", "..KVKCCCCCCKVK..",
-    "...KKCCCCCCKK...", "....KPPPPPPK....", "....KPPKKPPK....", ".....KK..KK....."],
-  fox: ["..KK........KK..", "..KFK......KFK..", "..KFFKKKKKKFFK..", "..KFFFFFFFFFFK..",
-    ".KFFFFFFFFFFFFK.", ".KFFEFFFFFFEFFK.", ".KFFEFFFFFFEFFK.", ".KwwwwFNNFwwwwK.",
-    "..KwwwwwwwwwwK..", "...KKCCRRCCKK...", "..KFKCCCCCCKFK..", "..KFKCCCCCCKFK..",
-    "...KKCCCCCCKK...", "....KPPPPPPK....", "....KPPKKPPK....", ".....KK..KK....."],
+  "bear": [
+    "...KKK....KKK...",
+    "..KBBBK..KBBBK..",
+    "..KBbBKKKKBbBK..",
+    "...KBBBBBBBBK...",
+    "..KBBWKBBKWBBK..",
+    "..KBBBBbbBBBBK..",
+    "..KBBbKKKKbBBK..",
+    "...KBBBBBBBBK...",
+    "..KCCCCCCCCCCK..",
+    ".KCCCCWYYWCCCCK.",
+    ".KCCCCCRRCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KBBBBBBBBK...",
+    "...KBBK..KBBK...",
+    "...KBBK..KBBK...",
+    "...KKK....KKK..."
+  ],
+  "fox": [
+    "..KK........KK..",
+    ".KFFK......KFFK.",
+    ".KFfFK....KFfFK.",
+    "..KFFKKKKKKFFK..",
+    "..KFFFFFFFFFFK..",
+    ".KFFfWKFFKWfFFK.",
+    ".KfffFFFFFFfffK.",
+    "..KfffKKKKfffK..",
+    "..KCCCCCCCCCCK..",
+    ".KCCCCCRRCCCCCK.",
+    ".KCCCCCCCCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KFFFFFFFFK...",
+    "...KFFK..KFFK...",
+    "...KFFK..KFFK...",
+    "...KKK....KKK..."
+  ],
+  "robot": [
+    ".......KK.......",
+    "......KYYK......",
+    ".......KK.......",
+    "...KKKKKKKKKK...",
+    "..KSSSSSSSSSSK..",
+    "..KSsWKSSKWsSK..",
+    "..KSSSSSSSSSSK..",
+    "..KSSKKKKKKSSK..",
+    "...KKKKKKKKKK...",
+    "..KCCCCCCCCCCK..",
+    ".KCCCCCRRCCCCCK.",
+    ".KCCCCCCCCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KSSSSSSSSK...",
+    "...KSSK..KSSK...",
+    "...KKKK..KKKK..."
+  ],
+  "alien": [
+    "...KK......KK...",
+    "..KYYK....KYYK..",
+    "...KK......KK...",
+    "...KKKKKKKKKK...",
+    "..KVVVVVVVVVVK..",
+    ".KVVWWKVVKKWWVK.",
+    ".KVVWWKVVKKWWVK.",
+    "..KVVVVVVVVVVK..",
+    "...KVVKKKKVVK...",
+    "..KCCCCCCCCCCK..",
+    ".KCCCCCRRCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KVVVVVVVVK...",
+    "...KVVK..KVVK...",
+    "...KVVK..KVVK...",
+    "...KKK....KKK..."
+  ]
 };
-const OFFICE_PALETTE = { K: "#0b0f0e", E: "#141a18", W: "#ffffff", N: "#3a2418", B: "#6b4630", M: "#e8c8a0",
-  F: "#b85a1e", w: "#f4efe6", S: "#5f6f7c", s: "#46535e", L: "#7fe0ff", A: "#ffcd00", V: "#3f8f3a", P: "#33436e" };
+const OFFICE_SPRITES_WORKING = {
+  "bear": [
+    "...KKK....KKK...",
+    "..KBBBK..KBBBK..",
+    "..KBbBKKKKBbBK..",
+    "...KBBBBBBBBK...",
+    "..KBBWKBBKWBBK..",
+    "..KBBBBbbBBBBK..",
+    "..KBBbKKKKbBBK..",
+    "...KBBBBBBBBK...",
+    "..KCCCCCCCCCCK..",
+    ".KBBCCWYYWCCBBK.",
+    ".KCCCCCRRCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KBBBBBBBBK...",
+    "..KBBK....KBBK..",
+    "...KK......KK...",
+    "................"
+  ],
+  "fox": [
+    "..KK........KK..",
+    ".KFFK......KFFK.",
+    ".KFfFK....KFfFK.",
+    "..KFFKKKKKKFFK..",
+    "..KFFFFFFFFFFK..",
+    ".KFFfWKFFKWfFFK.",
+    ".KfffFFFFFFfffK.",
+    "..KfffKKKKfffK..",
+    "..KCCCCCCCCCCK..",
+    ".KFFCCCRRCCFFCK.",
+    ".KCCCCCCCCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KFFFFFFFFK...",
+    "..KFFK....KFFK..",
+    "...KK......KK...",
+    "................"
+  ],
+  "robot": [
+    "......KYYK......",
+    ".....KYYYYK.....",
+    ".......KK.......",
+    "...KKKKKKKKKK...",
+    "..KSSSSSSSSSSK..",
+    "..KSSWKSSKWSSK..",
+    "..KSSSSSSSSSSK..",
+    "..KSSKKKKKKSSK..",
+    "...KKKKKKKKKK...",
+    "..KCCCCCCCCCCK..",
+    ".KSSCCCRRCCSSCK.",
+    ".KCCCCCCCCCCCCK.",
+    "..KCCCCCCCCCCK..",
+    "...KSSSSSSSSK...",
+    "...KSSK..KSSK...",
+    "...KKKK..KKKK..."
+  ],
+  "alien": [
+    "..KYYK....KYYK..",
+    ".KYYYYK..KYYYYK.",
+    "...KK......KK...",
+    "...KKKKKKKKKK...",
+    "..KVVVVVVVVVVK..",
+    ".KVVWWKVVKKWWVK.",
+    ".KVVWWKVVKKWWVK.",
+    "..KVVVVVVVVVVK..",
+    "...KVVKKKKVVK...",
+    "..KCCCCCCCCCCK..",
+    ".KVVCCCRRCCVVCK.",
+    "..KCCCCCCCCCCK..",
+    "...KVVVVVVVVK...",
+    "..KVVK....KVVK..",
+    "...KK......KK...",
+    "................"
+  ]
+};
+const OFFICE_PALETTE = {
+  "K": "#18181b",
+  "W": "#fafaf9",
+  "Y": "#fde047",
+  "B": "#78350f",
+  "b": "#b45309",
+  "F": "#c2410c",
+  "f": "#fed7aa",
+  "S": "#52525b",
+  "s": "#d4d4d8",
+  "V": "#4c1d95",
+  "v": "#ddd6fe"
+};
 
 function officeToolOf(agent) { return agent === "claude" || agent === "codex" ? agent : "other"; }
 
@@ -1565,18 +1705,18 @@ function campOf(who) {
 
 // The box-shadow string of a sprite: one 1x1 shadow per pixel, scaled. Cached per species, colours and scale.
 const officeShadowCache = new Map();
-function spriteShadow(species, palette, scale) {
+function spriteShadow(species, palette, scale, working = false) {
   const sp = OFFICE_SPRITES[species] ? species : "alien";
   const pal = palette || {};
   const shirt = pal.shirt || OFFICE_CAMPS.other.shirt;
   const badge = pal.badge || OFFICE_CAMPS.other.badge;
   const px = Number.isInteger(scale) && scale > 0 && scale <= 12 ? scale : 3;
-  const key = `${sp}|${shirt}|${badge}|${px}`;
+  const key = `${sp}|${shirt}|${badge}|${px}|${working}`;
   const hit = officeShadowCache.get(key);
   if (hit !== undefined) return hit;
   const colors = Object.assign({}, OFFICE_PALETTE, { C: shirt, R: badge });
   const out = [];
-  OFFICE_SPRITES[sp].forEach((row, y) => {
+  (working ? OFFICE_SPRITES_WORKING : OFFICE_SPRITES)[sp].forEach((row, y) => {
     for (let x = 0; x < row.length; x++) {
       const c = colors[row[x]];
       if (c) out.push(`${x * px}px ${y * px}px 0 0 ${c}`);
@@ -1628,6 +1768,43 @@ function officeMember(role) {
     familyLabel: typeof r.family_label === "string" ? r.family_label : family,
     model: typeof r.model === "string" ? r.model : "", species: speciesFor({ family }),
     camp: campOf({ family }).key };
+}
+
+// Fixed lines selected from evidence, never generated from terminal text.
+function personaSpeech(target) {
+  const t = target || {};
+  const a = t.activity || {};
+  const reason = typeof a.reason === "string" ? a.reason : "";
+  const result = (sourceLabel, line, why = reason) => ({ sourceLabel, line, reason: why });
+  if ((t.key || "").startsWith("flow:")) {
+    const auto = t.automation && t.automation.mode === "auto";
+    const source = "依據：流程紀錄";
+    const lines = {
+      in_review: auto ? "任務位於審查階段；自動模式已設定，不代表審查程序正在執行。" : "任務在審查室。手動模式下，VBear 不會替你送審。",
+      awaiting_merge: "審查通過，而且就是目前的 commit。VBear 不會替你 merge 或 push，輪到你了！",
+      review_stale: "審查過的不是目前的 commit，需要重新審查。",
+      awaiting_approval: auto ? "計畫等候核准中；核准前執行者不會開工。" : "計畫等候核准中；手動模式需由你自行在終端執行。",
+    };
+    const label = ["awaiting_merge", "review_stale"].includes(t.phaseKey) ? source + "＋HEAD 核對"
+      : t.phaseKey === "in_review" ? source + (auto ? "（自動模式）" : "（手動記錄）") : source;
+    return result(label, lines[t.phaseKey] || `任務目前在${t.stationLabel}：${t.phaseLabel}`, t.phaseReason || "");
+  }
+  if ((t.key || "").startsWith("profile:")) return result("依據：角色名冊", "名冊角色不在出勤，沒有即時狀態", "");
+  if (t.status === "exited") return result("依據：VBear runtime（session 已結束）", "這個終端已經結束了。");
+  if (t.tool === "claude") {
+    if (t.status === "working" && a.decided_by === "claude-title") return result(
+      "依據：Claude Code 終端標題（開頭的轉圈符號）",
+      "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為 session 標題保存或回傳。");
+    if (t.status === "working" && a.decided_by === "claude-stream") return result(
+      "依據：Claude Code 串流協定的回合事件", "我正在跑自動派工的這一輪，做完會交回結果。");
+    if (t.status === "waiting" && a.decided_by === "claude-title") return result(
+      "依據：Claude Code 終端標題（閒置符號 ✳）", "我停下來等你囉（! 輪到你），打開終端機看看我吧。");
+    if (t.status === "waiting" && a.decided_by === "claude-stream") return result(
+      "依據：Claude Code 串流協定的回合事件", "這一輪背景派工已結束，等待下一則任務。");
+  }
+  return result("依據：沒有可採用的證據", t.tool === "claude"
+    ? "VBear 現在看不出我在做什麼（例如版本還沒驗證、或標題超過 5 秒沒更新），所以誠實寫『狀態未知』。"
+    : "VBear 目前沒有這個工具的即時狀態來源，所以寫『狀態未知』。");
 }
 
 function officeBubble(status) {
@@ -1821,11 +1998,12 @@ function officeIsMobile() {
 }
 
 // A 16x16 character: a 1px square whose box-shadows are the pixels. Decoration only; the control around it has the words.
-function officeSprite(species, camp, scale) {
+function officeSprite(species, camp, scale, working = false) {
   const c = OFFICE_CAMPS[camp] || OFFICE_CAMPS.other;
-  const px = el("span", { class: "office-px",
-    style: `width:${scale}px;height:${scale}px;box-shadow:${spriteShadow(species, c, scale)}` });
-  return el("span", { class: "office-sprite", "aria-hidden": "true", style: `width:${16 * scale}px;height:${16 * scale}px` }, px);
+  const frame = (active) => el("span", { class: `office-px office-frame-${active ? "working" : "idle"}`,
+    style: `width:${scale}px;height:${scale}px;box-shadow:${spriteShadow(species, c, scale, active)}` });
+  return el("span", { class: `office-sprite${working ? " office-sprite-working" : ""}`, "aria-hidden": "true",
+    style: `width:${16 * scale}px;height:${16 * scale}px` }, frame(false), working ? frame(true) : null);
 }
 
 function officeTeamTitle(t) { return t.taskMissing ? "（任務卡已刪除或無法讀取）" : (t.title || "（沒有名稱）"); }
@@ -1869,7 +2047,7 @@ function officeDeskButton(d, selected, fresh, onPick) {
     d.waits ? el("span", { class: `office-turn${fresh ? " office-turn-new" : ""}` },
       el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
     d.ended ? null : el("span", { class: "office-bubble", "aria-hidden": "true" }, d.bubble),
-    officeSprite(d.species, d.camp, 3),
+    officeSprite(d.species, d.camp, 3, d.status === "working"),
     el("span", { class: "office-desk-top", "aria-hidden": "true" }),
     el("span", { class: "office-plate" },
       el("span", { class: "office-plate-name" }, d.name),
@@ -7223,6 +7401,12 @@ if (typeof module !== "undefined" && module.exports) {
     restoreSelection,
     OFFICE_SPECIES,
     OFFICE_SPRITES,
+    OFFICE_SPRITES_WORKING,
+    personaSpeech,
+    officeSprite,
+    officeDeskButton,
+    officeProfileButton,
+    officeTeamButton,
     OFFICE_PALETTE,
     OFFICE_CAMPS,
     boardGroups,

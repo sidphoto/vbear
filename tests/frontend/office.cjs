@@ -248,7 +248,7 @@ test("the four sprites are 16x16 of known letters, original, with no alarm red; 
   assert.strictEqual(app.spriteShadow("dragon", pal, 3), app.spriteShadow("alien", pal, 3), "an unknown species draws as an alien");
 });
 
-test("the camps' shirts are lighter than every species' fur, so a character reads the same whatever its species", () => {
+test("camp shirts stay lighter and character contrast meets 2:1 except user-decided known exceptions", () => {
   const lum = (hex) => {
     const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
       .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
@@ -256,13 +256,32 @@ test("the camps' shirts are lighter than every species' fur, so a character read
   };
   const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
   const fur = { bear: app.OFFICE_PALETTE.B, fox: app.OFFICE_PALETTE.F, robot: app.OFFICE_PALETTE.S, alien: app.OFFICE_PALETTE.V };
+  // User-decided known exceptions: 2026-10-15 user decision to retain the specification's colors.
+  // Pin each pair to its approved colors; every other pair still requires at least 2:1.
+  const knownExceptions = {
+    "other shirt on fox": ["#a855f7", "#c2410c"],
+    "other shirt on robot": ["#a855f7", "#52525b"],
+    "bear fur against its outline": ["#78350f", "#18181b"],
+    "alien fur against its outline": ["#4c1d95", "#18181b"],
+  };
+  const seenExceptions = [];
+  const checkContrast = (name, a, b) => {
+    if (Object.hasOwn(knownExceptions, name)) {
+      assert.deepStrictEqual([a, b], knownExceptions[name], `${name}: colors approved on 2026-10-15`);
+      assert(ratio(a, b) < 2, `${name}: reconsider the known exception if contrast now meets 2:1`);
+      seenExceptions.push(name);
+    } else {
+      assert(ratio(a, b) >= 2, `${name}: ${ratio(a, b).toFixed(2)}`);
+    }
+  };
   for (const [sp, color] of Object.entries(fur)) {
     for (const [camp, c] of Object.entries(app.OFFICE_CAMPS)) {
       assert(lum(c.shirt) > lum(color), `${camp} shirt is lighter than the ${sp}`);
-      assert(ratio(c.shirt, color) >= 2, `${camp} shirt on ${sp}: ${ratio(c.shirt, color).toFixed(2)}`);
+      checkContrast(`${camp} shirt on ${sp}`, c.shirt, color);
     }
-    assert(ratio(color, app.OFFICE_PALETTE.K) >= 2, `${sp} fur against its outline`);
+    checkContrast(`${sp} fur against its outline`, color, app.OFFICE_PALETTE.K);
   }
+  assert.deepStrictEqual(seenExceptions.sort(), Object.keys(knownExceptions).sort());
 });
 
 test("weapons come from the loadout's tools and nowhere else", () => {
@@ -1011,6 +1030,83 @@ test("the nav has the office after the lobby, and the route exists", () => {
   assert(a > 0 && b > a, "office comes after the lobby");
   assert(html.includes('href="#/office" data-nav="office"><span aria-hidden="true">▦</span>辦公室</a>'));
   assert.strictEqual(typeof app.viewOffice, "function");
+});
+
+test("both supplied frames use the palette and working shadows keep a separate cache", () => {
+  const letters = new Set([...Object.keys(app.OFFICE_PALETTE), "C", "R", "."]);
+  for (const sp of app.OFFICE_SPECIES) {
+    for (const rows of [app.OFFICE_SPRITES[sp], app.OFFICE_SPRITES_WORKING[sp]]) {
+      assert.strictEqual(rows.length, 16);
+      for (const row of rows) {
+        assert.strictEqual(row.length, 16);
+        for (const c of row) assert(letters.has(c));
+      }
+    }
+    const idle = app.spriteShadow(sp, app.OFFICE_CAMPS.openai, 3);
+    const working = app.spriteShadow(sp, app.OFFICE_CAMPS.openai, 3, true);
+    assert.notStrictEqual(idle, working);
+    assert(working.includes(app.OFFICE_CAMPS.openai.shirt));
+    assert(working.includes(app.OFFICE_CAMPS.openai.badge));
+    assert.strictEqual(app.spriteShadow(sp, app.OFFICE_CAMPS.openai, 3), idle);
+  }
+});
+
+test("only working desk sprites alternate; team and roster sprites remain idle", () => {
+  for (const status of ["working", "waiting", "needs-input", "exited", "unknown"]) {
+    const d = model(live({ sessions: [session("animation", { status })] })).desks[0];
+    const n = app.officeDeskButton(d, false, false, () => {});
+    assert.strictEqual(byClass(n, "office-sprite-working").length, status === "working" ? 1 : 0);
+  }
+  const m = model(null, flowsOf([flow("implementing")]), profilesOf([profile("idle", "claude")]));
+  assert.strictEqual(byClass(app.officeTeamButton(m.stations.build.teams[0], false, false, () => {}), "office-sprite-working").length, 0);
+  assert.strictEqual(byClass(app.officeProfileButton(m.lounge.items[0], false, () => {}), "office-sprite-working").length, 0);
+  const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
+  assert(css.includes(".8s steps(1, end) infinite"));
+  assert(/@media \(prefers-reduced-motion: reduce\)\s*{\s*\.office-sprite-working \.office-frame-idle { animation: none; visibility: visible; }\s*\.office-sprite-working \.office-frame-working { animation: none; visibility: hidden; }/.test(css));
+});
+
+test("persona lines and labels follow the corrected evidence table exactly", () => {
+  const title = "依據：Claude Code 終端標題";
+  const stream = "依據：Claude Code 串流協定的回合事件";
+  const rows = [
+    ["working", "claude-title", title + "（開頭的轉圈符號）", "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為 session 標題保存或回傳。"],
+    ["working", "claude-stream", stream, "我正在跑自動派工的這一輪，做完會交回結果。"],
+    ["waiting", "claude-title", title + "（閒置符號 ✳）", "我停下來等你囉（! 輪到你），打開終端機看看我吧。"],
+    ["waiting", "claude-stream", stream, "這一輪背景派工已結束，等待下一則任務。"],
+    ["exited", null, "依據：VBear runtime（session 已結束）", "這個終端已經結束了。"],
+  ];
+  for (const [status, decided_by, sourceLabel, line] of rows) {
+    assert.deepStrictEqual(app.personaSpeech({ key: "session:test", tool: "claude", status, activity: { decided_by, reason: "原文 <test>" } }),
+      { sourceLabel, line, reason: "原文 <test>" });
+  }
+  for (const tool of ["claude", "codex", "other"]) {
+    for (const status of ["unknown", "needs-input", "working", "waiting"]) {
+      for (const decided_by of [null, "unrecognized"]) {
+        const r = app.personaSpeech({ tool, status, activity: { decided_by } });
+        assert.strictEqual(r.sourceLabel, "依據：沒有可採用的證據");
+        assert.strictEqual(r.line, tool === "claude"
+          ? "VBear 現在看不出我在做什麼（例如版本還沒驗證、或標題超過 5 秒沒更新），所以誠實寫『狀態未知』。"
+          : "VBear 目前沒有這個工具的即時狀態來源，所以寫『狀態未知』。");
+      }
+    }
+  }
+  const cases = [
+    ["in_review", "auto", "依據：流程紀錄（自動模式）", "任務位於審查階段；自動模式已設定，不代表審查程序正在執行。"],
+    ["in_review", "manual", "依據：流程紀錄（手動記錄）", "任務在審查室。手動模式下，VBear 不會替你送審。"],
+    ["awaiting_approval", "auto", "依據：流程紀錄", "計畫等候核准中；核准前執行者不會開工。"],
+    ["awaiting_approval", "manual", "依據：流程紀錄", "計畫等候核准中；手動模式需由你自行在終端執行。"],
+    ["awaiting_merge", "manual", "依據：流程紀錄＋HEAD 核對", "審查通過，而且就是目前的 commit。VBear 不會替你 merge 或 push，輪到你了！"],
+    ["review_stale", "manual", "依據：流程紀錄＋HEAD 核對", "審查過的不是目前的 commit，需要重新審查。"],
+  ];
+  for (const [phaseKey, mode, sourceLabel, line] of cases) {
+    assert.deepStrictEqual(app.personaSpeech({ key: "flow:test", phaseKey, phaseReason: "原因", automation: { mode } }),
+      { sourceLabel, line, reason: "原因" });
+  }
+  for (const phaseKey of ["planning", "implementing", "needs_fix", "review_unverified", "awaiting_push", "new-phase"]) {
+    assert.strictEqual(app.personaSpeech({ key: "flow:test", phaseKey, stationLabel: "計畫板", phaseLabel: "原文 <test>" }).line,
+      "任務目前在計畫板：原文 <test>");
+  }
+  assert.strictEqual(app.personaSpeech({ key: "profile:test" }).line, "名冊角色不在出勤，沒有即時狀態");
 });
 
 // ---- run ------------------------------------------------------------------------------------------------------

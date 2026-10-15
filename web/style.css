@@ -1075,3 +1075,14 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 @media (max-width: 820px) {
   .office-layout { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Only a working desk has two frames; roster and flow sprites stay still. */
+.office-frame-working { visibility: hidden; }
+.office-sprite-working .office-frame-idle { animation: office-idle-frame .8s steps(1, end) infinite; }
+.office-sprite-working .office-frame-working { animation: office-working-frame .8s steps(1, end) infinite; }
+@keyframes office-idle-frame { 0%, 100% { visibility: visible; } 50% { visibility: hidden; } }
+@keyframes office-working-frame { 0%, 100% { visibility: hidden; } 50% { visibility: visible; } }
+@media (prefers-reduced-motion: reduce) {
+  .office-sprite-working .office-frame-idle { animation: none; visibility: visible; }
+  .office-sprite-working .office-frame-working { animation: none; visibility: hidden; }
+}
