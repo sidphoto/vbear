@@ -1809,6 +1809,512 @@ function officeOverrides(profiles, storage) {
   return out;
 }
 
+// ---------- the office (design office v1.3): the page --------------------------------------------------------
+
+let officeTick = null;
+// keys whose 「輪到你」 badge was already drawn: only a badge that is new fades in (no repeat on every repaint)
+const officeBadgeSeen = new Set();
+const OFFICE_MOBILE_QUERY = "(max-width: 820px)";
+
+function officeIsMobile() {
+  try { return !!(window.matchMedia && window.matchMedia(OFFICE_MOBILE_QUERY).matches); } catch (_) { return false; }
+}
+
+// A 16x16 character: a 1px square whose box-shadows are the pixels. Decoration only; the control around it has the words.
+function officeSprite(species, camp, scale) {
+  const c = OFFICE_CAMPS[camp] || OFFICE_CAMPS.other;
+  const px = el("span", { class: "office-px",
+    style: `width:${scale}px;height:${scale}px;box-shadow:${spriteShadow(species, c, scale)}` });
+  return el("span", { class: "office-sprite", "aria-hidden": "true", style: `width:${16 * scale}px;height:${16 * scale}px` }, px);
+}
+
+function officeTeamTitle(t) { return t.taskMissing ? "（任務卡已刪除或無法讀取）" : (t.title || "（沒有名稱）"); }
+
+function officeTeamLabel(t) {
+  return `${officeTeamTitle(t)}，${t.phaseLabel}，任務在：${t.stationLabel}${t.waits ? "，輪到你" : ""}`;
+}
+function officeDeskLabel(d) {
+  return `${d.name}，${d.ended ? "已結束" : d.bubble.replace(/^\? /, "")}，${d.toolLabel}`;
+}
+function officeProfileLabel(p) { return `${p.name}，名冊，${p.toolLabel}`; }
+
+// Where a team's mode is said: manual flows say they are recorded by hand; automatic ones use the existing words.
+function officeModeText(t) {
+  if (t.automation.mode === "auto") {
+    return `${t.automation.held ? "自動（已停止）" : "自動執行中"}${t.automation.stepLabel ? "・" + t.automation.stepLabel : ""}`;
+  }
+  return "手動記錄";
+}
+
+function officeTeamButton(t, selected, fresh, onPick) {
+  const members = [t.executor, ...t.reviewers];
+  return el("button", { type: "button", "data-office-key": t.key, "aria-label": officeTeamLabel(t),
+    "aria-pressed": String(selected), on: { click: () => onPick(t.key) },
+    class: `office-team${t.waits ? " office-team-waits" : ""}${selected ? " office-selected" : ""}` },
+    t.waits ? el("span", { class: `office-turn${fresh ? " office-turn-new" : ""}` },
+      el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
+    el("span", { class: "office-members" },
+      members.map((mb) => officeSprite(mb.species, mb.camp, 3)),
+      t.moreReviewers ? el("span", { class: "office-more-members" }, `+${t.moreReviewers}`) : null),
+    el("span", { class: "office-team-title" }, officeTeamTitle(t)),
+    el("span", { class: "office-team-phase" }, t.phaseLabel),
+    el("span", { class: "office-team-where" }, `任務在：${t.stationLabel}`),
+    el("span", { class: "office-team-mode" }, officeModeText(t)));
+}
+
+function officeDeskButton(d, selected, fresh, onPick) {
+  return el("button", { type: "button", "data-office-key": d.key, "aria-label": officeDeskLabel(d), "aria-pressed": String(selected),
+    on: { click: () => onPick(d.key) },
+    class: `office-char office-desk-char office-status-${d.status}${d.waits ? " office-waits" : ""}${selected ? " office-selected" : ""}` },
+    d.waits ? el("span", { class: `office-turn${fresh ? " office-turn-new" : ""}` },
+      el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
+    d.ended ? null : el("span", { class: "office-bubble", "aria-hidden": "true" }, d.bubble),
+    officeSprite(d.species, d.camp, 3),
+    el("span", { class: "office-desk-top", "aria-hidden": "true" }),
+    el("span", { class: "office-plate" },
+      el("span", { class: "office-plate-name" }, d.name),
+      el("span", { class: "office-plate-tool" }, d.ended ? `${d.toolLabel}・已結束` : d.toolLabel),
+      d.bound.map((b) => el("span", { class: "office-plate-flow" },
+        `流程：${b.taskMissing ? "（任務卡已刪除或無法讀取）" : b.title}（任務在：${b.stationLabel}）`)),
+      d.boundMore ? el("span", { class: "office-plate-flow" }, `等 ${d.boundMore} 個`) : null));
+}
+
+function officeProfileButton(p, selected, onPick) {
+  return el("button", { type: "button", "data-office-key": p.key, "aria-label": officeProfileLabel(p), "aria-pressed": String(selected),
+    on: { click: () => onPick(p.key) },
+    class: `office-char office-profile-char${selected ? " office-selected" : ""}` },
+    officeSprite(p.species, p.camp, 3),
+    el("span", { class: "office-plate" },
+      el("span", { class: "office-plate-name" }, p.name),
+      el("span", { class: "office-plate-tool" }, p.toolLabel)));
+}
+
+// ---- the side panel ----
+
+function officeKv(rows) {
+  return el("dl", { class: "kv small office-kv" }, rows.flatMap(([k, v]) => [el("dt", null, k), el("dd", null, v)]));
+}
+
+function officeArmorCell(it) {
+  const strong = it.group === "blocked" || it.group === "partial";
+  return el("div", { class: `office-armor-cell ${strong ? "office-armor-solid" : "office-armor-dashed"}` },
+    el("strong", null, it.name), " ", el("span", { class: "office-armor-level" }, it.level),
+    el("span", { class: "office-armor-note" }, it.note || ""));
+}
+
+function officeGear(loadoutState) {
+  if (!loadoutState || loadoutState.state === "loading") return el("p", { class: "small muted" }, "載入裝備中…");
+  if (loadoutState.state === "error") return notice("warn", `讀不到這個角色的裝備：${loadoutState.error}`);
+  const d = loadoutState.data;
+  const w = weaponsFrom(d);
+  const skills = officeSkills(d);
+  const ar = d && d.armor && typeof d.armor === "object" ? d.armor : {};
+  const items = Array.isArray(ar.items) ? ar.items : [];
+  return [
+    el("section", { class: "office-gear", "data-office-gear": "weapons" },
+      el("h4", null, "武器（可用工具）"),
+      w.known
+        ? [el("div", { class: "chips" },
+          w.allowed.map((n) => el("span", { class: "tag office-weapon-ok" }, `${n}・可用`)),
+          w.blocked.map((n) => el("span", { class: "tag office-weapon-off" }, `${n}・鎖住`))),
+        w.source ? el("p", { class: "small muted" }, w.source) : null]
+        : el("p", { class: "small" }, `未知：${w.reason}`)),
+    el("section", { class: "office-gear", "data-office-gear": "armor" },
+      el("h4", null, "防具"),
+      ar.applicable === false ? el("p", { class: "small" }, ar.why || "這個角色沒有防具資料。")
+        : (items.length ? el("div", { class: "office-armor" }, items.map(officeArmorCell))
+          : el("p", { class: "small muted" }, "沒有防具資料。")),
+      el("p", { class: "small muted" }, ar.preview_decides || "實際以出發前檢查為準")),
+    el("section", { class: "office-gear", "data-office-gear": "skills" },
+      el("h4", null, "技能卡"),
+      skills.note ? el("p", { class: "small" }, skills.note) : null,
+      skills.rows.length ? el("ul", { class: "office-skill-list" }, skills.rows.map((r) =>
+        el("li", { class: `office-skill office-skill-${r.state}` }, el("strong", null, r.name),
+          r.text ? el("span", { class: "small" }, ` ${r.text}`) : null)))
+        : el("p", { class: "small muted" }, "未選任何技能。")),
+  ];
+}
+
+function officePanelContent(m, S, handlers) {
+  const idx = officeIndex(m);
+  const key = S.key;
+  if (!key) {
+    return [el("h2", { id: "office-panel-title", tabindex: "-1" }, "角色面板"),
+      S.notice ? el("p", { class: "office-gone", role: "status" }, S.notice) : null,
+      el("p", { class: "small" }, "點一個角色或一隊，這裡會顯示它的位置、狀態和依據。"),
+      el("ul", { class: "small office-howto" },
+        el("li", null, "工作站：流程的隊伍站在「任務目前在哪一站」；站只表示任務的位置，不表示 Agent 正在做什麼。"),
+        el("li", null, "辦公桌：出勤中的終端，頭上的字是它目前的狀態。"),
+        el("li", null, "休息室：角色名冊（Agent Profile），不代表正在出勤；點開看武器、防具和技能卡。"))];
+  }
+  const kind = key.split(":")[0];
+  const head = (name, sub, badgeNode) => el("div", { class: "office-panel-head" },
+    el("h2", { id: "office-panel-title", tabindex: "-1" }, name),
+    el("div", { class: "small muted" }, sub), badgeNode || null);
+  const close = el("button", { type: "button", class: "btn small office-close", "data-office-close": "1",
+    on: { click: handlers.close } }, officeIsMobile() ? "返回" : "關閉");
+  if (kind === "flow") {
+    const t = allOfficeTeams(m).find((x) => x.key === key);
+    if (!t) return [close];
+    const members = [t.executor, ...t.reviewers];
+    return [close,
+      head(officeTeamTitle(t), `${officeModeText(t)}・任務在：${t.stationLabel}`, flowPhaseBadge({ key: t.phaseKey, label: t.phaseLabel, reason: t.phaseReason })),
+      t.waits ? el("p", { class: "office-turn office-turn-inline" }, el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
+      el("p", null, t.attentionReason || t.phaseReason || "沒有說明"),
+      el("h3", null, "隊伍成員"),
+      el("ul", { class: "office-members-list" }, members.map((mb, i) => el("li", null,
+        officeSprite(mb.species, mb.camp, 2),
+        el("span", null, el("strong", null, mb.name), `（${i === 0 ? "執行者" : "審查者"}）`,
+          el("span", { class: "small muted" }, ` ${mb.familyLabel}${mb.model ? "・" + mb.model : "・模型未提供"}`))))),
+      t.moreReviewers ? el("p", { class: "small muted" }, `還有 ${t.moreReviewers} 位審查者，到流程頁查看。`) : null,
+      el("p", { class: "small muted" }, "流程角色只記名稱與模型家族，沒有裝備資料。"),
+      el("a", { class: "btn primary office-go", href: `#/flows/${encodeURIComponent(t.id)}` }, "前往流程")];
+  }
+  if (kind === "session") {
+    const d = m.desks.find((x) => x.key === key);
+    if (!d) return [close];
+    return [close,
+      head(d.name, `${OFFICE_SPECIES_LABEL[d.species]}・${d.toolLabel}・陣營 ${OFFICE_CAMPS[d.camp].label}`, statusBadge(d.status, d.activity)),
+      d.waits ? el("p", { class: "office-turn office-turn-inline" }, el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
+      el("p", { class: "small" }, activityBasis(d.activity)),
+      officeKv([["標題", d.title || "—"], ["專案", d.project || "—"], ["終端", d.paneId || d.terminalId]]),
+      d.bound.length ? el("div", null, el("h3", null, "綁定的流程"), el("ul", null, d.bound.map((b) => el("li", null,
+        `${b.taskMissing ? "（任務卡已刪除或無法讀取）" : b.title}（任務在：${b.stationLabel}）`)))) : null,
+      el("section", { class: "office-gear" }, el("h4", null, "武器・防具・技能卡"),
+        el("p", { class: "small" }, "未知：不是用 Profile 啟動的，VBear 看不到它的裝備")),
+      d.ended ? null : el("a", { class: "btn primary office-go", href: `#/term/${encodeURIComponent(d.paneId || d.terminalId)}`,
+        title: "開啟終端機串流（預設僅觀看）" }, "開啟終端")];
+  }
+  const p = m.lounge.items.find((x) => x.key === key);
+  if (!p) return [close];
+  const species = el("select", { "aria-label": "換種族", on: { change: (e) => handlers.species(p.id, e.target.value) } },
+    el("option", { value: "" , selected: p.overridden ? null : "selected" }, `依工具（${OFFICE_SPECIES_LABEL[speciesFor({ tool: p.tool })]}）`),
+    OFFICE_SPECIES.map((sp) => el("option", { value: sp, selected: p.overridden && p.species === sp ? "selected" : null },
+      OFFICE_SPECIES_LABEL[sp])));
+  return [close,
+    head(p.name, `${OFFICE_SPECIES_LABEL[p.species]}・${p.toolLabel}${p.modelId ? "・" + p.modelId : ""}・陣營 ${OFFICE_CAMPS[p.camp].label}`,
+      badge("名冊", "b-mute", "這是角色設定，不代表正在出勤")),
+    el("p", { class: "small" }, "名冊：這是角色設定，不代表正在出勤。"),
+    el("label", { class: "office-species" }, "種族 ", species),
+    el("p", { class: "small muted" }, "只換名冊上的外觀；出勤的終端與流程角色依工具或模型家族顯示。"),
+    officeGear(S.loadout && S.loadout.key === key ? S.loadout : null),
+    el("a", { class: "btn primary office-go", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, "打開角色卡")];
+}
+
+function allOfficeTeams(m) { return OFFICE_STATIONS.flatMap((st) => m.stations[st].teams); }
+
+// ---- the counts (header and bottom of the scene) ----
+
+function officeCountsBar(m, pick) {
+  const n = (v) => (v === null ? "無法判斷" : String(v));
+  const defs = [
+    ["turn", "輪到你", n(m.counts.turn)],
+    ["working", "工作中", n(m.counts.working)],
+    ["unknown", "狀態未知", n(m.counts.unknown)],
+    ["roster", "名冊", n(m.counts.roster)],
+  ];
+  return el("div", { class: "office-counts", role: "group", "aria-label": "計數" },
+    defs.map(([kind, label, value]) => el("button", { type: "button", class: `office-count office-count-${kind}`,
+      "data-office-count": kind, on: { click: () => pick(kind) } },
+    el("span", { class: "office-count-label" }, label), el("strong", { class: "office-count-value" }, value))));
+}
+
+// ---- the scene ----
+
+function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
+  const stationsBody = m.errors.flows
+    ? notice("warn", `讀不到流程：${m.errors.flows}`)
+    : el("div", { class: "office-stations-grid" }, OFFICE_STATIONS.map((st) => {
+      const stn = m.stations[st];
+      const waits = stn.teams.some((t) => t.waits);
+      return el("section", { class: `office-station${waits ? " office-station-waits" : ""}`, "data-station": st },
+        el("h3", { class: "office-station-title" }, stn.label),
+        stn.teams.length ? stn.teams.map((t) => officeTeamButton(t, S.key === t.key, fresh.has(t.key), (k) => S.select(k)))
+          : el("p", { class: "small muted office-empty" }, "這站沒有隊伍"),
+        stn.more ? el("a", { class: "btn small office-more", href: "#/flows" }, `這站還有 ${stn.more} 隊 →`) : null);
+    }));
+  const desksBody = m.errors.runtime
+    ? (runtimeNotice() || notice("warn", "無法連線到 VBear runtime，工作中的 Terminal 資訊暫不可用。"))
+    : (m.desks.length ? el("div", { class: "office-desks-grid" }, m.desks.map((d) => officeDeskButton(d, S.key === d.key, fresh.has(d.key), (k) => S.select(k))))
+      : el("p", { class: "small muted office-empty" }, "目前沒有出勤中的終端"));
+  const loungeBody = m.errors.profiles
+    ? notice("warn", `讀不到角色名冊：${m.errors.profiles}`)
+    : (m.lounge.items.length ? el("div", { class: "office-lounge-grid" }, m.lounge.items.map((p) => officeProfileButton(p, S.key === p.key, (k) => S.select(k))))
+      : el("p", { class: "small muted office-empty" }, "名冊裡還沒有角色"));
+  return [
+    el("section", { class: "office-section", "data-office-section": "stations" },
+      el("h2", { id: "office-stations", tabindex: "-1" }, "工作站"),
+      el("p", { class: "small muted" }, "任務在哪一站。站只表示任務的位置，不表示 Agent 正在做什麼。"), stationsBody),
+    el("section", { class: "office-section", "data-office-section": "desks" },
+      el("h2", { id: "office-desks", tabindex: "-1" }, "辦公桌"),
+      el("p", { class: "small muted" }, "出勤中的終端，頭上的字是它目前的狀態。"), desksBody),
+    el("section", { class: "office-section", "data-office-section": "lounge" },
+      el("h2", { id: "office-lounge", tabindex: "-1" }, "休息室"),
+      el("p", { class: "small muted" }, "名冊：角色設定，不代表正在出勤。"),
+      el("button", { type: "button", class: "btn small office-reload", on: { click: () => S.reloadRoster() } }, "重新整理名冊"),
+      loungeBody,
+      m.lounge.more ? el("a", { class: "btn small office-more", href: "#/team" }, `還有 ${m.lounge.more} 個角色 →`) : null),
+  ];
+}
+
+// ---- the phone's list ----
+
+function officeRows(m) {
+  const rows = new Map();
+  for (const t of allOfficeTeams(m)) {
+    rows.set(t.key, { key: t.key, name: officeTeamTitle(t), species: t.executor.species, camp: t.executor.camp,
+      where: `任務在：${t.stationLabel}`, label: officeTeamLabel(t),
+      badge: flowPhaseBadge({ key: t.phaseKey, label: t.phaseLabel, reason: t.phaseReason }), waits: t.waits });
+  }
+  for (const d of m.desks) {
+    rows.set(d.key, { key: d.key, name: d.name, species: d.species, camp: d.camp, where: `辦公桌・${d.toolLabel}`,
+      label: officeDeskLabel(d), badge: statusBadge(d.status, d.activity), waits: d.waits });
+  }
+  for (const p of m.lounge.items) {
+    rows.set(p.key, { key: p.key, name: p.name, species: p.species, camp: p.camp, where: `休息室・${p.toolLabel}`,
+      label: officeProfileLabel(p), badge: badge("名冊", "b-mute", "這是角色設定，不代表正在出勤"), waits: false });
+  }
+  return rows;
+}
+
+function officeListView(m, S) {
+  const rows = officeRows(m);
+  const flowsBlocked = m.errors.flows;
+  return officeList(m).map((g) => {
+    const body = [];
+    if (g.id.startsWith("station-") && flowsBlocked) {
+      if (g.id === "station-board") body.push(notice("warn", `讀不到流程：${flowsBlocked}`));
+    } else if (g.id === "desks" && m.errors.runtime) {
+      body.push(runtimeNotice() || notice("warn", "無法連線到 VBear runtime，工作中的 Terminal 資訊暫不可用。"));
+    } else if (g.id === "lounge" && m.errors.profiles) {
+      body.push(notice("warn", `讀不到角色名冊：${m.errors.profiles}`));
+    } else if (!g.keys.length) {
+      body.push(el("p", { class: "small muted office-empty" }, g.id === "turn" ? "目前沒有輪到你的" : "沒有"));
+    } else {
+      body.push(el("ul", { class: "office-rows" }, g.keys.map((key) => {
+        const r = rows.get(key);
+        return el("li", null, el("button", { type: "button", class: `office-row${r.waits ? " office-row-waits" : ""}`,
+          "data-office-key": key, "aria-label": r.label, "aria-pressed": String(S.key === key),
+          on: { click: () => S.select(key) } },
+        officeSprite(r.species, r.camp, 2),
+        el("span", { class: "office-row-text" },
+          r.waits ? el("span", { class: "office-turn" }, el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
+          el("strong", null, r.name), el("span", { class: "small muted" }, r.where)),
+        r.badge));
+      })));
+    }
+    if (g.more) body.push(el("a", { class: "btn small office-more", href: g.id === "lounge" ? "#/team" : "#/flows" },
+      g.id === "lounge" ? `還有 ${g.more} 個角色 →` : `這站還有 ${g.more} 隊 →`));
+    return el("section", { class: "office-section", "data-office-section": g.id.startsWith("station-") ? "stations" : g.id },
+      el("h2", { id: `office-${g.id}`, tabindex: "-1" }, g.label), body);
+  });
+}
+
+// ---- the view ----
+
+async function readProfiles() {
+  try {
+    const r = await api.get("/api/agent-profiles");
+    return Array.isArray(r.profiles) ? { profiles: r.profiles } : { error: "角色名冊的格式無法辨識", profiles: [] };
+  } catch (e) { return { error: e.message, profiles: [] }; }
+}
+
+async function viewOffice() {
+  const token = seq;
+  await loadLive(false, FLOW_LIVE_TIMEOUT_MS);   // first: /api/flows only reads the live cache
+  const [, profilesData] = await Promise.all([loadFlows(), readProfiles()]);
+  if (token !== seq) return;
+  const main = claim(token);
+  const S = { key: "", name: "", notice: "", loadout: null, profiles: profilesData, model: null, shownKey: "", mobile: officeIsMobile() };
+  const fresh = new Set();
+  const statusLine = el("p", { class: "small muted office-status", role: "status", "aria-live": "polite" });
+  const root = el("div", { class: "office" });
+  const computeModel = () => officeModel(D.live, D.flows, S.profiles, officeOverrides(S.profiles.profiles, store));
+
+  const select = (key) => {
+    const idx = officeIndex(S.model);
+    if (!idx.has(key)) return;
+    S.key = key; S.name = idx.get(key).name; S.notice = ""; statusLine.textContent = "";
+    if (key.startsWith("profile:")) {
+      const id = key.slice("profile:".length);
+      if (!(S.loadout && S.loadout.key === key)) {
+        S.loadout = { key, state: "loading" };
+        api.get(`/api/agent-profiles/${encodeURIComponent(id)}/loadout`).then((data) => {
+          if (S.key !== key) return;
+          S.loadout = { key, state: "ok", data };
+          renderPanelOnly();
+        }).catch((e) => {
+          if (S.key !== key) return;
+          S.loadout = { key, state: "error", error: e.message };
+          renderPanelOnly();
+        });
+      }
+    } else S.loadout = null;
+    render({ focusKey: key, panelFocus: true });
+  };
+  S.select = select;
+  const closePanel = () => {
+    const was = S.key;
+    S.key = ""; S.name = ""; S.loadout = null; S.notice = "";
+    render({ focusKey: was, fallbackHeading: true });
+  };
+  const setSpecies = (id, value) => {
+    try { store.set(OFFICE_SPECIES_KEY + id, OFFICE_SPECIES.includes(value) ? value : null); } catch (_) { /* optional */ }
+    S.model = computeModel();
+    S.shownKey = officeKey(S.model);
+    render({ focusKey: `profile:${id}` });
+  };
+  const pick = (kind) => {
+    const m = S.model;
+    const teams = allOfficeTeams(m);
+    let key = "";
+    if (kind === "turn") key = (teams.find((t) => t.waits) || {}).key || (m.desks.find((d) => d.waits) || {}).key || "";
+    else if (kind === "working") key = (m.desks.find((d) => d.status === "working") || {}).key || "";
+    else if (kind === "unknown") key = (m.desks.find((d) => d.status === "unknown") || {}).key || "";
+    else key = (m.lounge.items[0] || {}).key || "";
+    if (!key) {
+      statusLine.textContent = { turn: "目前沒有輪到你的角色", working: "目前沒有工作中的終端", unknown: "目前沒有狀態未知的終端",
+        roster: "名冊裡還沒有角色" }[kind];
+      return;
+    }
+    select(key);
+  };
+  const handlers = { close: closePanel, species: setSpecies };
+
+  function panelAside() {
+    return el("aside", { class: "office-panel", "aria-label": "角色面板", "data-office-panel": S.key ? "open" : "idle" },
+      officePanelContent(S.model, S, handlers));
+  }
+  let panelSlot = null;
+  function panelNode() { panelSlot = el("div", { class: "office-panel-slot" }, panelAside()); return panelSlot; }
+  // a late answer (the loadout) repaints the panel only: the focus and the scene are left alone
+  function renderPanelOnly() {
+    if (panelSlot && officeInside(root, panelSlot)) setKids(panelSlot, panelAside()); else render({});
+  }
+  function render(opts) {
+    const m = S.model;
+    for (const t of allOfficeTeams(m)) if (t.waits && !officeBadgeSeen.has(t.key)) { fresh.add(t.key); officeBadgeSeen.add(t.key); }
+    for (const d of m.desks) if (d.waits && !officeBadgeSeen.has(d.key)) { fresh.add(d.key); officeBadgeSeen.add(d.key); }
+    // a badge that went away is forgotten, so a later one fades in again
+    for (const k of [...officeBadgeSeen]) {
+      if (!allOfficeTeams(m).some((t) => t.key === k && t.waits) && !m.desks.some((d) => d.key === k && d.waits)) officeBadgeSeen.delete(k);
+    }
+    S.mobile = officeIsMobile();
+    const head = el("header", { class: "office-head" },
+      el("h1", null, "辦公室"),
+      el("p", { class: "small muted" }, "每 5 秒更新・資料來自流程、終端與角色名冊，沒有的就不畫"),
+      officeCountsBar(m, pick),
+      el("nav", { class: "office-jumps", "aria-label": "跳到" }, S.mobile
+        ? [["輪到你", "office-turn"], ["工作站", "office-station-board"], ["辦公桌", "office-desks"], ["休息室", "office-lounge"]]
+          .map(([label, id]) => officeJump(label, id))
+        : [["工作站", "office-stations"], ["辦公桌", "office-desks"], ["休息室", "office-lounge"]]
+          .map(([label, id]) => officeJump(label, id))),
+      statusLine);
+    let body;
+    if (m.allEmpty) {
+      body = el("div", { class: "empty-state office-start" },
+        el("strong", null, "辦公室目前沒有人。到終端工作台建立角色。"),
+        el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台"));
+    } else if (S.mobile) {
+      body = S.key ? el("div", { class: "office-mobile-panel" }, panelNode())
+        : el("div", { class: "office-list" }, officeListView(m, S));
+    } else {
+      body = el("div", { class: "office-layout" },
+        el("div", { class: "office-scene" }, officeSections(m, S, fresh),
+          el("div", { class: "office-counts-foot" }, officeCountsBar(m, pick))),
+        panelNode());
+    }
+    fresh.clear();
+    setKids(root, head, body);
+    if (opts && opts.focusKey) {
+      const target = officeFindByKey(root, opts.focusKey);
+      if (target) target.focus();
+      else if (opts.fallbackHeading || opts.focusSection) officeFocusHeading(root, opts.focusSection || officeSectionOfKey(opts.focusKey), S.mobile);
+    } else if (opts && opts.focusSection) officeFocusHeading(root, opts.focusSection, S.mobile);
+    if (opts && opts.panelFocus && S.mobile && S.key) {
+      const title = document.getElementById("office-panel-title");
+      if (title && title.focus) title.focus();
+    }
+  }
+  function repaint(m, key) {
+    const active = document.activeElement;
+    const activeKey = active && active.getAttribute && officeInside(root, active) ? active.getAttribute("data-office-key") : null;
+    S.model = m;
+    S.shownKey = key;
+    let focusKey = activeKey || "";
+    let focusSection = "";
+    if (S.key) {
+      const r = restoreSelection({ key: S.key, name: S.name }, m);
+      if (r.kept) { S.name = officeIndex(m).get(S.key).name; }
+      else {
+        S.key = ""; S.name = ""; S.loadout = null; S.notice = r.message;
+        if (focusKey) { focusKey = ""; focusSection = r.focusSection; }
+      }
+    }
+    render({ focusKey, focusSection });
+    if (!focusKey && !focusSection && active && active.getAttribute && active.getAttribute("data-office-key")) {
+      officeFocusHeading(root, officeSectionOfKey(active.getAttribute("data-office-key")), S.mobile);
+    }
+  }
+
+  S.model = computeModel();
+  S.shownKey = officeKey(S.model);
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && S.key && !(e.isComposing)) { e.preventDefault(); closePanel(); }
+  });
+  render({});
+  setKids(main, root);
+
+  const onViewport = () => { if (officeIsMobile() !== S.mobile) render({}); };
+  let mq = null;
+  try { mq = window.matchMedia ? window.matchMedia(OFFICE_MOBILE_QUERY) : null; } catch (_) { mq = null; }
+  if (mq && mq.addEventListener) mq.addEventListener("change", onViewport);
+  officeTick = async () => {
+    await loadLive();
+    await loadFlows();
+    const m = computeModel();
+    const key = officeKey(m);
+    if (key === S.shownKey) return;
+    repaint(m, key);
+  };
+  activeViewCleanup = () => {
+    officeTick = null;
+    if (mq && mq.removeEventListener) mq.removeEventListener("change", onViewport);
+  };
+  // the roster is read when the page opens and again on request
+  S.reloadRoster = async () => {
+    S.profiles = await readProfiles();
+    const m = computeModel();
+    repaint(m, officeKey(m));
+  };
+}
+
+function officeJump(label, id) {
+  return el("a", { class: "office-jump btn small", href: "#/office", "data-office-jump": id,
+    on: { click: (e) => {
+      e.preventDefault();
+      const t = document.getElementById(id);
+      if (t) { t.focus(); if (t.scrollIntoView) t.scrollIntoView({ block: "start" }); }
+    } } }, label);
+}
+function officeInside(root, node) {
+  for (let n = node; n; n = n.parentNode) if (n === root) return true;
+  return false;
+}
+function officeFindByKey(root, key) {
+  return Array.from(root.querySelectorAll("[data-office-key]")).find((n) => n.getAttribute("data-office-key") === key) || null;
+}
+function officeSectionOfKey(key) {
+  const kind = String(key).split(":")[0];
+  return kind === "flow" ? "stations" : kind === "session" ? "desks" : "lounge";
+}
+function officeFocusHeading(root, section, mobile) {
+  const ids = mobile ? { stations: "office-station-board", desks: "office-desks", lounge: "office-lounge" }
+    : { stations: "office-stations", desks: "office-desks", lounge: "office-lounge" };
+  const heading = document.getElementById(ids[section] || ids.stations);
+  if (heading && heading.focus) heading.focus();
+}
+
 function projectCard(p) {
   const live = (D.live.sessions || []).filter((s) => s.project_id === p.project_id);
   return el("a", { class: "card", href: `#/projects/${p.project_id}` },
@@ -6551,6 +7057,7 @@ async function route() {
     else if (top === "settings") await viewSettings();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
     else if (top === "terminals") await viewTerminals();
+    else if (top === "office") await viewOffice();
     else if (top === "flows" && parts[1]) await viewFlowDetail(decodeURIComponent(parts[1]));
     else if (top === "flows") await viewFlows();
     else setKids($main(), emptyState("找不到這個頁面", null));
@@ -6583,6 +7090,7 @@ async function route() {
       if (before !== after && !busy) { const y = scrollY; await route(); scrollTo(0, y); }
     };
   }
+  if (top === "office") liveTick = officeTick;
   if (top === "flows" && parts[1]) {
     // the executor, reviews and gate change without the user doing anything: refresh them quietly
     liveTick = async () => { if (flowCoordinator) await flowCoordinator.tick(); };
@@ -6666,6 +7174,7 @@ if (typeof module !== "undefined" && module.exports) {
     flowLiveText,
     flowGateGrid,
     flowTeamSection,
+    viewOffice,
     waitsForYou,
     stationFor,
     speciesFor,

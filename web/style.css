@@ -21,6 +21,12 @@
      dark enough for 4.5:1 on the soft backgrounds */
   --quest-edge: #8a5a00; --quest-bar: #8a5a00;
   --quest-ok: #256a42; --quest-warn: #7a5500; --quest-mute: #585c59;
+  /* the office (design office v1.3): the red is only for 「輪到你」; the deep brick red and the gold are small
+     decoration, far darker than the alarm red */
+  --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #b3180f;
+  --vn-red-deep: #7a1d17; --vn-gold: #ffcd00;
+  --office-floor: #efe8d8; --office-floor-line: #e0d7c2; --office-desk: #c9a578;
+  --office-box-bg: #f4efe6; --office-box-ink: #0b0f0e; --office-box-line: #0b0f0e;
   --radius: 12px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", "Segoe UI", sans-serif;
@@ -35,6 +41,10 @@
     --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
     --mute: #9aa09c; --mute-soft: #2a2f2d;
     --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
+    --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
+    --vn-red-deep: #7a1d17; --vn-gold: #ffcd00;
+    --office-floor: #1f2523; --office-floor-line: #262d2a; --office-desk: #5a4632;
+    --office-box-bg: #f4efe6; --office-box-ink: #0b0f0e; --office-box-line: #0b0f0e;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
     color-scheme: dark;
   }
@@ -47,6 +57,10 @@
   --bad: #f08a7d; --bad-soft: #3d201c; --info: #86b4e3; --info-soft: #1c2b3b;
   --mute: #9aa09c; --mute-soft: #2a2f2d;
   --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
+  --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
+  --vn-red-deep: #7a1d17; --vn-gold: #ffcd00;
+  --office-floor: #1f2523; --office-floor-line: #262d2a; --office-desk: #5a4632;
+  --office-box-bg: #f4efe6; --office-box-ink: #0b0f0e; --office-box-line: #0b0f0e;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
   color-scheme: dark;
 }
@@ -971,3 +985,92 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .quest-start strong { margin-bottom: 0; }
 .quest-start .btn, .quest-more { min-height: 44px; justify-content: center; }
 .quest-more { margin-top: 12px; }
+
+/* ---- the office (design office v1.3) ---- */
+.office-head h1 { border-left: 6px solid var(--vn-red-deep); padding-left: 10px; }
+.office-counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.office-count { display: inline-flex; align-items: baseline; gap: 8px; min-height: 44px; padding: 6px 14px; border: 1px solid var(--line-2);
+  border-radius: 10px; background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; }
+.office-count:hover { background: var(--panel-2); }
+.office-count-value { font-size: 17px; }
+.office-count-turn .office-count-value { color: var(--vn-red-ink); }
+.office-jumps { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+.office-jump { min-height: 44px; display: inline-flex; align-items: center; }
+.office-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
+.office-scene { min-width: 0; display: flex; flex-direction: column; gap: 22px;
+  background: repeating-linear-gradient(0deg, var(--office-floor) 0 31px, var(--office-floor-line) 31px 32px),
+    repeating-linear-gradient(90deg, transparent 0 31px, var(--office-floor-line) 31px 32px);
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+.office-section > h2 { margin: 0 0 4px; padding-bottom: 4px; border-bottom: 4px solid var(--vn-red-deep); font-size: 18px; }
+.office-section > h2:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.office-stations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 10px; align-items: start; }
+.office-station { background: var(--panel); border: 2px solid var(--line-2); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.office-station-waits { border: 3px solid var(--vn-red); padding: 9px; }
+.office-station-title { margin: 0; font-size: 15px; }
+.office-team, .office-char, .office-row { font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
+.office-team { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; width: 100%; min-height: 44px; padding: 10px;
+  border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); position: relative; }
+.office-team:hover, .office-char:hover, .office-row:hover { border-color: var(--accent); }
+.office-team:focus-visible, .office-char:focus-visible, .office-row:focus-visible, .office-count:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.office-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.office-team-waits { border-color: var(--vn-red); }
+.office-turn { display: inline-flex; align-items: center; gap: 6px; background: var(--vn-red); color: var(--vn-on-red); font-weight: 700;
+  font-size: 13px; padding: 2px 10px 2px 6px; border-radius: 999px; line-height: 1.5; }
+.office-turn-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--vn-on-red); color: var(--vn-red); font-size: 12px; line-height: 1; }
+.office-turn-inline { margin: 0; align-self: flex-start; }
+.office-turn-new { animation: office-fade .4s ease-out 1; }
+@keyframes office-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .office-turn-new { animation: none; } }
+.office-members { display: flex; align-items: flex-end; gap: 4px; flex-wrap: wrap; }
+.office-more-members { font-size: 12px; color: var(--ink-2); }
+.office-sprite { display: inline-block; position: relative; flex: none; image-rendering: pixelated; }
+.office-px { position: absolute; left: 0; top: 0; display: block; }
+.office-team-title { font-weight: 650; word-break: break-word; }
+.office-team-phase, .office-team-where, .office-team-mode { font-size: 12.5px; color: var(--ink-2); }
+.office-more { align-self: flex-start; min-height: 44px; }
+.office-empty { margin: 4px 0; }
+.office-desks-grid, .office-lounge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-top: 10px; }
+.office-char { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 8px 10px; min-height: 44px; width: 100%;
+  border: 1px solid transparent; border-radius: 8px; background: transparent; position: relative; }
+.office-bubble { background: var(--office-box-bg); color: var(--office-box-ink); border: 2px solid var(--office-box-line);
+  box-shadow: 0 0 0 2px var(--office-box-bg); border-radius: 4px; padding: 1px 8px; font-size: 12.5px; font-weight: 650; white-space: nowrap; margin-bottom: 2px; }
+.office-desk-top { display: block; width: 72px; height: 8px; margin-top: -6px; background: var(--office-desk); border: 2px solid var(--office-box-line); border-radius: 2px; }
+.office-plate { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 1px; font-size: 12.5px; color: var(--ink-2); min-width: 0; }
+.office-plate-name { font-weight: 650; color: var(--ink); word-break: break-word; }
+.office-plate-flow { color: var(--ink-2); word-break: break-word; }
+.office-waits { border-color: var(--vn-red); }
+.office-panel-slot { min-width: 0; }
+.office-panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column;
+  gap: 10px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+.office-panel h2 { margin: 0; font-size: 18px; word-break: break-word; }
+.office-panel h2:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.office-panel h3, .office-panel h4 { margin: 8px 0 4px; font-size: 14px; }
+.office-panel-head { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.office-close { align-self: flex-end; min-height: 44px; }
+.office-go { min-height: 44px; justify-content: center; margin-top: auto; }
+.office-gone { margin: 0; padding: 8px 10px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--ink-2); }
+.office-howto { margin: 0; padding-left: 18px; }
+.office-members-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.office-members-list li { display: flex; align-items: center; gap: 8px; }
+.office-armor { display: flex; flex-direction: column; gap: 6px; }
+.office-armor-cell { border: 2px solid var(--line-2); border-radius: 6px; padding: 6px 8px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 2px 8px; }
+.office-armor-solid { border-style: solid; border-color: var(--ok); }
+.office-armor-dashed { border-style: dashed; border-color: var(--ink-3); }
+.office-armor-note { flex-basis: 100%; color: var(--ink-2); }
+.office-armor-level { font-weight: 650; }
+.office-weapon-ok { border-color: var(--ok); }
+.office-weapon-off { border-style: dashed; }
+.office-skill-list { margin: 0; padding-left: 18px; }
+.office-species { display: flex; align-items: center; gap: 8px; }
+.office-start { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.office-start .btn { min-height: 44px; }
+.office-list { display: flex; flex-direction: column; gap: 18px; margin-top: 10px; }
+.office-rows { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.office-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 56px; padding: 8px 10px; border: 1px solid var(--line-2);
+  border-radius: 8px; background: var(--panel); }
+.office-row-waits { border: 2px solid var(--vn-red); }
+.office-row-text { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; word-break: break-word; }
+.office-mobile-panel .office-panel { position: static; max-height: none; }
+@media (max-width: 820px) {
+  .office-layout { grid-template-columns: minmax(0, 1fr); }
+}

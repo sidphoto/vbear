@@ -3,9 +3,15 @@
 // The real web/app.js on a synthetic DOM. Run: node tests/frontend/office.cjs   (exit code 0 = pass)
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
 const assert = require("assert");
 const h = require("./lib/s2_harness.cjs");
-const { app } = h;
+const { app, jsonResponse, setHandler, FETCH_LOG } = h;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function settle(n = 40) { for (let i = 0; i < n; i++) await Promise.resolve(); await sleep(5); for (let i = 0; i < n; i++) await Promise.resolve(); }
+const text = (n) => (n ? n.textContent : "");
+const root = path.join(__dirname, "..", "..", "web");
 
 global.document.querySelector = () => null;
 
@@ -466,6 +472,453 @@ test("the phone's list: who waits for you, the stations in order, the desks, the
   assert.deepStrictEqual(by["station-build"], [`flow:${going.id}`]);
   assert.deepStrictEqual(by.desks, ["session:t-1", "session:t-2"]);
   assert.deepStrictEqual(by.lounge, ["profile:a"]);
+});
+
+
+// ---- the page -------------------------------------------------------------------------------------------------
+
+let page;
+let tick = null;
+let mobile = false;
+global.window.matchMedia = (q) => ({ matches: mobile && /max-width: 820px/.test(q), addEventListener() {}, removeEventListener() {} });
+function loadoutOf(tool, over = {}) {
+  const tools = tool === "claude" ? { known: true, allowed: ["Bash"], blocked: ["Edit", "Write"], source: "與 argv 相同的常數" }
+    : { known: false, allowed: [], blocked: [], unknown_reason: tool === "codex" ? "目前無法從 VBear 啟動這個角色" : "VBear 目前只支援用 Profile 啟動 Claude Code" };
+  return { ok: true, tools,
+    skills: { title: "已選技能（VBear 啟動時不載入）", note: "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。", items: [
+      { skill_id: "s-code", state: "in_index", name: "code-review", invoke_name: "code-review" },
+      { skill_id: "s-gone", state: "not_in_index", note: "目前索引找不到此技能", indexed_at: 1791770000 }] },
+    armor: { applicable: true, preview_decides: "實際以出發前檢查為準", items: [
+      { name: "Write", group: "blocked", level: "強制（限已測路徑、版本與執行層）", note: "寫入只限工作目錄" },
+      { name: "Test", group: "not_blocked", level: "僅意圖", note: "可用 Bash 執行指令" }] }, ...over };
+}
+function setPage(over = {}) {
+  page = { live: live(), flows: flowsOf([]), profiles: profilesOf([]), loadout: {}, loadoutError: null, flowsError: null,
+    profilesError: null, liveError: null, ...over };
+  setHandler((url) => {
+    const p = url.split("?")[0];
+    if (p === "/api/overview") return jsonResponse({ ok: true, totals: { active: 0 }, generated_at: 1, stale: false, skills_with_problems: [] });
+    if (p === "/api/skills") return jsonResponse({ skills: [], categories: [] });
+    if (p === "/api/roles") return jsonResponse({ roles: [] });
+    if (p === "/api/live") return page.liveError ? jsonResponse({ error: page.liveError }, false, 500) : jsonResponse(page.live);
+    if (p === "/api/flows") return page.flowsError ? jsonResponse({ error: page.flowsError }, false, 500) : jsonResponse(page.flows);
+    if (p === "/api/agent-profiles") return page.profilesError ? jsonResponse({ error: page.profilesError }, false, 500) : jsonResponse(page.profiles);
+    const m = /^\/api\/agent-profiles\/([^/]+)\/loadout$/.exec(p);
+    if (m) return page.loadoutError ? jsonResponse({ error: page.loadoutError }, false, 500) : jsonResponse(page.loadout[m[1]] || loadoutOf("claude"));
+    return null;
+  });
+}
+async function open() {
+  const real = global.setInterval;
+  tick = null;
+  global.setInterval = (fn) => { tick = fn; return 0; };
+  global.location.hash = "#/office";
+  try { await app.route(); await settle(); } finally { global.setInterval = real; }
+  return h.dom().mainEl;
+}
+async function refresh() { assert(tick, "the office registered a refresh"); tick(); await settle(); }
+const byKey = (mainEl, key) => mainEl.find((n) => n.getAttribute && n.getAttribute("data-office-key") === key);
+const byClass = (n, c) => n.findAll((x) => x.hasClass && x.hasClass(c));
+const panel = (mainEl) => mainEl.find((n) => n.hasClass && n.hasClass("office-panel"));
+const INTERACTIVE = new Set(["a", "button", "input", "select", "textarea", "summary"]);
+const scene = () => {
+  const turn = flow("awaiting_merge", { attention: true, attention_reason: "停在合併關卡" });
+  const going = flow("implementing", { automation: { mode: "auto", held: false, step_label: "派工中" } });
+  const bnd = bound(flow("in_review"), "pane-1");
+  return { turn, going, bnd, flows: [turn, going, bnd] };
+};
+
+test("the office page: three areas, the counts twice, jump links, one button per team and character", async () => {
+  const sc = scene();
+  setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1", { pane_id: "pane-1" }),
+    session("t-2", { status: "waiting", agent: "codex", role_label: "" }), session("t-3", { status: "unknown" })], attention: ["t-2"] }),
+  profiles: profilesOf([profile("a", "claude"), profile("b", "codex")]) });
+  const main = await open();
+  assert.strictEqual(text(main.find((n) => n.tag === "h1")), "辦公室");
+  const heads = main.findAll((n) => n.tag === "h2").map(text);
+  assert.deepStrictEqual(heads.slice(0, 3), ["工作站", "辦公桌", "休息室"]);
+  assert.strictEqual(byClass(main, "office-counts").length, 2, "the counts at the top and at the foot of the scene");
+  const jumps = byClass(main, "office-jump").map(text);
+  assert.deepStrictEqual(jumps, ["工作站", "辦公桌", "休息室"]);
+  assert(text(main).includes("每 5 秒更新"));
+  // each team and character is one button with a label of its name and its state or place
+  const buttons = main.findAll((n) => n.getAttribute && n.getAttribute("data-office-key"));
+  assert.strictEqual(buttons.length, 3 + 3 + 2);
+  for (const b of buttons) {
+    assert.strictEqual(b.tag, "button");
+    const label = b.getAttribute("aria-label");
+    assert(label && label.length > 3, "a label");
+    // nothing interactive inside a button
+    assert.strictEqual(b.findAll((n) => INTERACTIVE.has(n.tag)).length, 0, label);
+  }
+  const t = byKey(main, `flow:${sc.turn.id}`);
+  assert(t.getAttribute("aria-label").includes("審查通過・等合併") && t.getAttribute("aria-label").includes("任務在：合併關卡"));
+  assert(t.getAttribute("aria-label").includes("輪到你"));
+  assert(byKey(main, "session:t-3").getAttribute("aria-label").includes("狀態未知"));
+  assert(byKey(main, "profile:a").getAttribute("aria-label").includes("名冊"));
+});
+
+test("a team that waits for you has the badge with words and a thick frame; teams have no personal status bubble", async () => {
+  const sc = scene();
+  setPage({ flows: flowsOf(sc.flows) });
+  const main = await open();
+  const team = byKey(main, `flow:${sc.turn.id}`);
+  const badges = byClass(team, "office-turn");
+  assert.strictEqual(badges.length, 1);
+  assert(text(badges[0]).includes("輪到你") && text(badges[0]).includes("!"));
+  assert(team.hasClass("office-team-waits"));
+  const station = main.find((n) => n.getAttribute && n.getAttribute("data-station") === "gate");
+  assert(station.hasClass("office-station-waits"));
+  const plain = byKey(main, `flow:${sc.going.id}`);
+  assert.strictEqual(byClass(plain, "office-turn").length, 0);
+  // no bubble in any team: not 工作中, not zz, not ?
+  for (const k of [sc.turn, sc.going, sc.bnd]) {
+    const b = byKey(main, `flow:${k.id}`);
+    assert.strictEqual(byClass(b, "office-bubble").length, 0);
+    for (const word of ["工作中", "zz", "?"]) assert(!text(b).includes(word), `${word} in a team`);
+  }
+  // the other station is not framed
+  assert(!main.find((n) => n.getAttribute && n.getAttribute("data-station") === "build").hasClass("office-station-waits"));
+  // the team's words: task, the phase's own label, where, the mode
+  assert(text(plain).includes(sc.going.task_title) && text(plain).includes("實作中") && text(plain).includes("任務在：實作區"));
+  assert(text(plain).includes("自動執行中・派工中"));
+  assert(text(byKey(main, `flow:${sc.turn.id}`)).includes("手動記錄"));
+});
+
+test("a desk's bubble always has words; an ended session has none and its plate says so; flows are named on the plate", async () => {
+  const sc = scene();
+  setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1", { pane_id: "pane-1" }),
+    session("t-2", { status: "waiting" }), session("t-3", { status: "unknown" }), session("t-4", { status: "exited" }),
+    session("t-5", { status: "needs-input" })], attention: ["t-2"] }) });
+  const main = await open();
+  const bubbleOf = (k) => byClass(byKey(main, k), "office-bubble").map(text);
+  assert.deepStrictEqual(bubbleOf("session:t-1"), ["工作中"]);
+  assert.deepStrictEqual(bubbleOf("session:t-2"), ["等你回覆"]);
+  assert.deepStrictEqual(bubbleOf("session:t-3"), ["? 狀態未知"]);
+  assert.deepStrictEqual(bubbleOf("session:t-5"), ["需要你處理"]);
+  assert.deepStrictEqual(bubbleOf("session:t-4"), []);
+  assert(text(byKey(main, "session:t-4")).includes("已結束"));
+  // the bound flow is on the plate of the very row, with its station
+  assert(text(byKey(main, "session:t-1")).includes(`流程：${sc.bnd.task_title}（任務在：審查室）`));
+  assert(!text(byKey(main, "session:t-2")).includes("流程："));
+  // the desk of a session that waits for you has the badge
+  assert(byClass(byKey(main, "session:t-2"), "office-turn").length === 1);
+});
+
+test("each station has its own limit, with a link for the rest; the lounge stops at 24", async () => {
+  const flows = [...Array.from({ length: 5 }, () => flow("planning")), flow("in_review"), flow("awaiting_merge")];
+  const profiles = Array.from({ length: 30 }, (_, i) => profile(`p${i}`, "claude"));
+  setPage({ flows: flowsOf(flows), profiles: profilesOf(profiles) });
+  const main = await open();
+  const board = main.find((n) => n.getAttribute && n.getAttribute("data-station") === "board");
+  assert.strictEqual(board.findAll((n) => n.getAttribute && (n.getAttribute("data-office-key") || "").startsWith("flow:")).length, 3);
+  const more = byClass(board, "office-more");
+  assert.strictEqual(more.length, 1);
+  assert.strictEqual(text(more[0]), "這站還有 2 隊 →");
+  assert.strictEqual(more[0].getAttribute("href"), "#/flows");
+  const lounge = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "lounge");
+  assert.strictEqual(lounge.findAll((n) => n.getAttribute && (n.getAttribute("data-office-key") || "").startsWith("profile:")).length, 24);
+  const loungeMore = byClass(lounge, "office-more")[0];
+  assert.strictEqual(text(loungeMore), "還有 6 個角色 →");
+  assert.strictEqual(loungeMore.getAttribute("href"), "#/team");
+  assert(text(lounge).includes("名冊：角色設定，不代表正在出勤"));
+});
+
+test("selecting a profile reads its loadout once and shows weapons, armor and skills as they are", async () => {
+  setPage({ profiles: profilesOf([profile("a", "claude"), profile("b", "codex")]),
+    loadout: { a: loadoutOf("claude"), b: loadoutOf("codex") } });
+  const main = await open();
+  const reads = () => FETCH_LOG.filter((x) => /\/loadout$/.test(x.url)).length;
+  const before = reads();
+  byKey(main, "profile:a").click();
+  await settle();
+  const p = panel(main);
+  assert(text(p).includes("名冊：這是角色設定，不代表正在出勤"));
+  const weapons = p.find((n) => n.getAttribute && n.getAttribute("data-office-gear") === "weapons");
+  assert(text(weapons).includes("Bash・可用") && text(weapons).includes("Edit・鎖住") && text(weapons).includes("Write・鎖住"));
+  const armor = p.find((n) => n.getAttribute && n.getAttribute("data-office-gear") === "armor");
+  const cells = byClass(armor, "office-armor-cell");
+  assert.strictEqual(cells.length, 2);
+  assert(cells[0].hasClass("office-armor-solid") && text(cells[0]).includes("強制（限已測路徑、版本與執行層）"));
+  assert(cells[1].hasClass("office-armor-dashed") && text(cells[1]).includes("僅意圖"), "dashed is not enforced, and has words");
+  const skills = p.find((n) => n.getAttribute && n.getAttribute("data-office-gear") === "skills");
+  assert(text(skills).includes("這份清單是你的挑選紀錄"));
+  assert(text(skills).includes("目前索引找不到此技能（索引時間 "));
+  assert(!text(p).includes("已消失"));
+  assert.strictEqual(reads() - before, 1);
+  assert(text(p).includes("打開角色卡"));
+  assert.strictEqual(byClass(p, "office-go")[0].getAttribute("href"), "#/workbench?profile=a");
+  // a refresh with nothing changed does not read it again, and the selection is still there
+  await refresh();
+  assert.strictEqual(reads() - before, 1);
+  assert(byKey(main, "profile:a").hasClass("office-selected"));
+  // the other tool: unknown, with the reason as it came
+  byKey(main, "profile:b").click();
+  await settle();
+  assert(text(panel(main)).includes("未知：目前無法從 VBear 啟動這個角色"));
+  assert.strictEqual(reads() - before, 2);
+});
+
+test("a failed loadout is said in the gear area and the rest of the panel stays", async () => {
+  setPage({ profiles: profilesOf([profile("a", "claude")]), loadoutError: "讀取失敗" });
+  const main = await open();
+  byKey(main, "profile:a").click();
+  await settle();
+  const p = panel(main);
+  assert(text(p).includes("讀不到這個角色的裝備：讀取失敗"));
+  assert(text(p).includes("名冊：這是角色設定"));
+  assert.strictEqual(byClass(p, "office-go").length, 1);
+});
+
+test("a session's panel says its gear is unknown; a team's panel has no gear and says why", async () => {
+  const sc = scene();
+  setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1", { pane_id: "pane-1" })] }) });
+  const main = await open();
+  byKey(main, "session:t-1").click();
+  await settle();
+  let p = panel(main);
+  assert(text(p).includes("未知：不是用 Profile 啟動的，VBear 看不到它的裝備"));
+  assert(text(p).includes("標題顯示工作中"), "the basis of its status");
+  const term = byClass(p, "office-go")[0];
+  assert.strictEqual(term.getAttribute("href"), "#/term/pane-1");
+  byKey(main, `flow:${sc.turn.id}`).click();
+  await settle();
+  p = panel(main);
+  assert(text(p).includes("流程角色只記名稱與模型家族，沒有裝備資料"));
+  assert(text(p).includes("停在合併關卡"));
+  assert(text(p).includes("Claude Code") && text(p).includes("Codex") && text(p).includes("gpt-6-luna"));
+  assert.strictEqual(p.findAll((n) => n.getAttribute && n.getAttribute("data-office-gear")).length, 0);
+  assert.strictEqual(byClass(p, "office-go")[0].getAttribute("href"), `#/flows/${sc.turn.id}`);
+});
+
+test("the species of a profile can be changed, is stored, and a bad stored value is the default", async () => {
+  global.localStorage._store = {};
+  setPage({ profiles: profilesOf([profile("a", "claude"), profile("b", "codex")]) });
+  let main = await open();
+  const spritesOf = (key) => byClass(byKey(main, key), "office-px")[0].style.cssText;
+  const before = spritesOf("profile:a");
+  byKey(main, "profile:a").click();
+  await settle();
+  const select = panel(main).find((n) => n.tag === "select");
+  assert(select, "a species selector");
+  select.value = "fox";
+  select.dispatch("change", { target: select });
+  await settle();
+  assert.strictEqual(JSON.parse(global.localStorage._store["sid:office.species.a"]), "fox");
+  assert.notStrictEqual(spritesOf("profile:a"), before, "the sprite changed");
+  assert(text(panel(main)).includes("只換名冊上的外觀；出勤的終端與流程角色依工具或模型家族顯示"));
+  // an unknown stored value is ignored
+  global.localStorage._store["sid:office.species.b"] = JSON.stringify("dragon");
+  main = await open();
+  const sp = app.speciesFor({ tool: "codex" }, "dragon");
+  assert.strictEqual(sp, "robot");
+  global.localStorage._store = {};
+});
+
+test("a refresh repaints only when something shown changed; the selection stays and the focus follows it", async () => {
+  const sc = scene();
+  setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1")] }) });
+  const main = await open();
+  const ch = byKey(main, "session:t-1");
+  ch.focus();
+  ch.click();
+  await settle();
+  const layout = main.find((n) => n.hasClass && n.hasClass("office-layout"));
+  const scened = layout.children[0];
+  await refresh();
+  assert.strictEqual(layout.children[0], scened, "no change: not repainted");
+  // a visible change: the session now waits
+  page.live = live({ sessions: [session("t-1", { status: "waiting" })], attention: ["t-1"] });
+  await refresh();
+  const again = byKey(main, "session:t-1");
+  assert(again && again !== ch, "repainted");
+  assert(again.hasClass("office-selected"), "the selection is kept");
+  assert.strictEqual(global.document.activeElement, again, "the focus is on the new element of the same character");
+  assert(text(panel(main)).includes("等你回覆"));
+});
+
+test("a selected session that ended: the panel goes back, says what was there, and the focus goes to the heading", async () => {
+  setPage({ live: live({ sessions: [session("t-1"), session("t-2")] }) });
+  const main = await open();
+  const ch = byKey(main, "session:t-1");
+  ch.focus();
+  ch.click();
+  await settle();
+  page.live = live({ sessions: [session("t-2")] });
+  await refresh();
+  assert.strictEqual(panel(main).getAttribute("data-office-panel"), "idle");
+  assert(text(panel(main)).includes("剛才選的Claude 工人已不在辦公室"));
+  const active = global.document.activeElement;
+  assert(active && active.tag !== "body", "the focus is not left on the body");
+  assert.strictEqual(active.getAttribute("id"), "office-desks");
+  assert.strictEqual(active.getAttribute("tabindex"), "-1");
+});
+
+test("Esc closes the panel and the focus goes back to the character; the close button does the same", async () => {
+  setPage({ live: live({ sessions: [session("t-1")] }) });
+  const main = await open();
+  const ch = byKey(main, "session:t-1");
+  ch.focus();
+  ch.click();
+  await settle();
+  assert.strictEqual(panel(main).getAttribute("data-office-panel"), "open");
+  const rootEl = main.find((n) => n.hasClass && n.hasClass("office"));
+  rootEl.dispatch("keydown", { key: "Escape", target: ch });
+  await settle();
+  assert.strictEqual(panel(main).getAttribute("data-office-panel"), "idle");
+  assert.strictEqual(global.document.activeElement.getAttribute("data-office-key"), "session:t-1");
+  byKey(main, "session:t-1").click();
+  await settle();
+  const closeBtn = panel(main).find((n) => n.getAttribute && n.getAttribute("data-office-close") === "1");
+  closeBtn.click();
+  await settle();
+  assert.strictEqual(panel(main).getAttribute("data-office-panel"), "idle");
+});
+
+test("a count moves the focus to the first of its kind, or says there is none", async () => {
+  const sc = scene();
+  setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1"), session("t-3", { status: "unknown" })] }),
+    profiles: profilesOf([profile("a", "claude")]) });
+  const main = await open();
+  const count = (kind) => byClass(main, "office-count").find((n) => n.getAttribute("data-office-count") === kind);
+  assert(text(count("turn")).includes("輪到你"));
+  count("turn").click();
+  await settle();
+  assert(byKey(main, `flow:${sc.turn.id}`).hasClass("office-selected"));
+  assert.strictEqual(global.document.activeElement, byKey(main, `flow:${sc.turn.id}`));
+  count("unknown").click();
+  await settle();
+  assert(byKey(main, "session:t-3").hasClass("office-selected"));
+  setPage({ flows: flowsOf([flow("implementing")]), live: live({ sessions: [session("t-1")] }) });
+  const empty = await open();
+  const c2 = byClass(empty, "office-count").find((n) => n.getAttribute("data-office-count") === "turn");
+  c2.click();
+  await settle();
+  assert(text(empty).includes("目前沒有輪到你的角色"));
+});
+
+test("errors are said where they are: flows, runtime, roster; and an empty office is only claimed when everything was read", async () => {
+  setPage({ flowsError: "讀不到 flows.json", profilesError: "名冊壞了" });
+  let main = await open();
+  assert(text(main).includes("讀不到流程：讀不到 flows.json"));
+  assert(text(main).includes("讀不到角色名冊：名冊壞了"));
+  assert(!text(main).includes("辦公室目前沒有人"));
+  assert(!text(main).includes("這站沒有隊伍"), "no empty stations drawn as if there were no tasks");
+  setPage({ live: live({ runtime: { available: false, problems: ["連不上"] } }) });
+  main = await open();
+  assert(text(main).includes("無法連線到 VBear runtime"));
+  assert(!text(main).includes("目前沒有出勤中的終端"));
+  assert(text(byClass(main, "office-counts")[0]).includes("無法判斷"));
+  assert(!text(main).includes("辦公室目前沒有人"));
+  setPage();
+  main = await open();
+  assert(text(main).includes("辦公室目前沒有人。到終端工作台建立角色。"));
+  const link = main.findAll((n) => n.tag === "a").find((n) => n.getAttribute("href") === "#/workbench");
+  assert(link);
+});
+
+test("on a phone: no scene, a list in the design's order; a row opens a full panel and 'back' returns to the row", async () => {
+  const sc = scene();
+  mobile = true;
+  try {
+    setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1", { pane_id: "pane-1" }), session("t-2", { status: "waiting" })], attention: ["t-2"] }),
+      profiles: profilesOf([profile("a", "claude")]) });
+    const main = await open();
+    assert.strictEqual(byClass(main, "office-scene").length, 0, "the scene is not drawn");
+    const heads = main.findAll((n) => n.tag === "h2").map(text);
+    assert.deepStrictEqual(heads, ["輪到你", "計畫板", "實作區", "審查室", "合併關卡", "辦公桌", "休息室"]);
+    assert.deepStrictEqual(byClass(main, "office-jump").map(text), ["輪到你", "工作站", "辦公桌", "休息室"]);
+    const rows = byClass(main, "office-row");
+    assert(rows.length >= 7);
+    for (const r of rows) assert.strictEqual(r.tag, "button");
+    // a row that waits for you says so in words, not only in its frame
+    for (const r of rows.filter((x) => x.hasClass("office-row-waits"))) {
+      assert(byClass(r, "office-turn").length === 1 && text(r).includes("輪到你"));
+    }
+    assert(rows.some((x) => x.hasClass("office-row-waits")));
+    const row = byKey(main, `flow:${sc.going.id}`);
+    row.focus();
+    row.click();
+    await settle();
+    assert.strictEqual(byClass(main, "office-list").length, 0, "the list is replaced by the full panel");
+    assert.strictEqual(panel(main).getAttribute("data-office-panel"), "open");
+    assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-panel-title");
+    const back = panel(main).find((n) => n.getAttribute && n.getAttribute("data-office-close") === "1");
+    assert.strictEqual(text(back), "返回");
+    back.click();
+    await settle();
+    assert.strictEqual(global.document.activeElement.getAttribute("data-office-key"), `flow:${sc.going.id}`);
+    // the row is gone when the user returns: the focus goes to the list's heading
+    byKey(main, "session:t-1").click();
+    await settle();
+    page.live = live({ sessions: [session("t-2", { status: "waiting" })], attention: ["t-2"] });
+    await refresh();
+    const active = global.document.activeElement;
+    assert(active && active.tag !== "body");
+  } finally { mobile = false; }
+});
+
+test("the red is only for 'your turn', and every pair the design names has the contrast it asks for", () => {
+  const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
+  const blocks = {
+    light: css.slice(css.indexOf(":root {"), css.indexOf("@media (prefers-color-scheme: dark)")),
+    dark: css.slice(css.indexOf(":root:not([data-theme=\"light\"])"), css.indexOf(":root[data-theme=\"dark\"]")),
+    darkManual: css.slice(css.indexOf(":root[data-theme=\"dark\"]"), css.indexOf("* { box-sizing")),
+  };
+  const varsOf = (b) => Object.fromEntries([...b.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})/g)].map((m) => [m[1], m[2]]));
+  const lum = (hex) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  for (const [name, block] of Object.entries(blocks)) {
+    const v = varsOf(block);
+    for (const t of ["vn-red", "vn-on-red", "vn-red-ink", "vn-red-deep", "vn-gold", "office-floor", "office-box-bg", "office-box-ink"]) {
+      assert(v[t], `${name} defines --${t}`);
+    }
+    assert(ratio(v["vn-on-red"], v["vn-red"]) >= 4.5, `${name}: white on the red badge ${ratio(v["vn-on-red"], v["vn-red"]).toFixed(2)}`);
+    assert(ratio(v["vn-red-ink"], v.panel) >= 4.5, `${name}: red text on the card ${ratio(v["vn-red-ink"], v.panel).toFixed(2)}`);
+    assert(ratio(v["vn-red-ink"], v.bg) >= 4.5, `${name}: red text on the page`);
+    assert(ratio(v["vn-red-ink"], v["office-floor"]) >= 4.5, `${name}: red text on the floor`);
+    // the frame and the badge against what is behind them: 3:1
+    assert(ratio(v["vn-red"], v.panel) >= 3, `${name}: red frame on the card ${ratio(v["vn-red"], v.panel).toFixed(2)}`);
+    assert(ratio(v["vn-red"], v.bg) >= 3, `${name}: red frame on the page ${ratio(v["vn-red"], v.bg).toFixed(2)}`);
+    assert(ratio(v["vn-red"], v["office-floor"]) >= 3, `${name}: red on the floor`);
+    // the decoration is far darker/lighter than the alarm red: it cannot be taken for it
+    assert(lum(v["vn-red-deep"]) < lum(v["vn-red"]) * 0.6, `${name}: deep red is much darker`);
+    assert(ratio(v["office-box-ink"], v["office-box-bg"]) >= 4.5, `${name}: bubble text`);
+    assert(ratio(v["ink-2"], v.panel) >= 4.5 && ratio(v["ink-2"], v["panel-2"]) >= 4.5, `${name}: second ink on the cards`);
+  }
+  // the alarm red is used by 'your turn' rules only
+  const rules = [...css.slice(css.indexOf("the office (design office v1.3)", css.indexOf("/* ---- the office"))).matchAll(/([^{}]+)\{([^}]*)\}/g)];
+  const users = rules.filter((r) => /var\(--vn-red(-ink)?\)/.test(r[2])).map((r) => r[1].trim());
+  assert(users.length > 0);
+  for (const sel of users) assert(/turn|waits/.test(sel), `red used by a rule that is not about 'your turn': ${sel}`);
+  // and nothing outside the office block uses it
+  const before = css.slice(0, css.indexOf("/* ---- the office"));
+  const usesBefore = [...before.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((r) => /var\(--vn-red/.test(r[2]));
+  assert.strictEqual(usesBefore.length, 0);
+});
+
+test("the page's code uses only what a real DOM has (the test's fake nodes have find/findAll, a browser does not)", () => {
+  const src = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const a = src.indexOf("// ---------- the office (design office v1.3): the page");
+  const b = src.indexOf("function projectCard(p) {");
+  assert(a > 0 && b > a);
+  const code = src.slice(a, b);
+  for (const bad of [/\broot\.find\(/, /\.findAll\(/, /\bslot\.find\(/, /\.hasClass\(/, /\.withText\(/, /\.dispatch\(/]) {
+    assert(!bad.test(code), `the page's code calls a test-only method: ${bad}`);
+  }
+});
+
+test("the nav has the office after the lobby, and the route exists", () => {
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const a = html.indexOf('data-nav="home"');
+  const b = html.indexOf('data-nav="office"');
+  assert(a > 0 && b > a, "office comes after the lobby");
+  assert(html.includes('href="#/office" data-nav="office"><span aria-hidden="true">▦</span>辦公室</a>'));
+  assert.strictEqual(typeof app.viewOffice, "function");
 });
 
 // ---- run ------------------------------------------------------------------------------------------------------
