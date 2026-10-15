@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **A pixel office, `#/office`.** A new page after 冒險者大廳 in the menu. Four workstations (計畫板, 實作區,
+  審查室, 合併關卡) hold the flows' teams by their phase (at most 3 per station, then 「這站還有 N 隊」; a team that
+  waits for you is taken first); each live terminal sits at a desk with its state in words over the character
+  (an ended one has none); the saved profiles stay in the lounge (at most 24, then a link). A station says only
+  where the task is, never what an agent is doing. The red (#DA251D) is used only for 「輪到你」, and always with
+  words. Click a character for its panel: weapons (the tools a launch offers), armor with solid frames for
+  enforced and dashed for the rest, and its skill cards (a skill the index cannot find says so with the index
+  time). A flow's team has no gear panel (flow roles record only a name and a model family) and a session's gear is
+  unknown. Species (bear, fox, robot, alien) follows the tool or the model family; you can change a profile's
+  species (kept in the browser). On a phone it is a list, not a scene. It reads only what the flows, live and
+  profile APIs already return. The one backend change: `GET /api/agent-profiles/<id>/loadout` has a read-only
+  `tools` object, taken from the same two constants the Claude argv is built from (`Bash`; `Edit,Write`), so the
+  argv text is unchanged and a test locks it. The characters are original pixel art, inspired by Pixel-Crew
+  (MIT) but using none of its art or code. `tests/qa_game_ui.py` has `VBEAR_QA_OFFICE=1` and `=stress`.
 - **The home page is the quest board, 冒險者大廳.** 「我的工作台」 (the home page and the first menu item) is now
   冒險者大廳. Its first block, 「需要你處理」, became two blocks: 「輪到你」 (the flows the server marks as needing
   you, a stale review of a manual or stopped flow, and the agents that wait for your reply) and

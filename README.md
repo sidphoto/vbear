@@ -31,6 +31,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Armor** | The **protection a launch actually puts on, and the weak spots it does not cover**: writes kept inside the work directory, no network, Edit/Write tools off. Seven permission labels, each saying how strongly it holds | 「出發前檢查」 |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task, each with a model family. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | 流程 |
 | **Quest board** | The **home page** (冒險者大廳): what waits for you first (flows at a gate, agents waiting for your reply), then the other tasks in progress. Each card is something VBear already has; nothing is scored | Home page |
+| **Office** | A **pixel office** page (辦公室, `#/office`): the flows' teams stand at the **workstation** where their task is (計畫板, 實作區, 審查室, 合併關卡), live terminals sit at **desks** (the words over a character are its state), and the saved profiles stay in the **lounge** (the roster: a role setting, not attendance). Click a character for its **weapons** (the tools a launch offers, read from the same constants as the launch's argv), armor and skill cards. A station only says where the task is, never what an agent is doing | 辦公室 |
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | The board's 「輪到你」 and the flow page |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
@@ -49,6 +50,19 @@ All screens below show **demo data**: a synthetic Claude Code and Codex in a tem
 The **quest board** (demo data), the home page: 「輪到你」 first, with the flows at a gate and any agent that waits for
 your reply (a framed card, with the words that say why), then 「其他進行中的任務」. A card is one flow; the whole card
 opens it. Manual flows say that VBear will not move them for you, and nothing is shown that VBear cannot read.
+
+<img src="docs/images/office.png" alt="The pixel office: four workstations with teams of pixel characters, desks with live terminals and a speech box over each, and the lounge with the saved profiles" width="992">
+
+The **pixel office** (demo data), `#/office`: teams stand at the station their task is at, a framed team with a red
+「輪到你」 badge waits for you, each live terminal sits at a desk with its state in words, and the lounge holds the
+saved profiles. The red is used for nothing else.
+
+<img src="docs/images/office-gear.png" alt="A profile's panel in the office: species choice, weapons (Bash available, Edit and Write locked), armor with solid and dashed frames, skill cards" width="392">
+
+A profile's **panel** (demo data): its weapons, its armor (a solid frame is enforced or partly enforced, a dashed one is
+intent only or not limited, each with its words) and its chosen skill cards. The characters are original pixel art,
+inspired by the way [Pixel-Crew](https://github.com/juinwei7/Pixel-Crew) (MIT) shows an office; no art or code is
+taken from it.
 
 <p>
 <img src="docs/images/role-card.png" alt="A character card in the dark theme: the role label, the tool, the chosen skills with their source tags" width="330">
@@ -139,7 +153,7 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
    [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
    Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
    down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
-2. **Open VBear.** The app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 終端機, 終端工作台, 流程,
+2. **Open VBear.** The app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 辦公室, 終端機, 終端工作台, 流程,
    技能庫, Agent 團隊, 專案 and 設定. VBear lists the skills and agent roles it finds on your Mac (read-only; it
    changes none of them).
 3. **Pick a character and preview the launch.**

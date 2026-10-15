@@ -16,6 +16,12 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       Optional VBEAR_QA_LOBBY=1: more flows for the home page's quest board (one waits for approval, one waits
       for a merge, four more are being worked on by hand, next to the automatic one, so 「還有 1 則」 shows). VBEAR_QA_LOBBY=empty
       deletes the flow instead, so the board is in its first-run state (no flow, no waiting Agent).
+      Optional VBEAR_QA_OFFICE=1: the pixel office (#/office) with what design office 6 asks for: six flows
+      spread over the four stations (plan board, build area, review room, merge gate) next to the automatic
+      one, three synthetic live sessions (working, waiting for you, state unknown; the working one is the
+      executor of a flow, so its desk plate names it) and three profiles (Claude, Codex, and one whose chosen skill
+      the index cannot find). VBEAR_QA_OFFICE=stress: every station full with a "more" link (20 flows), ten
+      sessions and 31 profiles (the lounge shows 24 and links to the rest).
       Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
       the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
@@ -80,6 +86,7 @@ class _Env(RunnerCase):
         self._launch_environment()
         self._flow()
         self._lobby()
+        self._office()
 
     # ---- the index: skills and professions, as files in the temporary HOME
 
@@ -204,24 +211,8 @@ class _Env(RunnerCase):
             return
         if mode != "1":
             return
-        import copy
-        base_roles = copy.deepcopy(flows.get_flow(self.fid)["roles"])
-        base_roles["executor"].pop("session_id", None)
+        add = self._add_flow
         names = ("整理首頁文案", "補上登入流程的測試", "更新安裝說明", "調整深色主題的對比", "修正列表的排序", "改寫設定頁的說明")
-
-        def add(title, events, workdir=None):
-            tid = tasks.save_task(None, {"title": title, "workdir": str(self.work), "goal": "（示範）" + title,
-                                         "acceptance_criteria": ["相關測試通過"]})["id"]
-            roles = copy.deepcopy(base_roles)
-            if workdir:
-                roles["executor"]["workdir"] = workdir
-            else:
-                roles["executor"].pop("workdir", None)
-            fid = flows.create_flow({"task_id": tid, "roles": roles}, lambda t: True)["id"]
-            for body in events:
-                flows.append_event(fid, {"note": "QA", **body})
-            return fid
-
         plan = [{"kind": "plan_submitted"}]
         approved = plan + [{"kind": "plan_approved"}, {"kind": "implementation_started"}]
         add(names[0], plan)                                                     # 等核准: waits for you
@@ -230,6 +221,98 @@ class _Env(RunnerCase):
             workdir=str(self.work))                                              # 等合併: waits for you
         for title in names[2:]:
             add(title, approved)                                                 # worked on by hand
+
+    def _add_flow(self, title, events, workdir=None, session_id=None):
+        """One more flow (a task card and its flow) with the main flow's roles, and the events recorded by hand."""
+        import copy
+        base_roles = copy.deepcopy(flows.get_flow(self.fid)["roles"])
+        base_roles["executor"].pop("session_id", None)
+        tid = tasks.save_task(None, {"title": title, "workdir": str(self.work), "goal": "（示範）" + title,
+                                     "acceptance_criteria": ["相關測試通過"]})["id"]
+        roles = base_roles
+        if workdir:
+            roles["executor"]["workdir"] = workdir
+        else:
+            roles["executor"].pop("workdir", None)
+        if session_id:
+            roles["executor"]["session_id"] = session_id
+        fid = flows.create_flow({"task_id": tid, "roles": roles}, lambda t: True)["id"]
+        for body in events:
+            flows.append_event(fid, {"note": "QA", **body})
+        return fid
+
+    # ---- the pixel office: flows at every station, synthetic live sessions, a roster of profiles
+
+    def _office(self) -> None:
+        mode = os.environ.get("VBEAR_QA_OFFICE", "")
+        if mode not in ("1", "stress"):
+            return
+        stress = mode == "stress"
+        plan = [{"kind": "plan_submitted"}]
+        approved = plan + [{"kind": "plan_approved"}, {"kind": "implementation_started"}]
+        reported = approved + [{"kind": "executor_report", "commit": self.commit}]
+        passed = reported + [{"kind": "review_result", "commit": self.commit, "verdict": "PASS", "reviewer": 0}]
+        merged = passed + [{"kind": "merge_done"}]
+        work = str(self.work)
+        working_session = "n-5eed00000001"     # the id shape of a native session; the first synthetic row
+        if stress:
+            for i in range(5):
+                self._add_flow(f"計畫板的任務 {i + 1}", plan if i % 2 else [])
+                self._add_flow(f"實作區的任務 {i + 1}", approved, session_id=working_session if i == 0 else None)
+                self._add_flow(f"審查室的任務 {i + 1}", reported, workdir=work)
+                self._add_flow(f"合併關卡的任務 {i + 1}", passed if i < 3 else merged, workdir=work)
+            rows = [("claude", "working", f"示範工人 {i + 1}") for i in range(4)] + \
+                [("claude", "waiting", f"等你的工人 {i + 1}") for i in range(3)] + \
+                [("codex", "needs-input", "需要你處理的審查員"), ("codex", "unknown", "狀態未知的審查員"),
+                 ("shared", "unknown", "別的工具")]
+        else:
+            self._add_flow("設計新的設定頁", [])                                  # plan board
+            self._add_flow("整理首頁文案", plan)                                  # plan board, waits for you
+            self._add_flow("更新安裝說明", approved, session_id=working_session)  # build area, bound to a desk
+            self._add_flow("修正列表的排序", approved)                            # build area
+            self._add_flow("補上登入流程的測試", reported, workdir=work)          # review room
+            self._add_flow("調整深色主題的對比", passed, workdir=work)            # merge gate, waits for you
+            self._add_flow("發佈說明", merged, workdir=work)                      # merge gate, awaiting push
+            rows = [("claude", "working", "實作者"), ("claude", "waiting", "等你回覆的審查前檢查"),
+                    ("codex", "unknown", "不確定的終端")]
+        agents = []
+        for i, (tool, status, label) in enumerate(rows):
+            tid = f"n-5eed{i + 1:08x}"
+            act = None if status == "unknown" else {
+                "reason": {"working": "標題顯示工作中（示範資料）", "waiting": "這一輪已結束，等待你的回覆（示範資料）",
+                           "needs-input": "停在確認視窗，等你處理（示範資料）"}[status],
+                "decided_by": "title", "evidence": [{"rung": "title", "label": "終端標題（示範資料）"}]}
+            agents.append({"terminal_id": tid, "pane_id": tid, "agent": tool, "agent_status": status, "activity": act,
+                           "tab_id": f"qa-tab-{i}", "workspace_id": "qa-ws", "foreground_cwd": str(self.qa_work),
+                           "cwd": str(self.qa_work), "terminal_title_stripped": f"{label}（示範）", "name": label,
+                           "agent_session": {}, "focused": False})
+        runtime = self.console.store.runtime
+        real = runtime.snapshot
+
+        def snapshot(*a, **k):
+            snap = dict(real(*a, **k))
+            snap["agents"] = list(snap.get("agents") or []) + agents
+            snap["tabs"] = list(snap.get("tabs") or []) + [
+                {"tab_id": a["tab_id"], "label": a["name"], "workspace_id": a["workspace_id"]} for a in agents]
+            return snap
+        patcher = mock.patch.object(runtime, "snapshot", snapshot)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # profiles: the two of the environment, one whose chosen skill the index cannot find, and in the stress
+        # case thirty more (a roster longer than the lounge shows)
+        by_dir = {Path(s["path"]).parent.name: s["skill_id"] for s in self.index["skills"]}
+        known = set(by_dir.values()) | {GHOST_SKILL_ID}
+        agent_profiles.save_profile("demo-ghost-role", {
+            "name": "技能找不到的角色（示範）", "model": {"tool": "claude", "model_id": ""}, "enabled": True,
+            "equipped_skill_ids": [by_dir["code-review"], GHOST_SKILL_ID],
+            "permission_intents": dict(GOOD)}, known_skills=known, known_roles=set())
+        if stress:
+            for i in range(30):
+                tool = ("claude", "codex", "shared")[i % 3]
+                agent_profiles.save_profile(f"demo-roster-{i + 1:02d}", {
+                    "name": f"示範角色 {i + 1}", "model": {"tool": tool, "model_id": ""}, "enabled": True,
+                    "equipped_skill_ids": [by_dir["code-review"]] if tool != "shared" else [],
+                    "permission_intents": dict(GOOD)}, known_skills=known, known_roles=set())
 
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/#auth={self.token}"
@@ -295,6 +378,57 @@ class Check(_Env):
         else:
             self.assertEqual(flow["roles"]["executor"]["workdir"], str(self.work))
         self.assertTrue(flow["roles"]["reviewers"][0]["independent_of_executor"]["counted"])
+
+
+@unittest.skipIf(DEMO, "CheckOffice builds its own scenarios")
+class CheckOffice(_Env):
+    """The two office scenarios hold what design office 6 asks for (the browser checks are the checklist)."""
+
+    STATION = {"planning": "board", "awaiting_approval": "board", "implementing": "build", "needs_fix": "build",
+               "in_review": "review", "review_stale": "review", "review_unverified": "review",
+               "awaiting_merge": "gate", "awaiting_push": "gate"}
+
+    def office(self, mode):
+        with mock.patch.dict(os.environ, {"VBEAR_QA_OFFICE": mode}):
+            self.build()
+        # one /api/live first: the flows' view reads the live cache that it fills
+        live = self.api("/api/live?force=1")
+        flow_list = self.api("/api/flows")["flows"]
+        profiles = self.api("/api/agent-profiles")["profiles"]
+        return live, flow_list, profiles
+
+    def test_the_general_office(self):
+        live, flow_list, profiles = self.office("1")
+        stations = {}
+        for f in flow_list:
+            stations.setdefault(self.STATION.get(f["phase"]["key"], "board"), []).append(f)
+        self.assertEqual({k: len(v) for k, v in stations.items()}, {"board": 2, "build": 3, "review": 1, "gate": 2})
+        self.assertGreaterEqual(len(flow_list), 6)
+        # the ones that wait for you: the approval and the two at the gate
+        waiting = sorted(f["task_title"] for f in flow_list if f["attention"])
+        self.assertEqual(waiting, sorted(["發佈說明", "整理首頁文案", "調整深色主題的對比"]))
+        sessions = {x["terminal_id"]: x for x in live["sessions"] if x["terminal_id"].startswith("n-5eed")}
+        self.assertEqual(sorted(x["status"] for x in sessions.values()), ["unknown", "waiting", "working"])
+        self.assertIn("n-5eed00000002", live["attention"])
+        # the working session is the executor of one flow, and the live view says it is there
+        bound = [f for f in flow_list if f["roles"]["executor"].get("session_id") == "n-5eed00000001"]
+        self.assertEqual([f["task_title"] for f in bound], ["更新安裝說明"])
+        self.assertEqual(bound[0]["executor_live"]["state"], "working")
+        names = {p["id"] for p in profiles}
+        self.assertTrue({CLAUDE_PROFILE, CODEX_PROFILE, "demo-ghost-role"} <= names)
+        loadout = self.api("/api/agent-profiles/demo-ghost-role/loadout")
+        self.assertTrue(any(i["state"] == "not_in_index" for i in loadout["skills"]["items"]))
+        self.assertTrue(loadout["tools"]["known"])
+
+    def test_the_crowded_office(self):
+        live, flow_list, profiles = self.office("stress")
+        stations = {}
+        for f in flow_list:
+            stations.setdefault(self.STATION.get(f["phase"]["key"], "board"), []).append(f)
+        for st in ("board", "build", "review", "gate"):
+            self.assertGreater(len(stations[st]), 3, st)
+        self.assertEqual(len([x for x in live["sessions"] if x["terminal_id"].startswith("n-5eed")]), 10)
+        self.assertGreater(len(profiles), 24)
 
 
 class CheckCodexBlocked(Check):
@@ -454,6 +588,30 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] Break the flows file (or stop the console's runtime) and look: 「讀不到流程：…」 in both blocks, never
       「沒有任務」; with the runtime away and no flow card, 「…無法判斷有沒有 Agent 在等你」.
   [ ] 390 px wide: one column, no sideways scroll, every card still one tap; light and dark both readable.
+
+== 6. 辦公室 (#/office; start with VBEAR_QA_OFFICE=1 for the full office, =stress for the crowded one)
+  [ ] 工作站: four stations (計畫板, 實作區, 審查室, 合併關卡). A team is the executor and the reviewer(s) drawn as
+      characters with the task name, the phase's own words and 「任務在：<站>」; no character has its own
+      status bubble. A team that waits for you has a red 「輪到你」 badge with words and its station has a thick
+      frame; nothing else is red. With =stress every station shows 3 and 「這站還有 N 隊 →」.
+  [ ] 辦公桌: one desk per live session (working, waiting, unknown); the bubble above always has words
+      (「工作中」「等你回覆」「? 狀態未知」). The desk of the working session names its flow:
+      「流程：更新安裝說明（任務在：實作區）」. A session that waits for you has the red badge.
+  [ ] 休息室: the roster of profiles (「名冊：角色設定，不代表正在出勤」), at most 24, then 「還有 N 個角色 →」.
+  [ ] Click a profile: the panel shows 武器 (Claude: Bash 可用, Edit／Write 鎖住; Codex: 未知 with the reason),
+      防具 (solid frame = enforced or partly, dashed = intent only / not limited, each with its words) and 技能卡
+      (the skill the index cannot find says 「目前索引找不到此技能（索引時間 …）」, never 「已消失」). It reads the loadout
+      once. 換種族 changes only the roster's picture and survives a reload.
+  [ ] Click a team: its task, the reason in the phase's words, the members (name, family, model), and the line that
+      flow roles have no gear. Click a desk: 「未知：不是用 Profile 啟動的，VBear 看不到它的裝備」 and 開啟終端.
+  [ ] The four counts (輪到你 / 工作中 / 狀態未知 / 名冊) at the top and at the foot; a click selects the first one
+      and moves the focus to it; with none it says so.
+  [ ] Keyboard: Tab goes through every team and character (one stop each), Enter opens the panel, Esc closes it and
+      the focus returns to the character; the jump links move the focus to the area headings.
+  [ ] Wait 5 seconds with a character selected: the selection and the focus stay. Stop the session (or delete the
+      flow): the panel returns with 「剛才選的…已不在辦公室」 and the focus is on an area heading, not on the page.
+  [ ] 390 px: no scene, a list (輪到你 → the stations → 辦公桌 → 休息室), a row opens a full panel with 返回.
+  [ ] prefers-reduced-motion: the 「輪到你」 badge does not fade in. Light and dark are both readable.
 """
 
 
