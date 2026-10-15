@@ -21,7 +21,8 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       one, three synthetic live sessions (working, waiting for you, state unknown; the working one is the
       executor of a flow, so its desk plate names it) and three profiles (Claude, Codex, and one whose chosen skill
       the index cannot find). VBEAR_QA_OFFICE=stress: every station full with a "more" link (20 flows), ten
-      sessions and 31 profiles (the lounge shows 24 and links to the rest).
+      sessions and 33 profiles (the environment's two, the one whose skill is missing, and thirty more; the lounge
+      shows 24 and links to the rest).
       Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
       the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
