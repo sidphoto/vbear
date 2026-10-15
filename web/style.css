@@ -1062,6 +1062,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .office-weapon-off { border-style: dashed; }
 .office-skill-list { margin: 0; padding-left: 18px; }
 .office-species { display: flex; align-items: center; gap: 8px; }
+.office-species select { min-height: 44px; min-width: 44px; padding: 4px 8px; }
 .office-start { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .office-start .btn { min-height: 44px; }
 .office-list { display: flex; flex-direction: column; gap: 18px; margin-top: 10px; }

@@ -1759,7 +1759,7 @@ function officeIndex(model) {
   const idx = new Map();
   for (const st of OFFICE_STATIONS) {
     for (const t of model.stations[st].teams) {
-      idx.set(t.key, { kind: "flow", name: t.taskMissing ? "（任務卡已刪除或無法讀取）" : t.title, section: "stations" });
+      idx.set(t.key, { kind: "flow", name: t.taskMissing ? "（任務卡已刪除或無法讀取）" : t.title, section: "stations", station: st });
     }
   }
   for (const d of model.desks) idx.set(d.key, { kind: "session", name: d.name, section: "desks" });
@@ -1987,7 +1987,8 @@ function officePanelContent(m, S, handlers) {
   }
   const p = m.lounge.items.find((x) => x.key === key);
   if (!p) return [close];
-  const species = el("select", { "aria-label": "換種族", on: { change: (e) => handlers.species(p.id, e.target.value) } },
+  const species = el("select", { "aria-label": "換種族", "data-office-species": "1",
+    on: { change: (e) => handlers.species(p.id, e.target.value) } },
     el("option", { value: "" , selected: p.overridden ? null : "selected" }, `依工具（${OFFICE_SPECIES_LABEL[speciesFor({ tool: p.tool })]}）`),
     OFFICE_SPECIES.map((sp) => el("option", { value: sp, selected: p.overridden && p.species === sp ? "selected" : null },
       OFFICE_SPECIES_LABEL[sp])));
@@ -2051,7 +2052,8 @@ function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
     el("section", { class: "office-section", "data-office-section": "lounge" },
       el("h2", { id: "office-lounge", tabindex: "-1" }, "休息室"),
       el("p", { class: "small muted" }, "名冊：角色設定，不代表正在出勤。"),
-      el("button", { type: "button", class: "btn small office-reload", on: { click: () => S.reloadRoster() } }, "重新整理名冊"),
+      el("button", { type: "button", class: "btn small office-reload", "data-office-reload": "1",
+        on: { click: () => S.reloadRoster() } }, "重新整理名冊"),
       loungeBody,
       m.lounge.more ? el("a", { class: "btn small office-more", href: "#/team" }, `還有 ${m.lounge.more} 個角色 →`) : null),
   ];
@@ -2125,7 +2127,7 @@ async function viewOffice() {
   const [, profilesData] = await Promise.all([loadFlows(), readProfiles()]);
   if (token !== seq) return;
   const main = claim(token);
-  const S = { key: "", name: "", notice: "", loadout: null, profiles: profilesData, model: null, shownKey: "", mobile: officeIsMobile() };
+  const S = { key: "", name: "", station: "", notice: "", loadout: null, profiles: profilesData, model: null, shownKey: "", mobile: officeIsMobile() };
   const fresh = new Set();
   const statusLine = el("p", { class: "small muted office-status", role: "status", "aria-live": "polite" });
   const root = el("div", { class: "office" });
@@ -2134,7 +2136,7 @@ async function viewOffice() {
   const select = (key) => {
     const idx = officeIndex(S.model);
     if (!idx.has(key)) return;
-    S.key = key; S.name = idx.get(key).name; S.notice = ""; statusLine.textContent = "";
+    S.key = key; S.name = idx.get(key).name; S.station = idx.get(key).station || ""; S.notice = ""; statusLine.textContent = "";
     if (key.startsWith("profile:")) {
       const id = key.slice("profile:".length);
       if (!(S.loadout && S.loadout.key === key)) {
@@ -2150,19 +2152,19 @@ async function viewOffice() {
         });
       }
     } else S.loadout = null;
-    render({ focusKey: key, panelFocus: true });
+    render({ focusSpec: officeKeySpec(key), panelFocus: true });
   };
   S.select = select;
   const closePanel = () => {
     const was = S.key;
-    S.key = ""; S.name = ""; S.loadout = null; S.notice = "";
-    render({ focusKey: was, fallbackHeading: true });
+    S.key = ""; S.name = ""; S.station = ""; S.loadout = null; S.notice = "";
+    render({ focusSpec: officeKeySpec(was) });
   };
   const setSpecies = (id, value) => {
     try { store.set(OFFICE_SPECIES_KEY + id, OFFICE_SPECIES.includes(value) ? value : null); } catch (_) { /* optional */ }
     S.model = computeModel();
     S.shownKey = officeKey(S.model);
-    render({ focusKey: `profile:${id}` });
+    render({ focusSpec: officeKeySpec(`profile:${id}`) });
   };
   const pick = (kind) => {
     const m = S.model;
@@ -2226,11 +2228,13 @@ async function viewOffice() {
     }
     fresh.clear();
     setKids(root, head, body);
-    if (opts && opts.focusKey) {
-      const target = officeFindByKey(root, opts.focusKey);
-      if (target) target.focus();
-      else if (opts.fallbackHeading || opts.focusSection) officeFocusHeading(root, opts.focusSection || officeSectionOfKey(opts.focusKey), S.mobile);
-    } else if (opts && opts.focusSection) officeFocusHeading(root, opts.focusSection, S.mobile);
+    // the focus: back on the control it was on; when that control is gone, on the heading of its area
+    // (never left on a removed node, never on the body)
+    const o = opts || {};
+    if (!(o.focusSpec && officeRestoreFocus(root, o.focusSpec))) {
+      if (o.focusSection) officeFocusHeading(root, o.focusSection, S.mobile, o.focusStation);
+      else if (o.focusSpec && o.focusSpec.attr === "data-office-key") officeFocusHeading(root, officeSectionOfKey(o.focusSpec.val), S.mobile);
+    }
     if (opts && opts.panelFocus && S.mobile && S.key) {
       const title = document.getElementById("office-panel-title");
       if (title && title.focus) title.focus();
@@ -2238,25 +2242,27 @@ async function viewOffice() {
   }
   function repaint(m, key) {
     const active = document.activeElement;
-    const activeKey = active && active.getAttribute && officeInside(root, active) ? active.getAttribute("data-office-key") : null;
+    const spec = officeFocusSpec(root, active);
+    const inside = !!(active && officeInside(root, active));
     S.model = m;
     S.shownKey = key;
-    let focusKey = activeKey || "";
+    let focusSpec = spec;
     let focusSection = "";
+    let focusStation = "";
     if (S.key) {
+      const prev = S.key;
       const r = restoreSelection({ key: S.key, name: S.name }, m);
       if (r.kept) { S.name = officeIndex(m).get(S.key).name; }
       else {
-        S.key = ""; S.name = ""; S.loadout = null; S.notice = r.message;
-        if (focusKey) { focusKey = ""; focusSection = r.focusSection; }
+        const station = S.station;
+        S.key = ""; S.name = ""; S.station = ""; S.loadout = null; S.notice = r.message;
+        // the focus was on the selection, in its panel, or on something that went away with it: the area's heading
+        const tied = inside && (!spec || spec.panel || (spec.attr === "data-office-key" && spec.val === prev));
+        if (tied) { focusSpec = null; focusSection = r.focusSection; focusStation = station; }
       }
     }
-    render({ focusKey, focusSection });
-    if (!focusKey && !focusSection && active && active.getAttribute && active.getAttribute("data-office-key")) {
-      officeFocusHeading(root, officeSectionOfKey(active.getAttribute("data-office-key")), S.mobile);
-    }
+    render({ focusSpec, focusSection, focusStation });
   }
-
   S.model = computeModel();
   S.shownKey = officeKey(S.model);
   root.addEventListener("keydown", (e) => {
@@ -2301,15 +2307,42 @@ function officeInside(root, node) {
   for (let n = node; n; n = n.parentNode) if (n === root) return true;
   return false;
 }
-function officeFindByKey(root, key) {
-  return Array.from(root.querySelectorAll("[data-office-key]")).find((n) => n.getAttribute("data-office-key") === key) || null;
+const OFFICE_FOCUS_ATTRS = ["data-office-key", "data-office-count", "data-office-jump", "data-office-close",
+  "data-office-reload", "data-office-species"];
+function officeKeySpec(key) { return { attr: "data-office-key", val: key, ordinal: 0, panel: false }; }
+function officeAll(root, attr) { return Array.from(root.querySelectorAll(`[${attr}]`)); }
+// What the focus is on, as something that can be found again after a repaint (the nodes are new): the
+// attribute that names it and its place among those with the same value.
+function officeFocusSpec(root, node) {
+  if (!node || !node.getAttribute || !officeInside(root, node)) return null;
+  const id = node.getAttribute("id");
+  if (id === "office-panel-title") return { attr: "id", val: id, ordinal: 0, panel: true };
+  for (const attr of OFFICE_FOCUS_ATTRS) {
+    const val = node.getAttribute(attr);
+    if (val !== null && val !== undefined) {
+      const same = officeAll(root, attr).filter((n) => n.getAttribute(attr) === val);
+      return { attr, val, ordinal: Math.max(0, same.indexOf(node)),
+        panel: attr === "data-office-close" || attr === "data-office-species" };
+    }
+  }
+  if (id && node.getAttribute("tabindex") === "-1") return { attr: "id", val: id, ordinal: 0, panel: false };
+  return null;
+}
+function officeRestoreFocus(root, spec) {
+  let list;
+  if (spec.attr === "id") { const n = document.getElementById(spec.val); list = n ? [n] : []; }
+  else list = officeAll(root, spec.attr).filter((n) => n.getAttribute(spec.attr) === spec.val);
+  const target = list[Math.min(spec.ordinal || 0, list.length - 1)];
+  if (target && target.focus) { target.focus(); return true; }
+  return false;
 }
 function officeSectionOfKey(key) {
   const kind = String(key).split(":")[0];
   return kind === "flow" ? "stations" : kind === "session" ? "desks" : "lounge";
 }
-function officeFocusHeading(root, section, mobile) {
-  const ids = mobile ? { stations: "office-station-board", desks: "office-desks", lounge: "office-lounge" }
+function officeFocusHeading(root, section, mobile, station) {
+  const ids = mobile ? { stations: `office-station-${OFFICE_STATIONS.includes(station) ? station : "board"}`,
+    desks: "office-desks", lounge: "office-lounge" }
     : { stations: "office-stations", desks: "office-desks", lounge: "office-lounge" };
   const heading = document.getElementById(ids[section] || ids.stations);
   if (heading && heading.focus) heading.focus();

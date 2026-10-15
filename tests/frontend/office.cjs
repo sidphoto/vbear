@@ -754,6 +754,98 @@ test("a selected session that ended: the panel goes back, says what was there, a
   assert.strictEqual(active.getAttribute("tabindex"), "-1");
 });
 
+test("the selection is gone while the focus is in its panel: the focus goes to that kind's own heading, exactly", async () => {
+  // desktop: the focus on the panel's close button, then on its title
+  for (const where of ["close", "title"]) {
+    setPage({ live: live({ sessions: [session("t-1"), session("t-2")] }) });
+    const main = await open();
+    byKey(main, "session:t-1").click();
+    await settle();
+    const target = where === "close" ? panel(main).find((n) => n.getAttribute && n.getAttribute("data-office-close") === "1")
+      : panel(main).find((n) => n.getAttribute && n.getAttribute("id") === "office-panel-title");
+    target.focus();
+    assert.strictEqual(global.document.activeElement, target);
+    page.live = live({ sessions: [session("t-2")] });
+    await refresh();
+    const active = global.document.activeElement;
+    assert.strictEqual(active.getAttribute("id"), "office-desks", `from the ${where}`);
+    assert.strictEqual(active.getAttribute("tabindex"), "-1");
+    assert(text(panel(main)).includes("已不在辦公室"));
+  }
+  // a flow: the heading of the stations; a profile: the lounge
+  const f = flow("implementing");
+  setPage({ flows: flowsOf([f]), profiles: profilesOf([profile("a", "claude")]) });
+  let main = await open();
+  byKey(main, `flow:${f.id}`).click();
+  await settle();
+  panel(main).find((n) => n.getAttribute && n.getAttribute("data-office-close") === "1").focus();
+  page.flows = flowsOf([]);
+  await refresh();
+  assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-stations");
+  setPage({ profiles: profilesOf([profile("a", "claude"), profile("b", "codex")]) });
+  main = await open();
+  byKey(main, "profile:a").click();
+  await settle();
+  const sel = panel(main).find((n) => n.tag === "select");
+  sel.focus();
+  page.profiles = profilesOf([profile("b", "codex")]);
+  const reload = main.find((n) => n.getAttribute && n.getAttribute("data-office-reload") === "1");
+  reload.click();
+  await settle();
+  assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-lounge");
+  // focus on something that is not tied to the selection stays where it was (a count button)
+  setPage({ live: live({ sessions: [session("t-1"), session("t-2")] }) });
+  main = await open();
+  byKey(main, "session:t-1").click();
+  await settle();
+  const count = byClass(main, "office-count").find((n) => n.getAttribute("data-office-count") === "working");
+  count.focus();
+  page.live = live({ sessions: [session("t-2")] });
+  await refresh();
+  const again = global.document.activeElement;
+  assert.strictEqual(again.getAttribute("data-office-count"), "working", "a control that survives keeps the focus");
+});
+
+test("on a phone, the focus goes to the heading of its area when the selection is gone", async () => {
+  mobile = true;
+  try {
+    const f = flow("implementing");
+    setPage({ flows: flowsOf([f]), live: live({ sessions: [session("t-1")] }) });
+    let main = await open();
+    byKey(main, `flow:${f.id}`).click();
+    await settle();
+    assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-panel-title");
+    page.flows = flowsOf([]);
+    await refresh();
+    assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-station-build");
+    // a session: the desks
+    main = await open();
+    byKey(main, "session:t-1").click();
+    await settle();
+    assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-panel-title");
+    page.live = live({ sessions: [] });
+    await refresh();
+    assert.strictEqual(global.document.activeElement.getAttribute("id"), "office-desks");
+  } finally { mobile = false; }
+});
+
+test("every control of the office has a touch height of 44px, the species selector too", () => {
+  const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
+  const rules = new Map();
+  for (const m of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    for (const sel of m[1].split(",").map((x) => x.trim())) {
+      const h = /min-height:\s*(\d+)px/.exec(m[2]);
+      if (h) rules.set(sel, Math.max(rules.get(sel) || 0, Number(h[1])));
+    }
+  }
+  const mustBe44 = [".office-count", ".office-jump", ".office-team", ".office-char", ".office-row", ".office-more",
+    ".office-close", ".office-go", ".office-species select", ".office-start .btn"];
+  for (const sel of mustBe44) assert((rules.get(sel) || 0) >= 44, `${sel} has min-height >= 44px (${rules.get(sel)})`);
+  // and the page really builds the selector that rule is for
+  const src = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(src.includes('el("label", { class: "office-species" }, "種族 ", species)'));
+});
+
 test("Esc closes the panel and the focus goes back to the character; the close button does the same", async () => {
   setPage({ live: live({ sessions: [session("t-1")] }) });
   const main = await open();
