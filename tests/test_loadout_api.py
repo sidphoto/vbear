@@ -282,6 +282,53 @@ class LoadoutTests(_Helpers, unittest.TestCase):
         self.assertFalse(body["armor"]["applicable"])
         self.assertTrue(any(b["code"] == "tool_not_launchable" for b in body["blockers"]))
 
+    def test_tools_are_the_launch_constants_for_claude_and_unknown_with_a_reason_otherwise(self):
+        # office design 3.1: always an object; the Claude lists are the constants the argv is built from
+        from vbear.runtime import agent_sessions
+        c, port = self.serve(static=_static())
+        self.save(c, model={"tool": "claude", "model_id": ""})
+        _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        tools = body["tools"]
+        self.assertEqual(set(tools), {"known", "allowed", "blocked", "source"})
+        self.assertIs(tools["known"], True)
+        self.assertEqual(tools["allowed"], ["Bash"])
+        self.assertEqual(tools["blocked"], ["Edit", "Write"])
+        self.assertTrue(tools["source"])
+        # the same words as the argv of a launch, not a second copy
+        argv = agent_sessions.claude_argv({"cli_binary": "/x/claude", "settings_path": "/x/s.json"})
+        self.assertEqual(tools["allowed"], argv[argv.index("--tools") + 1].split(","))
+        self.assertEqual(tools["blocked"], argv[argv.index("--disallowedTools") + 1].split(","))
+        with mock.patch.object(agent_sessions, "CLAUDE_TOOLS_ALLOWED", ("Bash", "Grep")):
+            _, changed = _get(port, "/api/agent-profiles/prof-a/loadout")
+            argv2 = agent_sessions.claude_argv({"cli_binary": "/x/claude", "settings_path": "/x/s.json"})
+        self.assertEqual(changed["tools"]["allowed"], ["Bash", "Grep"])
+        self.assertEqual(argv2[argv2.index("--tools") + 1], "Bash,Grep")
+
+    def test_tools_of_other_tools_are_unknown_with_the_constant_reason(self):
+        from vbear import loadout
+        c, port = self.serve(static=_static())
+        self.save(c, model={"tool": "codex", "model_id": ""})
+        _, codex = _get(port, "/api/agent-profiles/prof-a/loadout")
+        self.assertEqual(codex["tools"], {"known": False, "allowed": [], "blocked": [],
+                                          "unknown_reason": loadout.CODEX_NOT_LAUNCHABLE})
+        self.assertEqual(codex["tools"]["unknown_reason"], codex["armor"]["launch_note"])
+        self.save(c, model={"tool": "shared", "model_id": ""})
+        _, shared = _get(port, "/api/agent-profiles/prof-a/loadout")
+        self.assertEqual(shared["tools"], {"known": False, "allowed": [], "blocked": [],
+                                           "unknown_reason": loadout.TOOLS_ONLY_CLAUDE})
+        self.assertEqual(loadout.TOOLS_ONLY_CLAUDE, "VBear 目前只支援用 Profile 啟動 Claude Code")
+        # a Codex role that is launchable on recorded evidence: the tool list is still not recorded, and says so
+        launchable = loadout._tools("codex", False)
+        self.assertEqual(launchable, {"known": False, "allowed": [], "blocked": [],
+                                      "unknown_reason": loadout.TOOLS_CODEX_NOT_RECORDED})
+
+    def test_tools_are_the_only_new_field(self):
+        c, port = self.serve(static=_static())
+        self.save(c)
+        _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        self.assertEqual(set(body), {"ok", "profile", "index", "profession", "skills", "version_status", "tools",
+                                     "armor", "blockers", "blockers_note"})
+
     def snapshot(self):
         """Every file under the state directory: size, mtime and content hash, so that 'nothing changed' is
         a comparison and not a hope."""

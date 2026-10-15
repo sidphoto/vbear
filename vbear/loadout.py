@@ -11,6 +11,7 @@ Profile in them.
 from __future__ import annotations
 
 from . import agent_launch
+from .runtime import agent_sessions
 
 NOT_KNOWN_AT_PREVIEW = "出發前檢查時才知道"
 INDEX_MISSING = "目前索引找不到此技能"
@@ -23,6 +24,9 @@ CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互�
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
 CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
 SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
+TOOLS_ONLY_CLAUDE = "VBear 目前只支援用 Profile 啟動 Claude Code"
+TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
+TOOLS_SOURCE = "與 VBear 啟動 Claude Code 時傳入的 --tools／--disallowedTools 相同（同一組常數）"
 
 
 def _sourced(value) -> dict:
@@ -181,6 +185,20 @@ def _skills_section(tool: str, codex_not_launchable: bool, items: list) -> dict:
     return out
 
 
+def _tools(tool, codex_not_launchable: bool) -> dict:
+    """The tools a launch of this role offers: always an object. Only a Claude Code launch has a tool set VBear
+    sets itself, and its two lists are the constants the argv is built from (agent_sessions), never text parsed
+    from the armor. Anything else says why it is not known."""
+    if tool == "claude":
+        return {"known": True, "allowed": list(agent_sessions.CLAUDE_TOOLS_ALLOWED),
+                "blocked": list(agent_sessions.CLAUDE_TOOLS_BLOCKED), "source": TOOLS_SOURCE}
+    if tool == "codex":
+        reason = CODEX_NOT_LAUNCHABLE if codex_not_launchable else TOOLS_CODEX_NOT_RECORDED
+    else:
+        reason = TOOLS_ONLY_CLAUDE
+    return {"known": False, "allowed": [], "blocked": [], "unknown_reason": reason}
+
+
 def build(profile: dict, static: dict | None, live: dict | None, verification: dict | None) -> dict:
     """The loadout of one Profile from what is already loaded (see the module note)."""
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
@@ -201,6 +219,7 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
         "profession": _profession(profile, static, tool),
         "skills": _skills_section(tool, codex_not_launchable, [_skill(sid, static, live) for sid in equipped]),
         "version_status": version,
+        "tools": _tools(tool, codex_not_launchable),
         "armor": _armor(tool, version) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),
         "blockers": blockers,
         "blockers_note": "假設你已勾選知悉 commit、並維持關閉網路；實際以出發前檢查為準",

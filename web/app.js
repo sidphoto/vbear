@@ -1319,6 +1319,15 @@ async function viewHome() {
 const BOARD_IN_PROGRESS_MAX = 4;
 let boardShownKey = null;
 
+// Whether a flow is waiting for you: the server's own attention flag (it also covers a stopped automatic run and
+// a stop at the merge gate, whatever the phase), or a stale review in a manual or stopped-automatic flow, where
+// nothing will send it again by itself. One rule for the home board and the office.
+function waitsForYou(f) {
+  if (!f || f.attention === true) return !!f;
+  const a = f.automation;
+  return !!(f.phase && f.phase.key === "review_stale" && (!a || a.mode !== "auto" || a.held));
+}
+
 function boardGroups(live, flowsData) {
   const L = live || {};
   const runtimeAvailable = !!(L.runtime && L.runtime.available);
@@ -1333,12 +1342,6 @@ function boardGroups(live, flowsData) {
   else flows = flowsData.flows.filter((f) => f && typeof f === "object");
   // A finished flow is never on the board, even when the server still marks it as needing attention.
   const open = flows.filter((f) => !(f.phase && f.phase.key === "done"));
-  const waitsForYou = (f) => {
-    if (f.attention === true) return true;
-    // Nothing re-sends a stale review by itself when the mode is manual or the automatic run has stopped.
-    const a = f.automation;
-    return !!(f.phase && f.phase.key === "review_stale" && (!a || a.mode !== "auto" || a.held));
-  };
   const yourTurnFlows = open.filter(waitsForYou);
   const rest = open.filter((f) => !waitsForYou(f));
   return {
@@ -1482,6 +1485,328 @@ function boardSection(g) {
       flowsError(),
       goingBody),
   ];
+}
+
+// ---------- the office (design office v1.3): data and pure functions ----------------------------------------
+// A page that draws what VBear already has: the flows' teams at the station their phase names, the live
+// terminals at a desk, the Agent Profiles in a lounge. Everything here is a pure function of what the page has
+// loaded, so the model, the key that decides a repaint and the selection that survives it can be tested.
+
+const OFFICE_STATIONS = ["board", "build", "review", "gate"];
+const OFFICE_STATION_LABEL = { board: "計畫板", build: "實作區", review: "審查室", gate: "合併關卡" };
+// phase -> station. A phase this table does not know goes to the plan board with its own label; done is not shown.
+const OFFICE_PHASE_STATION = {
+  planning: "board", awaiting_approval: "board",
+  implementing: "build", needs_fix: "build",
+  in_review: "review", review_stale: "review", review_unverified: "review",
+  awaiting_merge: "gate", awaiting_push: "gate",
+};
+const OFFICE_TEAMS_PER_STATION = 3;
+const OFFICE_REVIEWERS_SHOWN = 3;
+const OFFICE_LOUNGE_MAX = 24;
+const OFFICE_BOUND_FLOWS_SHOWN = 2;
+const OFFICE_SPECIES = ["bear", "fox", "robot", "alien"];
+const OFFICE_SPECIES_LABEL = { bear: "熊", fox: "狐", robot: "機械人", alien: "外星人" };
+const OFFICE_FAMILY_SPECIES = { anthropic: "bear", openai: "robot", google: "fox" };
+const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot" };
+// The camp is the maker of the model; its shirt colour is lighter than every species' fur (tested), so a
+// character reads the same whichever species it was given.
+const OFFICE_CAMPS = {
+  anthropic: { label: "Anthropic", shirt: "#f3b07a", badge: "#e0b25c" },
+  openai: { label: "OpenAI", shirt: "#9cc8f5", badge: "#e0b25c" },
+  google: { label: "Google", shirt: "#9be0a8", badge: "#e0b25c" },
+  other: { label: "其他", shirt: "#d0d4d1", badge: "#8c948f" },
+};
+const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai" };
+// 16x16 rows, original art. K outline, E eye, W white, N nose, B bear fur, M muzzle, F fox fur, w fox white,
+// S robot steel, s robot shadow, L robot eye, A antenna (gold), V alien skin, P legs, C shirt, R shirt badge.
+const OFFICE_SPRITES = {
+  bear: ["..KKK......KKK..", ".KBBBK....KBBBK.", ".KBMBKKKKKKBMBK.", "..KBBBBBBBBBBK..",
+    ".KBBBBBBBBBBBBK.", ".KBBEBBBBBBEBBK.", ".KBBEBBBBBBEBBK.", ".KBBBBMMMMBBBBK.",
+    "..KBBBMNNMBBBK..", "...KKBBMMBBKK...", "..KBKCCRRCCKBK..", "..KBKCCCCCCKBK..",
+    "...KKCCCCCCKK...", "....KBBBBBBK....", "....KBBKKBBK....", ".....KK..KK....."],
+  robot: [".......AA.......", ".......KK.......", "....KKKKKKKK....", "...KSSSSSSSSK...",
+    "...KSKKKKKKSK...", "...KSKLKKLKSK...", "...KSKKKKKKSK...", "...KSSssssSSK...",
+    "....KKKKKKKK....", "...KKCCRRCCKK...", "..KSKCCCCCCKSK..", "..KSKCCCCCCKSK..",
+    "...KKCCCCCCKK...", "....KSSSSSSK....", "....KSSKKSSK....", "....KKK..KKK...."],
+  alien: ["......KKKK......", "....KKVVVVKK....", "...KVVVVVVVVK...", "..KVVVVVVVVVVK..",
+    "..KVEEVVVVEEVK..", "..KVEWVVVVWEVK..", "..KVEEVVVVEEVK..", "...KVVVVVVVVK...",
+    "....KVVMMVVK....", "...KKCCRRCCKK...", "..KVKCCCCCCKVK..", "..KVKCCCCCCKVK..",
+    "...KKCCCCCCKK...", "....KPPPPPPK....", "....KPPKKPPK....", ".....KK..KK....."],
+  fox: ["..KK........KK..", "..KFK......KFK..", "..KFFKKKKKKFFK..", "..KFFFFFFFFFFK..",
+    ".KFFFFFFFFFFFFK.", ".KFFEFFFFFFEFFK.", ".KFFEFFFFFFEFFK.", ".KwwwwFNNFwwwwK.",
+    "..KwwwwwwwwwwK..", "...KKCCRRCCKK...", "..KFKCCCCCCKFK..", "..KFKCCCCCCKFK..",
+    "...KKCCCCCCKK...", "....KPPPPPPK....", "....KPPKKPPK....", ".....KK..KK....."],
+};
+const OFFICE_PALETTE = { K: "#0b0f0e", E: "#141a18", W: "#ffffff", N: "#3a2418", B: "#6b4630", M: "#e8c8a0",
+  F: "#b85a1e", w: "#f4efe6", S: "#5f6f7c", s: "#46535e", L: "#7fe0ff", A: "#ffcd00", V: "#3f8f3a", P: "#33436e" };
+
+function officeToolOf(agent) { return agent === "claude" || agent === "codex" ? agent : "other"; }
+
+function stationFor(phaseKey) {
+  if (phaseKey === "done") return null;
+  return OFFICE_PHASE_STATION[phaseKey] || "board";
+}
+
+// An override is accepted only when it is one of the four species the page draws; anything else is ignored.
+function speciesFor(who, override) {
+  if (typeof override === "string" && OFFICE_SPECIES.includes(override)) return override;
+  const w = who || {};
+  if (typeof w.family === "string" && OFFICE_FAMILY_SPECIES[w.family]) return OFFICE_FAMILY_SPECIES[w.family];
+  if (w.family === undefined && typeof w.tool === "string" && OFFICE_TOOL_SPECIES[w.tool]) return OFFICE_TOOL_SPECIES[w.tool];
+  return "alien";
+}
+function campOf(who) {
+  const w = who || {};
+  const key = typeof w.family === "string" ? (OFFICE_CAMPS[w.family] ? w.family : "other")
+    : (OFFICE_TOOL_CAMP[w.tool] || "other");
+  return Object.assign({ key }, OFFICE_CAMPS[key]);
+}
+
+// The box-shadow string of a sprite: one 1x1 shadow per pixel, scaled. Cached per species, colours and scale.
+const officeShadowCache = new Map();
+function spriteShadow(species, palette, scale) {
+  const sp = OFFICE_SPRITES[species] ? species : "alien";
+  const pal = palette || {};
+  const shirt = pal.shirt || OFFICE_CAMPS.other.shirt;
+  const badge = pal.badge || OFFICE_CAMPS.other.badge;
+  const px = Number.isInteger(scale) && scale > 0 && scale <= 12 ? scale : 3;
+  const key = `${sp}|${shirt}|${badge}|${px}`;
+  const hit = officeShadowCache.get(key);
+  if (hit !== undefined) return hit;
+  const colors = Object.assign({}, OFFICE_PALETTE, { C: shirt, R: badge });
+  const out = [];
+  OFFICE_SPRITES[sp].forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const c = colors[row[x]];
+      if (c) out.push(`${x * px}px ${y * px}px 0 0 ${c}`);
+    }
+  });
+  const value = out.join(",");
+  officeShadowCache.set(key, value);
+  return value;
+}
+
+const OFFICE_TOOLS_MISSING = "這份角色卡資料沒有工具欄位（資料來自較舊的版本）";
+// The weapons of a profile: read only from loadout.tools, never from the armor's words.
+function weaponsFrom(loadout) {
+  const t = loadout && typeof loadout === "object" ? loadout.tools : null;
+  if (!t || typeof t !== "object" || typeof t.known !== "boolean") {
+    return { known: false, allowed: [], blocked: [], source: "", reason: OFFICE_TOOLS_MISSING };
+  }
+  const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  if (t.known) {
+    return { known: true, allowed: list(t.allowed), blocked: list(t.blocked),
+      source: typeof t.source === "string" ? t.source : "", reason: "" };
+  }
+  return { known: false, allowed: [], blocked: [], source: "",
+    reason: typeof t.unknown_reason === "string" && t.unknown_reason ? t.unknown_reason : OFFICE_TOOLS_MISSING };
+}
+
+// The chosen skills of a loadout as rows. A skill the index does not have is said so with the index's own
+// time: it is not "gone" (it may be installed somewhere the scan does not look, or removed).
+function officeSkills(loadout) {
+  const sk = loadout && typeof loadout === "object" && loadout.skills && typeof loadout.skills === "object" ? loadout.skills : {};
+  const rows = (Array.isArray(sk.items) ? sk.items : []).filter((x) => x && typeof x === "object").map((x) => {
+    const id = typeof x.skill_id === "string" ? x.skill_id : "";
+    if (x.state === "in_index") {
+      return { id, name: x.invoke_name || x.name || id, state: "in_index", text: "" };
+    }
+    if (x.state === "not_in_index") {
+      const when = Number.isFinite(x.indexed_at) ? `（索引時間 ${fmtTime(x.indexed_at)}）` : "";
+      return { id, name: id, state: "not_in_index", text: `${x.note || "目前索引找不到此技能"}${when}` };
+    }
+    return { id, name: id, state: "index_not_loaded", text: "索引尚未載入，無法確認這項技能" };
+  });
+  return { note: typeof sk.note === "string" ? sk.note : "", rows };
+}
+
+function officeMember(role) {
+  const r = role && typeof role === "object" ? role : {};
+  const family = typeof r.family === "string" ? r.family : "unknown";
+  return { name: typeof r.name === "string" && r.name ? r.name : "未提供", family,
+    familyLabel: typeof r.family_label === "string" ? r.family_label : family,
+    model: typeof r.model === "string" ? r.model : "", species: speciesFor({ family }),
+    camp: campOf({ family }).key };
+}
+
+function officeBubble(status) {
+  if (status === "exited") return "";
+  if (status === "needs-input") return "需要你處理";
+  if (status === "waiting") return "等你回覆";
+  if (status === "working") return "工作中";
+  return "? 狀態未知";
+}
+
+// overrides: { <profileId>: species } already read from storage (see officeOverrides).
+function officeModel(live, flowsData, profilesData, overrides) {
+  const L = live || {};
+  const ov = overrides || {};
+  const runtimeAvailable = !!(L.runtime && L.runtime.available);
+  const sessions = (Array.isArray(L.sessions) ? L.sessions : []).filter((x) => x && typeof x === "object");
+  const attention = new Set(Array.isArray(L.attention) ? L.attention : []);
+  const errors = { flows: "", profiles: "", live: L.error ? String(L.error) : "", runtime: !runtimeAvailable };
+  let flows = [];
+  if (!flowsData) errors.flows = "還沒有讀取到流程";
+  else if (flowsData.error) errors.flows = String(flowsData.error);
+  else if (!Array.isArray(flowsData.flows)) errors.flows = "流程資料的格式無法辨識";
+  else flows = flowsData.flows.filter((f) => f && typeof f === "object");
+  let profiles = [];
+  if (!profilesData) errors.profiles = "還沒有讀取到角色名冊";
+  else if (profilesData.error) errors.profiles = String(profilesData.error);
+  else if (!Array.isArray(profilesData.profiles)) errors.profiles = "角色名冊的格式無法辨識";
+  else profiles = profilesData.profiles.filter((p) => p && typeof p === "object" && typeof p.id === "string");
+
+  // stations: the teams of every open flow; the ones that wait for you are taken first, then the API order
+  const open = flows.filter((f) => !(f.phase && f.phase.key === "done"));
+  const stationOf = (f) => stationFor(f.phase && f.phase.key) || "board";
+  const teamOf = (f) => {
+    const ph = f.phase || {};
+    const a = f.automation || {};
+    const roles = f.roles || {};
+    const reviewers = (Array.isArray(roles.reviewers) ? roles.reviewers : []).map(officeMember);
+    const station = stationOf(f);
+    return {
+      key: `flow:${f.id}`, id: f.id, title: f.task_missing ? "" : (f.task_title || ""), taskMissing: !!f.task_missing,
+      phaseKey: ph.key || "", phaseLabel: ph.label || "階段不明", phaseReason: ph.reason || "",
+      attentionReason: f.attention_reason || "", waits: waitsForYou(f), station, stationLabel: OFFICE_STATION_LABEL[station],
+      automation: { mode: a.mode || "", held: !!a.held, stepLabel: a.step_label || "" },
+      executor: officeMember(roles.executor), reviewers: reviewers.slice(0, OFFICE_REVIEWERS_SHOWN),
+      moreReviewers: Math.max(0, reviewers.length - OFFICE_REVIEWERS_SHOWN),
+      sessionId: roles.executor && typeof roles.executor.session_id === "string" ? roles.executor.session_id : "",
+      live: f.executor_live && typeof f.executor_live === "object" ? f.executor_live : null,
+    };
+  };
+  const allTeams = open.map(teamOf);
+  const stations = {};
+  for (const st of OFFICE_STATIONS) {
+    const here = allTeams.filter((t) => t.station === st);
+    const ordered = [...here.filter((t) => t.waits), ...here.filter((t) => !t.waits)];
+    stations[st] = { label: OFFICE_STATION_LABEL[st], teams: ordered.slice(0, OFFICE_TEAMS_PER_STATION),
+      more: Math.max(0, ordered.length - OFFICE_TEAMS_PER_STATION) };
+  }
+
+  // desks: one per live session; a flow is named on the plate only when its executor is this very row and the
+  // live data that says so is current
+  const boundTo = (x) => allTeams.filter((t) => {
+    if (!t.sessionId || (t.sessionId !== x.pane_id && t.sessionId !== x.terminal_id)) return false;
+    const lv = t.live;
+    if (!lv || lv.state === "stale" || lv.state === "not_loaded") return false;
+    return !(lv.freshness && lv.freshness.state === "invalid");
+  });
+  const projects = Array.isArray(L.projects) ? L.projects : [];
+  const desks = sessions.map((x) => {
+    const tool = officeToolOf(x.agent);
+    const status = typeof x.status === "string" && STATUS[x.status] ? x.status : "unknown";
+    const bound = boundTo(x);
+    const project = projects.find((p) => p.project_id === x.project_id);
+    return {
+      key: `session:${x.terminal_id}`, terminalId: x.terminal_id, paneId: x.pane_id || "", tool,
+      toolLabel: TOOL[x.agent] || x.agent || "未知工具", status, ended: status === "exited",
+      bubble: officeBubble(status), activity: x.activity || null, name: x.role_label || (TOOL[x.agent] || x.agent || "工作階段"),
+      title: x.title || "", projectId: x.project_id || "", project: project ? project.name : "",
+      waits: attention.has(x.terminal_id), species: speciesFor({ tool }), camp: campOf({ tool }).key,
+      bound: bound.slice(0, OFFICE_BOUND_FLOWS_SHOWN).map((t) => ({ id: t.id, title: t.title, taskMissing: t.taskMissing,
+        station: t.station, stationLabel: t.stationLabel })),
+      boundMore: Math.max(0, bound.length - OFFICE_BOUND_FLOWS_SHOWN),
+    };
+  });
+
+  // lounge: the roster of profiles (not attendance)
+  const rosterAll = profiles.map((p) => {
+    const model = p.model && typeof p.model === "object" ? p.model : {};
+    const tool = typeof model.tool === "string" ? model.tool : "";
+    return { key: `profile:${p.id}`, id: p.id, name: typeof p.name === "string" && p.name ? p.name : p.id,
+      tool, toolLabel: TOOL[tool] || tool || "未知工具", modelId: model.model_id || "",
+      species: speciesFor({ tool }, ov[p.id]), overridden: OFFICE_SPECIES.includes(ov[p.id]),
+      camp: campOf({ tool }).key };
+  });
+  const lounge = { items: rosterAll.slice(0, OFFICE_LOUNGE_MAX), more: Math.max(0, rosterAll.length - OFFICE_LOUNGE_MAX),
+    total: rosterAll.length };
+
+  const turnFlows = allTeams.filter((t) => t.waits).length;
+  const turnSessions = desks.filter((d) => d.waits).length;
+  const counts = {
+    turn: turnFlows + turnSessions, turnFlows, turnSessions,
+    working: runtimeAvailable ? desks.filter((d) => d.status === "working").length : null,
+    unknown: runtimeAvailable ? desks.filter((d) => d.status === "unknown").length : null,
+    roster: errors.profiles ? null : rosterAll.length,
+  };
+  const everyoneLoaded = !errors.flows && !errors.profiles && runtimeAvailable;
+  const allEmpty = everyoneLoaded && allTeams.length === 0 && desks.length === 0 && rosterAll.length === 0;
+  return { stations, desks, lounge, counts, errors, allEmpty, runtimeAvailable, teamsTotal: allTeams.length };
+}
+
+// Everything the office shows, so that a refresh repaints only when something visible changed.
+function officeKey(model) {
+  const m = model;
+  const member = (x) => [x.name, x.family, x.familyLabel, x.model, x.species, x.camp];
+  const team = (t) => [t.key, t.title, t.taskMissing, t.phaseKey, t.phaseLabel, t.phaseReason, t.waits, t.attentionReason,
+    t.automation.mode, t.automation.held, t.automation.stepLabel, member(t.executor), t.reviewers.map(member),
+    t.moreReviewers, t.station];
+  const desk = (d) => [d.key, d.paneId, d.tool, d.toolLabel, d.status, d.activity, d.name, d.title, d.projectId, d.project,
+    d.waits, d.species, d.camp, d.bound.map((b) => [b.id, b.title, b.taskMissing, b.station]), d.boundMore];
+  return JSON.stringify({
+    errors: m.errors, runtime: m.runtimeAvailable, counts: m.counts, allEmpty: m.allEmpty,
+    stations: OFFICE_STATIONS.map((st) => [st, m.stations[st].more, m.stations[st].teams.map(team)]),
+    desks: m.desks.map(desk),
+    lounge: [m.lounge.more, m.lounge.total, m.lounge.items.map((p) => [p.key, p.name, p.tool, p.modelId, p.species, p.camp])],
+  });
+}
+
+// All characters and teams of a model by their identity key: { key -> { kind, name, section } }.
+function officeIndex(model) {
+  const idx = new Map();
+  for (const st of OFFICE_STATIONS) {
+    for (const t of model.stations[st].teams) {
+      idx.set(t.key, { kind: "flow", name: t.taskMissing ? "（任務卡已刪除或無法讀取）" : t.title, section: "stations" });
+    }
+  }
+  for (const d of model.desks) idx.set(d.key, { kind: "session", name: d.name, section: "desks" });
+  for (const p of model.lounge.items) idx.set(p.key, { kind: "profile", name: p.name, section: "lounge" });
+  return idx;
+}
+
+// What happens to the selection after a repaint. prev is the key, or { key, name } so the message can name what
+// was there. focusKey is the character to focus; focusSection the heading to focus when the selection is gone
+// (never the body).
+function restoreSelection(prev, model) {
+  const key = typeof prev === "string" ? prev : (prev && prev.key) || "";
+  const prevName = prev && typeof prev === "object" && prev.name ? prev.name : "";
+  if (!key) return { kept: false, key: "", message: "", focusKey: "", focusSection: "" };
+  const idx = officeIndex(model);
+  if (idx.has(key)) return { kept: true, key, message: "", focusKey: key, focusSection: "" };
+  const kind = key.split(":")[0];
+  const section = kind === "flow" ? "stations" : kind === "session" ? "desks" : "lounge";
+  const name = prevName || "角色";
+  return { kept: false, key: "", message: `剛才選的${name}已不在辦公室`, focusKey: "", focusSection: section };
+}
+
+// The phone's list: who waits for you, then the teams by station, then the desks, then the lounge.
+function officeList(model) {
+  const turn = [];
+  for (const st of OFFICE_STATIONS) for (const t of model.stations[st].teams) if (t.waits) turn.push(t.key);
+  for (const d of model.desks) if (d.waits) turn.push(d.key);
+  return [
+    { id: "turn", label: "輪到你", keys: turn },
+    ...OFFICE_STATIONS.map((st) => ({ id: `station-${st}`, label: OFFICE_STATION_LABEL[st],
+      keys: model.stations[st].teams.map((t) => t.key), more: model.stations[st].more })),
+    { id: "desks", label: "辦公桌", keys: model.desks.map((d) => d.key) },
+    { id: "lounge", label: "休息室", keys: model.lounge.items.map((p) => p.key), more: model.lounge.more },
+  ];
+}
+
+const OFFICE_SPECIES_KEY = "office.species.";
+// The species a person gave a profile, read defensively: a failed read or an unknown value is no override.
+function officeOverrides(profiles, storage) {
+  const out = {};
+  for (const p of Array.isArray(profiles) ? profiles : []) {
+    if (!p || typeof p.id !== "string") continue;
+    let v;
+    try { v = storage.get(OFFICE_SPECIES_KEY + p.id, null); } catch (_) { v = null; }
+    if (typeof v === "string" && OFFICE_SPECIES.includes(v)) out[p.id] = v;
+  }
+  return out;
 }
 
 function projectCard(p) {
@@ -6341,6 +6666,23 @@ if (typeof module !== "undefined" && module.exports) {
     flowLiveText,
     flowGateGrid,
     flowTeamSection,
+    waitsForYou,
+    stationFor,
+    speciesFor,
+    campOf,
+    spriteShadow,
+    weaponsFrom,
+    officeSkills,
+    officeModel,
+    officeKey,
+    officeIndex,
+    officeList,
+    officeOverrides,
+    restoreSelection,
+    OFFICE_SPECIES,
+    OFFICE_SPRITES,
+    OFFICE_PALETTE,
+    OFFICE_CAMPS,
     boardGroups,
     boardKey,
     boardKeyContext,

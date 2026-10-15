@@ -165,6 +165,22 @@ def claude_settings(workdir: str, scratch: str, uid: int) -> dict:
     }}
 
 
+# The tools a Claude launch offers (decision D4: Edit and Write are not covered by the Bash sandbox). The argv of
+# both launch shapes is built from these two tuples (read when the argv is built), and the role card's tool list
+# (loadout.py) reads the same tuples, so what the page says is what the argv says. Joined with a comma they are
+# the exact argv values: "Bash" and "Edit,Write".
+CLAUDE_TOOLS_ALLOWED = ("Bash",)
+CLAUDE_TOOLS_BLOCKED = ("Edit", "Write")
+
+
+def _tools_arg() -> str:
+    return ",".join(CLAUDE_TOOLS_ALLOWED)
+
+
+def _disallowed_tools_arg() -> str:
+    return ",".join(CLAUDE_TOOLS_BLOCKED)
+
+
 def stream_settings(workdir: str, scratch: str, uid: int, cli_version: str) -> dict:
     """Design 2.1: the managed sandbox settings plus an ``env`` block that
     pins the API endpoint and provider. ``--settings`` ranks above user and
@@ -191,7 +207,7 @@ def stream_argv(manifest: dict) -> list[str]:
             "--verbose", "--replay-user-messages", "--permission-prompts", "none",
             "--json-schema", schema, "--max-budget-usd", f"{budget:.2f}",
             "--safe-mode", "--settings", manifest["settings_path"], "--permission-mode", "acceptEdits",
-            "--tools", "Bash", "--disallowedTools", "Edit,Write", "--strict-mcp-config",
+            "--tools", _tools_arg(), "--disallowedTools", _disallowed_tools_arg(), "--strict-mcp-config",
             "--session-id", sid, "--model", model]
 
 
@@ -209,8 +225,8 @@ def claude_argv(manifest: dict) -> list[str]:
     """Trusted argv; nothing here comes from an RPC caller. Edit/Write tools are
     not offered (decision D4): they are not covered by the Bash sandbox."""
     argv = [manifest["cli_binary"], "--safe-mode", "--settings", manifest["settings_path"],
-            "--permission-mode", "acceptEdits", "--tools", "Bash",
-            "--disallowedTools", "Edit,Write", "--strict-mcp-config"]
+            "--permission-mode", "acceptEdits", "--tools", _tools_arg(),
+            "--disallowedTools", _disallowed_tools_arg(), "--strict-mcp-config"]
     model_id = manifest.get("model_id")
     if model_id:
         if not isinstance(model_id, str) or not MODEL_ID_RE.match(model_id):

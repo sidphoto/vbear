@@ -101,6 +101,21 @@ class LaunchStateCase(unittest.TestCase):
             "--permission-mode", "acceptEdits", "--tools", "Bash",
             "--disallowedTools", "Edit,Write", "--strict-mcp-config"])
 
+    def test_the_tool_arguments_are_built_from_the_shared_constants(self):
+        # the page's tool list (loadout) and both argv shapes read one pair of constants (office design 3.1)
+        from unittest import mock
+        self.assertEqual((a.CLAUDE_TOOLS_ALLOWED, a.CLAUDE_TOOLS_BLOCKED), (("Bash",), ("Edit", "Write")))
+        m = self.prepare()
+        argv = a.claude_argv(m)
+        self.assertEqual(argv[argv.index("--tools") + 1], "Bash")
+        self.assertEqual(argv[argv.index("--disallowedTools") + 1], "Edit,Write")
+        # changing the constants changes the argv: nothing in the argv is a second copy of the words
+        with mock.patch.object(a, "CLAUDE_TOOLS_ALLOWED", ("Bash", "Grep")), \
+                mock.patch.object(a, "CLAUDE_TOOLS_BLOCKED", ("Edit",)):
+            changed = a.claude_argv(m)
+        self.assertEqual(changed[changed.index("--tools") + 1], "Bash,Grep")
+        self.assertEqual(changed[changed.index("--disallowedTools") + 1], "Edit")
+
     def test_codex_prepare_and_argv_are_pinned_and_workspace_scoped(self):
         m = self.prepare_codex()
         self.assertEqual(m["engine"], "codex")
