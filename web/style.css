@@ -1086,3 +1086,17 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   .office-sprite-working .office-frame-idle { animation: none; visibility: visible; }
   .office-sprite-working .office-frame-working { animation: none; visibility: hidden; }
 }
+
+.office-stage { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.office-stage-toggle { min-height: 44px; align-self: flex-start; }
+.office-stage-container { width: 100%; min-width: 0; }
+.office-stage-container[hidden] { display: none; }
+.office-stage-svg { display: block; width: 100%; max-width: 360px; height: auto; margin: auto; }
+.office-persona-speech { border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-wrap: anywhere; }
+.office-persona-speech p { margin: 6px 0; }
+.office-persona-speech summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.office-stage-working { animation: office-stage-hands .8s steps(1, end) infinite; }
+@keyframes office-stage-hands { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .office-stage-working { animation: none; transform: none; }
+}

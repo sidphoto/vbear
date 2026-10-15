@@ -2113,6 +2113,116 @@ function officeGear(loadoutState) {
   ];
 }
 
+// Screen text is separate from the drawing so its evidence rules are testable.
+function officeStageScreen(target) {
+  const t = target || {};
+  const neutral = { fill: "#27272a", ink: "#a1a1aa" };
+  if ((t.key || "").startsWith("flow:")) return { ...neutral, label: `任務在${t.stationLabel}` };
+  if ((t.key || "").startsWith("profile:")) return { ...neutral, label: "名冊" };
+  if (t.status === "working") return { fill: "#064e3b", ink: "#34d399", label: "◐ 工作中" };
+  if (t.status === "waiting" || t.status === "needs-input") return { fill: "#7f1d1d", ink: "#fca5a5", label: "✳ 輪到你" };
+  return { ...neutral, label: t.status === "exited" ? "已結束" : "? 狀態未知" };
+}
+
+function officeStageSvg(target) {
+  const t = target || {};
+  const member = (t.key || "").startsWith("flow:") ? t.executor : t;
+  const sp = OFFICE_SPECIES.includes(member.species) ? member.species : "alien";
+  const camp = OFFICE_CAMPS[member.camp] || OFFICE_CAMPS.other;
+  const screen = officeStageScreen(t);
+  const working = (t.key || "").startsWith("session:") && t.status === "working";
+  const p = OFFICE_PALETTE;
+  const fur = { bear: p.B, fox: p.F, robot: p.S, alien: p.V }[sp];
+  const make = (tag, attrs, parent, text) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text !== undefined) n.textContent = text;
+    if (parent) parent.append(n);
+    return n;
+  };
+  const svg = make("svg", { class: `office-stage-svg office-stage-${sp}`, viewBox: "0 0 360 240", role: "img",
+    "aria-label": `${OFFICE_SPECIES_LABEL[sp]}，${member.name || "未知名稱"}，${screen.label}`, focusable: "false" });
+  // The character is scaled within the stage, leaving room for a readable monitor.
+  const body = make("g", { transform: "translate(0 -5) scale(1 .9)" }, svg);
+  const shape = (tag, attrs, parent = body) => make(tag, { stroke: p.K, "stroke-width": 4, ...attrs }, parent);
+  shape("rect", { x: 122, y: 135, width: 116, height: 95, rx: sp === "robot" ? 18 : 42, fill: camp.shirt });
+  if (sp === "bear") {
+    for (const x of [122, 238]) {
+      shape("circle", { cx: x, cy: 52, r: 24, fill: fur });
+      shape("circle", { cx: x, cy: 52, r: 12, fill: p.b, stroke: "none" });
+    }
+    shape("rect", { x: 112, y: 45, width: 136, height: 106, rx: 50, fill: fur });
+    shape("path", { d: "M152 153 L180 184 L208 153", fill: "none", stroke: p.W, "stroke-width": 10, "stroke-linejoin": "round" });
+    shape("circle", { cx: 180, cy: 184, r: 7, fill: p.Y });
+    shape("ellipse", { cx: 180, cy: 116, rx: 28, ry: 20, fill: p.b });
+    shape("ellipse", { cx: 180, cy: 108, rx: 9, ry: 6, fill: p.K });
+  } else if (sp === "fox") {
+    shape("polygon", { points: "116,75 104,18 154,50", fill: fur });
+    shape("polygon", { points: "244,75 256,18 206,50", fill: fur });
+    shape("polygon", { points: "119,61 113,32 139,51", fill: p.f, stroke: "none" });
+    shape("polygon", { points: "241,61 247,32 221,51", fill: p.f, stroke: "none" });
+    shape("rect", { x: 114, y: 48, width: 132, height: 98, rx: 46, fill: fur });
+    shape("path", { d: "M114 105 Q145 146 180 146 Q215 146 246 105 Q220 95 180 115 Q140 95 114 105Z", fill: p.f, stroke: "none" });
+    shape("path", { d: "M171 116 L189 116 L180 125Z", fill: p.K });
+  } else if (sp === "robot") {
+    shape("line", { x1: 180, y1: 20, x2: 180, y2: 45 });
+    shape("circle", { cx: 180, cy: 18, r: 9, fill: p.Y });
+    shape("rect", { x: 116, y: 42, width: 128, height: 98, rx: 16, fill: fur });
+    shape("rect", { x: 128, y: 64, width: 104, height: 44, rx: 8, fill: p.K });
+    for (const x of [142, 198]) shape("rect", { x, y: 76, width: 20, height: 18, rx: 3, fill: OFFICE_CAMPS.google.shirt, stroke: "none" });
+    shape("rect", { x: 152, y: 118, width: 56, height: 10, rx: 3, fill: p.s, "stroke-width": 2 });
+    shape("rect", { x: 155, y: 151, width: 50, height: 26, rx: 4, fill: p.K });
+    shape("path", { d: "M163 164h8l4-5 6 10 5-5h10", stroke: camp.badge, fill: "none", "stroke-width": 2 });
+  } else {
+    for (const [x, to] of [[145, 132], [215, 228]]) {
+      shape("line", { x1: x, y1: 50, x2: to, y2: 20 });
+      shape("circle", { cx: to, cy: 18, r: 8, fill: p.Y });
+    }
+    shape("rect", { x: 114, y: 45, width: 132, height: 100, rx: 48, fill: fur });
+    for (const x of [150, 210]) shape("ellipse", { cx: x, cy: 94, rx: 16, ry: 20, fill: p.W });
+    shape("path", { d: "M166 126 Q180 136 194 126", stroke: p.v, fill: "none", "stroke-width": 3 });
+  }
+  if (sp !== "robot") for (const x of [152, 208]) {
+    shape("circle", { cx: x, cy: 92, r: sp === "alien" ? 7 : 9, fill: p.K });
+    shape("circle", { cx: x - 3, cy: 89, r: 3, fill: p.W, stroke: "none" });
+  }
+  if (sp !== "bear") shape("rect", { x: 171, y: 181, width: 18, height: 9, rx: 3, fill: camp.badge, "stroke-width": 2 });
+  const hands = make("g", { class: `office-stage-hands${working ? " office-stage-working" : ""}` }, body);
+  for (const x of [118, 242]) shape("ellipse", { cx: x, cy: 215, rx: 16, ry: 13, fill: fur }, hands);
+  shape("rect", { x: 40, y: 205, width: 280, height: 14, rx: 4, fill: "#5c4033" }, svg);
+  shape("rect", { x: 126, y: 177, width: 108, height: 26, rx: 4, fill: p.s }, svg);
+  shape("path", { d: "M135 187h90 M140 195h80", "stroke-width": 2 }, svg);
+  shape("rect", { x: 104, y: 137, width: 152, height: 51, rx: 6, fill: p.K }, svg);
+  shape("rect", { x: 111, y: 143, width: 138, height: 37, rx: 3, fill: screen.fill, stroke: "none", "data-stage-screen": "1" }, svg);
+  make("text", { x: 180, y: 166, "text-anchor": "middle", fill: screen.ink, "font-size": 13, "font-family": "monospace", "font-weight": "bold" }, svg, screen.label);
+  return svg;
+}
+
+const OFFICE_STAGE_KEY = "office.stage.collapsed";
+function officeStageCollapsed(storage) {
+  try { return storage.get(OFFICE_STAGE_KEY, false) === true; } catch { return false; }
+}
+function officeStage(target, storage = store) {
+  let collapsed = officeStageCollapsed(storage);
+  const content = el("div", { id: "office-stage-container", class: "office-stage-container", hidden: collapsed ? "hidden" : null }, officeStageSvg(target));
+  const button = el("button", { type: "button", class: "btn small office-stage-toggle", "data-office-stage-toggle": "1",
+    "aria-expanded": String(!collapsed), "aria-controls": "office-stage-container", on: { click: () => {
+      collapsed = !collapsed;
+      content.hidden = collapsed;
+      button.setAttribute("aria-expanded", String(!collapsed));
+      button.textContent = collapsed ? "展開角色舞台" : "隱藏角色舞台";
+      try { storage.set(OFFICE_STAGE_KEY, collapsed); } catch { /* optional */ }
+    } } }, collapsed ? "展開角色舞台" : "隱藏角色舞台");
+  return el("section", { class: "office-stage" }, button, content);
+}
+
+function officeSpeech(target) {
+  const speech = personaSpeech(target);
+  return el("section", { class: "office-persona-speech" }, el("h3", null, "角色狀態回報"),
+    el("p", { class: "small muted" }, speech.sourceLabel), el("p", null, speech.line),
+    speech.reason ? el("details", null, el("summary", null, "VBear 的判斷"), el("p", null, speech.reason)) : null);
+}
+
 function officePanelContent(m, S, handlers) {
   const idx = officeIndex(m);
   const key = S.key;
@@ -2135,10 +2245,12 @@ function officePanelContent(m, S, handlers) {
     const t = allOfficeTeams(m).find((x) => x.key === key);
     if (!t) return [close];
     const members = [t.executor, ...t.reviewers];
-    return [close,
+    return [close, officeStage(t),
       head(officeTeamTitle(t), `${officeModeText(t)}・任務在：${t.stationLabel}`, flowPhaseBadge({ key: t.phaseKey, label: t.phaseLabel, reason: t.phaseReason })),
       t.waits ? el("p", { class: "office-turn office-turn-inline" }, el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
+      officeSpeech(t),
       el("p", null, t.attentionReason || t.phaseReason || "沒有說明"),
+      el("p", { class: "small muted" }, "隊伍角色代表流程關卡；即時敲鍵盤動態請見辦公桌出勤角色。"),
       el("h3", null, "隊伍成員"),
       el("ul", { class: "office-members-list" }, members.map((mb, i) => el("li", null,
         officeSprite(mb.species, mb.camp, 2),
@@ -2151,10 +2263,10 @@ function officePanelContent(m, S, handlers) {
   if (kind === "session") {
     const d = m.desks.find((x) => x.key === key);
     if (!d) return [close];
-    return [close,
+    return [close, officeStage(d),
       head(d.name, `${OFFICE_SPECIES_LABEL[d.species]}・${d.toolLabel}・陣營 ${OFFICE_CAMPS[d.camp].label}`, statusBadge(d.status, d.activity)),
       d.waits ? el("p", { class: "office-turn office-turn-inline" }, el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
-      el("p", { class: "small" }, activityBasis(d.activity)),
+      officeSpeech(d),
       officeKv([["標題", d.title || "—"], ["專案", d.project || "—"], ["終端", d.paneId || d.terminalId]]),
       d.bound.length ? el("div", null, el("h3", null, "綁定的流程"), el("ul", null, d.bound.map((b) => el("li", null,
         `${b.taskMissing ? "（任務卡已刪除或無法讀取）" : b.title}（任務在：${b.stationLabel}）`)))) : null,
@@ -2170,10 +2282,11 @@ function officePanelContent(m, S, handlers) {
     el("option", { value: "" , selected: p.overridden ? null : "selected" }, `依工具（${OFFICE_SPECIES_LABEL[speciesFor({ tool: p.tool })]}）`),
     OFFICE_SPECIES.map((sp) => el("option", { value: sp, selected: p.overridden && p.species === sp ? "selected" : null },
       OFFICE_SPECIES_LABEL[sp])));
-  return [close,
+  return [close, officeStage(p),
     head(p.name, `${OFFICE_SPECIES_LABEL[p.species]}・${p.toolLabel}${p.modelId ? "・" + p.modelId : ""}・陣營 ${OFFICE_CAMPS[p.camp].label}`,
       badge("名冊", "b-mute", "這是角色設定，不代表正在出勤")),
     el("p", { class: "small" }, "名冊：這是角色設定，不代表正在出勤。"),
+    el("p", { class: "small muted" }, personaSpeech(p).line),
     el("label", { class: "office-species" }, "種族 ", species),
     el("p", { class: "small muted" }, "只換名冊上的外觀；出勤的終端與流程角色依工具或模型家族顯示。"),
     officeGear(S.loadout && S.loadout.key === key ? S.loadout : null),
@@ -2486,7 +2599,7 @@ function officeInside(root, node) {
   return false;
 }
 const OFFICE_FOCUS_ATTRS = ["data-office-key", "data-office-count", "data-office-jump", "data-office-close",
-  "data-office-reload", "data-office-species"];
+  "data-office-reload", "data-office-species", "data-office-stage-toggle"];
 function officeKeySpec(key) { return { attr: "data-office-key", val: key, ordinal: 0, panel: false }; }
 function officeAll(root, attr) { return Array.from(root.querySelectorAll(`[${attr}]`)); }
 // What the focus is on, as something that can be found again after a repaint (the nodes are new): the
@@ -2500,7 +2613,7 @@ function officeFocusSpec(root, node) {
     if (val !== null && val !== undefined) {
       const same = officeAll(root, attr).filter((n) => n.getAttribute(attr) === val);
       return { attr, val, ordinal: Math.max(0, same.indexOf(node)),
-        panel: attr === "data-office-close" || attr === "data-office-species" };
+        panel: attr === "data-office-close" || attr === "data-office-species" || attr === "data-office-stage-toggle" };
     }
   }
   if (id && node.getAttribute("tabindex") === "-1") return { attr: "id", val: id, ordinal: 0, panel: false };
@@ -7403,6 +7516,11 @@ if (typeof module !== "undefined" && module.exports) {
     OFFICE_SPRITES,
     OFFICE_SPRITES_WORKING,
     personaSpeech,
+    officeStageScreen,
+    officeStageSvg,
+    officeStage,
+    officeStageCollapsed,
+    officePanelContent,
     officeSprite,
     officeDeskButton,
     officeProfileButton,

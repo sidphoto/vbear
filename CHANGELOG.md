@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Embodied office characters.** New supplied pixel art and camp colors, two-frame typing only for working
+  desk sessions, and reduced-motion support. Panels add fixed persona lines with evidence labels and expandable
+  reasons, plus a responsive SVG character stage with a status monitor and a locally saved collapse preference.
+  Team and roster characters remain static; their monitors describe task location and roster membership.
+  Waiting lines distinguish terminal-title and background-stream evidence; review lines describe the recorded
+  phase without claiming that a review process is running.
+
 - **A pixel office, `#/office`.** A new page after 冒險者大廳 in the menu. Four workstations (計畫板, 實作區,
   審查室, 合併關卡) hold the flows' teams by their phase (at most 3 per station, then 「這站還有 N 隊」; a team that
   waits for you is taken first); each live terminal sits at a desk with its state in words over the character

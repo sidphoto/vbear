@@ -57,6 +57,12 @@ The **pixel office** (demo data), `#/office`: teams stand at the station their t
 「輪到你」 badge waits for you, each live terminal sits at a desk with its state in words, and the lounge holds the
 saved profiles. The red is used for nothing else.
 
+Only desk characters with a working status alternate between two typing frames. Teams and roster characters
+stay still; the operating system's reduced-motion preference disables the animation. Panels show fixed persona
+lines with evidence labels and expandable reasons, plus a collapsible SVG character stage. The monitor uses
+words and color for attendance; teams show their task's station and profiles show the roster. The browser saves
+the stage collapse preference locally. The screenshots above predate the embodied upgrade.
+
 <img src="docs/images/office-gear.png" alt="A profile's panel in the office: species choice, weapons (Bash available, Edit and Write locked), armor with solid and dashed frames, skill cards" width="392">
 
 A profile's **panel** (demo data): its weapons, its armor (a solid frame is enforced or partly enforced, a dashed one is

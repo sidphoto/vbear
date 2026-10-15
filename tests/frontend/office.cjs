@@ -1109,6 +1109,109 @@ test("persona lines and labels follow the corrected evidence table exactly", () 
   assert.strictEqual(app.personaSpeech({ key: "profile:test" }).line, "名冊角色不在出勤，沒有即時狀態");
 });
 
+test("stage screens keep session status separate from task location and roster membership", () => {
+  const expected = {
+    working: ["#064e3b", "#34d399", "◐ 工作中"],
+    waiting: ["#7f1d1d", "#fca5a5", "✳ 輪到你"],
+    "needs-input": ["#7f1d1d", "#fca5a5", "✳ 輪到你"],
+    exited: ["#27272a", "#a1a1aa", "已結束"],
+    unknown: ["#27272a", "#a1a1aa", "? 狀態未知"],
+  };
+  const lum = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
+    .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+  for (const [status, [fill, ink, label]] of Object.entries(expected)) {
+    assert.deepStrictEqual(app.officeStageScreen({ key: "session:s", status }), { fill, ink, label });
+    assert((lum(ink) + .05) / (lum(fill) + .05) >= 4.5);
+    for (const species of app.OFFICE_SPECIES) {
+      const target = { key: "session:s", status, species, camp: "openai", name: "<img src=x>" };
+      const svg = app.officeStageSvg(target);
+      assert.strictEqual(svg.tag, "svg");
+      assert.strictEqual(svg.getAttribute("role"), "img");
+      assert(svg.getAttribute("aria-label").includes("<img src=x>"));
+      assert(svg.getAttribute("aria-label").includes(label));
+      assert.strictEqual(svg.findAll((n) => (n.getAttribute("class") || "").split(/\s+/).includes("office-stage-working")).length, status === "working" ? 1 : 0);
+      assert.strictEqual(svg.findAll((n) => n.getAttribute && n.getAttribute("data-stage-screen") === "1")[0].getAttribute("fill"), fill);
+      assert(text(svg).includes(label));
+      assert.strictEqual(svg.findAll((n) => ["image", "script", "foreignObject"].includes(n.tag)).length, 0);
+    }
+  }
+  for (const key of ["flow:f", "profile:p"]) {
+    const target = { key, status: "working", waits: true, stationLabel: "實作區", species: "fox", camp: "google",
+      executor: { species: "bear", camp: "anthropic", name: "執行者" } };
+    const screen = app.officeStageScreen(target);
+    assert.strictEqual(screen.fill, "#27272a");
+    assert.strictEqual(screen.label, key.startsWith("flow:") ? "任務在實作區" : "名冊");
+    assert.strictEqual(app.officeStageSvg(target).findAll((n) => (n.getAttribute("class") || "").split(/\s+/).includes("office-stage-working")).length, 0);
+  }
+});
+
+test("stage collapse is accessible, persists, and storage failure defaults to expanded", () => {
+  let saved = false;
+  const storage = { get: (key, fallback) => key === "office.stage.collapsed" ? saved : fallback,
+    set: (key, value) => { assert.strictEqual(key, "office.stage.collapsed"); saved = value; } };
+  const t = { key: "profile:p", species: "bear", camp: "anthropic", name: "角色" };
+  const stage = app.officeStage(t, storage);
+  const button = byClass(stage, "office-stage-toggle")[0];
+  const container = byClass(stage, "office-stage-container")[0];
+  assert.strictEqual(button.getAttribute("aria-controls"), container.id);
+  assert.strictEqual(button.getAttribute("aria-expanded"), "true");
+  assert.strictEqual(button.tag, "button");
+  button.dispatch("click");
+  assert.strictEqual(button.getAttribute("aria-expanded"), "false");
+  assert.strictEqual(container.hidden, true);
+  assert.strictEqual(text(button), "展開角色舞台");
+  assert.strictEqual(saved, true);
+  assert.strictEqual(byClass(app.officeStage(t, storage), "office-stage-toggle")[0].getAttribute("aria-expanded"), "false");
+  button.dispatch("click");
+  assert.strictEqual(container.hidden, false);
+  assert.strictEqual(saved, false);
+  const blocked = { get() { throw Error("blocked"); }, set() { throw Error("blocked"); } };
+  assert.strictEqual(app.officeStageCollapsed(blocked), false);
+  const blockedStage = app.officeStage(t, blocked);
+  const blockedButton = byClass(blockedStage, "office-stage-toggle")[0];
+  assert.strictEqual(blockedButton.getAttribute("aria-expanded"), "true");
+  assert.doesNotThrow(() => blockedButton.dispatch("click"));
+  for (const bad of [null, "true", 1, {}, false]) assert.strictEqual(app.officeStageCollapsed({ get: () => bad }), false);
+  const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
+  assert(css.includes(".office-stage-container[hidden] { display: none; }"));
+  assert(css.includes("width: 100%; max-width: 360px; height: auto"));
+  assert(/@media \(prefers-reduced-motion: reduce\)\s*{\s*\.office-stage-working { animation: none; transform: none; }/.test(css));
+  const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));
+});
+
+test("persona and stage integrate into panels and collapse focus survives refresh", async () => {
+  global.localStorage._store = {};
+  const f = flow("in_review", { automation: { mode: "auto", held: true } });
+  setPage({ flows: flowsOf([f]), profiles: profilesOf([profile("stage", "codex")]),
+    live: live({ sessions: [session("stage", { status: "waiting", activity: { decided_by: "claude-stream", reason: "<原始原因>" } })] }) });
+  const main = await open();
+  byKey(main, "session:stage").click();
+  await settle();
+  assert(text(panel(main)).includes("這一輪背景派工已結束，等待下一則任務。"));
+  assert(text(panel(main)).includes("<原始原因>"));
+  const button = byClass(panel(main), "office-stage-toggle")[0];
+  button.click();
+  button.focus();
+  assert.strictEqual(button.getAttribute("aria-expanded"), "false");
+  page.live.sessions[0].activity.reason = "更新原因";
+  await refresh();
+  const next = byClass(panel(main), "office-stage-toggle")[0];
+  assert.strictEqual(next.getAttribute("aria-expanded"), "false");
+  assert.strictEqual(global.document.activeElement, next);
+  assert(text(panel(main)).includes("更新原因"));
+  byKey(main, "flow:" + f.id).click();
+  await settle();
+  assert(text(panel(main)).includes("任務位於審查階段；自動模式已設定，不代表審查程序正在執行。"));
+  assert(text(panel(main)).includes("任務在審查室"));
+  byKey(main, "profile:stage").click();
+  await settle();
+  assert(text(panel(main)).includes("名冊角色不在出勤，沒有即時狀態"));
+  assert.strictEqual(byClass(panel(main), "office-persona-speech").length, 0);
+  global.localStorage._store = {};
+});
+
 // ---- run ------------------------------------------------------------------------------------------------------
 
 (async () => {
