@@ -1080,7 +1080,7 @@ test("persona lines and labels follow the corrected evidence table exactly", () 
       { sourceLabel, line, reason: "原文 <test>" });
   }
   for (const tool of ["claude", "codex", "other"]) {
-    for (const status of ["unknown", "needs-input", "working", "waiting"]) {
+    for (const status of ["unknown"]) {
       for (const decided_by of [null, "unrecognized"]) {
         const r = app.personaSpeech({ tool, status, activity: { decided_by } });
         assert.strictEqual(r.sourceLabel, "依據：沒有可採用的證據");
@@ -1107,6 +1107,41 @@ test("persona lines and labels follow the corrected evidence table exactly", () 
       "任務目前在計畫板：原文 <test>");
   }
   assert.strictEqual(app.personaSpeech({ key: "profile:test" }).line, "名冊角色不在出勤，沒有即時狀態");
+});
+
+test("every session status stays consistent across persona, badge and screen for every evidence source", () => {
+  const neutral = { working: "工作中", waiting: "等你回覆", "needs-input": "需要你處理" };
+  const category = {
+    working: /工作中|終端機裡忙|正在跑自動派工/,
+    waiting: /等你回覆|停下來等你|等待下一則任務/,
+    "needs-input": /需要你處理/,
+    exited: /終端已經結束/,
+    unknown: /狀態未知/,
+  };
+  for (const agent of ["claude", "codex", "other"]) {
+    for (const status of Object.keys(category)) {
+      for (const decided_by of ["claude-title", "claude-stream", null, "unrecognized", undefined]) {
+        for (const activity of [undefined, null, { decided_by, reason: "原始原因" }]) {
+          const m = model(live({ sessions: [session("matrix", { agent, status, title: "合成終端", activity })] }));
+          const d = m.desks[0];
+          const r = app.personaSpeech(d);
+          const context = JSON.stringify({ agent, status, activity });
+          assert(category[status].test(r.line), context + ": " + r.line);
+          assert.strictEqual(r.line.includes("狀態未知"), status === "unknown", context);
+          assert.strictEqual(r.reason, activity ? "原始原因" : "", context);
+          const specific = agent === "claude" && ["working", "waiting"].includes(status)
+            && activity && ["claude-title", "claude-stream"].includes(activity.decided_by);
+          if (neutral[status] && !specific) {
+            assert.strictEqual(r.sourceLabel, "依據：VBear runtime 回報的狀態（沒有附上證據來源）", context);
+            assert.strictEqual(r.line, `VBear runtime 回報我在${neutral[status]}，但沒有附上是哪一種證據。`, context);
+          }
+          const rendered = app.officePanelContent(m, { key: d.key }, { close() {} }).map(text).join("");
+          assert.strictEqual(rendered.includes("狀態未知"), status === "unknown", context);
+          if (status === "working") assert(rendered.includes("◐ 工作中"), context);
+        }
+      }
+    }
+  }
 });
 
 test("stage screens keep session status separate from task location and roster membership", () => {

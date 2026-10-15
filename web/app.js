@@ -1770,7 +1770,7 @@ function officeMember(role) {
     camp: campOf({ family }).key };
 }
 
-// Fixed lines selected from evidence, never generated from terminal text.
+// Fixed lines selected from status and evidence, never generated from terminal text.
 function personaSpeech(target) {
   const t = target || {};
   const a = t.activity || {};
@@ -1791,16 +1791,21 @@ function personaSpeech(target) {
   }
   if ((t.key || "").startsWith("profile:")) return result("依據：角色名冊", "名冊角色不在出勤，沒有即時狀態", "");
   if (t.status === "exited") return result("依據：VBear runtime（session 已結束）", "這個終端已經結束了。");
-  if (t.tool === "claude") {
-    if (t.status === "working" && a.decided_by === "claude-title") return result(
-      "依據：Claude Code 終端標題（開頭的轉圈符號）",
-      "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為 session 標題保存或回傳。");
-    if (t.status === "working" && a.decided_by === "claude-stream") return result(
-      "依據：Claude Code 串流協定的回合事件", "我正在跑自動派工的這一輪，做完會交回結果。");
-    if (t.status === "waiting" && a.decided_by === "claude-title") return result(
-      "依據：Claude Code 終端標題（閒置符號 ✳）", "我停下來等你囉（! 輪到你），打開終端機看看我吧。");
-    if (t.status === "waiting" && a.decided_by === "claude-stream") return result(
-      "依據：Claude Code 串流協定的回合事件", "這一輪背景派工已結束，等待下一則任務。");
+  if (["working", "waiting", "needs-input"].includes(t.status)) {
+    if (t.tool === "claude") {
+      if (t.status === "working" && a.decided_by === "claude-title") return result(
+        "依據：Claude Code 終端標題（開頭的轉圈符號）",
+        "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為 session 標題保存或回傳。");
+      if (t.status === "working" && a.decided_by === "claude-stream") return result(
+        "依據：Claude Code 串流協定的回合事件", "我正在跑自動派工的這一輪，做完會交回結果。");
+      if (t.status === "waiting" && a.decided_by === "claude-title") return result(
+        "依據：Claude Code 終端標題（閒置符號 ✳）", "我停下來等你囉（! 輪到你），打開終端機看看我吧。");
+      if (t.status === "waiting" && a.decided_by === "claude-stream") return result(
+        "依據：Claude Code 串流協定的回合事件", "這一輪背景派工已結束，等待下一則任務。");
+    }
+    const states = { working: "工作中", waiting: "等你回覆", "needs-input": "需要你處理" };
+    return result("依據：VBear runtime 回報的狀態（沒有附上證據來源）",
+      `VBear runtime 回報我在${states[t.status]}，但沒有附上是哪一種證據。`);
   }
   return result("依據：沒有可採用的證據", t.tool === "claude"
     ? "VBear 現在看不出我在做什麼（例如版本還沒驗證、或標題超過 5 秒沒更新），所以誠實寫『狀態未知』。"

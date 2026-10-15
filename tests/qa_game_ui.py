@@ -18,7 +18,7 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       deletes the flow instead, so the board is in its first-run state (no flow, no waiting Agent).
       Optional VBEAR_QA_OFFICE=1: the pixel office (#/office) with what design office 6 asks for: six flows
       spread over the four stations (plan board, build area, review room, merge gate) next to the automatic
-      one, three synthetic live sessions (working, waiting for you, state unknown; the working one is the
+      one, four synthetic live sessions (two working, waiting for you, state unknown; the first working one is the
       executor of a flow, so its desk plate names it) and three profiles (Claude, Codex, and one whose chosen skill
       the index cannot find). VBEAR_QA_OFFICE=stress: every station full with a "more" link (20 flows), ten
       sessions and 33 profiles (the environment's two, the one whose skill is missing, and thirty more; the lounge
@@ -275,14 +275,28 @@ class _Env(RunnerCase):
             self._add_flow("調整深色主題的對比", passed, workdir=work)            # merge gate, waits for you
             self._add_flow("發佈說明", merged, workdir=work)                      # merge gate, awaiting push
             rows = [("claude", "working", "實作者"), ("claude", "waiting", "等你回覆的審查前檢查"),
-                    ("codex", "unknown", "不確定的終端")]
+                    ("codex", "unknown", "不確定的終端"), ("claude", "working", "沒有附上證據來源的實作者")]
         agents = []
         for i, (tool, status, label) in enumerate(rows):
             tid = f"n-5eed{i + 1:08x}"
-            act = None if status == "unknown" else {
-                "reason": {"working": "標題顯示工作中（示範資料）", "waiting": "這一輪已結束，等待你的回覆（示範資料）",
-                           "needs-input": "停在確認視窗，等你處理（示範資料）"}[status],
-                "decided_by": "title", "evidence": [{"rung": "title", "label": "終端標題（示範資料）"}]}
+            # Keep a known status without a source in both scenarios to exercise neutral speech.
+            source = ("claude-title" if status == "working" else "claude-stream") if tool == "claude" else None
+            if label == "沒有附上證據來源的實作者":
+                source = None
+            reason = {"working": "標題顯示工作中（示範資料）" if source else "工作中，但未附上證據來源（示範資料）",
+                      "waiting": "這一輪已結束，等待下一則派工（示範資料）",
+                      "needs-input": "停在確認視窗，等你處理；未附上證據來源（示範資料）",
+                      "unknown": "沒有已驗證的狀態訊號（示範資料）"}[status]
+            act = {"session": "present", "activity": status if status in ("working", "waiting") else "unknown",
+                   "needs_input": {"count": 1 if status == "needs-input" else 0,
+                                   "reason": reason if status == "needs-input" else None},
+                   "needs_input_evidence": None, "resumability": "unknown", "display": status,
+                   "reason": reason, "decided_by": source, "evidence": []}
+            if source:
+                act["evidence"].append({"rung": source,
+                                        "label": "終端標題（示範資料）" if source == "claude-title" else "串流協定（示範資料）",
+                                        "trust": "authoritative", "value": status, "note": reason,
+                                        "since": None, "observed_at": None})
             agents.append({"terminal_id": tid, "pane_id": tid, "agent": tool, "agent_status": status, "activity": act,
                            "tab_id": f"qa-tab-{i}", "workspace_id": "qa-ws", "foreground_cwd": str(self.qa_work),
                            "cwd": str(self.qa_work), "terminal_title_stripped": f"{label}（示範）", "name": label,
@@ -409,7 +423,17 @@ class CheckOffice(_Env):
         waiting = sorted(f["task_title"] for f in flow_list if f["attention"])
         self.assertEqual(waiting, sorted(["發佈說明", "整理首頁文案", "調整深色主題的對比"]))
         sessions = {x["terminal_id"]: x for x in live["sessions"] if x["terminal_id"].startswith("n-5eed")}
-        self.assertEqual(sorted(x["status"] for x in sessions.values()), ["unknown", "waiting", "working"])
+        self.assertEqual(sorted(x["status"] for x in sessions.values()), ["unknown", "waiting", "working", "working"])
+        self.assertEqual(sessions["n-5eed00000001"]["activity"]["decided_by"], "claude-title")
+        self.assertEqual(sessions["n-5eed00000002"]["activity"]["decided_by"], "claude-stream")
+        self.assertIsNone(sessions["n-5eed00000004"]["activity"]["decided_by"])
+        for row in sessions.values():
+            act = row["activity"]
+            self.assertEqual(act["display"], row["status"])
+            self.assertTrue(act["reason"])
+            if act["decided_by"]:
+                self.assertEqual(act["evidence"][0]["rung"], act["decided_by"])
+                self.assertEqual(act["evidence"][0]["value"], row["status"])
         self.assertIn("n-5eed00000002", live["attention"])
         # the working session is the executor of one flow, and the live view says it is there
         bound = [f for f in flow_list if f["roles"]["executor"].get("session_id") == "n-5eed00000001"]
@@ -595,9 +619,11 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       characters with the task name, the phase's own words and 「任務在：<站>」; no character has its own
       status bubble. A team that waits for you has a red 「輪到你」 badge with words and its station has a thick
       frame; nothing else is red. With =stress every station shows 3 and 「這站還有 N 隊 →」.
-  [ ] 辦公桌: one desk per live session (working, waiting, unknown); the bubble above always has words
+  [ ] 辦公桌: one desk per live session (two working, waiting, unknown); the bubble above always has words
       (「工作中」「等你回覆」「? 狀態未知」). The desk of the working session names its flow:
       「流程：更新安裝說明（任務在：實作區）」. A session that waits for you has the red badge.
+      Select 「沒有附上證據來源的實作者」: its screen says 「◐ 工作中」 and speech uses the neutral runtime
+      report with 「沒有附上證據來源」; it must not say 「狀態未知」.
   [ ] 休息室: the roster of profiles (「名冊：角色設定，不代表正在出勤」), at most 24, then 「還有 N 個角色 →」.
   [ ] Click a profile: the panel shows 武器 (Claude: Bash 可用, Edit／Write 鎖住; Codex: 未知 with the reason),
       防具 (solid frame = enforced or partly, dashed = intent only / not limited, each with its words) and 技能卡
