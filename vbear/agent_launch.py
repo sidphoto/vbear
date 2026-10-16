@@ -94,6 +94,8 @@ UNKNOWN = "未知"
 NOT_GRANTED = "不授予"
 UNRESTRICTED = "未限制"
 VERIFIED_INTENTS = {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}
+# the words the screens use for the four permission intents (the keys stay English in the API)
+INTENT_LABELS = {"read": "讀取檔案", "write": "編輯寫入", "test": "執行測試", "deploy": "部署上線"}
 
 
 class PreviewError(Exception):
@@ -146,7 +148,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     intents = profile.get("permission_intents") or {}
     for key in ("read", "write", "test", "deploy"):
         if intents.get(key, "unspecified") == "unspecified":
-            block("intent_unspecified", f"{key} 未指定；未指定不會被當成允許")
+            block("intent_unspecified", f"{INTENT_LABELS[key]}的權限意圖還沒決定；沒決定的不會被當成允許")
     if intents.get("read") == "deny":
         block("read_deny_unenforceable", "無法強制禁止讀取：讀取範圍沒有被隔離")
     if intents.get("write") == "deny":
@@ -162,7 +164,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         block("intents_not_supported", "此權限組合不是已驗證設定所能對應的組合")
     if commit is not True:
         block("commit_not_enforceable",
-              "目前無法強制不 commit：工作目錄的 .git 在可寫範圍內。要啟動，請勾選「我知道這個設定無法阻止 commit」")
+              "目前無法強制不 commit：工作目錄的 .git 在可寫範圍內。要出發，請先勾選「我知道這個角色會在這個資料夾建立、修改檔案，也能存下版本紀錄（commit），VBear 擋不住」")
     if not (isinstance(network, dict) and network.get("enabled") is False
             and not network.get("approved_domains")):
         block("network_not_available", "已驗證的設定只有關閉網路（空 allowlist）；不支援開啟網路或指定網域")
@@ -305,7 +307,7 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
     digest = (manifest or {}).get("settings_sha256") or "none"
     scratch = ((manifest or {}).get("scratch") or {}).get("path")
     write_scope = [p for p in (workdir, scratch) if p] or "不適用"
-    unprepared = None if manifest else "此 Profile 無法啟動，未產生設定"
+    unprepared = None if manifest else "此角色卡無法啟動，未產生設定"
 
     def label(level, note, *, path_scope="不適用", evidence=(), unknown_reason="none"):
         return {"level": UNKNOWN if unprepared else level,

@@ -1741,7 +1741,7 @@ function questCard(f, yourTurn) {
       rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
         rev.counts_as_pass ? "算通過" : (rev.why || "")), ` ${shortCommit(rev.commit)}`) : null),
     note ? el("div", { class: "small muted" }, note) : null,
-    teamAvatars(f, 1),
+    teamAvatars(f, 1, true),
     questNext(f),
     el("div", { class: "quest-go" }, yourTurn ? "前往處理 →" : "查看流程 →"));
 }
@@ -3391,7 +3391,7 @@ function permissionSuggestion(catalog, position) {
 }
 
 // The light on the card: green only when every intent is decided. It speaks for the intents alone; whether a launch
-// can go ahead is what the pre-launch check says, and the card says so under the light.
+// can go ahead is what the launch pass says, and the card says so under the light.
 function cardLight(p) {
   const intents = p && typeof p.permission_intents === "object" && p.permission_intents ? p.permission_intents : {};
   const undecided = CARD_INTENT_KEYS.filter(([k]) => intents[k] !== "allow" && intents[k] !== "deny").map(([, zh]) => zh);
@@ -8638,7 +8638,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     shell
   );
 
-  // 「出發」 on a card of the card pool lands here with the pre-launch check already open; the address is cleaned at
+  // 「出發」 on a card of the card pool lands here with the launch pass already open; the address is cleaned at
   // once so that a later re-render of the page does not open it again.
   if (autoLaunch && initialProfileId) {
     const target = agentProfiles.find((p) => p.id === initialProfileId);
@@ -8880,15 +8880,16 @@ function nextStepsList(flow) {
 }
 
 // The small heads of a role card on a task card (design 3.8): who is in the team, as pixel avatars.
-function teamAvatars(flow, scale = 2) {
+// compact: only the place under each avatar (the name stays in the tooltip); the board's card already names its roles.
+function teamAvatars(flow, scale = 2, compact = false) {
   const roles = flow && flow.roles && typeof flow.roles === "object" ? flow.roles : null;
   if (!roles) return null;
   const list = [["規劃", roles.planner], ["執行", roles.executor],
     ...(Array.isArray(roles.reviewers) ? roles.reviewers : []).map((r, i) => [`審查${i + 1}`, r])].filter(([, r]) => r);
-  return el("div", { class: "team-avatars", "data-team": "avatars" }, list.map(([label, r]) => {
+  return el("div", { class: compact ? "team-avatars team-avatars-compact" : "team-avatars", "data-team": "avatars" }, list.map(([label, r]) => {
     const tool = teamCardTool(r);
     return el("span", { class: "team-avatar", title: `${label}：${r.name || ""}`, "data-position": label },
-      cardAvatar({ id: r.profile_id || "", model: { tool } }, scale), el("span", { class: "small" }, `${label}・${r.name || ""}`));
+      cardAvatar({ id: r.profile_id || "", model: { tool } }, scale), el("span", { class: "small" }, compact ? label : `${label}・${r.name || ""}`));
   }));
 }
 

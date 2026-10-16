@@ -566,6 +566,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.ok(!findText(d, "無法阻止 commit（工作目錄的 .git"));
     assert.strictEqual(vm.runInContext("PASS_COMMIT_ACK", ctx), "我知道這個角色會在這個資料夾建立、修改檔案，也能存下版本紀錄（commit），VBear 擋不住。");
     assert.ok(posts.length === 0, "opening the pass previews nothing");
+    assert.ok(!/Profile|AgentRole|Agent Builder|Permission Intents/.test(textOf(d)), "the screen words, not the old names");
   });
 
   await test("pass dialog: a launchable preview shows the front first, the seven items behind a fold, the bypass on the front", async () => {
@@ -594,7 +595,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
 
   await test("pass dialog: a blocked preview lists the reasons with the fix beside each, and the commit one only points at the box", async () => {
     const blocked = previewOf(LV.unknown, LV.unknown, { launchable: false, preview_id: null, cli: null, settings_digest: null,
-      reasons: [{ code: "intent_unspecified", message: "write 未指定；未指定不會被當成允許" },
+      reasons: [{ code: "intent_unspecified", message: "編輯寫入的權限意圖還沒決定；沒決定的不會被當成允許" },
         { code: "commit_not_enforceable", message: "目前無法強制不 commit" },
         { code: "codex_evidence_missing", message: "Codex 0.159.2 本輪 OS sandbox 驗收尚未完成" }] });
     const ctx = mkPass([roleP], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: blocked }) });
@@ -629,7 +630,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
         return jsonResponse({ ok: true, preview: saved
           ? previewOf(LV.enforced, LV.enforced)
           : previewOf(LV.unknown, LV.unknown, { launchable: false, preview_id: null, cli: null,
-            reasons: [{ code: "intent_unspecified", message: "write 未指定；未指定不會被當成允許" }] }) });
+            reasons: [{ code: "intent_unspecified", message: "編輯寫入的權限意圖還沒決定；沒決定的不會被當成允許" }] }) });
       } });
     const d = await openPass(ctx);
     field(d).value = WORKDIR; commitBox(d).checked = true;
@@ -726,6 +727,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.ok(!/\p{Extended_Pictographic}/u.test(passBlock), "no emoji");
     assert.ok(!/https?:\/\//.test(passBlock));
     assert.ok(!/安全|已限制|保證/.test(passBlock.replace(/不可繞過/g, "")), "nothing is called safe or restricted");
+    assert.ok(!/稀有|星數|抽卡|等級|血量|分數/.test(passBlock), "no rarity, stars, draws or levels (design 6.1)");
     const dialogSrc = app.slice(app.indexOf("function promptAgentLaunch("), app.indexOf("function promptDeleteAgentProfile("));
     assert.ok(!/innerHTML|\p{Extended_Pictographic}/u.test(dialogSrc));
     assert.ok(!/出發前檢查/.test(app), "the old name is gone from the page");

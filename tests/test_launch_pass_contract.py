@@ -61,6 +61,27 @@ class PassWordsTests(unittest.TestCase):
             {"enabled": False, "model": {"tool": "claude"}, "permission_intents": {}}, True,
             {"enabled": False, "approved_domains": []})[0]["message"])
 
+    def test_an_undecided_intent_is_named_in_the_screen_words_not_the_api_key(self):
+        self.assertEqual(agent_launch.INTENT_LABELS, {"read": "讀取檔案", "write": "編輯寫入", "test": "執行測試", "deploy": "部署上線"})
+        for key, word in agent_launch.INTENT_LABELS.items():
+            intents = dict(agent_launch.VERIFIED_INTENTS, **{key: "unspecified"})
+            profile = {"enabled": True, "model": {"tool": "claude"}, "permission_intents": intents}
+            reasons = [r for r in agent_launch.launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
+                       if r["code"] == "intent_unspecified"]
+            self.assertEqual(len(reasons), 1, key)
+            self.assertIn(word, reasons[0]["message"])
+            self.assertNotIn(key, reasons[0]["message"])
+            self.assertNotIn("安全", reasons[0]["message"])
+
+    def test_the_commit_reason_quotes_the_sentence_the_page_asks_you_to_tick(self):
+        reasons = agent_launch.launch_blockers(
+            {"enabled": True, "model": {"tool": "claude"}, "permission_intents": dict(agent_launch.VERIFIED_INTENTS)},
+            False, {"enabled": False, "approved_domains": []})
+        message = next(r["message"] for r in reasons if r["code"] == "commit_not_enforceable")
+        sentence = re.search(r'const PASS_COMMIT_ACK = "([^"]+)"', APP).group(1)
+        self.assertIn(sentence.rstrip("。"), message)
+        self.assertTrue(message.startswith("目前無法強制不 commit"))
+
     def test_the_pass_has_one_name_on_the_server_and_in_the_page(self):
         self.assertNotIn("出發前檢查", APP)
         self.assertNotIn("出發前檢查", (ROOT / "vbear" / "loadout.py").read_text(encoding="utf-8"))

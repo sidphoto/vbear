@@ -699,7 +699,13 @@ test("settings: the block can be brought back (or put away) from the settings pa
 test("the bulletin: a flow card shows its team's avatars and whose turn the next step is; the key repaints when they change", () => {
   const f = flow("awaiting_approval", { attention: true });
   const card = app.questCard(f, true);
-  assert(card.find((n) => n.getAttribute && n.getAttribute("data-team") === "avatars"), "the team's avatars");
+  const avatars = card.find((n) => n.getAttribute && n.getAttribute("data-team") === "avatars");
+  assert(avatars, "the team's avatars");
+  assert(avatars.hasClass("team-avatars-compact"), "compact on the board: the card names its roles already");
+  const heads = avatars.findAll((n) => n.getAttribute && n.getAttribute("data-position"));
+  assert.deepStrictEqual(heads.map((n) => n.getAttribute("data-position")), ["規劃", "執行", "審查1"]);
+  assert(heads.every((n) => /：./.test(n.getAttribute("title"))), "the role's name stays in the tooltip");
+  assert.strictEqual(text(heads[0]), "規劃", "only the place is written under the head");
   const next = card.find((n) => n.getAttribute && n.getAttribute("data-quest") === "next");
   assert(next && text(next) === app.nextStepSummary(f));
   assert(/輪到/.test(text(next)));
@@ -724,6 +730,7 @@ test("source: the first-game block is built with el(), no innerHTML, no emoji, n
   assert(!/innerHTML|insertAdjacentHTML/.test(blockSrc));
   assert(!/\p{Extended_Pictographic}/u.test(blockSrc));
   assert(!/https?:\/\//.test(blockSrc));
+  assert(!/稀有|星數|抽卡|等級|血量|分數|安全|已限制|保證/.test(blockSrc), "no rarity, levels or promises in the first game");
   const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
   for (const sel of [".onboard-steps", ".onboard-step", ".onboard-done", ".quest-next"]) assert(css.includes(sel), sel);
   assert(/\.onboard-text\s*\{[^}]*overflow-wrap:\s*anywhere/.test(css));

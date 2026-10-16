@@ -636,8 +636,8 @@ function findModalInBody() {
     const blocked = { preview_id: null, launchable: false,
       reasons: [{ code: "codex_interactive_flags_unsupported", message: "Codex 的互動模式還不能安全地受管啟動" }],
       cli: null, settings_digest: null, canonical_paths: { workdir: "/Users/u/work", scratch: null },
-      derived_labels: Object.fromEntries(Object.keys(labels).map((k) => [k, label("未知", "此 Profile 無法啟動，未產生設定",
-        "此 Profile 無法啟動，未產生設定")])), armor_groups: groupsNoClaude, expires_at: null };
+      derived_labels: Object.fromEntries(Object.keys(labels).map((k) => [k, label("未知", "此角色卡無法啟動，未產生設定",
+        "此角色卡無法啟動，未產生設定")])), armor_groups: groupsNoClaude, expires_at: null };
     let answer = launchable;
     const loadout = { ok: true,
       profile: { id: "p-2", name: "Stuck", enabled: false, tool: "codex", model_id: "gpt-test", profession_role_id: "r-2",
@@ -737,7 +737,7 @@ function findModalInBody() {
       { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
       { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
       { id: "unproven", label: "未證明", levels: ["未知"] }];
-    const note = "此 Profile 無法啟動，未產生設定";
+    const note = "此角色卡無法啟動，未產生設定";
     const blocked = { preview_id: null, launchable: false,
       reasons: [{ code: "tool_not_launchable", message: "shared 不是可啟動的工具" }], cli: null,
       settings_digest: null, canonical_paths: { workdir: "/Users/u/work", scratch: null },
@@ -911,7 +911,7 @@ function findModalInBody() {
           armorItem("Read", "僅意圖", "not_blocked", "讀取不隔離"),
           armorItem("Commit", "未限制", "not_blocked", ".git 可寫", { unknown_reason: "未測試以 denyWrite 排除 .git 的效果" }),
         ] },
-      blockers: [{ code: "intent_unspecified", message: "test 未指定；未指定不會被當成允許" }],
+      blockers: [{ code: "intent_unspecified", message: "執行測試的權限意圖還沒決定；沒決定的不會被當成允許" }],
       blockers_note: "假設你已勾選知悉 commit、並維持關閉網路；實際以出發通行證為準",
       ...over,
     });
@@ -989,10 +989,10 @@ function findModalInBody() {
     assert.strictEqual(header(groups[0]), "擋住了 · 強制（限已測路徑、版本與執行層）");
     assert.strictEqual(header(groups[3]), "沒有擋 · 僅意圖、未限制");
     assert.ok(header(groups[4]).startsWith("未證明 · 未驗證（此 Claude Code 版本尚未實測）"));
-    assert.ok(findText(card, "實際以出發通行證為準"), "the card says the pre-launch check decides");
+    assert.ok(findText(card, "實際以出發通行證為準"), "the card says the launch pass decides");
     assert.ok(findText(card, "範圍：產生出發通行證時才知道") || findText(card, "產生出發通行證時才知道"),
-              "what needs a work directory is 'known at the pre-launch check'");
-    assert.ok(findText(card, "目前無法出發的原因") && findText(card, "test 未指定"), "launch blockers shown");
+              "what needs a work directory is 'known when the launch pass is made'");
+    assert.ok(findText(card, "目前無法出發的原因") && findText(card, "執行測試的權限意圖還沒決定"), "launch blockers shown");
     assert.ok(findText(card, "只是記錄，不會變成實際權限"), "intents are labelled as records");
 
     // everything clickable in the card is a button or a link
