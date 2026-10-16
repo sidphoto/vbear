@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 — quest board and pixel office
+
+The home page is now the quest board, 冒險者大廳, with flows and agents that need your attention and other open
+tasks. The pixel office, `#/office`, places teams by their task phase, live terminals at desks and saved profiles
+in the lounge. Characters have persona lines with evidence labels and expandable reasons; a station describes
+task location. Safe-mode launches were tested on Claude Code 2.1.299: VBear's flags left user and project skills
+unlisted and offered only Bash, so a profile's skill list remains a record of your picks.
 
 - **Embodied office characters.** New supplied pixel art and camp colors, two-frame typing only for working
   desk sessions, and reduced-motion support. Panels add fixed persona lines with evidence labels and expandable
