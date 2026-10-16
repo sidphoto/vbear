@@ -368,7 +368,7 @@ test("the nav's first item is renamed and the others are not", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
   assert(/data-nav="home"><span aria-hidden="true">⌂<\/span>冒險者大廳</.test(html));
   assert(!html.includes("我的工作台"));
-  for (const label of ["終端機", "終端工作台", "流程", "技能庫", "Agent 團隊", "專案", "設定"]) assert(html.includes(`</span>${label}</a>`), label);
+  for (const label of ["終端機", "終端工作台", "流程", "技能庫", "角色卡池", "專案", "設定"]) assert(html.includes(`</span>${label}</a>`), label);
 });
 
 test("flows and agents share the first block: the flows come first, in API order", async () => {
@@ -383,7 +383,7 @@ test("flows and agents share the first block: the flows come first, in API order
   assert.deepStrictEqual(cards.slice(0, 2).map((c) => c.getAttribute("data-flow-id")), [a.id, b.id]);
   assert.strictEqual(cards[2].tag, "div", "the agent's card is the existing session card");
   assert(text(turn).includes("1 個 Agent 在等你") && text(turn).includes("2 則流程等你"));
-  assert(text(turn).includes("每 5 秒更新") && text(turn).includes("Agent 團隊"));
+  assert(text(turn).includes("每 5 秒更新") && text(turn).includes("角色卡池"));
   const going = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "going");
   assert.strictEqual(going.findAll((n) => n.getAttribute && n.getAttribute("data-quest") === "flow").length, 1);
 });

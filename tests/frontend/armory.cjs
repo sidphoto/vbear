@@ -27,7 +27,7 @@ seq=1; function claim(){ return main; }
 function crumbs(){ return null; } function notice(){ return null; }
 function badge(label){ return el('span', null, label); } function actBadge(a){ return badge(a); }
 function helpTip(label, hint){ return el('span', {class:'armory-tip', 'data-tip':hint, 'aria-label':label+'說明：'+hint, tabindex:'0'}, 'ⓘ'); }
-const api={get:async()=>({skills:[{skill_id:'s1',name:'Installed & equipped',invoke_name:'s1',activation:'active',states:{available:false,installed:true,equipped:[{id:'p1',name:'Disabled Profile',enabled:false}],loaded:{observed:false,evidence:[]}},sources:{available:'掃描（marketplace 副本）',installed:'掃描',equipped:'主控台 Profile（使用者意圖）',loaded:'未知（沒有執行觀察）'}}],unresolved_equipped:[{skill_id:'gone'}]})};
+const api={get:async()=>({skills:[{skill_id:'s1',name:'Installed & equipped',invoke_name:'s1',activation:'active',states:{available:false,installed:true,equipped:[{id:'p1',name:'Disabled Profile',enabled:false}],loaded:{observed:false,evidence:[]}},sources:{available:'掃描（marketplace 副本）',installed:'掃描',equipped:'主控台角色卡（使用者意圖）',loaded:'未知（沒有執行觀察）'}}],unresolved_equipped:[{skill_id:'gone'}]})};
 ` + source.slice(source.indexOf("// ---------- skill translations"), source.indexOf("// ---------- data")) + source.slice(source.indexOf("async function viewArmory("), source.indexOf("async function viewSkillDetail(")), context);
 (async () => {
   await vm.runInContext("viewArmory()", context);

@@ -170,10 +170,21 @@ const catalogBody = {
       scope: "user", activation: "active", excerpt: "beta desc" },
   ],
   disclosures: [
-    "Equipped Skill Loadout ≠ Loaded into any running session.",
-    "Permission Intents are intent-only and are NOT enforced.",
-    "Agent Profiles are stored only inside this console's own state directory.",
+    "技能卡插在角色卡上，只是你的挑選紀錄，不代表已經進入任何執行中的終端。",
+    "權限意圖是隊伍分工的標記，VBear 不會因此限制這個程式的真實能力。",
+    "角色卡只存放在這個主控台自己的狀態資料夾。",
   ],
+  starter_deck: [
+    { key: "planner", name: "CEO", position: "planner", tool: "claude",
+      permission_intents: { read: "allow", write: "deny", test: "deny", deploy: "deny" } },
+    { key: "executor", name: "工匠", position: "executor", tool: "claude",
+      permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
+    { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex",
+      permission_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" } },
+  ],
+  positions: ["planner", "executor", "reviewer"],
+  demo_id_prefix: "demo-",
+  codex_installed: true,
 };
 
 const profilesList = [
@@ -280,7 +291,7 @@ async function switchToAgentTab() {
 
 async function clickCreateAgentProfileButton() {
   const btn = walk(main).find((n) =>
-    n.tag === "button" && /建立 Agent Profile/.test(n.textContent || ""));
+    n.tag === "button" && /＋ 新角色卡/.test(n.textContent || ""));
   if (!btn) throw new Error("create button not found");
   btn.dispatch("click");
   await new Promise((r) => setImmediate(r));
@@ -315,10 +326,10 @@ function findModalInBody() {
     await switchToAgentTab();
     const right = findRightColumn();
     assert.ok(right, "right column present");
-    assert.ok(findText(right, "Agent Builder"), "title rendered");
-    assert.ok(findText(right, "已選技能"), "honest disclosure present");
+    assert.ok(findText(right, "角色卡"), "title rendered");
+    assert.ok(findText(right, "技能卡僅為挑選紀錄"), "honest disclosure present");
     assert.ok(findText(right, "絕對不會寫入 ~/.codex"), "boundary disclosure present");
-    assert.ok(findText(right, "建立 Agent Profile"), "create button visible");
+    assert.ok(findText(right, "＋ 新角色卡"), "create button visible");
     console.log("ok empty-state renders title, disclosures, create button");
   }
 
@@ -343,7 +354,7 @@ function findModalInBody() {
     const right = findRightColumn();
     assert.ok(findText(right, "First"), "first profile name in list");
     assert.ok(findText(right, "Stuck"), "second profile name in list");
-    assert.ok(findText(right, "目前索引找不到 1 項已選技能"), "unresolved warning surfaced in list view");
+    assert.ok(findText(right, "目前索引找不到 1 張技能卡"), "unresolved warning surfaced in list view");
     assert.ok(!findText(right, "已從掃描結果中消失"), "not worded as 'disappeared' (design v1.1 #6)");
     console.log("ok list+unresolved-warning");
   }
@@ -383,10 +394,13 @@ function findModalInBody() {
     assert.ok(modal, "modal opened on create click");
     const inputs = walk(modal).filter((n) => n.tag === "input");
     assert.ok(inputs.length >= 1, "modal has inputs");
-    inputs[0].value = "My new profile";
-    const saveBtn = walk(modal).filter((n) =>
-      n.tag === "button" && /建立 Profile/.test(n.textContent || ""))[0];
-    assert.ok(saveBtn, "save button labelled  建立 Profile");
+    inputs[0].dispatch("input", { target: Object.assign(inputs[0], { value: "My new profile" }) });
+    const btn = (label) => walk(modal).filter((n) =>
+      n.tag === "button" && (n.textContent || "").trim() === label)[0];
+    btn("下一步").dispatch("click");
+    btn("下一步").dispatch("click");
+    const saveBtn = btn("建立");
+    assert.ok(saveBtn, "save button labelled  建立 (third step)");
     saveBtn.dispatch("click");
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -394,10 +408,9 @@ function findModalInBody() {
     assert.ok(createPost, "create POST was made to /api/agent-profiles");
     assert.equal(createPost.body.name, "My new profile");
     assert.deepEqual(createPost.body.permission_intents,
-                     { read: "unspecified", write: "unspecified",
-                       test: "unspecified", deploy: "unspecified" });
+                     { read: "deny", write: "deny", test: "deny", deploy: "deny" });
     assert.equal(createPost.body.enabled, true);
-    console.log("ok editor sends POST with default permission_intents");
+    console.log("ok wizard sends POST with every intent decided (deny without a position)");
   }
 
   // Test 4: delete confirm → POST to /<id>/delete (then a list refresh).
@@ -513,7 +526,7 @@ function findModalInBody() {
     button("產生預覽").dispatch("click");
     await tick();
     assert.deepStrictEqual(posts[0].body, { profile_id: "p-1", workdir: "/Users/u/work", commit: false });
-    assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "目前無法強制不 commit"),
+    assert.ok(findText(modal, "這張角色卡目前無法啟動") && findText(modal, "目前無法強制不 commit"),
               "non-launchable preview shows the reason");
     assert.ok(findText(modal, "現在不能出發：目前無法強制不 commit"), "the reason is also beside the off button");
     assert.strictEqual(button("確認啟動").disabled, true, "confirm stays disabled when not launchable");
@@ -536,7 +549,7 @@ function findModalInBody() {
     assert.deepStrictEqual(inGroup("not_blocked"), ["Read", "Test", "Commit"]);
     assert.deepStrictEqual(inGroup("unproven"), []);
     assert.ok(groups.every((g) => g.tag === "section" && g.className === "rc-armor-group"), "same element and class");
-    assert.ok(findText(modal, "已選清單，本次不會載入") && findText(modal, "這次出發不會把這些技能帶上"));
+    assert.ok(findText(modal, "技能卡清單（收藏中），本次不會載入") && findText(modal, "這次出發不會把這些技能帶上"));
     assert.ok(findText(modal, "alpha"), "the chosen skill is listed by name");
     assert.ok(findText(modal, "版本驗證"), "the version verification row");
     assert.ok(findText(modal, "未限制") && findText(modal, "未測試 denyWrite .git"), "level and unknown reason shown");
@@ -695,7 +708,7 @@ function findModalInBody() {
     commit.dispatch("change");
     button("產生預覽").dispatch("click");
     await tick();
-    assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "Codex 的互動模式還不能安全地受管啟動"));
+    assert.ok(findText(modal, "這張角色卡目前無法啟動") && findText(modal, "Codex 的互動模式還不能安全地受管啟動"));
     assert.strictEqual(button("確認啟動").disabled, true);
     assert.ok(findText(modal, "現在不能出發：Codex 的互動模式還不能安全地受管啟動"));
     for (const word of ["Claude", "Haiku", "尚未實測"]) assert.ok(!findText(modal, word), `blocked: no 「${word}」`);
@@ -774,7 +787,7 @@ function findModalInBody() {
       commit.dispatch("change");
       button("產生預覽").dispatch("click");
       await tick();
-      assert.ok(findText(modal, "這個 Profile 目前無法啟動") && findText(modal, "shared 不是可啟動的工具"), "the reason is shown");
+      assert.ok(findText(modal, "這張角色卡目前無法啟動") && findText(modal, "shared 不是可啟動的工具"), "the reason is shown");
       assert.strictEqual(button("確認啟動").disabled, true);
       assert.ok(findText(modal, "現在不能出發：shared 不是可啟動的工具"));
       for (const word of ["Claude", "Codex", "Haiku", "尚未實測", "驗證這個版本"]) {
@@ -945,7 +958,7 @@ function findModalInBody() {
     assert.ok(findText(card, "VBear 不會執行這些檔案") && !findText(card, "可執行腳本"), "references only, no script count");
     assert.ok(findText(card, "職業只是標籤，不會把角色指示載入 Claude Code"), "the role is a label");
     assert.ok(findText(card, "未知（這個畫面不探測 Claude Code"), "unknown version is said, not guessed");
-    assert.ok(findText(card, "工具（遊戲用語：陣營）"), "first mention of the tool names the game word");
+    assert.ok(findText(card, "陣營"), "the tool is named with the game word");
     for (const word of ["出勤", "曾使用", "使用次數"]) assert.ok(!findText(card, word), `no attendance: ${word}`);
 
     // armor: five groups, same element kind and class, the original level words, no collapse
@@ -1033,7 +1046,7 @@ function findModalInBody() {
                missing_files: { items: ["b.sh"], origin: "derived", detail: "掃描結果" },
                warnings: { items: ["w1"], origin: "derived", detail: "掃描結果" } },
       added_to_roles: { items: [{ id: "p-1", name: "First", enabled: true }], effective: false,
-                        note: "已加入角色只是挑選紀錄，本次不生效", origin: "user", detail: "主控台 Profile（使用者意圖）" },
+                        note: "已加入角色只是挑選紀錄，本次不生效", origin: "user", detail: "主控台角色卡（使用者意圖）" },
       observation: { state: "none", window_days: 30, source: "執行觀察", origin: "runtime", detail: "執行觀察" },
       marketplace_copies: [{ skill_id: "s-m", tool: "claude", scope: "marketplace" }],
       marketplace_source: { origin: "derived", detail: "市集掃描" },
@@ -1094,7 +1107,7 @@ function findModalInBody() {
     // every field has its source tag: 類別, 工具, 來源, files, status, roles, observation, marketplace
     const sourceTags = walk(modal).filter((n) => n.className && n.className.includes("prov"));
     assert.ok(sourceTags.length >= 12, `source tags on the card (got ${sourceTags.length})`);
-    assert.ok(findText(modal, "類別") && findText(modal, "工具（遊戲用語：陣營）") && findText(modal, "來源（位置）"));
+    assert.ok(findText(modal, "類別") && findText(modal, "陣營") && findText(modal, "來源（位置）"));
     // the name, the missing files and the structure warnings carry their source too
     const provOf = (needle) => walk(modal).filter((n) => n.className && n.className.includes("prov")
       && (n.getAttribute("title") || "").includes(needle));

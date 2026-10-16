@@ -615,16 +615,28 @@ VBear game-UI QA console (synthetic Claude/Codex, temporary HOME and state; noth
 
 Every screen must treat the text {probe} as plain text: no image, no alert, the characters visible.
 
+== 0. 角色卡池 (#/team; use VBEAR_QA_FRESH=1 to see it empty)
+  [ ] Title 「角色卡池」; buttons 「＋ 新角色卡」 and (only without a card of your own) 「用起手牌組開始」.
+  [ ] 起手牌組: three rows (規劃 CEO, 執行 工匠, 審查 審查員), names editable; with no Codex found the reviewer is
+      unticked and says 「這台電腦找不到 Codex」. 「建立 N 張角色卡」 makes ordinary cards.
+  [ ] ＋ 新角色卡: three steps (名字與外觀 / 陣營與位置 / 技能卡), 上一步/下一步/建立 always in view (also at 390 px).
+      Choosing a position shows the suggested intents tagged 「建議，可改」 with the sentence that an intent is
+      not a limit VBear applies. A skill of the other tool is greyed with 「… 不會讀這張卡」.
+  [ ] A card with an undecided intent shows 「還差一步：權限意圖還沒決定」 and 「現在決定」; a decided one says
+      「可以出發（權限意圖都已決定）」 and 「實際能不能出發，以出發前檢查為準」. 「名冊，不代表正在出勤」 on every card.
+  [ ] 出發 opens 出發前檢查 in the workbench for that card. 「你電腦裡現成的角色範本（職業標籤）」 is folded.
+
 == 1. 角色卡 (工作台 -> 右側「角色」分頁 -> pick 「QA 後端工匠（Claude）」)
-  [ ] 資料區：職業=qa-backend; 工具（遊戲用語：陣營）=Claude Code; 版本驗證狀態 has a sentence from the
+  [ ] 資料區：職業標籤=qa-backend; 陣營=Claude Code; 版本驗證狀態 has a sentence from the
       server (not blank); 狀態=啟用; 索引時間 is a time.
   [ ] 職業特性：說明/擅長/適合的工作 each carries a source tag; 未提供 (not 未知) where the author said nothing;
       the fixed note that a profession is only a label.
   [ ] 已選技能（VBear 啟動時不載入）：4 rows. 3 are found, 1 says the index cannot find it. The list header on
-      the left side says 「目前索引找不到 1 項已選技能」. The probe skill shows its name as text.
+      the left side says 「目前索引找不到 1 張技能卡」. The probe skill shows its name as text.
   [ ] 防具：seven items in five groups; each group header carries a level word; the heading says the preview
       decides (實際以出發前檢查為準); no value is printed as "安全" or a bare "OK".
-  [ ] 你的期望（意圖）：讀取・允許 寫入・允許 測試・允許 部署・拒絕; the note says it is only a record.
+  [ ] 權限意圖：讀取檔案・允許 編輯寫入・允許 執行測試・允許 部署上線・拒絕; the note says it is only a record and
+      that it does not mean VBear limits the program's real abilities.
   [ ] Switch to 「QA 審查員（Codex）」: the card has no Claude-specific wording; its skill list has 1 row.
       With VBEAR_QA_CODEX_BLOCKED=1 the line 「目前無法從 VBear 啟動這個角色…」 is right under the row of
       buttons (above the card), with the reasons; without it this role is launchable on synthetic evidence
@@ -646,7 +658,7 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] Button and dialog title both read 「出發前檢查」 (no 「預覽並啟動」 anywhere).
   [ ] Seven labels in five groups (讀取 / 寫入與測試 / 提交與部署 / 網路 / 檔案範圍); each has level, note,
       bypass, evidence; a label that is not enforced is not worded as enforced.
-  [ ] 已選清單，本次不會載入 appears once.
+  [ ] 技能卡清單（收藏中），本次不會載入 appears once.
   [ ] The version-verification row names the CLI version (2.1.286) and whether it is verified.
   [ ] The line beside 確認啟動 says why it is off, until a preview exists. Do not press 確認啟動 unless you
       want a (synthetic) session to open.

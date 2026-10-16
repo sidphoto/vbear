@@ -292,8 +292,8 @@ test("weapons come from the loadout's tools and nowhere else", () => {
   const codex = { tools: { known: false, allowed: [], blocked: [], unknown_reason: "目前無法從 VBear 啟動這個角色" } };
   assert.deepStrictEqual(app.weaponsFrom(codex), { known: false, allowed: [], blocked: [], source: "",
     reason: "目前無法從 VBear 啟動這個角色" });
-  const other = { tools: { known: false, allowed: [], blocked: [], unknown_reason: "VBear 目前只支援用 Profile 啟動 Claude Code" } };
-  assert.strictEqual(app.weaponsFrom(other).reason, "VBear 目前只支援用 Profile 啟動 Claude Code");
+  const other = { tools: { known: false, allowed: [], blocked: [], unknown_reason: "VBear 目前只支援用角色卡啟動 Claude Code" } };
+  assert.strictEqual(app.weaponsFrom(other).reason, "VBear 目前只支援用角色卡啟動 Claude Code");
   // an older answer without the field: unknown, even though the armor's words mention Bash
   for (const old of [{ armor: claude.armor }, { tools: null }, { tools: "Bash" }, { tools: { known: "yes" } }, null, undefined, 3]) {
     const w = app.weaponsFrom(old);
@@ -502,7 +502,7 @@ let mobile = false;
 global.window.matchMedia = (q) => ({ matches: mobile && /max-width: 820px/.test(q), addEventListener() {}, removeEventListener() {} });
 function loadoutOf(tool, over = {}) {
   const tools = tool === "claude" ? { known: true, allowed: ["Bash"], blocked: ["Edit", "Write"], source: "與 argv 相同的常數" }
-    : { known: false, allowed: [], blocked: [], unknown_reason: tool === "codex" ? "目前無法從 VBear 啟動這個角色" : "VBear 目前只支援用 Profile 啟動 Claude Code" };
+    : { known: false, allowed: [], blocked: [], unknown_reason: tool === "codex" ? "目前無法從 VBear 啟動這個角色" : "VBear 目前只支援用角色卡啟動 Claude Code" };
   return { ok: true, tools,
     skills: { title: "已選技能（VBear 啟動時不載入）", note: "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。", items: [
       { skill_id: "s-code", state: "in_index", name: "code-review", invoke_name: "code-review" },
@@ -696,7 +696,7 @@ test("a session's panel says its gear is unknown; a team's panel has no gear and
   byKey(main, "session:t-1").click();
   await settle();
   let p = panel(main);
-  assert(text(p).includes("未知：不是用 Profile 啟動的，VBear 看不到它的裝備"));
+  assert(text(p).includes("未知：不是用角色卡啟動的，VBear 看不到它的裝備"));
   assert(text(p).includes("標題顯示工作中"), "the basis of its status");
   const term = byClass(p, "office-go")[0];
   assert.strictEqual(term.getAttribute("href"), "#/term/pane-1");
