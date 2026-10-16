@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — Chinese skill summaries
+
+Skill descriptions can show Chinese machine translations and summaries alongside the author's original text.
+Source fingerprints identify changes to the original text, and stale translations are marked; automatic
+retranslation is off by default. Translation runs only after the installed Claude Code version passes a check that its translation run
+offers no tool but StructuredOutput and no MCP server; the Codex translation engine is disabled.
 
 - Add a guarded skill-translation candidate: redacted author-field fingerprints, a bounded atomic cache,
   stale/orphan states, sequential cancellable jobs, and consent-bound automatic work after explicit rescans.
