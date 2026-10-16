@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from . import activity
-from .agent_profiles import profile_digest  # moved there so a team slot can record it; same function, same value
+from .agent_profiles import VERIFIED_INTENTS, profile_digest  # moved there so a team slot / the starter deck share them; same values
 from .runtime import agent_sessions, cli_versions
 from .runtime.native import NativeRuntimeError, NativeRuntimeUnavailable
 
@@ -93,7 +93,6 @@ INTENT = "僅意圖"
 UNKNOWN = "未知"
 NOT_GRANTED = "不授予"
 UNRESTRICTED = "未限制"
-VERIFIED_INTENTS = {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}
 # the words the screens use for the four permission intents (the keys stay English in the API)
 INTENT_LABELS = {"read": "讀取檔案", "write": "編輯寫入", "test": "執行測試", "deploy": "部署上線"}
 
@@ -129,6 +128,14 @@ def _codex_evidence_reference() -> str | None:
     if not all(checks[name] is True for name in CODEX_EVIDENCE_CHECKS):
         return None
     return reference
+
+
+def intent_blockers(intents: dict) -> list[dict]:
+    """Why a combination of permission intents alone cannot be launched: ``launch_blockers`` for a stand-in Claude
+    card that is enabled, with the commit acknowledged and the network closed, so only the intents can speak. The
+    wizard asks this before a card is saved; the rules stay here, the page repeats none of them."""
+    stand_in = {"model": {"tool": "claude"}, "enabled": True, "permission_intents": dict(intents)}
+    return launch_blockers(stand_in, True, {"enabled": False, "approved_domains": []})
 
 
 def launch_blockers(profile: dict, commit, network) -> list[dict]:

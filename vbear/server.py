@@ -532,6 +532,8 @@ def make_handler(console: Console):
                     return self._json(self._governance_view())
                 if path == "/api/agent-builder/catalog":
                     return self._json(self._agent_builder_catalog())
+                if path == "/api/agent-builder/intent-check":
+                    return self._intent_check(parse_qs(url.query))
                 if path == "/api/native/claude-verification":
                     return self._json({"status": console.claude_verifier.status()})
                 if path == "/api/agent-profiles":
@@ -1156,6 +1158,18 @@ def make_handler(console: Console):
             return agent_profiles.get_profile(profile_id, known_skills=set(index.keys()),
                                               known_roles=known_roles)
 
+        def _intent_check(self, query: dict):
+            """GET /api/agent-builder/intent-check?read=&write=&test=&deploy= : why this combination of permission
+            intents cannot be launched (agent_launch.intent_blockers). Pure: nothing is read or written."""
+            keys = agent_profiles.PERMISSION_KEYS
+            if set(query) != set(keys) or any(len(query[k]) != 1 for k in keys):
+                return self._error(400, "請提供 read、write、test、deploy 各一個值")
+            intents = {k: query[k][0] for k in keys}
+            if any(v not in agent_profiles.PERMISSION_VALUES for v in intents.values()):
+                return self._error(400, "權限意圖只能是 allow、deny 或 unspecified")
+            blockers = agent_launch.intent_blockers(intents)
+            return self._json({"ok": True, "intents": intents, "can_launch": not blockers, "blockers": blockers})
+
         def _folder_inspect(self, query: dict):
             """GET /api/folders/inspect?path= : a read-only summary of a folder (vbear.folders)."""
             if set(query) - {"path"} or len(query.get("path", [])) != 1:
@@ -1557,6 +1571,9 @@ def make_handler(console: Console):
                 "starter_deck": [dict(card, permission_intents=dict(card["permission_intents"]))
                                  for card in agent_profiles.STARTER_DECK],
                 "positions": list(agent_profiles.POSITIONS),
+                # The one combination of intents a managed launch honours; the starter deck and the wizard's
+                # suggestions both use it (design card-play v1.2 R10).
+                "verified_intents": dict(agent_profiles.VERIFIED_INTENTS),
                 "demo_id_prefix": agent_profiles.DEMO_ID_PREFIX,
                 # Whether a pinned Codex install exists on this machine: one stat, no program is run.
                 "codex_installed": self._codex_pinned_found(),

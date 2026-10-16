@@ -75,17 +75,24 @@ KNOWN_TOOLS: frozenset[str] = frozenset({"claude", "codex", "shared"})
 # profile field, so it never reaches the stored schema.
 POSITIONS: tuple[str, ...] = ("planner", "executor", "reviewer")
 
-# The three cards "用起手牌組開始" offers (design card-play 3.3). The catalog serves this constant so the front end
-# draws the same deck the tests lock. Each entry becomes an ordinary profile through save_profile; the permission
-# intents are suggestions the person can change, and are records, not authority. The reviewer is on the other tool
-# than the executor on purpose: a review by the same family does not count.
+# The one combination of intents a managed launch honours today (agent_launch.launch_blockers is a whitelist on it):
+# read, write and test allowed, deploy denied. It lives here, beside the starter deck, so the deck, the wizard's
+# suggestions (through the catalog) and the launch rules all take the value from one place.
+VERIFIED_INTENTS: dict[str, str] = {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}
+
+# The three cards "用起手牌組開始" offers (design card-play 3.3, v1.2 R10). The catalog serves this constant so the
+# front end draws the same deck the tests lock. Each entry becomes an ordinary profile through save_profile. All three
+# carry VERIFIED_INTENTS: a card with any other combination cannot be launched from VBear at all, and a new person
+# must not be handed cards that cannot go. The intents are suggestions the person can change, and are records, not
+# authority: that a planner or a reviewer should not edit files cannot be enforced here, and the screens say so. The
+# reviewer is on the other tool than the executor on purpose: a review by the same family does not count.
 STARTER_DECK: tuple[dict[str, Any], ...] = (
     {"key": "planner", "name": "CEO", "position": "planner", "tool": "claude",
-     "permission_intents": {"read": "allow", "write": "deny", "test": "deny", "deploy": "deny"}},
+     "permission_intents": dict(VERIFIED_INTENTS)},
     {"key": "executor", "name": "工匠", "position": "executor", "tool": "claude",
-     "permission_intents": {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}},
+     "permission_intents": dict(VERIFIED_INTENTS)},
     {"key": "reviewer", "name": "審查員", "position": "reviewer", "tool": "codex",
-     "permission_intents": {"read": "allow", "write": "deny", "test": "allow", "deploy": "deny"}},
+     "permission_intents": dict(VERIFIED_INTENTS)},
 )
 
 # QA and demo environments name their sample cards with this id prefix; the console never invents a profile with it.

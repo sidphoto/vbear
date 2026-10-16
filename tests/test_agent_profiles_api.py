@@ -41,7 +41,7 @@ os.environ["PATH"] = "/usr/bin:/bin"
 os.environ.pop("HERDR_BIN_PATH", None)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from vbear import agent_profiles, server  # noqa: E402
+from vbear import agent_launch, agent_profiles, server  # noqa: E402
 from vbear import runtime as rt_mod  # noqa: E402
 from vbear.config import state_dir  # noqa: E402
 from vbear.index import Store  # noqa: E402
@@ -159,13 +159,15 @@ class AgentBuilderAPITests(unittest.TestCase):
             ("planner", "CEO", "planner", "claude"),
             ("executor", "工匠", "executor", "claude"),
             ("reviewer", "審查員", "reviewer", "codex")])
-        self.assertEqual([c["permission_intents"] for c in deck], [
-            {"read": "allow", "write": "deny", "test": "deny", "deploy": "deny"},
-            {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"},
-            {"read": "allow", "write": "deny", "test": "allow", "deploy": "deny"}])
-        # the response is a copy: the constant cannot be edited through it
-        deck[0]["permission_intents"]["write"] = "allow"
-        self.assertEqual(agent_profiles.STARTER_DECK[0]["permission_intents"]["write"], "deny")
+        # v1.2 R10: every card carries the one combination a managed launch honours, taken from one place
+        self.assertEqual([c["permission_intents"] for c in deck], [dict(agent_launch.VERIFIED_INTENTS)] * 3)
+        self.assertEqual(body["verified_intents"], {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"})
+        self.assertEqual(body["verified_intents"], agent_launch.VERIFIED_INTENTS)
+        # the response is a copy: the constants cannot be edited through it
+        deck[0]["permission_intents"]["write"] = "deny"
+        body["verified_intents"]["write"] = "deny"
+        self.assertEqual(agent_profiles.STARTER_DECK[0]["permission_intents"]["write"], "allow")
+        self.assertEqual(agent_profiles.VERIFIED_INTENTS["write"], "allow")
         self.assertIsInstance(body["codex_installed"], bool)
 
     def test_starter_deck_constant_is_safe_to_save_and_has_a_cross_tool_reviewer(self):
@@ -182,6 +184,17 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertNotEqual(tools["executor"], tools["reviewer"])
         # none of them grants deploy
         self.assertTrue(all(c["permission_intents"]["deploy"] == "deny" for c in deck))
+        # R10: the intents alone never keep a starter card from going, and the deck and the launch rules share one
+        # constant (agent_launch only imports it)
+        self.assertIs(agent_launch.VERIFIED_INTENTS, agent_profiles.VERIFIED_INTENTS)
+        for card in deck:
+            self.assertEqual(card["permission_intents"], agent_launch.VERIFIED_INTENTS, card["key"])
+            self.assertEqual(agent_launch.intent_blockers(card["permission_intents"]), [], card["key"])
+            blockers = agent_launch.launch_blockers(
+                {"model": {"tool": card["tool"]}, "enabled": True, "permission_intents": dict(card["permission_intents"])},
+                True, {"enabled": False, "approved_domains": []})
+            # the only thing in the way of a starter card is Codex itself; never an intent
+            self.assertTrue(all(b["code"].startswith("codex_") for b in blockers), (card["key"], blockers))
         # and each one goes through the ordinary save
         for card in deck:
             status, saved = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(), body={
@@ -193,6 +206,45 @@ class AgentBuilderAPITests(unittest.TestCase):
         status, _ = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
                              body=_sample(position="planner"))
         self.assertEqual(status, 400)
+
+    def test_intent_check_names_the_launch_rules_reasons_and_nothing_else(self):
+        def check(**q):
+            from urllib.parse import urlencode
+            return _request("GET", self.port, "/api/agent-builder/intent-check?" + urlencode(q))
+        # the verified combination: nothing in the way
+        status, body = check(**agent_launch.VERIFIED_INTENTS)
+        self.assertEqual((status, body["ok"], body["can_launch"], body["blockers"]), (200, True, True, []))
+        self.assertEqual(body["intents"], agent_launch.VERIFIED_INTENTS)
+        # one row per rule, with the server's own code and words
+        cases = [({"write": "deny"}, "readonly_unverified"), ({"read": "deny"}, "read_deny_unenforceable"),
+                 ({"test": "deny"}, "test_deny_unenforceable"), ({"deploy": "allow"}, "deploy_not_available"),
+                 ({"write": "unspecified"}, "intent_unspecified")]
+        for change, code in cases:
+            status, body = check(**{**agent_launch.VERIFIED_INTENTS, **change})
+            self.assertEqual(status, 200)
+            self.assertFalse(body["can_launch"], change)
+            self.assertIn(code, [b["code"] for b in body["blockers"]], change)
+            expected = agent_launch.intent_blockers({**agent_launch.VERIFIED_INTENTS, **change})
+            self.assertEqual(body["blockers"], expected)
+        # it answers about the intents alone: no reason about the tool, the commit or the network
+        status, body = check(read="deny", write="deny", test="deny", deploy="deny")
+        self.assertEqual(sorted(b["code"] for b in body["blockers"]),
+                         ["read_deny_unenforceable", "readonly_unverified", "test_deny_unenforceable"])
+        # missing, extra, repeated and unknown values are refused, not guessed
+        for q in ("", "read=allow&write=allow&test=allow", "read=allow&write=allow&test=allow&deploy=deny&x=1",
+                  "read=allow&read=deny&write=allow&test=allow&deploy=deny",
+                  "read=allow&write=allow&test=allow&deploy=maybe", "read=enforce&write=allow&test=allow&deploy=deny"):
+            status, _ = _request("GET", self.port, "/api/agent-builder/intent-check" + ("?" + q if q else ""))
+            self.assertEqual(status, 400, q)
+
+    def test_intent_check_runs_nothing_and_writes_nothing(self):
+        import subprocess
+        before = sorted(p.name for p in state_dir().iterdir())
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("ran a program")), \
+                mock.patch.object(subprocess, "Popen", side_effect=AssertionError("ran a program")):
+            status, _ = _request("GET", self.port, "/api/agent-builder/intent-check?read=allow&write=deny&test=allow&deploy=deny")
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted(p.name for p in state_dir().iterdir()), before)
 
     def test_catalog_codex_installed_is_a_stat_of_the_pinned_path_and_runs_nothing(self):
         import subprocess
