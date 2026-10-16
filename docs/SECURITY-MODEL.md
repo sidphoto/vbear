@@ -552,7 +552,7 @@ to 500; the approval is refused when the chosen limits could write more than the
 - If `config.json` is corrupt, it is never overwritten. It is backed up, scanning is turned off, and a
   warning is shown.
 
-## Skill translations (candidate, no production provider enabled)
+## Skill translations (version-verified Claude boundary)
 
 `translations.py` is separate from managed launches, dispatches and the runtime. Only an explicitly requested
 single/batch translation or a rescan after engine-bound automatic consent can enqueue work. Automatic mode
@@ -567,18 +567,35 @@ prompt/cache/UI. This is a **new outbound data path through the user's authentic
 consume the user's quota or money. Claude's `--max-budget-usd 0.05` is a requested budget checked by the CLI,
 not a guaranteed invoice cap; Codex cost and tokens are unknown. VBear adds no API key or HTTP client.
 
-The candidate Claude argv explicitly empties tools and MCP, uses safe mode and nonpersistent JSON output.
-The candidate Codex argv requests read-only and tool disabling; **these flags are not evidence that Codex
-has no tools**. Existing launch evidence includes Bash and cannot establish this new boundary. Production
-provider resolution therefore refuses both engines with `boundary_unverified`, before spawning anything.
-There is no config/environment bypass. Enabling a real provider requires version/binary/exact-argv evidence
-and a reviewed code change; this task ran fake CLIs only. Neither engine is claimed verified or available.
+Claude uses `claude-haiku-5-5`, safe mode, an empty explicit tools list and strict empty MCP config,
+nonpersistent output, and a fixed `--json-schema` requiring exactly four string fields. The effective
+boundary is **only StructuredOutput (returns structured results), no MCP**, verified per CLI version.
+`POST /api/translations/verify`, behind the existing Host/token/Origin/X-VBear protections, runs an
+explicit quota-consuming probe after UI confirmation. It uses the translation argv with only
+`--output-format stream-json` and `--verbose` changed, a fixed harmless prompt, and the same empty cwd,
+environment, budget, deadline, output cap and process-group cleanup. It requires exactly one system/init
+with `tools == ["StructuredOutput"]` and `mcp_servers == []`; absent, malformed or different declarations
+fail closed. It checks `--version` before and after the probe and stores version -> passing timestamp in
+`translation-boundaries.json` via locked, atomic/0600 jsonstore. Reverification first revokes an old pass.
+Before each translation, resolution probes the current executable's version; only a matching stored
+pass enables it. This is version compatibility evidence, not binary authentication or proof against a
+malicious replacement executable. No generic launch verifier or environment bypass grants a pass.
+GET reads never run a probe or CLI; the UI does not claim that a stored pass proves the current version.
+Verification shares the translation worker lock. Unconfirmed process extinction blocks later work.
+Codex remains `boundary_unverified` unconditionally: read-only/tool-disable flags cannot prove its boundary.
+All implementation tests use fake CLIs only; this change does not prepopulate any real-version pass.
 The fake QA provider is injected in the QA Python process only.
+
+Claude translation accepts only a JSON object with `type=result`, `is_error=false`, and an object in
+`structured_output`, then applies the existing field/length validation. A missing structured result is
+an error; text in `result` and Markdown fences are never extracted. The prompt requests Traditional Chinese
+(Taiwan usage, no simplified characters). A small set of unambiguously simplified forms rejects output
+with `not_traditional`; shared characters are excluded. This heuristic does not prove full linguistic accuracy.
 
 A worker uses an empty temporary cwd, stdin for the untrusted JSON-string-delimited payload, fixed argv,
 no shell, one process group, a 60-second deadline, 32 KiB input and 64 KiB stdout limits. Stderr is discarded.
 On every exit it kills/reaps the group; unconfirmed group extinction blocks further work for manual review.
-HOME is needed for future authenticated CLI use; empty cwd alone is **not read isolation**. No credential is
+HOME is needed for authenticated CLI use; empty cwd alone is **not read isolation**. No credential is
 copied. Prompt-injection instructions and strict output validation cannot prove semantic fidelity. Missing
 author when/needs/description values are forced to 「原文未提供」 after validation; other machine translations
 remain unverified content, labelled separately from author facts and rendered only as text.

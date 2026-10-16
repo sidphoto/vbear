@@ -32,17 +32,28 @@ FAKE = '''#!{python}
 import json, os, sys, time
 from pathlib import Path
 args = sys.argv[1:]
+if args == ['--version']:
+    print('2.1.296 (Claude Code)')
+    sys.exit(0)
 assert args[args.index('--tools')+1] == ''
 assert '--safe-mode' in args and '--strict-mcp-config' in args
 assert args[args.index('--mcp-config')+1] == '{{"mcpServers":{{}}}}'
-assert args[args.index('--model')+1] == 'claude-haiku-4-5-20251001'
+assert args[args.index('--model')+1] == 'claude-haiku-5-5'
 assert args[args.index('--max-budget-usd')+1] == '0.05'
 assert '--no-session-persistence' in args
+schema = json.loads(args[args.index('--json-schema')+1])
+assert schema == {{'type':'object', 'properties':{{k:{{'type':'string'}} for k in ('what','when','needs','description_zh')}}, 'required':['what','when','needs','description_zh'], 'additionalProperties':False}}
+
 assert not list(Path.cwd().iterdir())
 assert Path(os.environ['HOME']).name == 'home'
 assert set(os.environ) <= {{'PATH','HOME','USER','LOGNAME','LANG','TMPDIR','LC_CTYPE','__CF_USER_TEXT_ENCODING'}}
 prompt = sys.stdin.read()
-assert 'BEGIN_UNTRUSTED_JSON_STRING' in prompt
+assert '繁體中文（台灣用語，不得使用簡體字）' in prompt
+if '--verbose' in args:
+    assert args[args.index('--output-format')+1] == 'stream-json'
+    assert '技能' not in prompt and 'BEGIN_UNTRUSTED_JSON_STRING' not in prompt
+else:
+    assert 'BEGIN_UNTRUSTED_JSON_STRING' in prompt
 assert '/do-not-send' not in prompt and 'private-path' not in prompt
 sys.stderr.write('PRIVATE_ACCOUNT_INFO')
 {action}
@@ -65,7 +76,7 @@ class TranslationTests(unittest.TestCase):
     def fake(self, action=None):
         script = self.root / "fake-cli"
         if action is None:
-            action = "print(json.dumps(" + repr({"type": "result", "is_error": False, "result": json.dumps(RESULT)}) + "))"
+            action = "print(json.dumps(" + repr({"type": "result", "is_error": False, "structured_output": RESULT}) + "))"
         script.write_text(FAKE.format(python=sys.executable, action=action))
         script.chmod(0o700)
         return lambda engine: (str(script), "2.1.296")
@@ -174,11 +185,86 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(result["source_hash"], tr.source_hash(record()))
 
     def test_production_refuses_before_subprocess(self):
-        with mock.patch('subprocess.Popen', side_effect=AssertionError("no real CLI")):
+        with mock.patch.object(tr, "claude_identity", return_value=("fake", "2.1.296")), \
+             mock.patch('subprocess.Popen', side_effect=AssertionError("no real CLI")):
             for engine in tr.MODELS:
                 with self.assertRaises(tr.TranslationError) as cm:
                     tr.run_cli(engine, record(), threading.Event())
                 self.assertEqual(cm.exception.code, "boundary_unverified")
+
+    def test_structured_output_required_and_result_never_unwrapped(self):
+        for payload in (
+                {"type": "result", "is_error": False, "result": json.dumps(RESULT)},
+                {"type": "result", "is_error": False, "result": "```json\n" + json.dumps(RESULT) + "\n```"},
+                {"type": "result", "is_error": False, "structured_output": json.dumps(RESULT)},
+                {"type": "result", "is_error": True, "structured_output": RESULT},
+                {"type": "other", "is_error": False, "structured_output": RESULT},
+                {"type": "result", "structured_output": RESULT}):
+            with self.subTest(payload=payload), self.assertRaises(tr.TranslationError) as cm:
+                tr.run_cli("claude", record(), threading.Event(),
+                           provider=self.fake("print(json.dumps(" + repr(payload) + "))"))
+            self.assertEqual(cm.exception.code, "invalid_output")
+        payload = {"type": "result", "is_error": False, "structured_output": RESULT, "result": "ignored"}
+        out = tr.run_cli("claude", record(), threading.Event(),
+                         provider=self.fake("print(json.dumps(" + repr(payload) + "))"))
+        self.assertEqual(out["description_zh"], RESULT["description_zh"])
+
+    def test_simplified_characters_rejected_before_missing_overrides(self):
+        for char in tr.SIMPLIFIED:
+            with self.subTest(char=char), self.assertRaises(tr.TranslationError) as cm:
+                tr.validate_result({**RESULT, "needs": char}, {})
+            self.assertEqual(cm.exception.code, "not_traditional")
+        tr.validate_result({**RESULT, "description_zh": "查入程式資料讀寫審核門檻"})
+        payload = {"type": "result", "is_error": False, "structured_output": {**RESULT, "what": "这个"}}
+        with self.assertRaises(tr.TranslationError) as cm:
+            tr.run_cli("claude", record(), threading.Event(),
+                       provider=self.fake("print(json.dumps(" + repr(payload) + "))"))
+        self.assertEqual(cm.exception.code, "not_traditional")
+
+    def test_boundary_probe_pass_persistence_and_version_gating(self):
+        event = {"type": "system", "subtype": "init", "tools": ["StructuredOutput"], "mcp_servers": []}
+        binary, version = self.fake("print(json.dumps(" + repr(event) + "))")("claude")
+        with mock.patch.object(tr.shutil, "which", return_value=binary):
+            with self.assertRaises(tr.TranslationError) as cm:
+                tr.resolve_provider("claude")
+            self.assertEqual(cm.exception.code, "boundary_unverified")
+            passed = tr.verify_boundary("claude")
+            self.assertEqual(passed["version"], version)
+            self.assertEqual(tr.resolve_provider("claude"), (binary, version))
+        store = tr.BoundaryStore()
+        self.assertEqual(store.load(), {version: passed["passed_at"]})
+        self.assertEqual(store.path().stat().st_mode & 0o777, 0o600)
+        with mock.patch.object(tr, "claude_identity", return_value=(binary, "2.1.301")), \
+             mock.patch.object(tr, "_execute", side_effect=AssertionError("unverified must not translate")):
+            with self.assertRaises(tr.TranslationError) as cm:
+                tr.run_cli("claude", record(), threading.Event())
+            self.assertEqual(cm.exception.code, "boundary_unverified")
+            with self.assertRaises(tr.TranslationError):
+                tr.TranslationManager().start({"s": record()}, "claude")
+        with mock.patch.object(tr, "claude_identity", side_effect=AssertionError("Codex never probes")):
+            with self.assertRaises(tr.TranslationError):
+                tr.verify_boundary("codex")
+
+    def test_boundary_probe_rejects_extra_tools_mcp_missing_and_changed_version(self):
+        good = {"type": "system", "subtype": "init", "tools": ["StructuredOutput"], "mcp_servers": []}
+        store = tr.BoundaryStore()
+        for event in ({**good, "tools": ["StructuredOutput", "Read"]},
+                      {**good, "mcp_servers": [{"name": "remote"}]},
+                      {**good, "tools": []}, {"type": "result"}, {**good, "mcp_servers": None},
+                      {k: v for k, v in good.items() if k != "tools"}):
+            with store.locked():
+                store.save({"2.1.296": time.time()})
+            binary, _ = self.fake("print(json.dumps(" + repr(event) + "))")("claude")
+            with self.subTest(event=event), mock.patch.object(tr.shutil, "which", return_value=binary):
+                with self.assertRaises(tr.TranslationError) as cm:
+                    tr.verify_boundary("claude")
+                self.assertEqual(cm.exception.code, "boundary_unverified")
+                self.assertEqual(store.load(), {})
+        binary, _ = self.fake("print(json.dumps(" + repr(good) + "))")("claude")
+        with mock.patch.object(tr, "claude_identity", side_effect=[(binary, "2.1.296"), (binary, "2.1.301")]):
+            with self.assertRaises(tr.TranslationError):
+                tr.verify_boundary("claude")
+        self.assertEqual(store.load(), {})
 
     def test_fake_timeout_and_cancel_terminate_group(self):
         for cancel in (False, True):
@@ -258,6 +344,49 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, "busy")
         first.cancel()
         self.wait(first)
+
+    def test_block_marker_rechecked_after_worker_lock_handoff(self):
+        marker = cfg.state_dir() / "translation-worker.blocked"
+        flock = tr.fcntl.flock
+        def handoff(fd, operation):
+            flock(fd, operation)
+            if operation & tr.fcntl.LOCK_NB:
+                cfg.write_private(marker, "process_unconfirmed\n")
+        for action in (lambda: tr.verify_boundary("claude"),
+                       lambda: tr.TranslationManager().start({"s": record()}, "claude")):
+            with self.subTest(action=action):
+                with mock.patch.object(tr.fcntl, "flock", side_effect=handoff), \
+                     mock.patch.object(tr, "claude_identity", side_effect=AssertionError("blocked must not probe")), \
+                     mock.patch.object(tr, "_verify_boundary", side_effect=AssertionError("blocked must not verify")):
+                    with self.assertRaises(tr.TranslationError) as cm:
+                        action()
+                    self.assertEqual(cm.exception.code, "process_unconfirmed")
+                marker.unlink()
+
+    def test_verification_and_version_checks_share_worker_lock(self):
+        started = threading.Event()
+        def run(engine, rec, cancel):
+            started.set()
+            cancel.wait(2)
+            return entry(rec)
+        first = tr.TranslationManager(run)
+        first.start({"s": record()}, "claude")
+        self.assertTrue(started.wait(1))
+        with mock.patch.object(tr, "claude_identity", side_effect=AssertionError("busy must not probe")):
+            for action in (lambda: tr.verify_boundary("claude"),
+                           lambda: tr.TranslationManager().start({"s": record()}, "claude")):
+                with self.assertRaises(tr.TranslationError) as cm:
+                    action()
+                self.assertEqual(cm.exception.code, "busy")
+        first.cancel()
+        self.wait(first)
+        with mock.patch.object(tr, "claude_identity", return_value=("fake", "2.1.296")):
+            with self.assertRaises(tr.TranslationError):
+                tr.TranslationManager().start({"s": record()}, "claude")
+        # A rejected version must release the lock for explicit verification.
+        with mock.patch.object(tr, "_verify_boundary", return_value={"version": "2.1.296"}) as verify:
+            tr.verify_boundary("claude")
+            verify.assert_called_once_with("claude")
 
     def test_old_inflight_result_stale_against_new_index_and_group_block(self):
         manager = tr.TranslationManager(lambda engine, rec, cancel: entry(rec))

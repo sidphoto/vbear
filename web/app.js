@@ -934,7 +934,9 @@ function translationPanel(id, original) {
           running ? "翻譯中…" : e ? "重新翻譯" : "翻成中文"),
         running ? el("button", { class: "btn small", type: "button", "data-translation-action": "cancel", on: { click: cancelTranslations } }, "取消翻譯工作") : null,
         el("span", { class: "small muted" }, `說明文字會送到 ${T.engine}，消耗你的 CLI 帳號額度。`)),
-      T.provider === "unverified" ? el("p", { class: "small muted" }, "正式 CLI 的無工具邊界尚未驗證，目前會拒絕啟動。") : null,
+      T.provider === "version_required" ? el("div", { class: "small muted" },
+        T.engine === "claude" ? "翻譯前會核對版本；若未通過：這個 Claude Code 版本的翻譯安全邊界還沒驗證。" : "Codex 翻譯安全邊界尚未驗證，目前會拒絕啟動。",
+        T.engine === "claude" ? el("button", { class: "btn small", type: "button", on: { click: verifyTranslationBoundary } }, "驗證") : null) : null,
       T.provider === "fake" ? el("p", { class: "small muted" }, "QA 假 CLI 情境：不會呼叫真實模型。") : null);
     if (focused) {
       const target = Array.from(box.querySelectorAll("button")).find(b => b.getAttribute("data-translation-action") === focusedAction);
@@ -969,10 +971,18 @@ function translationToolbar() {
   box._translationInitial = true;
   T.listeners.add(draw); draw(); return box;
 }
+async function verifyTranslationBoundary() {
+  if (!(await confirmInPage("驗證翻譯安全邊界", "將用固定的無害提示檢查目前 Claude Code 版本是否只有 StructuredOutput、沒有 MCP。會花極少量額度；請求預算 US$0.05，這不是保證帳單上限。", "驗證"))) return;
+  try {
+    const result = await api.post("/api/translations/verify", {});
+    toast(`Claude Code ${result.version} 翻譯安全邊界驗證通過；翻譯前仍會核對版本。`);
+    await refreshTranslations();
+  } catch (e) { toast("驗證失敗：" + e.message); }
+}
 function translationSettings(conf, saveConf) {
   const engine = el("select", { "aria-label": "翻譯引擎", on: { change: async () => {
     const result = await saveConf({ translation_engine: engine.value });
-    if (result) { conf = result.config; auto.checked = !!conf.translation_auto; await refreshTranslations(); }
+    if (result) { conf = result.config; auto.checked = !!conf.translation_auto; await refreshTranslations(); viewSettings(); }
     else engine.value = conf.translation_engine || "claude";
   } } }, [["claude", "Claude Code（Haiku）"], ["codex", "Codex"]].map(([v, label]) =>
     el("option", { value: v, selected: v === (conf.translation_engine || "claude") }, label)));
@@ -997,7 +1007,9 @@ function translationSettings(conf, saveConf) {
       try { await api.del("/api/translations/orphans"); await refreshTranslations(); viewSettings(); }
       catch (e) { toast(e.message); }
     } } }, "清除孤兒翻譯"),
-    el("p", { class: "small muted" }, T.provider === "fake" ? "QA 假 CLI；不打真模型。" : "正式 CLI 無工具邊界尚未驗證；此版本不會啟動真實翻譯 CLI。"));
+    el("p", { class: "small muted" }, T.provider === "fake" ? "QA 假 CLI；不打真模型。" : "翻譯前會核對版本。若未通過：這個 Claude Code 版本的翻譯安全邊界還沒驗證。Codex 翻譯仍未開放。"),
+    el("p", { class: "small muted" }, "驗證會花極少量額度，只送固定的無害提示，不送技能資料。"),
+    conf.translation_engine === "claude" ? el("button", { class: "btn small", type: "button", on: { click: verifyTranslationBoundary } }, "驗證") : null);
 }
 
 // ---------- data -----------------------------------------------------------

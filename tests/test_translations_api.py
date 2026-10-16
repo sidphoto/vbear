@@ -71,7 +71,7 @@ class TranslationApiTests(fixtures.TranslationTests):
         self.assertEqual(self.call('/api/translations/orphans', 'DELETE')[1]['deleted'], 1)
 
     def test_api_token_origin_host_fetch_site_and_body_limit(self):
-        for path, method in (('/api/translations/batch', 'POST'), ('/api/translations/orphans', 'DELETE')):
+        for path, method in (('/api/translations/batch', 'POST'), ('/api/translations/verify', 'POST'), ('/api/translations/orphans', 'DELETE')):
             self.assertEqual(self.call(path, method, {}, {'Authorization': 'Bearer bad'})[0], 401)
             self.assertEqual(self.call(path, method, {}, {'Origin': 'http://evil.example'})[0], 403)
             self.assertEqual(self.call(path, method, {}, {'X-VBear': ''})[0], 403)
@@ -79,6 +79,17 @@ class TranslationApiTests(fixtures.TranslationTests):
         self.assertEqual(self.call('/api/translations', headers={'Sec-Fetch-Site': 'cross-site'})[0], 403)
         self.assertEqual(self.call('/api/translations/batch', 'POST', {'x': 'a' * 66000})[0], 413)
         self.assertIsNone(self.console.translations.job)
+
+    def test_api_verify_uses_explicit_post_and_rejects_body_overrides(self):
+        with mock.patch.object(tr, "verify_boundary", return_value={"version": "2.1.301", "passed_at": 1}) as verify:
+            status, data = self.call('/api/translations/verify', 'POST', {})
+            self.assertEqual(status, 200, data)
+            verify.assert_called_once_with("claude")
+            for body in ({"engine": "claude"}, {"version": "2.1.301"}, []):
+                self.assertEqual(self.call('/api/translations/verify', 'POST', body)[0], 400)
+            self.assertEqual(verify.call_count, 1)
+            self.call('/api/translations/verify')
+            self.assertEqual(verify.call_count, 1)
 
     def test_api_config_consent_validation_engine_change_and_disable(self):
         self.assertEqual(self.call('/api/config', 'POST', {'translation_auto': True})[0], 400)

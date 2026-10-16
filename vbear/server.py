@@ -572,6 +572,8 @@ def make_handler(console: Console):
             try:
                 if path == "/api/auth":
                     return self._auth_exchange(self._body())
+                if path == "/api/translations/verify":
+                    return self._translation_call("verify", self._body_strict())
                 if path == "/api/translations/batch/cancel":
                     return self._translation_call("cancel")
                 if path == "/api/translations/batch":
@@ -1224,10 +1226,14 @@ def make_handler(console: Console):
                 manager = console.translation_manager()
                 if action == "cancel":
                     return self._json({"job": manager.cancel()})
+                if action == "verify":
+                    if not isinstance(body, dict) or body:
+                        raise translations.TranslationError("bad_request")
+                    return self._json(translations.verify_boundary(console.store.conf.get("translation_engine", "claude")))
                 records = console.translation_records()
                 if action == "view":
                     return self._json({**manager.view(records), "engine": console.store.conf.get("translation_engine", "claude"),
-                                       "provider": "unverified" if manager.run is translations.run_cli else "fake"})
+                                       "provider": "version_required" if manager.run is translations.run_cli else "fake"})
                 if action == "orphans":
                     try:
                         return self._json({"deleted": manager.store.remove_orphans(records)})
