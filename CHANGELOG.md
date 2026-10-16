@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add an opt-in macOS browser startup mode, an open-in-browser menu command, and an Option-key escape to
+  window mode. Failed or timed-out browser launches fall back to the window with an error message.
+- Isolate macOS smoke tests by port and process ID, and add optional browser startup/reuse acceptance.
+
 ## v0.6.0 — Chinese skill summaries
 
 Skill descriptions can show Chinese machine translations and summaries alongside the author's original text.

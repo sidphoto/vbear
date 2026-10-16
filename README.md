@@ -264,8 +264,14 @@ Or with Homebrew:
 brew install --cask sidphoto/tap/vbear
 ```
 
-Quitting the app stops its window and server. Terminals you opened keep running, and they are there again
-the next time you open VBear.
+The app defaults to window mode. In 「顯示方式」, choose 「在瀏覽器中開啟」 to open the current console in your
+default browser, or check 「啟動時用瀏覽器開啟」 to use the browser on future launches. In browser mode the app
+exits after opening the console; its background server keeps running. Hold **Option** while launching to open
+a window and change the preference. If browser startup fails or takes more than 15 seconds, the app falls back
+to a window with an error message.
+
+In window mode, quitting the app stops its window and any server it started. Terminals you opened keep running,
+and they are there again the next time you open VBear.
 
 ### From source
 

@@ -315,6 +315,15 @@ variable from its environment at once, so the runtime daemon and terminals never
 `http://127.0.0.1:<port>/#auth=<token>`. The bundle is ad-hoc signed and is never written to at run time
 (`-B`, byte-compiled at build).
 
+The opt-in `BrowserOnLaunch` UserDefaults preference runs the bundled Python's `vbear launch` instead of
+creating a window. Option at startup overrides it. A successful launch exits the shell, leaving the CLI's
+detached server alive; a nonzero exit, executable error or 15-second deadline opens the normal window and
+an error sheet. The window's browser command opens the server's existing `open.html`, after checking it
+matches this connection, without another token file or token-bearing subprocess argument. Acceptance uses
+`VBEAR_APP_PORT` to avoid the production port and `-BrowserOnLaunch YES/NO` to override preferences without
+writing the user's defaults. `macos/test_browser_mode.sh` exercises the Swift launch decision and failure paths;
+`macos/smoke_test.sh <dmg> --browser` also checks detached server startup and reuse.
+
 ## Front end — `web/`
 
 Plain HTML, CSS and JavaScript with no framework. The only dependency is the bundled xterm.js 5.5.0 with

@@ -2,7 +2,8 @@
 # Install acceptance for a built VBear .dmg, as a brand-new user would see it:
 # an empty HOME, no Claude/Codex config, no earlier VBear state.
 #
-#   macos/smoke_test.sh dist/VBear-0.2.0-arm64.dmg
+#   macos/smoke_test.sh dist/VBear-0.6.0-arm64.dmg [--browser]
+# --browser also checks browser startup and server survival after app exit.
 #
 # Opens a VBear window for about a minute (it quits it again). Everything is
 # created under one temporary directory and removed at the end; your real
@@ -18,12 +19,26 @@ export VBEAR_HOME="$ROOT/s"                    # state dir (short path for the s
 mkdir -p "$MNT" "$QA_HOME"
 APP="$ROOT/VBear.app"
 APP_PID=""
+BROWSER_PID=""
+export HOME="$QA_HOME"
+export VBEAR_RUNTIME_AUTOSTART=0
+# Reserve a fresh non-production port; never probe or send requests to 7788.
+QA_PORT="$(/usr/bin/python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+[ "$QA_PORT" != 7788 ] || { echo "refusing production port" >&2; exit 1; }
+export VBEAR_APP_PORT="$QA_PORT"
 FAILS=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; FAILS=$((FAILS + 1)); }
 
 cleanup() {
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+  if [ -f "$VBEAR_HOME/server.token" ]; then
+    "$PY" -B -c 'import json, os, signal; p=json.load(open(os.environ["VBEAR_HOME"] + "/server.token")); os.kill(p["pid"], signal.SIGTERM)' 2>/dev/null || true
+  fi
+  if [ -n "$BROWSER_PID" ]; then
+    kill "$BROWSER_PID" 2>/dev/null || true
+    wait "$BROWSER_PID" 2>/dev/null || true
+  fi
   if [ -S "$VBEAR_HOME/runtime.sock" ] && [ -x "$APP/Contents/Resources/python/bin/python3" ]; then
     (cd "$APP/Contents/Resources/app" && ../python/bin/python3 -B -c \
       "from vbear.runtime import daemon as d; from pathlib import Path; d.rpc('shutdown', base=Path('$VBEAR_HOME'), force=True, timeout=15)" \
@@ -76,9 +91,13 @@ then pass "compiled code records bundle paths only"; else fail "compiled code re
 "$PY" -B -c "import ctypes, pty, termios, fcntl, selectors, tomllib, http.server, ssl, hashlib, secrets" \
   && pass "bundled python has the modules VBear needs" || fail "bundled python has the modules VBear needs"
 
-# 2. Start it as a new user (no ~/.claude, ~/.codex, ~/.vbear).
+# 2. Start our own isolated daemon; the app may not autostart any daemon.
+(cd "$APP/Contents/Resources/app" && exec "$PY" -B -m vbear runtimed) >"$ROOT/runtime.log" 2>&1 &
+for _ in $(seq 1 100); do [ -S "$VBEAR_HOME/runtime.sock" ] && break; sleep 0.1; done
+# Start it as a new user (no ~/.claude, ~/.codex, ~/.vbear).
 env -i HOME="$QA_HOME" USER="$USER" LOGNAME="$USER" VBEAR_HOME="$VBEAR_HOME" \
-    PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP/Contents/MacOS/VBear" >"$ROOT/app.log" 2>&1 &
+    VBEAR_RUNTIME_AUTOSTART=0 VBEAR_APP_PORT="$QA_PORT" \
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP/Contents/MacOS/VBear" -BrowserOnLaunch NO >"$ROOT/app.log" 2>&1 &
 APP_PID=$!
 for _ in $(seq 1 240); do [ -f "$VBEAR_HOME/server.token" ] && break; sleep 0.5; done
 [ -f "$VBEAR_HOME/server.token" ] && pass "app started its server" || { fail "app started its server"; cat "$ROOT/app.log"; exit 1; }
@@ -91,6 +110,7 @@ import base64, http.client, json, sys, time, urllib.request, urllib.error
 state, home = sys.argv[1], sys.argv[2]
 tok = json.load(open(f"{state}/server.token"))
 port, token = tok["port"], tok["token"]
+assert port != 7788, "refusing production port"
 base = f"http://127.0.0.1:{port}"
 bad = 0
 def check(ok, what):
@@ -137,7 +157,8 @@ sys.exit(1 if bad else 0)
 PYEOF
 cd - >/dev/null
 
-osascript -e 'tell application id "io.github.sidphoto.vbear" to quit' >/dev/null 2>&1 || kill "$APP_PID"
+# Address only the process this test started, never the shared bundle ID.
+/usr/bin/swift -e 'import Cocoa; guard let app = NSRunningApplication(processIdentifier: Int32(CommandLine.arguments[1])!) else { exit(1) }; exit(app.terminate() ? 0 : 1)' "$APP_PID"
 for _ in $(seq 1 20); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.5; done
 kill -0 "$APP_PID" 2>/dev/null && fail "app quits" || pass "app quits"
 APP_PID=""
@@ -150,6 +171,52 @@ r = d.rpc('list', base=Path('$VBEAR_HOME'))['result']['sessions']
 print(any(s['session_id'] == '$SID' and not s['exited'] for s in r))" 2>/dev/null || echo False)"
 [ "$ALIVE" = "True" ] && pass "the terminal keeps running after the app quits" || fail "the terminal keeps running after the app quits"
 codesign --verify --deep --strict "$APP" && pass "bundle unchanged after running (signature still valid)" || fail "bundle unchanged after running"
+
+if [ "${2:-}" = "--browser" ]; then
+  "$APP/Contents/MacOS/VBear" -BrowserOnLaunch YES >"$ROOT/browser.log" 2>&1 &
+  APP_PID=$!
+  for _ in $(seq 1 200); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$APP_PID" 2>/dev/null; then
+    fail "browser-mode app exits without a window"
+    kill -TERM "$APP_PID"
+  else
+    wait "$APP_PID" && pass "browser-mode app exits successfully without a window" || fail "browser-mode app exit status"
+  fi
+  APP_PID=""
+  # Authenticate after the app has gone, not merely while its child starts.
+  "$PY" -B - "$VBEAR_HOME" "$QA_PORT" <<'PYEOF' || FAILS=$((FAILS + 1))
+import json, pathlib, sys, urllib.request
+state, port = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+assert port != 7788
+access = json.loads((state / "server.token").read_text())
+assert access["port"] == port
+req = urllib.request.Request(f"http://127.0.0.1:{port}/api/config",
+                             headers={"Authorization": "Bearer " + access["token"]})
+with urllib.request.urlopen(req, timeout=10) as r:
+    assert json.load(r)["state_dir"] == str(state)
+assert (state / "open.html").is_file()
+print("PASS  browser server survives app exit with the existing private handoff")
+PYEOF
+  FIRST_SERVER_PID="$("$PY" -B -c 'import json, os; print(json.load(open(os.environ["VBEAR_HOME"] + "/server.token"))["pid"])')"
+  # Reuse that server on a second browser-mode launch.
+  "$APP/Contents/MacOS/VBear" -BrowserOnLaunch YES >"$ROOT/reuse.log" 2>&1 &
+  APP_PID=$!
+  for _ in $(seq 1 200); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$APP_PID" 2>/dev/null; then
+    fail "browser-mode reuse exits"
+    kill -TERM "$APP_PID"
+  else
+    wait "$APP_PID" && pass "browser-mode reuse exits successfully" || fail "browser-mode reuse exit status"
+  fi
+  APP_PID=""
+  # Only the PID from our isolated state may be stopped.
+  BROWSER_PID="$("$PY" -B -c 'import json, os; print(json.load(open(os.environ["VBEAR_HOME"] + "/server.token"))["pid"])')"
+  [ "$BROWSER_PID" = "$FIRST_SERVER_PID" ] && pass "second launch reuses the same server PID" || fail "second launch reuses the same server PID"
+  kill -TERM "$BROWSER_PID"
+  for _ in $(seq 1 100); do [ ! -f "$VBEAR_HOME/server.token" ] && break; sleep 0.1; done
+  [ ! -f "$VBEAR_HOME/server.token" ] && pass "isolated browser server cleaned up" || fail "isolated browser server cleaned up"
+  BROWSER_PID=""
+fi
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "SMOKE TEST PASSED"; else echo "SMOKE TEST FAILED ($FAILS)"; exit 1; fi

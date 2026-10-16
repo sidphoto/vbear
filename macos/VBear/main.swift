@@ -10,7 +10,28 @@
 import Cocoa
 import WebKit
 
-let defaultPort = 7788
+// Scripted acceptance can select a port without ever probing the user's console.
+let testPort = ProcessInfo.processInfo.environment["VBEAR_APP_PORT"].flatMap(Int.init)
+let defaultPort = testPort ?? 7788
+let browserPreference = "BrowserOnLaunch"
+
+func shouldLaunchBrowser(_ preferred: Bool, modifiers: NSEvent.ModifierFlags) -> Bool {
+    preferred && !modifiers.contains(.option)
+}
+
+func browserLaunchProblem(_ process: Process, timeout: TimeInterval = 15) throws -> String? {
+    try process.run()
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+    if process.isRunning {
+        process.terminate()
+        return "瀏覽器啟動超過 15 秒，已改用視窗模式。"
+    }
+    if process.terminationStatus != 0 {
+        return "瀏覽器啟動失敗（代碼 \(process.terminationStatus)），已改用視窗模式。"
+    }
+    return nil
+}
 
 func randomToken() -> String {
     var bytes = [UInt8](repeating: 0, count: 32)
@@ -84,21 +105,35 @@ func portIsFree(_ port: Int) -> Bool {
 }
 
 func freePort() -> Int {
+    if !(1...65535).contains(defaultPort) { return 0 }
     if portIsFree(defaultPort) { return defaultPort }
+    if testPort != nil { return 0 }
     for p in 7789...7899 where portIsFree(p) { return p }
     return 0
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, NSMenuItemValidation {
     var window: NSWindow!
     var webView: WKWebView!
     var server: Process?
     var port = defaultPort
     var token = ""
+    var browserItem: NSMenuItem!
+    var browserReady = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         buildMenu()
+        if shouldLaunchBrowser(UserDefaults.standard.bool(forKey: browserPreference),
+                               modifiers: NSEvent.modifierFlags) {
+            launchBrowser()
+        } else {
+            startWindow()
+        }
+    }
+
+    func startWindow() {
         let config = WKWebViewConfiguration()
+        if testPort != nil { config.websiteDataStore = .nonPersistent() }
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -110,14 +145,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = webView
         window.center()
-        window.setFrameAutosaveName("VBearMain")
+        if testPort == nil { window.setFrameAutosaveName("VBearMain") }
         window.makeKeyAndOrderFront(nil)
         showMessage("VBear 正在啟動…", detail: "第一次開啟會先整理你的技能與工作紀錄，可能需要一點時間。")
         DispatchQueue.global(qos: .userInitiated).async { self.connect() }
     }
 
+    // Launch has its own detached server lifecycle. Never assign it to `server`.
+    func launchBrowser() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            var problem: String?
+            let p = Process()
+            do {
+                guard let res = Bundle.main.resourceURL else { throw CocoaError(.fileNoSuchFile) }
+                let appDir = res.appendingPathComponent("app")
+                p.executableURL = res.appendingPathComponent("python/bin/python3")
+                p.currentDirectoryURL = appDir
+                p.arguments = ["-B", "-m", "vbear", "launch"]
+                if let port = testPort { p.arguments! += ["--port", String(port)] }
+                p.environment = self.pythonEnvironment(appDir)
+                p.standardInput = FileHandle.nullDevice
+                p.standardOutput = FileHandle.nullDevice
+                p.standardError = FileHandle.nullDevice
+                problem = try browserLaunchProblem(p)
+            } catch {
+                problem = "無法啟動瀏覽器模式：\(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                if let problem = problem {
+                    self.startWindow()
+                    self.showBrowserError(problem)
+                } else {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+    }
+
+    func pythonEnvironment(_ appDir: URL) -> [String: String] {
+        let env = ProcessInfo.processInfo.environment
+        var child: [String: String] = [:]
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "VBEAR_HOME", "VBEAR_RUNTIME_AUTOSTART"] {
+            if let v = env[key] { child[key] = v }
+        }
+        child["LANG"] = env["LANG"] ?? "zh_TW.UTF-8"
+        child["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        child["PYTHONPATH"] = appDir.path
+        child["PYTHONDONTWRITEBYTECODE"] = "1"
+        return child
+    }
+
+    func showBrowserError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "無法在瀏覽器中開啟"
+        alert.informativeText = message + " 啟動時按住 Option 可使用視窗模式；你也可以在「顯示方式」取消瀏覽器啟動偏好。"
+        alert.addButton(withTitle: "好")
+        alert.beginSheetModal(for: window)
+    }
+
+    @objc func toggleBrowser(_ sender: NSMenuItem) {
+        let enabled = !UserDefaults.standard.bool(forKey: browserPreference)
+        UserDefaults.standard.set(enabled, forKey: browserPreference)
+        sender.state = enabled ? .on : .off
+    }
+
+    @objc func openBrowser(_ sender: Any?) {
+        // The server already wrote this private handoff; do not create another
+        // token-bearing file or put the token in a subprocess argument.
+        let opener = stateDirectory().appendingPathComponent("open.html")
+        let expected = "<!doctype html><meta charset=utf-8><title>VBear</title>"
+            + "<script>location.replace(\"http://127.0.0.1:\(port)/#auth=\(token)\")</script>"
+            + "<p>正在開啟 VBear…</p>\n"
+        guard browserReady, let contents = try? String(contentsOf: opener, encoding: .utf8),
+              contents == expected, NSWorkspace.shared.open(opener) else {
+            showBrowserError("主控台尚未就緒，或瀏覽器交接檔無法開啟。請稍後重試。")
+            return
+        }
+    }
+
     func connect() {
-        if let rec = recordedAccess(), accepts(port: rec.port, token: rec.token) {
+        if let rec = recordedAccess(), (testPort == nil || rec.port == testPort), accepts(port: rec.port, token: rec.token) {
             port = rec.port
             token = rec.token
             return DispatchQueue.main.async { self.openConsole() }
@@ -154,15 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         p.executableURL = python
         p.arguments = ["-B", "-m", "vbear", "serve", "--port", String(port)]
         p.currentDirectoryURL = appDir
-        let env = ProcessInfo.processInfo.environment
-        var child: [String: String] = [:]
-        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "VBEAR_HOME", "VBEAR_RUNTIME_AUTOSTART"] {
-            if let v = env[key] { child[key] = v }
-        }
-        child["LANG"] = env["LANG"] ?? "zh_TW.UTF-8"
-        child["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        child["PYTHONPATH"] = appDir.path
-        child["PYTHONDONTWRITEBYTECODE"] = "1"
+        var child = pythonEnvironment(appDir)
         child["VBEAR_ACCESS_TOKEN"] = token
         p.environment = child
         let logDir = stateDirectory()
@@ -185,6 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func openConsole() {
         guard let url = URL(string: "http://127.0.0.1:\(port)/#auth=\(token)") else { return }
+        browserReady = true
         webView.load(URLRequest(url: url))
     }
 
@@ -238,7 +338,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
     }
 
-    @objc func reload(_ sender: Any?) { webView.reload() }
+    @objc func reload(_ sender: Any?) { webView?.reload() }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(openBrowser(_:)) { return browserReady }
+        if menuItem.action == #selector(reload(_:)) { return webView != nil }
+        return true
+    }
 
     func buildMenu() {
         let main = NSMenu()
@@ -262,6 +368,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         edit.addItem(item("全選", #selector(NSText.selectAll(_:)), "a"))
         let view = NSMenu(title: "顯示方式")
         view.addItem(item("重新載入", #selector(reload(_:)), "r"))
+        view.addItem(item("在瀏覽器中開啟", #selector(openBrowser(_:)), ""))
+        view.addItem(.separator())
+        browserItem = item("啟動時用瀏覽器開啟（按住 Option 使用視窗）", #selector(toggleBrowser(_:)), "")
+        browserItem.state = UserDefaults.standard.bool(forKey: browserPreference) ? .on : .off
+        view.addItem(browserItem)
         let win = NSMenu(title: "視窗")
         win.addItem(item("縮到最小", #selector(NSWindow.miniaturize(_:)), "m"))
         win.addItem(item("關閉", #selector(NSWindow.performClose(_:)), "w"))
