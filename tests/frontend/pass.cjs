@@ -698,6 +698,23 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.deepStrictEqual(launches[0], { preview_id: "p-" + "a".repeat(32), expected_settings_digest: "d".repeat(64), user_confirmed: true });
   });
 
+  await test("a confirmation can keep its long print behind 「詳細」: the short sentence on top, nothing lost, no fold when there is none", async () => {
+    const ctx = mkPass([roleP]);
+    const pending = ctx.confirmInPage("確認送出技能說明", "會用你自己的 Claude 帳號翻譯這張技能卡，通常不到 1 美分。", "翻成中文", { details: "請求預算 US$0.05，這不是保證帳單上限。" });
+    const d = dialog();
+    assert.ok(d && findText(d, "會用你自己的 Claude 帳號翻譯這張技能卡，通常不到 1 美分。"));
+    const fold = byData(d, "data-confirm", "details")[0];
+    assert.ok(fold && fold.tag === "details" && !fold.hasAttribute("open"), "folded");
+    assert.strictEqual(fold.children[0].textContent, "詳細");
+    assert.ok(textOf(fold).includes("請求預算 US$0.05，這不是保證帳單上限。"));
+    btnByText(d, "翻成中文").dispatch("click");
+    assert.strictEqual(await pending, true);
+    const plain = ctx.confirmInPage("標題", "只有一句", "好");
+    assert.ok(!byData(dialog(), "data-confirm", "details").length);
+    btnByText(dialog(), "取消").dispatch("click");
+    assert.strictEqual(await plain, false);
+  });
+
   // ---- the source and the style --------------------------------------------------------------------------------
   const app = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");

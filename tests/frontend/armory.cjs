@@ -16,7 +16,7 @@ class Node {
 }
 function walk(n) { return [n, ...(n.children || []).flatMap(walk)]; }
 const main = new Node("main");
-const context = { Node, console, main, window: { scrollTo() {} }, document: {
+const context = { Node, console, main, window: { scrollTo() {} }, store: { get: (_k, d) => d, set() {} }, document: {
   createElement: t => new Node(t), createTextNode: t => Object.assign(new Node("#text"), { textContent: String(t) }),
   getElementById: () => main,
 } };

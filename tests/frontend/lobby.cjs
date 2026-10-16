@@ -336,6 +336,10 @@ function setPage(over = {}) {
     if (p === "/api/roles") return jsonResponse({ roles: [] });
     if (p === "/api/live") return handlerState.liveError ? jsonResponse({ error: handlerState.liveError }, false, 500) : jsonResponse(handlerState.live);
     if (p === "/api/flows") return handlerState.flowsError ? jsonResponse({ error: handlerState.flowsError }, false, 500) : jsonResponse(handlerState.flows);
+    if (p === "/api/agent-profiles" && handlerState.profiles) return jsonResponse({ ok: true, profiles: handlerState.profiles });
+    if (p === "/api/agent-builder/catalog" && handlerState.catalog) return jsonResponse(handlerState.catalog);
+    if (p === "/api/tasks" && handlerState.tasks) return jsonResponse({ ok: true, tasks: handlerState.tasks });
+    if (p === "/api/config" && handlerState.config) return jsonResponse({ ok: true, config: handlerState.config });
     return null;
   });
 }
@@ -356,7 +360,8 @@ test("the page is the lobby: title, lede, and the board before the search", asyn
   setPage({ flows: flowsOf([flow("awaiting_approval", { attention: true })]) });
   const main = await open();
   assert.strictEqual(text(main.find(isEl("h1"))), "冒險者大廳");
-  assert(text(main).includes("先看告示板上輪到你的任務，再看其他進行中的任務。"));
+  assert(text(main).includes("這裡看哪些任務在等你、隊伍走到哪一步。"));
+  assert(!text(main).includes("先看告示板上輪到你的任務"));
   const hs = headings(main);
   assert.deepStrictEqual(hs.slice(0, 2), ["輪到你", "其他進行中的任務"]);
   assert(hs.indexOf("找技能") > hs.indexOf("其他進行中的任務"), "the search stays after the board");
@@ -462,7 +467,8 @@ test("all empty: one start block that points at the terminal workbench and expla
   assert.strictEqual(links.length, 1);
   assert.strictEqual(links[0].getAttribute("href"), "#/workbench");
   assert.strictEqual(text(links[0]), "到終端工作台");
-  assert(text(b).includes("先在右側「任務卡」分頁新增任務卡，再到「流程」頁建立流程"));
+  assert(text(b).includes("先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置"));
+  assert(!text(b).includes("右側「任務卡」分頁"));
   assert(!headings(main).includes("輪到你"), "the two blocks are replaced by the start block");
 });
 
@@ -550,6 +556,177 @@ test("the CSS defines the new tokens in light and in both dark blocks, with enou
     assert(ratio(v.accent, v.panel) >= 4.5, `${name} accent`);
     for (const t of ["bad", "info"]) assert(ratio(v[t], v[t + "-soft"]) >= 4.5, `${name} --${t}: ${ratio(v[t], v[t + "-soft"])}`);
   }
+});
+
+
+// ---- the first game (design card-play 3.8) and the bulletin ---------------------------------------------------
+
+const catalogOf = () => ({ ok: true, demo_id_prefix: "demo-" });
+const mkCard = (id) => ({ id, name: id, model: { tool: "claude", model_id: "" }, equipped_skill_ids: [], permission_intents: {} });
+const taskOf = (id, workdir) => ({ id, title: `卡 ${id}`, status: "open", workdir });
+const stateOf = (over = {}) => app.onboardingState({ profiles: [], catalog: catalogOf(), tasks: [], flows: [], dismissed: false, ...over });
+const stepsDone = (st) => st.steps.map((x) => x.done);
+const onboard = (main) => main.find((n) => n.getAttribute && n.getAttribute("id") === "h-onboarding");
+
+test("onboardingState: unreadable data or a dismissed block shows nothing; a guess is never drawn", () => {
+  const base = { profiles: [], catalog: catalogOf(), tasks: [], flows: [], dismissed: false };
+  assert.strictEqual(app.onboardingState(base).mode, "steps");
+  for (const key of ["profiles", "tasks", "flows", "dismissed"]) {
+    for (const bad of [null, undefined, "x", {}, 3]) {
+      if (key === "dismissed" && bad === null) continue;
+      assert.strictEqual(app.onboardingState({ ...base, [key]: bad }).mode, "none", `${key}=${String(bad)}`);
+    }
+  }
+  for (const nope of [undefined, null, 5, "x", []]) assert.strictEqual(app.onboardingState(nope).mode, "none");
+  assert.strictEqual(app.onboardingState({ ...base, dismissed: true }).mode, "none");
+  assert.strictEqual(app.onboardingSection(app.onboardingState({ ...base, dismissed: true })), null);
+});
+
+test("onboardingState: each step is ticked from data the server has", () => {
+  assert.deepStrictEqual([...stepsDone(stateOf())], [false, false, false]);
+  // a sample card is not a card of your own
+  assert.deepStrictEqual([...stepsDone(stateOf({ profiles: [mkCard("demo-a"), mkCard("demo-b")] }))], [false, false, false]);
+  assert.deepStrictEqual([...stepsDone(stateOf({ profiles: [mkCard("demo-a"), mkCard("mine")] }))], [true, false, false]);
+  // a task card counts when it has a folder
+  assert.deepStrictEqual([...stepsDone(stateOf({ tasks: [taskOf("t1", null), taskOf("t2", "")] }))], [false, false, false]);
+  assert.deepStrictEqual([...stepsDone(stateOf({ tasks: [taskOf("t1", "/p/one")] }))], [false, true, false]);
+  // a team counts when a flow has a planner and an executor
+  const withTeam = flow("planning");
+  assert.deepStrictEqual([...stepsDone(stateOf({ flows: [withTeam] }))], [false, false, true]);
+  assert.deepStrictEqual([...stepsDone(stateOf({ flows: [flow("planning", { roles: {} })] }))], [false, false, false]);
+  assert.deepStrictEqual([...app.onboardingState({ profiles: [mkCard("a")], catalog: null, tasks: [taskOf("t1", "/p")], flows: [], dismissed: false }).steps.map((x) => x.key)], ["cards", "task", "team"]);
+});
+
+test("onboardingState: all three done folds to one line with the current step of the flow that waits for you", () => {
+  const quiet = flow("implementing");
+  const waiting = flow("awaiting_approval", { attention: true });
+  const all = { profiles: [mkCard("mine")], tasks: [taskOf("t1", "/p/one")] };
+  const st = stateOf({ ...all, flows: [quiet, waiting] });
+  assert.strictEqual(st.mode, "done");
+  assert.strictEqual(st.next, app.nextStepSummary(waiting));
+  assert(st.next.startsWith("下一步："));
+  assert.strictEqual(stateOf({ ...all, flows: [quiet] }).next, app.nextStepSummary(quiet));
+  // only a finished flow, or a phase the table does not know: the line has no next step to say
+  assert.strictEqual(stateOf({ ...all, flows: [flow("done")] }).next, "");
+  assert.strictEqual(stateOf({ ...all, flows: [flow("mystery")] }).next, "");
+});
+
+test("the page: the three steps sit above the board, the next undone step has the only button, 先不要 is there", async () => {
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: false } });
+  const main = await open();
+  const host = onboard(main);
+  assert(host, "the block is on the page");
+  const hs = headings(main);
+  assert.strictEqual(hs[0], "新手第一局", "above the board");
+  const html = main.findAll((n) => n.getAttribute && n.getAttribute("data-step")).map((n) => [n.getAttribute("data-step"), n.getAttribute("data-done")]);
+  assert.deepStrictEqual(html, [["cards", "false"], ["task", "false"], ["team", "false"]]);
+  assert(text(host).includes("1. 拿角色卡") && text(host).includes("2. 導入專案，建立任務卡") && text(host).includes("3. 把隊伍放上任務卡"));
+  const gos = host.findAll((n) => n.getAttribute && n.getAttribute("data-onboard-go"));
+  assert.deepStrictEqual(gos.map((n) => n.getAttribute("data-onboard-go")), ["cards"], "one button, on the first step that is not done");
+  assert.strictEqual(gos[0].getAttribute("href"), "#/team");
+  assert(host.find((n) => n.getAttribute && n.getAttribute("data-onboard") === "dismiss"));
+  assert(!/安全|已限制|保證/.test(text(host)));
+});
+
+test("the page: steps tick from the server's data, and the button moves on to the step that is next", async () => {
+  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: false } });
+  let main = await open();
+  assert.deepStrictEqual(main.findAll((n) => n.getAttribute && n.getAttribute("data-step")).map((n) => n.getAttribute("data-done")), ["true", "false", "false"]);
+  assert.deepStrictEqual(onboard(main).findAll((n) => n.getAttribute && n.getAttribute("data-onboard-go")).map((n) => n.getAttribute("data-onboard-go")), ["task"]);
+  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [taskOf("t-1", "/p/one")], config: { onboarding_dismissed: false } });
+  main = await open();
+  const go = onboard(main).findAll((n) => n.getAttribute && n.getAttribute("data-onboard-go"));
+  assert.deepStrictEqual(go.map((n) => n.getAttribute("data-onboard-go")), ["team"]);
+  assert.strictEqual(go[0].getAttribute("href"), "#/workbench?task=t-1");
+});
+
+test("the page: 先不要 saves onboarding_dismissed and the block goes away; the board stays", async () => {
+  const posts = [];
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: false } });
+  const inner = global.fetch;
+  global.fetch = async (url, options) => {
+    if (url === "/api/config" && options && options.method === "POST") {
+      posts.push(JSON.parse(options.body));
+      return { ok: true, status: 200, json: async () => ({ ok: true, config: { onboarding_dismissed: true } }) };
+    }
+    return inner(url, options);
+  };
+  try {
+    const main = await open();
+    const dismiss = onboard(main).find((n) => n.getAttribute && n.getAttribute("data-onboard") === "dismiss");
+    dismiss.dispatch ? dismiss.dispatch("click") : dismiss._listeners.click.forEach((f) => f({ preventDefault() {} }));
+    await settle();
+    assert.deepStrictEqual(posts, [{ onboarding_dismissed: true }]);
+    assert.strictEqual(onboard(main).children.length, 0, "nothing left");
+    assert(board(main), "the board is still there");
+  } finally { global.fetch = inner; }
+});
+
+test("the page: a dismissed block, or a config that cannot be read, shows nothing", async () => {
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [], config: { onboarding_dismissed: true } });
+  assert.strictEqual(onboard(await open()).children.length, 0);
+  setPage({ profiles: [], catalog: catalogOf(), tasks: [] });   // /api/config answers nothing usable
+  assert.strictEqual(onboard(await open()).children.length, 0);
+  setPage({ tasks: [], config: { onboarding_dismissed: false } });   // the cards could not be read
+  assert.strictEqual(onboard(await open()).children.length, 0);
+});
+
+test("the page: with all three done it is one line, 你的小隊已就位 · 下一步", async () => {
+  const waiting = flow("awaiting_approval", { attention: true });
+  setPage({ profiles: [mkCard("mine")], catalog: catalogOf(), tasks: [taskOf("t-1", "/p/one")], flows: flowsOf([waiting]), config: { onboarding_dismissed: false } });
+  const main = await open();
+  const host = onboard(main);
+  const line = host.find((n) => n.getAttribute && n.getAttribute("data-onboarding") === "done");
+  assert(line, "the folded line");
+  assert.strictEqual(text(line.find((n) => n.hasClass && n.hasClass("onboard-line"))), `你的小隊已就位 · ${app.nextStepSummary(waiting)}`);
+  assert(!host.find((n) => n.getAttribute && n.getAttribute("data-step")), "no steps any more");
+  assert(host.find((n) => n.getAttribute && n.getAttribute("data-onboard") === "dismiss"), "it can be put away too");
+});
+
+test("settings: the block can be brought back (or put away) from the settings page", async () => {
+  const saved = [];
+  const saveConf = async (body, msg) => { saved.push([body, msg]); return { config: body }; };
+  const hidden = app.onboardingSettings({ onboarding_dismissed: true }, saveConf);
+  assert(text(hidden).includes("新手第一局") && text(hidden).includes("目前已收起"));
+  const showBtn = hidden.find((n) => n.getAttribute && n.getAttribute("data-onboard") === "show");
+  assert.strictEqual(text(showBtn), "重新顯示大廳的新手第一局");
+  const shown = app.onboardingSettings({ onboarding_dismissed: false }, saveConf);
+  const hideBtn = shown.find((n) => n.getAttribute && n.getAttribute("data-onboard") === "hide");
+  assert.strictEqual(text(hideBtn), "不要再顯示新手第一局");
+  assert(text(shown).includes("三步都完成後會收成一行"));
+});
+
+test("the bulletin: a flow card shows its team's avatars and whose turn the next step is; the key repaints when they change", () => {
+  const f = flow("awaiting_approval", { attention: true });
+  const card = app.questCard(f, true);
+  assert(card.find((n) => n.getAttribute && n.getAttribute("data-team") === "avatars"), "the team's avatars");
+  const next = card.find((n) => n.getAttribute && n.getAttribute("data-quest") === "next");
+  assert(next && text(next) === app.nextStepSummary(f));
+  assert(/輪到/.test(text(next)));
+  // a phase the table does not know says nothing about the next step
+  const odd = app.questCard(flow("mystery"), false);
+  assert(!odd.find((n) => n.getAttribute && n.getAttribute("data-quest") === "next"));
+  // the repaint key reads them
+  const key = (x) => app.boardKey(group(live(), flowsOf([x])), { liveError: "", projects: [] });
+  const g = flow("awaiting_approval", { attention: true });
+  assert.strictEqual(key(f).includes("輪到"), true);
+  const other = flow("awaiting_approval", { attention: true, roles: { ...g.roles, planner: { name: "另一位規劃者", family_label: "x" } } });
+  other.id = f.id;
+  assert.notStrictEqual(key(f), key(other), "a changed planner repaints");
+  const later = flow("implementing", { attention: true }); later.id = f.id;
+  assert.notStrictEqual(key(f), key(later), "a changed next step repaints");
+});
+
+test("source: the first-game block is built with el(), no innerHTML, no emoji, no outside resource", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  const blockSrc = src.slice(src.indexOf("// ---------- the first game"), src.indexOf("// ---------- the office (design office v1.3)"));
+  assert(blockSrc.length > 2000);
+  assert(!/innerHTML|insertAdjacentHTML/.test(blockSrc));
+  assert(!/\p{Extended_Pictographic}/u.test(blockSrc));
+  assert(!/https?:\/\//.test(blockSrc));
+  const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+  for (const sel of [".onboard-steps", ".onboard-step", ".onboard-done", ".quest-next"]) assert(css.includes(sel), sel);
+  assert(/\.onboard-text\s*\{[^}]*overflow-wrap:\s*anywhere/.test(css));
 });
 
 // ---- run ------------------------------------------------------------------------------------------------------

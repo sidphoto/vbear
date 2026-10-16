@@ -1,7 +1,61 @@
 # Changelog
 
-## Unreleased
+## v0.7.0 — card play (unreleased)
 
+A first-time user can now build a team in three card moves, with no form to fill in: **collect** role cards (or take
+the starter deck), **equip** skill cards, and **play** a card onto a task card's team place, then set out. A task card
+is one folder, and an existing project can be brought in and managed. The version number is not changed here; this
+section lists what the branch holds so far.
+
+**Words.** 「Agent 團隊」 is now 「角色卡池」; a profile is a 「角色卡」, chosen skills are 「技能卡」 in slots
+(dashed 「收藏中」, solid 「生效中」 only when the loadout says a skill really loads, which no launch does today),
+the tool is the 「陣營」, permission intents have Chinese labels and say they are a record, not a grant.
+
+- **Card pool and wizard.** A card-pool page with a starter deck of three (CEO, 工匠, 審查員; the reviewer is left
+  unticked when Codex is not installed), a three-step wizard (name and look, tool and place, skill cards) whose
+  bottom buttons stay in view on a phone, suggested permission intents marked 「建議，可改」, and a same-name hint that
+  never blocks. `GET /api/agent-builder/catalog` carries the deck, positions and `codex_installed`.
+- **Role card.** Two faces (front: avatar, place, slots, a light that says why a launch is or is not possible; back:
+  tool and model, permission intents with 「只是記錄，不是授權」, evidence, advanced). Flip with the button or F; no
+  animation under reduced motion; the hidden face is `aria-hidden`. The office panel uses the same card.
+  `loadout` skill rows now carry `will_load` and the block carries `all_inactive`; the page decides dashed or solid
+  from that field and never from text.
+- **Task card = folder; bring in a project.** 「＋ 任務卡（導入專案）」 picks a folder from the projects VBear saw, the
+  recent folders or a pasted path (the app window also has a native chooser, `vbearPickFolder`, restricted to the main
+  frame of the console's own origin, one panel at a time). New: `GET /api/folders/inspect`, read-only (a few
+  `stat`s and the repository's HEAD, no git process, no walk), refusing the home directory itself and sensitive
+  places (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, `~/.vbear`, `~/.claude`, `~/.codex`, `~/.gemini`, `~/Library`,
+  and symlinks into them) with the same answer whether or not they exist. A folder that is not a git repository is
+  said so plainly: reviews tied to a commit will not count there. Config gets `recent_folders` (at most 10) and
+  `onboarding_dismissed`. A card's front names the folder, branch and HEAD, and counts the terminals whose working
+  directory is in it, without saying which role card opened them.
+- **Teams on a task card.** Team places (規劃位, 執行位, 審查位, an optional second review) filled by clicking, dragging
+  or 「放上任務卡」. A review place that would not count turns red at once with the reason (`slotProblem`); an empty
+  second place is not sent; errors show on the place. Flow roles can carry `profile_id` and a strict
+  `profile_snapshot` (`name`, `tool`, `model_id`, `revision`), and the page says when a card changed after it was
+  placed. `profile_digest` moved to `agent_profiles.py` with an unchanged value. A 「下一步」 list says whose turn each
+  step is.
+- **Launch pass (出發通行證).** The pre-launch check is now a pass. Its front has three lines: where it can write,
+  whether the network is blocked, and always 「擋不住版本紀錄（commit）」. Each line is worded by the level the preview
+  gives it; a check mark is drawn only for an enforced level, and partly blocked, untested and unknown items say so
+  in words. A shield legend (solid, dashed, empty; shape, not only colour) explains the shields. The seven labels sit
+  behind 「看七項細節」, unchanged. The commit acknowledgement is written out in plain words. Each reason that stops a
+  launch has a button next to it (decide the intents, change the folder, tick the box), and fixing it returns to the
+  same pass with a new preview. Server wording that said Profile follows the new name.
+- **The first game and the board.** The home page starts with 「新手第一局」 (get role cards, bring in a project, put the
+  team on it), each step ticked from real data, folded to one line when done, dismissable and restorable in
+  settings. Flow cards on the board show their team and whose turn the next step is.
+- **Phone menu.** At 720px and narrower the navigation folds behind one button that names the current page.
+- **Skill translation.** The confirmation is one sentence (your own account, usually under one US cent) with the
+  whole budget and timeout text behind 「詳細」. The progress bar folds away: success after 5 seconds, failure after
+  10 seconds into a dot at the lower right that reopens the reason, a close button on each. A failure is also shown
+  on the skill card the job was started from, with 「重試」 and 「原因」.
+- **Opening with a login code.** `#auth=` is now traded for the session before anything else asks the server: the
+  translation poll, hash changes and tab focus wait, and a 401 met in that moment no longer puts up 「請從 VBear 開啟」.
+  The router no longer keeps polling after the login page is shown.
+- **QA and tests.** The QA console gained `VBEAR_QA_FRESH=1` and `VBEAR_QA_TRANSLATE=fail`; the fake translation CLI
+  follows the structured-output change. New tests cover the folder API, the config keys, flow role cards, `will_load`,
+  the starter deck, the pass table level by level, the team places and the first game.
 - Add an opt-in macOS browser startup mode, an open-in-browser menu command, and an Option-key escape to
   window mode. Failed or timed-out browser launches fall back to the window with an error message.
 - Isolate macOS smoke tests by port and process ID, and add optional browser startup/reuse acceptance.

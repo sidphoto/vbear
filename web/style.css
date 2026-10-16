@@ -1340,3 +1340,37 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .pass-details > summary { cursor: pointer; font-weight: 600; min-height: 32px; }
 .pass-reasons li { margin-bottom: 6px; }
 .pass-reasons .btn { margin-left: 6px; }
+
+/* the lobby's first game (design card-play 3.8) */
+.onboard { border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); padding: 14px; }
+.onboard-steps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.onboard-step { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 0; }
+.onboard-text { flex: 1 1 14em; min-width: 0; overflow-wrap: anywhere; }
+.onboard-step[aria-current="step"] .onboard-text strong { text-decoration: underline; text-underline-offset: 3px; }
+.onboard-done-step .pass-mark { color: var(--ok); }
+.pass-mark-todo { color: var(--ink-3); }
+.onboard-state { color: var(--ink-3); white-space: nowrap; }
+.onboard-done { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; padding: 10px 14px; }
+.onboard-line { margin: 0; overflow-wrap: anywhere; min-width: 0; flex: 1 1 16em; }
+.quest-next { margin-top: 4px; overflow-wrap: anywhere; }
+
+/* the phone menu (design card-play 3.9, #11): one button that names the page; the list opens under it */
+.nav-toggle { display: none; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+.nav-toggle-bars { width: 16px; height: 2px; background: currentColor; box-shadow: 0 -5px 0 currentColor, 0 5px 0 currentColor; }
+@media (max-width: 720px) {
+  .nav-toggle { display: inline-flex; margin-left: auto; max-width: 100%; min-width: 0; }
+  #nav-toggle-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side .nav { display: none; }
+  .side.nav-open .nav { display: grid; width: 100%; overflow: visible; }
+  .side.nav-open .nav a { padding: 12px 10px; }
+}
+
+/* the translation bar folds away (design card-play 3.4): a finished job leaves, a failed one becomes a dot */
+.translation-activity .btn { min-height: 32px; }
+.translation-dot { position: fixed; right: 16px; bottom: 64px; width: 36px; height: 36px; padding: 0; border-radius: 50%; border: 2px solid var(--warn); background: var(--panel); justify-content: center; box-shadow: var(--shadow); }
+.translation-dot-btn { width: 100%; height: 100%; border: 0; border-radius: 50%; background: transparent; color: var(--warn); font: inherit; font-weight: 700; cursor: pointer; }
+.translation-dot-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.translation-failure { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.translation-failure-why summary { cursor: pointer; display: inline; }
+.confirm-details { margin: 8px 0; }
+.confirm-details summary { cursor: pointer; }

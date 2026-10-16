@@ -36,6 +36,12 @@ and contain no data.
   it from the address bar at once. It never appears in a command line.
 - Local tools send `Authorization: Bearer <token>`.
 
+The page trades the code **before it asks the server for anything else**: from the moment it sees `#auth=` until
+`POST /api/auth` has answered, the translation poll, hash changes and tab-focus refreshes are held back and a 401
+met in that window is not shown as "open VBear" (`authPending` in `web/app.js`; `tests/frontend/boot.cjs` holds the
+trade open and checks that no other request leaves the page, and that a refused code ends the waiting state). This is
+about order and wording on the page; it adds no credential and changes nothing the server checks.
+
 The result is that **other user accounts on the Mac can no longer drive VBear**, because they cannot read your
 state directory. **Programs running as your own user still can,** because they can read the token file, just as
 they can read anything else you own. Sandboxed Agent sessions can read the file too (reads are not isolated),
@@ -117,6 +123,33 @@ These are the claims the launch preview makes, and their status:
 | Deploy is denied | Only by the absence of network access | |
 | Reads are isolated | **No.** A session can read anything your user account can read | |
 | Commands you type with `!` are sandboxed | **No.** Claude Code runs `!` commands outside the sandbox; the preview says so | |
+
+### The launch pass (出發通行證) is a way of reading these claims, not a new one
+
+The pass is the page that used to be called the pre-launch check. Its front has three lines, and they are worded
+**by the level the server gave that item**, never by what the page would like to say (`passSummary`, a pure function
+of the preview's `derived_labels` and `canonical_paths`):
+
+- The write and network lines say what was blocked only for the `強制` level; `部分強制` says it is partial,
+  `未驗證` says the setting exists but this version was not tested, `未知` and `不授予` say the range is not known,
+  and `僅意圖` / `未限制` say it is not blocked. A check mark is drawn only for `強制`. A level the page does not know
+  reads as unknown. A write line cannot name a folder it was not given.
+- The commit line is always 「擋不住版本紀錄（commit）」, whatever the label's level says, because `.git` is inside the
+  writable folder (see the table above). It is on the front, not only behind the fold.
+- Shields follow the level word (solid: enforced; dashed: intent only; empty: unrestricted) and only those three
+  levels have one. Shape differs as well as colour. `tests/test_launch_pass_contract.py` compares the page's level
+  table with the constants in `vbear/agent_launch.py`, so a changed word on either side fails a test.
+- The seven labels, their five groups and the "can be bypassed" notice are unchanged and are one click away
+  (「看七項細節」); the bypass notice stays on the front.
+- The sentence the user ticks says that the role will create and change files in the folder and can save commits, which
+  VBear cannot block. The same box still decides whether the preview is made with `commit: true`; a button that points
+  at an unticked box only moves focus to it and never ticks it.
+- A button next to a reason that stops a launch only leads to where that reason is changed: the card editor (an
+  ordinary profile save through `POST /api/agent-profiles/<id>`), the folder chooser, or the checkbox. The rules stay
+  in `launch_blockers`; the page repeats none of them. After a save the pass opens again on the same folder and asks
+  for a **new preview**; nothing from the old preview is reused, and a preview is still single use.
+- Permission intents on a role card are a record of the team's division of work. The page says so wherever it shows
+  them, and a green light on a card is worded 「可以出發（權限意圖都已決定）」, not "safe".
 
 Other safeguards:
 - **Unverified Claude Code versions are labelled, not hidden.** A genuine Claude Code release that is not on the
@@ -225,6 +258,15 @@ Other safeguards:
   family a review is judged by is still the role's own `family`, which the page fills from the card's tool and the
   server neither derives nor cross-checks. Placing a card on a task card's team writes only `flows.json`; it starts,
   sends and loads nothing.
+
+## The home page's first game
+
+The 「新手第一局」 block and the team and next step shown on a flow card on the board read only what the existing
+`GET /api/agent-profiles`, `/api/tasks`, `/api/flows` and `/api/config` already return; nothing is written except the
+one setting 「先不要」 saves (`onboarding_dismissed`, a boolean in `config.json`). A step is ticked from those records
+(a role card that is not a demo card, a task card with a folder, a flow with a planner and an executor), and when
+a list cannot be read the block shows nothing instead of guessing. The phone-width navigation menu only toggles a
+class on the page.
 
 ## Phase 2 coordination
 
@@ -626,6 +668,12 @@ malicious replacement executable. No generic launch verifier or environment bypa
 GET reads never run a probe or CLI; the UI does not claim that a stored pass proves the current version.
 Verification shares the translation worker lock. Unconfirmed process extinction blocks later work.
 Codex remains `boundary_unverified` unconditionally: read-only/tool-disable flags cannot prove its boundary.
+The confirmation shown before a translation is one sentence (your own account, usually under one US cent per card) with the
+whole disclosure above kept word for word behind 「詳細」; the figure is a plain-language estimate, and the requested
+US$0.05 budget, its non-guarantee, the 60-second limit and "tokens unknown" are unchanged. The progress bar folds
+away (5 seconds after success, 10 seconds after a failure into a dot that reopens the reason, a close button on
+each, a closed job remembered in the browser's local storage by id): this is display only and does not change what is
+sent or when. A failure is shown on a skill card only when this page started that very job, because a job does not name its skill.
 All implementation tests use fake CLIs only; this change does not prepopulate any real-version pass.
 The fake QA provider is injected in the QA Python process only.
 

@@ -33,7 +33,8 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       lines of the Codex labels.
       Optional VBEAR_QA_TRANSLATE=1: seed fresh/stale/none/orphan translations and inject a process-local fake
       translation CLI for both engine selectors, and point 「驗證」 (verify_boundary) at it. No real CLI or
-      model is ever used.
+      model is ever used. VBEAR_QA_TRANSLATE=fail is the same with a CLI whose every translation fails (the
+      「驗證」 probe still passes): it shows the failure on the skill card and the bar's fold into a dot.
       Optional VBEAR_QA_RUN=1: also start the runner thread, so the flow goes on by itself (the first review is
       NEEDS WORK, a helper commits the "fix", the second says PASS, the merge gate opens). Without it the flow
       stays exactly as built: automatic mode on, one review round done, the runner idle.
@@ -167,12 +168,13 @@ class _Env(RunnerCase):
             "permission_intents": dict(GOOD)}, known_skills=known_skills, known_roles=known_roles)
 
     def _translations(self):
-        if os.environ.get("VBEAR_QA_TRANSLATE") != "1":
+        if os.environ.get("VBEAR_QA_TRANSLATE") not in ("1", "fail"):
             return
+        fails = os.environ.get("VBEAR_QA_TRANSLATE") == "fail"
         # This executable is always generated under the synthetic HOME. The
         # provider injection is process-local, not a product config/env bypass.
         fake = self.tmp / "qa-translation-cli"
-        fake.write_text("#!" + sys.executable + "\n" + r'''import json, sys, time
+        fake.write_text("#!" + sys.executable + "\n" + "FAILS = " + repr(fails) + "\n" + r'''import json, sys, time
 from pathlib import Path
 a = sys.argv[1:]
 if a == ["--version"]:                          # translations.claude_identity()
@@ -193,6 +195,9 @@ if "--verbose" in a:                            # the boundary probe (the settin
     assert a[a.index("--output-format") + 1] == "stream-json"
     print(json.dumps({"type": "system", "subtype": "init", "tools": ["StructuredOutput"], "mcp_servers": []}))
     sys.exit(0)
+if FAILS:                                       # VBEAR_QA_TRANSLATE=fail: every translation fails, the probe above still passes
+    sys.stderr.write("synthetic failure\n")
+    sys.exit(3)
 payload = prompt.split("BEGIN_UNTRUSTED_JSON_STRING\n", 1)[1].split("\nEND_UNTRUSTED_JSON_STRING", 1)[0]
 fields = json.loads(json.loads(payload))
 time.sleep(0.6)
@@ -661,6 +666,23 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       「這張角色卡已經不在角色卡池了」；手動填寫的角色寫「手動填寫的角色，沒有對應的角色卡」。
   [ ] 「下一步」清單（任務卡分頁與流程頁）：目前這一步加粗並標「輪到 X」，原本的階段原因留在步驟旁；自動模式多一步「你接受風險」；
       push 在六步之後另寫一行。「風險接受」「串流執行者」「體力」旁有 ⓘ 說明。大廳的任務卡正面有隊伍小頭像和「下一步：…（輪到 …）」。
+
+== 0d. 出發通行證、新手第一局、手機選單、翻譯、登入碼 (VBEAR_QA_FRESH=1 看新手第一局；VBEAR_QA_TRANSLATE=fail 看翻譯失敗)
+  [ ] 角色卡的「出發」開「出發通行證：名稱」（不再有「出發前檢查」）。產生預覽後正面只有三行：寫入、網路、commit，各有圖形（勾／驚嘆號／
+      問號／叉，形狀不同）和一個狀態字（已擋住／部分擋住／未實測／不明／沒有擋住）。只有「強制」那一級才是勾；commit 一行永遠是
+      「擋不住版本紀錄（commit）」。盾牌圖例寫「實線盾牌：強制、虛線盾牌：只是記錄、空盾牌：沒擋」，並說部分擋住、未實測、不明不畫盾牌。
+  [ ] 「看七項細節」收合，展開是原本的七項（五組）、可繞過說明在正面。勾選文字是「我知道這個角色會在這個資料夾建立、修改檔案，也能存下
+      版本紀錄（commit），VBear 擋不住。」
+  [ ] 擋住時每個原因旁有修正按鈕：權限意圖未決定 →「現在決定」開角色卡編輯（步驟 2、權限展開），存檔後回到同一張通行證（資料夾和勾選都在，
+      自動重新產生預覽）；資料夾被拒絕 →「換資料夾」；commit 未勾 →「回去勾選知悉」只把焦點移過去，不替你勾。
+  [ ] 大廳（VBEAR_QA_FRESH=1）最上方「新手第一局」三步：拿角色卡、導入專案、把隊伍放上任務卡。只有第一個未完成的步驟有按鈕；各步依真實資料
+      打勾（示範卡不算）。三步完成後收成一行「你的小隊已就位 · 下一步：…」。「先不要」收起；設定頁可重新顯示。
+  [ ] 告示板上的流程卡有隊伍小頭像和「下一步：…（輪到 …）」；副標是「這裡看哪些任務在等你、隊伍走到哪一步。」
+  [ ] 390 px 寬：導覽收成一個「選單：目前頁名」按鈕（不橫向捲動），展開後是直向清單，Esc 或換頁收起。
+  [ ] 技能卡翻譯確認：主文「會用你自己的 Claude 帳號翻譯這張技能卡，通常不到 1 美分。」，「詳細」展開才是預算與逾時全文。
+      翻譯進度列：成功 5 秒後收起；失敗 10 秒後變右下角小圓點，點開看原因；都有關閉鈕。失敗時那張技能卡上寫
+      「暫時無法翻譯，原文已保留 · 重試 · 原因」。
+  [ ] 用 #auth=<登入碼> 開啟：網址立即清成 #/，交換完成前沒有任何其他請求，不會閃過「請從 VBear 開啟」。
 
 == 1. 角色卡 (工作台 -> 右側「角色」分頁 -> pick 「QA 後端工匠（Claude）」)
   [ ] 資料區：職業標籤=qa-backend; 陣營=Claude Code; 版本驗證狀態 has a sentence from the

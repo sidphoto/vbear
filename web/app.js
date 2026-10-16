@@ -696,8 +696,11 @@ const api = {
 // The session cookie stopped working (VBear restarted, or the page was
 // opened without going through VBear): stop refreshing and say how to get in.
 let authLostShown = false;
+// True from the start of the page until the login code in the address (#auth=<token>) has been traded for the session
+// cookie. Until then a 401 is expected, so nothing may show "open VBear" or start the router (see bootstrap).
+let authPending = false;
 function authLost() {
-  if (authLostShown || typeof document === "undefined") return;
+  if (authPending || authLostShown || typeof document === "undefined") return;
   authLostShown = true;
   clearInterval(liveTimer);
   liveTick = null;
@@ -835,12 +838,20 @@ function modelList(models) {
 function initialOf(name) { const c = String(name || "?").trim().replace(/^[^\p{L}\p{N}]+/u, ""); return (c[0] || "?").toUpperCase(); }
 
 // ---------- skill translations (text only, separate from author facts) ------
-const T = { entries: {}, counts: {}, job: null, engine: "claude", error: null, loaded: false, listeners: new Set() };
+const T = { entries: {}, counts: {}, job: null, engine: "claude", error: null, loaded: false, listeners: new Set(),
+  attempts: {}, ui: { seen: null, seenAt: 0, opened: null } };
 
 function translationOf(id) { return T.entries[id] || { state: "none", entry: null }; }
 function translationDescription(s) {
   const t = translationOf(s.skill_id);
   return t.entry ? t.entry.description_zh : (s.description && s.description.value) || "";
+}
+// The last single-skill job, when it failed and was started from this card (T.attempts); nothing is said about a card
+// whose job this page did not start, because the job does not name its skill.
+function translationFailureFor(id) {
+  const job = T.job;
+  if (!job || job.status !== "failed" || T.attempts[job.id] !== id) return null;
+  return { message: job.error && job.error.message ? job.error.message : "原因不明" };
 }
 function translationBadge(id) {
   const t = translationOf(id);
@@ -855,6 +866,20 @@ function translationDisclosure(count, engine = T.engine, automatic = false) {
     (automatic ? "開啟後，每次重新掃描最多自動翻譯 20 個，其餘等待下一次掃描；可在設定關閉，並以全域進度列立即停止。" : "可從全域進度列取消。") +
     "原文與翻譯都不是指令，不會載入或執行技能。";
 }
+// The short sentence of a translation confirmation (design card-play 3.4); translationDisclosure stays whole behind 「詳細」.
+// Only the Claude price is stated: Haiku through your own account is cents at most, and the budget limit is in the details.
+// Codex has no such figure, so it says so.
+function translationSummary(count, engine = T.engine, automatic = false) {
+  if (automatic) {
+    return engine === "claude"
+      ? "開啟後，每次重新掃描最多會自動翻譯 20 張技能卡，用你自己的 Claude 帳號，每張通常不到 1 美分；可以隨時在設定關閉。"
+      : "開啟後，每次重新掃描最多會自動翻譯 20 張技能卡，用你自己的 Codex 帳號，費用上限未知；可以隨時在設定關閉。";
+  }
+  const what = count === 1 ? "這張技能卡" : `這 ${count} 張技能卡`;
+  return engine === "claude"
+    ? `會用你自己的 Claude 帳號翻譯${what}，${count === 1 ? "" : "每張"}通常不到 1 美分。`
+    : `會用你自己的 Codex 帳號翻譯${what}，費用上限未知。`;
+}
 async function refreshTranslations() {
   try {
     const data = await api.get("/api/translations");
@@ -864,6 +889,25 @@ async function refreshTranslations() {
   renderTranslationActivity();
   for (const listener of [...T.listeners]) listener();
 }
+// The bottom bar of the translation job (design card-play 3.4). A finished job does not stay: success folds away after
+// 5 seconds; a failure stays 10 seconds, then becomes a small dot at the lower right that opens the reason again. A
+// running job stays until it ends. Every state has a close button; the id of a job that was closed is kept, so it does not
+// come back when the page is opened again. translationBarState decides, from what it is given, so it can be tested.
+const TRANSLATION_BAR_OK_MS = 5000;
+const TRANSLATION_BAR_FAIL_MS = 10000;
+function translationBarState({ job, error, seen, seenAt, opened, closed, now }) {
+  if (error) return error === closed ? { view: "hidden", kind: "unknown" } : { view: "bar", kind: "unknown" };
+  if (!job || typeof job !== "object") return { view: "hidden", kind: "none" };
+  if (job.id === closed) return { view: "hidden", kind: "closed" };
+  if (["running", "cancelling"].includes(job.status)) return { view: "bar", kind: "running" };
+  const age = seen === job.id ? Math.max(0, now - seenAt) : 0;
+  if (job.status === "failed") {
+    if (opened === job.id || age < TRANSLATION_BAR_FAIL_MS) return { view: "bar", kind: "failed" };
+    return { view: "dot", kind: "failed" };
+  }
+  return age >= TRANSLATION_BAR_OK_MS ? { view: "hidden", kind: "done" } : { view: "bar", kind: "done" };
+}
+function closeTranslationBar(key) { store.set("translationClosed", key); renderTranslationActivity(); }
 function renderTranslationActivity() {
   let box = document.getElementById("translation-activity");
   if (!box) {
@@ -872,16 +916,34 @@ function renderTranslationActivity() {
   }
   const job = T.job;
   const active = job && ["running", "cancelling"].includes(job.status);
+  // the first time a finished job is seen, start its clock and come back when it is due to fold
+  if (job && !active && !T.error && T.ui.seen !== job.id) {
+    T.ui.seen = job.id;
+    T.ui.seenAt = Date.now();
+    setTimeout(renderTranslationActivity, (job.status === "failed" ? TRANSLATION_BAR_FAIL_MS : TRANSLATION_BAR_OK_MS) + 50);
+  }
+  const closed = store.get("translationClosed", null);
+  const st = translationBarState({ job, error: T.error, seen: T.ui.seen, seenAt: T.ui.seenAt, opened: T.ui.opened, closed, now: Date.now() });
   const focused = box.contains(document.activeElement);
-  box.hidden = !job && !T.error;
+  box.hidden = st.view === "hidden";
+  box.className = st.view === "dot" ? "translation-activity translation-dot" : "translation-activity";
+  box.setAttribute("data-bar", st.view === "hidden" ? "hidden" : `${st.view}-${st.kind}`);
+  if (st.view === "dot") {
+    setKids(box, el("button", { class: "translation-dot-btn", type: "button", "aria-label": "翻譯有失敗，點開看原因", title: "翻譯有失敗，點開看原因",
+      on: { click: () => { T.ui.opened = job.id; renderTranslationActivity(); } } }, "!"));
+    return;
+  }
   const status = job && ({ running: "翻譯中", cancelling: "正在停止", completed: "已結束", failed: "失敗", cancelled: "已取消" }[job.status] || "未知");
+  const closeKey = T.error ? T.error : job ? job.id : null;
   setKids(box,
     el("span", { role: "status", "aria-live": "polite", "aria-atomic": "true" },
       T.error ? `翻譯狀態未知：${T.error}` : job ? `${job.automatic ? "自動重翻" : "技能翻譯"} ${status} · ${job.done}/${job.total} · 失敗 ${job.failed}` : ""),
     T.waiting ? el("span", { class: "small" }, `${T.waiting} 個等待下次掃描`) : null,
-    job && job.error ? el("span", { class: "small" }, job.error.message) : null,
+    job && job.error ? el("span", { class: "small", "data-bar": "reason" }, job.error.message) : null,
     active ? el("button", { class: "btn small", type: "button", "aria-disabled": String(job.status === "cancelling"),
-      on: { click: async () => { if (job.status === "cancelling") return; await cancelTranslations(); } } }, "停止翻譯") : null);
+      on: { click: async () => { if (job.status === "cancelling") return; await cancelTranslations(); } } }, "停止翻譯") : null,
+    closeKey ? el("button", { class: "btn small", type: "button", "data-bar": "close", "aria-label": "關閉翻譯進度",
+      on: { click: () => closeTranslationBar(closeKey) } }, "關閉") : null);
   if (focused && box.querySelector("button")) box.querySelector("button").focus();
 }
 async function cancelTranslations() {
@@ -891,10 +953,13 @@ async function cancelTranslations() {
 async function startTranslation(id, which) {
   const count = id ? 1 : T.counts[which] || 0;
   if (!count || T.error) return;
-  if (!(await confirmInPage("確認送出技能說明", translationDisclosure(count), "翻成中文"))) return;
+  if (!(await confirmInPage("確認送出技能說明", translationSummary(count), "翻成中文", { details: translationDisclosure(count) }))) return;
   try {
-    if (id) await api.post(`/api/skills/${encodeURIComponent(id)}/translate`, {});
-    else await api.post("/api/translations/batch", { which });
+    if (id) {
+      const r = await api.post(`/api/skills/${encodeURIComponent(id)}/translate`, {});
+      // remember which card this job was for, so a failure can be said on that very card
+      if (r && r.job && typeof r.job.id === "string") T.attempts[r.job.id] = id;
+    } else await api.post("/api/translations/batch", { which });
     await refreshTranslations();
   } catch (e) { toast("無法翻譯：" + e.message); }
 }
@@ -905,17 +970,22 @@ function translationPanel(id, original) {
   const draw = () => {
     if (!initial && !document.body.contains(box)) { T.listeners.delete(draw); return; }
     initial = false;
-    const nextSignature = JSON.stringify([translationOf(id), T.error, T.engine, T.job, showOriginal]);
+    const nextSignature = JSON.stringify([translationOf(id), T.error, T.engine, T.job, showOriginal, translationFailureFor(id)]);
     if (nextSignature === signature) return;
     signature = nextSignature;
     const focused = box.contains(document.activeElement);
     const focusedAction = focused && document.activeElement.getAttribute("data-translation-action");
     const t = translationOf(id), e = t.entry;
     const running = T.job && ["running", "cancelling"].includes(T.job.status);
+    const failure = running ? null : translationFailureFor(id);
     const originalView = el("div", { class: "translation-original" }, original);
     originalView.hidden = !!e && !showOriginal;
     setKids(box,
       T.error ? notice("warn", "翻譯狀態未知：" + T.error) : null,
+      failure ? el("div", { class: "translation-failure notice warn", "data-translation": "failure" },
+        el("span", null, "暫時無法翻譯，原文已保留"), " · ",
+        el("button", { class: "btn small", type: "button", "data-translation-action": "retry", on: { click: () => { if (!T.error) startTranslation(id); } } }, "重試"), " · ",
+        el("details", { class: "translation-failure-why" }, el("summary", null, "原因"), el("p", { class: "small" }, failure.message))) : null,
       t.state === "stale" ? notice("warn", `原文已變更，舊翻譯可能過期；上次翻譯：${fmtTime(e.created_at)}。請重新翻譯。`) : null,
       e ? translationBadge(id) : null,
       e && !showOriginal ? el("div", { class: "translation-summary" },
@@ -926,7 +996,7 @@ function translationPanel(id, original) {
         el("p", null, e.description_zh)) : null,
       e ? el("button", { class: "btn small", type: "button", "data-translation-action": "original", "aria-expanded": String(showOriginal), on: { click: () => {
         showOriginal = !showOriginal; draw(); box.querySelector("button").focus();
-      } } }, showOriginal ? "返回中文整理" : "看新的作者原文") : null,
+      } } }, showOriginal ? "返回中文整理" : "看英文原文") : null,
       originalView,
       el("div", { class: "translation-actions" },
         el("button", { class: "btn small", type: "button", "data-translation-action": "translate", "aria-disabled": String(!!running || !!T.error),
@@ -972,7 +1042,8 @@ function translationToolbar() {
   T.listeners.add(draw); draw(); return box;
 }
 async function verifyTranslationBoundary() {
-  if (!(await confirmInPage("驗證翻譯安全邊界", "將用固定的無害提示檢查目前 Claude Code 版本是否只有 StructuredOutput、沒有 MCP。會花極少量額度；請求預算 US$0.05，這不是保證帳單上限。", "驗證"))) return;
+  if (!(await confirmInPage("驗證翻譯安全邊界", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。", "驗證",
+    { details: "將用固定的無害提示檢查目前 Claude Code 版本是否只有 StructuredOutput、沒有 MCP。會花極少量額度；請求預算 US$0.05，這不是保證帳單上限。" }))) return;
   try {
     const result = await api.post("/api/translations/verify", {});
     toast(`Claude Code ${result.version} 翻譯安全邊界驗證通過；翻譯前仍會核對版本。`);
@@ -988,7 +1059,8 @@ function translationSettings(conf, saveConf) {
     el("option", { value: v, selected: v === (conf.translation_engine || "claude") }, label)));
   const auto = el("input", { type: "checkbox", checked: !!conf.translation_auto, on: { change: async () => {
     const wanted = auto.checked;
-    if (wanted && !(await confirmInPage("開啟原文變更時自動重翻", translationDisclosure(20, engine.value, true), "同意並開啟"))) {
+    if (wanted && !(await confirmInPage("開啟原文變更時自動重翻", translationSummary(20, engine.value, true), "同意並開啟",
+      { details: translationDisclosure(20, engine.value, true) }))) {
       auto.checked = false; return;
     }
     const result = await saveConf({ translation_auto: wanted, translation_consent_engine: engine.value });
@@ -1181,7 +1253,8 @@ const NATIVE_SESSION_RE = /^n-[0-9a-f]{12}$/;
 // In-page confirmation (not window.confirm): a native browser dialog blocks
 // the page and cannot be driven by browser automation, which left the close
 // button unverifiable in acceptance. Resolves true only on the confirm button.
-function confirmInPage(title, message, confirmLabel) {
+// opts.details: the long print, kept whole behind a 「詳細」 fold under the short sentence.
+function confirmInPage(title, message, confirmLabel, opts = {}) {
   return new Promise((resolve) => {
     const titleId = "modal-confirm-title";
     let settled = false;
@@ -1197,6 +1270,8 @@ function confirmInPage(title, message, confirmLabel) {
       el("div", { class: "modal-box" },
         el("h2", { id: titleId }, title),
         el("p", null, message),
+        opts && typeof opts.details === "string" && opts.details
+          ? el("details", { class: "confirm-details", "data-confirm": "details" }, el("summary", null, "詳細"), el("p", { class: "small" }, opts.details)) : null,
         el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
     document.body.append(modalElem);
     // Escape or a view teardown closes the dialog through this teardown: that is a "no".
@@ -1456,10 +1531,30 @@ function sectionHead(title, sub, action) {
 async function viewHome() {
   const token = seq;
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
-  const [, , tasksRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
-    api.get("/api/tasks").catch(() => null)]);
+  const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
+    api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null)]);
   const L = D.live;
   const main = claim(token);
+  const onboardingHost = el("div", { id: "h-onboarding" });
+  const onboardingInput = () => ({
+    profiles: profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : null,
+    catalog: catalogRes && catalogRes.ok ? catalogRes : null,
+    tasks: tasksRes && Array.isArray(tasksRes.tasks) ? tasksRes.tasks : null,
+    flows: D.flows && !D.flows.error && Array.isArray(D.flows.flows) ? D.flows.flows : null,
+    dismissed: configRes && configRes.config && typeof configRes.config.onboarding_dismissed === "boolean" ? configRes.config.onboarding_dismissed : null,
+  });
+  const drawOnboarding = () => setKids(onboardingHost, onboardingSection(onboardingState(onboardingInput()), {
+    onImport: () => openImportProject({ onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
+    onDismiss: async () => {
+      try {
+        await api.post("/api/config", { onboarding_dismissed: true });
+        configRes.config.onboarding_dismissed = true;
+        drawOnboarding();
+      } catch (e) { toast("沒有存成：" + e.message); }
+    },
+  }));
+  drawOnboarding();
   const input = el("input", { type: "search", placeholder: "想做什麼？例如：網站安全檢查、做簡報、剪影片、部署…", "aria-label": "用途搜尋技能" });
   const results = el("div", { class: "grid", style: "margin-top:14px" });
   const runSearch = () => {
@@ -1481,11 +1576,12 @@ async function viewHome() {
 
   setKids(main, 
     el("h1", null, "冒險者大廳"),
-    el("p", { class: "lede" }, "先看告示板上輪到你的任務，再看其他進行中的任務。"),
+    el("p", { class: "lede" }, "這裡看哪些任務在等你、隊伍走到哪一步。"),
     corruptNotice(),
     staleNotice(),
     herdrMigrationNotice(),
     runtimeNotice(),
+    onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
     taskCardsSection(tasksRes && tasksRes.tasks, { flows: D.flows && !D.flows.error ? D.flows.flows || [] : undefined,
       onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
@@ -1547,6 +1643,13 @@ function boardGroups(live, flowsData) {
   };
 }
 
+// The role cards a flow's team stands on, as far as the card shows them (avatar and name per place).
+function boardTeamKey(f) {
+  const r = f && f.roles && typeof f.roles === "object" ? f.roles : {};
+  const one = (x) => (x ? [x.name || "", x.profile_id || "", teamCardTool(x)] : null);
+  return [one(r.planner), one(r.executor), (Array.isArray(r.reviewers) ? r.reviewers : []).map(one)];
+}
+
 // What the key reads besides the groups: the live load's error (it rewords the executor column) and the
 // projects (an agent card shows its project's name). The page passes them explicitly, so what the key is made
 // of is visible at the call site.
@@ -1568,7 +1671,7 @@ function boardKey(g, ctx) {
     return [f.id, f.task_title, !!f.task_missing, ph.key, ph.label, ph.reason, f.attention === true, f.attention_reason || "",
       a.mode || "", !!a.held, a.step_label || "", roleText(roles.executor), (roles.reviewers || []).map(roleText),
       live.label, live.reason, r ? [r.verdict, !!r.counts_as_pass, r.commit, r.why || ""] : null,
-      f.phase ? flowBindingNote(f) : ""];
+      f.phase ? flowBindingNote(f) : "", nextStepSummary(f), boardTeamKey(f)];
   };
   const sessionFields = (x) => {
     const project = projects.find((p) => p.project_id === x.project_id);
@@ -1638,7 +1741,16 @@ function questCard(f, yourTurn) {
       rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
         rev.counts_as_pass ? "算通過" : (rev.why || "")), ` ${shortCommit(rev.commit)}`) : null),
     note ? el("div", { class: "small muted" }, note) : null,
+    teamAvatars(f, 1),
+    questNext(f),
     el("div", { class: "quest-go" }, yourTurn ? "前往處理 →" : "查看流程 →"));
+}
+
+// "Next: ... (your turn / a role's turn)" from nextSteps, which reads the phase the server already derived. Nothing
+// is said for a phase the table does not know.
+function questNext(f) {
+  const text = nextStepSummary(f);
+  return text ? el("div", { class: "small quest-next", "data-quest": "next" }, text) : null;
 }
 
 function boardSection(g) {
@@ -1650,7 +1762,7 @@ function boardSection(g) {
       el("div", { class: "empty-state quest-start" },
         el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
         el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台"),
-        el("span", null, "在那裡挑角色出發；想讓多個 Agent 合作，先在右側「任務卡」分頁新增任務卡，再到「流程」頁建立流程。")));
+        el("span", null, "在那裡挑角色出發；想讓多個 Agent 合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。")));
   }
   const nTurn = g.yourTurnFlows.length;
   const nAgents = g.yourTurnSessions.length;
@@ -1679,6 +1791,76 @@ function boardSection(g) {
       flowsError(),
       goingBody),
   ];
+}
+
+// ---------- the first game (design card-play 3.8) -----------------------------------------------------------------
+// Three steps for someone who has no team yet: get role cards, bring in a project as a task card, put the team on
+// it. Each step is ticked from data the server has (a card of your own, a task card with a folder, a flow with a
+// team), never from what the page did. Unknown data (a list that did not load, a config that cannot be read) shows
+// nothing instead of a guess.
+const ONBOARD_TITLE = "新手第一局";
+const ONBOARD_STEPS = [
+  { key: "cards", text: "拿角色卡", hint: "用起手牌組一次拿三張，或自己建" },
+  { key: "task", text: "導入專案，建立任務卡", hint: "挑一個你電腦上現有的專案資料夾" },
+  { key: "team", text: "把隊伍放上任務卡", hint: "規劃、執行、審查各放一張角色卡" },
+];
+
+// input: { profiles, catalog, tasks, flows, dismissed }; a list that is not an array, or a dismissed that is not a
+// boolean, means it could not be read. -> { mode: "none" | "steps" | "done", steps, next (the one line when done) }.
+function onboardingState(input) {
+  const i = input && typeof input === "object" ? input : {};
+  const readable = Array.isArray(i.profiles) && Array.isArray(i.tasks) && Array.isArray(i.flows) && typeof i.dismissed === "boolean";
+  if (!readable || i.dismissed) return { mode: "none", steps: [], next: "" };
+  const done = {
+    cards: i.profiles.some((p) => p && typeof p === "object" && !isDemoCard(p, i.catalog)),
+    task: i.tasks.some((t) => t && typeof t === "object" && typeof t.workdir === "string" && t.workdir !== ""),
+    team: i.flows.some((f) => f && typeof f === "object" && f.roles && f.roles.planner && f.roles.executor),
+  };
+  const firstTask = i.tasks.find((t) => t && typeof t === "object" && typeof t.workdir === "string" && t.workdir !== "" && typeof t.id === "string") || null;
+  const steps = ONBOARD_STEPS.map((st, n) => ({ ...st, n: n + 1, done: done[st.key] }));
+  const all = steps.every((st) => st.done);
+  let next = "";
+  if (all) {
+    const open = i.flows.filter((f) => f && typeof f === "object" && !(f.phase && f.phase.key === "done"));
+    const f = open.find(waitsForYou) || open[0];
+    next = f ? nextStepSummary(f) : "";
+  }
+  return { mode: all ? "done" : "steps", steps, next, firstTaskId: firstTask ? firstTask.id : null };
+}
+
+function onboardMark(done) {
+  if (done) return passMark("ok");
+  const svg = svgEl("svg", { class: "pass-mark pass-mark-todo", viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": "true", focusable: "false" });
+  svg.append(svgEl("circle", { cx: 8, cy: 8, r: 6.6, fill: "none", stroke: "currentColor", "stroke-width": 1.6 }));
+  return svg;
+}
+
+// opts: { onImport(), onDismiss() }
+function onboardingSection(state, opts = {}) {
+  if (!state || state.mode === "none") return null;
+  const dismiss = el("button", { class: "btn small", type: "button", "data-onboard": "dismiss",
+    on: { click: () => { if (typeof opts.onDismiss === "function") opts.onDismiss(); } } }, "先不要");
+  if (state.mode === "done") {
+    return el("section", { class: "section onboard onboard-done", "data-onboarding": "done", "aria-label": ONBOARD_TITLE },
+      el("p", { class: "onboard-line" }, "你的小隊已就位", state.next ? ` · ${state.next}` : ""), dismiss);
+  }
+  const current = state.steps.find((st) => !st.done);
+  const action = (st) => {
+    if (st.key === "cards") return el("a", { class: "btn small primary", href: "#/team", "data-onboard-go": "cards" }, "到角色卡池");
+    if (st.key === "task") return el("button", { class: "btn small primary", type: "button", "data-onboard-go": "task",
+      on: { click: () => { if (typeof opts.onImport === "function") opts.onImport(); } } }, "導入專案");
+    return state.firstTaskId
+      ? el("a", { class: "btn small primary", href: `#/workbench?task=${encodeURIComponent(state.firstTaskId)}`, "data-onboard-go": "team" }, "去放隊伍")
+      : null;
+  };
+  return el("section", { class: "section onboard", "data-onboarding": "steps", "aria-label": ONBOARD_TITLE },
+    sectionHead(ONBOARD_TITLE, "三步組好一支隊伍：拿卡、導入專案、把隊伍放上去。", dismiss),
+    el("ol", { class: "onboard-steps" }, state.steps.map((st) => el("li", { class: `onboard-step${st.done ? " onboard-done-step" : ""}`,
+      "data-step": st.key, "data-done": String(st.done), "aria-current": current && current.key === st.key ? "step" : null },
+      onboardMark(st.done),
+      el("span", { class: "onboard-text" }, el("strong", null, `${st.n}. ${st.text}`), " ", el("span", { class: "small muted" }, st.hint)),
+      el("span", { class: "onboard-state small" }, st.done ? "完成" : "還沒"),
+      current && current.key === st.key ? action(st) : null))));
 }
 
 // ---------- the office (design office v1.3): data and pure functions ----------------------------------------
@@ -4428,6 +4610,19 @@ function projectDetail(p) {
           el("td", { class: "mono small" }, s.session_id.slice(0, 8))))))) : emptyState("沒有紀錄", null)));
 }
 
+// The lobby's 新手第一局 can be put away from the lobby (config key onboarding_dismissed); this brings it back.
+function onboardingSettings(conf, saveConf) {
+  const dismissed = conf.onboarding_dismissed === true;
+  const btn = el("button", { class: "btn small", type: "button", "data-onboard": dismissed ? "show" : "hide", on: { click: async () => {
+    const r = await saveConf({ onboarding_dismissed: !dismissed }, dismissed ? "大廳會再顯示新手第一局" : "大廳不再顯示新手第一局");
+    if (r) viewSettings();
+  } } }, dismissed ? "重新顯示大廳的新手第一局" : "不要再顯示新手第一局");
+  return el("section", { class: "panel pad onboard-settings", "data-settings": "onboarding" },
+    el("h2", null, ONBOARD_TITLE),
+    el("p", { class: "small muted" }, dismissed ? "目前已收起。" : "大廳最上方的三步進度：拿角色卡、導入專案、把隊伍放上任務卡。三步都完成後會收成一行。"),
+    btn);
+}
+
 async function viewSettings() {
   const token = seq;
   await loadStatic();
@@ -4461,6 +4656,7 @@ async function viewSettings() {
     el("p", { class: "lede" }, "選擇要盤點的來源。主控台只讀取你選的位置，不會修改任何技能或角色檔案。"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
     translationSettings(conf, saveConf),
+    onboardingSettings(conf, saveConf),
     el("div", { class: "grid-2" },
       el("div", { class: "panel pad" },
         el("h2", { style: "margin-bottom:6px" }, "掃描來源"),
@@ -9524,6 +9720,37 @@ function taskCardsSection(tasksList, opts = {}) {
 
 // ---------- router ---------------------------------------------------------
 
+// The phone menu (design card-play 3.9, #11): at 720px and narrower the nav folds behind one button that names the page
+// you are on, instead of a row that scrolls sideways. The button only toggles a class; the CSS does the folding, so a
+// wide window never sees it.
+function navPageName(top) {
+  const link = Array.from(document.querySelectorAll("[data-nav]")).find((a) => a.dataset && a.dataset.nav === top);
+  if (!link) return "";
+  const kids = link.childNodes ? Array.from(link.childNodes) : [];
+  const own = kids.filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
+  return own || String(link.textContent || "").replace(/^\S\s*/, "").trim();
+}
+function setNavMenu(open) {
+  const side = document.querySelector("nav.side");
+  const btn = document.getElementById("nav-toggle");
+  if (side && side.classList) side.classList.toggle("nav-open", !!open);
+  if (btn) btn.setAttribute("aria-expanded", String(!!open));
+}
+function syncNavMenu(top) {
+  const label = document.getElementById("nav-toggle-label");
+  const name = navPageName(top);
+  if (label) label.textContent = name ? `選單：${name}` : "選單";
+  setNavMenu(false);   // going to a page puts the menu away
+}
+function wireNavMenu() {
+  const btn = document.getElementById("nav-toggle");
+  if (!btn || !btn.addEventListener) return;
+  btn.addEventListener("click", () => setNavMenu(btn.getAttribute("aria-expanded") !== "true"));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && btn.getAttribute("aria-expanded") === "true") { setNavMenu(false); if (btn.focus) btn.focus(); }
+  });
+}
+
 let liveTimer = null;
 let liveTick = null;
 let routedHash = null;
@@ -9544,6 +9771,7 @@ async function route() {
   document.querySelectorAll("[data-nav]").forEach((a) => {
     if (a.dataset.nav === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
+  syncNavMenu(top);
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
@@ -9564,6 +9792,7 @@ async function route() {
   } catch (e) {
     setKids($main(), e.status === 401 ? authRequiredView() : notice("bad", "載入失敗：" + e.message));
   }
+  if (authLostShown) return;   // the login page is up: nothing here should keep asking the server every few seconds
   // Live pages refresh their data quietly; they re-render only when nothing
   // is focused inside main, so typing and scrolling are never interrupted.
   // Home refreshes only its attention block, so the search box keeps focus.
@@ -9608,9 +9837,9 @@ async function route() {
 }
 
 setTheme(store.get("theme", "auto"));
-setInterval(() => { if (!document.hidden && !authLostShown) refreshTranslations(); }, 2500);
+setInterval(() => { if (!document.hidden && !authLostShown && !authPending) refreshTranslations(); }, 2500);
 // Coming back to this tab: refresh at once instead of waiting.
-document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick) liveTick(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick && !authPending) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).
 function skipToMain(e) {
   if (e) e.preventDefault();
@@ -9619,7 +9848,9 @@ function skipToMain(e) {
   main.scrollIntoView({ block: "start" });
 }
 document.querySelector("a.skip").addEventListener("click", skipToMain);
+wireNavMenu();
 window.addEventListener("hashchange", () => {
+  if (authPending) return;   // bootstrap routes to the address as it is once the login code is traded
   if (location.hash === "#main" && routedHash !== null) {  // reached without the click handler
     history.replaceState(null, "", routedHash || location.pathname + location.search);
     skipToMain();
@@ -9631,12 +9862,18 @@ if (location.hash === "#main") history.replaceState(null, "", location.pathname 
 
 // Opening VBear (launcher, app) lands here with #auth=<token> once; trade it
 // for the HttpOnly session cookie and drop it from the address bar at once.
+// The exchange comes first and the router waits for it: while the code is being traded the page has no session, so
+// every other request (the translation poll, a nav click, a tab coming back to the front) is held back instead of
+// meeting a 401 and putting up "open VBear" on a page that is about to log in. authPending is set before the first
+// await, so no timer or event can run in between.
 async function bootstrap() {
   const m = /^#auth=([A-Za-z0-9_-]{20,200})$/.exec(location.hash || "");
   if (m) {
+    authPending = true;
     history.replaceState(null, "", location.pathname + location.search + "#/");
     try { await api.post("/api/auth", { token: m[1] }); }
     catch (_) { /* the first API call then shows how to open VBear */ }
+    finally { authPending = false; }
   }
   route();
 }
@@ -9797,5 +10034,21 @@ if (typeof module !== "undefined" && module.exports) {
     teamSection,
     openPlaceDialog,
     flowRoleToolText,
+    navPageName,
+    setNavMenu,
+    syncNavMenu,
+    passSummary,
+    passFront,
+    passMark,
+    passFix,
+    passFolderFix,
+    passKind,
+    PASS_COMMIT_ACK,
+    onboardingState,
+    onboardingSection,
+    onboardingSettings,
+    questNext,
+    boardTeamKey,
+    ONBOARD_STEPS,
   };
 }
