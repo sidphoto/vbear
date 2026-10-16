@@ -418,3 +418,36 @@ it watches before it acts: VBear shows you what a launch may do before anything 
 It was called **SID Console** until v0.1.0, and it began as a plugin for the Herdr terminal multiplexer.
 The last Herdr-based version is tagged `last-herdr`. On first start, VBear moves an existing
 `~/.sid-console` state directory to `~/.vbear`.
+
+### Skill descriptions in Traditional Chinese (candidate)
+
+The Skills Library, Armory skill cards and workbench skill dialogs can display separately labelled machine
+translations with “what / when / needs” summaries, an author-original toggle and visible stale warnings when
+author fields change. Chinese translations participate in library search. Missing author information stays
+“not provided”; generated content is not a verified capability. Skill files are never modified.
+
+Single/batch translation asks before sending redacted author fields through your logged-in local CLI and
+using its quota or paid usage. Settings defaults to Claude Haiku; Codex is selectable. Automatic retranslation
+is off by default, requires engine-specific disclosure/consent, and queues up to 20 missing/stale entries after
+an explicit console rescan. A global progress strip survives navigation/refresh and allows cancellation.
+Changing engines disables automation until consent is renewed; clearing orphan cache entries requires two
+confirmations. Claude's requested US$0.05 per-item budget is not a guaranteed invoice cap. Codex cost and
+all token estimates are unknown.
+
+**Real translation execution is currently blocked.** The exact no-tools CLI boundary has no version-specific
+evidence yet; existing agent-launch evidence includes Bash and cannot be reused. Both production providers
+fail closed before spawning a CLI. The UI, cache, worker and API are a reviewable candidate; enabling real
+execution needs separately authorized CLI verification and a reviewed provider change. No real CLI/model was
+called for this feature's tests. Existing agent launch and dispatch behaviour is unchanged.
+
+AGY can exercise both engine choices with a synthetic HOME, temporary state, random console port and fake
+translation CLI:
+
+```sh
+VBEAR_QA_TRANSLATE=1 VBEAR_QA_SERVE=1 python3 -m unittest tests.qa_game_ui.Serve -v
+```
+
+Use only the login URL and synthetic paths printed by that harness. It seeds fresh/stale/missing/orphan
+states and prints the browser checklist. `python3 -m unittest tests.qa_game_ui.TranslationCheck -v` checks
+both fake providers, source-change detection and cache cleanup without a real account. The complete Python
+suite and real browser QA remain independent acceptance work, not evidence supplied by these fixtures.

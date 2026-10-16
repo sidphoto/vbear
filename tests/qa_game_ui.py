@@ -27,6 +27,8 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
       lines of the Codex labels.
+      Optional VBEAR_QA_TRANSLATE=1: seed fresh/stale/none/orphan translations and inject a process-local fake
+      translation CLI for both engine selectors. No real CLI or model is ever used.
       Optional VBEAR_QA_RUN=1: also start the runner thread, so the flow goes on by itself (the first review is
       NEEDS WORK, a helper commits the "fix", the second says PASS, the merge gate opens). Without it the flow
       stays exactly as built: automatic mode on, one review round done, the runner idle.
@@ -43,6 +45,7 @@ What is built (everything synthetic, all under one temporary directory printed i
 from __future__ import annotations
 
 import json
+import copy
 import os
 import sys
 import threading
@@ -53,7 +56,7 @@ from unittest import mock
 
 from tests.test_automation_runner import RunnerCase
 from tests.test_runtimed_managed import FAKE_CLI, FAKE_CODEX_CLI
-from vbear import agent_launch, agent_profiles, flows, tasks
+from vbear import agent_launch, agent_profiles, flows, tasks, translations
 from vbear import config as cfg
 
 PROBE = "<img src=x onerror=alert(document.domain)>"
@@ -88,6 +91,7 @@ class _Env(RunnerCase):
         self._flow()
         self._lobby()
         self._office()
+        self._translations()
 
     # ---- the index: skills and professions, as files in the temporary HOME
 
@@ -149,6 +153,51 @@ class _Env(RunnerCase):
             "model": {"tool": "codex", "model_id": ""}, "enabled": True,
             "equipped_skill_ids": [by_dir["codex-triage"]],
             "permission_intents": dict(GOOD)}, known_skills=known_skills, known_roles=known_roles)
+
+    def _translations(self):
+        if os.environ.get("VBEAR_QA_TRANSLATE") != "1":
+            return
+        # This executable is always generated under the synthetic HOME. The
+        # provider injection is process-local, not a product config/env bypass.
+        fake = self.tmp / "qa-translation-cli"
+        fake.write_text("#!" + sys.executable + "\n" + r'''import json, sys, time
+from pathlib import Path
+assert not list(Path.cwd().iterdir())
+a = sys.argv[1:]
+engine = "codex" if a[0] == "exec" else "claude"
+if engine == "claude":
+    assert a[a.index("--tools") + 1] == ""
+    assert "--safe-mode" in a and "--strict-mcp-config" in a
+else:
+    assert a[a.index("--sandbox") + 1] == "read-only"
+    assert "shell_tool" in a and "mcp" in a
+prompt = sys.stdin.read()
+payload = prompt.split("BEGIN_UNTRUSTED_JSON_STRING\n", 1)[1].split("\nEND_UNTRUSTED_JSON_STRING", 1)[0]
+fields = json.loads(json.loads(payload))
+time.sleep(0.6)
+result = {"what": "QA 假翻譯：整理技能說明", "when": "原文未提供", "needs": "原文未提供",
+          "description_zh": "QA 假 CLI 中文說明：" + str(fields.get("name") or "未提供") + " <img src=x onerror=alert(1)>"}
+if engine == "claude":
+    print(json.dumps({"type":"result", "is_error":False, "result":json.dumps(result)}))
+else:
+    print(json.dumps(result))
+''', encoding="utf-8")
+        fake.chmod(0o700)
+        provider = lambda engine: (str(fake), "2.1.296" if engine == "claude" else "0.160.0")
+        manager = self.console.translations
+        manager.run = lambda engine, record, cancel: translations.run_cli(engine, record, cancel, provider=provider)
+        rows = {s["name"]: s for s in self.index["skills"]}
+        def seed(rec):
+            return {"lang": "zh-TW", "source_hash": translations.source_hash(rec), "created_at": time.time(),
+                    "engine": "claude", "model": translations.MODELS["claude"], "cli_version": "2.1.296",
+                    "summary": {"what": "QA 假翻譯：審查變更", "when": translations.MISSING, "needs": translations.MISSING},
+                    "description_zh": "QA 假翻譯：檢查變更的風險"}
+        fresh = rows["code-review"]
+        manager.store.put(fresh["skill_id"], seed(fresh))
+        stale = copy.deepcopy(rows["test-writer"])
+        stale["description"] = {"value": "Old description before author update", "origin": "author"}
+        manager.store.put(stale["skill_id"], seed(stale))
+        manager.store.put("qa-translation-orphan", seed(fresh))
 
     # ---- 出發前檢查 needs a CLI to look at: the synthetic ones, pinned for this process only
 
@@ -640,6 +689,68 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] 390 px: no scene, a list (輪到你 → the stations → 辦公桌 → 休息室), a row opens a full panel with 返回.
   [ ] prefers-reduced-motion: the 「輪到你」 badge does not fade in. Light and dark are both readable.
 """
+
+
+
+
+CHECKLIST += """
+
+== 7. 技能中文化（VBEAR_QA_TRANSLATE=1） ==
+  [ ] 技能庫：code-review 是機器翻譯；test-writer 標過期；其他技能可按翻成中文。
+  [ ] 搜尋「檢查變更的風險」能找到英文技能，結果標明機器翻譯／過期機器翻譯。
+  [ ] Armory、工作台的技能卡和技能詳細頁：中文整理預設顯示；看作者原文切換完整說明欄位。
+  [ ] 未提供的時機／需求顯示作者未提供；HTML 探針只顯示文字，不產生圖片或執行。
+  [ ] 批次過期／未翻：確認資料送出、帳號額度、預算非保證上限、Token 未知與等待上限後才執行。
+  [ ] 全域列顯示進度，切到其他頁與重新整理後仍能停止。設定開啟自動重翻需確認；關閉即取消。
+  [ ] 設定改 Codex 後自動重翻關閉；此情境仍只執行 qa-translation-cli。
+  [ ] 設定兩次確認才清除 1 個孤兒。取消任一步都保留；清除後重新讀取數量是 0。
+  [ ] 原文更新：編輯上列 synthetic HOME/.claude/skills/code-review/SKILL.md 的 description，
+      按重新掃描後看過期；重新翻譯後恢復。不要修改真實 HOME 任何檔案。
+  [ ] 1280／390 px、淺／深色、鍵盤操作、console 無錯誤及截圖，均由 AGY 實際驗證。
+"""
+
+
+class TranslationCheck(_Env):
+    def test_fake_translation_scenario(self):
+        with mock.patch.dict(os.environ, {"VBEAR_QA_TRANSLATE": "1"}):
+            self.build()
+        view = self.api("/api/translations")
+        self.assertEqual(view["provider"], "fake")
+        self.assertEqual(view["counts"]["fresh"], 1)
+        self.assertEqual(view["counts"]["stale"], 1)
+        self.assertEqual(view["counts"]["orphan"], 1)
+        self.assertGreater(view["counts"]["none"], 0)
+        status, result = self.call("/api/translations/batch", "POST", {"which": "stale"})
+        self.assertEqual(status, 202, result)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            view = self.api("/api/translations")
+            if view["job"]["status"] not in ("running", "cancelling"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(view["job"]["status"], "completed", view)
+        self.assertEqual(view["job"]["failed"], 0, view)
+        self.assertEqual(view["counts"]["stale"], 0)
+        self.assertEqual(view["counts"]["fresh"], 2)
+        self.assertEqual(self.call("/api/config", "POST", {"translation_engine": "codex"})[0], 200)
+        codex_id = self.skill_ids["spare-skill"]
+        self.assertEqual(self.call(f"/api/skills/{codex_id}/translate", "POST", {})[0], 202)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            view = self.api("/api/translations")
+            if view["job"]["status"] not in ("running", "cancelling"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(view["job"]["status"], "completed", view)
+        self.assertEqual(view["entries"][codex_id]["entry"]["engine"], "codex")
+        status, result = self.call("/api/translations/orphans", "DELETE")
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(self.api("/api/translations")["counts"]["orphan"], 0)
+        source = self.home / ".claude/skills/code-review/SKILL.md"
+        source.write_text(source.read_text().replace("Review a diff and list the risky lines.", "Review the changed author text."))
+        self.assertEqual(self.call("/api/rescan", "POST", {})[0], 200)
+        self.assertEqual(self.api("/api/translations")["counts"]["stale"], 1)
 
 
 if __name__ == "__main__":

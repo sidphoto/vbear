@@ -32,6 +32,7 @@ class Node {
     this.multiple = false;
     this.size = 0;
   }
+  contains(node) { return this === node || this.children.some(c => c instanceof Node && c.contains(node)); }
   get classList() {
     const self = this;
     return {
@@ -208,6 +209,7 @@ const staticData = {
 
 function freshContext(handlers) {
   Object.keys(fetchHandlers).forEach((k) => delete fetchHandlers[k]);
+  fetchHandlers["GET /api/translations"] = () => jsonResponse({entries:{},counts:{fresh:0,stale:0,none:0,orphan:0},job:null,engine:"claude"});
   Object.assign(fetchHandlers, handlers);
   fetchCalls.length = 0;
   for (const id of [...idRegistry.keys()]) idRegistry.delete(id);

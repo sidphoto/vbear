@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add a guarded skill-translation candidate: redacted author-field fingerprints, a bounded atomic cache,
+  stale/orphan states, sequential cancellable jobs, and consent-bound automatic work after explicit rescans.
+- Add Chinese summaries and author-original toggles to skill cards/details, translated library search,
+  cost/quota disclosures, global progress, settings and two-step orphan cleanup.
+- Add fake-only translation tests and `VBEAR_QA_TRANSLATE=1` to the isolated QA console. Production CLI
+  providers remain blocked until the exact no-tools boundary has version-specific evidence. No real model
+  was called; existing launch and dispatch behaviour is unchanged.
+
 ## v0.5.0 — quest board and pixel office
 
 The home page is now the quest board, 冒險者大廳, with flows and agents that need your attention and other open

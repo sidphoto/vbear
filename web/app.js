@@ -667,6 +667,13 @@ const api = {
       if (timer) clearTimeout(timer);
     }
   },
+  async del(path) {
+    const res = await fetch(path, { method: "DELETE", headers: { "X-VBear": "1" } });
+    const data = await res.json();
+    if (res.status === 401 && data.code === "auth_required") authLost();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  },
   async post(path, body) {
     const res = await fetch(path, {
       method: "POST",
@@ -827,6 +834,172 @@ function modelList(models) {
 }
 function initialOf(name) { const c = String(name || "?").trim().replace(/^[^\p{L}\p{N}]+/u, ""); return (c[0] || "?").toUpperCase(); }
 
+// ---------- skill translations (text only, separate from author facts) ------
+const T = { entries: {}, counts: {}, job: null, engine: "claude", error: null, loaded: false, listeners: new Set() };
+
+function translationOf(id) { return T.entries[id] || { state: "none", entry: null }; }
+function translationDescription(s) {
+  const t = translationOf(s.skill_id);
+  return t.entry ? t.entry.description_zh : (s.description && s.description.value) || "";
+}
+function translationBadge(id) {
+  const t = translationOf(id);
+  return t.entry ? badge(t.state === "stale" ? "機器翻譯 · 過期" : "機器翻譯", t.state === "stale" ? "b-warn" : "b-info",
+    `${t.entry.engine} ${t.entry.model} · ${fmtTime(t.entry.created_at)}；內容未經 VBear 驗證`) : null;
+}
+function translationDisclosure(count, engine = T.engine, automatic = false) {
+  const budget = engine === "claude"
+    ? `Claude 請求預算每項 US$0.05，${count} 項合計 US$${(count * 0.05).toFixed(2)}；CLI 在回合結束檢查，這不是保證帳單上限。`
+    : "Codex 費用上限未知。";
+  return `將 ${count} 個技能的作者說明欄位送到本機已登入的 ${engine} CLI，可能消耗該帳號的額度或產生費用。${budget} Token 消耗未知。每項最多 60 秒，總等待上限約 ${count} 分鐘（不是速度預測）。` +
+    (automatic ? "開啟後，每次重新掃描最多自動翻譯 20 個，其餘等待下一次掃描；可在設定關閉，並以全域進度列立即停止。" : "可從全域進度列取消。") +
+    "原文與翻譯都不是指令，不會載入或執行技能。";
+}
+async function refreshTranslations() {
+  try {
+    const data = await api.get("/api/translations");
+    if (!data || !data.entries) throw new Error("翻譯狀態未知");
+    Object.assign(T, data, { loaded: true, error: null });
+  } catch (e) { T.error = e.message || "翻譯狀態未知"; }
+  renderTranslationActivity();
+  for (const listener of [...T.listeners]) listener();
+}
+function renderTranslationActivity() {
+  let box = document.getElementById("translation-activity");
+  if (!box) {
+    box = el("aside", { id: "translation-activity", class: "translation-activity", "aria-label": "技能翻譯進度" });
+    document.body.append(box);
+  }
+  const job = T.job;
+  const active = job && ["running", "cancelling"].includes(job.status);
+  const focused = box.contains(document.activeElement);
+  box.hidden = !job && !T.error;
+  const status = job && ({ running: "翻譯中", cancelling: "正在停止", completed: "已結束", failed: "失敗", cancelled: "已取消" }[job.status] || "未知");
+  setKids(box,
+    el("span", { role: "status", "aria-live": "polite", "aria-atomic": "true" },
+      T.error ? `翻譯狀態未知：${T.error}` : job ? `${job.automatic ? "自動重翻" : "技能翻譯"} ${status} · ${job.done}/${job.total} · 失敗 ${job.failed}` : ""),
+    T.waiting ? el("span", { class: "small" }, `${T.waiting} 個等待下次掃描`) : null,
+    job && job.error ? el("span", { class: "small" }, job.error.message) : null,
+    active ? el("button", { class: "btn small", type: "button", "aria-disabled": String(job.status === "cancelling"),
+      on: { click: async () => { if (job.status === "cancelling") return; await cancelTranslations(); } } }, "停止翻譯") : null);
+  if (focused && box.querySelector("button")) box.querySelector("button").focus();
+}
+async function cancelTranslations() {
+  try { await api.post("/api/translations/batch/cancel", {}); await refreshTranslations(); }
+  catch (e) { toast(e.message); }
+}
+async function startTranslation(id, which) {
+  const count = id ? 1 : T.counts[which] || 0;
+  if (!count || T.error) return;
+  if (!(await confirmInPage("確認送出技能說明", translationDisclosure(count), "翻成中文"))) return;
+  try {
+    if (id) await api.post(`/api/skills/${encodeURIComponent(id)}/translate`, {});
+    else await api.post("/api/translations/batch", { which });
+    await refreshTranslations();
+  } catch (e) { toast("無法翻譯：" + e.message); }
+}
+function translationPanel(id, original) {
+  const box = el("section", { class: "translation-panel", "aria-label": "技能中文化" });
+  let showOriginal = false;
+  let initial = true, signature = "";
+  const draw = () => {
+    if (!initial && !document.body.contains(box)) { T.listeners.delete(draw); return; }
+    initial = false;
+    const nextSignature = JSON.stringify([translationOf(id), T.error, T.engine, T.job, showOriginal]);
+    if (nextSignature === signature) return;
+    signature = nextSignature;
+    const focused = box.contains(document.activeElement);
+    const focusedAction = focused && document.activeElement.getAttribute("data-translation-action");
+    const t = translationOf(id), e = t.entry;
+    const running = T.job && ["running", "cancelling"].includes(T.job.status);
+    const originalView = el("div", { class: "translation-original" }, original);
+    originalView.hidden = !!e && !showOriginal;
+    setKids(box,
+      T.error ? notice("warn", "翻譯狀態未知：" + T.error) : null,
+      t.state === "stale" ? notice("warn", `原文已變更，舊翻譯可能過期；上次翻譯：${fmtTime(e.created_at)}。請重新翻譯。`) : null,
+      e ? translationBadge(id) : null,
+      e && !showOriginal ? el("div", { class: "translation-summary" },
+        el("h3", null, "中文重點（機器整理，未經驗證）"),
+        [["做什麼", "what"], ["何時用", "when"], ["需要什麼", "needs"]].map(([label, key]) =>
+          el("p", { class: e.summary[key] === "原文未提供" ? "muted" : null },
+            el("strong", null, label + "："), e.summary[key] === "原文未提供" ? "作者未提供此資訊" : e.summary[key])),
+        el("p", null, e.description_zh)) : null,
+      e ? el("button", { class: "btn small", type: "button", "data-translation-action": "original", "aria-expanded": String(showOriginal), on: { click: () => {
+        showOriginal = !showOriginal; draw(); box.querySelector("button").focus();
+      } } }, showOriginal ? "返回中文整理" : "看新的作者原文") : null,
+      originalView,
+      el("div", { class: "translation-actions" },
+        el("button", { class: "btn small", type: "button", "data-translation-action": "translate", "aria-disabled": String(!!running || !!T.error),
+          "aria-busy": String(!!running), on: { click: () => { if (!running && !T.error) startTranslation(id); } } },
+          running ? "翻譯中…" : e ? "重新翻譯" : "翻成中文"),
+        running ? el("button", { class: "btn small", type: "button", "data-translation-action": "cancel", on: { click: cancelTranslations } }, "取消翻譯工作") : null,
+        el("span", { class: "small muted" }, `說明文字會送到 ${T.engine}，消耗你的 CLI 帳號額度。`)),
+      T.provider === "unverified" ? el("p", { class: "small muted" }, "正式 CLI 的無工具邊界尚未驗證，目前會拒絕啟動。") : null,
+      T.provider === "fake" ? el("p", { class: "small muted" }, "QA 假 CLI 情境：不會呼叫真實模型。") : null);
+    if (focused) {
+      const target = Array.from(box.querySelectorAll("button")).find(b => b.getAttribute("data-translation-action") === focusedAction);
+      (target || box.querySelector("button")).focus();
+    }
+  };
+  T.listeners.add(draw);
+  draw();
+  return box;
+}
+function translationToolbar() {
+  const box = el("section", { class: "translation-toolbar", "aria-label": "技能庫中文化" });
+  let signature = "";
+  const draw = () => {
+    if (!document.body.contains(box) && !box._translationInitial) { T.listeners.delete(draw); return; }
+    box._translationInitial = false;
+    const nextSignature = JSON.stringify([T.counts, T.error]);
+    if (signature === nextSignature) return;
+    signature = nextSignature;
+    const details = box.querySelector("details"), expanded = details && details.open;
+    const focused = box.contains(document.activeElement);
+    const c = T.counts;
+    setKids(box,
+      el("p", { class: "small", role: "status" }, T.error ? "中文化狀態未知：" + T.error :
+        `中文化：已翻 ${c.fresh || 0} · 過期 ${c.stale || 0} · 未翻 ${c.none || 0}`),
+      el("details", null, el("summary", null, "批次翻譯"), el("div", { class: "translation-actions" },
+        [["stale", "重新翻譯所有過期的"], ["none", "翻譯全部未翻的"]].map(([which, label]) =>
+          el("button", { class: "btn small", type: "button", on: { click: () => startTranslation(null, which) } }, `${label}（${c[which] || 0}）`)))));
+    box.querySelector("details").open = !!expanded;
+    if (focused) box.querySelector("button").focus();
+  };
+  box._translationInitial = true;
+  T.listeners.add(draw); draw(); return box;
+}
+function translationSettings(conf, saveConf) {
+  const engine = el("select", { "aria-label": "翻譯引擎", on: { change: async () => {
+    const result = await saveConf({ translation_engine: engine.value });
+    if (result) { conf = result.config; auto.checked = !!conf.translation_auto; await refreshTranslations(); }
+    else engine.value = conf.translation_engine || "claude";
+  } } }, [["claude", "Claude Code（Haiku）"], ["codex", "Codex"]].map(([v, label]) =>
+    el("option", { value: v, selected: v === (conf.translation_engine || "claude") }, label)));
+  const auto = el("input", { type: "checkbox", checked: !!conf.translation_auto, on: { change: async () => {
+    const wanted = auto.checked;
+    if (wanted && !(await confirmInPage("開啟原文變更時自動重翻", translationDisclosure(20, engine.value, true), "同意並開啟"))) {
+      auto.checked = false; return;
+    }
+    const result = await saveConf({ translation_auto: wanted, translation_consent_engine: engine.value });
+    if (result) { conf = result.config; await refreshTranslations(); }
+    auto.checked = !!conf.translation_auto;
+  } } });
+  return el("section", { class: "panel pad translation-settings" }, el("h2", null, "技能中文化"),
+    el("label", null, "使用自己的本機 CLI：", engine),
+    el("label", { class: "switch" }, auto, el("span", null, "原文變更時自動重翻（預設關閉）")),
+    el("p", { class: "small muted" }, "第一次開啟需確認資料送出、額度與費用。更換引擎會關閉自動重翻，請重新同意。關閉時也會停止目前工作。"),
+    el("p", null, `孤兒翻譯：${T.error ? "未知" : T.counts.orphan || 0}`),
+    el("button", { class: "btn small", type: "button", on: { click: async () => {
+      if (T.error) return;
+      if (!(await confirmInPage("檢查孤兒翻譯", `目前有 ${T.counts.orphan || 0} 個索引已找不到的翻譯；只清除快取，不會刪除技能。`, "繼續"))) return;
+      if (!(await confirmInPage("最後確認", "確定清除目前索引裡不存在的翻譯快取？", "清除"))) return;
+      try { await api.del("/api/translations/orphans"); await refreshTranslations(); viewSettings(); }
+      catch (e) { toast(e.message); }
+    } } }, "清除孤兒翻譯"),
+    el("p", { class: "small muted" }, T.provider === "fake" ? "QA 假 CLI；不打真模型。" : "正式 CLI 無工具邊界尚未驗證；此版本不會啟動真實翻譯 CLI。"));
+}
+
 // ---------- data -----------------------------------------------------------
 
 const D = { overview: null, skills: null, categories: [], roles: null, live: null, config: null, byId: new Map() };
@@ -901,6 +1074,8 @@ function searchSkills(query, pool) {
     const name = norm(s.name), inv = norm(s.invoke_name);
     const desc = norm(s.description && s.description.value);
     const when = norm(s.when_to_use && s.when_to_use.value);
+    const translated = translationOf(s.skill_id);
+    const translationText = norm(translated.entry ? [translated.entry.description_zh, ...Object.values(translated.entry.summary)].join(" ") : "");
     let score = 0; const why = [];
     const a = ann(s);
     const aliases = (a.aliases || []).map(norm), tags = (a.tags || []).map(norm), note = norm(a.note);
@@ -914,6 +1089,7 @@ function searchSkills(query, pool) {
       else if (name.includes(t) || inv.includes(t)) { score += 40; why.push("名稱包含"); }
       if (desc.includes(t)) { score += 18; why.push("用途描述"); }
       if (when.includes(t)) { score += 8; why.push("使用時機"); }
+      if (translationText.includes(t)) { score += 16; why.push(translated.state === "stale" ? "過期機器翻譯" : "機器翻譯"); }
     }
     for (const c of s.categories || []) if (catHits.has(c.id)) { score += catWeight(c.id); why.push(`用途：${c.label}`); }
     if (score > 0) out.push({ s, score: score + (s.activation === "active" ? 5 : 0), why: [...new Set(why)] });
@@ -931,8 +1107,9 @@ function skillCard(s, why) {
         el("div", { class: "card-title" }, displayName(s)),
         el("div", { class: "card-sub mono" }, displayName(s) !== s.name ? `原名 ${s.invoke_name}` : s.invoke_name !== s.name ? `呼叫名稱 ${s.invoke_name}` : SCOPE[s.scope] || s.scope)),
       activationWithHelp(s.activation)),
-    s.description && s.description.value
-      ? el("p", { class: "clamp" }, firstSentence(s.description.value, 170))
+    translationBadge(s.skill_id),
+    translationDescription(s)
+      ? el("p", { class: "clamp" }, firstSentence(translationDescription(s), 170))
       : el("p", { class: "muted" }, "作者沒有提供用途描述"),
     (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine", title: "我的標籤" }, "#" + t))) : null,
     el("div", { class: "chips" },
@@ -1079,6 +1256,7 @@ async function openSkillCard(skillId, opts = {}) {
   backBtn.focus();
   let d;
   try {
+    await refreshTranslations();
     d = await api.get(`/api/skills/${encodeURIComponent(skillId)}?view=card`);
   } catch (e) {
     setKids(body, notice("bad", "無法顯示技能卡：" + (e && e.message ? e.message : "未知錯誤")));
@@ -1104,11 +1282,12 @@ async function openSkillCard(skillId, opts = {}) {
     skillCardField("類別", sk.categories),
     skillCardField("工具（遊戲用語：陣營）", sk.tool),
     skillCardField("來源（位置）", scopeSrc),
+    translationPanel(skillId, el("div", null,
     skillCardField("效果（技能作者的說明）", sk.description),
     skillCardField("發動時機", sk.when_to_use),
     skillCardField("需要（輸入）", sk.inputs),
     skillCardField("產出", sk.outputs),
-    skillCardField("依賴", sk.dependencies),
+    skillCardField("依賴", sk.dependencies))),
     el("div", { class: "sc-field" },
       el("div", { class: "sc-label" }, "引用的檔案"),
       el("div", { class: "sc-value" },
@@ -2662,6 +2841,7 @@ function projectCard(p) {
 async function viewSkills(params) {
   const token = seq;
   await loadStatic();
+  await refreshTranslations();
   const f = Object.assign({ q: "", tool: "", act: "active", scope: "", cat: "", mine: "", view: store.get("view", "card") }, store.get("skillFilters", {}), params);
   if (params.q !== undefined) f.q = params.q;
   const main = claim(token);
@@ -2691,7 +2871,7 @@ async function viewSkills(params) {
   const card = ({ s, why }) => skillCard(s, why);
   const row = ({ s, why }) => el("tr", null,
     el("td", null, el("a", { href: `#/skills/${s.skill_id}` }, displayName(s)), displayName(s) !== s.name ? el("div", { class: "small muted mono" }, s.name) : null, (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine" }, "#" + t))) : null, (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
-    el("td", null, firstSentence(s.description && s.description.value, 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null),
+    el("td", null, translationBadge(s.skill_id), firstSentence(translationDescription(s), 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null),
     el("td", null, TOOL[s.tool] || s.tool),
     el("td", null, SCOPE[s.scope] || s.scope, s.origin_package && s.origin_package.version ? el("div", { class: "small muted" }, s.origin_package.version) : null),
     el("td", null, actBadge(s.activation)));
@@ -2755,6 +2935,7 @@ async function viewSkills(params) {
     el("p", { class: "lede" }, "這裡是掃描到的 Skill 清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟 Armory。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
+    translationToolbar(),
     el("div", { class: "search" }, q),
     el("div", { class: "toolbar" },
       sel("狀態", "act", actOptions, "這是掃描到的載入狀態；可使用不代表目前有 Agent 正在使用。"),
@@ -2767,6 +2948,13 @@ async function viewSkills(params) {
       el("span", null, "用途分類為", el("b", null, "自動整理"), "（依描述關鍵字），滑過標籤可看到命中的字。")),
     out);
   draw();
+  let translationSignature = JSON.stringify(T.entries);
+  const refreshResults = () => {
+    if (!document.body.contains(out)) { T.listeners.delete(refreshResults); return; }
+    const next = JSON.stringify(T.entries);
+    if (next !== translationSignature) { translationSignature = next; draw(); }
+  };
+  T.listeners.add(refreshResults);
 }
 
 async function viewArmory() {
@@ -2774,7 +2962,7 @@ async function viewArmory() {
   const main = claim(token);
   setKids(main, el("p", { class: "loading" }, "載入 Armory…"));
   let data;
-  try { data = await api.get("/api/armory"); }
+  try { data = await api.get("/api/armory"); await refreshTranslations(); }
   catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["Armory"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
   const state = (label, value, source, hint, cls) => el("div", { class: "armory-state" },
@@ -2793,6 +2981,8 @@ async function viewArmory() {
         el("div", { class: "card-top" }, el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name), actBadge(s.activation)),
         el("div", null, el("button", { class: "btn small", type: "button",
           on: { click: () => openSkillCard(s.skill_id) } }, "技能卡特性")),
+        translationBadge(s.skill_id),
+        translationOf(s.skill_id).entry ? el("p", { class: "clamp" }, firstSentence(translationDescription(s), 170)) : null,
         el("div", { class: "card-sub mono" }, s.invoke_name || s.skill_id),
         el("div", { class: "armory-states" },
           state("市集可取得", x.available ? badge("可取得", "b-info") : badge("不適用", "b-mute"), s.sources.available,
@@ -2812,6 +3002,7 @@ async function viewArmory() {
 async function viewSkillDetail(id) {
   const token = seq;
   await loadStatic();
+  await refreshTranslations();
   const main = claim(token);
   setKids(main, el("p", { class: "loading" }, "載入中…"));
   let d;
@@ -2843,11 +3034,12 @@ async function viewSkillDetail(id) {
     el("div", { class: "grid-2 section" },
       el("div", { class: "panel pad" },
         el("h2", { style: "margin-bottom:12px" }, "這個技能能做什麼"),
+        translationPanel(s.skill_id, el("div", null,
         field("一句話用途", s.description, "作者沒有提供 description"),
         field("使用時機", s.when_to_use),
         field("需要提供", s.inputs),
         field("預期產出", s.outputs),
-        field("相依需求", s.dependencies),
+        field("相依需求", s.dependencies))),
         (s.categories || []).length ? el("div", { class: "field" }, el("h3", null, "用途分類", prov({ origin: "derived", detail: "描述關鍵字" })),
           el("div", { class: "chips" }, s.categories.map((c) => el("span", { class: "tag cat" }, `${c.label}（命中「${c.keyword}」）`)))) : null),
       el("div", { style: "display:grid;gap:16px;align-content:start" },
@@ -3156,6 +3348,7 @@ function projectDetail(p) {
 async function viewSettings() {
   const token = seq;
   await loadStatic();
+  await refreshTranslations();
   const main = claim(token);
   const c = await api.get("/api/config");
   if (token !== seq) return;
@@ -3184,6 +3377,7 @@ async function viewSettings() {
     el("h1", null, "設定"),
     el("p", { class: "lede" }, "選擇要盤點的來源。主控台只讀取你選的位置，不會修改任何技能或角色檔案。"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
+    translationSettings(conf, saveConf),
     el("div", { class: "grid-2" },
       el("div", { class: "panel pad" },
         el("h2", { style: "margin-bottom:6px" }, "掃描來源"),
@@ -3215,7 +3409,7 @@ async function viewSettings() {
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "資料流向"),
           el("ul", { class: "small", style: "margin:0;padding-left:18px;color:var(--ink-2)" },
-            el("li", null, "所有掃描都在這台電腦上完成，主控台不連線到任何外部服務。"),
+            el("li", null, "所有掃描都在這台電腦上完成；技能翻譯若啟用，會經你的本機 CLI 將作者說明送到模型服務。"),
             el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
             el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
             el("li", null, "主控台只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
@@ -7437,6 +7631,7 @@ async function route() {
 }
 
 setTheme(store.get("theme", "auto"));
+setInterval(() => { if (!document.hidden && !authLostShown) refreshTranslations(); }, 2500);
 // Coming back to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).
