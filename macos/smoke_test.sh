@@ -112,6 +112,21 @@ APP_PID=$!
 for _ in $(seq 1 240); do [ -f "$VBEAR_HOME/server.token" ] && break; sleep 0.5; done
 [ -f "$VBEAR_HOME/server.token" ] && pass "app started its server" || { fail "app started its server"; cat "$ROOT/app.log"; exit 1; }
 [ "$(stat -f %Lp "$VBEAR_HOME/server.token")" = "600" ] && pass "token file is 0600" || fail "token file is 0600"
+# The folder chooser bridge is in the app: its types and the reply function are in the binary (Swift keeps short string
+# literals such as the message name inline, and the optimizer inlines small functions, so those are what `strings` can
+# see), and the wiring reads origin and main frame. Nothing
+# here opens a real panel; the decisions themselves (origin, request id, busy) are run by macos/test_browser_mode.sh below.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+APP_STRINGS="$(strings -a "$APP/Contents/MacOS/VBear")"
+for needle in FolderPickerGate PickerRequest window.__vbearFolderPicked securityOrigin NSOpenPanel; do
+  grep -qF -- "$needle" <<<"$APP_STRINGS" && pass "app binary has the chooser bridge: $needle" || fail "app binary has the chooser bridge: $needle"
+done
+if [ -f "$HERE/VBear/main.swift" ]; then
+  grep -qF 'frameIsMain: message.frameInfo.isMainFrame' "$HERE/VBear/main.swift" && grep -qF 'message.frameInfo.securityOrigin' "$HERE/VBear/main.swift" \
+    && grep -qF 'case .busy(let id)' "$HERE/VBear/main.swift" && grep -qF 'canChooseFiles = false' "$HERE/VBear/main.swift" \
+    && pass "chooser wiring checks the main frame and origin, answers busy, and chooses folders only" \
+    || fail "chooser wiring checks the main frame and origin, answers busy, and chooses folders only"
+fi
 
 # 3. API, built-in terminal, quit; driven with the bundled Python itself.
 cd "$APP/Contents/Resources/app"
@@ -142,6 +157,16 @@ check(call("/api/config", auth=False)[0] == 401, "API refuses requests without t
 st, cfg = call("/api/config")
 check(st == 200 and cfg["state_dir"] == state, "API answers with the token, state dir is the test one")
 check(urllib.request.urlopen(base + "/", timeout=10).status == 200, "web page is served")
+page_js = urllib.request.urlopen(base + "/app.js", timeout=10).read().decode("utf-8")
+check("vbearPickFolder" in page_js and "__vbearFolderPicked" in page_js, "the served page uses the same bridge names as the app")
+import os, urllib.parse
+os.makedirs(f"{home}/qa-proj/.git", exist_ok=True)
+open(f"{home}/qa-proj/.git/HEAD", "w").write("ref: refs/heads/main\n")
+st, r = call("/api/folders/inspect?path=" + urllib.parse.quote(f"{home}/qa-proj", safe=""))
+check(st == 200 and r["exists"] and r["git"]["is_repo"] and r["git"]["branch"] == "main", "folder inspect reads a repository without running git")
+check(call("/api/folders/inspect?path=" + urllib.parse.quote(home, safe=""))[0] == 403, "folder inspect refuses the home directory itself")
+check(call("/api/folders/inspect?path=" + urllib.parse.quote(f"{home}/.ssh/x", safe=""))[0] == 403, "folder inspect refuses ~/.ssh")
+check(call("/api/folders/inspect?path=" + urllib.parse.quote(f"{home}/qa-proj", safe=""), auth=False)[0] == 401, "folder inspect needs the token")
 st, ov = call("/api/overview")
 check(st == 200, "overview loads for a user with no skills")
 st, r = call("/api/native/terminals", "POST", {"cwd": "~"})
@@ -181,6 +206,15 @@ r = d.rpc('list', base=Path('$VBEAR_HOME'))['result']['sessions']
 print(any(s['session_id'] == '$SID' and not s['exited'] for s in r))" 2>/dev/null || echo False)"
 [ "$ALIVE" = "True" ] && pass "the terminal keeps running after the app quits" || fail "the terminal keeps running after the app quits"
 codesign --verify --deep --strict "$APP" && pass "bundle unchanged after running (signature still valid)" || fail "bundle unchanged after running"
+
+# The chooser bridge's decisions (origin, request id, busy), run from the same source the bundle was built from.
+if [ -f "$HERE/test_browser_mode.sh" ] && /usr/bin/xcrun --find swiftc >/dev/null 2>&1; then
+  if bash "$HERE/test_browser_mode.sh" >"$ROOT/bridge-unit.log" 2>&1; then
+    pass "chooser bridge decisions (origin, request id, busy, reply JSON) pass"
+  else
+    fail "chooser bridge decisions pass"; tail -5 "$ROOT/bridge-unit.log"
+  fi
+fi
 
 if [ "${2:-}" = "--browser" ]; then
   check_browser_requests() {

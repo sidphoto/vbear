@@ -33,6 +33,64 @@ func browserLaunchProblem(_ process: Process, timeout: TimeInterval = 15) throws
     return nil
 }
 
+// ---- the folder chooser the page can ask for (design card-play 4, R9) --------------------------------------------
+// The page posts {requestId} to the script message handler `vbearPickFolder` and hears back through
+// window.__vbearFolderPicked(JSON). What it gets is only a path as text: it still asks the server (inspect) about
+// it, and the chooser gives the page no file access. The decisions live in these plain functions so a test can run
+// them without a window.
+
+let folderPickerMessage = "vbearPickFolder"
+
+/// ^[a-z0-9-]{1,32}$
+func isValidPickerRequestId(_ id: String) -> Bool {
+    guard (1...32).contains(id.utf8.count) else { return false }
+    return id.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
+}
+
+/// Only the app's own server: http, 127.0.0.1, and the port this app started (or found) it on.
+func isConsoleOrigin(scheme: String, host: String, port: Int, serverPort: Int) -> Bool {
+    scheme == "http" && host == "127.0.0.1" && port == serverPort
+}
+
+/// One chooser panel at a time.
+final class FolderPickerGate {
+    private(set) var isOpen = false
+    func begin() -> Bool {
+        if isOpen { return false }
+        isOpen = true
+        return true
+    }
+    func end() { isOpen = false }
+}
+
+enum PickerRequest: Equatable {
+    case ignore               // not ours to answer: no reply at all
+    case busy(String)         // a panel is already open
+    case open(String)         // show the panel; the gate is now taken
+}
+
+func pickerRequest(frameIsMain: Bool, scheme: String, host: String, port: Int, serverPort: Int,
+                   body: Any, gate: FolderPickerGate) -> PickerRequest {
+    guard frameIsMain, isConsoleOrigin(scheme: scheme, host: host, port: port, serverPort: serverPort),
+          let dict = body as? [String: Any], dict.count == 1,
+          let id = dict["requestId"] as? String, isValidPickerRequestId(id) else { return .ignore }
+    return gate.begin() ? .open(id) : .busy(id)
+}
+
+/// The JavaScript that hands the answer to the page; the JSON comes from JSONSerialization, never from string pasting.
+func pickerReplyScript(requestId: String, status: String, path: String?) -> String? {
+    guard ["ok", "cancel", "busy"].contains(status), isValidPickerRequestId(requestId) else { return nil }
+    var object: [String: Any] = ["requestId": requestId, "status": status]
+    if status == "ok" {
+        guard let path = path else { return nil }
+        object["path"] = path
+    }
+    guard JSONSerialization.isValidJSONObject(object),
+          let data = try? JSONSerialization.data(withJSONObject: object),
+          let json = String(data: data, encoding: .utf8) else { return nil }
+    return "window.__vbearFolderPicked(\(json))"
+}
+
 func randomToken() -> String {
     var bytes = [UInt8](repeating: 0, count: 32)
     _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
@@ -112,8 +170,9 @@ func freePort() -> Int {
     return 0
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSMenuItemValidation {
     var window: NSWindow!
+    let folderGate = FolderPickerGate()
     var webView: WKWebView!
     var server: Process?
     var port = defaultPort
@@ -135,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let config = WKWebViewConfiguration()
         if testPort != nil { config.websiteDataStore = .nonPersistent() }
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.userContentController.add(self, name: folderPickerMessage)
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -149,6 +209,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.makeKeyAndOrderFront(nil)
         showMessage("VBear 正在啟動…", detail: "第一次開啟會先整理你的技能與工作紀錄，可能需要一點時間。")
         DispatchQueue.global(qos: .userInitiated).async { self.connect() }
+    }
+
+    func answerFolderPicker(_ requestId: String, _ status: String, _ path: String? = nil) {
+        guard let script = pickerReplyScript(requestId: requestId, status: status, path: path) else { return }
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == folderPickerMessage else { return }
+        let origin = message.frameInfo.securityOrigin
+        switch pickerRequest(frameIsMain: message.frameInfo.isMainFrame, scheme: origin.protocol, host: origin.host,
+                             port: origin.port, serverPort: port, body: message.body, gate: folderGate) {
+        case .ignore:
+            return
+        case .busy(let id):
+            answerFolderPicker(id, "busy")
+        case .open(let id):
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = false
+            panel.message = "選一個專案資料夾"
+            panel.prompt = "選擇"
+            panel.beginSheetModal(for: window) { response in
+                self.folderGate.end()
+                if response == .OK, let url = panel.url {
+                    self.answerFolderPicker(id, "ok", url.path)
+                } else {
+                    self.answerFolderPicker(id, "cancel")
+                }
+            }
+        }
     }
 
     // Launch has its own detached server lifecycle. Never assign it to `server`.
