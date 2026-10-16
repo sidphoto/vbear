@@ -551,3 +551,42 @@ to 500; the approval is refused when the chosen limits could write more than the
 - State lives in `~/.vbear/`. The directory has mode `0700` and its files `0600`, written atomically.
 - If `config.json` is corrupt, it is never overwritten. It is backed up, scanning is turned off, and a
   warning is shown.
+
+## Skill translations (candidate, no production provider enabled)
+
+`translations.py` is separate from managed launches, dispatches and the runtime. Only an explicitly requested
+single/batch translation or a rescan after engine-bound automatic consent can enqueue work. Automatic mode
+is off by default, caps each rescan at 20 entries, skips unchanged fresh entries, and cools failed fingerprints
+for five minutes. Changing engines turns automatic mode off unless the new engine is explicitly accepted;
+turning it off cancels current work. Reads of `/api/translations` use the already loaded index, never scan or
+start a CLI. POST and DELETE use the existing Host, token, Origin and X-VBear protections.
+
+Only name and author-provenance description/when_to_use/inputs/outputs/dependencies are redacted and hashed;
+derived fields are null. No file body, path, provenance detail, stderr or account information goes into the
+prompt/cache/UI. This is a **new outbound data path through the user's authenticated local CLI** and may
+consume the user's quota or money. Claude's `--max-budget-usd 0.05` is a requested budget checked by the CLI,
+not a guaranteed invoice cap; Codex cost and tokens are unknown. VBear adds no API key or HTTP client.
+
+The candidate Claude argv explicitly empties tools and MCP, uses safe mode and nonpersistent JSON output.
+The candidate Codex argv requests read-only and tool disabling; **these flags are not evidence that Codex
+has no tools**. Existing launch evidence includes Bash and cannot establish this new boundary. Production
+provider resolution therefore refuses both engines with `boundary_unverified`, before spawning anything.
+There is no config/environment bypass. Enabling a real provider requires version/binary/exact-argv evidence
+and a reviewed code change; this task ran fake CLIs only. Neither engine is claimed verified or available.
+The fake QA provider is injected in the QA Python process only.
+
+A worker uses an empty temporary cwd, stdin for the untrusted JSON-string-delimited payload, fixed argv,
+no shell, one process group, a 60-second deadline, 32 KiB input and 64 KiB stdout limits. Stderr is discarded.
+On every exit it kills/reaps the group; unconfirmed group extinction blocks further work for manual review.
+HOME is needed for future authenticated CLI use; empty cwd alone is **not read isolation**. No credential is
+copied. Prompt-injection instructions and strict output validation cannot prove semantic fidelity. Missing
+author when/needs/description values are forced to 「原文未提供」 after validation; other machine translations
+remain unverified content, labelled separately from author facts and rendered only as text.
+
+The version-1 cache envelope (`translations.json`) is atomic/0600, locked across processes with jsonstore,
+limited to 2 MiB before read/write, and quarantines invalid JSON/schema with a blocking marker. It never
+silently replaces a damaged cache. Summaries are capped at 150 characters, description at 2000. Cache errors
+use fixed classifications, not filesystem/CLI excerpts. Source hash mismatch keeps old text visibly stale;
+an in-flight old result cannot appear fresh against a new index. Orphan deletion rechecks the current loaded
+index and removes only cache entries, never skill files. Jobs are in-memory: console restart loses progress,
+retains accepted translations and does not resume outbound work automatically.

@@ -52,6 +52,7 @@ from . import flows
 from . import previews as previews_mod
 from .api_error import ApiError
 from . import risk_acceptance
+from . import translations
 from . import tasks
 from . import runtime as rt
 from .runtime import cli_versions, pipeline_store
@@ -89,7 +90,7 @@ SKILL_SUMMARY_FIELDS = (
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
-                   "herdr_migration_acknowledged"}
+                   "herdr_migration_acknowledged", "translation_engine", "translation_auto"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -155,6 +156,20 @@ class Console:
         # the runner of automatic flows (S3): started by serve() only, never by constructing a Console
         self.runner = runner_mod.AutomationRunner(self.executor, self.review)
         self.claude_verifier = claude_verify.ClaudeVerifier()
+        self.translations = translations.TranslationManager()
+        self.store.after_rescan = self.translations.after_scan
+
+    def translation_manager(self):
+        with self.lock:
+            if not hasattr(self, "translations"):
+                self.translations = translations.TranslationManager()
+            return self.translations
+
+    def translation_records(self):
+        static = self.store.static_if_loaded()
+        if static is None:
+            raise translations.TranslationError("not_found")
+        return {s["skill_id"]: s for s in static["skills"]}
 
     def previews(self):
         """Preview store for Profile-managed launches; native runtime only."""
@@ -409,6 +424,8 @@ def make_handler(console: Console):
             try:
                 if path in STATIC_FILES:
                     return self._static(STATIC_FILES[path])
+                if path in ("/api/translations", "/api/translations/batch"):
+                    return self._translation_call("view")
                 if path == "/api/overview":
                     return self._json(self._overview())
                 if path == "/api/skills":
@@ -555,6 +572,13 @@ def make_handler(console: Console):
             try:
                 if path == "/api/auth":
                     return self._auth_exchange(self._body())
+                if path == "/api/translations/batch/cancel":
+                    return self._translation_call("cancel")
+                if path == "/api/translations/batch":
+                    return self._translation_call("batch", self._body_strict())
+                if path.startswith("/api/skills/") and path.endswith("/translate"):
+                    return self._translation_call("single", self._body_strict(),
+                                                  unquote(path[len("/api/skills/"):-len("/translate")]))
                 if path == "/api/rescan":
                     try:
                         data = console.store.rescan()
@@ -708,6 +732,8 @@ def make_handler(console: Console):
                 return self._auth_error()
             path = urlparse(self.path).path
             try:
+                if path == "/api/translations/orphans":
+                    return self._translation_call("orphans")
                 if path.startswith("/api/tasks/"):
                     task_id = path[len("/api/tasks/"):]
                     ok = tasks.delete_task(task_id)
@@ -1193,6 +1219,31 @@ def make_handler(console: Console):
                 "recent_skill_ids": [s["skill_id"] for s in recent],
             }
 
+        def _translation_call(self, action, body=None, skill_id=None):
+            try:
+                manager = console.translation_manager()
+                if action == "cancel":
+                    return self._json({"job": manager.cancel()})
+                records = console.translation_records()
+                if action == "view":
+                    return self._json({**manager.view(records), "engine": console.store.conf.get("translation_engine", "claude"),
+                                       "provider": "unverified" if manager.run is translations.run_cli else "fake"})
+                if action == "orphans":
+                    try:
+                        return self._json({"deleted": manager.store.remove_orphans(records)})
+                    except translations.StoreError:
+                        raise translations.TranslationError("storage") from None
+                if not isinstance(body, dict) or set(body) - ({"which"} if action == "batch" else set()):
+                    raise translations.TranslationError("bad_request")
+                conf = console.store.conf
+                job = manager.start(records, conf.get("translation_engine", "claude"),
+                                    which=body.get("which", "stale+none"),
+                                    ids=[skill_id] if action == "single" else None)
+                return self._json({"job": job}, 202)
+            except translations.TranslationError as exc:
+                status = {"bad_request": 400, "not_found": 404, "storage": 503}.get(exc.code, 409)
+                return self._json({"code": exc.code, "error": str(exc)}, status)
+
         def _skills(self) -> dict:
             items = []
             notes = annotations.load()
@@ -1313,8 +1364,16 @@ def make_handler(console: Console):
                 if cfg.is_corrupt():
                     raise ValueError(cfg.corrupt_message())
                 conf = cfg.load()
+                if "translation_auto" in body and type(body["translation_auto"]) is not bool:
+                    raise ValueError("自動重翻必須為布林值")
+                requested_engine = body.get("translation_engine", conf.get("translation_engine", "claude"))
+                if body.get("translation_auto") is True and (conf.get("translation_auto") is not True or requested_engine != conf.get("translation_engine")):
+                    if body.get("translation_consent_engine") != requested_engine:
+                        raise ValueError("請先確認引擎、資料送出與額度說明")
                 for key in CONFIG_WRITABLE & body.keys():
                     value = body[key]
+                    if key == "translation_engine" and (not isinstance(value, str) or value not in translations.MODELS):
+                        raise ValueError("不支援的翻譯引擎")
                     if key == "usage_days":
                         try:
                             value = max(1, min(365, int(value)))
@@ -1334,8 +1393,13 @@ def make_handler(console: Console):
                     for src in conf.get("sources", []):
                         if src["source_id"] in toggles:
                             src["enabled"] = bool(toggles[src["source_id"]])
+                if ("translation_engine" in body and body["translation_engine"] != console.store.conf.get("translation_engine", "claude")
+                        and body.get("translation_consent_engine") != body["translation_engine"]):
+                    conf["translation_auto"] = False
                 cfg.save(conf)
                 console.store.set_conf(conf)
+            if body.get("translation_auto") is False or ("translation_engine" in body):
+                console.translation_manager().cancel()
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
                     or "project_roots" in body}
 

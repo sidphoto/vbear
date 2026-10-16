@@ -197,6 +197,8 @@ DEFAULT_CONFIG = {
     "port": DEFAULT_PORT,
     "language": "zh-TW",
     "advanced_mode": False,
+    "translation_engine": "claude",
+    "translation_auto": False,
     "runtime_kind": "native",  # the only runtime since the Herdr bridge was removed
     "project_roots": ["~/projects"],
     "sources": [asdict(s) for s in default_sources()],

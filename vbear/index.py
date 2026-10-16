@@ -426,7 +426,10 @@ class Store:
                 raise ValueError(cfg.corrupt_message())
             data, stamp = self._scan(conf)
             self._publish(data, stamp)
-            return data
+        callback = getattr(self, "after_rescan", None)
+        if callback is not None:
+            callback(data, conf)
+        return data
 
     def _publish(self, data: dict, stamp: tuple) -> None:
         """Swap in a static index, then retire live views built on older ones.
