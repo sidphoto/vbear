@@ -192,6 +192,24 @@ Other safeguards:
 - Results, approvals, closure reasons and handoffs are still set through the same unauthenticated local UI/API, and
   `verified` stays false.
 
+### Starter cards and the wizard's launch check
+
+- **The starter deck carries the one combination a managed launch honours.** `launch_blockers` is a whitelist: read,
+  write and test allowed, deploy denied (`VERIFIED_INTENTS`, defined in `vbear/agent_profiles.py` and imported by
+  `agent_launch`). The three starter cards and the wizard's suggestions use it, taken from the catalog, so a person
+  is never handed a card that cannot go. This is a choice of defaults, not a limit: that a planner or reviewer
+  should not edit files cannot be enforced today, and the screens say so beside the suggestions.
+- **`GET /api/agent-builder/intent-check?read=&write=&test=&deploy=` is pure.** Same Host, token and Origin checks as
+  every other `GET /api/`. It runs `launch_blockers` for a stand-in enabled Claude card with the commit acknowledged
+  and the network closed, so only the intents can speak, and returns the server's own reasons. It reads and writes
+  nothing and starts no process; the four values must each be given once and be `allow`, `deny` or `unspecified`
+  (anything else is `400`). The wizard uses it to tell a person, before saving, that a combination cannot be
+  launched; the page holds none of those rules.
+- **A Codex card's light.** Codex cannot open a terminal from VBear (`codex_` reasons), but the flow's automatic
+  review does run it, in a scratch copy. When every reason on a card starts with `codex_` the card shows a neutral
+  "can't open a terminal directly" light instead of the red one; any other reason keeps the red. It is a reading of
+  the same `blockers`, not a new permission.
+
 ### A task card is a folder: folder inspection and the app's folder chooser
 
 - **`GET /api/folders/inspect?path=` is read-only.** It sits behind the same Host, token and Origin checks as every

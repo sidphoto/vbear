@@ -625,8 +625,11 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] 起手牌組: three rows (規劃 CEO, 執行 工匠, 審查 審查員), names editable; with no Codex found the reviewer is
       unticked and says 「這台電腦找不到 Codex」. 「建立 N 張角色卡」 makes ordinary cards.
   [ ] ＋ 新角色卡: three steps (名字與外觀 / 陣營與位置 / 技能卡), 上一步/下一步/建立 always in view (also at 390 px).
-      Choosing a position shows the suggested intents tagged 「建議，可改」 with the sentence that an intent is
-      not a limit VBear applies. A skill of the other tool is greyed with 「… 不會讀這張卡」.
+      A new card starts from the one set of intents a launch can honour (讀取/編輯/測試 允許, 部署 拒絕), tagged
+      「建議，可改」, with the sentence that an intent is not a limit VBear applies and the sentence that this
+      is the only set VBear can launch today. Changing an intent to another combination shows
+      「這個組合目前不能出發」 with the server's reasons right there. A skill of the other tool is greyed with
+      「… 不會讀這張卡」.
   [ ] A card with an undecided intent shows 「還差一步：權限意圖還沒決定」 and 「現在決定」; a decided one says
       「可以出發（權限意圖都已決定）」 and 「實際能不能出發，以出發通行證為準」. 「名冊，不代表正在出勤」 on every card.
   [ ] 出發 opens 出發通行證 in the workbench for that card. 「你電腦裡現成的角色範本（職業標籤）」 is folded.
@@ -636,7 +639,9 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       With reduced motion the card turns without animation.
   [ ] The skill slots are dashed with 「收藏中」 and the line 「這次的安全啟動不會載入」 (nothing is solid 「生效中」
       today: the server says will_load false for every skill). With VBEAR_QA_CODEX_BLOCKED=1 the Codex card's light
-      is 「目前不能出發」 with the first reason on the front and every reason on the back, not green.
+      is the neutral 「不能直接開終端」 (a half-filled ring, blue) with the review-place sentence on the front and
+      every original reason on the back; a card with any other reason (e.g. 編輯寫入 拒絕) is the red
+      「目前不能出發」. Position badges are a square with one character (規／執／審／？); the shields are flat-topped.
   [ ] 辦公室 (#/office, VBEAR_QA_OFFICE=1): a roster character's panel shows the same card, a short front; the weapons,
       armor (with a shield by 強制／僅意圖／未限制 only) and skills are on the back, which scrolls with the panel.
 

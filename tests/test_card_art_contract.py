@@ -44,6 +44,45 @@ class ShieldTableTests(unittest.TestCase):
                                   agent_launch.UNKNOWN})
 
 
+class StarterIntentsAndCodexLightTests(unittest.TestCase):
+    """v1.2 R10 and R11: the page holds no copy of the launch rules; it reads them from the server."""
+
+    CLOSED = {"enabled": False, "approved_domains": []}
+
+    def test_the_page_has_no_copy_of_the_verified_combination(self):
+        compact = re.sub(r"\s+", "", APP)
+        for literal in ('read:"allow",write:"allow",test:"allow",deploy:"deny"',
+                        'read:"allow",write:"deny"', "VERIFIED_INTENTS"):
+            self.assertNotIn(literal, compact, literal)
+        body = re.search(r"function permissionSuggestion\(catalog, position\) \{(.*?)\n\}", APP, re.S).group(1)
+        self.assertIn("starter_deck", body)
+        self.assertIn("verifiedIntents(catalog)", body)
+        self.assertIn("catalog.verified_intents", re.search(r"function verifiedIntents\(catalog\) \{(.*?)\}", APP, re.S).group(1))
+
+    def test_the_page_asks_the_server_why_a_combination_cannot_go(self):
+        self.assertIn("/api/agent-builder/intent-check?", APP)
+        # and no launch_blockers code is spelled out for that purpose in the wizard
+        wizard = APP[APP.index("function openCardWizard"):APP.index("// ---- the starter deck")]
+        for code in ("readonly_unverified", "read_deny_unenforceable", "test_deny_unenforceable", "intents_not_supported"):
+            self.assertNotIn(code, wizard, code)
+
+    def test_a_card_with_the_verified_intents_is_blocked_only_by_codex_reasons_and_only_for_codex(self):
+        codex = {"model": {"tool": "codex"}, "enabled": True, "permission_intents": dict(agent_launch.VERIFIED_INTENTS)}
+        claude = {"model": {"tool": "claude"}, "enabled": True, "permission_intents": dict(agent_launch.VERIFIED_INTENTS)}
+        codes = [b["code"] for b in agent_launch.launch_blockers(codex, True, self.CLOSED)]
+        self.assertTrue(codes and all(c.startswith("codex_") for c in codes), codes)
+        self.assertEqual(agent_launch.launch_blockers(claude, True, self.CLOSED), [])
+        # a reason about anything else keeps the plain prefix-free code the page tells apart by
+        other = agent_launch.launch_blockers({**codex, "permission_intents": {**agent_launch.VERIFIED_INTENTS, "write": "deny"}},
+                                             True, self.CLOSED)
+        self.assertTrue(any(not b["code"].startswith("codex_") for b in other))
+
+    def test_the_light_tells_codex_reasons_apart_by_their_prefix_and_by_nothing_else(self):
+        body = re.search(r"function cardDeparture\(p, loadoutState\) \{(.*?)\n\}\n", APP, re.S).group(1)
+        self.assertIn('startsWith("codex_")', body)
+        self.assertIn("blockers.every(", body)
+
+
 class WillLoadTests(unittest.TestCase):
     def test_no_tool_loads_a_chosen_skill_today(self):
         for tool in ("claude", "codex", "shared", None, "agy"):

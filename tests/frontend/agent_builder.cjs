@@ -174,13 +174,14 @@ const catalogBody = {
     "權限意圖是隊伍分工的標記，VBear 不會因此限制這個程式的真實能力。",
     "角色卡只存放在這個主控台自己的狀態資料夾。",
   ],
+  verified_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" },
   starter_deck: [
     { key: "planner", name: "CEO", position: "planner", tool: "claude",
-      permission_intents: { read: "allow", write: "deny", test: "deny", deploy: "deny" } },
+      permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "executor", name: "工匠", position: "executor", tool: "claude",
       permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex",
-      permission_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" } },
+      permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
   ],
   positions: ["planner", "executor", "reviewer"],
   demo_id_prefix: "demo-",
@@ -409,9 +410,9 @@ function findModalInBody() {
     assert.ok(createPost, "create POST was made to /api/agent-profiles");
     assert.equal(createPost.body.name, "My new profile");
     assert.deepEqual(createPost.body.permission_intents,
-                     { read: "deny", write: "deny", test: "deny", deploy: "deny" });
+                     { read: "allow", write: "allow", test: "allow", deploy: "deny" });
     assert.equal(createPost.body.enabled, true);
-    console.log("ok wizard sends POST with every intent decided (deny without a position)");
+    console.log("ok wizard sends POST with every intent decided (the verified combination without a position, R10)");
   }
 
   // Test 4: delete confirm → POST to /<id>/delete (then a list refresh).

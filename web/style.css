@@ -1136,7 +1136,11 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .rcard-title { min-width: 0; display: grid; gap: 5px; }
 .rcard-title h3 { margin: 0; font-size: 15.5px; line-height: 1.3; overflow-wrap: anywhere; color: var(--card-frame-title, var(--ink)); }
 .rcard .tag { background: transparent; border-color: var(--card-frame-line, var(--line-2)); }
-.rcard-pos { display: inline-flex; align-items: center; gap: 4px; }
+.rcard-pos { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+/* the position badge (art v3 positionBadges): a hard 2px square with one Chinese character, camp tokens --pos-* */
+.pos-glyph { box-sizing: border-box; flex: none; width: 24px; height: 24px; display: inline-grid; place-items: center; font-size: 14px; font-weight: 700; line-height: 1; border: 2px solid var(--pos-border, currentColor); border-radius: 0; background: var(--pos-bg, transparent); color: var(--pos-text, inherit); }
+.cw-title-icon { display: flex; align-items: center; gap: 8px; }
+.btn > .card-px { display: inline-block; vertical-align: -1px; margin-right: 6px; }
 .card-px { display: block; flex: none; image-rendering: pixelated; }
 .px-k { fill: #18181b; }
 .rcard-slots { display: grid; gap: 6px; }
@@ -1151,18 +1155,21 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .rcard-green { background: var(--ok-soft); }
 .rcard-yellow { background: var(--warn-soft); }
 .rcard-blocked { background: var(--bad-soft); }
+.rcard-codex { background: var(--info-soft); }
 .rcard-dot { flex: none; width: 12px; height: 12px; margin-top: 4px; border: 2px solid currentColor; }
 .rcard-green .rcard-dot { border-radius: 50%; background: var(--ok); border-color: var(--ok); }
 .rcard-yellow .rcard-dot { background: var(--warn); border-color: var(--warn); transform: rotate(45deg); }
 .rcard-blocked .rcard-dot { background: var(--bad); border-color: var(--bad); border-radius: 2px; }
+/* the fifth light (R11): a ring with its left half filled, in the info colour; not the red square of a refusal */
+.rcard-codex .rcard-dot { border-radius: 50%; border-color: var(--info); background: linear-gradient(90deg, var(--info) 50%, transparent 50%); }
 .rcard-checking .rcard-dot, .rcard-unknown .rcard-dot { border-radius: 50%; border-style: dashed; border-color: var(--ink-3); }
 .rcard-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 .rcard-back { max-height: min(70vh, 560px); overflow: auto; position: relative; }
 .office-panel .rcard-back { max-height: none; overflow: visible; }
 .rcard .prov b { white-space: nowrap; }
 .rcard-back:focus-visible { outline: 2px solid var(--gold); outline-offset: -4px; }
-.rcard-pattern { height: 16px; overflow: hidden; border-radius: 4px; border: 1px solid var(--card-frame-line, var(--line-2)); }
-.rcard-pattern .card-pattern { display: block; width: 100%; height: 16px; }
+.rcard-pattern { flex: none; height: 16px; overflow: hidden; border-radius: 4px; border: 1px solid var(--card-frame-line, var(--line-2)); }
+.rcard-pattern .card-pattern { display: block; width: 100%; height: 16px; opacity: .4; }  /* art v3 allows it: the 16x16 tile is busy at full strength */
 .rcard-back-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--card-frame-title, var(--ink)); }
 .rcard-block h4 { margin: 0 0 4px; font-size: 13.5px; color: var(--card-frame-title, var(--ink)); }
 .rcard-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
@@ -1175,20 +1182,20 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .armor-shield { display: inline-flex; vertical-align: middle; margin-right: 6px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .px-k { fill: #f8fafc; } }
 :root[data-theme="dark"] .px-k { fill: #f8fafc; }
-.rcard[data-camp="anthropic"] { --card-frame-bg: #fffbeb; --card-frame-line: #78350f; --card-frame-title: #92400e; }
-.rcard[data-camp="openai"] { --card-frame-bg: #f0fdfa; --card-frame-line: #134e4a; --card-frame-title: #115e59; }
-.rcard[data-camp="google"] { --card-frame-bg: #f0f9ff; --card-frame-line: #0c4a6e; --card-frame-title: #075985; }
-.rcard[data-camp="other"] { --card-frame-bg: #faf5ff; --card-frame-line: #581c87; --card-frame-title: #6b21a8; }
+.rcard[data-camp="anthropic"] { --card-frame-bg: #fffbeb; --card-frame-line: #78350f; --card-frame-title: #92400e; --pos-bg: #fffbeb; --pos-text: #92400e; --pos-border: #78350f; }
+.rcard[data-camp="openai"] { --card-frame-bg: #f0fdfa; --card-frame-line: #134e4a; --card-frame-title: #115e59; --pos-bg: #f0fdfa; --pos-text: #115e59; --pos-border: #134e4a; }
+.rcard[data-camp="google"] { --card-frame-bg: #f0f9ff; --card-frame-line: #0c4a6e; --card-frame-title: #075985; --pos-bg: #f0f9ff; --pos-text: #075985; --pos-border: #0c4a6e; }
+.rcard[data-camp="other"] { --card-frame-bg: #faf5ff; --card-frame-line: #581c87; --card-frame-title: #6b21a8; --pos-bg: #faf5ff; --pos-text: #6b21a8; --pos-border: #581c87; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .rcard[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; }
-  :root:not([data-theme="light"]) .rcard[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; }
-  :root:not([data-theme="light"]) .rcard[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; }
-  :root:not([data-theme="light"]) .rcard[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; }
+  :root:not([data-theme="light"]) .rcard[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; --pos-bg: #292315; --pos-text: #fde68a; --pos-border: #fbbf24; }
+  :root:not([data-theme="light"]) .rcard[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; --pos-bg: #142522; --pos-text: #99f6e4; --pos-border: #5eead4; }
+  :root:not([data-theme="light"]) .rcard[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; --pos-bg: #14232b; --pos-text: #bae6fd; --pos-border: #7dd3fc; }
+  :root:not([data-theme="light"]) .rcard[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; --pos-bg: #24182e; --pos-text: #e9d5ff; --pos-border: #d8b4fe; }
 }
-:root[data-theme="dark"] .rcard[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; }
-:root[data-theme="dark"] .rcard[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; }
-:root[data-theme="dark"] .rcard[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; }
-:root[data-theme="dark"] .rcard[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; }
+:root[data-theme="dark"] .rcard[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; --pos-bg: #292315; --pos-text: #fde68a; --pos-border: #fbbf24; }
+:root[data-theme="dark"] .rcard[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; --pos-bg: #142522; --pos-text: #99f6e4; --pos-border: #5eead4; }
+:root[data-theme="dark"] .rcard[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; --pos-bg: #14232b; --pos-text: #bae6fd; --pos-border: #7dd3fc; }
+:root[data-theme="dark"] .rcard[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; --pos-bg: #24182e; --pos-text: #e9d5ff; --pos-border: #d8b4fe; }
 
 .cw-box { max-width: 680px; max-height: min(88vh, 760px); }
 .cw-body { overflow-y: auto; display: grid; gap: 14px; align-content: start; min-height: 0; padding: 2px; }

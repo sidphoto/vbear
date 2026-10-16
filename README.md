@@ -171,7 +171,10 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
 3. **Collect, bring in a project, and play.**
    - Open **角色卡池** and press **用起手牌組開始** for three ready cards (a planner, an executor and a reviewer), or
      **＋ 新角色卡** for a three-step wizard (name and look, tool and place, skill cards). Pressing **起手牌組** needs
-     no typing; the reviewer card is left unticked when Codex is not on this Mac.
+     no typing; the reviewer card is left unticked when Codex is not on this Mac. The three cards carry the one set of
+     permission intents VBear can launch today (read, write and test allowed; deploy denied). A Codex card shows a
+     neutral "can't open a terminal directly" light: VBear cannot start Codex in a terminal yet, but a Codex card on a
+     task card's review place is used by the automatic review.
    - Press **＋ 任務卡（導入專案）** on the home page and pick a project folder from the list of projects VBear saw on your
      Mac, from the recent folders, or paste a path (the app window also has 選擇資料夾…). The check shows whether the
      folder is a git repository, its branch and HEAD, and warns when it is not (a folder without git can still be a

@@ -14,7 +14,15 @@ the tool is the 「陣營」, permission intents have Chinese labels and say the
 - **Card pool and wizard.** A card-pool page with a starter deck of three (CEO, 工匠, 審查員; the reviewer is left
   unticked when Codex is not installed), a three-step wizard (name and look, tool and place, skill cards) whose
   bottom buttons stay in view on a phone, suggested permission intents marked 「建議，可改」, and a same-name hint that
-  never blocks. `GET /api/agent-builder/catalog` carries the deck, positions and `codex_installed`.
+  never blocks. `GET /api/agent-builder/catalog` carries the deck, positions, `verified_intents` and
+  `codex_installed`. All three starter cards (and the wizard's suggestions, with or without a place) carry the one
+  combination a managed launch honours, so none of them is stopped by its own intents; the wizard says why the
+  suggestions are all alike and, for a combination you change to, asks `GET /api/agent-builder/intent-check` and shows
+  the server's reasons on the spot.
+- **Codex cards.** A Codex card whose only reasons are `codex_` ones (it cannot open a terminal, but the flow's
+  automatic review can use it) shows a neutral light, 「不能直接開終端」, not the red 「目前不能出發」.
+- **Card art v3.** Position badges are a hard square with one character (規／執／審／？), the shields are flat-topped
+  and pointed (filled, dashed, slashed), the folder and import icons are redrawn and used on the import dialog.
 - **Role card.** Two faces (front: avatar, place, slots, a light that says why a launch is or is not possible; back:
   tool and model, permission intents with 「只是記錄，不是授權」, evidence, advanced). Flip with the button or F; no
   animation under reduced motion; the hidden face is `aria-hidden`. The office panel uses the same card.

@@ -3364,6 +3364,8 @@ const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", shared: "�
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", shared: "共用卡" };
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
+// Beside the suggested intents, after CARD_INTENT_NOTE (design v1.2 R10): why the suggestions are all the same set.
+const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
 const CARD_SPECIES_NOTE = "種族只換外觀，不影響能力。";
 const CARD_SKILLS_NOTE = "技能卡收藏在角色卡上，只是你的挑選紀錄（收藏中）：這次的安全啟動不會載入它們。";
 const CARD_PAGE_SIZE = 48;
@@ -3379,15 +3381,24 @@ function setCardPosition(id, position) {
   store.set(CARD_POSITION_KEY + id, CARD_POSITIONS.includes(position) ? position : null);
 }
 
-// The suggested intents of a position, from the starter deck the server serves; no position, or a position the
-// deck does not know, means all four are deny (design 3.3).
+// The suggested intents of a position, from the starter deck the server serves (design 3.3, v1.2 R10). The deck and
+// the fallback for no position (or one the deck does not know) both come from the server: the one combination a
+// managed launch honours (catalog.verified_intents). The page holds no copy of it; only when the catalog gives none
+// are all four deny, which grants nothing.
+function cardIntentsOf(src) {
+  const out = {};
+  for (const [k] of CARD_INTENT_KEYS) {
+    if (!src || typeof src !== "object" || (src[k] !== "allow" && src[k] !== "deny")) return null;
+    out[k] = src[k];
+  }
+  return out;
+}
+function verifiedIntents(catalog) { return cardIntentsOf(catalog && catalog.verified_intents); }
 function permissionSuggestion(catalog, position) {
-  const out = { read: "deny", write: "deny", test: "deny", deploy: "deny" };
   const deck = catalog && Array.isArray(catalog.starter_deck) ? catalog.starter_deck : [];
   const hit = CARD_POSITIONS.includes(position) ? deck.find((c) => c && c.position === position) : null;
-  if (!hit || !hit.permission_intents || typeof hit.permission_intents !== "object") return out;
-  for (const [k] of CARD_INTENT_KEYS) if (hit.permission_intents[k] === "allow") out[k] = "allow";
-  return out;
+  return (hit && cardIntentsOf(hit.permission_intents)) || verifiedIntents(catalog)
+    || { read: "deny", write: "deny", test: "deny", deploy: "deny" };
 }
 
 // The light on the card: green only when every intent is decided. It speaks for the intents alone; whether a launch
@@ -3470,10 +3481,12 @@ function openCardWizard(opts) {
     position: existing ? cardPosition(existing.id) : null,
     modelId: existing && existing.model ? String(existing.model.model_id || "") : "",
     profession: existing && existing.profession_role_id ? existing.profession_role_id : "",
+    // a new card starts from the suggestion for no position (the one combination a launch honours, R10); a card that
+    // exists keeps its own choices
     intents: Object.fromEntries(permissionKeys.map((k) => [k,
       existing && existing.permission_intents && ["allow", "deny", "unspecified"].includes(existing.permission_intents[k])
-        ? existing.permission_intents[k] : "deny"])),
-    suggested: false,
+        ? existing.permission_intents[k] : permissionSuggestion(catalog, null)[k]])),
+    suggested: isNew,
     // an existing card's intents are its own choice: a position never overwrites them, it only offers its suggestion
     touched: !isNew,
     equipped: new Set(existing ? (existing.equipped_skill_ids || []).filter((x) => typeof x === "string") : []),
@@ -3551,6 +3564,46 @@ function openCardWizard(opts) {
   }
 
   // ---- step 2
+  // Why the combination on the screen cannot be launched: asked of the server (agent_launch.intent_blockers) per
+  // combination and remembered; the page holds no copy of the rules. The one combination the catalog names as
+  // verified needs no question.
+  const intentChecks = new Map();
+  let intentBox = null;   // the box of the step on the screen; null when the step is not 2
+  function intentKey() { return CARD_INTENT_KEYS.map(([k]) => st.intents[k]).join(","); }
+  function intentIsVerified() {
+    const v = verifiedIntents(catalog);
+    return Boolean(v) && CARD_INTENT_KEYS.every(([k]) => st.intents[k] === v[k]);
+  }
+  function paintIntentCheck() {
+    const box = intentBox;
+    if (!box) return;
+    const key = intentKey();
+    const entry = intentChecks.get(key);
+    if (intentIsVerified()) { box.setAttribute("hidden", ""); setKids(box); return; }
+    box.removeAttribute("hidden");
+    if (!entry || entry.state === "loading") {
+      setKids(box, el("p", { class: "small muted" }, "檢查這個組合能不能出發…"));
+      if (!entry) {
+        intentChecks.set(key, { state: "loading" });
+        const q = CARD_INTENT_KEYS.map(([k]) => `${k}=${encodeURIComponent(st.intents[k])}`).join("&");
+        api.get(`/api/agent-builder/intent-check?${q}`)
+          .then((r) => intentChecks.set(key, Array.isArray(r && r.blockers) ? { state: "ok", blockers: r.blockers } : { state: "error" }))
+          .catch(() => intentChecks.set(key, { state: "error" }))
+          .then(() => { if (intentKey() === key) paintIntentCheck(); });
+      }
+      return;
+    }
+    if (entry.state === "error") {
+      setKids(box, el("p", { class: "small muted" }, "讀不到這個組合的檢查，實際能不能出發以出發通行證為準。"));
+      return;
+    }
+    const reasons = entry.blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
+    if (!entry.blockers.length) { box.setAttribute("hidden", ""); setKids(box); return; }
+    setKids(box, el("div", { class: "notice warn", role: "status" }, el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+      el("div", null, el("strong", null, "這個組合目前不能出發"),
+        el("ul", { class: "small" }, (reasons.length ? reasons : ["原因未提供"]).map((r) => el("li", null, r))))));
+  }
+
   function applySuggestion() {
     st.intents = permissionSuggestion(catalog, st.position);
     st.suggested = Boolean(st.position);
@@ -3621,7 +3674,9 @@ function openCardWizard(opts) {
           st.suggested ? el("span", { class: "tag cw-tag", "data-cw": "suggested" }, "建議，可改") : null),
         summary,
         undecided ? el("p", { class: "small cw-error" }, "有權限意圖還沒決定；出發前要先決定。") : null,
-        el("p", { class: "small muted", "data-cw": "intent-note" }, CARD_INTENT_NOTE), intents),
+        el("p", { class: "small muted", "data-cw": "intent-note" }, CARD_INTENT_NOTE),
+        el("p", { class: "small muted", "data-cw": "launch-note" }, CARD_INTENT_LAUNCH_NOTE),
+        (intentBox = el("div", { "data-cw": "intent-check", "aria-live": "polite" })), intents),
       advanced,
     ];
   }
@@ -3737,8 +3792,10 @@ function openCardWizard(opts) {
 
   function draw() {
     drawStepper();
+    intentBox = null;
     const parts = st.step === 1 ? stepOne() : st.step === 2 ? stepTwo() : stepThree();
     setKids(body, ...parts);
+    if (st.step === 2) paintIntentCheck();
     drawFoot();
   }
 
@@ -3834,7 +3891,8 @@ function openStarterDeck(opts) {
             "這台電腦找不到 Codex。審查位需要和工匠不同陣營的卡，要用這張卡時再勾選。") : null,
           el("details", { class: "cw-details" }, el("summary", null, "看權限建議"),
             el("div", { class: "rc-chips" }, CARD_INTENT_KEYS.map(([k, zh]) => intentChip(k, zh, c.permission_intents[k]))),
-            el("p", { class: "small muted" }, CARD_INTENT_NOTE))));
+            el("p", { class: "small muted" }, CARD_INTENT_NOTE),
+            el("p", { class: "small muted", "data-cw": "launch-note" }, CARD_INTENT_LAUNCH_NOTE))));
     }));
   }
   function drawFoot() {
@@ -3902,7 +3960,7 @@ function deleteCard(p, onDone) {
     .catch((err) => toast("刪除失敗：" + err.message));
 }
 
-// Pixel art of the cards (art 20261017-cards v0.7.0-art-2, copied in; nothing is read from outside at run time).
+// Pixel art of the cards (art 20261017-cards v0.7.0-art-3, copied in; nothing is read from outside at run time).
 // One character per cell, "." is clear. K is the outline: it takes its colour from the theme (style.css, .px-k), light
 // #18181b, dark #f8fafc. The other characters are the same in both themes. The red of the vn is not used on a card.
 const CARD_PALETTE = {
@@ -3915,22 +3973,25 @@ const CARD_PALETTE = {
 };
 const CARD_PIXELS = {
   backPattern: ["KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KnnnnKnnnnKnnnnK", "KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KKKKKKKKKKKKKKKK"],
-  positions: {
-    planning: ["..KKKKKKKK..", ".KYYYYYYYYK.", "KYYKK..KKYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYKK..KKYYK", ".KYYYYYYYYK.", "..KKKKKKKK.."],
-    execution: ["............", "..KKKKKK....", ".KYYYYYYK...", ".KYYYYYYKK..", "..KKKKKKYYK.", ".....KYYKYYK", "....KYYKYYK.", "...KYYKYYK..", "..KYYKYYK...", ".KYYKYYK....", "..KKKKK.....", "............"],
-    review: ["..KKKKKK....", ".KWWWWWWK...", "KWWK..KWWK..", "KWWK..KWWK..", "KWWK..KWWK..", "KWWK..KWWK..", "KWWK..KWWK..", ".KWWWWWWK...", "..KKKKKK....", ".....K......", "......K.....", ".......KK..."],
-    unspecified: ["...KKKK.....", "..KYYYYK....", ".KYYK..K....", ".KYYK..K....", "...KKKK.....", "....K.......", "...K........", "...K........", "............", "...K........", "..KKK.......", "............"],
-  },
   shields: {
-    enforced: ["....KKKK....", "...KTTTTK...", "..KTTTTTTK..", ".KTTKTTKTTK.", "KTTKTTTTKTTK", "KTTTTKTTTTTK", "KTTTTTKTTTTK", ".KTTTTTTTTK.", "..KTTTTTTK..", "...KTTTTK...", "....KTTK....", ".....KK....."],
-    recorded: ["....KKKK....", "...K....K...", "..K......K..", ".K..K..K..K.", "K..K....K..K", "K....K.....K", "K.....K....K", ".K........K.", "..K......K..", "...K....K...", "....K..K....", ".....KK....."],
-    none: ["............", "............", "...KKKKKK...", "..K......K..", ".K........K.", "K..........K", "K..........K", ".K........K.", "..K......K..", "...K......K.", "....K....K..", ".....KKKK..."],
+    enforced: ["KKKKKKKKKKKK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", ".KTTTTTTTTK.", ".KTTTTTTTTK.", "..KTTTTTTK..", "...KTTTTK...", "....KTTK....", ".....KK....."],
+    recorded: ["K.K.K.K.K.K.", "...........K", "K...........", "...........K", "K...........", "...........K", ".K..........", "..........K.", "..K.........", "........K...", "....K.......", ".....KK....."],
+    none: ["KKKKKKKKKKKK", "KK.........K", "K.K........K", "K..K.......K", "K...K......K", "K....K.....K", ".K....K...K.", ".K.....K..K.", "..K.....KK..", "...K....KK..", "....K..K..K.", ".....KK....."],
   },
   icons: {
-    taskFolder: ["............", "..KKKKKKK...", ".KYYYYYYYK..", "KYYYYYYYYYK.", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", ".KYYYYYYYYK.", "..KKKKKKKK.."],
-    importProject: [".....KK.....", "....KYYK....", "...KYYYYK...", "..KYYYYYYK..", ".....KK.....", ".....KK.....", ".....KK.....", ".....KK.....", "K....KK....K", "KK...KK...KK", ".KK......KK.", "..KKKKKKKK.."],
+    taskFolder: ["............", ".KKKK.......", "KYYYYK......", "KYYYYKKKKKK.", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", ".KKKKKKKKKK.", "............"],
+    importProject: [".....KK.....", ".....YY.....", ".....YY.....", ".....YY.....", "..KKKYYKKK..", "...KYYYYK...", "....KYYK....", "K....KK....K", "K..........K", "KK........KK", ".KKKKKKKKKK.", "............"],
     emptySlot: ["............", "............", "..KKKKKKKK..", "..KnnnnnnK..", "..KnnKnnnK..", "..KnnKnnnK..", "..KnnKnnnK..", "..KnnKnnnK..", "..KnnnnnnK..", "..KKKKKKKK..", "............", "............"],
   },
+};
+
+// The position badge (art v3 positionBadges): a square with a hard 2px border and one Chinese character, drawn in CSS from
+// the camp's tokens (--pos-bg, --pos-text, --pos-border in style.css). The 12x12 position pixel maps of v1 and v2 are not used.
+const CARD_POSITION_BADGES = {
+  planning: { glyph: "規", label: "規劃" },
+  execution: { glyph: "執", label: "執行" },
+  review: { glyph: "審", label: "審查" },
+  unspecified: { glyph: "？", label: "未指定" },
 };
 
 // ---- the role card (design card-play 3.2, 3.4) ---------------------------------------------------------------
@@ -3971,7 +4032,7 @@ function cardPixelSvg(rows, scale = 2) {
   return svg;
 }
 
-// group: positions | shields | icons; null for a name the art does not have.
+// group: shields | icons; null for a name the art does not have (the position badge is drawn by positionBadge).
 function cardArt(group, name, scale = 2) {
   const set = cardHas(CARD_PIXELS, group) && group !== "backPattern" ? CARD_PIXELS[group] : null;
   if (!set || !cardHas(set, name)) return null;
@@ -3991,8 +4052,17 @@ function cardPatternStrip() {
   return svg;
 }
 
-const CARD_POSITION_ART = { planner: "planning", executor: "execution", reviewer: "review" };
-function cardPositionArt(position) { return CARD_POSITION_ART[position] || "unspecified"; }
+const CARD_POSITION_BADGE_KEY = { planner: "planning", executor: "execution", reviewer: "review" };
+function cardPositionBadgeKey(position) { return cardHas(CARD_POSITION_BADGE_KEY, position) ? CARD_POSITION_BADGE_KEY[position] : "unspecified"; }
+// The badge of a suggested position: the square with its one character (decoration, the words next to it say the same)
+// and the words. The colours come from the camp frame the badge sits in.
+function positionBadge(position) {
+  const key = cardPositionBadgeKey(position);
+  const b = CARD_POSITION_BADGES[key];
+  return el("span", { class: "rcard-pos", "data-pcard": "position", "data-pos": key },
+    el("span", { class: "pos-glyph", "aria-hidden": "true" }, b.glyph),
+    el("span", { class: "pos-text" }, position ? `${CARD_POSITION_LABEL[position]}位` : "位置未指定"));
+}
 
 // The shield of an armor level, by the level word the server sends (agent_launch.py). Only the three levels that have a
 // shield get one; partial, unverified, unknown and not-granted get none rather than a shield that says too much.
@@ -4155,6 +4225,8 @@ function cardSlots(p, loadoutState, catalog) {
     active: false, allInactive: null };
 }
 
+const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
+
 // What the light says. Yellow is the intents (as cardLight); once they are all decided, green is only for a loadout that
 // was read and lists no reason against a launch. Not read yet, not readable, or with reasons: not green.
 function cardDeparture(p, loadoutState) {
@@ -4164,7 +4236,14 @@ function cardDeparture(p, loadoutState) {
   const blockers = loadoutState.state === "ok" && loadoutState.data ? loadoutState.data.blockers : null;
   if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到出發條件，實際能不能出發以出發通行證為準", reasons: [] };
   const reasons = blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
-  if (blockers.length) return { state: "blocked", text: "目前不能出發", reasons: reasons.length ? reasons : ["原因未提供"] };
+  const shown = reasons.length ? reasons : ["原因未提供"];
+  // Codex cannot open a terminal from VBear today, but a Codex card on a review place is used by the flow (the automatic
+  // review runs it in a scratch copy): when every reason starts with codex_ the light is this fifth, neutral state
+  // (design v1.2 R11). Any other reason, even beside those, keeps the red.
+  if (blockers.length && blockers.every((b) => b && typeof b.code === "string" && b.code.startsWith("codex_"))) {
+    return { state: "codex", text: "不能直接開終端", note: CARD_CODEX_NOTE, reasons: shown };
+  }
+  if (blockers.length) return { state: "blocked", text: "目前不能出發", reasons: shown };
   return { ...base, reasons: [] };
 }
 
@@ -4202,8 +4281,7 @@ function profileCard(p, opts = {}) {
         el("h3", null, name),
         el("div", { class: "chips" },
           el("span", { class: "tag" }, CARD_TOOL_LABEL[tool] || tool || "未知陣營"),
-          el("span", { class: "tag rcard-pos", "data-pcard": "position" }, cardArt("positions", cardPositionArt(pos), 2),
-            pos ? `${CARD_POSITION_LABEL[pos]}位` : "位置未指定"),
+          positionBadge(pos),
           demo ? badge("示範", "b-info", "範例資料，不是你建立的卡") : null,
           launchOff ? badge("停用", "b-mute", "已停用，但保留存檔") : null))),
     slotsBox, lightBox,
@@ -4305,7 +4383,10 @@ function profileCard(p, opts = {}) {
             on: { click: () => handlers.decide(p) } }, "現在決定")) : null)
           : dep.state === "blocked"
             ? el("div", { class: "small" }, dep.reasons[0], dep.reasons.length > 1 ? `（另有 ${dep.reasons.length - 1} 項，翻到背面看）` : "")
-            : el("div", { class: "small muted" }, "實際能不能出發，以出發通行證為準。")));
+            : dep.state === "codex"
+              ? el("div", { class: "small", "data-pcard": "codex-note" }, dep.note,
+                el("div", { class: "muted" }, "原因翻到背面看。"))
+              : el("div", { class: "small muted" }, "實際能不能出發，以出發通行證為準。")));
 
     const ld = loadoutState && loadoutState.state === "ok" && loadoutState.data ? loadoutState.data : null;
     const pr = ld && ld.profession && typeof ld.profession === "object" ? ld.profession : null;
@@ -4321,10 +4402,10 @@ function profileCard(p, opts = {}) {
     const desc = pr && pr.state === "found" && pr.description ? pr.description.value : null;
     setKids(englishBox, desc ? String(desc) : "—");
 
-    const reasons = dep.state === "blocked" ? dep.reasons : [];
+    const reasons = dep.state === "blocked" || dep.state === "codex" ? dep.reasons : [];
     if (reasons.length) {
       reasonBox.removeAttribute("hidden");
-      setKids(reasonBox, el("h4", null, "目前不能出發的原因"),
+      setKids(reasonBox, el("h4", null, dep.state === "codex" ? "不能直接開終端的原因" : "目前不能出發的原因"),
         el("ul", { class: "small" }, reasons.map((r) => el("li", null, r))),
         el("p", { class: "small muted" }, ld && ld.blockers_note ? ld.blockers_note : ""));
     } else {
@@ -4953,7 +5034,8 @@ async function viewFlows() {
       list.length ? el("div", { class: "grid" }, list.map(flowCard)) : emptyState("還沒有流程", "在下方選一張任務卡建立。")),
     el("section", { class: "section" },
       sectionHead("建立流程", null, el("button", { type: "button", class: "btn small", "data-act": "import", on: { click: () => openImportProject({
-        onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }) } }, "＋ 任務卡（導入專案）")),
+        onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }) } },
+        cardArt("icons", "importProject", 1), "＋ 任務卡（導入專案）")),
       el("label", { class: "small" }, "任務卡（一張任務卡對應一個流程）"), taskSel,
       boardHost,
       el("details", { class: "fold ts-manual", "data-flow": "manual" }, el("summary", null, "進階：手動填寫"),
@@ -9529,7 +9611,7 @@ function openImportProject(opts = {}) {
   const foot = el("div", { class: "modal-actions cw-foot" });
   const stepper = el("ol", { class: "cw-steps", "aria-label": "步驟" });
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
-    el("div", { class: "modal-box cw-box" }, el("h2", { id: titleId }, "新任務卡：導入專案"), stepper, body, foot));
+    el("div", { class: "modal-box cw-box" }, el("h2", { id: titleId, class: "cw-title-icon" }, cardArt("icons", "importProject", 2), "新任務卡：導入專案"), stepper, body, foot));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
   const STEPS = ["挑資料夾", "填寫任務卡"];
@@ -9921,12 +10003,14 @@ if (typeof module !== "undefined" && module.exports) {
     cardArt,
     cardPixelSvg,
     cardPatternStrip,
-    cardPositionArt,
+    cardPositionBadgeKey,
+    positionBadge,
     armorShieldKind,
     readLoadouts,
     officeRoleCard,
     CARD_PIXELS,
     CARD_PALETTE,
+    CARD_POSITION_BADGES,
     CARD_SLOT_LABEL,
     CARD_INTENT_NOTE,
     viewTerminal,

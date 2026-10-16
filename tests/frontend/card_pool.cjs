@@ -173,13 +173,14 @@ const catalogBody = {
     "權限意圖是隊伍分工的標記，VBear 不會因此限制這個程式的真實能力。",
     "角色卡只存放在這個主控台自己的狀態資料夾。",
   ],
+  verified_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" },
   starter_deck: [
     { key: "planner", name: "CEO", position: "planner", tool: "claude",
-      permission_intents: { read: "allow", write: "deny", test: "deny", deploy: "deny" } },
+      permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "executor", name: "工匠", position: "executor", tool: "claude",
       permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex",
-      permission_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" } },
+      permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
   ],
   positions: ["planner", "executor", "reviewer"],
   demo_id_prefix: "demo-",
@@ -295,13 +296,15 @@ const catalog = {
     { skill_id: "s-s", name: "shared-skill", tool: "shared", scope: "user", activation: "active", excerpt: "for both" },
   ],
   disclosures: ["技能卡插在角色卡上，只是你的挑選紀錄。"],
+  verified_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" },
   starter_deck: [
-    { key: "planner", name: "CEO", position: "planner", tool: "claude", permission_intents: { read: "allow", write: "deny", test: "deny", deploy: "deny" } },
+    { key: "planner", name: "CEO", position: "planner", tool: "claude", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "executor", name: "工匠", position: "executor", tool: "claude", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
-    { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex", permission_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" } },
+    { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
   ],
   positions: ["planner", "executor", "reviewer"], demo_id_prefix: "demo-", codex_installed: true,
 };
+const VERIFIED = { read: "allow", write: "allow", test: "allow", deploy: "deny" };
 const ALL_DENY = { read: "deny", write: "deny", test: "deny", deploy: "deny" };
 const mkProfile = (id, name, tool, intents, extra = {}) => ({
   id, name, profession_role_id: null, model: { tool, model_id: "" }, equipped_skill_ids: [],
@@ -354,17 +357,22 @@ async function test(name, fn) {
   const pure = freshContext({});
   evalAgentBuilderSlice(pure);
 
-  await test("permissionSuggestion: each position takes the deck's intents; none or unknown or no deck is all deny", () => {
+  await test("permissionSuggestion: every position and no position take the one combination the server names (R10); no catalog data is all deny", () => {
     const sug = pure.permissionSuggestion;
-    assert.deepStrictEqual({ ...sug(catalog, "planner") }, { read: "allow", write: "deny", test: "deny", deploy: "deny" });
-    assert.deepStrictEqual({ ...sug(catalog, "executor") }, { read: "allow", write: "allow", test: "allow", deploy: "deny" });
-    assert.deepStrictEqual({ ...sug(catalog, "reviewer") }, { read: "allow", write: "deny", test: "allow", deploy: "deny" });
-    for (const p of [null, "", "boss", "constructor", undefined]) assert.deepStrictEqual({ ...sug(catalog, p) }, ALL_DENY, String(p));
+    for (const p of ["planner", "executor", "reviewer", null, "", "boss", "constructor", undefined]) assert.deepStrictEqual({ ...sug(catalog, p) }, VERIFIED, String(p));
+    // the page holds no copy: a catalog that names another combination changes every suggestion
+    const other = { ...catalog, verified_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" },
+      starter_deck: catalog.starter_deck.map((c) => ({ ...c, permission_intents: { read: "allow", write: "deny", test: "allow", deploy: "deny" } })) };
+    for (const p of ["planner", "executor", "reviewer", null]) assert.deepStrictEqual({ ...sug(other, p) }, { read: "allow", write: "deny", test: "allow", deploy: "deny" }, String(p));
+    // no deck: the verified set; neither: all deny, which grants nothing
+    const noDeck = { verified_intents: catalog.verified_intents };
+    for (const p of ["planner", null]) assert.deepStrictEqual({ ...sug(noDeck, p) }, VERIFIED);
     assert.deepStrictEqual({ ...sug({}, "planner") }, ALL_DENY);
     assert.deepStrictEqual({ ...sug(null, "planner") }, ALL_DENY);
-    // a value the deck gets wrong (anything but allow) is deny, never "unspecified"
-    const odd = { starter_deck: [{ position: "planner", permission_intents: { read: "unspecified", write: "allow", test: "x", deploy: 1 } }] };
-    assert.deepStrictEqual({ ...sug(odd, "planner") }, { read: "deny", write: "allow", test: "deny", deploy: "deny" });
+    // a deck entry with a value that is not allow or deny is not used (never "unspecified"); the verified set stands in
+    const odd = { verified_intents: catalog.verified_intents, starter_deck: [{ position: "planner", permission_intents: { read: "unspecified", write: "allow", test: "x", deploy: 1 } }] };
+    assert.deepStrictEqual({ ...sug(odd, "planner") }, VERIFIED);
+    assert.deepStrictEqual({ ...sug({ verified_intents: { read: "allow", write: "enforce", test: "allow", deploy: "deny" } }, null) }, ALL_DENY);
   });
 
   await test("cardLight: green only when all four intents are decided, in the design's words, never 安全", () => {
@@ -584,47 +592,110 @@ async function test(name, fn) {
     assert.strictEqual(posts[0].name, "ceo");
   });
 
-  await test("wizard step 2: choosing a position brings its intents marked 建議，可改, with the disclaimer beside them", async () => {
+  const CHECK = "GET /api/agent-builder/intent-check?";
+  const writeDenyBlockers = [{ code: "readonly_unverified", message: "這張角色卡的啟動組合尚未驗證唯讀模式；不會退化成可寫模式" }];
+  const selectOf = (label) => walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("aria-label") === label);
+  const setIntent = (label, value) => { const sel = selectOf(label); sel.value = value; sel.dispatch("change"); };
+
+  await test("wizard step 2 (R10): a new card starts from the verified combination marked 建議，可改, with both notes beside it, and asks nothing", async () => {
     const { posts, d } = await openWizard();
     typeName(d, "Planner one");
     btnByText(d, "下一步").dispatch("click");
     let cur = dialog();
-    // no position: all four deny, no 建議 tag
-    assert.ok(byData(cur, "data-cw", "suggested").length === 0);
-    assert.ok(findText(cur, "不代表 VBear 已經限制這個程式的真實能力"), "the disclaimer is always beside the intents");
-    byData(cur, "data-position", "planner")[0].dispatch("click");
-    cur = dialog();
+    const chipsOf = (node) => textOf(byData(node, "data-cw", "intent-summary")[0]);
+    // no position: the verified set, and it is a suggestion
     assert.ok(byData(cur, "data-cw", "suggested").length === 1 && findText(cur, "建議，可改"));
-    const chips = textOf(byData(cur, "data-cw", "intent-summary")[0]);
-    assert.ok(chips.includes("讀取檔案・允許") && chips.includes("編輯寫入・拒絕") && chips.includes("執行測試・拒絕") && chips.includes("部署上線・拒絕"), chips);
-    assert.ok(findText(cur, "不代表 VBear 已經限制這個程式的真實能力"));
+    let chips = chipsOf(cur);
+    assert.ok(chips.includes("讀取檔案・允許") && chips.includes("編輯寫入・允許") && chips.includes("執行測試・允許") && chips.includes("部署上線・拒絕"), chips);
+    assert.ok(findText(cur, "不代表 VBear 已經限制這個程式的真實能力"), "the R3 sentence is always beside the intents");
+    assert.ok(findText(byData(cur, "data-cw", "launch-note")[0],
+      "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。"));
+    const note = byData(cur, "data-cw", "intent-note")[0], launch = byData(cur, "data-cw", "launch-note")[0];
+    const order = walk(cur); assert.ok(order.indexOf(note) < order.indexOf(launch), "the launch sentence comes after the R3 sentence");
+    assert.ok(byData(cur, "data-cw", "intent-check")[0].hasAttribute("hidden"), "the verified combination needs no warning");
+    assert.ok(!fetchCalls.some((c) => c.url.includes("intent-check")), "and nothing was asked");
+    for (const position of ["planner", "executor", "reviewer"]) {
+      byData(dialog(), "data-position", position)[0].dispatch("click");
+      cur = dialog();
+      assert.ok(byData(cur, "data-cw", "suggested").length === 1);
+      assert.strictEqual(chipsOf(cur), chips, position);
+    }
     assert.ok(!findText(cur, "還沒決定"), "the wizard does not produce an undecided intent");
     btnByText(cur, "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
-    assert.deepStrictEqual(posts[0].permission_intents, { read: "allow", write: "deny", test: "deny", deploy: "deny" });
+    assert.deepStrictEqual(posts[0].permission_intents, VERIFIED);
+    assert.ok(!fetchCalls.some((c) => c.url.includes("intent-check")));
   });
 
-  await test("wizard step 2: a hand-made change is kept when the position changes, and the suggestion is offered, not forced", async () => {
-    const { posts, d } = await openWizard();
+  await test("wizard step 2 (R10): a hand-made combination is kept on a position change, asks the server why it cannot go, and says so on the spot", async () => {
+    const { posts, d } = await openWizard([], catalog, {
+      [CHECK + "read=allow&write=deny&test=allow&deploy=deny"]: () => jsonResponse({ ok: true, can_launch: false, blockers: writeDenyBlockers }) });
     typeName(d, "Hand made");
     btnByText(d, "下一步").dispatch("click");
     byData(dialog(), "data-position", "planner")[0].dispatch("click");
-    const sel = walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("aria-label") === "編輯寫入");
-    sel.value = "allow"; sel.dispatch("change");
+    setIntent("編輯寫入", "deny");
+    await tick();
     assert.ok(byData(dialog(), "data-cw", "suggested").length === 0, "no longer the suggestion once it was changed");
+    const box = byData(dialog(), "data-cw", "intent-check")[0];
+    assert.ok(!box.hasAttribute("hidden"));
+    assert.ok(findText(box, "這個組合目前不能出發"), "the headline");
+    assert.ok(findText(box, writeDenyBlockers[0].message), "the server's own reason, not a page copy");
+    assert.strictEqual(fetchCalls.filter((c) => c.url.includes("intent-check")).length, 1);
+    assert.ok(fetchCalls.find((c) => c.url.includes("intent-check")).url.endsWith("read=allow&write=deny&test=allow&deploy=deny"));
     byData(dialog(), "data-position", "reviewer")[0].dispatch("click");
-    const after = walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("aria-label") === "編輯寫入");
-    assert.strictEqual(after.value, "allow", "not overwritten");
+    assert.strictEqual(selectOf("編輯寫入").value, "deny", "not overwritten");
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], writeDenyBlockers[0].message), "still there after the redraw");
+    assert.strictEqual(fetchCalls.filter((c) => c.url.includes("intent-check")).length, 1, "the answer for a combination is remembered");
     const apply = byData(dialog(), "data-cw", "apply-suggestion")[0];
     assert.ok(apply, "the suggestion is offered");
     apply.dispatch("click");
-    const sel2 = walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("aria-label") === "編輯寫入");
-    assert.strictEqual(sel2.value, "deny");
+    assert.strictEqual(selectOf("編輯寫入").value, "allow");
+    assert.ok(byData(dialog(), "data-cw", "intent-check")[0].hasAttribute("hidden"), "back on the verified combination: no warning");
     btnByText(dialog(), "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
-    assert.deepStrictEqual(posts[0].permission_intents, { read: "allow", write: "deny", test: "allow", deploy: "deny" });
+    assert.deepStrictEqual(posts[0].permission_intents, VERIFIED);
+  });
+
+  await test("wizard step 2 (R10): while the question is open it says so; an answer that cannot be read says the pass decides; no reasons means no warning", async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const { d } = await openWizard([], catalog, {
+      [CHECK + "read=allow&write=allow&test=deny&deploy=deny"]: async () => { await gate; return jsonResponse({ ok: true, can_launch: false, blockers: [{ code: "test_deny_unenforceable", message: "x" }] }); },
+      [CHECK + "read=deny&write=allow&test=allow&deploy=deny"]: () => { throw new Error("offline"); },
+      [CHECK + "read=allow&write=allow&test=allow&deploy=allow"]: () => jsonResponse({ ok: true, can_launch: true, blockers: [] }) });
+    typeName(d, "Q");
+    btnByText(d, "下一步").dispatch("click");
+    setIntent("執行測試", "deny");
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "檢查這個組合能不能出發"), "while asking");
+    release(); await tick(4);
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能出發"));
+    setIntent("執行測試", "allow");
+    setIntent("讀取檔案", "deny");
+    await tick(4);
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "讀不到這個組合的檢查，實際能不能出發以出發通行證為準。"));
+    setIntent("讀取檔案", "allow");
+    setIntent("部署上線", "allow");
+    await tick(4);
+    assert.ok(byData(dialog(), "data-cw", "intent-check")[0].hasAttribute("hidden"), "no reasons, no warning");
+  });
+
+  await test("wizard (R10): editing a card keeps its own intents, not marked as a suggestion, and the check speaks for them", async () => {
+    const mine = mkProfile("p-1", "Mine", "claude", ALL_DENY);
+    await openPool([mine], catalog, {
+      [CHECK + "read=deny&write=deny&test=deny&deploy=deny"]: () => jsonResponse({ ok: true, can_launch: false, blockers: [
+        { code: "read_deny_unenforceable", message: "無法強制禁止讀取：讀取範圍沒有被隔離" },
+        { code: "readonly_unverified", message: writeDenyBlockers[0].message }] }) });
+    byData(main, "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(4);
+    const d = dialog();
+    assert.ok(byData(d, "data-cw", "suggested").length === 0);
+    assert.strictEqual(selectOf("編輯寫入").value, "deny");
+    const box = byData(d, "data-cw", "intent-check")[0];
+    assert.ok(findText(box, "這個組合目前不能出發") && findText(box, "無法強制禁止讀取") && findText(box, writeDenyBlockers[0].message));
   });
 
   await test("wizard step 2: the profession label and Model ID sit in 進階, with the new explanation", async () => {
@@ -734,7 +805,7 @@ async function test(name, fn) {
     await tick(8);
     assert.deepStrictEqual(posts.map((p) => p.name), ["CEO", "我的工匠", "審查員"]);
     assert.deepStrictEqual(posts.map((p) => p.model.tool), ["claude", "claude", "codex"]);
-    assert.deepStrictEqual(posts[2].permission_intents, { read: "allow", write: "deny", test: "allow", deploy: "deny" });
+    for (const p of posts) assert.deepStrictEqual(p.permission_intents, VERIFIED, "R10: every starter card carries the verified combination");
     assert.ok(posts.every((p) => p.enabled === true && p.profession_role_id === null && p.equipped_skill_ids.length === 0));
     for (const p of posts) for (const v of Object.values(p.permission_intents)) assert.ok(v === "allow" || v === "deny");
     assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-1")), "planner");
@@ -927,11 +998,24 @@ async function test(name, fn) {
       ["decided, no blockers", decided, okState({ blockers: [] }), "green"],
       ["decided, one blocker", decided, okState({ blockers: [{ code: "c", message: "不能出發的原因" }] }), "blocked"],
       ["decided, blocker without text", decided, okState({ blockers: [{ code: "c" }] }), "blocked"],
+      // R11: only codex_ reasons make the neutral fifth state; any other reason keeps the red
+      ["only a codex_ reason", decided, okState({ blockers: [{ code: "codex_interactive_flags_unsupported", message: "m" }] }), "codex"],
+      ["only the two codex_ reasons", decided, okState({ blockers: [{ code: "codex_interactive_flags_unsupported", message: "a" }, { code: "codex_evidence_missing", message: "b" }] }), "codex"],
+      ["a codex_ reason and another", decided, okState({ blockers: [{ code: "codex_evidence_missing", message: "a" }, { code: "readonly_unverified", message: "b" }] }), "blocked"],
+      ["another reason first, then codex_", decided, okState({ blockers: [{ code: "commit_not_enforceable", message: "a" }, { code: "codex_evidence_missing", message: "b" }] }), "blocked"],
+      ["a code that only contains codex_", decided, okState({ blockers: [{ code: "not_codex_x", message: "a" }] }), "blocked"],
+      ["a reason with no code", decided, okState({ blockers: [{ message: "a" }] }), "blocked"],
+      ["a reason whose code is not text", decided, okState({ blockers: [{ code: 7, message: "a" }, { code: "codex_evidence_missing" }] }), "blocked"],
+      ["undecided beats the codex state", undecided, okState({ blockers: [{ code: "codex_evidence_missing", message: "a" }] }), "yellow"],
     ];
     for (const [label, p, ld, want] of rows) assert.strictEqual(pure.cardDeparture(p, ld).state, want, label);
     assert.deepStrictEqual([...pure.cardDeparture(decided, okState({ blockers: [{ message: "A" }, { message: "B" }] })).reasons], ["A", "B"]);
     assert.deepStrictEqual([...pure.cardDeparture(decided, okState({ blockers: [{ code: "c" }] })).reasons], ["原因未提供"]);
     assert.strictEqual(pure.cardDeparture(decided, okState({ blockers: [] })).text, "可以出發（權限意圖都已決定）");
+    const codex = pure.cardDeparture(decided, okState({ blockers: [{ code: "codex_interactive_flags_unsupported", message: "A" }, { code: "codex_evidence_missing", message: "B" }] }));
+    assert.strictEqual(codex.text, "不能直接開終端");
+    assert.strictEqual(codex.note, "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。");
+    assert.deepStrictEqual([...codex.reasons], ["A", "B"], "the original reasons are kept for the back");
     for (const r of rows) assert.ok(!/安全|已限制/.test(pure.cardDeparture(r[1], r[2]).text), "the light never says safe or limited");
   });
 
@@ -974,6 +1058,29 @@ async function test(name, fn) {
     assert.strictEqual(light("p-2").getAttribute("data-light"), "green");
     assert.ok(byData(cardOf("p-2"), "data-rc", "blockers")[0].hasAttribute("hidden"), "nothing to list: the block is hidden");
     for (const l of byData(main, "data-pcard", "light")) assert.ok(!/安全|已限制/.test(textOf(l)), "no light says safe or limited");
+  });
+
+  await test("a Codex card whose only reasons are codex_ shows the neutral light, not the red; one other reason brings the red back (R11)", async () => {
+    const intents = { read: "allow", write: "allow", test: "allow", deploy: "deny" };
+    const cx = [{ code: "codex_interactive_flags_unsupported", message: "固定版 Codex CLI 互動 TUI 不支援" }, { code: "codex_evidence_missing", message: "Codex 驗收尚未完成" }];
+    const p = mkProfile("p-1", "Reviewer", "codex", intents), q = mkProfile("p-2", "Mixed", "codex", intents), r = mkProfile("p-3", "Claude", "claude", intents);
+    await openPool([p, q, r], catalog, {
+      "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, { blockers: cx })),
+      "GET /api/agent-profiles/p-2/loadout": () => jsonResponse(loadoutBody(q, { blockers: [...cx, { code: "readonly_unverified", message: "尚未驗證唯讀" }] })) });
+    const light = (id) => byData(cardOf(id), "data-pcard", "light")[0];
+    assert.strictEqual(light("p-1").getAttribute("data-light"), "codex");
+    assert.ok(light("p-1").className.includes("rcard-codex") && !light("p-1").className.includes("rcard-blocked"));
+    const front = faceOf(cardOf("p-1"), "front");
+    assert.ok(findText(front, "不能直接開終端"));
+    assert.ok(findText(front, "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。"));
+    assert.ok(!findText(front, "目前不能出發"), "not the red words");
+    const reasons = byData(cardOf("p-1"), "data-rc", "blockers")[0];
+    assert.ok(!reasons.hasAttribute("hidden") && findText(reasons, "固定版 Codex CLI 互動 TUI 不支援") && findText(reasons, "Codex 驗收尚未完成"), "the back lists the original reasons");
+    assert.ok(findText(reasons, "不能直接開終端的原因"));
+    assert.strictEqual(light("p-2").getAttribute("data-light"), "blocked");
+    assert.ok(findText(faceOf(cardOf("p-2"), "front"), "目前不能出發") && !findText(faceOf(cardOf("p-2"), "front"), "不能直接開終端"));
+    assert.strictEqual(light("p-3").getAttribute("data-light"), "green");
+    for (const l of byData(main, "data-pcard", "light")) assert.ok(!/安全|已限制/.test(textOf(l)));
   });
 
   await test("a late loadout repaints the slots and the light only: the buttons are the same nodes and keep their handlers", async () => {
@@ -1089,9 +1196,17 @@ async function test(name, fn) {
     assert.strictEqual(cardOf("demo-1").getAttribute("data-camp"), "openai");
     assert.strictEqual(cardOf("p-3").getAttribute("data-camp"), "other");
     const pos = byData(cardOf("p-1"), "data-pcard", "position")[0];
-    assert.ok(findText(pos, "審查位") && walk(pos).some((n) => n.tag === "svg"), "words and a badge");
-    assert.ok(findText(byData(cardOf("p-3"), "data-pcard", "position")[0], "位置未指定"));
-    assert.deepStrictEqual(["planner", "executor", "reviewer", null, "x"].map((x) => pure.cardPositionArt(x)), ["planning", "execution", "review", "unspecified", "unspecified"]);
+    assert.ok(findText(pos, "審查位"), "words");
+    const glyph = (node) => walk(node).find((n) => n.className === "pos-glyph");
+    assert.strictEqual(textOf(glyph(pos)), "審", "and the badge: one Chinese character (art v3), not a pixel map");
+    assert.strictEqual(glyph(pos).getAttribute("aria-hidden"), "true", "decoration: the words say the same");
+    assert.ok(!walk(pos).some((n) => n.tag === "svg"), "the 12x12 position pixel maps are not used");
+    const none = byData(cardOf("p-3"), "data-pcard", "position")[0];
+    assert.ok(findText(none, "位置未指定"));
+    assert.strictEqual(textOf(glyph(none)), "？");
+    assert.deepStrictEqual(["planner", "executor", "reviewer", null, "x", "__proto__", "constructor"].map((x) => pure.cardPositionBadgeKey(x)),
+      ["planning", "execution", "review", "unspecified", "unspecified", "unspecified", "unspecified"]);
+    assert.deepStrictEqual(["planner", "executor", "reviewer", null].map((x) => textOf(glyph(pure.positionBadge(x)))), ["規", "執", "審", "？"]);
   });
 
   await test("readLoadouts: at most four requests in flight, every id once, and it stops when the page is gone", async () => {
@@ -1120,14 +1235,13 @@ async function test(name, fn) {
     assert.deepStrictEqual(errs.map((x) => [x.state, x.error]), [["error", "boom"]]);
   });
 
-  await test("the art: every map is a full grid of palette characters; shields differ in shape; positions and icons exist", () => {
+  await test("the art (v3): every map is a full grid of palette characters; shields differ in shape; icons exist; no position pixel maps", () => {
     const px = vm.runInContext("CARD_PIXELS", pure), pal = vm.runInContext("CARD_PALETTE", pure);
-    assert.deepStrictEqual(Object.keys(px).sort(), ["backPattern", "icons", "positions", "shields"]);
-    assert.deepStrictEqual(Object.keys(px.positions).sort(), ["execution", "planning", "review", "unspecified"]);
+    assert.deepStrictEqual(Object.keys(px).sort(), ["backPattern", "icons", "shields"], "the position pixel maps are retired (R12)");
     assert.deepStrictEqual(Object.keys(px.shields).sort(), ["enforced", "none", "recorded"]);
     assert.deepStrictEqual(Object.keys(px.icons).sort(), ["emptySlot", "importProject", "taskFolder"]);
-    const grids = [["backPattern", px.backPattern, 16], ...["positions", "shields", "icons"].flatMap((g) => Object.entries(px[g]).map(([k, m]) => [`${g}.${k}`, m, 12]))];
-    assert.strictEqual(grids.length, 11);
+    const grids = [["backPattern", px.backPattern, 16], ...["shields", "icons"].flatMap((g) => Object.entries(px[g]).map(([k, m]) => [`${g}.${k}`, m, 12]))];
+    assert.strictEqual(grids.length, 7);
     for (const [name, rows, size] of grids) {
       assert.strictEqual(rows.length, size, `${name} height`);
       for (const row of rows) {
@@ -1141,6 +1255,46 @@ async function test(name, fn) {
     assert.strictEqual(new Set(Object.values(px.shields).map(shape)).size, 3);
     assert.ok(px.shields.recorded.join("").split("").filter((c) => c !== ".").every((c) => c === "K"), "dashed: outline only");
     assert.ok(/[^.K]/.test(px.shields.enforced.join("")), "solid: filled");
+    // v3: three flat-topped, pointed-bottom shields of one outline extent (the art's own check)
+    const bounds = (rows) => { const pts = rows.flatMap((r, y) => [...r].map((c, x) => (c === "." ? null : [x, y])).filter(Boolean));
+      return [Math.min(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[1]))]; };
+    for (const k of ["enforced", "recorded", "none"]) assert.deepStrictEqual(bounds(px.shields[k]), [0, 11, 0, 11], k);
+    for (const k of ["enforced", "recorded", "none"]) assert.strictEqual(px.shields[k][11], ".....KK.....", `${k}: the same pointed bottom`);
+    assert.strictEqual(px.shields.enforced[0], "KKKKKKKKKKKK", "flat top");
+    assert.ok(px.shields.none.join("").split("").filter((c) => c !== ".").every((c) => c === "K") && px.shields.none[5][5] === "K", "empty shield: outline and a slash across it");
+    assert.ok(px.shields.recorded.every((r) => !/KK.*KK/.test(r.slice(1, 11))), "dashed: no run of outline pixels along the side");
+    // the icons the card play needs
+    assert.ok(/Y/.test(px.icons.taskFolder.join("")) && /Y/.test(px.icons.importProject.join("")));
+    assert.ok(px.icons.importProject[1] === ".....YY....." && px.icons.importProject[6] === "....KYYK....", "the import arrow points down into the tray");
+  });
+
+  await test("position badges (art v3): one character and one label per position, a hard 2px square coloured by the camp", () => {
+    const b = vm.runInContext("CARD_POSITION_BADGES", pure);
+    assert.deepStrictEqual(Object.keys(b), ["planning", "execution", "review", "unspecified"]);
+    assert.deepStrictEqual(Object.values(b).map((x) => [x.glyph, x.label]), [["規", "規劃"], ["執", "執行"], ["審", "審查"], ["？", "未指定"]]);
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    const rule = /\.pos-glyph\s*\{([^}]*)\}/.exec(css);
+    assert.ok(rule, "the badge rule");
+    assert.ok(/border:\s*2px solid var\(--pos-border/.test(rule[1]) && /border-radius:\s*0\b/.test(rule[1]), "hard 2px square");
+    assert.ok(/background:\s*var\(--pos-bg/.test(rule[1]) && /color:\s*var\(--pos-text/.test(rule[1]));
+    // the art's positionBadges.themes values, in light and in both dark blocks; text 4.5:1, border 3:1 (recomputed here)
+    const want = {
+      light: { anthropic: ["#fffbeb", "#92400e", "#78350f"], openai: ["#f0fdfa", "#115e59", "#134e4a"], google: ["#f0f9ff", "#075985", "#0c4a6e"], other: ["#faf5ff", "#6b21a8", "#581c87"] },
+      dark: { anthropic: ["#292315", "#fde68a", "#fbbf24"], openai: ["#142522", "#99f6e4", "#5eead4"], google: ["#14232b", "#bae6fd", "#7dd3fc"], other: ["#24182e", "#e9d5ff", "#d8b4fe"] },
+    };
+    const lum = (hex) => { const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    const ratio = (a, c) => { const [x, y] = [lum(a), lum(c)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+    const prefixes = { light: [""], dark: ["  :root:not([data-theme=\"light\"]) ", ":root[data-theme=\"dark\"] "] };
+    let seen = 0;
+    for (const mode of ["light", "dark"]) for (const camp of Object.keys(want[mode])) for (const prefix of prefixes[mode]) {
+      const line = css.split("\n").find((l) => l.startsWith(prefix + `.rcard[data-camp="${camp}"] {`));
+      assert.ok(line, `${mode} ${camp}`);
+      const get = (n) => new RegExp(`--pos-${n}: (#[0-9a-fA-F]{6})`).exec(line)[1];
+      assert.deepStrictEqual([get("bg"), get("text"), get("border")], want[mode][camp], `${mode} ${camp}`);
+      assert.ok(ratio(get("text"), get("bg")) >= 4.5 && ratio(get("border"), get("bg")) >= 3, `${mode} ${camp} contrast`);
+      seen += 1;
+    }
+    assert.strictEqual(seen, 12);
   });
 
   await test("cardArt: an SVG with the cell grid, decoration only; a name it does not have is null", () => {
@@ -1153,7 +1307,7 @@ async function test(name, fn) {
     assert.ok(rects.length > 10 && rects.every((r) => Number(r.getAttribute("height")) === 1));
     assert.ok(rects.some((r) => r.getAttribute("class") === "px-k"), "the outline takes the theme's colour");
     assert.ok(rects.filter((r) => r.getAttribute("class") !== "px-k").every((r) => /^#[0-9a-f]{6}$/i.test(r.getAttribute("fill"))));
-    for (const [g, n] of [["shields", "nope"], ["nope", "enforced"], ["backPattern", "backPattern"], ["positions", "__proto__"], ["icons", "constructor"]]) {
+    for (const [g, n] of [["shields", "nope"], ["nope", "enforced"], ["backPattern", "backPattern"], ["positions", "planning"], ["positions", "__proto__"], ["icons", "constructor"]]) {
       assert.strictEqual(pure.cardArt(g, n), null, `${g}.${n}`);
     }
     const strip = pure.cardPatternStrip();
@@ -1200,6 +1354,17 @@ async function test(name, fn) {
     assert.ok(/\.rcard-face\[hidden\]\s*\{\s*display:\s*none/.test(css), "a hidden face is not shown by the face's own display");
     assert.ok(/prefers-reduced-motion:\s*reduce\)\s*\{\s*\.rcard-turn[^}]*animation:\s*none/.test(css), "no turning animation with reduced motion");
     assert.ok(!/url\(\s*["']?https?:/.test(css));
+  });
+
+  await test("CSS: the fifth light (R11) differs from the red in shape and colour", () => {
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    const dot = (cls) => (new RegExp(`\\.rcard-${cls} \\.rcard-dot\\s*\\{([^}]*)\\}`).exec(css) || [])[1] || "";
+    const codex = dot("codex"), red = dot("blocked");
+    assert.ok(codex && red);
+    assert.ok(/var\(--info\)/.test(codex) && !/var\(--bad\)/.test(codex), "the info colour, not the red");
+    assert.ok(/border-radius:\s*50%/.test(codex) && /linear-gradient/.test(codex), "a half-filled ring");
+    assert.ok(/border-radius:\s*2px/.test(red) && /var\(--bad\)/.test(red), "the red is the square");
+    assert.ok(/\.rcard-codex\s*\{\s*background:\s*var\(--info-soft\)/.test(css));
   });
 
   console.log(`\n${passed} passed`);
