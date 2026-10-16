@@ -94,16 +94,24 @@ def _observation(skill_id: str, live: dict | None) -> dict:
     return {**base, "state": "none", "window_days": window}
 
 
-def _skill(skill_id: str, static: dict | None, live: dict | None) -> dict:
+def _will_load(tool, skill_id: str) -> bool:
+    """Whether a launch of this role would load the chosen skill. The one place that answers it, and the answer
+    is no for every tool today: a Claude Code launch passes the safe-mode flag, a Codex role is not launched at
+    all, and shared is not a launchable tool. A card shows the solid "in effect" slot only when this says yes."""
+    return False
+
+
+def _skill(skill_id: str, static: dict | None, live: dict | None, tool=None) -> dict:
+    will_load = _will_load(tool, skill_id)
     if static is None:
-        return {"skill_id": skill_id, "state": "index_not_loaded", "effective": False}
+        return {"skill_id": skill_id, "state": "index_not_loaded", "effective": False, "will_load": will_load}
     rec = next((s for s in static.get("skills", []) if s.get("skill_id") == skill_id), None)
     if rec is None:
-        return {"skill_id": skill_id, "state": "not_in_index", "effective": False, "note": INDEX_MISSING,
-                "indexed_at": static.get("generated_at")}
+        return {"skill_id": skill_id, "state": "not_in_index", "effective": False, "will_load": will_load,
+                "note": INDEX_MISSING, "indexed_at": static.get("generated_at")}
     refs = [r for r in (rec.get("referenced_files") or []) if isinstance(r, dict)]
     return {
-        "skill_id": skill_id, "state": "in_index", "effective": False,
+        "skill_id": skill_id, "state": "in_index", "effective": False, "will_load": will_load,
         "name": rec.get("name"), "invoke_name": rec.get("invoke_name"), "tool": rec.get("tool"),
         "scope": rec.get("scope"), "activation": rec.get("activation"),
         "description": _sourced(rec.get("description")), "when_to_use": _sourced(rec.get("when_to_use")),
@@ -173,7 +181,10 @@ def _armor(tool: str, version_status: dict) -> dict:
 def _skills_section(tool: str, codex_not_launchable: bool, items: list) -> dict:
     """The chosen skills with the statement that fits the tool. Only a Claude Code launch passes the safe-mode
     flag, so only there is the safe-mode statement made (and only as fact for the version it was checked on)."""
-    out = {"title": "已選技能（VBear 啟動時不載入）", "items": items}
+    # all_inactive is what the card reads to draw the dashed slots; it is worked out from the items, not from words
+    all_inactive = all(it.get("will_load") is not True for it in items)
+    out = {"title": "技能卡（收藏中：VBear 啟動時不載入）" if all_inactive else "技能卡",
+           "items": items, "all_inactive": all_inactive}
     if tool == "claude":
         out["note"] = "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。"
         out["safe_mode"] = ("已傳入安全模式旗標；Claude Code 2.1.296 的說明指出安全模式會關閉技能，"
@@ -217,7 +228,7 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
             "intents_note": "只是記錄，不會變成實際權限"},
         "index": {"loaded": static is not None, "generated_at": static.get("generated_at") if static else None},
         "profession": _profession(profile, static, tool),
-        "skills": _skills_section(tool, codex_not_launchable, [_skill(sid, static, live) for sid in equipped]),
+        "skills": _skills_section(tool, codex_not_launchable, [_skill(sid, static, live, tool) for sid in equipped]),
         "version_status": version,
         "tools": _tools(tool, codex_not_launchable),
         "armor": _armor(tool, version) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),

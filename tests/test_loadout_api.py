@@ -422,7 +422,50 @@ class LoadoutTests(_Helpers, unittest.TestCase):
         self.assertIn("2.1.296", body["skills"]["safe_mode"])
         self.assertIn("其他版本是否停用技能未驗證", body["skills"]["safe_mode"])
         self.assertTrue(all(s["effective"] is False for s in body["skills"]["items"]))
-        self.assertEqual(body["skills"]["title"], "已選技能（VBear 啟動時不載入）")
+        self.assertEqual(body["skills"]["title"], "技能卡（收藏中：VBear 啟動時不載入）")
+
+    def test_every_skill_says_whether_it_will_load_and_the_section_says_all_inactive(self):
+        """R1: the card draws dashed or solid slots from these two fields, never from the words."""
+        c, port = self.serve(static=_static())
+        self.save(c)
+        _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        items = body["skills"]["items"]
+        self.assertEqual({s["state"] for s in items}, {"in_index", "not_in_index"})
+        for s in items:
+            self.assertIs(s["will_load"], False, s)
+        self.assertIs(body["skills"]["all_inactive"], True)
+        # no index in memory: the answer is still a plain no, not a missing field
+        c2, port2 = self.serve(static=None)
+        self.save(c2)
+        _, body = _get(port2, "/api/agent-profiles/prof-a/loadout")
+        self.assertTrue(all(s["state"] == "index_not_loaded" and s["will_load"] is False
+                            for s in body["skills"]["items"]))
+        self.assertIs(body["skills"]["all_inactive"], True)
+
+    def test_will_load_is_false_for_every_tool_and_all_inactive_holds_with_no_skills(self):
+        c, port = self.serve(static=_static())
+        for tool in ("claude", "codex", "shared"):
+            self.save(c, model={"tool": tool, "model_id": ""}, equipped_skill_ids=["s-code"])
+            _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+            self.assertEqual([s["will_load"] for s in body["skills"]["items"]], [False], tool)
+            self.assertIs(body["skills"]["all_inactive"], True, tool)
+            self.assertTrue(all(s["effective"] is False for s in body["skills"]["items"]), tool)
+        self.save(c, equipped_skill_ids=[])
+        _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        self.assertEqual(body["skills"]["items"], [])
+        self.assertIs(body["skills"]["all_inactive"], True)
+
+    def test_all_inactive_is_worked_out_from_the_items_not_fixed(self):
+        """When a tool one day reports that a skill loads, the section says so and the title stops claiming it."""
+        from vbear import loadout
+        c, port = self.serve(static=_static())
+        self.save(c)
+        with mock.patch.object(loadout, "_will_load", side_effect=lambda tool, sid: sid == "s-code"):
+            _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
+        by_id = {s["skill_id"]: s["will_load"] for s in body["skills"]["items"]}
+        self.assertEqual(by_id, {"s-code": True, "s-gone": False})
+        self.assertIs(body["skills"]["all_inactive"], False)
+        self.assertEqual(body["skills"]["title"], "技能卡")
 
 
 class SkillCardTests(_Helpers, unittest.TestCase):
