@@ -509,14 +509,14 @@ function findModalInBody() {
     walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
       && /First/.test(n.textContent || "")).dispatch("click");
     await tick();
-    const openBtn = walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查");
-    assert.ok(openBtn, "detail view offers 出發前檢查");
+    const openBtn = walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證");
+    assert.ok(openBtn, "detail view offers 出發通行證");
     assert.ok(!walk(main).some((n) => (n.textContent || "").trim() === "預覽並啟動"), "the old name is gone");
     openBtn.dispatch("click");
     await tick();
     const modal = findModalInBody();
     assert.ok(modal, "launch dialog opened");
-    assert.ok(findText(modal, "出發前檢查：First"), "the dialog is named like the button");
+    assert.ok(findText(modal, "出發通行證：First"), "the dialog is named like the button");
     assert.ok(findText(modal, "現在不能出發：還沒有產生這次的預覽"), "the button is off with a reason beside it");
     const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
     const workdir = walk(modal).find((n) => n.tag === "input" && n.getAttribute("type") === "text");
@@ -646,10 +646,10 @@ function findModalInBody() {
       skills: { title: "已選技能（VBear 啟動時不載入）", items: [], note: "n" },
       version_status: { state: "unknown", text: "未知（這個畫面不探測 Codex 版本）" },
       armor: { applicable: true, basis: "verified_setting", title: "防具（以 Codex 已記錄的驗證證據為準）",
-               basis_note: "b", preview_decides: "實際以出發前檢查為準",
+               basis_note: "b", preview_decides: "實際以出發通行證為準",
                launch_note: "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）",
                groups: groupsNoClaude, items: [] },
-      blockers: [{ code: "profile_disabled", message: "這個 Profile 已停用" }], blockers_note: "n" };
+      blockers: [{ code: "profile_disabled", message: "這張角色卡已停用" }], blockers_note: "n" };
     const ctx = freshContext({
       "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
       "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
@@ -673,15 +673,15 @@ function findModalInBody() {
     await tick();
     // the reason sits right under the head row that holds the button
     const line = walk(main).find((n) => n.getAttribute && n.getAttribute("data-rc") === "launch-line");
-    assert.ok(line, "a line for the reason is beside the 出發前檢查 button");
-    assert.ok(findText(line, "目前無法從 VBear 啟動這個角色") && findText(line, "這個 Profile 已停用"));
+    assert.ok(line, "a line for the reason is beside the 出發通行證 button");
+    assert.ok(findText(line, "目前無法從 VBear 啟動這個角色") && findText(line, "這張角色卡已停用"));
     const detail = walk(main).find((n) => n.className === "wb-tab-content" && walk(n).includes(line));
     assert.ok(detail, "found the detail");
-    assert.ok(walk(detail.children[0]).some((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查"),
+    assert.ok(walk(detail.children[0]).some((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證"),
               "the head row holds the button");
     assert.strictEqual(detail.children[1], line, "the line comes right after the button's row");
 
-    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查").dispatch("click");
+    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證").dispatch("click");
     await tick();
     const modal = findModalInBody();
     const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
@@ -774,7 +774,7 @@ function findModalInBody() {
     walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
       && /Common/.test(n.textContent || "")).dispatch("click");
     await tick();
-    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發前檢查").dispatch("click");
+    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證").dispatch("click");
     await tick();
     const modal = findModalInBody();
     const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
@@ -896,23 +896,23 @@ function findModalInBody() {
           warnings: [], observed: { state: "unavailable", window_days: null, source: "執行觀察" } },
       ] },
       version_status: { state: "unknown", version: null, source: "沒有載入的驗證資料",
-                        text: "未知（這個畫面不探測 Claude Code；要到出發前檢查才會讀取版本）" },
+                        text: "未知（這個畫面不探測 Claude Code；要到出發通行證才會讀取版本）" },
       armor: { applicable: true, basis: "verified_setting", title: "防具（以已驗證設定為準）",
-        basis_note: "以已驗證設定為準：說明", preview_decides: "實際以出發前檢查為準",
+        basis_note: "以已驗證設定為準：說明", preview_decides: "實際以出發通行證為準",
         groups: [{ id: "blocked", label: "擋住了", levels: ["強制（限已測路徑、版本與執行層）"] },
                  { id: "partial", label: "部分擋住", levels: ["部分強制"] },
                  { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
                  { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
                  { id: "unproven", label: "未證明", levels: ["未驗證（此 Claude Code 版本尚未實測）", "未知"] }],
         items: [
-          armorItem("Network", "強制（限已測路徑、版本與執行層）", "blocked", "空 allowlist", { evidence_refs: "出發前檢查時才知道" }),
-          armorItem("Write", "部分強制", "partial", "Bash 寫入受限；Edit/Write 工具屬工具層意圖", { path_scope: "出發前檢查時才知道" }),
+          armorItem("Network", "強制（限已測路徑、版本與執行層）", "blocked", "空 allowlist", { evidence_refs: "產生出發通行證時才知道" }),
+          armorItem("Write", "部分強制", "partial", "Bash 寫入受限；Edit/Write 工具屬工具層意圖", { path_scope: "產生出發通行證時才知道" }),
           armorItem("Deploy", "不授予", "not_granted", "沒有專用權限"),
           armorItem("Read", "僅意圖", "not_blocked", "讀取不隔離"),
           armorItem("Commit", "未限制", "not_blocked", ".git 可寫", { unknown_reason: "未測試以 denyWrite 排除 .git 的效果" }),
         ] },
       blockers: [{ code: "intent_unspecified", message: "test 未指定；未指定不會被當成允許" }],
-      blockers_note: "假設你已勾選知悉 commit、並維持關閉網路；實際以出發前檢查為準",
+      blockers_note: "假設你已勾選知悉 commit、並維持關閉網路；實際以出發通行證為準",
       ...over,
     });
     const handlers = (loadoutFn) => ({
@@ -989,8 +989,8 @@ function findModalInBody() {
     assert.strictEqual(header(groups[0]), "擋住了 · 強制（限已測路徑、版本與執行層）");
     assert.strictEqual(header(groups[3]), "沒有擋 · 僅意圖、未限制");
     assert.ok(header(groups[4]).startsWith("未證明 · 未驗證（此 Claude Code 版本尚未實測）"));
-    assert.ok(findText(card, "實際以出發前檢查為準"), "the card says the pre-launch check decides");
-    assert.ok(findText(card, "範圍：出發前檢查時才知道") || findText(card, "出發前檢查時才知道"),
+    assert.ok(findText(card, "實際以出發通行證為準"), "the card says the pre-launch check decides");
+    assert.ok(findText(card, "範圍：產生出發通行證時才知道") || findText(card, "產生出發通行證時才知道"),
               "what needs a work directory is 'known at the pre-launch check'");
     assert.ok(findText(card, "目前無法出發的原因") && findText(card, "test 未指定"), "launch blockers shown");
     assert.ok(findText(card, "只是記錄，不會變成實際權限"), "intents are labelled as records");
@@ -1019,7 +1019,7 @@ function findModalInBody() {
       skills: { title: "已選技能（VBear 啟動時不載入）", items: [],
                 note: "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。" },
       armor: { applicable: true, basis: "verified_setting", title: "防具（以 Codex 已記錄的驗證證據為準）",
-               basis_note: "以 VBear 已記錄的 Codex 驗證證據為準", preview_decides: "實際以出發前檢查為準",
+               basis_note: "以 VBear 已記錄的 Codex 驗證證據為準", preview_decides: "實際以出發通行證為準",
                launch_note: "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）",
                groups: [{ id: "unproven", label: "未證明", levels: ["未知"] }],
                items: [armorItem("Network", "未知", "unproven", "network_access=false 尚無本輪 OS 負向證據")] } })));

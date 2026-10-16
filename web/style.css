@@ -1317,3 +1317,26 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   .team-slots { grid-template-columns: 1fr; }
   .ts-menu-list { max-height: 220px; }
 }
+
+/* the launch pass (design card-play 3.7): three lines, each with a mark whose shape differs from the others,
+   a word, and a shield only for the levels that have one */
+.pass-front { display: grid; gap: 8px; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel-2); padding: 12px; min-width: 0; }
+.pass-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pass-line { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 0; }
+.pass-text { font-weight: 600; overflow-wrap: anywhere; min-width: 0; flex: 1 1 14em; }
+.pass-word { font-size: 12px; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; white-space: nowrap; }
+.pass-mark { flex: none; }
+.pass-ok { --pass-tone: var(--ok); }
+.pass-partial, .pass-unverified { --pass-tone: var(--warn); }
+.pass-unknown { --pass-tone: var(--mute); }
+.pass-open { --pass-tone: var(--bad); }
+.pass-line .pass-mark, .pass-line .pass-word { color: var(--pass-tone); }
+.pass-line .armor-shield { margin-right: 0; }
+.pass-scratch { margin: 0; overflow-wrap: anywhere; }
+.pass-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.pass-legend-item { display: inline-flex; align-items: center; gap: 2px; }
+.pass-legend-note { flex-basis: 100%; }
+.pass-details { margin-top: 10px; }
+.pass-details > summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.pass-reasons li { margin-bottom: 6px; }
+.pass-reasons .btn { margin-left: 6px; }

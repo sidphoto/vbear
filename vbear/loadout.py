@@ -13,12 +13,12 @@ from __future__ import annotations
 from . import agent_launch
 from .runtime import agent_sessions
 
-NOT_KNOWN_AT_PREVIEW = "出發前檢查時才知道"
+NOT_KNOWN_AT_PREVIEW = "產生出發通行證時才知道"
 INDEX_MISSING = "目前索引找不到此技能"
 VERSION_BASIS = ("以已驗證設定為準：這是 VBear 有實測證據的那組設定會做到的程度；你這台 Mac 的 Claude Code 版本"
-                 "實際守到什麼程度，要等出發前檢查才知道")
+                 "實際守到什麼程度，要等出發通行證才知道")
 CODEX_BASIS = ("以 VBear 已記錄的 Codex 驗證證據為準；證據不全的項目是「未知」。這台 Mac 的 Codex 版本"
-               "實際守到什麼程度，要等出發前檢查才知道")
+               "實際守到什麼程度，要等出發通行證才知道")
 ARMOR_NOT_APPLICABLE = {"shared": "shared 不是可啟動的工具，沒有防具"}
 CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）"
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
@@ -145,7 +145,7 @@ def _version_status(tool: str, verification: dict | None) -> dict:
         return {"state": "unverified", "version": version, "source": source,
                 "text": f"未驗證（Claude Code {version}；{source}）"}
     return {"state": "unknown", "version": None, "source": "沒有載入的驗證資料",
-            "text": "未知（這個畫面不探測 Claude Code；要到出發前檢查才會讀取版本）"}
+            "text": "未知（這個畫面不探測 Claude Code；要到出發通行證才會讀取版本）"}
 
 
 def _armor(tool: str, version_status: dict) -> dict:
@@ -171,7 +171,7 @@ def _armor(tool: str, version_status: dict) -> dict:
     out = {"applicable": True, "basis": "verified_setting",
            "title": "防具（以已驗證設定為準）" if tool == "claude" else "防具（以 Codex 已記錄的驗證證據為準）",
            "basis_note": VERSION_BASIS if tool == "claude" else CODEX_BASIS,
-           "preview_decides": "實際以出發前檢查為準",
+           "preview_decides": "實際以出發通行證為準",
            # a Codex card never carries the Claude-only "this Claude Code version is unverified" wording
            "groups": agent_launch.armor_groups(tool),
            "items": rows}
@@ -233,7 +233,7 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
         "tools": _tools(tool, codex_not_launchable),
         "armor": _armor(tool, version) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),
         "blockers": blockers,
-        "blockers_note": "假設你已勾選知悉 commit、並維持關閉網路；實際以出發前檢查為準",
+        "blockers_note": "假設你已勾選知悉 commit、並維持關閉網路；實際以出發通行證為準",
     }
 
 

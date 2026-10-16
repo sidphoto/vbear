@@ -438,7 +438,7 @@ async function test(name, fn) {
     assert.ok(light(cards[0]).className.includes("rcard-green") && findText(light(cards[0]), "可以出發（權限意圖都已決定）"));
     assert.ok(light(cards[1]).className.includes("rcard-yellow") && findText(light(cards[1]), "還差一步：權限意圖還沒決定"));
     assert.ok(byData(cards[1], "data-pcard", "decide").length === 1 && byData(cards[0], "data-pcard", "decide").length === 0);
-    assert.ok(findText(light(cards[0]), "實際能不能出發，以出發前檢查為準"), "the green light does not promise a launch");
+    assert.ok(findText(light(cards[0]), "實際能不能出發，以出發通行證為準"), "the green light does not promise a launch");
     // the scanned role templates are folded away by default
     const tpl = byData(main, "data-pool", "templates")[0];
     assert.strictEqual(tpl.tag, "details");
@@ -487,7 +487,7 @@ async function test(name, fn) {
     await ctx.viewWorkbench(null, null, "p-1", true);
     await tick();
     const d = dialog();
-    assert.ok(d && findText(d, "出發前檢查：Mine"), "the check is open");
+    assert.ok(d && findText(d, "出發通行證：Mine"), "the check is open");
     assert.deepStrictEqual([...ctx.__replaced], ["#/workbench?profile=p-1"]);
     // without the request nothing opens
     const ctx2 = freshContext(baseHandlers(profiles, catalog, {
@@ -860,7 +860,7 @@ async function test(name, fn) {
     // the slots say the cards are kept, not loaded; none is in effect
     assert.ok(findText(main, "技能卡 1 張") && findText(main, "收藏中") && findText(main, "這次的安全啟動不會載入"));
     assert.ok(!findText(main, "生效中"), "no card claims to be in effect");
-    assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發前檢查裡的防具標示。");
+    assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。");
   });
 
   await test("CSS: the wizard keeps its footer in view and honours reduced motion", () => {

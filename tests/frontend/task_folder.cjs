@@ -1039,7 +1039,7 @@ async function test(name, fn) {
     await ctx.viewWorkbench(null, null, "p-1", true);
     await tick(6);
     const d = dialog();
-    assert.ok(d && findText(d, "出發前檢查：Mine"));
+    assert.ok(d && findText(d, "出發通行證：Mine"));
     assert.ok(findText(d, `可以選的範圍：${HOME} 之內、已經存在的資料夾。`));
     assert.ok(!findText(d, "家目錄內的資料夾"), "not the fixed sentence");
     assert.ok(act(d, "pick-folder"));

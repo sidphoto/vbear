@@ -507,7 +507,7 @@ function loadoutOf(tool, over = {}) {
     skills: { title: "已選技能（VBear 啟動時不載入）", note: "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。", items: [
       { skill_id: "s-code", state: "in_index", name: "code-review", invoke_name: "code-review" },
       { skill_id: "s-gone", state: "not_in_index", note: "目前索引找不到此技能", indexed_at: 1791770000 }] },
-    armor: { applicable: true, preview_decides: "實際以出發前檢查為準", items: [
+    armor: { applicable: true, preview_decides: "實際以出發通行證為準", items: [
       { name: "Write", group: "blocked", level: "強制（限已測路徑、版本與執行層）", note: "寫入只限工作目錄" },
       { name: "Test", group: "not_blocked", level: "僅意圖", note: "可用 Bash 執行指令" }] }, ...over };
 }

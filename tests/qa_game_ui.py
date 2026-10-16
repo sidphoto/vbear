@@ -28,7 +28,7 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       sessions and 33 profiles (the environment's two, the one whose skill is missing, and thirty more; the lounge
       shows 24 and links to the rest).
       Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
-      the Codex role cannot be launched from VBear: its card and the 出發前檢查 dialog then show the reason.
+      the Codex role cannot be launched from VBear: its card and the 出發通行證 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
       lines of the Codex labels.
       Optional VBEAR_QA_TRANSLATE=1: seed fresh/stale/none/orphan translations and inject a process-local fake
@@ -224,7 +224,7 @@ else:
         manager.store.put(stale["skill_id"], seed(stale))
         manager.store.put("qa-translation-orphan", seed(fresh))
 
-    # ---- 出發前檢查 needs a CLI to look at: the synthetic ones, pinned for this process only
+    # ---- 出發通行證 needs a CLI to look at: the synthetic ones, pinned for this process only
 
     def _launch_environment(self) -> None:
         self.qa_work = self.tmp / "qa-workdir"
@@ -441,7 +441,7 @@ class Check(_Env):
         self.assertEqual(card["skill"]["missing_files"]["items"], ["scripts/lint.sh"])
         probe = self.api(f"/api/skills/{items[2]['skill_id']}?view=card")
         self.assertTrue(probe["skill"]["warnings"]["items"])
-        # 出發前檢查 is launchable for the Claude role and has its seven labels; the preview starts nothing
+        # 出發通行證 is launchable for the Claude role and has its seven labels; the preview starts nothing
         st, r = self.call("/api/native/agent-previews", "POST",
                           {"profile_id": CLAUDE_PROFILE, "workdir": str(self.qa_work), "commit": True})
         self.assertEqual(st, 200, r)
@@ -606,7 +606,7 @@ VBear game-UI QA console (synthetic Claude/Codex, temporary HOME and state; noth
   login   {url}
   state   {base}
   home    {home}
-  workdir {work}      <- type this folder in the 出發前檢查 dialog
+  workdir {work}      <- type this folder in the 出發通行證 dialog
   flow    #/flows/{fid}      runner: {runner}
   roles   #/workbench?profile={claude}   (Claude)     #/workbench?profile={codex}   (Codex)
   theme   設定 (#/settings) -> 顯示 -> 外觀: 淺色 / 深色 / 跟隨系統. Check every item below in light AND dark,
@@ -623,8 +623,8 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       Choosing a position shows the suggested intents tagged 「建議，可改」 with the sentence that an intent is
       not a limit VBear applies. A skill of the other tool is greyed with 「… 不會讀這張卡」.
   [ ] A card with an undecided intent shows 「還差一步：權限意圖還沒決定」 and 「現在決定」; a decided one says
-      「可以出發（權限意圖都已決定）」 and 「實際能不能出發，以出發前檢查為準」. 「名冊，不代表正在出勤」 on every card.
-  [ ] 出發 opens 出發前檢查 in the workbench for that card. 「你電腦裡現成的角色範本（職業標籤）」 is folded.
+      「可以出發（權限意圖都已決定）」 and 「實際能不能出發，以出發通行證為準」. 「名冊，不代表正在出勤」 on every card.
+  [ ] 出發 opens 出發通行證 in the workbench for that card. 「你電腦裡現成的角色範本（職業標籤）」 is folded.
   [ ] The card is two faces. 翻面 (or the F key with the focus on a card button) shows the back: 陣營與模型, 職業標籤,
       證據來源, 權限意圖 with 「只是記錄，不是授權」 and the sentence that an intent is not a limit, 編輯／複製／刪除,
       and Tool ID / Model ID only under 「進階」. The focus lands on 翻回正面; a screen reader reads one face only.
@@ -646,7 +646,7 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] {home}/.ssh, the home folder itself, and a folder outside the home: the server's refusal in words, nothing to continue
       with; a missing folder says so. Step 2: title (the folder's name), goal, and 「更多」 (Chinese template names).
   [ ] A card made before folders were required says 「還沒有資料夾 · 」 with 「選資料夾」.
-  [ ] 出發前檢查 shows 「可以選的範圍：{home} 之內、已經存在的資料夾。」 and a 「挑資料夾…」 button that fills the field.
+  [ ] 出發通行證 shows 「可以選的範圍：{home} 之內、已經存在的資料夾。」 and a 「挑資料夾…」 button that fills the field.
 
 == 0c. 隊伍 (任務卡的「隊伍」: 工作台 -> 右側「任務卡」分頁, 流程頁, 流程 -> 建立流程; 角色卡池 -> 「放上任務卡」)
   [ ] 任務卡有四個位置：規劃位、執行位、審查位，加一個虛線的「第二位審查（選填）」。點位置開「從角色卡池挑」清單（可用名字找、Esc
@@ -670,7 +670,7 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] 技能卡（收藏中：VBear 啟動時不載入）：4 rows. 3 are found, 1 says the index cannot find it. The list header on
       the left side says 「目前索引找不到 1 張技能卡」. The probe skill shows its name as text.
   [ ] 防具：seven items in five groups; each group header carries a level word; the heading says the preview
-      decides (實際以出發前檢查為準); no value is printed as "安全" or a bare "OK".
+      decides (實際以出發通行證為準); no value is printed as "安全" or a bare "OK".
   [ ] 權限意圖：讀取檔案・允許 編輯寫入・允許 執行測試・允許 部署上線・拒絕; the note says it is only a record and
       that it does not mean VBear limits the program's real abilities.
   [ ] Switch to 「QA 審查員（Codex）」: the card has no Claude-specific wording; its skill list has 1 row.
@@ -690,8 +690,8 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       selected list; 打開技能檔案; 返回. After a removal, re-add is NOT offered here (use the editor).
   [ ] A skill the index cannot find: its row on the role card says so; no card is invented for it.
 
-== 3. 出發前檢查 (角色卡右上「出發前檢查」; workdir above; tick the commit box; 產生預覽)
-  [ ] Button and dialog title both read 「出發前檢查」 (no 「預覽並啟動」 anywhere).
+== 3. 出發通行證 (角色卡右上「出發通行證」; workdir above; tick the commit box; 產生預覽)
+  [ ] Button and dialog title both read 「出發通行證」 (no 「預覽並啟動」 anywhere).
   [ ] Seven labels in five groups (讀取 / 寫入與測試 / 提交與部署 / 網路 / 檔案範圍); each has level, note,
       bypass, evidence; a label that is not enforced is not worded as enforced.
   [ ] 技能卡清單（收藏中），本次不會載入 appears once.

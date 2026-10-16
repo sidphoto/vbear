@@ -252,14 +252,14 @@ class LoadoutTests(_Helpers, unittest.TestCase):
         armor = body["armor"]
         self.assertTrue(armor["applicable"])
         self.assertEqual(armor["basis"], "verified_setting")
-        self.assertEqual(armor["preview_decides"], "實際以出發前檢查為準")
+        self.assertEqual(armor["preview_decides"], "實際以出發通行證為準")
         self.assertEqual(body["version_status"]["state"], "unknown")
         names = [i["name"] for i in armor["items"]]
         self.assertEqual(names, list(agent_launch.ARMOR_NAMES))
         write = next(i for i in armor["items"] if i["name"] == "Write")
         self.assertEqual(write["level"], agent_launch.PARTIAL)
         self.assertEqual(write["group"], "partial")
-        self.assertEqual(write["path_scope"], "出發前檢查時才知道")
+        self.assertEqual(write["path_scope"], "產生出發通行證時才知道")
         commit = next(i for i in armor["items"] if i["name"] == "Commit")
         self.assertEqual(commit["group"], "not_blocked")
         self.assertEqual([g["label"] for g in armor["groups"]], ["擋住了", "部分擋住", "沒有專用權限", "沒有擋", "未證明"])

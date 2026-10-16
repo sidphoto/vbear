@@ -1443,7 +1443,7 @@ function herdrMigrationNotice() {
   } } }, "知道了");
   const wrap = el("div", { class: "notice info" },
     el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從角色卡的「出發前檢查」開啟。 ", ack));
+    el("div", null, "主控台已改用內建的 VBear runtime，不再支援 Herdr，設定已自動切換。在 Herdr 或其他終端自行啟動的 Agent 不會出現在這裡；請從角色卡的「出發通行證」開啟。 ", ack));
   return wrap;
 }
 function sectionHead(title, sub, action) {
@@ -2301,7 +2301,7 @@ function officeGear(loadoutState) {
       ar.applicable === false ? el("p", { class: "small" }, ar.why || "這個角色沒有防具資料。")
         : (items.length ? el("div", { class: "office-armor" }, items.map(officeArmorCell))
           : el("p", { class: "small muted" }, "沒有防具資料。")),
-      el("p", { class: "small muted" }, ar.preview_decides || "實際以出發前檢查為準")),
+      el("p", { class: "small muted" }, ar.preview_decides || "實際以出發通行證為準")),
     el("section", { class: "office-gear", "data-office-gear": "skills" },
       el("h4", null, "技能卡"),
       skills.note ? el("p", { class: "small" }, skills.note) : null,
@@ -3181,7 +3181,7 @@ const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還�
 const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", shared: "共用（skills CLI）" };
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", shared: "共用卡" };
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
-const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發前檢查裡的防具標示。";
+const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
 const CARD_SPECIES_NOTE = "種族只換外觀，不影響能力。";
 const CARD_SKILLS_NOTE = "技能卡收藏在角色卡上，只是你的挑選紀錄（收藏中）：這次的安全啟動不會載入它們。";
 const CARD_PAGE_SIZE = 48;
@@ -3825,6 +3825,128 @@ function armorShield(level) {
   return kind ? el("span", { class: `armor-shield armor-shield-${kind}`, "data-shield": kind }, cardArt("shields", kind, 2)) : null;
 }
 
+// ---- The launch pass (design card-play 3.7, 6.7) -----------------------------------------------------------------------
+// The front of the pass is three lines. Each one is worded by the level the preview gives that item, so a check mark
+// is only ever drawn for an enforced level; a level this table does not know reads as unknown, never as a protective
+// one. The keys are the server's level words (agent_launch.py); a test compares them with its constants.
+const PASS_LEVEL_KIND = {
+  "強制（限已測路徑、版本與執行層）": "enforced",
+  "部分強制": "partial",
+  "未驗證（此 Claude Code 版本尚未實測）": "unverified",
+  "未知": "unknown",
+  "僅意圖": "open",
+  "未限制": "open",
+  "不授予": "unknown",
+};
+const PASS_KIND_MARK = { enforced: "ok", partial: "warn", unverified: "warn", unknown: "unknown", open: "bad" };
+const PASS_KIND_WORD = { enforced: "已擋住", partial: "部分擋住", unverified: "未實測", unknown: "不明", open: "沒有擋住" };
+const PASS_WRITE_TEXT = {
+  enforced: (path) => `只能改這個資料夾：${path}`,
+  partial: (path) => `大致只能改這個資料夾：${path}（部分擋住）`,
+  unverified: () => "設定成只能改這個資料夾，但這個版本還沒實測",
+  open: () => "寫入範圍沒有被擋住",
+  unknown: () => "寫入範圍不明",
+};
+const PASS_NETWORK_TEXT = {
+  enforced: "擋住網路",
+  partial: "部分擋住網路",
+  unverified: "設定成不連網，但這個版本還沒實測",
+  open: "網路沒有被擋住",
+  unknown: "網路防護不明",
+};
+const PASS_COMMIT_TEXT = "擋不住版本紀錄（commit）";
+const PASS_COMMIT_ACK = "我知道這個角色會在這個資料夾建立、修改檔案，也能存下版本紀錄（commit），VBear 擋不住。";
+const PASS_SHIELD_LEGEND = [
+  ["enforced", "實線盾牌：強制"],
+  ["recorded", "虛線盾牌：只是記錄，沒有擋"],
+  ["none", "空盾牌：沒擋"],
+];
+const PASS_LEGEND_NOTE = "部分擋住、未實測、不明的項目不畫盾牌，以文字為準。";
+const PASS_DETAILS_LABEL = "看七項細節";
+
+function passKind(level) { return typeof level === "string" && cardHas(PASS_LEVEL_KIND, level) ? PASS_LEVEL_KIND[level] : "unknown"; }
+
+// preview -> { lines: [write, network, commit], workdir, scratch }. Reads derived_labels and canonical_paths only.
+// A write line that names a folder it cannot name (no path) falls back to unknown; the commit line is the same
+// words whatever its level says.
+function passSummary(pv) {
+  const labels = pv && pv.derived_labels && typeof pv.derived_labels === "object" ? pv.derived_labels : {};
+  const paths = pv && pv.canonical_paths && typeof pv.canonical_paths === "object" ? pv.canonical_paths : {};
+  const workdir = typeof paths.workdir === "string" ? paths.workdir : "";
+  const scratch = typeof paths.scratch === "string" && paths.scratch ? paths.scratch : null;
+  const levelOf = (name) => {
+    const lab = cardHas(labels, name) ? labels[name] : null;
+    return lab && typeof lab === "object" && typeof lab.level === "string" ? lab.level : null;
+  };
+  const make = (id, name, kind, text) => {
+    const level = levelOf(name);
+    return { id, name, level, kind, mark: PASS_KIND_MARK[kind], word: PASS_KIND_WORD[kind], text,
+      shield: level === null ? null : armorShieldKind(level) };
+  };
+  let writeKind = passKind(levelOf("Write"));
+  if ((writeKind === "enforced" || writeKind === "partial") && !workdir) writeKind = "unknown";
+  const networkKind = passKind(levelOf("Network"));
+  return {
+    workdir, scratch,
+    lines: [
+      make("write", "Write", writeKind, PASS_WRITE_TEXT[writeKind](workdir)),
+      make("network", "Network", networkKind, PASS_NETWORK_TEXT[networkKind]),
+      make("commit", "Commit", "open", PASS_COMMIT_TEXT),
+    ],
+  };
+}
+
+// The mark in front of a line: a circle with a check (enforced), a triangle with an exclamation mark (partial or
+// not tested), a circle with a question mark (unknown), a circle with a cross (not blocked). Different shapes, so
+// the meaning does not rest on colour; the status word is written beside it too.
+function passMark(mark) {
+  const svg = svgEl("svg", { class: `pass-mark pass-mark-${mark}`, viewBox: "0 0 16 16", width: 16, height: 16,
+    "aria-hidden": "true", focusable: "false" });
+  const stroke = { fill: "none", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" };
+  if (mark === "ok") svg.append(svgEl("circle", { cx: 8, cy: 8, r: 6.6, ...stroke }), svgEl("path", { d: "M5 8.2l2.2 2.3L11.2 5.8", ...stroke }));
+  else if (mark === "warn") svg.append(svgEl("path", { d: "M8 1.8L14.6 13.6H1.4Z", ...stroke }), svgEl("path", { d: "M8 6v3.6M8 11.6v.4", ...stroke }));
+  else if (mark === "unknown") svg.append(svgEl("circle", { cx: 8, cy: 8, r: 6.6, ...stroke, "stroke-dasharray": "2 2" }),
+    svgEl("path", { d: "M6.2 6.4a1.9 1.9 0 1 1 2.8 1.7c-.6.4-1 .8-1 1.6M8 11.6v.4", ...stroke }));
+  else svg.append(svgEl("circle", { cx: 8, cy: 8, r: 6.6, ...stroke }), svgEl("path", { d: "M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8", ...stroke }));
+  return svg;
+}
+
+function passFront(pv) {
+  const s = passSummary(pv);
+  return el("section", { class: "pass-front", "data-pass": "front", "aria-label": "這次出發的限制" },
+    el("ul", { class: "pass-lines" }, s.lines.map((ln) => el("li", { class: `pass-line pass-${ln.kind}`, "data-pass-line": ln.id, "data-kind": ln.kind },
+      passMark(ln.mark),
+      el("span", { class: "pass-text" }, ln.text),
+      el("span", { class: "pass-word" }, ln.word),
+      ln.shield ? armorShield(ln.level) : null))),
+    s.scratch ? el("p", { class: "small muted pass-scratch" }, "另有這次出發的暫存區：", el("span", { class: "mono" }, s.scratch)) : null,
+    passLegend());
+}
+
+function passLegend() {
+  return el("div", { class: "pass-legend small muted", "data-pass": "legend" },
+    el("span", { class: "pass-legend-title" }, "盾牌圖例："),
+    PASS_SHIELD_LEGEND.map(([kind, label]) => el("span", { class: "pass-legend-item" },
+      el("span", { class: `armor-shield armor-shield-${kind}`, "data-shield": kind }, cardArt("shields", kind, 2)), label)),
+    el("span", { class: "pass-legend-note" }, PASS_LEGEND_NOTE));
+}
+
+// What can be done about a reason a launch is not possible. Only a pointer to where it is changed: the rules are the
+// server's (launch_blockers), the page does not repeat them. A code with no entry has no fix here.
+const PASS_FIXES = {
+  intent_unspecified: { act: "intents", label: "現在決定" },
+  read_deny_unenforceable: { act: "intents", label: "調整權限意圖" },
+  readonly_unverified: { act: "intents", label: "調整權限意圖" },
+  test_deny_unenforceable: { act: "intents", label: "調整權限意圖" },
+  deploy_not_available: { act: "intents", label: "調整權限意圖" },
+  intents_not_supported: { act: "intents", label: "調整權限意圖" },
+  tool_not_launchable: { act: "tool", label: "改選陣營" },
+  commit_not_enforceable: { act: "commit", label: "回去勾選知悉" },
+};
+function passFix(code) { return typeof code === "string" && cardHas(PASS_FIXES, code) ? PASS_FIXES[code] : null; }
+// A preview that was refused because of the folder (the server answers 400 for a missing, relative or outside folder).
+function passFolderFix(err) { return Boolean(err && err.status === 400) ? { act: "folder", label: "換資料夾" } : null; }
+
 // The slots of a card (design 3.4). A slot is solid ("生效中") only when the loadout says will_load for that very
 // skill; every other slot is dashed ("收藏中"), also before the loadout is read. The words are never compared.
 const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };
@@ -3858,7 +3980,7 @@ function cardDeparture(p, loadoutState) {
   if (base.state === "yellow") return { ...base, reasons: [] };
   if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認出發條件中…", reasons: [] };
   const blockers = loadoutState.state === "ok" && loadoutState.data ? loadoutState.data.blockers : null;
-  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到出發條件，實際能不能出發以出發前檢查為準", reasons: [] };
+  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到出發條件，實際能不能出發以出發通行證為準", reasons: [] };
   const reasons = blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
   if (blockers.length) return { state: "blocked", text: "目前不能出發", reasons: reasons.length ? reasons : ["原因未提供"] };
   return { ...base, reasons: [] };
@@ -4001,7 +4123,7 @@ function profileCard(p, opts = {}) {
             on: { click: () => handlers.decide(p) } }, "現在決定")) : null)
           : dep.state === "blocked"
             ? el("div", { class: "small" }, dep.reasons[0], dep.reasons.length > 1 ? `（另有 ${dep.reasons.length - 1} 項，翻到背面看）` : "")
-            : el("div", { class: "small muted" }, "實際能不能出發，以出發前檢查為準。")));
+            : el("div", { class: "small muted" }, "實際能不能出發，以出發通行證為準。")));
 
     const ld = loadoutState && loadoutState.state === "ok" && loadoutState.data ? loadoutState.data : null;
     const pr = ld && ld.profession && typeof ld.profession === "object" ? ld.profession : null;
@@ -5760,7 +5882,7 @@ async function viewTerminal(paneId) {
     }
     if (connState === "closed") {
       notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的 Terminal 時，請從角色卡的「出發前檢查」開啟。")
+        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的 Terminal 時，請從角色卡的「出發通行證」開啟。")
         : "如需重新開啟請點選右上方「重新連線」。"}`));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
@@ -6588,7 +6710,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }
       if (connState === "closed") {
         notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? "需要新的 Terminal 時，請從角色卡的「出發前檢查」開啟。"
+        ? "需要新的 Terminal 時，請從角色卡的「出發通行證」開啟。"
         : "如需重新開啟請點選右上方「重新連線」。"}`));
       } else if (connState === "disconnected") {
         const attempts = reconnectPolicy.getRetryCount();
@@ -7390,7 +7512,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("div", { class: "wb-profile-actions" },
           el("button", { class: "btn small primary", type: "button",
             title: "先看這次啟動實際會套用什麼，確認後才啟動",
-            on: { click: () => promptAgentLaunch(p) } }, "出發前檢查"),
+            on: { click: () => promptAgentLaunch(p) } }, "出發通行證"),
           el("button", { class: "btn small", type: "button",
             on: { click: () => promptAgentProfileEditor(p) } }, "編輯"),
           el("button", { class: "btn small", type: "button",
@@ -7577,7 +7699,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("h4", null, "防具"), notice("warn", ar.why || "這個角色沒有防具資料。"));
     } else {
       armor = el("section", { class: "rc-block", "data-rc": "armor" },
-        el("h4", null, (ar.title || "防具") + " ", el("strong", { class: "rc-decides" }, ar.preview_decides || "實際以出發前檢查為準")),
+        el("h4", null, (ar.title || "防具") + " ", el("strong", { class: "rc-decides" }, ar.preview_decides || "實際以出發通行證為準")),
         el("p", { class: "rc-note" }, ar.basis_note || ""),
         ar.launch_note ? notice("warn", ar.launch_note) : null,
         el("div", { class: "rc-armor-grid" }, (ar.groups || []).map((g) => rcArmorGroup(g, ar.items || []))));
@@ -7642,14 +7764,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
       placeholder: `資料夾的絕對路徑，例如 ${liveHome || "/Users/you"}/projects/demo`, autocomplete: "off" });
     if (typeof launchOpts.workdir === "string") workdirInput.value = launchOpts.workdir;
+    const openFolderPicker = () => openFolderDialog({
+      title: "挑資料夾", useLabel: "用這個資料夾出發",
+      onUse: (path) => { workdirInput.value = path; invalidate("輸入已變更，請重新產生預覽。"); } });
     // What the server takes (it checks the folder again when the preview is made): an existing folder inside the home directory.
     const workdirRange = el("p", { class: "small muted", id: "agent-launch-range" },
       `可以選的範圍：${liveHome || "你的家目錄"} 之內、已經存在的資料夾。`,
       launchOpts.workdirNote ? ` ${launchOpts.workdirNote}` : "");
-    const pickBtn = el("button", { class: "btn small", type: "button", "data-act": "pick-folder", on: { click: () => openFolderDialog({
-      title: "挑資料夾", useLabel: "用這個資料夾出發",
-      onUse: (path) => { workdirInput.value = path; invalidate("輸入已變更，請重新產生預覽。"); } }) } }, "挑資料夾…");
+    const pickBtn = el("button", { class: "btn small", type: "button", "data-act": "pick-folder", on: { click: openFolderPicker } }, "挑資料夾…");
     const commitBox = el("input", { type: "checkbox", id: "agent-launch-commit" });
+    if (launchOpts.commit === true) commitBox.checked = true;
     const out = el("div", { class: "agent-launch-preview", "aria-live": "polite" });
     const previewBtn = el("button", { class: "btn", type: "button", on: { click: () => doPreview() } }, "產生預覽");
     const confirmBtn = el("button", { class: "btn primary", type: "button", on: { click: () => doLaunch() } }, "確認啟動");
@@ -7700,15 +7824,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
-        el("h2", { id: titleId }, `出發前檢查：${p.name || p.id}`),
+        el("h2", { id: titleId }, `出發通行證：${p.name || p.id}`),
         el("p", { class: "small muted" },
-          "出發前先看這次實際會套上的防具，和它擋不到的地方。確認後才會啟動 Agent。"),
+          "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動 Agent。"),
         el("label", { class: "small", for: "agent-launch-workdir" }, "工作目錄"),
         el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
         workdirRange,
         el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
-          el("span", null, "我知道這個設定無法阻止 commit（工作目錄的 .git 在可寫範圍內）。不勾選就無法啟動。")),
+          el("span", null, PASS_COMMIT_ACK, el("span", { class: "small muted" }, " 不勾選就無法啟動。"))),
         out,
         why,
         el("div", { class: "modal-actions" }, cancelBtn, previewBtn, confirmBtn)));
@@ -7717,15 +7841,43 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     workdirInput.focus();
     why.textContent = whyOff();
 
+    // A reason it cannot go, with the button that leads to where it is changed (PASS_FIXES). The editor closes when
+    // the card is saved and this pass opens again, on the same folder, with a new preview: the fix returns here.
+    function fixRole(openIntents) {
+      return async () => {
+        const catalog = await ensureCatalog();
+        if (!catalog) { toast("無法載入角色卡目錄"); return; }
+        openCardWizard({ catalog, profiles: agentProfiles, existing: p, start: 2, openIntents, onSaved: async (saved) => {
+          await reloadAgentProfiles();
+          const fresh = agentProfiles.find((x) => x.id === saved.id) || saved;
+          renderRightColumn();
+          closeModal();
+          promptAgentLaunch(fresh, { workdir: workdirInput.value, commit: commitBox.checked, autoPreview: true });
+        } });
+      };
+    }
+    function fixAction(fix) {
+      if (!fix) return null;
+      const run = fix.act === "intents" ? fixRole(true) : fix.act === "tool" ? fixRole(false)
+        : fix.act === "commit" ? () => { commitBox.focus(); }
+        : fix.act === "folder" ? openFolderPicker : null;
+      return run ? el("button", { class: "btn small", type: "button", "data-pass-fix": fix.act, on: { click: run } }, fix.label) : null;
+    }
+    function reasonItem(r) {
+      return el("li", { "data-reason": r && r.code ? r.code : "" }, r && r.message ? r.message : "原因不明", " ",
+        fixAction(passFix(r && r.code)));
+    }
+
     function renderPreview(pv) {
       const kids = [];
       if (!pv.launchable) {
-        kids.push(el("div", { class: "notice warn" },
+        kids.push(el("div", { class: "notice warn", "data-pass": "blocked" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
           el("div", null,
             el("strong", null, "這張角色卡目前無法啟動"),
-            el("ul", { class: "small" }, (pv.reasons || []).map((r) => el("li", null, r.message))))));
+            el("ul", { class: "small pass-reasons" }, (pv.reasons || []).map(reasonItem)))));
       } else {
+        kids.push(passFront(pv));
         kids.push(el("dl", { class: "kv small" },
           el("dt", null, "CLI"), el("dd", { class: "mono" }, `${cliName ? cliName + " " : ""}${pv.cli.version} · ${pv.cli.binary}`),
           el("dt", null, "版本驗證"),
@@ -7740,12 +7892,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         else if (needsAck(pv)) kids.push(unverifiedBox(pv));
         else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));
       }
-      kids.push(el("h4", { class: "agent-launch-h" }, "防具（這次出發前檢查的實際標示）"));
-      kids.push(el("p", { class: "small muted" },
-        "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是角色卡的設定值。" +
-        "使用者在進階終端仍可自行改變 CLI 行為，沒有一項是不可繞過的邊界。"));
       // The concrete bypass (e.g. "!" shell commands in the terminal) comes from
-      // the server's labels; show each distinct text once instead of per label.
+      // the server's labels; show each distinct text once instead of per label. It stays on the front of the pass.
       const bypasses = [...new Set(Object.values(pv.derived_labels || {})
         .map((lab) => lab && lab.bypass).filter((b) => typeof b === "string" && b))];
       if (bypasses.length) {
@@ -7754,7 +7902,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           el("div", { class: "small" }, el("strong", null, "可繞過："), bypasses.join(" "))));
       }
       // The seven labels of THIS preview, in the five groups; a group is only a frame, every item keeps its
-      // level words, note and limits, and an empty group says so.
+      // level words, note and limits, and an empty group says so. They are the full text behind the three lines.
       const scopeText = (v) => Array.isArray(v) ? (v.filter(Boolean).join("、") || "不適用") : (v || "不適用");
       const items = Object.entries(pv.derived_labels || {}).map(([name, lab]) => ({
         name, level: lab.level, group: armorGroupOf(lab.level), note: lab.note,
@@ -7764,9 +7912,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       // the groups with the level words this tool can show (the server knows; the table is the fallback)
       const groups = Array.isArray(pv.armor_groups) && pv.armor_groups.length ? pv.armor_groups
         : ARMOR_GROUPS_UI.map((g) => ({ ...g, levels: g.levels.filter((lv) => isClaude || !/Claude/.test(lv)) }));
-      kids.push(el("div", { class: "rc-armor-grid agent-launch-labels", "data-armor": "preview" },
-        groups.map((g) => rcArmorGroup(g, items))));
-      kids.push(chosenSkillsList());
+      kids.push(el("details", { class: "pass-details", "data-pass": "details" },
+        el("summary", null, PASS_DETAILS_LABEL),
+        el("h4", { class: "agent-launch-h" }, "七項標示（這次出發通行證的實際標示）"),
+        el("p", { class: "small muted" },
+          "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是角色卡的設定值。" +
+          "使用者在進階終端仍可自行改變 CLI 行為，沒有一項是不可繞過的邊界。"),
+        el("div", { class: "rc-armor-grid agent-launch-labels", "data-armor": "preview" },
+          groups.map((g) => rcArmorGroup(g, items))),
+        chosenSkillsList()));
       setKids(out, ...kids);
     }
 
@@ -7898,6 +8052,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         syncConfirm();
       } catch (err) {
         invalidate("無法產生預覽：" + err.message);
+        const fix = fixAction(passFolderFix(err));
+        if (fix) out.append(fix);
       } finally {
         busy = false;
         previewBtn.disabled = false;
@@ -7910,6 +8066,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         }
       }
     }
+
+    if (launchOpts.autoPreview === true && workdirInput.value.trim()) doPreview();
 
     async function doLaunch() {
       if (busy || !current) return;

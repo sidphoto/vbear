@@ -142,7 +142,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         block("tool_not_launchable",
               "shared 不是可啟動的工具" if tool == "shared" else "此 Agent 工具沒有受管啟動設定")
     if profile.get("enabled") is False:
-        block("profile_disabled", "此 Profile 已停用")
+        block("profile_disabled", "此角色卡已停用")
     intents = profile.get("permission_intents") or {}
     for key in ("read", "write", "test", "deploy"):
         if intents.get(key, "unspecified") == "unspecified":
@@ -150,7 +150,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     if intents.get("read") == "deny":
         block("read_deny_unenforceable", "無法強制禁止讀取：讀取範圍沒有被隔離")
     if intents.get("write") == "deny":
-        block("readonly_unverified", "此 R3 Profile 啟動組合尚未驗證唯讀模式；不會退化成可寫模式")
+        block("readonly_unverified", "這張角色卡的啟動組合尚未驗證唯讀模式；不會退化成可寫模式")
     if intents.get("test") == "deny":
         block("test_deny_unenforceable", "無法強制禁止執行指令：已驗證的設定會提供 Bash 工具")
     if intents.get("deploy") == "allow":
@@ -421,7 +421,7 @@ class PreviewStore:
             "derived_labels": derive_labels(manifest, canonical, (profile.get("model") or {}).get("tool")),
             "armor_groups": armor_groups(engine),
             "expires_at": None,
-            "persisted": "commit 與 network 是本次啟動的輸入，不會寫回 Profile",
+            "persisted": "commit 與 network 是本次啟動的輸入，不會寫回角色卡",
         }
         if prepared:
             preview_id = "p-" + secrets.token_hex(PREVIEW_ID_BYTES)
@@ -467,7 +467,7 @@ class PreviewStore:
                 raise PreviewError(409, "settings_drift", "settings digest 不符；請重新 preview")
             current = load_profile(entry["profile_id"])
             if current is None or profile_digest(current) != entry["profile_digest"]:
-                raise PreviewError(409, "profile_drift", "Profile 在 preview 之後已變更；請重新 preview")
+                raise PreviewError(409, "profile_drift", "角色卡在預覽之後已變更；請重新產生預覽")
             try:
                 if manifest.get("cli_verified") is False:
                     # accept_unverified_cli is True here (checked above, before consuming).
