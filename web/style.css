@@ -1232,3 +1232,33 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 @media (prefers-reduced-motion: reduce) { .cw-choice, .cw-skill, .cw-step { transition: none; } }
 .pool-tools .seg { max-width: 100%; flex-wrap: wrap; }
 .pool-tools .seg button { white-space: nowrap; }
+
+/* ---- task cards are folders (design card-play 3.6): the folder picker, the import dialog, the front of a task card ---- */
+.fp { display: grid; gap: 14px; min-width: 0; }
+.fp-list { display: grid; gap: 6px; min-width: 0; }
+.fp-h { margin: 0; font-size: 13.5px; }
+.fp-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); max-height: 220px; overflow-y: auto; }
+.fp-item { display: grid; gap: 2px; justify-items: start; width: 100%; text-align: left; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); border-radius: 10px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: 13.5px; min-width: 0; }
+.fp-item:hover { border-color: var(--accent); }
+.fp-item > * { max-width: 100%; }
+.fp-path { overflow-wrap: anywhere; word-break: break-all; color: var(--ink-3); }
+.fp-paste { gap: 8px; flex-wrap: wrap; }
+.fp-paste input { flex: 1 1 220px; min-width: 0; }
+.fp-result { display: grid; gap: 10px; min-width: 0; }
+.fp-facts { margin: 0; }
+.fp-nogit { margin: 4px 0 0; }
+.fp-terms > summary { cursor: pointer; font-size: 12.5px; color: var(--accent); }
+.fp-term-list { margin: 4px 0 0; padding-left: 18px; }
+.tf-card { gap: 10px; }
+.tf-title { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.tf-block { display: grid; gap: 6px; min-width: 0; }
+.tf-head { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.tf-head .card-px { flex: none; margin-top: 2px; }
+.tf-name { display: grid; min-width: 0; }
+.tf-git { display: grid; gap: 4px; justify-items: start; }
+.tf-none { margin: 0; color: var(--warn); }
+.tf-actions { display: flex; gap: 8px; margin-top: auto; }
+@media (max-width: 720px) {
+  .fp-items { grid-template-columns: 1fr; max-height: 180px; }
+  .cw-foot .btn { flex: 1 1 auto; }
+}

@@ -635,6 +635,19 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] 辦公室 (#/office, VBEAR_QA_OFFICE=1): a roster character's panel shows the same card, a short front; the weapons,
       armor (with a shield by 強制／僅意圖／未限制 only) and skills are on the back, which scrolls with the panel.
 
+== 0b. 任務卡＝資料夾 (大廳「任務卡」, 流程 -> 建立流程, 工作台 -> 右側「任務卡」分頁; type folders under {home})
+  [ ] 大廳 has the section 「任務卡」 with 「＋ 任務卡（導入專案）」; a card shows the folder name and path, 「分支 … · HEAD …」,
+      「這個資料夾目前有 N 個終端」 (open 「各是什麼狀態」: statuses only, no 「在工作」) and 「專案技能 N 張」.
+  [ ] 導入專案: step 1 lists 「VBear 在你電腦上看到的專案」 (with 依據), 「最近用過」 and 「貼上路徑」 (~/ works); in a browser it
+      says 「瀏覽器拿不到完整路徑，請從清單選或貼上。」 and has no 選擇資料夾… button. The buttons stay in view (also at 390 px).
+  [ ] A folder with no .git: the badge 「沒有版本紀錄」 and the whole sentence about commits; buttons 「仍要建立」 and 「換資料夾」.
+      The card made from it shows the same badge on its front (lobby and workbench).
+  [ ] A folder that already has an unfinished card: 「打開那張卡」 is the main button, 「仍要建一張新的」 the other.
+  [ ] {home}/.ssh, the home folder itself, and a folder outside the home: the server's refusal in words, nothing to continue
+      with; a missing folder says so. Step 2: title (the folder's name), goal, and 「更多」 (Chinese template names).
+  [ ] A card made before folders were required says 「還沒有資料夾 · 」 with 「選資料夾」.
+  [ ] 出發前檢查 shows 「可以選的範圍：{home} 之內、已經存在的資料夾。」 and a 「挑資料夾…」 button that fills the field.
+
 == 1. 角色卡 (工作台 -> 右側「角色」分頁 -> pick 「QA 後端工匠（Claude）」)
   [ ] 資料區：職業標籤=qa-backend; 陣營=Claude Code; 版本驗證狀態 has a sentence from the
       server (not blank); 狀態=啟用; 索引時間 is a time.

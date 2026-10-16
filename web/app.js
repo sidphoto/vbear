@@ -1456,7 +1456,8 @@ function sectionHead(title, sub, action) {
 async function viewHome() {
   const token = seq;
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
-  await Promise.all([loadStatic(), loadLive().then(() => loadFlows())]);
+  const [, , tasksRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
+    api.get("/api/tasks").catch(() => null)]);
   const L = D.live;
   const main = claim(token);
   const input = el("input", { type: "search", placeholder: "想做什麼？例如：網站安全檢查、做簡報、剪影片、部署…", "aria-label": "用途搜尋技能" });
@@ -1486,6 +1487,7 @@ async function viewHome() {
     herdrMigrationNotice(),
     runtimeNotice(),
     el("div", { id: "h-board" }, boardSection(board)),
+    taskCardsSection(tasksRes && tasksRes.tasks, { onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
     el("section", { class: "section" },
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
       el("div", { class: "search" }, input),
@@ -4610,7 +4612,10 @@ async function viewFlows() {
     el("section", { class: "section" },
       sectionHead("進行中的流程", `${list.length} 個`),
       list.length ? el("div", { class: "grid" }, list.map(flowCard)) : emptyState("還沒有流程", "在下方選一張任務卡建立。")),
-    el("section", { class: "section" }, sectionHead("建立流程", null), form),
+    el("section", { class: "section" },
+      sectionHead("建立流程", null, el("button", { type: "button", class: "btn small", "data-act": "import", on: { click: () => openImportProject({
+        onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }) } }, "＋ 任務卡（導入專案）")),
+      form),
     mountStorage().node);
 }
 
@@ -7052,19 +7057,21 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     const selectorRow = el("div", { class: "row", style: "margin-bottom: 4px" },
       selectElem,
-      el("button", { class: "btn small primary", type: "button", on: { click: promptCreateTask } }, "＋ 新增"));
+      el("button", { class: "btn small primary", type: "button", on: { click: promptCreateTask } }, "＋ 任務卡"));
 
     const activeTask = tasksList.find((t) => t.id === activeTaskId);
     if (!activeTask) {
       setKids(taskContent,
         selectorRow,
-        emptyState("尚未選取或建立任務卡", "點選上方「＋ 新增」建立一個新的 Task Card。")
+        emptyState("尚未選取或建立任務卡", "點選上方「＋ 任務卡」，挑一個你電腦上現有的專案資料夾。")
       );
       return taskContent;
     }
 
     const taskProv = activeTask.provenance || {};
     const { agent, tests, human, verificationAsserted, derivedStatus } = computeTaskProvenance(taskProv, activeTask.status, activeTask.closure);
+
+    const folderBlock = taskFolderBlock(activeTask, { onChanged: (updated) => { Object.assign(activeTask, updated); renderRightColumn(); } });
 
     // Tracking association status
     const isAssociatedWithCurrent = (activeTask.associated_pane_id === activePaneId);
@@ -7251,6 +7258,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           pickupBadge(activeTask.pickup),
           activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
           prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" }))),
+      folderBlock,
       chainRow(activeTask),
       trackingBox,
       provBox,
@@ -7596,13 +7604,22 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   // Profile-managed launch (R3 S0): preview what will actually apply, then
   // confirm. The labels come from the server and describe this one launch;
   // they are not Profile settings and none of them is an unbypassable boundary.
-  function promptAgentLaunch(p) {
+  function promptAgentLaunch(p, launchOpts = {}) {
     const titleId = "modal-agent-launch-title";
     let current = null;   // the preview the confirm button refers to
     let busy = false;
     let ackBox = null;    // "I know this Claude Code version is unverified" (only for such previews)
+    const liveHome = D.live && typeof D.live.home === "string" ? D.live.home : "";
     const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
-      placeholder: "資料夾的絕對路徑，例如 /Users/you/projects/demo", autocomplete: "off" });
+      placeholder: `資料夾的絕對路徑，例如 ${liveHome || "/Users/you"}/projects/demo`, autocomplete: "off" });
+    if (typeof launchOpts.workdir === "string") workdirInput.value = launchOpts.workdir;
+    // What the server takes (it checks the folder again when the preview is made): an existing folder inside the home directory.
+    const workdirRange = el("p", { class: "small muted", id: "agent-launch-range" },
+      `可以選的範圍：${liveHome || "你的家目錄"} 之內、已經存在的資料夾。`,
+      launchOpts.workdirNote ? ` ${launchOpts.workdirNote}` : "");
+    const pickBtn = el("button", { class: "btn small", type: "button", "data-act": "pick-folder", on: { click: () => openFolderDialog({
+      title: "挑資料夾", useLabel: "用這個資料夾出發",
+      onUse: (path) => { workdirInput.value = path; invalidate("輸入已變更，請重新產生預覽。"); } }) } }, "挑資料夾…");
     const commitBox = el("input", { type: "checkbox", id: "agent-launch-commit" });
     const out = el("div", { class: "agent-launch-preview", "aria-live": "polite" });
     const previewBtn = el("button", { class: "btn", type: "button", on: { click: () => doPreview() } }, "產生預覽");
@@ -7658,7 +7675,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("p", { class: "small muted" },
           "出發前先看這次實際會套上的防具，和它擋不到的地方。確認後才會啟動 Agent。"),
         el("label", { class: "small", for: "agent-launch-workdir" }, "工作目錄"),
-        workdirInput,
+        el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
+        workdirRange,
         el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
           el("span", null, "我知道這個設定無法阻止 commit（工作目錄的 .git 在可寫範圍內）。不勾選就無法啟動。")),
@@ -8130,94 +8148,20 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
   }
 
+  // A new task card is made by importing a folder (one card, one folder); the picker and the form are shared with the lobby.
   function promptCreateTask() {
-    let modal;
-    const titleInput = el("input", { type: "text", placeholder: "輸入任務標題 (必填)", required: true });
-    const tmplSelect = el("select", {
-      on: {
-        change: (e) => {
-          const t = templates[e.target.value] || {};
-          if (t.goal) goalInput.value = t.goal;
-          if (t.scope) scopeInput.value = (t.scope || []).join("\n");
-          if (t.out_of_scope) outOfScopeInput.value = (t.out_of_scope || []).join("\n");
-          if (t.deliverables) deliverablesInput.value = (t.deliverables || []).join("\n");
-          if (t.acceptance_criteria) criteriaInput.value = (t.acceptance_criteria || []).join("\n");
-          if (t.evidence) evidenceInput.value = (t.evidence || []).join("\n");
-        },
-      },
-    }, Object.keys(templates).map((k) => el("option", { value: k }, `${templates[k].title || k} (${k})`)));
-
-    const defaultTmpl = templates["custom"] || {};
-    const goalInput = el("textarea", { rows: "3", placeholder: "完成此任務的主要目標" }, defaultTmpl.goal || "");
-    const scopeInput = el("textarea", { rows: "2", placeholder: "允許變更的檔案或模組 (每行一項)" }, (defaultTmpl.scope || []).join("\n"));
-    const outOfScopeInput = el("textarea", { rows: "2", placeholder: "不可變更的範圍 (每行一項)" }, (defaultTmpl.out_of_scope || []).join("\n"));
-    const deliverablesInput = el("textarea", { rows: "2", placeholder: "預期交付之成果物 (每行一項)" }, (defaultTmpl.deliverables || []).join("\n"));
-    const criteriaInput = el("textarea", { rows: "2", placeholder: "驗收標準 (每行一項)" }, (defaultTmpl.acceptance_criteria || []).join("\n"));
-    const evidenceInput = el("textarea", { rows: "2", placeholder: "驗證證據 (每行一項)" }, (defaultTmpl.evidence || []).join("\n"));
-    const activePane = ((D.live && D.live.panes) || []).find((x) => x.pane_id === activePaneId);
-    const workdirInput = el("input", { type: "text", value: (activePane && activePane.cwd) || "",
-      placeholder: "/Users/you/project（選填，預設為目前 Terminal 的工作目錄）" });
-
-    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
-    const saveBtn = el("button", { class: "btn primary", type: "button", on: { click: submitSave } }, "建立任務卡");
-
-    modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "task-create-modal-title" },
-      el("div", { class: "modal-box", style: "max-width: 620px; max-height: 85vh; overflow-y: auto;" },
-        el("h2", { id: "task-create-modal-title" }, "建立新任務卡 (Task Card)"),
-        el("div", { class: "wb-form" },
-          el("label", null, "任務範本", tmplSelect),
-          el("label", null, "任務標題 *", titleInput),
-          el("label", null, "目標 (Goal)", goalInput),
-          el("label", null, "範圍 (Scope，每行一項)", scopeInput),
-          el("label", null, "範圍外 (Out of Scope，每行一項)", outOfScopeInput),
-          el("label", null, "交付物 (Deliverables，每行一項)", deliverablesInput),
-          el("label", null, "驗收條件 (Acceptance Criteria，每行一項)", criteriaInput),
-          el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput),
-          el("label", null, "工作目錄（選填：git 儲存庫內的絕對路徑，測試與核准會綁定到當時的 commit）", workdirInput)),
-        el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
-    document.body.append(modal);
-
-    // Capture the opener via withModalA11y before moving focus into the
-    // dialog, so close/Escape restores focus to whatever opened the modal,
-    // not to titleInput (which is about to be removed with the dialog).
-    // withModalA11y also registers this dialog, so view cleanup (navigating
-    // away mid-dialog) closes it the proper way instead of leaving it
-    // orphaned with the rest of the page still marked inert.
-    const closeModal = withModalA11y(modal, () => modal.remove());
-    titleInput.focus();
-
-    async function submitSave() {
-      const title = titleInput.value.trim();
-      if (!title) {
-        toast("請填寫任務標題");
-        titleInput.focus();
-        return;
-      }
-      saveBtn.disabled = true;
-      try {
-        const payload = {
-          title,
-          template: tmplSelect.value,
-          goal: goalInput.value.trim(),
-          scope: scopeInput.value.trim(),
-          out_of_scope: outOfScopeInput.value.trim(),
-          deliverables: deliverablesInput.value.trim(),
-          acceptance_criteria: criteriaInput.value.trim(),
-          evidence: evidenceInput.value.trim(),
-          workdir: workdirInput.value.trim() || null,
-          associated_pane_id: activePaneId || null,
-        };
-        const res = await api.post("/api/tasks", payload);
-        tasksList.unshift(res.task);
-        activeTaskId = res.task.id;
-        toast("任務卡建立成功");
-        closeModal();
+    return openImportProject({
+      paneId: activePaneId,
+      onCreated: (task) => {
+        tasksList.unshift(task);
+        activeTaskId = task.id;
         renderRightColumn();
-      } catch (err) {
-        toast("建立失敗：" + err.message);
-        saveBtn.disabled = false;
-      }
-    }
+      },
+      onOpenTask: (id) => {
+        if (tasksList.some((t) => t.id === id)) { activeTaskId = id; renderRightColumn(); }
+        else location.hash = `#/workbench?task=${encodeURIComponent(id)}`;
+      },
+    });
   }
 
   function promptEditTask(task) {
@@ -8245,7 +8189,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           el("label", null, "交付物 (Deliverables，每行一項)", deliverablesInput),
           el("label", null, "驗收條件 (Acceptance Criteria，每行一項)", criteriaInput),
           el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput),
-          el("label", null, "工作目錄（選填：改了之後，既有的測試與核准仍對應原本的 commit）", workdirInput)),
+          el("label", null, "工作目錄（改了之後，既有的測試與核准仍對應原本的 commit）", workdirInput),
+          el("button", { class: "btn small", type: "button", "data-act": "pick-folder", on: { click: () => openFolderDialog({
+            title: "挑資料夾", useLabel: "用這個資料夾", onUse: (path) => { workdirInput.value = path; } }) } }, "挑資料夾…")),
         el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
     document.body.append(modal);
 
@@ -8314,9 +8260,467 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   if (autoLaunch && initialProfileId) {
     const target = agentProfiles.find((p) => p.id === initialProfileId);
     try { history.replaceState(null, "", `#/workbench?profile=${encodeURIComponent(initialProfileId)}`); } catch (_) { /* optional */ }
-    if (target && target.enabled !== false) promptAgentLaunch(target);
+    const fromTask = initialTaskId ? tasksList.find((t) => t.id === initialTaskId) : null;
+    if (target && target.enabled !== false) {
+      promptAgentLaunch(target, fromTask && fromTask.workdir
+        ? { workdir: fromTask.workdir, workdirNote: `已帶入任務卡「${fromTask.title || fromTask.id}」的資料夾，可以改。` } : {});
+    }
     else if (target) toast("這張角色卡已停用，不能出發");
   }
+}
+
+// ---------- task cards are folders (design card-play 3.6) ---------------------------------------------------
+// One task card is one folder. What is known about the folder comes from GET /api/folders/inspect, which is
+// read-only on the server (a few stats and the repository's HEAD, no git process, no walk). Nothing here writes into
+// a folder. Terminals are counted by their working directory only: nothing says which role card opened one.
+
+const NO_GIT_BADGE = "沒有版本紀錄";
+const NO_GIT_NOTE = "這個資料夾還沒有版本紀錄（git）。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。";
+const FOLDER_BROWSER_NOTE = "瀏覽器拿不到完整路徑，請從清單選或貼上。";
+const FOLDER_TERMINAL_NOTE = "只依終端目前的工作目錄比對，只含 VBear 認得的 Claude Code、Codex 終端；不代表它們是哪張角色卡開的。";
+const FOLDER_REFUSED_MESSAGE = "這個位置不能當成專案";
+// Mirrors vbear/folders.py SENSITIVE_HOME_DIRS (a test keeps the two equal): only used to leave such places out of the
+// lists of folders; the server is the one that refuses them.
+const FOLDER_REFUSED_HOME_DIRS = [".ssh", ".gnupg", ".aws", ".config", ".vbear", ".claude", ".codex", ".gemini", "Library"];
+const FOLDER_SEEN_MAX = 24;
+const FOLDER_RECENT_MAX = 10;
+const FOLDER_OPEN_TASK_MAX = 6;
+
+// "~" and "~/x" in the pasted text mean the home directory; the server only takes absolute paths.
+function expandHome(text, home) {
+  const t = String(text === undefined || text === null ? "" : text).trim();
+  if (typeof home !== "string" || !home) return t;
+  if (t === "~") return home;
+  if (t.startsWith("~/")) return home.replace(/\/+$/, "") + t.slice(1);
+  return t;
+}
+
+function folderBaseName(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : String(path || "");
+}
+
+function folderRefusedPath(path, home) {
+  if (typeof path !== "string" || typeof home !== "string" || !home) return false;
+  const base = home.replace(/\/+$/, "");
+  if (path === base) return true;
+  return FOLDER_REFUSED_HOME_DIRS.some((d) => {
+    const bad = `${base}/${d}`.toLowerCase();
+    const low = path.toLowerCase();
+    return low === bad || low.startsWith(bad + "/");
+  });
+}
+
+// The three places a folder can come from (design 3.6 step 1): projects VBear saw on this computer (the index's
+// projects, with the basis it gives), folders used recently (the config's recent_folders), and a pasted path.
+function folderSources(live, conf) {
+  const L = live && typeof live === "object" ? live : {};
+  const home = typeof L.home === "string" ? L.home : "";
+  const seen = [];
+  for (const p of Array.isArray(L.projects) ? L.projects : []) {
+    if (!p || typeof p.path !== "string" || !p.path.startsWith("/") || p.path === home) continue;
+    if (p.project_id === "home" || p.project_id === "unknown" || folderRefusedPath(p.path, home)) continue;
+    if (seen.some((s) => s.path === p.path)) continue;
+    seen.push({ name: String(p.name || folderBaseName(p.path)), path: p.path, basis: String(p.basis || "") });
+    if (seen.length >= FOLDER_SEEN_MAX) break;
+  }
+  const recent = [];
+  for (const path of conf && Array.isArray(conf.recent_folders) ? conf.recent_folders : []) {
+    if (typeof path !== "string" || !path.startsWith("/") || recent.some((r) => r.path === path)) continue;
+    recent.push({ name: folderBaseName(path), path });
+    if (recent.length >= FOLDER_RECENT_MAX) break;
+  }
+  return { seen, recent };
+}
+
+// "1 個等你回覆、1 個工作中、1 個已結束": the statuses the live view already gives, counted.
+function folderTerminalStatusText(items) {
+  const counts = new Map();
+  for (const it of Array.isArray(items) ? items : []) {
+    const key = it && Object.prototype.hasOwnProperty.call(STATUS, it.status) ? it.status : "unknown";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Object.keys(STATUS_ORDER).filter((k) => counts.has(k)).map((k) => `${counts.get(k)} 個${STATUS[k][0]}`).join("、");
+}
+
+// The headline for the terminals of a folder: a count by working directory, never a claim about what they do.
+function folderTerminalHeadline(terminals) {
+  if (!terminals || terminals.known !== true) return "這個資料夾的終端數暫時讀不到";
+  return `這個資料夾目前有 ${terminals.count} 個終端`;
+}
+
+// What the folder is, as far as the answer shows: usable (an existing folder) or the reason it is not.
+function folderVerdict(info) {
+  if (!info || info.ok !== true) return { usable: false, kind: "error", text: "無法檢查這個資料夾" };
+  if (!info.exists) return { usable: false, kind: "missing", text: "找不到這個資料夾" };
+  if (!info.is_dir) return { usable: false, kind: "notdir", text: "這不是資料夾" };
+  const git = info.git || {};
+  return { usable: true, kind: git.is_repo ? "git" : "nogit", noGit: !git.is_repo, text: "" };
+}
+
+function folderGitLine(git) {
+  if (!git || !git.is_repo) return null;
+  if (!git.commit) return `已找到 git 儲存庫，但讀不到目前的版本：${git.error || "原因不明"}`;
+  const branch = git.branch ? `分支 ${git.branch}` : "不在任何分支上（HEAD 分離）";
+  return `${branch} · HEAD ${git.short || String(git.commit).slice(0, 8)}`;
+}
+
+function folderOpenTasks(info) {
+  const t = info && info.tasks;
+  return t && t.known === true && Array.isArray(t.items) ? t.items : [];
+}
+
+// A native folder chooser exists only in the app window (WKWebView message handler vbearPickFolder). The page asks
+// with a short request id and hears back through window.__vbearFolderPicked; the path it gets is only text, and is
+// checked by the server (inspect) like any other.
+let folderPickSeq = 0;
+const folderPickPending = new Map();
+function folderBridge() {
+  try {
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.vbearPickFolder;
+    return h && typeof h.postMessage === "function" ? h : null;
+  } catch (_) { return null; }
+}
+function nativeFolderPick() {
+  const bridge = folderBridge();
+  if (!bridge) return null;
+  return () => new Promise((resolve) => {
+    const requestId = `pick-${Date.now().toString(36)}-${(++folderPickSeq).toString(36)}`;
+    folderPickPending.set(requestId, resolve);
+    try { bridge.postMessage({ requestId }); } catch (_) { folderPickPending.delete(requestId); resolve({ status: "cancel" }); }
+  });
+}
+function folderPicked(reply) {
+  if (!reply || typeof reply !== "object" || typeof reply.requestId !== "string") return;
+  const done = folderPickPending.get(reply.requestId);
+  if (!done) return;                        // not an answer to anything this page asked
+  folderPickPending.delete(reply.requestId);
+  const status = reply.status === "ok" || reply.status === "busy" ? reply.status : "cancel";
+  const path = status === "ok" && typeof reply.path === "string" && reply.path.length <= 1024 ? reply.path : "";
+  done(status === "ok" && !path ? { status: "cancel" } : { status, path });
+}
+if (typeof window !== "undefined") window.__vbearFolderPicked = folderPicked;
+
+function folderInspectUrl(path) { return `/api/folders/inspect?path=${encodeURIComponent(path)}`; }
+
+// The facts about a folder, as a list. Terminals open into a list of statuses; nothing here says what they work on.
+function folderFacts(info) {
+  const v = folderVerdict(info);
+  if (!v.usable) return notice("warn", v.text);
+  const git = info.git || {};
+  const rows = [];
+  rows.push(el("dt", null, "資料夾"), el("dd", null, el("strong", null, info.name || folderBaseName(info.path)),
+    el("div", { class: "small mono fp-path" }, info.path)));
+  rows.push(el("dt", null, "版本紀錄"), el("dd", null, v.noGit
+    ? [badge(NO_GIT_BADGE, "b-warn", NO_GIT_NOTE), el("p", { class: "small muted fp-nogit" }, NO_GIT_NOTE)]
+    : el("span", null, folderGitLine(git))));
+  rows.push(el("dt", null, "專案技能"), el("dd", null, info.project_skill_count === null || info.project_skill_count === undefined
+    ? "技能索引還沒載入，數量未知" : `${info.project_skill_count} 張`));
+  const term = info.terminals || {};
+  const termList = term.known === true && term.count > 0
+    ? el("details", { class: "fp-terms" }, el("summary", null, "各是什麼狀態"),
+        el("p", { class: "small" }, folderTerminalStatusText(term.items) + (term.items.length < term.count ? `（只列出前 ${term.items.length} 個的狀態）` : "")),
+        el("ul", { class: "small fp-term-list" }, term.items.map((t) => el("li", null,
+          badge((STATUS[t.status] || STATUS.unknown)[0], (STATUS[t.status] || STATUS.unknown)[1]),
+          t.title ? ` ${t.title}` : ""))))
+    : null;
+  rows.push(el("dt", null, "終端"), el("dd", null, folderTerminalHeadline(term), termList,
+    el("p", { class: "small muted" }, FOLDER_TERMINAL_NOTE)));
+  const open = folderOpenTasks(info);
+  rows.push(el("dt", null, "未結案的任務卡"), el("dd", null, info.tasks && info.tasks.known === true
+    ? (open.length ? open.map((t) => el("div", null, t.title || t.id)) : "沒有")
+    : "暫時讀不到任務卡"));
+  return el("dl", { class: "kv fp-facts" }, rows);
+}
+
+// The picker: three ways to a folder, then the facts about the one chosen. The dialog that hosts it learns each
+// answer through `onResult(info, helpers)` (info is null while there is no usable answer) and keeps its buttons in
+// its own footer, so they stay in view; `renderNote(info)` may add a sentence under the facts. The picker itself
+// never creates or saves anything.
+function folderPicker(opts) {
+  const live = opts.live || D.live || {};
+  const home = typeof live.home === "string" ? live.home : "";
+  const lists = el("div", { class: "fp-lists" });
+  const result = el("div", { class: "fp-result", "aria-live": "polite" });
+  const input = el("input", { type: "text", class: "input mono", "aria-label": "資料夾的絕對路徑", autocomplete: "off",
+    placeholder: `貼上資料夾的路徑，例如 ${home || "/Users/you"}/projects/demo` });
+  let newest = 0;                           // only the newest answer is drawn
+
+  function list(title, items, withBasis) {
+    return el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, title),
+      items.length ? el("ul", { class: "fp-items" }, items.map((it) => el("li", null,
+        el("button", { type: "button", class: "fp-item", "data-path": it.path,
+          on: { click: () => inspect(it.path) } },
+          el("strong", null, it.name), el("span", { class: "small mono fp-path" }, it.path),
+          withBasis && it.basis ? el("span", { class: "small muted" }, `依據：${it.basis}`) : null))))
+        : el("p", { class: "small muted" }, "沒有"));
+  }
+
+  async function inspect(raw) {
+    const mine = ++newest;
+    const path = expandHome(raw, home);
+    if (!path) { setKids(result); report(null); return; }
+    input.value = path;
+    setKids(result, el("p", { class: "small muted" }, "檢查中…"));
+    report(null);
+    let info = null;
+    let problem = "";
+    try { info = await api.get(folderInspectUrl(path)); }
+    catch (e) { problem = e && e.message ? e.message : "無法檢查這個資料夾"; }
+    if (mine !== newest) return;
+    if (problem) { setKids(result, notice("bad", problem)); return; }
+    const v = folderVerdict(info);
+    setKids(result, folderFacts(info), v.usable && opts.renderNote ? opts.renderNote(info) : null);
+    report(v.usable ? info : null);
+    if (result.scrollIntoView) result.scrollIntoView({ block: "nearest" });
+  }
+  function report(info) { if (opts.onResult) opts.onResult(info, { inspect, clear }); }
+  function clear() { newest++; input.value = ""; setKids(result); report(null); input.focus(); }
+  // The config (recent folders) arrives after the dialog is open; the lists are drawn again with it.
+  function setConf(conf) {
+    const sources = folderSources(live, conf);
+    setKids(lists, list("VBear 在你電腦上看到的專案", sources.seen, true), list("最近用過", sources.recent, false));
+  }
+  setConf(opts.conf);
+
+  const native = nativeFolderPick();
+  const pickBtn = native ? el("button", { type: "button", class: "btn", on: { click: async () => {
+    pickBtn.disabled = true;
+    try {
+      const r = await native();
+      if (r.status === "ok") inspect(r.path);
+      else if (r.status === "busy") toast("選擇資料夾的視窗已經開著了");
+    } finally { pickBtn.disabled = false; }
+  } } }, "選擇資料夾…") : null;
+  const check = () => inspect(input.value);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); check(); } });
+
+  const node = el("div", { class: "fp" },
+    lists,
+    el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, "貼上路徑"),
+      el("div", { class: "row fp-paste" }, input, el("button", { type: "button", class: "btn", on: { click: check } }, "檢查"), pickBtn),
+      native ? null : el("p", { class: "small muted fp-browser-note" }, FOLDER_BROWSER_NOTE)),
+    result);
+  if (opts.initialPath) inspect(opts.initialPath);
+  return { node, inspect, clear, setConf, input };
+}
+
+// A dialog that only picks a folder (the launch check, a task card that has no folder yet).
+function openFolderDialog(opts) {
+  const titleId = "folder-dialog-title";
+  let close = () => {};
+  const foot = el("div", { class: "modal-actions cw-foot" });
+  const cancel = el("button", { type: "button", class: "btn", on: { click: () => close() } }, "取消");
+  setKids(foot, cancel);
+  const picker = folderPicker({ onResult: (info) => {
+    setKids(foot, cancel, info ? el("button", { type: "button", class: "btn primary", "data-act": "use", on: { click: async () => {
+      try { await opts.onUse(info.path, info); close(); } catch (e) { toast((opts.failure || "無法使用這個資料夾") + "：" + e.message); }
+    } } }, opts.useLabel || "使用這個資料夾") : null);
+  } });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+    el("div", { class: "modal-box cw-box" },
+      el("h2", { id: titleId }, opts.title || "挑資料夾"),
+      el("div", { class: "cw-body" }, picker.node),
+      foot));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  picker.input.focus();
+  api.get("/api/config").then((r) => picker.setConf(r && r.config)).catch(() => {});
+  return { modal, picker, close: () => close() };
+}
+
+// Import a project: pick a folder, see what is in it, then fill in the card. A folder that already has an unfinished
+// card offers that card first; a folder without git history is allowed, and says what that costs.
+function openImportProject(opts = {}) {
+  let templates = {};
+  const st = { step: 1, info: null, title: "", goal: "", template: "custom", more: {}, busy: false };
+  const titleId = "import-project-title";
+  const body = el("div", { class: "cw-body" });
+  const foot = el("div", { class: "modal-actions cw-foot" });
+  const stepper = el("ol", { class: "cw-steps", "aria-label": "步驟" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+    el("div", { class: "modal-box cw-box" }, el("h2", { id: titleId }, "新任務卡：導入專案"), stepper, body, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  const STEPS = ["挑資料夾", "填寫任務卡"];
+
+  function drawStepper() {
+    setKids(stepper, STEPS.map((t, i) => el("li", { class: i + 1 === st.step ? "cw-on" : (i + 1 < st.step ? "cw-done" : "") },
+      el("span", { class: "cw-step", "aria-current": i + 1 === st.step ? "step" : null, "aria-label": `第 ${i + 1} 步，共 ${STEPS.length} 步：${t}` },
+        el("span", { class: "cw-step-n", "aria-hidden": "true" }, String(i + 1)), t))));
+  }
+
+  function openCard(id) {
+    close();
+    if (opts.onOpenTask) opts.onOpenTask(id);
+    else location.hash = `#/workbench?task=${encodeURIComponent(id)}`;
+  }
+
+  let found = null;            // the usable answer about the chosen folder, with the helpers of the picker
+  const footStep1 = () => {
+    if (!found) return [el("button", { type: "button", class: "btn", on: { click: close } }, "取消")];
+    const { info, helpers } = found;
+    const v = folderVerdict(info);
+    const open = folderOpenTasks(info);
+    const go = () => { st.info = info; st.title = st.title || info.name || ""; st.step = 2; draw(); };
+    const buttons = [el("button", { type: "button", class: "btn", on: { click: close } }, "取消")];
+    if (open.length) {
+      buttons.push(el("button", { type: "button", class: "btn primary", "data-act": "open-card", on: { click: () => openCard(open[0].id) } },
+        open.length === 1 ? "打開那張卡" : `打開那張卡（${open[0].title || open[0].id}）`));
+      for (const t of open.slice(1, FOLDER_OPEN_TASK_MAX)) {
+        buttons.push(el("button", { type: "button", class: "btn", "data-act": "open-card-more", on: { click: () => openCard(t.id) } }, `打開「${t.title || t.id}」`));
+      }
+      buttons.push(el("button", { type: "button", class: "btn", "data-act": "new-anyway", on: { click: go } }, "仍要建一張新的"));
+    } else {
+      buttons.push(el("button", { type: "button", class: "btn primary", "data-act": "next", on: { click: go } }, v.noGit ? "仍要建立" : "下一步：填寫任務卡"));
+    }
+    buttons.push(el("button", { type: "button", class: "btn", "data-act": "change", on: { click: () => helpers.clear() } }, "換資料夾"));
+    return buttons;
+  };
+  const picker = folderPicker({ initialPath: opts.startPath || "",
+    renderNote: (info) => folderOpenTasks(info).length
+      ? notice("info", `這個資料夾已經有 ${folderOpenTasks(info).length} 張未結案的任務卡。要接著做，請打開那張卡。`) : null,
+    onResult: (info, helpers) => { found = info ? { info, helpers } : null; if (st.step === 1) setKids(foot, footStep1()); } });
+
+  function field(label, control) { return el("label", { class: "cw-field" }, el("span", null, label), control); }
+
+  function stepTwo() {
+    const info = st.info;
+    const title = el("input", { type: "text", value: st.title, required: true, "aria-label": "任務標題", placeholder: "這張任務卡要做什麼" });
+    title.addEventListener("input", () => { st.title = title.value; });
+    const goal = el("textarea", { rows: "3", placeholder: "完成這張任務卡的主要目標（選填）" }, st.goal);
+    goal.addEventListener("input", () => { st.goal = goal.value; });
+    const lines = ["scope", "out_of_scope", "deliverables", "acceptance_criteria", "evidence"];
+    const LABELS = { scope: "範圍（每行一項）", out_of_scope: "範圍外（每行一項）", deliverables: "交付物（每行一項）",
+      acceptance_criteria: "驗收條件（每行一項）", evidence: "實測證據（每行一項）" };
+    const areas = {};
+    for (const k of lines) {
+      areas[k] = el("textarea", { rows: "2" }, st.more[k] || "");
+      areas[k].addEventListener("input", () => { st.more[k] = areas[k].value; });
+    }
+    const tmpl = el("select", { "aria-label": "任務範本" }, Object.keys(templates).map((k) =>
+      el("option", { value: k, selected: k === st.template }, String((templates[k] && templates[k].title) || k))));
+    tmpl.addEventListener("change", () => {
+      st.template = tmpl.value;
+      const t = templates[tmpl.value] || {};
+      if (t.goal) { st.goal = t.goal; goal.value = t.goal; }
+      for (const k of lines) if (Array.isArray(t[k])) { st.more[k] = t[k].join("\n"); areas[k].value = st.more[k]; }
+    });
+    setKids(body,
+      el("div", { class: "notice info" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"), el("div", null,
+        el("strong", null, info.name || folderBaseName(info.path)), " ", el("span", { class: "small mono" }, info.path),
+        folderVerdict(info).noGit ? el("div", null, badge(NO_GIT_BADGE, "b-warn", NO_GIT_NOTE), el("p", { class: "small" }, NO_GIT_NOTE)) : null)),
+      field("任務標題 *", title), field("目標", goal),
+      el("details", { class: "cw-details" }, el("summary", null, "更多"),
+        el("div", { class: "cw-body" }, field("任務範本", tmpl), lines.map((k) => field(LABELS[k], areas[k])))));
+    const create = el("button", { type: "button", class: "btn primary", "data-act": "create", on: { click: submit } }, "建立任務卡");
+    create.disabled = st.busy;
+    setKids(foot, el("button", { type: "button", class: "btn", on: { click: close } }, "取消"),
+      el("button", { type: "button", class: "btn", "data-act": "back", on: { click: () => { st.step = 1; draw(); } } }, "上一步"), create);
+    title.focus();
+
+    async function submit() {
+      const text = st.title.trim();
+      if (!text) { toast("請填寫任務標題"); title.focus(); return; }
+      st.busy = true;
+      create.disabled = true;
+      try {
+        const payload = { title: text, template: st.template, goal: st.goal.trim(), workdir: st.info.path,
+          associated_pane_id: opts.paneId || null };
+        for (const k of lines) payload[k] = (st.more[k] || "").trim();
+        const res = await api.post("/api/tasks", payload);
+        toast("任務卡已建立");
+        close();
+        if (opts.onCreated) opts.onCreated(res.task);
+      } catch (e) {
+        toast("建立失敗：" + e.message);
+        st.busy = false;
+        create.disabled = false;
+      }
+    }
+  }
+
+  function draw() {
+    drawStepper();
+    if (st.step === 1) {
+      setKids(body, el("p", { class: "small muted" }, "一張任務卡就是一個資料夾。挑一個你電腦上現有的專案，VBear 只會讀它的基本資訊，不會寫入、也不會在裡面執行 git。"), picker.node);
+      setKids(foot, footStep1());
+    } else {
+      stepTwo();
+    }
+  }
+  draw();
+  picker.input.focus();
+  api.get("/api/config").then((r) => picker.setConf(r && r.config)).catch(() => {});
+  api.get("/api/task-templates").then((r) => {
+    if (r && r.templates && typeof r.templates === "object") { templates = r.templates; if (st.step === 2) draw(); }
+  }).catch(() => {});
+  return { modal, close, picker, state: st };
+}
+
+// The front of a task card's folder: name and path at once, then the facts when the server has answered.
+// A card made before folders were required has none; it says so and offers to pick one.
+function taskFolderBlock(task, opts = {}) {
+  const box = el("div", { class: "tf-block" });
+  if (!task.workdir) {
+    setKids(box, el("p", { class: "small tf-none" }, "還沒有資料夾 · ",
+      el("button", { type: "button", class: "btn small", "data-act": "pick-folder", on: { click: () => openFolderDialog({
+        title: `選資料夾：${task.title || task.id}`, useLabel: "設為這張任務卡的資料夾",
+        onUse: async (path) => {
+          const res = await api.post(`/api/tasks/${encodeURIComponent(task.id)}`, { workdir: path });
+          if (opts.onChanged) opts.onChanged(res.task);
+        } }) } }, "選資料夾")));
+    return box;
+  }
+  const head = el("div", { class: "tf-head" }, cardArt("icons", "taskFolder", 2),
+    el("div", { class: "tf-name" }, el("strong", null, folderBaseName(task.workdir)), el("span", { class: "small mono fp-path" }, task.workdir)));
+  const detail = el("div", { class: "tf-detail small muted" }, "讀取資料夾資訊…");
+  setKids(box, head, detail);
+  api.get(folderInspectUrl(task.workdir)).then((info) => {
+    const v = folderVerdict(info);
+    if (!v.usable) { setKids(detail, notice("warn", v.kind === "missing" ? "這個資料夾已經不存在或搬走了" : v.text)); return; }
+    const git = info.git || {};
+    const term = info.terminals || {};
+    setKids(detail,
+      v.noGit
+        ? el("div", { class: "tf-git" }, badge(NO_GIT_BADGE, "b-warn", NO_GIT_NOTE), el("span", { class: "small muted" }, NO_GIT_NOTE))
+        : el("div", { class: "tf-git small" }, folderGitLine(git)),
+      el("div", { class: "tf-terms small" }, folderTerminalHeadline(term),
+        term.known === true && term.count > 0
+          ? el("details", { class: "fp-terms" }, el("summary", null, "各是什麼狀態"),
+              el("p", { class: "small" }, folderTerminalStatusText(term.items)),
+              el("p", { class: "small muted" }, FOLDER_TERMINAL_NOTE))
+          : null),
+      info.project_skill_count === null || info.project_skill_count === undefined ? null
+        : el("div", { class: "tf-skills small" }, `專案技能 ${info.project_skill_count} 張`));
+  }).catch((e) => {
+    setKids(detail, notice("warn", e && e.status === 403 ? `${e.message}（請換一個資料夾）` : "讀不到這個資料夾的資訊：" + (e && e.message || "")));
+  });
+  return box;
+}
+
+function taskFrontCard(task, opts = {}) {
+  return el("article", { class: "tf-card card", "data-task": task.id },
+    el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"), taskStatusBadge(task.status)),
+    taskFolderBlock(task, opts),
+    el("div", { class: "tf-actions" },
+      el("a", { class: "btn small", href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "打開")));
+}
+
+// The lobby's section of task cards: the unfinished ones, newest first.
+function taskCardsSection(tasksList, opts = {}) {
+  const open = (Array.isArray(tasksList) ? tasksList : []).filter((t) => t && t.status !== "closed" && t.status !== "handed_off");
+  const add = el("button", { type: "button", class: "btn primary small", "data-act": "import", on: { click: () => openImportProject({
+    onCreated: opts.onCreated, onOpenTask: opts.onOpenTask }) } }, "＋ 任務卡（導入專案）");
+  return el("section", { class: "section", id: "h-tasks" },
+    sectionHead("任務卡", "一張任務卡就是一個資料夾：把你電腦上現有的專案導入，就能在這裡管理。", add),
+    open.length
+      ? el("div", null,
+          el("div", { class: "grid" }, open.slice(0, FOLDER_OPEN_TASK_MAX).map((t) => taskFrontCard(t, opts))),
+          open.length > FOLDER_OPEN_TASK_MAX
+            ? el("p", { class: "small muted tf-more" }, `還有 ${open.length - FOLDER_OPEN_TASK_MAX} 張未結案的任務卡，`,
+                el("a", { href: "#/workbench" }, "到終端工作台的「任務卡」分頁看全部"), "。") : null)
+      : emptyState("還沒有任務卡", "按「＋ 任務卡（導入專案）」，挑一個你電腦上現有的專案資料夾。"));
 }
 
 // ---------- router ---------------------------------------------------------
@@ -8550,5 +8954,26 @@ if (typeof module !== "undefined" && module.exports) {
     withModalA11y,
     closeOpenModals,
     route,
+    NO_GIT_BADGE,
+    NO_GIT_NOTE,
+    FOLDER_BROWSER_NOTE,
+    FOLDER_TERMINAL_NOTE,
+    FOLDER_REFUSED_HOME_DIRS,
+    expandHome,
+    folderBaseName,
+    folderSources,
+    folderTerminalStatusText,
+    folderTerminalHeadline,
+    folderVerdict,
+    folderGitLine,
+    folderOpenTasks,
+    folderPicked,
+    folderPicker,
+    folderFacts,
+    openFolderDialog,
+    openImportProject,
+    taskFolderBlock,
+    taskFrontCard,
+    taskCardsSection,
   };
 }

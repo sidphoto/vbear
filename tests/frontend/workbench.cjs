@@ -651,7 +651,7 @@ async function runWorkbenchTests() {
   // review blocker #1: it used to call titleInput.focus() *before*
   // withModalA11y ran, so withModalA11y captured titleInput itself as the
   // "opener", and Escape/close then tried to restore focus to the very
-  // element it had just removed, instead of the "＋ 新增" button that
+  // element it had just removed, instead of the "＋ 任務卡" button that
   // actually opened the dialog.
   {
     global.location.hash = "#/workbench";
@@ -663,8 +663,8 @@ async function runWorkbenchTests() {
     const taskTab = tablist.findAll((n) => n.getAttribute("role") === "tab").find((t) => t.textContent.includes("[T]"));
     taskTab.click();
 
-    const newTaskBtn = mainEl.find((n) => n.tag === "button" && n.textContent.includes("＋ 新增"));
-    assert.ok(newTaskBtn, "task tab must render a ＋ 新增 (create task) trigger button");
+    const newTaskBtn = mainEl.find((n) => n.tag === "button" && n.textContent.includes("＋ 任務卡"));
+    assert.ok(newTaskBtn, "task tab must render a ＋ 任務卡 (create task) trigger button");
     newTaskBtn.focus(); // a real click also focuses the clicked button
     newTaskBtn.click();
 
@@ -680,7 +680,7 @@ async function runWorkbenchTests() {
     assert.strictEqual(mainEl.hasAttribute("inert"), false, "closing the dialog must restore background inert state");
     assert.strictEqual(
       document.activeElement, newTaskBtn,
-      "closing the dialog must restore focus to the ＋ 新增 button that opened it, not the title input the dialog auto-focused"
+      "closing the dialog must restore focus to the ＋ 任務卡 button that opened it, not the title input the dialog auto-focused"
     );
 
     console.log("ok: Category 11 - create-task dialog restores focus to its actual opener, not the title input it auto-focuses");
@@ -698,7 +698,7 @@ async function runWorkbenchTests() {
     const beforeKeydownListeners = windowListeners.keydown.length;
     assert.ok(beforeKeydownListeners >= 1, "workbench's Escape-exits-focus-mode listener must still be registered");
 
-    const newTaskBtn = mainEl.find((n) => n.tag === "button" && n.textContent.includes("＋ 新增"));
+    const newTaskBtn = mainEl.find((n) => n.tag === "button" && n.textContent.includes("＋ 任務卡"));
     newTaskBtn.focus();
     newTaskBtn.click();
     const modal = document.body.find((n) => n.hasClass("modal-backdrop"));
