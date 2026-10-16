@@ -15,6 +15,9 @@ check(!shouldLaunchBrowser(false, modifiers: []), "window mode is the default")
 check(shouldLaunchBrowser(true, modifiers: []), "enabled preference selects browser mode")
 check(!shouldLaunchBrowser(true, modifiers: .option), "Option overrides browser preference")
 check(!shouldLaunchBrowser(true, modifiers: [.option, .shift]), "Option with other keys still overrides")
+let child = AppDelegate().pythonEnvironment(URL(fileURLWithPath: "/synthetic/app"))
+check(child["BROWSER"] == ProcessInfo.processInfo.environment["BROWSER"],
+      "BROWSER is passed through unchanged without a default")
 func process(_ path: String, _ arguments: [String] = []) -> Process {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: path)
@@ -43,4 +46,5 @@ do {
 }
 SWIFT
 swiftc -framework Cocoa -framework WebKit -o "$TEST_DIR/browser-tests" "$TEST_DIR/main.swift"
-"$TEST_DIR/browser-tests"
+BROWSER="$TEST_DIR/fake-browser" "$TEST_DIR/browser-tests"
+env -u BROWSER "$TEST_DIR/browser-tests"

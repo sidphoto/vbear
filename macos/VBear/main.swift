@@ -185,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func pythonEnvironment(_ appDir: URL) -> [String: String] {
         let env = ProcessInfo.processInfo.environment
         var child: [String: String] = [:]
-        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "VBEAR_HOME", "VBEAR_RUNTIME_AUTOSTART"] {
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "VBEAR_HOME", "VBEAR_RUNTIME_AUTOSTART", "BROWSER"] {
             if let v = env[key] { child[key] = v }
         }
         child["LANG"] = env["LANG"] ?? "zh_TW.UTF-8"

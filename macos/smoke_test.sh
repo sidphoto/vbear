@@ -22,6 +22,16 @@ APP_PID=""
 BROWSER_PID=""
 export HOME="$QA_HOME"
 export VBEAR_RUNTIME_AUTOSTART=0
+# Intercept browser requests in both modes; never invoke a desktop browser.
+export BROWSER="$ROOT/fake-browser"
+cat > "$BROWSER" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@" >> "$(dirname "$0")/browser-requests.log"
+# Suppress webbrowser fallback even if logging fails; assertions below catch it.
+exit 0
+SH
+chmod 700 "$BROWSER"
+: > "$ROOT/browser-requests.log"
 # Reserve a fresh non-production port; never probe or send requests to 7788.
 QA_PORT="$(/usr/bin/python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 [ "$QA_PORT" != 7788 ] || { echo "refusing production port" >&2; exit 1; }
@@ -96,7 +106,7 @@ then pass "compiled code records bundle paths only"; else fail "compiled code re
 for _ in $(seq 1 100); do [ -S "$VBEAR_HOME/runtime.sock" ] && break; sleep 0.1; done
 # Start it as a new user (no ~/.claude, ~/.codex, ~/.vbear).
 env -i HOME="$QA_HOME" USER="$USER" LOGNAME="$USER" VBEAR_HOME="$VBEAR_HOME" \
-    VBEAR_RUNTIME_AUTOSTART=0 VBEAR_APP_PORT="$QA_PORT" \
+    VBEAR_RUNTIME_AUTOSTART=0 VBEAR_APP_PORT="$QA_PORT" BROWSER="$BROWSER" \
     PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP/Contents/MacOS/VBear" -BrowserOnLaunch NO >"$ROOT/app.log" 2>&1 &
 APP_PID=$!
 for _ in $(seq 1 240); do [ -f "$VBEAR_HOME/server.token" ] && break; sleep 0.5; done
@@ -173,6 +183,14 @@ print(any(s['session_id'] == '$SID' and not s['exited'] for s in r))" 2>/dev/nul
 codesign --verify --deep --strict "$APP" && pass "bundle unchanged after running (signature still valid)" || fail "bundle unchanged after running"
 
 if [ "${2:-}" = "--browser" ]; then
+  check_browser_requests() {
+    "$PY" -B - "$ROOT/browser-requests.log" "$VBEAR_HOME/open.html" "$1" <<'PYEOF'
+import pathlib, sys
+log, opener, count = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
+assert log.read_text().splitlines() == [opener.as_uri()] * count, "browser requests were not intercepted"
+print(f"PASS  fake browser recorded {count} isolated handoff request(s)")
+PYEOF
+  }
   "$APP/Contents/MacOS/VBear" -BrowserOnLaunch YES >"$ROOT/browser.log" 2>&1 &
   APP_PID=$!
   for _ in $(seq 1 200); do kill -0 "$APP_PID" 2>/dev/null || break; sleep 0.1; done
@@ -183,6 +201,7 @@ if [ "${2:-}" = "--browser" ]; then
     wait "$APP_PID" && pass "browser-mode app exits successfully without a window" || fail "browser-mode app exit status"
   fi
   APP_PID=""
+  check_browser_requests 1 || FAILS=$((FAILS + 1))
   # Authenticate after the app has gone, not merely while its child starts.
   "$PY" -B - "$VBEAR_HOME" "$QA_PORT" <<'PYEOF' || FAILS=$((FAILS + 1))
 import json, pathlib, sys, urllib.request
@@ -209,6 +228,7 @@ PYEOF
     wait "$APP_PID" && pass "browser-mode reuse exits successfully" || fail "browser-mode reuse exit status"
   fi
   APP_PID=""
+  check_browser_requests 2 || FAILS=$((FAILS + 1))
   # Only the PID from our isolated state may be stopped.
   BROWSER_PID="$("$PY" -B -c 'import json, os; print(json.load(open(os.environ["VBEAR_HOME"] + "/server.token"))["pid"])')"
   [ "$BROWSER_PID" = "$FIRST_SERVER_PID" ] && pass "second launch reuses the same server PID" || fail "second launch reuses the same server PID"
