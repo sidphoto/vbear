@@ -44,6 +44,7 @@ from . import loadout as loadout_mod
 from . import claude_verify
 from . import config as cfg
 from . import flow_executor
+from . import folders
 from . import flow_review
 from . import flow_storage
 from . import automation as automation_mod
@@ -90,7 +91,8 @@ SKILL_SUMMARY_FIELDS = (
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
-                   "herdr_migration_acknowledged", "translation_engine", "translation_auto"}
+                   "herdr_migration_acknowledged", "translation_engine", "translation_auto",
+                   "recent_folders", "onboarding_dismissed"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -145,6 +147,7 @@ class Console:
         # Profile-managed launches (R3 S0): work directories must be inside this root.
         self.managed_root = Path.home()
         self._previews = None
+        self._preview_folders: dict[str, str] = {}  # preview_id -> folder, for recent_folders at launch
         # Server-held preview records for dispatches and risk acceptances
         # (design 3.1, 10): files under <state>/previews/, not memory.
         self.preview_records = previews_mod.PreviewStore()
@@ -158,6 +161,44 @@ class Console:
         self.claude_verifier = claude_verify.ClaudeVerifier()
         self.translations = translations.TranslationManager()
         self.store.after_rescan = self.translations.after_scan
+
+    def remember_folder(self, path) -> None:
+        """Move `path` to the front of config's recent_folders (best effort: a problem here never fails
+        the request that triggered it, and a corrupt config is left alone)."""
+        if not isinstance(path, str) or not path:
+            return
+        try:
+            text = folders.clean_path_text(path)
+            with self.lock:
+                if cfg.is_corrupt():
+                    return
+                conf = cfg.load()
+                if conf.get("_corrupt"):
+                    return
+                current = conf.get("recent_folders")
+                current = current if isinstance(current, list) else []
+                updated = folders.remembered(current, text)
+                if updated == current:
+                    return
+                conf["recent_folders"] = updated
+                cfg.save(conf)
+                self.store.set_conf(conf)
+        except Exception:
+            pass
+
+    def note_preview_folder(self, preview_id, workdir) -> None:
+        """Keep which folder a launch preview is for until it is confirmed (a few entries, never more)."""
+        if isinstance(preview_id, str) and isinstance(workdir, str):
+            with self.lock:
+                kept = self.__dict__.setdefault("_preview_folders", {})  # also for a Console built without __init__
+                kept[preview_id] = workdir
+                while len(kept) > 64:
+                    kept.pop(next(iter(kept)))
+
+    def take_preview_folder(self, preview_id):
+        with self.lock:
+            kept = self.__dict__.setdefault("_preview_folders", {})
+            return kept.pop(preview_id, None) if isinstance(preview_id, str) else None
 
     def translation_manager(self):
         with self.lock:
@@ -485,6 +526,8 @@ def make_handler(console: Console):
                     except KeyError:
                         return self._error(404, "找不到這個流程")
                     return self._json({"ok": True, "flow": self._flow_view(flow)})
+                if path == "/api/folders/inspect":
+                    return self._folder_inspect(parse_qs(url.query))
                 if path == "/api/governance":
                     return self._json(self._governance_view())
                 if path == "/api/agent-builder/catalog":
@@ -621,6 +664,7 @@ def make_handler(console: Console):
                 if path == "/api/tasks":
                     try:
                         saved = tasks.save_task(None, self._body())
+                        console.remember_folder(saved.get("workdir"))
                         return self._json({"ok": True, "task": self._with_pickup([saved])[0]})
                     except ValueError as exc:
                         return self._error(400, str(exc))
@@ -1112,6 +1156,21 @@ def make_handler(console: Console):
             return agent_profiles.get_profile(profile_id, known_skills=set(index.keys()),
                                               known_roles=known_roles)
 
+        def _folder_inspect(self, query: dict):
+            """GET /api/folders/inspect?path= : a read-only summary of a folder (vbear.folders)."""
+            if set(query) - {"path"} or len(query.get("path", [])) != 1:
+                return self._error(400, "請只提供一個 path 參數")
+            try:
+                task_rows = tasks.load_all()
+            except Exception:  # a damaged task store is its own page's problem; the folder facts still stand
+                task_rows = None
+            try:
+                return self._json(folders.inspect_folder(
+                    query["path"][0], home=Path.home(), root=console.managed_root, live=console.store.live_cached(),
+                    static=console.store.static_if_loaded(), task_rows=task_rows))
+            except folders.FolderError as exc:
+                return self._error(exc.status, str(exc))
+
         def _agent_preview(self, body: dict):
             """What a Profile-managed launch would apply. Starts nothing. Raw
             argv, env, settings and credentials are not accepted here."""
@@ -1137,6 +1196,7 @@ def make_handler(console: Console):
                                                     body.get("network"))
             except agent_launch.PreviewError as exc:
                 return self._json({"error": str(exc), "code": exc.code}, exc.status)
+            console.note_preview_folder(preview.get("preview_id"), (preview.get("canonical_paths") or {}).get("workdir"))
             return self._json({"ok": True, "preview": preview})
 
         def _agent_launch(self, body: dict):
@@ -1154,6 +1214,7 @@ def make_handler(console: Console):
                     accept_unverified_cli=body.get("accept_unverified_cli"))
             except agent_launch.PreviewError as exc:
                 return self._json({"error": str(exc), "code": exc.code}, exc.status)
+            console.remember_folder(console.take_preview_folder(body.get("preview_id")))
             console.store.live(force=True)  # the new pane must be a live target at once
             return self._json({"ok": True, "launch": result})
 
@@ -1393,6 +1454,10 @@ def make_handler(console: Console):
                         value = bool(value)
                     if key == "herdr_migration_acknowledged":
                         value = bool(value)
+                    if key == "recent_folders":
+                        value = folders.clean_recent_folders(value)
+                    if key == "onboarding_dismissed" and type(value) is not bool:
+                        raise ValueError("onboarding_dismissed 必須是布林值")
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):

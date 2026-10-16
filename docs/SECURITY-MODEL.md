@@ -159,6 +159,38 @@ Other safeguards:
 - Results, approvals, closure reasons and handoffs are still set through the same unauthenticated local UI/API, and
   `verified` stays false.
 
+### A task card is a folder: folder inspection and the app's folder chooser
+
+- **`GET /api/folders/inspect?path=` is read-only.** It sits behind the same Host, token and Origin checks as every
+  other `GET /api/` route. It does a fixed number of `stat` calls and the same plain-file `HEAD` read as `git_head`
+  (no `git` process, no tree walk, nothing written). It answers with a summary only: whether the folder exists, the
+  repository root, branch and `HEAD` hash, the project-skill count taken from the skill index **already in memory**
+  (it never loads or scans), the terminals of the last live view whose working directory is inside the folder, and
+  the unfinished task cards bound to it. No file content is returned.
+- **Places that can never be a project are refused before anything is looked at.** The path is made absolute and
+  `realpath`-ed first (so a symlink into a refused place is refused too, and `~/.SSH` is refused as `~/.ssh` is:
+  names are compared case-folded). The home directory itself, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`,
+  `~/.vbear`, `~/.claude`, `~/.codex`, `~/.gemini`, `~/Library`, the state directory in use, and anything below
+  them answer `403` with one fixed sentence that is the same whether or not the place exists, so the endpoint
+  cannot be used to probe for them. A place outside the home directory is `403` too. The list is the constant
+  `SENSITIVE_HOME_DIRS` in `vbear/folders.py`; tests lock it, and lock that the page's copy of it (used only to leave
+  such folders out of its lists) is identical.
+- **Terminals are counted by working directory only.** The count and the list say nothing about which role card
+  opened a terminal; the page words it as "this folder currently has N terminals", never as "working".
+- **`recent_folders` and `onboarding_dismissed`** live in `config.json` (written with `write_private`, validated: at
+  most 10 absolute path strings of at most 1024 characters without NUL; a boolean). A folder is remembered only after
+  a task card with it was created or a launch preview for it was confirmed; a corrupt config is left alone.
+- **The app window's folder chooser** (macOS app only) is the script message handler `vbearPickFolder`. The page
+  sends `{requestId}` with a short token (`^[a-z0-9-]{1,32}$`, checked again in Swift). The app ignores any message
+  that is not from the main frame of its own server (`http`, host `127.0.0.1`, the port the app started), answers
+  `busy` while a panel is already open, and otherwise opens an `NSOpenPanel` that can choose one directory and no
+  file. The answer goes back through `window.__vbearFolderPicked(JSON)` built with `JSONSerialization`, no string
+  concatenation. The path is only text: the page asks `/api/folders/inspect` about it like about any typed path, and
+  the chooser gives the page no file access. In a browser there is no chooser and the page says so.
+- **Nothing here writes into a project folder or runs a program in it.** A folder without a git repository can
+  still be a task card; the card is marked "no version history", because a review result binds to a commit and
+  cannot count there (see "Task cards" above).
+
 ## Flows
 
 - **The board's recording routes add no execution capability.** The Phase 1 board records and shows. Its routes

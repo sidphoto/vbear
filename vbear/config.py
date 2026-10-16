@@ -201,6 +201,8 @@ DEFAULT_CONFIG = {
     "translation_auto": False,
     "runtime_kind": "native",  # the only runtime since the Herdr bridge was removed
     "project_roots": ["~/projects"],
+    "recent_folders": [],  # folders used by task cards and launches, newest first, at most 10
+    "onboarding_dismissed": False,  # the lobby's "first game" card was put away
     "sources": [asdict(s) for s in default_sources()],
 }
 
