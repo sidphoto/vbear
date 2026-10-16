@@ -210,7 +210,7 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(by_id["sess-1"]["skills"]["name:alpha"]["evidence"], "explicit")
         self.assertEqual(by_id["cdx-1"]["models"], {"gpt-a": 1})
         self.assertIn(f"path:{FAKE_HOME}/.codex/skills/alpha/SKILL.md", by_id["cdx-1"]["skills"])
-        cache = (FAKE_HOME / ".vbear" / "usage-cache.json").read_text()
+        cache = (cfg.state_dir() / "usage-cache.json").read_text()
         self.assertNotIn("SECRET PROMPT TEXT", cache)
         self.assertNotIn("SECRET PROMPT TEXT", json.dumps(result))
 

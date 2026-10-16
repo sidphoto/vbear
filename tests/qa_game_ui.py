@@ -15,7 +15,11 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       of this machine. It is what the README's screenshots are taken from (docs/images/).
       Optional VBEAR_QA_LOBBY=1: more flows for the home page's quest board (one waits for approval, one waits
       for a merge, four more are being worked on by hand, next to the automatic one, so 「還有 1 則」 shows). VBEAR_QA_LOBBY=empty
-      deletes the flow instead, so the board is in its first-run state (no flow, no waiting Agent).
+      builds no flow and starts no executor, so the board is in its first-run state (no flow, no session,
+      nothing waiting for you); the two role cards stay.
+      Optional VBEAR_QA_FRESH=1: a user who has just installed VBear: no demo role cards, no task cards, no
+      flows and no session (the skills stay). It implies the empty lobby and wins over VBEAR_QA_LOBBY=1 and
+      VBEAR_QA_OFFICE; it combines with VBEAR_QA_TRANSLATE, VBEAR_QA_CODEX_BLOCKED and VBEAR_QA_DEMO.
       Optional VBEAR_QA_OFFICE=1: the pixel office (#/office) with what design office 6 asks for: six flows
       spread over the four stations (plan board, build area, review room, merge gate) next to the automatic
       one, four synthetic live sessions (two working, waiting for you, state unknown; the first working one is the
@@ -28,7 +32,8 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
       lines of the Codex labels.
       Optional VBEAR_QA_TRANSLATE=1: seed fresh/stale/none/orphan translations and inject a process-local fake
-      translation CLI for both engine selectors. No real CLI or model is ever used.
+      translation CLI for both engine selectors, and point 「驗證」 (verify_boundary) at it. No real CLI or
+      model is ever used.
       Optional VBEAR_QA_RUN=1: also start the runner thread, so the flow goes on by itself (the first review is
       NEEDS WORK, a helper commits the "fix", the second says PASS, the merge gate opens). Without it the flow
       stays exactly as built: automatic mode on, one review round done, the runner idle.
@@ -85,12 +90,19 @@ class _Env(RunnerCase):
         self.assertTrue(str(self.home).startswith(str(self.tmp)), "HOME must be the temporary one")
         self.assertEqual(os.environ["HOME"], str(self.home))
         self.assertEqual(os.environ["VBEAR_HOME"], str(self.base))
+        self.fresh = os.environ.get("VBEAR_QA_FRESH") == "1"
+        self.empty = self.fresh or os.environ.get("VBEAR_QA_LOBBY") == "empty"
         self._skills_and_roles()
-        self._profiles()
+        if not self.fresh:
+            self._profiles()
         self._launch_environment()
-        self._flow()
-        self._lobby()
-        self._office()
+        if self.empty:
+            # no demo flow means no demo executor either: its managed session is what the lobby would still list
+            self._clear_demo()
+        else:
+            self._flow()
+            self._lobby()
+            self._office()
         self._translations()
 
     # ---- the index: skills and professions, as files in the temporary HOME
@@ -162,28 +174,41 @@ class _Env(RunnerCase):
         fake = self.tmp / "qa-translation-cli"
         fake.write_text("#!" + sys.executable + "\n" + r'''import json, sys, time
 from pathlib import Path
-assert not list(Path.cwd().iterdir())
 a = sys.argv[1:]
+if a == ["--version"]:                          # translations.claude_identity()
+    print("2.1.296 (Claude Code)")
+    sys.exit(0)
+assert not list(Path.cwd().iterdir())
 engine = "codex" if a[0] == "exec" else "claude"
 if engine == "claude":
     assert a[a.index("--tools") + 1] == ""
     assert "--safe-mode" in a and "--strict-mcp-config" in a
+    schema = json.loads(a[a.index("--json-schema") + 1])
+    assert sorted(schema["required"]) == ["description_zh", "needs", "what", "when"]
 else:
     assert a[a.index("--sandbox") + 1] == "read-only"
     assert "shell_tool" in a and "mcp" in a
 prompt = sys.stdin.read()
+if "--verbose" in a:                            # the boundary probe (the settings page's 「驗證」)
+    assert a[a.index("--output-format") + 1] == "stream-json"
+    print(json.dumps({"type": "system", "subtype": "init", "tools": ["StructuredOutput"], "mcp_servers": []}))
+    sys.exit(0)
 payload = prompt.split("BEGIN_UNTRUSTED_JSON_STRING\n", 1)[1].split("\nEND_UNTRUSTED_JSON_STRING", 1)[0]
 fields = json.loads(json.loads(payload))
 time.sleep(0.6)
 result = {"what": "QA 假翻譯：整理技能說明", "when": "原文未提供", "needs": "原文未提供",
           "description_zh": "QA 假 CLI 中文說明：" + str(fields.get("name") or "未提供") + " <img src=x onerror=alert(1)>"}
-if engine == "claude":
-    print(json.dumps({"type":"result", "is_error":False, "result":json.dumps(result)}))
+if engine == "claude":                          # since 4e8902e: structured_output, never the free-text "result"
+    print(json.dumps({"type": "result", "is_error": False, "structured_output": result}))
 else:
     print(json.dumps(result))
 ''', encoding="utf-8")
         fake.chmod(0o700)
         provider = lambda engine: (str(fake), "2.1.296" if engine == "claude" else "0.160.0")
+        # 「驗證」 (verify_boundary) looks up the claude binary itself: point it at the fake, for this process only
+        p = mock.patch.object(translations, "claude_identity", return_value=(str(fake), "2.1.296"))
+        p.start()
+        self.addCleanup(p.stop)
         manager = self.console.translations
         manager.run = lambda engine, record, cancel: translations.run_cli(engine, record, cancel, provider=provider)
         rows = {s["name"]: s for s in self.index["skills"]}
@@ -254,11 +279,17 @@ else:
 
     # ---- the home page's quest board: more flows, or none
 
+    def _clear_demo(self) -> None:
+        """VBEAR_QA_LOBBY=empty / VBEAR_QA_FRESH=1: RunnerCase.setUp made a task and a flow; remove them before
+        anything starts, so there is no session, no flow and nothing waiting for you. FRESH also removes the task
+        cards (and _profiles never ran: no role cards): a user who has just installed VBear."""
+        flows.delete_flow(self.fid)
+        if self.fresh:
+            for task in tasks.list_tasks():
+                tasks.delete_task(task["id"])
+
     def _lobby(self) -> None:
         mode = os.environ.get("VBEAR_QA_LOBBY", "")
-        if mode == "empty":
-            flows.delete_flow(self.fid)
-            return
         if mode != "1":
             return
         add = self._add_flow
@@ -658,7 +689,8 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] Wait more than 5 seconds with the search box focused and some text typed: the box keeps its focus and
       text while the board changes (stop the runner or record an event by hand to see a change).
   [ ] VBEAR_QA_LOBBY=empty: one start block: 「大廳目前沒有任務。想開始第一個任務？」, one link 「到終端工作台」
-      and the sentence that a task card must be added first.
+      and the sentence that a task card must be added first; no terminal is listed (no 「等你回覆」 session).
+  [ ] VBEAR_QA_FRESH=1: the same board, and also no role card (角色卡池 is empty) and no task card.
   [ ] Break the flows file (or stop the console's runtime) and look: 「讀不到流程：…」 in both blocks, never
       「沒有任務」; with the runtime away and no flow card, 「…無法判斷有沒有 Agent 在等你」.
   [ ] 390 px wide: one column, no sideways scroll, every card still one tap; light and dark both readable.
