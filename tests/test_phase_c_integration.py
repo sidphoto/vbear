@@ -260,10 +260,10 @@ class EndToEndTests(unittest.TestCase):
         # The server must respond with 503 (never 500 / never 200-empty).
         with mock.patch.object(agent_profiles, "list_profiles",
                                side_effect=agent_profiles.AgentProfileStorageError(
-                                   "Agent Profile 儲存先前偵測到損毀，需人工復原")):
+                                   "角色卡儲存先前偵測到損毀，需人工復原")):
             status, body = _request("GET", self.port, "/api/agent-profiles")
         self.assertEqual(status, 503)
-        self.assertIn("Agent Profile", body["error"])
+        self.assertIn("角色卡", body["error"])
 
     def test_corruption_marker_blocks_subsequent_writes_with_503(self):
         # Seed a valid profile, simulate disk corruption on the next read.

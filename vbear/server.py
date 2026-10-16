@@ -514,7 +514,7 @@ def make_handler(console: Console):
                         return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "profile_store_damaged",
                                            "hint": PROFILE_STORE_HINT}, 409)
                     if out is None:
-                        return self._error(404, "找不到此 Agent Profile")
+                        return self._error(404, "找不到這張角色卡")
                     return self._json(out)
                 if path.startswith("/api/agent-profiles/"):
                     rest = path[len("/api/agent-profiles/"):]
@@ -527,7 +527,7 @@ def make_handler(console: Console):
                     p = agent_profiles.get_profile(rest, known_skills=known_skills,
                                                     known_roles=known_roles)
                     if p is None:
-                        return self._error(404, "找不到此 Agent Profile")
+                        return self._error(404, "找不到這張角色卡")
                     return self._json({"ok": True, "profile": p})
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
@@ -681,7 +681,7 @@ def make_handler(console: Console):
                         target = rest[:-7]
                         ok = agent_profiles.delete_profile(target)
                         if not ok:
-                            return self._error(404, "找不到此 Agent Profile 或已刪除")
+                            return self._error(404, "找不到這張角色卡，或已刪除")
                         return self._json({"ok": True, "deleted": target})
                     if rest.endswith("/duplicate"):
                         target = rest[:-10]
@@ -692,7 +692,7 @@ def make_handler(console: Console):
                         except ValueError as exc:
                             return self._error(400, str(exc))
                         if dup is None:
-                            return self._error(404, "找不到此 Agent Profile")
+                            return self._error(404, "找不到這張角色卡")
                         return self._json({"ok": True, "profile": dup})
                     target = rest
                     try:
@@ -1120,10 +1120,10 @@ def make_handler(console: Console):
                 return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
             profile = self._load_profile(body.get("profile_id"))
             if profile is None:
-                return self._error(404, "找不到此 Profile")
+                return self._error(404, "找不到這張角色卡")
             tool = body.get("tool")
             if tool is not None and (tool == "shared" or tool != (profile.get("model") or {}).get("tool")):
-                return self._error(400, "tool 必須與 Profile 的工具相符，且不可為 shared")
+                return self._error(400, "tool 必須與角色卡的工具相符，且不可為 shared")
             workdir = body.get("workdir")
             if isinstance(workdir, str) and workdir.strip().lower().startswith("file://"):
                 return self._error(400, "工作目錄請填資料夾路徑（例如 /Users/you/project），不是 file:// 連結")
@@ -1409,6 +1409,19 @@ def make_handler(console: Console):
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
                     or "project_roots" in body}
 
+        @staticmethod
+        def _codex_pinned_found() -> bool:
+            """True when a verified version of Codex is installed at the pinned location (a stat of the path;
+            nothing is executed). False is "no evidence found", which the UI says in those words."""
+            from .runtime import codex_constants, review_codex
+            for version in codex_constants.VERIFIED_VERSIONS:
+                try:
+                    review_codex.codex_binary(version)
+                except review_codex.CodexRefused:
+                    continue
+                return True
+            return False
+
         def _agent_builder_catalog(self) -> dict:
             """Read-only catalog used by the Agent Builder UI.
 
@@ -1464,21 +1477,24 @@ def make_handler(console: Console):
                 "max_skills_per_profile": agent_profiles.MAX_SKILLS_PER_PROFILE,
                 "professions": roles,
                 "skills": skills_for_picker,
-                # Honest disclosure: equipped != loaded, intent != enforce.
+                # Honest disclosure: a chosen skill is not a loaded skill, an intent is not a limit.
                 # This text is shown to the user verbatim, never as an HTML
                 # permission warning or as an enforced UI block.
                 "disclosures": [
-                    "已選技能（舊稱 Equipped Skill Loadout）≠ Loaded into any running session. "
-                    "Saving a Profile never starts, restarts, or injects anything.",
-                    "Permission Intents are intent-only and are NOT enforced. "
-                    "They are descriptive records of what this Profile is composed "
-                    "for; the underlying CLI tools' actual authority comes from "
-                    "their own per-call rules; only a Profile-managed launch applies "
-                    "a verified sandbox configuration.",
-                    "Agent Profiles are stored only inside this console's own state "
-                    "directory. They never write to ~/.codex, ~/.claude, third-"
-                    "party skill/role sources, or any third-party marketplace cache.",
+                    "技能卡插在角色卡上，只是你的挑選紀錄，不代表已經進入任何執行中的終端。"
+                    "儲存角色卡不會啟動、重啟或注入任何東西。",
+                    "權限意圖是隊伍分工的標記，VBear 不會因此限制這個程式的真實能力；"
+                    "底層工具的實際權限來自它自己的規則，只有透過角色卡出發時，才會套用經過驗證的沙盒設定。",
+                    "角色卡只存放在這個主控台自己的狀態資料夾，不會寫入 ~/.codex、~/.claude、"
+                    "第三方技能或角色來源，也不會寫入任何外掛市集的快取。",
                 ],
+                # The starter deck, the positions and the id prefix of sample cards (design card-play 3.3).
+                "starter_deck": [dict(card, permission_intents=dict(card["permission_intents"]))
+                                 for card in agent_profiles.STARTER_DECK],
+                "positions": list(agent_profiles.POSITIONS),
+                "demo_id_prefix": agent_profiles.DEMO_ID_PREFIX,
+                # Whether a pinned Codex install exists on this machine: one stat, no program is run.
+                "codex_installed": self._codex_pinned_found(),
             }
 
         def _with_pickup(self, items: list[dict]) -> list[dict]:

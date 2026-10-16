@@ -70,6 +70,27 @@ PERMISSION_VALUES: tuple[str, ...] = ("allow", "deny", "unspecified")
 # no separate "model registry" file: this list IS the registry.
 KNOWN_TOOLS: frozenset[str] = frozenset({"claude", "codex", "shared"})
 
+# The suggested positions of a role card on a team. A position is only a label the front end remembers; it is not a
+# profile field, so it never reaches the stored schema.
+POSITIONS: tuple[str, ...] = ("planner", "executor", "reviewer")
+
+# The three cards "用起手牌組開始" offers (design card-play 3.3). The catalog serves this constant so the front end
+# draws the same deck the tests lock. Each entry becomes an ordinary profile through save_profile; the permission
+# intents are suggestions the person can change, and are records, not authority. The reviewer is on the other tool
+# than the executor on purpose: a review by the same family does not count.
+STARTER_DECK: tuple[dict[str, Any], ...] = (
+    {"key": "planner", "name": "CEO", "position": "planner", "tool": "claude",
+     "permission_intents": {"read": "allow", "write": "deny", "test": "deny", "deploy": "deny"}},
+    {"key": "executor", "name": "工匠", "position": "executor", "tool": "claude",
+     "permission_intents": {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}},
+    {"key": "reviewer", "name": "審查員", "position": "reviewer", "tool": "codex",
+     "permission_intents": {"read": "allow", "write": "deny", "test": "allow", "deploy": "deny"}},
+)
+
+# QA and demo environments name their sample cards with this id prefix; the console never invents a profile with it.
+# The front end sorts such cards last and labels them 示範. It is a label by id, not a stored fact.
+DEMO_ID_PREFIX = "demo-"
+
 
 class AgentProfileStorageError(RuntimeError):
     """Raised when agent_profiles.json is corrupted and needs manual recovery.
@@ -164,7 +185,7 @@ def _mark_corrupt(path: Path, marker: Path, exc: Exception) -> Path:
         _write_marker(marker, quarantine_path, path, exc)
     except OSError as marker_exc:
         raise AgentProfileStorageError(
-            f"Agent Profile 儲存損毀復原失敗：無法寫入復原標記 {marker}（{marker_exc}）。"
+            f"角色卡儲存損毀復原失敗：無法寫入復原標記 {marker}（{marker_exc}）。"
             f"損毀檔案未搬移、原封保留於 {path}，下次讀取會重新嘗試隔離；"
             "請人工檢查檔案系統（磁碟空間與權限）後重試"
         ) from marker_exc
@@ -178,7 +199,7 @@ def _mark_corrupt(path: Path, marker: Path, exc: Exception) -> Path:
         except OSError as remark_exc:
             remark = f"；另外無法更新標記內的實際位置（{remark_exc}）"
         raise AgentProfileStorageError(
-            f"Agent Profile 儲存檔案損毀，且無法搬移至 {quarantine_path}（{move_exc}）。"
+            f"角色卡儲存檔案損毀，且無法搬移至 {quarantine_path}（{move_exc}）。"
             f"損毀檔案原地保留於 {path}，復原標記 {marker} 已寫入，"
             f"讀寫已封鎖至人工復原為止{remark}"
         ) from move_exc
@@ -239,7 +260,7 @@ def _cross_process_lock(timeout: float = 10.0):
             except OSError:
                 if time.monotonic() >= deadline:
                     raise AgentProfileStorageError(
-                        "Agent Profile 儲存鎖定逾時（可能有其他程序正在寫入），請稍後再試"
+                        "角色卡儲存鎖定逾時（可能有其他程序正在寫入），請稍後再試"
                     )
                 time.sleep(0.02)
         yield
@@ -492,7 +513,7 @@ def load_all(known_skills: set[str] | None = None,
     marker = _corrupt_marker_path()
     if marker.exists():
         raise AgentProfileStorageError(
-            f"Agent Profile 儲存先前偵測到損毀，需人工復原後才能繼續讀寫。"
+            f"角色卡儲存先前偵測到損毀，需人工復原後才能繼續讀寫。"
             f"詳見 {marker}"
         )
 
@@ -501,7 +522,7 @@ def load_all(known_skills: set[str] | None = None,
         raw = _read_raw(path)
     except OSError as exc:
         raise AgentProfileStorageError(
-            f"無法安全讀取 Agent Profile 儲存檔案 {path}：{exc}；為避免資料遺失，"
+            f"無法安全讀取角色卡儲存檔案 {path}：{exc}；為避免資料遺失，"
             "讀寫已暫停，請人工檢查檔案系統（權限、是否為符號連結或硬連結）後重試"
         ) from exc
     if raw is None:
@@ -514,11 +535,11 @@ def load_all(known_skills: set[str] | None = None,
     except (ValueError, RecursionError) as exc:
         if not mark_corrupt:
             raise AgentProfileDamaged(
-                f"Agent Profile 儲存檔案損毀（{type(exc).__name__}）；這個畫面只讀取，不會搬移或修改檔案"
+                f"角色卡儲存檔案損毀（{type(exc).__name__}）；這個畫面只讀取，不會搬移或修改檔案"
             ) from exc
         quarantine_path = _mark_corrupt(path, marker, exc)
         raise AgentProfileStorageError(
-            f"Agent Profile 儲存檔案損毀，已隔離至 {quarantine_path}，"
+            f"角色卡儲存檔案損毀，已隔離至 {quarantine_path}，"
             f"請人工復原後刪除 {marker} 以恢復讀寫"
         ) from exc
 
@@ -529,12 +550,12 @@ def load_all(known_skills: set[str] | None = None,
             exc = ValueError(f"Profile 項目 {k!r} 結構不符：{problem}")
             if not mark_corrupt:
                 raise AgentProfileDamaged(
-                    f"Agent Profile 儲存檔案含有不符結構的項目（{k!r}：{problem}）；"
+                    f"角色卡儲存檔案含有不符結構的項目（{k!r}：{problem}）；"
                     "這個畫面只讀取，不會搬移或修改檔案"
                 ) from exc
             quarantine_path = _mark_corrupt(path, marker, exc)
             raise AgentProfileStorageError(
-                f"Agent Profile 儲存檔案含有不符結構的項目（{k!r}：{problem}），"
+                f"角色卡儲存檔案含有不符結構的項目（{k!r}：{problem}），"
                 f"已隔離至 {quarantine_path}，請人工復原後刪除 {marker} 以恢復讀寫"
             ) from exc
         # Re-decorate the resolved/unresolved view against the current
@@ -612,7 +633,7 @@ def save_profile(profile_id: str | None, body: dict[str, Any],
 
         existing = all_profiles.get(tid) if profile_id or raw_id else None
         if not existing and len(all_profiles) >= MAX_PROFILES:
-            raise ValueError(f"Agent Profile 已達上限 {MAX_PROFILES} 筆")
+            raise ValueError(f"角色卡已達上限 {MAX_PROFILES} 筆")
 
         normalized = _normalize_profile(
             body, profile_id=tid, existing=existing,
@@ -661,7 +682,7 @@ def duplicate_profile(profile_id: str,
         if profile_id not in all_profiles:
             return None
         if len(all_profiles) >= MAX_PROFILES:
-            raise ValueError(f"Agent Profile 已達上限 {MAX_PROFILES} 筆")
+            raise ValueError(f"角色卡已達上限 {MAX_PROFILES} 筆")
         existing = all_profiles[profile_id]
         for _ in range(8):
             new_id = f"prof-{secrets.token_hex(6)}"

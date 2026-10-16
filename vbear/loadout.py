@@ -24,7 +24,7 @@ CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互�
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
 CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
 SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
-TOOLS_ONLY_CLAUDE = "VBear 目前只支援用 Profile 啟動 Claude Code"
+TOOLS_ONLY_CLAUDE = "VBear 目前只支援用角色卡啟動 Claude Code"
 TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
 TOOLS_SOURCE = "與 VBear 啟動 Claude Code 時傳入的 --tools／--disallowedTools 相同（同一組常數）"
 
@@ -272,7 +272,7 @@ def skill_card(static: dict, skill_id: str, profiles, live: dict | None) -> dict
                          "origin": "derived", "detail": "掃描結果"},
         },
         "added_to_roles": {"items": roles, "effective": False, "note": "已加入角色只是挑選紀錄，本次不生效",
-                           "origin": "user", "detail": "主控台 Profile（使用者意圖）"},
+                           "origin": "user", "detail": "主控台角色卡（使用者意圖）"},
         "observation": _observation(skill_id, live),
         "marketplace_copies": copies,
         "marketplace_source": {"origin": "derived", "detail": "市集掃描"},

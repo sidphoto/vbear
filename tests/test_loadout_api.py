@@ -316,7 +316,7 @@ class LoadoutTests(_Helpers, unittest.TestCase):
         _, shared = _get(port, "/api/agent-profiles/prof-a/loadout")
         self.assertEqual(shared["tools"], {"known": False, "allowed": [], "blocked": [],
                                            "unknown_reason": loadout.TOOLS_ONLY_CLAUDE})
-        self.assertEqual(loadout.TOOLS_ONLY_CLAUDE, "VBear 目前只支援用 Profile 啟動 Claude Code")
+        self.assertEqual(loadout.TOOLS_ONLY_CLAUDE, "VBear 目前只支援用角色卡啟動 Claude Code")
         # a Codex role that is launchable on recorded evidence: the tool list is still not recorded, and says so
         launchable = loadout._tools("codex", False)
         self.assertEqual(launchable, {"known": False, "allowed": [], "blocked": [],

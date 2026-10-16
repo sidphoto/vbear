@@ -143,9 +143,69 @@ class AgentBuilderAPITests(unittest.TestCase):
                          agent_profiles.MAX_SKILLS_PER_PROFILE)
         # Disclosures must be present and honest about intent-only semantics.
         joined = "\n".join(body["disclosures"])
-        self.assertIn("Equipped Skill Loadout", joined)
-        self.assertIn("Permission Intents are intent-only", joined)
-        self.assertIn("never write to ~/.codex", joined)
+        self.assertIn("只是你的挑選紀錄", joined)
+        self.assertIn("VBear 不會因此限制這個程式的真實能力", joined)
+        self.assertIn("不會寫入 ~/.codex", joined)
+        for old in ("Agent Profile", "Permission Intents", "Equipped Skill Loadout"):
+            self.assertNotIn(old, joined)
+
+    def test_catalog_serves_the_starter_deck_exactly(self):
+        status, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["positions"], ["planner", "executor", "reviewer"])
+        self.assertEqual(body["demo_id_prefix"], "demo-")
+        deck = body["starter_deck"]
+        self.assertEqual([(c["key"], c["name"], c["position"], c["tool"]) for c in deck], [
+            ("planner", "CEO", "planner", "claude"),
+            ("executor", "工匠", "executor", "claude"),
+            ("reviewer", "審查員", "reviewer", "codex")])
+        self.assertEqual([c["permission_intents"] for c in deck], [
+            {"read": "allow", "write": "deny", "test": "deny", "deploy": "deny"},
+            {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"},
+            {"read": "allow", "write": "deny", "test": "allow", "deploy": "deny"}])
+        # the response is a copy: the constant cannot be edited through it
+        deck[0]["permission_intents"]["write"] = "allow"
+        self.assertEqual(agent_profiles.STARTER_DECK[0]["permission_intents"]["write"], "deny")
+        self.assertIsInstance(body["codex_installed"], bool)
+
+    def test_starter_deck_constant_is_safe_to_save_and_has_a_cross_tool_reviewer(self):
+        deck = agent_profiles.STARTER_DECK
+        self.assertEqual(len(deck), 3)
+        self.assertEqual([c["position"] for c in deck], list(agent_profiles.POSITIONS))
+        for card in deck:
+            self.assertIn(card["tool"], agent_profiles.KNOWN_TOOLS)
+            self.assertEqual(set(card["permission_intents"]), set(agent_profiles.PERMISSION_KEYS))
+            # a suggestion is always decided: the wizard must not make a card that cannot launch
+            self.assertTrue(set(card["permission_intents"].values()) <= {"allow", "deny"})
+            self.assertTrue(card["name"].strip())
+        tools = {c["position"]: c["tool"] for c in deck}
+        self.assertNotEqual(tools["executor"], tools["reviewer"])
+        # none of them grants deploy
+        self.assertTrue(all(c["permission_intents"]["deploy"] == "deny" for c in deck))
+        # and each one goes through the ordinary save
+        for card in deck:
+            status, saved = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(), body={
+                "name": card["name"], "profession_role_id": None, "model": {"tool": card["tool"], "model_id": ""},
+                "equipped_skill_ids": [], "permission_intents": dict(card["permission_intents"]), "enabled": True})
+            self.assertEqual(status, 200, saved)
+            self.assertEqual(saved["profile"]["permission_intents"], card["permission_intents"])
+        # a position is not a profile field: the stored schema still rejects it
+        status, _ = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
+                             body=_sample(position="planner"))
+        self.assertEqual(status, 400)
+
+    def test_catalog_codex_installed_is_a_stat_of_the_pinned_path_and_runs_nothing(self):
+        import subprocess
+        from vbear.runtime import review_codex
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("ran a program")), \
+                mock.patch.object(subprocess, "Popen", side_effect=AssertionError("ran a program")):
+            with mock.patch.object(review_codex, "codex_binary", side_effect=review_codex.CodexRefused("no_binary", "x")):
+                _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+                self.assertIs(body["codex_installed"], False)
+            with mock.patch.object(review_codex, "codex_binary", return_value="/pinned/codex") as found:
+                _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+                self.assertIs(body["codex_installed"], True)
+                self.assertTrue(found.called)
 
     def test_create_then_list_then_get(self):
         status, body = _request("POST", self.port, "/api/agent-profiles",
@@ -215,7 +275,7 @@ class AgentBuilderAPITests(unittest.TestCase):
         # AGY review 2026-09-25 (Low): ValueError from duplicate must be 400,
         # not fall through to the generic 500 handler.
         with mock.patch.object(agent_profiles, "duplicate_profile",
-                               side_effect=ValueError("Agent Profile 已達上限 500 筆")):
+                               side_effect=ValueError("角色卡已達上限 500 筆")):
             status, body = _request("POST", self.port,
                                     "/api/agent-profiles/prof-any/duplicate",
                                     body={}, headers=_write_headers())
