@@ -1487,7 +1487,8 @@ async function viewHome() {
     herdrMigrationNotice(),
     runtimeNotice(),
     el("div", { id: "h-board" }, boardSection(board)),
-    taskCardsSection(tasksRes && tasksRes.tasks, { onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
+    taskCardsSection(tasksRes && tasksRes.tasks, { flows: D.flows && !D.flows.error ? D.flows.flows || [] : undefined,
+      onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
     el("section", { class: "section" },
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
       el("div", { class: "search" }, input),
@@ -3907,6 +3908,9 @@ function profileCard(p, opts = {}) {
       handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff,
         title: launchOff ? "這張卡已停用" : "先看這次出發會套用什麼，確認後才啟動",
         on: { click: () => handlers.launch(p) } }, "出發") : null,
+      handlers.place ? el("button", { type: "button", class: "btn small", "data-pcard": "place",
+        title: "把這張卡放進一張任務卡的隊伍（規劃、執行或審查位）",
+        on: { click: () => handlers.place(p) } }, "放上任務卡") : null,
       frontFlip));
 
   const chips = el("div", { class: "rc-chips" }, CARD_INTENT_KEYS.map(([k, zh]) => intentChip(k, zh, intents[k])));
@@ -4071,6 +4075,7 @@ async function viewTeam() {
     duplicate: (p) => duplicateCard(p, refresh),
     remove: (p) => deleteCard(p, refresh),
     launch: (p) => { location.hash = `#/workbench?profile=${encodeURIComponent(p.id)}&launch=1`; },
+    place: (p) => openPlaceDialog(p, { profiles }),
   };
   const needCatalog = (fn) => () => {
     if (!catalog) { toast("角色卡目錄尚未就緒，請稍後再試"); return; }
@@ -4462,13 +4467,20 @@ function flowGateGrid(f) {
     el("p", { class: "small muted" }, "關卡只依事件推導出的階段排位；「已過」不代表當時有記錄到核准。"));
 }
 
+// The tool of a role is known only when the role was filled from a card (its snapshot says); a hand-written role has none.
+function flowRoleToolText(role) {
+  const tool = role && role.profile_snapshot && role.profile_snapshot.tool;
+  return tool && cardHas(CARD_TOOL_LABEL, tool) ? `${CARD_TOOL_LABEL[tool]}（放上隊伍時的角色卡：${role.profile_snapshot.name}）`
+    : "未提供（流程記錄沒有這個欄位）";
+}
+
 // 隊伍: planner, executor and reviewers as small cards. The planner is only a record; VBear never starts one.
 function flowTeamSection(f, liveText) {
   const card = (kind, role, rows) => el("li", { class: "team-card" },
     el("h4", null, kind),
     el("dl", { class: "rc-dl" },
       el("dt", null, "名稱"), el("dd", null, role && role.name ? String(role.name) : "未提供"),
-      el("dt", null, "工具"), el("dd", null, "未提供（流程記錄沒有這個欄位）"),
+      el("dt", null, "工具"), el("dd", null, flowRoleToolText(role)),
       el("dt", null, "家族（模型出自哪一家）"), el("dd", null, role && role.family_label ? role.family_label : "未提供"),
       el("dt", null, "模型"), el("dd", null, role && role.model ? String(role.model) : "未提供"),
       rows));
@@ -4487,7 +4499,7 @@ function flowTeamSection(f, liveText) {
       ...row("與執行者", !ind ? "未提供" : ind.counted ? "不同家族，可算獨立審查"
         : `不算獨立審查：${ind.why || "原因未提供"}`)]);
   });
-  return el("section", { class: "section", "data-flow": "team" }, sectionHead("隊伍", null),
+  return el("section", { class: "section", "data-flow": "team" }, sectionHead("隊伍明細", "上面的「隊伍」是放卡的地方；這裡是流程記錄的角色資料。"),
     el("ul", { class: "team-grid" }, [planner, executor, ...reviewers]));
 }
 
@@ -4591,6 +4603,7 @@ async function viewFlows() {
   const submit = el("button", { class: "btn primary", type: "submit", disabled: free.length ? null : "disabled" }, "建立流程");
   const form = el("form", { class: "flow-form", on: { submit: async (ev) => {
     ev.preventDefault();
+    if (!taskSel.value) { toast("請先選一張任務卡"); return; }
     const reviewers = reviewerRows.map((r) => r.read()).filter((r) => r.name);
     submit.disabled = true;
     try {
@@ -4599,10 +4612,18 @@ async function viewFlows() {
       location.hash = `#/flows/${encodeURIComponent(r.flow.id)}`;
     } catch (e) { toast("無法建立流程：" + e.message); submit.disabled = false; }
   } } },
-    el("label", { class: "small" }, "任務卡（一張任務卡對應一個流程）"), taskSel,
     planner.node, executor.node, reviewerRows.map((r) => r.node),
     el("p", { class: "small muted" }, "審查者與執行者必須是不同模型家族，審查結果才算通過；家族「其他」或「不明」也不算。"),
     submit);
+  // the cards go on the task card's places (design 3.5); typing the names by hand is the "advanced" way
+  const boardHost = el("div", { "data-flow": "board-host" });
+  const mountBoard = () => {
+    const t = free.find((x) => x.id === taskSel.value);
+    setKids(boardHost, t ? teamSection(t, { gone: () => token !== seq, onSaved: () => route() })
+      : emptyState("沒有可以建立隊伍的任務卡", "每張任務卡只有一個流程；先用「＋ 任務卡（導入專案）」建一張新的。"));
+  };
+  taskSel.addEventListener("change", mountBoard);
+  mountBoard();
   const list = data.flows || [];
   setKids(main,
     el("h1", null, "流程"),
@@ -4615,7 +4636,10 @@ async function viewFlows() {
     el("section", { class: "section" },
       sectionHead("建立流程", null, el("button", { type: "button", class: "btn small", "data-act": "import", on: { click: () => openImportProject({
         onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }) } }, "＋ 任務卡（導入專案）")),
-      form),
+      el("label", { class: "small" }, "任務卡（一張任務卡對應一個流程）"), taskSel,
+      boardHost,
+      el("details", { class: "fold ts-manual", "data-flow": "manual" }, el("summary", null, "進階：手動填寫"),
+        el("div", { class: "cw-body" }, el("p", { class: "small muted" }, "不挑角色卡，自己打名字、家族和模型。這樣記下的角色沒有對應的角色卡。"), form))),
     mountStorage().node);
 }
 
@@ -4667,9 +4691,12 @@ async function viewFlowDetail(flowId) {
     return;
   }
   const meta = D.flows && D.flows.kinds ? D.flows : await loadFlows();
+  const tasksRes = await api.get("/api/tasks").catch(() => ({ tasks: [] }));
   const main = claim(token);
   if (token !== seq) return;
   const f = res.flow;
+  const flowTask = ((tasksRes && tasksRes.tasks) || []).find((t) => t.id === f.task_id)
+    || { id: f.task_id, title: f.task_title || f.task_id, workdir: null };
   const kindSel = el("select", { "aria-label": "事件種類" }, (meta.kinds || []).map((k) => el("option", { value: k.key }, k.label)));
   const commit = el("input", { type: "text", class: "input mono", "aria-label": "commit", placeholder: "完整的 40 或 64 碼 commit", maxlength: "64" });
   const verdict = el("select", { "aria-label": "審查結論" }, (meta.verdicts || []).map((v) => el("option", { value: v }, v)));
@@ -4734,6 +4761,7 @@ async function viewFlowDetail(flowId) {
     flowBindingNote(f) ? el("p", { class: "small muted" }, flowBindingNote(f)) : null,
     (f.warnings || []).map((w) => notice("warn", w)),
     flowGateGrid(f),
+    teamSection(flowTask, { flow: f, hideOpen: true, gone: () => token !== seq, onSaved: () => route() }),
     flowTeamSection(f, flowLiveText(f.executor_live, liveLoadError())),
     coordinator.node,
     el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
@@ -4977,7 +5005,7 @@ function openAcceptanceDialog(flowId, onDone, opts = {}) {
         el("dt", null, "執行者的 Claude 帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, v.executor_account),
         el("dt", null, "審查者的 Codex 帳號指紋（前 16 碼）"), el("dd", { class: "mono" }, v.review_account),
         el("dt", null, "指紋金鑰 id"), el("dd", { class: "mono" }, v.login_key_id)),
-      el("h3", null, "體力（停損設定，全部九項）"),
+      el("h3", null, "體力（停損設定，全部九項）", " ", teamInfo("stamina", "體力")),
       el("div", { class: "table-scroll" }, el("table", { class: "s2-limits" }, el("tbody", null, limitRows))),
       el("p", { class: "small" }, "改了模型或體力設定，要按「套用並重新預覽」才會產生新的預覽。",
         " ", el("button", { class: "btn small", type: "button", on: { click: () => {
@@ -5034,7 +5062,7 @@ function s2AcceptancePanel(flowId, ex, refresh) {
   const [label, cls, tip] = S2_ACCEPTANCE[a.state] || S2_ACCEPTANCE.unknown;
   const v = a.values;
   return el("section", { class: "section s2-panel", "data-s2": "acceptance" },
-    sectionHead("風險接受", null, el("div", { class: "row" }, badge(label, cls, tip),
+    sectionHead(["風險接受", " ", teamInfo("risk", "風險接受")], null, el("div", { class: "row" }, badge(label, cls, tip),
       el("button", { class: "btn small primary", type: "button",
         disabled: ex.automation && ex.automation.mode === "auto",
         title: ex.automation && ex.automation.mode === "auto" ? "自動執行中；要改體力設定或重新接受，先停止流程並切回手動" : "",
@@ -5182,7 +5210,7 @@ function s2ExecutorPanel(flowId, ex, refresh) {
       s.worst_case ? notice("warn", s.worst_case.text) : null);
   });
   return el("section", { class: "section s2-panel", "data-s2": "executor" },
-    sectionHead("串流執行者", "由 VBear 啟動的 Claude Code；你逐則核准派工。", el("div", { class: "row" }, start, stop)),
+    sectionHead(["串流執行者", " ", teamInfo("executor", "串流執行者")], "由 VBear 啟動的 Claude Code；你逐則核准派工。", el("div", { class: "row" }, start, stop)),
     s2StreamSupport(ex.stream_support),
     why.length ? el("p", { class: "small muted" }, "現在不能啟動：" + why.join("；") + "。") : null,
     held ? notice("warn", `流程已停止：${ex.hold.reason || "（沒有說明）"}${ex.hold.at ? `（${fmtTime(ex.hold.at)}）` : ""}`) : null,
@@ -7259,6 +7287,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
           prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" }))),
       folderBlock,
+      teamSection(activeTask, { profiles: agentProfiles, catalog: agentBuilderCatalog, gone: () => token !== seq }),
       chainRow(activeTask),
       trackingBox,
       provBox,
@@ -8269,6 +8298,612 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   }
 }
 
+// ---------- team slots: put role cards on a task card (design card-play 3.5) ----------------------------------------
+// A task card has three places for role cards: planning, execution, review (and a dashed second review place). A card
+// put there is copied into the flow's role (name, family, model) with a note of which card it was and the card's
+// revision at that moment; nothing follows the card afterwards, and nothing here starts or sends anything. The only
+// rule enforced on screen is the one the server already enforces for a review: it counts when the reviewer's and the
+// executor's model families are both known and different.
+
+const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", shared: "unknown" };
+const TEAM_FAMILY_LABEL = { anthropic: "Anthropic（Claude）", openai: "OpenAI（Codex）", google: "Google（Gemini）",
+  minimax: "MiniMax", other: "其他", unknown: "不明" };
+const TEAM_SLOTS = [
+  { key: "planner", label: "規劃位", short: "規劃", position: "planner" },
+  { key: "executor", label: "執行位", short: "執行", position: "executor" },
+  { key: "reviewer1", label: "審查位", short: "審查 1", position: "reviewer" },
+  { key: "reviewer2", label: "第二位審查", short: "審查 2", position: "reviewer", optional: true },
+];
+const TEAM_ROLE_NAME_MAX = 80;
+const TEAM_DRAFT_KEY = "team.draft.";
+const TEAM_DRAG_TYPE = "text/x-vbear-card";
+const TEAM_MENU_MAX = 48;
+const TEAM_TRAY_MAX = 24;
+const SLOT_REVIEW_NEEDS_DIFF = "這個位置需要和執行位不同陣營的卡，審查結果才算數";
+const TEAM_SAVE_NOTE = "儲存會在時間軸記一筆「角色變更」；換掉隊伍之後，先前由自動審查留下的結果可能不再算數。";
+// One fixed sentence per term the next-steps list uses (design 3.5): the words come from what the console already says.
+const TEAM_INFO = {
+  risk: "接受殘餘風險是你自己做的一筆記錄。沒有有效的接受，VBear 不會啟動執行者，也不會啟動 Codex 審查；接受不會讓 VBear 多擋住什麼，" +
+    "它只是承認還有這些風險，完整清單在接受視窗裡。",
+  stamina: "體力是停損設定：經過時間、執行者額度（USD）等的上限，到了上限 VBear 就停止這個流程。九項的預設與上限都列在接受視窗裡，" +
+    "你可以調低，不能超過上限。固定規則：連續失敗 1 次就停止。",
+  executor: "串流執行者是由 VBear 啟動的 Claude Code。派工要先預覽、由你核准才會送出；沒有有效的風險接受就不能啟動。",
+};
+function teamInfo(key, label) { return helpTip(label, TEAM_INFO[key]); }
+
+function teamFamily(tool) {
+  return typeof tool === "string" && cardHas(TEAM_TOOL_FAMILY, tool) ? TEAM_TOOL_FAMILY[tool] : "unknown";
+}
+// The family of a card or of a role: a role carries its own `family`; a role card is read from its tool.
+function teamCardFamily(card) {
+  if (!card || typeof card !== "object") return "unknown";
+  if (typeof card.family === "string" && cardHas(TEAM_FAMILY_LABEL, card.family)) return card.family;
+  const tool = card.model && typeof card.model === "object" ? card.model.tool : card.tool;
+  return teamFamily(tool);
+}
+// The tool of a card or a role, for its look: a card says it; a role filled from a card says it in its snapshot; a
+// hand-written role only has a family, and the two families that have a tool here map back to it.
+const TEAM_FAMILY_TOOL = { anthropic: "claude", openai: "codex" };
+function teamCardTool(card) {
+  if (!card || typeof card !== "object") return "";
+  if (card.profile_snapshot && typeof card.profile_snapshot.tool === "string") return card.profile_snapshot.tool;
+  const tool = card.model && typeof card.model === "object" ? card.model.tool : card.tool;
+  if (typeof tool === "string") return tool;
+  return typeof card.family === "string" && cardHas(TEAM_FAMILY_TOOL, card.family) ? TEAM_FAMILY_TOOL[card.family] : "";
+}
+
+// The red the person sees on a place the moment a card lands on it. Only a review place can be wrong: the card's family
+// and the executor's decide whether the review counts, exactly as the server judges a review. The place is still
+// allowed (it is a record); it just says plainly that the result will not count. null means nothing to say.
+function slotProblem(slot, card, team) {
+  if (typeof slot !== "string" || !slot.startsWith("reviewer") || !card) return null;
+  const rf = teamCardFamily(card);
+  const executor = team && team.executor ? team.executor : null;
+  if (rf === "unknown" || rf === "other") {
+    return { code: "reviewer_family_unknown", text: SLOT_REVIEW_NEEDS_DIFF,
+      why: "這張卡的陣營是「共用」或不明，審查結果不算數" };
+  }
+  if (!executor) return null;
+  const ef = teamCardFamily(executor);
+  if (ef === "unknown" || ef === "other") {
+    return { code: "executor_family_unknown", text: SLOT_REVIEW_NEEDS_DIFF,
+      why: "執行位的陣營是「共用」或不明，審查結果不算數" };
+  }
+  if (ef === rf) {
+    return { code: "same_family", text: SLOT_REVIEW_NEEDS_DIFF,
+      why: `審查位和執行位同為 ${TEAM_FAMILY_LABEL[rf]}` };
+  }
+  return null;
+}
+
+// A role as the flow stores it, made from a role card. The family comes from the card's tool (claude is anthropic, codex
+// is openai, shared is unknown); the revision is the one the server showed for the card. opts.keep is the role that was
+// in the place before: an executor keeps its session and folder when only the card changes; opts.workdir is the folder
+// to start from when there is none.
+function roleFromCard(p, opts = {}) {
+  const tool = p && p.model && typeof p.model.tool === "string" ? p.model.tool : "";
+  const name = String((p && p.name) || (p && p.id) || "").trim();
+  const role = { name: name.slice(0, TEAM_ROLE_NAME_MAX) || "未命名", family: teamFamily(tool) };
+  const modelId = p && p.model && typeof p.model.model_id === "string" ? p.model.model_id : "";
+  if (modelId && modelId.length <= TEAM_ROLE_NAME_MAX) role.model = modelId;
+  if (p && typeof p.id === "string" && typeof p.revision === "string" && /^[0-9a-f]{64}$/.test(p.revision)
+      && cardHas(TEAM_TOOL_FAMILY, tool) && name) {
+    role.profile_id = p.id;
+    role.profile_snapshot = { name, tool, model_id: modelId, revision: p.revision };
+  }
+  const keep = opts.keep && typeof opts.keep === "object" ? opts.keep : null;
+  if (opts.executor) {
+    if (keep && keep.session_id) role.session_id = keep.session_id;
+    const wd = (keep && keep.workdir) || opts.workdir;
+    if (typeof wd === "string" && wd) role.workdir = wd;
+  }
+  return role;
+}
+
+// The places as { planner, executor, reviewer1, reviewer2 } from a flow's roles; a place with nobody is null.
+function teamSlotsFromRoles(roles) {
+  const out = { planner: null, executor: null, reviewer1: null, reviewer2: null };
+  if (!roles || typeof roles !== "object") return out;
+  if (roles.planner) out.planner = { ...roles.planner };
+  if (roles.executor) out.executor = { ...roles.executor };
+  const revs = Array.isArray(roles.reviewers) ? roles.reviewers : [];
+  if (revs[0]) out.reviewer1 = { ...revs[0] };
+  if (revs[1]) out.reviewer2 = { ...revs[1] };
+  return out;
+}
+const TEAM_ROLE_KEYS = ["name", "family", "model", "profile_id", "profile_snapshot"];
+function teamRoleBody(entry, executor) {
+  const out = {};
+  for (const k of TEAM_ROLE_KEYS.concat(executor ? ["session_id", "workdir"] : [])) {
+    if (entry[k] !== undefined && entry[k] !== null && entry[k] !== "") out[k] = entry[k];
+  }
+  return out;
+}
+// What is still missing for a team the server will take: a planner, an executor and at least one reviewer.
+function teamMissing(slots) {
+  const out = [];
+  if (!slots.planner) out.push("規劃位");
+  if (!slots.executor) out.push("執行位");
+  if (!slots.reviewer1) out.push("審查位");
+  return out;
+}
+// The body for the server. The empty second review place is never sent and never counts (design 3.5). null while a
+// required place is empty.
+function teamRolesBody(slots) {
+  if (teamMissing(slots).length) return null;
+  const reviewers = [slots.reviewer1, slots.reviewer2].filter(Boolean).map((r) => teamRoleBody(r, false));
+  return { planner: teamRoleBody(slots.planner, false), executor: teamRoleBody(slots.executor, true), reviewers };
+}
+function teamProblems(slots) {
+  const out = {};
+  for (const key of ["reviewer1", "reviewer2"]) {
+    const p = slots[key] ? slotProblem(key, slots[key], slots) : null;
+    if (p) out[key] = p;
+  }
+  return out;
+}
+
+// Has the card moved on since it was put here? The record keeps what it was; the page only tells (design 3.5).
+function teamCardState(entry, profiles) {
+  if (!entry || !entry.profile_id || !entry.profile_snapshot) return { state: "manual" };
+  const current = (Array.isArray(profiles) ? profiles : []).find((p) => p && p.id === entry.profile_id);
+  if (!current) return { state: "gone" };
+  if (typeof current.revision !== "string" || !current.revision) return { state: "unknown", current };
+  return current.revision === entry.profile_snapshot.revision ? { state: "same", current } : { state: "changed", current };
+}
+
+// The draft of a task that has no flow yet: only card ids, so a deleted card simply is not there when it is read back.
+function teamDraftRead(taskId, profiles, workdir) {
+  const raw = store.get(TEAM_DRAFT_KEY + taskId, null);
+  const out = { planner: null, executor: null, reviewer1: null, reviewer2: null };
+  if (!raw || typeof raw !== "object") return out;
+  for (const key of Object.keys(out)) {
+    const id = raw[key];
+    const p = typeof id === "string" ? (profiles || []).find((x) => x && x.id === id) : null;
+    if (p) out[key] = roleFromCard(p, { executor: key === "executor", workdir });
+  }
+  return out;
+}
+function teamDraftWrite(taskId, slots) {
+  const ids = {};
+  for (const key of Object.keys(slots)) if (slots[key] && slots[key].profile_id) ids[key] = slots[key].profile_id;
+  store.set(TEAM_DRAFT_KEY + taskId, Object.keys(ids).length ? ids : null);
+}
+
+// ---- the next steps (design 3.5) ----------------------------------------------------------------------------------
+const NEXT_PHASE_STEP = { planning: "plan", awaiting_approval: "approve", implementing: "implement", needs_fix: "implement",
+  in_review: "review", review_stale: "review", awaiting_merge: "merge", review_unverified: "merge", awaiting_push: null, done: null };
+const NEXT_STEP_TEXT = { plan: "規劃者提出計畫", approve: "你核准計畫", risk: "你接受風險", implement: "執行者實作",
+  review: "審查者檢查", merge: "你自己合併" };
+
+// The steps of a flow, read from the phase the server already derived. A step is past, now or next by its place in the
+// list only: it does not say that anything was recorded. Step 3 exists only in automatic mode. After step 6 comes the
+// push, which is also yours; it is said as a line after the list because the list has six steps.
+function nextSteps(flow) {
+  const f = flow && typeof flow === "object" ? flow : {};
+  const roles = f.roles && typeof f.roles === "object" ? f.roles : {};
+  const roleName = (r) => (r && typeof r.name === "string" && r.name ? r.name : "未命名");
+  const auto = Boolean(f.automation && f.automation.mode === "auto");
+  const reviewers = (Array.isArray(roles.reviewers) ? roles.reviewers : []).map(roleName);
+  const who = {
+    plan: roleName(roles.planner), approve: "你", risk: "你", implement: roleName(roles.executor),
+    review: auto ? `VBear 送審，${reviewers.join("、") || "審查者"}審查` : (reviewers.join("、") || "審查者"), merge: "你",
+  };
+  const turn = { ...who, review: auto ? "VBear（自動送審）" : who.review };
+  const keys = ["plan", "approve", ...(auto ? ["risk"] : []), "implement", "review", "merge"];
+  const phaseKey = f.phase && typeof f.phase.key === "string" ? f.phase.key : "";
+  const known = cardHas(NEXT_PHASE_STEP, phaseKey);
+  const currentKey = known ? NEXT_PHASE_STEP[phaseKey] : null;
+  const at = currentKey ? keys.indexOf(currentKey) : -1;
+  const allPast = known && !currentKey;
+  const steps = keys.map((key, i) => ({
+    n: i + 1, key, text: NEXT_STEP_TEXT[key], who: who[key],
+    state: !known ? "next" : allPast || i < at ? "past" : i === at ? "now" : "next",
+  }));
+  const reason = f.phase && typeof f.phase.reason === "string" ? f.phase.reason : "";
+  return { steps, current: at, known, turn: at >= 0 ? turn[keys[at]] : (phaseKey === "awaiting_push" ? "你" : null),
+    reason, after: phaseKey === "awaiting_push" ? { text: "你自己 push", who: "你" } : null };
+}
+
+function nextStepsList(flow) {
+  const ns = nextSteps(flow);
+  if (!ns.known) {
+    return el("div", { class: "ns", "data-ns": "list" },
+      el("p", { class: "small muted" }, "目前的階段無法對應到步驟，只顯示階段文字。"));
+  }
+  const items = ns.steps.map((s) => el("li", { class: `ns-step ns-${s.state}`, "data-step": s.key, "data-state": s.state,
+    "aria-current": s.state === "now" ? "step" : null },
+    s.state === "now" ? el("strong", null, s.text) : el("span", null, s.text),
+    s.key === "risk" ? teamInfo("risk", "風險接受") : null,
+    s.key === "implement" ? teamInfo("executor", "串流執行者") : null,
+    el("span", { class: "ns-who small muted" }, `（${s.who}）`),
+    s.state === "now" ? el("span", { class: "ns-turn tag", "data-ns": "turn" }, `輪到 ${ns.turn}`) : null,
+    s.state === "now" && ns.reason ? el("div", { class: "small ns-reason" }, ns.reason) : null));
+  return el("div", { class: "ns", "data-ns": "list" },
+    el("ol", { class: "ns-list" }, items),
+    ns.after ? el("p", { class: "small ns-after", "data-ns": "after" }, `接下來：${ns.after.text}（輪到 ${ns.after.who}）。`,
+      ns.reason ? el("span", { class: "muted" }, ` ${ns.reason}`) : null) : null);
+}
+
+// The small heads of a role card on a task card (design 3.8): who is in the team, as pixel avatars.
+function teamAvatars(flow, scale = 2) {
+  const roles = flow && flow.roles && typeof flow.roles === "object" ? flow.roles : null;
+  if (!roles) return null;
+  const list = [["規劃", roles.planner], ["執行", roles.executor],
+    ...(Array.isArray(roles.reviewers) ? roles.reviewers : []).map((r, i) => [`審查${i + 1}`, r])].filter(([, r]) => r);
+  return el("div", { class: "team-avatars", "data-team": "avatars" }, list.map(([label, r]) => {
+    const tool = teamCardTool(r);
+    return el("span", { class: "team-avatar", title: `${label}：${r.name || ""}`, "data-position": label },
+      cardAvatar({ id: r.profile_id || "", model: { tool } }, scale), el("span", { class: "small" }, `${label}・${r.name || ""}`));
+  }));
+}
+
+// ---- the board ----------------------------------------------------------------------------------------------------
+
+// opts: { task, flow (the saved flow view, or null), profiles, catalog, gitState ("git" | "nogit" | null),
+//         onSaved(flowView), onNeedCatalog }. Returns { node, state }.
+function teamBoard(opts) {
+  const task = opts.task;
+  const profiles = Array.isArray(opts.profiles) ? opts.profiles : [];
+  const catalog = opts.catalog || null;
+  const cards = sortCards(profiles, catalog);
+  let flow = opts.flow || null;
+  let slots = flow ? teamSlotsFromRoles(flow.roles) : teamDraftRead(task.id, profiles, task.workdir);
+  let dirty = false;
+  let busy = false;
+  let selected = null;       // a card id picked in the tray (touch: pick a card, then a place)
+  let openKey = null;        // the place whose card list is open
+  let query = "";
+  let focusKey = null;
+  const focusRefs = new Map();   // place key -> its button; "search" -> the open list's search box
+  const errors = {};
+  let boardError = "";
+  const host = el("section", { class: "section team-board", "data-team": "board" });
+
+  const cardById = (id) => profiles.find((p) => p && p.id === id) || null;
+  const slotDef = (key) => TEAM_SLOTS.find((s) => s.key === key);
+  const clearErrors = () => { for (const k of Object.keys(errors)) delete errors[k]; boardError = ""; };
+
+  function place(key, p) {
+    if (!p) return;
+    const prev = slots[key];
+    slots[key] = roleFromCard(p, { executor: key === "executor", keep: prev, workdir: key === "executor" ? task.workdir : undefined });
+    delete errors[key];
+    boardError = "";
+    dirty = true;
+    selected = null;
+    openKey = null;
+    focusKey = key;
+    if (!flow) teamDraftWrite(task.id, slots);
+    paint();
+  }
+  function clearSlot(key) {
+    slots[key] = null;
+    delete errors[key];
+    dirty = true;
+    openKey = null;
+    focusKey = key;
+    if (!flow) teamDraftWrite(task.id, slots);
+    paint();
+  }
+
+  // The server's words name the place when they can ("planner：…", "reviewers[1]：…"); a folder or session complaint
+  // belongs to the executor; anything else stays under the buttons.
+  function showError(message) {
+    clearErrors();
+    const text = String(message || "未知錯誤");
+    const m = /^(planner|executor|reviewers\[(\d)\])：/.exec(text);
+    if (m) errors[m[1] === "planner" ? "planner" : m[1] === "executor" ? "executor" : `reviewer${Number(m[2]) + 1}`] = text;
+    else if (/工作目錄|session/.test(text)) errors.executor = text;
+    else boardError = text;
+  }
+
+  async function save() {
+    const body = teamRolesBody(slots);
+    if (!body || busy) return;
+    busy = true;
+    clearErrors();
+    paint();
+    try {
+      const res = flow
+        ? await api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`, { roles: body })
+        : await api.post("/api/flows", { task_id: task.id, roles: body });
+      if (!flow) store.set(TEAM_DRAFT_KEY + task.id, null);
+      toast(flow ? "已儲存隊伍" : "已建立隊伍");
+      busy = false;
+      dirty = false;
+      if (res && res.flow) { flow = res.flow; slots = teamSlotsFromRoles(flow.roles); }
+      paint();
+      if (opts.onSaved) opts.onSaved(res && res.flow);
+    } catch (e) {
+      busy = false;
+      showError(e && e.message);
+      paint();
+    }
+  }
+
+  // the card changed since it was put here: take the current one, in that place only
+  async function refreshSlot(key, current) {
+    const wasDirty = dirty;
+    slots[key] = roleFromCard(current, { executor: key === "executor", keep: slots[key], workdir: key === "executor" ? task.workdir : undefined });
+    dirty = true;
+    if (!flow) teamDraftWrite(task.id, slots);
+    if (wasDirty || !flow) { toast(flow ? "已換成最新的設定；按「儲存隊伍」才會寫入" : "已換成最新的設定"); paint(); return; }
+    await save();
+  }
+
+  function cardChip(p) {
+    const tool = p.model && p.model.tool;
+    const on = selected === p.id;
+    return el("button", { type: "button", class: `ts-chip${on ? " ts-chip-on" : ""}`, "data-card": p.id, draggable: "true",
+      "aria-pressed": String(on), title: "拖到位置上；或先點這張卡，再點位置",
+      on: {
+        click: () => { selected = on ? null : p.id; openKey = null; paint(); },
+        dragstart: (e) => {
+          if (e.dataTransfer) {
+            try { e.dataTransfer.setData(TEAM_DRAG_TYPE, p.id); e.dataTransfer.setData("text/plain", p.id); e.dataTransfer.effectAllowed = "copy"; } catch (_) { /* some browsers refuse */ }
+          }
+        },
+      } },
+      cardAvatar(p, 2), el("span", { class: "ts-chip-name" }, p.name || p.id),
+      el("span", { class: "tag" }, CARD_TOOL_SHORT[tool] || tool || "?"));
+  }
+
+  function menuFor(key) {
+    const def = slotDef(key);
+    const q = query.trim().toLowerCase();
+    const matches = cards.filter((p) => !q || String(p.name || "").toLowerCase().includes(q));
+    const search = el("input", { type: "search", class: "input", "aria-label": "用名字找角色卡", placeholder: "用名字找角色卡", value: query,
+      on: { input: (e) => { query = e.target.value; focusKey = "search"; paint(); } } });
+    focusRefs.set("search", search);
+    const rows = matches.slice(0, TEAM_MENU_MAX).map((p) => {
+      const trial = { ...slots, [key]: roleFromCard(p, { executor: key === "executor" }) };
+      const problem = slotProblem(key, trial[key], trial);
+      const suggested = cardPosition(p.id) === def.position;
+      return el("li", null, el("button", { type: "button", class: "ts-pick", "data-pick": p.id, on: { click: () => place(key, p) } },
+        cardAvatar(p, 2),
+        el("span", { class: "ts-pick-body" },
+          el("strong", null, p.name || p.id),
+          el("span", { class: "small muted" }, `${CARD_TOOL_SHORT[p.model && p.model.tool] || "?"}${suggested ? "・你建議放這裡" : ""}${p.enabled === false ? "・已停用" : ""}`),
+          problem ? el("span", { class: "small ts-pick-warn" }, "放這裡審查不算數：" + problem.why) : null)));
+    });
+    return el("div", { class: "ts-menu", "data-menu": key },
+      el("div", { class: "small muted" }, "從角色卡池挑"), search,
+      rows.length ? el("ul", { class: "ts-menu-list" }, rows) : el("p", { class: "small muted" }, cards.length ? "沒有符合的角色卡" : "角色卡池是空的，先到「角色卡池」拿幾張卡"),
+      matches.length > TEAM_MENU_MAX ? el("p", { class: "small muted" }, `還有 ${matches.length - TEAM_MENU_MAX} 張，輸入名字縮小範圍`) : null);
+  }
+
+  function slotNode(def, problems) {
+    const entry = slots[def.key];
+    const problem = problems[def.key] || null;
+    const state = teamCardState(entry, profiles);
+    const err = errors[def.key] || "";
+    const isOpen = openKey === def.key;
+    const armed = selected !== null;
+    const body = entry
+      ? el("span", { class: "ts-card" },
+          cardAvatar({ id: entry.profile_id || "", model: { tool: teamCardTool(entry) } }, 3),
+          el("span", { class: "ts-card-text" },
+            el("strong", { "data-ts": "name" }, entry.name),
+            el("span", { class: "small muted" }, [CARD_TOOL_SHORT[teamCardTool(entry)] || null, TEAM_FAMILY_LABEL[entry.family] || entry.family,
+              entry.model || null].filter(Boolean).join("・"))))
+      : el("span", { class: "ts-empty" }, cardArt("icons", "emptySlot", 2), def.optional ? "＋ 第二位審查（選填）" : "＋ 放一張角色卡");
+    const button = el("button", { type: "button", class: "ts-body", "data-act": "slot",
+      "aria-expanded": String(isOpen), "aria-label": entry ? `${def.label}：${entry.name}，按 Enter 換一張` : `${def.label}：空的，按 Enter 挑一張`,
+      on: { click: () => {
+        if (selected) { place(def.key, cardById(selected)); return; }
+        openKey = isOpen ? null : def.key; query = ""; focusKey = def.key; paint();
+      } } }, body);
+    focusRefs.set(def.key, button);
+    const li = el("li", { class: `team-slot${entry ? " ts-filled" : " ts-vacant"}${def.optional ? " ts-optional" : ""}${armed ? " ts-armed" : ""}${problem ? " ts-bad" : ""}`,
+      "data-slot": def.key, "data-state": entry ? (problem ? "problem" : "filled") : "empty",
+      on: {
+        dragover: (e) => { if (e.preventDefault) e.preventDefault(); },
+        drop: (e) => {
+          if (e.preventDefault) e.preventDefault();
+          let id = "";
+          try { id = e.dataTransfer ? (e.dataTransfer.getData(TEAM_DRAG_TYPE) || e.dataTransfer.getData("text/plain")) : ""; } catch (_) { id = ""; }
+          const p = cardById(id);
+          if (p) place(def.key, p);
+        },
+        keydown: (e) => { if (e.key === "Escape" && openKey === def.key) { openKey = null; focusKey = def.key; paint(); } },
+      } },
+      el("div", { class: "ts-head" }, el("strong", null, def.label),
+        el("span", { class: "small muted" }, def.position === "reviewer" ? "要和執行位不同陣營" : `建議放「${def.short}」位的卡`)),
+      button,
+      entry ? el("div", { class: "ts-tools" },
+        el("button", { type: "button", class: "btn small", "data-act": "clear", on: { click: () => clearSlot(def.key) } }, "拿下來"),
+        // from a place, the launch check opens with this task card's folder already in it (design 3.6); not while there
+        // are changes that only exist on this page, and not for a card that is gone
+        entry.profile_id && state.state !== "gone" && (!flow || !dirty)
+          ? el("a", { class: "btn small", "data-act": "launch", title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的",
+              href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1` }, "出發") : null) : null,
+      problem ? el("p", { class: "ts-problem small", "data-slot-problem": problem.code, role: "status" }, el("strong", null, "不算數："), problem.text, el("span", { class: "muted" }, `（${problem.why}）`)) : null,
+      entry && state.state === "changed"
+        ? el("p", { class: "ts-stale small", "data-slot-stale": "changed" },
+            `${entry.profile_snapshot.name} 的設定在放上隊伍後改過了 · `,
+            el("button", { type: "button", class: "btn small", "data-act": "refresh", on: { click: () => refreshSlot(def.key, state.current) } }, "更新成最新")) : null,
+      entry && state.state === "gone"
+        ? el("p", { class: "ts-stale small", "data-slot-stale": "gone" }, "這張角色卡已經不在角色卡池了；隊伍裡保留的是放上時的紀錄。") : null,
+      entry && state.state === "manual"
+        ? el("p", { class: "small muted", "data-slot-stale": "manual" }, "手動填寫的角色，沒有對應的角色卡。") : null,
+      err ? el("p", { class: "ts-error small", "data-slot-error": def.key, role: "alert" }, err) : null,
+      isOpen ? menuFor(def.key) : null);
+    return li;
+  }
+
+  function paint() {
+    focusRefs.clear();
+    const problems = teamProblems(slots);
+    const missing = teamMissing(slots);
+    const complete = missing.length === 0;
+    const noGit = opts.gitState === "nogit";
+    const save1 = el("button", { type: "button", class: "btn primary", "data-act": "save", disabled: !complete || busy || (flow && !dirty),
+      on: { click: save } }, busy ? "儲存中…" : flow ? "儲存隊伍" : "建立隊伍");
+    const tray = cards.length
+      ? el("div", { class: "ts-tray", "data-team": "tray" },
+          el("div", { class: "small muted" }, "角色卡池：拖到位置上，或先點一張卡再點位置"),
+          el("div", { class: "ts-chips" }, cards.slice(0, TEAM_TRAY_MAX).map(cardChip)),
+          cards.length > TEAM_TRAY_MAX ? el("p", { class: "small muted" }, `還有 ${cards.length - TEAM_TRAY_MAX} 張，點位置用名字找`) : null)
+      : el("div", { class: "ts-tray" }, el("p", { class: "small muted" }, "角色卡池是空的。"),
+          el("a", { class: "btn small", href: "#/team" }, "到角色卡池拿卡"));
+    setKids(host,
+      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。" : "把角色卡放上來：規劃、執行、審查各一位（第二位審查選填）。"),
+      selected ? el("p", { class: "small ts-armed-note", role: "status" }, `已拿起「${(cardById(selected) || {}).name || ""}」，點一個位置放下去。`,
+        el("button", { type: "button", class: "btn small", on: { click: () => { selected = null; paint(); } } }, "放開")) : null,
+      el("ul", { class: "team-slots" }, TEAM_SLOTS.map((d) => slotNode(d, problems))),
+      noGit ? el("p", { class: "small ts-nogit", "data-team": "nogit" }, badge(NO_GIT_BADGE, "b-warn", NO_GIT_NOTE), " ", NO_GIT_NOTE) : null,
+      tray,
+      el("div", { class: "ts-actions" }, save1,
+        !complete ? el("span", { class: "small muted", "data-team": "missing" }, `還差：${missing.join("、")}`) : null,
+        flow && !dirty ? el("span", { class: "small muted" }, "沒有未儲存的改動") : null),
+      el("p", { class: "small muted" }, flow ? TEAM_SAVE_NOTE : "建立之後，這張任務卡就有流程；沒放滿三個必填位置之前不會送出。"),
+      boardError ? el("p", { class: "ts-error small", "data-team": "error", role: "alert" }, boardError) : null);
+    if (focusKey) {
+      const node = focusRefs.get(focusKey);
+      focusKey = null;
+      if (node && typeof node.focus === "function") node.focus();
+    }
+  }
+
+  paint();
+  return { node: host, state: { get slots() { return slots; }, get dirty() { return dirty; }, get flow() { return flow; } },
+    place, save, clearSlot };
+}
+
+// The team of one task card, loaded on its own: the flow of this task (if any), the cards, and whether the folder has
+// version history (the review of a folder without it never counts; the board says so beside the review places).
+// opts may carry flow, profiles, catalog to skip a request the caller already made.
+function teamSection(task, opts = {}) {
+  const box = el("div", { class: "team-section", "data-team": "section" }, el("p", { class: "small muted" }, "讀取隊伍…"));
+  const gone = typeof opts.gone === "function" ? opts.gone : () => false;
+  let preset = opts;      // what the caller already has is used once; a reload after a save asks the server again
+  async function load() {
+    const have = preset;
+    preset = {};
+    const [flowsRes, profilesRes, catalog, info] = await Promise.all([
+      have.flow !== undefined ? { flows: have.flow ? [have.flow] : [] } : api.get("/api/flows").catch((e) => ({ error: e.message, flows: [] })),
+      have.profiles ? { profiles: have.profiles } : api.get("/api/agent-profiles").catch((e) => ({ error: e.message, profiles: [] })),
+      have.catalog !== undefined ? have.catalog : api.get("/api/agent-builder/catalog").then((r) => (r && r.ok ? r : null)).catch(() => null),
+      task.workdir ? api.get(folderInspectUrl(task.workdir)).catch(() => null) : null,
+    ]);
+    if (gone()) return;
+    const flow = ((flowsRes && flowsRes.flows) || []).find((f) => f.task_id === task.id) || null;
+    const gitState = info && info.exists !== false ? (folderVerdict(info).noGit ? "nogit" : "git") : null;
+    const board = teamBoard({ task, flow, profiles: (profilesRes && profilesRes.profiles) || [], catalog, gitState, onSaved: () => { load(); if (opts.onSaved) opts.onSaved(); } });
+    setKids(box,
+      flowsRes && flowsRes.error ? notice("warn", "讀不到流程：" + flowsRes.error) : null,
+      profilesRes && profilesRes.error ? notice("warn", "讀不到角色卡：" + profilesRes.error) : null,
+      flow ? el("section", { class: "section", "data-team": "next" }, sectionHead("下一步", flow.phase ? flow.phase.label : null,
+        opts.hideOpen ? null : el("a", { class: "btn small", href: `#/flows/${encodeURIComponent(flow.id)}` }, "打開流程")), nextStepsList(flow)) : null,
+      board.node);
+  }
+  load().catch((e) => setKids(box, notice("bad", "讀不到隊伍：" + (e && e.message || ""))));
+  return box;
+}
+
+// "放上任務卡" on a role card: pick the task card, pick the place, put it there. A task that already has a flow is
+// saved at once (the dialog is the confirmation, and it shows what the save does); one that has none gets a draft that
+// the board on its own page finishes.
+function openPlaceDialog(p, opts = {}) {
+  const profiles = Array.isArray(opts.profiles) && opts.profiles.length ? opts.profiles : [p];
+  const st = { tasks: null, flows: [], taskId: null, slot: null, busy: false, error: "", loadError: "" };
+  const titleId = "place-dialog-title";
+  const body = el("div", { class: "cw-body" });
+  const foot = el("div", { class: "modal-actions cw-foot" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+    el("div", { class: "modal-box cw-box" }, el("h2", { id: titleId }, `放上任務卡：${p.name || p.id}`), body, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+
+  const task = () => (st.tasks || []).find((t) => t.id === st.taskId) || null;
+  const flowOf = (t) => st.flows.find((f) => t && f.task_id === t.id) || null;
+  const slotsOf = (t) => {
+    const f = flowOf(t);
+    return f ? teamSlotsFromRoles(f.roles) : teamDraftRead(t.id, profiles, t.workdir);
+  };
+
+  async function go() {
+    const t = task();
+    if (!t || !st.slot || st.busy) return;
+    const slots = slotsOf(t);
+    slots[st.slot] = roleFromCard(p, { executor: st.slot === "executor", keep: slots[st.slot], workdir: t.workdir });
+    const flow = flowOf(t);
+    st.error = "";
+    if (!flow) {
+      teamDraftWrite(t.id, slots);
+      const missing = teamMissing(slots);
+      toast(missing.length ? `已放進「${t.title || t.id}」的草稿，還差：${missing.join("、")}` : "三個必填位置都有卡了，到任務卡上按「建立隊伍」");
+      close();
+      location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;
+      return;
+    }
+    st.busy = true;
+    draw();
+    try {
+      await api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`, { roles: teamRolesBody(slots) });
+      toast(`已放上「${t.title || t.id}」的${(TEAM_SLOTS.find((s) => s.key === st.slot) || {}).label || "位置"}`);
+      close();
+      if (opts.onPlaced) opts.onPlaced();
+      location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;
+    } catch (e) {
+      st.busy = false;
+      st.error = e && e.message ? e.message : "未知錯誤";
+      draw();
+    }
+  }
+
+  function draw() {
+    const t = task();
+    const open = (st.tasks || []);
+    const rows = open.map((x) => el("li", null, el("button", { type: "button", class: "fp-item", "data-place-task": x.id, "aria-pressed": String(x.id === st.taskId),
+      on: { click: () => { st.taskId = x.id; st.slot = null; st.error = ""; draw(); } } },
+      el("strong", null, x.title || "（沒有名稱）"),
+      el("span", { class: "small muted fp-path" }, x.workdir ? `${folderBaseName(x.workdir)}・${x.workdir}` : "還沒有資料夾"),
+      el("span", { class: "small" }, flowOf(x) ? "已有隊伍，放上去會直接儲存" : "還沒有隊伍，會先放進草稿"))));
+    const slots = t ? slotsOf(t) : null;
+    const slotRows = t ? TEAM_SLOTS.map((d) => {
+      const there = slots[d.key];
+      const trial = { ...slots, [d.key]: roleFromCard(p, { executor: d.key === "executor" }) };
+      const problem = slotProblem(d.key, trial[d.key], trial);
+      return el("li", null, el("button", { type: "button", class: "fp-item", "data-place-slot": d.key, "aria-pressed": String(d.key === st.slot),
+        on: { click: () => { st.slot = d.key; st.error = ""; draw(); } } },
+        el("strong", null, d.label),
+        el("span", { class: "small muted" }, there ? `現在是「${there.name}」，會換成這張` : "目前是空的"),
+        problem ? el("span", { class: "small ts-pick-warn" }, `${problem.text}（${problem.why}）`) : null));
+    }) : [];
+    setKids(body,
+      el("p", { class: "small muted" }, "挑一張任務卡，再挑它的一個位置。放上去只是把這張卡的名字、陣營和模型記進隊伍，不會啟動任何東西。"),
+      st.loadError ? notice("bad", st.loadError) : null,
+      st.tasks === null ? el("p", { class: "small muted" }, "讀取任務卡…")
+        : open.length ? el("ul", { class: "fp-items", "data-place": "tasks" }, rows)
+          : emptyState("沒有未結案的任務卡", "先到大廳按「＋ 任務卡（導入專案）」，挑一個資料夾。"),
+      t ? el("div", { "data-place": "slots" }, el("h3", null, "放在哪個位置"), el("ul", { class: "fp-items ts-slotlist" }, slotRows)) : null,
+      t && flowOf(t) ? el("p", { class: "small muted" }, TEAM_SAVE_NOTE) : null,
+      st.error ? el("p", { class: "ts-error small", "data-place": "error", role: "alert" }, st.error) : null);
+    const go1 = el("button", { type: "button", class: "btn primary", "data-act": "place", disabled: !t || !st.slot || st.busy, on: { click: go } },
+      st.busy ? "放上去…" : "放上去");
+    setKids(foot, el("button", { type: "button", class: "btn", on: { click: close } }, "取消"), go1);
+  }
+  draw();
+  Promise.all([api.get("/api/tasks"), api.get("/api/flows").catch(() => ({ flows: [] }))]).then(([tr, fr]) => {
+    st.tasks = ((tr && tr.tasks) || []).filter((x) => x && x.status !== "closed" && x.status !== "handed_off");
+    st.flows = (fr && fr.flows) || [];
+    if (opts.taskId && st.tasks.some((x) => x.id === opts.taskId)) st.taskId = opts.taskId;
+    draw();
+  }).catch((e) => { st.tasks = []; st.loadError = "讀不到任務卡：" + (e && e.message || ""); draw(); });
+  return { modal, close, state: st };
+}
+
+// One line for a flow's next step, for the front of a task card: 「下一步：執行者實作（輪到 工匠）」.
+function nextStepSummary(flow) {
+  const ns = nextSteps(flow);
+  if (!ns.known) return "";
+  if (ns.current >= 0) return `下一步：${ns.steps[ns.current].text}（輪到 ${ns.turn}）`;
+  if (ns.after) return `下一步：${ns.after.text}（輪到 ${ns.after.who}）`;
+  return "這個流程的步驟都走完了";
+}
+
 // ---------- task cards are folders (design card-play 3.6) ---------------------------------------------------
 // One task card is one folder. What is known about the folder comes from GET /api/folders/inspect, which is
 // read-only on the server (a few stats and the repository's HEAD, no git process, no walk). Nothing here writes into
@@ -8700,9 +9335,15 @@ function taskFolderBlock(task, opts = {}) {
 }
 
 function taskFrontCard(task, opts = {}) {
+  // the team and the next step, only when the flows were read: not knowing is not "no team"
+  const flow = Array.isArray(opts.flows) ? opts.flows.find((f) => f && f.task_id === task.id) || null : undefined;
   return el("article", { class: "tf-card card", "data-task": task.id },
     el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"), taskStatusBadge(task.status)),
     taskFolderBlock(task, opts),
+    flow ? el("div", { class: "tf-team", "data-tf": "team" }, teamAvatars(flow),
+        nextStepSummary(flow) ? el("div", { class: "small", "data-tf": "next" }, nextStepSummary(flow)) : null)
+      : flow === null ? el("div", { class: "tf-team small muted", "data-tf": "team" }, "還沒有隊伍 · ",
+          el("a", { href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "把角色卡放上去")) : null,
     el("div", { class: "tf-actions" },
       el("a", { class: "btn small", href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "打開")));
 }
@@ -8975,5 +9616,28 @@ if (typeof module !== "undefined" && module.exports) {
     taskFolderBlock,
     taskFrontCard,
     taskCardsSection,
+    TEAM_SLOTS,
+    TEAM_INFO,
+    SLOT_REVIEW_NEEDS_DIFF,
+    TEAM_SAVE_NOTE,
+    teamFamily,
+    teamCardFamily,
+    slotProblem,
+    roleFromCard,
+    teamSlotsFromRoles,
+    teamMissing,
+    teamRolesBody,
+    teamProblems,
+    teamCardState,
+    teamDraftRead,
+    teamDraftWrite,
+    nextSteps,
+    nextStepsList,
+    nextStepSummary,
+    teamAvatars,
+    teamBoard,
+    teamSection,
+    openPlaceDialog,
+    flowRoleToolText,
   };
 }

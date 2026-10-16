@@ -1262,3 +1262,58 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   .fp-items { grid-template-columns: 1fr; max-height: 180px; }
   .cw-foot .btn { flex: 1 1 auto; }
 }
+
+/* ---- team slots and next steps (design card-play 3.5): role cards on a task card ---- */
+.team-board { display: grid; gap: 12px; min-width: 0; }
+.team-slots { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); min-width: 0; }
+.team-slot { display: grid; gap: 6px; align-content: start; padding: 10px 12px; border: 2px solid var(--line-2); border-radius: var(--radius); background: var(--panel); min-width: 0; }
+.team-slot.ts-vacant { border-style: dashed; background: var(--panel-2); }
+.team-slot.ts-optional.ts-vacant { border-color: var(--line); }
+.team-slot.ts-armed { outline: 2px dotted var(--accent); outline-offset: 2px; }
+.team-slot.ts-bad { border-color: var(--bad); border-left-width: 6px; }
+.team-slot.ts-bad.ts-vacant { border-style: dashed; }
+.ts-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; justify-content: space-between; }
+.ts-body { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: inherit; font: inherit; padding: 4px 0; cursor: pointer; min-height: 44px; border-radius: 8px; }
+.ts-body:hover { background: var(--accent-soft); }
+.ts-card { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ts-card-text { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.ts-empty { display: flex; gap: 6px; align-items: center; color: var(--ink-2); }
+.ts-tools { display: flex; gap: 6px; }
+.ts-problem { margin: 0; padding: 4px 8px; border-radius: 6px; color: var(--bad); background: var(--bad-soft); font-weight: 600; }
+.ts-problem .muted { font-weight: 400; color: var(--ink-2); }
+.ts-stale { margin: 0; padding: 4px 8px; border-radius: 6px; background: var(--warn-soft); color: var(--ink); display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.ts-error { margin: 0; padding: 4px 8px; border-radius: 6px; background: var(--bad-soft); color: var(--ink); border: 1px solid var(--bad); overflow-wrap: anywhere; }
+.ts-menu { display: grid; gap: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.ts-menu input { width: 100%; min-width: 0; }
+.ts-menu-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+.ts-pick { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); border-radius: 10px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 13.5px; min-height: 44px; }
+.ts-pick:hover { border-color: var(--accent); }
+.ts-pick-body { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.ts-pick-warn { color: var(--bad); }
+.ts-tray { display: grid; gap: 6px; }
+.ts-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ts-chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); border-radius: 999px; padding: 4px 10px 4px 6px; cursor: grab; font: inherit; font-size: 13px; min-height: 40px; max-width: 100%; }
+.ts-chip:hover { border-color: var(--accent); }
+.ts-chip-on, .ts-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); }
+.ts-chip-name { overflow-wrap: anywhere; text-align: left; }
+.fp-items.ts-slotlist { max-height: none; overflow-y: visible; }
+.ts-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ts-armed-note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0; }
+.ts-nogit { margin: 0; }
+.ts-manual { margin-top: 12px; }
+.ns { display: grid; gap: 6px; }
+.ns-list { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.ns-step { color: var(--ink-2); }
+.ns-past { color: var(--ink-3); }
+.ns-now { color: var(--ink); }
+.ns-turn { margin-left: 6px; border-color: var(--accent); color: var(--accent); }
+.ns-reason { color: var(--bad); }
+.ns-after { margin: 0; }
+.team-avatars { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.team-avatar { display: inline-flex; gap: 4px; align-items: center; min-width: 0; }
+.tf-team { display: grid; gap: 4px; }
+.team-section { display: grid; gap: 12px; min-width: 0; }
+@media (max-width: 720px) {
+  .team-slots { grid-template-columns: 1fr; }
+  .ts-menu-list { max-height: 220px; }
+}

@@ -214,6 +214,17 @@ Other safeguards:
 - **Malformed data fails closed.** Stored values that are non-finite, out of range, of the wrong type, out of order
   or unknown block the store instead of being shown or repaired; tests feed each entry point NaN, ±inf, huge
   integers, booleans, wrong containers and unknown fields.
+- **A role can record the role card it was filled from, and that is only a note.** A role may carry `profile_id` and
+  `profile_snapshot` (`name`, `tool`, `model_id`, `revision`), both or neither, each checked as plain data with a
+  closed key set (anything extra, or of another type, is refused on input and blocks the store on load).
+  `vbear/flows.py` still imports neither the launch nor the profile module and computes no digest: the revision is
+  the `profile_digest` the profile API shows for the card (`revision`, response only; a request that carries one is
+  refused), and a test locks that value. Nothing in a flow follows a card that is edited, copied or deleted
+  afterwards: the page compares the recorded revision with the card's current one, says so, and updates the role
+  only when the person presses the button (`POST /api/flows/<id>/roles`). The snapshot does not decide anything: the
+  family a review is judged by is still the role's own `family`, which the page fills from the card's tool and the
+  server neither derives nor cross-checks. Placing a card on a task card's team writes only `flows.json`; it starts,
+  sends and loads nothing.
 
 ## Phase 2 coordination
 
