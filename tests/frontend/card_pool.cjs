@@ -1,5 +1,6 @@
-// P1 (design card-play 3.1 to 3.3): the card pool page, the three-step card wizard, the starter deck, the pure helpers
-// (permissionSuggestion, cardLight, sameNameCard, skillCompatible), the card vocabulary and the honesty rules.
+// P1 and P2 (design card-play 3.1 to 3.4): the card pool page, the three-step card wizard, the starter deck, the pure helpers
+// (permissionSuggestion, cardLight, sameNameCard, skillCompatible, cardSlots, cardDeparture), the card vocabulary and the
+// honesty rules; the role card (two faces, flip, slots, light), the art and the camp frames.
 // Runs the real viewTeam() / openCardWizard() / openStarterDeck() / viewWorkbench() from web/app.js against a
 // synthetic DOM and a fetch stub. It is NOT a browser test.
 //
@@ -237,6 +238,7 @@ function freshContext(handlers) {
     Node, console: { log: () => {}, warn: () => {}, error: () => {} },
     document: {
       createElement: (t) => new Node(t),
+      createElementNS: (_ns, t) => new Node(t),
       createTextNode: (t) => { const n = new Node("#text"); n.textContent = t; return n; },
       getElementById: (id) => idRegistry.get(id) || null,
       body, documentElement, activeElement: null,
@@ -310,8 +312,18 @@ const roles = [
   { role_id: "r-1", name: "Writer", tool: "claude", kind: "subagent", skill_link_ids: [], skill_link_basis: "undeclared" },
 ];
 
+// What the server's loadout says of a profile: no reason against a launch unless a test gives one.
+function loadoutBody(p, over = {}) {
+  return { ok: true, profile: { id: p.id }, index: { loaded: true }, profession: { state: "none", role_id: null },
+    skills: { title: "技能卡（收藏中：VBear 啟動時不載入）", all_inactive: true,
+      items: (p.equipped_skill_ids || []).map((id) => ({ skill_id: id, state: "in_index", name: id, will_load: false, effective: false })) },
+    blockers: [], ...over };
+}
 function baseHandlers(profiles, cat = catalog, extra = {}) {
+  const loadouts = {};
+  for (const p of profiles) loadouts[`GET /api/agent-profiles/${encodeURIComponent(p.id)}/loadout`] = () => jsonResponse(loadoutBody(p));
   return {
+    ...loadouts,
     "GET /api/overview": () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
     "GET /api/skills": () => jsonResponse({ skills: [], categories: [] }),
     "GET /api/roles": () => jsonResponse({ roles }),
@@ -328,6 +340,7 @@ async function openPool(profiles, cat = catalog, extra = {}) {
   const ctx = freshContext(baseHandlers(profiles, cat, extra));
   evalAgentBuilderSlice(ctx);
   await ctx.viewTeam();
+  await tick(8);
   return ctx;
 }
 
@@ -422,8 +435,8 @@ async function test(name, fn) {
     assert.ok(cards.every((c) => findText(c, "名冊，不代表正在出勤")));
     assert.ok(!findText(main, "出勤中"), "no attendance is claimed");
     const light = (c) => byData(c, "data-pcard", "light")[0];
-    assert.ok(light(cards[0]).className.includes("pcard-green") && findText(light(cards[0]), "可以出發（權限意圖都已決定）"));
-    assert.ok(light(cards[1]).className.includes("pcard-yellow") && findText(light(cards[1]), "還差一步：權限意圖還沒決定"));
+    assert.ok(light(cards[0]).className.includes("rcard-green") && findText(light(cards[0]), "可以出發（權限意圖都已決定）"));
+    assert.ok(light(cards[1]).className.includes("rcard-yellow") && findText(light(cards[1]), "還差一步：權限意圖還沒決定"));
     assert.ok(byData(cards[1], "data-pcard", "decide").length === 1 && byData(cards[0], "data-pcard", "decide").length === 0);
     assert.ok(findText(light(cards[0]), "實際能不能出發，以出發前檢查為準"), "the green light does not promise a launch");
     // the scanned role templates are folded away by default
@@ -826,7 +839,7 @@ async function test(name, fn) {
     const poolCode = source.slice(start, end);
     assert.ok(start > 0 && end > start);
     assert.ok(!/\p{Extended_Pictographic}/u.test(poolCode), "emoji in the card pool code");
-    assert.ok(!/https?:\/\//.test(poolCode), "external resource");
+    assert.ok(!/https?:\/\//.test(poolCode.split("http://www.w3.org/2000/svg").join("")), "external resource (the SVG namespace is a name, not a load)");
     const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
     assert.ok(html.includes("</span>角色卡池</a>") && !html.includes("Agent 團隊"));
   });
@@ -838,10 +851,14 @@ async function test(name, fn) {
     for (const w of ["稀有", "星數", "星等", "抽卡", "隨機", "攻擊力", "防禦力", "等級", "Lv.", "★", "☆", "出勤中"]) {
       assert.ok(!t.includes(w), `forbidden on the pool page: ${w}`);
     }
-    // the card face never shows a permission on its own (the intents live in the wizard, beside their disclaimer)
-    assert.ok(!/寫入：拒絕|編輯寫入・拒絕|讀取檔案・允許/.test(t), "no intent on the card face");
-    // the skills line says the cards are kept, not loaded
-    assert.ok(findText(main, "技能卡 1 張（收藏中，這次的安全啟動不會載入）"));
+    // the card face never shows a permission on its own: the intents are on the back, beside their disclaimer
+    for (const card of walk(main).filter((n) => n.tag === "article" && n.getAttribute("data-profile-id"))) {
+      const face = (which) => walk(card).find((n) => n.getAttribute && n.getAttribute("data-face") === which && n.tag === "div");
+      assert.ok(!/(讀取檔案|編輯寫入|執行測試|部署上線|寫入|讀取)[・：](允許|拒絕|還沒決定)/.test(textOf(face("front"))), "no single intent on the card face");
+      assert.ok(findText(face("back"), "只是記錄，不是授權") && findText(face("back"), "不代表 VBear 已經限制"), "the back carries the disclaimer");
+    }
+    // the slots say the cards are kept, not loaded; none is in effect
+    assert.ok(findText(main, "技能卡 1 張") && findText(main, "收藏中") && findText(main, "這次的安全啟動不會載入"));
     assert.ok(!findText(main, "生效中"), "no card claims to be in effect");
     assert.strictEqual(vm.runInContext("CARD_INTENT_NOTE", pure), "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發前檢查裡的防具標示。");
   });
@@ -852,6 +869,337 @@ async function test(name, fn) {
     assert.ok(/\.cw-body\s*\{[^}]*overflow-y:\s*auto/.test(css));
     assert.ok(/prefers-reduced-motion[^{]*\{[^}]*\.cw-choice/.test(css));
     assert.ok(!/@import|url\(\s*["']?https?:/.test(css), "no external resource in the CSS");
+  });
+
+  // ======== P2 (design card-play 3.2, 3.4, R1): the role card, its slots, the art ========================================
+
+  const cardOf = (id) => walk(main).find((n) => n.tag === "article" && n.getAttribute("data-profile-id") === id);
+  const faceOf = (card, which) => walk(card).find((n) => n.tag === "div" && n.getAttribute("data-face") === which);
+  const slotsOf = (card) => walk(card).filter((n) => n.tag === "li" && ["collected", "active"].includes(n.getAttribute("data-slot")));
+  const okState = (data) => ({ state: "ok", data });
+  const loadoutWith = (items, over = {}) => ({ blockers: [], profession: { state: "none", role_id: null },
+    skills: { all_inactive: true, items }, ...over });
+
+  await test("cardSlotState: solid only for will_load === true, for that very skill; words and other values never decide", () => {
+    const rows = [
+      [{ will_load: true }, "active"], [{ will_load: false }, "collected"], [{}, "collected"], [null, "collected"],
+      [undefined, "collected"], [{ will_load: "true" }, "collected"], [{ will_load: 1 }, "collected"],
+      [{ will_load: null }, "collected"], [{ effective: true }, "collected"], [{ state: "生效中" }, "collected"],
+    ];
+    for (const [item, want] of rows) assert.strictEqual(pure.cardSlotState(item), want, JSON.stringify(item));
+    assert.deepStrictEqual({ ...vm.runInContext("CARD_SLOT_LABEL", pure) }, { collected: "收藏中", active: "生效中" });
+  });
+
+  await test("cardSlots: the profile's own list before the loadout, the loadout's rows after; all_inactive is read, not guessed", () => {
+    const p = { equipped_skill_ids: ["s-c", "s-x"] };
+    const before = pure.cardSlots(p, null, catalog);
+    assert.strictEqual(before.loaded, false);
+    assert.deepStrictEqual(before.rows.map((r) => [r.id, r.name, r.state]), [["s-c", "claude-skill", "collected"], ["s-x", "codex-skill", "collected"]]);
+    assert.strictEqual(before.allInactive, null, "nothing is claimed before the loadout is read");
+    assert.strictEqual(pure.cardSlots(p, { state: "loading" }, catalog).loaded, false);
+    assert.strictEqual(pure.cardSlots(p, { state: "error", error: "x" }, catalog).allInactive, null);
+    const items = [{ skill_id: "s-c", state: "in_index", name: "a", will_load: false }, { skill_id: "gone", state: "not_in_index", will_load: false }];
+    const after = pure.cardSlots(p, okState(loadoutWith(items)), catalog);
+    assert.strictEqual(after.loaded, true);
+    assert.deepStrictEqual(after.rows.map((r) => [r.id, r.state, r.missing]), [["s-c", "collected", false], ["gone", "collected", true]]);
+    assert.strictEqual(after.allInactive, true);
+    // one skill that will load: that slot is solid, and the section is no longer "all inactive" even if the flag says so
+    const mixed = pure.cardSlots(p, okState(loadoutWith([{ skill_id: "s-c", state: "in_index", will_load: true }, items[1]])), catalog);
+    assert.deepStrictEqual(mixed.rows.map((r) => r.state), ["active", "collected"]);
+    assert.strictEqual(mixed.allInactive, false);
+    assert.strictEqual(pure.cardSlots(p, okState({ skills: { items } }), catalog).allInactive, null, "no flag: no claim");
+    assert.strictEqual(pure.cardSlots(p, okState({ skills: { all_inactive: "yes", items } }), catalog).allInactive, null, "a flag that is not a boolean is no flag");
+    assert.strictEqual(pure.cardSlots({}, null, null).rows.length, 0);
+  });
+
+  await test("cardDeparture: yellow for undecided intents; green only with a loadout that was read and lists no reason", () => {
+    const decided = { permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } };
+    const undecided = { permission_intents: { read: "allow", write: "unspecified", test: "allow", deploy: "deny" } };
+    const rows = [
+      ["undecided, no loadout", undecided, null, "yellow"],
+      ["undecided, blockers listed", undecided, okState({ blockers: [{ code: "x", message: "m" }] }), "yellow"],
+      ["decided, no loadout", decided, null, "checking"],
+      ["decided, loading", decided, { state: "loading" }, "checking"],
+      ["decided, error", decided, { state: "error", error: "e" }, "unknown"],
+      ["decided, ok without data", decided, { state: "ok" }, "unknown"],
+      ["decided, blockers not a list", decided, okState({ blockers: "none" }), "unknown"],
+      ["decided, blockers missing", decided, okState({}), "unknown"],
+      ["decided, no blockers", decided, okState({ blockers: [] }), "green"],
+      ["decided, one blocker", decided, okState({ blockers: [{ code: "c", message: "不能出發的原因" }] }), "blocked"],
+      ["decided, blocker without text", decided, okState({ blockers: [{ code: "c" }] }), "blocked"],
+    ];
+    for (const [label, p, ld, want] of rows) assert.strictEqual(pure.cardDeparture(p, ld).state, want, label);
+    assert.deepStrictEqual([...pure.cardDeparture(decided, okState({ blockers: [{ message: "A" }, { message: "B" }] })).reasons], ["A", "B"]);
+    assert.deepStrictEqual([...pure.cardDeparture(decided, okState({ blockers: [{ code: "c" }] })).reasons], ["原因未提供"]);
+    assert.strictEqual(pure.cardDeparture(decided, okState({ blockers: [] })).text, "可以出發（權限意圖都已決定）");
+    for (const r of rows) assert.ok(!/安全|已限制/.test(pure.cardDeparture(r[1], r[2]).text), "the light never says safe or limited");
+  });
+
+  await test("the card on the pool page: dashed slots for will_load false, solid for true, whatever the section's words say", async () => {
+    const profiles = [mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" }, { equipped_skill_ids: ["s-c", "s-s"] })];
+    const items = [{ skill_id: "s-c", state: "in_index", name: "claude-skill", will_load: false },
+      { skill_id: "s-s", state: "in_index", name: "shared-skill", will_load: true }];
+    await openPool(profiles, catalog, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutWith(items, {
+      skills: { title: "全部都是收藏中", all_inactive: false, items } })) });
+    const card = cardOf("p-1");
+    assert.deepStrictEqual(slotsOf(card).map((n) => [n.getAttribute("data-slot"), n.className.includes("rcard-slot-active")]), [["collected", false], ["active", true]]);
+    assert.ok(findText(faceOf(card, "front"), "生效中") && findText(faceOf(card, "front"), "收藏中"));
+    assert.ok(!findText(card, "這次的安全啟動不會載入"), "no blanket 'not loaded' line when one skill will load");
+    // the words of the title are not what decides: all slots dashed although the title says 生效中
+    const items2 = items.map((x) => ({ ...x, will_load: false }));
+    await openPool(profiles, catalog, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutWith(items2, {
+      skills: { title: "技能卡（生效中）", all_inactive: true, items: items2 } })) });
+    const card2 = cardOf("p-1");
+    assert.ok(slotsOf(card2).length === 2 && slotsOf(card2).every((n) => n.getAttribute("data-slot") === "collected" && !n.className.includes("rcard-slot-active")));
+    assert.ok(findText(card2, "這次的安全啟動不會載入"));
+    // a card with no skill says so, and a long list shows six and counts the rest
+    const many = Array.from({ length: 9 }, (_, i) => `k-${i}`);
+    await openPool([mkProfile("p-1", "None", "claude", ALL_DENY), mkProfile("p-2", "Many", "claude", ALL_DENY, { equipped_skill_ids: many })]);
+    assert.ok(findText(cardOf("p-1"), "沒有插技能卡"));
+    assert.strictEqual(slotsOf(cardOf("p-2")).length, 6);
+    assert.ok(findText(cardOf("p-2"), "技能卡 9 張") && findText(cardOf("p-2"), "另有 3 張"));
+  });
+
+  await test("a card whose loadout lists a reason is not green: the front gives the first reason, the back all of them", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
+    const q = mkProfile("p-2", "Fine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
+    await openPool([p, q], catalog, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, {
+      blockers: [{ code: "a", message: "第一個原因" }, { code: "b", message: "第二個原因" }], blockers_note: "假設已勾選" })) });
+    const light = (id) => byData(cardOf(id), "data-pcard", "light")[0];
+    assert.strictEqual(light("p-1").getAttribute("data-light"), "blocked");
+    assert.ok(findText(faceOf(cardOf("p-1"), "front"), "目前不能出發") && findText(faceOf(cardOf("p-1"), "front"), "第一個原因"));
+    assert.ok(!findText(faceOf(cardOf("p-1"), "front"), "第二個原因") && findText(faceOf(cardOf("p-1"), "front"), "另有 1 項，翻到背面看"));
+    const reasons = byData(cardOf("p-1"), "data-rc", "blockers")[0];
+    assert.ok(!reasons.hasAttribute("hidden") && findText(reasons, "第一個原因") && findText(reasons, "第二個原因") && findText(reasons, "假設已勾選"));
+    assert.strictEqual(light("p-2").getAttribute("data-light"), "green");
+    assert.ok(byData(cardOf("p-2"), "data-rc", "blockers")[0].hasAttribute("hidden"), "nothing to list: the block is hidden");
+    for (const l of byData(main, "data-pcard", "light")) assert.ok(!/安全|已限制/.test(textOf(l)), "no light says safe or limited");
+  });
+
+  await test("a late loadout repaints the slots and the light only: the buttons are the same nodes and keep their handlers", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" }, { equipped_skill_ids: ["s-c"] });
+    const calls = [];
+    const card = pure.profileCard(p, { catalog, handlers: { launch: (x) => calls.push(["launch", x.id]), edit: (x) => calls.push(["edit", x.id]) } });
+    const launch = byData(card.node, "data-pcard", "launch")[0];
+    assert.strictEqual(byData(card.node, "data-pcard", "light")[0].getAttribute("data-light"), "checking");
+    assert.ok(findText(card.node, "確認出發條件中"));
+    card.setLoadout(okState(loadoutBody(p)));
+    assert.strictEqual(byData(card.node, "data-pcard", "light")[0].getAttribute("data-light"), "green");
+    assert.strictEqual(byData(card.node, "data-pcard", "launch")[0], launch, "the same button");
+    launch.dispatch("click"); byData(card.node, "data-pcard", "edit")[0].dispatch("click");
+    assert.deepStrictEqual(calls, [["launch", "p-1"], ["edit", "p-1"]]);
+    card.setLoadout({ state: "error", error: "x" });
+    assert.strictEqual(byData(card.node, "data-pcard", "light")[0].getAttribute("data-light"), "unknown");
+    assert.ok(findText(card.node, "讀不到出發條件"));
+    // no handlers given: no action button, only the flip
+    const bare = pure.profileCard(p, { catalog }).node;
+    assert.deepStrictEqual(["launch", "edit", "duplicate", "remove", "decide"].map((k) => byData(bare, "data-pcard", k).length), [0, 0, 0, 0, 0]);
+    assert.strictEqual(byData(bare, "data-pcard", "flip").length, 2);
+  });
+
+  await test("flip: both faces stay in the DOM, one is hidden and aria-hidden; button and F key turn it, the focus follows", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
+    const faces = [];
+    const card = pure.profileCard(p, { catalog, handlers: {}, onFace: (f) => faces.push(f) }).node;
+    const front = faceOf(card, "front"), back = faceOf(card, "back");
+    const state = () => [card.getAttribute("data-face"), front.hasAttribute("hidden"), front.getAttribute("aria-hidden"), back.hasAttribute("hidden"), back.getAttribute("aria-hidden")];
+    assert.deepStrictEqual(state(), ["front", false, "false", true, "true"]);
+    assert.ok(front.children.length && back.children.length, "both are built");
+    const flips = byData(card, "data-pcard", "flip");
+    assert.strictEqual(flips.length, 2);
+    assert.ok(flips.every((b) => b.getAttribute("aria-keyshortcuts") === "F" && /按 F/.test(b.getAttribute("title"))));
+    flips[0].dispatch("click");
+    assert.deepStrictEqual(state(), ["back", true, "true", false, "false"]);
+    assert.strictEqual(lastFocus, flips[1], "the button of the face that is up takes the focus");
+    flips[1].dispatch("click");
+    assert.deepStrictEqual(state(), ["front", false, "false", true, "true"]);
+    assert.strictEqual(lastFocus, flips[0]);
+    const key = (k, target, extra = {}) => card.dispatch("keydown", { key: k, target, ...extra });
+    key("f", flips[0]);
+    assert.strictEqual(card.getAttribute("data-face"), "back");
+    key("F", flips[1]);
+    assert.strictEqual(card.getAttribute("data-face"), "front");
+    key("f", new Node("input")); key("f", new Node("textarea")); key("f", new Node("select"));
+    key("f", flips[0], { ctrlKey: true }); key("f", flips[0], { metaKey: true }); key("f", flips[0], { altKey: true });
+    key("x", flips[0]);
+    assert.strictEqual(card.getAttribute("data-face"), "front", "typing in a field, a shortcut with a modifier, another key: no turn");
+    assert.deepStrictEqual(faces, ["back", "front", "back", "front"]);
+    const back2 = pure.profileCard(p, { catalog, face: "back" }).node;
+    assert.strictEqual(back2.getAttribute("data-face"), "back");
+    assert.ok(faceOf(back2, "front").hasAttribute("hidden") && !faceOf(back2, "back").hasAttribute("hidden"));
+    assert.strictEqual(back.getAttribute("role"), "region");
+    assert.strictEqual(back.getAttribute("tabindex"), "0", "the scrollable back can be scrolled from the keyboard");
+  });
+
+  await test("flip: with reduced motion there is no turning class; otherwise it is added and taken off", () => {
+    const p = mkProfile("p-1", "Mine", "claude", ALL_DENY);
+    const run = (reduced) => {
+      const ctx = freshContext({});
+      ctx.window.matchMedia = (q) => ({ matches: reduced && /prefers-reduced-motion/.test(q) });
+      const timers = [];
+      ctx.setTimeout = (f, ms) => { timers.push([f, ms]); return timers.length; };
+      evalAgentBuilderSlice(ctx);
+      const card = ctx.profileCard(p, { catalog }).node;
+      byData(card, "data-pcard", "flip")[0].dispatch("click");
+      return { card, timers };
+    };
+    const calm = run(true);
+    assert.ok(!calm.card.classList.contains("rcard-turn") && calm.timers.length === 0);
+    assert.strictEqual(calm.card.getAttribute("data-face"), "back", "it still turns, only without the motion");
+    const moving = run(false);
+    assert.ok(moving.card.classList.contains("rcard-turn") && moving.timers.length === 1);
+    moving.timers[0][0]();
+    assert.ok(!moving.card.classList.contains("rcard-turn"));
+  });
+
+  await test("the back: tool and model, the intents with their notes, evidence, the actions; Tool ID and Model ID only under 進階", async () => {
+    const p = mkProfile("p-1", "Mine", "codex", { read: "allow", write: "deny", test: "allow", deploy: "deny" }, { profession_role_id: "r-1" });
+    p.model = { tool: "codex", model_id: "gpt-test" };
+    const desc = { value: "Writes docs", origin: "author", detail: "front matter" };
+    await openPool([p], catalog, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, {
+      profession: { state: "found", role_id: "r-1", name: "Writer", description: desc } })) });
+    const card = cardOf("p-1");
+    const back = faceOf(card, "back");
+    const front = faceOf(card, "front");
+    assert.ok(findText(back, "Codex CLI") && findText(back, "gpt-test"));
+    assert.ok(findText(back, "Writer") && findText(back, "只是標籤"), "the profession label, said to be only a label");
+    assert.ok(findText(back, "證據來源") && findText(back, "你自己在主控台建立") && findText(back, "Writes docs"));
+    assert.ok(findText(back, "讀取檔案・允許") && findText(back, "編輯寫入・拒絕") && findText(back, "執行測試・允許") && findText(back, "部署上線・拒絕"));
+    assert.ok(findText(back, "只是記錄，不是授權"));
+    assert.strictEqual(textOf(byData(back, "data-rc", "intent-note")[0]), vm.runInContext("CARD_INTENT_NOTE", pure));
+    for (const kind of ["edit", "duplicate", "remove"]) {
+      assert.strictEqual(byData(back, "data-pcard", kind).length, 1, `${kind} is on the back`);
+      assert.strictEqual(byData(front, "data-pcard", kind).length, 0, `${kind} is not on the front`);
+    }
+    assert.strictEqual(byData(front, "data-pcard", "launch").length, 1);
+    const adv = byData(back, "data-rc", "advanced")[0];
+    assert.strictEqual(adv.tag, "details");
+    assert.ok(!adv.hasAttribute("open") && findText(adv, "Tool ID") && findText(adv, "Model ID") && findText(adv, "英文說明") && findText(adv, "Writes docs"));
+    const outside = textOf(card).replace(textOf(adv), "");
+    for (const w of ["Tool ID", "Model ID", "Permission Intents", "AgentRole", "Agent Builder"]) assert.ok(!outside.includes(w), `${w} is for 進階 only`);
+    assert.ok(!/\bProfile\b/.test(outside), "no 'Profile' on either face");
+    assert.ok(!findText(card, "出勤中"));
+  });
+
+  await test("the front shows the suggested position with its badge, the camp frame, and the sample label", async () => {
+    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY), mkProfile("demo-1", "Demo", "codex", ALL_DENY), mkProfile("p-3", "Shared", "shared", ALL_DENY)]);
+    ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("reviewer"));
+    await ctx.viewTeam(); await tick(8);
+    assert.strictEqual(cardOf("p-1").getAttribute("data-camp"), "anthropic");
+    assert.strictEqual(cardOf("demo-1").getAttribute("data-camp"), "openai");
+    assert.strictEqual(cardOf("p-3").getAttribute("data-camp"), "other");
+    const pos = byData(cardOf("p-1"), "data-pcard", "position")[0];
+    assert.ok(findText(pos, "審查位") && walk(pos).some((n) => n.tag === "svg"), "words and a badge");
+    assert.ok(findText(byData(cardOf("p-3"), "data-pcard", "position")[0], "位置未指定"));
+    assert.deepStrictEqual(["planner", "executor", "reviewer", null, "x"].map((x) => pure.cardPositionArt(x)), ["planning", "execution", "review", "unspecified", "unspecified"]);
+  });
+
+  await test("readLoadouts: at most four requests in flight, every id once, and it stops when the page is gone", async () => {
+    const ctx = freshContext({});
+    evalAgentBuilderSlice(ctx);
+    let inflight = 0, peak = 0;
+    const done = [];
+    const api = vm.runInContext("api", ctx);
+    api.get = (url) => { inflight += 1; peak = Math.max(peak, inflight);
+      return new Promise((r) => setImmediate(() => { inflight -= 1; r({ url }); })); };
+    const ids = Array.from({ length: 11 }, (_, i) => `p-${i}`);
+    ctx.readLoadouts(ids, (id, state) => done.push([id, state.state]), () => false);
+    await tick(40);
+    assert.strictEqual(done.length, 11);
+    assert.deepStrictEqual(done.map((d) => d[0]).sort(), [...ids].sort());
+    assert.ok(peak <= 4 && peak >= 2, `peak ${peak}`);
+    let gone = false;
+    const seen = [];
+    ctx.readLoadouts(ids, (id) => { seen.push(id); gone = true; }, () => gone);
+    await tick(40);
+    assert.ok(seen.length <= 4, "after the page is gone nothing more is read or applied");
+    api.get = () => Promise.reject(new Error("boom"));
+    const errs = [];
+    ctx.readLoadouts(["a"], (id, st) => errs.push(st), () => false);
+    await tick(6);
+    assert.deepStrictEqual(errs.map((x) => [x.state, x.error]), [["error", "boom"]]);
+  });
+
+  await test("the art: every map is a full grid of palette characters; shields differ in shape; positions and icons exist", () => {
+    const px = vm.runInContext("CARD_PIXELS", pure), pal = vm.runInContext("CARD_PALETTE", pure);
+    assert.deepStrictEqual(Object.keys(px).sort(), ["backPattern", "icons", "positions", "shields"]);
+    assert.deepStrictEqual(Object.keys(px.positions).sort(), ["execution", "planning", "review", "unspecified"]);
+    assert.deepStrictEqual(Object.keys(px.shields).sort(), ["enforced", "none", "recorded"]);
+    assert.deepStrictEqual(Object.keys(px.icons).sort(), ["emptySlot", "importProject", "taskFolder"]);
+    const grids = [["backPattern", px.backPattern, 16], ...["positions", "shields", "icons"].flatMap((g) => Object.entries(px[g]).map(([k, m]) => [`${g}.${k}`, m, 12]))];
+    assert.strictEqual(grids.length, 11);
+    for (const [name, rows, size] of grids) {
+      assert.strictEqual(rows.length, size, `${name} height`);
+      for (const row of rows) {
+        assert.strictEqual(row.length, size, `${name} width`);
+        for (const c of row) assert.ok(c === "." || Object.prototype.hasOwnProperty.call(pal, c), `${name}: ${c} is not in the palette`);
+      }
+    }
+    assert.ok(Object.values(pal).every((v) => /^#[0-9a-f]{6}$/i.test(v)) && !Object.values(pal).some((v) => v.toLowerCase() === "#da251d"), "no vn red");
+    // the shield differs in shape, not only in colour
+    const shape = (rows) => rows.map((r) => r.replace(/[^.]/g, "#")).join("|");
+    assert.strictEqual(new Set(Object.values(px.shields).map(shape)).size, 3);
+    assert.ok(px.shields.recorded.join("").split("").filter((c) => c !== ".").every((c) => c === "K"), "dashed: outline only");
+    assert.ok(/[^.K]/.test(px.shields.enforced.join("")), "solid: filled");
+  });
+
+  await test("cardArt: an SVG with the cell grid, decoration only; a name it does not have is null", () => {
+    const svg = pure.cardArt("shields", "enforced", 2);
+    assert.strictEqual(svg.tag, "svg");
+    assert.strictEqual(svg.getAttribute("viewBox"), "0 0 12 12");
+    assert.strictEqual(svg.getAttribute("aria-hidden"), "true");
+    assert.strictEqual(svg.getAttribute("width"), "24");
+    const rects = walk(svg).filter((n) => n.tag === "rect");
+    assert.ok(rects.length > 10 && rects.every((r) => Number(r.getAttribute("height")) === 1));
+    assert.ok(rects.some((r) => r.getAttribute("class") === "px-k"), "the outline takes the theme's colour");
+    assert.ok(rects.filter((r) => r.getAttribute("class") !== "px-k").every((r) => /^#[0-9a-f]{6}$/i.test(r.getAttribute("fill"))));
+    for (const [g, n] of [["shields", "nope"], ["nope", "enforced"], ["backPattern", "backPattern"], ["positions", "__proto__"], ["icons", "constructor"]]) {
+      assert.strictEqual(pure.cardArt(g, n), null, `${g}.${n}`);
+    }
+    const strip = pure.cardPatternStrip();
+    const pattern = walk(strip).find((n) => n.tag === "pattern");
+    assert.ok(pattern && pattern.getAttribute("width") === "16" && pattern.getAttribute("height") === "16");
+    const fill = walk(strip).filter((n) => n.tag === "rect").pop().getAttribute("fill");
+    assert.strictEqual(fill, `url(#${pattern.getAttribute("id")})`, "fills with its own pattern, nothing outside");
+    const other = walk(pure.cardPatternStrip()).find((n) => n.tag === "pattern");
+    assert.notStrictEqual(other.getAttribute("id"), pattern.getAttribute("id"), "each strip has its own id");
+  });
+
+  await test("armorShieldKind: only enforced, intent-only and unrestricted have a shield, by the server's level words", () => {
+    const rows = [["強制（限已測路徑、版本與執行層）", "enforced"], ["僅意圖", "recorded"], ["未限制", "none"],
+      ["部分強制", null], ["未驗證（此 Claude Code 版本尚未實測）", null], ["未知", null], ["不授予", null], ["", null], [undefined, null], ["enforced", null]];
+    for (const [level, want] of rows) assert.strictEqual(pure.armorShieldKind(level), want, String(level));
+  });
+
+  // The frame colours of the art, read from the CSS the page ships: every camp has them in light, in the dark media block
+  // and in the dark theme, each text colour reaches 4.5:1 on its card colour, each frame line 3:1, and no card uses the vn red.
+  await test("CSS: camp frames in light and both dark blocks, with their contrast; no vn red on a card; the dark outline", () => {
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    const lum = (hex) => { const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+    const grab = (prefix, camp) => {
+      const m = css.split("\n").find((l) => l.startsWith(prefix + `.rcard[data-camp="${camp}"] {`));
+      assert.ok(m, `${prefix}${camp}`);
+      const v = (name) => new RegExp(`--card-frame-${name}: (#[0-9a-fA-F]{6})`).exec(m)[1];
+      return { bg: v("bg"), line: v("line"), title: v("title") };
+    };
+    const modes = [["light", "", "#1f2522"], ["dark media", "  :root:not([data-theme=\"light\"]) ", "#e9ece8"], ["dark theme", ":root[data-theme=\"dark\"] ", "#e9ece8"]];
+    let checked = 0;
+    for (const [label, prefix, ink] of modes) for (const camp of ["anthropic", "openai", "google", "other"]) {
+      const f = grab(prefix, camp);
+      assert.ok(ratio(f.title, f.bg) >= 4.5, `${label} ${camp} title ${ratio(f.title, f.bg)}`);
+      assert.ok(ratio(ink, f.bg) >= 4.5, `${label} ${camp} text ${ratio(ink, f.bg)}`);
+      assert.ok(ratio(f.line, f.bg) >= 3, `${label} ${camp} line ${ratio(f.line, f.bg)}`);
+      checked += 1;
+    }
+    assert.strictEqual(checked, 12);
+    const cardCss = css.split("\n").filter((l) => /rcard|card-px|px-k|armor-shield/.test(l)).join("\n");
+    assert.ok(!/da251d|--vn-red/i.test(cardCss), "the vn red is not on a card");
+    assert.ok(/\.px-k\s*\{\s*fill:\s*#18181b/.test(css) && /\[data-theme="dark"\]\s*\.px-k\s*\{\s*fill:\s*#f8fafc/.test(css) && /:not\(\[data-theme="light"\]\)\s*\.px-k\s*\{\s*fill:\s*#f8fafc/.test(css), "outline: dark on light, light on dark");
+    assert.ok(/\.rcard-slot\s*\{[^}]*border:\s*2px dashed/.test(css) && /\.rcard-slot-active\s*\{[^}]*border-style:\s*solid/.test(css), "collected is dashed, in effect is solid");
+    assert.ok(/\.rcard-face\[hidden\]\s*\{\s*display:\s*none/.test(css), "a hidden face is not shown by the face's own display");
+    assert.ok(/prefers-reduced-motion:\s*reduce\)\s*\{\s*\.rcard-turn[^}]*animation:\s*none/.test(css), "no turning animation with reduced motion");
+    assert.ok(!/url\(\s*["']?https?:/.test(css));
   });
 
   console.log(`\n${passed} passed`);

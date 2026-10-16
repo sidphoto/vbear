@@ -2272,7 +2272,7 @@ function officeKv(rows) {
 function officeArmorCell(it) {
   const strong = it.group === "blocked" || it.group === "partial";
   return el("div", { class: `office-armor-cell ${strong ? "office-armor-solid" : "office-armor-dashed"}` },
-    el("strong", null, it.name), " ", el("span", { class: "office-armor-level" }, it.level),
+    armorShield(it.level), el("strong", null, it.name), " ", el("span", { class: "office-armor-level" }, it.level),
     el("span", { class: "office-armor-note" }, it.note || ""));
 }
 
@@ -2419,6 +2419,17 @@ function officeSpeech(target) {
     speech.reason ? el("details", null, el("summary", null, "VBear 的判斷"), el("p", null, speech.reason)) : null);
 }
 
+// The roster card in the panel is the same card as in the card pool: short front, the gear on the back (design card-play
+// 3.2). Which face is up is kept in S, so the panel repaints (a late loadout) without turning the card back.
+function officeRoleCard(p, S) {
+  const list = S.profiles && Array.isArray(S.profiles.profiles) ? S.profiles.profiles : [];
+  const full = list.find((x) => x && x.id === p.id);
+  const loadoutState = S.loadout && S.loadout.key === p.key ? S.loadout : null;
+  const gear = officeGear(loadoutState);
+  if (!full) return gear;
+  return profileCard(full, { loadout: loadoutState, face: S.face, onFace: (f) => { S.face = f; }, backExtra: gear }).node;
+}
+
 function officePanelContent(m, S, handlers) {
   const idx = officeIndex(m);
   const key = S.key;
@@ -2485,7 +2496,7 @@ function officePanelContent(m, S, handlers) {
     el("p", { class: "small muted" }, personaSpeech(p).line),
     el("label", { class: "office-species" }, "種族 ", species),
     el("p", { class: "small muted" }, "只換名冊上的外觀；出勤的終端與流程角色依工具或模型家族顯示。"),
-    officeGear(S.loadout && S.loadout.key === key ? S.loadout : null),
+    officeRoleCard(p, S),
     el("a", { class: "btn primary office-go", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, "打開角色卡")];
 }
 
@@ -2614,7 +2625,7 @@ async function viewOffice() {
   const [, profilesData] = await Promise.all([loadFlows(), readProfiles()]);
   if (token !== seq) return;
   const main = claim(token);
-  const S = { key: "", name: "", station: "", notice: "", loadout: null, profiles: profilesData, model: null, shownKey: "", mobile: officeIsMobile() };
+  const S = { key: "", name: "", station: "", notice: "", loadout: null, face: "front", profiles: profilesData, model: null, shownKey: "", mobile: officeIsMobile() };
   const fresh = new Set();
   const statusLine = el("p", { class: "small muted office-status", role: "status", "aria-live": "polite" });
   const root = el("div", { class: "office" });
@@ -2623,6 +2634,7 @@ async function viewOffice() {
   const select = (key) => {
     const idx = officeIndex(S.model);
     if (!idx.has(key)) return;
+    if (S.key !== key) S.face = "front";
     S.key = key; S.name = idx.get(key).name; S.station = idx.get(key).station || ""; S.notice = ""; statusLine.textContent = "";
     if (key.startsWith("profile:")) {
       const id = key.slice("profile:".length);
@@ -3705,45 +3717,333 @@ function deleteCard(p, onDone) {
     .catch((err) => toast("刪除失敗：" + err.message));
 }
 
-// ---- the page: 角色卡池 -------------------------------------------------------------------------------------
+// Pixel art of the cards (art 20261017-cards v0.7.0-art-2, copied in; nothing is read from outside at run time).
+// One character per cell, "." is clear. K is the outline: it takes its colour from the theme (style.css, .px-k), light
+// #18181b, dark #f8fafc. The other characters are the same in both themes. The red of the vn is not used on a card.
+const CARD_PALETTE = {
+  K: "#18181b", W: "#fafaf9", Y: "#fde047", B: "#78350f",
+  b: "#b45309", F: "#c2410c", f: "#fed7aa", S: "#52525b",
+  s: "#d4d4d8", V: "#4c1d95", v: "#ddd6fe", O: "#d97706",
+  o: "#ffedd5", T: "#0f766e", t: "#ccfbf1", G: "#0369a1",
+  g: "#e0f2fe", P: "#7e22ce", p: "#f3e8ff", N: "#334155",
+  n: "#e2e8f0",
+};
+const CARD_PIXELS = {
+  backPattern: ["KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KnnnnKnnnnKnnnnK", "KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KKKKKKKKKKKKKKKK"],
+  positions: {
+    planning: ["..KKKKKKKK..", ".KYYYYYYYYK.", "KYYKK..KKYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYK....KYYK", "KYYKK..KKYYK", ".KYYYYYYYYK.", "..KKKKKKKK.."],
+    execution: ["............", "..KKKKKK....", ".KYYYYYYK...", ".KYYYYYYKK..", "..KKKKKKYYK.", ".....KYYKYYK", "....KYYKYYK.", "...KYYKYYK..", "..KYYKYYK...", ".KYYKYYK....", "..KKKKK.....", "............"],
+    review: ["..KKKKKK....", ".KWWWWWWK...", "KWWK..KWWK..", "KWWK..KWWK..", "KWWK..KWWK..", "KWWK..KWWK..", "KWWK..KWWK..", ".KWWWWWWK...", "..KKKKKK....", ".....K......", "......K.....", ".......KK..."],
+    unspecified: ["...KKKK.....", "..KYYYYK....", ".KYYK..K....", ".KYYK..K....", "...KKKK.....", "....K.......", "...K........", "...K........", "............", "...K........", "..KKK.......", "............"],
+  },
+  shields: {
+    enforced: ["....KKKK....", "...KTTTTK...", "..KTTTTTTK..", ".KTTKTTKTTK.", "KTTKTTTTKTTK", "KTTTTKTTTTTK", "KTTTTTKTTTTK", ".KTTTTTTTTK.", "..KTTTTTTK..", "...KTTTTK...", "....KTTK....", ".....KK....."],
+    recorded: ["....KKKK....", "...K....K...", "..K......K..", ".K..K..K..K.", "K..K....K..K", "K....K.....K", "K.....K....K", ".K........K.", "..K......K..", "...K....K...", "....K..K....", ".....KK....."],
+    none: ["............", "............", "...KKKKKK...", "..K......K..", ".K........K.", "K..........K", "K..........K", ".K........K.", "..K......K..", "...K......K.", "....K....K..", ".....KKKK..."],
+  },
+  icons: {
+    taskFolder: ["............", "..KKKKKKK...", ".KYYYYYYYK..", "KYYYYYYYYYK.", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", ".KYYYYYYYYK.", "..KKKKKKKK.."],
+    importProject: [".....KK.....", "....KYYK....", "...KYYYYK...", "..KYYYYYYK..", ".....KK.....", ".....KK.....", ".....KK.....", ".....KK.....", "K....KK....K", "KK...KK...KK", ".KK......KK.", "..KKKKKKKK.."],
+    emptySlot: ["............", "............", "..KKKKKKKK..", "..KnnnnnnK..", "..KnnKnnnK..", "..KnnKnnnK..", "..KnnKnnnK..", "..KnnKnnnK..", "..KnnnnnnK..", "..KKKKKKKK..", "............", "............"],
+  },
+};
 
-function poolCard(p, catalog, handlers) {
+// ---- the role card (design card-play 3.2, 3.4) ---------------------------------------------------------------
+// One component for the card pool page and the office panel: the front is short, the back holds the detail. Both
+// faces are always in the DOM; the one that is turned away is hidden and aria-hidden, so a screen reader reads only
+// the face that is up. The card is a record of the console: nothing here starts, loads or limits anything.
+
+function svgEl(tag, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, String(v));
+  return node;
+}
+
+// The cells of a pixel map as rects into `parent`: runs of one colour become one rect. The outline takes its colour
+// from the theme (class px-k), every other colour is fixed.
+function cardPixelRects(rows, parent) {
+  const w = rows[0].length;
+  rows.forEach((row, y) => {
+    let x = 0;
+    while (x < w) {
+      const c = row[x];
+      let end = x + 1;
+      while (end < w && row[end] === c) end++;
+      if (cardHas(CARD_PALETTE, c)) {
+        const rect = { x, y, width: end - x, height: 1 };
+        parent.append(svgEl("rect", c === "K" ? { ...rect, class: "px-k" } : { ...rect, fill: CARD_PALETTE[c] }));
+      }
+      x = end;
+    }
+  });
+}
+
+// A pixel map as an SVG, `scale` screen pixels to a cell. Decoration: the words next to it say the same thing.
+function cardPixelSvg(rows, scale = 2) {
+  const svg = svgEl("svg", { class: "card-px", viewBox: `0 0 ${rows[0].length} ${rows.length}`, width: rows[0].length * scale,
+    height: rows.length * scale, "aria-hidden": "true", focusable: "false", "shape-rendering": "crispEdges" });
+  cardPixelRects(rows, svg);
+  return svg;
+}
+
+// group: positions | shields | icons; null for a name the art does not have.
+function cardArt(group, name, scale = 2) {
+  const set = cardHas(CARD_PIXELS, group) && group !== "backPattern" ? CARD_PIXELS[group] : null;
+  if (!set || !cardHas(set, name)) return null;
+  return cardPixelSvg(set[name], scale);
+}
+
+// The back of a card: the 16x16 pattern repeated along a strip (an SVG pattern, so it tiles at its own size).
+let cardPatternSeq = 0;
+function cardPatternStrip() {
+  const id = `card-back-pattern-${++cardPatternSeq}`;
+  const svg = svgEl("svg", { class: "card-pattern", width: "100%", height: 16, "aria-hidden": "true", focusable: "false", "shape-rendering": "crispEdges" });
+  const tile = svgEl("pattern", { id, width: 16, height: 16, patternUnits: "userSpaceOnUse" });
+  cardPixelRects(CARD_PIXELS.backPattern, tile);
+  const defs = svgEl("defs");
+  defs.append(tile);
+  svg.append(defs, svgEl("rect", { x: 0, y: 0, width: "100%", height: 16, fill: `url(#${id})` }));
+  return svg;
+}
+
+const CARD_POSITION_ART = { planner: "planning", executor: "execution", reviewer: "review" };
+function cardPositionArt(position) { return CARD_POSITION_ART[position] || "unspecified"; }
+
+// The shield of an armor level, by the level word the server sends (agent_launch.py). Only the three levels that have a
+// shield get one; partial, unverified, unknown and not-granted get none rather than a shield that says too much.
+const ARMOR_LEVEL_SHIELD = {
+  "強制（限已測路徑、版本與執行層）": "enforced",
+  "僅意圖": "recorded",
+  "未限制": "none",
+};
+function armorShieldKind(level) { return cardHas(ARMOR_LEVEL_SHIELD, level) ? ARMOR_LEVEL_SHIELD[level] : null; }
+function armorShield(level) {
+  const kind = armorShieldKind(level);
+  return kind ? el("span", { class: `armor-shield armor-shield-${kind}`, "data-shield": kind }, cardArt("shields", kind, 2)) : null;
+}
+
+// The slots of a card (design 3.4). A slot is solid ("生效中") only when the loadout says will_load for that very
+// skill; every other slot is dashed ("收藏中"), also before the loadout is read. The words are never compared.
+const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };
+const CARD_SLOT_NOTE = "這次的安全啟動不會載入";
+const CARD_SLOTS_SHOWN = 6;
+function cardSlotState(item) { return item && item.will_load === true ? "active" : "collected"; }
+
+// loadoutState: { state: "loading" | "ok" | "error", data } or null. rows follow the loadout when it is read (so a skill
+// the index does not know is a row too), and the profile's own list before that.
+function cardSlots(p, loadoutState, catalog) {
+  const sk = loadoutState && loadoutState.state === "ok" && loadoutState.data && typeof loadoutState.data.skills === "object"
+    ? loadoutState.data.skills : null;
+  const names = new Map((catalog && Array.isArray(catalog.skills) ? catalog.skills : []).map((s) => [s.skill_id, s.invoke_name || s.name]));
+  const ids = Array.isArray(p && p.equipped_skill_ids) ? p.equipped_skill_ids.filter((x) => typeof x === "string") : [];
+  if (sk && Array.isArray(sk.items)) {
+    const rows = sk.items.filter((x) => x && typeof x === "object" && typeof x.skill_id === "string").map((x) => ({
+      id: x.skill_id, state: cardSlotState(x), name: x.invoke_name || x.name || names.get(x.skill_id) || x.skill_id,
+      missing: x.state === "not_in_index", unread: x.state === "index_not_loaded" }));
+    const active = rows.some((r) => r.state === "active");
+    return { loaded: true, rows, active,
+      allInactive: typeof sk.all_inactive === "boolean" ? sk.all_inactive && !active : null };
+  }
+  return { loaded: false, rows: ids.map((id) => ({ id, state: "collected", name: names.get(id) || id, missing: false, unread: false })),
+    active: false, allInactive: null };
+}
+
+// What the light says. Yellow is the intents (as cardLight); once they are all decided, green is only for a loadout that
+// was read and lists no reason against a launch. Not read yet, not readable, or with reasons: not green.
+function cardDeparture(p, loadoutState) {
+  const base = cardLight(p);
+  if (base.state === "yellow") return { ...base, reasons: [] };
+  if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認出發條件中…", reasons: [] };
+  const blockers = loadoutState.state === "ok" && loadoutState.data ? loadoutState.data.blockers : null;
+  if (!Array.isArray(blockers)) return { state: "unknown", text: "讀不到出發條件，實際能不能出發以出發前檢查為準", reasons: [] };
+  const reasons = blockers.map((b) => (b && typeof b.message === "string" ? b.message : "")).filter(Boolean);
+  if (blockers.length) return { state: "blocked", text: "目前不能出發", reasons: reasons.length ? reasons : ["原因未提供"] };
+  return { ...base, reasons: [] };
+}
+
+// opts: { catalog, handlers: { launch, decide, edit, duplicate, remove }, loadout, face, onFace(face), backExtra }.
+// A button shows only when its handler is given. Returns { node, setLoadout(state) }: a late loadout repaints the parts
+// that depend on it and leaves the buttons alone.
+function profileCard(p, opts = {}) {
+  const catalog = opts.catalog || null;
+  const handlers = opts.handlers || {};
   const tool = p.model && typeof p.model.tool === "string" ? p.model.tool : "";
   const camp = campOf({ tool });
   const pos = cardPosition(p.id);
-  const light = cardLight(p);
   const demo = isDemoCard(p, catalog);
-  const skills = Array.isArray(p.equipped_skill_ids) ? p.equipped_skill_ids.length : 0;
-  const unresolved = (p._unresolved && p._unresolved.skills) || [];
   const launchOff = p.enabled === false;
-  return el("article", { class: `pcard${demo ? " pcard-demo" : ""}`, "data-profile-id": p.id, "data-camp": camp.key,
-    style: `border-top:4px solid ${camp.shirt}`, "aria-label": `角色卡：${p.name || p.id}` },
-    el("div", { class: "pcard-head" }, cardAvatar(p),
-      el("div", { class: "pcard-title" },
-        el("h3", null, p.name || p.id),
+  const name = p.name || p.id;
+  const intents = p.permission_intents && typeof p.permission_intents === "object" ? p.permission_intents : {};
+  let loadoutState = opts.loadout || null;
+  let face = opts.face === "back" ? "back" : "front";
+
+  const slotsBox = el("div", { class: "rcard-slots", "data-pcard": "slots" });
+  const lightBox = el("div", { "data-pcard": "light", role: "status" });
+  const profBox = el("dd", { "data-rc": "profession" });
+  const evidenceBox = el("dd", { "data-rc": "evidence" });
+  const englishBox = el("dd", { "data-rc": "english" });
+  const reasonBox = el("section", { class: "rcard-block", "data-rc": "blockers" });
+
+  const flipButton = (label, aria) => el("button", { type: "button", class: "btn small rcard-flip", "data-pcard": "flip",
+    "aria-keyshortcuts": "F", "aria-label": aria, title: `${label}（按 F）`, on: { click: () => setFace(face === "front" ? "back" : "front", true) } }, label);
+  const frontFlip = flipButton("翻面", `翻面，看「${name}」的背面`);
+  const backFlip = flipButton("翻回正面", `翻回「${name}」的正面`);
+
+  const front = el("div", { class: "rcard-face rcard-front", "data-face": "front", role: "group", "aria-label": `${name} 的正面` },
+    el("div", { class: "rcard-head" }, cardAvatar(p),
+      el("div", { class: "rcard-title" },
+        el("h3", null, name),
         el("div", { class: "chips" },
           el("span", { class: "tag" }, CARD_TOOL_LABEL[tool] || tool || "未知陣營"),
-          el("span", { class: "tag", "data-pcard": "position" }, pos ? `${CARD_POSITION_LABEL[pos]}位` : "位置未指定"),
+          el("span", { class: "tag rcard-pos", "data-pcard": "position" }, cardArt("positions", cardPositionArt(pos), 2),
+            pos ? `${CARD_POSITION_LABEL[pos]}位` : "位置未指定"),
           demo ? badge("示範", "b-info", "範例資料，不是你建立的卡") : null,
           launchOff ? badge("停用", "b-mute", "已停用，但保留存檔") : null))),
-    el("p", { class: "small muted pcard-slots", "data-pcard": "slots" },
-      skills ? `技能卡 ${skills} 張（收藏中，這次的安全啟動不會載入）` : "沒有插技能卡",
-      unresolved.length ? `；${unresolved.length} 張目前索引找不到` : ""),
-    el("div", { class: `pcard-light pcard-${light.state}`, "data-pcard": "light", role: "status" },
-      el("span", { class: "pcard-dot", "aria-hidden": "true" }),
-      el("div", null, el("strong", null, light.text),
-        light.state === "yellow"
-          ? el("div", null, el("button", { type: "button", class: "btn small", "data-pcard": "decide",
-            on: { click: () => handlers.decide(p) } }, "現在決定"))
-          : el("div", { class: "small muted" }, "實際能不能出發，以出發前檢查為準。"))),
+    slotsBox, lightBox,
     el("p", { class: "small muted", "data-pcard": "roster" }, "名冊，不代表正在出勤"),
-    el("div", { class: "pcard-actions" },
-      el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff,
+    el("div", { class: "rcard-actions" },
+      handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff,
         title: launchOff ? "這張卡已停用" : "先看這次出發會套用什麼，確認後才啟動",
-        on: { click: () => handlers.launch(p) } }, "出發"),
-      el("button", { type: "button", class: "btn small", on: { click: () => handlers.edit(p) } }, "編輯"),
-      el("button", { type: "button", class: "btn small", on: { click: () => handlers.duplicate(p) } }, "複製"),
-      el("button", { type: "button", class: "btn small", on: { click: () => handlers.remove(p) } }, "刪除")));
+        on: { click: () => handlers.launch(p) } }, "出發") : null,
+      frontFlip));
+
+  const chips = el("div", { class: "rc-chips" }, CARD_INTENT_KEYS.map(([k, zh]) => intentChip(k, zh, intents[k])));
+  const back = el("div", { class: "rcard-face rcard-back", "data-face": "back", role: "region", "aria-label": `${name} 的背面`, tabindex: "0" },
+    el("div", { class: "rcard-pattern", "aria-hidden": "true" }, cardPatternStrip()),
+    el("div", { class: "rcard-back-head" }, el("strong", null, `${name}・背面`), backFlip),
+    el("dl", { class: "rcard-dl" },
+      el("dt", null, "陣營與模型"),
+      el("dd", null, `${CARD_TOOL_LABEL[tool] || tool || "未知陣營"}・${(p.model && p.model.model_id) || "未指定（視為該工具預設值）"}`),
+      el("dt", null, "職業標籤"), profBox,
+      el("dt", null, "證據來源"), evidenceBox),
+    el("section", { class: "rcard-block", "data-rc": "intents" },
+      el("h4", null, "權限意圖"),
+      el("p", { class: "small" }, "只是記錄，不是授權。"),
+      el("p", { class: "small muted", "data-rc": "intent-note" }, CARD_INTENT_NOTE),
+      chips),
+    reasonBox,
+    (handlers.edit || handlers.duplicate || handlers.remove) ? el("div", { class: "rcard-actions" },
+      handlers.edit ? el("button", { type: "button", class: "btn small", "data-pcard": "edit", on: { click: () => handlers.edit(p) } }, "編輯") : null,
+      handlers.duplicate ? el("button", { type: "button", class: "btn small", "data-pcard": "duplicate", on: { click: () => handlers.duplicate(p) } }, "複製") : null,
+      handlers.remove ? el("button", { type: "button", class: "btn small", "data-pcard": "remove", on: { click: () => handlers.remove(p) } }, "刪除") : null) : null,
+    opts.backExtra || null,
+    el("details", { class: "fold rcard-advanced", "data-rc": "advanced" },
+      el("summary", null, "進階"),
+      el("dl", { class: "rcard-dl" },
+        el("dt", null, "Tool ID"), el("dd", { class: "mono" }, tool || "—"),
+        el("dt", null, "Model ID"), el("dd", { class: "mono" }, (p.model && p.model.model_id) || "—"),
+        el("dt", null, "角色卡 ID"), el("dd", { class: "mono" }, p.id),
+        el("dt", null, "英文說明"), englishBox)));
+
+  const article = el("article", { class: `rcard${demo ? " rcard-demo" : ""}`, "data-profile-id": p.id, "data-camp": camp.key,
+    "data-face": face, "aria-label": `角色卡：${name}`,
+    on: { keydown: (e) => {
+      const t = e.target && e.target.tag ? String(e.target.tag).toUpperCase() : (e.target && e.target.tagName) || "";
+      if ((e.key !== "f" && e.key !== "F") || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(t) || (e.target && e.target.isContentEditable)) return;
+      e.preventDefault();
+      setFace(face === "front" ? "back" : "front", true);
+    } } }, front, back);
+
+  function reducedMotion() {
+    try { return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (_) { return false; }
+  }
+  function applyFace() {
+    const showFront = face === "front";
+    for (const [node, shown] of [[front, showFront], [back, !showFront]]) {
+      if (shown) node.removeAttribute("hidden"); else node.setAttribute("hidden", "");
+      node.setAttribute("aria-hidden", String(!shown));
+    }
+    article.setAttribute("data-face", face);
+  }
+  function setFace(next, moveFocus) {
+    if (next === face) return;
+    face = next;
+    applyFace();
+    if (typeof opts.onFace === "function") opts.onFace(face);
+    if (!reducedMotion()) {
+      article.classList.add("rcard-turn");
+      setTimeout(() => article.classList.remove("rcard-turn"), 400);
+    }
+    // the button that was pressed is now hidden: the same button of the face that is up takes the focus
+    if (moveFocus) (face === "front" ? frontFlip : backFlip).focus();
+  }
+
+  function paint() {
+    const slots = cardSlots(p, loadoutState, catalog);
+    const shown = slots.rows.slice(0, CARD_SLOTS_SHOWN);
+    setKids(slotsBox,
+      el("div", { class: "rcard-slots-head small" }, `技能卡 ${slots.rows.length} 張`,
+        (p._unresolved && p._unresolved.skills || []).length ? `；${p._unresolved.skills.length} 張目前索引找不到` : ""),
+      slots.rows.length
+        ? el("ul", { class: "rcard-slot-list" }, shown.map((r) => el("li", { class: `rcard-slot rcard-slot-${r.state}`, "data-slot": r.state },
+          el("span", { class: "rcard-slot-name" }, r.name),
+          el("span", { class: "rcard-slot-label" }, CARD_SLOT_LABEL[r.state]))),
+        slots.rows.length > shown.length ? el("li", { class: "rcard-slot-more small muted" }, `另有 ${slots.rows.length - shown.length} 張`) : null)
+        : el("p", { class: "small muted rcard-slot-empty" }, cardArt("icons", "emptySlot", 1), "沒有插技能卡"),
+      slots.allInactive === true ? el("p", { class: "small muted", "data-slot-note": "inactive" }, CARD_SLOT_NOTE)
+        : slots.loaded ? null : el("p", { class: "small muted" }, "技能卡只是你的挑選紀錄"));
+
+    const dep = cardDeparture(p, loadoutState);
+    lightBox.className = `rcard-light rcard-${dep.state}`;
+    lightBox.setAttribute("data-light", dep.state);
+    setKids(lightBox,
+      el("span", { class: "rcard-dot", "aria-hidden": "true" }),
+      el("div", null, el("strong", null, dep.text),
+        dep.state === "yellow"
+          ? (handlers.decide ? el("div", null, el("button", { type: "button", class: "btn small", "data-pcard": "decide",
+            on: { click: () => handlers.decide(p) } }, "現在決定")) : null)
+          : dep.state === "blocked"
+            ? el("div", { class: "small" }, dep.reasons[0], dep.reasons.length > 1 ? `（另有 ${dep.reasons.length - 1} 項，翻到背面看）` : "")
+            : el("div", { class: "small muted" }, "實際能不能出發，以出發前檢查為準。")));
+
+    const ld = loadoutState && loadoutState.state === "ok" && loadoutState.data ? loadoutState.data : null;
+    const pr = ld && ld.profession && typeof ld.profession === "object" ? ld.profession : null;
+    let profText = "載入中…";
+    if (loadoutState && loadoutState.state === "error") profText = "讀不到職業標籤";
+    else if (pr) {
+      profText = pr.state === "found" ? (pr.name || pr.role_id) : pr.state === "none" ? "（未選職業標籤）"
+        : pr.state === "not_in_index" ? `${pr.role_id}（目前索引找不到這個職業）` : `${pr.role_id || ""}（索引未載入）`;
+    } else if (!loadoutState) profText = p.profession_role_id ? String(p.profession_role_id) : "（未選職業標籤）";
+    setKids(profBox, profText, pr ? el("span", { class: "small muted" }, "　只是標籤，不會把角色指示載入工具") : null);
+    setKids(evidenceBox, "這張卡的設定：你自己在主控台建立（使用者意圖）",
+      pr && pr.state === "found" && pr.description ? el("div", { class: "small" }, "職業標籤的說明：", prov(pr.description)) : null);
+    const desc = pr && pr.state === "found" && pr.description ? pr.description.value : null;
+    setKids(englishBox, desc ? String(desc) : "—");
+
+    const reasons = dep.state === "blocked" ? dep.reasons : [];
+    if (reasons.length) {
+      reasonBox.removeAttribute("hidden");
+      setKids(reasonBox, el("h4", null, "目前不能出發的原因"),
+        el("ul", { class: "small" }, reasons.map((r) => el("li", null, r))),
+        el("p", { class: "small muted" }, ld && ld.blockers_note ? ld.blockers_note : ""));
+    } else {
+      reasonBox.setAttribute("hidden", "");
+      setKids(reasonBox);
+    }
+  }
+  applyFace();
+  paint();
+  return { node: article, setLoadout(state) { loadoutState = state; paint(); } };
+}
+
+// ---- the page: 角色卡池 -------------------------------------------------------------------------------------
+
+// Reads the loadout of each id with at most `limit` requests in flight; gone() stops the queue (the page was left).
+function readLoadouts(ids, onState, gone, limit = 4) {
+  const queue = [...ids];
+  const next = async () => {
+    while (queue.length && !gone()) {
+      const id = queue.shift();
+      let state;
+      try {
+        state = { state: "ok", data: await api.get(`/api/agent-profiles/${encodeURIComponent(id)}/loadout`) };
+      } catch (e) { state = { state: "error", error: e && e.message ? e.message : "未知錯誤" }; }
+      if (gone()) return;
+      onState(id, state);
+    }
+  };
+  for (let i = 0; i < Math.min(limit, queue.length); i++) next();
 }
 
 async function viewTeam() {
@@ -3787,12 +4087,16 @@ async function viewTeam() {
     [["", "全部"], ...Object.entries(CARD_TOOL_LABEL)].map(([v, t]) => el("button", { type: "button", "data-filter": v || "all",
       "aria-pressed": String(filter === v), on: { click: () => { store.set("teamCardTool", v); viewTeam(); } } }, t)));
 
+  // each card reads its own loadout (a read-only answer from memory), four at a time; the page does not wait for them
+  const cards = new Map(shown.map((p) => [p.id, profileCard(p, { catalog, handlers })]));
+  readLoadouts(shown.map((p) => p.id), (id, state) => { const c = cards.get(id); if (c) c.setLoadout(state); }, () => token !== seq);
+
   const poolBody = !profilesRes.ok
     ? notice("bad", "無法讀取角色卡：" + profilesRes.error)
     : !profiles.length
       ? emptyState("還沒有角色卡", "按「＋ 新角色卡」自己做一張，或用起手牌組一次拿三張。")
       : shown.length
-        ? el("div", { class: "grid pool-grid" }, shown.map((p) => poolCard(p, catalog, handlers)))
+        ? el("div", { class: "grid pool-grid" }, shown.map((p) => cards.get(p.id).node))
         : emptyState("這個陣營還沒有角色卡", null);
 
   const liveBlock = tview === "list"
@@ -7120,20 +7424,27 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   let rcProfile = null;
   let rcChanged = async () => {};
 
+  // The badge follows the loadout's will_load of this skill, never the words around it (design card-play R1).
+  function rcSkillBadge(sk) {
+    return cardSlotState(sk) === "active"
+      ? badge(CARD_SLOT_LABEL.active, "b-ok", "這個版本的 loadout 明確回報會載入這張技能卡")
+      : badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡");
+  }
+
   function rcSkillCard(sk) {
     const head = el("div", { class: "rc-skill-head" },
       el("strong", null, sk.name ? String(sk.name) : `未提供（ID：${sk.skill_id}）`),
-      badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡"));
+      rcSkillBadge(sk));
     if (sk.state === "not_in_index") {
       return el("li", { class: "rc-skill rc-warn" },
         el("div", { class: "rc-skill-head" }, el("strong", { class: "mono" }, sk.skill_id),
-          badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
+          rcSkillBadge(sk)),
         el("p", null, `${sk.note || "目前索引找不到此技能"}（索引時間：${fmtTime(sk.indexed_at)}）`));
     }
     if (sk.state === "index_not_loaded") {
       return el("li", { class: "rc-skill rc-warn" },
         el("div", { class: "rc-skill-head" }, el("strong", { class: "mono" }, sk.skill_id),
-          badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
+          rcSkillBadge(sk)),
         el("p", null, "索引未載入，無法顯示這張技能卡的內容。"));
     }
     const refs = sk.referenced_files || {};
@@ -7162,7 +7473,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       mine.length ? mine.map((it) => el("div", { class: "rc-armor-item" },
         el("div", { class: "rc-armor-name" },
           el("strong", null, it.name), ` ${ARMOR_NAME_ZH[it.name] ? "（" + ARMOR_NAME_ZH[it.name] + "）" : ""}`),
-        el("div", { class: "rc-armor-level" }, it.level),
+        el("div", { class: "rc-armor-level" }, armorShield(it.level), it.level),
         el("p", null, it.note),
         (it.path_scope !== "不適用" || it.evidence_refs !== "不適用")
           ? el("p", { class: "rc-note" }, `範圍：${it.path_scope}；證據：${it.evidence_refs}`) : null,
@@ -8162,6 +8473,20 @@ if (typeof module !== "undefined" && module.exports) {
     skillIncompatibleNote,
     cardPosition,
     setCardPosition,
+    profileCard,
+    cardSlots,
+    cardSlotState,
+    cardDeparture,
+    cardArt,
+    cardPixelSvg,
+    cardPatternStrip,
+    cardPositionArt,
+    armorShieldKind,
+    readLoadouts,
+    officeRoleCard,
+    CARD_PIXELS,
+    CARD_PALETTE,
+    CARD_SLOT_LABEL,
     CARD_INTENT_NOTE,
     viewTerminal,
     shellPanes,

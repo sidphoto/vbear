@@ -678,6 +678,43 @@ test("selecting a profile reads its loadout once and shows weapons, armor and sk
   assert.strictEqual(reads() - before, 2);
 });
 
+test("the roster card in the panel is the pool's card: a short front, the gear on the back, the face kept across repaints", async () => {
+  setPage({ profiles: profilesOf([profile("a", "claude", { equipped_skill_ids: ["s-code", "s-gone"],
+    permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } }), profile("b", "codex")]),
+  loadout: { a: loadoutOf("claude"), b: loadoutOf("codex") } });
+  const main = await open();
+  byKey(main, "profile:a").click();
+  await settle();
+  const cardIn = () => panel(main).find((n) => n.tag === "article" && n.getAttribute && n.getAttribute("data-profile-id") === "a");
+  const face = (c, which) => c.find((n) => n.tag === "div" && n.getAttribute && n.getAttribute("data-face") === which);
+  let card = cardIn();
+  assert(card && card.hasClass("rcard") && card.getAttribute("data-camp") === "anthropic");
+  assert.strictEqual(card.getAttribute("data-face"), "front");
+  const gearIn = (f, kind) => f.find((n) => n.getAttribute && n.getAttribute("data-office-gear") === kind);
+  assert(!gearIn(face(card, "front"), "weapons") && !gearIn(face(card, "front"), "armor"), "the front is short: no gear");
+  assert(gearIn(face(card, "back"), "weapons") && gearIn(face(card, "back"), "armor") && gearIn(face(card, "back"), "skills"), "the gear is on the back");
+  // the slots of the front come from the loadout: both skills are kept, neither one loads
+  const slots = card.findAll((n) => n.getAttribute && ["collected", "active"].includes(n.getAttribute("data-slot")));
+  assert.deepStrictEqual(slots.map((n) => n.getAttribute("data-slot")), ["collected", "collected"]);
+  assert(text(face(card, "front")).includes("技能卡 2 張") && text(face(card, "front")).includes("收藏中"));
+  assert.strictEqual(face(card, "back").getAttribute("aria-hidden"), "true");
+  assert(face(card, "back").hasAttribute("hidden") && !face(card, "front").hasAttribute("hidden"));
+  // turning the card, then selecting the same character again (a repaint of the panel), keeps the back up
+  card.findAll((n) => n.getAttribute && n.getAttribute("data-pcard") === "flip")[0].click();
+  assert.strictEqual(card.getAttribute("data-face"), "back");
+  byKey(main, "profile:a").click();
+  await settle();
+  card = cardIn();
+  assert.strictEqual(card.getAttribute("data-face"), "back", "the same character: the face stays");
+  // another character starts on its front
+  byKey(main, "profile:b").click();
+  await settle();
+  const other = panel(main).find((n) => n.tag === "article" && n.getAttribute && n.getAttribute("data-profile-id") === "b");
+  assert.strictEqual(other.getAttribute("data-face"), "front");
+  assert(text(panel(main)).includes("打開角色卡"), "the link to the workbench stays");
+  assert(!text(panel(main)).includes("出勤中"));
+});
+
 test("a failed loadout is said in the gear area and the rest of the panel stays", async () => {
   setPage({ profiles: profilesOf([profile("a", "claude")]), loadoutError: "讀取失敗" });
   const main = await open();

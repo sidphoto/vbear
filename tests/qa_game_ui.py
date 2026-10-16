@@ -625,13 +625,22 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
   [ ] A card with an undecided intent shows 「還差一步：權限意圖還沒決定」 and 「現在決定」; a decided one says
       「可以出發（權限意圖都已決定）」 and 「實際能不能出發，以出發前檢查為準」. 「名冊，不代表正在出勤」 on every card.
   [ ] 出發 opens 出發前檢查 in the workbench for that card. 「你電腦裡現成的角色範本（職業標籤）」 is folded.
+  [ ] The card is two faces. 翻面 (or the F key with the focus on a card button) shows the back: 陣營與模型, 職業標籤,
+      證據來源, 權限意圖 with 「只是記錄，不是授權」 and the sentence that an intent is not a limit, 編輯／複製／刪除,
+      and Tool ID / Model ID only under 「進階」. The focus lands on 翻回正面; a screen reader reads one face only.
+      With reduced motion the card turns without animation.
+  [ ] The skill slots are dashed with 「收藏中」 and the line 「這次的安全啟動不會載入」 (nothing is solid 「生效中」
+      today: the server says will_load false for every skill). With VBEAR_QA_CODEX_BLOCKED=1 the Codex card's light
+      is 「目前不能出發」 with the first reason on the front and every reason on the back, not green.
+  [ ] 辦公室 (#/office, VBEAR_QA_OFFICE=1): a roster character's panel shows the same card, a short front; the weapons,
+      armor (with a shield by 強制／僅意圖／未限制 only) and skills are on the back, which scrolls with the panel.
 
 == 1. 角色卡 (工作台 -> 右側「角色」分頁 -> pick 「QA 後端工匠（Claude）」)
   [ ] 資料區：職業標籤=qa-backend; 陣營=Claude Code; 版本驗證狀態 has a sentence from the
       server (not blank); 狀態=啟用; 索引時間 is a time.
   [ ] 職業特性：說明/擅長/適合的工作 each carries a source tag; 未提供 (not 未知) where the author said nothing;
       the fixed note that a profession is only a label.
-  [ ] 已選技能（VBear 啟動時不載入）：4 rows. 3 are found, 1 says the index cannot find it. The list header on
+  [ ] 技能卡（收藏中：VBear 啟動時不載入）：4 rows. 3 are found, 1 says the index cannot find it. The list header on
       the left side says 「目前索引找不到 1 張技能卡」. The probe skill shows its name as text.
   [ ] 防具：seven items in five groups; each group header carries a level word; the heading says the preview
       decides (實際以出發前檢查為準); no value is printed as "安全" or a bare "OK".

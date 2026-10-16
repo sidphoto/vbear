@@ -239,6 +239,7 @@ function freshContext(handlers) {
     Node, console: { log: () => {}, warn: () => {}, error: () => {} },
     document: {
       createElement: (t) => new Node(t),
+      createElementNS: (_ns, t) => new Node(t),
       createTextNode: (t) => { const n = new Node("#text"); n.textContent = t; return n; },
       getElementById: (id) => idRegistry.get(id) || null,
       body, documentElement, activeElement: null,
@@ -949,6 +950,16 @@ function findModalInBody() {
               "the safe-mode statement is conditional on the verified version");
     const notEffective = walk(card).filter((n) => n.tag === "span" && (n.textContent || "") === "本次不生效");
     assert.strictEqual(notEffective.length, 3, "every chosen skill card says 本次不生效");
+    // the shields of the armor follow the level word: enforced, intent only and unrestricted have one, the rest none
+    assert.deepStrictEqual(walk(card).filter((n) => n.getAttribute && n.getAttribute("data-shield")).map((n) => n.getAttribute("data-shield")),
+      ["enforced", "recorded", "none"]);
+    // R1: the badge follows will_load of that very skill, not the words around it
+    const lit = loadout();
+    lit.skills.items[0] = { ...lit.skills.items[0], will_load: true };
+    const card2 = await open(() => jsonResponse(lit));
+    const spans = (c, t) => walk(c).filter((n) => n.tag === "span" && (n.textContent || "") === t).length;
+    assert.strictEqual(spans(card2, "生效中"), 1, "one skill will load: one 生效中");
+    assert.strictEqual(spans(card2, "本次不生效"), 2, "the other two do not");
     assert.ok(findText(card, "目前索引找不到此技能") && findText(card, "索引時間"), "a skill the index lacks says so, with the time");
     assert.ok(!findText(card, "已消失"), "not worded as 'disappeared'");
     assert.ok(findText(card, "技能作者的說明，只適用於你自己啟動並載入這張技能的工具"), "the effect is labelled as the author's");
