@@ -543,8 +543,8 @@ def make_handler(console: Console):
                     }
                     return self._json({
                         "ok": True,
-                        "profiles": agent_profiles.list_profiles(
-                            known_skills=known_skills, known_roles=known_roles),
+                        "profiles": [agent_profiles.with_revision(p) for p in agent_profiles.list_profiles(
+                            known_skills=known_skills, known_roles=known_roles)],
                     })
                 if path.startswith("/api/agent-profiles/") and path.endswith("/loadout"):
                     try:
@@ -571,7 +571,7 @@ def make_handler(console: Console):
                                                     known_roles=known_roles)
                     if p is None:
                         return self._error(404, "找不到這張角色卡")
-                    return self._json({"ok": True, "profile": p})
+                    return self._json({"ok": True, "profile": agent_profiles.with_revision(p)})
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
                     if action == "stream" and pane_enc:
@@ -711,7 +711,7 @@ def make_handler(console: Console):
                                                              known_roles=known_roles)
                     except ValueError as exc:
                         return self._error(400, str(exc))
-                    return self._json({"ok": True, "profile": saved})
+                    return self._json({"ok": True, "profile": agent_profiles.with_revision(saved)})
                 if path.startswith("/api/agent-profiles/"):
                     rest = path[len("/api/agent-profiles/"):]
                     body = self._body()
@@ -737,7 +737,7 @@ def make_handler(console: Console):
                             return self._error(400, str(exc))
                         if dup is None:
                             return self._error(404, "找不到這張角色卡")
-                        return self._json({"ok": True, "profile": dup})
+                        return self._json({"ok": True, "profile": agent_profiles.with_revision(dup)})
                     target = rest
                     try:
                         saved = agent_profiles.save_profile(target, body,
@@ -745,7 +745,7 @@ def make_handler(console: Console):
                                                              known_roles=known_roles)
                     except ValueError as exc:
                         return self._error(400, str(exc))
-                    return self._json({"ok": True, "profile": saved})
+                    return self._json({"ok": True, "profile": agent_profiles.with_revision(saved)})
                 if path.startswith("/api/term/"):
                     pane_enc, _, action = path[len("/api/term/"):].rpartition("/")
                     if pane_enc and action in ("input", "control"):

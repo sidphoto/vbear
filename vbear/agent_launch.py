@@ -16,7 +16,6 @@ boundary: a user typing in the advanced terminal can change what the CLI does.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -26,6 +25,7 @@ import time
 from pathlib import Path
 
 from . import activity
+from .agent_profiles import profile_digest  # moved there so a team slot can record it; same function, same value
 from .runtime import agent_sessions, cli_versions
 from .runtime.native import NativeRuntimeError, NativeRuntimeUnavailable
 
@@ -127,13 +127,6 @@ def _codex_evidence_reference() -> str | None:
     if not all(checks[name] is True for name in CODEX_EVIDENCE_CHECKS):
         return None
     return reference
-
-
-def profile_digest(profile: dict) -> str:
-    """Digest of the validated Profile snapshot (the Profile has no revision)."""
-    stable = {k: v for k, v in profile.items() if not k.startswith("_")}
-    blob = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def launch_blockers(profile: dict, commit, network) -> list[dict]:

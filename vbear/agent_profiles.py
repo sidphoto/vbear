@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -90,6 +91,23 @@ STARTER_DECK: tuple[dict[str, Any], ...] = (
 # QA and demo environments name their sample cards with this id prefix; the console never invents a profile with it.
 # The front end sorts such cards last and labels them 示範. It is a label by id, not a stored fact.
 DEMO_ID_PREFIX = "demo-"
+
+
+def profile_digest(profile: dict) -> str:
+    """Digest of the validated Profile snapshot (the Profile has no revision). A launch preview records it to
+    notice a changed Profile; a team slot records it as the revision of the card that was placed (flows.py keeps
+    the value, it never computes one). Keys that start with an underscore are transient decoration and do not
+    count."""
+    stable = {k: v for k, v in profile.items() if not k.startswith("_")}
+    blob = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def with_revision(profile: dict) -> dict:
+    """A profile as the API shows it: the same fields plus ``revision``, its digest. The digest is computed from
+    the profile as read, so a team slot that recorded it can tell later whether the card changed. The key is
+    for the response only; nothing reads it back from a request."""
+    return {**profile, "revision": profile_digest(profile)}
 
 
 class AgentProfileStorageError(RuntimeError):

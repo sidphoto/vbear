@@ -101,6 +101,18 @@ MAX_PATH = 1024
 # seconds.
 LIVE_STALE_S = 30.0
 
+# A role may say which role card it was filled from (design card-play 3.5). Both fields are plain data checked
+# here and nowhere else: flows.py does not read the profile store and does not compute a digest, so nothing in a
+# flow follows a card that is edited, copied or deleted afterwards. The page compares the revision with the card's
+# current one and offers to update; it never happens by itself. The id format and the two length limits repeat
+# agent_profiles' (a test keeps them equal); the revision is agent_profiles.profile_digest, a sha256 hex string.
+PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
+SNAPSHOT_KEYS = frozenset({"name", "tool", "model_id", "revision"})
+SNAPSHOT_TOOLS = ("claude", "codex", "shared")
+MAX_SNAPSHOT_NAME = 200
+MAX_SNAPSHOT_MODEL_ID = 200
+ROLE_CARD_KEYS = frozenset({"profile_id", "profile_snapshot"})
+
 _BASE_EVENT_KEYS = frozenset({"seq", "at", "kind", "source", "note"})
 _STORED_KIND_KEYS = {
     "executor_report": frozenset({"commit"}),
@@ -142,12 +154,37 @@ def _short_text(value, limit: int) -> bool:
     return isinstance(value, str) and len(value) <= limit and "\x00" not in value
 
 
+def _role_card_problem(role: dict) -> str | None:
+    """profile_id and profile_snapshot, when a role has either: both, each exactly of its shape. Never repairs,
+    never infers one from the other."""
+    if not (set(role) & ROLE_CARD_KEYS):
+        return None
+    if set(role) & ROLE_CARD_KEYS != ROLE_CARD_KEYS:
+        return "profile_id 與 profile_snapshot 必須一起出現"
+    pid = role["profile_id"]
+    if not (isinstance(pid, str) and PROFILE_ID_RE.match(pid)):
+        return "profile_id 不合法"
+    snap = role["profile_snapshot"]
+    if not isinstance(snap, dict) or set(snap) != SNAPSHOT_KEYS:
+        return "profile_snapshot 必須剛好有 name、tool、model_id、revision"
+    name, model_id = snap["name"], snap["model_id"]
+    if not (isinstance(name, str) and name.strip() and len(name) <= MAX_SNAPSHOT_NAME and "\x00" not in name):
+        return "profile_snapshot.name 不合法"
+    if not (isinstance(model_id, str) and len(model_id) <= MAX_SNAPSHOT_MODEL_ID and "\x00" not in model_id):
+        return "profile_snapshot.model_id 不合法"
+    if snap["tool"] not in SNAPSHOT_TOOLS:
+        return "profile_snapshot.tool 不合法"
+    if not (isinstance(snap["revision"], str) and _SHA256_RE.match(snap["revision"])):
+        return "profile_snapshot.revision 不合法（要 64 碼小寫十六進位）"
+    return None
+
+
 # --- stored shape (anything else blocks the store) ---------------------------
 
 def _role_problem(role, *, executor: bool) -> str | None:
     if not isinstance(role, dict):
         return "角色不是物件"
-    allowed = {"name", "family", "model"} | ({"session_id", "workdir"} if executor else set())
+    allowed = {"name", "family", "model"} | ROLE_CARD_KEYS | ({"session_id", "workdir"} if executor else set())
     if set(role) - allowed:
         return "角色含未知欄位"
     if not (_short_text(role.get("name"), MAX_NAME) and role["name"].strip()):
@@ -157,6 +194,9 @@ def _role_problem(role, *, executor: bool) -> str | None:
     # Optional keys are absent when unset; this module never stores null or "".
     if "model" in role and not (_short_text(role["model"], MAX_NAME) and role["model"]):
         return "模型名稱不合法"
+    problem = _role_card_problem(role)
+    if problem:
+        return problem
     if executor:
         if "session_id" in role and not (isinstance(role["session_id"], str) and SESSION_RE.match(role["session_id"])):
             return "session id 不合法"
@@ -333,16 +373,23 @@ def read_only_snapshot(state_dir=None) -> dict:
 def _clean_role(raw, *, executor: bool) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("角色必須是物件")
-    allowed = {"name", "family", "model"} | ({"session_id", "workdir"} if executor else set())
+    allowed = {"name", "family", "model"} | ROLE_CARD_KEYS | ({"session_id", "workdir"} if executor else set())
     extra = set(raw) - allowed
     if extra:
         raise ValueError(f"角色不接受的欄位：{', '.join(sorted(map(str, extra)))}")
+    card_problem = _role_card_problem(raw)
+    if card_problem:
+        raise ValueError(card_problem)
     name = raw.get("name")
     if not (isinstance(name, str) and name.strip() and len(name.strip()) <= MAX_NAME and "\x00" not in name):
         raise ValueError(f"角色名稱必須是 1–{MAX_NAME} 字的文字")
     if raw.get("family") not in FAMILIES:
         raise ValueError("模型家族必須是 " + "、".join(FAMILIES) + " 之一")
     role = {"name": name.strip(), "family": raw["family"]}
+    if ROLE_CARD_KEYS & set(raw):
+        # copied as it is: it was just checked to be exactly the stored shape
+        role["profile_id"] = raw["profile_id"]
+        role["profile_snapshot"] = {k: raw["profile_snapshot"][k] for k in ("name", "tool", "model_id", "revision")}
     model = raw.get("model")
     if model not in (None, ""):
         if not (isinstance(model, str) and len(model) <= MAX_NAME and "\x00" not in model):
