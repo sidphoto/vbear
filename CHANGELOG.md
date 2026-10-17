@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The import-a-project window: the list of projects VBear has seen (and the recent folders) now fades at its bottom
+  edge and says 「共 N 個，往下捲動看更多」 while rows are hidden below it, so a cut-off last row no longer looks like
+  the end of the list. The note for a folder without git no longer ends a full-width bracket right before a full stop,
+  which read like a stray space; the same was done to a few other sentences on the main paths.
+
 ## v0.7.0 — card play
 
 A first-time user can now build a team in three card moves, with no form to fill in: **collect** role cards (or take

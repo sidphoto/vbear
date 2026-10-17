@@ -3555,7 +3555,7 @@ function openCardWizard(opts) {
 
   function nameHint() {
     const same = sameNameCard(profiles, st.name, existing ? existing.id : null);
-    return same ? `已經有一張叫「${same.name}」的卡（只是提醒，仍然可以用這個名字）。` : "";
+    return same ? `已經有一張叫「${same.name}」的卡，只是提醒，仍然可以用這個名字。` : "";
   }
 
   // ---- step 1
@@ -3638,7 +3638,7 @@ function openCardWizard(opts) {
         el("span", null, CARD_TOOL_LABEL[t] || t))));
     const codexNote = st.tool === "codex" && catalog.codex_installed === false
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
-        "這台電腦找不到 Codex（沒有找到固定版本的安裝）。卡可以先建立。") : null;
+        "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
 
     const posChoices = [["", "先不指定"], ...CARD_POSITIONS.map((p) => [p, CARD_POSITION_LABEL[p]])];
     const posGroup = el("div", { class: "cw-choices", role: "group", "aria-label": "建議位置" },
@@ -3899,7 +3899,7 @@ function openStarterDeck(opts) {
       const hint = el("p", { class: "small cw-hint", "data-cw": "same-name", "aria-live": "polite" });
       const syncHint = () => {
         const same = sameNameCard(profiles, r.name, null);
-        hint.textContent = same ? `已經有一張叫「${same.name}」的卡（只是提醒）。` : "";
+        hint.textContent = same ? `已經有一張叫「${same.name}」的卡，只是提醒。` : "";
       };
       syncHint();
       return el("div", { class: "cw-deck-row", "data-deck": c.key },
@@ -4137,7 +4137,7 @@ const PASS_NETWORK_TEXT = {
 // was not told, it says that rather than guessing.
 function launchRangeText(live) {
   const root = live && typeof live.managed_root === "string" && live.managed_root ? live.managed_root : "";
-  return root ? `可以選的範圍：${root} 之內、已經存在的資料夾。` : "可以選的範圍：伺服器允許的資料夾之內、已經存在的資料夾（這次讀不到實際範圍）。";
+  return root ? `可以選的範圍：${root} 之內、已經存在的資料夾。` : "可以選的範圍：伺服器允許的資料夾之內、已經存在的資料夾，這次讀不到實際範圍。";
 }
 const PASS_WORKDIR_LABEL = "在哪裡做（工作資料夾）";
 const PASS_COMMIT_TEXT = "擋不住版本紀錄（commit）";
@@ -5379,7 +5379,7 @@ function openAcceptanceDialog(flowId, onDone, opts = {}) {
       current = res;
       previewId = res.preview_id;
       render(res);
-      setKids(status, `這份預覽只能用一次，5 分鐘內有效（到 ${fmtTime(res.expires_at)}）。接受的是下面這一組值；` +
+      setKids(status, `這份預覽只能用一次，5 分鐘內有效，到 ${fmtTime(res.expires_at)} 為止。接受的是下面這一組值；` +
         "任何一項在你按下之前改變，就必須重新預覽。");
     } catch (e) {
       current = null;
@@ -6700,7 +6700,7 @@ const TASK_STATUS_LABELS = {
   agent_completed: ["待驗收 (Agent回報完成)", "b-warn", "Agent 已回報完成，但尚未通過測試驗證與人類核准"],
   verification_asserted: ["聲稱驗證通過 (Verification Asserted)", "b-ok", "此主控台無身份驗證：僅代表自動化測試與介面核准兩欄皆已透過本頁/API 自我回報為通過，並非經授權之正式驗證"],
   blocked: ["等待回覆 / 阻塞", "b-bad", "任務遭遇問題等待指示"],
-  verification_stale: ["結果對應的版本已變更", "b-warn", "測試或核准記錄時的 commit 與目前不同（或無法確認）；需要重新測試與核准"],
+  verification_stale: ["結果對應的版本已變更", "b-warn", "測試或核准記錄時的 commit 與目前不同，或無法確認；需要重新測試與核准"],
   handed_off: ["已交接", "b-mute", "已交給下一位；後續請看接手的任務卡"],
   closed: ["已結案（未完成）", "b-mute", "取消、拒絕執行或被其他任務取代"],
 };
@@ -6724,7 +6724,7 @@ const BINDING = {
 // A badge alone says little to someone new: these two get a sentence beside them (draft, and nobody has picked it up).
 // "draft" is what a card derives to when nobody marked it in progress: it says nothing about whether work has begun.
 const TASK_STATUS_EXPLAIN = { draft: "草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。" };
-const PICKUP_EXPLAIN = { unclaimed: "尚未認領：還沒有把這張任務卡關聯到任何終端（關聯只是追蹤記錄，不會把內容送進終端）。" };
+const PICKUP_EXPLAIN = { unclaimed: "尚未認領：還沒有把這張任務卡關聯到任何終端。關聯只是追蹤記錄，不會把內容送進終端。" };
 function taskStatusExplain(status, pickup) {
   const out = [];
   if (cardHas(TASK_STATUS_EXPLAIN, status)) out.push(TASK_STATUS_EXPLAIN[status]);
@@ -7917,7 +7917,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   const ARMOR_NAME_ZH = { Read: "讀取", Write: "寫入", Test: "測試", Commit: "commit", Deploy: "部署",
     Network: "網路", Filesystem: "檔案系統" };
   const ARMOR_GROUP_HELP = {
-    blocked: "這幾項已實測確實擋住（限已測的路徑、版本與執行層）。",
+    blocked: "這幾項已實測確實擋住，限已測的路徑、版本與執行層。",
     partial: "只擋住一部分；沒擋住的部分寫在每一項的說明裡。",
     not_granted: "VBear 沒有給這項專用權限，不代表已阻止透過其他工具做到。",
     not_blocked: "這幾項沒有被擋住：只是意圖，或沒有限制。",
@@ -7974,7 +7974,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("dt", null, "類別"), el("dd", null, cats.length ? cats.join("、") : el("span", { class: "muted" }, "未提供")),
         el("dt", null, "工具"), el("dd", null, rcText(sk.tool) || "未提供"),
         el("dt", null, "引用檔案"),
-        el("dd", null, `共 ${refs.count ?? "未提供"} 個（存在 ${refs.present ?? "未提供"}、缺少 ${refs.missing ?? "未提供"}）；VBear 不會執行這些檔案`),
+        el("dd", null, `共 ${refs.count ?? "未提供"} 個，存在 ${refs.present ?? "未提供"}、缺少 ${refs.missing ?? "未提供"}；VBear 不會執行這些檔案`),
         el("dt", null, "觀察狀態"), el("dd", null, rcObservation(sk.observed))),
       (sk.warnings || []).length ? el("p", { class: "rc-note" }, "結構檢查：" + sk.warnings.join("；")) : null,
       el("button", { class: "btn small rc-open", type: "button",
@@ -8471,7 +8471,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const sub = el("div", { class: "small muted", style: "margin: 4px 0;" },
       "角色卡是你自選陣營、職業標籤與技能卡的設定組合，");
     const sub2 = el("div", { class: "small muted", style: "margin-bottom: 8px;" },
-      "與掃描到的角色範本（唯讀）並存。技能卡僅為挑選紀錄（收藏中）。");
+      "與掃描到的角色範本並存，範本是唯讀的。技能卡僅為挑選紀錄，目前是收藏中。");
 
     const selected = agentProfiles.find((p) => p.id === selectedProfileId);
 
@@ -9133,7 +9133,7 @@ function nextStepsList(flow, opts = {}) {
   return el("div", { class: "ns", "data-ns": "list" },
     el("ol", { class: "ns-list" }, items),
     nextStepActionNode(flow, opts),
-    ns.after ? el("p", { class: "small ns-after", "data-ns": "after" }, `接下來：${ns.after.text}（輪到 ${ns.after.who}）。`,
+    ns.after ? el("p", { class: "small ns-after", "data-ns": "after" }, `接下來：${ns.after.text}，輪到 ${ns.after.who}。`,
       ns.reason ? el("span", { class: "muted" }, ` ${ns.reason}`) : null) : null);
 }
 
@@ -9361,7 +9361,7 @@ function teamBoard(opts) {
       : el("div", { class: "ts-tray" }, el("p", { class: "small muted" }, "角色卡池是空的。"),
           el("a", { class: "btn small", href: "#/team" }, "到角色卡池拿卡"));
     setKids(host,
-      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。" : "把角色卡放上來：規劃、執行、審查各一位（第二位審查選填）。"),
+      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。" : "把角色卡放上來：規劃、執行、審查各一位，第二位審查選填。"),
       selected ? el("p", { class: "small ts-armed-note", role: "status" }, `已拿起「${(cardById(selected) || {}).name || ""}」，點一個位置放下去。`,
         el("button", { type: "button", class: "btn small", on: { click: () => { selected = null; paint(); } } }, "放開")) : null,
       el("ul", { class: "team-slots" }, TEAM_SLOTS.map((d) => slotNode(d, problems))),
@@ -9521,7 +9521,7 @@ function nextStepSummary(flow) {
 // Is the task card linked to the terminal that is open? Only a chosen terminal can be linked to: with none chosen the
 // answer is "none", never "linked" (null === null must not read as a link). The link is a tracking record only.
 const TRACKING_NOTE = "追蹤關聯：任務卡和終端只是在主控台裡互相記一筆，不會把任務卡的內容送進終端。";
-const TRACKING_RESTART_NOTE = "提醒：改了任務卡的內容之後，要讓角色讀到新內容，必須重新啟動角色（新開一個終端）。";
+const TRACKING_RESTART_NOTE = "提醒：改了任務卡的內容之後，要讓角色讀到新內容，必須重新啟動角色，也就是新開一個終端。";
 function taskTerminalLink(task, paneId) {
   if (typeof paneId !== "string" || !paneId) return { state: "none", text: "目前沒有可關聯的終端" };
   if (task && task.associated_pane_id === paneId) return { state: "linked", text: "已與目前的終端關聯（僅追蹤記錄）" };
@@ -9534,7 +9534,7 @@ function taskTerminalLink(task, paneId) {
 // a folder. Terminals are counted by their working directory only: nothing says which role card opened one.
 
 const NO_GIT_BADGE = "沒有版本紀錄";
-const NO_GIT_NOTE = "這個資料夾還沒有版本紀錄（git）。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。";
+const NO_GIT_NOTE = "這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。";
 const FOLDER_BROWSER_NOTE = "瀏覽器拿不到完整路徑，請從清單選或貼上。";
 const FOLDER_FINDER_TIP = "在 Finder 對資料夾按右鍵，按住 Option，選『拷貝\"…\"為路徑名稱』，再貼到這裡";
 const FOLDER_TERMINAL_NOTE = "只依終端目前的工作目錄比對，只含 VBear 認得的 Claude Code、Codex 終端；不代表它們是哪張角色卡開的。";
@@ -9702,6 +9702,30 @@ function folderFacts(info) {
   return el("dl", { class: "kv fp-facts" }, rows);
 }
 
+// A list in a box of fixed height hides its last rows below the edge. When there is more than fits, the bottom edge
+// fades out (CSS, `data-more`) and one small line says how many there are; both go away once the end is in view.
+function folderListMoreText(count) { return `共 ${count} 個，往下捲動看更多`; }
+
+// Whether the box hides rows below its edge right now: from the box's own measures, so it can be checked without a layout.
+function folderListHidesMore(box) {
+  if (!box) return false;
+  const total = Number(box.scrollHeight), shown = Number(box.clientHeight), top = Number(box.scrollTop) || 0;
+  if (!(total > 0) || !(shown > 0)) return false;
+  return total - shown - top > 4;
+}
+
+function folderListWatch(box, note) {
+  const update = () => {
+    const more = folderListHidesMore(box);
+    if (more) box.setAttribute("data-more", "1"); else box.removeAttribute("data-more");
+    note.hidden = !more;
+  };
+  box.addEventListener("scroll", update);
+  if (typeof ResizeObserver === "function") new ResizeObserver(update).observe(box);
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(update);
+  return update;
+}
+
 // The picker: three ways to a folder, then the facts about the one chosen. The dialog that hosts it learns each
 // answer through `onResult(info, helpers)` (info is null while there is no usable answer) and keeps its buttons in
 // its own footer, so they stay in view; `renderNote(info)` may add a sentence under the facts. The picker itself
@@ -9719,13 +9743,15 @@ function folderPicker(opts) {
   let sourcesEmpty = false;
 
   function list(title, items, withBasis) {
-    return el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, title),
-      items.length ? el("ul", { class: "fp-items" }, items.map((it) => el("li", null,
-        el("button", { type: "button", class: "fp-item", "data-path": it.path,
-          on: { click: () => inspect(it.path) } },
-          el("strong", null, it.name), el("span", { class: "small mono fp-path" }, it.path),
-          withBasis && it.basis ? el("span", { class: "small muted" }, `依據：${it.basis}`) : null))))
-        : el("p", { class: "small muted" }, "沒有"));
+    if (!items.length) return el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, title), el("p", { class: "small muted" }, "沒有"));
+    const ul = el("ul", { class: "fp-items" }, items.map((it) => el("li", null,
+      el("button", { type: "button", class: "fp-item", "data-path": it.path,
+        on: { click: () => inspect(it.path) } },
+        el("strong", null, it.name), el("span", { class: "small mono fp-path" }, it.path),
+        withBasis && it.basis ? el("span", { class: "small muted" }, `依據：${it.basis}`) : null))));
+    const more = el("p", { class: "small muted fp-more", "data-fp": "more", hidden: true }, folderListMoreText(items.length));
+    folderListWatch(ul, more);
+    return el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, title), ul, more);
   }
 
   async function inspect(raw) {
@@ -10308,6 +10334,8 @@ if (typeof module !== "undefined" && module.exports) {
     expandHome,
     folderBaseName,
     folderSources,
+    folderListHidesMore,
+    folderListMoreText,
     folderTerminalStatusText,
     folderTerminalHeadline,
     folderVerdict,

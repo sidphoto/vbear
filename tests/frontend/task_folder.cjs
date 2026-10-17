@@ -471,7 +471,7 @@ async function test(name, fn) {
     const node = pure.folderFacts(plainInfo());
     const text = textOf(node);
     assert.ok(text.includes("沒有版本紀錄"));
-    assert.ok(text.includes("這個資料夾還沒有版本紀錄（git）。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。"));
+    assert.ok(text.includes("這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。"));
     assert.ok(walk(node).some((n) => n.className && n.className.includes("badge") && n.textContent === "沒有版本紀錄"));
     assert.ok(!text.includes("分支"));
   });
@@ -726,7 +726,7 @@ async function test(name, fn) {
     await pickFolder(d, ctx, PLAIN);
     const text = textOf(d);
     assert.ok(text.includes(ctx.NO_GIT_NOTE));
-    assert.ok(text.includes("這個資料夾還沒有版本紀錄（git）。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。"));
+    assert.ok(text.includes("這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。"));
     assert.deepStrictEqual(labels(foot(d)), ["取消", "仍要建立", "換資料夾"]);
     act(d, "next").dispatch("click");
     assert.ok(findText(d, ctx.NO_GIT_BADGE), "step 2 keeps saying it");
@@ -1114,6 +1114,66 @@ async function test(name, fn) {
     assert.deepStrictEqual(hashes, ["location.hash = `#/workbench?task=${encodeURIComponent(id)}`;"]);
   });
 
+  // ---- P9: full-width brackets next to full stops, and a list that shows it can scroll ------------------------------
+  await test("P9: NO_GIT_NOTE has no full-width bracket next to a full stop, semicolon or comma, and still says all of it", () => {
+    const note = pure.NO_GIT_NOTE;
+    assert.ok(!/[\uff09\u300d\u300f][\u3002\uff1b\u3001\uff0c]/.test(note), note);
+    assert.ok(!note.includes("\uff09\u3002"));
+    for (const part of ["git 版本紀錄", "任務卡可以建立", "也能從這裡出發", "審查結果要綁定 commit", "不會算數", "合併關卡也用不了"]) assert.ok(note.includes(part), part);
+    assert.ok(!note.includes("沒有版本紀錄（"), "the badge text stays the badge, the note is a sentence of its own");
+  });
+
+  await test("P9: the sentences of the main paths that used to end a bracket right before a stop were reworded", () => {
+    const gone = ["（只是提醒，仍然可以用這個名字）。", "（只是提醒）。", "（沒有找到固定版本的安裝）。", "（這次讀不到實際範圍）。",
+      "（輪到 ${ns.after.who}）。", "（第二位審查選填）。", "（新開一個終端）。", "（唯讀）並存", "（限已測的路徑、版本與執行層）。",
+      "（關聯只是追蹤記錄，不會把內容送進終端）。", "有效（到 ${fmtTime", "（或無法確認）；", "（存在 ${refs.present"];
+    for (const g of gone) assert.ok(!source.includes(g), g);
+    const there = ["已經有一張叫「${same.name}」的卡，只是提醒，仍然可以用這個名字。", "找不到 Codex，沒有找到固定版本的安裝。", "接下來：${ns.after.text}，輪到 ${ns.after.who}。",
+      "審查各一位，第二位審查選填。", "必須重新啟動角色，也就是新開一個終端。", "已實測確實擋住，限已測的路徑、版本與執行層。"];
+    for (const t of there) assert.ok(source.includes(t), t);
+  });
+
+  await test("P9: folderListHidesMore reads the box's own measures (more below the edge, with a little slack)", () => {
+    const row = (scrollHeight, clientHeight, scrollTop) => ({ scrollHeight, clientHeight, scrollTop });
+    assert.strictEqual(pure.folderListHidesMore(row(500, 220, 0)), true, "rows below the edge");
+    assert.strictEqual(pure.folderListHidesMore(row(500, 220, 100)), true, "halfway");
+    assert.strictEqual(pure.folderListHidesMore(row(500, 220, 280)), false, "the end is in view");
+    assert.strictEqual(pure.folderListHidesMore(row(500, 220, 277)), false, "within the slack of the end");
+    assert.strictEqual(pure.folderListHidesMore(row(220, 220, 0)), false, "everything fits");
+    assert.strictEqual(pure.folderListHidesMore(row(223, 220, 0)), false, "a few pixels over is not a hidden row");
+    assert.strictEqual(pure.folderListHidesMore(row(0, 0, 0)), false, "not laid out yet");
+    assert.strictEqual(pure.folderListHidesMore(null), false);
+    assert.strictEqual(pure.folderListMoreText(12), "共 12 個，往下捲動看更多");
+  });
+
+  await test("P9: the list of seen projects says there is more only while rows are hidden, and the line goes with the end of the list", () => {
+    const ctx = newCtx();
+    const picker = ctx.folderPicker({ live });
+    const seen = walk(picker.node).find((n) => n.classList && n.classList.contains("fp-items"));
+    const more = byData(picker.node, "data-fp", "more")[0];
+    assert.ok(seen && more, "the list and its line exist");
+    assert.ok(more.hidden === true || more.hasAttribute("hidden"), "hidden until the box is measured");
+    assert.ok(!seen.hasAttribute("data-more"));
+    assert.ok(more.textContent.startsWith("共 ") && more.textContent.endsWith("個，往下捲動看更多"), more.textContent);
+    Object.assign(seen, { scrollHeight: 640, clientHeight: 220, scrollTop: 0 });
+    seen.dispatch("scroll");
+    assert.strictEqual(seen.getAttribute("data-more"), "1", "the edge fades");
+    assert.strictEqual(more.hidden, false, "and the line shows");
+    seen.scrollTop = 420;
+    seen.dispatch("scroll");
+    assert.ok(!seen.hasAttribute("data-more"), "at the end the fade is gone");
+    assert.strictEqual(more.hidden, true);
+    Object.assign(seen, { scrollHeight: 200, clientHeight: 220, scrollTop: 0 });
+    seen.dispatch("scroll");
+    assert.ok(!seen.hasAttribute("data-more"), "a short list never does");
+  });
+
+  await test("P9: a list with nothing in it has no fade line (no list to scroll)", () => {
+    const ctx = newCtx();
+    const picker = ctx.folderPicker({ live: { home: "/Users/tester", projects: [] } });
+    assert.strictEqual(byData(picker.node, "data-fp", "more").length, 0);
+  });
+
   // ---- the css -----------------------------------------------------------------------------------------------------
   await test("CSS: the picker, the import dialog and the card front are styled; the list collapses to one column on a phone", () => {
     const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
@@ -1121,6 +1181,14 @@ async function test(name, fn) {
     assert.ok(/@media \(max-width: 720px\)\s*\{\s*\.fp-items \{ grid-template-columns: 1fr;/.test(css), "one column on a phone");
     assert.ok(/\.fp-path \{[^}]*overflow-wrap: anywhere/.test(css), "a long path wraps");
     assert.ok(!/url\(\s*["']?https?:/.test(css));
+  });
+
+  await test("CSS P9: the fade is on the scroll box only while it has more (data-more), has no global text-spacing rule, and hides the line when [hidden]", () => {
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    assert.ok(/\.fp-items\[data-more="1"\] \{[^}]*mask-image: linear-gradient\(to bottom, #000 calc\(100% - \d+px\), transparent\)/.test(css));
+    assert.ok(/\.fp-items\[data-more="1"\] \{[^}]*-webkit-mask-image/.test(css), "WebKit spelling too");
+    assert.ok(/\.fp-more\[hidden\] \{ display: none; \}/.test(css));
+    assert.ok(!/text-spacing-trim|font-feature-settings:\s*["']halt/.test(css), "no sitewide typography change for the bracket spacing");
   });
 
   console.log(`\n${passed} passed`);

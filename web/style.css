@@ -1249,6 +1249,10 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .fp-item:hover { border-color: var(--accent); }
 .fp-item > * { max-width: 100%; }
 .fp-path { overflow-wrap: anywhere; word-break: break-all; color: var(--ink-3); }
+/* A list in a box of fixed height: while rows are hidden below the edge, the edge fades out and a line says so. */
+.fp-items[data-more="1"] { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 34px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 34px), transparent); padding-bottom: 6px; }
+.fp-more { margin: 0; text-align: center; }
+.fp-more[hidden] { display: none; }
 .fp-paste { gap: 8px; flex-wrap: wrap; }
 .fp-paste input { flex: 1 1 220px; min-width: 0; }
 .fp-result { display: grid; gap: 10px; min-width: 0; }
@@ -1266,7 +1270,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .tf-none { margin: 0; color: var(--warn); }
 .tf-actions { display: flex; gap: 8px; margin-top: auto; }
 @media (max-width: 720px) {
-  .fp-items { grid-template-columns: 1fr; max-height: 180px; }
+  .fp-items { grid-template-columns: 1fr; max-height: 210px; }
   .cw-foot .btn { flex: 1 1 auto; }
 }
 

@@ -945,7 +945,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     const sec = ctx.onboardingSection({ mode: "steps", steps: ctx.ONBOARD_STEPS.map((s, i) => ({ ...s, n: i + 1, done: false })), next: "", firstTaskId: null }, {});
     assert.ok(buttons(sec).some((b) => b.textContent === "先收起新手引導"));
     assert.deepStrictEqual(plain(pure.taskStatusExplain("draft", { state: "unclaimed" })),
-      ["草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。", "尚未認領：還沒有把這張任務卡關聯到任何終端（關聯只是追蹤記錄，不會把內容送進終端）。"]);
+      ["草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。", "尚未認領：還沒有把這張任務卡關聯到任何終端。關聯只是追蹤記錄，不會把內容送進終端。"]);
     assert.deepStrictEqual(plain(pure.taskStatusExplain("in_progress", { state: "working" })), []);
     assert.deepStrictEqual(plain(pure.taskStatusExplain("draft", null)), ["草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。"]);
     const card = pure.taskFrontCard(baseTask({ status: "draft", pickup: { state: "unclaimed" } }), {});
