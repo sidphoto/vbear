@@ -1,11 +1,10 @@
 # Changelog
 
-## v0.7.0 — card play (unreleased)
+## v0.7.0 — card play
 
 A first-time user can now build a team in three card moves, with no form to fill in: **collect** role cards (or take
 the starter deck), **equip** skill cards, and **play** a card onto a task card's team place, then set out. A task card
-is one folder, and an existing project can be brought in and managed. The version number is not changed here; this
-section lists what the branch holds so far.
+is one folder, and an existing project can be brought in and managed.
 
 **Words.** 「Agent 團隊」 is now 「角色卡池」; a profile is a 「角色卡」, chosen skills are 「技能卡」 in slots
 (dashed 「收藏中」, solid 「生效中」 only when the loadout says a skill really loads, which no launch does today),
