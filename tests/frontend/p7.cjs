@@ -945,11 +945,34 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     const sec = ctx.onboardingSection({ mode: "steps", steps: ctx.ONBOARD_STEPS.map((s, i) => ({ ...s, n: i + 1, done: false })), next: "", firstTaskId: null }, {});
     assert.ok(buttons(sec).some((b) => b.textContent === "先收起新手引導"));
     assert.deepStrictEqual(plain(pure.taskStatusExplain("draft", { state: "unclaimed" })),
-      ["草稿：這張任務卡還沒開始做。", "尚未認領：還沒有把這張任務卡關聯到任何終端（關聯只是追蹤記錄，不會把內容送進終端）。"]);
+      ["草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。", "尚未認領：還沒有把這張任務卡關聯到任何終端（關聯只是追蹤記錄，不會把內容送進終端）。"]);
     assert.deepStrictEqual(plain(pure.taskStatusExplain("in_progress", { state: "working" })), []);
-    assert.deepStrictEqual(plain(pure.taskStatusExplain("draft", null)), ["草稿：這張任務卡還沒開始做。"]);
+    assert.deepStrictEqual(plain(pure.taskStatusExplain("draft", null)), ["草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。"]);
     const card = pure.taskFrontCard(baseTask({ status: "draft", pickup: { state: "unclaimed" } }), {});
-    assert.ok(findText(card, "草稿：這張任務卡還沒開始做。"));
+    assert.ok(findText(card, "草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。"));
+  });
+
+  await test("#11b the draft sentence says only what the status means (nobody marked it in progress), nowhere says work has not begun", () => {
+    // tasks.py derives "draft" when no agent field and no in_progress mark exist; it is not "work has not started"
+    const app = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+    assert.ok(!app.includes("還沒開始做"), "the old claim is gone from the app");
+    assert.ok(!app.includes("尚未開始執行"), "the old badge tooltip is gone too");
+    const [text] = plain(pure.taskStatusExplain("draft", null));
+    assert.ok(!/還沒開始做|沒有開始|尚未開始/.test(text), text);
+    assert.ok(text.includes("還沒有人把這張任務卡標成「執行中」"), text);
+    assert.ok(text.includes("只是標記"), text);
+    // it must not send people to a control that the card front does not have
+    assert.ok(!/按|選|請把/.test(text), text);
+    assert.ok(/隊伍與下一步/.test(text), "it points to where progress actually shows");
+    // the badge tooltip says the same thing as the sentence
+    const tip = pure.taskStatusBadge("draft").getAttribute("title");
+    assert.ok(tip.includes("標成「執行中」") && tip.includes("只是標記") && !/開始/.test(tip), tip);
+    // both places read the one function: the workbench head and the card front
+    const front = pure.taskFrontCard(baseTask({ status: "draft", pickup: { state: "working" } }), { flows: [flowView("planning")], profiles: PROFILES });
+    assert.ok(findText(front, text));
+    assert.ok(!findText(front, "還沒開始做"));
+    // a card the user did mark in progress gets no draft sentence
+    assert.deepStrictEqual(plain(pure.taskStatusExplain("in_progress", null)), []);
   });
 
   // ---- #14 the lobby's second button ----------------------------------------------------------------------------------------------

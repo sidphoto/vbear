@@ -86,8 +86,9 @@ edit; the permission advice behind each is folded. Right: the card pool in the *
 
 **Task cards** (demo data): a task card is one folder. It shows the folder, the branch and HEAD it could read, how many
 terminals are in that folder, the team on it (planning, doing and reviewing places) and the next step with who holds it.
-A card that no terminal has claimed says so, and says that linking is only a record. (The demo's cards all use the same
-folder, so the rows look alike.)
+A card that nobody has marked 「執行中」 (in progress) is called 「草稿」 (draft) and says exactly that: it is only a mark, not a
+measure of whether work has started. A card that no terminal has claimed says so, and says that linking is only a record.
+(The demo's cards all use the same folder, so the rows look alike.)
 
 <img src="docs/images/import-project.png" alt="The dialog for a new task card: pick a folder VBear found, a recently used one, or paste a path" width="520">
 

@@ -6695,7 +6695,7 @@ function computeTaskProvenance(prov = {}, rawStatus = "draft", closure = null) {
 }
 
 const TASK_STATUS_LABELS = {
-  draft: ["草稿", "b-mute", "尚未開始執行"],
+  draft: ["草稿", "b-mute", "還沒有人把這張任務卡標成「執行中」；這只是標記，不代表有沒有人在做"],
   in_progress: ["執行中", "b-info", "Agent 或開發者正在進行此任務"],
   agent_completed: ["待驗收 (Agent回報完成)", "b-warn", "Agent 已回報完成，但尚未通過測試驗證與人類核准"],
   verification_asserted: ["聲稱驗證通過 (Verification Asserted)", "b-ok", "此主控台無身份驗證：僅代表自動化測試與介面核准兩欄皆已透過本頁/API 自我回報為通過，並非經授權之正式驗證"],
@@ -6722,7 +6722,8 @@ const BINDING = {
   unknown: ["無法確認版本", "b-warn"], unbound: ["未綁定版本", "b-mute"], none: ["尚無結果", "b-mute"],
 };
 // A badge alone says little to someone new: these two get a sentence beside them (draft, and nobody has picked it up).
-const TASK_STATUS_EXPLAIN = { draft: "草稿：這張任務卡還沒開始做。" };
+// "draft" is what a card derives to when nobody marked it in progress: it says nothing about whether work has begun.
+const TASK_STATUS_EXPLAIN = { draft: "草稿：還沒有人把這張任務卡標成「執行中」。這只是標記，不代表沒人在做；做到哪一步，看下方的隊伍與下一步。" };
 const PICKUP_EXPLAIN = { unclaimed: "尚未認領：還沒有把這張任務卡關聯到任何終端（關聯只是追蹤記錄，不會把內容送進終端）。" };
 function taskStatusExplain(status, pickup) {
   const out = [];
