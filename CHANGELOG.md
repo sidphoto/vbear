@@ -82,6 +82,7 @@ the tool is the 「陣營」, permission intents have Chinese labels and say the
 - **QA and tests.** The QA console gained `VBEAR_QA_FRESH=1` and `VBEAR_QA_TRANSLATE=fail`; the fake translation CLI
   follows the structured-output change. New tests cover the folder API, the config keys, flow role cards, `will_load`,
   the starter deck, the pass table level by level, the team places and the first game.
+- **Docs: README screenshots retaken.** Both READMEs now show v0.7.0 (demo data): the home page and the fresh-install home, the card pool (front and back, the starter deck, the light theme), task cards and the project import, a flow's team places, the launch pass (the three-line front and 「看七項細節」), a skill card, and the office with its stage panel. Four older pictures (`role-card*.png`, `preflight-check.png`) are gone; the captions say only what a picture shows, and the status line reads v0.7.
 - Add an opt-in macOS browser startup mode, an open-in-browser menu command, and an Option-key escape to
   window mode. Failed or timed-out browser launches fall back to the window with an error message.
 - Isolate macOS smoke tests by port and process ID, and add optional browser startup/reuse acceptance.

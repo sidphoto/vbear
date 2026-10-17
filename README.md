@@ -9,7 +9,7 @@ ordinary terminal and is not covered by these protections.)
 
 [繁體中文說明](README.zh-TW.md) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/SECURITY-MODEL.md) · [Contributing](.github/CONTRIBUTING.md)
 
-> **Status: early (v0.3).** It is built and used daily by one person on macOS.
+> **Status: early (v0.7).** It is built and used daily by one person on macOS.
 > The interface is in Traditional Chinese (zh-TW).
 > Expect rough edges, and read [Good to know before you start](#good-to-know-before-you-start) before relying on it.
 
@@ -47,59 +47,97 @@ list is a record of your picks.
 ### What it looks like
 
 All screens below show **demo data**: a synthetic Claude Code and Codex in a temporary folder, not a real project.
+Where a picture shows a folder, the temporary folder of the demo run is replaced by a stand-in name such as
+`~/projects/notes-site`; your own screens show your real paths.
 
-<img src="docs/images/lobby.png" alt="The home page, 冒險者大廳: the quest board with what waits for you first, then the other tasks in progress" width="992">
+<img src="docs/images/lobby.png" alt="The home page, 冒險者大廳: the 新手第一局 card with its three steps, then 輪到你 with the flows at a gate" width="992">
 
-The **quest board** (demo data), the home page: 「輪到你」 first, with the flows at a gate and any agent that waits for
-your reply (a framed card, with the words that say why), then 「其他進行中的任務」. A card is one flow; the whole card
-opens it. Manual flows say that VBear will not move them for you, and nothing is shown that VBear cannot read.
+The **quest board** (demo data), the home page 冒險者大廳. At the top, 「新手第一局」 lists the three steps (take role
+cards, bring in a project, put a team on a task card); a step is ticked only from real data, and the demo's own cards
+are tagged 示範, so step 1 stays open here. Then 「輪到你」: the flows at a gate and any agent that waits for your reply
+(a framed card, with the words that say why), then 「其他進行中的任務」. A card is one flow; the whole card opens it.
+Manual flows say that VBear will not move them for you, and nothing is shown that VBear cannot read.
 
-<img src="docs/images/office.png" alt="The pixel office: four workstations with teams of pixel characters, desks with live terminals and a speech box over each, and the lounge with the saved role cards" width="992">
+<img src="docs/images/lobby-first-run.png" alt="The home page on a fresh install: three unticked steps, an empty quest board with one button to the terminal workbench" width="992">
+
+The same page on a **fresh install** (demo data, nothing created yet): the three steps are all open, only the first one
+has a button (「到角色卡池」), and the board says there is no task yet instead of showing an empty list.
+
+<img src="docs/images/card-pool.png" alt="The card pool, 角色卡池: two role cards face up with their skill slots drawn with dashed frames, and one card turned over to its back" width="900">
+
+The **card pool** 「角色卡池」 (demo data). A role card has two faces. The front (left and right here) shows the name,
+the tool tag, the position, the skill slots and the one-line light: 「可以出發（權限意圖都已決定）」 followed by
+「實際能不能出發，以出發通行證為準」, and a line about what a start allows, written from the same armor items as the pass
+(here: files can be changed after a start, with the reach only partly limited, and a commit is not stopped). 「名冊，
+不代表正在出勤」 is on every card. The back (middle) holds the faction and model, the role label, where the evidence came
+from and the permission intents, each marked as a record and not a grant. The skill slots are dashed 「收藏中」: kept on
+the card, and 「這次的安全啟動不會載入」. A solid 「生效中」 slot would appear only if VBear reported that a skill loads,
+which no launch does today, so none appears here. A skill that the index cannot find is called out on the card.
+
+<p>
+<img src="docs/images/card-pool-starter.png" alt="The starter deck dialog: three ready role cards for planning, doing and reviewing, with editable names" width="520">
+<img src="docs/images/card-pool-light.png" alt="The card pool in the light theme" width="640">
+</p>
+
+Left: the **starter deck** 「用起手牌組開始」 (demo data): three ready cards (planner, doer, reviewer) whose names you can
+edit; the permission advice behind each is folded. Right: the card pool in the **light theme** (demo data).
+
+<img src="docs/images/task-cards.png" alt="The task cards section: a row of task cards, each a folder with its branch, its team and its next step" width="992">
+
+**Task cards** (demo data): a task card is one folder. It shows the folder, the branch and HEAD it could read, how many
+terminals are in that folder, the team on it (planning, doing and reviewing places) and the next step with who holds it.
+A card that no terminal has claimed says so, and says that linking is only a record. (The demo's cards all use the same
+folder, so the rows look alike.)
+
+<img src="docs/images/import-project.png" alt="The dialog for a new task card: pick a folder VBear found, a recently used one, or paste a path" width="520">
+
+**Bringing in a project** (demo data), 「＋ 任務卡（導入專案）」: pick a folder VBear found on your computer, or paste a
+path. The dialog says VBear only reads the folder's basic facts, writes nothing and runs no git in it.
+
+<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates, the next steps, and its team: planning, doing and reviewing places with a second reviewer place and the card pool to drag from" width="984">
+
+A flow's **progress and team places** (demo data): the gates passed and the current one, the next steps, and the team
+on the task card: the planning, doing and reviewing places, each with its model family (the reviewer's place needs a
+different family from the doer's), an optional second reviewer, and the card pool below to put a role card on a place.
+Saving the team writes a line to the timeline.
+
+<img src="docs/images/launch-pass.png" alt="The launch pass: three lines on the front (folder, network, commit), the shield legend, the acknowledgement and the confirm button" width="570">
+
+The **launch pass** 「出發通行證」 (demo data): the front says in three lines what this start can and cannot do: it can
+change roughly this folder (partly limited), the network is blocked, and a commit is not stopped. The acknowledgement that
+a commit is not stopped must be ticked before a start. The CLI version, the scratch folder, the 「可繞過」 note and the
+folded 「看七項細節」 follow.
+
+<img src="docs/images/launch-pass-details.png" alt="What 「看七項細節」 opens: the seven labels in five groups, then the list of skill cards marked not loaded" width="570">
+
+What 「看七項細節」 opens (demo data): the seven labels in five groups with each one's evidence, and the chosen skill cards
+marked 「本次不會載入」.
+
+<img src="docs/images/skill-card.png" alt="A skill card: the one-line use with its source tag, fields the author did not give, and where the skill sits on role cards" width="992">
+
+A **skill card** (demo data): every field carries where it came from, a field the skill file does not give says so, and
+the part 「已插在哪些角色卡上」 shows the skill as 「收藏中（這次出發不會載入）」 on each card that holds it.
+
+<img src="docs/images/office.png" alt="The pixel office: the counts, then the stations with a framed team and a red 輪到你 badge" width="940">
 
 The **pixel office** (demo data), `#/office`: teams stand at the station their task is at, a framed team with a red
-「輪到你」 badge waits for you, each live terminal sits at a desk with its state in words, and the lounge holds the
-saved role cards. The red is used for nothing else.
+「輪到你」 badge waits for you, and the panel on the right says what a click shows. The red is used for nothing else.
+
+<p>
+<img src="docs/images/office-desks.png" alt="The desks and the lounge: terminals at desks with their state in words above, and the saved role cards in the lounge" width="540">
+<img src="docs/images/office-gear.png" alt="A role card's panel in the office: the species choice, the character stage and the card with its dashed skill slots" width="300">
+</p>
+
+Left (demo data): each live terminal sits at a **desk** with its state in a word box (「工作中」, 「等你回覆」, 「狀態未知」), and the
+**lounge** holds the saved role cards. Right: a role card's **panel**: a roster character is not at work and has no live
+state; the species choice only changes the roster picture; and the same card is shown with its dashed slots.
 
 Only desk characters with a working status alternate between two typing frames. Teams and roster characters
 stay still; the operating system's reduced-motion preference disables the animation. Panels show fixed persona
 lines with evidence labels and expandable reasons, plus a collapsible SVG character stage. The monitor uses
 words and color for attendance; teams show their task's station and role cards show the roster. The browser saves
-the stage collapse preference locally. The screenshots above predate the embodied upgrade.
-
-<img src="docs/images/office-gear.png" alt="A role card's panel in the office: species choice, weapons (Bash available, Edit and Write locked), armor with solid and dashed frames, skill cards" width="392">
-
-A role card's **panel** (demo data): its weapons, its armor (a solid frame is enforced or partly enforced, a dashed one is
-intent only or not limited, each with its words) and its chosen skill cards. The characters are original pixel art,
-inspired by the way [Pixel-Crew](https://github.com/juinwei7/Pixel-Crew) (MIT) shows an office; no art or code is
-taken from it.
-
-<p>
-<img src="docs/images/role-card.png" alt="A character card in the dark theme: the role label, the tool, the chosen skills with their source tags" width="330">
-<img src="docs/images/role-card-armor.png" alt="The same card's armor in five groups, then the user's own expectations" width="330">
-</p>
-
-The **character card** (demo data): a role card's role label, tool, chosen skills (each marked as not loaded by a
-launch) and, to the right, its armor in five groups with the original level words.
-
-<img src="docs/images/skill-card.png" alt="A skill card: effect, trigger, referenced files, missing file, status, with a source tag on every field" width="722">
-
-A **skill card** (demo data): every field carries where it came from, a missing file is called out, and the card says
-that adding it to a role only records your pick.
-
-<img src="docs/images/preflight-check.png" alt="The launch pass with its seven labels in five groups, the chosen list marked not loaded, the confirm button" width="448">
-
-The **launch pass** (demo data, the folder and temporary-path lines cut out of the picture). This picture was taken
-before the three-line front was added: it shows what 「看七項細節」 opens, the seven labels in five groups and the
-chosen skills marked 「本次不會載入」.
-
-<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates and its team as three cards" width="984">
-
-A flow's **progress and party** (demo data): the gates passed, the current one, and the planner, executor and
-reviewer with their model families and whether the reviewer counts as independent.
-
-<img src="docs/images/role-card-light.png" alt="The character card in the light theme" width="330">
-
-The same character card in the light theme (demo data).
+the stage collapse preference locally. The characters are original pixel art, inspired by the way
+[Pixel-Crew](https://github.com/juinwei7/Pixel-Crew) (MIT) shows an office; no art or code is taken from it.
 
 ## What you can do with it
 
