@@ -44,7 +44,7 @@ const api={get:async()=>({skills:[{skill_id:'s1',name:'Installed & equipped',inv
   const links = nodes.filter(n => n.tag === "a");
   assert(links.some(a => a.href === "#/workbench?profile=p1"), "equipped Profile must deep-link to workbench");
   assert(source.includes('let activeTab = initialProfileId ? "agent" : "task"'), "profile deep link must select the Agent Builder tab");
-  assert(source.includes('let rightCollapsed = initialProfileId ? false'), "profile deep link must reveal the right column");
+  assert(source.includes('let rightCollapsed = (initialProfileId || initialTaskId) ? false'), "profile deep link must reveal the right column");
   assert(text.includes("已停用"), "disabled Profile must remain visible");
   assert(nodes.some(n => n.tag === "button" && walk(n).some(c => c.textContent === "技能卡特性")), "each Armory card opens the skill card");
   console.log("ok armory honest loaded state and profile deep link");

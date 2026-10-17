@@ -163,7 +163,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     if intents.get("test") == "deny":
         block("test_deny_unenforceable", "無法強制禁止執行指令：已驗證的設定會提供 Bash 工具")
     if intents.get("deploy") == "allow":
-        block("deploy_not_available", "沒有可安全表達「只可發布」的 CLI 設定；發布須留在 Agent session 之外")
+        block("deploy_not_available", "沒有可安全表達「只可發布」的 CLI 設定；發布須留在角色的終端之外")
     # Whitelist, not blacklist: the one verified configuration honours exactly
     # this combination. Anything else that slipped past the reasons above
     # (an unexpected value, a future intent key) is refused too.
@@ -260,7 +260,7 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
                             if proven else "network_access=false 尚無本輪 OS 負向證據",
                             evidence=ev, unknown_reason=unknown),
             "Filesystem": item(ENFORCED if proven else UNKNOWN,
-                               "僅工作目錄、session scratch 與明確 opt-in 的 .git 可寫；讀取未隔離"
+                               "僅工作目錄、這次出發的暫存區與明確 opt-in 的 .git 可寫；讀取未隔離"
                                if proven else "Codex filesystem sandbox 尚無本輪 OS 證據",
                                scope=SCOPE_CODEX_WRITE, evidence=ev, unknown_reason=unknown),
         }
@@ -268,14 +268,14 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
         why = WHY_VERSION
         return {
             "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到", unknown_reason=why),
-            "Write": item(UNVERIFIED, "設定為只允許寫入工作目錄與本 session 暫存區，但此版本未實測",
+            "Write": item(UNVERIFIED, "設定為只允許寫入工作目錄與這次出發的暫存區，但此版本未實測",
                           scope=SCOPE_WRITE, unknown_reason=why),
             "Test": item(INTENT, "可用 Bash 執行指令；限制尚未在此版本實測", unknown_reason=why),
             "Commit": item(UNRESTRICTED, COMMIT_NOTE_FOLDER_UNKNOWN,
                            scope=SCOPE_WORKDIR, unknown_reason=why),
             "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
             "Network": item(UNVERIFIED, "設定為空 allowlist（不連網），但此版本未實測", unknown_reason=why),
-            "Filesystem": item(UNVERIFIED, "設定為工作目錄與本 session 暫存區之外不可寫，但此版本未實測",
+            "Filesystem": item(UNVERIFIED, "設定為工作目錄與這次出發的暫存區之外不可寫，但此版本未實測",
                                scope=SCOPE_WRITE, unknown_reason=why),
         }
     if claude_verified is None:
@@ -296,9 +296,9 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
            item(UNKNOWN, "設定為空 allowlist，但尚未以這組設定實測",
                 unknown_reason="空 allowlist 在此設定形狀下尚無實測證據"))
     return {
-        "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他 session 的暫存區",
+        "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到，包括其他終端的暫存區",
                      evidence=(EVIDENCE_WRITES,)),
-        "Write": item(PARTIAL, "Bash 工具的寫入由 Claude 沙盒限制在工作目錄與本 session 暫存區（OS 拒絕）；"
+        "Write": item(PARTIAL, "Bash 工具的寫入由 Claude 沙盒限制在工作目錄與這次出發的暫存區（OS 拒絕）；"
                                "Edit/Write 工具未提供，屬工具層意圖，不是 OS 邊界",
                       scope=SCOPE_WRITE, evidence=(EVIDENCE_WRITES, EVIDENCE_LIFECYCLE)),
         "Test": item(INTENT, "可用 Bash 執行指令；只受寫入範圍與網路設定限制", evidence=(EVIDENCE_WRITES,)),
@@ -306,7 +306,7 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
                        scope=SCOPE_WORKDIR, unknown_reason="未測試以 denyWrite 排除 .git 的效果"),
         "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
         "Network": net,
-        "Filesystem": item(ENFORCED, "Agent 的 Bash 工具寫入邊界：工作目錄與本 session 暫存區之外的寫入被 OS 拒絕"
+        "Filesystem": item(ENFORCED, "Agent 的 Bash 工具寫入邊界：工作目錄與這次出發的暫存區之外的寫入被 OS 拒絕"
                                      "（含家目錄與全域 CLI 設定的已測路徑）。這不是讀取隔離",
                            scope=SCOPE_WRITE, evidence=(EVIDENCE_WRITES, EVIDENCE_LIFECYCLE)),
     }

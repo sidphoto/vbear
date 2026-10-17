@@ -251,6 +251,11 @@ Other safeguards:
   outside reads are the executor directory's HEAD through `git_head` (plain bounded file reads, as for task cards)
   and the last live view already built (`Store.live_cached()`). The flows routes never build a live view, so they
   never reach the runtime and cannot start its daemon; a test holds them to that.
+- **`GET /api/live` also carries `managed_root`** (P7): the one folder a launch may work in, as the server holds it. It is
+  a path the console already shows elsewhere, only used for the wording of the folder hint; the server still checks every
+  folder itself. `derive_labels` (the pass's seven labels) now does one `os.path.isdir` and one `os.path.lexists` on
+  `<folder>/.git` to word the Commit note for that folder; no walk, no git process, nothing written, and the level
+  (not restricted) does not change.
 - **The pages still read live state the existing way.** The 「流程」 pages, like the home page, call `/api/live`. On
   the native runtime with autostart on (the default), that call starts VBear's own runtime daemon when it is not
   running (unchanged behaviour). It

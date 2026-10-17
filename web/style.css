@@ -1381,3 +1381,16 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .translation-failure-why summary { cursor: pointer; display: inline; }
 .confirm-details { margin: 8px 0; }
 .confirm-details summary { cursor: pointer; }
+
+/* P7 closing fixes: the path hint beside the box, the action under the next steps, the pass line on a card, the picker's original */
+.fp-hints { display: grid; gap: 2px; margin-top: 6px; }
+.fp-hints p { margin: 0; overflow-wrap: anywhere; }
+.fp-finder-tip { color: var(--ink); }
+.ns-action { display: grid; gap: 8px; margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel-2); min-width: 0; }
+.ns-action p { margin: 0; overflow-wrap: anywhere; }
+.ns-launch { gap: 8px; flex-wrap: wrap; }
+.rcard-passline { margin: 0; padding: 0 2px; overflow-wrap: anywhere; color: var(--ink-2); }
+.cw-skill-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cw-skill-cell > .cw-skill { flex: 1 1 auto; }
+.cw-skill-orig summary { cursor: pointer; }
+.cw-skill-orig p { margin: 4px 0 0; overflow-wrap: anywhere; }

@@ -1106,11 +1106,11 @@ test("persona lines and labels follow the corrected evidence table exactly", () 
   const title = "依據：Claude Code 終端標題";
   const stream = "依據：Claude Code 串流協定的回合事件";
   const rows = [
-    ["working", "claude-title", title + "（開頭的轉圈符號）", "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為 session 標題保存或回傳。"],
+    ["working", "claude-title", title + "（開頭的轉圈符號）", "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為終端標題保存或回傳。"],
     ["working", "claude-stream", stream, "我正在跑自動派工的這一輪，做完會交回結果。"],
     ["waiting", "claude-title", title + "（閒置符號 ✳）", "我停下來等你囉（! 輪到你），打開終端機看看我吧。"],
     ["waiting", "claude-stream", stream, "這一輪背景派工已結束，等待下一則任務。"],
-    ["exited", null, "依據：VBear runtime（session 已結束）", "這個終端已經結束了。"],
+    ["exited", null, "依據：VBear runtime（終端已結束）", "這個終端已經結束了。"],
   ];
   for (const [status, decided_by, sourceLabel, line] of rows) {
     assert.deepStrictEqual(app.personaSpeech({ key: "session:test", tool: "claude", status, activity: { decided_by, reason: "原文 <test>" } }),

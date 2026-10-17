@@ -688,10 +688,11 @@ async function test(name, fn) {
     putVia(b, "reviewer1", "p-rev");
     putVia(b, "executor", "p-maker");
     assert.strictEqual(slotNode(b.node, "reviewer1").getAttribute("data-state"), "filled");
-    putVia(b, "executor", "p-rev");         // now codex executes, codex reviews
-    assert.ok(byData(slotNode(b.node, "reviewer1"), "data-slot-problem", "same_family")[0]);
+    putVia(b, "executor", "p-rev");         // now codex executes, and the very same codex card reviews
+    assert.ok(byData(slotNode(b.node, "reviewer1"), "data-slot-problem", "same_card")[0], "the same card, which is said first (P7 #8)");
     putVia(b, "executor", "p-shared");
     assert.ok(byData(slotNode(b.node, "reviewer1"), "data-slot-problem", "executor_family_unknown")[0]);
+    putVia(b, "executor", "p-maker");        // another card than the shared one, so it is the family that is unknown
     putVia(b, "reviewer2", "p-shared");
     assert.ok(byData(slotNode(b.node, "reviewer2"), "data-slot-problem", "reviewer_family_unknown")[0]);
     // the list shows the consequence before the card is chosen
@@ -812,8 +813,8 @@ async function test(name, fn) {
     assert.strictEqual(b.state.slots.executor.session_id, "n-0123456789ab");
     assert.strictEqual(b.state.slots.executor.workdir, REPO);
     assert.strictEqual(b.state.slots.executor.profile_id, "p-rev");
-    // and the review place is judged against the new executor
-    assert.ok(byData(slotNode(b.node, "reviewer1"), "data-slot-problem", "same_family")[0]);
+    // and the review place is judged against the new executor: the very same card, said first (P7 #8)
+    assert.ok(byData(slotNode(b.node, "reviewer1"), "data-slot-problem", "same_card")[0]);
   });
 
   await test("board: a place with a card can start the launch check with the task card's folder; not while changes are unsaved, not for a card that is gone", () => {
@@ -821,14 +822,14 @@ async function test(name, fn) {
     const fl = flowView();
     const b = board(ctx, { flow: fl, profiles: PROFILES.filter((p) => p.id !== "p-rev") });
     const link = act(slotNode(b.node, "executor"), "launch");
-    assert.strictEqual(link.getAttribute("href"), "#/workbench?task=task-1&profile=p-maker&launch=1");
+    assert.strictEqual(link.getAttribute("href"), "#/workbench?task=task-1&profile=p-maker&launch=1&step=implement");
     assert.ok(!act(slotNode(b.node, "reviewer1"), "launch"), "the card is gone");
     assert.ok(!act(slotNode(b.node, "reviewer2"), "launch"), "an empty place has nothing to launch");
     putVia(b, "reviewer2", "p-shared");
     assert.ok(!act(slotNode(b.node, "executor"), "launch"), "unsaved changes would be lost by leaving");
     const draft = board(newCtx(), {});
     putVia(draft, "planner", "p-ceo");
-    assert.strictEqual(act(slotNode(draft.node, "planner"), "launch").getAttribute("href"), "#/workbench?task=task-1&profile=p-ceo&launch=1", "a draft survives leaving");
+    assert.strictEqual(act(slotNode(draft.node, "planner"), "launch").getAttribute("href"), "#/workbench?task=task-1&profile=p-ceo&launch=1&step=plan", "a draft survives leaving");
     const hand = flowView();
     hand.roles.planner = { name: "手填", family: "other" };
     assert.ok(!act(slotNode(board(newCtx(), { flow: hand }).node, "planner"), "launch"));
@@ -965,7 +966,7 @@ async function test(name, fn) {
     const n2 = hidden.teamSection(baseTask(), { flow: flowView(), hideOpen: true, profiles: PROFILES, catalog });
     main.append(n2);
     await tick(8);
-    assert.ok(!walk(byData(n2, "data-team", "next")[0]).some((n) => n.tag === "a"), "no link to the page it is already on");
+    assert.ok(!walk(byData(n2, "data-team", "next")[0]).some((n) => n.tag === "a" && (n.getAttribute("href") || "").startsWith("#/flows/")), "no link to the page it is already on");
   });
 
   // ---- 放上任務卡 ---------------------------------------------------------------------------------------------------
@@ -1037,7 +1038,7 @@ async function test(name, fn) {
     await placeFlow(ctx, MAKER, "task-1");
     assert.ok(byData(dlg(), "data-place", "slots")[0], "the task was preselected");
     const rev = byData(dlg(), "data-place-slot", "reviewer1")[0];
-    assert.ok(findText(rev, "這個位置需要和執行位不同陣營的卡"), "claude on the review place of a claude executor");
+    assert.ok(findText(rev, "同一張卡不能審查自己"), "the executor's own card on its review place (P7 #8)");
     assert.ok(!findText(byData(dlg(), "data-place-slot", "planner")[0], "審查結果才算數"));
     byData(dlg(), "data-place-slot", "executor")[0].click();
     act(dlg(), "place").click();

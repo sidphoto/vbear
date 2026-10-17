@@ -701,6 +701,33 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.deepStrictEqual(launches[0], { preview_id: "p-" + "a".repeat(32), expected_settings_digest: "d".repeat(64), user_confirmed: true });
   });
 
+  await test("pass dialog (P7 #2): a launch from a task's place keeps a note for that step of that task card; a launch without a step, or one that failed, keeps none", async () => {
+    const task = { id: "task-1", title: "T", template: "custom", goal: "", scope: [], out_of_scope: [], deliverables: [], acceptance_criteria: [], evidence: [],
+      steps: [], artifacts: [], status: "draft", workdir: WORKDIR, provenance: { agent: "pending", tests: "untested", human: "pending", verified: false,
+        verification_asserted: false, notes: "", source: "unauthenticated_console_ui" }, associated_pane_id: null, associated_session_id: null,
+      association_mode: "tracking_only", association_label: "x", created_at: 1, updated_at: 1 };
+    const run = async (step, launchOk) => {
+      const ctx = mkPass([roleP], { ...loadoutFor("p-1"), "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [task] }),
+        "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: previewOf(LV.enforced, LV.enforced) }),
+        "POST /api/native/agent-launches": () => (launchOk ? jsonResponse({ ok: true, launch: { session: { session_id: "n-0123456789ab" } } })
+          : jsonResponse({ error: "no" }, 500)) });
+      await ctx.viewWorkbench(null, "task-1", "p-1", true, step);
+      await tick(8);
+      const d = dialog();
+      assert.strictEqual(field(d).value, WORKDIR, "the folder of the task card is filled in");
+      commitBox(d).checked = true;
+      btnByText(d, "產生預覽").dispatch("click");
+      await tick(6);
+      btnByText(d, "確認啟動").dispatch("click");
+      await tick(6);
+      return JSON.parse(JSON.stringify(ctx.launchMemoRead("task-1").map((e) => [e.step, e.session_id, e.name])));
+    };
+    assert.deepStrictEqual(await run("plan", true), [["plan", "n-0123456789ab", "Mine"]]);
+    assert.deepStrictEqual(await run("", true), [], "no step in the address: nothing to note");
+    assert.deepStrictEqual(await run("nonsense", true), [], "a step the page does not know");
+    assert.deepStrictEqual(await run("plan", false), [], "the launch did not happen");
+  });
+
   await test("a confirmation can keep its long print behind 「詳細」: the short sentence on top, nothing lost, no fold when there is none", async () => {
     const ctx = mkPass([roleP]);
     const pending = ctx.confirmInPage("確認送出技能說明", "會用你自己的 Claude 帳號翻譯這張技能卡，通常不到 1 美分。", "翻成中文", { details: "請求預算 US$0.05，這不是保證帳單上限。" });

@@ -321,7 +321,7 @@ const plainInfo = (over = {}) => ({ ok: true, path: PLAIN, name: "notes", exists
   git: { is_repo: false, root: null, branch: null, commit: null, short: null, error: null },
   project_skill_count: 0, terminals: { known: true, count: 0, items: [] }, tasks: { known: true, items: [], count: 0 }, ...over });
 const inspectKey = (p) => `GET /api/folders/inspect?path=${encodeURIComponent(p)}`;
-const live = { home: HOME, sessions: [], projects: [
+const live = { home: HOME, managed_root: HOME, sessions: [], projects: [
   { project_id: "proj-1", name: "demo", path: REPO, basis: "git 儲存庫根目錄", live_session_ids: [], last_activity: "" },
   { project_id: "proj-2", name: "notes", path: PLAIN, basis: "工作目錄（非 git）", live_session_ids: [], last_activity: "" }], attention: [], usage: { sessions: [] }, runtime: { available: true, problems: [] } };
 const baseTask = (over = {}) => ({ id: "task-1", title: "Demo task", template: "custom", goal: "", scope: [], out_of_scope: [], deliverables: [],
@@ -1031,7 +1031,7 @@ async function test(name, fn) {
     act(d, "next").dispatch("click");
     act(d, "create").dispatch("click");
     await tick(6);
-    assert.ok(findText(main, "demo") && findText(main, "狀態證明"));
+    assert.ok(findText(main, "demo") && findText(main, "狀態依據"));
     const post = fetchCalls.find((c) => c.options && c.options.method === "POST");
     assert.strictEqual(JSON.parse(post.options.body).workdir, REPO);
   });

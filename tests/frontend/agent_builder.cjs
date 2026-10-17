@@ -815,12 +815,12 @@ function findModalInBody() {
     const tick = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
     assert.strictEqual(ctx.closeSessionButton("w1:p2"), null, "non-native ids get no close button");
     assert.strictEqual(ctx.closeSessionButton("n-xyz"), null, "malformed ids get no close button");
-    // Clicks "關閉 Session", then answers the in-page dialog with confirm or cancel.
+    // Clicks "關閉終端", then answers the in-page dialog with confirm or cancel.
     const confirmDialog = async (answer) => {
       const dlg = findModalInBody();
       assert.ok(dlg, "an in-page confirmation dialog opened");
       const pick = walk(dlg).find((n) => n.tag === "button"
-        && (n.textContent || "").trim() === (answer ? "關閉 Session" : "取消"));
+        && (n.textContent || "").trim() === (answer ? "關閉終端" : "取消"));
       assert.ok(pick, "dialog offers the expected button");
       pick.dispatch("click");
       await tick();
@@ -832,7 +832,7 @@ function findModalInBody() {
       await confirmDialog(answer);
     };
     const btn = ctx.closeSessionButton("n-0123456789ab");
-    assert.ok(btn && (btn.textContent || "").includes("關閉 Session"));
+    assert.ok(btn && (btn.textContent || "").includes("關閉終端"));
     btn.dispatch("click");
     await tick();
     assert.deepStrictEqual(posts, [], "nothing is sent before the dialog is answered");

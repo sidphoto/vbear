@@ -531,7 +531,7 @@ async function runWorkbenchTests() {
 
     const bodyText = mainEl.textContent;
     assert.ok(
-      bodyText.includes("追蹤關聯 (Tracking Only)") && bodyText.includes("絕非 Context 注入"),
+      bodyText.includes("追蹤關聯") && bodyText.includes("不會把任務卡的內容送進終端"),
       "the rendered task tab must label task/session association as tracking-only, never context injection"
     );
     assert.ok(
@@ -976,7 +976,7 @@ async function runWorkbenchTests() {
             from: { ...sample, status: "handed_off", provenance: { ...sample.provenance, agent: "completed" },
               closure: { reason: "handed_off_to", target: body.to, note: body.note, set_at: 1, successor: "task-next" } },
             to: { ...sample, id: "task-next", title: body.title, owner: body.to, handed_off_from: sample.id,
-              chain_of_record: [sample.id], pickup: { state: "unclaimed", detail: "還沒有關聯任何 Terminal" } },
+              chain_of_record: [sample.id], pickup: { state: "unclaimed", detail: "還沒有關聯任何終端" } },
           });
         }
         const id = decodeURIComponent(path.slice("/api/tasks/".length));

@@ -1083,6 +1083,105 @@ async function test(name, fn) {
     for (const l of byData(main, "data-pcard", "light")) assert.ok(!/安全|已限制/.test(textOf(l)));
   });
 
+  // ---- P7: the pass line on a card, the picker's Chinese ----------------------------------------------------------------
+  const ARMOR_LEVEL = { enforced: "強制（限已測路徑、版本與執行層）", partial: "部分強制", unverified: "未驗證（此 Claude Code 版本尚未實測）",
+    unknown: "未知", intent: "僅意圖", unrestricted: "未限制", notGranted: "不授予" };
+  const armorOf = (write, commit = ARMOR_LEVEL.unrestricted, over = {}) => ({ applicable: true, items: [
+    { name: "Read", level: ARMOR_LEVEL.intent }, { name: "Write", level: write }, { name: "Commit", level: commit }, { name: "Network", level: ARMOR_LEVEL.enforced }], ...over });
+
+  await test("P7 #13 cardPassLine: made from the armor items; never more hopeful than the pass; unreadable armor gives no line", () => {
+    const line = (write, commit) => pure.cardPassLine({ state: "ok", data: { armor: armorOf(write, commit) } });
+    const rows = [
+      [ARMOR_LEVEL.enforced, "出發後可以改檔案（限工作資料夾）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.partial, "出發後可以改檔案（範圍只部分擋住）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.unverified, "出發後可以改檔案（範圍限制還沒實測）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.unknown, "出發後可以改檔案（範圍不明）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.notGranted, "出發後可以改檔案（範圍不明）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.intent, "出發後可以改檔案（範圍沒有被擋住）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.unrestricted, "出發後可以改檔案（範圍沒有被擋住）；擋不住 commit；詳情看出發通行證"],
+      ["something new", "出發後可以改檔案（範圍不明）；擋不住 commit；詳情看出發通行證"],
+    ];
+    for (const [level, want] of rows) assert.strictEqual(line(level), want, level);
+    // only an enforced write may say the reach; commit is never said to be stopped, whatever its own level says
+    for (const level of Object.values(ARMOR_LEVEL)) {
+      const t = line(level, ARMOR_LEVEL.enforced);
+      assert.ok(t.includes("擋不住 commit") && !/安全|已限制/.test(t), level);
+      assert.strictEqual(t.includes("限工作資料夾"), level === ARMOR_LEVEL.enforced, level);
+    }
+    // the same table the pass front uses decides the reach
+    for (const level of Object.values(ARMOR_LEVEL)) {
+      const kind = pure.passKind(level);
+      assert.strictEqual(line(level).includes("限工作資料夾"), kind === "enforced");
+    }
+  });
+
+  await test("P7 #13 cardPassLine: nothing when the armor cannot be read, does not apply, or lacks the two items", () => {
+    const bad = [undefined, null, { state: "loading" }, { state: "error", error: "x" }, { state: "ok" }, { state: "ok", data: null },
+      { state: "ok", data: {} }, { state: "ok", data: { armor: null } }, { state: "ok", data: { armor: { applicable: false, why: "x" } } },
+      { state: "ok", data: { armor: { applicable: true } } }, { state: "ok", data: { armor: { applicable: true, items: "x" } } },
+      { state: "ok", data: { armor: { applicable: true, items: [] } } },
+      { state: "ok", data: { armor: { applicable: true, items: [{ name: "Write", level: ARMOR_LEVEL.enforced }] } } },
+      { state: "ok", data: { armor: { applicable: true, items: [{ name: "Commit", level: ARMOR_LEVEL.unrestricted }] } } },
+      { state: "ok", data: { armor: { applicable: true, items: [{ name: "Write" }, { name: "Commit", level: 5 }, null, "x"] } } }];
+    for (const st of bad) assert.strictEqual(pure.cardPassLine(st), null, JSON.stringify(st));
+  });
+
+  await test("P7 #13 the card's front shows that line, made from its loadout, and hides it while unread or unreadable", () => {
+    const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
+    const card = pure.profileCard(p, { catalog });
+    const box = () => byData(card.node, "data-pcard", "pass-line")[0];
+    assert.ok(box().hasAttribute("hidden"), "before the loadout arrives");
+    assert.strictEqual(box().textContent, "");
+    card.setLoadout(okState(loadoutBody(p, { armor: armorOf(ARMOR_LEVEL.enforced) })));
+    assert.ok(!box().hasAttribute("hidden"));
+    assert.strictEqual(box().textContent, "出發後可以改檔案（限工作資料夾）；擋不住 commit；詳情看出發通行證");
+    assert.ok(byData(card.node, "data-face", "front")[0] && walk(byData(card.node, "data-face", "front")[0]).includes(box()), "on the front");
+    card.setLoadout(okState(loadoutBody(p, { armor: armorOf(ARMOR_LEVEL.unverified) })));
+    assert.ok(box().textContent.includes("範圍限制還沒實測") && !box().textContent.includes("限工作資料夾"));
+    card.setLoadout(okState(loadoutBody(p, { armor: { applicable: false, why: "x" } })));
+    assert.ok(box().hasAttribute("hidden") && box().textContent === "");
+    card.setLoadout({ state: "error", error: "x" });
+    assert.ok(box().hasAttribute("hidden"));
+  });
+
+  await test("P7 #4 the back of a card calls the intents 「權限意圖（分工記號）」", () => {
+    const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
+    const back = byData(pure.profileCard(p, { catalog, face: "back" }).node, "data-rc", "intents")[0];
+    assert.strictEqual(walk(back).find((n) => n.tag === "h4").textContent, "權限意圖（分工記號）");
+    assert.ok(findText(back, "只是記錄，不是授權。"));
+  });
+
+  await test("P7 #12 the skill picker: the Chinese 「what it does」 when there is a translation (過期 marked), the original behind 「看原文」, the English as it was when there is none", async () => {
+    const entry = (zh) => ({ engine: "claude", model: "haiku", cli_version: "2.1.296", created_at: 1, name_zh: "甲", description_zh: zh });
+    const cat = { ...catalog, skills: [...catalog.skills, { skill_id: "s-3", name: "gamma", invoke_name: "tool:gamma", tool: "shared", scope: "user", activation: "active", excerpt: "gamma desc" }] };
+    const { d } = await openWizard([], cat, { "GET /api/translations": () => jsonResponse({
+      entries: { "s-c": { state: "fresh", entry: entry("替程式變更做審查，並列出有風險的行，同時標出需要補測試的地方。") }, "s-x": { state: "stale", entry: entry("舊的翻譯。") } },
+      counts: { fresh: 1, stale: 1, none: 1, orphan: 0 }, job: null, engine: "claude" }) });
+    typeName(d, "Alpha");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(d, "下一步").dispatch("click");
+    await tick(8);                           // translations the page had not read are read when the list opens
+    const cell = (id) => byData(d, "data-skill-cell", id)[0];
+    const fresh = cell("s-c");
+    assert.strictEqual(byData(fresh, "data-cw", "skill-zh")[0].textContent, "替程式變更做審查，並列出有風險的行，同時標出需要補測試的地方。");
+    assert.ok(findText(fresh, "機器翻譯") && !findText(fresh, "過期"));
+    const orig = byData(fresh, "data-cw", "skill-orig")[0];
+    assert.ok(orig && orig.tag === "details" && !orig.hasAttribute("open"), "folded");
+    assert.strictEqual(orig.children[0].textContent, "看原文");
+    assert.ok(textOf(orig).includes("for claude"));
+    assert.ok(!walk(byData(fresh, "data-skill", "s-c")[0]).includes(orig), "the original is beside the card, not inside the button");
+    const stale = cell("s-x");
+    assert.ok(findText(stale, "過期") && byData(stale, "data-cw", "skill-zh")[0].textContent === "舊的翻譯。");
+    assert.ok(byData(stale, "data-cw", "skill-orig")[0]);
+    const none = cell("s-3");
+    assert.strictEqual(byData(none, "data-cw", "skill-en")[0].textContent, "gamma desc");
+    assert.strictEqual(byData(none, "data-cw", "skill-zh").length, 0);
+    assert.strictEqual(byData(none, "data-cw", "skill-orig").length, 0, "nothing to show the original of");
+    // clicking the card still picks it
+    byData(fresh, "data-skill", "s-c")[0].dispatch("click");
+    assert.ok(findText(d, "已插入（1）"));
+  });
+
   await test("a late loadout repaints the slots and the light only: the buttons are the same nodes and keep their handlers", async () => {
     const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" }, { equipped_skill_ids: ["s-c"] });
     const calls = [];

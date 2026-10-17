@@ -853,6 +853,17 @@ function translationFailureFor(id) {
   if (!job || job.status !== "failed" || T.attempts[job.id] !== id) return null;
   return { message: job.error && job.error.message ? job.error.message : "原因不明" };
 }
+// What a skill says about itself in the picker: its Chinese "what it does" when a translation exists (marked as machine
+// translation, and 過期 when the original changed since), otherwise the original excerpt. -> { zh, text, badge }.
+function skillPickText(s) {
+  const t = s && s.skill_id ? translationOf(s.skill_id) : { entry: null };
+  if (t.entry && t.entry.description_zh) {
+    return { zh: true, text: firstSentence(t.entry.description_zh, 90),
+      badge: badge(t.state === "stale" ? "過期" : "機器翻譯", t.state === "stale" ? "b-warn" : "b-info",
+        t.state === "stale" ? "原文改過，這段翻譯可能已經不準；看原文確認" : "機器翻譯，內容未經 VBear 驗證") };
+  }
+  return { zh: false, text: s && s.excerpt ? String(s.excerpt) : "", badge: null };
+}
 function translationBadge(id) {
   const t = translationOf(id);
   return t.entry ? badge(t.state === "stale" ? "機器翻譯 · 過期" : "機器翻譯", t.state === "stale" ? "b-warn" : "b-info",
@@ -1439,28 +1450,28 @@ function titleFailureText(names) {
 function closeSessionButton(paneId, afterHash = "#/team") {
   if (!NATIVE_SESSION_RE.test(paneId || "")) return null;
   const btn = el("button", { class: "btn small", type: "button",
-    title: "結束這個 Terminal 裡的程式並關閉 session",
+    title: "結束這個終端裡的程式並關閉它",
     on: { click: async () => {
-      if (!(await confirmInPage("關閉 Session", "確定要關閉這個 Terminal？裡面正在執行的程式會被結束。", "關閉 Session"))) return;
+      if (!(await confirmInPage("關閉終端", "確定要關閉這個終端？裡面正在執行的程式會被結束。", "關閉終端"))) return;
       btn.disabled = true;
       try {
         const r = await api.post(`/api/native/sessions/${encodeURIComponent(paneId)}/close`, {});
         const m = r.managed;
-        toast(!m ? "Session 已關閉"
-          : m.cleaned ? "Session 已關閉，暫存區與設定已清除"
-          : `Session 已關閉；暫存區保留待檢查：${m.retained_reason || "原因未知"}`);
+        toast(!m ? "終端已關閉"
+          : m.cleaned ? "終端已關閉，暫存區與設定已清除"
+          : `終端已關閉；暫存區保留待檢查：${m.retained_reason || "原因未知"}`);
         if (location.hash === afterHash) route();  // no hashchange: re-render in place
         else if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
       } catch (e) {
         if (e.status === 404) {
-          toast("Session 已不存在或已結束");
+          toast("這個終端已不存在或已結束");
           if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
           return;
         }
         toast("關閉失敗：" + e.message);
         btn.disabled = false;
       }
-    } } }, "關閉 Session");
+    } } }, "關閉終端");
   return btn;
 }
 
@@ -1502,7 +1513,7 @@ function corruptNotice() {
 function runtimeNotice() {
   const h = D.live && D.live.runtime;
   if (!h) return null;
-  if (!h.available) return notice("warn", ["無法連線到 VBear runtime，工作中的 Terminal 資訊暫不可用。", (h.problems || []).join("；")].join(" "));
+  if (!h.available) return notice("warn", ["無法連線到 VBear runtime，終端的資訊暫時看不到。", (h.problems || []).join("；")].join(" "));
   return null;
 }
 // One-time notice after a Herdr-era config was switched to native (until acknowledged).
@@ -1544,6 +1555,7 @@ async function viewHome() {
     flows: D.flows && !D.flows.error && Array.isArray(D.flows.flows) ? D.flows.flows : null,
     dismissed: configRes && configRes.config && typeof configRes.config.onboarding_dismissed === "boolean" ? configRes.config.onboarding_dismissed : null,
   });
+  boardFirstGame = onboardingState(onboardingInput()).mode === "steps";
   const drawOnboarding = () => setKids(onboardingHost, onboardingSection(onboardingState(onboardingInput()), {
     onImport: () => openImportProject({ onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
     onDismiss: async () => {
@@ -1584,6 +1596,7 @@ async function viewHome() {
     onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
     taskCardsSection(tasksRes && tasksRes.tasks, { flows: D.flows && !D.flows.error ? D.flows.flows || [] : undefined,
+      profiles: profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : undefined,
       onCreated: () => route(), onOpenTask: (id) => { location.hash = `#/workbench?task=${encodeURIComponent(id)}`; } }),
     el("section", { class: "section" },
       sectionHead("找技能", "用你的話描述要做的事，不需要記得技能名稱"),
@@ -1608,6 +1621,7 @@ async function viewHome() {
 // repaints only when something visible changed.
 const BOARD_IN_PROGRESS_MAX = 4;
 let boardShownKey = null;
+let boardFirstGame = false;   // set by the home page: the first game is still on, so the workbench button is not the main one
 
 // Whether a flow is waiting for you: the server's own attention flag (it also covers a stopped automatic run and
 // a stop at the merge gate, whatever the phase), or a stale review in a manual or stopped-automatic flow, where
@@ -1721,7 +1735,7 @@ function questCard(f, yourTurn) {
     : (a.mode === "auto"
       ? el("div", { class: "stat-line" }, badge(a.held ? "自動（已停止）" : "自動執行中", a.held ? "b-warn" : "b-info"),
         a.step_label ? el("span", { class: "small" }, a.step_label) : null)
-      : el("div", { class: "small muted" }, "手動模式：VBear 不會替你推進，下一步由你或你啟動的 Agent 處理"));
+      : el("div", { class: "small muted" }, "手動模式：VBear 不會替你推進，下一步由你或你啟動的角色處理"));
   return el("article", { class: `card quest ${yourTurn ? "quest-turn" : "quest-going"}`,
     "data-quest": "flow", "data-flow-id": f.id || "" },
     el("div", { class: "card-top" },
@@ -1735,7 +1749,7 @@ function questCard(f, yourTurn) {
     modeLine,
     el("div", { class: "stat-line" },
       el("span", null, "執行 ", el("b", null, roleText(roles.executor))),
-      el("span", null, "session ", el("b", { title: live.reason }, live.label))),
+      el("span", null, "終端 ", el("b", { title: live.reason }, live.label))),
     el("div", { class: "stat-line" },
       el("span", null, "審查 ", el("b", null, (roles.reviewers || []).map(roleText).join("、"))),
       rev ? el("span", null, "最新 ", badge(rev.verdict, VERDICT_CLASS[rev.verdict] || "b-mute",
@@ -1753,7 +1767,9 @@ function questNext(f) {
   return text ? el("div", { class: "small quest-next", "data-quest": "next" }, text) : null;
 }
 
-function boardSection(g) {
+function boardSection(g, opts = {}) {
+  // Someone still on the first game has a bigger next move (the three steps above); the workbench is a plain button then
+  const firstGame = opts.firstGame !== undefined ? opts.firstGame === true : boardFirstGame;
   // one node per block: a node has one parent, so a shared one would be taken away from the first block
   const flowsError = () => (g.error ? notice("warn", `讀不到流程：${g.error}`) : null);
   if (g.allEmpty) {
@@ -1761,22 +1777,22 @@ function boardSection(g) {
       sectionHead("任務告示板", "每 5 秒更新"),
       el("div", { class: "empty-state quest-start" },
         el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
-        el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台"),
-        el("span", null, "在那裡挑角色出發；想讓多個 Agent 合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。")));
+        el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到終端工作台"),
+        el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。")));
   }
   const nTurn = g.yourTurnFlows.length;
   const nAgents = g.yourTurnSessions.length;
-  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nAgents ? `${nAgents} 個 Agent 在等你` : ""].filter(Boolean).join("・");
+  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
   const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...g.yourTurnSessions.map(sessionCard)];
   let turnBody;
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
     turnBody = g.runtimeAvailable
-      ? emptyState("目前沒有可判斷為在等你的 Agent", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到角色卡池查看。")
-      : emptyState("VBear runtime 未連線，無法判斷有沒有 Agent 在等你", null);
-  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear runtime 未連線，無法判斷有沒有 Agent 在等你", null);
+      ? emptyState("目前沒有可判斷為在等你的終端", "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到角色卡池查看。")
+      : emptyState("VBear runtime 未連線，無法判斷有沒有終端在等你", null);
+  } else if (!g.runtimeAvailable) turnBody = emptyState("VBear runtime 未連線，無法判斷有沒有終端在等你", null);
   else turnBody = emptyState("告示板上目前沒有輪到你的任務",
-    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他 Terminal 會顯示「狀態未知」，請到角色卡池查看。");
+    "只有 VBear 受管啟動、且版本已驗證的 Claude Code 能判斷「工作中／等你回覆」；其他終端會顯示「狀態未知」，請到角色卡池查看。");
   const goingBody = g.inProgress.length
     ? [el("div", { class: "grid" }, g.inProgress.map((f) => questCard(f, false))),
       g.moreInProgress ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreInProgress} 則 →`) : null]
@@ -1839,7 +1855,7 @@ function onboardMark(done) {
 function onboardingSection(state, opts = {}) {
   if (!state || state.mode === "none") return null;
   const dismiss = el("button", { class: "btn small", type: "button", "data-onboard": "dismiss",
-    on: { click: () => { if (typeof opts.onDismiss === "function") opts.onDismiss(); } } }, "先不要");
+    on: { click: () => { if (typeof opts.onDismiss === "function") opts.onDismiss(); } } }, "先收起新手引導");
   if (state.mode === "done") {
     return el("section", { class: "section onboard onboard-done", "data-onboarding": "done", "aria-label": ONBOARD_TITLE },
       el("p", { class: "onboard-line" }, "你的小隊已就位", state.next ? ` · ${state.next}` : ""), dismiss);
@@ -2166,12 +2182,12 @@ function personaSpeech(target) {
     return result(label, lines[t.phaseKey] || `任務目前在${t.stationLabel}：${t.phaseLabel}`, t.phaseReason || "");
   }
   if ((t.key || "").startsWith("profile:")) return result("依據：角色名冊", "名冊角色不在出勤，沒有即時狀態", "");
-  if (t.status === "exited") return result("依據：VBear runtime（session 已結束）", "這個終端已經結束了。");
+  if (t.status === "exited") return result("依據：VBear runtime（終端已結束）", "這個終端已經結束了。");
   if (["working", "waiting", "needs-input"].includes(t.status)) {
     if (t.tool === "claude") {
       if (t.status === "working" && a.decided_by === "claude-title") return result(
         "依據：Claude Code 終端標題（開頭的轉圈符號）",
-        "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為 session 標題保存或回傳。");
+        "我正在終端機裡忙！VBear 依標題第一個字元分類，不把標題文字作為終端標題保存或回傳。");
       if (t.status === "working" && a.decided_by === "claude-stream") return result(
         "依據：Claude Code 串流協定的回合事件", "我正在跑自動派工的這一輪，做完會交回結果。");
       if (t.status === "waiting" && a.decided_by === "claude-title") return result(
@@ -2461,6 +2477,7 @@ function officeArmorCell(it) {
     el("span", { class: "office-armor-note" }, it.note || ""));
 }
 
+const WEAPON_LOCKED_NOTE = "鎖住＝VBear 啟動時不開放這個工具；寫檔改由終端指令在限制範圍內進行。";
 function officeGear(loadoutState) {
   if (!loadoutState || loadoutState.state === "loading") return el("p", { class: "small muted" }, "載入裝備中…");
   if (loadoutState.state === "error") return notice("warn", `讀不到這個角色的裝備：${loadoutState.error}`);
@@ -2476,6 +2493,7 @@ function officeGear(loadoutState) {
         ? [el("div", { class: "chips" },
           w.allowed.map((n) => el("span", { class: "tag office-weapon-ok" }, `${n}・可用`)),
           w.blocked.map((n) => el("span", { class: "tag office-weapon-off" }, `${n}・鎖住`))),
+        w.blocked.length ? el("p", { class: "small", "data-office-gear": "weapons-note" }, WEAPON_LOCKED_NOTE) : null,
         w.source ? el("p", { class: "small muted" }, w.source) : null]
         : el("p", { class: "small" }, `未知：${w.reason}`)),
     el("section", { class: "office-gear", "data-office-gear": "armor" },
@@ -2623,7 +2641,7 @@ function officePanelContent(m, S, handlers) {
       S.notice ? el("p", { class: "office-gone", role: "status" }, S.notice) : null,
       el("p", { class: "small" }, "點一個角色或一隊，這裡會顯示它的位置、狀態和依據。"),
       el("ul", { class: "small office-howto" },
-        el("li", null, "工作站：流程的隊伍站在「任務目前在哪一站」；站只表示任務的位置，不表示 Agent 正在做什麼。"),
+        el("li", null, "工作站：流程的隊伍站在「任務目前在哪一站」；站只表示任務的位置，不表示角色正在做什麼。"),
         el("li", null, "辦公桌：出勤中的終端，頭上的字是它目前的狀態。"),
         el("li", null, "休息室：角色卡名冊，不代表正在出勤；點開看武器、防具和技能卡。"))];
   }
@@ -2718,7 +2736,7 @@ function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
         stn.more ? el("a", { class: "btn small office-more", href: "#/flows" }, `這站還有 ${stn.more} 隊 →`) : null);
     }));
   const desksBody = m.errors.runtime
-    ? (runtimeNotice() || notice("warn", "無法連線到 VBear runtime，工作中的 Terminal 資訊暫不可用。"))
+    ? (runtimeNotice() || notice("warn", "無法連線到 VBear runtime，終端的資訊暫時看不到。"))
     : (m.desks.length ? el("div", { class: "office-desks-grid" }, m.desks.map((d) => officeDeskButton(d, S.key === d.key, fresh.has(d.key), (k) => S.select(k))))
       : el("p", { class: "small muted office-empty" }, "目前沒有出勤中的終端"));
   const loungeBody = m.errors.profiles
@@ -2728,7 +2746,7 @@ function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
   return [
     el("section", { class: "office-section", "data-office-section": "stations" },
       el("h2", { id: "office-stations", tabindex: "-1" }, "工作站"),
-      el("p", { class: "small muted" }, "任務在哪一站。站只表示任務的位置，不表示 Agent 正在做什麼。"), stationsBody),
+      el("p", { class: "small muted" }, "任務在哪一站。站只表示任務的位置，不表示角色正在做什麼。"), stationsBody),
     el("section", { class: "office-section", "data-office-section": "desks" },
       el("h2", { id: "office-desks", tabindex: "-1" }, "辦公桌"),
       el("p", { class: "small muted" }, "出勤中的終端，頭上的字是它目前的狀態。"), desksBody),
@@ -2770,7 +2788,7 @@ function officeListView(m, S) {
     if (g.id.startsWith("station-") && flowsBlocked) {
       if (g.id === "station-board") body.push(notice("warn", `讀不到流程：${flowsBlocked}`));
     } else if (g.id === "desks" && m.errors.runtime) {
-      body.push(runtimeNotice() || notice("warn", "無法連線到 VBear runtime，工作中的 Terminal 資訊暫不可用。"));
+      body.push(runtimeNotice() || notice("warn", "無法連線到 VBear runtime，終端的資訊暫時看不到。"));
     } else if (g.id === "lounge" && m.errors.profiles) {
       body.push(notice("warn", `讀不到角色名冊：${m.errors.profiles}`));
     } else if (!g.keys.length) {
@@ -3039,7 +3057,7 @@ function projectCard(p) {
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" }, p.name),
         el("div", { class: "card-sub mono" }, home(p.path) || p.basis)),
-      live.length ? badge(`${live.length} 個工作中`, "b-info") : badge("無工作中", "b-mute")),
+      live.length ? badge(`${live.length} 個開啟中的終端`, "b-info") : badge("沒有開啟中的終端", "b-mute")),
     el("div", { class: "stat-line" },
       p.git_branch ? el("span", null, "分支 ", el("b", null, p.git_branch)) : null,
       el("span", null, "近期工作階段 ", el("b", null, p.recent_session_ids.length)),
@@ -3140,8 +3158,8 @@ async function viewSkills(params) {
 
   const actOptions = [["active", "可使用"], ["", "全部"], ...Object.entries(ACT).filter(([k]) => k !== "active").map(([k, v]) => [k, v[0]])];
   setKids(main, 
-    el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "Armory 四態總覽")),
-    el("p", { class: "lede" }, "這裡是掃描到的 Skill 清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟 Armory。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
+    el("div", { class: "row" }, el("h1", null, "技能庫"), el("a", { class: "btn small", href: "#/armory" }, "技能四態總覽")),
+    el("p", { class: "lede" }, "這裡是掃描到的技能清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟「技能四態總覽」。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
     translationToolbar(),
@@ -3169,18 +3187,18 @@ async function viewSkills(params) {
 async function viewArmory() {
   const token = seq;
   const main = claim(token);
-  setKids(main, el("p", { class: "loading" }, "載入 Armory…"));
+  setKids(main, el("p", { class: "loading" }, "載入技能四態總覽…"));
   let data;
   try { data = await api.get("/api/armory"); await refreshTranslations(); }
-  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["Armory"]]), notice("bad", e.message)); return; }
+  catch (e) { setKids(main, crumbs([["技能庫", "#/skills"], ["四態總覽"]]), notice("bad", e.message)); return; }
   if (token !== seq) return;
   const state = (label, value, source, hint, cls) => el("div", { class: "armory-state" },
     el("div", { class: "armory-label" }, badge(label, cls), helpTip(label, hint)),
     el("span", { class: "small muted" }, "依據：", source), value);
   const rows = data.skills || [];
   setKids(main,
-    crumbs([["技能庫", "#/skills"], ["Armory"]]),
-    el("div", { class: "row" }, el("h1", null, "VBear Armory"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
+    crumbs([["技能庫", "#/skills"], ["四態總覽"]]),
+    el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
     el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、已加入角色與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
     data.unresolved_equipped && data.unresolved_equipped.length
       ? notice("warn", `有 ${data.unresolved_equipped.length} 張角色卡引用的技能卡，目前索引找不到；不會自動刪除。`) : null,
@@ -3199,7 +3217,7 @@ async function viewArmory() {
           state("本機已安裝", x.installed ? badge("已安裝", "b-ok") : badge("未安裝／其他", "b-mute"), s.sources.installed,
             "已安裝代表掃描到本機副本；不代表正在被任何 Agent 使用。", "b-ok"),
           state("已加入角色", equipped.length
-            ? el("div", { class: "chips" }, equipped.map((p) => el("a", { class: "tag", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id, p.enabled ? null : "（已停用）")))
+            ? el("div", { class: "chips" }, equipped.map((p) => el("a", { class: "tag", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id, p.enabled ? null : "（角色卡已停用）")))
             : badge("未加入角色", "b-mute"), s.sources.equipped,
             "加入角色只是你替角色做的挑選紀錄；它不會自動啟動、載入或套用這個 Skill。", "b-accent"),
           state("使用證據", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("尚無證據", "b-mute"), s.sources.loaded,
@@ -3255,10 +3273,12 @@ async function viewSkillDetail(id) {
         annotationPanel(s, d.annotation_key, d.annotation),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "已插在哪些角色卡上"),
-          d.equipped_by && d.equipped_by.length ? el("ul", { class: "tree" }, d.equipped_by.map((p) => el("li", null,
-            el("a", { href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id),
-            " ", p.enabled ? badge("啟用", "b-ok") : badge("已停用", "b-mute"),
-            el("span", { class: "small muted" }, "・主控台角色卡（你的挑選紀錄）"))))
+          d.equipped_by && d.equipped_by.length ? el("div", null,
+            el("p", { class: "small muted", "data-skill": "equipped-note" }, SKILL_EQUIPPED_NOTE),
+            el("ul", { class: "tree", "data-skill": "equipped" }, d.equipped_by.map((p) => el("li", null,
+              el("a", { href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id),
+              " ", badge(CARD_SLOT_LABEL.collected + "（這次出發不載入）", "b-mute", CARD_SLOT_NOTE),
+              el("span", { class: "small muted" }, `・角色卡本身${p.enabled ? "啟用中" : "已停用"}（你的挑選紀錄）`)))))
             : el("p", { class: "muted small" }, "沒有角色加入此技能。")),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "誰可以使用"),
@@ -3363,6 +3383,7 @@ const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還�
 const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", shared: "共用（skills CLI）" };
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", shared: "共用卡" };
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
+const CARD_INTENT_TITLE = "權限意圖（分工記號）";
 const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
 // Beside the suggested intents, after CARD_INTENT_NOTE (design v1.2 R10): why the suggestions are all the same set.
 const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
@@ -3742,6 +3763,7 @@ function openCardWizard(opts) {
       const visible = hits.slice(0, st.shown);
       const grid = el("div", { class: "cw-skill-grid", "data-cw": "skill-grid" }, visible.map((s) => {
         const ok = skillCompatible(s, st.tool);
+        const pick = skillPickText(s);
         const btn = el("button", { type: "button", class: `cw-skill${ok ? "" : " cw-skill-off"}`,
           "data-skill": s.skill_id, "aria-pressed": String(st.equipped.has(s.skill_id)),
           "aria-disabled": ok ? null : "true", title: ok ? null : skillIncompatibleNote(st.tool),
@@ -3753,10 +3775,13 @@ function openCardWizard(opts) {
           el("strong", null, s.name || s.skill_id),
           el("span", { class: "tag" }, CARD_TOOL_SHORT[s.tool] || s.tool || "?"),
           s.activation === "disabled" ? el("span", { class: "small muted" }, "（停用）") : null,
-          s.excerpt ? el("span", { class: "small muted cw-skill-ex" }, s.excerpt) : null,
+          pick.badge, pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
           ok ? null : el("span", { class: "small cw-error", "data-cw": "incompatible" }, skillIncompatibleNote(st.tool)));
         buttons.set(s.skill_id, btn);
-        return btn;
+        // the original is beside the card, not inside it: a button cannot hold another control
+        return el("div", { class: "cw-skill-cell", "data-skill-cell": s.skill_id }, btn,
+          pick.zh && s.excerpt ? el("details", { class: "small cw-skill-orig", "data-cw": "skill-orig" }, el("summary", null, "看原文"),
+            el("p", { class: "small muted" }, s.excerpt)) : null);
       }));
       const more = hits.length > visible.length
         ? el("button", { type: "button", class: "btn small", "data-cw": "more",
@@ -3770,6 +3795,8 @@ function openCardWizard(opts) {
         st.query = e.target.value; st.shown = CARD_PAGE_SIZE; drawList(); syncChosen(); } } });
     drawList();
     syncChosen();
+    // translations the page has not read yet arrive a moment later; the list is drawn again with them
+    if (!T.loaded) refreshTranslations().then(() => { if (modal.contains(list)) { drawList(); syncChosen(); } }).catch(() => {});
     return [
       el("p", { class: "small muted", "data-cw": "skills-note" }, CARD_SKILLS_NOTE),
       removedNote ? note : null,
@@ -4106,6 +4133,13 @@ const PASS_NETWORK_TEXT = {
   open: "網路沒有被擋住",
   unknown: "網路防護不明",
 };
+// Where a launch may work: the folder the server allows (its managed_root), not an assumed home directory. If the page
+// was not told, it says that rather than guessing.
+function launchRangeText(live) {
+  const root = live && typeof live.managed_root === "string" && live.managed_root ? live.managed_root : "";
+  return root ? `可以選的範圍：${root} 之內、已經存在的資料夾。` : "可以選的範圍：伺服器允許的資料夾之內、已經存在的資料夾（這次讀不到實際範圍）。";
+}
+const PASS_WORKDIR_LABEL = "在哪裡做（工作資料夾）";
 const PASS_COMMIT_TEXT = "擋不住版本紀錄（commit）";
 const PASS_COMMIT_ACK = "我知道這個角色會在這個資料夾建立、修改檔案，也能存下版本紀錄（commit），VBear 擋不住。";
 const PASS_SHIELD_LEGEND = [
@@ -4203,6 +4237,8 @@ function passFolderFix(err) { return Boolean(err && err.status === 400) ? { act:
 // skill; every other slot is dashed ("收藏中"), also before the loadout is read. The words are never compared.
 const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };
 const CARD_SLOT_NOTE = "這次的安全啟動不會載入";
+// On a skill's page: "收藏中" is how the skill sits on a card (the same word as on the card); 啟用／已停用 is about the card itself.
+const SKILL_EQUIPPED_NOTE = "「收藏中」是這張技能卡插在角色卡上的狀態，和卡面一樣：這次出發不會載入它。後面的「啟用中／已停用」只在說那張角色卡本身能不能出發。";
 const CARD_SLOTS_SHOWN = 6;
 function cardSlotState(item) { return item && item.will_load === true ? "active" : "collected"; }
 
@@ -4223,6 +4259,26 @@ function cardSlots(p, loadoutState, catalog) {
   }
   return { loaded: false, rows: ids.map((id) => ({ id, state: "collected", name: names.get(id) || id, missing: false, unread: false })),
     active: false, allInactive: null };
+}
+
+// One line on the front of a card about what a start does, made from the same armor items the pass is made from (the loadout's
+// armor, built by agent_launch.armor_items). It is never more hopeful than the pass: writing is possible after a start, the
+// reach of that writing is worded by the item's own level, and a commit is never said to be stopped (the pass says the
+// same). Unreadable armor, a tool with none, or an item missing: no line at all.
+const CARD_PASS_WRITE_REACH = { enforced: "（限工作資料夾）", partial: "（範圍只部分擋住）", unverified: "（範圍限制還沒實測）",
+  unknown: "（範圍不明）", open: "（範圍沒有被擋住）" };
+function cardPassLine(loadoutState) {
+  const ar = loadoutState && loadoutState.state === "ok" && loadoutState.data && typeof loadoutState.data.armor === "object"
+    ? loadoutState.data.armor : null;
+  if (!ar || ar.applicable !== true || !Array.isArray(ar.items)) return null;
+  const level = (name) => {
+    const it = ar.items.find((x) => x && typeof x === "object" && x.name === name && typeof x.level === "string");
+    return it ? it.level : null;
+  };
+  const write = level("Write");
+  const commit = level("Commit");
+  if (write === null || commit === null) return null;
+  return `出發後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住 commit；詳情看出發通行證`;
 }
 
 const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
@@ -4265,6 +4321,7 @@ function profileCard(p, opts = {}) {
 
   const slotsBox = el("div", { class: "rcard-slots", "data-pcard": "slots" });
   const lightBox = el("div", { "data-pcard": "light", role: "status" });
+  const passLineBox = el("p", { class: "small rcard-passline", "data-pcard": "pass-line", hidden: "" });
   const profBox = el("dd", { "data-rc": "profession" });
   const evidenceBox = el("dd", { "data-rc": "evidence" });
   const englishBox = el("dd", { "data-rc": "english" });
@@ -4284,7 +4341,7 @@ function profileCard(p, opts = {}) {
           positionBadge(pos),
           demo ? badge("示範", "b-info", "範例資料，不是你建立的卡") : null,
           launchOff ? badge("停用", "b-mute", "已停用，但保留存檔") : null))),
-    slotsBox, lightBox,
+    slotsBox, lightBox, passLineBox,
     el("p", { class: "small muted", "data-pcard": "roster" }, "名冊，不代表正在出勤"),
     el("div", { class: "rcard-actions" },
       handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff,
@@ -4305,7 +4362,7 @@ function profileCard(p, opts = {}) {
       el("dt", null, "職業標籤"), profBox,
       el("dt", null, "證據來源"), evidenceBox),
     el("section", { class: "rcard-block", "data-rc": "intents" },
-      el("h4", null, "權限意圖"),
+      el("h4", null, CARD_INTENT_TITLE),
       el("p", { class: "small" }, "只是記錄，不是授權。"),
       el("p", { class: "small muted", "data-rc": "intent-note" }, CARD_INTENT_NOTE),
       chips),
@@ -4371,6 +4428,10 @@ function profileCard(p, opts = {}) {
         : el("p", { class: "small muted rcard-slot-empty" }, cardArt("icons", "emptySlot", 1), "沒有插技能卡"),
       slots.allInactive === true ? el("p", { class: "small muted", "data-slot-note": "inactive" }, CARD_SLOT_NOTE)
         : slots.loaded ? null : el("p", { class: "small muted" }, "技能卡只是你的挑選紀錄"));
+
+    const passText = cardPassLine(loadoutState);
+    if (passText) { passLineBox.removeAttribute("hidden"); setKids(passLineBox, passText); }
+    else { passLineBox.setAttribute("hidden", ""); setKids(passLineBox); }
 
     const dep = cardDeparture(p, loadoutState);
     lightBox.className = `rcard-light rcard-${dep.state}`;
@@ -4510,15 +4571,15 @@ async function viewTeam() {
 
   setKids(main,
     el("h1", null, "角色卡池"),
-    el("p", { class: "lede" }, "這裡收集你的角色卡。每張卡是一份可以重複使用的角色設定；工作中的終端在下方，兩者不同：一張卡可以同時有多個終端。"),
+    el("p", { class: "lede" }, "這裡收集你的角色卡。每張卡是一份可以重複使用的角色設定；開啟中的終端在下方，兩者不同：一張卡可以同時有多個終端。"),
     runtimeNotice(),
     el("section", { class: "section" },
       sectionHead("我的角色卡", `${profiles.length} 張`, el("div", { class: "pool-tools" }, filterBar)),
       actions,
       poolBody),
     el("section", { class: "section" },
-      sectionHead("工作中的 Terminal", `${sessions.length} 個，由 VBear runtime 管理`, seg),
-      sessions.length ? liveBlock : emptyState("沒有工作中的 Agent", L.runtime && L.runtime.available ? "從角色卡按「出發」，確認後會出現在這裡" : "VBear runtime 未連線")),
+      sectionHead("開啟中的終端", `${sessions.length} 個，由 VBear runtime 管理`, seg),
+      sessions.length ? liveBlock : emptyState("沒有開啟中的終端", L.runtime && L.runtime.available ? "從角色卡按「出發」，確認後會出現在這裡" : "VBear runtime 未連線")),
     el("details", { class: "fold section", "data-pool": "templates" },
       el("summary", null, "你電腦裡現成的角色範本（職業標籤）", el("span", { class: "small muted", style: "font-weight:400" }, `${cli.length + subs.length} 個`)),
       el("div", { class: "fold-body" },
@@ -4605,7 +4666,7 @@ async function viewRole(id) {
         el("dl", { class: "kv small" },
           el("dt", null, "預設模型"), el("dd", null, (r.model && r.model.value) || "未指定", " ", prov(r.model)),
           el("dt", null, "設定檔"), el("dd", { class: "mono" }, r.path ? home(r.path) : "（工具本身，沒有單一設定檔）"),
-          el("dt", null, "工作中"), el("dd", null, r.kind === "cli" ? `${sessions.length} 個 Terminal` : "目前無法辨識子代理的執行個體")),
+          el("dt", null, "開啟中"), el("dd", null, r.kind === "cli" ? `${sessions.length} 個終端` : "目前無法辨識子代理的執行個體")),
         sessions.length ? el("ul", { class: "tree", style: "margin-top:12px" }, sessions.map((s) => el("li", null,
           el("b", null, s.role_label || s.pane_id), " ", statusBadge(s.status, s.activity), " ",
           el("span", { class: "small muted" }, modelList(s.models_observed).join("、") || "模型未知")))) : null)),
@@ -4633,11 +4694,11 @@ async function viewProjects(id) {
   const rest = projects.filter((p) => !p.live_session_ids.length);
   setKids(main, 
     el("h1", null, "專案"),
-    el("p", { class: "lede" }, "依工作目錄的 git 儲存庫歸類。專案是目標與資料歸屬；工作中的 Terminal 依工作目錄對應到專案。"),
+    el("p", { class: "lede" }, "依工作目錄的 git 儲存庫歸類。專案是目標與資料歸屬；開啟中的終端依工作目錄對應到專案。"),
     runtimeNotice(),
     el("section", { class: "section" },
-      sectionHead("有 Agent 正在工作", `${active.length} 個專案`),
-      active.length ? el("div", { style: "display:grid;gap:12px" }, active.map((p) => projectFold(p, true))) : emptyState("目前沒有工作中的專案", null)),
+      sectionHead("有開啟中終端的專案", `${active.length} 個專案`),
+      active.length ? el("div", { style: "display:grid;gap:12px" }, active.map((p) => projectFold(p, true))) : emptyState("目前沒有開啟中終端的專案", null)),
     el("section", { class: "section" },
       sectionHead("最近有紀錄", `最近 ${L.usage.window_days} 天的工作階段`),
       rest.length ? el("div", { style: "display:grid;gap:12px" }, rest.map((p) => projectFold(p, false))) : emptyState("沒有其他紀錄", null)));
@@ -4650,7 +4711,7 @@ function projectFold(p, open) {
   for (const s of live) { const k = s.workspace_label || s.workspace_id; if (!byWs.has(k)) byWs.set(k, []); byWs.get(k).push(s); }
   return el("details", { class: "fold", open },
     el("summary", null, p.name,
-      live.length ? badge(`${live.length} 個工作中`, "b-info") : null,
+      live.length ? badge(`${live.length} 個開啟中的終端`, "b-info") : null,
       el("span", { class: "small muted", style: "font-weight:400" }, p.last_activity ? `・${ago(p.last_activity)}` : ""),
       el("span", { class: "spacer" }), el("a", { class: "btn small", href: `#/projects/${p.project_id}` }, "詳情")),
     el("div", { class: "fold-body" },
@@ -4660,7 +4721,7 @@ function projectFold(p, open) {
         el("ul", { class: "tree" }, list.map((s) => el("li", { class: "row" },
           el("b", null, s.role_label || s.pane_id), statusBadge(s.status, s.activity), el("span", { class: "tag" }, TOOL[s.agent] || s.agent),
           (s.skills_used || []).slice(0, 3).map(usedChip),
-          el("a", { class: "btn small", href: `#/term/${encodeURIComponent(s.pane_id)}` }, "開啟"))))))) : el("p", { class: "small muted" }, "沒有工作中的 Terminal。"),
+          el("a", { class: "btn small", href: `#/term/${encodeURIComponent(s.pane_id)}` }, "開啟"))))))) : el("p", { class: "small muted" }, "沒有開啟中的終端。"),
       p.skills_used.length ? el("div", { class: "chips", style: "margin-top:10px" }, el("span", { class: "small muted" }, "近期用過："),
         p.skills_used.slice(0, 8).map(([name, n]) => el("span", { class: "tag" }, `${name} ×${n}`))) : null));
 }
@@ -4674,7 +4735,7 @@ function projectDetail(p) {
     el("h1", null, p.name),
     el("p", { class: "lede" }, el("span", { class: "mono" }, home(p.path)), p.git_branch ? `　分支 ${p.git_branch}` : "", `　（判斷依據：${p.basis}）`),
     el("section", { class: "section" },
-      sectionHead("工作中的 Terminal", `${live.length} 個`),
+      sectionHead("開啟中的終端", `${live.length} 個`),
       live.length ? el("div", { class: "grid" }, live.map(sessionCard)) : emptyState("目前沒有", null)),
     projSkills.length ? el("section", { class: "section" },
       sectionHead("專案專屬技能", "放在這個專案目錄裡的技能"),
@@ -4773,7 +4834,7 @@ async function viewSettings() {
             el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
             el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
             el("li", null, "主控台只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
-            el("li", null, "Agent 由主控台內建的 VBear runtime 啟動與管理；開啟終端預設只觀看，接管後才會送出輸入。"))),
+            el("li", null, "角色由主控台內建的 VBear runtime 啟動與管理；開啟終端預設只觀看，接管後才會送出輸入。"))),
         advanced ? el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "診斷"),
           el("dl", { class: "kv small" },
@@ -4931,7 +4992,7 @@ function flowCard(f) {
       f.automation.step_label ? el("span", { class: "small" }, f.automation.step_label) : null) : null,
     el("div", { class: "stat-line" },
       el("span", null, "執行 ", el("b", null, roleText(f.roles.executor))),
-      el("span", null, "session ", el("b", { title: flowLiveText(f.executor_live, liveLoadError()).reason },
+      el("span", null, "終端 ", el("b", { title: flowLiveText(f.executor_live, liveLoadError()).reason },
         flowLiveText(f.executor_live, liveLoadError()).label))),
     el("div", { class: "stat-line" },
       el("span", null, "審查 ", el("b", null, f.roles.reviewers.map(roleText).join("、"))),
@@ -4965,8 +5026,8 @@ function roleInputs(prefix, families, role, opts = {}) {
   const fields = [el("b", null, prefix), name, family, model];
   if (opts.executor) {
     const sessions = ((D.live && D.live.panes) || []);
-    extra.session = el("select", { "aria-label": "執行者的 session" },
-      el("option", { value: "" }, "（不綁定 session）"),
+    extra.session = el("select", { "aria-label": "執行者的終端" },
+      el("option", { value: "" }, "（不綁定終端）"),
       sessions.map((p) => el("option", { value: p.pane_id, selected: role && role.session_id === p.pane_id ? "selected" : null },
         `${p.pane_id}・${p.title || p.agent || "terminal"}`)));
     extra.workdir = el("input", { type: "text", class: "input mono", "aria-label": "執行者的工作目錄",
@@ -5026,7 +5087,7 @@ async function viewFlows() {
   const list = data.flows || [];
   setKids(main,
     el("h1", null, "流程"),
-    el("p", { class: "lede" }, "多個 Agent 合作完成一張任務卡：誰規劃、誰執行、誰審查，進行到哪一步，等誰處理。"),
+    el("p", { class: "lede" }, "多個角色合作完成一張任務卡：誰規劃、誰執行、誰審查，進行到哪一步，等誰處理。"),
     flowNotice(),
     data.error ? notice("bad", "流程無法讀取：" + data.error) : null,
     el("section", { class: "section" },
@@ -5161,14 +5222,15 @@ async function viewFlowDetail(flowId) {
     flowBindingNote(f) ? el("p", { class: "small muted" }, flowBindingNote(f)) : null,
     (f.warnings || []).map((w) => notice("warn", w)),
     flowGateGrid(f),
-    teamSection(flowTask, { flow: f, hideOpen: true, gone: () => token !== seq, onSaved: () => route() }),
+    teamSection(flowTask, { flow: f, hideOpen: true, gone: () => token !== seq, onSaved: () => route(),
+      onRecord: () => { const box = document.querySelector('[data-flow="record"]'); if (box && box.scrollIntoView) box.scrollIntoView({ block: "start" }); } }),
     flowTeamSection(f, flowLiveText(f.executor_live, liveLoadError())),
     coordinator.node,
     el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
       (f.stray_reviews || []).length ? notice("info", `另有 ${f.stray_reviews.length} 筆審查的 commit 不是最新一次回報的 commit，未列入輪次。`) : null),
     el("section", { class: "section" }, sectionHead("時間軸", `${(f.events || []).length} 筆`),
       (f.events || []).length ? timeline : emptyState("還沒有事件", null)),
-    el("section", { class: "section" }, sectionHead("手動記錄事件", null), form));
+    el("section", { class: "section", "data-flow": "record" }, sectionHead("手動記錄事件", null), form));
 }
 
 // ---------- the VBear-managed executor, reviews and merge gate (S2c-4) ------------
@@ -6079,7 +6141,7 @@ async function viewTerminal(paneId) {
   const backHash = isShell ? "#/terminals" : "#/team";
   const roleName = isShell ? `終端機 · ${shellLabel(pane)}`
     : session ? (session.role_label || session.agent || paneId) : paneId;
-  const toolName = session ? (TOOL[session.agent] || session.agent) : "Terminal";
+  const toolName = session ? (TOOL[session.agent] || session.agent) : "終端";
   const project = session ? (D.live.projects || []).find((p) => p.project_id === session.project_id) : null;
 
   let mode = "observe";
@@ -6118,7 +6180,7 @@ async function viewTerminal(paneId) {
   const bannerWrap = el("div", { class: "term-warning-box" });
   const actionWrap = el("div", { class: "term-toolbar" });
   const dimInfo = el("span", { class: "term-dim-info" }, "—");
-  const termElem = el("div", { class: "term-container", role: "region", "aria-label": `Terminal ${paneId}` });
+  const termElem = el("div", { class: "term-container", role: "region", "aria-label": `終端 ${paneId}` });
   const termWrap = el("div", { class: "term-container-wrap" }, termElem);
 
   const inputBatcher = createInputBatcher(async (text) => {
@@ -6160,7 +6222,7 @@ async function viewTerminal(paneId) {
     }
     if (connState === "closed") {
       notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的 Terminal 時，請從角色卡的「出發通行證」開啟。")
+        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。")
         : "如需重新開啟請點選右上方「重新連線」。"}`));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
@@ -6200,7 +6262,7 @@ async function viewTerminal(paneId) {
     modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "modal-takeover-title" },
       el("div", { class: "modal-box" },
         el("h2", { id: "modal-takeover-title" }, "確認接管終端操作"),
-        el("p", null, "您即將接管此 Terminal 的鍵盤輸入控制。"),
+        el("p", null, "您即將接管此終端的鍵盤輸入控制。"),
         el("div", { class: "notice warn", style: "margin: 4px 0" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
           el("div", null, "重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。若 Agent 正在執行任務，請避免非預期的干擾。")),
@@ -6376,7 +6438,7 @@ async function viewTerminal(paneId) {
         if (res.status === 404) {
           connState = "closed";
           sessionGone = true;
-          closedReason = "此 Terminal 已不存在（已關閉或從未存在）。";
+          closedReason = "此終端已不存在（已關閉或從未存在）。";
         } else if (res.status === 429) {
           connState = "error";
           errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
@@ -6659,9 +6721,19 @@ const BINDING = {
   current: ["對應目前版本", "b-ok"], stale: ["版本已變更", "b-warn"], mismatch: ["測試與核准版本不同", "b-warn"],
   unknown: ["無法確認版本", "b-warn"], unbound: ["未綁定版本", "b-mute"], none: ["尚無結果", "b-mute"],
 };
+// A badge alone says little to someone new: these two get a sentence beside them (draft, and nobody has picked it up).
+const TASK_STATUS_EXPLAIN = { draft: "草稿：這張任務卡還沒開始做。" };
+const PICKUP_EXPLAIN = { unclaimed: "尚未認領：還沒有把這張任務卡關聯到任何終端（關聯只是追蹤記錄，不會把內容送進終端）。" };
+function taskStatusExplain(status, pickup) {
+  const out = [];
+  if (cardHas(TASK_STATUS_EXPLAIN, status)) out.push(TASK_STATUS_EXPLAIN[status]);
+  const state = pickup && typeof pickup === "object" ? pickup.state : "";
+  if (typeof state === "string" && cardHas(PICKUP_EXPLAIN, state)) out.push(PICKUP_EXPLAIN[state]);
+  return out;
+}
 function pickupBadge(p) {
   const [label, cls] = PICKUP[(p && p.state)] || PICKUP.unknown;
-  return badge(label, cls, `處理狀態（由關聯 Terminal 即時推算，不是誰填的）：${(p && p.detail) || "沒有資料"}`);
+  return badge(label, cls, `處理狀態（由關聯終端即時推算，不是誰填的）：${(p && p.detail) || "沒有資料"}`);
 }
 function bindingBadge(b) {
   const [label, cls] = BINDING[(b && b.state)] || BINDING.unknown;
@@ -6673,7 +6745,13 @@ function taskStatusBadge(status) {
   return badge(label, cls, title);
 }
 
-async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, autoLaunch = false) {
+// The workbench stacks its columns at 900px and narrower (style.css); there the right column is far down the page.
+function workbenchStacked() {
+  try { return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches; }
+  catch (_) { return false; }
+}
+
+async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, autoLaunch = false, initialStep = "") {
   const token = seq;
   cleanupActiveTerminal();
   const [staticData, liveData, tasksRes, templatesRes, govRes,
@@ -6723,7 +6801,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   let leftCollapsed = store.get("wb:left_collapsed", false);
   // An Armory/Profile deep link must reveal its target, even if this browser
   // previously remembered the right column as collapsed.
-  let rightCollapsed = initialProfileId ? false : store.get("wb:right_collapsed", false);
+  let rightCollapsed = (initialProfileId || initialTaskId) ? false : store.get("wb:right_collapsed", false);
   let focusMode = false;
   let activeTab = initialProfileId ? "agent" : "task"; // "task" | "agent" | "project" | "global"
 
@@ -6769,13 +6847,13 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       shell.classList.add("right-collapsed");
       rightCol.classList.add("collapsed");
       rightCol.classList.remove("mobile-show");
-      rightToggleBtn.textContent = "右欄 ◄";
+      rightToggleBtn.textContent = "任務與隊伍 ◄";
       rightToggleBtn.setAttribute("aria-pressed", "false");
     } else {
       shell.classList.remove("right-collapsed");
       rightCol.classList.remove("collapsed");
       rightCol.classList.add("mobile-show");
-      rightToggleBtn.textContent = "右欄 ►";
+      rightToggleBtn.textContent = "任務與隊伍 ►";
       rightToggleBtn.setAttribute("aria-pressed", "true");
     }
     if (focusMode) {
@@ -6853,7 +6931,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       const skillsUsed = activeSession.skills_used || [];
       agentDetails = el("div", { class: "wb-panel", style: "margin-top: 4px" },
         el("div", { class: "wb-panel-head" },
-          el("h3", { class: "wb-panel-title" }, "當前 Agent 資訊"),
+          el("h3", { class: "wb-panel-title" }, "這個終端的資訊"),
           prov({ origin: "runtime", detail: "執行觀察" })),
         el("dl", { class: "kv small" },
           el("dt", null, "角色名稱"), el("dd", { style: "font-weight:600" }, roleName),
@@ -6865,7 +6943,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     setKids(leftCol,
       el("div", { class: "wb-panel" },
         el("div", { class: "wb-panel-head" },
-          el("h2", { class: "wb-panel-title" }, `執行中 Agent (${sessions.length})`),
+          el("h2", { class: "wb-panel-title" }, `開啟中的終端 (${sessions.length})`),
           el("button", {
             class: "btn small",
             type: "button",
@@ -6874,7 +6952,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
             on: { click: toggleLeft },
           }, "◀")),
         sessions.length ? el("div", { class: "wb-session-list" }, sessionItems)
-                        : emptyState("目前沒有運行中的 Agent", null)),
+                        : emptyState("目前沒有開啟中的終端", null)),
       agentDetails
     );
   }
@@ -6906,14 +6984,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       setKids(centerCol,
         focusBanner,
         el("div", { class: "wb-panel pad" },
-          emptyState("尚未選取 Terminal", "請由左側選取一個工作中的 Agent 或建立新工作階段。")));
+          emptyState("尚未選取終端", "請由左側選一個開啟中的終端，或從角色卡出發開一個新的。")));
       return;
     }
 
     const currentPane = activePaneId;
     const session = sessions.find((s) => s.pane_id === currentPane);
     const roleName = session ? (session.role_label || session.agent || currentPane) : currentPane;
-    const toolName = session ? (TOOL[session.agent] || session.agent) : "Terminal";
+    const toolName = session ? (TOOL[session.agent] || session.agent) : "終端";
     const project = session ? (D.live.projects || []).find((p) => p.project_id === session.project_id) : null;
 
     let mode = "observe";
@@ -6948,7 +7026,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const bannerWrap = el("div", { class: "term-warning-box" });
     const actionWrap = el("div", { class: "term-toolbar" });
     const dimInfo = el("span", { class: "term-dim-info" }, "—");
-    const termElem = el("div", { class: "term-container", role: "region", "aria-label": `Terminal ${currentPane}` });
+    const termElem = el("div", { class: "term-container", role: "region", "aria-label": `終端 ${currentPane}` });
     const termWrap = el("div", { class: "term-container-wrap" }, termElem);
 
     const inputBatcher = createInputBatcher(async (text) => {
@@ -6988,7 +7066,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }
       if (connState === "closed") {
         notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? "需要新的 Terminal 時，請從角色卡的「出發通行證」開啟。"
+        ? "需要新的終端時，請從角色卡的「出發通行證」開啟。"
         : "如需重新開啟請點選右上方「重新連線」。"}`));
       } else if (connState === "disconnected") {
         const attempts = reconnectPolicy.getRetryCount();
@@ -7026,7 +7104,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       actions.push(el("a", { class: "btn small", href: `#/term/${encodeURIComponent(currentPane)}`, title: "以獨立視窗開啟" }, "獨立視窗"));
       if (!sessionGone) actions.push(closeSessionButton(currentPane));
       if (rightCollapsed) {
-        actions.push(el("button", { class: "btn small", type: "button", on: { click: toggleRight }, title: "展開右欄" }, "右欄 ►"));
+        actions.push(el("button", { class: "btn small", type: "button", on: { click: toggleRight }, title: "展開任務與隊伍" }, "任務與隊伍 ►"));
       }
       setKids(actionWrap, actions);
 
@@ -7042,7 +7120,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-modal-takeover-title" },
         el("div", { class: "modal-box" },
           el("h2", { id: "wb-modal-takeover-title" }, "確認接管終端操作"),
-          el("p", null, "您即將接管此 Terminal 的鍵盤輸入控制。"),
+          el("p", null, "您即將接管此終端的鍵盤輸入控制。"),
           el("div", { class: "notice warn", style: "margin: 4px 0" },
             el("span", { class: "ico", "aria-hidden": "true" }, "!"),
             el("div", null, "重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。若 Agent 正在執行任務，請避免非預期的干擾。")),
@@ -7184,7 +7262,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           if (res.status === 404) {
             connState = "closed";
             sessionGone = true;
-            closedReason = "此 Terminal 已不存在（已關閉或從未存在）。";
+            closedReason = "此終端已不存在（已關閉或從未存在）。";
           } else if (res.status === 429) {
             connState = "error";
             errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
@@ -7432,7 +7510,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       },
     }, label));
 
-    const tabsHeader = el("div", { class: "wb-tabs", role: "tablist", "aria-label": "Context 治理與任務分頁" }, tabButtons);
+    const tabsHeader = el("div", { class: "wb-tabs", role: "tablist", "aria-label": "背景資料與任務分頁" }, tabButtons);
 
     let tabBody;
     if (activeTab === "task") {
@@ -7452,11 +7530,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     setKids(rightCol,
       el("div", { class: "wb-panel" },
         el("div", { class: "wb-panel-head" },
-          el("h2", { class: "wb-panel-title" }, "Context 治理與任務"),
+          el("h2", { class: "wb-panel-title" }, "背景資料與任務"),
           el("button", {
             class: "btn small",
             type: "button",
-            title: "收合右欄",
+            title: "收合任務與隊伍",
             "aria-label": "收合右側欄",
             on: { click: toggleRight },
           }, "▶")),
@@ -7501,15 +7579,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     const folderBlock = taskFolderBlock(activeTask, { onChanged: (updated) => { Object.assign(activeTask, updated); renderRightColumn(); } });
 
-    // Tracking association status
-    const isAssociatedWithCurrent = (activeTask.associated_pane_id === activePaneId);
-    const trackingBox = el("div", { class: "notice info", style: "font-size:12.5px; padding: 8px 10px;" },
+    // Tracking association status. With no terminal chosen there is nothing to link to, and nothing is said to be linked.
+    const link = taskTerminalLink(activeTask, activePaneId);
+    const isAssociatedWithCurrent = link.state === "linked";
+    const trackingBox = el("div", { class: "notice info", style: "font-size:12.5px; padding: 8px 10px;", "data-wb": "tracking" },
       el("div", null,
-        el("div", { style: "font-weight:700; margin-bottom:2px" },
-          isAssociatedWithCurrent ? "✓ 已與當前 Terminal 關聯 (僅追蹤記錄)" : "尚未與當前 Terminal 關聯"),
-        el("div", { class: "small muted" }, "ℹ️ 追蹤關聯 (Tracking Only)：此任務與 Session 僅供主控台追蹤記錄，絕非 Context 注入。"),
-        el("div", { class: "small muted", style: "color:var(--warn); margin-top:2px" }, "⚠️ 未來規則提示：若變更 Task Card 並欲套用為 Effective Context，必須重新啟動 Agent Session。")),
-      el("button", {
+        el("div", { style: "font-weight:700; margin-bottom:2px", "data-wb": "tracking-state" }, link.text),
+        el("div", { class: "small muted" }, TRACKING_NOTE),
+        el("div", { class: "small muted", style: "color:var(--warn); margin-top:2px" }, TRACKING_RESTART_NOTE)),
+      link.state === "none" ? null : el("button", {
         class: `btn small ${isAssociatedWithCurrent ? "" : "primary"}`,
         type: "button",
         style: "margin-left:auto; flex-shrink:0;",
@@ -7524,19 +7602,19 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
               // for (M1): a failed or partial update must not leave the UI
               // showing an association the backend didn't record.
               Object.assign(activeTask, res.task);
-              toast(isAssociatedWithCurrent ? "已解除 Terminal 追蹤關聯" : "已將任務與當前 Terminal 關聯 (僅追蹤)");
+              toast(isAssociatedWithCurrent ? "已解除終端的追蹤關聯" : "已將任務卡與目前的終端關聯（僅追蹤）");
               renderRightColumn();
             } catch (err) {
               toast("關聯更新失敗：" + err.message);
             }
           },
         },
-      }, isAssociatedWithCurrent ? "解除關聯" : "關聯此 Terminal"));
+      }, isAssociatedWithCurrent ? "解除關聯" : "關聯目前的終端"));
 
     // Status Provenance Box
     const provBox = el("div", { class: "wb-provenance-box" },
       el("div", { class: "wb-provenance-head" },
-        el("span", null, "狀態證明 (Status Provenance)"),
+        el("span", null, "狀態依據（誰說了算）"),
         taskStatusBadge(derivedStatus)),
       el("div", { class: "wb-provenance-row" },
         el("span", null, "1. 自我回報狀態 (Self-Reported)：",
@@ -7685,7 +7763,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           taskStatusBadge(derivedStatus),
           pickupBadge(activeTask.pickup),
           activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
-          prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" }))),
+          prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" })),
+        taskStatusExplain(derivedStatus, activeTask.pickup).map((t) => el("p", { class: "small muted", "data-wb": "status-explain" }, t))),
       folderBlock,
       teamSection(activeTask, { profiles: agentProfiles, catalog: agentBuilderCatalog, gone: () => token !== seq }),
       chainRow(activeTask),
@@ -7987,7 +8066,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const intentLabel = CARD_INTENT_LABEL;
     const KEYS = CARD_INTENT_KEYS;
     const expect = el("section", { class: "rc-block", "data-rc": "intents" },
-      el("h4", null, "權限意圖"),
+      el("h4", null, CARD_INTENT_TITLE),
       el("p", { class: "rc-note" }, (d.profile && d.profile.intents_note) || "只是記錄，不會變成實際權限"),
       el("p", { class: "rc-note", "data-rc": "intent-note" }, CARD_INTENT_NOTE),
       el("div", { class: "rc-chips" }, KEYS.map(([k, zh]) =>
@@ -8047,7 +8126,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       onUse: (path) => { workdirInput.value = path; invalidate("輸入已變更，請重新產生預覽。"); } });
     // What the server takes (it checks the folder again when the preview is made): an existing folder inside the home directory.
     const workdirRange = el("p", { class: "small muted", id: "agent-launch-range" },
-      `可以選的範圍：${liveHome || "你的家目錄"} 之內、已經存在的資料夾。`,
+      launchRangeText(D.live),
       launchOpts.workdirNote ? ` ${launchOpts.workdirNote}` : "");
     const pickBtn = el("button", { class: "btn small", type: "button", "data-act": "pick-folder", on: { click: openFolderPicker } }, "挑資料夾…");
     const commitBox = el("input", { type: "checkbox", id: "agent-launch-commit" });
@@ -8077,7 +8156,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
           return "現在不能出發：" + (reasons.join("；") || "這張角色卡目前無法啟動") + "。";
         }
-        return "現在不能出發：還沒有產生這次的預覽。先填工作目錄、勾選 commit 的知悉，再按「產生預覽」。";
+        return "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾、勾選 commit 的知悉，再按「產生預覽」。";
       }
       if (needsAck(current) && !(ackBox && ackBox.checked)) {
         return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
@@ -8104,8 +8183,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       el("div", { class: "modal-box modal-wide" },
         el("h2", { id: titleId }, `出發通行證：${p.name || p.id}`),
         el("p", { class: "small muted" },
-          "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動 Agent。"),
-        el("label", { class: "small", for: "agent-launch-workdir" }, "工作目錄"),
+          "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動角色。"),
+        el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
         el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
         workdirRange,
         el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
@@ -8162,7 +8241,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           el("dd", null, isCodex ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
             : !isClaude ? "不適用"
             : pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
-          el("dt", null, "工作目錄"), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
+          el("dt", null, PASS_WORKDIR_LABEL), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
         if (isCodex) kids.push(codexEvidenceNote(pv));
@@ -8287,7 +8366,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       return el("div", { class: "notice info" },
         el("span", { class: "ico", "aria-hidden": "true" }, "i"),
         el("div", { class: "small" },
-          el("strong", null, `Claude Code ${pv.cli.version} 的「工作中／等你回覆」判斷還沒有驗證`),
+          el("strong", null, "出發後 VBear 暫時看不出它在忙還是在等你"),
+          el("p", { class: "small muted", style: "margin:4px 0" }, `原因：Claude Code ${pv.cli.version} 的「忙／等你」判斷方式還沒有在這台 Mac 驗證過。`),
           el("p", { style: "margin:4px 0" },
             "可以照常啟動；只是啟動後，VBear 會把它的狀態顯示為「未知」。驗證會同時檢查啟動邊界與終端標題。"),
           lastFailure ? el("p", { class: "agent-launch-last-failure", style: "margin:4px 0" },
@@ -8358,6 +8438,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true,
           ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}) });
         toast("已啟動（由角色卡啟動，VBear 管理）");
+        if (launchOpts.fromTask && launchOpts.fromTask.step && res.launch && res.launch.session) {
+          launchMemoAdd(launchOpts.fromTask.id, { step: launchOpts.fromTask.step, session_id: res.launch.session.session_id, name: p.name || p.id });
+        }
         closeModal();
         location.hash = `#/term/${encodeURIComponent(res.launch.session.session_id)}`;
       } catch (err) {
@@ -8719,6 +8802,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     toolbar,
     shell
   );
+  // On a phone the columns stack and the terminals come first. Coming in from a task card (its 打開), the person wants
+  // the task card and its team, so the page starts there; only when the address names a task, and only when stacked.
+  if (initialTaskId && workbenchStacked()) {
+    setTimeout(() => { if (token === seq && rightCol.scrollIntoView) rightCol.scrollIntoView({ block: "start" }); }, 0);
+  }
 
   // 「出發」 on a card of the card pool lands here with the launch pass already open; the address is cleaned at
   // once so that a later re-render of the page does not open it again.
@@ -8728,9 +8816,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const fromTask = initialTaskId ? tasksList.find((t) => t.id === initialTaskId) : null;
     if (target && target.enabled !== false) {
       promptAgentLaunch(target, fromTask && fromTask.workdir
-        ? { workdir: fromTask.workdir, workdirNote: `已帶入任務卡「${fromTask.title || fromTask.id}」的資料夾，可以改。` } : {});
+        ? { workdir: fromTask.workdir, workdirNote: `已帶入任務卡「${fromTask.title || fromTask.id}」的資料夾，可以改。`,
+            // which step of which task card this start is for: kept only as a note on that card after the terminal opens
+            fromTask: { id: fromTask.id, step: cardHas(NEXT_STEP_ASK, initialStep) ? initialStep : "" } } : {});
     }
     else if (target) toast("這張角色卡已停用，不能出發");
+    else toast("找不到這張角色卡，可能已經刪除");
   }
 }
 
@@ -8755,6 +8846,7 @@ const TEAM_DRAFT_KEY = "team.draft.";
 const TEAM_DRAG_TYPE = "text/x-vbear-card";
 const TEAM_MENU_MAX = 48;
 const TEAM_TRAY_MAX = 24;
+const SLOT_REVIEW_SELF = "同一張卡不能審查自己";
 const SLOT_REVIEW_NEEDS_DIFF = "這個位置需要和執行位不同陣營的卡，審查結果才算數";
 const TEAM_SAVE_NOTE = "儲存會在時間軸記一筆「角色變更」；換掉隊伍之後，先前由自動審查留下的結果可能不再算數。";
 // One fixed sentence per term the next-steps list uses (design 3.5): the words come from what the console already says.
@@ -8795,6 +8887,10 @@ function slotProblem(slot, card, team) {
   if (typeof slot !== "string" || !slot.startsWith("reviewer") || !card) return null;
   const rf = teamCardFamily(card);
   const executor = team && team.executor ? team.executor : null;
+  // the very same card in the execution place and a review place: it would review its own work, whatever its family
+  if (executor && typeof card.profile_id === "string" && card.profile_id && executor.profile_id === card.profile_id) {
+    return { code: "same_card", text: SLOT_REVIEW_SELF, why: "這張卡已經放在執行位" };
+  }
   if (rf === "unknown" || rf === "other") {
     return { code: "reviewer_family_unknown", text: SLOT_REVIEW_NEEDS_DIFF,
       why: "這張卡的陣營是「共用」或不明，審查結果不算數" };
@@ -8941,7 +9037,85 @@ function nextSteps(flow) {
     reason, after: phaseKey === "awaiting_push" ? { text: "你自己 push", who: "你" } : null };
 }
 
-function nextStepsList(flow) {
+// ---- doing the next step from the page (P7 #2) -------------------------------------------------------------------
+// What can be done for the step that is now. A step done by a role card gets a button that starts that card through the
+// ordinary launch pass (the same path as a team place's own 出發 button), so nothing starts without the pass and a click.
+// In manual mode VBear does not move the flow on: the sentence says that, and where to record the step.
+// What was done for a step by a launch the page just made is kept as a short note: only VBear's own launch result,
+// never a guess about which terminal belongs to which card.
+const NEXT_STEP_ASK = { plan: "提出計畫", implement: "動手實作", review: "做審查" };
+const NEXT_STEP_RECORD = { plan: "計畫已提交", implement: "執行者回報", review: "審查結果" };
+const STEP_OF_SLOT = { planner: "plan", executor: "implement", reviewer1: "review", reviewer2: "review" };
+const LAUNCH_MEMO_KEY = "task.launched.";
+const LAUNCH_MEMO_MAX = 8;
+const LAUNCH_MEMO_MS = 24 * 3600 * 1000;
+
+function launchMemoRead(taskId, now = Date.now()) {
+  const raw = store.get(LAUNCH_MEMO_KEY + taskId, []);
+  return (Array.isArray(raw) ? raw : []).filter((e) => e && typeof e === "object" && typeof e.session_id === "string"
+    && typeof e.step === "string" && Number.isFinite(e.at) && now - e.at >= 0 && now - e.at < LAUNCH_MEMO_MS);
+}
+function launchMemoAdd(taskId, entry, now = Date.now()) {
+  if (typeof taskId !== "string" || !taskId || !entry || typeof entry.session_id !== "string" || !cardHas(NEXT_STEP_ASK, entry.step)) return;
+  const kept = launchMemoRead(taskId, now).filter((e) => e.session_id !== entry.session_id);
+  kept.push({ step: entry.step, session_id: entry.session_id, name: String(entry.name || "").slice(0, TEAM_ROLE_NAME_MAX), at: now });
+  store.set(LAUNCH_MEMO_KEY + taskId, kept.slice(-LAUNCH_MEMO_MAX));
+}
+
+// -> null, or { step, ask, turn, manual, launches: [{name, profile_id}], note, record, recordWords }.
+// opts.profiles: the cards as the pool has them; a card that is gone or switched off gets no button.
+function nextStepAction(flow, opts = {}) {
+  const ns = nextSteps(flow);
+  if (!ns.known || ns.current < 0) return null;
+  const step = ns.steps[ns.current];
+  if (!cardHas(NEXT_STEP_ASK, step.key)) return null;
+  const roles = flow.roles && typeof flow.roles === "object" ? flow.roles : {};
+  const auto = Boolean(flow.automation && flow.automation.mode === "auto");
+  const holders = step.key === "plan" ? [roles.planner] : step.key === "implement" ? [roles.executor]
+    : (Array.isArray(roles.reviewers) ? roles.reviewers : []);
+  // in automatic mode VBear starts the executor and sends the review itself; only the planner is always yours to start
+  const startable = step.key === "plan" || !auto;
+  const profiles = Array.isArray(opts.profiles) ? opts.profiles : null;
+  const launches = !startable ? [] : holders
+    .filter((r) => r && typeof r.profile_id === "string" && r.profile_id)
+    .filter((r) => !profiles || profiles.some((c) => c && c.id === r.profile_id && c.enabled !== false))
+    .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
+  const recordWords = NEXT_STEP_RECORD[step.key];
+  return { step: step.key, ask: NEXT_STEP_ASK[step.key], turn: ns.turn, manual: !auto, launches, recordWords,
+    note: auto ? "" : `手動模式下，VBear 不會自動推進。${ns.turn} 在終端裡完成這一步後，回到這裡記錄（例如『記錄：${recordWords}』）。` };
+}
+
+// The action under the next-steps list. opts: { task, profiles, compact (the lobby's card: buttons and the note only),
+// onRecord (on the flow's own page: jumps to the form; elsewhere it links to that page), onFlowPage (already there) }.
+function nextStepActionNode(flow, opts = {}) {
+  const act = nextStepAction(flow, opts);
+  if (!act) return null;
+  const taskId = opts.task && opts.task.id ? opts.task.id : flow.task_id;
+  const launchHref = (l) => `#/workbench?task=${encodeURIComponent(taskId)}&profile=${encodeURIComponent(l.profile_id)}&launch=1&step=${act.step}`;
+  const memo = taskId ? launchMemoRead(taskId).filter((e) => e.step === act.step) : [];
+  const kids = [];
+  if (act.launches.length) {
+    kids.push(el("div", { class: "ns-launch row" }, act.launches.map((l) =>
+      el("a", { class: "btn small primary", "data-ns": "launch", "data-profile": l.profile_id, href: launchHref(l),
+        title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的" }, `讓 ${l.name} 出發`))));
+  }
+  if (memo.length) {
+    const last = memo[memo.length - 1];
+    kids.push(el("p", { class: "small ns-launched", "data-ns": "launched" },
+      `已開啟 ${memo.length} 個終端；接下來在終端裡請它${act.ask}。`, " ",
+      el("a", { href: `#/term/${encodeURIComponent(last.session_id)}` }, "打開終端")));
+  }
+  if (act.note && !opts.compact) {
+    kids.push(el("p", { class: "small ns-manual", "data-ns": "manual" }, act.note, " ",
+      typeof opts.onRecord === "function"
+        ? el("button", { type: "button", class: "btn small", "data-ns": "record", on: { click: opts.onRecord } }, "到下方記錄")
+        : opts.onFlowPage ? null      // already on the flow's page, with nothing to jump to: no link to where it is
+        : el("a", { class: "btn small", "data-ns": "record", href: `#/flows/${encodeURIComponent(flow.id)}` }, "到流程頁記錄")));
+  }
+  return kids.length ? el("div", { class: "ns-action", "data-ns": "action" }, kids) : null;
+}
+
+function nextStepsList(flow, opts = {}) {
   const ns = nextSteps(flow);
   if (!ns.known) {
     return el("div", { class: "ns", "data-ns": "list" },
@@ -8957,6 +9131,7 @@ function nextStepsList(flow) {
     s.state === "now" && ns.reason ? el("div", { class: "small ns-reason" }, ns.reason) : null));
   return el("div", { class: "ns", "data-ns": "list" },
     el("ol", { class: "ns-list" }, items),
+    nextStepActionNode(flow, opts),
     ns.after ? el("p", { class: "small ns-after", "data-ns": "after" }, `接下來：${ns.after.text}（輪到 ${ns.after.who}）。`,
       ns.reason ? el("span", { class: "muted" }, ` ${ns.reason}`) : null) : null);
 }
@@ -9154,7 +9329,7 @@ function teamBoard(opts) {
         // are changes that only exist on this page, and not for a card that is gone
         entry.profile_id && state.state !== "gone" && (!flow || !dirty)
           ? el("a", { class: "btn small", "data-act": "launch", title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的",
-              href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1` }, "出發") : null) : null,
+              href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1&step=${STEP_OF_SLOT[def.key]}` }, "出發") : null) : null,
       problem ? el("p", { class: "ts-problem small", "data-slot-problem": problem.code, role: "status" }, el("strong", null, "不算數："), problem.text, el("span", { class: "muted" }, `（${problem.why}）`)) : null,
       entry && state.state === "changed"
         ? el("p", { class: "ts-stale small", "data-slot-stale": "changed" },
@@ -9232,7 +9407,8 @@ function teamSection(task, opts = {}) {
       flowsRes && flowsRes.error ? notice("warn", "讀不到流程：" + flowsRes.error) : null,
       profilesRes && profilesRes.error ? notice("warn", "讀不到角色卡：" + profilesRes.error) : null,
       flow ? el("section", { class: "section", "data-team": "next" }, sectionHead("下一步", flow.phase ? flow.phase.label : null,
-        opts.hideOpen ? null : el("a", { class: "btn small", href: `#/flows/${encodeURIComponent(flow.id)}` }, "打開流程")), nextStepsList(flow)) : null,
+        opts.hideOpen ? null : el("a", { class: "btn small", href: `#/flows/${encodeURIComponent(flow.id)}` }, "打開流程")),
+        nextStepsList(flow, { task, profiles: (profilesRes && profilesRes.profiles) || [], onRecord: opts.onRecord, onFlowPage: Boolean(opts.hideOpen) })) : null,
       board.node);
   }
   load().catch((e) => setKids(box, notice("bad", "讀不到隊伍：" + (e && e.message || ""))));
@@ -9341,6 +9517,16 @@ function nextStepSummary(flow) {
   return "這個流程的步驟都走完了";
 }
 
+// Is the task card linked to the terminal that is open? Only a chosen terminal can be linked to: with none chosen the
+// answer is "none", never "linked" (null === null must not read as a link). The link is a tracking record only.
+const TRACKING_NOTE = "追蹤關聯：任務卡和終端只是在主控台裡互相記一筆，不會把任務卡的內容送進終端。";
+const TRACKING_RESTART_NOTE = "提醒：改了任務卡的內容之後，要讓角色讀到新內容，必須重新啟動角色（新開一個終端）。";
+function taskTerminalLink(task, paneId) {
+  if (typeof paneId !== "string" || !paneId) return { state: "none", text: "目前沒有可關聯的終端" };
+  if (task && task.associated_pane_id === paneId) return { state: "linked", text: "已與目前的終端關聯（僅追蹤記錄）" };
+  return { state: "unlinked", text: "尚未與目前的終端關聯" };
+}
+
 // ---------- task cards are folders (design card-play 3.6) ---------------------------------------------------
 // One task card is one folder. What is known about the folder comes from GET /api/folders/inspect, which is
 // read-only on the server (a few stats and the repository's HEAD, no git process, no walk). Nothing here writes into
@@ -9349,6 +9535,7 @@ function nextStepSummary(flow) {
 const NO_GIT_BADGE = "沒有版本紀錄";
 const NO_GIT_NOTE = "這個資料夾還沒有版本紀錄（git）。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。";
 const FOLDER_BROWSER_NOTE = "瀏覽器拿不到完整路徑，請從清單選或貼上。";
+const FOLDER_FINDER_TIP = "在 Finder 對資料夾按右鍵，按住 Option，選『拷貝\"…\"為路徑名稱』，再貼到這裡";
 const FOLDER_TERMINAL_NOTE = "只依終端目前的工作目錄比對，只含 VBear 認得的 Claude Code、Codex 終端；不代表它們是哪張角色卡開的。";
 const FOLDER_REFUSED_MESSAGE = "這個位置不能當成專案";
 // Mirrors vbear/folders.py SENSITIVE_HOME_DIRS (a test keeps the two equal): only used to leave such places out of the
@@ -9365,6 +9552,15 @@ function expandHome(text, home) {
   if (t === "~") return home;
   if (t.startsWith("~/")) return home.replace(/\/+$/, "") + t.slice(1);
   return t;
+}
+
+// Does pasted text look like one absolute path (or "~/…")? Then it is checked at once; anything else waits for the button.
+// Only a look at the text: the server is the one that judges the path.
+function folderLooksLikePath(text) {
+  if (typeof text !== "string") return false;
+  const t = text.trim();
+  if (!t || t.length > 1024 || /[\u0000-\u001f]/.test(t)) return false;
+  return t.startsWith("/") || t.startsWith("~/") || t === "~";
 }
 
 function folderBaseName(path) {
@@ -9517,6 +9713,9 @@ function folderPicker(opts) {
   const input = el("input", { type: "text", class: "input mono", "aria-label": "資料夾的絕對路徑", autocomplete: "off",
     placeholder: `貼上資料夾的路徑，例如 ${home || "/Users/you"}/projects/demo` });
   let newest = 0;                           // only the newest answer is drawn
+  let lastChecked = "";                     // a pasted path is checked once, not again for the same text
+  const hints = el("div", { class: "fp-hints" });
+  let sourcesEmpty = false;
 
   function list(title, items, withBasis) {
     return el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, title),
@@ -9533,6 +9732,7 @@ function folderPicker(opts) {
     const path = expandHome(raw, home);
     if (!path) { setKids(result); report(null); return; }
     input.value = path;
+    lastChecked = path;
     setKids(result, el("p", { class: "small muted" }, "檢查中…"));
     report(null);
     let info = null;
@@ -9546,16 +9746,29 @@ function folderPicker(opts) {
     report(v.usable ? info : null);
     if (result.scrollIntoView) result.scrollIntoView({ block: "nearest" });
   }
-  function report(info) { if (opts.onResult) opts.onResult(info, { inspect, clear }); }
-  function clear() { newest++; input.value = ""; setKids(result); report(null); input.focus(); }
+  // "檢查" is the main button until there is a usable answer; then the dialog's own next button takes over
+  function report(info) {
+    if (checkBtn) checkBtn.classList.toggle("primary", !info);
+    if (opts.onResult) opts.onResult(info, { inspect, clear });
+  }
+  function clear() { newest++; input.value = ""; lastChecked = ""; setKids(result); report(null); input.focus(); }
   // The config (recent folders) arrives after the dialog is open; the lists are drawn again with it.
   function setConf(conf) {
     const sources = folderSources(live, conf);
+    sourcesEmpty = sources.seen.length === 0 && sources.recent.length === 0;
     setKids(lists, list("VBear 在你電腦上看到的專案", sources.seen, true), list("最近用過", sources.recent, false));
+    drawHints();
   }
+  // Right beside the box: how to get a folder's path when both lists are empty, and why a browser cannot pick one.
+  function drawHints() {
+    setKids(hints,
+      sourcesEmpty ? el("p", { class: "small fp-finder-tip", "data-fp": "finder-tip" }, FOLDER_FINDER_TIP) : null,
+      native ? null : el("p", { class: "small muted fp-browser-note", "data-fp": "browser-note" }, FOLDER_BROWSER_NOTE));
+  }
+  let checkBtn = null;
+  const native = nativeFolderPick();
   setConf(opts.conf);
 
-  const native = nativeFolderPick();
   const pickBtn = native ? el("button", { type: "button", class: "btn", on: { click: async () => {
     pickBtn.disabled = true;
     try {
@@ -9565,16 +9778,24 @@ function folderPicker(opts) {
     } finally { pickBtn.disabled = false; }
   } } }, "選擇資料夾…") : null;
   const check = () => inspect(input.value);
+  checkBtn = el("button", { type: "button", class: "btn primary", "data-act": "check", on: { click: check } }, "檢查");
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); check(); } });
+  // a pasted path is read after the box has taken it; once, and only when it looks like an absolute path
+  input.addEventListener("paste", () => {
+    setTimeout(() => {
+      const v = input.value.trim();
+      if (folderLooksLikePath(v) && v !== lastChecked) inspect(v);
+    }, 0);
+  });
 
   const node = el("div", { class: "fp" },
     lists,
     el("section", { class: "fp-list" }, el("h3", { class: "fp-h" }, "貼上路徑"),
-      el("div", { class: "row fp-paste" }, input, el("button", { type: "button", class: "btn", on: { click: check } }, "檢查"), pickBtn),
-      native ? null : el("p", { class: "small muted fp-browser-note" }, FOLDER_BROWSER_NOTE)),
+      el("div", { class: "row fp-paste" }, input, checkBtn, pickBtn),
+      hints),
     result);
   if (opts.initialPath) inspect(opts.initialPath);
-  return { node, inspect, clear, setConf, input };
+  return { node, inspect, clear, setConf, input, checkBtn };
 }
 
 // A dialog that only picks a folder (the launch check, a task card that has no folder yet).
@@ -9776,9 +9997,11 @@ function taskFrontCard(task, opts = {}) {
   const flow = Array.isArray(opts.flows) ? opts.flows.find((f) => f && f.task_id === task.id) || null : undefined;
   return el("article", { class: "tf-card card", "data-task": task.id },
     el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"), taskStatusBadge(task.status)),
+    taskStatusExplain(task.status, task.pickup).map((t) => el("p", { class: "small muted", "data-tf": "status-explain" }, t)),
     taskFolderBlock(task, opts),
     flow ? el("div", { class: "tf-team", "data-tf": "team" }, teamAvatars(flow),
-        nextStepSummary(flow) ? el("div", { class: "small", "data-tf": "next" }, nextStepSummary(flow)) : null)
+        nextStepSummary(flow) ? el("div", { class: "small", "data-tf": "next" }, nextStepSummary(flow)) : null,
+        nextStepActionNode(flow, { task, profiles: opts.profiles, compact: true }))
       : flow === null ? el("div", { class: "tf-team small muted", "data-tf": "team" }, "還沒有隊伍 · ",
           el("a", { href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "把角色卡放上去")) : null,
     el("div", { class: "tf-actions" },
@@ -9858,7 +10081,7 @@ async function route() {
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
-    else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1");
+    else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step);
     else if (top === "armory") await viewArmory();
     else if (top === "skills" && parts[1]) await viewSkillDetail(parts[1]);
     else if (top === "skills") await viewSkills(params);
@@ -9982,6 +10205,7 @@ if (typeof module !== "undefined" && module.exports) {
     activityBasis,
     computeTaskProvenance,
     taskStatusBadge,
+    taskStatusExplain,
     TASK_STATUS_LABELS,
     viewWorkbench,
     viewTeam,
@@ -10099,6 +10323,7 @@ if (typeof module !== "undefined" && module.exports) {
     TEAM_SLOTS,
     TEAM_INFO,
     SLOT_REVIEW_NEEDS_DIFF,
+    SLOT_REVIEW_SELF,
     TEAM_SAVE_NOTE,
     teamFamily,
     teamCardFamily,
@@ -10113,6 +10338,15 @@ if (typeof module !== "undefined" && module.exports) {
     teamDraftWrite,
     nextSteps,
     nextStepsList,
+    nextStepAction,
+    nextStepActionNode,
+    cardPassLine,
+    skillPickText,
+    launchRangeText,
+    launchMemoRead,
+    launchMemoAdd,
+    taskTerminalLink,
+    folderLooksLikePath,
     nextStepSummary,
     teamAvatars,
     teamBoard,

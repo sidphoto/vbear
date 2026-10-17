@@ -295,7 +295,7 @@ test("each mode says what it is: automatic running, automatic stopped, manual", 
   const held = text(app.questCard(flow("implementing", { automation: { mode: "auto", held: true, step_label: "已停止：額度用完" } }), false));
   assert(held.includes("自動（已停止）") && held.includes("已停止：額度用完"));
   const manual = text(app.questCard(flow("implementing"), false));
-  assert(manual.includes("手動模式：VBear 不會替你推進，下一步由你或你啟動的 Agent 處理"));
+  assert(manual.includes("手動模式：VBear 不會替你推進，下一步由你或你啟動的角色處理"));
   // a waiting card of a stopped automatic flow carries the stopped tag too
   const heldTurn = text(app.questCard(flow("implementing", { attention: true, automation: { mode: "auto", held: true, step_label: "" } }), true));
   assert(heldTurn.includes("自動（已停止）"));
@@ -387,7 +387,7 @@ test("flows and agents share the first block: the flows come first, in API order
   assert.strictEqual(cards.length, 3);
   assert.deepStrictEqual(cards.slice(0, 2).map((c) => c.getAttribute("data-flow-id")), [a.id, b.id]);
   assert.strictEqual(cards[2].tag, "div", "the agent's card is the existing session card");
-  assert(text(turn).includes("1 個 Agent 在等你") && text(turn).includes("2 則流程等你"));
+  assert(text(turn).includes("1 個終端在等你") && text(turn).includes("2 則流程等你"));
   assert(text(turn).includes("每 5 秒更新") && text(turn).includes("角色卡池"));
   const going = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "going");
   assert.strictEqual(going.findAll((n) => n.getAttribute && n.getAttribute("data-quest") === "flow").length, 1);
@@ -431,7 +431,7 @@ test("runtime not connected and no flow card: the board says it cannot tell whet
   setPage({ live: live({ runtime: { available: false, problems: ["連不上"] } }), flows: flowsOf([flow("implementing")]) });
   const main = await open();
   const turn = main.find((n) => n.getAttribute && n.getAttribute("data-board") === "turn");
-  assert(text(turn).includes("VBear runtime 未連線，無法判斷有沒有 Agent 在等你"));
+  assert(text(turn).includes("VBear runtime 未連線，無法判斷有沒有終端在等你"));
   assert(!text(turn).includes("沒有輪到你的任務"));
   assert(text(main).includes("無法連線到 VBear runtime"), "the page notice is kept");
   assert(!text(board(main)).includes("大廳目前沒有任務"));
@@ -440,7 +440,7 @@ test("runtime not connected and no flow card: the board says it cannot tell whet
 test("a failed live load is not drawn as an empty lobby either", async () => {
   setPage({ liveError: "背景程序沒有回應" });
   const main = await open();
-  assert(text(board(main)).includes("無法判斷有沒有 Agent 在等你"));
+  assert(text(board(main)).includes("無法判斷有沒有終端在等你"));
   assert(!text(board(main)).includes("大廳目前沒有任務"));
 });
 

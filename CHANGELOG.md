@@ -61,6 +61,24 @@ the tool is the 「陣營」, permission intents have Chinese labels and say the
 - **Opening with a login code.** `#auth=` is now traded for the session before anything else asks the server: the
   translation poll, hash changes and tab focus wait, and a 401 met in that moment no longer puts up 「請從 VBear 開啟」.
   The router no longer keeps polling after the login page is shown.
+- **Closing fixes (P7).** The import box says how to get a folder's path (Finder: right-click, hold Option, copy as
+  pathname) when no project or recent folder is listed, 「檢查」 is the main button and Enter or a pasted absolute path
+  checks once (read-only). The next step on a task card has a button, 「讓 X 出發」, that goes through the same launch
+  pass as a place's own 出發 button; in manual mode a sentence says VBear will not move the flow on and where to record
+  the step, and after a launch from a place the card says 「已開啟 N 個終端」 from VBear's own launch result only (never
+  which terminal belongs to which card). A skill's page says 收藏中（這次出發不載入）, like the card, and keeps 啟用／已停用
+  for the card itself; weapons explain 鎖住; the intents are 「權限意圖（分工記號）」. Without a terminal chosen, the
+  tracking box no longer says it is linked. 「工作中」 is only used for the working status ("N open terminals" elsewhere);
+  the English words Terminal, Session, Armory, Context and Status Provenance are gone from the screens. The phone
+  workbench opens at the task card and its team when you come from a task card, and 「右欄」 is 「任務與隊伍」. The same
+  card cannot review itself. The pass words its commit note by the folder (no `.git` in it: it says so; a `.git`: it
+  says that one is writable; `derive_labels` does one `lstat` for this), and a card's back, which has no folder, says
+  「工作目錄內若有 .git」 instead of claiming one, names the field 「在哪裡做（工作資料夾）」, and says 「出發後 VBear
+  暫時看不出它在忙還是在等你」 for an unverified Claude Code. `GET /api/live` also carries `managed_root`, the folder
+  a launch may work in, and the pass's range hint is made from it. A role card's front has one line from its armor
+  data (「出發後可以改檔案；擋不住 commit；詳情看出發通行證」, never more hopeful than the pass). The skill picker shows the
+  Chinese 「what it does」 (marked 機器翻譯 or 過期) with the original behind 「看原文」. On the home page, 「到終端工作台」
+  is a plain button while the first game is on. `VBEAR_QA_FRESH=1` no longer carries the HTML probe skill.
 - **QA and tests.** The QA console gained `VBEAR_QA_FRESH=1` and `VBEAR_QA_TRANSLATE=fail`; the fake translation CLI
   follows the structured-output change. New tests cover the folder API, the config keys, flow role cards, `will_load`,
   the starter deck, the pass table level by level, the team places and the first game.
