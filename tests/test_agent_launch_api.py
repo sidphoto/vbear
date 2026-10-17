@@ -347,6 +347,29 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(self.preview(pid, tool="codex")[0], 400)            # does not match the Profile
         self.assertEqual(self.launch_dirs(), [])
 
+    def test_the_commit_note_follows_the_folder_and_the_range_is_the_servers_own(self):
+        """P7 #9, #10: a folder without .git does not get a sentence about its .git; the page learns the allowed
+        folder from /api/live (managed_root), and a refusal names it."""
+        pid = self.profile()
+        st, r = self.preview(pid)
+        self.assertEqual(st, 200, r)
+        note = r["preview"]["derived_labels"]["Commit"]["note"]
+        self.assertIn("沒有 .git", note)
+        self.assertNotIn(".git 在可寫範圍內", note)
+        self.assertEqual(r["preview"]["derived_labels"]["Commit"]["level"], "未限制")
+        (self.work / ".git").mkdir()
+        st, r = self.preview(pid)
+        self.assertEqual(st, 200, r)
+        self.assertEqual(r["preview"]["derived_labels"]["Commit"]["note"], "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push")
+        st, live = self.req("GET", "/api/live")
+        self.assertEqual(st, 200)
+        self.assertEqual(live["managed_root"], str(self.console.managed_root.resolve()))
+        self.assertIn("home", live, "the rest of the live view is still there")
+        st, bad = self.preview(pid, workdir="/usr")
+        self.assertEqual(st, 400)
+        self.assertIn(str(self.console.managed_root.resolve()), bad["error"])
+        self.assertNotIn("家目錄", bad["error"])
+
     # ---- confirm ----
 
     def test_confirm_launches_once_and_replay_is_refused(self):

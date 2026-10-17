@@ -820,7 +820,7 @@ def executor_live(session_id, live, now) -> dict:
     """The executor session's state from the cached live view, never shown
     as current unless the view is fresh and the runtime answered."""
     if not session_id:
-        return {"state": "unbound", "label": "未綁定 session", "reason": "沒有設定執行者的 session", "freshness": None}
+        return {"state": "unbound", "label": "尚未綁定終端", "reason": "沒有設定執行者的終端", "freshness": None}
     fresh = live_freshness(live, now)
     if fresh["state"] == "missing":
         return {"state": "not_loaded", "label": "即時狀態未載入", "reason": fresh["detail"], "freshness": fresh}
@@ -842,7 +842,7 @@ def executor_live(session_id, live, now) -> dict:
     elif any(p.get("pane_id") == session_id for p in panes):
         label, state, reason = "狀態未知", "unknown", "不是 Agent session"
     else:
-        label, state, reason = "找不到 session", "missing", "這個 session 不在終端機清單（可能已結束）"
+        label, state, reason = "找不到這個終端", "missing", "這個終端不在終端機清單（可能已結束）"
     if fresh["state"] == "stale":
         return {"state": "stale", "label": "即時狀態已過期",
                 "reason": f"{fresh['detail']}；當時是「{label}」", "freshness": fresh}

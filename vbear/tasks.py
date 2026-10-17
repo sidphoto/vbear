@@ -1035,21 +1035,21 @@ def pickup(task: dict[str, Any], live: dict[str, Any] | None) -> dict[str, str]:
         return {"state": "blocked", "detail": f"等待：{target}" if target else "阻塞，未記錄在等誰"}
     pane = task.get("associated_pane_id") or task.get("associated_session_id")
     if not pane:
-        return {"state": "unclaimed", "detail": "還沒有關聯任何 Terminal"}
+        return {"state": "unclaimed", "detail": "還沒有關聯任何終端"}
     runtime = (live or {}).get("runtime") or {}
     if not runtime.get("available"):
-        return {"state": "unknown", "detail": "VBear runtime 未連線，無法確認關聯的 Terminal"}
+        return {"state": "unknown", "detail": "VBear runtime 未連線，無法確認關聯的終端"}
     match = next((x for x in (live or {}).get("panes") or () if x.get("pane_id") == pane), None)
     if match is None:
-        return {"state": "stalled", "detail": "關聯的 Terminal 已不存在，任務還沒結案"}
+        return {"state": "stalled", "detail": "關聯的終端已不存在，任務還沒結案"}
     if match.get("exited"):
-        return {"state": "stalled", "detail": "關聯的 Terminal 已結束，任務還沒結案"}
+        return {"state": "stalled", "detail": "關聯的終端已結束，任務還沒結案"}
     status = match.get("agent_status")
     if status == "working":
-        return {"state": "working", "detail": "關聯的 Agent 正在工作"}
+        return {"state": "working", "detail": "關聯的終端正在工作"}
     if status in ("waiting", "needs-input"):
-        return {"state": "parked", "detail": "關聯的 Agent 停下來在等你，任務還沒結案"}
-    return {"state": "unknown", "detail": "無法判斷關聯 Agent 的狀態"}
+        return {"state": "parked", "detail": "關聯的終端停下來在等你，任務還沒結案"}
+    return {"state": "unknown", "detail": "無法判斷關聯終端的狀態"}
 
 
 def delete_task(task_id: str) -> bool:

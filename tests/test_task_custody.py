@@ -430,6 +430,19 @@ class PickupTests(unittest.TestCase):
             self.assertTrue(got["detail"])
         self.assertIn("審查者", tasks.pickup(self.card(agent="blocked", closure={"target": "審查者"}), None)["detail"])
 
+    def test_the_details_are_in_screen_words_not_english(self):
+        """P7 #11: a task card's pick-up detail says 終端, not Terminal or Agent."""
+        p = {"pane_id": "n-000000000001", "exited": False}
+        views = [(self.card(pane=None), live([])), (self.card(), live([], available=False)), (self.card(), live([])),
+                 (self.card(), live([{**p, "exited": True}])), (self.card(), live([{**p, "agent_status": "working"}])),
+                 (self.card(), live([{**p, "agent_status": "waiting"}])), (self.card(), live([{**p, "agent_status": "unknown"}]))]
+        for card, view in views:
+            with self.subTest(view=view):
+                detail = tasks.pickup(card, view)["detail"]
+                self.assertNotIn("Terminal", detail)
+                self.assertNotIn("Agent", detail)
+                self.assertIn("終端", detail)
+
 
 class CustodyAPITests(unittest.TestCase):
     @classmethod

@@ -171,7 +171,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         block("intents_not_supported", "此權限組合不是已驗證設定所能對應的組合")
     if commit is not True:
         block("commit_not_enforceable",
-              "目前無法強制不 commit：工作目錄的 .git 在可寫範圍內。要出發，請先勾選「我知道這個角色會在這個資料夾建立、修改檔案，也能存下版本紀錄（commit），VBear 擋不住」")
+              "目前無法強制不 commit：角色能在工作資料夾裡寫檔，VBear 擋不住它存下版本紀錄。要出發，請先勾選「我知道這個角色會在這個資料夾建立、修改檔案，也能存下版本紀錄（commit），VBear 擋不住」")
     if not (isinstance(network, dict) and network.get("enabled") is False
             and not network.get("approved_domains")):
         block("network_not_available", "已驗證的設定只有關閉網路（空 allowlist）；不支援開啟網路或指定網域")
@@ -213,6 +213,12 @@ EVIDENCE_WRITES, EVIDENCE_LIFECYCLE, EVIDENCE_NETWORK, EVIDENCE_CODEX = "writes"
 WHY_VERSION = "why_version"            # unknown_reason: "this Claude Code version is not verified", with the version
 CODEX_NO_EVIDENCE = "尚無 Codex 0.159.2 OS sandbox 驗收證據"
 VERSION_UNKNOWN_NOTE = "尚未載入這個 Claude Code 版本的驗證資料，無法說明這一項在你的 Mac 上守到什麼程度"
+
+
+# The Commit note, by what is known about the folder: not known (a card's back, a preview of a folder VBear cannot see),
+# a folder with a .git, a folder without one. The level is the same in all three: not restricted.
+COMMIT_NOTE_FOLDER_UNKNOWN = "工作目錄內若有 .git，它在可寫範圍內，無法阻止本機 commit；未驗證 push"
+COMMIT_NOTE_HAS_GIT = "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push"
 
 
 def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -> dict:
@@ -265,7 +271,7 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
             "Write": item(UNVERIFIED, "設定為只允許寫入工作目錄與本 session 暫存區，但此版本未實測",
                           scope=SCOPE_WRITE, unknown_reason=why),
             "Test": item(INTENT, "可用 Bash 執行指令；限制尚未在此版本實測", unknown_reason=why),
-            "Commit": item(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+            "Commit": item(UNRESTRICTED, COMMIT_NOTE_FOLDER_UNKNOWN,
                            scope=SCOPE_WORKDIR, unknown_reason=why),
             "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
             "Network": item(UNVERIFIED, "設定為空 allowlist（不連網），但此版本未實測", unknown_reason=why),
@@ -278,7 +284,7 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
             "Read": item(INTENT, "讀取範圍沒有被隔離；同一使用者可讀的檔案都讀得到"),
             "Write": item(UNKNOWN, VERSION_UNKNOWN_NOTE),
             "Test": item(INTENT, "可用 Bash 執行指令；限制是否生效取決於版本驗證，尚未載入"),
-            "Commit": item(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+            "Commit": item(UNRESTRICTED, COMMIT_NOTE_FOLDER_UNKNOWN,
                            scope=SCOPE_WORKDIR),
             "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
             "Network": item(UNKNOWN, VERSION_UNKNOWN_NOTE),
@@ -296,7 +302,7 @@ def armor_items(tool, claude_verified, network_verified, codex_os_evidence_ok) -
                                "Edit/Write 工具未提供，屬工具層意圖，不是 OS 邊界",
                       scope=SCOPE_WRITE, evidence=(EVIDENCE_WRITES, EVIDENCE_LIFECYCLE)),
         "Test": item(INTENT, "可用 Bash 執行指令；只受寫入範圍與網路設定限制", evidence=(EVIDENCE_WRITES,)),
-        "Commit": item(UNRESTRICTED, "工作目錄內的 .git 在可寫範圍內，無法阻止本機 commit；未驗證 push",
+        "Commit": item(UNRESTRICTED, COMMIT_NOTE_FOLDER_UNKNOWN,
                        scope=SCOPE_WORKDIR, unknown_reason="未測試以 denyWrite 排除 .git 的效果"),
         "Deploy": item(NOT_GRANTED, "沒有可安全表達「只可發布」的設定；不提供"),
         "Network": net,
@@ -345,10 +351,35 @@ def derive_labels(manifest: dict | None, workdir: str | None, engine: str | None
         EVIDENCE_NETWORK: claude_evidence(version, "network"),
         EVIDENCE_CODEX: codex_ref,
     }
-    return {name: label(it["level"], it["note"], path_scope=scopes[it["scope"]],
-                        evidence=[evidence[e] for e in it["evidence"]],
-                        unknown_reason=why if it["unknown_reason"] == WHY_VERSION else it["unknown_reason"])
-            for name, it in items.items()}
+    labels = {name: label(it["level"], it["note"], path_scope=scopes[it["scope"]],
+                          evidence=[evidence[e] for e in it["evidence"]],
+                          unknown_reason=why if it["unknown_reason"] == WHY_VERSION else it["unknown_reason"])
+              for name, it in items.items()}
+    # The commit note is worded for the folder this preview is for (the level stays "not restricted"). A folder that
+    # exists says whether it has a .git; a folder VBear cannot see keeps the note that does not claim one.
+    git = _git_state(workdir) if manifest and "Commit" in labels and workdir else None
+    if git == "nogit":
+        labels["Commit"]["note"] = NO_GIT_COMMIT_NOTE[tool]
+    elif git == "git" and tool == "claude":
+        labels["Commit"]["note"] = COMMIT_NOTE_HAS_GIT
+    return labels
+
+
+NO_GIT_COMMIT_NOTE = {
+    "claude": "這個資料夾目前沒有 .git；角色能寫入這個資料夾，仍可能自己建立版本紀錄（git init）並 commit，VBear 無法阻止；未驗證 push",
+    "codex": "commit=true 允許寫入工作目錄；這個資料夾目前沒有 .git，仍可能自己建立版本紀錄並 commit。沒有命令樣式攔截，也不涵蓋 push",
+}
+
+
+def _git_state(workdir):
+    """"git" or "nogit" for a folder that exists, None when it cannot be told (not a folder, an error). One ``isdir``
+    and one ``lstat`` of ``<folder>/.git`` (a folder, a worktree's file or a link all count): no walk, no git process."""
+    try:
+        if not os.path.isdir(workdir):
+            return None
+        return "git" if os.path.lexists(os.path.join(workdir, ".git")) else "nogit"
+    except (OSError, ValueError):
+        return None
 
 
 class PreviewStore:

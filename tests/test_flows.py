@@ -810,9 +810,16 @@ class LiveFreshnessTests(unittest.TestCase):
         del view["runtime"]
         self.assertEqual(self.ex(view)["label"], "runtime 狀態不明")
 
+    def test_an_executor_with_no_terminal_says_so_in_screen_words(self):
+        r = flows.executor_live("", live_view(1), self.NOW)
+        self.assertEqual((r["state"], r["label"]), ("unbound", "尚未綁定終端"))
+        self.assertNotIn("session", r["label"] + r["reason"])
+        gone = self.ex({**live_view(1), "sessions": [], "panes": []})
+        self.assertNotIn("session", gone["label"] + gone["reason"])
+
     def test_other_session_states(self):
         self.assertEqual(self.ex({**live_view(1), "sessions": []})["label"], "狀態未知")          # a plain shell pane
-        self.assertEqual(self.ex({**live_view(1), "sessions": [], "panes": []})["label"], "找不到 session")
+        self.assertEqual(self.ex({**live_view(1), "sessions": [], "panes": []})["label"], "找不到這個終端")
         self.assertEqual(self.ex(live_view(1, status="needs-input"))["label"], "需要你處理")
 
     def test_malformed_view_parts_are_tolerated(self):
@@ -821,7 +828,7 @@ class LiveFreshnessTests(unittest.TestCase):
                       {"sessions": [{"terminal_id": SID, "status": "working", "activity": {"reason": 5}}]}):
             with self.subTest(extra=extra):
                 r = self.ex(live_view(1, **extra))
-                self.assertIn(r["label"], {"狀態未知", "找不到 session", "runtime 狀態不明", "工作中"})
+                self.assertIn(r["label"], {"狀態未知", "找不到這個終端", "runtime 狀態不明", "工作中"})
                 self.assertIsInstance(r["reason"], str)
 
 

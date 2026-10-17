@@ -2,6 +2,7 @@
 path, and the empty / fresh-user scenarios are really empty. No real model or CLI is called."""
 from __future__ import annotations
 
+import json
 import os
 import time
 import unittest
@@ -86,6 +87,19 @@ class FreshUserTests(_Qa):
 
     def test_the_skills_stay_so_there_is_something_to_equip(self):
         self.assertIn("code-review", self.skill_ids)
+
+    def test_the_html_probe_skill_is_for_security_checks_not_for_a_new_user(self):
+        self.assertFalse((self.home / ".claude" / "skills" / "html-probe").exists())
+        self.assertNotIn(qa.PROBE, self.skill_ids)
+        self.assertNotIn(qa.PROBE, json.dumps(self.api("/api/skills")))
+
+
+class DefaultEnvironmentKeepsTheProbeTests(_Qa):
+    ENV = {"VBEAR_QA_LOBBY": "empty"}
+
+    def test_the_probe_skill_is_there_outside_the_fresh_scenario(self):
+        self.assertTrue((self.home / ".claude" / "skills" / "html-probe" / "SKILL.md").is_file())
+        self.assertIn(qa.PROBE, json.dumps(self.api("/api/skills")))
 
 
 class FreshWithOtherFlagsTests(_Qa):

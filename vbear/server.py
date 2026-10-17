@@ -487,7 +487,8 @@ def make_handler(console: Console):
                     force = parse_qs(url.query).get("force", ["0"])[0] == "1"
                     if force and self.headers.get("X-VBear") != "1":
                         return self._error(403, "強制更新需要主控台標頭")
-                    return self._json(console.store.live(force=force))
+                    # managed_root is the one folder a launch may work in; the pages word their hint from it, not from the home directory
+                    return self._json({**console.store.live(force=force), "managed_root": str(console.managed_root.resolve())})
                 if path == "/api/config":
                     return self._json(self._config_view())
                 if path == "/api/tasks":
@@ -1204,7 +1205,7 @@ def make_handler(console: Console):
             if (not isinstance(workdir, str) or not os.path.isabs(workdir)
                     or not Path(os.path.realpath(workdir)).is_dir()
                     or not Path(os.path.realpath(workdir)).is_relative_to(root)):
-                return self._error(400, "workdir 必須是家目錄內既存的資料夾")
+                return self._error(400, f"workdir 必須是允許範圍（{root}）之內既存的資料夾")
             try:
                 preview = console.previews().create(profile, workdir, body.get("commit", False),
                                                     body.get("network"))

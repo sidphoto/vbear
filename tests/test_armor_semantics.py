@@ -95,6 +95,73 @@ class PureTests(unittest.TestCase):
         self.assertEqual(items["Commit"]["level"], al.UNRESTRICTED)       # a weakness is stated whatever the version
 
 
+class CommitNoteForTheFolderTests(unittest.TestCase):
+    """P7 #9: the commit note says what is so for the folder the preview is for. A folder that exists and has no .git
+    does not get a sentence about its .git; the level stays "not restricted"; folders VBear cannot see keep the
+    static note (the golden file pins those)."""
+
+    def labels(self, workdir, engine="claude"):
+        manifest = armor_cases._manifest(engine, "2.1.296" if engine == "claude" else "0.159.2", True if engine == "claude" else None)
+        with mock.patch.object(al, "_codex_evidence_reference", return_value="docs/evidence/codex-0.159.2.json"):
+            return al.derive_labels(manifest, workdir, engine)
+
+    def test_a_folder_without_git_gets_its_own_sentence(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for engine in ("claude", "codex"):
+                with self.subTest(engine=engine):
+                    c = self.labels(d, engine)["Commit"]
+                    self.assertEqual(c["note"], al.NO_GIT_COMMIT_NOTE[engine])
+                    self.assertIn("沒有 .git", c["note"])
+                    self.assertNotIn("在可寫範圍內", c["note"])
+                    self.assertEqual(c["level"], al.UNRESTRICTED, "the level is not softened")
+                    self.assertTrue("無法阻止" in c["note"] or "仍可能自己建立版本紀錄" in c["note"])
+
+    def test_a_folder_with_git_says_its_git_is_writable(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".git").mkdir()
+            self.assertEqual(self.labels(d)["Commit"]["note"], al.COMMIT_NOTE_HAS_GIT)
+            self.assertIn("工作目錄內的 .git 在可寫範圍內", al.COMMIT_NOTE_HAS_GIT)
+            self.assertIn("commit=true 明確允許工作目錄與 .git 寫入", self.labels(d, "codex")["Commit"]["note"])
+
+    def test_without_a_folder_to_look_at_the_note_does_not_claim_a_git(self):
+        note = al.COMMIT_NOTE_FOLDER_UNKNOWN
+        self.assertIn("若有 .git", note)
+        self.assertNotEqual(note, al.COMMIT_NOTE_HAS_GIT)
+        for tool in ("claude",):
+            for verified in (True, False, None):
+                self.assertEqual(al.armor_items(tool, verified, True, True)["Commit"]["note"], note)
+            self.assertEqual(al.armor_items(tool, True, True, True)["Commit"]["level"], al.UNRESTRICTED)
+
+    def test_a_git_file_or_link_counts_as_git(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".git").write_text("gitdir: /elsewhere")       # a worktree's .git is a file
+            self.assertEqual(self.labels(d)["Commit"]["note"], al.COMMIT_NOTE_HAS_GIT)
+        with tempfile.TemporaryDirectory() as d:
+            os.symlink(os.path.join(d, "nowhere"), os.path.join(d, ".git"))    # a dangling link is still an entry
+            self.assertEqual(self.labels(d)["Commit"]["note"], al.COMMIT_NOTE_HAS_GIT)
+
+    def test_a_folder_that_does_not_exist_or_no_folder_keeps_the_static_note(self):
+        for workdir in ("/definitely/not/here", None, ""):
+            with self.subTest(workdir=workdir):
+                self.assertEqual(self.labels(workdir)["Commit"]["note"], al.COMMIT_NOTE_FOLDER_UNKNOWN)
+
+    def test_an_unprepared_launch_says_it_cannot_start_whatever_the_folder(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            c = al.derive_labels(None, d, "claude")["Commit"]
+            self.assertEqual(c["note"], "此角色卡無法啟動，未產生設定")
+
+    def test_the_block_message_does_not_claim_a_git_folder(self):
+        reasons = al.launch_blockers({"permission_intents": dict(al.VERIFIED_INTENTS), "model": {"tool": "claude"}, "enabled": True}, False,
+                                     {"enabled": False, "approved_domains": []})
+        message = next(r["message"] for r in reasons if r["code"] == "commit_not_enforceable")
+        self.assertTrue(message.startswith("目前無法強制不 commit"))
+        self.assertNotIn(".git", message.split("要出發")[0])
+
+
 class PageTableTests(unittest.TestCase):
     def test_the_pages_group_table_is_the_servers(self):
         """web/app.js frames a preview's labels in five groups from its own table (the preview carries no group);

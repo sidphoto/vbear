@@ -18,7 +18,7 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       builds no flow and starts no executor, so the board is in its first-run state (no flow, no session,
       nothing waiting for you); the two role cards stay.
       Optional VBEAR_QA_FRESH=1: a user who has just installed VBear: no demo role cards, no task cards, no
-      flows and no session (the skills stay). It implies the empty lobby and wins over VBEAR_QA_LOBBY=1 and
+      flows and no session (the skills stay, except the HTML probe skill, which is for security checks). It implies the empty lobby and wins over VBEAR_QA_LOBBY=1 and
       VBEAR_QA_OFFICE; it combines with VBEAR_QA_TRANSLATE, VBEAR_QA_CODEX_BLOCKED and VBEAR_QA_DEMO.
       Optional VBEAR_QA_OFFICE=1: the pixel office (#/office) with what design office 6 asks for: six flows
       spread over the four stations (plan board, build area, review room, merge gate) next to the automatic
@@ -123,8 +123,9 @@ class _Env(RunnerCase):
             _write(sk / "doc-helper" / "SKILL.md",
                    "---\nname: doc-helper\ndescription: Draft short documentation for a finished change.\n---\n"
                    "# Doc helper\n\nUse when a change is merged.\n")
-        else:
-            # the name and description are HTML-like text: every screen must show them as text, never run them
+        elif not self.fresh:
+            # the name and description are HTML-like text: every screen must show them as text, never run them.
+            # It is a probe for security checks: a "new user" environment (FRESH) does not carry it
             _write(sk / "html-probe" / "SKILL.md",
                    f"---\nname: {json.dumps(PROBE)}\ndescription: {json.dumps('probe ' + PROBE + ' end')}\n---\n"
                    "# Probe\n\nA skill whose name and description look like markup.\n")
