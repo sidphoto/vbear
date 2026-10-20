@@ -143,6 +143,62 @@ test("C5 still three shields: partial, unverified, unknown and not-granted get n
   assert.strictEqual(app.passSummary(pv).lines.filter((l) => l.shield).length, 0);
 });
 
+// ---- C6: the office's props and desk strip ---------------------------------------------------------------------------
+function officeFixtures() {
+  const flow = { id: "flow-000000000001", task_title: "整理首頁文案", task_missing: false, phase: { key: "planning", label: "計畫中", reason: "" },
+    attention: false, attention_reason: "", automation: { mode: "manual", held: false, step_label: "" },
+    roles: { planner: { name: "CEO", family: "anthropic" }, executor: { name: "工匠", family: "anthropic" }, reviewers: [{ name: "審查員", family: "openai" }] },
+    executor_live: { state: "idle", label: "工作中", reason: "", freshness: { state: "fresh", age_s: 3 } }, latest_review: null, binding: { detail: "" } };
+  const live = { runtime: { available: true, problems: [] }, sessions: [{ terminal_id: "n-0123456789ab", pane_id: "n-0123456789ab", agent: "claude", status: "working", role_label: "工人",
+    title: "做事中", activity: { reason: "", evidence: [] }, project_id: "p1" }], attention: [], projects: [{ project_id: "p1", name: "專案一" }] };
+  const profiles = { ok: true, profiles: [{ id: "p-1", name: "角色一", model: { tool: "claude", model_id: "" } }] };
+  return app.officeModel(live, { ok: true, flows: [flow] }, profiles);
+}
+const SELECT = { key: null, select() {}, reloadRoster() {} };
+
+test("C6 each station's title carries its own prop (plan board, build area, review room, merge gate) and the lounge carries the coffee; the words are unchanged", () => {
+  const [stations, , lounge] = app.officeSections(officeFixtures(), SELECT, new Set());
+  const titles = byClass(stations, "office-station-title");
+  assert.strictEqual(titles.length, 4);
+  assert.deepStrictEqual(titles.map((t) => t.find((n) => n.hasClass && n.hasClass("office-prop")).getAttribute("data-prop")), ["stationPlan", "stationImpl", "stationReview", "stationMerge"]);
+  assert.deepStrictEqual(titles.map(text), ["計畫板", "實作區", "審查室", "合併關卡"], "a prop adds no words and is not what tells the stations apart");
+  const loungeTitle = lounge.find((n) => n.tag === "h2");
+  assert.strictEqual(text(loungeTitle), "休息室");
+  assert.strictEqual(loungeTitle.find((n) => n.hasClass && n.hasClass("office-prop")).getAttribute("data-prop"), "loungeCoffee");
+  for (const t of [...titles, loungeTitle]) {
+    const prop = t.find((n) => n.hasClass && n.hasClass("office-prop"));
+    assert.strictEqual(prop.getAttribute("aria-hidden"), "true", "decoration");
+    const svg = prop.find((n) => n.tag === "svg");
+    assert.strictEqual(svg.getAttribute("viewBox"), "0 0 16 16");
+    assert.strictEqual(svg.getAttribute("width"), "32", "2x");
+  }
+  assert.deepStrictEqual(Object.keys(app.OFFICE_STATION_PROP), ["board", "build", "review", "gate"]);
+  assert(!/<img|url\(/.test(text(stations)));
+});
+
+test("C6 a desk's character stands on the art's 24x4 desk strip (3x), the strip is decoration", () => {
+  const m = officeFixtures();
+  assert.strictEqual(m.desks.length, 1);
+  const btn = app.officeDeskButton(m.desks[0], false, false, () => {});
+  const top = byClass(btn, "office-desk-top")[0];
+  assert.strictEqual(top.getAttribute("aria-hidden"), "true");
+  const svg = top.find((n) => n.tag === "svg");
+  assert.strictEqual(svg.getAttribute("viewBox"), "0 0 24 4");
+  assert.strictEqual(svg.getAttribute("width"), "72");
+  assert.strictEqual(svg.getAttribute("height"), "12");
+  assert(svg.findAll((n) => n.tag === "rect" && n.getAttribute("class") === "px-k").length > 0, "its outline is the theme's K (light on a dark floor)");
+  assert(/\.office-desk-top \{[^}]*width: 72px; height: 12px/.test(CSS_SRC));
+});
+
+test("C6 the props are 2x, small, beside the title, and the office never relies on one: the station buttons keep their words and labels", () => {
+  const m = officeFixtures();
+  const team = m.stations.board.teams[0];
+  const b = app.officeTeamButton(team, false, false, () => {});
+  assert(text(b).includes("計畫板") || text(b).includes("任務在"));
+  assert(!b.find((n) => n.hasClass && n.hasClass("office-prop")), "no prop inside the team button");
+  assert(/\.office-station-title \{[^}]*display: flex/.test(CSS_SRC));
+});
+
 // ---- run ----------------------------------------------------------------------------------------------------------
 (async () => {
   const timer = setTimeout(() => { console.error("TIMEOUT"); process.exit(2); }, 120000);

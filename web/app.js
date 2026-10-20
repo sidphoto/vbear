@@ -2129,6 +2129,11 @@ function onboardingSection(state, opts = {}) {
 
 const OFFICE_STATIONS = ["board", "build", "review", "gate"];
 const OFFICE_STATION_LABEL = { board: "計畫板", build: "實作區", review: "審查室", gate: "合併關卡" };
+// the 16x16 prop of the art (officeProps) that sits beside a station's title, and beside the lounge's. Decoration: the
+// words say the same, and the station is never told apart by the prop alone.
+const OFFICE_STATION_PROP = { board: "stationPlan", build: "stationImpl", review: "stationReview", gate: "stationMerge" };
+const OFFICE_LOUNGE_PROP = "loungeCoffee";
+function officeProp(name) { return el("span", { class: "office-prop", "data-prop": name, "aria-hidden": "true" }, cardArt("officeProps", name, 2)); }
 // phase -> station. A phase this table does not know goes to the plan board with its own label; done is not shown.
 const OFFICE_PHASE_STATION = {
   planning: "board", awaiting_approval: "board",
@@ -2691,7 +2696,7 @@ function officeDeskButton(d, selected, fresh, onPick) {
       el("span", { class: "office-turn-mark", "aria-hidden": "true" }, "!"), "輪到你") : null,
     d.ended ? null : el("span", { class: "office-bubble", "aria-hidden": "true" }, d.bubble),
     officeSprite(d.species, d.camp, 3, d.status === "working"),
-    el("span", { class: "office-desk-top", "aria-hidden": "true" }),
+    el("span", { class: "office-desk-top", "aria-hidden": "true" }, deskStripSvg(3)),
     el("span", { class: "office-plate" },
       el("span", { class: "office-plate-name" }, d.name),
       el("span", { class: "office-plate-tool" }, d.ended ? `${d.toolLabel}・已結束` : d.toolLabel),
@@ -2977,7 +2982,7 @@ function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
       const stn = m.stations[st];
       const waits = stn.teams.some((t) => t.waits);
       return el("section", { class: `office-station${waits ? " office-station-waits" : ""}`, "data-station": st },
-        el("h3", { class: "office-station-title" }, stn.label),
+        el("h3", { class: "office-station-title" }, officeProp(OFFICE_STATION_PROP[st]), stn.label),
         stn.teams.length ? stn.teams.map((t) => officeTeamButton(t, S.key === t.key, fresh.has(t.key), (k) => S.select(k)))
           : el("p", { class: "small muted office-empty" }, "這站沒有隊伍"),
         stn.more ? el("a", { class: "btn small office-more", href: "#/flows" }, `這站還有 ${stn.more} 隊 →`) : null);
@@ -2998,7 +3003,7 @@ function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
       el("h2", { id: "office-desks", tabindex: "-1" }, "辦公桌"),
       el("p", { class: "small muted" }, "出勤中的終端，頭上的字是它目前的狀態。"), desksBody),
     el("section", { class: "office-section", "data-office-section": "lounge" },
-      el("h2", { id: "office-lounge", tabindex: "-1" }, "休息室"),
+      el("h2", { id: "office-lounge", tabindex: "-1", class: "office-lounge-title" }, officeProp(OFFICE_LOUNGE_PROP), "休息室"),
       el("p", { class: "small muted" }, "名冊：角色設定，不代表正在出勤。"),
       el("button", { type: "button", class: "btn small office-reload", "data-office-reload": "1",
         on: { click: () => S.reloadRoster() } }, "重新整理名冊"),
@@ -4318,6 +4323,9 @@ function cardPixelSvg(rows, scale = 2, shield = false) {
   cardPixelRects(rows, svg, shield);
   return svg;
 }
+
+// The strip of desk under a desk's character (art deskStrip, 24x4). Decoration.
+function deskStripSvg(scale = 3) { return cardPixelSvg(CARD_PIXELS.deskStrip, scale); }
 
 // group: shields | icons | officeProps; null for a name the art does not have (the position badge is drawn by positionBadge).
 function cardArt(group, name, scale = 2) {
@@ -10512,6 +10520,11 @@ if (typeof module !== "undefined" && module.exports) {
     officeDeskButton,
     officeProfileButton,
     officeTeamButton,
+    officeSections,
+    officeProp,
+    deskStripSvg,
+    OFFICE_STATION_PROP,
+    OFFICE_LOUNGE_PROP,
     OFFICE_PALETTE,
     OFFICE_OUTLINE,
     OFFICE_CAMPS,

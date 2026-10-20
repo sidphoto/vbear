@@ -1009,7 +1009,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .office-stations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 10px; align-items: start; }
 .office-station { background: var(--panel); border: 2px solid var(--line-2); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .office-station-waits { border: 3px solid var(--vn-red); padding: 9px; }
-.office-station-title { margin: 0; font-size: 15px; }
+.office-station-title { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.office-lounge-title { display: flex; align-items: center; gap: 8px; }
+.office-prop { display: inline-flex; flex: none; }
 .office-team, .office-char, .office-row { font: inherit; color: var(--ink); text-align: left; cursor: pointer; }
 .office-team { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; width: 100%; min-height: 44px; padding: 10px;
   border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); position: relative; }
@@ -1037,7 +1039,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   border: 1px solid transparent; border-radius: 8px; background: transparent; position: relative; }
 .office-bubble { background: var(--office-box-bg); color: var(--office-box-ink); border: 2px solid var(--office-box-line);
   box-shadow: 0 0 0 2px var(--office-box-bg); border-radius: 4px; padding: 1px 8px; font-size: 12.5px; font-weight: 650; white-space: nowrap; margin-bottom: 2px; }
-.office-desk-top { display: block; width: 72px; height: 8px; margin-top: -6px; background: var(--office-desk); border: 2px solid var(--office-box-line); border-radius: 2px; }
+.office-desk-top { display: block; width: 72px; height: 12px; margin-top: -8px; }  /* the art's 24x4 desk strip at 3x */
 .office-plate { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 1px; font-size: 12.5px; color: var(--ink-2); min-width: 0; }
 .office-plate-name { font-weight: 650; color: var(--ink); word-break: break-word; }
 .office-plate-flow { color: var(--ink-2); word-break: break-word; }
