@@ -42,6 +42,10 @@ the card's flow waits for you, and three fixed lines; the focus starts on 「取
   contrast bar in the dark theme; the robot's eyes follow the camp instead of one blue; 「執行觀察」 is no longer said twice;
   the draft card's long explanation is one line with 「這是什麼」 for the rest (the meaning is kept: a mark, not a count of
   work); a role card's back says 「往下捲動看更多」 when it scrolls.
+- **Last small fixes.** The launch pass no longer says 「S0 驗收」 (it now says the mode was tested to be able to write to your
+  home folder, which is the same fact); 「輪到你」 has no stray space; a task card's template badge says 「自訂」 and so on
+  instead of the stored key; a terminal that is gone says so in plain words, with the runtime's own sentence kept under
+  「技術細節」; and on a narrow screen a long skill name no longer pushes the ⓘ out of its card.
 - **Docs.** The README screenshots (both languages) were retaken for this state, mostly in the light theme and two in the
   dark theme, with new ones for the workbench task card, a handoff, a terminal just opened, the takeover reminder and the
   skills library.
