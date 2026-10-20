@@ -7,6 +7,46 @@
   the end of the list. The note for a folder without git no longer ends a full-width bracket right before a full stop,
   which read like a stray space; the same was done to a few other sentences on the main paths.
 
+**After a start, and picking a task up.** A start from a task card now stays in the workbench: the new terminal sits
+beside the same task card, and the terminal is noted on the card (a tracking record, nothing is sent into it; if you
+changed the folder, or the note could not be saved, the page says so). A terminal this tab has just started from a launch
+pass can be typed into at once, with one line saying so and a 「改成只觀看」 button; the right to type is held only in memory,
+is used once, and lapses after two minutes, so a reload or a link never gets it. Taking over a terminal that is already
+running now opens a 「接手提醒」: the task card linked to it and its next step, the agent's state as VBear can read it, whether
+the card's flow waits for you, and three fixed lines; the focus starts on 「取消」. A task card made by a handoff shows a
+「接手提醒」 at its top with the earlier card, its written note and its last state, and nothing the page does not know.
+
+- **Workbench.** With no terminal open the task card is the page and one line says so, instead of an empty black area. The
+  four-column 「狀態依據」 block and the project and global rules sit behind a folded 「進階（工程資訊）」. The card's top shows the
+  flow's current gate, and the old mark (「草稿」) becomes small text. The 「角色」 tab shows the same two-sided role card as
+  the card pool, and the office's 「打開角色卡」 opens that card in the card pool. Skill words say one thing: 「收藏在角色卡上」
+  and 「出發時不會載入」 (a recorded pick, not a broken skill).
+- **The next step's own buttons.** When it is your turn, the 「下一步」 box holds the button: 「核准計畫」 (a manual record,
+  behind a confirmation) and 「核准計畫並開啟自動執行…」 (the same approval window as before); when it is your turn to merge or
+  upload there is a sentence, not a button. The launch pass fetches its preview when the commit sentence is ticked (and
+  fetches it on opening when that was ticked already); it never ticks it for you and the focus never lands on 「確認啟動」.
+- **Plain words.** The flow and terminal pages say 版本 (commit), 執行階段, 上傳到遠端 and 只能觀看／你正在操作 instead of session,
+  HEAD, push, Observe and Control; the technical values stay in small brackets, and the plan hash is still in the approval
+  window. Flow phase names follow (「等你上傳」). Two cards or flows with the same title also show their folder and day; the
+  common English skill categories show in Chinese (the filter values do not change). A terminal page's back button says
+  where it goes (「回角色卡池」, and 「回任務卡」 for a terminal linked to a card). The home page no longer puts the cursor in the
+  skill search.
+- **Card feel.** The shields have new art with the same three meanings (solid, dashed, empty with a slash; partly blocked,
+  untested and unknown still get none). Team places that hold a role card take the card's camp colour and the place's badge
+  (規／執／審); the pool below the places is a row of small cards. Skill cards are chips with a cut corner and a band in the
+  tool's colour. The starter deck and task cards have card frames; a task card has a header and three lights (規→執→審)
+  that come only from the flow's real phase and are empty when there is none. The office has a small prop beside each
+  station's title and a wooden strip under each desk character. Putting a card on a task card keeps you in the card pool
+  and asks whether to fill another place.
+- **Dark theme and small fixes.** The office outline, the deep red rule, the warning text and the solid shield now pass the
+  contrast bar in the dark theme; the robot's eyes follow the camp instead of one blue; 「執行觀察」 is no longer said twice;
+  the draft card's long explanation is one line with 「這是什麼」 for the rest (the meaning is kept: a mark, not a count of
+  work); a role card's back says 「往下捲動看更多」 when it scrolls.
+- **Docs.** The README screenshots (both languages) were retaken for this state, mostly in the light theme and two in the
+  dark theme, with new ones for the workbench task card, a handoff, a terminal just opened, the takeover reminder and the
+  skills library.
+
+
 ## v0.7.0 — card play
 
 A first-time user can now build a team in three card moves, with no form to fill in: **collect** role cards (or take

@@ -2,13 +2,57 @@
 picture is a PNG of at most 150 KB, and the two READMEs show the same pictures in the same order (the captions are
 written once per language)."""
 import re
+import struct
 import unittest
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = ROOT / "docs" / "images"
 READMES = ("README.md", "README.zh-TW.md")
 MAX_BYTES = 150 * 1024
+
+
+def png_top(path, rows=120):
+    """Width, height and the mean luminance (0..1) of the first rows of a palette PNG with 8-bit indexes (what the
+    screenshots are saved as), read with the standard library only."""
+    data = path.read_bytes()
+    pos, plte, idat, header = 8, b"", b"", None
+    while pos < len(data):
+        size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + size]
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"PLTE":
+            plte = body
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + size
+    width, height, depth, color, _, _, interlace = header
+    assert (depth, color, interlace) == (8, 3, 0), f"{path.name}: expected an 8-bit palette PNG"
+    raw = zlib.decompress(idat)
+    stride = width + 1
+    prev, total, count = bytearray(width), 0.0, 0
+    lum = [(0.2126 * plte[i] + 0.7152 * plte[i + 1] + 0.0722 * plte[i + 2]) / 255 for i in range(0, len(plte), 3)]
+    for y in range(min(rows, height)):
+        kind, line = raw[y * stride], bytearray(raw[y * stride + 1:(y + 1) * stride])
+        for x in range(width):
+            a = line[x - 1] if x else 0
+            b = prev[x]
+            c = prev[x - 1] if x else 0
+            if kind == 1:
+                line[x] = (line[x] + a) & 255
+            elif kind == 2:
+                line[x] = (line[x] + b) & 255
+            elif kind == 3:
+                line[x] = (line[x] + (a + b) // 2) & 255
+            elif kind == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        total += sum(lum[i] for i in line)
+        count += width
+        prev = line
+    return width, height, total / count
 
 
 def referenced(name):
@@ -64,6 +108,82 @@ class ReadmeImages(unittest.TestCase):
                     seen += 1
                     self.assertIn(mark, blocks[i + 1], f"{name}: the caption after {block[:60]!r}")
             self.assertGreaterEqual(seen, 10, name)
+
+    def test_a_picture_is_never_shown_larger_than_it_is(self):
+        for name in READMES:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            for src, width in re.findall(r'<img src="(docs/images/[^"]+)"[^>]*width="(\d+)"', text):
+                pixels = png_top(ROOT / src, rows=1)[0]
+                self.assertLessEqual(int(width), pixels, f"{name}: {src} is shown at {width} px but is {pixels} px wide")
+
+    def test_most_pictures_are_the_light_theme_and_the_dark_ones_are_really_dark(self):
+        names = sorted({Path(r).name for r in referenced("README.md")})
+        dark = [n for n in names if "-dark" in n]
+        self.assertGreaterEqual(len(dark), 1)
+        self.assertLess(len(dark), len(names) / 2)
+        for n in names:
+            mean = png_top(IMAGES / n)[2]
+            if n in dark:
+                self.assertLess(mean, 0.3, f"{n} is named dark but its top is light ({mean:.2f})")
+            else:
+                self.assertGreater(mean, 0.6, f"{n} should be the light theme but its top is dark ({mean:.2f})")
+
+    def test_the_screens_the_readmes_describe_show_words_the_app_really_has(self):
+        """The captions quote what is on the screen. Each quoted phrase of the new screens must still be in the page's
+        source, so a rename cannot leave a README describing a button that is gone."""
+        app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        quoted = ("接手提醒", "改成只觀看", "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent", "核准計畫並開啟自動執行…",
+                  "終端工作台", "標記：", "這是什麼", "打開角色卡", "回角色卡池", "回任務卡", "往下捲動看更多", "確認啟動",
+                  "這個終端沒有關聯任務卡", "現在打字可能打斷它", "名冊，不代表正在出勤", "收藏中", "生效中", "看七項細節")
+        for phrase in quoted:
+            self.assertIn(phrase, app, phrase)
+        en = (ROOT / "README.md").read_text(encoding="utf-8")
+        zh = (ROOT / "README.zh-TW.md").read_text(encoding="utf-8")
+        for phrase in ("接手提醒", "改成只觀看", "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent", "核准計畫並開啟自動執行…",
+                       "這個終端沒有關聯任務卡", "現在打字可能打斷它"):
+            self.assertIn(phrase, en, phrase)
+            self.assertIn(phrase, zh, phrase)
+
+    def test_the_readmes_no_longer_say_typing_always_needs_a_takeover(self):
+        en = (ROOT / "README.md").read_text(encoding="utf-8")
+        zh = (ROOT / "README.zh-TW.md").read_text(encoding="utf-8")
+        self.assertNotIn("typing takes an explicit takeover (one tab at a time)", en)
+        self.assertNotIn("Typing into it takes an explicit takeover, and only", en)
+        self.assertNotIn("要打字必須\n明確「接管」", zh)
+        self.assertNotIn("要打字必須明確接管，", zh)
+        # the exception is written down in both: a terminal this tab just started
+        self.assertIn("has just started", en)
+        self.assertIn("剛從出發通行證開出來", zh)
+
+
+class ChangelogUnreleased(unittest.TestCase):
+    def setUp(self):
+        self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    def test_unreleased_comes_first_and_the_version_has_not_moved(self):
+        headings = re.findall(r"^## (.+)$", self.text, re.M)
+        self.assertEqual(headings[0], "Unreleased")
+        self.assertTrue(headings[1].startswith("v0.7.0"), headings[:2])
+        init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn('__version__ = "0.7.0"', init)
+        self.assertFalse(any(h.startswith("v0.8") for h in headings))
+
+    def test_unreleased_covers_every_part_of_this_release(self):
+        start = self.text.index("## Unreleased")
+        section = self.text[start:self.text.index("## v0.7.0")]
+        for topic in ("After a start", "接手提醒", "改成只觀看", "取消", "Workbench", "下一步", "Plain words", "Card feel",
+                      "shields", "Dark theme", "README screenshots"):
+            self.assertIn(topic, section, topic)
+
+    def test_unreleased_does_not_claim_more_than_the_pages_do(self):
+        section = self.text[self.text.index("## Unreleased"):self.text.index("## v0.7.0")]
+        # the typing right and the note on the card are said with their limits
+        self.assertIn("held only in memory", section)
+        self.assertIn("lapses after two minutes", section)
+        self.assertIn("a tracking record", section)
+        # nothing says a skill card now loads, or that a shield means more than it did
+        self.assertNotIn("loads", section.replace("never loads", "").replace("does not load", ""))
+        self.assertIn("partly blocked,\n  untested and unknown still get none", section)
 
 
 if __name__ == "__main__":
