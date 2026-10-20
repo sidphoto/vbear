@@ -4234,24 +4234,36 @@ function deleteCard(p, onDone) {
     .catch((err) => toast("刪除失敗：" + err.message));
 }
 
-// Pixel art of the cards (art 20261017-cards v0.7.0-art-3, copied in; nothing is read from outside at run time).
+// Pixel art of the cards (art 20261020-flow-art 0.8.0-art-4, copied in; nothing is read from outside at run time).
 // One character per cell, "." is clear. K is the outline: it takes its colour from the theme (style.css, .px-k), light
-// #18181b, dark #f8fafc. The other characters are the same in both themes. The red of the vn is not used on a card.
+// #18181b, dark #f8fafc. The other characters are the same in both themes, except in a shield: its fill T and its pale
+// inside H come from the art's shieldTokens (style.css, .px-st and .px-sh), and the shared palette is not touched.
+// The red of the vn is not used on a card.
 const CARD_PALETTE = {
   K: "#18181b", W: "#fafaf9", Y: "#fde047", B: "#78350f",
   b: "#b45309", F: "#c2410c", f: "#fed7aa", S: "#52525b",
   s: "#d4d4d8", V: "#4c1d95", v: "#ddd6fe", O: "#d97706",
   o: "#ffedd5", T: "#0f766e", t: "#ccfbf1", G: "#0369a1",
   g: "#e0f2fe", P: "#7e22ce", p: "#f3e8ff", N: "#334155",
-  n: "#e2e8f0",
+  n: "#e2e8f0", H: "#e6fffb",
 };
 const CARD_PIXELS = {
   backPattern: ["KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KnnnnKnnnnKnnnnK", "KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KKKKKKKKKKKKKKKK"],
   shields: {
     enforced: ["KKKKKKKKKKKK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", ".KTTTTTTTTK.", ".KTTTTTTTTK.", "..KTTTTTTK..", "...KTTTTK...", "....KTTK....", ".....KK....."],
-    recorded: ["K.K.K.K.K.K.", "...........K", "K...........", "...........K", "K...........", "...........K", ".K..........", "..........K.", "..K.........", "........K...", "....K.......", ".....KK....."],
-    none: ["KKKKKKKKKKKK", "KK.........K", "K.K........K", "K..K.......K", "K...K......K", "K....K.....K", ".K....K...K.", ".K.....K..K.", "..K.....KK..", "...K....KK..", "....K..K..K.", ".....KK....."],
+    recorded: ["KK.KK.KK.KK.", "KHHHHHHHHHHK", "KHHHHHHHHHHK", ".HHHHHHHHHH.", "KHHHHHHHHHHK", "KHHHHHHHHHHK", "..HHHHHHHH..", ".KHHHHHHHHK.", "..KHHHHHHK..", "....HHHH....", "....KHHK....", ".....KK....."],
+    none: ["KKKKKKKKKKKK", "KK.........K", "K.K........K", "K..K.......K", "K...K......K", "K....K.....K", ".K....K...K.", ".K.....K..K.", "..K.....KK..", "...K....K...", "....K..K....", ".....KK....."],
   },
+  // 16x16 props of the office (art v4 officeProps): decoration beside a station's title; the words say the same.
+  officeProps: {
+    stationPlan: ["......KKKK......", ".....KWWWWK.....", "....KWWWWWWK....", "....KWWYWWYK....", "....KWWWWWWK....", "....KWWWWWWK....", "....KKKKKKKK....", ".......KK.......", "......KBBK......", ".....KBBBBK.....", "....KBBBBBBK....", "...KBBBBBBBBK...", "...K..KBBK..K...", "......KBBK......", "......KKKK......", "................"],
+    stationImpl: ["................", "...KKKKKKKKKK...", "...KTTTTTTTTK...", "...KTTTTYTTTK...", "...KTTTTTTTTK...", "...KTTTTTTTTK...", "...KTTTTTTTTK...", "...KTTTTTTTTK...", "...KKKKKKKKKK...", "..BBBBBBBBBBBB..", ".KBBBBBBBBBBBBK.", "..BBBBBBBBBBBB..", ".....KssssK.....", ".....KKKKKK.....", "................", "................"],
+    stationReview: ["................", ".KKKKKKKKKK.....", ".KWWWWWWWWK.....", ".KWWWWWWWWK.....", ".KWWWTWWWTK.....", ".KWWWWTWTWK.....", ".KWWWWWTWWKK....", ".KWWWWWWWWKsK...", ".KWWWWWWWKsssK..", ".KWWWWWWWKsssK..", ".KWWWWWWWWKsK...", ".KWWWWWWWWKK....", ".KWWWWWWWWK.K...", ".KWWWWWWWWK..K..", ".KKKKKKKKKK...K.", "................"],
+    stationMerge: ["........KYY.....", "........KY......", "......KKKK......", ".....K....K.....", ".....KKKKKK.....", "....KWWWWWWK....", "....KWWWWWWK....", "....KWWWWWWK....", "....KKKKKKKK....", "..BB...BB...BB..", "...BB..BB..BB...", "....BB.BB.BB....", ".....BBBBBB.....", "......BBBB......", ".......BB.......", "......BBBB......"],
+    loungeCoffee: ["......S..S......", "......s..s......", "................", "................", "......KKKK......", "......KWWKK.....", "......KWWK.K....", "......KWWK.K....", "......KWWKK.....", "......KKKK......", ".....BBBBBB.....", "....KBBBBBBK....", ".......BB.......", ".......BB.......", ".......BB.......", ".....BBBBBB....."],
+  },
+  // 24x4 strip of desk under a desk's character (art v4 deskStrip)
+  deskStrip: ["KKKKKKKKKKKKKKKKKKKKKKKK", "KBBBBBBBBBBBBBBBBBBBBBBK", "KBBBBBBBBBBBBBBBBBBBBBBK", "KKKKKKKKKKKKKKKKKKKKKKKK"],
   icons: {
     taskFolder: ["............", ".KKKK.......", "KYYYYK......", "KYYYYKKKKKK.", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", "KYYYYYYYYYYK", ".KKKKKKKKKK.", "............"],
     importProject: [".....KK.....", ".....YY.....", ".....YY.....", ".....YY.....", "..KKKYYKKK..", "...KYYYYK...", "....KYYK....", "K....KK....K", "K..........K", "KK........KK", ".KKKKKKKKKK.", "............"],
@@ -4281,7 +4293,7 @@ function svgEl(tag, attrs) {
 
 // The cells of a pixel map as rects into `parent`: runs of one colour become one rect. The outline takes its colour
 // from the theme (class px-k), every other colour is fixed.
-function cardPixelRects(rows, parent) {
+function cardPixelRects(rows, parent, shield = false) {
   const w = rows[0].length;
   rows.forEach((row, y) => {
     let x = 0;
@@ -4291,7 +4303,8 @@ function cardPixelRects(rows, parent) {
       while (end < w && row[end] === c) end++;
       if (cardHas(CARD_PALETTE, c)) {
         const rect = { x, y, width: end - x, height: 1 };
-        parent.append(svgEl("rect", c === "K" ? { ...rect, class: "px-k" } : c === "T" ? { ...rect, class: "px-t", fill: CARD_PALETTE[c] } : { ...rect, fill: CARD_PALETTE[c] }));
+        const cls = c === "K" ? "px-k" : shield && c === "T" ? "px-st" : shield && c === "H" ? "px-sh" : "";
+        parent.append(svgEl("rect", cls === "px-k" ? { ...rect, class: cls } : cls ? { ...rect, class: cls, fill: CARD_PALETTE[c] } : { ...rect, fill: CARD_PALETTE[c] }));
       }
       x = end;
     }
@@ -4299,18 +4312,18 @@ function cardPixelRects(rows, parent) {
 }
 
 // A pixel map as an SVG, `scale` screen pixels to a cell. Decoration: the words next to it say the same thing.
-function cardPixelSvg(rows, scale = 2) {
+function cardPixelSvg(rows, scale = 2, shield = false) {
   const svg = svgEl("svg", { class: "card-px", viewBox: `0 0 ${rows[0].length} ${rows.length}`, width: rows[0].length * scale,
     height: rows.length * scale, "aria-hidden": "true", focusable: "false", "shape-rendering": "crispEdges" });
-  cardPixelRects(rows, svg);
+  cardPixelRects(rows, svg, shield);
   return svg;
 }
 
-// group: shields | icons; null for a name the art does not have (the position badge is drawn by positionBadge).
+// group: shields | icons | officeProps; null for a name the art does not have (the position badge is drawn by positionBadge).
 function cardArt(group, name, scale = 2) {
-  const set = cardHas(CARD_PIXELS, group) && group !== "backPattern" ? CARD_PIXELS[group] : null;
+  const set = cardHas(CARD_PIXELS, group) && group !== "backPattern" && group !== "deskStrip" ? CARD_PIXELS[group] : null;
   if (!set || !cardHas(set, name)) return null;
-  return cardPixelSvg(set[name], scale);
+  return cardPixelSvg(set[name], scale, group === "shields");
 }
 
 // The back of a card: the 16x16 pattern repeated along a strip (an SVG pattern, so it tiles at its own size).

@@ -374,7 +374,7 @@ test("A3 the 'index cannot find the skill card' text takes the site's warning in
 
 test("A4 shields: the solid one is lighter on a dark card (3:1+), the dotted one's dots show on both; still only three shields, none for partial/unverified/unknown", () => {
   const t = themeTokens();
-  const darkFill = (CSS_SRC.match(/:root\[data-theme="dark"\] \.px-t \{ fill: (#[0-9a-f]{6}); \}/) || [])[1];
+  const darkFill = (CSS_SRC.match(/:root\[data-theme="dark"\] \.px-st \{ fill: (#[0-9a-f]{6}); \}/) || [])[1];
   assert(darkFill, "a dark-theme teal exists");
   for (const [name, fill, v] of [["light", "#0f766e", t.light], ["dark", darkFill, t.dark]]) {
     for (const behind of ["panel", "panel-2"]) {
@@ -388,7 +388,7 @@ test("A4 shields: the solid one is lighter on a dark card (3:1+), the dotted one
   assert(/\.px-k \{ fill: #18181b; \}/.test(CSS_SRC) && /:root\[data-theme="dark"\] \.px-k \{ fill: #f8fafc; \}/.test(CSS_SRC));
   // the solid shield's teal pixels carry the class that the dark rule changes; the rect keeps its own fill as well
   const svg = app.armorShield("強制（限已測路徑、版本與執行層）").find((n) => n.tag === "svg");
-  const teal = svg.findAll((n) => n.getAttribute("class") === "px-t");
+  const teal = svg.findAll((n) => n.getAttribute("class") === "px-st");
   assert(teal.length > 0 && teal.every((n) => n.getAttribute("fill") === "#0f766e"));
   // honesty: partial, unverified, unknown and not-granted still get no shield
   for (const level of ["部分強制", "未驗證（此 Claude Code 版本尚未實測）", "未知", "不授予", "something new", "", null, undefined]) {

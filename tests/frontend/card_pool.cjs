@@ -1361,9 +1361,9 @@ async function test(name, fn) {
     assert.deepStrictEqual(errs.map((x) => [x.state, x.error]), [["error", "boom"]]);
   });
 
-  await test("the art (v3): every map is a full grid of palette characters; shields differ in shape; icons exist; no position pixel maps", () => {
+  await test("the art (v4): every map is a full grid of palette characters; shields differ in shape; icons exist; no position pixel maps", () => {
     const px = vm.runInContext("CARD_PIXELS", pure), pal = vm.runInContext("CARD_PALETTE", pure);
-    assert.deepStrictEqual(Object.keys(px).sort(), ["backPattern", "icons", "shields"], "the position pixel maps are retired (R12)");
+    assert.deepStrictEqual(Object.keys(px).sort(), ["backPattern", "deskStrip", "icons", "officeProps", "shields"], "the position pixel maps are retired (R12)");
     assert.deepStrictEqual(Object.keys(px.shields).sort(), ["enforced", "none", "recorded"]);
     assert.deepStrictEqual(Object.keys(px.icons).sort(), ["emptySlot", "importProject", "taskFolder"]);
     const grids = [["backPattern", px.backPattern, 16], ...["shields", "icons"].flatMap((g) => Object.entries(px[g]).map(([k, m]) => [`${g}.${k}`, m, 12]))];
@@ -1379,7 +1379,8 @@ async function test(name, fn) {
     // the shield differs in shape, not only in colour
     const shape = (rows) => rows.map((r) => r.replace(/[^.]/g, "#")).join("|");
     assert.strictEqual(new Set(Object.values(px.shields).map(shape)).size, 3);
-    assert.ok(px.shields.recorded.join("").split("").filter((c) => c !== ".").every((c) => c === "K"), "dashed: outline only");
+    assert.ok(px.shields.recorded.join("").split("").filter((c) => c !== ".").every((c) => c === "K" || c === "H"), "dashed: outline dashes and the pale inside");
+    assert.ok(/H/.test(px.shields.recorded.join("")) && !/T/.test(px.shields.recorded.join("")), "dashed: pale inside, not the solid fill");
     assert.ok(/[^.K]/.test(px.shields.enforced.join("")), "solid: filled");
     // v3: three flat-topped, pointed-bottom shields of one outline extent (the art's own check)
     const bounds = (rows) => { const pts = rows.flatMap((r, y) => [...r].map((c, x) => (c === "." ? null : [x, y])).filter(Boolean));
@@ -1388,7 +1389,8 @@ async function test(name, fn) {
     for (const k of ["enforced", "recorded", "none"]) assert.strictEqual(px.shields[k][11], ".....KK.....", `${k}: the same pointed bottom`);
     assert.strictEqual(px.shields.enforced[0], "KKKKKKKKKKKK", "flat top");
     assert.ok(px.shields.none.join("").split("").filter((c) => c !== ".").every((c) => c === "K") && px.shields.none[5][5] === "K", "empty shield: outline and a slash across it");
-    assert.ok(px.shields.recorded.every((r) => !/KK.*KK/.test(r.slice(1, 11))), "dashed: no run of outline pixels along the side");
+    assert.strictEqual(px.shields.recorded[0], "KK.KK.KK.KK.", "dashed: two on, one off along the top");
+    assert.ok(px.shields.recorded.slice(1, 6).some((r) => r[0] === "." && r[11] === "."), "dashed: the sides have gaps too (the outline is not solid)");
     // the icons the card play needs
     assert.ok(/Y/.test(px.icons.taskFolder.join("")) && /Y/.test(px.icons.importProject.join("")));
     assert.ok(px.icons.importProject[1] === ".....YY....." && px.icons.importProject[6] === "....KYYK....", "the import arrow points down into the tray");
