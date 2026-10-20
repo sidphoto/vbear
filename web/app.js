@@ -1581,6 +1581,7 @@ async function viewHome() {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { searchSoon.cancel(); location.hash = `#/skills?q=${encodeURIComponent(input.value.trim())}`; } });
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
+  noteTasks(tasksRes && tasksRes.tasks);
   const board = boardGroups(L, D.flows);
   boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
@@ -1682,7 +1683,7 @@ function boardKey(g, ctx) {
     const r = f.latest_review;
     const roles = f.roles || {};
     const live = flowLiveText(f.executor_live, liveError);
-    return [f.id, f.task_title, !!f.task_missing, ph.key, ph.label, ph.reason, f.attention === true, f.attention_reason || "",
+    return [f.id, f.task_title, flowTitleHint(f), !!f.task_missing, ph.key, ph.label, ph.reason, f.attention === true, f.attention_reason || "",
       a.mode || "", !!a.held, a.step_label || "", roleText(roles.executor), (roles.reviewers || []).map(roleText),
       live.label, live.reason, r ? [r.verdict, !!r.counts_as_pass, r.commit, r.why || ""] : null,
       f.phase ? flowBindingNote(f) : "", nextStepSummary(f), boardTeamKey(f)];
@@ -1722,6 +1723,50 @@ function questIcon(kind) {
 
 // A flow on the home board. One article with one link (the title, stretched over the card by CSS), so the card
 // is clickable as a whole and Tab stops on it once; nothing inside is a link or a control.
+// Two task cards or flows with the same title are told apart by the folder's name and the day the card was made
+// (P10 F6). Only what the task card itself stores is used: no folder or no date is simply left out, and a title that
+// nothing else shares gets no extra line. taskIndex is filled wherever the page has read the task cards.
+let taskIndex = new Map();
+function noteTasks(list) {
+  if (!Array.isArray(list)) return;
+  taskIndex = new Map(list.filter((t) => t && typeof t === "object" && typeof t.id === "string").map((t) => [t.id, t]));
+}
+function taskDayText(createdAt) {
+  if (typeof createdAt !== "number" || !Number.isFinite(createdAt) || createdAt <= 0) return "";
+  const d = new Date(createdAt * 1000);
+  if (Number.isNaN(d.getTime())) return "";
+  const two = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+// -> "資料夾 foo・建立於 2026-10-20", with either part left out when the task card does not have it; "" for no card.
+function taskHintText(t) {
+  if (!t || typeof t !== "object") return "";
+  const parts = [];
+  if (typeof t.workdir === "string" && t.workdir) parts.push(`資料夾 ${folderBaseName(t.workdir)}`);
+  const day = taskDayText(t.created_at);
+  if (day) parts.push(`建立於 ${day}`);
+  return parts.join("・");
+}
+// titles that appear more than once in a list of {title}
+function duplicateTitles(items) {
+  const seen = new Map();
+  for (const x of Array.isArray(items) ? items : []) {
+    const k = x && typeof x.title === "string" ? x.title : null;
+    if (k !== null && k !== "") seen.set(k, (seen.get(k) || 0) + 1);
+  }
+  return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
+}
+// the hint line of a flow, when another flow on the page has the same task title
+function flowTitleHint(f) {
+  if (!f || f.task_missing || typeof f.task_title !== "string") return "";
+  const all = (D.flows && Array.isArray(D.flows.flows) ? D.flows.flows : []).filter((x) => x && !x.task_missing)
+    .map((x) => ({ title: x.task_title }));
+  return duplicateTitles(all).has(f.task_title) ? taskHintText(taskIndex.get(f.task_id)) : "";
+}
+function hintLine(text) {
+  return text ? el("div", { class: "small muted card-hint", "data-hint": "same-title" }, text) : null;
+}
+
 function questCard(f, yourTurn) {
   const ph = f.phase || {};
   const a = f.automation || {};
@@ -1743,6 +1788,7 @@ function questCard(f, yourTurn) {
         el("div", { class: "card-title" },
           el("a", { class: "quest-link", href: `#/flows/${encodeURIComponent(f.id)}` },
             f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title)),
+        hintLine(flowTitleHint(f)),
         el("div", { class: "card-sub" }, f.attention_reason || ph.reason || "")),
       el("span", { class: `badge ${flowPhaseClass(ph.key)} quest-type`, title: ph.reason || "" },
         questIcon(yourTurn ? "turn" : "going"), ph.label || "階段不明")),
@@ -4984,6 +5030,7 @@ function flowCard(f) {
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" }, f.task_missing ? "（任務卡已刪除或無法讀取）" : f.task_title),
+        hintLine(flowTitleHint(f)),
         el("div", { class: "card-sub" }, f.attention_reason || f.phase.reason)),
       flowPhaseBadge(f.phase)),
     f.automation && f.automation.mode === "auto"
@@ -5052,11 +5099,13 @@ async function viewFlows() {
   const [data, tasksRes] = await Promise.all([loadFlows(), api.get("/api/tasks").catch(() => ({ tasks: [] }))]);
   const main = claim(token);
   if (token !== seq) return;
+  noteTasks(tasksRes.tasks);
   const used = new Set((data.flows || []).map((f) => f.task_id));
   const free = (tasksRes.tasks || []).filter((t) => !used.has(t.id));
+  const sameTitle = duplicateTitles(tasksRes.tasks || []);
   const families = data.families || [];
   const taskSel = el("select", { "aria-label": "任務卡" },
-    free.length ? free.map((t) => el("option", { value: t.id }, t.title)) : el("option", { value: "" }, "（沒有尚未建立流程的任務卡）"));
+    free.length ? free.map((t) => el("option", { value: t.id }, sameTitle.has(t.title) && taskHintText(t) ? `${t.title}（${taskHintText(t)}）` : t.title)) : el("option", { value: "" }, "（沒有尚未建立流程的任務卡）"));
   const planner = roleInputs("規劃", families, null);
   const executor = roleInputs("執行", families, null, { executor: true });
   const reviewerRows = [roleInputs("審查 1", families, null), roleInputs("審查 2", families, null)];
@@ -9540,6 +9589,7 @@ function openPlaceDialog(p, opts = {}) {
       on: { click: () => { st.taskId = x.id; st.slot = null; st.error = ""; draw(); } } },
       el("strong", null, x.title || "（沒有名稱）"),
       el("span", { class: "small muted fp-path" }, x.workdir ? `${folderBaseName(x.workdir)}・${x.workdir}` : "還沒有資料夾"),
+      st.same && st.same.has(x.title) && taskDayText(x.created_at) ? el("span", { class: "small muted", "data-hint": "same-title" }, `建立於 ${taskDayText(x.created_at)}`) : null,
       el("span", { class: "small" }, flowOf(x) ? "已有隊伍，放上去會直接儲存" : "還沒有隊伍，會先放進草稿"))));
     const slots = t ? slotsOf(t) : null;
     const slotRows = t ? TEAM_SLOTS.map((d) => {
@@ -9569,6 +9619,7 @@ function openPlaceDialog(p, opts = {}) {
   Promise.all([api.get("/api/tasks"), api.get("/api/flows").catch(() => ({ flows: [] }))]).then(([tr, fr]) => {
     st.tasks = ((tr && tr.tasks) || []).filter((x) => x && x.status !== "closed" && x.status !== "handed_off");
     st.flows = (fr && fr.flows) || [];
+    st.same = duplicateTitles(st.tasks);
     if (opts.taskId && st.tasks.some((x) => x.id === opts.taskId)) st.taskId = opts.taskId;
     draw();
   }).catch((e) => { st.tasks = []; st.loadError = "讀不到任務卡：" + (e && e.message || ""); draw(); });
@@ -10090,6 +10141,7 @@ function taskFrontCard(task, opts = {}) {
   const flow = Array.isArray(opts.flows) ? opts.flows.find((f) => f && f.task_id === task.id) || null : undefined;
   return el("article", { class: "tf-card card", "data-task": task.id },
     el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"), taskStatusBadge(task.status)),
+    opts.sameTitle && opts.sameTitle.has(task.title) ? hintLine(taskHintText(task)) : null,
     taskStatusExplain(task.status, task.pickup).map((t) => el("p", { class: "small muted", "data-tf": "status-explain" }, t)),
     taskFolderBlock(task, opts),
     flow ? el("div", { class: "tf-team", "data-tf": "team" }, teamAvatars(flow),
@@ -10110,7 +10162,7 @@ function taskCardsSection(tasksList, opts = {}) {
     sectionHead("任務卡", "一張任務卡就是一個資料夾：把你電腦上現有的專案導入，就能在這裡管理。", add),
     open.length
       ? el("div", null,
-          el("div", { class: "grid" }, open.slice(0, FOLDER_OPEN_TASK_MAX).map((t) => taskFrontCard(t, opts))),
+          el("div", { class: "grid" }, open.slice(0, FOLDER_OPEN_TASK_MAX).map((t) => taskFrontCard(t, { ...opts, sameTitle: duplicateTitles(open) }))),
           open.length > FOLDER_OPEN_TASK_MAX
             ? el("p", { class: "small muted tf-more" }, `還有 ${open.length - FOLDER_OPEN_TASK_MAX} 張未結案的任務卡，`,
                 el("a", { href: "#/workbench" }, "到終端工作台的「任務卡」分頁看全部"), "。") : null)
@@ -10436,6 +10488,11 @@ if (typeof module !== "undefined" && module.exports) {
     nextStepAction,
     nextStepActionNode,
     nextStepYourTurn,
+    D,
+    noteTasks,
+    taskHintText,
+    duplicateTitles,
+    flowTitleHint,
     cardPassLine,
     skillPickText,
     launchRangeText,

@@ -211,6 +211,69 @@ test("F5 the CLI word is gone from the places that spoke to a person (product na
   for (const w of ["消耗你的 CLI 帳號額度", "使用自己的本機 CLI：", "（CLI 回報）", 'el("dt", null, "CLI")', "改變 CLI 行為"]) assert(!APP_SRC.includes(w), w);
 });
 
+// ---- F6: same-name task cards and flows -------------------------------------------------------------------------
+const day = (iso) => Math.floor(new Date(iso + "T12:00:00").getTime() / 1000);
+test("F6 a title that two cards share gets the folder and the day; one that is alone gets nothing", () => {
+  const a = { id: "t-a", title: "更新安裝說明", workdir: "/home/u/site-a", created_at: day("2026-10-01") };
+  const b = { id: "t-b", title: "更新安裝說明", workdir: "/home/u/site-b", created_at: day("2026-10-09") };
+  const c = { id: "t-c", title: "只有一張", workdir: "/home/u/site-c", created_at: day("2026-10-09") };
+  assert.strictEqual(app.taskHintText(a), "資料夾 site-a・建立於 2026-10-01");
+  assert.strictEqual(app.taskHintText(b), "資料夾 site-b・建立於 2026-10-09");
+  assert.strictEqual(app.taskHintText({ id: "x", title: "t" }), "", "no folder and no date: nothing is made up");
+  assert.strictEqual(app.taskHintText({ id: "x", workdir: "/p/q", created_at: "yesterday" }), "資料夾 q");
+  assert.strictEqual(app.taskHintText(null), "");
+  assert.deepStrictEqual([...app.duplicateTitles([a, b, c])], ["更新安裝說明"]);
+  const cards = [a, b, c].map((t) => app.taskFrontCard(t, { flows: [], sameTitle: app.duplicateTitles([a, b, c]) }));
+  const hint = (card) => byData(card, "data-hint", "same-title")[0];
+  assert.strictEqual(text(hint(cards[0])), "資料夾 site-a・建立於 2026-10-01");
+  assert.strictEqual(text(hint(cards[1])), "資料夾 site-b・建立於 2026-10-09");
+  assert.strictEqual(hint(cards[2]), undefined, "a title nothing else shares has no extra line");
+});
+
+test("F6 two flows with one task title are told apart on the board and the list, and the repaint key follows", () => {
+  const a = { id: "t-a", title: "整理首頁文案", workdir: "/home/u/site-a", created_at: day("2026-10-01") };
+  const b = { id: "t-b", title: "整理首頁文案", workdir: "/home/u/site-b", created_at: day("2026-10-09") };
+  app.noteTasks([a, b]);
+  const f1 = Object.assign(flowView("planning"), { id: "flow-000000000001", task_id: "t-a", task_title: "整理首頁文案", roles: flowView("planning").roles, executor_live: null, latest_review: null });
+  const f2 = Object.assign(flowView("planning"), { id: "flow-000000000002", task_id: "t-b", task_title: "整理首頁文案", executor_live: null, latest_review: null });
+  const f3 = Object.assign(flowView("planning"), { id: "flow-000000000003", task_id: "t-c", task_title: "別的任務", executor_live: null, latest_review: null });
+  app.D.flows = { flows: [f1, f2, f3] };
+  assert.strictEqual(app.flowTitleHint(f1), "資料夾 site-a・建立於 2026-10-01");
+  assert.strictEqual(app.flowTitleHint(f2), "資料夾 site-b・建立於 2026-10-09");
+  assert.strictEqual(app.flowTitleHint(f3), "");
+  for (const make of [(f) => app.questCard(f, true), (f) => app.flowCard(f)]) {
+    assert.strictEqual(text(byData(make(f1), "data-hint", "same-title")[0]), "資料夾 site-a・建立於 2026-10-01");
+    assert.strictEqual(byData(make(f3), "data-hint", "same-title").length, 0);
+  }
+  const key = (g) => app.boardKey({ error: "", yourTurnFlows: g, yourTurnSessions: [], inProgress: [], moreInProgress: 0, runtimeAvailable: true, allEmpty: false }, { liveError: "", projects: [] });
+  const before = key([f1]);
+  app.noteTasks([{ ...a, workdir: "/home/u/renamed" }, b]);
+  assert.notStrictEqual(key([f1]), before, "the hint is part of what the board shows, so a change repaints it");
+  app.D.flows = null;
+});
+
+test("F6 the 放上任務卡 menu adds the day to a title another card shares", async () => {
+  closeDialogs();
+  const t1 = { id: "t-a", title: "更新安裝說明", workdir: "/home/u/site-a", status: "draft", created_at: day("2026-10-01") };
+  const t2 = { id: "t-b", title: "更新安裝說明", workdir: "/home/u/site-b", status: "draft", created_at: day("2026-10-09") };
+  const t3 = { id: "t-c", title: "唯一的", workdir: "/home/u/site-c", status: "draft", created_at: day("2026-10-09") };
+  setHandler((url) => {
+    const p = String(url).split("?")[0];
+    if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: [t1, t2, t3] });
+    if (p === "/api/flows") return jsonResponse({ ok: true, flows: [] });
+    return null;
+  });
+  app.openPlaceDialog({ id: "p-1", name: "CEO" }, {});
+  await settle();
+  const rows = dialog().findAll((n) => n.getAttribute && n.getAttribute("data-place-task"));
+  assert.strictEqual(rows.length, 3);
+  const hints = (row) => byData(row, "data-hint", "same-title").map(text);
+  assert.deepStrictEqual(hints(rows[0]), ["建立於 2026-10-01"]);
+  assert.deepStrictEqual(hints(rows[1]), ["建立於 2026-10-09"]);
+  assert.deepStrictEqual(hints(rows[2]), []);
+  closeDialogs();
+});
+
 // ---- run ----------------------------------------------------------------------------------------------------------
 (async () => {
   const timer = setTimeout(() => { console.error("TIMEOUT"); process.exit(2); }, 120000);
