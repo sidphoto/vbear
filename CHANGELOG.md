@@ -49,6 +49,9 @@ the card's flow waits for you, and three fixed lines; the focus starts on 「取
 - **Docs.** The README screenshots (both languages) were retaken for this state, mostly in the light theme and two in the
   dark theme, with new ones for the workbench task card, a handoff, a terminal just opened, the takeover reminder and the
   skills library.
+- **Card back pattern.** The pattern along the top of a role card's back is now a tidy row of small crosses on a clear
+  ground (「角色卡背面花紋改成整齊的小十字」), where it used to look like noise; it is drawn a little stronger so it still shows on
+  every camp's card in both themes.
 
 
 ## v0.7.0 — card play

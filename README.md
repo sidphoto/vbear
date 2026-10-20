@@ -9,7 +9,7 @@ ordinary terminal and is not covered by these protections.)
 
 [繁體中文說明](README.zh-TW.md) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/SECURITY-MODEL.md) · [Contributing](.github/CONTRIBUTING.md)
 
-> **Status: early (v0.7).** It is built and used daily by one person on macOS.
+> **Status: early (v0.8).** It is built and used daily by one person on macOS.
 > The interface is in Traditional Chinese (zh-TW).
 > Expect rough edges, and read [Good to know before you start](#good-to-know-before-you-start) before relying on it.
 

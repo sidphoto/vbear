@@ -8,7 +8,7 @@ VBear 是跑在你自己 Mac 上的主控台。你用它的角色卡啟動 Claud
 
 [English](README.md) · [架構](docs/ARCHITECTURE.md) · [安全模型](docs/SECURITY-MODEL.md) · [參與貢獻](.github/CONTRIBUTING.md) · [回報資安問題](SECURITY.md)
 
-> **目前狀態：早期版本（v0.7）**，只在 macOS 上由作者本人日常使用與測試。畫面是繁體中文。
+> **目前狀態：早期版本（v0.8）**，只在 macOS 上由作者本人日常使用與測試。畫面是繁體中文。
 > 開始使用前請先看下方「使用前要知道的事」。
 
 ## VBear 是什麼？

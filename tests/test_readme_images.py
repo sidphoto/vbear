@@ -85,15 +85,17 @@ class ReadmeImages(unittest.TestCase):
                 self.assertRegex(tag, r'alt="[^"]+"', tag)
                 self.assertRegex(tag, r'width="\d+"', tag)
 
-    def test_stale_sentences_are_gone_and_the_status_says_v07(self):
+    def test_stale_sentences_are_gone_and_the_status_says_v08(self):
         en = (ROOT / "README.md").read_text(encoding="utf-8")
         zh = (ROOT / "README.zh-TW.md").read_text(encoding="utf-8")
         for stale in ("predate the embodied upgrade", "taken before the three-line front", "(v0.3)"):
             self.assertNotIn(stale, en)
         for stale in ("尚未更新至人物化版本", "加上三行正面之前拍的", "（v0.3）"):
             self.assertNotIn(stale, zh)
-        self.assertIn("Status: early (v0.7)", en)
-        self.assertIn("目前狀態：早期版本（v0.7）", zh)
+        self.assertIn("Status: early (v0.8)", en)
+        self.assertIn("目前狀態：早期版本（v0.8）", zh)
+        self.assertNotIn("(v0.7)", en)
+        self.assertNotIn("（v0.7）", zh)
 
     def test_every_caption_says_demo_data(self):
         for name, start, end, mark in (("README.md", "### What it looks like", "## What you can do with it", "demo data"),
