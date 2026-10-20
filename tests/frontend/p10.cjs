@@ -103,9 +103,9 @@ test("F2 your merge and your push are sentences, not buttons", () => {
   const merge = app.nextStepActionNode(flowView("awaiting_merge"), { task });
   assert.strictEqual(merge.findAll((n) => n.tag === "button" || n.tag === "a").length, 0, "no fake button");
   assert(text(merge).includes("到你的專案資料夾") && text(merge).includes("合併") && text(merge).includes("不會替你合併"));
-  assert(!text(merge).includes("合併與 push 關卡"), "off the flow page there is no such panel to point to");
+  assert(!text(merge).includes("合併與上傳關卡"), "off the flow page there is no such panel to point to");
   const onPage = app.nextStepActionNode(flowView("awaiting_merge"), { task, onFlowPage: true });
-  assert(text(onPage).includes("下方「合併與 push 關卡」"));
+  assert(text(onPage).includes("下方「合併與上傳關卡」"));
   const push = app.nextStepActionNode(flowView("awaiting_push"), { task });
   assert.strictEqual(push.findAll((n) => n.tag === "button" || n.tag === "a").length, 0);
   assert(text(push).includes("到你的專案資料夾") && text(push).includes("不會替你上傳"));
@@ -179,6 +179,36 @@ test("F3 if the task list cannot be read the terminal page still has its back bu
     try { return await openTerminal(PANE, { live: roleLive(), tasks: [] }); } finally { global.fetch = orig; }
   })();
   assert.strictEqual(text(byData(main, "data-term", "back")[0]), "回角色卡池");
+});
+
+// ---- F5: plain words for the engineering ones ------------------------------------------------------------------
+test("F5 the main words are plain: the engineering names are gone from the page code, the technical values stay beside them", () => {
+  const gone = ["僅觀看 (Observe)", "操作控制中 (Control)", "Pane ID", "關閉 session", "已有執行中的 session", "還沒有執行者 session",
+    "無法核對 HEAD", "用來核對 HEAD", "BASE_IS_ANCESTOR：", "你自己 push", "合併與 push 關卡", "push（你來）", "HEAD 分離", "＋HEAD 核對",
+    "不再核對目前的 HEAD", "目前的 commit。VBear", "bytes，sha256", " bytes・sha256", "關閉這個執行者 session"];
+  for (const w of gone) assert(!APP_SRC.includes(w), `still in the page code: ${w}`);
+  // the values a person decides on are still there, named in words
+  for (const w of ["計畫雜湊（sha256）前 16 碼", "計畫長度", "位元組", "指紋（sha256）", "（BASE_IS_ANCESTOR）", "終端編號："]) assert(APP_SRC.includes(w), `lost: ${w}`);
+});
+
+test("F5 the next step after merging says 上傳, and the gates and the merge panel are named the same way", () => {
+  const ns = app.nextSteps(flowView("awaiting_push"));
+  assert.deepStrictEqual({ text: ns.after.text, who: ns.after.who }, { text: "你自己上傳到遠端", who: "你" });
+  assert.strictEqual(app.nextStepSummary(flowView("awaiting_push")), "下一步：你自己上傳到遠端（輪到 你）");
+  const grid = app.flowGateGrid(Object.assign(flowView("awaiting_push"), { attention: true, phase: { key: "awaiting_push", label: "等你上傳", reason: "" } }));
+  assert(text(grid).includes("上傳（你來）") && !/push/.test(text(grid)));
+});
+
+test("F5 the terminal's mode badge speaks plainly, in both the standalone page and the toolbar", async () => {
+  const main = await openTerminal(PANE, { live: roleLive(), tasks: [] });
+  const t = text(main);
+  assert(t.includes("只能觀看"), "a terminal that was only opened is 只能觀看");
+  assert(!/Observe|Control\)/.test(t), "no English mode names on the page");
+  assert(t.includes("終端編號：" + PANE), "the terminal's number is named in words");
+});
+
+test("F5 the CLI word is gone from the places that spoke to a person (product names such as Codex CLI stay)", () => {
+  for (const w of ["消耗你的 CLI 帳號額度", "使用自己的本機 CLI：", "（CLI 回報）", 'el("dt", null, "CLI")', "改變 CLI 行為"]) assert(!APP_SRC.includes(w), w);
 });
 
 // ---- run ----------------------------------------------------------------------------------------------------------

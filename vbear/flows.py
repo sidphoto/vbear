@@ -65,7 +65,7 @@ CLIENT_KINDS = tuple(k for k in EVENT_KINDS
                      if k not in ("roles_changed",) + CONSOLE_KINDS + AUTOMATION_KINDS)
 KIND_LABELS = {"plan_submitted": "提出計畫", "plan_approved": "計畫核准", "implementation_started": "開始實作",
                "executor_report": "執行者回報", "review_result": "審查結果", "merge_done": "已合併",
-               "push_done": "已 push", "note": "備註", "roles_changed": "角色變更",
+               "push_done": "已上傳到遠端（push）", "note": "備註", "roles_changed": "角色變更",
                "risk_acknowledged": "接受殘餘風險", "automation_mode": "自動執行模式",
                "auto_dispatch_intent": "自動派工（意圖）", "auto_dispatch_sent": "自動派工（已送出）",
                "auto_report": "執行者回報（自動核對）", "auto_review_intent": "自動審查（意圖）",
@@ -78,8 +78,8 @@ KIND_FIELDS = {"executor_report": frozenset({"commit"}),
 PHASES = {
     "planning": "計畫中", "awaiting_approval": "等核准", "implementing": "實作中",
     "in_review": "審查中", "needs_fix": "等修正", "awaiting_merge": "審查通過・等合併",
-    "review_stale": "審查結果已過期", "review_unverified": "審查通過・無法核對 HEAD",
-    "awaiting_push": "等 push", "done": "完成",
+    "review_stale": "審查結果已過期", "review_unverified": "審查通過・無法核對目前版本",
+    "awaiting_push": "等你上傳", "done": "完成",
 }
 ATTENTION_PHASES = frozenset({"awaiting_approval", "awaiting_merge", "awaiting_push", "review_unverified"})
 MANUAL_LABEL = "手動記錄（未驗證）"
@@ -674,7 +674,7 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
                     continue
                 _auto_reports.add(e["dispatch_id"])
             if closed and e["commit"] == current_commit:
-                warnings.append(f"合併後又回報同一個 commit {_short(e['commit'])}，不開始新一輪")
+                warnings.append(f"合併後又回報同一個版本 {_short(e['commit'])}，不開始新一輪")
                 continue
             origin = "auto" if e.get("_auto") else "manual"
             if (rounds and not closed and e["commit"] == current_commit and not rounds[-1]["reviews"]
@@ -687,7 +687,7 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
             current_commit, passed_commit, closed = e["commit"], None, False
             rounds.append({"round": len(rounds) + 1, "commit": e["commit"], "reported_at": e["at"], "reviews": []})
             _round_origins[len(rounds)] = {origin}
-            state, reason = "in_review", f"等待審查 {_short(e['commit'])}（第 {len(rounds)} 輪）"
+            state, reason = "in_review", f"等待審查版本 {_short(e['commit'])}（第 {len(rounds)} 輪）"
         elif kind == "review_result":
             if e.get("_auto"):
                 # an automatic result is bound to its own review: the job the runner started for that round,
@@ -697,7 +697,7 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
                     warnings.append(f"自動審查 {e['job_id']} 的結果重複，只算一次，其餘不納入")
                     continue
                 if job is None or job["round"] != e["round"] or _auto_intents.get(e["round"]) != e["commit"]:
-                    warnings.append("自動審查結果的輪次、審查或 commit 與時間軸不符，不納入")
+                    warnings.append("自動審查結果的輪次、審查或版本與時間軸不符，不納入")
                     continue
                 if job["report_round"] != len(rounds):
                     warnings.append("自動審查結果屬於先前的回報輪次，不納入目前這一輪")
@@ -732,17 +732,17 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
                 elif passed_commit is None:
                     state, reason = "in_review", why
             else:
-                row["why"] = "這筆審查的 commit 不是最新一次回報的 commit"
+                row["why"] = "這筆審查的版本不是最新一次回報的版本"
                 row["counts_as_pass"] = False
                 stray.append(row)
         elif kind == "merge_done":
             if state not in ("review_passed",):
-                warnings.append("合併時沒有對應最新 commit 的有效審查通過")
-            state, reason, closed = "awaiting_push", "已合併，等 push", True
+                warnings.append("合併時沒有對應最新版本的有效審查通過")
+            state, reason, closed = "awaiting_push", "已合併，等你上傳到遠端（push）", True
         elif kind == "push_done":
             if state != "awaiting_push":
-                warnings.append("push 之前沒有合併的紀錄")
-            state, reason = "done", "已 push"
+                warnings.append("上傳（push）之前沒有合併的紀錄")
+            state, reason = "done", "已上傳到遠端（push）"
     binding = None
     if state == "review_passed":
         workdir = flow["roles"]["executor"].get("workdir")
@@ -752,14 +752,14 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
         note = "（以任務工作目錄核對）" if via_task else ""
         extra = {"source": "task_workdir"} if via_task else {}
         if not workdir:
-            state, reason = "review_unverified", "沒有設定執行者的工作目錄，無法核對審查的 commit 是否仍是目前版本"
+            state, reason = "review_unverified", "沒有設定執行者的工作目錄，無法核對審查的版本是否仍是目前版本"
             binding = {"state": "unverified", "reviewed": passed_commit, "head": None, "detail": reason}
         else:
             head = heads(workdir) or {}
             commit = head.get("commit")
             if not (isinstance(commit, str) and COMMIT_RE.match(commit)):
                 why = head.get("error") or "原因不明"
-                state, reason = "review_unverified", f"讀不到執行者目前的 commit（{why}）{note}"
+                state, reason = "review_unverified", f"讀不到執行者目前的版本（{why}）{note}"
                 binding = {"state": "unverified", "reviewed": passed_commit, "head": None, "detail": reason, **extra}
             elif commit != passed_commit:
                 state = "review_stale"
@@ -767,9 +767,9 @@ def derive(flow: dict, heads: Callable[[str], dict], task_workdir: str | None = 
                           f"審查結果已過期，需要重新審查{note}")
                 binding = {"state": "stale", "reviewed": passed_commit, "head": commit, "detail": reason, **extra}
             else:
-                state, reason = "awaiting_merge", f"審查通過的 {_short(commit)} 就是執行者目前的 commit，等你合併{note}"
+                state, reason = "awaiting_merge", f"審查通過的 {_short(commit)} 就是執行者目前的版本，等你合併{note}"
                 binding = {"state": "current", "reviewed": passed_commit, "head": commit,
-                           "detail": "只比對 commit，看不到未提交的修改" + ("；以任務工作目錄核對" if via_task else ""),
+                           "detail": "只比對版本編號（commit），看不到未存成版本的修改" + ("；以任務工作目錄核對" if via_task else ""),
                            **extra}
     label = PHASES[state]
     if state == "in_review" and rounds:
@@ -832,15 +832,15 @@ def executor_live(session_id, live, now) -> dict:
     panes = [x for x in live.get("panes") or () if isinstance(x, dict)] if isinstance(live.get("panes"), list) else []
     match = next((x for x in sessions if x.get("terminal_id") == session_id), None)
     if runtime.get("available") is False:     # only an explicit False proves it did not answer
-        label, state, reason = "runtime 未連線", "unknown", "無法判斷 session 狀態"
+        label, state, reason = "runtime 未連線", "unknown", "無法判斷終端狀態"
     elif runtime.get("available") is not True:
-        label, state, reason = "runtime 狀態不明", "unknown", "即時資料沒有可用的 runtime 狀態，無法判斷 session 狀態"
+        label, state, reason = "runtime 狀態不明", "unknown", "即時資料沒有可用的 runtime 狀態，無法判斷終端狀態"
     elif match is not None:
         state = match.get("status") if match.get("status") in _LIVE_LABELS else "unknown"
         act = match.get("activity") if isinstance(match.get("activity"), dict) else {}
         label, reason = _LIVE_LABELS[state], act.get("reason") if isinstance(act.get("reason"), str) else ""
     elif any(p.get("pane_id") == session_id for p in panes):
-        label, state, reason = "狀態未知", "unknown", "不是 Agent session"
+        label, state, reason = "狀態未知", "unknown", "不是 Agent 終端"
     else:
         label, state, reason = "找不到這個終端", "missing", "這個終端不在終端機清單（可能已結束）"
     if fresh["state"] == "stale":

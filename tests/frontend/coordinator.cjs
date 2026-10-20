@@ -191,7 +191,7 @@ test("closing a session reads the stored-data panel again, so its delete button 
   const reads = () => FETCH_LOG.filter((x) => x.url.endsWith("/api/flows/storage")).length;
   const before = reads();
   assert(before >= 1, "read once when the page was drawn");
-  button(byS2(c.node, "executor"), "關閉 session").click();
+  button(byS2(c.node, "executor"), "關閉執行者").click();
   await settle();
   button(byS2(c.node, "executor"), "確定").click();
   await settle();
@@ -444,7 +444,7 @@ test("reports keep the executor's words and VBear's checks apart", async () => {
   assert(heads.includes("執行者自述") && heads.includes("VBear 讀檔核對"));
   assert(text(rp).includes("做完了"));
   assert(text(rp).includes("回報的 head 等於任務工作目錄目前的 commit"));
-  assert(text(rp).includes("較早的回報，不再核對目前的 HEAD"));
+  assert(text(rp).includes("較早的回報，不再核對目前的版本"));
 });
 
 test("a refused tool call is shown by count and name, as text, and does not change the turn's verdict", async () => {
@@ -469,7 +469,7 @@ test("an order that cannot be told is said, and no report is called the latest",
   const c = await mount({ executor: executor({ sessions_order_problem: "有兩個 session 的建立時間相同，無法判斷哪一個是最新的" }),
     reports: { ok: true, latest_dispatch_id: null, order_problem: "有兩個 session 的建立時間相同，無法判斷哪一個是最新的",
       reports: [reportEntry({ latest: false, usable: false, checks: null })] } });
-  assert(text(byS2(c.node, "executor")).includes("無法判斷 session 的先後"));
+  assert(text(byS2(c.node, "executor")).includes("無法判斷執行階段的先後"));
   assert(text(byS2(c.node, "reports")).includes("無法判定最新的回報"));
   assert(button(byS2(c.node, "reviews"), "請 Codex 審查最新回報").disabled);
 });
@@ -598,7 +598,7 @@ test("the local refs are labelled as what they are", async () => {
     { ref: "refs/remotes/origin/main", text: "本機 refs/remotes/origin/main 目前指向：未知（這個本機 ref 不存在）", commit: null, is_reviewed_commit: false, caveat: "這是本機記下的位置，不代表遠端現在的狀態" }] }) });
   const t = text(byS2(c.node, "gate"));
   assert(t.includes("本機 refs/heads/main 目前指向 " + COMMIT));
-  assert(t.includes("就是被審的 commit"));
+  assert(t.includes("就是被審的版本"));
   assert(t.includes("未知（這個本機 ref 不存在）"));
   assert(t.includes("不代表遠端現在的狀態"));
 });
@@ -812,7 +812,7 @@ test("the approval dialog shows the plan, every automatic-mode part, the fixed r
   const t = text(m);
   assert(posts().some((x) => x.url.endsWith("/automation-preview")), "its own preview route");
   assert(!posts().some((x) => x.url.endsWith("/acceptance-preview")));
-  assert(t.includes("核准計畫並開啟自動執行") && t.includes("任務：實作 add()") && t.includes("sha256 前 16 碼 dddddddddddddddd"));
+  assert(t.includes("核准計畫並開啟自動執行") && t.includes("任務：實作 add()") && t.includes("雜湊（sha256）前 16 碼 dddddddddddddddd"));
   for (const id of ["does", "limits", "accounts", "not_auto", "forwarding", "git_writable", "stop", "residual"]) {
     assert(t.includes(`內文 ${id}`), id);
   }
@@ -909,11 +909,11 @@ test("what an automatic event says is shown from its fixed fields", () => {
   const e = (o) => app.flowAutomationDetail(o).join(" | ");
   assert(e({ kind: "automation_mode", mode: "auto", approval_seq: 7 }).includes("auto-7"));
   assert(e({ kind: "automation_mode", mode: "manual", approval_seq: null }).includes("切回手動"));
-  assert(e({ kind: "auto_dispatch_intent", dispatch_id: "0b1c2d3e-0000", length: 12, text_sha256: "a".repeat(64) }).includes("12 bytes"));
+  assert(e({ kind: "auto_dispatch_intent", dispatch_id: "0b1c2d3e-0000", length: 12, text_sha256: "a".repeat(64) }).includes("12 位元組"));
   const report = e({ kind: "auto_report", dispatch_id: "0b1c2d3e-0000", commit: "b".repeat(40), status: "done",
     tests_result: "passed" });
   assert(report.includes("執行者自述：狀態 done、測試 passed"), "the status and the tests are the executor's words");
-  assert(report.includes("VBear 讀檔核對：head 等於工作目錄目前的 commit"), "the checks are VBear's own");
+  assert(report.includes("VBear 讀檔核對：回報的版本等於工作目錄目前的版本"), "the checks are VBear's own");
   assert(!report.includes("VBear 讀檔核對通過"), "no claim that the executor's fields were read by VBear");
   assert(e({ kind: "auto_review_result", round: 2, commit: "c".repeat(40), verdict: "NEEDS WORK" }).includes("第 2 輪結論：NEEDS WORK"));
   assert(e({ kind: "auto_review_aborted", round: 1, job_id: "r-" + "1".repeat(16) }).includes("該輪無效"));
@@ -930,7 +930,7 @@ test("storage shows size and counts, and deleting takes two steps and names the 
   const s = app.mountStorage({ afterDelete: (id) => { gone = id; } });
   await settle();
   const t = text(s.node);
-  assert(t.includes("1.0 MiB") && t.includes("4.00 GiB") && t.includes("1 個 session、2 次審查"), t);
+  assert(t.includes("1.0 MiB") && t.includes("4.00 GiB") && t.includes("1 個執行階段、2 次審查"), t);
   button(s.node, "刪除這個流程…").click();
   await settle();
   assert(!posts().some((x) => x.url.endsWith("/delete")), "one click is a question");
@@ -1222,7 +1222,7 @@ test("the limits are bars with the words; what cannot be counted is not drawn as
   assert.strictEqual(cost.getAttribute("max"), "20");
   assert.strictEqual(cost.getAttribute("value"), "7.62");
   const words = text(panel);
-  assert(words.includes("已記錄的花費 USD 0.12（CLI 回報）"), words);
+  assert(words.includes("已記錄的花費 USD 0.12（Claude Code 自己回報）"), words);
   assert(words.includes("未結算 USD 7.50（未完成的回合按額度上限計入用量）"));
   assert(words.includes("實際費用尚未知"));
   // the figures are shown to the cent whatever the float digits are (22.3 as 22.299999999999997)

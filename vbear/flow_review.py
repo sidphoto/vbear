@@ -182,7 +182,7 @@ class FlowReview:
         for m in self._review_manifests(flow):
             out.append(self._review_entry(flow, m))
         return {"flow_id": flow_id, "reviews": out,
-                "note": "審查者寫的內容一律以純文字顯示。BASE_IS_ANCESTOR 是審查者自行回報的，VBear 沒有獨立驗證。",
+                "note": "審查者寫的內容一律以純文字顯示。審查者回報的「基準版本是否包含在內」（BASE_IS_ANCESTOR）是它自己說的，VBear 沒有獨立驗證。",
                 "usage_note": USAGE_NOTE}
 
     def _review_entry(self, flow: dict, m: dict) -> dict:

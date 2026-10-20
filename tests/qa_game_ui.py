@@ -734,13 +734,13 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       「[object Object]」.
 
 == 4. 隊伍與任務 (流程 -> the flow)
-  [ ] 任務進度: seven gates 計畫/核准/實作/審查/合併（你來）/push（你來）/完成. The phase is 「等修正」
+  [ ] 任務進度: seven gates 計畫/核准/實作/審查/合併（你來）/上傳（你來）/完成. The phase is 「等修正」
       ({manual}), so 計畫/核准/實作 read 已過, 審查 reads 目前：等修正, the rest 未到.
       With VBEAR_QA_RUN=1 the flow reaches the merge gate: the phase becomes 審查通過・等合併 and the line
       「以任務工作目錄核對」 appears when the role names no directory.
   [ ] 隊伍: 規劃者 card says it is only a record and VBear does not launch it; 執行者 card has its live
       state (this flow's executor is not bound to a terminal session, so it reads 未綁定 session), the work
-      directory (the temporary one; 「（未設定，無法核對 HEAD）」 with VBEAR_QA_NO_MANUAL=1) and the session; the 審查者 card says it counts as independent of the
+      directory (the temporary one; 「（未設定，無法核對目前版本）」 with VBEAR_QA_NO_MANUAL=1) and the session; the 審查者 card says it counts as independent of the
       executor (different families). A field that is not there reads 未提供.
   [ ] 體力 (limits): each limit is a bar plus numbers; nothing unknown is drawn as an empty bar (it says
       無法核算); elapsed time has a bar.

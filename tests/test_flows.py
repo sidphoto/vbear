@@ -147,6 +147,22 @@ class DerivationTests(FlowCase):
         self.assertEqual(len(d["rounds"]), 2)
         self.assertEqual(d["warnings"], [])
 
+    def test_phase_words_are_plain(self):
+        """P10 F5: what the flow says about its own phase is not engineering shorthand (HEAD, push), and a short
+        commit number is called a version where it is only a name for one."""
+        for key, label in flows.PHASES.items():
+            self.assertFalse({"HEAD", "push", "session"} & set(label.replace("・", " ").split()), (key, label))
+        self.assertEqual(flows.PHASES["awaiting_push"], "等你上傳")
+        fid = self.flow(workdir=self.repo)
+        for kind, fields in (("plan_submitted", {}), ("plan_approved", {}), ("executor_report", {"commit": C1}),
+                             ("review_result", {"reviewer": 0, "verdict": "PASS", "commit": C1}), ("merge_done", {})):
+            self.add(fid, kind, **fields)
+        d = self.derive(fid)
+        self.assertEqual(d["phase"]["key"], "awaiting_push")
+        self.assertEqual(d["phase"]["reason"], "已合併，等你上傳到遠端（push）")
+        self.add(fid, "push_done")
+        self.assertEqual(self.derive(fid)["phase"]["reason"], "已上傳到遠端（push）")
+
     def test_attention_is_only_for_the_users_gates(self):
         fid = self.flow(workdir=self.repo)
         self.assertFalse(self.derive(fid)["attention"])

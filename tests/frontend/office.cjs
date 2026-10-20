@@ -1132,8 +1132,8 @@ test("persona lines and labels follow the corrected evidence table exactly", () 
     ["in_review", "manual", "依據：流程紀錄（手動記錄）", "任務在審查室。手動模式下，VBear 不會替你送審。"],
     ["awaiting_approval", "auto", "依據：流程紀錄", "計畫等候核准中；核准前執行者不會開工。"],
     ["awaiting_approval", "manual", "依據：流程紀錄", "計畫等候核准中；手動模式需由你自行在終端執行。"],
-    ["awaiting_merge", "manual", "依據：流程紀錄＋HEAD 核對", "審查通過，而且就是目前的 commit。VBear 不會替你 merge 或 push，輪到你了！"],
-    ["review_stale", "manual", "依據：流程紀錄＋HEAD 核對", "審查過的不是目前的 commit，需要重新審查。"],
+    ["awaiting_merge", "manual", "依據：流程紀錄＋目前版本核對", "審查通過，而且就是目前的版本。VBear 不會替你合併或上傳，輪到你了！"],
+    ["review_stale", "manual", "依據：流程紀錄＋目前版本核對", "審查過的不是目前的版本，需要重新審查。"],
   ];
   for (const [phaseKey, mode, sourceLabel, line] of cases) {
     assert.deepStrictEqual(app.personaSpeech({ key: "flow:test", phaseKey, phaseReason: "原因", automation: { mode } }),

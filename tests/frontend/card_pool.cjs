@@ -1092,20 +1092,20 @@ async function test(name, fn) {
   await test("P7 #13 cardPassLine: made from the armor items; never more hopeful than the pass; unreadable armor gives no line", () => {
     const line = (write, commit) => pure.cardPassLine({ state: "ok", data: { armor: armorOf(write, commit) } });
     const rows = [
-      [ARMOR_LEVEL.enforced, "出發後可以改檔案（限工作資料夾）；擋不住 commit；詳情看出發通行證"],
-      [ARMOR_LEVEL.partial, "出發後可以改檔案（範圍只部分擋住）；擋不住 commit；詳情看出發通行證"],
-      [ARMOR_LEVEL.unverified, "出發後可以改檔案（範圍限制還沒實測）；擋不住 commit；詳情看出發通行證"],
-      [ARMOR_LEVEL.unknown, "出發後可以改檔案（範圍不明）；擋不住 commit；詳情看出發通行證"],
-      [ARMOR_LEVEL.notGranted, "出發後可以改檔案（範圍不明）；擋不住 commit；詳情看出發通行證"],
-      [ARMOR_LEVEL.intent, "出發後可以改檔案（範圍沒有被擋住）；擋不住 commit；詳情看出發通行證"],
-      [ARMOR_LEVEL.unrestricted, "出發後可以改檔案（範圍沒有被擋住）；擋不住 commit；詳情看出發通行證"],
-      ["something new", "出發後可以改檔案（範圍不明）；擋不住 commit；詳情看出發通行證"],
+      [ARMOR_LEVEL.enforced, "出發後可以改檔案（限工作資料夾）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.partial, "出發後可以改檔案（範圍只部分擋住）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.unverified, "出發後可以改檔案（範圍限制還沒實測）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.unknown, "出發後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.notGranted, "出發後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.intent, "出發後可以改檔案（範圍沒有被擋住）；擋不住存下版本紀錄；詳情看出發通行證"],
+      [ARMOR_LEVEL.unrestricted, "出發後可以改檔案（範圍沒有被擋住）；擋不住存下版本紀錄；詳情看出發通行證"],
+      ["something new", "出發後可以改檔案（範圍不明）；擋不住存下版本紀錄；詳情看出發通行證"],
     ];
     for (const [level, want] of rows) assert.strictEqual(line(level), want, level);
     // only an enforced write may say the reach; commit is never said to be stopped, whatever its own level says
     for (const level of Object.values(ARMOR_LEVEL)) {
       const t = line(level, ARMOR_LEVEL.enforced);
-      assert.ok(t.includes("擋不住 commit") && !/安全|已限制/.test(t), level);
+      assert.ok(t.includes("擋不住存下版本紀錄") && !/安全|已限制/.test(t), level);
       assert.strictEqual(t.includes("限工作資料夾"), level === ARMOR_LEVEL.enforced, level);
     }
     // the same table the pass front uses decides the reach
@@ -1134,7 +1134,7 @@ async function test(name, fn) {
     assert.strictEqual(box().textContent, "");
     card.setLoadout(okState(loadoutBody(p, { armor: armorOf(ARMOR_LEVEL.enforced) })));
     assert.ok(!box().hasAttribute("hidden"));
-    assert.strictEqual(box().textContent, "出發後可以改檔案（限工作資料夾）；擋不住 commit；詳情看出發通行證");
+    assert.strictEqual(box().textContent, "出發後可以改檔案（限工作資料夾）；擋不住存下版本紀錄；詳情看出發通行證");
     assert.ok(byData(card.node, "data-face", "front")[0] && walk(byData(card.node, "data-face", "front")[0]).includes(box()), "on the front");
     card.setLoadout(okState(loadoutBody(p, { armor: armorOf(ARMOR_LEVEL.unverified) })));
     assert.ok(box().textContent.includes("範圍限制還沒實測") && !box().textContent.includes("限工作資料夾"));

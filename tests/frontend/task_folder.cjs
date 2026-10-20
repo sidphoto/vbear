@@ -444,7 +444,7 @@ async function test(name, fn) {
   await test("folderGitLine: branch and short HEAD, a detached HEAD in words, an unreadable HEAD with its reason, nothing without a repository", () => {
     const g = pure.folderGitLine;
     assert.strictEqual(g(gitInfo().git), "分支 main · HEAD 01234567");
-    assert.strictEqual(g({ ...gitInfo().git, branch: null }), "不在任何分支上（HEAD 分離） · HEAD 01234567");
+    assert.strictEqual(g({ ...gitInfo().git, branch: null }), "不在任何分支上（停在某一個版本） · HEAD 01234567");
     assert.strictEqual(g({ is_repo: true, commit: null, error: "分支還沒有任何 commit" }), "已找到 git 儲存庫，但讀不到目前的版本：分支還沒有任何 commit");
     assert.strictEqual(g({ is_repo: true, commit: null, error: null }), "已找到 git 儲存庫，但讀不到目前的版本：原因不明");
     assert.strictEqual(g({ is_repo: false }), null);
@@ -471,7 +471,7 @@ async function test(name, fn) {
     const node = pure.folderFacts(plainInfo());
     const text = textOf(node);
     assert.ok(text.includes("沒有版本紀錄"));
-    assert.ok(text.includes("這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。"));
+    assert.ok(text.includes("這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定版本編號，在這個資料夾裡不會算數，合併關卡也用不了。"));
     assert.ok(walk(node).some((n) => n.className && n.className.includes("badge") && n.textContent === "沒有版本紀錄"));
     assert.ok(!text.includes("分支"));
   });
@@ -726,7 +726,7 @@ async function test(name, fn) {
     await pickFolder(d, ctx, PLAIN);
     const text = textOf(d);
     assert.ok(text.includes(ctx.NO_GIT_NOTE));
-    assert.ok(text.includes("這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。"));
+    assert.ok(text.includes("這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定版本編號，在這個資料夾裡不會算數，合併關卡也用不了。"));
     assert.deepStrictEqual(labels(foot(d)), ["取消", "仍要建立", "換資料夾"]);
     act(d, "next").dispatch("click");
     assert.ok(findText(d, ctx.NO_GIT_BADGE), "step 2 keeps saying it");
@@ -1119,7 +1119,7 @@ async function test(name, fn) {
     const note = pure.NO_GIT_NOTE;
     assert.ok(!/[\uff09\u300d\u300f][\u3002\uff1b\u3001\uff0c]/.test(note), note);
     assert.ok(!note.includes("\uff09\u3002"));
-    for (const part of ["git 版本紀錄", "任務卡可以建立", "也能從這裡出發", "審查結果要綁定 commit", "不會算數", "合併關卡也用不了"]) assert.ok(note.includes(part), part);
+    for (const part of ["git 版本紀錄", "任務卡可以建立", "也能從這裡出發", "審查結果要綁定版本編號", "不會算數", "合併關卡也用不了"]) assert.ok(note.includes(part), part);
     assert.ok(!note.includes("沒有版本紀錄（"), "the badge text stays the badge, the note is a sentence of its own");
   });
 

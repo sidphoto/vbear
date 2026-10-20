@@ -494,7 +494,7 @@ async function test(name, fn) {
     const push = pure.nextSteps(fv("awaiting_push"));
     assert.strictEqual(push.current, -1);
     assert.ok(push.steps.every((s) => s.state === "past"));
-    assert.deepStrictEqual(plain(push.after), { text: "你自己 push", who: "你" });
+    assert.deepStrictEqual(plain(push.after), { text: "你自己上傳到遠端", who: "你" });
     assert.strictEqual(push.turn, "你");
     const done = pure.nextSteps(fv("done"));
     assert.ok(done.steps.every((s) => s.state === "past") && done.after === null && done.turn === null);
@@ -532,7 +532,7 @@ async function test(name, fn) {
   await test("nextStepSummary: one honest line for the card front", () => {
     assert.strictEqual(pure.nextStepSummary(fv("implementing")), "下一步：執行者實作（輪到 工匠）");
     assert.strictEqual(pure.nextStepSummary(fv("awaiting_merge")), "下一步：你自己合併（輪到 你）");
-    assert.strictEqual(pure.nextStepSummary(fv("awaiting_push")), "下一步：你自己 push（輪到 你）");
+    assert.strictEqual(pure.nextStepSummary(fv("awaiting_push")), "下一步：你自己上傳到遠端（輪到 你）");
     assert.strictEqual(pure.nextStepSummary(fv("done")), "這個流程的步驟都走完了");
     assert.strictEqual(pure.nextStepSummary(fv("???")), "", "an unknown phase is not turned into a step");
   });
@@ -552,7 +552,7 @@ async function test(name, fn) {
     const unknown = pure.nextStepsList(fv("zzz"));
     assert.ok(findText(unknown, "無法對應到步驟") && byData(unknown, "data-state", "now").length === 0);
     const push = pure.nextStepsList(fv("awaiting_push"));
-    assert.ok(findText(byData(push, "data-ns", "after")[0], "你自己 push"));
+    assert.ok(findText(byData(push, "data-ns", "after")[0], "你自己上傳到遠端"));
   });
 
   await test("info tips: the fixed sentences exist for 風險接受, 體力 and 串流執行者, and claim nothing VBear does not do", () => {
@@ -883,7 +883,7 @@ async function test(name, fn) {
     const none = board(ctx, { gitState: "nogit" });
     const note = byData(none.node, "data-team", "nogit")[0];
     assert.ok(note && findText(note, ctx.NO_GIT_NOTE) && findText(note, "沒有版本紀錄"));
-    assert.ok(findText(note, "隊伍的審查結果要綁定 commit"));
+    assert.ok(findText(note, "隊伍的審查結果要綁定版本編號"));
     main.replaceChildren();
     const yes = board(ctx, { gitState: "git" });
     assert.ok(!byData(yes.node, "data-team", "nogit")[0]);

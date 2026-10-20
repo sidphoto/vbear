@@ -1014,7 +1014,7 @@ function translationPanel(id, original) {
           "aria-busy": String(!!running), on: { click: () => { if (!running && !T.error) startTranslation(id); } } },
           running ? "翻譯中…" : e ? "重新翻譯" : "翻成中文"),
         running ? el("button", { class: "btn small", type: "button", "data-translation-action": "cancel", on: { click: cancelTranslations } }, "取消翻譯工作") : null,
-        el("span", { class: "small muted" }, `說明文字會送到 ${T.engine}，消耗你的 CLI 帳號額度。`)),
+        el("span", { class: "small muted" }, `說明文字會送到 ${T.engine}，消耗你自己登入的帳號額度。`)),
       T.provider === "version_required" ? el("div", { class: "small muted" },
         T.engine === "claude" ? "翻譯前會核對版本；若未通過：這個 Claude Code 版本的翻譯安全邊界還沒驗證。" : "Codex 翻譯安全邊界尚未驗證，目前會拒絕啟動。",
         T.engine === "claude" ? el("button", { class: "btn small", type: "button", on: { click: verifyTranslationBoundary } }, "驗證") : null) : null,
@@ -1079,7 +1079,7 @@ function translationSettings(conf, saveConf) {
     auto.checked = !!conf.translation_auto;
   } } });
   return el("section", { class: "panel pad translation-settings" }, el("h2", null, "技能中文化"),
-    el("label", null, "使用自己的本機 CLI：", engine),
+    el("label", null, "使用自己電腦上已登入的工具：", engine),
     el("label", { class: "switch" }, auto, el("span", null, "原文變更時自動重翻（預設關閉）")),
     el("p", { class: "small muted" }, "第一次開啟需確認資料送出、額度與費用。更換引擎會關閉自動重翻，請重新同意。關閉時也會停止目前工作。"),
     el("p", null, `孤兒翻譯：${T.error ? "未知" : T.counts.orphan || 0}`),
@@ -2173,11 +2173,11 @@ function personaSpeech(target) {
     const source = "依據：流程紀錄";
     const lines = {
       in_review: auto ? "任務位於審查階段；自動模式已設定，不代表審查程序正在執行。" : "任務在審查室。手動模式下，VBear 不會替你送審。",
-      awaiting_merge: "審查通過，而且就是目前的 commit。VBear 不會替你 merge 或 push，輪到你了！",
-      review_stale: "審查過的不是目前的 commit，需要重新審查。",
+      awaiting_merge: "審查通過，而且就是目前的版本。VBear 不會替你合併或上傳，輪到你了！",
+      review_stale: "審查過的不是目前的版本，需要重新審查。",
       awaiting_approval: auto ? "計畫等候核准中；核准前執行者不會開工。" : "計畫等候核准中；手動模式需由你自行在終端執行。",
     };
-    const label = ["awaiting_merge", "review_stale"].includes(t.phaseKey) ? source + "＋HEAD 核對"
+    const label = ["awaiting_merge", "review_stale"].includes(t.phaseKey) ? source + "＋目前版本核對"
       : t.phaseKey === "in_review" ? source + (auto ? "（自動模式）" : "（手動記錄）") : source;
     return result(label, lines[t.phaseKey] || `任務目前在${t.stationLabel}：${t.phaseLabel}`, t.phaseReason || "");
   }
@@ -4278,7 +4278,7 @@ function cardPassLine(loadoutState) {
   const write = level("Write");
   const commit = level("Commit");
   if (write === null || commit === null) return null;
-  return `出發後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住 commit；詳情看出發通行證`;
+  return `出發後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住存下版本紀錄；詳情看出發通行證`;
 }
 
 const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
@@ -4830,7 +4830,7 @@ async function viewSettings() {
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:8px" }, "資料流向"),
           el("ul", { class: "small", style: "margin:0;padding-left:18px;color:var(--ink-2)" },
-            el("li", null, "所有掃描都在這台電腦上完成；技能翻譯若啟用，會經你的本機 CLI 將作者說明送到模型服務。"),
+            el("li", null, "所有掃描都在這台電腦上完成；技能翻譯若啟用，會經你電腦上已登入的工具，將作者說明送到模型服務。"),
             el("li", null, "網頁伺服器只接受本機（127.0.0.1）連線。"),
             el("li", null, "技能內的腳本不會被執行；原始內容以純文字顯示。"),
             el("li", null, "主控台只寫入自己的狀態目錄", advanced ? [": ", el("span", { class: "mono" }, home(c.state_dir))] : "", "。"),
@@ -4906,7 +4906,7 @@ function flowPhaseBadge(phase) {
 }
 // 任務進度 (design game-ui 4.5): the phase VBear already derives, drawn as a row of gates. The words are the
 // phase's own; a gate is 已過 / 目前 / 未到 by position only (it does not claim an approval was recorded).
-const FLOW_GATES = ["計畫", "核准", "實作", "審查", "合併（你來）", "push（你來）", "完成"];
+const FLOW_GATES = ["計畫", "核准", "實作", "審查", "合併（你來）", "上傳（你來）", "完成"];
 const FLOW_PHASE_GATE = { planning: 0, awaiting_approval: 1, implementing: 2, in_review: 3, needs_fix: 3,
   review_stale: 3, review_unverified: 4, awaiting_merge: 4, awaiting_push: 5, done: 6 };
 function flowGateGrid(f) {
@@ -4950,8 +4950,8 @@ function flowTeamSection(f, liveText) {
     row("狀態", "沒有狀態：只是記錄，不是 VBear 啟動的角色"));
   const executor = card("執行者", ex, [
     ...row("狀態", `${liveText.label}${liveText.reason ? "：" + liveText.reason : ""}`),
-    ...row("工作目錄", ex.workdir || "（未設定，無法核對 HEAD）", "mono flow-path"),
-    ...(ex.session_id ? row("session", ex.session_id, "mono") : [])]);
+    ...row("工作目錄", ex.workdir || "（未設定，無法核對目前版本）", "mono flow-path"),
+    ...(ex.session_id ? row("執行階段編號", ex.session_id, "mono") : [])]);
   const reviewers = (f.roles.reviewers || []).map((r, i) => {
     const ind = r.independent_of_executor;
     return card(`審查者 ${i + 1}`, r, [
@@ -5031,7 +5031,7 @@ function roleInputs(prefix, families, role, opts = {}) {
       sessions.map((p) => el("option", { value: p.pane_id, selected: role && role.session_id === p.pane_id ? "selected" : null },
         `${p.pane_id}・${p.title || p.agent || "terminal"}`)));
     extra.workdir = el("input", { type: "text", class: "input mono", "aria-label": "執行者的工作目錄",
-      value: role && role.workdir ? role.workdir : "", placeholder: "工作目錄（絕對路徑，用來核對 HEAD）" });
+      value: role && role.workdir ? role.workdir : "", placeholder: "工作目錄（絕對路徑，用來核對目前版本）" });
     fields.push(extra.session, extra.workdir);
   }
   const read = () => {
@@ -5115,15 +5115,15 @@ function flowAutomationDetail(e) {
   const id = (v) => (typeof v === "string" ? v.slice(0, 8) : "");
   switch (e.kind) {
     case "automation_mode": return [e.mode === "auto" ? `切到自動執行（核准 auto-${e.approval_seq}）` : "切回手動"];
-    case "auto_dispatch_intent": return [`派工 ${id(e.dispatch_id)}・${e.length} bytes・sha256 ${String(e.text_sha256).slice(0, 12)}…`];
+    case "auto_dispatch_intent": return [`派工 ${id(e.dispatch_id)}・${e.length} 位元組・指紋（sha256）${String(e.text_sha256).slice(0, 12)}…`];
     case "auto_dispatch_sent": return [`派工 ${id(e.dispatch_id)} 已送出`];
     case "auto_report": return [
       `派工 ${id(e.dispatch_id)}：`,
-      `執行者自述：狀態 ${e.status}、測試 ${e.tests_result}、head ${shortCommit(e.commit)}`,
-      "VBear 讀檔核對：head 等於工作目錄目前的 commit、commit 物件存在（沒有全部通過就不會有這一筆）"];
-    case "auto_review_intent": return [`第 ${e.round} 輪審查（commit ${shortCommit(e.commit)}）`];
+      `執行者自述：狀態 ${e.status}、測試 ${e.tests_result}、版本 ${shortCommit(e.commit)}`,
+      "VBear 讀檔核對：回報的版本等於工作目錄目前的版本、這個版本確實存在（沒有全部通過就不會有這一筆）"];
+    case "auto_review_intent": return [`第 ${e.round} 輪審查（版本 ${shortCommit(e.commit)}）`];
     case "auto_review_started": return [`第 ${e.round} 輪審查已啟動（${e.job_id}）`];
-    case "auto_review_result": return [`第 ${e.round} 輪結論：${e.verdict}（commit ${shortCommit(e.commit)}）`];
+    case "auto_review_result": return [`第 ${e.round} 輪結論：${e.verdict}（版本 ${shortCommit(e.commit)}）`];
     case "auto_review_aborted": return [`第 ${e.round} 輪被停止中止，該輪無效（${e.job_id}）`];
     case "auto_stopped": return [`原因代碼 ${e.reason_code}`, e.detail];
     default: return [];
@@ -5159,11 +5159,11 @@ async function viewFlowDetail(flowId) {
   const flowTask = ((tasksRes && tasksRes.tasks) || []).find((t) => t.id === f.task_id)
     || { id: f.task_id, title: f.task_title || f.task_id, workdir: null };
   const kindSel = el("select", { "aria-label": "事件種類" }, (meta.kinds || []).map((k) => el("option", { value: k.key }, k.label)));
-  const commit = el("input", { type: "text", class: "input mono", "aria-label": "commit", placeholder: "完整的 40 或 64 碼 commit", maxlength: "64" });
+  const commit = el("input", { type: "text", class: "input mono", "aria-label": "版本編號（commit）", placeholder: "完整的 40 或 64 碼版本編號（commit）", maxlength: "64" });
   const verdict = el("select", { "aria-label": "審查結論" }, (meta.verdicts || []).map((v) => el("option", { value: v }, v)));
   const reviewer = el("select", { "aria-label": "審查者" }, f.roles.reviewers.map((r, i) => el("option", { value: String(i) }, roleText(r))));
   const note = el("textarea", { class: "input", "aria-label": "備註", maxlength: "2000", rows: "3", placeholder: "備註（選填）" });
-  const commitRow = el("label", { class: "small" }, "commit ", commit);
+  const commitRow = el("label", { class: "small" }, "版本編號（commit） ", commit);
   const reviewRow = el("div", { class: "row" }, el("label", { class: "small" }, "審查者 ", reviewer), el("label", { class: "small" }, "結論 ", verdict));
   const syncFields = () => {
     const k = kindSel.value;
@@ -5192,7 +5192,7 @@ async function viewFlowDetail(flowId) {
   flowCoordinator = coordinator;
   const rounds = f.rounds || [];
   const roundTable = rounds.length ? el("div", { class: "table-scroll" }, el("table", { class: "flow-rounds" },
-    el("thead", null, el("tr", null, ["輪次", "回報的 commit", "審查者", "家族", "結論", "算通過", "說明"].map((h) => el("th", null, h)))),
+    el("thead", null, el("tr", null, ["輪次", "回報的版本", "審查者", "家族", "結論", "算通過", "說明"].map((h) => el("th", null, h)))),
     el("tbody", null, rounds.flatMap((rnd) => (rnd.reviews.length ? rnd.reviews : [null]).map((rv, i) =>
       el("tr", null,
         el("td", null, i === 0 ? `第 ${rnd.round} 輪` : ""),
@@ -5201,7 +5201,7 @@ async function viewFlowDetail(flowId) {
         el("td", null, rv ? (D.flows.families || []).find((x) => x.key === rv.family)?.label || rv.family : ""),
         el("td", null, rv ? badge(rv.verdict, VERDICT_CLASS[rv.verdict] || "b-mute") : ""),
         el("td", null, rv ? (rv.counts_as_pass ? "是" : "否") : ""),
-        el("td", { class: "small" }, rv ? rv.why : ""))))))) : emptyState("還沒有執行者回報", "執行者回報 commit 後，審查結果會依輪次列在這裡。");
+        el("td", { class: "small" }, rv ? rv.why : ""))))))) : emptyState("還沒有執行者回報", "執行者回報版本後，審查結果會依輪次列在這裡。");
   const timeline = el("ol", { class: "flow-timeline" }, (f.events || []).map((e) => el("li", null,
     el("div", { class: "row" }, el("b", null, e.label),
       badge(e.source_label, e.source === "manual" ? "b-mute" : (e.source === "automation" ? "b-info" : "b-ok"),
@@ -5227,7 +5227,7 @@ async function viewFlowDetail(flowId) {
     flowTeamSection(f, flowLiveText(f.executor_live, liveLoadError())),
     coordinator.node,
     el("section", { class: "section" }, sectionHead("審查輪次", `${rounds.length} 輪`), roundTable,
-      (f.stray_reviews || []).length ? notice("info", `另有 ${f.stray_reviews.length} 筆審查的 commit 不是最新一次回報的 commit，未列入輪次。`) : null),
+      (f.stray_reviews || []).length ? notice("info", `另有 ${f.stray_reviews.length} 筆審查的版本不是最新一次回報的版本，未列入輪次。`) : null),
     el("section", { class: "section" }, sectionHead("時間軸", `${(f.events || []).length} 筆`),
       (f.events || []).length ? timeline : emptyState("還沒有事件", null)),
     el("section", { class: "section", "data-flow": "record" }, sectionHead("手動記錄事件", null), form));
@@ -5337,7 +5337,7 @@ function s2CostMeter(acct) {
   const rec = num(acct.recorded_usd), uns = num(acct.unsettled_usd);
   li.append(
     el("div", { class: "small s2-cost-split" },
-      rec === null ? "已記錄的花費：無法核算" : `已記錄的花費 USD ${cents(rec)}（CLI 回報）`,
+      rec === null ? "已記錄的花費：無法核算" : `已記錄的花費 USD ${cents(rec)}（Claude Code 自己回報）`,
       uns === null ? "；未結算：無法核算"
         : (Math.round(uns * 100) > 0 ? `；未結算 USD ${cents(uns)}（未完成的回合按額度上限計入用量）` : "；沒有未結算的回合")),
     el("div", { class: "small muted" }, "實際費用尚未知；這裡的數字是用量，不是帳單。"));
@@ -5437,7 +5437,7 @@ function openAcceptanceDialog(flowId, onDone, opts = {}) {
       el("p", null, az.intro),
       el("h3", null, "這份計畫（核准的就是這一份）"),
       s2Pre(res.plan_text),
-      el("p", { class: "small muted" }, `計畫文字 ${res.plan_bytes} bytes，sha256 前 16 碼 ${String(res.plan_sha256).slice(0, 16)}；` +
+      el("p", { class: "small muted" }, `計畫長度 ${res.plan_bytes} 位元組；計畫雜湊（sha256）前 16 碼 ${String(res.plan_sha256).slice(0, 16)}；` +
         "核准之後任務卡再改，不會影響已核准的這一份。"),
       az.sections.map((s, i) => el("section", { class: "s2-risk", "data-s2-auto": s.id },
         el("h3", null, `${String.fromCharCode(65 + i)}. ${s.title}`), el("p", { class: "s2-risk-body" }, s.body))),
@@ -5580,13 +5580,13 @@ function s2AutomationPanel(flowId, au, refresh) {
       badge(held ? "自動（已停止）" : "自動執行中", held ? "b-warn" : "b-info"), stop, disable)),
     a.problem ? notice("bad", "自動執行的模式紀錄不可信：" + a.problem) : null,
     held ? notice("warn", `已停止：${step.hold_reason || "原因不明"}。停止後不會自動恢復；要繼續請在下面的執行者面板按「繼續」，` +
-      "或先切回手動。執行者正在進行的一輪可能還會繼續執行並寫入工作目錄，直到它自己結束，或你關閉 session。") : null,
+      "或先切回手動。執行者正在進行的一輪可能還會繼續執行並寫入工作目錄，直到它自己結束，或你關閉這個執行階段。") : null,
     step ? el("div", null, el("p", null, el("b", null, "目前步驟："), step.label),
       el("p", { class: "small muted" }, "接著：" + step.after)) : null,
-    step && step.awaiting_merge ? notice("info", "審查通過，各項核對成立：到下面「合併與 push 關卡」取得指令，由你自己執行。") : null,
+    step && step.awaiting_merge ? notice("info", "審查通過，各項核對成立：到下面「合併與上傳關卡」取得指令，由你自己執行。") : null,
     ap ? el("dl", { class: "kv small" },
       el("dt", null, "核准於"), el("dd", null, fmtTime(ap.at)),
-      el("dt", null, "核准的計畫"), el("dd", { class: "mono" }, `${ap.plan_bytes} bytes・sha256 ${String(ap.plan_sha256).slice(0, 16)}…`),
+      el("dt", null, "核准的計畫"), el("dd", { class: "mono" }, `${ap.plan_bytes} 位元組・雜湊（sha256）${String(ap.plan_sha256).slice(0, 16)}…`),
       el("dt", null, "自動執行文字版本"), el("dd", { class: "mono" }, ap.auto_text_version),
       el("dt", null, "核准 id"), el("dd", { class: "mono" }, a.approval_id)) : null,
     el("p", { class: "small muted" }, "用量與體力（停損設定）見下面的「串流執行者」；固定規則：連續失敗 1 次就停止。"));
@@ -5617,7 +5617,7 @@ function s2ExecutorPanel(flowId, ex, refresh) {
     if (ex.stream_support && ex.stream_support.state === "unverified") why.push("這個 Claude Code 版本的串流模式還沒有通過驗證");
     if (ex.stream_support && ex.stream_support.state === "unknown") why.push("讀不到 Claude Code 的版本");
     if (ex.hold && ex.hold.held) why.push("流程已停止");
-    if (live) why.push("已有執行中的 session");
+    if (live) why.push("已有執行中的執行者");
     if (ex.workdir_problem) why.push(ex.workdir_problem);
     if (ex.unresolved_failure) why.push("有尚未「繼續」的失敗");
     if (!ex.accounting || !ex.accounting.ok) why.push("用量無法核算");
@@ -5639,7 +5639,7 @@ function s2ExecutorPanel(flowId, ex, refresh) {
   const sessionRows = sessions.map((s) => {
     const st = s.status || {};
     const closeBtn = (s.manifest_state === "running" || s.manifest_state === "launching") && st.live
-      ? s2Confirm("關閉 session", "確定要關閉這個執行者 session？", async () => {
+      ? s2Confirm("關閉執行者", "確定要關閉這個執行者？", async () => {
         try { await api.post(s2Url(flowId, "executor/close"), { launch_id: s.launch_id }); toast("已要求關閉"); }
         catch (e) { toast("無法關閉：" + e.message); }
         refresh();
@@ -5666,7 +5666,7 @@ function s2ExecutorPanel(flowId, ex, refresh) {
         `回應 ${st.responses ?? "?"}　費用 ${st.total_cost_usd ?? "?"} USD`),
       s.status_problem ? notice("warn", s.status_problem) : null,
       unsent ? el("div", { class: "s2-unsent" },
-        notice("warn", `有一則派工（${String(unsent).slice(0, 8)}…）已準備好但還沒送出；在它送出或這個 session 關閉之前，不能再準備新的派工，也不能開啟自動執行。`),
+        notice("warn", `有一則派工（${String(unsent).slice(0, 8)}…）已準備好但還沒送出；在它送出或這個執行者關閉之前，不能再準備新的派工，也不能開啟自動執行。`),
         el("div", { class: "row" }, sendBtn)) : null,
       st.journal_problem ? notice("bad", "日誌有問題：" + st.journal_problem) : null,
       s.worst_case ? notice("warn", s.worst_case.text) : null);
@@ -5676,8 +5676,8 @@ function s2ExecutorPanel(flowId, ex, refresh) {
     s2StreamSupport(ex.stream_support),
     why.length ? el("p", { class: "small muted" }, "現在不能啟動：" + why.join("；") + "。") : null,
     held ? notice("warn", `流程已停止：${ex.hold.reason || "（沒有說明）"}${ex.hold.at ? `（${fmtTime(ex.hold.at)}）` : ""}`) : null,
-    ex.sessions_problem ? notice("bad", "無法列出 session：" + ex.sessions_problem) : null,
-    ex.sessions_order_problem ? notice("warn", "無法判斷 session 的先後：" + ex.sessions_order_problem + "。在這之前不會判定哪一份回報是最新的。") : null,
+    ex.sessions_problem ? notice("bad", "無法列出執行階段：" + ex.sessions_problem) : null,
+    ex.sessions_order_problem ? notice("warn", "無法判斷執行階段的先後：" + ex.sessions_order_problem + "。在這之前不會判定哪一份回報是最新的。") : null,
     acct && acct.ok ? el("ul", { class: "small s2-meters" },
       s2Meter("派工", acct.dispatches, acct.limits.max_dispatches, " 則"),
       s2Meter("執行者模型回應", acct.responses, acct.limits.executor_total_max_responses),
@@ -5696,8 +5696,8 @@ function s2ExecutorPanel(flowId, ex, refresh) {
       : (acct ? notice("bad", `用量無法核算（${acct.code}）：${acct.message}`) : null),
     (ex.failures || []).length ? el("div", null, el("h3", null, "失敗"),
       el("ul", { class: "small" }, ex.failures.map((f) => el("li", null,
-        badge(f.released ? "已繼續" : "未繼續", f.released ? "b-mute" : "b-warn"), ` ${f.kind === "review" ? "審查 " + f.job_id : "session " + f.launch_id}：${f.why}`)))) : null,
-    sessions.length ? el("ul", { class: "s2-sessions" }, sessionRows) : emptyState("還沒有執行者 session", null));
+        badge(f.released ? "已繼續" : "未繼續", f.released ? "b-mute" : "b-warn"), ` ${f.kind === "review" ? "審查 " + f.job_id : "執行階段 " + f.launch_id}：${f.why}`)))) : null,
+    sessions.length ? el("ul", { class: "s2-sessions" }, sessionRows) : emptyState("還沒有執行者的執行階段", null));
 }
 
 function s2DispatchComposer(flowId, getExecutor, refresh) {
@@ -5730,7 +5730,7 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
   let generation = 0;                           // bumped when the mode switches: an answer from before is dropped
   async function doPreview() {
     const launch = target();
-    if (!launch) { toast("目前沒有執行中的執行者 session"); return; }
+    if (!launch) { toast("目前沒有執行中的執行者"); return; }
     previewBtn.disabled = true;
     const mine = generation;
     try {
@@ -5754,7 +5754,7 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
     } } }, "核准並送出");
     const drop = el("button", { class: "btn small", type: "button", on: { click: () => setKids(out) } }, "放棄這份預覽");
     setKids(out,
-      el("p", { class: "small" }, `將送出的內容（${pre.bytes} bytes，sha256 ${pre.text_sha256.slice(0, 12)}…）：`),
+      el("p", { class: "small" }, `將送出的內容（${pre.bytes} 位元組，雜湊（sha256）${pre.text_sha256.slice(0, 12)}…）：`),
       pre.rewritten ? notice("info", "有不可見或控制字元，已改寫成可見的 \\uXXXX（設計 3.3），下面就是實際送出的內容。") : null,
       s2Pre(pre.text),
       pre.ready ? null : notice("warn", "現在還不能送出：" + pre.not_ready_reason),
@@ -5795,7 +5795,7 @@ function s2ReportsPanel(rp) {
               badge(c.ok === true ? "通過" : (c.ok === false ? "不符" : "讀不到"),
                 c.ok === true ? "b-ok" : (c.ok === false ? "b-bad" : "b-warn")), ` ${c.label}`,
               c.detail ? el("span", { class: "small muted" }, `（${c.detail}）`) : null)))
-              : el("p", { class: "small muted" }, "較早的回報，不再核對目前的 HEAD。"))) : null);
+              : el("p", { class: "small muted" }, "較早的回報，不再核對目前的版本。"))) : null);
     })) : emptyState("還沒有回報", "派工並等執行者回合結束後，有效的回報會顯示在這裡。"));
 }
 
@@ -5860,7 +5860,7 @@ function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
       x.retained_reason ? notice("warn", "待人工處理：" + x.retained_reason) : null,
       x.record && x.record !== "complete" && x.record !== "none" ? notice("warn", "審查紀錄：" + x.record) : null,
       res.base_is_ancestor !== undefined && res.base_is_ancestor !== null
-        ? el("p", { class: "small" }, `BASE_IS_ANCESTOR：${res.base_is_ancestor ? "yes" : "no"}　`,
+        ? el("p", { class: "small" }, `基準版本是否包含在內（BASE_IS_ANCESTOR）：${res.base_is_ancestor ? "是" : "否"}　`,
           el("span", { class: "muted" }, res.base_is_ancestor_note || "")) : null,
       s2UsageLine(x.usage),
       rep && rep.text ? el("details", { class: "s2-report-text", open: x.outcome === "valid" && !running },
@@ -5868,18 +5868,18 @@ function s2ReviewsPanel(flowId, ex, rp, rv, composer, refresh) {
         s2Pre(rep.text)) : (rep && rep.problem ? el("p", { class: "small muted" }, rep.problem) : null));
   });
   return el("section", { class: "section s2-panel", "data-s2": "reviews" },
-    sectionHead("Codex 審查", "審查者寫的內容一律以純文字顯示；BASE_IS_ANCESTOR 是審查者自行回報的，VBear 沒有獨立驗證。", start),
+    sectionHead("Codex 審查", "審查者寫的內容一律以純文字顯示；審查者回報的「基準版本是否包含在內」（BASE_IS_ANCESTOR）是它自己說的，VBear 沒有獨立驗證。", start),
     why.length ? el("p", { class: "small muted" }, "現在不能啟動審查：" + why.join("；") + "。") : null,
     reviews.some((x) => x.usage) && rv.data.usage_note ? el("p", { class: "small muted" }, rv.data.usage_note) : null,
     items.length ? el("ul", { class: "s2-reviews" }, items) : emptyState("還沒有審查", null));
 }
 
 function s2GatePanel(g) {
-  if (!g.ok) return el("section", { class: "section s2-panel", "data-s2": "gate" }, sectionHead("合併與 push 關卡", null),
+  if (!g.ok) return el("section", { class: "section s2-panel", "data-s2": "gate" }, sectionHead("合併與上傳關卡", null),
     notice("bad", "無法讀取關卡：" + g.message));
   const d = g.data;
   return el("section", { class: "section s2-panel", "data-s2": "gate" },
-    sectionHead("合併與 push 關卡", d.note, badge(d.open ? "條件都符合" : "尚未符合", d.open ? "b-ok" : "b-mute")),
+    sectionHead("合併與上傳關卡", d.note, badge(d.open ? "條件都符合" : "尚未符合", d.open ? "b-ok" : "b-mute")),
     el("ul", { class: "s2-checks" }, d.conditions.map((c) => el("li", null,
       badge(c.ok === true ? "符合" : (c.ok === false ? "不符" : "不明"), c.ok === true ? "b-ok" : (c.ok === false ? "b-bad" : "b-warn")),
       ` ${c.label}`, c.detail ? el("span", { class: "small muted" }, `（${c.detail}）`) : null))),
@@ -5889,7 +5889,7 @@ function s2GatePanel(g) {
         : notice("info", d.commands_note || "沒有可給的指令。")) : null,
     el("h3", null, "目前本機的狀態（讀檔所得）"),
     el("ul", { class: "small" }, (d.after || []).map((a) => el("li", null, a.text,
-      a.is_reviewed_commit ? el("span", null, " ", badge("就是被審的 commit", "b-ok")) : null,
+      a.is_reviewed_commit ? el("span", null, " ", badge("就是被審的版本", "b-ok")) : null,
       a.caveat ? el("span", { class: "muted" }, `（${a.caveat}）`) : null))));
 }
 
@@ -5942,7 +5942,7 @@ function mountStorage(opts = {}) {
       return el("li", { class: "s2-storage-item" },
         el("div", { class: "row" }, el("b", { class: "mono" }, x.flow_id), el("span", { class: "small" }, `任務 ${x.task_id}`),
           badge(s2Bytes(x.bytes), x.bytes == null ? "b-warn" : "b-mute"),
-          x.has_data ? el("span", { class: "small muted" }, `${x.sessions} 個 session、${x.reviews} 次審查`) : el("span", { class: "small muted" }, "沒有保存的資料"),
+          x.has_data ? el("span", { class: "small muted" }, `${x.sessions} 個執行階段、${x.reviews} 次審查`) : el("span", { class: "small muted" }, "沒有保存的資料"),
           x.held ? badge("已停止", "b-warn") : null,
           x.deleting ? badge("上次刪除沒有完成", "b-warn", "再按一次刪除即可完成") : null, button),
         x.reasons && x.reasons.length
@@ -6204,9 +6204,9 @@ async function viewTerminal(paneId) {
     if (token !== seq || isDisposed) return;
 
     if (mode === "control") {
-      setKids(modeBadge, badge("操作控制中 (Control)", "b-ok", "目前可由此網頁終端輸入"));
+      setKids(modeBadge, badge("你正在操作", "b-ok", "目前可由此網頁終端輸入"));
     } else {
-      setKids(modeBadge, badge("僅觀看 (Observe)", "b-info", "目前為觀看模式，無法鍵盤輸入"));
+      setKids(modeBadge, badge("只能觀看", "b-info", "目前為觀看模式，無法鍵盤輸入"));
     }
 
     if (connState === "connected") {
@@ -6555,7 +6555,7 @@ async function viewTerminal(paneId) {
           modeBadge,
           connBadge),
         el("p", { class: "small muted mono", style: "margin:0" },
-          `Pane ID: ${paneId}`,
+          `終端編號：${paneId}`,
           project ? ` · 專案: ${project.name}` : "",
           " · 尺寸: ", dimInfo)),
       actionWrap),
@@ -6717,7 +6717,7 @@ const TASK_STATUS_LABELS = {
   agent_completed: ["待驗收 (Agent回報完成)", "b-warn", "Agent 已回報完成，但尚未通過測試驗證與人類核准"],
   verification_asserted: ["聲稱驗證通過 (Verification Asserted)", "b-ok", "此主控台無身份驗證：僅代表自動化測試與介面核准兩欄皆已透過本頁/API 自我回報為通過，並非經授權之正式驗證"],
   blocked: ["等待回覆 / 阻塞", "b-bad", "任務遭遇問題等待指示"],
-  verification_stale: ["結果對應的版本已變更", "b-warn", "測試或核准記錄時的 commit 與目前不同，或無法確認；需要重新測試與核准"],
+  verification_stale: ["結果對應的版本已變更", "b-warn", "測試或核准記錄時的版本與目前不同，或無法確認；需要重新測試與核准"],
   handed_off: ["已交接", "b-mute", "已交給下一位；後續請看接手的任務卡"],
   closed: ["已結案（未完成）", "b-mute", "取消、拒絕執行或被其他任務取代"],
 };
@@ -7061,9 +7061,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       if (token !== seq || isDisposed) return;
 
       if (mode === "control") {
-        setKids(modeBadge, badge("操作控制中 (Control)", "b-ok", "目前可由此網頁終端輸入"));
+        setKids(modeBadge, badge("你正在操作", "b-ok", "目前可由此網頁終端輸入"));
       } else {
-        setKids(modeBadge, badge("僅觀看 (Observe)", "b-info", "目前為觀看模式，無法鍵盤輸入"));
+        setKids(modeBadge, badge("只能觀看", "b-info", "目前為觀看模式，無法鍵盤輸入"));
       }
 
       if (connState === "connected") {
@@ -7379,7 +7379,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
               modeBadge,
               connBadge),
             el("p", { class: "small muted mono", style: "margin:0" },
-              `Pane ID: ${currentPane}`,
+              `終端編號：${currentPane}`,
               project ? ` · 專案: ${project.name}` : "",
               " · 尺寸: ", dimInfo)),
           actionWrap),
@@ -8174,7 +8174,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
           return "現在不能出發：" + (reasons.join("；") || "這張角色卡目前無法啟動") + "。";
         }
-        return "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾、勾選 commit 的知悉，再按「產生預覽」。";
+        return "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾、勾選存下版本紀錄（commit）的知悉，再按「產生預覽」。";
       }
       if (needsAck(current) && !(ackBox && ackBox.checked)) {
         return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
@@ -8259,7 +8259,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       } else {
         kids.push(passFront(pv));
         kids.push(el("dl", { class: "kv small" },
-          el("dt", null, "CLI"), el("dd", { class: "mono" }, `${cliName ? cliName + " " : ""}${pv.cli.version} · ${pv.cli.binary}`),
+          el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " " : ""}${pv.cli.version} · ${pv.cli.binary}`),
           el("dt", null, "版本驗證"),
           el("dd", null, isCodex ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
             : !isClaude ? "不適用"
@@ -8297,7 +8297,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("h4", { class: "agent-launch-h" }, "七項標示（這次出發通行證的實際標示）"),
         el("p", { class: "small muted" },
           "以下七項是這次啟動的實際套用程度，由設定與實測證據推導，不是角色卡的設定值。" +
-          "使用者在進階終端仍可自行改變 CLI 行為，沒有一項是不可繞過的邊界。"),
+          "使用者在進階終端仍可自行改變工具的行為，沒有一項是不可繞過的邊界。"),
         el("div", { class: "rc-armor-grid agent-launch-labels", "data-armor": "preview" },
           groups.map((g) => rcArmorGroup(g, items))),
         chosenSkillsList()));
@@ -8762,7 +8762,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           el("label", null, "交付物 (Deliverables，每行一項)", deliverablesInput),
           el("label", null, "驗收條件 (Acceptance Criteria，每行一項)", criteriaInput),
           el("label", null, "實測證據 (Evidence，每行一項)", evidenceInput),
-          el("label", null, "工作目錄（改了之後，既有的測試與核准仍對應原本的 commit）", workdirInput),
+          el("label", null, "工作目錄（改了之後，既有的測試與核准仍對應原本的版本）", workdirInput),
           el("button", { class: "btn small", type: "button", "data-act": "pick-folder", on: { click: () => openFolderDialog({
             title: "挑資料夾", useLabel: "用這個資料夾", onUse: (path) => { workdirInput.value = path; } }) } }, "挑資料夾…")),
         el("div", { class: "modal-actions" }, cancelBtn, saveBtn)));
@@ -9059,7 +9059,7 @@ function nextSteps(flow) {
   }));
   const reason = f.phase && typeof f.phase.reason === "string" ? f.phase.reason : "";
   return { steps, current: at, known, turn: at >= 0 ? turn[keys[at]] : (phaseKey === "awaiting_push" ? "你" : null),
-    reason, after: phaseKey === "awaiting_push" ? { text: "你自己 push", who: "你" } : null };
+    reason, after: phaseKey === "awaiting_push" ? { text: "你自己上傳到遠端", who: "你" } : null };
 }
 
 // ---- doing the next step from the page (P7 #2) -------------------------------------------------------------------
@@ -9148,7 +9148,7 @@ function nextStepActionNode(flow, opts = {}) {
 const NEXT_APPROVE_RECORD_TITLE = "核准計畫";
 const NEXT_APPROVE_RECORD_ASK = "這會在流程紀錄寫下一筆「計畫核准」。這是你手動記錄的（未驗證）；它不會派工、不會輸入指令，也不會執行 git。";
 const NEXT_MERGE_GUIDE = "輪到你合併：到你的專案資料夾，自己把這個分支合併進主線。VBear 不會替你合併。";
-const NEXT_MERGE_GUIDE_GATE = "合併前要核對的項目與指令，在下方「合併與 push 關卡」。";
+const NEXT_MERGE_GUIDE_GATE = "合併前要核對的項目與指令，在下方「合併與上傳關卡」。";
 const NEXT_PUSH_GUIDE = "輪到你上傳：到你的專案資料夾，自己把合併好的內容上傳到遠端（git push）。VBear 不會替你上傳。";
 
 function nextStepYourTurn(flow, opts = {}) {
@@ -9600,7 +9600,7 @@ function taskTerminalLink(task, paneId) {
 // a folder. Terminals are counted by their working directory only: nothing says which role card opened one.
 
 const NO_GIT_BADGE = "沒有版本紀錄";
-const NO_GIT_NOTE = "這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定 commit，在這個資料夾裡不會算數，合併關卡也用不了。";
+const NO_GIT_NOTE = "這個資料夾還沒有 git 版本紀錄。任務卡可以建立，也能從這裡出發；但隊伍的審查結果要綁定版本編號，在這個資料夾裡不會算數，合併關卡也用不了。";
 const FOLDER_BROWSER_NOTE = "瀏覽器拿不到完整路徑，請從清單選或貼上。";
 const FOLDER_FINDER_TIP = "在 Finder 對資料夾按右鍵，按住 Option，選『拷貝\"…\"為路徑名稱』，再貼到這裡";
 const FOLDER_TERMINAL_NOTE = "只依終端目前的工作目錄比對，只含 VBear 認得的 Claude Code、Codex 終端；不代表它們是哪張角色卡開的。";
@@ -9696,7 +9696,7 @@ function folderVerdict(info) {
 function folderGitLine(git) {
   if (!git || !git.is_repo) return null;
   if (!git.commit) return `已找到 git 儲存庫，但讀不到目前的版本：${git.error || "原因不明"}`;
-  const branch = git.branch ? `分支 ${git.branch}` : "不在任何分支上（HEAD 分離）";
+  const branch = git.branch ? `分支 ${git.branch}` : "不在任何分支上（停在某一個版本）";
   return `${branch} · HEAD ${git.short || String(git.commit).slice(0, 8)}`;
 }
 
