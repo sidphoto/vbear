@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 — launch and hand over
 
 - The import-a-project window: the list of projects VBear has seen (and the recent folders) now fades at its bottom
   edge and says 「共 N 個，往下捲動看更多」 while rows are hidden below it, so a cut-off last row no longer looks like

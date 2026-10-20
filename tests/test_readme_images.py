@@ -158,27 +158,26 @@ class ReadmeImages(unittest.TestCase):
         self.assertIn("剛從出發通行證開出來", zh)
 
 
-class ChangelogUnreleased(unittest.TestCase):
+class ChangelogRelease(unittest.TestCase):
     def setUp(self):
         self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
-    def test_unreleased_comes_first_and_the_version_has_not_moved(self):
+    def test_the_release_heading_matches_the_version(self):
         headings = re.findall(r"^## (.+)$", self.text, re.M)
-        self.assertEqual(headings[0], "Unreleased")
+        self.assertTrue(headings[0].startswith("v0.8.0"), headings[:2])
         self.assertTrue(headings[1].startswith("v0.7.0"), headings[:2])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('__version__ = "0.7.0"', init)
-        self.assertFalse(any(h.startswith("v0.8") for h in headings))
+        self.assertIn('__version__ = "0.8.0"', init)
 
     def test_unreleased_covers_every_part_of_this_release(self):
-        start = self.text.index("## Unreleased")
+        start = self.text.index("## v0.8.0")
         section = self.text[start:self.text.index("## v0.7.0")]
         for topic in ("After a start", "接手提醒", "改成只觀看", "取消", "Workbench", "下一步", "Plain words", "Card feel",
                       "shields", "Dark theme", "README screenshots"):
             self.assertIn(topic, section, topic)
 
     def test_unreleased_does_not_claim_more_than_the_pages_do(self):
-        section = self.text[self.text.index("## Unreleased"):self.text.index("## v0.7.0")]
+        section = self.text[self.text.index("## v0.8.0"):self.text.index("## v0.7.0")]
         # the typing right and the note on the card are said with their limits
         self.assertIn("held only in memory", section)
         self.assertIn("lapses after two minutes", section)
