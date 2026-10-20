@@ -1126,6 +1126,33 @@ async function test(name, fn) {
     for (const st of bad) assert.strictEqual(pure.cardPassLine(st), null, JSON.stringify(st));
   });
 
+  await test("P10 A7 the back says 「往下捲動看更多」 only while there is more below, and not when it all fits or the front is showing", () => {
+    const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
+    const card = pure.profileCard(p, { catalog, face: "back" });
+    const back = byData(card.node, "data-face", "back")[0];
+    const note = byData(card.node, "data-pcard", "more")[0];
+    assert.ok(note, "the line is on the back");
+    assert.strictEqual(note.textContent, "往下捲動看更多");
+    const measure = (total, shown, top = 0) => { back.scrollHeight = total; back.clientHeight = shown; back.scrollTop = top; back.dispatch("scroll"); };
+    measure(500, 500);
+    assert.ok(note.hasAttribute("hidden"), "all of it fits: no line");
+    measure(900, 560, 0);
+    assert.ok(!note.hasAttribute("hidden"), "more below: the line");
+    measure(900, 560, 200);
+    assert.ok(!note.hasAttribute("hidden"), "still more below");
+    measure(900, 560, 340);
+    assert.ok(note.hasAttribute("hidden"), "scrolled to the end: the line goes away");
+    // the front is showing: nothing is said about a back nobody sees
+    measure(900, 560, 0);
+    const front = pure.profileCard(p, { catalog, face: "front" });
+    const fb = byData(front.node, "data-face", "back")[0];
+    fb.scrollHeight = 900; fb.clientHeight = 560; fb.dispatch("scroll");
+    assert.ok(byData(front.node, "data-pcard", "more")[0].hasAttribute("hidden"), "the front face is up");
+    // the same words and the same measure as the import window's list; the line sits inside the scrolling back
+    assert.ok(back.children.includes(note));
+    assert.ok(/\.rcard-more \{[^}]*position: sticky/.test(fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8")), "the line stays at the bottom edge while the back scrolls");
+  });
+
   await test("P7 #13 the card's front shows that line, made from its loadout, and hides it while unread or unreadable", () => {
     const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
     const card = pure.profileCard(p, { catalog });

@@ -816,8 +816,10 @@ function toolTag(t) { return el("span", { class: "tag" }, TOOL[t] || t || "未�
 function prov(src) {
   const origin = (src && src.origin) || "missing";
   const [label, explain] = PROV[origin] || PROV.missing;
-  return el("span", { class: `prov ${origin}`, title: `${explain}${src && src.detail ? "｜" + src.detail : ""}` },
-    el("b", null, label), src && src.detail ? el("span", null, "· " + src.detail) : null);
+  // a detail that only repeats the label (the runtime's 「執行觀察」) is not said twice
+  const detail = src && src.detail && src.detail !== label ? src.detail : "";
+  return el("span", { class: `prov ${origin}`, title: `${explain}${detail ? "｜" + detail : ""}` },
+    el("b", null, label), detail ? el("span", null, "· " + detail) : null);
 }
 function fmtTime(v) {
   if (!v) return "—";
@@ -2628,7 +2630,7 @@ function officeStageSvg(target) {
     shape("circle", { cx: 180, cy: 18, r: 9, fill: p.Y });
     shape("rect", { x: 116, y: 42, width: 128, height: 98, rx: 16, fill: fur });
     shape("rect", { x: 128, y: 64, width: 104, height: 44, rx: 8, fill: p.K });
-    for (const x of [142, 198]) shape("rect", { x, y: 76, width: 20, height: 18, rx: 3, fill: OFFICE_CAMPS.google.shirt, stroke: "none" });
+    for (const x of [142, 198]) shape("rect", { x, y: 76, width: 20, height: 18, rx: 3, fill: camp.shirt, stroke: "none" });
     shape("rect", { x: 152, y: 118, width: 56, height: 10, rx: 3, fill: p.s, "stroke-width": 2 });
     shape("rect", { x: 155, y: 151, width: 50, height: 26, rx: 4, fill: p.K });
     shape("path", { d: "M163 164h8l4-5 6 10 5-5h10", stroke: camp.badge, fill: "none", "stroke-width": 2 });
@@ -4139,6 +4141,7 @@ function cardPatternStrip() {
   return svg;
 }
 
+const CARD_BACK_MORE_TEXT = "往下捲動看更多";
 const CARD_POSITION_BADGE_KEY = { planner: "planning", executor: "execution", reviewer: "review" };
 function cardPositionBadgeKey(position) { return cardHas(CARD_POSITION_BADGE_KEY, position) ? CARD_POSITION_BADGE_KEY[position] : "unspecified"; }
 // The badge of a suggested position: the square with its one character (decoration, the words next to it say the same)
@@ -4438,7 +4441,19 @@ function profileCard(p, opts = {}) {
         el("dt", null, "Tool ID"), el("dd", { class: "mono" }, tool || "—"),
         el("dt", null, "Model ID"), el("dd", { class: "mono" }, (p.model && p.model.model_id) || "—"),
         el("dt", null, "角色卡 ID"), el("dd", { class: "mono" }, p.id),
-        el("dt", null, "英文說明"), englishBox)));
+        el("dt", null, "英文說明"), englishBox)),
+    // shown only while there is more below the visible part of the back (the same measure as the import window's list)
+    el("p", { class: "small rcard-more", "data-pcard": "more", hidden: true }, CARD_BACK_MORE_TEXT));
+  const moreNote = back.children[back.children.length - 1];
+  function updateMore() {
+    const more = face === "back" && folderListHidesMore(back);
+    if (more) moreNote.removeAttribute("hidden"); else moreNote.setAttribute("hidden", "");
+    return more;
+  }
+  back.addEventListener("scroll", updateMore);
+  back.addEventListener("toggle", updateMore, true);
+  if (typeof ResizeObserver === "function") new ResizeObserver(updateMore).observe(back);
+  if (typeof MutationObserver === "function") new MutationObserver(updateMore).observe(back, { childList: true, subtree: true, characterData: true });
 
   const article = el("article", { class: `rcard${demo ? " rcard-demo" : ""}`, "data-profile-id": p.id, "data-camp": camp.key,
     "data-face": face, "aria-label": `角色卡：${name}`,
@@ -4460,6 +4475,7 @@ function profileCard(p, opts = {}) {
       node.setAttribute("aria-hidden", String(!shown));
     }
     article.setAttribute("data-face", face);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(updateMore); else updateMore();
   }
   function setFace(next, moveFocus) {
     if (next === face) return;
@@ -10456,6 +10472,7 @@ if (typeof module !== "undefined" && module.exports) {
     OFFICE_PALETTE,
     OFFICE_OUTLINE,
     OFFICE_CAMPS,
+    prov,
     boardGroups,
     boardKey,
     boardKeyContext,

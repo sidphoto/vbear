@@ -415,6 +415,31 @@ test("A5 the card shows one short line and keeps the long sentences whole behind
   assert.strictEqual(app.taskStatusExplainBlock("in_progress", null, "data-tf"), null);
 });
 
+// ---- A6: the doubled word, and the robot's eyes ------------------------------------------------------------------
+test("A6 the runtime's 「執行觀察」 is said once; another detail still shows beside its label", () => {
+  const same = app.prov({ origin: "runtime", detail: "執行觀察" });
+  assert.strictEqual(text(same), "執行觀察");
+  assert(!text(same).includes("執行觀察 · 執行觀察") && !text(same).includes("· 執行觀察"));
+  assert.strictEqual(text(app.prov({ origin: "runtime", detail: "最近 7 天" })), "執行觀察· 最近 7 天");
+  assert.strictEqual(text(app.prov({ origin: "author", detail: "" })), "作者說明");
+  assert.strictEqual(text(app.prov(null)), "未提供");
+});
+
+test("A6 the big robot's eyes take the camp's colour, not always Google's blue", () => {
+  const eyes = (camp) => {
+    const svg = app.officeStageSvg({ key: "session:t1", status: "waiting", species: "robot", camp, name: "x" });
+    return svg.findAll((n) => n.getAttribute && n.getAttribute("width") === "20" && n.getAttribute("height") === "18").map((n) => n.getAttribute("fill"));
+  };
+  for (const camp of ["anthropic", "openai", "google", "other"]) {
+    assert.deepStrictEqual(eyes(camp), [app.OFFICE_CAMPS[camp].shirt, app.OFFICE_CAMPS[camp].shirt], camp);
+    // seen on the fixed dark screen (#18181b): 3:1 or more
+    const r = ratioOf(app.OFFICE_CAMPS[camp].shirt, "#18181b");
+    CONTRAST_LOG.push(`A6 robot eyes ${camp} ${app.OFFICE_CAMPS[camp].shirt} on the screen #18181b: ${r.toFixed(2)}`);
+    assert(r >= 3, `${camp}: ${r.toFixed(2)}`);
+  }
+  assert.notDeepStrictEqual(eyes("anthropic"), eyes("google"));
+});
+
 // ---- run ----------------------------------------------------------------------------------------------------------
 (async () => {
   const timer = setTimeout(() => { console.error("TIMEOUT"); process.exit(2); }, 120000);
