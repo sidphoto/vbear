@@ -48,90 +48,142 @@ list is a record of your picks.
 
 All screens below show **demo data**: a synthetic Claude Code and Codex in a temporary folder, not a real project.
 Where a picture shows a folder, the temporary folder of the demo run is replaced by a stand-in name such as
-`~/projects/notes-site`; your own screens show your real paths.
+`~/projects/notes-site`; your own screens show your real paths. Most pictures are the light theme; two are the dark
+theme, and both themes show the same things.
 
 <img src="docs/images/lobby.png" alt="The home page, 冒險者大廳: the 新手第一局 card with its three steps, then 輪到你 with the flows at a gate" width="992">
 
 The **quest board** (demo data), the home page 冒險者大廳. At the top, 「新手第一局」 lists the three steps (take role
-cards, bring in a project, put a team on a task card); a step is ticked only from real data, and the demo's own cards
-are tagged 示範, so step 1 stays open here. Then 「輪到你」: the flows at a gate and any agent that waits for your reply
-(a framed card, with the words that say why), then 「其他進行中的任務」. A card is one flow; the whole card opens it.
-Manual flows say that VBear will not move them for you, and nothing is shown that VBear cannot read.
+cards, bring in a project, put a team on a task card); a step is ticked only from real data, and the demo's own role
+cards are tagged 示範, so step 1 stays open here. Then 「輪到你」: the flows at a gate and any agent that waits for your
+reply (a framed card, with the words that say why), then 「其他進行中的任務」. A card is one flow; the whole card opens it.
+When two cards share a title, a small line adds the folder and the day it was made. Manual flows say that VBear will
+not move them for you, and nothing is shown that VBear cannot read.
 
 <img src="docs/images/lobby-first-run.png" alt="The home page on a fresh install: three unticked steps, an empty quest board with one button to the terminal workbench" width="992">
 
 The same page on a **fresh install** (demo data, nothing created yet): the three steps are all open, only the first one
 has a button (「到角色卡池」), and the board says there is no task yet instead of showing an empty list.
 
-<img src="docs/images/card-pool.png" alt="The card pool, 角色卡池: two role cards face up with their skill slots drawn with dashed frames, and one card turned over to its back" width="900">
+<img src="docs/images/card-pool.png" alt="The card pool, 角色卡池: two role cards face up in their camp colour with skill chips drawn with dashed frames, and one card turned over to its back" width="900">
 
-The **card pool** 「角色卡池」 (demo data). A role card has two faces. The front (left and right here) shows the name,
-the tool tag, the position, the skill slots and the one-line light: 「可以出發（權限意圖都已決定）」 followed by
-「實際能不能出發，以出發通行證為準」, and a line about what a start allows, written from the same armor items as the pass
-(here: files can be changed after a start, with the reach only partly limited, and a commit is not stopped). 「名冊，
-不代表正在出勤」 is on every card. The back (middle) holds the faction and model, the role label, where the evidence came
-from and the permission intents, each marked as a record and not a grant. The skill slots are dashed 「收藏中」: kept on
-the card, and 「這次的安全啟動不會載入」. A solid 「生效中」 slot would appear only if VBear reported that a skill loads,
-which no launch does today, so none appears here. A skill that the index cannot find is called out on the card.
+The **card pool** 「角色卡池」 (demo data). A role card has two faces and a frame in its camp's colour (warm for Claude
+Code, teal for Codex). The front (left and right here) shows the name, the tool tag, the position, the skill slots and
+the one-line light: 「可以出發（權限意圖都已決定）」 followed by 「實際能不能出發，以出發通行證為準」, and a line about what a
+start allows, written from the same armor items as the pass (here: files can be changed after a start, with the reach
+only partly limited, and a commit is not stopped). 「名冊，不代表正在出勤」 is on every card. The back (middle) holds the
+faction and model, the role label, where the evidence came from and the permission intents, each marked as a record and
+not a grant. A skill card is a chip with one cut corner; in a slot it is dashed 「收藏中」: kept on the card, and
+「這次的安全啟動不會載入」. A solid 「生效中」 slot would appear only if VBear reported that a skill loads, which no launch
+does today, so none appears here. A skill that the index cannot find is called out on the card.
 
 <p>
-<img src="docs/images/card-pool-starter.png" alt="The starter deck dialog: three ready role cards for planning, doing and reviewing, with editable names" width="520">
-<img src="docs/images/card-pool-light.png" alt="The card pool in the light theme" width="640">
+<img src="docs/images/card-pool-starter.png" alt="The starter deck dialog: three ready role cards for planning, doing and reviewing, each with a position badge and an editable name" width="520">
+<img src="docs/images/card-pool-dark.png" alt="The card pool in the dark theme" width="640">
 </p>
 
-Left: the **starter deck** 「用起手牌組開始」 (demo data): three ready cards (planner, doer, reviewer) whose names you can
-edit; the permission advice behind each is folded. Right: the card pool in the **light theme** (demo data).
+Left: the **starter deck** 「用起手牌組開始」 (demo data): three ready cards (planner, doer, reviewer), each with the
+badge of its position (規, 執, 審) and a name you can edit; the permission advice behind each is folded. Right: the card
+pool in the **dark theme** (demo data).
 
-<img src="docs/images/task-cards.png" alt="The task cards section: a row of task cards, each a folder with its branch, its team and its next step" width="992">
+<img src="docs/images/task-cards.png" alt="The task cards section: a row of task cards, each a folder with a header, three progress lights, its branch, its team and its next step" width="992">
 
-**Task cards** (demo data): a task card is one folder. It shows the folder, the branch and HEAD it could read, how many
-terminals are in that folder, the team on it (planning, doing and reviewing places) and the next step with who holds it.
-A card that nobody has marked 「執行中」 (in progress) is called 「草稿」 (draft) and says exactly that: it is only a mark, not a
-measure of whether work has started. A card that no terminal has claimed says so, and says that linking is only a record.
-(The demo's cards all use the same folder, so the rows look alike.)
+**Task cards** (demo data): a task card is one folder. Its header names the card, says where its flow is, and carries
+three small lights for planning, doing and reviewing (規, 執, 審). The lights come only from the flow's real phase and
+say nothing when there is no flow, and 「已過」 is a place in the order, not a record that someone approved. Below are
+the folder, the branch and HEAD it could read, how many terminals are in that folder, the team on it and the next step
+with who holds it. A card that nobody has marked 「執行中」 (in progress) is called 「草稿」 (draft) and says in one line
+that it is only a mark; 「這是什麼」 opens the longer explanation. A card that no terminal has claimed says so, and says
+that linking is only a record. (The demo's cards all use the same folder, so the rows look alike.)
 
 <img src="docs/images/import-project.png" alt="The dialog for a new task card: pick a folder VBear found, a recently used one, or paste a path" width="520">
 
 **Bringing in a project** (demo data), 「＋ 任務卡（導入專案）」: pick a folder VBear found on your computer, or paste a
 path. The dialog says VBear only reads the folder's basic facts, writes nothing and runs no git in it.
 
-<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates, the next steps, and its team: planning, doing and reviewing places with a second reviewer place and the card pool to drag from" width="984">
+<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates, the next steps, and its team: planning, doing and reviewing places framed in their camp colours with position badges, a second reviewer place and the card pool to drag from" width="984">
 
 A flow's **progress and team places** (demo data): the gates passed and the current one, the next steps, and the team
 on the task card: the planning, doing and reviewing places, each with its model family (the reviewer's place needs a
-different family from the doer's), an optional second reviewer, and the card pool below to put a role card on a place.
-Saving the team writes a line to the timeline.
+different family from the doer's) and, once a role card sits there, that card's camp colour and the place's badge
+(規, 執, 審). An empty place stays plain. There is an optional second reviewer, and below is the card pool as small
+cards (name, tool and the position you saved on it; 「？」 means none) to put on a place. Saving the team writes a line
+to the timeline.
+
+<p>
+<img src="docs/images/workbench-task.png" alt="The task card in the terminal workbench: the card header with its phase, the folder, and the next steps with the buttons for the step that waits for you" width="360">
+<img src="docs/images/handoff-reminder.png" alt="A task card made by a handoff: a 接手提醒 block at its top with the earlier card, the written note and the earlier card's last state" width="360">
+</p>
+
+Left (demo data): the **task card in the terminal workbench**, 「終端工作台」. The header shows the flow's current gate
+(here 「等核准」) and the old mark as a small 「標記：草稿」. When it is your turn, the 「下一步」 box holds the button
+itself: 「核准計畫」 writes a manual record into the flow (it dispatches nothing), and 「核准計畫並開啟自動執行…」 opens the
+same approval window as before, with the whole plan, the limits and the risk. Right (demo data): a card made by a
+**handoff** has a 「接手提醒」 block at its top: which card it came from (with a button to open it), who it was handed to,
+the earlier writer's note word for word, and the earlier card's last stored state. VBear shows only what was stored and
+says it does not know what the earlier person actually finished.
+
+<img src="docs/images/terminal-just-opened.png" alt="The top of a terminal page: the badge 你正在操作 and a line saying this is the terminal you just opened and typing goes straight to the agent, with a button to switch back to watching" width="992">
+
+A terminal **that this tab has just started** from a launch pass or a task card (demo data; the demo's synthetic agent
+prints nothing, so only the top of the page is shown): you can type at once, and a line says so: 「這是你剛開的終端，可以直接打字；打的字會直接送給 Agent」,
+with 「改成只觀看」 to give the keyboard back. Only the tab that pressed 「確認啟動」 gets this, within two minutes; after a reload, or
+when a terminal is opened from a link or another tab, it opens watch-only. When the start came from a task card, the
+workbench opens with the new terminal beside that card and, if you kept the card's folder, notes the terminal on the card
+(a tracking record; nothing is sent into the terminal).
+
+<img src="docs/images/takeover-reminder.png" alt="The 接手提醒 window before taking over a running terminal: the linked task card and its next step, the agent's state, whether the flow waits for you, and three fixed reminders" width="500">
+
+**Taking over a terminal that is already running** (demo data) first shows 「接手提醒」: the task card linked to this
+terminal and its next step (or 「這個終端沒有關聯任務卡」), the agent's state as VBear can read it (here 「不明」; a working
+agent gets 「現在打字可能打斷它」), and whether the card's flow waits for you. Three fixed lines follow: what you type goes
+to the agent, only one tab controls at a time, and you can switch back to watching whenever you like. The focus starts on
+「取消」, so one Enter does not take over.
 
 <img src="docs/images/launch-pass.png" alt="The launch pass: three lines on the front (folder, network, commit), the shield legend, the acknowledgement and the confirm button" width="570">
 
 The **launch pass** 「出發通行證」 (demo data): the front says in three lines what this start can and cannot do: it can
-change roughly this folder (partly limited), the network is blocked, and a commit is not stopped. The acknowledgement that
-a commit is not stopped must be ticked before a start. The CLI version, the scratch folder, the 「可繞過」 note and the
+change roughly this folder (partly limited, no shield), the network is blocked (a solid shield), and a commit is not
+stopped (an empty shield with a slash). A dashed shield means only a record. The legend sits under the lines, and
+partly blocked, untested and unknown items get no shield, only words. The acknowledgement that a commit is not stopped
+must be ticked before a start; ticking it also fetches the preview. The CLI version, the scratch folder, the 「可繞過」 note and the
 folded 「看七項細節」 follow.
 
-<img src="docs/images/launch-pass-details.png" alt="What 「看七項細節」 opens: the seven labels in five groups, then the list of skill cards marked not loaded" width="570">
+<img src="docs/images/launch-pass-details.png" alt="What 「看七項細節」 opens: the seven labels in five groups with the three kinds of shield, then the list of skill cards marked not loaded" width="570">
 
-What 「看七項細節」 opens (demo data): the seven labels in five groups with each one's evidence, and the chosen skill cards
-marked 「本次不會載入」.
+What 「看七項細節」 opens (demo data): the seven labels in five groups with each one's evidence and, where it applies, its
+shield, and the chosen skill cards marked 「本次不會載入」.
 
 <img src="docs/images/skill-card.png" alt="A skill card: the one-line use with its source tag, fields the author did not give, and where the skill sits on role cards" width="992">
 
 A **skill card** (demo data): every field carries where it came from, a field the skill file does not give says so, and
 the part 「已插在哪些角色卡上」 shows the skill as 「收藏中（這次出發不會載入）」 on each card that holds it.
 
-<img src="docs/images/office.png" alt="The pixel office: the counts, then the stations with a framed team and a red 輪到你 badge" width="940">
+<img src="docs/images/skills-library.png" alt="The skills library: skill cards as chips with one cut corner and a coloured band on top, each with its state, source and use tags" width="992">
 
-The **pixel office** (demo data), `#/office`: teams stand at the station their task is at, a framed team with a red
-「輪到你」 badge waits for you, and the panel on the right says what a click shows. The red is used for nothing else.
+The **skills library** (demo data): each skill card is a chip with a cut corner and a band in its tool's colour (warm for
+Claude Code, teal for Codex); the tool is also written as a tag. 「可使用」 only says the skill file was found in a place
+the tool reads and is not disabled; it does not say an agent is using it.
+
+<img src="docs/images/office.png" alt="The pixel office: the counts, then the stations, each with its small prop beside the title, with a framed team and a red 輪到你 badge" width="940">
+
+The **pixel office** (demo data), `#/office`: teams stand at the station their task is at, each station has a small
+prop beside its title (a plan board, a desk, a review room, a merge gate), a framed team with a red 「輪到你」 badge waits
+for you, and the panel on the right says what a click shows. The red is used for nothing else.
 
 <p>
-<img src="docs/images/office-desks.png" alt="The desks and the lounge: terminals at desks with their state in words above, and the saved role cards in the lounge" width="540">
+<img src="docs/images/office-desks.png" alt="The desks and the lounge: terminals at desks on a wooden strip with their state in words above, and the saved role cards in the lounge" width="540">
 <img src="docs/images/office-gear.png" alt="A role card's panel in the office: the species choice, the character stage and the card with its dashed skill slots" width="300">
 </p>
 
-Left (demo data): each live terminal sits at a **desk** with its state in a word box (「工作中」, 「等你回覆」, 「狀態未知」), and the
-**lounge** holds the saved role cards. Right: a role card's **panel**: a roster character is not at work and has no live
-state; the species choice only changes the roster picture; and the same card is shown with its dashed slots.
+Left (demo data): each live terminal sits at a **desk** (a small wooden strip under the character) with its state in a
+word box (「工作中」, 「等你回覆」, 「狀態未知」), and the **lounge** holds the saved role cards. Right: a role card's **panel**: a
+roster character is not at work and has no live state; the species choice only changes the roster picture; and the same
+card is shown with its dashed slots. 「打開角色卡」 on a card opens that card in the card pool.
+
+<img src="docs/images/office-dark.png" alt="The pixel office in the dark theme: the outlines of the characters and props turn light, so they stay visible on the dark floor" width="700">
+
+The office in the **dark theme** (demo data): the outlines turn light, so the characters and props stay readable.
 
 Only desk characters with a working status alternate between two typing frames. Teams and roster characters
 stay still; the operating system's reduced-motion preference disables the animation. Panels show fixed persona
@@ -158,7 +210,8 @@ stored locally and never written into the skill files.
 
 **See who is working and who is waiting.**
 Agent terminals run in a small background program on your Mac, so they keep running when you close the browser
-tab. You can watch any of them, and typing takes an explicit takeover (one tab at a time). For Claude Code that you
+tab. You can watch any of them. Typing into a running one takes an explicit takeover, which first shows a reminder (one tab
+at a time); the one exception is a terminal this tab has just started from a launch pass, which you can type into at once. For Claude Code that you
 launched from a role card, on a version with recorded evidence, the console shows whether it is working or waiting
 for you.
 
@@ -376,7 +429,9 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   under your account, **not sandboxed**, and the UI labels them that way.
 - **Terminal workbench.** Agent terminals run in a small local background program (the *VBear runtime*), so they keep
   running when the browser tab or the console closes. You can watch any terminal in the browser.
-  Typing into it takes an explicit takeover, and only one tab can type at a time.
+  Typing into a running one takes an explicit takeover with a reminder first, and only one tab can type at a time; a terminal
+  this tab has just started from a launch pass is the one you can type into at once. A start from a task card stays in the
+  workbench, with the new terminal beside that card.
 - **Previewed, sandboxed Claude launches** (launches that VBear starts and keeps watch of). You pick a role card and a work directory, and you
   get a launch pass; behind its three lines are seven permission labels (read, write, test, commit, deploy, network, filesystem).
   Each label says how strongly it is enforced, with the evidence. The launch starts only after you
@@ -397,7 +452,7 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   what tests reported and what you approved, and the console never labels a card "verified". With a work
   directory, a test result and an approval are tied to the commit they were given for and go stale when it moves.
   Marking a card done or blocked asks what follows; a handoff closes the card and opens its successor with the
-  chain of earlier cards; whether anyone is on it is worked out from the linked terminal, not typed in.
+  chain of earlier cards, and the successor shows a 「接手提醒」 with the earlier card and its written note; whether anyone is on it is worked out from the linked terminal, not typed in.
 - **Flows (look-only).** One task card carried by several agents: who plans, who executes, who reviews, each
   with a model family (the maker of the model: Anthropic, OpenAI, Google and so on). The 「流程」 page shows the phase (planning, awaiting approval, implementing, review round N,
   needs fix, passed and awaiting merge, review out of date, awaiting push, done), the review rounds and a timeline,
