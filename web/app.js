@@ -4267,7 +4267,7 @@ function deleteCard(p, onDone) {
     .catch((err) => toast("刪除失敗：" + err.message));
 }
 
-// Pixel art of the cards (art 20261020-flow-art 0.8.0-art-4, copied in; nothing is read from outside at run time).
+// Pixel art of the cards (art 20261020-flow-art 0.8.0-art-5, copied in; v5 only changed backPattern; nothing is read from outside at run time).
 // One character per cell, "." is clear. K is the outline: it takes its colour from the theme (style.css, .px-k), light
 // #18181b, dark #f8fafc. The other characters are the same in both themes, except in a shield: its fill T and its pale
 // inside H come from the art's shieldTokens (style.css, .px-st and .px-sh), and the shared palette is not touched.
@@ -4281,7 +4281,7 @@ const CARD_PALETTE = {
   n: "#e2e8f0", H: "#e6fffb",
 };
 const CARD_PIXELS = {
-  backPattern: ["KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KnnnnKnnnnKnnnnK", "KKKKKKKKKKKKKKKK", "KnnnnKnnnnKnnnnK", "KnnKnnnnKnnKnnnK", "KnnnKnnYnnnnKnnK", "KKnnnnnnnnKnnnnK", "KnnnnnnnnnnnnnKK", "KnnKnnnnKnnKnnnK", "KKKKKKKKKKKKKKKK"],
+  backPattern: ["................", "....K.......K...", "...KKK.....KKK..", "....K.......K...", "................", "................", "................", "................", "................", "....K.......K...", "...KKK.....KKK..", "....K.......K...", "................", "................", "................", "................"],
   shields: {
     enforced: ["KKKKKKKKKKKK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", "KTTTTTTTTTTK", ".KTTTTTTTTK.", ".KTTTTTTTTK.", "..KTTTTTTK..", "...KTTTTK...", "....KTTK....", ".....KK....."],
     recorded: ["KK.KK.KK.KK.", "KHHHHHHHHHHK", "KHHHHHHHHHHK", ".HHHHHHHHHH.", "KHHHHHHHHHHK", "KHHHHHHHHHHK", "..HHHHHHHH..", ".KHHHHHHHHK.", "..KHHHHHHK..", "....HHHH....", "....KHHK....", ".....KK....."],

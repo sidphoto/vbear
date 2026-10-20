@@ -62,7 +62,7 @@ test("C5 the page's art is the art's: shields, office props and desk strip, char
   assert(app.CARD_PIXELS.deskStrip.every((r) => r.length === 24));
   if (!dir) { console.log("     (VBEAR_FLOW_ART not set: not compared with the art's cards.json)"); return; }
   const art = JSON.parse(fs.readFileSync(path.join(dir, "cards.json"), "utf8"));
-  assert.strictEqual(art.version, "0.8.0-art-4", "this is the v4 art");
+  assert.strictEqual(art.version, "0.8.0-art-5", "this is the v5 art (only backPattern differs from v4)");
   const rowsOf = (m) => (Array.isArray(m) ? m : m.rows);
   assert.deepStrictEqual(app.CARD_PIXELS.backPattern, rowsOf(art.backPattern.pixel));
   for (const k of ["enforced", "recorded", "none"]) assert.deepStrictEqual(app.CARD_PIXELS.shields[k], rowsOf(art.shields[k]), `shield ${k}`);
