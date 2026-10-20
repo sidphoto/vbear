@@ -1611,7 +1611,7 @@ async function viewHome() {
       sectionHead("需要留意的技能", "可使用的技能中，結構檢查發現問題的項目"),
       el("div", { class: "grid" }, problemSkills.slice(0, 6).map((s) => skillCard(s)))) : null,
   );
-  setTimeout(() => input.focus(), 0);
+  // no auto-focus on the search box: it would scroll the page past the first-game steps and the "your turn" board
 }
 
 // ---------- the quest board (design lobby v1.2) ------------------------------------------------------------
@@ -9090,7 +9090,7 @@ function nextStepAction(flow, opts = {}) {
 // onRecord (on the flow's own page: jumps to the form; elsewhere it links to that page), onFlowPage (already there) }.
 function nextStepActionNode(flow, opts = {}) {
   const act = nextStepAction(flow, opts);
-  if (!act) return null;
+  if (!act) return opts.compact ? null : nextStepYourTurn(flow, opts);
   const taskId = opts.task && opts.task.id ? opts.task.id : flow.task_id;
   const launchHref = (l) => `#/workbench?task=${encodeURIComponent(taskId)}&profile=${encodeURIComponent(l.profile_id)}&launch=1&step=${act.step}`;
   const memo = taskId ? launchMemoRead(taskId).filter((e) => e.step === act.step) : [];
@@ -9112,6 +9112,48 @@ function nextStepActionNode(flow, opts = {}) {
         ? el("button", { type: "button", class: "btn small", "data-ns": "record", on: { click: opts.onRecord } }, "到下方記錄")
         : opts.onFlowPage ? null      // already on the flow's page, with nothing to jump to: no link to where it is
         : el("a", { class: "btn small", "data-ns": "record", href: `#/flows/${encodeURIComponent(flow.id)}` }, "到流程頁記錄")));
+  }
+  return kids.length ? el("div", { class: "ns-action", "data-ns": "action" }, kids) : null;
+}
+
+// The steps that are yours (P10 F2): the buttons are the page's own, calling what the flow page already calls, with the
+// same confirmation first. Approving a plan by hand only writes the manual record the form at the bottom writes (and says
+// so in the dialog); approving it and turning on automatic mode opens the same dialog as the 自動執行 panel (the whole
+// plan, the limits and the risks, and its own preview). Merging and pushing are done by you, outside VBear: a sentence,
+// never a button that looks as if VBear did it. The lobby's compact card has none of this.
+const NEXT_APPROVE_RECORD_TITLE = "核准計畫";
+const NEXT_APPROVE_RECORD_ASK = "這會在流程紀錄寫下一筆「計畫核准」。這是你手動記錄的（未驗證）；它不會派工、不會輸入指令，也不會執行 git。";
+const NEXT_MERGE_GUIDE = "輪到你合併：到你的專案資料夾，自己把這個分支合併進主線。VBear 不會替你合併。";
+const NEXT_MERGE_GUIDE_GATE = "合併前要核對的項目與指令，在下方「合併與 push 關卡」。";
+const NEXT_PUSH_GUIDE = "輪到你上傳：到你的專案資料夾，自己把合併好的內容上傳到遠端（git push）。VBear 不會替你上傳。";
+
+function nextStepYourTurn(flow, opts = {}) {
+  const ns = nextSteps(flow);
+  if (!ns.known || !flow || typeof flow.id !== "string" || !flow.id) return null;
+  const key = ns.current >= 0 ? ns.steps[ns.current].key : null;
+  const kids = [];
+  if (key === "approve") {
+    const auto = Boolean(flow.automation && flow.automation.mode === "auto");
+    const record = el("button", { type: "button", class: "btn small primary", "data-ns": "approve-plan", on: { click: async (ev) => {
+      if (!(await confirmInPage(NEXT_APPROVE_RECORD_TITLE, NEXT_APPROVE_RECORD_ASK, "核准計畫"))) return;
+      ev.target.disabled = true;
+      try {
+        await api.post(`/api/flows/${encodeURIComponent(flow.id)}/events`, flowEventBody("plan_approved", { note: "" }));
+        toast("已記錄（手動記錄，未驗證）");
+        route();
+      } catch (e) { toast("無法記錄：" + e.message); ev.target.disabled = false; }
+    } } }, "核准計畫");
+    const withAuto = auto ? null : el("button", { type: "button", class: "btn small", "data-ns": "approve-auto",
+      title: "會先完整顯示計畫全文、體力設定與全部風險，確認後才開啟",
+      on: { click: () => openAcceptanceDialog(flow.id, () => route(), { auto: true }) } }, "核准計畫並開啟自動執行…");
+    kids.push(el("div", { class: "ns-yours row", "data-ns": "yours" }, record, withAuto),
+      el("p", { class: "small muted", "data-ns": "yours-note" },
+        "「核准計畫」只會在流程紀錄寫下手動記錄，不會派工；要讓 VBear 照核准的計畫派工，請選「核准計畫並開啟自動執行」。"));
+  } else if (key === "merge") {
+    kids.push(el("p", { class: "small ns-guide", "data-ns": "merge-guide" }, NEXT_MERGE_GUIDE,
+      opts.onFlowPage ? " " + NEXT_MERGE_GUIDE_GATE : ""));
+  } else if (ns.after) {
+    kids.push(el("p", { class: "small ns-guide", "data-ns": "push-guide" }, NEXT_PUSH_GUIDE));
   }
   return kids.length ? el("div", { class: "ns-action", "data-ns": "action" }, kids) : null;
 }
@@ -10369,6 +10411,7 @@ if (typeof module !== "undefined" && module.exports) {
     nextStepsList,
     nextStepAction,
     nextStepActionNode,
+    nextStepYourTurn,
     cardPassLine,
     skillPickText,
     launchRangeText,

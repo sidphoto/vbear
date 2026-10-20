@@ -607,8 +607,10 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     const compact = ctx.nextStepActionNode(flowView("planning"), { task: baseTask(), profiles: PROFILES, compact: true });
     assert.ok(byData(compact, "data-ns", "launch")[0]);
     assert.strictEqual(byData(compact, "data-ns", "manual").length, 0);
-    // a step that is yours has no action at all
-    assert.strictEqual(ctx.nextStepActionNode(flowView("awaiting_approval"), { task: baseTask(), profiles: PROFILES }), null);
+    // a step that is yours has no launch button (P10 F2 gives it its own buttons; the lobby's compact card has none)
+    const yours = ctx.nextStepActionNode(flowView("awaiting_approval"), { task: baseTask(), profiles: PROFILES });
+    assert.strictEqual(byData(yours, "data-ns", "launch").length, 0);
+    assert.strictEqual(ctx.nextStepActionNode(flowView("awaiting_approval"), { task: baseTask(), profiles: PROFILES, compact: true }), null);
     // nothing in it writes or navigates by itself
     assert.ok(walk(node).every((n) => n.tag !== "form"));
   });

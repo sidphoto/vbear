@@ -369,6 +369,17 @@ test("the page is the lobby: title, lede, and the board before the search", asyn
   assert(!text(main).includes("需要你處理"), "the old block is gone");
 });
 
+test("opening the lobby does not put the cursor in the skill search (it would scroll the page)", async () => {
+  setPage({ flows: flowsOf([flow("awaiting_approval", { attention: true })]) });
+  global.document.activeElement = null;
+  const main = await open();
+  await sleep(20);
+  const search = main.find((n) => n.tag === "input" && n.getAttribute("type") === "search");
+  assert(search, "the search box is still on the page");
+  assert(!search._focused && global.document.activeElement !== search, "the search box is not focused on arrival");
+  assert(!/setTimeout\(\(\) => input\.focus\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8")), "no deferred focus call on the lobby search");
+});
+
 test("the nav's first item is renamed and the others are not", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
   assert(/data-nav="home"><span aria-hidden="true">⌂<\/span>冒險者大廳</.test(html));
