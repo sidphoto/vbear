@@ -8935,8 +8935,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   );
   // On a phone the columns stack and the terminals come first. Coming in from a task card (its 打開), the person wants
   // the task card and its team, so the page starts there; only when the address names a task, and only when stacked.
+  // A terminal this tab has just started is the exception: the person comes for the terminal (and the line that says the keyboard is theirs).
   if (initialTaskId && workbenchStacked()) {
-    setTimeout(() => { if (token === seq && rightCol.scrollIntoView) rightCol.scrollIntoView({ block: "start" }); }, 0);
+    const first = activePaneId && hasFreshTerminalGrant(activePaneId) ? centerCol : rightCol;
+    setTimeout(() => { if (token === seq && first.scrollIntoView) first.scrollIntoView({ block: "start" }); }, 0);
   }
 
   // 「出發」 on a card of the card pool lands here with the launch pass already open; the address is cleaned at

@@ -255,6 +255,27 @@ test("3.2 the mark is given in one place only (a launch this tab confirmed) and 
   assert(!/location\.hash[^;]*(token|grant|fresh)/i.test(code), "nothing about it goes into an address");
 });
 
+test("3.1 on a phone (stacked columns) a just-started terminal is what the page starts at; otherwise it is still the task card", async () => {
+  const scrolled = [];
+  const orig = h.SyntheticNode ? h.SyntheticNode.prototype.scrollIntoView : null;
+  const Node = app && h.SyntheticNode;
+  Node.prototype.scrollIntoView = function () { scrolled.push(this.className || ""); };
+  global.window.matchMedia = (q) => ({ matches: q === "(max-width: 900px)" });
+  try {
+    app.grantFreshTerminal(PANE);
+    await openWorkbench(`#/workbench/${PANE}?task=task-1`, { live: roleLive(), tasks: [mkTask({ associated_pane_id: PANE })] });
+    assert(scrolled.some((c) => c.includes("wb-term-center")) && !scrolled.some((c) => c.includes("wb-right")), `just started: the terminal first (${scrolled})`);
+    app.cleanupActiveTerminal();
+    scrolled.length = 0;
+    await openWorkbench(`#/workbench/${PANE}?task=task-1`, { live: roleLive(), tasks: [mkTask({ associated_pane_id: PANE })] });
+    assert(scrolled.some((c) => c.includes("wb-right")) && !scrolled.some((c) => c.includes("wb-term-center")), "no mark: the task card first, as before");
+    app.cleanupActiveTerminal();
+  } finally {
+    delete global.window.matchMedia;
+    Node.prototype.scrollIntoView = orig || function () {};
+  }
+});
+
 test("3.2 one shared request for taking input: the pages, the dialogs and the built-in terminal all go through it", () => {
   assert.strictEqual((APP_SRC.match(/action: "takeover"/g) || []).length, 1, "only requestTerminalControl asks");
   assert.strictEqual((APP_SRC.match(/requestTerminalControl\(\{/g) || []).length, 5, "standalone dialog + auto, workbench dialog + auto, and the function itself is not counted twice");
