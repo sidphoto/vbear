@@ -8195,7 +8195,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       why.textContent = busy ? "" : whyOff();
     }
     workdirInput.addEventListener("input", () => invalidate("輸入已變更，請重新產生預覽。"));
-    commitBox.addEventListener("change", () => invalidate("輸入已變更，請重新產生預覽。"));
+    // ticking the commit sentence changes what the preview says it is allowed to do: with a folder filled in, it is previewed
+    // again on its own (the old one is dropped first; 確認啟動 is still only a click away after that)
+    commitBox.addEventListener("change", () => {
+      invalidate("輸入已變更，請重新產生預覽。");
+      if (launchOpts.autoPreview !== false && workdirInput.value.trim()) doPreview();
+    });
 
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
@@ -8443,7 +8448,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }
     }
 
-    if (launchOpts.autoPreview === true && workdirInput.value.trim()) doPreview();
+    // P10 F4: a folder that is already filled in is previewed on opening (the preview is the same single-use, 5-minute
+    // one); the focus stays on the folder box or the preview button, never on 確認啟動
+    if (launchOpts.autoPreview !== false && workdirInput.value.trim()) doPreview();
 
     async function doLaunch() {
       if (busy || !current) return;

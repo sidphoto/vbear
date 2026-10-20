@@ -16,6 +16,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js")
 
 // --- synthetic DOM (structure, listeners, attributes, classList) ---------
 const idRegistry = new Map();
+const focusLog = [];   // every node that was given the focus, in order
 class Node {
   constructor(tag) {
     this.tag = tag;
@@ -108,7 +109,7 @@ class Node {
   }
   querySelector(sel) { return walk(this).find((n) => n.tag === sel) || null; }
   querySelectorAll(sel) { return walk(this).filter((n) => n.tag === sel); }
-  focus() {}
+  focus() { focusLog.push(this); }
   blur() {}
   get selectedOptions() {
     return this.children.filter((c) => c.hasAttribute("selected") && c.tag === "option");
@@ -699,6 +700,46 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     await tick(6);
     assert.strictEqual(launches.length, 1);
     assert.deepStrictEqual(launches[0], { preview_id: "p-" + "a".repeat(32), expected_settings_digest: "d".repeat(64), user_confirmed: true });
+  });
+
+  await test("pass dialog (P10 F4): a folder that is already filled in is previewed on opening; the focus never lands on 確認啟動 and a launch still needs the tick and a click", async () => {
+    const task = { id: "task-1", title: "T", template: "custom", goal: "", scope: [], out_of_scope: [], deliverables: [], acceptance_criteria: [], evidence: [],
+      steps: [], artifacts: [], status: "draft", workdir: WORKDIR, provenance: { agent: "pending", tests: "untested", human: "pending", verified: false,
+        verification_asserted: false, notes: "", source: "unauthenticated_console_ui" }, associated_pane_id: null, associated_session_id: null,
+      association_mode: "tracking_only", association_label: "x", created_at: 1, updated_at: 1 };
+    const previews = []; const launches = [];
+    const ctx = mkPass([roleP], { ...loadoutFor("p-1"), "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [task] }),
+      "POST /api/native/agent-previews": (_u, o) => { const b = JSON.parse(o.body); previews.push(b);
+        // like the server: without the commit acknowledgment the pass is shown but cannot go
+        return jsonResponse({ ok: true, preview: b.commit ? previewOf(LV.enforced, LV.enforced)
+          : previewOf(LV.enforced, LV.enforced, { launchable: false, preview_id: null, reasons: [{ code: "commit_not_enforceable", message: "請先勾選" }] }) }); },
+      "POST /api/native/agent-launches": (_u, o) => { launches.push(JSON.parse(o.body)); return jsonResponse({ ok: true, launch: { session: { session_id: "n-0123456789ab" } } }); } });
+    focusLog.length = 0;
+    await ctx.viewWorkbench(null, "task-1", "p-1", true);
+    await tick(10);
+    const d = dialog();
+    assert.strictEqual(previews.length, 1, "the preview was asked for without a click");
+    assert.deepStrictEqual(previews[0], { profile_id: "p-1", workdir: WORKDIR, commit: false });
+    const confirm = btnByText(d, "確認啟動");
+    assert.ok(!focusLog.includes(confirm), "the focus was never given to 確認啟動");
+    assert.strictEqual(confirm.disabled, true, "the commit sentence still has to be ticked");
+    confirm.dispatch("click");
+    await tick(6);
+    assert.strictEqual(launches.length, 0, "a disabled 確認啟動 launches nothing");
+    commitBox(d).checked = true; commitBox(d).dispatch("change");
+    await tick(8);
+    assert.strictEqual(previews.length, 2, "ticking previews again on its own");
+    assert.deepStrictEqual(previews[1], { profile_id: "p-1", workdir: WORKDIR, commit: true });
+    assert.ok(byData(d, "data-pass", "front").length === 1, "its front is shown");
+    assert.strictEqual(confirm.disabled, false);
+    assert.ok(!focusLog.includes(confirm), "ticking does not move the focus onto it either");
+    assert.strictEqual(launches.length, 0, "nothing launched until the click");
+    confirm.dispatch("click");
+    await tick(6);
+    assert.strictEqual(launches.length, 1);
+    // with no folder yet there is nothing to preview
+    const none = mkPass([roleP], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => { throw new Error("no preview without a folder"); } });
+    await openPass(none);
   });
 
   await test("pass dialog (P7 #2): a launch from a task's place keeps a note for that step of that task card; a launch without a step, or one that failed, keeps none", async () => {

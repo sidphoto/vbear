@@ -1122,7 +1122,10 @@ async function test(name, fn) {
 
   await test("source: the only writes are the flow and its roles; the only navigation is to a task card by id", () => {
     const posted = [...new Set((block.match(/api\.post\(([^,]+),/g) || []).map((x) => x.replace(/\s+/g, " ")))].sort();
-    assert.deepStrictEqual(posted, ["api.post(\"/api/flows\",", "api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`,"]);
+    // P10 F2: the next-step box's 「核准計畫」 writes the one manual event the form at the bottom of the flow page writes
+    // (after its own confirmation); no other kind is written from here
+    assert.deepStrictEqual(posted, ["api.post(\"/api/flows\",", "api.post(`/api/flows/${encodeURIComponent(flow.id)}/events`,", "api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`,"]);
+    assert.deepStrictEqual([...new Set(block.match(/flowEventBody\("[a-z_]+"/g))], ['flowEventBody("plan_approved"']);
     const hashes = block.match(/location\.hash = [^;]+;/g) || [];
     assert.ok(hashes.length >= 2 && hashes.every((h) => h === "location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;"), hashes.join("|"));
     assert.ok(!/api\.post\([^)]*(executor|dispatch|review|automation|accept)/.test(block), "nothing is started or sent from the team board");
