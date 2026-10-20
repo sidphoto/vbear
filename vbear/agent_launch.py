@@ -33,7 +33,7 @@ PREVIEW_TTL = 300.0
 PREVIEW_ID_BYTES = 16
 MAX_PREVIEWS = 32
 BYPASS_PTY = ("使用者在進階終端可自行改變 CLI 行為；例如在 Claude Code 以 ! 開頭直接執行的 shell 指令"
-              "不經沙盒（S0 驗收實測可寫入家目錄）。此標籤只約束 Agent，不是不可繞過的邊界")
+              "不經沙盒（實測過：這種模式可以寫入你的家目錄）。此標籤只約束 Agent，不是不可繞過的邊界")
 BYPASS_OTHER_PTY = ("使用者在進階終端可自行改變 CLI 行為；此標籤只約束 Agent，不是不可繞過的邊界")
 BYPASS_CODEX_PTY = ("使用者在 Codex Terminal 可輸入 ! 直接執行使用者 shell，繞過 Codex sandbox；此標籤只描述 Agent 執行層，"
                     "不代表 OS 對使用者 shell 的隔離。")

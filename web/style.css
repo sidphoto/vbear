@@ -168,6 +168,9 @@ a.card:hover { border-color: var(--line-2); transform: translateY(-1px); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
 .toolbar label { font-size: 13px; color: var(--ink-2); }
 .filter-control, .status-help { display: inline-flex; gap: 4px; align-items: center; min-width: 0; }
+/* a card's status badge and its ⓘ keep their own width (P14): with a long unbreakable title the title column gives way (it can wrap
+   anywhere), not the badge, whose ⓘ used to be pushed out past the card's edge */
+.card-top > .status-help { flex: none; }
 .toolbar select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel); }
 .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 9px; overflow: hidden; }
 .seg button { border: 0; background: var(--panel); padding: 5px 11px; cursor: pointer; font-size: 13px; }

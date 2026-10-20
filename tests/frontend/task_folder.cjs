@@ -1125,10 +1125,10 @@ async function test(name, fn) {
 
   await test("P9: the sentences of the main paths that used to end a bracket right before a stop were reworded", () => {
     const gone = ["（只是提醒，仍然可以用這個名字）。", "（只是提醒）。", "（沒有找到固定版本的安裝）。", "（這次讀不到實際範圍）。",
-      "（輪到 ${ns.after.who}）。", "（第二位審查選填）。", "（新開一個終端）。", "（唯讀）並存", "（限已測的路徑、版本與執行層）。",
+      "（${turnOf(ns.after.who)}）。", "（第二位審查選填）。", "（新開一個終端）。", "（唯讀）並存", "（限已測的路徑、版本與執行層）。",
       "（關聯只是追蹤記錄，不會把內容送進終端）。", "有效（到 ${fmtTime", "（或無法確認）；", "（存在 ${refs.present"];
     for (const g of gone) assert.ok(!source.includes(g), g);
-    const there = ["已經有一張叫「${same.name}」的卡，只是提醒，仍然可以用這個名字。", "找不到 Codex，沒有找到固定版本的安裝。", "接下來：${ns.after.text}，輪到 ${ns.after.who}。",
+    const there = ["已經有一張叫「${same.name}」的卡，只是提醒，仍然可以用這個名字。", "找不到 Codex，沒有找到固定版本的安裝。", "接下來：${ns.after.text}，${turnOf(ns.after.who)}。",
       "審查各一位，第二位審查選填。", "必須重新啟動角色，也就是新開一個終端。", "已實測確實擋住，限已測的路徑、版本與執行層。"];
     for (const t of there) assert.ok(source.includes(t), t);
   });

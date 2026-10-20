@@ -530,9 +530,9 @@ async function test(name, fn) {
   });
 
   await test("nextStepSummary: one honest line for the card front", () => {
-    assert.strictEqual(pure.nextStepSummary(fv("implementing")), "下一步：執行者實作（輪到 工匠）");
-    assert.strictEqual(pure.nextStepSummary(fv("awaiting_merge")), "下一步：你自己合併（輪到 你）");
-    assert.strictEqual(pure.nextStepSummary(fv("awaiting_push")), "下一步：你自己上傳到遠端（輪到 你）");
+    assert.strictEqual(pure.nextStepSummary(fv("implementing")), "下一步：執行者實作（輪到工匠）");
+    assert.strictEqual(pure.nextStepSummary(fv("awaiting_merge")), "下一步：你自己合併（輪到你）");
+    assert.strictEqual(pure.nextStepSummary(fv("awaiting_push")), "下一步：你自己上傳到遠端（輪到你）");
     assert.strictEqual(pure.nextStepSummary(fv("done")), "這個流程的步驟都走完了");
     assert.strictEqual(pure.nextStepSummary(fv("???")), "", "an unknown phase is not turned into a step");
   });
@@ -543,7 +543,7 @@ async function test(name, fn) {
     assert.strictEqual(now.length, 1);
     assert.strictEqual(now[0].getAttribute("aria-current"), "step");
     assert.ok(walk(now[0]).some((n) => n.tag === "strong" && n.textContent === "執行者實作"));
-    assert.ok(findText(now[0], "輪到 工匠"));
+    assert.ok(findText(now[0], "輪到工匠"));
     assert.ok(findText(now[0], "原因：implementing"));
     const risk = byData(node, "data-step", "risk")[0];
     assert.ok(walk(risk).some((n) => n.className === "armory-tip" && n.getAttribute("data-tip") === pure.TEAM_INFO.risk));
@@ -943,7 +943,7 @@ async function test(name, fn) {
     main.append(node);
     await tick(8);
     const next = byData(node, "data-team", "next")[0];
-    assert.ok(next && findText(next, "輪到 工匠"));
+    assert.ok(next && findText(next, "輪到工匠"));
     assert.ok(walk(next).some((n) => n.tag === "a" && n.getAttribute("href") === `#/flows/${FLOW_ID}`));
     assert.ok(byData(node, "data-team", "board")[0]);
     // a flow of another task is not this task's team
@@ -1079,7 +1079,7 @@ async function test(name, fn) {
     const team = byData(withFlow, "data-tf", "team")[0];
     assert.ok(team);
     assert.strictEqual(byData(team, "data-position", "規劃").length + byData(team, "data-position", "執行").length + byData(team, "data-position", "審查1").length, 3);
-    assert.ok(findText(byData(team, "data-tf", "next")[0], "下一步：執行者實作（輪到 工匠）"));
+    assert.ok(findText(byData(team, "data-tf", "next")[0], "下一步：執行者實作（輪到工匠）"));
     const none = ctx.taskFrontCard(baseTask(), { flows: [] });
     assert.ok(findText(byData(none, "data-tf", "team")[0], "還沒有隊伍"));
     assert.ok(walk(none).some((n) => n.tag === "a" && n.getAttribute("href") === "#/workbench?task=task-1"));

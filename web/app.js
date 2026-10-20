@@ -966,6 +966,11 @@ const EVIDENCE = {
 function badge(label, cls, title, plain) {
   return el("span", { class: `badge ${cls}${plain ? " plain" : ""}`, title }, label);
 }
+// The name of a task template on screen (P14): the stored value is the key ("custom"), the badge says it in Chinese. A key
+// this list does not know is shown as it is stored, never a guess; the data is not changed.
+const TEMPLATE_NAMES = { bug_fix: "Bug 修復", feature: "功能實作", review: "獨立審查", test: "測試補充", research: "技術調研",
+  refactor: "模組重構", docs: "技術文件", investigation: "問題排查", custom: "自訂" };
+function templateName(key) { return typeof key === "string" && cardHas(TEMPLATE_NAMES, key) ? TEMPLATE_NAMES[key] : String(key == null ? "" : key); }
 function actBadge(a) { const [l, c, t] = ACT[a] || ACT.unknown; return badge(l, c, t); }
 const ACT_HELP = {
   active: "可使用代表掃描到它位於工具的載入範圍；不代表目前有 Agent 正在使用。",
@@ -1697,6 +1702,27 @@ function emptyState(title, detail) {
 function notice(kind, text) {
   const ico = { warn: "!", info: "i", bad: "×" }[kind] || "i";
   return el("div", { class: `notice ${kind}`, role: kind === "bad" ? "alert" : "note" }, el("span", { class: "ico", "aria-hidden": "true" }, ico), el("div", null, text));
+}
+// The runtime's words for a terminal it could not attach to arrive as "terminal attach failed: <its message>" (P14). The ones
+// known are said in plain words, with the original kept in a fold ("技術細節"); one that is not known gets only a general
+// line, never a guess at the cause. Any other reason (for example 終端機已結束) is shown as it is. The server's text and
+// codes are not changed. gone: the answer was "no such session", so there is nothing left to reconnect to.
+function terminalClosedView(reason) {
+  const raw = typeof reason === "string" ? reason.trim() : "";
+  const m = /^terminal attach failed:\s*([\s\S]*)$/.exec(raw);
+  if (!m) return { text: raw, gone: false, detail: "" };
+  if (m[1].includes("沒有這個 session")) return { text: "這個終端已經不存在了（可能已關閉）。", gone: true, detail: raw };
+  if (m[1].includes("連線上限")) return { text: "這個終端的連線數已滿，暫時連不上；關閉其他正在看它的分頁後可以再試。", gone: false, detail: raw };
+  return { text: "沒能連上這個終端。", gone: false, detail: raw };
+}
+// The line under the terminal when its stream has closed: the reason (plain words), what to do next, and the original.
+function terminalClosedNotice(reason, sessionGone, goneAdvice) {
+  const v = terminalClosedView(reason);
+  const next = sessionGone ? goneAdvice : "如需重新開啟請點選右上方「重新連線」。";
+  const said = v.text && !/[。！？.!?]$/.test(v.text) ? v.text + "。" : v.text;
+  return notice("info", [`終端機連線已關閉${said ? "：" + said : ""}${next}`,
+    v.detail ? el("details", { class: "small term-tech", "data-term": "tech" },
+      el("summary", null, "技術細節"), el("code", { class: "term-tech-raw" }, v.detail)) : null]);
 }
 function staleNotice() {
   if (!D.overview || !D.overview.stale) return null;
@@ -6553,9 +6579,8 @@ async function viewTerminal(paneId) {
         : notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
     }
     if (connState === "closed") {
-      notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? (isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。")
-        : "如需重新開啟請點選右上方「重新連線」。"}`));
+      notices.push(terminalClosedNotice(closedReason, sessionGone,
+        isShell ? "需要新的終端機時，請到「終端機」頁開啟。" : "需要新的終端時，請從角色卡的「出發通行證」開啟。"));
     } else if (connState === "disconnected") {
       const attempts = reconnectPolicy.getRetryCount();
       const waitText = reconnectPolicy.canAutoRetry()
@@ -6746,6 +6771,7 @@ async function viewTerminal(paneId) {
           } else if (msg.type === "terminal.closed") {
             connState = "closed";
             closedReason = msg.reason || "終端機已結束";
+            if (terminalClosedView(msg.reason).gone) sessionGone = true;
             if (mode === "control") {
               mode = "observe";
               controlToken = null;
@@ -7473,9 +7499,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           : notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
       }
       if (connState === "closed") {
-        notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
-        ? "需要新的終端時，請從角色卡的「出發通行證」開啟。"
-        : "如需重新開啟請點選右上方「重新連線」。"}`));
+        notices.push(terminalClosedNotice(closedReason, sessionGone, "需要新的終端時，請從角色卡的「出發通行證」開啟。"));
       } else if (connState === "disconnected") {
         const attempts = reconnectPolicy.getRetryCount();
         const waitText = reconnectPolicy.canAutoRetry()
@@ -7674,6 +7698,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
             } else if (msg.type === "terminal.closed") {
               connState = "closed";
               closedReason = msg.reason || "終端機已結束";
+              if (terminalClosedView(msg.reason).gone) sessionGone = true;
               if (mode === "control") {
                 mode = "observe";
                 controlToken = null;
@@ -8160,7 +8185,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("h3", { class: "wb-task-title" }, activeTask.title),
         lightsSlot,
         el("div", { class: "row small muted" },
-          badge(activeTask.template, "b-info", "任務範本"),
+          badge(templateName(activeTask.template), "b-info", activeTask.template ? `任務範本（代號 ${activeTask.template}）` : "任務範本"),
           statusSlot,
           pickupBadge(activeTask.pickup),
           activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
@@ -9217,6 +9242,12 @@ function teamDraftWrite(taskId, slots) {
 }
 
 // ---- the next steps (design 3.5) ----------------------------------------------------------------------------------
+// 「輪到你」「輪到工匠」「輪到 CEO」: a space only where a Latin letter or digit meets the Chinese (P14: no stray space
+// in 「輪到 你」). turnAfter is the same rule for a name that is followed by more text: 「你在終端裡」「CEO 在終端裡」.
+const LATIN_EDGE_START = /^[A-Za-z0-9]/;
+const LATIN_EDGE_END = /[A-Za-z0-9]$/;
+function turnOf(who) { const s = String(who == null ? "" : who); return LATIN_EDGE_START.test(s) ? `輪到 ${s}` : `輪到${s}`; }
+function turnAfter(who) { const s = String(who == null ? "" : who); return LATIN_EDGE_END.test(s) ? s + " " : s; }
 const NEXT_PHASE_STEP = { planning: "plan", awaiting_approval: "approve", implementing: "implement", needs_fix: "implement",
   in_review: "review", review_stale: "review", awaiting_merge: "merge", review_unverified: "merge", awaiting_push: null, done: null };
 const NEXT_STEP_TEXT = { plan: "規劃者提出計畫", approve: "你核准計畫", risk: "你接受風險", implement: "執行者實作",
@@ -9296,7 +9327,7 @@ function nextStepAction(flow, opts = {}) {
     .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
   const recordWords = NEXT_STEP_RECORD[step.key];
   return { step: step.key, ask: NEXT_STEP_ASK[step.key], turn: ns.turn, manual: !auto, launches, recordWords,
-    note: auto ? "" : `手動模式下，VBear 不會自動推進。${ns.turn} 在終端裡完成這一步後，回到這裡記錄（例如『記錄：${recordWords}』）。` };
+    note: auto ? "" : `手動模式下，VBear 不會自動推進。${turnAfter(ns.turn)}在終端裡完成這一步後，回到這裡記錄（例如『記錄：${recordWords}』）。` };
 }
 
 // The action under the next-steps list. opts: { task, profiles, compact (the lobby's card: buttons and the note only),
@@ -9383,12 +9414,12 @@ function nextStepsList(flow, opts = {}) {
     s.key === "risk" ? teamInfo("risk", "風險接受") : null,
     s.key === "implement" ? teamInfo("executor", "串流執行者") : null,
     el("span", { class: "ns-who small muted" }, `（${s.who}）`),
-    s.state === "now" ? el("span", { class: "ns-turn tag", "data-ns": "turn" }, `輪到 ${ns.turn}`) : null,
+    s.state === "now" ? el("span", { class: "ns-turn tag", "data-ns": "turn" }, turnOf(ns.turn)) : null,
     s.state === "now" && ns.reason ? el("div", { class: "small ns-reason" }, ns.reason) : null));
   return el("div", { class: "ns", "data-ns": "list" },
     el("ol", { class: "ns-list" }, items),
     nextStepActionNode(flow, opts),
-    ns.after ? el("p", { class: "small ns-after", "data-ns": "after" }, `接下來：${ns.after.text}，輪到 ${ns.after.who}。`,
+    ns.after ? el("p", { class: "small ns-after", "data-ns": "after" }, `接下來：${ns.after.text}，${turnOf(ns.after.who)}。`,
       ns.reason ? el("span", { class: "muted" }, ` ${ns.reason}`) : null) : null);
 }
 
@@ -9796,12 +9827,12 @@ function openPlaceDialog(p, opts = {}) {
   return { modal, close, state: st };
 }
 
-// One line for a flow's next step, for the front of a task card: 「下一步：執行者實作（輪到 工匠）」.
+// One line for a flow's next step, for the front of a task card: 「下一步：執行者實作（輪到工匠）」.
 function nextStepSummary(flow) {
   const ns = nextSteps(flow);
   if (!ns.known) return "";
-  if (ns.current >= 0) return `下一步：${ns.steps[ns.current].text}（輪到 ${ns.turn}）`;
-  if (ns.after) return `下一步：${ns.after.text}（輪到 ${ns.after.who}）`;
+  if (ns.current >= 0) return `下一步：${ns.steps[ns.current].text}（${turnOf(ns.turn)}）`;
+  if (ns.after) return `下一步：${ns.after.text}（${turnOf(ns.after.who)}）`;
   return "這個流程的步驟都走完了";
 }
 
@@ -10706,6 +10737,12 @@ if (typeof module !== "undefined" && module.exports) {
     taskTerminalLink,
     folderLooksLikePath,
     nextStepSummary,
+    terminalClosedView,
+    terminalClosedNotice,
+    templateName,
+    TEMPLATE_NAMES,
+    turnOf,
+    turnAfter,
     teamAvatars,
     teamBoard,
     teamSection,

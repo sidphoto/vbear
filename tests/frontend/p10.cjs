@@ -194,7 +194,7 @@ test("F5 the main words are plain: the engineering names are gone from the page 
 test("F5 the next step after merging says 上傳, and the gates and the merge panel are named the same way", () => {
   const ns = app.nextSteps(flowView("awaiting_push"));
   assert.deepStrictEqual({ text: ns.after.text, who: ns.after.who }, { text: "你自己上傳到遠端", who: "你" });
-  assert.strictEqual(app.nextStepSummary(flowView("awaiting_push")), "下一步：你自己上傳到遠端（輪到 你）");
+  assert.strictEqual(app.nextStepSummary(flowView("awaiting_push")), "下一步：你自己上傳到遠端（輪到你）");
   const grid = app.flowGateGrid(Object.assign(flowView("awaiting_push"), { attention: true, phase: { key: "awaiting_push", label: "等你上傳", reason: "" } }));
   assert(text(grid).includes("上傳（你來）") && !/push/.test(text(grid)));
 });

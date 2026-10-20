@@ -531,7 +531,8 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
   });
 
   // ---- #2 the next step you can act on ---------------------------------------------------------------------------------
-  const noteOf = (name, words) => `手動模式下，VBear 不會自動推進。${name} 在終端裡完成這一步後，回到這裡記錄（例如『記錄：${words}』）。`;
+  // a space only where a Latin name meets the Chinese: 「CEO 在終端裡」, but 「工匠在終端裡」 (P14)
+  const noteOf = (name, words) => `手動模式下，VBear 不會自動推進。${/[A-Za-z0-9]$/.test(name) ? name + " " : name}在終端裡完成這一步後，回到這裡記錄（例如『記錄：${words}』）。`;
 
   await test("#2 nextStepAction: whose step it is, the button, and the sentence — row by row (manual mode)", () => {
     const rows = [
