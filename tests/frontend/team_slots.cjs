@@ -996,7 +996,7 @@ async function test(name, fn) {
     assert.strictEqual(act(dlg(), "place").disabled, true, "a place is needed too");
   });
 
-  await test("place dialog (task without a team): the card goes into the draft and the page goes to the task card", async () => {
+  await test("place dialog (task without a team): the card goes into the draft and the page stays; the dialog says where and offers the task card", async () => {
     const ctx = newCtx();
     await placeFlow(ctx, CEO);
     byData(dlg(), "data-place-task", "task-1")[0].click();
@@ -1005,9 +1005,10 @@ async function test(name, fn) {
     act(dlg(), "place").click();
     await tick();
     assert.strictEqual(posts().length, 0, "nothing is written to the flow yet");
-    assert.strictEqual(ctx.location.hash, "#/workbench?task=task-1");
+    assert.strictEqual(ctx.location.hash, "", "P12 C7: the page did not move");
     assert.strictEqual(ctx.teamDraftRead("task-1", PROFILES, REPO).planner.profile_id, "p-ceo");
-    assert.ok(!dlg(), "closed");
+    assert.ok(dlg(), "the dialog stays, with the answer in it");
+    assert.ok(findText(byData(dlg(), "data-place", "done")[0], "還要放其他位置嗎？"));
   });
 
   await test("place dialog (task with a team): saved at once with set-roles, and the note about the record is shown first", async () => {
@@ -1027,7 +1028,8 @@ async function test(name, fn) {
     assert.strictEqual(roles.reviewers.length, 2);
     assert.strictEqual(roles.reviewers[1].profile_id, "p-rev");
     assert.strictEqual(roles.executor.session_id, "n-0123456789ab");
-    assert.strictEqual(ctx.location.hash, "#/workbench?task=task-1");
+    assert.strictEqual(ctx.location.hash, "", "P12 C7: the page did not move");
+    assert.ok(findText(byData(dlg(), "data-place", "done")[0], "已放到「"), "and it says where");
   });
 
   await test("place dialog: a review place that would not count shows it before the click; the server's refusal appears inside the dialog", async () => {
@@ -1127,7 +1129,10 @@ async function test(name, fn) {
     assert.deepStrictEqual(posted, ["api.post(\"/api/flows\",", "api.post(`/api/flows/${encodeURIComponent(flow.id)}/events`,", "api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`,"]);
     assert.deepStrictEqual([...new Set(block.match(/flowEventBody\("[a-z_]+"/g))], ['flowEventBody("plan_approved"']);
     const hashes = block.match(/location\.hash = [^;]+;/g) || [];
-    assert.ok(hashes.length >= 2 && hashes.every((h) => h === "location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;"), hashes.join("|"));
+    assert.ok(hashes.every((h) => h === "location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;"), hashes.join("|"));
+    // P12 C7: the place dialog no longer moves the page by itself; its only way out is a link the person presses
+    const links = block.match(/href: `#\/workbench\?task=\$\{encodeURIComponent\(d\.taskId\)\}`/g) || [];
+    assert.strictEqual(links.length, 1);
     assert.ok(!/api\.post\([^)]*(executor|dispatch|review|automation|accept)/.test(block), "nothing is started or sent from the team board");
   });
 

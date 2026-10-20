@@ -1198,19 +1198,31 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 :root[data-theme="dark"] .px-st { fill: #5eead4; }
 :root[data-theme="dark"] .px-sh { fill: #142522; }
 .rcard[data-camp="anthropic"] { --card-frame-bg: #fffbeb; --card-frame-line: #78350f; --card-frame-title: #92400e; --pos-bg: #fffbeb; --pos-text: #92400e; --pos-border: #78350f; }
+.camp-frame[data-camp="anthropic"] { --card-frame-bg: #fffbeb; --card-frame-line: #78350f; --card-frame-title: #92400e; --pos-bg: #fffbeb; --pos-text: #92400e; --pos-border: #78350f; }
 .rcard[data-camp="openai"] { --card-frame-bg: #f0fdfa; --card-frame-line: #134e4a; --card-frame-title: #115e59; --pos-bg: #f0fdfa; --pos-text: #115e59; --pos-border: #134e4a; }
+.camp-frame[data-camp="openai"] { --card-frame-bg: #f0fdfa; --card-frame-line: #134e4a; --card-frame-title: #115e59; --pos-bg: #f0fdfa; --pos-text: #115e59; --pos-border: #134e4a; }
 .rcard[data-camp="google"] { --card-frame-bg: #f0f9ff; --card-frame-line: #0c4a6e; --card-frame-title: #075985; --pos-bg: #f0f9ff; --pos-text: #075985; --pos-border: #0c4a6e; }
+.camp-frame[data-camp="google"] { --card-frame-bg: #f0f9ff; --card-frame-line: #0c4a6e; --card-frame-title: #075985; --pos-bg: #f0f9ff; --pos-text: #075985; --pos-border: #0c4a6e; }
 .rcard[data-camp="other"] { --card-frame-bg: #faf5ff; --card-frame-line: #581c87; --card-frame-title: #6b21a8; --pos-bg: #faf5ff; --pos-text: #6b21a8; --pos-border: #581c87; }
+.camp-frame[data-camp="other"] { --card-frame-bg: #faf5ff; --card-frame-line: #581c87; --card-frame-title: #6b21a8; --pos-bg: #faf5ff; --pos-text: #6b21a8; --pos-border: #581c87; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .rcard[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; --pos-bg: #292315; --pos-text: #fde68a; --pos-border: #fbbf24; }
+  :root:not([data-theme="light"]) .camp-frame[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; --pos-bg: #292315; --pos-text: #fde68a; --pos-border: #fbbf24; }
   :root:not([data-theme="light"]) .rcard[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; --pos-bg: #142522; --pos-text: #99f6e4; --pos-border: #5eead4; }
+  :root:not([data-theme="light"]) .camp-frame[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; --pos-bg: #142522; --pos-text: #99f6e4; --pos-border: #5eead4; }
   :root:not([data-theme="light"]) .rcard[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; --pos-bg: #14232b; --pos-text: #bae6fd; --pos-border: #7dd3fc; }
+  :root:not([data-theme="light"]) .camp-frame[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; --pos-bg: #14232b; --pos-text: #bae6fd; --pos-border: #7dd3fc; }
   :root:not([data-theme="light"]) .rcard[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; --pos-bg: #24182e; --pos-text: #e9d5ff; --pos-border: #d8b4fe; }
+  :root:not([data-theme="light"]) .camp-frame[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; --pos-bg: #24182e; --pos-text: #e9d5ff; --pos-border: #d8b4fe; }
 }
 :root[data-theme="dark"] .rcard[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; --pos-bg: #292315; --pos-text: #fde68a; --pos-border: #fbbf24; }
+:root[data-theme="dark"] .camp-frame[data-camp="anthropic"] { --card-frame-bg: #292315; --card-frame-line: #fbbf24; --card-frame-title: #fde68a; --pos-bg: #292315; --pos-text: #fde68a; --pos-border: #fbbf24; }
 :root[data-theme="dark"] .rcard[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; --pos-bg: #142522; --pos-text: #99f6e4; --pos-border: #5eead4; }
+:root[data-theme="dark"] .camp-frame[data-camp="openai"] { --card-frame-bg: #142522; --card-frame-line: #5eead4; --card-frame-title: #99f6e4; --pos-bg: #142522; --pos-text: #99f6e4; --pos-border: #5eead4; }
 :root[data-theme="dark"] .rcard[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; --pos-bg: #14232b; --pos-text: #bae6fd; --pos-border: #7dd3fc; }
+:root[data-theme="dark"] .camp-frame[data-camp="google"] { --card-frame-bg: #14232b; --card-frame-line: #7dd3fc; --card-frame-title: #bae6fd; --pos-bg: #14232b; --pos-text: #bae6fd; --pos-border: #7dd3fc; }
 :root[data-theme="dark"] .rcard[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; --pos-bg: #24182e; --pos-text: #e9d5ff; --pos-border: #d8b4fe; }
+:root[data-theme="dark"] .camp-frame[data-camp="other"] { --card-frame-bg: #24182e; --card-frame-line: #d8b4fe; --card-frame-title: #e9d5ff; --pos-bg: #24182e; --pos-text: #e9d5ff; --pos-border: #d8b4fe; }
 
 .cw-box { max-width: 680px; max-height: min(88vh, 760px); }
 .cw-body { overflow-y: auto; display: grid; gap: 14px; align-content: start; min-height: 0; padding: 2px; }
@@ -1288,6 +1300,62 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
   .fp-items { grid-template-columns: 1fr; max-height: 210px; }
   .cw-foot .btn { flex: 1 1 auto; }
 }
+
+/* P12 (the card feel). A small thing in the colours of its camp (the art's frames, set by .camp-frame[data-camp] above): a filled
+   team place, the small cards of the pool, the chip cards of skills, a starter card. The quiet text on them is the second ink
+   (4.5:1 or more on every camp's card in both themes). A place that has a problem keeps the red frame. */
+.camp-frame { color: var(--ink); }
+.camp-frame .muted, .camp-frame .card-sub, .camp-frame.card p { color: var(--ink-2); }
+.team-slot.ts-filled.camp-frame { background: var(--card-frame-bg); border-color: var(--card-frame-line); }
+.team-slot.ts-filled.camp-frame.ts-bad { border-color: var(--bad); }
+.team-slot.camp-frame .ts-head strong { color: var(--card-frame-title); }
+.team-slot.camp-frame .ts-head { align-items: center; justify-content: flex-start; }
+.team-slot.camp-frame .ts-head > .small { margin-left: auto; }
+.team-slot.camp-frame .ts-body:hover { background: transparent; outline: 2px solid var(--card-frame-line); outline-offset: -2px; }
+.ts-chip.camp-frame { background: var(--card-frame-bg); border: 2px solid var(--card-frame-line); border-radius: 8px; padding: 4px 8px 4px 6px; }
+.ts-chip.camp-frame .ts-chip-name { color: var(--card-frame-title); font-weight: 650; }
+.ts-chip.camp-frame .tag { background: transparent; border-color: var(--card-frame-line); }
+.ts-chip.camp-frame:hover { border-color: var(--card-frame-line); box-shadow: 0 0 0 2px var(--accent); }
+.ts-chip.camp-frame.ts-chip-on, .ts-chip.camp-frame[aria-pressed="true"] { border-color: var(--card-frame-line); background: var(--card-frame-bg); box-shadow: 0 0 0 3px var(--accent); }
+.cw-deck-row.camp-frame { background: var(--card-frame-bg); border: 2px solid var(--card-frame-line); }
+.cw-deck-row.camp-frame .tag { background: transparent; border-color: var(--card-frame-line); }
+.cw-deck-row.camp-frame input[type="text"] { color: var(--ink); }
+/* a skill's chip card (art cardShapes.skill): the top right corner cut 12px, a band 4px across the top in the camp's frame colour */
+.skill-chip { position: relative; clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%); box-shadow: none; padding-top: 18px;
+  border-color: var(--card-frame-line, var(--line-2)); background: var(--card-frame-bg, var(--panel)); }
+.skill-chip::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--card-frame-line, var(--line-2)); }
+.skill-chip::after { content: ""; position: absolute; top: 0; right: 0; width: 12px; height: 12px;
+  background: linear-gradient(to top right, transparent calc(50% - 1px), var(--card-frame-line, var(--line-2)) calc(50% - 1px), var(--card-frame-line, var(--line-2)) calc(50% + 1px), transparent calc(50% + 1px)); }
+.skill-chip .card-title { color: var(--card-frame-title, var(--ink)); }
+.skill-chip:hover { outline: 2px solid var(--accent); outline-offset: -3px; }
+.rcard-slot.skill-chip { padding: 8px 14px 3px 8px; border-radius: 0; background: transparent; }
+@media (forced-colors: active) { .skill-chip { clip-path: none; } .skill-chip::after { display: none; } }
+/* the task card (art cardShapes.task): a folder's head, a frame that is dashed for a mark, solid for a flow under way, red for your turn,
+   and three lights 規 執 審 */
+:root { --dossier-head: #e8e3d8; --dossier-head-ink: #1f2522; --dossier-draft: #626b66; --dossier-progress: #1f2522; --dossier-turn: #da251d;
+  --lamp-complete: #16815e; --lamp-active: #b45309; --lamp-none: #626b66; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --dossier-head: #343b37; --dossier-head-ink: #e9ece8; --dossier-draft: #a7b0aa; --dossier-progress: #e9ece8; --dossier-turn: #ff6b61;
+  --lamp-complete: #45d09a; --lamp-active: #fbbf24; --lamp-none: #a7b0aa; } }
+:root[data-theme="dark"] { --dossier-head: #343b37; --dossier-head-ink: #e9ece8; --dossier-draft: #a7b0aa; --dossier-progress: #e9ece8; --dossier-turn: #ff6b61;
+  --lamp-complete: #45d09a; --lamp-active: #fbbf24; --lamp-none: #a7b0aa; }
+.task-dossier { border: 2px solid var(--line-2); }
+.task-dossier[data-tstate="draft"] { border: 2px dashed var(--dossier-draft); }
+.task-dossier[data-tstate="progress"] { border: 2px solid var(--dossier-progress); }
+.task-dossier[data-tstate="turn"] { border: 3px solid var(--dossier-turn); }
+.task-dossier-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; background: var(--dossier-head); color: var(--dossier-head-ink); border-radius: 6px; padding: 8px 12px; }
+.task-dossier-head .muted, .task-dossier-head .task-mark { color: var(--dossier-head-ink); }
+.tf-card.task-dossier > .task-dossier-head { margin: -15px -16px 0; border-radius: 0; }
+.task-dossier-head .wb-task-title { margin: 0; color: var(--dossier-head-ink); }
+.wb-task-head.task-dossier-head { flex-direction: column; align-items: stretch; flex-wrap: nowrap; }
+.wb-task-head .task-lights-slot { margin-left: 0; }
+.wb-task-head .task-lights { margin-left: 0; }
+.task-lights { list-style: none; margin: 0 0 0 auto; padding: 0; display: inline-flex; gap: 4px; }
+.task-light { box-sizing: border-box; width: 22px; height: 22px; display: inline-grid; place-items: center; font-size: 12.5px; font-weight: 700; line-height: 1; border: 2px solid var(--lamp-none); color: var(--dossier-head-ink); background: transparent; }
+.task-light-complete { border-color: var(--lamp-complete); background: var(--lamp-complete); color: var(--panel); }
+.task-light-active { border-color: var(--lamp-active); box-shadow: 0 0 0 2px var(--lamp-active); }
+.task-light-none { border-style: solid; border-color: var(--lamp-none); }
+.task-light-empty { border-style: dotted; border-color: var(--lamp-none); }
+.place-done { font-weight: 600; margin: 0; }
 
 /* ---- team slots and next steps (design card-play 3.5): role cards on a task card ---- */
 .team-board { display: grid; gap: 12px; min-width: 0; }

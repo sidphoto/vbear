@@ -1393,7 +1393,8 @@ function searchSkills(query, pool) {
 
 function skillCard(s, why) {
   const dups = (s.duplicate_of || []).length;
-  return el("a", { class: "card", href: `#/skills/${s.skill_id}` },
+  // a chip card: the corner cut and the band across the top are in the colours of the tool the skill belongs to (the tag says it too)
+  return el("a", { class: "card skill-chip camp-frame", "data-camp": campKeyOf(s), href: `#/skills/${s.skill_id}` },
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" }, displayName(s)),
@@ -3456,7 +3457,7 @@ async function viewArmory() {
       ? notice("warn", `有 ${data.unresolved_equipped.length} 張角色卡引用的技能卡，目前索引找不到；不會自動刪除。`) : null,
     el("div", { class: "grid armory-grid" }, rows.map((s) => {
       const x = s.states || {}, loaded = x.loaded || {}, equipped = x.equipped || [];
-      return el("div", { class: "card" },
+      return el("div", { class: "card skill-chip camp-frame", "data-camp": campKeyOf(s) },
         el("div", { class: "card-top" }, el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name), actBadge(s.activation)),
         el("div", null, el("button", { class: "btn small", type: "button",
           on: { click: () => openSkillCard(s.skill_id) } }, "技能卡特性")),
@@ -4154,12 +4155,13 @@ function openStarterDeck(opts) {
         hint.textContent = same ? `已經有一張叫「${same.name}」的卡，只是提醒。` : "";
       };
       syncHint();
-      return el("div", { class: "cw-deck-row", "data-deck": c.key },
+      return el("div", { class: "cw-deck-row camp-frame", "data-deck": c.key, "data-camp": campOf({ tool: c.tool }).key },
         el("input", { type: "checkbox", id: `deck-on-${i}`, checked: r.checked, disabled: busy,
           "aria-label": `建立「${r.name || c.name}」`, on: { change: (e) => { r.checked = e.target.checked; drawFoot(); } } }),
         el("div", { class: "cw-deck-main" },
           el("div", { class: "row", style: "gap:8px; align-items:center" },
             officeSprite(speciesFor({ tool: c.tool }), campOf({ tool: c.tool }).key, 2),
+            positionGlyph(c.position),
             el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || "未指定"),
             el("span", { class: "tag" }, CARD_TOOL_LABEL[c.tool] || c.tool)),
           el("label", { class: "cw-field", for: inputId }, el("span", null, "名字"),
@@ -4358,6 +4360,22 @@ function positionBadge(position) {
   return el("span", { class: "rcard-pos", "data-pcard": "position", "data-pos": key },
     el("span", { class: "pos-glyph", "aria-hidden": "true" }, b.glyph),
     el("span", { class: "pos-text" }, position ? `${CARD_POSITION_LABEL[position]}位` : "位置未指定"));
+}
+
+// Just the square with its character, for a place or a small card that already says the position in words (art v3
+// positionBadges, drawn in the colours of the camp frame it sits in). Decoration, so it is hidden from a screen reader.
+function positionGlyph(position) {
+  const key = cardPositionBadgeKey(position);
+  const b = CARD_POSITION_BADGES[key];
+  return el("span", { class: "pos-glyph", "data-pos": key, "aria-hidden": "true", title: b.label }, b.glyph);
+}
+// The camp of a thing that has a tool (a skill card, a card in the pool) or only a family (a role written into a team): the
+// frame colours follow it. A tool or family this page does not know is "other"; nothing is guessed from the name.
+function campKeyOf(thing) {
+  const t = thing && typeof thing === "object" ? thing : {};
+  const tool = teamCardTool(t);
+  if (tool) return campOf({ tool }).key;
+  return typeof t.family === "string" ? campOf({ family: t.family }).key : "other";
 }
 
 // The shield of an armor level, by the level word the server sends (agent_launch.py). Only the three levels that have a
@@ -4707,7 +4725,7 @@ function profileCard(p, opts = {}) {
       el("div", { class: "rcard-slots-head small" }, `技能卡 ${slots.rows.length} 張`,
         (p._unresolved && p._unresolved.skills || []).length ? `；${p._unresolved.skills.length} 張目前索引找不到` : ""),
       slots.rows.length
-        ? el("ul", { class: "rcard-slot-list" }, shown.map((r) => el("li", { class: `rcard-slot rcard-slot-${r.state}`, "data-slot": r.state },
+        ? el("ul", { class: "rcard-slot-list" }, shown.map((r) => el("li", { class: `rcard-slot skill-chip rcard-slot-${r.state}`, "data-slot": r.state },
           el("span", { class: "rcard-slot-name" }, r.name),
           el("span", { class: "rcard-slot-label" }, CARD_SLOT_LABEL[r.state]))),
         slots.rows.length > shown.length ? el("li", { class: "rcard-slot-more small muted" }, `另有 ${slots.rows.length - shown.length} 張`) : null)
@@ -7038,6 +7056,42 @@ function taskStatusBadge(status) {
 // (closed, handed off, blocked, a verification claim) stays the pill, and no state is made up for it.
 const GATE_DIGITS = ["①", "②", "③", "④", "⑤", "⑥", "⑦"];
 const MARK_IS_GENERIC = new Set(["draft", "in_progress"]);
+// The three lights of a task card (規→執→審): where the flow is, by the step it is at (nextSteps, from the phase the server
+// derived). A light is 已過 / 目前 / 未到 by its place only (it does not say an approval was recorded). With no flow, or a
+// phase this page does not know, the lights are empty: no state is made up.
+const TASK_LIGHTS = [
+  { key: "plan", glyph: "規", label: "規劃", steps: ["plan", "approve", "risk"] },
+  { key: "exec", glyph: "執", label: "執行", steps: ["implement"] },
+  { key: "review", glyph: "審", label: "審查", steps: ["review"] },
+];
+const TASK_LIGHT_WORD = { complete: "已過", active: "目前", none: "未到", empty: "沒有資料" };
+function taskLightStates(flow) {
+  if (!flow || typeof flow !== "object") return TASK_LIGHTS.map(() => "empty");
+  const ns = nextSteps(flow);
+  if (!ns.known) return TASK_LIGHTS.map(() => "empty");
+  // past the review (the merge, the upload, done) all three are behind it
+  const key = ns.current >= 0 ? ns.steps[ns.current].key : "merge";
+  const cur = key === "merge" ? TASK_LIGHTS.length : TASK_LIGHTS.findIndex((l) => l.steps.includes(key));
+  if (cur < 0) return TASK_LIGHTS.map(() => "empty");
+  return TASK_LIGHTS.map((_, i) => (i < cur ? "complete" : i === cur ? "active" : "none"));
+}
+function taskLights(flow) {
+  const states = taskLightStates(flow);
+  return el("ol", { class: "task-lights", "data-task": "lights", "aria-label": "進度燈：規劃、執行、審查（依流程目前的階段排位，不代表當時有記錄到核准）" },
+    TASK_LIGHTS.map((l, i) => el("li", { class: `task-light task-light-${states[i]}`, "data-light": l.key, "data-state": states[i],
+      title: `${l.label}：${TASK_LIGHT_WORD[states[i]]}`, "aria-label": `${l.label}：${TASK_LIGHT_WORD[states[i]]}` },
+      el("span", { "aria-hidden": "true" }, l.glyph))));
+}
+// The frame of a task card: dashed for a mark that is only a mark (draft), solid for a flow that is under way, red when the
+// flow waits for you. A card that is closed or handed over has the plain frame.
+function taskDossierState(task, flow) {
+  if (flow && flow.attention === true) return "turn";
+  if (flow && flow.phase && typeof flow.phase.key === "string" && flow.phase.key && flow.phase.key !== "done") return "progress";
+  const st = task && task.status;
+  if (st === "in_progress") return "progress";
+  if (st === "draft") return "draft";
+  return "plain";
+}
 function taskGate(flow) {
   const label = flow && flow.phase && typeof flow.phase.label === "string" ? flow.phase.label : "";
   if (!label) return null;
@@ -8098,11 +8152,13 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     // the status slot starts as the card's own mark; the flow (read by the team section) turns it into the gate it is at
     const statusSlot = el("span", { class: "row task-status-slot", "data-task": "status" }, taskStatusNodes(derivedStatus, null));
+    const lightsSlot = el("div", { class: "task-lights-slot" }, taskLights(null));
     setKids(taskContent,
       selectorRow,
       handoffReminder(activeTask, tasksList, { onOpen: (id) => { activeTaskId = id; renderRightColumn(); } }),
-      el("div", { class: "wb-task-head" },
+      el("div", { class: "wb-task-head task-dossier task-dossier-head", "data-tstate": taskDossierState(activeTask, null) },
         el("h3", { class: "wb-task-title" }, activeTask.title),
+        lightsSlot,
         el("div", { class: "row small muted" },
           badge(activeTask.template, "b-info", "任務範本"),
           statusSlot,
@@ -8112,7 +8168,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         taskStatusExplainBlock(derivedStatus, activeTask.pickup, "data-wb")),
       folderBlock,
       teamSection(activeTask, { profiles: agentProfiles, catalog: agentBuilderCatalog, gone: () => token !== seq,
-        onFlow: (flow) => setKids(statusSlot, taskStatusNodes(derivedStatus, flow)) }),
+        onFlow: (flow) => {
+          setKids(statusSlot, taskStatusNodes(derivedStatus, flow));
+          setKids(lightsSlot, taskLights(flow));
+          if (lightsSlot.parentNode) lightsSlot.parentNode.setAttribute("data-tstate", taskDossierState(activeTask, flow));
+        } }),
       chainRow(activeTask),
       trackingBox,
       renderField("目標 (Goal)", activeTask.goal),
@@ -9443,8 +9503,8 @@ function teamBoard(opts) {
   function cardChip(p) {
     const tool = p.model && p.model.tool;
     const on = selected === p.id;
-    return el("button", { type: "button", class: `ts-chip${on ? " ts-chip-on" : ""}`, "data-card": p.id, draggable: "true",
-      "aria-pressed": String(on), title: "拖到位置上；或先點這張卡，再點位置",
+    return el("button", { type: "button", class: `ts-chip camp-frame${on ? " ts-chip-on" : ""}`, "data-card": p.id, "data-camp": campKeyOf(p), draggable: "true",
+      "aria-pressed": String(on), title: `拖到位置上；或先點這張卡，再點位置（${cardPosition(p.id) ? `你建議放「${CARD_POSITION_LABEL[cardPosition(p.id)]}」位` : "位置未指定"}）`,
       on: {
         click: () => { selected = on ? null : p.id; openKey = null; paint(); },
         dragstart: (e) => {
@@ -9454,7 +9514,9 @@ function teamBoard(opts) {
         },
       } },
       cardAvatar(p, 2), el("span", { class: "ts-chip-name" }, p.name || p.id),
-      el("span", { class: "tag" }, CARD_TOOL_SHORT[tool] || tool || "?"));
+      el("span", { class: "tag" }, CARD_TOOL_SHORT[tool] || tool || "?"),
+      // the position this card was made for (the one you suggested), or "？" when you did not say
+      positionGlyph(cardPosition(p.id)));
   }
 
   function menuFor(key) {
@@ -9503,8 +9565,9 @@ function teamBoard(opts) {
         openKey = isOpen ? null : def.key; query = ""; focusKey = def.key; paint();
       } } }, body);
     focusRefs.set(def.key, button);
-    const li = el("li", { class: `team-slot${entry ? " ts-filled" : " ts-vacant"}${def.optional ? " ts-optional" : ""}${armed ? " ts-armed" : ""}${problem ? " ts-bad" : ""}`,
-      "data-slot": def.key, "data-state": entry ? (problem ? "problem" : "filled") : "empty",
+    // a place with a card in it takes the camp frame of that card and the badge of the place's position; a vacant one stays as it was
+    const li = el("li", { class: `team-slot${entry ? " ts-filled camp-frame" : " ts-vacant"}${def.optional ? " ts-optional" : ""}${armed ? " ts-armed" : ""}${problem ? " ts-bad" : ""}`,
+      "data-slot": def.key, "data-state": entry ? (problem ? "problem" : "filled") : "empty", "data-camp": entry ? campKeyOf(entry) : null,
       on: {
         dragover: (e) => { if (e.preventDefault) e.preventDefault(); },
         drop: (e) => {
@@ -9516,7 +9579,7 @@ function teamBoard(opts) {
         },
         keydown: (e) => { if (e.key === "Escape" && openKey === def.key) { openKey = null; focusKey = def.key; paint(); } },
       } },
-      el("div", { class: "ts-head" }, el("strong", null, def.label),
+      el("div", { class: "ts-head" }, entry ? positionGlyph(def.position) : null, el("strong", null, def.label),
         el("span", { class: "small muted" }, def.position === "reviewer" ? "要和執行位不同陣營" : `建議放「${def.short}」位的卡`)),
       button,
       entry ? el("div", { class: "ts-tools" },
@@ -9614,10 +9677,11 @@ function teamSection(task, opts = {}) {
 
 // "放上任務卡" on a role card: pick the task card, pick the place, put it there. A task that already has a flow is
 // saved at once (the dialog is the confirmation, and it shows what the save does); one that has none gets a draft that
-// the board on its own page finishes.
+// the board on its own page finishes. After a card is put, the page stays where it is: the dialog says where it went,
+// asks whether another place is wanted, and offers a link to the task card (it does not take the page there).
 function openPlaceDialog(p, opts = {}) {
   const profiles = Array.isArray(opts.profiles) && opts.profiles.length ? opts.profiles : [p];
-  const st = { tasks: null, flows: [], taskId: null, slot: null, busy: false, error: "", loadError: "" };
+  const st = { tasks: null, flows: [], taskId: null, slot: null, busy: false, error: "", loadError: "", done: null };
   const titleId = "place-dialog-title";
   const body = el("div", { class: "cw-body" });
   const foot = el("div", { class: "modal-actions cw-foot" });
@@ -9640,22 +9704,29 @@ function openPlaceDialog(p, opts = {}) {
     slots[st.slot] = roleFromCard(p, { executor: st.slot === "executor", keep: slots[st.slot], workdir: t.workdir });
     const flow = flowOf(t);
     st.error = "";
+    const slotLabel = (TEAM_SLOTS.find((x) => x.key === st.slot) || {}).label || "位置";
     if (!flow) {
       teamDraftWrite(t.id, slots);
       const missing = teamMissing(slots);
       toast(missing.length ? `已放進「${t.title || t.id}」的草稿，還差：${missing.join("、")}` : "三個必填位置都有卡了，到任務卡上按「建立隊伍」");
-      close();
-      location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;
+      st.done = { taskId: t.id, title: t.title || t.id, slot: slotLabel, draft: true, missing };
+      st.slot = null;
+      draw();
+      if (opts.onPlaced) opts.onPlaced();
       return;
     }
     st.busy = true;
     draw();
     try {
-      await api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`, { roles: teamRolesBody(slots) });
-      toast(`已放上「${t.title || t.id}」的${(TEAM_SLOTS.find((s) => s.key === st.slot) || {}).label || "位置"}`);
-      close();
+      const res = await api.post(`/api/flows/${encodeURIComponent(flow.id)}/roles`, { roles: teamRolesBody(slots) });
+      toast(`已放上「${t.title || t.id}」的${slotLabel}`);
+      // the next place is read from what the server now holds, not from what this dialog read before
+      if (res && res.flow) st.flows = st.flows.map((f) => (f.id === flow.id ? res.flow : f));
+      st.done = { taskId: t.id, title: t.title || t.id, slot: slotLabel, draft: false, missing: [] };
+      st.busy = false;
+      st.slot = null;
+      draw();
       if (opts.onPlaced) opts.onPlaced();
-      location.hash = `#/workbench?task=${encodeURIComponent(t.id)}`;
     } catch (e) {
       st.busy = false;
       st.error = e && e.message ? e.message : "未知錯誤";
@@ -9663,7 +9734,25 @@ function openPlaceDialog(p, opts = {}) {
     }
   }
 
+  // after a card was put: where it went, and the choice to put it somewhere else too
+  function drawDone() {
+    const d = st.done;
+    setKids(body,
+      el("p", { class: "place-done", "data-place": "done", role: "status" },
+        d.draft ? `已放進「${d.title}」的草稿：${d.slot}。` : `已放到「${d.title}」的${d.slot}，隊伍已儲存。`, " 還要放其他位置嗎？"),
+      d.draft
+        ? el("p", { class: "small muted", "data-place": "done-note" }, d.missing.length
+            ? `這只是草稿，隊伍還沒建立；還差：${d.missing.join("、")}。`
+            : "三個必填位置都有卡了，到任務卡上按「建立隊伍」才會建立隊伍。")
+        : null);
+    setKids(foot,
+      el("button", { type: "button", class: "btn", "data-act": "close", on: { click: close } }, "完成"),
+      el("button", { type: "button", class: "btn", "data-act": "again", on: { click: () => { st.done = null; st.error = ""; draw(); } } }, "再放一個位置"),
+      el("a", { class: "btn primary", "data-act": "open-task", href: `#/workbench?task=${encodeURIComponent(d.taskId)}`, on: { click: () => close() } }, "打開任務卡"));
+  }
+
   function draw() {
+    if (st.done) { drawDone(); return; }
     const t = task();
     const open = (st.tasks || []);
     const rows = open.map((x) => el("li", null, el("button", { type: "button", class: "fp-item", "data-place-task": x.id, "aria-pressed": String(x.id === st.taskId),
@@ -10221,9 +10310,10 @@ function taskFolderBlock(task, opts = {}) {
 function taskFrontCard(task, opts = {}) {
   // the team and the next step, only when the flows were read: not knowing is not "no team"
   const flow = Array.isArray(opts.flows) ? opts.flows.find((f) => f && f.task_id === task.id) || null : undefined;
-  return el("article", { class: "tf-card card", "data-task": task.id },
-    el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"),
-      el("span", { class: "row task-status-slot", "data-task": "status" }, taskStatusNodes(task.status, flow || null))),
+  return el("article", { class: "tf-card card task-dossier", "data-task": task.id, "data-tstate": taskDossierState(task, flow || null) },
+    el("div", { class: "tf-title task-dossier-head" }, el("strong", null, task.title || "（沒有名稱）"),
+      el("span", { class: "row task-status-slot", "data-task": "status" }, taskStatusNodes(task.status, flow || null)),
+      taskLights(flow || null)),
     opts.sameTitle && opts.sameTitle.has(task.title) ? hintLine(taskHintText(task)) : null,
     handoffReminder(task, opts.tasks, { compact: true, hrefOf: (id) => `#/workbench?task=${encodeURIComponent(id)}` }),
     taskStatusExplainBlock(task.status, task.pickup, "data-tf"),
@@ -10573,6 +10663,13 @@ if (typeof module !== "undefined" && module.exports) {
     openImportProject,
     taskFolderBlock,
     taskFrontCard,
+    taskLights,
+    taskLightStates,
+    taskDossierState,
+    TASK_LIGHTS,
+    skillCard,
+    positionGlyph,
+    campKeyOf,
     taskCardsSection,
     TEAM_SLOTS,
     TEAM_INFO,
