@@ -702,7 +702,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.deepStrictEqual(launches[0], { preview_id: "p-" + "a".repeat(32), expected_settings_digest: "d".repeat(64), user_confirmed: true });
   });
 
-  await test("pass dialog (P10 F4): a folder that is already filled in is previewed on opening; the focus never lands on 確認啟動 and a launch still needs the tick and a click", async () => {
+  await test("pass dialog (P10 F4): a filled-in folder is previewed without a click as soon as the commit sentence is ticked; the focus never lands on 確認啟動 and a launch still needs a click", async () => {
     const task = { id: "task-1", title: "T", template: "custom", goal: "", scope: [], out_of_scope: [], deliverables: [], acceptance_criteria: [], evidence: [],
       steps: [], artifacts: [], status: "draft", workdir: WORKDIR, provenance: { agent: "pending", tests: "untested", human: "pending", verified: false,
         verification_asserted: false, notes: "", source: "unauthenticated_console_ui" }, associated_pane_id: null, associated_session_id: null,
@@ -718,18 +718,25 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     await ctx.viewWorkbench(null, "task-1", "p-1", true);
     await tick(10);
     const d = dialog();
-    assert.strictEqual(previews.length, 1, "the preview was asked for without a click");
-    assert.deepStrictEqual(previews[0], { profile_id: "p-1", workdir: WORKDIR, commit: false });
+    assert.strictEqual(previews.length, 0, "the sentence is not ticked for the person: no preview that the server would refuse");
     const confirm = btnByText(d, "確認啟動");
     assert.ok(!focusLog.includes(confirm), "the focus was never given to 確認啟動");
-    assert.strictEqual(confirm.disabled, true, "the commit sentence still has to be ticked");
+    assert.strictEqual(confirm.disabled, true, "nothing to confirm yet");
+    assert.ok(!commitBox(d).checked, "the consent starts unticked");
     confirm.dispatch("click");
     await tick(6);
     assert.strictEqual(launches.length, 0, "a disabled 確認啟動 launches nothing");
     commitBox(d).checked = true; commitBox(d).dispatch("change");
     await tick(8);
-    assert.strictEqual(previews.length, 2, "ticking previews again on its own");
-    assert.deepStrictEqual(previews[1], { profile_id: "p-1", workdir: WORKDIR, commit: true });
+    assert.strictEqual(previews.length, 1, "ticking asks for the preview on its own, with no click on 產生預覽");
+    assert.deepStrictEqual(previews[0], { profile_id: "p-1", workdir: WORKDIR, commit: true });
+    commitBox(d).checked = false; commitBox(d).dispatch("change");
+    await tick(6);
+    assert.strictEqual(previews.length, 1, "un-ticking asks for nothing");
+    assert.strictEqual(confirm.disabled, true, "and the old preview is dropped");
+    commitBox(d).checked = true; commitBox(d).dispatch("change");
+    await tick(8);
+    assert.strictEqual(previews.length, 2);
     assert.ok(byData(d, "data-pass", "front").length === 1, "its front is shown");
     assert.strictEqual(confirm.disabled, false);
     assert.ok(!focusLog.includes(confirm), "ticking does not move the focus onto it either");

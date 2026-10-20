@@ -718,7 +718,7 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       selected list; 打開技能檔案; 返回. After a removal, re-add is NOT offered here (use the editor).
   [ ] A skill the index cannot find: its row on the role card says so; no card is invented for it.
 
-== 3. 出發通行證 (角色卡右上「出發通行證」; workdir above; tick the commit box; 產生預覽)
+== 3. 出發通行證 (角色卡右上「出發通行證」; workdir above; tick the commit box: the preview then comes by itself, 產生預覽 stays for a manual retry)
   [ ] Button and dialog title both read 「出發通行證」 (no 「預覽並啟動」 anywhere).
   [ ] Seven labels in five groups (讀取 / 寫入與測試 / 提交與部署 / 網路 / 檔案範圍); each has level, note,
       bypass, evidence; a label that is not enforced is not worded as enforced.

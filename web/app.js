@@ -8295,7 +8295,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     // again on its own (the old one is dropped first; 確認啟動 is still only a click away after that)
     commitBox.addEventListener("change", () => {
       invalidate("輸入已變更，請重新產生預覽。");
-      if (launchOpts.autoPreview !== false && workdirInput.value.trim()) doPreview();
+      if (launchOpts.autoPreview !== false && workdirInput.value.trim() && commitBox.checked) doPreview();
     });
 
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
@@ -8544,9 +8544,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }
     }
 
-    // P10 F4: a folder that is already filled in is previewed on opening (the preview is the same single-use, 5-minute
-    // one); the focus stays on the folder box or the preview button, never on 確認啟動
-    if (launchOpts.autoPreview !== false && workdirInput.value.trim()) doPreview();
+    // P10 F4: a folder that is already filled in is previewed without a click on 產生預覽 (the preview is the same
+    // single-use, 5-minute one); the focus stays on the folder box or the preview button, never on 確認啟動.
+    // The commit sentence is never ticked for the person: without it the server refuses every preview, so the pass
+    // would open on a warning about a box nobody has had a chance to read; ticking it is what asks for the preview.
+    if (launchOpts.autoPreview !== false && workdirInput.value.trim() && commitBox.checked) doPreview();
 
     async function doLaunch() {
       if (busy || !current) return;
