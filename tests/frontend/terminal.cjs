@@ -596,8 +596,10 @@ async function runAllTests() {
 
     // 9b. Takeover warning text describes the native control model honestly
     assert(
-      appSource.includes("重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。"),
-      "Takeover warning must describe single-controller input with automatic demotion"
+      appSource.includes("接手後，你在這裡打的字會直接送給 Agent。")
+        && appSource.includes("同一時間只有一個分頁能控制；你接手後，其他分頁會改成只觀看。")
+        && appSource.includes("接手後隨時可以按「改成只觀看」放開。"),
+      "Takeover reminder must say typing goes straight to the Agent, that one tab controls at a time, and that it can be released"
     );
     assert(!/Herdr/i.test(appSource.replace(/herdr_migration\w*|herdrMigrationNotice|Herdr-era|不再支援 Herdr|在 Herdr 或其他終端/g, "")),
       "no Herdr feature wording may remain outside the one-time migration notice");
@@ -772,8 +774,13 @@ async function runAllTests() {
     );
     assert.strictEqual(
       (appSource.match(/\.\.\.termDimsForRequest\(term\),/g) || []).length,
-      3,
-      "every takeover payload (workbench, standalone dialog, built-in terminal auto-takeover) must use termDimsForRequest()"
+      1,
+      "the one shared takeover request (requestTerminalControl: dialog, built-in terminal, freshly started terminal) must use termDimsForRequest()"
+    );
+    assert.strictEqual(
+      (appSource.match(/action: "takeover"/g) || []).length,
+      1,
+      "input control is asked for in one place only"
     );
     assert.strictEqual(
       (appSource.match(/if \(!usableTermDims\(dims\)\) return;/g) || []).length,

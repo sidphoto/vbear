@@ -457,7 +457,12 @@ async function runWorkbenchTests() {
     const tablist = mainEl.find((n) => n.getAttribute("role") === "tablist");
     assert.ok(tablist, "the G/P/A/T tab header must have role=tablist");
     const tabs = tablist.findAll((n) => n.getAttribute("role") === "tab");
-    assert.strictEqual(tabs.length, 4, "there must be exactly 4 tabs (T/A/P/G)");
+    // P11 3.5: 專案契約 [P] and 全域底線 [G] moved behind 進階（工程資訊）; they get a tab only while one of them is open
+    assert.strictEqual(tabs.length, 2, "there must be exactly 2 tabs (T/A) until an engineering page is opened");
+    assert.ok(!tabs.some((t) => /\[P\]|\[G\]/.test(t.textContent)), "no [P]/[G] tab by default");
+    const adv = mainEl.find((n) => n.getAttribute("data-wb") === "advanced");
+    assert.ok(adv && adv.tag === "details" && !adv.hasAttribute("open"), "進階（工程資訊） is a details element that starts shut");
+    assert.ok(adv.textContent.includes("進階（工程資訊）") && adv.textContent.includes("狀態依據"), "the four-column status basis is inside it");
     const selected = tabs.filter((t) => t.getAttribute("aria-selected") === "true");
     assert.strictEqual(selected.length, 1, "exactly one tab must be marked aria-selected=true at a time");
     for (const t of tabs) {
@@ -474,7 +479,12 @@ async function runWorkbenchTests() {
     // all called the non-variadic append() with multiple loose arguments,
     // which silently dropped content (or threw for a lone child) in every
     // one of them; clicking through all four is what catches that.
-    for (const marker of ["角色", "[P]", "[G]", "[T]"]) {
+    for (const marker of ["角色", "[T]", "[P]", "[T]", "[G]", "[T]"]) {
+      if (marker === "[P]" || marker === "[G]") {
+        const open = mainEl.find((n) => n.getAttribute("data-wb") === (marker === "[P]" ? "open-project" : "open-global"));
+        assert.ok(open, `${marker} is reached from the advanced box`);
+        open.click();
+      }
       const tab = mainEl.find((n) => n.getAttribute("role") === "tab" && n.textContent.includes(marker));
       tab.click();
       const nowSelected = mainEl
@@ -486,7 +496,7 @@ async function runWorkbenchTests() {
       assert.ok(mainEl.find((n) => n.getAttribute("role") === "tabpanel"), `${marker} tab must render a tabpanel without throwing`);
     }
 
-    console.log("ok: Category 5 - G/P/A/T tabs expose a real tablist/tab/tabpanel ARIA structure, and every tab renders without throwing");
+    console.log("ok: Category 5 - T/A tabs (and P/G once opened) expose a real tablist/tab/tabpanel ARIA structure, and every tab renders without throwing");
   }
 
   // 6. Escape-exits-focus-mode listener is owned and released by the view
@@ -743,9 +753,11 @@ async function runWorkbenchTests() {
     assert.ok(modal, "promptTakeover must append its dialog to document.body");
     assert.strictEqual(modal.getAttribute("aria-labelledby"), "modal-takeover-title");
 
-    const confirmBtn = modal.find((n) => n.tag === "button" && n.textContent.includes("確認接管操作"));
-    assert.ok(confirmBtn, "dialog must contain the explicit confirm button");
-    assert.strictEqual(document.activeElement, confirmBtn, "initial focus must move to the explicit confirm button, as the dialog explicitly requests");
+    // P11 3.3: the dialog is 「接手提醒」; the focus starts on 取消, so a stray Enter never takes the keyboard
+    const confirmBtn = modal.find((n) => n.tag === "button" && n.textContent === "確認接手");
+    const cancelBtn = modal.find((n) => n.tag === "button" && n.textContent === "取消");
+    assert.ok(confirmBtn && cancelBtn, "dialog must contain the explicit confirm and cancel buttons");
+    assert.strictEqual(document.activeElement, cancelBtn, "initial focus must be on 取消, never on the confirm button");
     assert.strictEqual(mainEl.hasAttribute("inert"), true, "background must be inert while the takeover dialog is open");
 
     modal.dispatch("keydown", { key: "Escape" });
@@ -753,7 +765,7 @@ async function runWorkbenchTests() {
     assert.strictEqual(mainEl.hasAttribute("inert"), false, "closing the dialog must restore background inert state");
     assert.strictEqual(
       document.activeElement, takeoverBtn,
-      "closing the dialog must restore focus to the 接管操作 button that opened it, not confirmBtn"
+      "closing the dialog must restore focus to the 接管操作 button that opened it, not to a button inside the dialog"
     );
 
     console.log("ok: Category 13 - standalone terminal view's takeover dialog restores focus to its actual opener, not confirmBtn");
@@ -804,8 +816,8 @@ async function runWorkbenchTests() {
     assert.ok(modal, "workbench's promptTakeover must append its dialog to document.body");
     assert.strictEqual(modal.getAttribute("aria-labelledby"), "wb-modal-takeover-title");
 
-    const confirmBtn = modal.find((n) => n.tag === "button" && n.textContent.includes("確認接管操作"));
-    assert.strictEqual(document.activeElement, confirmBtn, "initial focus must move to the explicit confirm button");
+    const cancelBtn = modal.find((n) => n.tag === "button" && n.textContent === "取消");
+    assert.strictEqual(document.activeElement, cancelBtn, "initial focus must be on 取消, never on the confirm button");
     assert.strictEqual(mainEl.hasAttribute("inert"), true);
 
     modal.dispatch("keydown", { key: "Escape" });
@@ -813,7 +825,7 @@ async function runWorkbenchTests() {
     assert.strictEqual(mainEl.hasAttribute("inert"), false);
     assert.strictEqual(
       document.activeElement, takeoverBtn,
-      "closing the dialog must restore focus to the 接管操作 button, not confirmBtn"
+      "closing the dialog must restore focus to the 接管操作 button, not to a button inside the dialog"
     );
 
     // Reopen, then navigate away entirely while it is still open.

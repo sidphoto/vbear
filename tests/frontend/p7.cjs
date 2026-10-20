@@ -832,7 +832,10 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     ctx2.__ls.set("sid:wb:right_collapsed", "true");
     await ctx2.viewWorkbench(null, null, null, false);
     await tick(8);
-    assert.ok(walk(main).some((n) => n.tag === "button" && n.textContent === "任務與隊伍 ◄"), "folded when no task is named");
+    // P11 3.5: with no terminal open the card is the page, so a remembered fold is not applied and the column buttons are put away
+    const shell = walk(main).find((n) => (n.className || "").split(/\s+/).includes("wb-shell"));
+    assert.ok(shell && shell.className.includes("no-term") && !shell.className.includes("right-collapsed"), "no terminal: the card column is shown");
+    assert.ok(walk(main).filter((n) => n.tag === "button" && (n.className || "").includes("wb-col-toggle")).every((b) => b.hidden === true), "no terminal: column buttons hidden");
     const app = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
     assert.ok(!app.includes("右欄 ►") && !app.includes("右欄 ◄"));
   });

@@ -398,6 +398,190 @@ async function handleReleaseAction({ isDisposed, mode, connState, inputBatcher, 
   }
 }
 
+// ---- who is at the keyboard (P11) ---------------------------------------------------------------------------------
+// One way to ask for input control (the dialog's confirm, a built-in terminal that connects, and a terminal this tab has
+// just started all come through here), one dialog that says what taking over means, and one mark for "this tab just
+// started that terminal". Taking input is the only thing here that can type into an Agent, so every line of it is a rule.
+
+// isDisposed is a function: it is asked again after the answer comes back, because the view may have been left meanwhile
+// (then a control session that was just granted is given up at once, by handleTakeoverResponse).
+async function requestTerminalControl({ paneId, term, isDisposed, setPending, onLive, onError }) {
+  let res;
+  try {
+    const pending = api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
+      action: "takeover",
+      ...termDimsForRequest(term),
+    });
+    if (setPending) setPending(pending);
+    res = await pending;
+  } catch (err) {
+    if (!isDisposed()) onError(err && err.message ? err.message : "網路錯誤");
+    return { disposed: isDisposed(), ok: false };
+  } finally {
+    if (setPending) setPending(null);
+  }
+  return handleTakeoverResponse({
+    res,
+    isDisposed: isDisposed(),
+    paneId,
+    apiPost: (path, body) => api.post(path, body),
+    onLiveSuccess: onLive,
+    onLiveError: (r) => onError(r && r.error ? r.error : "未知錯誤"),
+  });
+}
+
+// The mark of a terminal this tab has just started with 確認啟動. It lives only in this page's memory (never in the address,
+// localStorage or sessionStorage, so a reload, a shared address or another tab has none), is used once, and is void after
+// two minutes. Only a view that has its stream connected may use it.
+const TERM_GRANT_MS = 2 * 60 * 1000;
+const TERM_GRANT_MAX = 8;
+const termGrants = new Map();   // pane id -> time it was started
+function termGrantPrune(now) {
+  for (const [id, at] of termGrants) if (!(now - at >= 0 && now - at < TERM_GRANT_MS)) termGrants.delete(id);
+  while (termGrants.size > TERM_GRANT_MAX) termGrants.delete(termGrants.keys().next().value);
+}
+function grantFreshTerminal(paneId, now = Date.now()) {
+  if (typeof paneId !== "string" || !paneId) return;
+  termGrantPrune(now);
+  termGrants.set(paneId, now);
+}
+function hasFreshTerminalGrant(paneId, now = Date.now()) {
+  termGrantPrune(now);
+  return termGrants.has(paneId);
+}
+// true once for a terminal that was started here and not used yet
+function takeFreshTerminalGrant(paneId, now = Date.now()) {
+  termGrantPrune(now);
+  return termGrants.delete(paneId);
+}
+
+// The terminal a task card's launch just opened is recorded on that card, through the same update the 關聯目前的終端 button
+// uses (a tracking record only; nothing is sent to the terminal). The card keeps what the server stored, not what was asked.
+// A card that was tracking another terminal that is still running now tracks the new one (the person just started it for
+// this card with their own click); the old one is still in the workbench's list of open terminals, and in the card's
+// 已開啟 note when this browser started it.
+// A terminal opened on a different folder than the card's is not recorded: the card would be claiming work in a place it
+// is not about. -> { linked, previous, message }
+function launchFolderMatchesTask(taskWorkdir, typed, canonical) {
+  const norm = (v) => (typeof v === "string" ? v.trim().replace(/\/+$/, "") : "");
+  const want = norm(taskWorkdir);
+  return Boolean(want) && (norm(typed) === want || norm(canonical) === want);
+}
+async function linkLaunchedTerminal(task, paneId, { sameFolder = true } = {}) {
+  const title = task.title || task.id;
+  if (!sameFolder) {
+    return { linked: false, previous: null,
+      message: "終端已開啟。你改了資料夾，和任務卡的不同，所以沒有記到任務卡上；需要的話在任務卡按「關聯目前的終端」。" };
+  }
+  const before = typeof task.associated_pane_id === "string" && task.associated_pane_id && task.associated_pane_id !== paneId
+    ? task.associated_pane_id : null;
+  const live = (D.live && D.live.panes) || [];
+  const stillRunning = before !== null && live.some((x) => x && x.pane_id === before && !x.exited);
+  try {
+    const res = await api.post(`/api/tasks/${encodeURIComponent(task.id)}`, { associated_pane_id: paneId });
+    if (!res || !res.task || res.task.associated_pane_id !== paneId) throw new Error("伺服器沒有記下這筆關聯");
+    Object.assign(task, res.task);
+    return { linked: true, previous: stillRunning ? before : null,
+      message: `終端已開啟，並記到任務卡「${title}」上（只是追蹤記錄）。` +
+        (stillRunning ? "這張卡原本關聯的終端還在執行，可以從左邊的清單打開。" : "") };
+  } catch (e) {
+    return { linked: false, previous: null,
+      message: `終端已開啟，但沒能記到任務卡上：${e && e.message ? e.message : "原因不明"}。終端可以照常使用；需要的話在任務卡按「關聯目前的終端」。` };
+  }
+}
+
+const FRESH_TERMINAL_TEXT = "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent。";
+const FRESH_TERMINAL_RELEASE = "改成只觀看";
+function freshTerminalNotice(onObserve) {
+  return el("div", { class: "notice info", role: "status", "data-term": "fresh" },
+    el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", { class: "row" }, el("span", null, FRESH_TERMINAL_TEXT),
+      el("button", { class: "btn small", type: "button", "data-term": "fresh-release", on: { click: onObserve } }, FRESH_TERMINAL_RELEASE)));
+}
+
+// The takeover reminder (打開一個已經在跑的終端，按「接管操作」). Each line comes from data it is given, or says that there
+// is none: tasks / flows are null when they could not be read (not the same as "no task"). -> [{ key, text }]
+const TAKEOVER_TITLE = "接手提醒";
+const TAKEOVER_FIXED = [
+  ["typing", "接手後，你在這裡打的字會直接送給 Agent。"],
+  ["one-tab", "同一時間只有一個分頁能控制；你接手後，其他分頁會改成只觀看。"],
+  ["release", "接手後隨時可以按「改成只觀看」放開。"],
+];
+function takeoverAgentState(session, pane) {
+  if (pane && pane.kind === "shell") return "shell";
+  if ((pane && pane.exited) || (session && session.status === "exited")) return "exited";
+  const s = (session && session.status) || (pane && pane.agent_status) || "unknown";
+  if (s === "working") return "working";
+  if (s === "waiting" || s === "needs-input") return "waiting";
+  return "unknown";
+}
+function takeoverReminderLines({ paneId, session, pane, tasks, flows }) {
+  const lines = [];
+  const task = Array.isArray(tasks) ? tasks.find((t) => t && t.associated_pane_id === paneId) || null : null;
+  const flow = task && Array.isArray(flows) ? flows.find((f) => f && f.task_id === task.id) || null : null;
+  if (!Array.isArray(tasks)) lines.push({ key: "task", text: "讀不到任務卡清單，不知道這個終端有沒有關聯任務卡。" });
+  else if (!task) lines.push({ key: "task", text: "這個終端沒有關聯任務卡。" });
+  else {
+    lines.push({ key: "task", text: `這個終端關聯的任務卡：「${task.title || task.id}」。` });
+    if (!Array.isArray(flows)) lines.push({ key: "next", text: "讀不到流程，不知道這張卡的下一步。" });
+    else if (!flow) lines.push({ key: "next", text: "這張任務卡還沒有隊伍，沒有下一步可以說。" });
+    else {
+      const summary = nextStepSummary(flow);
+      lines.push({ key: "next", text: summary || "這張卡的流程階段無法對應到步驟，沒有下一步可以說。" });
+    }
+  }
+  const state = takeoverAgentState(session, pane);
+  const stateText = { working: "Agent 現在正在工作。", waiting: "Agent 現在停下來等你。", exited: "這個終端已經結束。",
+    shell: "這是一般終端機，不是 Agent。", unknown: "Agent 現在的狀態不明。" }[state];
+  lines.push({ key: "state", text: stateText });
+  if (state === "working") lines.push({ key: "interrupt", text: "現在打字可能打斷它。" });
+  if (flow) {
+    const ns = nextSteps(flow);
+    if (ns.known && ns.turn === "你") {
+      const what = ns.current >= 0 ? ns.steps[ns.current].text : ns.after ? ns.after.text : "";
+      if (what) lines.push({ key: "waiting", text: `這張卡的流程正在等你處理：${what}。` });
+    }
+  }
+  return lines;
+}
+async function readTakeoverData() {
+  const [tasks, flows] = await Promise.all([
+    api.get("/api/tasks").then((r) => (r && Array.isArray(r.tasks) ? r.tasks : null)).catch(() => null),
+    api.get("/api/flows").then((r) => (r && Array.isArray(r.flows) ? r.flows : null)).catch(() => null),
+  ]);
+  return { tasks, flows };
+}
+
+// The dialog both terminal pages open. It opens at once and fills in the task/flow lines when they are read; 確認接手 stays
+// off until then, and the focus starts on 取消 (or the window), so a stray Enter never takes the keyboard.
+// onConfirm({ close, confirmBtn }): the caller's request (requestTerminalControl) and what follows it.
+function openTakeoverReminder({ titleId, paneId, session, pane, onConfirm, onClosed, readData = readTakeoverData }) {
+  const confirmBtn = el("button", { class: "btn primary", type: "button", disabled: true, "data-takeover": "confirm",
+    on: { click: async () => { confirmBtn.disabled = true; await onConfirm({ close: () => closeModal(), confirmBtn }); } } }, "確認接手");
+  const cancelBtn = el("button", { class: "btn", type: "button", "data-takeover": "cancel", on: { click: () => closeModal() } }, "取消");
+  const factsBox = el("ul", { class: "takeover-facts", "data-takeover": "facts" }, el("li", { class: "muted" }, "正在讀取這個終端的情況…"));
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+    el("div", { class: "modal-box" },
+      el("h2", { id: titleId }, TAKEOVER_TITLE),
+      el("p", null, "你即將接手這個終端的鍵盤。先看下面幾件事："),
+      factsBox,
+      el("div", { class: "notice warn", style: "margin: 4px 0" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+        el("ul", { class: "takeover-fixed", "data-takeover": "fixed" }, TAKEOVER_FIXED.map(([k, t]) => el("li", { "data-fixed": k }, t)))),
+      el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
+  document.body.append(modal);
+  // the opener is captured before the focus moves in, so closing returns the focus to the button that opened it
+  const closeModal = withModalA11y(modal, () => { modal.remove(); if (onClosed) onClosed(); });
+  cancelBtn.focus();
+  Promise.resolve().then(readData).catch(() => ({ tasks: null, flows: null })).then((data) => {
+    if (!modal.parentNode) return;
+    const lines = takeoverReminderLines({ paneId, session, pane, tasks: data && data.tasks, flows: data && data.flows });
+    setKids(factsBox, lines.map((l) => el("li", { "data-fact": l.key }, l.text)));
+    confirmBtn.disabled = false;
+  });
+  return { modal, close: closeModal, confirmBtn, cancelBtn };
+}
+
 function handleTerminalFrame(msg, { term, reconnectPolicy } = {}) {
   if (!msg || msg.type !== "terminal.frame") return false;
   if (reconnectPolicy && typeof reconnectPolicy.recordValidFrame === "function") {
@@ -6252,6 +6436,7 @@ async function viewTerminal(paneId) {
   // takeover (e.g. another tab) that raced in after ours (L2/token safety).
   let controlToken = null;
   let autoTakeoverDone = false;
+  let freshControl = false;   // input control was taken because this tab just started the terminal (not through the dialog)
   let linkedTask = null;   // the task card this terminal is tracked on (for 「回任務卡」), once the list has been read
 
   const reconnectPolicy = createReconnectPolicy({
@@ -6304,7 +6489,8 @@ async function viewTerminal(paneId) {
     if (isShell) {
       notices.push(notice("info", SHELL_NOTE + " 同一個終端機在另一個分頁打開時，輸入會移到那邊；這裡按「接管操作」可以拿回來。"));
     } else if (mode === "control") {
-      notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
+      notices.push(freshControl ? freshTerminalNotice(doRelease)
+        : notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
     }
     if (connState === "closed") {
       notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
@@ -6325,8 +6511,8 @@ async function viewTerminal(paneId) {
     if (connState === "connected") {
       if (mode === "observe") {
         actions.push(el("button", { class: "btn small primary", type: "button", on: { click: promptTakeover } }, "接管操作"));
-      } else {
-        actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, "釋放控制"));
+      } else if (!freshControl) {
+        actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, FRESH_TERMINAL_RELEASE));
       }
     }
     if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
@@ -6342,107 +6528,45 @@ async function viewTerminal(paneId) {
     }
   }
 
+  // The dialog (shared with the workbench) says what taking over means; confirming asks the same way everything else does.
   function promptTakeover() {
     if (modalElem) return;
-    const confirmBtn = el("button", { class: "btn primary", type: "button", on: { click: () => onConfirm() } }, "確認接管操作");
-    const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
-    modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "modal-takeover-title" },
-      el("div", { class: "modal-box" },
-        el("h2", { id: "modal-takeover-title" }, "確認接管終端操作"),
-        el("p", null, "您即將接管此終端的鍵盤輸入控制。"),
-        el("div", { class: "notice warn", style: "margin: 4px 0" },
-          el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-          el("div", null, "重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。若 Agent 正在執行任務，請避免非預期的干擾。")),
-        el("p", { class: "small muted" }, "接管後您隨時可以點選「釋放控制」回到僅觀看狀態。"),
-        el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
-    document.body.append(modalElem);
-
-    // withModalA11y must capture document.activeElement (the opener) before
-    // focus moves into the dialog below — otherwise it would capture
-    // confirmBtn itself and Escape/close would try to refocus an element
-    // that's about to be removed instead of restoring focus to the opener.
-    // It also registers this dialog so terminal/view cleanup closes it
-    // through this same teardown (removes it, restores background
-    // inert/aria-hidden) instead of yanking modalElem out of the DOM.
-    const closeModal = withModalA11y(modalElem, () => {
-      if (modalElem) {
-        modalElem.remove();
-        modalElem = null;
-      }
-    });
-    confirmBtn.focus();
-
-    async function onConfirm() {
-      confirmBtn.disabled = true;
-      let res;
-      try {
-        pendingTakeover = api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
-          action: "takeover",
-          ...termDimsForRequest(term),
-        });
-        res = await pendingTakeover;
-      } catch (err) {
-        if (!isDisposed) {
-          toast("接管失敗：" + err.message);
-          confirmBtn.disabled = false;
-        }
-        return;
-      } finally {
-        pendingTakeover = null;
-      }
-
-      await handleTakeoverResponse({
-        res,
-        isDisposed,
-        paneId,
-        apiPost: (path, body) => api.post(path, body),
-        onLiveSuccess: (r) => {
+    const reminder = openTakeoverReminder({
+      titleId: "modal-takeover-title", paneId, session, pane,
+      onClosed: () => { modalElem = null; },
+      onConfirm: ({ close, confirmBtn }) => requestTerminalControl({
+        paneId, term, isDisposed: () => isDisposed, setPending: (p) => { pendingTakeover = p; },
+        onLive: (r) => {
           mode = "control";
           controlToken = r.token;
+          freshControl = false;
           inputBatcher.setEnabled(true);
-          toast("已接管終端操作（其他分頁會改回僅觀看）");
-          closeModal();
+          toast("已接手終端操作（其他分頁會改回僅觀看）");
+          close();
           updateUI();
           if (term) term.focus();
         },
-        onLiveError: (r) => {
-          toast("接管失敗：" + (r?.error || "未知錯誤"));
-          confirmBtn.disabled = false;
-        },
-      });
-    }
+        onError: (msg) => { toast("接手失敗：" + msg); confirmBtn.disabled = false; },
+      }),
+    });
+    modalElem = reminder.modal;
   }
 
-  // Built-in terminals only: take input control right after the stream
-  // connects, once per page visit. Same API as the dialog, without the dialog.
-  async function autoTakeover() {
+  // Taking input without the dialog, in the two cases where the person has already decided: a built-in terminal (their own
+  // shell) once per visit, and a terminal this tab has just started (fresh: the mark is used up here).
+  function autoTakeover(fresh) {
     autoTakeoverDone = true;
-    let res;
-    try {
-      pendingTakeover = api.post(`/api/term/${encodeURIComponent(paneId)}/control`, {
-        action: "takeover",
-        ...termDimsForRequest(term),
-      });
-      res = await pendingTakeover;
-    } catch (err) {
-      if (!isDisposed) toast("無法取得輸入控制：" + err.message);
-      return;
-    } finally {
-      pendingTakeover = null;
-    }
-    await handleTakeoverResponse({
-      res,
-      isDisposed,
-      paneId,
-      apiPost: (path, body) => api.post(path, body),
-      onLiveSuccess: (r) => {
+    return requestTerminalControl({
+      paneId, term, isDisposed: () => isDisposed, setPending: (p) => { pendingTakeover = p; },
+      onLive: (r) => {
         mode = "control";
         controlToken = r.token;
+        freshControl = Boolean(fresh);
         inputBatcher.setEnabled(true);
         updateUI();
         if (term) term.focus();
       },
-      onLiveError: (r) => toast("無法取得輸入控制：" + (r?.error || "未知錯誤")),
+      onError: (msg) => toast("無法取得輸入控制：" + msg),
     });
   }
 
@@ -6456,6 +6580,7 @@ async function viewTerminal(paneId) {
       onObserve: () => {
         mode = "observe";
         controlToken = null;
+        freshControl = false;
         toast("已釋放操作控制，切換為僅觀看模式");
         updateUI();
       },
@@ -6472,6 +6597,7 @@ async function viewTerminal(paneId) {
     if (mode === "control") {
       mode = "observe";
       controlToken = null;
+      freshControl = false;
       inputBatcher.setEnabled(false);
     }
     inputBatcher.clear();
@@ -6544,6 +6670,9 @@ async function viewTerminal(paneId) {
       reconnectPolicy.recordConnectionSuccess();
       updateUI();
       if (isShell && !autoTakeoverDone && mode === "observe") autoTakeover();
+      // A terminal this tab has just started (and only that one, only while the mark is fresh and unused) takes the
+      // keyboard now that the stream is connected; anything else stays watch-only until the person takes over.
+      else if (!isShell && !isDisposed && mode === "observe" && takeFreshTerminalGrant(paneId)) autoTakeover(true);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8", { stream: true });
@@ -6560,6 +6689,7 @@ async function viewTerminal(paneId) {
             if (mode === "control") {
               mode = "observe";
               controlToken = null;
+              freshControl = false;
               inputBatcher.setEnabled(false);
             }
             inputBatcher.clear();
@@ -6859,6 +6989,66 @@ function taskStatusBadge(status) {
   return badge(label, cls, title);
 }
 
+// The top of a task card says where the flow is (P11 3.5): the gate the next-steps box is at, in the words the server
+// derived for the phase. The mark the card carries (草稿 and the like) is something else: it only says nobody marked the
+// card as in progress, so beside a flow that is already planning it reads as if the two disagreed. Where a flow is known
+// and the mark is one of those two generic ones, the gate is the pill and the mark becomes small text; any other mark
+// (closed, handed off, blocked, a verification claim) stays the pill, and no state is made up for it.
+const GATE_DIGITS = ["①", "②", "③", "④", "⑤", "⑥", "⑦"];
+const MARK_IS_GENERIC = new Set(["draft", "in_progress"]);
+function taskGate(flow) {
+  const label = flow && flow.phase && typeof flow.phase.label === "string" ? flow.phase.label : "";
+  if (!label) return null;
+  const ns = nextSteps(flow);
+  const n = ns.known && ns.current >= 0 ? ns.steps[ns.current].n : 0;
+  return { text: n >= 1 && n <= GATE_DIGITS.length ? `${GATE_DIGITS[n - 1]} ${label}` : label, key: flow.phase.key || "" };
+}
+function taskStatusNodes(status, flow) {
+  const gate = MARK_IS_GENERIC.has(status) ? taskGate(flow) : null;
+  if (!gate) return [taskStatusBadge(status)];
+  const [label, , title] = TASK_STATUS_LABELS[status] || TASK_STATUS_LABELS.draft;
+  return [badge(gate.text, "b-info", "流程目前的階段（由流程自己的紀錄推算）", false),
+    el("span", { class: "small muted task-mark", "data-task": "mark", title }, `標記：${label}`)];
+}
+
+// The reminder at the top of a card that was made by handing another card over (tasks.handoff_task): where it came from, the
+// note its last holder wrote (word for word), and the state that card was left in. Only stored data is shown; what was
+// done is not guessed. A card with no hand-over source has none. opts: { onOpen(id) (a button), hrefOf(id) (a link), compact }
+const HANDOFF_TITLE = "接手提醒";
+const HANDOFF_NOT_A_CLAIM = "以上只是存下來的紀錄；VBear 不知道上一位實際做完了什麼。";
+function handoffReminder(task, tasks, opts = {}) {
+  const fromId = task && typeof task.handed_off_from === "string" ? task.handed_off_from : "";
+  if (!fromId) return null;
+  const prev = (Array.isArray(tasks) ? tasks : []).find((t) => t && t.id === fromId) || null;
+  const closure = prev && prev.closure && typeof prev.closure === "object" ? prev.closure : null;
+  const note = closure && typeof closure.note === "string" ? closure.note : "";
+  const open = !prev ? null : typeof opts.onOpen === "function"
+    ? el("button", { type: "button", class: "btn small", "data-handoff": "open", on: { click: () => opts.onOpen(prev.id) } }, "打開前一張卡")
+    : typeof opts.hrefOf === "function"
+      ? el("a", { class: "btn small", "data-handoff": "open", href: opts.hrefOf(prev.id) }, "打開前一張卡") : null;
+  const rows = [
+    el("p", { class: "handoff-from", "data-handoff": "from" },
+      prev ? `這張卡是從「${prev.title || prev.id}」交接過來的。` : `這張卡是從另一張任務卡交接過來的，但那張卡已經不在清單裡（編號 ${fromId}）。`, " ", open),
+    task.owner ? el("p", { class: "small", "data-handoff": "to" }, `交給：${task.owner}`) : null,
+  ];
+  const noteNode = !prev ? el("p", { class: "small muted", "data-handoff": "note-missing" }, "交接說明存在前一張卡上，現在讀不到。")
+    : note ? el("div", { "data-handoff": "note" }, el("div", { class: "small muted" }, "上一位寫的交接說明："),
+        el("blockquote", { class: "handoff-note" }, note))
+      : el("p", { class: "small muted", "data-handoff": "note-empty" }, "上一位沒有寫交接說明。");
+  const stateNode = prev ? el("p", { class: "small", "data-handoff": "state" }, "前一張卡最後的狀態：", taskStatusBadge(prev.status),
+    closure && cardHas(CLOSURE_LABEL, closure.reason) ? ` ${CLOSURE_LABEL[closure.reason]}` : "",
+    closure && Number.isFinite(closure.set_at) ? `（${fmtTime(closure.set_at)}）` : "") : null;
+  if (opts.compact) {
+    return el("div", { class: "handoff-box handoff-compact notice warn", "data-handoff": "box" },
+      el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+      el("div", null, el("strong", null, HANDOFF_TITLE), rows,
+        prev ? el("details", { class: "status-more small" }, el("summary", null, "交接說明與前一張卡的狀態"), noteNode, stateNode) : noteNode));
+  }
+  return el("div", { class: "handoff-box notice warn", "data-handoff": "box", role: "region", "aria-label": HANDOFF_TITLE },
+    el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+    el("div", null, el("strong", null, HANDOFF_TITLE), rows, noteNode, stateNode, el("p", { class: "small muted" }, HANDOFF_NOT_A_CLAIM)));
+}
+
 // The workbench stacks its columns at 900px and narrower (style.css); there the right column is far down the page.
 function workbenchStacked() {
   try { return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches; }
@@ -6944,6 +7134,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   const toolbar = el("div", { class: "wb-toolbar" }, leftToggleBtn, rightToggleBtn);
 
   function syncLayoutClasses() {
+    // with no terminal open the card takes the page: the list of terminals and the column buttons have nothing to do
+    shell.classList.toggle("no-term", !activePaneId);
+    leftToggleBtn.hidden = !activePaneId;
+    rightToggleBtn.hidden = !activePaneId;
+    if (!activePaneId) { leftCollapsed = true; rightCollapsed = false; }
     if (leftCollapsed) {
       shell.classList.add("left-collapsed");
       leftCol.classList.add("collapsed");
@@ -7095,10 +7290,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       el("button", { class: "btn small primary", type: "button", on: { click: () => setFocusMode(false) } }, "退出專注"));
 
     if (!activePaneId) {
+      // nothing open: no empty black area; the task card (or the role cards) is the page, the terminal is one line
       setKids(centerCol,
         focusBanner,
-        el("div", { class: "wb-panel pad" },
-          emptyState("尚未選取終端", "請由左側選一個開啟中的終端，或從角色卡出發開一個新的。")));
+        el("div", { class: "wb-term-strip", "data-wb": "no-terminal", role: "status" }, NO_TERMINAL_TEXT));
       return;
     }
 
@@ -7107,6 +7302,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const roleName = session ? (session.role_label || session.agent || currentPane) : currentPane;
     const toolName = session ? (TOOL[session.agent] || session.agent) : "終端";
     const project = session ? (D.live.projects || []).find((p) => p.project_id === session.project_id) : null;
+    const pane = (D.live.panes || []).find((p) => p.pane_id === currentPane) || null;
 
     let mode = "observe";
     let connState = "connecting";
@@ -7127,6 +7323,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     // session's token, needed so cleanup can send a token-guarded abandon
     // instead of an unconditional release (L2/token safety).
     let controlToken = null;
+    let freshControl = false;   // input control was taken because this tab just started the terminal (not through the dialog)
 
     const reconnectPolicy = createReconnectPolicy({
       maxRetries: 5,
@@ -7176,7 +7373,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
       const notices = [];
       if (mode === "control") {
-        notices.push(notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
+        notices.push(freshControl ? freshTerminalNotice(doRelease)
+          : notice("warn", "⚠️ 目前處於接管控制模式：你在這裡輸入的內容會直接送給 Agent。其他分頁接管時，這裡會自動改回僅觀看。"));
       }
       if (connState === "closed") {
         notices.push(notice("info", `終端機連線已關閉${closedReason ? "：" + closedReason : ""}${sessionGone
@@ -7201,8 +7399,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       if (connState === "connected") {
         if (mode === "observe") {
           actions.push(el("button", { class: "btn small primary", type: "button", on: { click: promptTakeover } }, "接管操作"));
-        } else {
-          actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, "釋放控制"));
+        } else if (!freshControl) {
+          actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, FRESH_TERMINAL_RELEASE));
         }
       }
       if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
@@ -7227,74 +7425,44 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }
     }
 
+    // Same dialog and same request as the standalone terminal page (openTakeoverReminder, requestTerminalControl).
     function promptTakeover() {
       if (modalElem) return;
-      const confirmBtn = el("button", { class: "btn primary", type: "button", on: { click: () => onConfirm() } }, "確認接管操作");
-      const cancelBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "取消");
-      modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": "wb-modal-takeover-title" },
-        el("div", { class: "modal-box" },
-          el("h2", { id: "wb-modal-takeover-title" }, "確認接管終端操作"),
-          el("p", null, "您即將接管此終端的鍵盤輸入控制。"),
-          el("div", { class: "notice warn", style: "margin: 4px 0" },
-            el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-            el("div", null, "重要提醒：接管後由這個分頁送出鍵盤輸入；同一時間只有一個分頁能控制，其他分頁接管時這裡會自動改回僅觀看。若 Agent 正在執行任務，請避免非預期的干擾。")),
-          el("p", { class: "small muted" }, "接管後您隨時可以點選「釋放控制」回到僅觀看狀態。"),
-          el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
-      document.body.append(modalElem);
-
-      // Same ordering fix as the standalone terminal view's promptTakeover:
-      // capture the opener via withModalA11y before moving focus into the
-      // dialog, so close/Escape restores focus to the opener, not confirmBtn.
-      // Registration (done inside withModalA11y) lets terminal/view cleanup
-      // close this dialog through its own teardown instead of reaching in
-      // and removing modalElem directly.
-      const closeModal = withModalA11y(modalElem, () => {
-        if (modalElem) {
-          modalElem.remove();
-          modalElem = null;
-        }
-      });
-      confirmBtn.focus();
-
-      async function onConfirm() {
-        confirmBtn.disabled = true;
-        let res;
-        try {
-          pendingTakeover = api.post(`/api/term/${encodeURIComponent(currentPane)}/control`, {
-            action: "takeover",
-            ...termDimsForRequest(term),
-          });
-          res = await pendingTakeover;
-        } catch (err) {
-          if (!isDisposed) {
-            toast("接管失敗：" + err.message);
-            confirmBtn.disabled = false;
-          }
-          return;
-        } finally {
-          pendingTakeover = null;
-        }
-
-        await handleTakeoverResponse({
-          res,
-          isDisposed,
-          paneId: currentPane,
-          apiPost: (path, body) => api.post(path, body),
-          onLiveSuccess: (r) => {
+      const reminder = openTakeoverReminder({
+        titleId: "wb-modal-takeover-title", paneId: currentPane, session, pane,
+        onClosed: () => { modalElem = null; },
+        onConfirm: ({ close, confirmBtn }) => requestTerminalControl({
+          paneId: currentPane, term, isDisposed: () => isDisposed, setPending: (p) => { pendingTakeover = p; },
+          onLive: (r) => {
             mode = "control";
             controlToken = r.token;
+            freshControl = false;
             inputBatcher.setEnabled(true);
-            toast("已接管終端操作（其他分頁會改回僅觀看）");
-            closeModal();
+            toast("已接手終端操作（其他分頁會改回僅觀看）");
+            close();
             updateUI();
             if (term) term.focus();
           },
-          onLiveError: (r) => {
-            toast("接管失敗：" + (r?.error || "未知錯誤"));
-            confirmBtn.disabled = false;
-          },
-        });
-      }
+          onError: (msg) => { toast("接手失敗：" + msg); confirmBtn.disabled = false; },
+        }),
+      });
+      modalElem = reminder.modal;
+    }
+
+    // A terminal this tab has just started takes the keyboard once its stream is connected (see viewTerminal).
+    function autoTakeoverFresh() {
+      return requestTerminalControl({
+        paneId: currentPane, term, isDisposed: () => isDisposed, setPending: (p) => { pendingTakeover = p; },
+        onLive: (r) => {
+          mode = "control";
+          controlToken = r.token;
+          freshControl = true;
+          inputBatcher.setEnabled(true);
+          updateUI();
+          if (term) term.focus();
+        },
+        onError: (msg) => toast("無法取得輸入控制：" + msg),
+      });
     }
 
     async function doRelease() {
@@ -7307,6 +7475,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         onObserve: () => {
           mode = "observe";
           controlToken = null;
+          freshControl = false;
           toast("已釋放操作控制，切換為僅觀看模式");
           updateUI();
         },
@@ -7323,6 +7492,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       if (mode === "control") {
         mode = "observe";
         controlToken = null;
+        freshControl = false;
         inputBatcher.setEnabled(false);
       }
       inputBatcher.clear();
@@ -7394,6 +7564,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         connState = "connected";
         reconnectPolicy.recordConnectionSuccess();
         updateUI();
+        if (!isDisposed && mode === "observe" && takeFreshTerminalGrant(currentPane)) autoTakeoverFresh();
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder("utf-8", { stream: true });
@@ -7410,6 +7581,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
               if (mode === "control") {
                 mode = "observe";
                 controlToken = null;
+                freshControl = false;
                 inputBatcher.setEnabled(false);
               }
               inputBatcher.clear();
@@ -7601,7 +7773,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }
     }
 
-    const tabButtons = RIGHT_TABS.map(([key, label], i) => el("button", {
+    // 專案契約 [P] and 全域底線 [G] are engineering pages: they are reached from 進階 on the task card and only get a tab
+    // while one of them is open
+    const shownTabs = RIGHT_TABS.filter(([key]) => key === "task" || key === "agent" || key === activeTab);
+    const tabButtons = shownTabs.map(([key, label], i) => el("button", {
       id: `wb-tab-${key}`,
       class: `wb-tab-btn${activeTab === key ? " active" : ""}`,
       type: "button",
@@ -7615,11 +7790,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(e.key)) return;
           e.preventDefault();
           let idx = i;
-          if (e.key === "ArrowRight") idx = (i + 1) % RIGHT_TABS.length;
-          else if (e.key === "ArrowLeft") idx = (i - 1 + RIGHT_TABS.length) % RIGHT_TABS.length;
+          if (e.key === "ArrowRight") idx = (i + 1) % shownTabs.length;
+          else if (e.key === "ArrowLeft") idx = (i - 1 + shownTabs.length) % shownTabs.length;
           else if (e.key === "Home") idx = 0;
-          else if (e.key === "End") idx = RIGHT_TABS.length - 1;
-          selectTab(RIGHT_TABS[idx][0], true);
+          else if (e.key === "End") idx = shownTabs.length - 1;
+          selectTab(shownTabs[idx][0], true);
         },
       },
     }, label));
@@ -7806,6 +7981,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         "ℹ️ 誠實揭露：本主控台無使用者身份驗證，以上三欄僅為透過此網頁/API 自行填寫之回報值（自我回報），並非經密碼學或帳號驗證之真實人類審查記錄。")
     );
 
+    // The engineering side of the card (who said what about its status, the project contract, the global floor): kept, shut
+    // by default.
+    const advancedBox = el("details", { class: "fold wb-advanced", "data-wb": "advanced" },
+      el("summary", null, "進階（工程資訊）"),
+      el("div", { class: "fold-body" },
+        provBox,
+        el("div", { class: "row", style: "margin-top:8px" },
+          RIGHT_TABS.filter(([key]) => key === "project" || key === "global").map(([key, label]) =>
+            el("button", { class: "btn small", type: "button", "data-wb": `open-${key}`, on: { click: () => { activeTab = key; renderRightColumn(); } } }, label)))));
+
     // 6 Core Fields
     function renderField(label, listOrStr) {
       if (!listOrStr || (Array.isArray(listOrStr) && listOrStr.length === 0)) {
@@ -7868,22 +8053,25 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       }, "交接給…"),
       el("button", { class: "btn small", type: "button", on: { click: () => promptDeleteTask(activeTask) } }, "刪除任務"));
 
+    // the status slot starts as the card's own mark; the flow (read by the team section) turns it into the gate it is at
+    const statusSlot = el("span", { class: "row task-status-slot", "data-task": "status" }, taskStatusNodes(derivedStatus, null));
     setKids(taskContent,
       selectorRow,
+      handoffReminder(activeTask, tasksList, { onOpen: (id) => { activeTaskId = id; renderRightColumn(); } }),
       el("div", { class: "wb-task-head" },
         el("h3", { class: "wb-task-title" }, activeTask.title),
         el("div", { class: "row small muted" },
           badge(activeTask.template, "b-info", "任務範本"),
-          taskStatusBadge(derivedStatus),
+          statusSlot,
           pickupBadge(activeTask.pickup),
           activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
           prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" })),
         taskStatusExplainBlock(derivedStatus, activeTask.pickup, "data-wb")),
       folderBlock,
-      teamSection(activeTask, { profiles: agentProfiles, catalog: agentBuilderCatalog, gone: () => token !== seq }),
+      teamSection(activeTask, { profiles: agentProfiles, catalog: agentBuilderCatalog, gone: () => token !== seq,
+        onFlow: (flow) => setKids(statusSlot, taskStatusNodes(derivedStatus, flow)) }),
       chainRow(activeTask),
       trackingBox,
-      provBox,
       renderField("目標 (Goal)", activeTask.goal),
       renderField("範圍 (Scope)", activeTask.scope),
       renderField("範圍外 (Out of Scope)", activeTask.out_of_scope),
@@ -7892,6 +8080,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       renderField("實測證據 (Evidence)", activeTask.evidence),
       stepsSection,
       artifactsSection,
+      advancedBox,
       actionRow
     );
 
@@ -8561,11 +8750,26 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true,
           ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}) });
         toast("已啟動（由角色卡啟動，VBear 管理）");
-        if (launchOpts.fromTask && launchOpts.fromTask.step && res.launch && res.launch.session) {
-          launchMemoAdd(launchOpts.fromTask.id, { step: launchOpts.fromTask.step, session_id: res.launch.session.session_id, name: p.name || p.id });
+        const sid = res.launch.session.session_id;
+        // this tab started it: the terminal may take the keyboard once it is open (see grantFreshTerminal)
+        grantFreshTerminal(sid);
+        if (launchOpts.fromTask && launchOpts.fromTask.step) {
+          launchMemoAdd(launchOpts.fromTask.id, { step: launchOpts.fromTask.step, session_id: sid, name: p.name || p.id });
         }
+        const fromTask = launchOpts.fromTask ? tasksList.find((t) => t.id === launchOpts.fromTask.id) || null : null;
+        const typed = workdirInput.value;
         closeModal();
-        location.hash = `#/term/${encodeURIComponent(res.launch.session.session_id)}`;
+        if (!fromTask) {
+          // not from a task card (the card pool, the role tab): the terminal's own page
+          location.hash = `#/term/${encodeURIComponent(sid)}`;
+          return;
+        }
+        // from a task card: stay in the workbench, the terminal on the left and the same card on the right
+        const outcome = await linkLaunchedTerminal(fromTask, sid, {
+          sameFolder: launchFolderMatchesTask(fromTask.workdir, typed, pv.canonical_paths && pv.canonical_paths.workdir) });
+        toast(outcome.message);
+        await loadLive(true);
+        location.hash = `#/workbench/${encodeURIComponent(sid)}?task=${encodeURIComponent(fromTask.id)}`;
       } catch (err) {
         invalidate("啟動未完成：" + err.message + "　請重新產生預覽。");
       } finally {
@@ -9566,6 +9770,7 @@ function teamSection(task, opts = {}) {
     ]);
     if (gone()) return;
     const flow = ((flowsRes && flowsRes.flows) || []).find((f) => f.task_id === task.id) || null;
+    if (typeof opts.onFlow === "function") opts.onFlow(flow);
     const gitState = info && info.exists !== false ? (folderVerdict(info).noGit ? "nogit" : "git") : null;
     const board = teamBoard({ task, flow, profiles: (profilesRes && profilesRes.profiles) || [], catalog, gitState, onSaved: () => { load(); if (opts.onSaved) opts.onSaved(); } });
     setKids(box,
@@ -9686,6 +9891,7 @@ function nextStepSummary(flow) {
 
 // Is the task card linked to the terminal that is open? Only a chosen terminal can be linked to: with none chosen the
 // answer is "none", never "linked" (null === null must not read as a link). The link is a tracking record only.
+const NO_TERMINAL_TEXT = "還沒有開啟終端；從下一步讓角色出發";
 const TRACKING_NOTE = "追蹤關聯：任務卡和終端只是在主控台裡互相記一筆，不會把任務卡的內容送進終端。";
 const TRACKING_RESTART_NOTE = "提醒：改了任務卡的內容之後，要讓角色讀到新內容，必須重新啟動角色，也就是新開一個終端。";
 function taskTerminalLink(task, paneId) {
@@ -10189,8 +10395,10 @@ function taskFrontCard(task, opts = {}) {
   // the team and the next step, only when the flows were read: not knowing is not "no team"
   const flow = Array.isArray(opts.flows) ? opts.flows.find((f) => f && f.task_id === task.id) || null : undefined;
   return el("article", { class: "tf-card card", "data-task": task.id },
-    el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"), taskStatusBadge(task.status)),
+    el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"),
+      el("span", { class: "row task-status-slot", "data-task": "status" }, taskStatusNodes(task.status, flow || null))),
     opts.sameTitle && opts.sameTitle.has(task.title) ? hintLine(taskHintText(task)) : null,
+    handoffReminder(task, opts.tasks, { compact: true, hrefOf: (id) => `#/workbench?task=${encodeURIComponent(id)}` }),
     taskStatusExplainBlock(task.status, task.pickup, "data-tf"),
     taskFolderBlock(task, opts),
     flow ? el("div", { class: "tf-team", "data-tf": "team" }, teamAvatars(flow),
@@ -10211,7 +10419,7 @@ function taskCardsSection(tasksList, opts = {}) {
     sectionHead("任務卡", "一張任務卡就是一個資料夾：把你電腦上現有的專案導入，就能在這裡管理。", add),
     open.length
       ? el("div", null,
-          el("div", { class: "grid" }, open.slice(0, FOLDER_OPEN_TASK_MAX).map((t) => taskFrontCard(t, { ...opts, sameTitle: duplicateTitles(open) }))),
+          el("div", { class: "grid" }, open.slice(0, FOLDER_OPEN_TASK_MAX).map((t) => taskFrontCard(t, { ...opts, tasks: tasksList, sameTitle: duplicateTitles(open) }))),
           open.length > FOLDER_OPEN_TASK_MAX
             ? el("p", { class: "small muted tf-more" }, `還有 ${open.length - FOLDER_OPEN_TASK_MAX} 張未結案的任務卡，`,
                 el("a", { href: "#/workbench" }, "到終端工作台的「任務卡」分頁看全部"), "。") : null)
@@ -10386,6 +10594,20 @@ if (typeof module !== "undefined" && module.exports) {
     createInputBatcher,
     createReconnectPolicy,
     handleTakeoverResponse,
+    requestTerminalControl,
+    grantFreshTerminal,
+    hasFreshTerminalGrant,
+    takeFreshTerminalGrant,
+    takeoverReminderLines,
+    openTakeoverReminder,
+    freshTerminalNotice,
+    handoffReminder,
+    taskGate,
+    taskStatusNodes,
+    FRESH_TERMINAL_TEXT,
+    TERM_GRANT_MS,
+    launchFolderMatchesTask,
+    linkLaunchedTerminal,
     handleReleaseAction,
     handleTerminalFrame,
     initTerminalInstance,

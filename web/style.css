@@ -1414,3 +1414,20 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .status-more > summary::-webkit-details-marker { display: none; }
 .status-more[open] { flex-basis: 100%; }
 .status-more > p { margin: 4px 0 0; }
+
+/* P11: the takeover reminder, the hand-over reminder, the terminal that has just been started, and a workbench with no terminal */
+.takeover-facts, .takeover-fixed { margin: 6px 0; padding-left: 20px; display: grid; gap: 4px; }
+.takeover-fixed { margin: 0; }
+.takeover-facts li, .takeover-fixed li { overflow-wrap: anywhere; }
+.handoff-box { margin: 4px 0 8px; min-width: 0; }
+.handoff-box > div { min-width: 0; }
+.handoff-box p { margin: 4px 0; overflow-wrap: anywhere; }
+.handoff-note { margin: 4px 0; padding: 6px 10px; border-left: 3px solid var(--line-2); background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-status-slot { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.task-mark { white-space: nowrap; }
+.wb-advanced { margin: 6px 0; }
+.wb-col-toggle[hidden] { display: none !important; }
+.wb-term-strip { padding: 10px 14px; border: 1px dashed var(--line-2); border-radius: var(--radius); background: var(--panel); color: var(--ink-2); font-size: 14px; }
+.wb-shell.no-term { grid-template-columns: minmax(0, 1fr) !important; grid-template-areas: "center" "right" !important; }
+.wb-shell.no-term > .wb-left { display: none !important; }
+.wb-shell.no-term > .wb-right { width: 100%; max-width: 980px; }
