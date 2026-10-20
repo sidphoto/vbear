@@ -2116,6 +2116,9 @@ const OFFICE_SPRITES_WORKING = {
     "................"
   ]
 };
+// K is the outline. The palette keeps the light theme's ink (the stage's dark features and the contrast tests read it);
+// what is drawn takes the outline from OFFICE_OUTLINE, a CSS variable that is light in the dark theme (style.css).
+const OFFICE_OUTLINE = "var(--office-outline)";
 const OFFICE_PALETTE = {
   "K": "#18181b",
   "W": "#fafaf9",
@@ -2163,7 +2166,7 @@ function spriteShadow(species, palette, scale, working = false) {
   const key = `${sp}|${shirt}|${badge}|${px}|${working}`;
   const hit = officeShadowCache.get(key);
   if (hit !== undefined) return hit;
-  const colors = Object.assign({}, OFFICE_PALETTE, { C: shirt, R: badge });
+  const colors = Object.assign({}, OFFICE_PALETTE, { K: OFFICE_OUTLINE, C: shirt, R: badge });
   const out = [];
   (working ? OFFICE_SPRITES_WORKING : OFFICE_SPRITES)[sp].forEach((row, y) => {
     for (let x = 0; x < row.length; x++) {
@@ -2600,7 +2603,7 @@ function officeStageSvg(target) {
     "aria-label": `${OFFICE_SPECIES_LABEL[sp]}，${member.name || "未知名稱"}，${screen.label}`, focusable: "false" });
   // The character is scaled within the stage, leaving room for a readable monitor.
   const body = make("g", { transform: "translate(0 -5) scale(1 .9)" }, svg);
-  const shape = (tag, attrs, parent = body) => make(tag, { stroke: p.K, "stroke-width": 4, ...attrs }, parent);
+  const shape = (tag, attrs, parent = body) => make(tag, { stroke: OFFICE_OUTLINE, "stroke-width": 4, ...attrs }, parent);
   shape("rect", { x: 122, y: 135, width: 116, height: 95, rx: sp === "robot" ? 18 : 42, fill: camp.shirt });
   if (sp === "bear") {
     for (const x of [122, 238]) {
@@ -4101,7 +4104,7 @@ function cardPixelRects(rows, parent) {
       while (end < w && row[end] === c) end++;
       if (cardHas(CARD_PALETTE, c)) {
         const rect = { x, y, width: end - x, height: 1 };
-        parent.append(svgEl("rect", c === "K" ? { ...rect, class: "px-k" } : { ...rect, fill: CARD_PALETTE[c] }));
+        parent.append(svgEl("rect", c === "K" ? { ...rect, class: "px-k" } : c === "T" ? { ...rect, class: "px-t", fill: CARD_PALETTE[c] } : { ...rect, fill: CARD_PALETTE[c] }));
       }
       x = end;
     }
@@ -6809,6 +6812,23 @@ function taskStatusExplain(status, pickup) {
   if (typeof state === "string" && cardHas(PICKUP_EXPLAIN, state)) out.push(PICKUP_EXPLAIN[state]);
   return out;
 }
+// The card's own one-line version of the two sentences above (P10 A5): the long text is kept whole behind 「這是什麼」, so
+// nothing the sentences say is lost; the line keeps the one thing that must not be misread (a draft is only a mark).
+const TASK_STATUS_SHORT = { draft: "草稿：只是標記，不代表沒人在做。" };
+const PICKUP_SHORT = { unclaimed: "尚未認領：還沒有關聯到終端。" };
+// attr: the data attribute the long paragraphs carry ("data-tf" on a card front, "data-wb" in the workbench's head)
+function taskStatusExplainBlock(status, pickup, attr) {
+  const long = taskStatusExplain(status, pickup);
+  if (!long.length) return null;
+  const state = pickup && typeof pickup === "object" ? pickup.state : "";
+  const short = [];
+  if (cardHas(TASK_STATUS_SHORT, status)) short.push(TASK_STATUS_SHORT[status]);
+  if (typeof state === "string" && cardHas(PICKUP_SHORT, state)) short.push(PICKUP_SHORT[state]);
+  return el("div", { class: "status-explain", "data-explain": "block" },
+    el("p", { class: "small muted status-explain-line", "data-explain": "line" }, short.join("")),
+    el("details", { class: "status-more small", "data-explain": "more" }, el("summary", null, "這是什麼"),
+      long.map((t) => el("p", { class: "small muted", [attr]: "status-explain" }, t))));
+}
 function pickupBadge(p) {
   const [label, cls] = PICKUP[(p && p.state)] || PICKUP.unknown;
   return badge(label, cls, `處理狀態（由關聯終端即時推算，不是誰填的）：${(p && p.detail) || "沒有資料"}`);
@@ -7842,7 +7862,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           pickupBadge(activeTask.pickup),
           activeTask.owner ? el("span", { class: "tag", title: "交接時指定的接手對象" }, `接手：${activeTask.owner}`) : null,
           prov({ origin: "user", detail: "本機任務卡 · 僅追蹤" })),
-        taskStatusExplain(derivedStatus, activeTask.pickup).map((t) => el("p", { class: "small muted", "data-wb": "status-explain" }, t))),
+        taskStatusExplainBlock(derivedStatus, activeTask.pickup, "data-wb")),
       folderBlock,
       teamSection(activeTask, { profiles: agentProfiles, catalog: agentBuilderCatalog, gone: () => token !== seq }),
       chainRow(activeTask),
@@ -7931,7 +7951,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       el("div", { class: "small muted" },
         `${profession} · ${toolLabel}`),
       el("div", { class: "small muted mono" }, p.id),
-      unresolved.length ? el("div", { class: "small", style: "color:#b85" },
+      unresolved.length ? el("div", { class: "small", style: "color:var(--quest-warn)" },
         `目前索引找不到 ${unresolved.length} 張技能卡`) : null
     );
     return item;
@@ -10153,7 +10173,7 @@ function taskFrontCard(task, opts = {}) {
   return el("article", { class: "tf-card card", "data-task": task.id },
     el("div", { class: "tf-title" }, el("strong", null, task.title || "（沒有名稱）"), taskStatusBadge(task.status)),
     opts.sameTitle && opts.sameTitle.has(task.title) ? hintLine(taskHintText(task)) : null,
-    taskStatusExplain(task.status, task.pickup).map((t) => el("p", { class: "small muted", "data-tf": "status-explain" }, t)),
+    taskStatusExplainBlock(task.status, task.pickup, "data-tf"),
     taskFolderBlock(task, opts),
     flow ? el("div", { class: "tf-team", "data-tf": "team" }, teamAvatars(flow),
         nextStepSummary(flow) ? el("div", { class: "small", "data-tf": "next" }, nextStepSummary(flow)) : null,
@@ -10362,6 +10382,7 @@ if (typeof module !== "undefined" && module.exports) {
     computeTaskProvenance,
     taskStatusBadge,
     taskStatusExplain,
+    taskStatusExplainBlock,
     TASK_STATUS_LABELS,
     viewWorkbench,
     viewTeam,
@@ -10389,6 +10410,7 @@ if (typeof module !== "undefined" && module.exports) {
     readLoadouts,
     officeRoleCard,
     CARD_PIXELS,
+    armorShield,
     CARD_PALETTE,
     CARD_POSITION_BADGES,
     CARD_SLOT_LABEL,
@@ -10432,6 +10454,7 @@ if (typeof module !== "undefined" && module.exports) {
     officeProfileButton,
     officeTeamButton,
     OFFICE_PALETTE,
+    OFFICE_OUTLINE,
     OFFICE_CAMPS,
     boardGroups,
     boardKey,

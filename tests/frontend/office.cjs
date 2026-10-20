@@ -244,7 +244,8 @@ test("the four sprites are 16x16 of known letters, original, with no alarm red; 
   assert.notStrictEqual(app.spriteShadow("bear", { shirt: app.OFFICE_CAMPS.openai.shirt, badge: pal.badge }, 3), a);
   const px = a.split(",");
   assert(px.length > 80 && px.length < 256);
-  assert(px.every((p) => /^\d+px \d+px 0 0 #[0-9a-f]{6}$/.test(p)), "one 1x1 shadow per pixel");
+  assert(px.every((p) => /^\d+px \d+px 0 0 (#[0-9a-f]{6}|var\(--office-outline\))$/.test(p)), "one 1x1 shadow per pixel");
+  assert(px.some((p) => p.endsWith("var(--office-outline)")) && !px.some((p) => p.endsWith("#18181b")), "the outline takes the theme's colour (P10 A1)");
   assert.strictEqual(app.spriteShadow("dragon", pal, 3), app.spriteShadow("alien", pal, 3), "an unknown species draws as an alien");
 });
 
@@ -1034,7 +1035,13 @@ test("the red is only for 'your turn', and every pair the design names has the c
     assert(ratio(v["vn-red"], v.bg) >= 3, `${name}: red frame on the page ${ratio(v["vn-red"], v.bg).toFixed(2)}`);
     assert(ratio(v["vn-red"], v["office-floor"]) >= 3, `${name}: red on the floor`);
     // the decoration is far darker/lighter than the alarm red: it cannot be taken for it
-    assert(lum(v["vn-red-deep"]) < lum(v["vn-red"]) * 0.6, `${name}: deep red is much darker`);
+    // (the dark theme cannot go darker and still be seen against a dark page: P10 A2 makes it clearly lighter instead)
+    if (name === "light") assert(lum(v["vn-red-deep"]) < lum(v["vn-red"]) * 0.6, `${name}: deep red is much darker`);
+    else assert(lum(v["vn-red-deep"]) > lum(v["vn-red"]) * 1.5, `${name}: deep red is much lighter, so it is not the alarm red`);
+    // the rules and borders it draws are graphics: 3:1 against the page, the card and the floor, in both themes
+    for (const behind of ["bg", "panel", "office-floor"]) {
+      assert(ratio(v["vn-red-deep"], v[behind]) >= 3, `${name}: deep red line on ${behind} ${ratio(v["vn-red-deep"], v[behind]).toFixed(2)}`);
+    }
     assert(ratio(v["office-box-ink"], v["office-box-bg"]) >= 4.5, `${name}: bubble text`);
     assert(ratio(v["ink-2"], v.panel) >= 4.5 && ratio(v["ink-2"], v["panel-2"]) >= 4.5, `${name}: second ink on the cards`);
   }

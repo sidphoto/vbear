@@ -308,6 +308,113 @@ test("F7 the 用途 filter shows the Chinese name and keeps the English id as it
   assert.deepStrictEqual(opts, [["", "全部"], ["development", "開發"], ["testing", "測試"], ["mystery", "Mystery"]]);
 });
 
+// ---- A1-A4, A8: the colours that were below the contrast line -----------------------------------------------------
+const lumOf = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const ratioOf = (a, b) => { const [x, y] = [lumOf(a), lumOf(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+function themeTokens() {
+  const varsOf = (b) => Object.fromEntries([...b.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})/g)].map((m) => [m[1], m[2]]));
+  const light = varsOf(CSS_SRC.slice(CSS_SRC.indexOf(":root {"), CSS_SRC.indexOf("@media (prefers-color-scheme: dark)")));
+  const dark = varsOf(CSS_SRC.slice(CSS_SRC.indexOf(":root[data-theme=\"dark\"]"), CSS_SRC.indexOf("* { box-sizing")));
+  const auto = varsOf(CSS_SRC.slice(CSS_SRC.indexOf(":root:not([data-theme=\"light\"])"), CSS_SRC.indexOf(":root[data-theme=\"dark\"]")));
+  return { light, dark, auto };
+}
+const CONTRAST_LOG = [];
+
+test("A1 the office's pixel outline follows the theme: light ink on dark, 3:1 or more against every dark background it sits on", () => {
+  const t = themeTokens();
+  assert.strictEqual(t.light["office-outline"], "#18181b", "the light theme looks as it did");
+  assert.strictEqual(t.dark["office-outline"], "#e5e0d5");
+  assert.strictEqual(t.auto["office-outline"], "#e5e0d5", "the automatic dark theme too");
+  const behind = { "office floor": t.dark["office-floor"], "page": t.dark.bg, "card": t.dark.panel, "card (2)": t.dark["panel-2"], "Codex card": "#121d1c", "Claude card": "#1c1814" };
+  for (const [name, bg] of Object.entries(behind)) {
+    const r = ratioOf(t.dark["office-outline"], bg);
+    CONTRAST_LOG.push(`A1 outline ${t.dark["office-outline"]} on ${name} ${bg}: ${r.toFixed(2)} (was ${ratioOf("#18181b", bg).toFixed(2)})`);
+    assert(r >= 3, `${name}: ${r.toFixed(2)}`);
+  }
+  assert(ratioOf(t.light["office-outline"], t.light["office-floor"]) >= 3);
+  // and it is what is drawn: the sprites' shadows and the stage's strokes name the variable; no fixed black outline is left
+  assert.strictEqual(app.OFFICE_OUTLINE, "var(--office-outline)");
+  assert(app.spriteShadow("robot", { shirt: "#38bdf8", badge: "#e0f2fe" }, 3).includes("var(--office-outline)"));
+  const stage = app.officeStageSvg({ key: "session:t1", status: "working", species: "robot", camp: "google", name: "x" });
+  const strokes = stage.findAll((n) => n.getAttribute && n.getAttribute("stroke") && n.getAttribute("stroke") !== "none").map((n) => n.getAttribute("stroke"));
+  assert(strokes.filter((c) => c === "var(--office-outline)").length > 5, "the outlines use the variable");
+  assert(strokes.every((c) => c === "var(--office-outline)" || c === "#e0f2fe"), "only the chest line of the robot (the camp's badge colour) is another stroke: " + strokes.join(","));
+  assert(!strokes.includes("#18181b"), "no fixed black outline");
+});
+
+test("A2 the deep red rules of the office are 3:1 or more on a dark page too (and not mistaken for the alarm red)", () => {
+  const t = themeTokens();
+  for (const [name, v] of [["light", t.light], ["dark", t.dark], ["auto dark", t.auto]]) {
+    for (const behind of ["bg", "panel", "office-floor"]) {
+      const r = ratioOf(v["vn-red-deep"], v[behind]);
+      CONTRAST_LOG.push(`A2 ${name} --vn-red-deep ${v["vn-red-deep"]} on ${behind} ${v[behind]}: ${r.toFixed(2)}${name === "light" ? "" : ` (was ${ratioOf("#7a1d17", v[behind]).toFixed(2)})`}`);
+      assert(r >= 3, `${name} on ${behind}: ${r.toFixed(2)}`);
+    }
+  }
+  assert.strictEqual(t.light["vn-red-deep"], "#7a1d17", "the light theme looks as it did");
+});
+
+test("A3 the 'index cannot find the skill card' text takes the site's warning ink: 4.5:1 or more in both themes, selected or not", () => {
+  assert(!APP_SRC.includes("color:#b85"), "no fixed yellow-brown");
+  assert(APP_SRC.includes('style: "color:var(--quest-warn)"'));
+  const t = themeTokens();
+  for (const [name, v] of [["light", t.light], ["dark", t.dark]]) {
+    for (const behind of ["panel", "panel-2", "accent-soft"]) {
+      const r = ratioOf(v["quest-warn"], v[behind]);
+      CONTRAST_LOG.push(`A3 ${name} --quest-warn ${v["quest-warn"]} on ${behind} ${v[behind]}: ${r.toFixed(2)}${name === "light" ? ` (was ${ratioOf("#bb8855", v[behind]).toFixed(2)} with #b85)` : ""}`);
+      assert(r >= 4.5, `${name} on ${behind}: ${r.toFixed(2)}`);
+    }
+  }
+});
+
+test("A4 shields: the solid one is lighter on a dark card (3:1+), the dotted one's dots show on both; still only three shields, none for partial/unverified/unknown", () => {
+  const t = themeTokens();
+  const darkFill = (CSS_SRC.match(/:root\[data-theme="dark"\] \.px-t \{ fill: (#[0-9a-f]{6}); \}/) || [])[1];
+  assert(darkFill, "a dark-theme teal exists");
+  for (const [name, fill, v] of [["light", "#0f766e", t.light], ["dark", darkFill, t.dark]]) {
+    for (const behind of ["panel", "panel-2"]) {
+      const r = ratioOf(fill, v[behind]);
+      CONTRAST_LOG.push(`A4 ${name} solid shield ${fill} on ${behind} ${v[behind]}: ${r.toFixed(2)}${name === "dark" ? ` (was ${ratioOf("#0f766e", v[behind]).toFixed(2)})` : ""}`);
+      assert(r >= 3, `${name} ${behind}: ${r.toFixed(2)}`);
+    }
+  }
+  // the dotted shield is outline dots only: they use the theme's outline ink, which is 3:1+ on the card in both
+  assert(ratioOf("#18181b", t.light.panel) >= 3 && ratioOf("#f8fafc", t.dark["panel-2"]) >= 3);
+  assert(/\.px-k \{ fill: #18181b; \}/.test(CSS_SRC) && /:root\[data-theme="dark"\] \.px-k \{ fill: #f8fafc; \}/.test(CSS_SRC));
+  // the solid shield's teal pixels carry the class that the dark rule changes; the rect keeps its own fill as well
+  const svg = app.armorShield("強制（限已測路徑、版本與執行層）").find((n) => n.tag === "svg");
+  const teal = svg.findAll((n) => n.getAttribute("class") === "px-t");
+  assert(teal.length > 0 && teal.every((n) => n.getAttribute("fill") === "#0f766e"));
+  // honesty: partial, unverified, unknown and not-granted still get no shield
+  for (const level of ["部分強制", "未驗證（此 Claude Code 版本尚未實測）", "未知", "不授予", "something new", "", null, undefined]) {
+    assert.strictEqual(app.armorShield(level), null, String(level));
+  }
+  assert.deepStrictEqual(Object.keys(app.CARD_PIXELS.shields).sort(), ["enforced", "none", "recorded"]);
+});
+
+// ---- A5: the draft / unclaimed lines ------------------------------------------------------------------------------
+test("A5 the card shows one short line and keeps the long sentences whole behind 「這是什麼」", () => {
+  const card = app.taskFrontCard({ id: "t-1", title: "T", status: "draft", pickup: { state: "unclaimed" }, workdir: "/p/x" }, { flows: [] });
+  const line = byData(card, "data-explain", "line")[0];
+  assert.strictEqual(text(line), "草稿：只是標記，不代表沒人在做。尚未認領：還沒有關聯到終端。");
+  assert(text(line).length < 40, "one line");
+  const more = byData(card, "data-explain", "more")[0];
+  assert.strictEqual(more.tag, "details");
+  assert(!more.hasAttribute("open"), "folded");
+  assert.strictEqual(text(more.children[0]), "這是什麼");
+  const long = byData(more, "data-tf", "status-explain").map(text);
+  assert.deepStrictEqual(long, app.taskStatusExplain("draft", { state: "unclaimed" }));
+  // the meaning of P8b stays: it is a mark, not a claim that nobody works on it
+  assert(long[0].includes("這只是標記，不代表沒人在做"));
+  assert(!/還沒開始做|尚未開始/.test(text(card)));
+  // a card with neither has none of it
+  assert.strictEqual(byData(app.taskFrontCard({ id: "t-2", title: "T", status: "in_progress", pickup: { state: "working" } }, { flows: [] }), "data-explain", "block").length, 0);
+  assert.strictEqual(app.taskStatusExplainBlock("in_progress", null, "data-tf"), null);
+});
+
 // ---- run ----------------------------------------------------------------------------------------------------------
 (async () => {
   const timer = setTimeout(() => { console.error("TIMEOUT"); process.exit(2); }, 120000);
@@ -316,6 +423,7 @@ test("F7 the 用途 filter shows the Chinese name and keeps the English id as it
     try { await fn(); console.log("ok   - " + name); } catch (e) { failed += 1; console.log("FAIL - " + name); console.log(e && e.stack || e); }
   }
   clearTimeout(timer);
+  if (process.env.P10_CONTRAST_LOG) console.log(CONTRAST_LOG.join("\n"));
   console.log(`${tests.length - failed}/${tests.length} passed`);
   process.exit(failed ? 1 : 0);
 })();

@@ -25,6 +25,7 @@
      decoration, far darker than the alarm red */
   --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #b3180f;
   --vn-red-deep: #7a1d17; --vn-gold: #ffcd00;
+  --office-outline: #18181b;
   --office-floor: #efe8d8; --office-floor-line: #e0d7c2; --office-desk: #c9a578;
   --office-box-bg: #f4efe6; --office-box-ink: #0b0f0e; --office-box-line: #0b0f0e;
   --radius: 12px;
@@ -42,7 +43,8 @@
     --mute: #9aa09c; --mute-soft: #2a2f2d;
     --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
     --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
-    --vn-red-deep: #7a1d17; --vn-gold: #ffcd00;
+    --vn-red-deep: #d9776b; --vn-gold: #ffcd00;
+    --office-outline: #e5e0d5;
     --office-floor: #1f2523; --office-floor-line: #262d2a; --office-desk: #5a4632;
     --office-box-bg: #f4efe6; --office-box-ink: #0b0f0e; --office-box-line: #0b0f0e;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
@@ -58,7 +60,8 @@
   --mute: #9aa09c; --mute-soft: #2a2f2d;
   --quest-edge: #e4b54f; --quest-bar: #e4b54f; --quest-ok: #74c793; --quest-warn: #e4b54f; --quest-mute: #9aa09c;
   --vn-red: #DA251D; --vn-on-red: #ffffff; --vn-red-ink: #ff8f85;
-  --vn-red-deep: #7a1d17; --vn-gold: #ffcd00;
+  --vn-red-deep: #d9776b; --vn-gold: #ffcd00;
+  --office-outline: #e5e0d5;
   --office-floor: #1f2523; --office-floor-line: #262d2a; --office-desk: #5a4632;
   --office-box-bg: #f4efe6; --office-box-ink: #0b0f0e; --office-box-line: #0b0f0e;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
@@ -1182,6 +1185,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .armor-shield { display: inline-flex; vertical-align: middle; margin-right: 6px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .px-k { fill: #f8fafc; } }
 :root[data-theme="dark"] .px-k { fill: #f8fafc; }
+/* the solid shield's teal (#0f766e) is 2.6:1 against a dark card; a lighter teal there, the same shape */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .px-t { fill: #14b8a6; } }
+:root[data-theme="dark"] .px-t { fill: #14b8a6; }
 .rcard[data-camp="anthropic"] { --card-frame-bg: #fffbeb; --card-frame-line: #78350f; --card-frame-title: #92400e; --pos-bg: #fffbeb; --pos-text: #92400e; --pos-border: #78350f; }
 .rcard[data-camp="openai"] { --card-frame-bg: #f0fdfa; --card-frame-line: #134e4a; --card-frame-title: #115e59; --pos-bg: #f0fdfa; --pos-text: #115e59; --pos-border: #134e4a; }
 .rcard[data-camp="google"] { --card-frame-bg: #f0f9ff; --card-frame-line: #0c4a6e; --card-frame-title: #075985; --pos-bg: #f0f9ff; --pos-text: #075985; --pos-border: #0c4a6e; }
@@ -1398,3 +1404,11 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .cw-skill-cell > .cw-skill { flex: 1 1 auto; }
 .cw-skill-orig summary { cursor: pointer; }
 .cw-skill-orig p { margin: 4px 0 0; overflow-wrap: anywhere; }
+
+/* the draft / unclaimed sentences of a task card: one line, the full text behind 「這是什麼」 (P10 A5) */
+.status-explain { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: 4px 0; }
+.status-explain-line { margin: 0; }
+.status-more > summary { cursor: pointer; color: var(--accent); text-decoration: underline; list-style: none; }
+.status-more > summary::-webkit-details-marker { display: none; }
+.status-more[open] { flex-basis: 100%; }
+.status-more > p { margin: 4px 0 0; }
