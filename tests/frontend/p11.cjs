@@ -226,6 +226,25 @@ test("3.2 the workbench's terminal takes the keyboard the same way, and shows th
   app.cleanupActiveTerminal();
 });
 
+test("3.2 leaving the page while the keyboard is being taken gives the control straight back", async () => {
+  app.grantFreshTerminal(PANE);
+  let open; const gate = new Promise((r) => { open = r; });
+  const over = { [`POST /api/term/${PANE}/control`]: (_u, o) => {
+    const b = JSON.parse(o.body || "{}");
+    return b.action === "takeover" ? gate.then(() => jsonResponse({ ok: true, token: "tok-late" })) : jsonResponse({ ok: true });
+  } };
+  await openTerminal(PANE, { live: roleLive(), tasks: [], over });
+  assert.strictEqual(takeovers().length, 1, "the request is in flight");
+  global.location.hash = "#/team";
+  await app.route();
+  open();
+  await settle();
+  const abandons = posts().filter((c) => c.body && c.body.action === "abandon");
+  assert.strictEqual(abandons.length, 1, "the late grant was abandoned, not kept");
+  assert.strictEqual(abandons[0].body.token, "tok-late");
+  assert.strictEqual(takeovers().length, 1, "and nothing asked again");
+});
+
 test("3.2 the mark is given in one place only (a launch this tab confirmed) and taken in the two terminal views only", () => {
   const code = APP_SRC.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
   assert.strictEqual((code.match(/grantFreshTerminal\(/g) || []).length, 2, "the definition and the launch's success path");
@@ -704,6 +723,40 @@ test("3.6 the skill words: what 本次不生效 meant is said plainly; 已加入
   assert(APP_SRC.includes("收藏在角色卡上") && APP_SRC.includes("收藏在 ${roles.length} 張角色卡上"), "the armory and the skill page use the card's word");
   // (the card's own word 收藏中 is the card pool's and is not changed here)
   assert(APP_SRC.includes('const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };'));
+});
+
+// ---- contrast of what this part added (WCAG relative luminance; text 4.5:1, outlines 3:1) -------------------------------
+const lum = (hex) => { const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+function tokens() {
+  const light = {}; const dark = {};
+  const read = (block, into) => { for (const m of block.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})/g)) into[m[1]] = m[2]; };
+  read(CSS_SRC.slice(CSS_SRC.indexOf(":root {"), CSS_SRC.indexOf("@media (prefers-color-scheme: dark)")), light);
+  const dm = CSS_SRC.indexOf(':root[data-theme="dark"] {');
+  read(CSS_SRC.slice(dm, CSS_SRC.indexOf("}", dm)), dark);
+  return { light, dark };
+}
+test("contrast: the quiet text of the new boxes, the keyboard notice, and the marked card's outline pass in both themes", () => {
+  const t = tokens();
+  assert(/\.handoff-box \.muted[^{]*\{ color: var\(--ink-2\); \}/.test(CSS_SRC), "the quiet text is the second ink");
+  const log = [];
+  for (const [name, v] of [["light", t.light], ["dark", t.dark]]) {
+    for (const behind of ["warn-soft", "panel", "panel-2"]) {
+      const r = ratio(v["ink-2"], v[behind]); log.push(`${name} ink-2 on ${behind}: ${r.toFixed(2)}`);
+      assert(r >= 4.5, `${name} ink-2 on ${behind}: ${r.toFixed(2)}`);
+    }
+    for (const behind of ["warn-soft", "info-soft", "panel"]) {
+      const r = ratio(v.ink, v[behind]); log.push(`${name} ink on ${behind}: ${r.toFixed(2)}`);
+      assert(r >= 4.5, `${name} ink on ${behind}: ${r.toFixed(2)}`);
+    }
+    const link = ratio(v.accent, v["warn-soft"]); log.push(`${name} accent (the fold's link) on warn-soft: ${link.toFixed(2)}`);
+    assert(link >= 4.5, `${name} accent on warn-soft`);
+    for (const behind of ["bg", "panel"]) {
+      const r = ratio(v.accent, v[behind]); log.push(`${name} outline (--accent) on ${behind}: ${r.toFixed(2)}`);
+      assert(r >= 3, `${name} outline on ${behind}`);
+    }
+  }
+  if (process.env.P11_CONTRAST_LOG) console.log(log.join("\n"));
 });
 
 // ---- the rules that hold everywhere ----------------------------------------------------------------------------------
