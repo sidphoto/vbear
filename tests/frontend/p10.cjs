@@ -274,6 +274,40 @@ test("F6 the 放上任務卡 menu adds the day to a title another card shares", 
   closeDialogs();
 });
 
+// ---- F7: the skill categories in Chinese ------------------------------------------------------------------------
+test("F7 the seven English category names are shown in Chinese, any case; others stay as they came", () => {
+  const want = { Development: "開發", Testing: "測試", Debugging: "除錯", Documentation: "文件", Security: "資安", DevOps: "部署維運", Data: "資料處理" };
+  for (const [en, zh] of Object.entries(want)) {
+    assert.strictEqual(app.categoryZh(en), zh, en);
+    assert.strictEqual(app.categoryZh(en.toLowerCase()), zh, en.toLowerCase());
+    assert.strictEqual(app.categoryZh(`  ${en.toUpperCase()} `), zh, "case and spaces do not matter");
+  }
+  for (const other of ["Design", "資安與防護", "constructor", "__proto__", "", "Data science"]) assert.strictEqual(app.categoryZh(other), other, other);
+  assert.strictEqual(app.categoryZh(null), null);
+});
+
+test("F7 the 用途 filter shows the Chinese name and keeps the English id as its value", async () => {
+  setHandler((url) => {
+    const p = String(url).split("?")[0];
+    if (p === "/api/overview") return jsonResponse(OVERVIEW);
+    if (p === "/api/skills") return jsonResponse({ skills: [], categories: [{ id: "development", label: "Development" }, { id: "testing", label: "Testing" }, { id: "mystery", label: "Mystery" }] });
+    if (p === "/api/roles") return jsonResponse({ roles: [] });
+    if (p === "/api/live") return jsonResponse(liveWith());
+    return null;
+  });
+  app.D.skills = null; app.D.categories = [];   // the earlier pages cached an empty index
+  global.location.hash = "#/skills";
+  const realSetInterval = global.setInterval;
+  global.setInterval = () => 0;
+  try { await app.route(); await settle(); } finally { global.setInterval = realSetInterval; }
+  const main = h.dom().mainEl;
+  const optVal = (o) => (o.getAttribute("value") !== null ? o.getAttribute("value") : o.value);
+  const sel = main.findAll((n) => n.tag === "select").find((n) => n.findAll((o) => o.tag === "option").some((o) => optVal(o) === "development"));
+  assert(sel, "the 用途 select is on the page: " + text(main).slice(0, 200));
+  const opts = sel.findAll((o) => o.tag === "option").map((o) => [optVal(o), text(o)]);
+  assert.deepStrictEqual(opts, [["", "全部"], ["development", "開發"], ["testing", "測試"], ["mystery", "Mystery"]]);
+});
+
 // ---- run ----------------------------------------------------------------------------------------------------------
 (async () => {
   const timer = setTimeout(() => { console.error("TIMEOUT"); process.exit(2); }, 120000);

@@ -104,6 +104,9 @@ class SyntheticNode {
     if (global.document && global.document.activeElement === this) global.document.activeElement = null;
   }
   scrollIntoView() {}
+  querySelector(sel) { return this.find((n) => n.tag === sel) || null; }
+  querySelectorAll(sel) { return this.findAll((n) => n.tag === sel); }
+  contains(node) { return this === node || this.children.some((c) => c instanceof SyntheticNode && c.contains(node)); }
   // Depth-first search of descendants matching `pred`.
   find(pred) {
     for (const kid of this.children) {

@@ -731,6 +731,17 @@ const store = {
 
 // ---------- vocabulary -----------------------------------------------------
 
+// The plain-Chinese name of a skill category (P10 F7). The categories VBear derives itself (vbear/categories.py) are
+// already Chinese; a category that comes from a skill package (its folder name) can be one of the common English ones.
+// Only the known words are changed, whatever their case; anything else is shown as it came. Filter values never use this.
+const CATEGORY_ZH = { development: "開發", testing: "測試", debugging: "除錯", documentation: "文件", security: "資安",
+  devops: "部署維運", data: "資料處理" };
+function categoryZh(label) {
+  if (typeof label !== "string") return label;
+  const k = label.trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(CATEGORY_ZH, k) ? CATEGORY_ZH[k] : label;
+}
+
 const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity" };
 const ACT = {
   active:        ["可使用", "b-ok", "位於工具的載入範圍，且沒有被停用"],
@@ -1186,7 +1197,7 @@ function searchSkills(query, pool) {
       if (when.includes(t)) { score += 8; why.push("使用時機"); }
       if (translationText.includes(t)) { score += 16; why.push(translated.state === "stale" ? "過期機器翻譯" : "機器翻譯"); }
     }
-    for (const c of s.categories || []) if (catHits.has(c.id)) { score += catWeight(c.id); why.push(`用途：${c.label}`); }
+    for (const c of s.categories || []) if (catHits.has(c.id)) { score += catWeight(c.id); why.push(`用途：${categoryZh(c.label)}`); }
     if (score > 0) out.push({ s, score: score + (s.activation === "active" ? 5 : 0), why: [...new Set(why)] });
   }
   return out.sort((a, b) => b.score - a.score || a.s.name.localeCompare(b.s.name));
@@ -1210,7 +1221,7 @@ function skillCard(s, why) {
     el("div", { class: "chips" },
       toolTag(s.tool),
       el("span", { class: "tag" }, SCOPE[s.scope] || s.scope),
-      (s.categories || []).slice(0, 2).map((c) => el("span", { class: "tag cat", title: `自動分類：描述中出現「${c.keyword}」` }, c.label)),
+      (s.categories || []).slice(0, 2).map((c) => el("span", { class: "tag cat", title: `自動分類：描述中出現「${c.keyword}」` }, categoryZh(c.label))),
       dups ? badge(`同名 ${dups + 1} 份`, "b-warn", "有其他來源使用相同名稱，詳情頁可比較") : null,
       (s.missing_files || []).length ? badge("引用檔缺失", "b-bad", s.missing_files.join(", ")) : null),
     why && why.length ? el("div", { class: "card-sub" }, "符合：" + why.join("、")) : null);
@@ -1377,7 +1388,7 @@ async function openSkillCard(skillId, opts = {}) {
       prov(nameSrc),
       badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
     notice("info", fixed),
-    skillCardField("類別", sk.categories),
+    skillCardField("類別", sk.categories && Array.isArray(sk.categories.value) ? { ...sk.categories, value: sk.categories.value.map(categoryZh) } : sk.categories),
     skillCardField("陣營", sk.tool),
     skillCardField("來源（位置）", scopeSrc),
     translationPanel(skillId, el("div", null,
@@ -3213,7 +3224,7 @@ async function viewSkills(params) {
     el("div", { class: "toolbar" },
       sel("狀態", "act", actOptions, "這是掃描到的載入狀態；可使用不代表目前有 Agent 正在使用。"),
       sel("工具", "tool", [["", "全部"], ["claude", "Claude Code"], ["codex", "Codex CLI"], ["shared", "skills CLI"]], "這是 Skill 所屬或可載入它的工具，不是目前正在執行的 Agent。"),
-      sel("用途", "cat", [["", "全部"], ...D.categories.map((c) => [c.id, c.label])], "用途由主控台依描述關鍵字自動整理，不是作者的保證。"),
+      sel("用途", "cat", [["", "全部"], ...D.categories.map((c) => [c.id, categoryZh(c.label)])], "用途由主控台依描述關鍵字自動整理，不是作者的保證。"),
       sel("範圍", "scope", [["", "全部"], ...Object.entries(SCOPE)], "範圍是掃描到檔案的位置，例如使用者、專案、外掛或市集。"),
       sel("我的註記", "mine", [["", "不限"], ["*", "有註記的"], ...myTags.map((t) => [t, "#" + t])], "註記只存在 VBear，不會寫回原本的 Skill 檔案。"),
       seg, count),
@@ -3314,7 +3325,7 @@ async function viewSkillDetail(id) {
         field("預期產出", s.outputs),
         field("相依需求", s.dependencies))),
         (s.categories || []).length ? el("div", { class: "field" }, el("h3", null, "用途分類", prov({ origin: "derived", detail: "描述關鍵字" })),
-          el("div", { class: "chips" }, s.categories.map((c) => el("span", { class: "tag cat" }, `${c.label}（命中「${c.keyword}」）`)))) : null),
+          el("div", { class: "chips" }, s.categories.map((c) => el("span", { class: "tag cat" }, `${categoryZh(c.label)}（命中「${c.keyword}」）`)))) : null),
       el("div", { style: "display:grid;gap:16px;align-content:start" },
         annotationPanel(s, d.annotation_key, d.annotation),
         el("div", { class: "panel pad" },
@@ -3347,7 +3358,7 @@ async function viewSkillDetail(id) {
             pkg.commit ? [el("dt", null, "commit"), el("dd", { class: "mono" }, pkg.commit.slice(0, 12))] : null,
             pkg.upstream ? [el("dt", null, "上游"), el("dd", null, pkg.upstream, " ", prov({ origin: "author", detail: pkg.evidence }))] : null,
             pkg.project ? [el("dt", null, "專案"), el("dd", null, pkg.project)] : null,
-            pkg.category ? [el("dt", null, "分類資料夾"), el("dd", null, pkg.category)] : null,
+            pkg.category ? [el("dt", null, "分類資料夾"), el("dd", null, categoryZh(pkg.category), categoryZh(pkg.category) !== pkg.category ? el("span", { class: "small muted" }, `（資料夾名稱：${pkg.category}）`) : null)] : null,
             el("dt", null, "檔案位置"), el("dd", { class: "mono" }, home(s.path)),
             el("dt", null, "檔案更新"), el("dd", null, fmtTime(s.mtime)),
             el("dt", null, "掃描時間"), el("dd", null, fmtTime(D.overview.generated_at)))))),
@@ -8031,7 +8042,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("p", null, "索引未載入，無法顯示這張技能卡的內容。"));
     }
     const refs = sk.referenced_files || {};
-    const cats = (sk.categories || []).map((c) => c && c.label).filter(Boolean);
+    const cats = (sk.categories || []).map((c) => c && categoryZh(c.label)).filter(Boolean);
     return el("li", { class: "rc-skill" }, head,
       el("dl", { class: "rc-dl" },
         el("dt", null, "效果（技能作者的說明，只適用於你自己啟動並載入這張技能的工具）"),
@@ -10490,6 +10501,7 @@ if (typeof module !== "undefined" && module.exports) {
     nextStepYourTurn,
     D,
     noteTasks,
+    categoryZh,
     taskHintText,
     duplicateTitles,
     flowTitleHint,
