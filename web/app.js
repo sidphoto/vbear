@@ -6126,6 +6126,12 @@ async function viewTerminals() {
         : emptyState("還沒有開著的終端機", "在上方選一個資料夾，按「開啟終端機」。")));
 }
 
+// The standalone terminal page's way back: a role terminal goes to the role-card pool (the page's current name), a
+// built-in one to the list of terminals; one tracked on a task card also gets a button to that card.
+const TERM_BACK_ROLE_LABEL = "回角色卡池";
+const TERM_BACK_SHELL_LABEL = "所有終端機";
+const TERM_BACK_TASK_LABEL = "回任務卡";
+
 async function viewTerminal(paneId) {
   const token = seq;
   cleanupActiveTerminal();
@@ -6167,6 +6173,7 @@ async function viewTerminal(paneId) {
   // takeover (e.g. another tab) that raced in after ours (L2/token safety).
   let controlToken = null;
   let autoTakeoverDone = false;
+  let linkedTask = null;   // the task card this terminal is tracked on (for 「回任務卡」), once the list has been read
 
   const reconnectPolicy = createReconnectPolicy({
     maxRetries: 5,
@@ -6247,7 +6254,8 @@ async function viewTerminal(paneId) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
     if (!sessionGone) actions.push(closeSessionButton(paneId, backHash));
-    actions.push(el("a", { class: "btn small", href: backHash }, isShell ? "所有終端機" : "返回團隊"));
+    if (linkedTask) actions.push(el("a", { class: "btn small", "data-term": "back-task", href: `#/workbench?task=${encodeURIComponent(linkedTask.id)}` }, TERM_BACK_TASK_LABEL));
+    actions.push(el("a", { class: "btn small", "data-term": "back", href: backHash }, isShell ? TERM_BACK_SHELL_LABEL : TERM_BACK_ROLE_LABEL));
     setKids(actionWrap, actions);
 
     if (term) {
@@ -6604,6 +6612,15 @@ async function viewTerminal(paneId) {
     }
     window.removeEventListener("resize", handleResize);
   };
+
+  // a role terminal tracked on a task card gets a way back to that card; not being able to read the list just means no button
+  if (!isShell) {
+    api.get("/api/tasks").then((r) => {
+      if (token !== seq || isDisposed) return;
+      linkedTask = ((r && r.tasks) || []).find((t) => t && t.associated_pane_id === paneId) || null;
+      if (linkedTask) updateUI();
+    }).catch(() => {});
+  }
 
   const TerminalClass = (typeof window !== "undefined" && window.Terminal) || (typeof Terminal !== "undefined" && Terminal) || null;
   const FitAddonClass = (typeof window !== "undefined" && (window.FitAddon?.FitAddon || window.FitAddon)) || (typeof FitAddon !== "undefined" && (FitAddon.FitAddon || FitAddon)) || null;
