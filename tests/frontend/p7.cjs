@@ -733,7 +733,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     assert.ok(!findText(unknown, note));
     assert.strictEqual(ctx.CARD_INTENT_TITLE, "權限意圖（分工記號）");
     const app = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
-    assert.strictEqual((app.match(/el\("h4", null, CARD_INTENT_TITLE\)/g) || []).length, 2, "the card back and the workbench card back");
+    assert.strictEqual((app.match(/el\("h4", null, CARD_INTENT_TITLE\)/g) || []).length, 1, "one card back, shared by the pool, the office roster and the workbench's role tab");
     assert.ok(!/el\("h4", null, "權限意圖"\)/.test(app), "no bare title left");
   });
 

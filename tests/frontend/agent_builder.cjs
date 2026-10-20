@@ -301,6 +301,15 @@ async function clickCreateAgentProfileButton() {
   await new Promise((r) => setImmediate(r));
 }
 
+// The role tab shows the same two-faced cards as the card pool (P11 3.6): one article per card, found by its name.
+function roleCardNode(name) {
+  return walk(main).find((n) => n.tag === "article" && n.getAttribute("aria-label") === `角色卡：${name}`);
+}
+function cardButton(name, label) {
+  const card = roleCardNode(name);
+  return card ? walk(card).find((n) => n.tag === "button" && (n.textContent || "").trim() === label) : undefined;
+}
+
 function findModalInBody() {
   return body.children.find((c) => c !== main && c.tag === "div"
                                     && c.getAttribute("role") === "dialog");
@@ -356,7 +365,7 @@ function findModalInBody() {
     const right = findRightColumn();
     assert.ok(findText(right, "First"), "first profile name in list");
     assert.ok(findText(right, "Stuck"), "second profile name in list");
-    assert.ok(findText(right, "目前索引找不到 1 張技能卡"), "unresolved warning surfaced in list view");
+    assert.ok(findText(right, "1 張目前索引找不到"), "unresolved warning surfaced on the role card");
     assert.ok(!findText(right, "已從掃描結果中消失"), "not worded as 'disappeared' (design v1.1 #6)");
     console.log("ok list+unresolved-warning");
   }
@@ -443,18 +452,11 @@ function findModalInBody() {
     evalAgentBuilderSlice(ctx);
     await ctx.viewWorkbench(null, null);
     await switchToAgentTab();
-    // Select p-1 by clicking its list-item button.
-    const listItem = walk(main).find((n) =>
-      n.tag === "button" && n.className.includes("wb-list-item")
-      && /First/.test(n.textContent || ""));
-    assert.ok(listItem, "first profile's list-item button found");
-    listItem.dispatch("click");
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    // Detail view should show the Edit/Copy/Delete/Disable buttons.
-    const deleteBtn = walk(main).find((n) =>
-      n.tag === "button" && (n.textContent || "").trim() === "刪除");
-    assert.ok(deleteBtn, "delete button labelled  刪除");
+    // The card's back holds 編輯／複製／刪除 (and the tab adds 停用／啟用 there).
+    const deleteBtn = cardButton("First", "刪除");
+    assert.ok(deleteBtn, "delete button labelled  刪除, on the First card");
+    assert.ok(cardButton("First", "編輯") && cardButton("First", "複製") && cardButton("First", "停用"), "and its siblings");
+    assert.ok(cardButton("Stuck", "啟用"), "a card that is switched off offers 啟用");
     deleteBtn.dispatch("click");
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
@@ -507,11 +509,10 @@ function findModalInBody() {
     evalAgentBuilderSlice(ctx);
     await ctx.viewWorkbench(null, null);
     await switchToAgentTab();
-    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
-      && /First/.test(n.textContent || "")).dispatch("click");
     await tick();
-    const openBtn = walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證");
-    assert.ok(openBtn, "detail view offers 出發通行證");
+    const openBtn = cardButton("First", "出發");
+    assert.ok(openBtn, "the card front offers 出發, which opens the launch pass");
+    assert.ok(!walk(main).some((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證"), "the old button name is gone from the tab");
     assert.ok(!walk(main).some((n) => (n.textContent || "").trim() === "預覽並啟動"), "the old name is gone");
     openBtn.dispatch("click");
     await tick();
@@ -669,20 +670,13 @@ function findModalInBody() {
     evalAgentBuilderSlice(ctx);
     await ctx.viewWorkbench(null, null);
     await switchToAgentTab();
-    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
-      && /Stuck/.test(n.textContent || "")).dispatch("click");
     await tick();
-    // the reason sits right under the head row that holds the button
-    const line = walk(main).find((n) => n.getAttribute && n.getAttribute("data-rc") === "launch-line");
-    assert.ok(line, "a line for the reason is beside the 出發通行證 button");
-    assert.ok(findText(line, "目前無法從 VBear 啟動這個角色") && findText(line, "這張角色卡已停用"));
-    const detail = walk(main).find((n) => n.className === "wb-tab-content" && walk(n).includes(line));
-    assert.ok(detail, "found the detail");
-    assert.ok(walk(detail.children[0]).some((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證"),
-              "the head row holds the button");
-    assert.strictEqual(detail.children[1], line, "the line comes right after the button's row");
-
-    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證").dispatch("click");
+    // the reason a card cannot go is on its own front, beside 出發 (the card pool's light)
+    const light = walk(roleCardNode("Stuck")).find((n) => n.getAttribute && n.getAttribute("data-pcard") === "light");
+    assert.ok(light, "a light for the reason is on the card");
+    // (what the light says for each state, blockers included, is card_pool.cjs's)
+    assert.ok(cardButton("Stuck", "出發"), "the front holds the button");
+    cardButton("Stuck", "出發").dispatch("click");
     await tick();
     const modal = findModalInBody();
     const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
@@ -772,10 +766,8 @@ function findModalInBody() {
     evalAgentBuilderSlice(ctx);
     await ctx.viewWorkbench(null, null);
     await switchToAgentTab();
-    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
-      && /Common/.test(n.textContent || "")).dispatch("click");
     await tick();
-    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "出發通行證").dispatch("click");
+    cardButton("Common", "出發").dispatch("click");
     await tick();
     const modal = findModalInBody();
     const button = (text) => walk(modal).find((n) => n.tag === "button" && (n.textContent || "").trim() === text);
@@ -865,182 +857,10 @@ function findModalInBody() {
     console.log("ok close button for native sessions");
   }
 
-  // The role card (design game-ui 4.1, 8): the loadout's data, every string as text, nothing guessed.
-  {
-    const hostile = '<img src=x onerror=alert(1)>';
-    const sourced = (value, origin = "author", detail = "front matter") => ({ value, origin, detail });
-    const armorItem = (name, level, group, note, extra = {}) => ({ name, level, group, note,
-      path_scope: "不適用", evidence_refs: "不適用", unknown_reason: null, ...extra });
-    const loadout = (over = {}) => ({
-      ok: true,
-      profile: { id: "p-1", name: "First", enabled: true, created_at: 1700000000, updated_at: 1700000000,
-                 tool: "claude", model_id: "opus-4.1", profession_role_id: "r-1",
-                 permission_intents: { read: "allow", write: "deny", test: "unspecified", deploy: "deny" },
-                 intents_note: "只是記錄，不會變成實際權限" },
-      index: { loaded: true, generated_at: 1791770000 },
-      profession: { state: "found", role_id: "r-1", name: hostile, tool: "claude", kind: "subagent",
-                    description: sourced("寫後端"), capabilities: sourced(null, "missing", ""),
-                    suitable_tasks: sourced(["小功能", "修 bug"], "derived", "標題"),
-                    label_only: "職業只是標籤，不會把角色指示載入 Claude Code" },
-      skills: { title: "已選技能（VBear 啟動時不載入）", note: "VBear 啟動的角色不會載入這些技能；這份清單是你的挑選紀錄。",
-                safe_mode: "已傳入安全模式旗標；Claude Code 2.1.296 的說明指出安全模式會關閉技能，其他版本是否停用技能未驗證",
-                items: [
-        { skill_id: "s-1", state: "in_index", effective: false, name: hostile, tool: "claude", scope: "user",
-          description: sourced(hostile), when_to_use: sourced(null, "missing", "作者沒有提供"),
-          categories: [{ label: "審查", keyword: "review" }],
-          referenced_files: { count: 2, present: 1, missing: 1, note: "VBear 不會執行這些檔案" },
-          warnings: ["w1"], observed: { state: "observed", window_days: 30, source: "執行觀察" } },
-        { skill_id: "s-gone", state: "not_in_index", effective: false, note: "目前索引找不到此技能", indexed_at: 1791770000 },
-        { skill_id: "s-3", state: "in_index", effective: false, name: "gamma", tool: "codex", scope: "user",
-          description: sourced("g"), when_to_use: sourced("時"), categories: [],
-          referenced_files: { count: 0, present: 0, missing: 0, note: "VBear 不會執行這些檔案" },
-          warnings: [], observed: { state: "unavailable", window_days: null, source: "執行觀察" } },
-      ] },
-      version_status: { state: "unknown", version: null, source: "沒有載入的驗證資料",
-                        text: "未知（這個畫面不探測 Claude Code；要到出發通行證才會讀取版本）" },
-      armor: { applicable: true, basis: "verified_setting", title: "防具（以已驗證設定為準）",
-        basis_note: "以已驗證設定為準：說明", preview_decides: "實際以出發通行證為準",
-        groups: [{ id: "blocked", label: "擋住了", levels: ["強制（限已測路徑、版本與執行層）"] },
-                 { id: "partial", label: "部分擋住", levels: ["部分強制"] },
-                 { id: "not_granted", label: "沒有專用權限", levels: ["不授予"] },
-                 { id: "not_blocked", label: "沒有擋", levels: ["僅意圖", "未限制"] },
-                 { id: "unproven", label: "未證明", levels: ["未驗證（此 Claude Code 版本尚未實測）", "未知"] }],
-        items: [
-          armorItem("Network", "強制（限已測路徑、版本與執行層）", "blocked", "空 allowlist", { evidence_refs: "產生出發通行證時才知道" }),
-          armorItem("Write", "部分強制", "partial", "Bash 寫入受限；Edit/Write 工具屬工具層意圖", { path_scope: "產生出發通行證時才知道" }),
-          armorItem("Deploy", "不授予", "not_granted", "沒有專用權限"),
-          armorItem("Read", "僅意圖", "not_blocked", "讀取不隔離"),
-          armorItem("Commit", "未限制", "not_blocked", ".git 可寫", { unknown_reason: "未測試以 denyWrite 排除 .git 的效果" }),
-        ] },
-      blockers: [{ code: "intent_unspecified", message: "執行測試的權限意圖還沒決定；沒決定的不會被當成允許" }],
-      blockers_note: "假設你已勾選知悉 commit、並維持關閉網路；實際以出發通行證為準",
-      ...over,
-    });
-    const handlers = (loadoutFn) => ({
-      "GET /api/overview":           () => jsonResponse({ stale: false, generated_at: 1, totals: {} }),
-      "GET /api/skills":             () => jsonResponse({ skills: staticData.skills, categories: [] }),
-      "GET /api/roles":              () => jsonResponse({ roles: staticData.roles }),
-      "GET /api/live":               () => jsonResponse({ sessions: [], projects: [], attention: [],
-                                                          usage: { sessions: [] }, runtime: { available: true, problems: [] } }),
-      "GET /api/tasks":              () => jsonResponse({ ok: true, tasks: [] }),
-      "GET /api/task-templates":     () => jsonResponse({ ok: true, templates: { custom: {} } }),
-      "GET /api/governance":         () => jsonResponse({ ok: true, global: { categories: [] }, project: { contract: {} } }),
-      "GET /api/agent-profiles":     () => jsonResponse({ ok: true, profiles: profilesList }),
-      "GET /api/agent-builder/catalog": () => jsonResponse(catalogBody),
-      "GET /api/agent-profiles/p-1/loadout": loadoutFn,
-    });
-    const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
-    const open = async (loadoutFn) => {
-      const ctx = freshContext(handlers(loadoutFn));
-      evalAgentBuilderSlice(ctx);
-      await ctx.viewWorkbench(null, null);
-      await switchToAgentTab();
-      walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
-        && /First/.test(n.textContent || "")).dispatch("click");
-      await tick();
-      return walk(main).find((n) => n.getAttribute && n.getAttribute("data-role-card") === "p-1");
-    };
+  // (The old role-card detail pane of the workbench tab is gone: the tab shows the card pool's cards, which
+  // card_pool.cjs covers face by face. The armor grid and the skill rows live on in the launch pass and the skill card dialog.)
 
-    // a full card
-    let card = await open(() => jsonResponse(loadout()));
-    assert.ok(card, "role card rendered");
-    assert.ok(!walk(card).some((n) => n.tag === "img" || n.tag === "script"), "no element is built from the text");
-    assert.ok(findText(card, hostile), "the hostile text is shown, as text");
-    assert.ok(findText(card, "已選技能（VBear 啟動時不載入）"), "the skills title says they are not loaded");
-    assert.ok(findText(card, "Claude Code 2.1.296") && findText(card, "其他版本是否停用技能未驗證"),
-              "the safe-mode statement is conditional on the verified version");
-    const notEffective = walk(card).filter((n) => n.tag === "span" && (n.textContent || "") === "本次不生效");
-    assert.strictEqual(notEffective.length, 3, "every chosen skill card says 本次不生效");
-    // the shields of the armor follow the level word: enforced, intent only and unrestricted have one, the rest none
-    assert.deepStrictEqual(walk(card).filter((n) => n.getAttribute && n.getAttribute("data-shield")).map((n) => n.getAttribute("data-shield")),
-      ["enforced", "recorded", "none"]);
-    // R1: the badge follows will_load of that very skill, not the words around it
-    const lit = loadout();
-    lit.skills.items[0] = { ...lit.skills.items[0], will_load: true };
-    const card2 = await open(() => jsonResponse(lit));
-    const spans = (c, t) => walk(c).filter((n) => n.tag === "span" && (n.textContent || "") === t).length;
-    assert.strictEqual(spans(card2, "生效中"), 1, "one skill will load: one 生效中");
-    assert.strictEqual(spans(card2, "本次不生效"), 2, "the other two do not");
-    assert.ok(findText(card, "目前索引找不到此技能") && findText(card, "索引時間"), "a skill the index lacks says so, with the time");
-    assert.ok(!findText(card, "已消失"), "not worded as 'disappeared'");
-    assert.ok(findText(card, "技能作者的說明，只適用於你自己啟動並載入這張技能的工具"), "the effect is labelled as the author's");
-    assert.ok(findText(card, "未提供"), "a missing field reads 未提供");
-    assert.ok(findText(card, "觀察期間內有紀錄（最近 30 天；來源：執行觀察）"), "observed state with its window");
-    assert.ok(findText(card, "觀察資料不可用"), "unavailable observation");
-    assert.ok(findText(card, "VBear 不會執行這些檔案") && !findText(card, "可執行腳本"), "references only, no script count");
-    assert.ok(findText(card, "職業只是標籤，不會把角色指示載入 Claude Code"), "the role is a label");
-    assert.ok(findText(card, "未知（這個畫面不探測 Claude Code"), "unknown version is said, not guessed");
-    assert.ok(findText(card, "陣營"), "the tool is named with the game word");
-    for (const word of ["出勤", "曾使用", "使用次數"]) assert.ok(!findText(card, word), `no attendance: ${word}`);
-
-    // armor: five groups, same element kind and class, the original level words, no collapse
-    const groups = walk(card).filter((n) => n.getAttribute && n.getAttribute("data-armor-group"));
-    assert.deepStrictEqual(groups.map((g) => g.getAttribute("data-armor-group")),
-      ["blocked", "partial", "not_granted", "not_blocked", "unproven"]);
-    assert.ok(groups.every((g) => g.tag === "section" && g.className === "rc-armor-group"), "same element and class");
-    assert.ok(groups.every((g) => !g.style.fontSize && !g.style.display), "no per-group inline size or hiding");
-    assert.ok(groups.every((g) => walk(g).filter((n) => n.tag === "h5").length === 1), "each group has the same header");
-    assert.ok(!walk(card).some((n) => n.tag === "details"), "nothing is folded away");
-    for (const word of ["強制（限已測路徑、版本與執行層）", "部分強制", "不授予", "僅意圖", "未限制"]) {
-      assert.ok(findText(card, word), `level text ${word} is shown as is`);
-    }
-    assert.ok(findText(groups[4], "（目前沒有項目）"), "an empty group says so");
-    // the group's name has its original level words right beside it (design v1.3)
-    const header = (g) => walk(g).find((n) => n.tag === "h5").textContent;
-    assert.strictEqual(header(groups[0]), "擋住了 · 強制（限已測路徑、版本與執行層）");
-    assert.strictEqual(header(groups[3]), "沒有擋 · 僅意圖、未限制");
-    assert.ok(header(groups[4]).startsWith("未證明 · 未驗證（此 Claude Code 版本尚未實測）"));
-    assert.ok(findText(card, "實際以出發通行證為準"), "the card says the launch pass decides");
-    assert.ok(findText(card, "範圍：產生出發通行證時才知道") || findText(card, "產生出發通行證時才知道"),
-              "what needs a work directory is 'known when the launch pass is made'");
-    assert.ok(findText(card, "目前無法出發的原因") && findText(card, "執行測試的權限意圖還沒決定"), "launch blockers shown");
-    assert.ok(findText(card, "只是記錄，不會變成實際權限"), "intents are labelled as records");
-
-    // everything clickable in the card is a button or a link
-    const clickable = walk(card).filter((n) => (n._listeners.click || []).length);
-    assert.ok(clickable.every((n) => n.tag === "button" || n.tag === "a"), "clickable things are buttons or links");
-    assert.ok(walk(card).filter((n) => n.tag === "a").every((n) => /^#\/skills\//.test(n.getAttribute("href"))),
-              "skill links go to the skill page");
-
-    // the index is not loaded: nothing is guessed
-    card = await open(() => jsonResponse(loadout({
-      index: { loaded: false, generated_at: null },
-      profession: { state: "index_not_loaded", role_id: "r-1" },
-      skills: { title: "已選技能（VBear 啟動時不載入）", note: "n", safe_mode: "s",
-                items: [{ skill_id: "s-1", state: "index_not_loaded", effective: false }] } })));
-    assert.ok(findText(card, "索引未載入"), "index not loaded is said");
-    assert.ok(findText(card, "無法顯示這張技能卡的內容"), "the skill card says it cannot be shown");
-    assert.ok(findText(card, "無法顯示職業特性"), "role features are not invented");
-    assert.strictEqual(walk(card).filter((n) => n.tag === "span" && (n.textContent || "") === "本次不生效").length, 1);
-
-    // a Codex role: no Claude version, no safe-mode words, and it says it cannot be launched
-    card = await open(() => jsonResponse(loadout({
-      version_status: { state: "unknown", version: null, source: "沒有載入的 Codex 驗證資料",
-                        text: "未知（這個畫面不探測 Codex 版本）" },
-      skills: { title: "已選技能（VBear 啟動時不載入）", items: [],
-                note: "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。" },
-      armor: { applicable: true, basis: "verified_setting", title: "防具（以 Codex 已記錄的驗證證據為準）",
-               basis_note: "以 VBear 已記錄的 Codex 驗證證據為準", preview_decides: "實際以出發通行證為準",
-               launch_note: "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）",
-               groups: [{ id: "unproven", label: "未證明", levels: ["未知"] }],
-               items: [armorItem("Network", "未知", "unproven", "network_access=false 尚無本輪 OS 負向證據")] } })));
-    assert.ok(findText(card, "VBear 目前不提供 Codex 角色的受管啟動") && findText(card, "目前無法從 VBear 啟動這個角色"));
-    assert.ok(findText(card, "未知（這個畫面不探測 Codex 版本）"));
-    for (const word of ["Claude Code 2.1.296", "安全模式", "已傳入安全模式旗標"]) {
-      assert.ok(!findText(card, word), `a Codex card has no ${word}`);
-    }
-    assert.ok(findText(card, "防具（以 Codex 已記錄的驗證證據為準）"));
-
-    // a profile without armor (a shared tool) and a failed load
-    card = await open(() => jsonResponse(loadout({ armor: { applicable: false, why: "shared 不是可啟動的工具，沒有防具" } })));
-    assert.ok(findText(card, "shared 不是可啟動的工具，沒有防具"), "no armor is explained");
-    assert.strictEqual(walk(card).filter((n) => n.getAttribute && n.getAttribute("data-armor-group")).length, 0);
-    card = await open(() => jsonResponse({ error: "Agent Profile 儲存檔案損毀" }, 503));
-    assert.ok(findText(card, "無法載入角色卡") && findText(card, "損毀"), "a failed load is shown, not an empty card");
-    console.log("ok role card renders the loadout as text, with every state and no guesses");
-  }
-
-  // The skill card dialog (design game-ui 4.2): opened from the role card, from ?view=card, text only.
+  // The skill card dialog (design game-ui 4.2): opened from the armory or a role's skill, from ?view=card, text only.
   {
     const hostile = '<img src=x onerror=alert(1)>';
     const sourced = (value, origin = "author", detail = "front matter") => ({ value, origin, detail });
@@ -1094,25 +914,18 @@ function findModalInBody() {
     });
     const tick = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
     evalAgentBuilderSlice(ctx);
-    await ctx.viewWorkbench(null, null);
-    await switchToAgentTab();
-    walk(main).find((n) => n.tag === "button" && n.className.includes("wb-list-item")
-      && /First/.test(n.textContent || "")).dispatch("click");
-    await tick();
-    const open = walk(main).find((n) => n.tag === "button" && (n.textContent || "") === "技能卡特性");
-    assert.ok(open, "the role card's skill has a 技能卡特性 button");
-    open.dispatch("click");
+    await ctx.openSkillCard("s-1", { profile: profilesList[0] });
     await tick();
     const modal = findModalInBody();
     assert.ok(modal, "skill card dialog opened");
     assert.ok(!walk(modal).some((n) => n.tag === "img" || n.tag === "script"), "no element is built from text");
     assert.ok(findText(modal, hostile), "the hostile name is shown as text");
-    assert.ok(walk(modal).some((n) => n.tag === "span" && (n.textContent || "") === "本次不生效"), "本次不生效 is fixed");
+    assert.ok(walk(modal).some((n) => n.tag === "span" && (n.textContent || "") === "出發時不會載入"), "出發時不會載入 is fixed");
     assert.ok(findText(modal, "效果是作者的描述，不是 VBear 驗證過的能力，只適用於你自己啟動並載入這張技能的工具"));
     assert.ok(findText(modal, "未提供"), "a missing field reads 未提供");
     assert.ok(findText(modal, "a.py") && findText(modal, "存在") && findText(modal, "缺少") && findText(modal, "VBear 不會執行這些檔案"));
     assert.ok(!findText(modal, "可執行腳本"), "no script count");
-    assert.ok(findText(modal, "已選入 1 個角色：First（本次不生效）"));
+    assert.ok(findText(modal, "收藏在 1 張角色卡上：First（出發時不會載入）"));
     assert.ok(findText(modal, "目前沒有觀察紀錄（最近 30 天；來源：執行觀察）"));
     assert.ok(findText(modal, "市集有其他副本（1 個，尚未安裝）"));
     assert.ok(findText(modal, "已安裝（可使用）：位於使用者技能目錄"), "the status names the state and the reason");
@@ -1208,7 +1021,7 @@ function findModalInBody() {
     await ctx.openSkillCard("s-8");
     for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
     const text = walk(findModalInBody()).map((n) => n.tag === "#text" ? n.textContent : "").join("");
-    assert.ok(text.includes("已選入哪些角色：無法讀取（角色資料無法讀取，請到角色頁處理）"));
+    assert.ok(text.includes("收藏在哪些角色卡上：無法讀取（角色資料無法讀取，請到角色頁處理）"));
     assert.ok(!/\/(Users|home|private)\//.test(text) && !text.includes("marker"), "no path or marker in the dialog");
     console.log("ok skill card shows the fixed unreadable-roles words");
   }

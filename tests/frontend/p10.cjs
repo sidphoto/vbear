@@ -359,7 +359,9 @@ test("A2 the deep red rules of the office are 3:1 or more on a dark page too (an
 
 test("A3 the 'index cannot find the skill card' text takes the site's warning ink: 4.5:1 or more in both themes, selected or not", () => {
   assert(!APP_SRC.includes("color:#b85"), "no fixed yellow-brown");
-  assert(APP_SRC.includes('style: "color:var(--quest-warn)"'));
+  // (the workbench's own list of role cards, where that text used to sit, is the shared card now — P11 3.6; the token is still
+  // the site's warning ink in the css)
+  assert(/\.quest \.badge\.b-warn \{ color: var\(--quest-warn\); \}/.test(CSS_SRC));
   const t = themeTokens();
   for (const [name, v] of [["light", t.light], ["dark", t.dark]]) {
     for (const behind of ["panel", "panel-2", "accent-soft"]) {

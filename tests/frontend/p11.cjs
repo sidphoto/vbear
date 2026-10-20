@@ -226,6 +226,16 @@ test("3.2 the workbench's terminal takes the keyboard the same way, and shows th
   app.cleanupActiveTerminal();
 });
 
+test("3.2 the mark is given in one place only (a launch this tab confirmed) and taken in the two terminal views only", () => {
+  const code = APP_SRC.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  assert.strictEqual((code.match(/grantFreshTerminal\(/g) || []).length, 2, "the definition and the launch's success path");
+  const at = code.indexOf("grantFreshTerminal(sid)");
+  assert(at > 0 && code.lastIndexOf("async function doLaunch", at) > code.lastIndexOf("function promptAgentLaunch", at), "inside doLaunch");
+  assert(code.slice(code.lastIndexOf("async function doLaunch", at), at).includes("api.post(\"/api/native/agent-launches\""), "after the launch request answered");
+  assert.strictEqual((code.match(/takeFreshTerminalGrant\(/g) || []).length, 3, "the definition, the standalone terminal and the workbench's terminal");
+  assert(!/location\.hash[^;]*(token|grant|fresh)/i.test(code), "nothing about it goes into an address");
+});
+
 test("3.2 one shared request for taking input: the pages, the dialogs and the built-in terminal all go through it", () => {
   assert.strictEqual((APP_SRC.match(/action: "takeover"/g) || []).length, 1, "only requestTerminalControl asks");
   assert.strictEqual((APP_SRC.match(/requestTerminalControl\(\{/g) || []).length, 5, "standalone dialog + auto, workbench dialog + auto, and the function itself is not counted twice");
@@ -568,6 +578,7 @@ test("3.5 with no terminal open the card is the page: no empty terminal area, a 
   assert(/\.wb-shell\.no-term > \.wb-left\s*\{[^}]*display:\s*none/.test(CSS_SRC), "css hides the terminal list in this state");
   assert(/\.wb-shell\.no-term\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(CSS_SRC), "css gives the card the whole page");
   assert(main.find((n) => n.getAttribute && n.getAttribute("data-wb") === "advanced"), "and the card is there");
+  assert.strictEqual(main.findAll((n) => n.getAttribute && n.getAttribute("aria-label") === "收合右側欄").length, 0, "no button that would fold the page's only content away");
 });
 
 test("3.5 with a terminal open the layout is the three columns it was, and a remembered fold still applies", async () => {
@@ -622,6 +633,77 @@ test("3.5 in the workbench the gate appears once the flow is read, and the lobby
   assert(text(byData(card, "data-task", "status")[0]).includes("① 計畫中"));
   const noTeam = app.taskFrontCard(mkTask(), { flows: [], profiles: [] });
   assert.strictEqual(text(byData(noTeam, "data-task", "status")[0]), "草稿");
+});
+
+// ---- 3.6: one role card everywhere ---------------------------------------------------------------------------------------
+const PROFILE_B = { ...PROFILE, id: "p-maker", name: "工匠", model: { tool: "codex", model_id: "" } };
+const cardOf = (main, id) => main.find((n) => n.tag === "article" && n.getAttribute("data-profile-id") === id);
+
+test("3.6 the workbench's role tab shows the card pool's cards (two faces, 出發), not the old pane", async () => {
+  const main = await openWorkbench("#/workbench?task=task-1", { tasks: [mkTask()], profiles: [PROFILE, PROFILE_B], live: liveWith() });
+  main.find((n) => n.getAttribute && n.getAttribute("role") === "tab" && n.textContent === "角色").click();
+  await settle();
+  const mainNow = h.dom().mainEl;
+  for (const id of ["p-ceo", "p-maker"]) {
+    const card = cardOf(mainNow, id);
+    assert(card, `${id} is drawn by profileCard`);
+    assert(card.find((n) => n.getAttribute && n.getAttribute("data-face") === "front") && card.find((n) => n.getAttribute && n.getAttribute("data-face") === "back"), "front and back");
+    assert(byData(card, "data-pcard", "launch")[0], "出發 is on the front");
+    assert.strictEqual(text(byData(card, "data-pcard", "launch")[0]), "出發");
+  }
+  assert.strictEqual(mainNow.findAll((n) => n.tag === "button" && n.textContent === "出發通行證").length, 0, "the old button name is gone");
+  assert.strictEqual(mainNow.findAll((n) => n.hasClass && n.hasClass("wb-list-item")).length, 0, "and the old list");
+  assert(!APP_SRC.includes("renderAgentProfileDetail") && !APP_SRC.includes("roleCardParts"), "the old pane's code is gone");
+});
+
+test("3.6 出發 on a card of the tab opens the launch pass; the back keeps edit/copy/delete and a way to switch the card off and on", async () => {
+  const main = await openWorkbench("#/workbench?task=task-1", { tasks: [mkTask()], profiles: [PROFILE], live: liveWith() });
+  main.find((n) => n.getAttribute && n.getAttribute("role") === "tab" && n.textContent === "角色").click();
+  await settle();
+  const card = cardOf(h.dom().mainEl, "p-ceo");
+  for (const k of ["edit", "duplicate", "remove", "toggle"]) assert(byData(card, "data-pcard", k)[0], `${k} is on the back`);
+  FETCH_LOG.length = 0;
+  byData(card, "data-pcard", "toggle")[0].click();
+  await settle();
+  assert.deepStrictEqual(posts().map((c) => [c.url, c.body]), [["/api/agent-profiles/p-ceo", { enabled: false }]]);
+  closeDialogs();
+  byData(cardOf(h.dom().mainEl, "p-ceo"), "data-pcard", "launch")[0].click();
+  await settle();
+  assert(text(dialog()).includes("出發通行證：CEO"), "the pass opened for that card");
+  closeDialogs();
+});
+
+test("3.6 an address that names a role card (?profile=) marks that card in the tab", async () => {
+  await openWorkbench("#/workbench?profile=p-maker", { tasks: [], profiles: [PROFILE, PROFILE_B], live: liveWith() });
+  const main = h.dom().mainEl;
+  assert(cardOf(main, "p-maker").hasClass("rcard-picked"), "the named card is marked");
+  assert(!cardOf(main, "p-ceo").hasClass("rcard-picked"));
+});
+
+test("3.6 the office's 打開角色卡 goes to the card pool with that card named; the pool finds it even when filtered to another camp", async () => {
+  const office = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
+  assert(office.includes("`#/team?card=${encodeURIComponent(p.id)}`"), "the link");
+  assert(!/#\/workbench\?profile=\$\{encodeURIComponent\(p\.id\)\}`, "打開角色卡"/.test(office), "no longer to the old workbench pane");
+  global.localStorage._store["sid:teamCardTool"] = JSON.stringify("codex");
+  await openWorkbench("#/team?card=p-ceo", { profiles: [PROFILE, PROFILE_B], live: liveWith() });
+  const main = h.dom().mainEl;
+  const card = cardOf(main, "p-ceo");
+  assert(card, "a claude card is shown although the pool was filtered to codex");
+  assert(card.hasClass("rcard-picked"), "and marked");
+  await openWorkbench("#/team", { profiles: [PROFILE, PROFILE_B], live: liveWith() });
+  assert(!cardOf(h.dom().mainEl, "p-ceo"), "without a named card the filter applies as before");
+  delete global.localStorage._store["sid:teamCardTool"];
+  await openWorkbench("#/team?card=nope", { profiles: [PROFILE], live: liveWith() });
+  assert(text(h.dom().toastEl).includes("找不到這張角色卡"), "a card that is gone is said to be gone");
+});
+
+test("3.6 the skill words: what 本次不生效 meant is said plainly; 已加入角色 / 已選入 / 收藏中 mean the same thing and say it the same way", async () => {
+  assert(!/本次不生效|已加入角色|未加入角色|已選入/.test(APP_SRC.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n")), "the old words are not on the page");
+  assert(APP_SRC.includes('const SKILL_NOT_LOADED = "出發時不會載入";'));
+  assert(APP_SRC.includes("不是壞了"), "and it says it is not broken");
+  assert(APP_SRC.includes("收藏在角色卡上") && APP_SRC.includes("收藏在 ${roles.length} 張角色卡上"), "the armory and the skill page use the card's word");
+  // (the card's own word 收藏中 is the card pool's and is not changed here)
+  assert(APP_SRC.includes('const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };'));
 });
 
 // ---- the rules that hold everywhere ----------------------------------------------------------------------------------

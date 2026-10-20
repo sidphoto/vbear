@@ -33,7 +33,7 @@ const api={get:async()=>({skills:[{skill_id:'s1',name:'Installed & equipped',inv
   await vm.runInContext("viewArmory()", context);
   const nodes = walk(main), text = nodes.map(n => n.textContent || "").join(" ");
   assert(text.includes("尚無證據"), "no runtime evidence must say no evidence");
-  for (const label of ["市集可取得", "本機已安裝", "已加入角色", "使用證據"]) {
+  for (const label of ["市集可取得", "本機已安裝", "收藏在角色卡上", "使用證據"]) {
     assert(text.includes(label), `missing Chinese-first Armory label: ${label}`);
   }
   assert(nodes.some(n => n["data-tip"] && n["data-tip"].includes("不代表正在被任何 Agent 使用")), "focus tooltip data missing");

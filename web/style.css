@@ -1431,3 +1431,8 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .wb-shell.no-term { grid-template-columns: minmax(0, 1fr) !important; grid-template-areas: "center" "right" !important; }
 .wb-shell.no-term > .wb-left { display: none !important; }
 .wb-shell.no-term > .wb-right { width: 100%; max-width: 980px; }
+
+/* P11 3.6: the card an address names (the office's 打開角色卡, a skill's role) is marked, in the pool and in the workbench's role tab */
+.rcard-picked { outline: 3px solid var(--accent); outline-offset: 2px; }
+.wb-card-list { display: grid; gap: 12px; min-width: 0; }
+.wb-card-list > .rcard { min-width: 0; }

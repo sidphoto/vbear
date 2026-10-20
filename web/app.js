@@ -1572,7 +1572,7 @@ async function openSkillCard(skillId, opts = {}) {
     el("div", { class: "sc-head" },
       el("strong", { class: "sc-name" }, nameText),
       prov(nameSrc),
-      badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡")),
+      badge(SKILL_NOT_LOADED, "b-mute", SKILL_NOT_LOADED_TIP)),
     notice("info", fixed),
     skillCardField("類別", sk.categories && Array.isArray(sk.categories.value) ? { ...sk.categories, value: sk.categories.value.map(categoryZh) } : sk.categories),
     skillCardField("陣營", sk.tool),
@@ -1599,9 +1599,9 @@ async function openSkillCard(skillId, opts = {}) {
       el("ul", { class: "sc-status" },
         el("li", null, skillStatusText(sk) + " ", prov(sk.status_source)),
         el("li", null, ((d.added_to_roles && d.added_to_roles.unavailable)
-          ? `已選入哪些角色：無法讀取（${d.added_to_roles.unavailable}）`
-          : roles.length ? `已選入 ${roles.length} 個角色：${roles.map((r) => r.name || r.id).join("、")}（本次不生效）`
-          : "沒有角色選入這張技能") + " ", prov(d.added_to_roles)),
+          ? `收藏在哪些角色卡上：無法讀取（${d.added_to_roles.unavailable}）`
+          : roles.length ? `收藏在 ${roles.length} 張角色卡上：${roles.map((r) => r.name || r.id).join("、")}（${SKILL_NOT_LOADED}）`
+          : "沒有角色卡收藏這張技能") + " ", prov(d.added_to_roles)),
         el("li", null, "觀察狀態：" + skillObservationText(d.observation) + " ", prov(d.observation)),
         el("li", null, ((d.marketplace_copies || []).length
           ? `市集有其他副本（${d.marketplace_copies.length} 個，尚未安裝）` : "市集沒有找到其他副本") + " ",
@@ -2946,7 +2946,8 @@ function officePanelContent(m, S, handlers) {
     el("label", { class: "office-species" }, "種族 ", species),
     el("p", { class: "small muted" }, "只換名冊上的外觀；出勤的終端與流程角色依工具或模型家族顯示。"),
     officeRoleCard(p, S),
-    el("a", { class: "btn primary office-go", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, "打開角色卡")];
+    el("a", { class: "btn primary office-go", "data-office": "open-card", href: `#/team?card=${encodeURIComponent(p.id)}`,
+      title: "到角色卡池，找到這張卡" }, "打開角色卡")];
 }
 
 function allOfficeTeams(m) { return OFFICE_STATIONS.flatMap((st) => m.stations[st].teams); }
@@ -3445,7 +3446,7 @@ async function viewArmory() {
   setKids(main,
     crumbs([["技能庫", "#/skills"], ["四態總覽"]]),
     el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
-    el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、已加入角色與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
+    el("p", { class: "lede" }, "四種狀態是唯讀觀察。已安裝、收藏在角色卡上與曾觀察到使用是不同事情；沒有證據就顯示未知。"),
     data.unresolved_equipped && data.unresolved_equipped.length
       ? notice("warn", `有 ${data.unresolved_equipped.length} 張角色卡引用的技能卡，目前索引找不到；不會自動刪除。`) : null,
     el("div", { class: "grid armory-grid" }, rows.map((s) => {
@@ -3462,10 +3463,10 @@ async function viewArmory() {
             "只有市集中的未安裝副本才會顯示「可取得」；這不代表目前可用。", "b-info"),
           state("本機已安裝", x.installed ? badge("已安裝", "b-ok") : badge("未安裝／其他", "b-mute"), s.sources.installed,
             "已安裝代表掃描到本機副本；不代表正在被任何 Agent 使用。", "b-ok"),
-          state("已加入角色", equipped.length
+          state("收藏在角色卡上", equipped.length
             ? el("div", { class: "chips" }, equipped.map((p) => el("a", { class: "tag", href: `#/workbench?profile=${encodeURIComponent(p.id)}` }, p.name || p.id, p.enabled ? null : "（角色卡已停用）")))
-            : badge("未加入角色", "b-mute"), s.sources.equipped,
-            "加入角色只是你替角色做的挑選紀錄；它不會自動啟動、載入或套用這個 Skill。", "b-accent"),
+            : badge("沒有角色卡收藏它", "b-mute"), s.sources.equipped,
+            "收藏在角色卡上只是你替角色做的挑選紀錄；出發時不會自動載入或套用這個 Skill。", "b-accent"),
           state("使用證據", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("尚無證據", "b-mute"), s.sources.loaded,
             "只有執行紀錄確實觀察到使用時才會顯示；尚無證據不代表沒有載入。", "b-warn")));
     })));
@@ -4484,6 +4485,10 @@ function passFolderFix(err) { return Boolean(err && err.status === 400) ? { act:
 // skill; every other slot is dashed ("收藏中"), also before the loadout is read. The words are never compared.
 const CARD_SLOT_LABEL = { collected: "收藏中", active: "生效中" };
 const CARD_SLOT_NOTE = "這次的安全啟動不會載入";
+// What 「本次不生效」 really meant: not that the skill is broken, but that VBear's safe launch does not put this skill card into the
+// terminal this time (it is a card kept on a role card, "收藏中"). Said that way wherever the skill card shows it.
+const SKILL_NOT_LOADED = "出發時不會載入";
+const SKILL_NOT_LOADED_TIP = "VBear 的安全啟動不會把這張技能卡載入終端；它只是收藏在角色卡上的紀錄，不是壞了。";
 // On a skill's page: "收藏中" is how the skill sits on a card (the same word as on the card); 啟用／已停用 is about the card itself.
 const SKILL_EQUIPPED_NOTE = "「收藏中」是這張技能卡插在角色卡上的狀態，和卡面一樣：這次出發不會載入它。後面的「啟用中／已停用」只在說那張角色卡本身能不能出發。";
 const CARD_SLOTS_SHOWN = 6;
@@ -4758,7 +4763,7 @@ function readLoadouts(ids, onState, gone, limit = 4) {
   for (let i = 0; i < Math.min(limit, queue.length); i++) next();
 }
 
-async function viewTeam() {
+async function viewTeam(params = {}) {
   const token = seq;
   const [, , profilesRes, catalogRes] = await Promise.all([loadStatic(), loadLive(),
     api.get("/api/agent-profiles").then((r) => ({ ok: true, profiles: (r && r.profiles) || [] }))
@@ -4769,7 +4774,10 @@ async function viewTeam() {
   const catalog = catalogRes;
   const profiles = sortCards(profilesRes.profiles, catalog);
   const tview = store.get("teamView", "card");
-  const filter = cardHas(CARD_TOOL_LABEL, store.get("teamCardTool", "")) ? store.get("teamCardTool", "") : "";
+  const wantedCard = params && typeof params.card === "string" ? params.card : "";
+  const storedFilter = cardHas(CARD_TOOL_LABEL, store.get("teamCardTool", "")) ? store.get("teamCardTool", "") : "";
+  // a card the address names is shown even when the pool is filtered to another camp
+  const filter = wantedCard && profiles.some((p) => p.id === wantedCard && !(p.model && p.model.tool === storedFilter)) ? "" : storedFilter;
   const sessions = [...L.sessions].sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
   const cli = D.roles.filter((r) => r.kind === "cli");
   const subs = D.roles.filter((r) => r.kind !== "cli");
@@ -4852,6 +4860,19 @@ async function viewTeam() {
       el("span", null, el("b", null, "本次模型"), "：從對話紀錄觀察到的實際模型"),
       el("span", null, el("b", null, "預設模型"), "：設定檔中的預設值，實際執行可能不同")),
   );
+  // 「打開角色卡」 from the office (or any link with ?card=): the pool opens with that card found and marked
+  if (wantedCard) {
+    const target = cards.get(wantedCard);
+    if (target) {
+      target.node.setAttribute("tabindex", "-1");
+      target.node.classList.add("rcard-picked");
+      setTimeout(() => {
+        if (token !== seq) return;
+        if (target.node.scrollIntoView) target.node.scrollIntoView({ block: "center" });
+        target.node.focus();
+      }, 0);
+    } else if (profilesRes.ok) toast("找不到這張角色卡，可能已經刪除");
+  }
 }
 const STATUS_ORDER = { "needs-input": 0, waiting: 1, working: 2, unknown: 3, exited: 4 };
 
@@ -7820,13 +7841,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       el("div", { class: "wb-panel" },
         el("div", { class: "wb-panel-head" },
           el("h2", { class: "wb-panel-title" }, "背景資料與任務"),
-          el("button", {
+          // with no terminal open the card is the page: there is nothing to fold it away for
+          activePaneId ? el("button", {
             class: "btn small",
             type: "button",
             title: "收合任務與隊伍",
             "aria-label": "收合右側欄",
             on: { click: toggleRight },
-          }, "▶")),
+          }, "▶") : null),
         tabsHeader,
         tabBody)
     );
@@ -8103,6 +8125,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       toast("載入角色卡失敗：" + err.message);
       agentProfiles = [];
     }
+    roleLoadouts.clear();
     // If the previously selected one is gone (deleted from elsewhere),
     // drop the selection rather than rendering a phantom.
     if (selectedProfileId && !agentProfiles.find((p) => p.id === selectedProfileId)) {
@@ -8121,97 +8144,6 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     return agentBuilderCatalog;
   }
 
-  function profileSummary(p) {
-    const tools = (agentBuilderCatalog && agentBuilderCatalog.tools) || [];
-    const profs = (agentBuilderCatalog && agentBuilderCatalog.professions) || [];
-    const profession = p.profession_role_id
-      ? (profs.find((r) => r.role_id === p.profession_role_id) || {}).name
-        || p.profession_role_id
-      : "（未選職業標籤）";
-    const tool = p.model && p.model.tool;
-    const toolLabel = (tool === "claude" && "Claude Code")
-                    || (tool === "codex" && "Codex CLI")
-                    || (tool === "shared" && "skills CLI")
-                    || tool || "？";
-    return { profession, toolLabel };
-  }
-
-  function renderAgentProfileListItem(p) {
-    const { profession, toolLabel } = profileSummary(p);
-    const unresolved = (p._unresolved && p._unresolved.skills) || [];
-    const item = el("button", {
-      class: "wb-list-item",
-      type: "button",
-      "aria-pressed": String(p.id === selectedProfileId),
-      style: "text-align:left; padding:8px; margin-bottom:4px;",
-      on: { click: () => {
-        selectedProfileId = p.id;
-        renderRightColumn();
-      } },
-    },
-      el("div", { class: "row", style: "justify-content:space-between" },
-        el("strong", null, p.name || p.id),
-        p.enabled ? badge("啟用", "b-ok plain", "這張角色卡仍可使用")
-                  : badge("停用", "b-mute plain", "已停用，但保留存檔")),
-      el("div", { class: "small muted" },
-        `${profession} · ${toolLabel}`),
-      el("div", { class: "small muted mono" }, p.id),
-      unresolved.length ? el("div", { class: "small", style: "color:var(--quest-warn)" },
-        `目前索引找不到 ${unresolved.length} 張技能卡`) : null
-    );
-    return item;
-  }
-
-  function renderAgentProfileDetail(p) {
-    // Why this role cannot be launched, right under the button that opens the check (it comes with the card's
-    // data, so it fills when that arrives)
-    const launchLine = el("div", { class: "rc-launch-line", "data-rc": "launch-line", "aria-live": "polite" });
-    return append(el("div", { class: "wb-tab-content" }),
-      el("div", { class: "row wb-profile-head", style: "justify-content:space-between" },
-        el("h3", { style: "margin:0" }, p.name || p.id),
-        el("div", { class: "wb-profile-actions" },
-          el("button", { class: "btn small primary", type: "button",
-            title: "先看這次啟動實際會套用什麼，確認後才啟動",
-            on: { click: () => promptAgentLaunch(p) } }, "出發通行證"),
-          el("button", { class: "btn small", type: "button",
-            on: { click: () => promptAgentProfileEditor(p) } }, "編輯"),
-          el("button", { class: "btn small", type: "button",
-            on: { click: () => duplicateCard(p, async (copy) => {
-              await reloadAgentProfiles();
-              selectedProfileId = copy.id;
-              renderRightColumn();
-            }) } }, "複製"),
-          el("button", { class: "btn small", type: "button",
-            on: { click: () => promptDeleteAgentProfile(p) } }, "刪除"),
-          el("button", { class: "btn small", type: "button",
-            on: { click: async () => {
-              try {
-                const next = { ...p, enabled: !p.enabled };
-                await api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}`,
-                  { enabled: next.enabled });
-                p.enabled = next.enabled;
-                toast(next.enabled ? "已啟用" : "已停用");
-                renderRightColumn();
-              } catch (err) {
-                toast("更新失敗：" + err.message);
-              }
-            } } }, p.enabled ? "停用" : "啟用"))),
-      launchLine,
-      renderRoleCard(p, (d) => setKids(launchLine, ...launchLineParts(d))));
-  }
-
-  // 「目前無法從 VBear 啟動這個角色」 and the reasons, as the loadout carries them.
-  function launchLineParts(d) {
-    const note = d && d.armor && typeof d.armor.launch_note === "string" ? d.armor.launch_note : "";
-    const reasons = ((d && d.blockers) || []).map((b) => (b && b.message ? String(b.message) : "")).filter(Boolean);
-    if (!note && !reasons.length) return [];
-    const kids = [];
-    if (note) kids.push(el("strong", null, note));
-    else kids.push(el("strong", null, "目前無法出發的原因："));
-    if (reasons.length) kids.push(el("ul", { class: "small" }, reasons.map((r) => el("li", null, r))));
-    return [notice("warn", kids)];
-  }
-
   // ---- Role card (design game-ui 4.1) ----------------------------------------------------------------------
   // Everything below comes from GET /api/agent-profiles/<id>/loadout, which answers from what is already
   // loaded. Every string from the scan, from the profile or from an agent is set with textContent (el + text
@@ -8225,64 +8157,6 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     not_blocked: "這幾項沒有被擋住：只是意圖，或沒有限制。",
     unproven: "尚未驗證或不知道，不能當成有保護。",
   };
-
-  function rcText(v) {
-    if (v === null || v === undefined || v === "") return null;
-    if (Array.isArray(v)) return v.map((x) => String(x)).join("、") || null;
-    return String(v);
-  }
-
-  // A value with where it came from; absent reads 未提供.
-  function rcSourced(src) {
-    const text = src ? rcText(src.value) : null;
-    return el("span", null, text === null ? null : text + " ", prov(src));
-  }
-
-  function rcObservation(o) { return skillObservationText(o); }
-
-  let rcProfile = null;
-  let rcChanged = async () => {};
-
-  // The badge follows the loadout's will_load of this skill, never the words around it (design card-play R1).
-  function rcSkillBadge(sk) {
-    return cardSlotState(sk) === "active"
-      ? badge(CARD_SLOT_LABEL.active, "b-ok", "這個版本的 loadout 明確回報會載入這張技能卡")
-      : badge("本次不生效", "b-mute", "VBear 啟動角色時不會載入這張技能卡");
-  }
-
-  function rcSkillCard(sk) {
-    const head = el("div", { class: "rc-skill-head" },
-      el("strong", null, sk.name ? String(sk.name) : `未提供（ID：${sk.skill_id}）`),
-      rcSkillBadge(sk));
-    if (sk.state === "not_in_index") {
-      return el("li", { class: "rc-skill rc-warn" },
-        el("div", { class: "rc-skill-head" }, el("strong", { class: "mono" }, sk.skill_id),
-          rcSkillBadge(sk)),
-        el("p", null, `${sk.note || "目前索引找不到此技能"}（索引時間：${fmtTime(sk.indexed_at)}）`));
-    }
-    if (sk.state === "index_not_loaded") {
-      return el("li", { class: "rc-skill rc-warn" },
-        el("div", { class: "rc-skill-head" }, el("strong", { class: "mono" }, sk.skill_id),
-          rcSkillBadge(sk)),
-        el("p", null, "索引未載入，無法顯示這張技能卡的內容。"));
-    }
-    const refs = sk.referenced_files || {};
-    const cats = (sk.categories || []).map((c) => c && categoryZh(c.label)).filter(Boolean);
-    return el("li", { class: "rc-skill" }, head,
-      el("dl", { class: "rc-dl" },
-        el("dt", null, "效果（技能作者的說明，只適用於你自己啟動並載入這張技能的工具）"),
-        el("dd", null, rcSourced(sk.description)),
-        el("dt", null, "時機"), el("dd", null, rcSourced(sk.when_to_use)),
-        el("dt", null, "類別"), el("dd", null, cats.length ? cats.join("、") : el("span", { class: "muted" }, "未提供")),
-        el("dt", null, "工具"), el("dd", null, rcText(sk.tool) || "未提供"),
-        el("dt", null, "引用檔案"),
-        el("dd", null, `共 ${refs.count ?? "未提供"} 個，存在 ${refs.present ?? "未提供"}、缺少 ${refs.missing ?? "未提供"}；VBear 不會執行這些檔案`),
-        el("dt", null, "觀察狀態"), el("dd", null, rcObservation(sk.observed))),
-      (sk.warnings || []).length ? el("p", { class: "rc-note" }, "結構檢查：" + sk.warnings.join("；")) : null,
-      el("button", { class: "btn small rc-open", type: "button",
-        on: { click: () => openSkillCard(sk.skill_id, { profile: rcProfile, onChanged: rcChanged }) } },
-        "技能卡特性"));
-  }
 
   function rcArmorGroup(group, items) {
     const mine = items.filter((it) => it.group === group.id);
@@ -8298,100 +8172,6 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           ? el("p", { class: "rc-note" }, `範圍：${it.path_scope}；證據：${it.evidence_refs}`) : null,
         it.unknown_reason ? el("p", { class: "rc-note" }, `未知或未測：${it.unknown_reason}`) : null))
         : el("p", { class: "rc-note" }, "（目前沒有項目）"));
-  }
-
-  // The sentence comes from the server, which knows which tool's data it is (a Codex card never carries a
-  // Claude version).
-  function rcVersionLine(v) {
-    return v && typeof v.text === "string" && v.text ? v.text : "未知";
-  }
-
-  function roleCardParts(p, d) {
-    const { toolLabel } = profileSummary(p);
-    const pr = d.profession || {};
-    const prName = pr.state === "found" ? (pr.name || pr.role_id)
-      : pr.state === "none" ? "（未選職業標籤）"
-      : pr.state === "not_in_index" ? `${pr.role_id}（目前索引找不到這個職業）`
-      : `${pr.role_id || ""}（索引未載入）`;
-    const idx = d.index || {};
-    const info = el("section", { class: "rc-block", "data-rc": "info" },
-      el("div", { class: "rc-sub" }, "角色卡・", el("span", { class: "mono" }, p.id)),
-      el("dl", { class: "rc-dl" },
-        el("dt", null, "職業標籤"), el("dd", null, prName),
-        el("dt", null, "陣營"), el("dd", null, toolLabel),
-        el("dt", null, "模型 (Model ID)"),
-        el("dd", { class: "mono" }, rcText((d.profile || {}).model_id) || "（未指定，視為該工具預設值；非執行環境）"),
-        el("dt", null, "版本驗證狀態"), el("dd", null, rcVersionLine(d.version_status)),
-        el("dt", null, "狀態"), el("dd", null, p.enabled ? "啟用" : "停用"),
-        el("dt", null, "索引時間"), el("dd", null, idx.loaded ? fmtTime(idx.generated_at) : "索引未載入"),
-        el("dt", null, "更新時間"), el("dd", null, fmtTime(p.updated_at || p.created_at))));
-
-    let features;
-    if (pr.state === "found") {
-      features = el("section", { class: "rc-block", "data-rc": "profession" },
-        el("h4", null, "職業特性"),
-        el("dl", { class: "rc-dl" },
-          el("dt", null, "說明"), el("dd", null, rcSourced(pr.description)),
-          el("dt", null, "擅長"), el("dd", null, rcSourced(pr.capabilities)),
-          el("dt", null, "適合的工作"), el("dd", null, rcSourced(pr.suitable_tasks))),
-        el("p", { class: "rc-note" }, pr.label_only || "職業只是標籤，不會把角色指示載入工具"));
-    } else {
-      features = el("section", { class: "rc-block", "data-rc": "profession" },
-        el("h4", null, "職業特性"),
-        el("p", { class: "rc-note" }, pr.state === "none" ? "未選職業標籤。"
-          : pr.state === "not_in_index" ? "目前索引找不到這個職業，無法顯示特性。"
-          : "索引未載入，無法顯示職業特性。"),
-        el("p", { class: "rc-note" }, pr.label_only || "職業只是標籤，不會把角色指示載入工具"));
-    }
-
-    const sk = d.skills || {};
-    const skills = el("section", { class: "rc-block", "data-rc": "skills" },
-      el("h4", null, sk.title || "技能卡（收藏中：VBear 啟動時不載入）"),
-      el("p", { class: "rc-note" }, sk.note || ""),
-      sk.safe_mode ? el("p", { class: "rc-note" }, sk.safe_mode) : null,
-      (sk.items || []).length ? el("ul", { class: "rc-skills" }, sk.items.map(rcSkillCard))
-        : el("p", { class: "rc-note" }, "未選任何技能。"));
-
-    const ar = d.armor || {};
-    let armor;
-    if (!ar.applicable) {
-      armor = el("section", { class: "rc-block", "data-rc": "armor" },
-        el("h4", null, "防具"), notice("warn", ar.why || "這個角色沒有防具資料。"));
-    } else {
-      armor = el("section", { class: "rc-block", "data-rc": "armor" },
-        el("h4", null, (ar.title || "防具") + " ", el("strong", { class: "rc-decides" }, ar.preview_decides || "實際以出發通行證為準")),
-        el("p", { class: "rc-note" }, ar.basis_note || ""),
-        ar.launch_note ? notice("warn", ar.launch_note) : null,
-        el("div", { class: "rc-armor-grid" }, (ar.groups || []).map((g) => rcArmorGroup(g, ar.items || []))));
-    }
-
-    const intents = d.profile && d.profile.permission_intents || {};
-    const intentLabel = CARD_INTENT_LABEL;
-    const KEYS = CARD_INTENT_KEYS;
-    const expect = el("section", { class: "rc-block", "data-rc": "intents" },
-      el("h4", null, CARD_INTENT_TITLE),
-      el("p", { class: "rc-note" }, (d.profile && d.profile.intents_note) || "只是記錄，不會變成實際權限"),
-      el("p", { class: "rc-note", "data-rc": "intent-note" }, CARD_INTENT_NOTE),
-      el("div", { class: "rc-chips" }, KEYS.map(([k, zh]) =>
-        el("span", { class: "rc-chip" }, `${zh}・${intentLabel[intents[k]] || intentLabel.unspecified}`))));
-
-    const blockers = (d.blockers || []).length ? el("section", { class: "rc-block", "data-rc": "blockers" },
-      el("h4", null, "目前無法出發的原因"),
-      el("ul", null, d.blockers.map((b) => el("li", null, b && b.message ? String(b.message) : "未知原因"))),
-      el("p", { class: "rc-note" }, d.blockers_note || "")) : null;
-
-    return [info, features, skills, armor, expect, blockers];
-  }
-
-  function renderRoleCard(p, onLoadout) {
-    const box = el("div", { class: "rc", "data-role-card": p.id });
-    rcProfile = p;
-    rcChanged = async () => { await reloadAgentProfiles(); renderRightColumn(); };
-    setKids(box, el("p", { class: "loading" }, "載入角色卡…"));
-    api.get(`/api/agent-profiles/${encodeURIComponent(p.id)}/loadout`)
-      .then((d) => { setKids(box, ...roleCardParts(p, d)); if (typeof onLoadout === "function") onLoadout(d); })
-      .catch((e) => setKids(box, notice("bad", "無法載入角色卡：" + (e && e.message ? e.message : "未知錯誤"))));
-    return box;
   }
 
   // The editor is the same wizard as the card pool page (see openCardWizard); this tab only says what to do after a save.
@@ -8786,6 +8566,11 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     });
   }
 
+  // The role cards are the same card as the card pool's and the office roster's (profileCard): two faces, 出發 on the
+  // front, the intents and the reasons on the back. What this tab adds around it is only what the pool page does not
+  // have: switching a card off and on, and the deep link that scrolls to one card.
+  const roleLoadouts = new Map();   // profile id -> the loadout state read for its card (dropped when the cards are read again)
+  let focusedProfileId = null;      // the card the address named, scrolled to once
   function renderAgentTabContent() {
     const content = el("div", { class: "wb-tab-content wb-agent-builder" });
     const header = el("div", { class: "row", style: "justify-content:space-between" },
@@ -8793,50 +8578,69 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       prov({ origin: "user", detail: "主控台儲存的角色卡 · 與掃描到的角色範本不同" }));
     const createBtn = el("button", { class: "btn primary", type: "button", "data-wb": "new-card",
       on: { click: () => renderAgentProfileEditor() } }, "＋ 新角色卡");
-
     const sub = el("div", { class: "small muted", style: "margin: 4px 0;" },
-      "角色卡是你自選陣營、職業標籤與技能卡的設定組合，");
+      "角色卡是你自選陣營、職業標籤與技能卡的設定組合，與掃描到的角色範本並存，範本是唯讀的。技能卡僅為挑選紀錄，目前是收藏中。");
     const sub2 = el("div", { class: "small muted", style: "margin-bottom: 8px;" },
-      "與掃描到的角色範本並存，範本是唯讀的。技能卡僅為挑選紀錄，目前是收藏中。");
+      "儲存後不會啟動、重啟或注入任何東西；權限意圖只是記錄，不是授權。");
 
-    const selected = agentProfiles.find((p) => p.id === selectedProfileId);
+    const toggleEnabled = (p) => async () => {
+      try {
+        await api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}`, { enabled: !p.enabled });
+        p.enabled = !p.enabled;
+        toast(p.enabled ? "已啟用" : "已停用");
+        renderRightColumn();
+      } catch (err) {
+        toast("更新失敗：" + err.message);
+      }
+    };
+    const handlers = {
+      launch: (p) => promptAgentLaunch(p),
+      place: (p) => openPlaceDialog(p, { profiles: agentProfiles }),
+      edit: (p) => promptAgentProfileEditor(p),
+      decide: (p) => (async () => {
+        const catalog = await ensureCatalog();
+        if (!catalog) { toast("無法載入角色卡目錄"); return; }
+        openCardWizard({ catalog, profiles: agentProfiles, existing: p, start: 2, openIntents: true, onSaved: async () => { await reloadAgentProfiles(); renderRightColumn(); } });
+      })(),
+      duplicate: (p) => duplicateCard(p, async (copy) => {
+        await reloadAgentProfiles();
+        selectedProfileId = copy.id;
+        focusedProfileId = null;
+        renderRightColumn();
+      }),
+      remove: (p) => promptDeleteAgentProfile(p),
+    };
+    const cards = new Map(sortCards(agentProfiles, agentBuilderCatalog).map((p) => [p.id,
+      profileCard(p, { catalog: agentBuilderCatalog, handlers, loadout: roleLoadouts.get(p.id) || null,
+        backExtra: el("div", { class: "rcard-actions", "data-wb": "card-toggle" },
+          el("button", { type: "button", class: "btn small", "data-pcard": "toggle", on: { click: toggleEnabled(p) } }, p.enabled ? "停用" : "啟用")) })]));
+    readLoadouts([...cards.keys()].filter((id) => !roleLoadouts.has(id)), (id, state) => {
+      roleLoadouts.set(id, state);
+      const c = cards.get(id);
+      if (c) c.setLoadout(state);
+    }, () => token !== seq);
 
-    const split = el("div", { class: "wb-split" });
-    // Sizing lives in style.css (.wb-agent-builder container query) so the
-    // split can stack when the right column is narrow; inline min-width here
-    // previously crushed the detail column to ~40px (Gate 7 finding).
-    const listCol = el("div", { class: "wb-col-left" });
-    const detailCol = el("div", { class: "wb-col-right" });
-
+    let body;
     if (agentProfiles.length === 0) {
-      setKids(listCol, emptyState("尚未建立任何角色卡", null));
+      body = [emptyState("尚未建立任何角色卡", null)];
     } else {
-      setKids(listCol,
-        el("div", { class: "wb-list" }, agentProfiles.map(renderAgentProfileListItem)));
+      body = [el("div", { class: "wb-card-list", "data-wb": "cards" }, [...cards.values()].map((c) => c.node))];
     }
-    if (selected) {
-      setKids(detailCol, renderAgentProfileDetail(selected));
-    } else {
-      setKids(detailCol,
-        emptyState("請從左側選取一張角色卡，或建立新的", null),
-        el("div", { class: "notice info", style: "font-size:12.5px; margin-top:8px;" },
-          el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-          el("div", null,
-            "角色卡只會寫入主控台狀態目錄 (",
-            el("code", null, "~/.vbear/agent_profiles.json"),
-            ")，",
-            "絕對不會寫入 ~/.codex、~/.claude、第三方技能/角色來源或外掛市集。")));
+    const picked = selectedProfileId && cards.get(selectedProfileId);
+    if (picked && focusedProfileId !== selectedProfileId) {
+      focusedProfileId = selectedProfileId;
+      picked.node.classList.add("rcard-picked");
+      setTimeout(() => { if (token === seq && picked.node.scrollIntoView) picked.node.scrollIntoView({ block: "nearest" }); }, 0);
     }
-    split.append(listCol, detailCol);
-
-    return append(content,
-      header,
-      createBtn,
-      sub,
-      sub2,
-      el("div", { class: "small muted", style: "margin-bottom: 8px;" },
-        "儲存後不會啟動、重啟或注入任何東西；權限意圖只是記錄，不是授權。"),
-      split);
+    return append(content, header, createBtn, sub, sub2,
+      el("div", { class: "notice info", style: "font-size:12.5px; margin: 8px 0;" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+        el("div", null,
+          "角色卡只會寫入主控台狀態目錄 (",
+          el("code", null, "~/.vbear/agent_profiles.json"),
+          ")，",
+          "絕對不會寫入 ~/.codex、~/.claude、第三方技能/角色來源或外掛市集。")),
+      ...body);
   }
 
   // Right Tab: [P] Project Contract Skeleton
@@ -10488,7 +10292,7 @@ async function route() {
     else if (top === "skills" && parts[1]) await viewSkillDetail(parts[1]);
     else if (top === "skills") await viewSkills(params);
     else if (top === "team" && parts[1] === "role") await viewRole(parts[2]);
-    else if (top === "team") await viewTeam();
+    else if (top === "team") await viewTeam(params);
     else if (top === "projects") await viewProjects(parts[1]);
     else if (top === "settings") await viewSettings();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));

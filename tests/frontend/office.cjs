@@ -667,7 +667,7 @@ test("selecting a profile reads its loadout once and shows weapons, armor and sk
   assert(!text(p).includes("已消失"));
   assert.strictEqual(reads() - before, 1);
   assert(text(p).includes("打開角色卡"));
-  assert.strictEqual(byClass(p, "office-go")[0].getAttribute("href"), "#/workbench?profile=a");
+  assert.strictEqual(byClass(p, "office-go")[0].getAttribute("href"), "#/team?card=a");
   // a refresh with nothing changed does not read it again, and the selection is still there
   await refresh();
   assert.strictEqual(reads() - before, 1);

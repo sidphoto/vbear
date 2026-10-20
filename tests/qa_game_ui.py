@@ -690,30 +690,24 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       「暫時無法翻譯，原文已保留 · 重試 · 原因」。
   [ ] 用 #auth=<登入碼> 開啟：網址立即清成 #/，交換完成前沒有任何其他請求，不會閃過「請從 VBear 開啟」。
 
-== 1. 角色卡 (工作台 -> 右側「角色」分頁 -> pick 「QA 後端工匠（Claude）」)
-  [ ] 資料區：職業標籤=qa-backend; 陣營=Claude Code; 版本驗證狀態 has a sentence from the
-      server (not blank); 狀態=啟用; 索引時間 is a time.
-  [ ] 職業特性：說明/擅長/適合的工作 each carries a source tag; 未提供 (not 未知) where the author said nothing;
-      the fixed note that a profession is only a label.
-  [ ] 技能卡（收藏中：VBear 啟動時不載入）：4 rows. 3 are found, 1 says the index cannot find it. The list header on
-      the left side says 「目前索引找不到 1 張技能卡」. The probe skill shows its name as text.
-  [ ] 防具：seven items in five groups; each group header carries a level word; the heading says the preview
-      decides (實際以出發通行證為準); no value is printed as "安全" or a bare "OK".
-  [ ] 權限意圖：讀取檔案・允許 編輯寫入・允許 執行測試・允許 部署上線・拒絕; the note says it is only a record and
-      that it does not mean VBear limits the program's real abilities.
-  [ ] Switch to 「QA 審查員（Codex）」: the card has no Claude-specific wording; its skill list has 1 row.
-      With VBEAR_QA_CODEX_BLOCKED=1 the line 「目前無法從 VBear 啟動這個角色…」 is right under the row of
-      buttons (above the card), with the reasons; without it this role is launchable on synthetic evidence
-      and the line is absent.
+== 1. 角色卡 (工作台 -> 右側「角色」分頁 or 角色卡池; both show the same two-faced card; ?profile=<id> or the office's 打開角色卡 (#/team?card=<id>) marks that card)
+  [ ] Front: name, 陣營, 技能卡 N 張 (an unresolved skill is counted as 「N 張目前索引找不到」), the skill rows with
+      收藏中, the light (可以出發 / 還差一步 / 目前不能出發 + the first reason), 「名冊，不代表正在出勤」, the buttons
+      出發 / 放上任務卡 / 翻面. The button is called 出發 everywhere (no 「出發通行證」 button on a card).
+  [ ] Back (翻面): 陣營與模型, 職業標籤, 證據來源, 權限意圖 (only a record), the reasons it cannot go, 編輯／複製／刪除,
+      and (workbench tab only) 停用／啟用; Tool ID / Model ID only under 「進階」.
+  [ ] Switch to 「QA 審查員（Codex）」: no Claude-specific wording; its skill list has 1 row. With
+      VBEAR_QA_CODEX_BLOCKED=1 the card's light says it cannot be launched directly, with the reason.
+  [ ] The seven armor labels live in the 出發通行證 (press 出發), not on the card.
 
-== 2. 技能卡 (角色卡的「技能卡特性」按鈕, or 技能庫 -> Armory)
+== 2. 技能卡 (技能庫 -> Armory -> 技能卡特性, or a skill's own page)
   [ ] code-review: 名稱 with source tag; 類別; 工具; 來源（位置）; 效果 (author text, tagged 作者); 發動時機
       (未提供 if absent); 引用的檔案 lists notes/checklist.md as 存在 and scripts/lint.sh as 缺少; the warning
       box 「缺少的檔案：scripts/lint.sh」 carries a source tag.
   [ ] The probe skill: name and description show as text; 結構檢查 warns that the front-matter name differs
       from the folder name (html-probe).
-  [ ] 這張卡的狀態: installed wording, 已選入 1 個角色（本次不生效）, 觀察狀態 (with its period), market copies.
-  [ ] The fixed sentence: the effect is the author's description, not verified by VBear; badge 本次不生效.
+  [ ] 這張卡的狀態: installed wording, 收藏在 1 張角色卡上（出發時不會載入）, 觀察狀態 (with its period), market copies.
+  [ ] The fixed sentence: the effect is the author's description, not verified by VBear; badge 出發時不會載入.
   [ ] Actions: 從這個角色移除 asks a confirmation in the page (no browser dialog) and changes only the
       selected list; 打開技能檔案; 返回. After a removal, re-add is NOT offered here (use the editor).
   [ ] A skill the index cannot find: its row on the role card says so; no card is invented for it.
@@ -732,6 +726,20 @@ Every screen must treat the text {probe} as plain text: no image, no alert, the 
       「現在不能出發：…」 (VBEAR_QA_CODEX_BLOCKED=1).
   [ ] Skill card, 從這個角色移除: the question names the skill ( 「未提供（ID：…）」 when it has no name), never
       「[object Object]」.
+
+== 3b. 出發之後、接手提醒 (P11; start with VBEAR_QA_LOBBY=empty for a first run with no terminal, or the office environment for running terminals)
+  [ ] A workbench with no terminal open (VBEAR_QA_LOBBY=empty, 工作台): the task card is the page, one line says 「還沒有開啟終端；從下一步讓角色出發」, no
+      black terminal area, no list of terminals, no column buttons; no sideways scroll at 390 px.
+  [ ] From a task card: 出發 / 讓 X 出發 -> pass -> tick the commit box -> 確認啟動. You land in the workbench (#/workbench/<terminal>?task=<id>), the new terminal beside the
+      same card; a toast says the terminal was recorded on the card; the card's tracking box says 已與目前的終端關聯 and 「尚未認領」 is gone.
+  [ ] That terminal shows 「這是你剛開的終端，可以直接打字；打的字會直接送給 Agent。」 with 改成只觀看 (the badge says 你正在操作). Press it: the badge says 只能觀看
+      and 接管操作 is back. Reload the page, or open the same terminal from its address: only 只能觀看; nothing is taken by itself.
+  [ ] 接管操作 on a terminal that was already running: the dialog is 「接手提醒」 (not 「確認接管終端操作」); it names the task card and its next step (or says the terminal has no
+      card), the Agent's state (a working Agent adds 「現在打字可能打斷它」), what waits for you when the flow data says so, and the three fixed lines. The focus is on 取消;
+      確認接手 does the taking. The same dialog from the standalone page (#/term/<id>) and from the workbench.
+  [ ] A card made by 工作台 -> 交接給…: its top shows 「接手提醒」 with the previous card (openable), the note word for word, and the last state; the lobby's card shows a short one with the note folded.
+  [ ] The top of a task card says where its flow is (「① 計畫中」) with 「標記：草稿」 as small text; a card with no team still says 草稿.
+  [ ] 進階（工程資訊） on the task card is shut; inside: 狀態依據 (the four fields), and the buttons to the [P] 專案契約 and [G] 全域底線 pages.
 
 == 4. 隊伍與任務 (流程 -> the flow)
   [ ] 任務進度: seven gates 計畫/核准/實作/審查/合併（你來）/上傳（你來）/完成. The phase is 「等修正」
