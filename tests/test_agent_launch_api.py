@@ -347,6 +347,27 @@ class PreviewApiCase(ServerCase):
         self.assertEqual(self.preview(pid, tool="codex")[0], 400)            # does not match the Profile
         self.assertEqual(self.launch_dirs(), [])
 
+    def test_a_credential_or_tool_state_folder_is_not_launchable(self):
+        """The folder picker never offers these places; a launch must not accept them either."""
+        home = self.tmp / "home"
+        for rel in (".ssh", ".config/x", "Library/LaunchAgents", ".claude/x", "projects/demo"):
+            (home / rel).mkdir(parents=True)
+        (home / "linked").symlink_to(home / ".ssh")
+        pid = self.profile()
+        self.console.managed_root = home
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            for rel in (".ssh", ".SSH", "linked", ".config/x", "Library/LaunchAgents", ".CLAUDE/x"):
+                with self.subTest(rel):
+                    st, r = self.preview(pid, workdir=str(home / rel))
+                    self.assertEqual(st, 200, r)
+                    self.assertFalse(r["preview"]["launchable"])
+                    self.assertIn("invalid_workdir", [x["code"] for x in r["preview"]["reasons"]])
+                    self.assertIsNone(r["preview"]["preview_id"])
+            st, r = self.preview(pid, workdir=str(home / "projects" / "demo"))
+            self.assertEqual(st, 200, r)
+            self.assertTrue(r["preview"]["launchable"], r["preview"]["reasons"])
+        self.assertEqual(len(self.launch_dirs()), 1)       # only the ordinary folder prepared anything
+
     def test_the_commit_note_follows_the_folder_and_the_range_is_the_servers_own(self):
         """P7 #9, #10: a folder without .git does not get a sentence about its .git; the page learns the allowed
         folder from /api/live (managed_root), and a refusal names it."""

@@ -178,6 +178,82 @@ class LaunchStateCase(unittest.TestCase):
                 self.assertEqual(c.exception.code, "invalid_workdir")
         self.assertFalse((self.base / "sessions").exists() and any((self.base / "sessions").iterdir()))
 
+    def fake_home(self) -> Path:
+        """A synthetic home inside the test's own temp tree; no real home directory is looked at."""
+        home = self.tmp / "home"
+        for rel in (".ssh", ".aws", ".gnupg", ".config/x", ".gemini", ".claude/x", ".codex",
+                    "Library/LaunchAgents", "Library/Mobile Documents/folder", "projects/demo"):
+            (home / rel).mkdir(parents=True, exist_ok=True)
+        (home / "linked-ssh").symlink_to(home / ".ssh")
+        (home / "projects" / "linked-aws").symlink_to(home / ".aws")
+        return home
+
+    def prepare_in_home(self, home: Path, workdir, *, allowed_root=None):
+        with mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear")}):
+            return a.prepare_claude_launch(
+                self.base, str(workdir), cli_binary=str(self.binary), cli_version="2.1.286",
+                cli_identity=a.binary_identity(str(self.binary)),
+                allowed_root=str(allowed_root or home))
+
+    def test_workdir_in_a_sensitive_home_location_is_refused_and_leaves_nothing(self):
+        home = Path(os.path.realpath(self.fake_home()))
+        cases = {
+            ".ssh": home / ".ssh",
+            ".SSH given as text": home / ".SSH",
+            "symlink to .ssh": home / "linked-ssh",
+            "symlink to .aws below the home": home / "projects" / "linked-aws",
+            "below .gnupg": home / ".gnupg" / "private-keys",
+            "Library/LaunchAgents": home / "Library" / "LaunchAgents",
+            "Library/Mobile Documents": home / "Library" / "Mobile Documents" / "folder",
+            ".config/x": home / ".config" / "x",
+            ".gemini": home / ".gemini",
+            ".CLAUDE/x given as text": home / ".CLAUDE" / "x",
+            ".Codex given as text": home / ".Codex",
+            "the state directory": home / ".vbear",
+            "the home itself": home,
+            "a location that does not exist": home / ".aws" / "nothing-here",
+        }
+        for label, workdir in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(a.LaunchRefused) as c:
+                    self.prepare_in_home(home, workdir)
+                self.assertEqual(c.exception.code, "invalid_workdir")
+        self.assertFalse((self.base / "sessions").exists() and any((self.base / "sessions").iterdir()))
+
+    def test_the_refusal_of_a_sensitive_location_does_not_depend_on_it_existing(self):
+        from vbear import folders
+        home = Path(os.path.realpath(self.fake_home()))
+        for workdir in (home / ".ssh", home / ".SSH", home / ".ssh" / "nothing-here", home / ".AWS" / "nothing-here"):
+            with self.subTest(workdir=workdir):
+                with self.assertRaises(a.LaunchRefused) as c:
+                    self.prepare_in_home(home, workdir)
+                self.assertEqual(c.exception.code, "invalid_workdir")
+                self.assertEqual(str(c.exception), folders.REFUSED)
+
+    def test_an_ordinary_project_folder_under_a_home_still_launches(self):
+        home = Path(os.path.realpath(self.fake_home()))
+        m = self.prepare_in_home(home, home / "projects" / "demo")
+        self.scratches.append(m["scratch"]["path"])
+        self.assertEqual(m["canonical_workspace"], str(home / "projects" / "demo"))
+
+    def test_the_protected_locations_are_compared_without_regard_to_case(self):
+        # the default macOS volume does not tell /TMP from /tmp, or <state>/ST from <state>/st
+        for workdir in ("/TMP", "/Private/Tmp", str(self.base).upper()):
+            with self.subTest(workdir=workdir):
+                with self.assertRaises(a.LaunchRefused) as c:
+                    a.prepare_claude_launch(self.base, workdir, cli_binary=str(self.binary),
+                                            cli_version="2.1.286",
+                                            cli_identity=a.binary_identity(str(self.binary)),
+                                            allowed_root="/")
+                self.assertEqual(c.exception.code, "invalid_workdir")
+
+    def test_launch_time_recheck_uses_the_same_rules(self):
+        home = Path(os.path.realpath(self.fake_home()))
+        with mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear")}):
+            with self.assertRaises(a.LaunchRefused) as c:
+                a._check_workdir(str(home / ".ssh"), str(home), self.base)
+        self.assertEqual(c.exception.code, "invalid_workdir")
+
     def test_workdir_inside_global_cli_config_is_refused(self):
         target = Path.home() / ".claude"
         if not target.is_dir():

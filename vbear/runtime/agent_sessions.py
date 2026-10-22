@@ -39,6 +39,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .. import folders
 from . import proctrack
 from . import stream_protocol
 
@@ -311,21 +312,28 @@ def _check_workdir(workdir: str, allowed_root: str, base: Path) -> str:
     if not isinstance(workdir, str) or not workdir or "\0" in workdir or not os.path.isabs(workdir):
         raise LaunchRefused("invalid_workdir", "工作目錄必須是絕對路徑")
     canonical = os.path.realpath(workdir)
+    root = os.path.realpath(allowed_root)
+    # The work directory becomes writable, so it follows the folder picker's rules (folders.resolve_allowed):
+    # the home directory, credentials, tool state and the state directory may not be, or contain, a project.
+    # Case is folded, symlinks are already resolved, and this comes before the existence check so the
+    # answer is the same whether or not the place exists.
+    homes = [Path(os.path.realpath(Path.home()))]
+    if folders.fold(homes[0]) != folders.fold(Path(root)):
+        homes.append(Path(root))
+    if folders.is_refused(Path(canonical), homes) or folders.covers_refused(Path(canonical), homes):
+        raise LaunchRefused("invalid_workdir", folders.REFUSED)
     if not os.path.isdir(canonical):
         raise LaunchRefused("invalid_workdir", "工作目錄不存在")
-    root = os.path.realpath(allowed_root)
     if canonical == root or os.path.commonpath([canonical, root]) != root:
         raise LaunchRefused("invalid_workdir", "工作目錄必須在允許的根目錄之內，且不能是根目錄本身")
-    home = os.path.realpath(Path.home())
-    protected = [os.path.realpath(base), os.path.join(home, ".claude"), os.path.join(home, ".codex"),
-                 os.path.realpath(SCRATCH_PARENT), os.path.realpath("/tmp")]
+    protected = [Path(os.path.realpath(base)), Path(os.path.realpath(SCRATCH_PARENT)),
+                 Path(os.path.realpath("/tmp"))]
     for p in protected:
-        # The work directory becomes writable: it may neither contain nor be a protected location.
-        if canonical == p or os.path.commonpath([canonical, p]) == canonical:
+        # It may neither contain a protected location nor be one.
+        if folders.inside(p, Path(canonical)):
             raise LaunchRefused("invalid_workdir", f"工作目錄不可包含受保護的位置：{p}")
-    for p in protected[:3]:
-        if os.path.commonpath([canonical, p]) == p:
-            raise LaunchRefused("invalid_workdir", f"工作目錄不可位於受保護的位置之內：{p}")
+    if folders.inside(Path(canonical), protected[0]):
+        raise LaunchRefused("invalid_workdir", f"工作目錄不可位於受保護的位置之內：{protected[0]}")
     return canonical
 
 

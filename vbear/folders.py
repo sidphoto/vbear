@@ -56,13 +56,14 @@ def clean_path_text(raw) -> str:
     return os.path.normpath(text)
 
 
-def _fold(path: Path) -> tuple[str, ...]:
+def fold(path: Path) -> tuple[str, ...]:
     # Case-folded parts: the default macOS volume does not tell ~/.SSH from ~/.ssh.
     return tuple(part.casefold() for part in path.parts)
 
 
-def _inside(path: Path, base: Path) -> bool:
-    p, b = _fold(path), _fold(base)
+def inside(path: Path, base: Path) -> bool:
+    # `path` is `base` or below it, compared without regard to case.
+    p, b = fold(path), fold(base)
     return len(p) >= len(b) and p[:len(b)] == b
 
 
@@ -87,6 +88,17 @@ def refused_locations(homes: list[Path]) -> list[Path]:
     return out
 
 
+def is_refused(real: Path, homes: list[Path]) -> bool:
+    """True when `real` (already resolved) is a home directory, or is or is under a refused location."""
+    return (any(fold(real) == fold(h) for h in homes)
+            or any(inside(real, blocked) for blocked in refused_locations(homes)))
+
+
+def covers_refused(real: Path, homes: list[Path]) -> bool:
+    """True when `real` (already resolved) is, or contains, a refused location."""
+    return any(inside(blocked, real) for blocked in refused_locations(homes))
+
+
 def resolve_allowed(raw, home: Path, root: Path | None = None) -> Path:
     """The real path of `raw`, or FolderError (400 for a malformed request, 403 for
     a place that may not be a project). Symlinks are followed first, so a link that
@@ -101,13 +113,13 @@ def resolve_allowed(raw, home: Path, root: Path | None = None) -> Path:
         real = Path(os.path.realpath(text))
     except (OSError, ValueError):
         raise FolderError(400, "路徑格式不正確") from None
-    homes = [home_real] if _fold(home_real) == _fold(root_real) else [home_real, root_real]
-    if any(_fold(real) == _fold(h) for h in homes):
+    homes = [home_real] if fold(home_real) == fold(root_real) else [home_real, root_real]
+    if any(fold(real) == fold(h) for h in homes):
         raise FolderError(403, REFUSED)
-    if not _inside(real, root_real):
+    if not inside(real, root_real):
         raise FolderError(403, OUTSIDE_HOME)
     for blocked in refused_locations(homes):
-        if _inside(real, blocked):
+        if inside(real, blocked):
             raise FolderError(403, REFUSED)
     return real
 
