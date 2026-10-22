@@ -1,6 +1,6 @@
-"""The READMEs' pictures: every <img> points at a file in docs/images, every file there is used by both READMEs, each
-picture is a PNG of at most 150 KB, and the two READMEs show the same pictures in the same order (the captions are
-written once per language)."""
+"""The READMEs' pictures: every <img> (and the dark banner's <source srcset>) points at a file in docs/images, every
+file there is used by both READMEs, each picture is a PNG of at most 150 KB, and the two READMEs show the same
+pictures in the same order (the captions are written once per language)."""
 import re
 import struct
 import unittest
@@ -57,7 +57,7 @@ def png_top(path, rows=120):
 
 def referenced(name):
     text = (ROOT / name).read_text(encoding="utf-8")
-    return re.findall(r'<img src="(docs/images/[^"]+)"', text)
+    return re.findall(r'<(?:img src|source media="[^"]+" srcset)="(docs/images/[^"]+)"', text)
 
 
 class ReadmeImages(unittest.TestCase):
@@ -84,6 +84,23 @@ class ReadmeImages(unittest.TestCase):
             for tag in re.findall(r"<img [^>]*>", text):
                 self.assertRegex(tag, r'alt="[^"]+"', tag)
                 self.assertRegex(tag, r'width="\d+"', tag)
+
+    def test_the_banner_opens_both_readmes_with_a_dark_version_for_the_dark_theme(self):
+        picture = ('<picture>\n  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">\n'
+                   '  <img src="docs/images/banner.png" alt="%s" width="960">\n</picture>\n')
+        for name, alt in (("README.md", "VBear — a pixel Formosan black bear at work"),
+                          ("README.zh-TW.md", "VBear：戴耳機上班的像素台灣黑熊")):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("# VBear\n\n" + picture % alt), name)
+            self.assertEqual(referenced(name)[:2], ["docs/images/banner-dark.png", "docs/images/banner.png"], name)
+            # it is not a screenshot: the one banner picture sits above the first paragraph, before the screenshot section
+            self.assertLess(text.index("banner.png"), text.index("**"), name)
+        # the banner is a palette PNG as wide as it is shown or wider, and the dark one is really dark
+        for n in ("banner.png", "banner-dark.png"):
+            width, height, mean = png_top(IMAGES / n)
+            self.assertGreaterEqual(width, 960)
+            self.assertEqual((width, height), (1280, 320))
+            self.assertEqual(mean < 0.3, "dark" in n, n)
 
     def test_stale_sentences_are_gone_and_the_status_says_v08(self):
         en = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -163,11 +180,16 @@ class ChangelogRelease(unittest.TestCase):
         self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     def test_the_release_heading_matches_the_version(self):
-        headings = re.findall(r"^## (.+)$", self.text, re.M)
+        headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
         self.assertTrue(headings[0].startswith("v0.8.0"), headings[:2])
         self.assertTrue(headings[1].startswith("v0.7.0"), headings[:2])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('__version__ = "0.8.0"', init)
+
+    def test_the_unreleased_section_says_the_new_logo_is_everywhere(self):
+        section = self.text[self.text.index("## Unreleased"):self.text.index("## v0.8.0")]
+        for topic in ("pixel Formosan black bear", "app icon", "tab icon", "banner"):
+            self.assertIn(topic, section, topic)
 
     def test_unreleased_covers_every_part_of_this_release(self):
         start = self.text.index("## v0.8.0")

@@ -80,7 +80,8 @@ button, input, select { font: inherit; color: inherit; }
 .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
 .side { position: sticky; top: 0; height: 100vh; padding: 20px 14px; border-right: 1px solid var(--line); background: var(--panel-2); display: flex; flex-direction: column; gap: 18px; }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px; }
-.brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-size: 18px; }
+.brand-mark { display: grid; place-items: center; width: 36px; height: 36px; }
+.brand-mark img { display: block; width: 32px; height: 32px; }  /* 32 x 32 grid at 32 px: one pixel per cell */
 .brand-text { font-weight: 700; letter-spacing: .01em; line-height: 1.2; }
 .brand-text small { display: block; font-weight: 400; color: var(--ink-3); font-size: 12px; margin-top: 2px; }
 .nav { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **New logo: a pixel Formosan black bear with a white V on its chest.** The app icon, the browser tab icon, the mark at
+  the top left of the page and the banner at the top of both READMEs (the bear wears a headset there, and a dark version
+  is shown on GitHub's dark theme) are all new. The icons are drawn cell by cell, so they stay sharp: the page mark is
+  `web/logo.svg`, the tab icon `web/favicon.svg`, and the app icon is drawn by `macos/make_icon.swift` from the pixels in
+  `macos/AppIcon.pixels.json` (the 16 and 32 pixel sizes use a simpler 16 x 16 bear). No behaviour changes.
+
 ## v0.8.0 — launch and hand over
 
 - The import-a-project window: the list of projects VBear has seen (and the recent folders) now fades at its bottom

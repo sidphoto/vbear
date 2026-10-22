@@ -67,6 +67,7 @@ STATIC_FILES = {
     "/app.js": "app.js",
     "/style.css": "style.css",
     "/favicon.svg": "favicon.svg",
+    "/logo.svg": "logo.svg",
     "/vendor/xterm/xterm.js": "vendor/xterm/xterm.js",
     "/vendor/xterm/xterm.css": "vendor/xterm/xterm.css",
     "/vendor/xterm/addon-fit.js": "vendor/xterm/addon-fit.js",

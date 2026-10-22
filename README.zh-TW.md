@@ -1,5 +1,10 @@
 # VBear
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
+  <img src="docs/images/banner.png" alt="VBear：戴耳機上班的像素台灣黑熊" width="960">
+</picture>
+
 **像選遊戲角色一樣挑選你的 AI 寫程式助手：出發前，先看清楚它的職業、技能和出發通行證。**
 
 VBear 是跑在你自己 Mac 上的主控台。你用它的角色卡啟動 Claude Code 時，它會在啟動「之前」先告訴你這次允許做什麼；

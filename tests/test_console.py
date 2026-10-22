@@ -398,6 +398,14 @@ class ServerTests(unittest.TestCase):
             e.close()
             return e.code, body, e.headers
 
+    def test_the_logo_files_are_served_as_svg(self):
+        for path in ("/favicon.svg", "/logo.svg"):
+            status, body, headers = self.req_raw(path)
+            self.assertEqual(status, 200, path)
+            self.assertEqual(headers.get("Content-Type"), "image/svg+xml; charset=utf-8", path)
+            self.assertTrue(body.startswith(b"<svg"), path)
+            self.assertIn("img-src 'self'", headers.get("Content-Security-Policy", ""))
+
     def test_vendored_static_assets_serving_and_path_traversal(self):
         """Vendored assets in /vendor/xterm/ are served with correct MIME,
         strict security headers, and cannot be path-traversed."""

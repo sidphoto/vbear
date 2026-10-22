@@ -1,5 +1,10 @@
 # VBear
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
+  <img src="docs/images/banner.png" alt="VBear — a pixel Formosan black bear at work" width="960">
+</picture>
+
 **Pick your AI coding agent like a game character: see its class, skills and armor before you send it in.**
 
 VBear is a console that runs on your own Mac. When you start Claude Code from one of its role cards, it shows what

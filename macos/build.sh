@@ -66,7 +66,7 @@ swiftc -O -target arm64-apple-macos13.0 -framework Cocoa -framework WebKit \
   -o "$APP/Contents/MacOS/VBear" "$ROOT/macos/VBear/main.swift"
 ICONSET="$BUILD/AppIcon.iconset"
 rm -rf "$ICONSET"
-swift "$ROOT/macos/make_icon.swift" "$ICONSET"
+swift "$ROOT/macos/make_icon.swift" "$ICONSET" "$ROOT/macos/AppIcon.pixels.json"
 iconutil -c icns -o "$RES/AppIcon.icns" "$ICONSET"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 
