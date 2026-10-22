@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.1 — pixel black bear
 
 - **New logo: a pixel Formosan black bear with a white V on its chest.** The app icon, the browser tab icon, the mark at
   the top left of the page and the banner at the top of both READMEs (the bear wears a headset there, and a dark version

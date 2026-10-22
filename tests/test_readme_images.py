@@ -180,14 +180,15 @@ class ChangelogRelease(unittest.TestCase):
         self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     def test_the_release_heading_matches_the_version(self):
-        headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.8.0"), headings[:2])
-        self.assertTrue(headings[1].startswith("v0.7.0"), headings[:2])
+        headings = re.findall(r"^## (.+)$", self.text, re.M)
+        self.assertTrue(headings[0].startswith("v0.8.1"), headings[:3])
+        self.assertTrue(headings[1].startswith("v0.8.0"), headings[:3])
+        self.assertTrue(headings[2].startswith("v0.7.0"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('__version__ = "0.8.0"', init)
+        self.assertIn('__version__ = "0.8.1"', init)
 
-    def test_the_unreleased_section_says_the_new_logo_is_everywhere(self):
-        section = self.text[self.text.index("## Unreleased"):self.text.index("## v0.8.0")]
+    def test_the_v081_section_says_the_new_logo_is_everywhere(self):
+        section = self.text[self.text.index("## v0.8.1"):self.text.index("## v0.8.0")]
         for topic in ("pixel Formosan black bear", "app icon", "tab icon", "banner"):
             self.assertIn(topic, section, topic)
 
