@@ -804,6 +804,44 @@ class RedactionTests(_HostileBase):  # M2
         for text, secret in cases.items():
             self.assertNotIn(secret, document.redact(text), text)
 
+    def test_secret_name_without_a_value_hides_the_indented_lines_below(self):
+        """`tokens:` then a deeper list, scalar or mapping: the value sits on the next lines."""
+        cases = {
+            "yaml list": "tokens:\n  - custom_secret_token_12345\n  - custom_secret_token_67890\nname: demo",
+            "scalar on the next line": "api_key:\n  custom_secret_value_12345\nname: demo",
+            "scalar after trailing spaces": "api_key:   \n  custom_secret_value_12345\nname: demo",
+            "nested mapping": "credentials:\n  aws:\n    secret: custom_secret_value_12345\n"
+                              "    region: custom_secret_value_67890\nname: demo",
+            "blank line inside": "password:\n\n  custom_secret_value_12345\nname: demo",
+            "inside a list item": "- tokens:\n    - custom_secret_token_12345\n- name: demo",
+            "list at the key's own depth": "tokens:\n- custom_secret_token_12345\n- custom_secret_token_67890\n"
+                                           "name: demo",
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                out = document.redact(text)
+                self.assertNotIn("custom_secret", out)
+                self.assertIn(document.REDACTED, out)
+                self.assertIn("name: demo", out)
+
+    def test_hidden_block_ends_at_the_next_line_of_the_same_depth(self):
+        out = document.redact("tokens:\n  - custom_secret_token_12345\nname: demo\n  indented: after\n")
+        self.assertEqual(out.split("\n")[0], "tokens:")
+        self.assertNotIn("custom_secret_token_12345", out)
+        self.assertIn("name: demo\n  indented: after", out)
+        out = document.redact("  tokens:\n    - custom_secret_token_12345\n  name: demo\nafter: x")
+        self.assertIn("  name: demo\nafter: x", out)
+        # a list item at the key's own depth belongs to the key, but a sibling list item does not
+        out = document.redact("- tokens:\n    - custom_secret_token_12345\n- name: demo\n- other")
+        self.assertIn("- name: demo\n- other", out)
+
+    def test_names_without_a_value_that_do_not_hold_secrets_are_left_alone(self):
+        for text in ("tags:\n  - a\n  - b\nname: demo", "max_tokens:\n  4096\nname: demo",
+                     "token_count:\n  - 3\nname: demo", "api_key_env:\n  OPENAI_KEY\nname: demo",
+                     "keywords:\n  - a", "The key:\n  fast"):
+            with self.subTest(text=text):
+                self.assertEqual(document.redact(text), text)
+
     def test_prose_is_left_alone(self):
         for text in ("author: Jane Doe", "bearer authentication is used", "pip install sk-learn",
                      "keywords: a, b", "url: https://example.com/token", "The key: fast"):
@@ -872,6 +910,24 @@ class HardenedServerTests(_HostileBase):  # M2/M3 read path, L2, L3, L4
                 self.assertNotIn(secret, text, path)
         _, detail, _ = self.req(f"/api/skills/{self.skill_id('evil')}")
         self.assertIn("Evil skill.", detail["raw"])
+
+    def test_names_without_a_value_are_hidden_in_detail_and_referenced_file(self):
+        folder = HOSTILE / "skills" / "listed"
+        (folder / "refs").mkdir(parents=True, exist_ok=True)
+        (folder / "SKILL.md").write_text(
+            "---\nname: listed\ndescription: Listed skill.\n---\n# Listed\n"
+            "See [data](refs/data.txt).\ntokens:\n  - custom_secret_token_12345\n"
+            "api_key:\n  custom_secret_value_12345\nnote: kept\n", encoding="utf-8")
+        (folder / "refs" / "data.txt").write_text(
+            "credentials:\n  aws:\n    secret: custom_secret_value_67890\nname: kept\n", encoding="utf-8")
+        self.console.store._static = build_static(self.console.store.conf)
+        sid = self.skill_id("listed")
+        _, detail, _ = self.req(f"/api/skills/{sid}")
+        _, ref, _ = self.req(f"/api/skills/{sid}/file?ref=refs/data.txt")
+        text = json.dumps([detail, ref], ensure_ascii=False)
+        self.assertNotIn("custom_secret", text)
+        self.assertIn("note: kept", detail["raw"])
+        self.assertIn("name: kept", ref["text"])
 
     def test_detail_rechecks_symlink_at_read_time(self):
         victim = HOSTILE / "skills" / "flip"

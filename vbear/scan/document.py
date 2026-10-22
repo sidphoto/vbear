@@ -45,6 +45,10 @@ _BEARER = re.compile(r"(?i)\b(bearer\s+)(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/
 _KV_NAME = re.compile(
     r"(?<![A-Za-z0-9_$-])([\"']?)([A-Za-z_$][A-Za-z0-9_.$-]{0,79})\1\s*(?::(?!//)|=)\s*(?=\S)"
 )
+# "name:" with nothing after the colon: the value, if any, is on the lines below.
+_KV_EMPTY = re.compile(
+    r"(?<![A-Za-z0-9_$-])([\"']?)([A-Za-z_$][A-Za-z0-9_.$-]{0,79})\1\s*:\s*\Z"
+)
 _NAME_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 # Name parts that mark a secret on their own, in any text.
 _STRONG_PARTS = {
@@ -155,6 +159,12 @@ _SECTION_KEYS = {
 _MAX_SECTION_CHARS = 1200
 
 
+def _may_hold_secret(name: str) -> bool:
+    """A name whose value could be a secret: a secret name, or one that only describes a secret."""
+    parts = [p.lower() for p in _NAME_PART.findall(name)]
+    return bool(parts) and not _structure_key(parts) and _names_secret(parts, False)
+
+
 def redact(text: str) -> str:
     """Never surface anything shaped like a credential (plan section 9)."""
     if not text:
@@ -162,23 +172,40 @@ def redact(text: str) -> str:
     text = _PEM_BLOCK.sub(REDACTED, text)
     text = _BARE_TOKENS.sub(REDACTED, text)
     lines = text.split("\n")
-    block_indent = None  # inside "secret_name: |" block scalar: hide its lines
+    # Inside the value of a secret name: the lines indented deeper than the name
+    # line. That is a "|" / ">" block scalar, or what follows a "name:" with
+    # nothing after the colon (a list, a scalar on the next line, a nested
+    # mapping). Blank lines do not end it; a line at the name's own depth or
+    # shallower does, except a "- item" at the name's own depth, which YAML
+    # allows as the list of a plain "name:" line.
+    block = None  # (indent of the name line, name, hide every line, own-depth list allowed)
     for i, line in enumerate(lines):
-        if block_indent is not None:
-            if not line.strip() or len(line) - len(line.lstrip()) > block_indent:
-                if line.strip():
-                    lines[i] = line[: len(line) - len(line.lstrip())] + REDACTED
-                continue
-            block_indent = None
+        if block is not None:
+            indent, name, hide_all, own_depth_list = block
+            body = line.lstrip()
+            if (not body or len(line) - len(body) > indent
+                    or (own_depth_list and body.startswith("-") and not body[1:2].strip())):
+                if not body:
+                    continue
+                # a name that only describes a secret keeps its harmless values
+                if hide_all or secret_value_for(name, re.sub(r"^-\s+", "", body.rstrip()), strict=False):
+                    lines[i] = line[: len(line) - len(body)] + REDACTED
+                    continue
+            else:
+                block = None
         for match in _KV_NAME.finditer(line):
             value = line[match.end():]
             if secret_value_for(match.group(2), value, strict=False):
                 lines[i] = line[: match.end()] + REDACTED
                 if value.strip() in ("|", "|-", "|+", ">", ">-", ">+"):
-                    block_indent = len(line) - len(line.lstrip())
+                    block = (len(line) - len(line.lstrip()), match.group(2), True, False)
                 break
         else:
             lines[i] = _BEARER.sub(lambda m: m.group(1) + REDACTED, line)
+            empty = _KV_EMPTY.search(line)
+            if empty and _may_hold_secret(empty.group(2)):
+                block = (len(line) - len(line.lstrip()), empty.group(2), False,
+                         not line.lstrip().startswith("-"))
     return "\n".join(lines)
 
 
