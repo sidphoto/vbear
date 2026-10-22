@@ -180,7 +180,7 @@ class ChangelogRelease(unittest.TestCase):
         self.text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     def test_the_release_heading_matches_the_version(self):
-        headings = re.findall(r"^## (.+)$", self.text, re.M)
+        headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
         self.assertTrue(headings[0].startswith("v0.8.1"), headings[:3])
         self.assertTrue(headings[1].startswith("v0.8.0"), headings[:3])
         self.assertTrue(headings[2].startswith("v0.7.0"), headings[:3])

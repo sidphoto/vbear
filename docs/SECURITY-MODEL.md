@@ -18,7 +18,7 @@ For how to report a vulnerability, see [SECURITY.md](../SECURITY.md).
 | DNS rebinding | The server binds to `127.0.0.1`, and the `Host` header must be a local address |
 | Skill content injecting script | Strict CSP (`script-src 'self'`), `textContent` only, no `innerHTML` |
 | Oversized or slow requests | Bodies over 64 KiB get 413; a body must arrive within 15 s |
-| Secrets inside skill files | API keys, tokens and PEM blocks are masked in the index, previews and warnings |
+| Secrets inside skill files | API keys, tokens and PEM blocks are masked in the index, previews and warnings; when a secret-looking name has nothing after its colon (`tokens:`), the more deeply indented lines under it (a list, a value on the next line, a nested mapping) are masked too |
 
 `style-src` allows `'unsafe-inline'`, because xterm.js sets inline styles for 24-bit colour. No
 user-controlled HTML or CSS reaches the page.
@@ -226,6 +226,14 @@ Other safeguards:
   cannot be used to probe for them. A place outside the home directory is `403` too. The list is the constant
   `SENSITIVE_HOME_DIRS` in `vbear/folders.py`; tests lock it, and lock that the page's copy of it (used only to leave
   such folders out of its lists) is identical.
+- **A managed launch's work directory follows the same list.** The folder becomes writable for the session, so
+  `_check_workdir` in `vbear/runtime/agent_sessions.py` refuses it by calling the same code (`refused_locations`):
+  the home directory, the places above and anything below them, by `realpath` and with names compared case-folded.
+  A work directory that would contain one of those places is refused too. The refusal comes before the check that the
+  folder exists, says the same fixed sentence whether or not the place exists, and has the code `invalid_workdir`;
+  the preview shows it as a blocker (`launchable: false`) and the check is repeated just before the launch starts. A
+  folder under `~/Library` (for example iCloud Drive's `~/Library/Mobile Documents`) or `~/.config` cannot be a
+  work directory, as it cannot be picked in the folder chooser.
 - **Terminals are counted by working directory only.** The count and the list say nothing about which role card
   opened a terminal; the page words it as "this folder currently has N terminals", never as "working".
 - **`recent_folders` and `onboarding_dismissed`** live in `config.json` (written with `write_private`, validated: at

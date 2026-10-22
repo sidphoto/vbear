@@ -68,9 +68,15 @@
   與整塊 PEM 私鑰。遮蔽套用在索引、章節、原始 SKILL.md、引用檔與警告文字，寧可多遮（例如整行說明）也不漏。
   資料庫鍵（`primary_key`、`sort_key`）不遮。只是「描述」機密的名稱（`max_tokens`、`token_file`、`api_key_env`、`secret_name`）
   只有在值明顯無害時才顯示：數字、路徑、網址（不含查詢字串）、`ENV_VAR` 名稱或布林值；其他值一律遮蔽（例如 `secret_file: hunter2`）。
+  名稱像機密、冒號後面沒有值的行（例如 `tokens:`），底下縮排更深的行（清單、換行後的值、巢狀 mapping）也一併遮蔽，直到縮排相同或更淺的下一行為止。
 - Profile 管理的 Claude 啟動：先 `POST /api/native/agent-previews` 取得預覽（七項權限的實際套用程度與證據），確認後
   `POST /api/native/agent-launches` 才啟動；預覽單次使用、5 分鐘過期，設定或 Profile 變動回 409。不接受 argv、環境變數、設定或憑證。
   Bash 工具的寫入由 Claude 沙盒限制在工作目錄與該 session 的暫存區；讀取不隔離；使用者在終端以 `!` 直接執行的指令不經沙盒。
+  工作目錄套用和資料夾選擇器同一份「不能當成專案」的清單：家目錄本身，以及 `~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.config`、
+  `~/.vbear`、`~/.claude`、`~/.codex`、`~/.gemini`、`~/Library` 和它們底下的位置（含狀態目錄）都會被拒絕；名稱不分大小寫，
+  符號連結先解析成實際路徑再比對，會包含這些位置的工作目錄也不行。拒絕發生在檢查資料夾是否存在之前，位置存不存在訊息都一樣，
+  錯誤碼是 `invalid_workdir`；預覽會顯示為不可啟動的原因，啟動前會再檢查一次。因此放在 `~/Library`（例如 iCloud Drive）或 `~/.config`
+  底下的資料夾不能當受管啟動的工作目錄。
 - **終端工作台（Terminal Workbench）安全模型與資料流向**：
   - **資料流向與本機邊界**：終端畫面走本機 SSE 串流 (`GET /api/term/<pane>/stream`)，輸出僅於記憶體中轉送，不落地儲存，絕不上傳外部或雲端。
   - **端點防護與 Fetch-SSE**：瀏覽器不使用原生 `EventSource`（因其無法攜帶自訂標頭），改由原生 `fetch()` 串流。端點防護精確區分：串流讀取 (`GET /api/term/<pane>/stream`) 透過 Host 檢驗、強制 `X-VBear: 1` 自訂標頭及 Fetch Metadata (`Sec-Fetch-Site`) 阻擋跨站讀取；操作與輸入寫入 (`POST /api/term/<pane>/...`) 則透過 Host 檢驗、`X-VBear: 1` 標頭及同源 `Origin` 檢驗完整防禦 CSRF。

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+Hardening that follows the first security review of v0.8.1. It found no confirmed vulnerability; these two changes make
+the code do what the documents already say.
+
+- **Skill secrets under a name with no value are masked.** A secret-looking name whose line ends at the colon
+  (`tokens:`, `api_key:`, `credentials:`) now masks the more deeply indented lines below it: a list, a value on the next
+  line, a nested mapping, as a `|` block already did. It stops at the next line that is as shallow as the name. A name
+  that only describes a secret (`max_tokens`, `api_key_env`) keeps its harmless values visible, as before. Text such as
+  `Passwords:` followed by an indented explanation is masked as well; masking more was chosen over missing a value. This
+  applies to the raw SKILL.md and the referenced files in the skill details.
+- **A managed launch's work directory follows the folder chooser's list.** The home directory itself, `~/.ssh`,
+  `~/.gnupg`, `~/.aws`, `~/.config`, `~/.vbear`, `~/.claude`, `~/.codex`, `~/.gemini`, `~/Library`, the state directory
+  and anything below them are refused as a work directory when a launch is previewed, prepared and again just before it
+  starts. Names are compared without regard to case and symlinks are resolved first, so `~/.SSH` and a link that points
+  at `~/.ssh` are refused too; the earlier protected places (`/tmp`, the scratch parent, `~/.claude`, `~/.codex`) are
+  compared the same way. The refusal comes before the check that the folder exists and reads the same either way
+  (`invalid_workdir`; the preview shows it as a reason the launch cannot start).
+  **Behaviour change:** a work directory under `~/Library` (for example iCloud Drive's `~/Library/Mobile Documents`) or
+  `~/.config`, which the folder chooser has always refused, is now refused for managed launches as well.
+
 ## v0.8.1 — pixel black bear
 
 - **New logo: a pixel Formosan black bear with a white V on its chest.** The app icon, the browser tab icon, the mark at
