@@ -7,7 +7,8 @@ the code do what the documents already say.
 
 - **Skill secrets under a name with no value are masked.** A secret-looking name whose line ends at the colon
   (`tokens:`, `api_key:`, `credentials:`) now masks the more deeply indented lines below it: a list, a value on the next
-  line, a nested mapping, as a `|` block already did. It stops at the next line that is as shallow as the name. A name
+  line, a nested mapping, as a `|` block already did. It stops at the next line that is as shallow as the name. The same holds when the name's line carries only a comment,
+  an opening bracket, a block header such as `|2` or `>-`, or a tag or anchor (`!vault |`, `&k`). A name
   that only describes a secret (`max_tokens`, `api_key_env`) keeps its harmless values visible, as before. Text such as
   `Passwords:` followed by an indented explanation is masked as well; masking more was chosen over missing a value. This
   applies to the raw SKILL.md and the referenced files in the skill details.

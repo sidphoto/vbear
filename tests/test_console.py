@@ -824,6 +824,60 @@ class RedactionTests(_HostileBase):  # M2
                 self.assertIn(document.REDACTED, out)
                 self.assertIn("name: demo", out)
 
+    def test_secret_name_whose_value_starts_on_the_next_line_hides_the_lines_below(self):
+        """The name line holds only a comment, an opening bracket, a block header or a tag or anchor."""
+        cases = {
+            "comment only": "tokens: # list below\n  - custom_secret_token_12345\nname: demo",
+            "comment only, spaced": "api_key:   # set below\n  custom_secret_value_12345\nname: demo",
+            "comment only, list at own depth": "tokens: # list below\n- custom_secret_token_12345\nname: demo",
+            "json array": '{\n  "tokens": [\n    "custom_secret_token_12345",\n    "custom_secret_token_67890"\n  ],\n'
+                          '  "name": "demo"\n}',
+            "flow sequence": "tokens: [\n  custom_secret_token_12345,\n]\nname: demo",
+            "flow mapping": "credentials: {\n  aws: custom_secret_value_12345\n}\nname: demo",
+            "bracket then comment": "tokens: [ # more\n  custom_secret_token_12345,\n]\nname: demo",
+            "json object": '{\n  "credentials": {\n    "aws": "custom_secret_value_12345"\n  },\n  "name": "demo"\n}',
+            "indent indicator": "secret: |2\n    custom_secret_value_12345\nname: demo",
+            "chomp then indent": "secret: |-2\n    custom_secret_value_12345\nname: demo",
+            "indent then chomp": "secret: |2-\n    custom_secret_value_12345\nname: demo",
+            "folded keep, indent": "secret: >+1\n   custom_secret_value_12345\nname: demo",
+            "block header with comment": "secret: > # c\n  custom_secret_value_12345\nname: demo",
+            "vault tag and block": "password: !vault |\n  custom_secret_value_12345\n  custom_secret_value_67890\nname: demo",
+            "anchor alone": "api_key: &k\n  custom_secret_value_12345\nname: demo",
+            "tag alone": "api_key: !!str\n  custom_secret_value_12345\nname: demo",
+            "tag then comment": "api_key: !custom # c\n  custom_secret_value_12345\nname: demo",
+            "anchor and tag, then block": "password: &p !vault >-\n  custom_secret_value_12345\nname: demo",
+            "inside a list item": "- tokens: # c\n    - custom_secret_token_12345\n- name: demo",
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                out = document.redact(text)
+                self.assertNotIn("custom_secret", out)
+                self.assertIn(document.REDACTED, out)
+                self.assertIn("name: demo" if "json" not in label else '"name": "demo"', out)
+
+    def test_flow_and_comment_openers_end_where_the_name_depth_returns(self):
+        out = document.redact('{\n  "tokens": [\n    "custom_secret_token_12345"\n  ],\n  "name": "demo"\n}')
+        self.assertIn('  ],\n  "name": "demo"\n}', out)
+        out = document.redact("tokens: # c\n  - custom_secret_token_12345\nname: demo\n  indented: after")
+        self.assertIn("name: demo\n  indented: after", out)
+
+    def test_long_runs_of_tag_characters_do_not_stall_the_scan(self):
+        started = time.monotonic()
+        for run in ("!" * 5000, "&" * 5000, "!& " * 2000, "!" * 5000 + " ", "!a" + " " * 200000, " " * 200000,
+                    "!a " * 50000):
+            out = document.redact("tokens: " + run + " x\n  custom_secret_token_12345")
+            self.assertIn(document.REDACTED, out.split("\n")[0])
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_describing_names_with_an_opener_keep_harmless_values_visible(self):
+        out = document.redact("max_tokens: # limit\n  4096\n  custom_secret_value_12345\nname: demo")
+        self.assertIn("  4096\n", out)
+        self.assertNotIn("custom_secret", out)
+        for text in ("tags: # c\n  - a\nname: demo", "tags: [\n  a,\n]\nname: demo",
+                     "keywords: !!seq\n  - a\nname: demo", "The key: # c\n  fast"):
+            with self.subTest(text=text):
+                self.assertEqual(document.redact(text), text)
+
     def test_hidden_block_ends_at_the_next_line_of_the_same_depth(self):
         out = document.redact("tokens:\n  - custom_secret_token_12345\nname: demo\n  indented: after\n")
         self.assertEqual(out.split("\n")[0], "tokens:")
@@ -917,9 +971,12 @@ class HardenedServerTests(_HostileBase):  # M2/M3 read path, L2, L3, L4
         (folder / "SKILL.md").write_text(
             "---\nname: listed\ndescription: Listed skill.\n---\n# Listed\n"
             "See [data](refs/data.txt).\ntokens:\n  - custom_secret_token_12345\n"
-            "api_key:\n  custom_secret_value_12345\nnote: kept\n", encoding="utf-8")
+            "api_key:\n  custom_secret_value_12345\npassword: !vault |\n  custom_secret_value_24680\n"
+            "tokens: # c\n  - custom_secret_token_13579\nnote: kept\n", encoding="utf-8")
         (folder / "refs" / "data.txt").write_text(
-            "credentials:\n  aws:\n    secret: custom_secret_value_67890\nname: kept\n", encoding="utf-8")
+            "credentials:\n  aws:\n    secret: custom_secret_value_67890\n"
+            '{\n  "tokens": [\n    "custom_secret_token_11223"\n  ],\n  "name": "kept"\n}\nname: kept\n',
+            encoding="utf-8")
         self.console.store._static = build_static(self.console.store.conf)
         sid = self.skill_id("listed")
         _, detail, _ = self.req(f"/api/skills/{sid}")

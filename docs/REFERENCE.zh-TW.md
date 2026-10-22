@@ -68,7 +68,7 @@
   與整塊 PEM 私鑰。遮蔽套用在索引、章節、原始 SKILL.md、引用檔與警告文字，寧可多遮（例如整行說明）也不漏。
   資料庫鍵（`primary_key`、`sort_key`）不遮。只是「描述」機密的名稱（`max_tokens`、`token_file`、`api_key_env`、`secret_name`）
   只有在值明顯無害時才顯示：數字、路徑、網址（不含查詢字串）、`ENV_VAR` 名稱或布林值；其他值一律遮蔽（例如 `secret_file: hunter2`）。
-  名稱像機密、冒號後面沒有值的行（例如 `tokens:`），底下縮排更深的行（清單、換行後的值、巢狀 mapping）也一併遮蔽，直到縮排相同或更淺的下一行為止。
+  名稱像機密、冒號後面沒有值的行（例如 `tokens:`），底下縮排更深的行（清單、換行後的值、巢狀 mapping）也一併遮蔽，直到縮排相同或更淺的下一行為止；同一行只有註解、開頭括號、區塊標記或標籤時也一樣。
 - Profile 管理的 Claude 啟動：先 `POST /api/native/agent-previews` 取得預覽（七項權限的實際套用程度與證據），確認後
   `POST /api/native/agent-launches` 才啟動；預覽單次使用、5 分鐘過期，設定或 Profile 變動回 409。不接受 argv、環境變數、設定或憑證。
   Bash 工具的寫入由 Claude 沙盒限制在工作目錄與該 session 的暫存區；讀取不隔離；使用者在終端以 `!` 直接執行的指令不經沙盒。

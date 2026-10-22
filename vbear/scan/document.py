@@ -49,6 +49,28 @@ _KV_NAME = re.compile(
 _KV_EMPTY = re.compile(
     r"(?<![A-Za-z0-9_$-])([\"']?)([A-Za-z_$][A-Za-z0-9_.$-]{0,79})\1\s*:\s*\Z"
 )
+# What follows "name:" when the real value starts on a later line: only a
+# comment, an opening bracket, a block scalar header ("|", ">-", "|2", "|-2",
+# ">+1" ...), or any of those after a tag or anchor ("!vault |", "&k").
+_COMMENT = re.compile(r"(?:^|\s)#")
+_BLOCK_HEADER = re.compile(r"[|>](?:[-+][1-9]?|[1-9][-+]?)?")
+
+
+def _value_below(value: str):
+    """None when `value` is a real value; else (block scalar header, opening bracket)."""
+    comment = _COMMENT.search(value)
+    tokens = (value[: comment.start()] if comment else value).split()
+    while tokens and tokens[0][0] in "!&":
+        tokens.pop(0)
+    if not tokens:
+        return "", ""
+    if len(tokens) == 1 and _BLOCK_HEADER.fullmatch(tokens[0]):
+        return tokens[0], ""
+    if len(tokens) == 1 and tokens[0] in ("[", "{"):
+        return "", tokens[0]
+    return None
+
+
 _NAME_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 # Name parts that mark a secret on their own, in any text.
 _STRONG_PARTS = {
@@ -197,8 +219,15 @@ def redact(text: str) -> str:
             value = line[match.end():]
             if secret_value_for(match.group(2), value, strict=False):
                 lines[i] = line[: match.end()] + REDACTED
-                if value.strip() in ("|", "|-", "|+", ">", ">-", ">+"):
-                    block = (len(line) - len(line.lstrip()), match.group(2), True, False)
+                below = _value_below(value)
+                if below is not None:
+                    name = match.group(2)
+                    block_scalar = bool(below[0])
+                    # a block scalar hides everything under it, as before; after only a
+                    # comment, bracket or tag a describing name still shows harmless lines
+                    block = (len(line) - len(line.lstrip()), name,
+                             block_scalar or secret_key_name(name, strict=False),
+                             not (block_scalar or below[1] or line.lstrip().startswith("-")))
                 break
         else:
             lines[i] = _BEARER.sub(lambda m: m.group(1) + REDACTED, line)

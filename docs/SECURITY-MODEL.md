@@ -18,7 +18,7 @@ For how to report a vulnerability, see [SECURITY.md](../SECURITY.md).
 | DNS rebinding | The server binds to `127.0.0.1`, and the `Host` header must be a local address |
 | Skill content injecting script | Strict CSP (`script-src 'self'`), `textContent` only, no `innerHTML` |
 | Oversized or slow requests | Bodies over 64 KiB get 413; a body must arrive within 15 s |
-| Secrets inside skill files | API keys, tokens and PEM blocks are masked in the index, previews and warnings; when a secret-looking name has nothing after its colon (`tokens:`), the more deeply indented lines under it (a list, a value on the next line, a nested mapping) are masked too |
+| Secrets inside skill files | API keys, tokens and PEM blocks are masked in the index, previews and warnings; when a secret-looking name has nothing after its colon (`tokens:`), the more deeply indented lines under it (a list, a value on the next line, a nested mapping) are masked too, and so are they when that line holds only a comment, an opening bracket, a block header or a tag or anchor |
 
 `style-src` allows `'unsafe-inline'`, because xterm.js sets inline styles for 24-bit colour. No
 user-controlled HTML or CSS reaches the page.
