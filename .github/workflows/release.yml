@@ -50,6 +50,16 @@ jobs:
             echo "bundled python links outside the bundle" >&2; exit 1
           fi
           (cd "$app/Contents/Resources/app" && ../python/bin/python3 -B -c "import vbear.server, vbear.runtime.daemon; print('vbear', __import__('vbear').__version__)")
+          # The dark Dock icon lives in Assets.car (compiled by actool). build.sh skips it when actool is missing,
+          # so a release must fail here rather than ship without it.
+          assets="$app/Contents/Resources/Assets.car"
+          [ -f "$assets" ] || { echo "no Resources/Assets.car: the app has no dark icon" >&2; exit 1; }
+          info="$(assetutil --info "$assets")"
+          for appearance in NSAppearanceNameAqua NSAppearanceNameDarkAqua; do
+            case "$info" in *"\"$appearance\""*) ;; *) echo "Assets.car has no $appearance icon" >&2; exit 1 ;; esac
+          done
+          [ "$(plutil -extract CFBundleIconName raw "$app/Contents/Info.plist")" = "AppIcon" ] || { echo "Info.plist has no CFBundleIconName" >&2; exit 1; }
+          [ -f "$app/Contents/Resources/AppIcon.icns" ] || { echo "no AppIcon.icns for older macOS" >&2; exit 1; }
           codesign --verify --deep --strict "$app"   # nothing above wrote into the bundle
       - name: Publish to the release
         env:

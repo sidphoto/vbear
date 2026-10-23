@@ -1,0 +1,25 @@
+{
+  "fill-specializations": [
+    { "value": { "solid": "srgb:0.95294,0.93725,0.89412,1.00000" } },
+    { "appearance": "dark", "value": { "solid": "srgb:0.11373,0.11373,0.10588,1.00000" } }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass": false,
+          "image-name-specializations": [
+            { "value": "light.png" },
+            { "appearance": "dark", "value": "dark.png" }
+          ],
+          "name": "bear"
+        }
+      ],
+      "lighting": "individual",
+      "shadow": { "kind": "none", "opacity": 0 },
+      "specular": false,
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": ["macOS"] }
+}

@@ -7,6 +7,7 @@
   <key>CFBundleIdentifier</key><string>io.github.sidphoto.vbear</string>
   <key>CFBundleExecutable</key><string>VBear</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>@VERSION@</string>
   <key>CFBundleVersion</key><string>@VERSION@</string>

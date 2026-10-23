@@ -30,6 +30,13 @@ the code do what the documents already say. The entries after them are small int
   sidebar. In the light theme the mark now has a one-pixel edge in a muted tan that follows the plate's stepped corners;
   the dark theme looks exactly as before. It follows VBear's own light/dark setting, whether chosen or following the
   system. The favicon and the app icon are unchanged.
+- **On macOS 26 and later the app icon follows light and dark mode.** The Dock and Finder show a dark plate with the
+  bear outlined in cream in dark mode and the cream plate in light mode. The icon is now an Icon Composer `.icon`
+  (`macos/AppIcon.icon`, compiled by `actool` into `Assets.car`), so macOS draws the plate itself: its rounded shape,
+  edge and finish differ a little from the old hand-drawn plate, and the small sizes are scaled down from the large
+  bear rather than drawn on their own 16 x 16 grid. Older macOS versions keep `AppIcon.icns`, unchanged, byte for byte.
+  The build skips `Assets.car` when Xcode is not installed (and says so); the release workflow fails if the app has no
+  `Assets.car` with both appearances.
 
 ## v0.8.1 — pixel black bear
 

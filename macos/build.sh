@@ -61,13 +61,35 @@ if grep -rlF "$ROOT" "$APP" >/dev/null 2>&1; then
   echo "build path leaked into the bundle:" >&2; grep -rlF "$ROOT" "$APP" | head >&2; exit 1
 fi
 
-# 3. Swift shell, icon, Info.plist.
+# 3. Swift shell, icons, Info.plist.
 swiftc -O -target arm64-apple-macos13.0 -framework Cocoa -framework WebKit \
   -o "$APP/Contents/MacOS/VBear" "$ROOT/macos/VBear/main.swift"
 ICONSET="$BUILD/AppIcon.iconset"
 rm -rf "$ICONSET"
 swift "$ROOT/macos/make_icon.swift" "$ICONSET" "$ROOT/macos/AppIcon.pixels.json"
 iconutil -c icns -o "$RES/AppIcon.icns" "$ICONSET"
+cp "$RES/AppIcon.icns" "$BUILD/AppIcon.icns"     # the reference for the check below
+# macOS 26 and later pick the icon for the light or dark appearance from Assets.car, which actool compiles from an
+# Icon Composer .icon (macos/AppIcon.icon: the plate colours and one bear layer per appearance; the system draws the
+# plate, its edge and the finish). The layers are made here from the two pixel files, so no pictures are kept in the
+# repository. Older systems keep reading AppIcon.icns (CFBundleIconFile), the light one made above.
+# Only Assets.car is taken from actool's output: it writes an AppIcon.icns of its own, which must not replace ours.
+if xcrun --find actool >/dev/null 2>&1; then
+  ICONDOC="$BUILD/AppIcon.icon"
+  ACTOOL_OUT="$BUILD/actool"
+  rm -rf "$ICONDOC" "$ACTOOL_OUT"
+  mkdir -p "$ICONDOC/Assets" "$ACTOOL_OUT"
+  cp "$ROOT/macos/AppIcon.icon/icon.json" "$ICONDOC/icon.json"
+  swift "$ROOT/macos/make_icon.swift" "$ICONSET" "$ROOT/macos/AppIcon.pixels.json" --layer "$ICONDOC/Assets/light.png"
+  swift "$ROOT/macos/make_icon.swift" "$ICONSET" "$ROOT/macos/AppIcon-dark.pixels.json" --layer "$ICONDOC/Assets/dark.png"
+  xcrun actool "$ICONDOC" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 13.0 \
+    --app-icon AppIcon --output-partial-info-plist "$ACTOOL_OUT/partial.plist" >"$ACTOOL_OUT/actool.log"
+  [ -f "$ACTOOL_OUT/Assets.car" ] || { echo "actool did not produce Assets.car (see $ACTOOL_OUT/actool.log)" >&2; exit 1; }
+  cp "$ACTOOL_OUT/Assets.car" "$RES/Assets.car"
+  cmp -s "$RES/AppIcon.icns" "$BUILD/AppIcon.icns" || { echo "AppIcon.icns is not the one iconutil made" >&2; exit 1; }
+else
+  echo "==> actool not found (Xcode is not installed): no Assets.car, so no dark Dock icon; AppIcon.icns is made as usual"
+fi
 sed "s/@VERSION@/$VERSION/g" "$ROOT/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 
 # 4. Ad-hoc signature (required to run on Apple Silicon), then verify.

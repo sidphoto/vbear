@@ -66,6 +66,14 @@ hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT" -quiet
 ditto "$MNT/VBear.app" "$APP"
 hdiutil detach "$MNT" -quiet
 codesign --verify --deep --strict "$APP" && pass "signature valid" || fail "signature valid"
+# The dark Dock icon (built by actool from the .icon): both appearances in Assets.car, and the .icns for older macOS.
+ICON_INFO="$(assetutil --info "$APP/Contents/Resources/Assets.car" 2>/dev/null || true)"
+case "$ICON_INFO" in
+  *'"NSAppearanceNameDarkAqua"'*'"NSAppearanceNameAqua"'* | *'"NSAppearanceNameAqua"'*'"NSAppearanceNameDarkAqua"'*)
+    pass "Assets.car has the light and the dark app icon" ;;
+  *) fail "Assets.car has the light and the dark app icon" ;;
+esac
+[ -f "$APP/Contents/Resources/AppIcon.icns" ] && pass "AppIcon.icns for older macOS" || fail "AppIcon.icns for older macOS"
 PY="$APP/Contents/Resources/python/bin/python3"
 [ -x "$PY" ] || { fail "bundled python exists"; exit 1; }
 # Every Mach-O file in the bundle may link only to the system or to the bundle itself.

@@ -2,14 +2,63 @@
 palette and the plate colour). web/favicon.svg (16 x 16) and web/logo.svg (32 x 32) must be exactly those cells, drawn
 with <rect> only and only the declared colours, and the page's mark must be that picture, served by the console."""
 import json
+import platform
 import re
+import shutil
+import struct
+import subprocess
+import tempfile
 import unittest
+import zlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SVG = "{http://www.w3.org/2000/svg}"
 PIXELS = json.loads((ROOT / "macos" / "AppIcon.pixels.json").read_text(encoding="utf-8"))
+DARK_PATH = ROOT / "macos" / "AppIcon-dark.pixels.json"
+ICON_PATH = ROOT / "macos" / "AppIcon.icon" / "icon.json"
+
+
+def rgb(hex_colour):
+    return tuple(int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def read_png(data):
+    """(width, height, rows of RGBA tuples) of an 8-bit RGBA, non-interlaced PNG."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, idat, size = 8, b"", None
+    while pos < len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b"IHDR":
+            size = struct.unpack(">IIBBBBB", body)
+            assert size[2:] == (8, 6, 0, 0, 0), size  # 8 bit, RGBA, no interlace
+        elif kind == b"IDAT":
+            idat += body
+    width, height = size[0], size[1]
+    raw, stride = zlib.decompress(idat), width * 4
+    rows, prev = [], bytearray(stride)
+    for y in range(height):
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - 4] if i >= 4 else 0
+            b = prev[i]
+            c = prev[i - 4] if i >= 4 else 0
+            if kind == 1:
+                line[i] = (line[i] + a) & 255
+            elif kind == 2:
+                line[i] = (line[i] + b) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            elif kind == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append([tuple(line[x * 4:x * 4 + 4]) for x in range(width)])
+        prev = line
+    return width, height, rows
 
 
 def plate_cells(dim):
@@ -175,6 +224,132 @@ class PageMark(unittest.TestCase):
         server = (ROOT / "vbear" / "server.py").read_text(encoding="utf-8")
         for route in ("/favicon.svg", "/logo.svg"):
             self.assertIn(f'"{route}": "{route[1:]}"', server)
+
+
+class DarkAppIcon(unittest.TestCase):
+    """The dark Dock/Finder icon: a second pixel file and an Icon Composer .icon that swaps plate and bear picture."""
+
+    @property
+    def dark(self):
+        return json.loads(DARK_PATH.read_text(encoding="utf-8"))
+
+    @property
+    def icon(self):
+        return json.loads(ICON_PATH.read_text(encoding="utf-8"))
+
+    def test_dark_pixel_file_has_the_same_format_as_the_light_one(self):
+        self.assertEqual(set(self.dark), set(PIXELS))
+        for key, dim in (("rows", 32), ("icon16", 16)):
+            self.assertEqual(len(self.dark[key]), dim, key)
+            for row in self.dark[key]:
+                self.assertEqual(len(row), dim, key)
+                for ch in row:
+                    self.assertIn(ch, self.dark["palette"], f"{key}: {ch!r} is not in the palette")
+        self.assertEqual(set(self.dark["palette"]), set(PIXELS["palette"]))
+        self.assertIsNone(self.dark["palette"]["."])
+        for value in self.dark["palette"].values():
+            self.assertTrue(value is None or re.fullmatch(r"#[0-9a-f]{6}", value), value)
+        # the file is written the way the light one is, so the two diff cleanly
+        for path, data in ((DARK_PATH, self.dark), (ROOT / "macos" / "AppIcon.pixels.json", PIXELS)):
+            self.assertEqual(path.read_text(encoding="utf-8"), json.dumps(data, indent=2, ensure_ascii=False) + "\n", path.name)
+
+    def test_dark_plate_is_dark_light_plate_is_light_and_the_bear_keeps_its_colours(self):
+        def luminance(key, data):
+            r, g, b = rgb(data["palette"][data["iconBackground"]])
+            return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+        self.assertGreater(luminance("light", PIXELS), 0.8)
+        self.assertLess(luminance("dark", self.dark), 0.2)
+        self.assertEqual(self.dark["palette"][self.dark["iconBackground"]], "#1d1d1b")
+        for ch in "KkWfGT":
+            self.assertEqual(self.dark["palette"][ch], PIXELS["palette"][ch], ch)
+
+    def test_dark_bear_is_the_light_bear_plus_one_outline_cell(self):
+        for key in ("rows", "icon16"):
+            for y, (light_row, dark_row) in enumerate(zip(PIXELS[key], self.dark[key])):
+                self.assertEqual(dark_row, dark_row[::-1], f"{key} row {y}")
+                for x, (a, b) in enumerate(zip(light_row, dark_row)):
+                    if a != b:
+                        self.assertEqual((a, b), (".", "O"), f"{key} cell {(x, y)}")
+
+    def test_icon_fill_colours_are_the_two_plate_colours(self):
+        fills = self.icon["fill-specializations"]
+        self.assertEqual(len(fills), 2)
+        by_appearance = {f.get("appearance", "default"): f["value"]["solid"] for f in fills}
+        self.assertEqual(set(by_appearance), {"default", "dark"})
+        for name, data in (("default", PIXELS), ("dark", self.dark)):
+            match = re.fullmatch(r"srgb:([\d.]+),([\d.]+),([\d.]+),1(?:\.0+)?", by_appearance[name])
+            self.assertIsNotNone(match, by_appearance[name])
+            got = tuple(round(float(v) * 255) for v in match.groups())
+            self.assertEqual(got, rgb(data["palette"][data["iconBackground"]]), name)
+
+    def test_icon_has_one_bear_layer_and_asks_the_system_for_no_effects(self):
+        self.assertEqual(self.icon["supported-platforms"], {"squares": ["macOS"]})
+        self.assertEqual(len(self.icon["groups"]), 1)
+        group = self.icon["groups"][0]
+        self.assertEqual(len(group["layers"]), 1)
+        layer = group["layers"][0]
+        self.assertIs(layer["glass"], False)
+        self.assertIs(group["specular"], False)
+        self.assertEqual(group["shadow"]["kind"], "none")
+        self.assertIs(group["translucency"]["enabled"], False)
+        self.assertEqual(layer["image-name-specializations"],
+                         [{"value": "light.png"}, {"appearance": "dark", "value": "dark.png"}])
+        self.assertNotIn("blend-mode", layer)
+        self.assertNotIn("opacity", layer)
+
+    def test_icon_document_holds_only_json_the_pictures_are_made_at_build_time(self):
+        self.assertEqual(sorted(p.name for p in (ICON_PATH.parent).rglob("*") if p.is_file()), ["icon.json"])
+
+    def test_info_plist_keeps_the_icns_name_and_names_the_asset_catalog_icon(self):
+        plist = (ROOT / "macos" / "Info.plist.in").read_text(encoding="utf-8")
+        self.assertIn("<key>CFBundleIconFile</key><string>AppIcon</string>", plist)
+        self.assertIn("<key>CFBundleIconName</key><string>AppIcon</string>", plist)
+
+    def test_build_makes_the_icns_for_old_systems_then_assets_car_with_actool(self):
+        build = (ROOT / "macos" / "build.sh").read_text(encoding="utf-8")
+        icns = build.index('iconutil -c icns -o "$RES/AppIcon.icns"')
+        self.assertIn('make_icon.swift" "$ICONSET" "$ROOT/macos/AppIcon.pixels.json"', build)
+        for needle in ('AppIcon-dark.pixels.json', "--layer", "macos/AppIcon.icon", "xcrun --find actool",
+                       "--app-icon AppIcon", "--minimum-deployment-target", 'Assets.car'):
+            self.assertIn(needle, build, needle)
+        self.assertGreater(build.index("xcrun actool"), icns)  # actool comes after the icns is in place
+        # without actool: one clear line and no failure; the icns stays the one iconutil made
+        self.assertRegex(build, r"else\s+echo \"==> actool not found[^\n]*Assets\.car[^\n]*\"")
+        # actool also writes its own AppIcon.icns: only Assets.car is taken from its output, and the icns is checked
+        self.assertNotRegex(build, r"cp [^\n]*actool[^\n]*\.icns")
+        self.assertRegex(build, r'cmp -s "\$RES/AppIcon\.icns" "\$BUILD/AppIcon\.icns"')
+
+    def test_release_refuses_a_bundle_without_the_dark_icon(self):
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        smoke = release[release.index("Smoke-check the bundle"):release.index("Publish to the release")]
+        self.assertIn("assetutil --info", smoke)
+        self.assertIn("NSAppearanceNameDarkAqua", smoke)
+        self.assertIn("NSAppearanceNameAqua", smoke)
+        self.assertIn("Resources/Assets.car", smoke)
+        script = (ROOT / "macos" / "smoke_test.sh").read_text(encoding="utf-8")
+        self.assertIn("NSAppearanceNameDarkAqua", script)
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertNotIn("build.sh", ci)  # CI does not build the app
+
+    @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("swift"), "needs swift on macOS")
+    def test_the_layer_picture_is_only_the_bear_one_cell_is_32_pixels(self):
+        for name, data in (("light", PIXELS), ("dark", self.dark)):
+            with tempfile.TemporaryDirectory() as tmp:
+                src = ROOT / "macos" / ("AppIcon.pixels.json" if name == "light" else "AppIcon-dark.pixels.json")
+                out = Path(tmp) / "layer.png"
+                subprocess.run(["swift", str(ROOT / "macos" / "make_icon.swift"), str(Path(tmp) / "set"), str(src),
+                                "--layer", str(out)], check=True, cwd=tmp, capture_output=True, timeout=300)
+                width, height, rows = read_png(out.read_bytes())
+            self.assertEqual((width, height), (1024, 1024), name)
+            for y, row in enumerate(data["rows"]):
+                for x, ch in enumerate(row):
+                    colour = data["palette"][ch]
+                    want = (0, 0, 0, 0) if colour is None else rgb(colour) + (255,)
+                    for dx, dy in ((0, 0), (31, 0), (0, 31), (31, 31), (16, 16)):
+                        self.assertEqual(rows[y * 32 + dy][x * 32 + dx], want, f"{name} cell {(x, y)} +{(dx, dy)}")
+            # no plate in the layer: every "." cell above was transparent, the plate's cells included
+            self.assertIn((3, 16), plate_cells(32))
+            self.assertEqual(data["rows"][16][3], ".")
 
 
 class AppIconScript(unittest.TestCase):
