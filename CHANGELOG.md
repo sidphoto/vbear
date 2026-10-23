@@ -3,7 +3,7 @@
 ## Unreleased
 
 Hardening that follows the first security review of v0.8.1. It found no confirmed vulnerability; these two changes make
-the code do what the documents already say.
+the code do what the documents already say. The entries after them are small interface changes.
 
 - **Skill secrets under a name with no value are masked.** A secret-looking name whose line ends at the colon
   (`tokens:`, `api_key:`, `credentials:`) now masks the more deeply indented lines below it: a list, a value on the next
@@ -21,6 +21,11 @@ the code do what the documents already say.
   (`invalid_workdir`; the preview shows it as a reason the launch cannot start).
   **Behaviour change:** a work directory under `~/Library` (for example iCloud Drive's `~/Library/Mobile Documents`) or
   `~/.config`, which the folder chooser has always refused, is now refused for managed launches as well.
+- **A skill can be taken off a role card from its back again.** The back of a role card now lists the skill cards on it,
+  each with a 技能卡特性 button. Opened from there, the skill card window offers 從這個角色移除 (with the usual
+  confirmation) and the card redraws by itself afterwards. This works in the card pool, the workbench's role tab and the
+  office roster; sample cards and the armory's view stay read-only. A skill the index can no longer find is listed
+  without a button and points to editing the card.
 
 ## v0.8.1 — pixel black bear
 

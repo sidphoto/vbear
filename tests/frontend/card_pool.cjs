@@ -1495,6 +1495,142 @@ async function test(name, fn) {
     assert.ok(/\.rcard-codex\s*\{\s*background:\s*var\(--info-soft\)/.test(css));
   });
 
+  // ======== P18 #1: the skill cards on a role card open the skill card window, and 從這個角色移除 works from there =========
+
+  const skillBody = (id, name) => {
+    const miss = () => ({ value: null, origin: "missing", detail: "" });
+    return { ok: true, index: { loaded: true, generated_at: 1 },
+      skill: { skill_id: id, name: { value: name, origin: "author", detail: "x" }, tool: miss(), scope: miss(), activation: "active",
+        installed: true, activation_reason: "r", status_source: { origin: "derived", detail: "d" },
+        description: miss(), when_to_use: miss(), inputs: miss(), outputs: miss(), dependencies: miss(),
+        categories: { value: null, origin: "missing", detail: "", matches: [] },
+        referenced_files: { count: 0, items: [], truncated: false, note: "n", origin: "derived", detail: "x" },
+        missing_files: { items: [], origin: "derived", detail: "d" }, warnings: { items: [], origin: "derived", detail: "d" } },
+      added_to_roles: { items: [], effective: false, note: "n", origin: "user", detail: "d" },
+      observation: { state: "unavailable", window_days: null, source: "s", origin: "runtime", detail: "d" },
+      marketplace_copies: [], marketplace_source: { origin: "derived", detail: "d" }, effect_note: "e" };
+  };
+  const skillHandlers = (ids) => Object.fromEntries(ids.map((id) => [`GET /api/skills/${id}?view=card`, () => jsonResponse(skillBody(id, `name-${id}`))]));
+  const dialogsNow = () => body.children.filter((c) => c !== main && c.getAttribute && c.getAttribute("role") === "dialog");
+  const removeButton = (root) => walk(root).find((n) => n.tag === "button" && (n.textContent || "") === "從這個角色移除");
+
+  await test("P18 #1 the back lists the skill cards on the card; each opens the skill card with 從這個角色移除; confirming posts the rest and redraws", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ["s-c", "s-s"] });
+    const posts = [];
+    let changed = 0;
+    const ctx = freshContext({ ...skillHandlers(["s-c", "s-s"]),
+      "POST /api/agent-profiles/p-1": (_u, o) => { posts.push(JSON.parse(o.body)); return jsonResponse({ ok: true }); } });
+    evalAgentBuilderSlice(ctx);
+    const card = ctx.profileCard(p, { catalog, face: "back", handlers: { skillsChanged: async () => { changed += 1; } } });
+    const sec = byData(card.node, "data-rc", "skills")[0];
+    assert.ok(sec, "the back has a section for the skill cards on the card");
+    assert.ok(faceOf(card.node, "back").contains(sec), "it is on the back, not the front");
+    assert.ok(findText(sec, "已插的技能卡"));
+    const btns = byData(sec, "data-pcard", "skill-card");
+    assert.strictEqual(btns.length, 2);
+    assert.ok(btns.every((b) => b.textContent === "技能卡特性"));
+    btns[0].dispatch("click"); await tick(8);
+    const modal = dialog();
+    assert.ok(modal && findText(modal, "name-s-c"), "the skill card of the first one");
+    const remove = removeButton(modal);
+    assert.ok(remove, "從這個角色移除 is there when opened from the card");
+    remove.dispatch("click"); await tick(8);
+    const ds = dialogsNow();
+    const confirmBox = ds[ds.length - 1];
+    assert.ok(findText(confirmBox, "把「name-s-c」從角色「Mine」的已選技能移除？這只會改你的挑選紀錄，不會刪除技能。"));
+    btnByText(confirmBox, "移除").dispatch("click"); await tick(8);
+    assert.deepStrictEqual(posts, [{ equipped_skill_ids: ["s-s"] }]);
+    assert.strictEqual(changed, 1, "the page is told once, so it can redraw");
+    assert.strictEqual(dialogsNow().length, 0, "both windows are closed");
+  });
+
+  await test("P18 #1 without a change handler, on a sample card, or from the armory: the skill card opens but offers no removal", async () => {
+    const ids = ["s-c"];
+    const open = async (p, handlers) => {
+      const ctx = freshContext(skillHandlers(ids));
+      evalAgentBuilderSlice(ctx);
+      const card = ctx.profileCard(p, { catalog, face: "back", handlers });
+      const btn = byData(card.node, "data-pcard", "skill-card")[0];
+      assert.ok(btn, "the entry is there");
+      btn.dispatch("click"); await tick(8);
+      const modal = dialog();
+      assert.ok(modal && findText(modal, "name-s-c"));
+      return modal;
+    };
+    const mine = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ids });
+    assert.ok(!removeButton(await open(mine, {})), "no handler: nothing could redraw the card");
+    const demo = mkProfile("demo-1", "Sample", "claude", VERIFIED, { equipped_skill_ids: ids });
+    assert.ok(!removeButton(await open(demo, { skillsChanged: async () => {} })), "a sample card is not edited");
+    const ctx = freshContext(skillHandlers(ids));
+    evalAgentBuilderSlice(ctx);
+    await ctx.openSkillCard("s-c"); await tick(8);
+    assert.ok(!removeButton(dialog()), "opened from the armory: no profile, no removal");
+  });
+
+  await test("P18 #1 a long list stays on the scrolling back; a skill the index cannot find has no entry and says why", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `s-${i}`);
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ids });
+    const card = pure.profileCard(p, { catalog, face: "back", handlers: { skillsChanged: async () => {} } });
+    const sec = byData(card.node, "data-rc", "skills")[0];
+    assert.strictEqual(byData(sec, "data-pcard", "skill-card").length, 40, "every skill on the card is reachable");
+    assert.ok(faceOf(card.node, "back").contains(sec));
+    assert.strictEqual(slotsOf(card.node).length, 6, "the front keeps its six slots");
+    const items = [{ skill_id: "s-1", state: "in_index", name: "one", will_load: false, effective: false },
+      { skill_id: "s-2", state: "not_in_index", name: "s-2", will_load: false, effective: false }];
+    card.setLoadout(okState(loadoutWith(items)));
+    const rows = byData(card.node, "data-rc", "skills")[0];
+    assert.strictEqual(byData(rows, "data-pcard", "skill-card").length, 1, "only the one the index has");
+    assert.ok(findText(rows, "目前索引找不到") && findText(rows, "編輯"), "the other says why, and where to take it off");
+  });
+
+  await test("P18 #1 the card pool redraws after a removal: skill count and slots follow, no page reload", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ["s-c", "s-s"] });
+    const ctx = await openPool([p], catalog, { ...skillHandlers(["s-c", "s-s"]),
+      "POST /api/agent-profiles/p-1": (_u, o) => { p.equipped_skill_ids = JSON.parse(o.body).equipped_skill_ids; return jsonResponse({ ok: true }); } });
+    assert.ok(findText(cardOf("p-1"), "技能卡 2 張"));
+    byData(cardOf("p-1"), "data-pcard", "skill-card")[1].dispatch("click"); await tick(8);
+    removeButton(dialog()).dispatch("click"); await tick(8);
+    const ds = dialogsNow();
+    btnByText(ds[ds.length - 1], "移除").dispatch("click"); await tick(12);
+    assert.ok(findText(cardOf("p-1"), "技能卡 1 張"), "the count is the new one");
+    assert.strictEqual(slotsOf(cardOf("p-1")).length, 1);
+    assert.strictEqual(ctx.location.hash, "", "no navigation: the page was redrawn in place");
+  });
+
+  await test("P18 #1 the workbench role tab: the same entry, and a removal redraws the tab", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ["s-c", "s-s"] });
+    const ctx = freshContext(baseHandlers([p], catalog, { ...skillHandlers(["s-c", "s-s"]),
+      "POST /api/agent-profiles/p-1": (_u, o) => { p.equipped_skill_ids = JSON.parse(o.body).equipped_skill_ids; return jsonResponse({ ok: true }); } }));
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null);
+    walk(main).find((n) => n.tag === "button" && (n.textContent || "").trim() === "角色").dispatch("click"); await tick();
+    assert.ok(findText(cardOf("p-1"), "技能卡 2 張"));
+    byData(cardOf("p-1"), "data-pcard", "skill-card")[0].dispatch("click"); await tick(8);
+    removeButton(dialog()).dispatch("click"); await tick(8);
+    const ds = dialogsNow();
+    btnByText(ds[ds.length - 1], "移除").dispatch("click"); await tick(12);
+    assert.ok(findText(cardOf("p-1"), "技能卡 1 張"), "the tab shows the new count");
+  });
+
+  await test("P18 #1 the office roster card: the same entry; its change handler is the view's, which reads the roster and the loadout again", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ["s-c"] });
+    let told = 0;
+    const posts = [];
+    const ctx = freshContext({ ...skillHandlers(["s-c"]),
+      "POST /api/agent-profiles/p-1": (_u, o) => { posts.push(JSON.parse(o.body)); return jsonResponse({ ok: true }); } });
+    evalAgentBuilderSlice(ctx);
+    const S = { profiles: { profiles: [p] }, loadout: null, face: "back", skillsChanged: async () => { told += 1; } };
+    const node = ctx.officeRoleCard({ id: "p-1", key: "profile:p-1" }, S);
+    byData(node, "data-pcard", "skill-card")[0].dispatch("click"); await tick(8);
+    removeButton(dialog()).dispatch("click"); await tick(8);
+    const ds = dialogsNow();
+    btnByText(ds[ds.length - 1], "移除").dispatch("click"); await tick(8);
+    assert.deepStrictEqual(posts, [{ equipped_skill_ids: [] }]);
+    assert.strictEqual(told, 1);
+    const view = source.slice(source.indexOf("async function viewOffice("), source.indexOf("function officeJump("));
+    assert.ok(/S\.skillsChanged\s*=\s*async/.test(view) && /S\.reloadRoster\(\)/.test(view.slice(view.indexOf("S.skillsChanged"))), "the view wires it to the roster reload");
+  });
+
   console.log(`\n${passed} passed`);
   if (process.exitCode) process.exit(process.exitCode);
   console.log("ALL CARD POOL FRONTEND TESTS PASSED");

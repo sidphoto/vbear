@@ -1183,6 +1183,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .rcard-pattern .card-pattern { display: block; width: 100%; height: 16px; opacity: .6; }  /* art v5: a row of small crosses on a clear ground; .6 keeps them >= 3:1 on every camp card, in both themes (p15 test) */
 .rcard-back-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--card-frame-title, var(--ink)); }
 .rcard-block h4 { margin: 0 0 4px; font-size: 13.5px; color: var(--card-frame-title, var(--ink)); }
+.rcard-skill-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rcard-skill-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.rcard-skill-name { min-width: 0; overflow-wrap: anywhere; }
 .rcard-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
 .rcard-dl dt { color: var(--ink-3); }
 .rcard-dl dd { margin: 0; overflow-wrap: anywhere; }

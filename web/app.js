@@ -2908,7 +2908,8 @@ function officeRoleCard(p, S) {
   const loadoutState = S.loadout && S.loadout.key === p.key ? S.loadout : null;
   const gear = officeGear(loadoutState);
   if (!full) return gear;
-  return profileCard(full, { loadout: loadoutState, face: S.face, onFace: (f) => { S.face = f; }, backExtra: gear }).node;
+  const handlers = typeof S.skillsChanged === "function" ? { skillsChanged: S.skillsChanged } : {};
+  return profileCard(full, { handlers, loadout: loadoutState, face: S.face, onFace: (f) => { S.face = f; }, backExtra: gear }).node;
 }
 
 function officePanelContent(m, S, handlers) {
@@ -3118,23 +3119,24 @@ async function viewOffice() {
     if (!idx.has(key)) return;
     if (S.key !== key) S.face = "front";
     S.key = key; S.name = idx.get(key).name; S.station = idx.get(key).station || ""; S.notice = ""; statusLine.textContent = "";
-    if (key.startsWith("profile:")) {
-      const id = key.slice("profile:".length);
-      if (!(S.loadout && S.loadout.key === key)) {
-        S.loadout = { key, state: "loading" };
-        api.get(`/api/agent-profiles/${encodeURIComponent(id)}/loadout`).then((data) => {
-          if (S.key !== key) return;
-          S.loadout = { key, state: "ok", data };
-          renderPanelOnly();
-        }).catch((e) => {
-          if (S.key !== key) return;
-          S.loadout = { key, state: "error", error: e.message };
-          renderPanelOnly();
-        });
-      }
-    } else S.loadout = null;
+    if (key.startsWith("profile:")) readLoadout(key);
+    else S.loadout = null;
     render({ focusSpec: officeKeySpec(key), panelFocus: true });
   };
+  // the loadout of a roster card, read once per card (a late answer repaints the panel only)
+  function readLoadout(key) {
+    if (S.loadout && S.loadout.key === key) return;
+    S.loadout = { key, state: "loading" };
+    api.get(`/api/agent-profiles/${encodeURIComponent(key.slice("profile:".length))}/loadout`).then((data) => {
+      if (S.key !== key) return;
+      S.loadout = { key, state: "ok", data };
+      renderPanelOnly();
+    }).catch((e) => {
+      if (S.key !== key) return;
+      S.loadout = { key, state: "error", error: e.message };
+      renderPanelOnly();
+    });
+  }
   S.select = select;
   const closePanel = () => {
     const was = S.key;
@@ -3273,6 +3275,13 @@ async function viewOffice() {
     S.profiles = await readProfiles();
     const m = computeModel();
     repaint(m, officeKey(m));
+  };
+  // a skill taken off a card from its back: the roster and the loadout of the open card are read again
+  S.skillsChanged = async () => {
+    const key = S.key;
+    S.loadout = null;
+    await S.reloadRoster();
+    if (S.key === key && key.startsWith("profile:")) { readLoadout(key); renderPanelOnly(); }
   };
 }
 
@@ -4620,7 +4629,7 @@ function cardDeparture(p, loadoutState) {
   return { ...base, reasons: [] };
 }
 
-// opts: { catalog, handlers: { launch, decide, edit, duplicate, remove }, loadout, face, onFace(face), backExtra }.
+// opts: { catalog, handlers: { launch, decide, edit, duplicate, remove, skillsChanged }, loadout, face, onFace(face), backExtra }.
 // A button shows only when its handler is given. Returns { node, setLoadout(state) }: a late loadout repaints the parts
 // that depend on it and leaves the buttons alone.
 function profileCard(p, opts = {}) {
@@ -4643,6 +4652,7 @@ function profileCard(p, opts = {}) {
   const evidenceBox = el("dd", { "data-rc": "evidence" });
   const englishBox = el("dd", { "data-rc": "english" });
   const reasonBox = el("section", { class: "rcard-block", "data-rc": "blockers" });
+  const skillsBox = el("section", { class: "rcard-block rcard-skills", "data-rc": "skills" });
 
   const flipButton = (label, aria) => el("button", { type: "button", class: "btn small rcard-flip", "data-pcard": "flip",
     "aria-keyshortcuts": "F", "aria-label": aria, title: `${label}（按 F）`, on: { click: () => setFace(face === "front" ? "back" : "front", true) } }, label);
@@ -4684,6 +4694,7 @@ function profileCard(p, opts = {}) {
       el("p", { class: "small muted", "data-rc": "intent-note" }, CARD_INTENT_NOTE),
       chips),
     reasonBox,
+    skillsBox,
     (handlers.edit || handlers.duplicate || handlers.remove) ? el("div", { class: "rcard-actions" },
       handlers.edit ? el("button", { type: "button", class: "btn small", "data-pcard": "edit", on: { click: () => handlers.edit(p) } }, "編輯") : null,
       handlers.duplicate ? el("button", { type: "button", class: "btn small", "data-pcard": "duplicate", on: { click: () => handlers.duplicate(p) } }, "複製") : null,
@@ -4758,6 +4769,23 @@ function profileCard(p, opts = {}) {
         : el("p", { class: "small muted rcard-slot-empty" }, cardArt("icons", "emptySlot", 1), "沒有插技能卡"),
       slots.allInactive === true ? el("p", { class: "small muted", "data-slot-note": "inactive" }, CARD_SLOT_NOTE)
         : slots.loaded ? null : el("p", { class: "small muted" }, "技能卡只是你的挑選紀錄"));
+
+    // The back lists every skill card on the card, each with the way into its skill card window. Removing from there needs a
+    // handler that redraws the page and a card that is not a sample, so a removal never leaves a stale card behind.
+    const canRemove = !demo && typeof handlers.skillsChanged === "function";
+    if (slots.rows.length) {
+      skillsBox.removeAttribute("hidden");
+      setKids(skillsBox, el("h4", null, "已插的技能卡"),
+        el("ul", { class: "small rcard-skill-rows" }, slots.rows.map((r) => el("li", { class: "rcard-skill-row", "data-skill-row": r.id },
+          el("span", { class: "rcard-skill-name" }, r.name),
+          r.missing
+            ? el("span", { class: "muted" }, "　目前索引找不到；要拿掉請到角色卡池編輯這張卡")
+            : el("button", { type: "button", class: "btn small", "data-pcard": "skill-card", "aria-label": `看「${r.name}」的技能卡特性`,
+              on: { click: () => openSkillCard(r.id, canRemove ? { profile: p, onChanged: handlers.skillsChanged } : {}) } }, "技能卡特性")))));
+    } else {
+      skillsBox.setAttribute("hidden", "");
+      setKids(skillsBox);
+    }
 
     const passText = cardPassLine(loadoutState);
     if (passText) { passLineBox.removeAttribute("hidden"); setKids(passLineBox, passText); }
@@ -4855,6 +4883,7 @@ async function viewTeam(params = {}) {
     remove: (p) => deleteCard(p, refresh),
     launch: (p) => { location.hash = `#/workbench?profile=${encodeURIComponent(p.id)}&launch=1`; },
     place: (p) => openPlaceDialog(p, { profiles }),
+    skillsChanged: refresh,
   };
   const needCatalog = (fn) => () => {
     if (!catalog) { toast("角色卡目錄尚未就緒，請稍後再試"); return; }
@@ -8715,6 +8744,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         renderRightColumn();
       }),
       remove: (p) => promptDeleteAgentProfile(p),
+      skillsChanged: async () => { await reloadAgentProfiles(); renderRightColumn(); },
     };
     const cards = new Map(sortCards(agentProfiles, agentBuilderCatalog).map((p) => [p.id,
       profileCard(p, { catalog: agentBuilderCatalog, handlers, loadout: roleLoadouts.get(p.id) || null,
