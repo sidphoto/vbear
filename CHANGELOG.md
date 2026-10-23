@@ -26,6 +26,10 @@ the code do what the documents already say. The entries after them are small int
   confirmation) and the card redraws by itself afterwards. This works in the card pool, the workbench's role tab and the
   office roster; sample cards and the armory's view stay read-only. A skill the index can no longer find is listed
   without a button and points to editing the card.
+- **The small bear's plate has a visible edge in the light theme.** Its cream plate was almost the colour of the light
+  sidebar. In the light theme the mark now has a one-pixel edge in a muted tan that follows the plate's stepped corners;
+  the dark theme looks exactly as before. It follows VBear's own light/dark setting, whether chosen or following the
+  system. The favicon and the app icon are unchanged.
 
 ## v0.8.1 — pixel black bear
 

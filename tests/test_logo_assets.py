@@ -143,6 +143,34 @@ class PageMark(unittest.TestCase):
         self.assertRegex(css, r"\.brand-mark img \{[^}]*width: 32px; height: 32px;")
         self.assertNotRegex(css, r"\.brand-mark \{[^}]*background")
 
+    def test_the_light_theme_marks_the_edge_of_the_plate_and_the_dark_theme_does_not(self):
+        css = (ROOT / "web" / "style.css").read_text(encoding="utf-8")
+        # the page's own theme decides, through the same three places that hold every theme colour:
+        # the light :root, the dark rules for "follow the system", and the dark rules for an explicit choice
+        light = re.search(r"^:root \{(.*?)^\}", css, re.S | re.M)
+        follow = re.search(r'@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{(.*?)\n  \}\n\}', css, re.S)
+        chosen = re.search(r'^:root\[data-theme="dark"\] \{(.*?)^\}', css, re.S | re.M)
+        for name, block in (("light", light), ("follow-system dark", follow), ("chosen dark", chosen)):
+            self.assertIsNotNone(block, name)
+        value = re.search(r"--brand-mark-filter:\s*([^;]+);", light.group(1))
+        self.assertIsNotNone(value, "the light theme defines the edge")
+        steps = ["drop-shadow(" + part for part in value.group(1).split("drop-shadow(")[1:]]
+        # four hard copies, one cell (1 CSS px at 32 px) to each side: no blur radius, so every edge stays a pixel edge
+        self.assertEqual(sorted(re.match(r"drop-shadow\(([-\d]+(?:px)? [-\d]+(?:px)?) 0 ", x).group(1) for x in steps),
+                         sorted(["1px 0", "-1px 0", "0 1px", "0 -1px"]))
+        self.assertNotIn("blur(", value.group(1))
+        for name, block in (("follow-system dark", follow), ("chosen dark", chosen)):
+            self.assertRegex(block.group(1), r"--brand-mark-filter:\s*none;", name)
+        rule = re.search(r"\.brand-mark img \{([^}]*)\}", css)
+        self.assertIn("filter: var(--brand-mark-filter);", rule.group(1))
+        self.assertNotRegex(rule.group(1), r"transform|scale|zoom")  # the mark is never resized
+        self.assertNotIn("data-theme", rule.group(0))
+
+    def test_the_mark_file_itself_carries_no_theme_rule(self):
+        # an image's SVG cannot read the page's data-theme, so a prefers-color-scheme rule in it would disagree with the page
+        for name in ("logo.svg", "favicon.svg"):
+            self.assertNotIn("prefers-color-scheme", (ROOT / "web" / name).read_text(encoding="utf-8"), name)
+
     def test_the_server_sends_both_files(self):
         server = (ROOT / "vbear" / "server.py").read_text(encoding="utf-8")
         for route in ("/favicon.svg", "/logo.svg"):
