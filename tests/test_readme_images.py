@@ -181,11 +181,16 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_release_heading_matches_the_version(self):
         headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.8.1"), headings[:3])
-        self.assertTrue(headings[1].startswith("v0.8.0"), headings[:3])
-        self.assertTrue(headings[2].startswith("v0.7.0"), headings[:3])
+        self.assertTrue(headings[0].startswith("v0.8.2"), headings[:3])
+        self.assertTrue(headings[1].startswith("v0.8.1"), headings[:3])
+        self.assertTrue(headings[2].startswith("v0.8.0"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('__version__ = "0.8.1"', init)
+        self.assertIn('__version__ = "0.8.2"', init)
+
+    def test_the_v082_section_covers_the_hardening_and_the_interface_changes(self):
+        section = self.text[self.text.index("## v0.8.2"):self.text.index("## v0.8.1")]
+        for topic in ("Skill secrets", "~/Library", "taken off a role card", "one-pixel edge", "light and dark mode"):
+            self.assertIn(topic, section, topic)
 
     def test_the_v081_section_says_the_new_logo_is_everywhere(self):
         section = self.text[self.text.index("## v0.8.1"):self.text.index("## v0.8.0")]

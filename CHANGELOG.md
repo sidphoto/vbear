@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.2 — hardening and a dark icon
 
 Hardening that follows the first security review of v0.8.1. It found no confirmed vulnerability; these two changes make
 the code do what the documents already say. The entries after them are small interface changes.
@@ -29,7 +29,7 @@ the code do what the documents already say. The entries after them are small int
 - **The small bear's plate has a visible edge in the light theme.** Its cream plate was almost the colour of the light
   sidebar. In the light theme the mark now has a one-pixel edge in a muted tan that follows the plate's stepped corners;
   the dark theme looks exactly as before. It follows VBear's own light/dark setting, whether chosen or following the
-  system. The favicon and the app icon are unchanged.
+  system. The edge is drawn on the page only: the favicon is unchanged.
 - **On macOS 26 and later the app icon follows light and dark mode.** The Dock and Finder show a dark plate with the
   bear outlined in cream in dark mode and the cream plate in light mode. The icon is now an Icon Composer `.icon`
   (`macos/AppIcon.icon`, compiled by `actool` into `Assets.car`), so macOS draws the plate itself: its rounded shape,
