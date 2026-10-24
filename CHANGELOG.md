@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.5 — the skills AGY reads
 
 - **An AGY card can now hold the skills AGY actually reads.** VBear used to say it did not know which skills
   Antigravity (AGY) reads and let an AGY card hold only shared skill cards. It now works it out from files on your

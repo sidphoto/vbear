@@ -181,11 +181,16 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_release_heading_matches_the_version(self):
         headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.8.4"), headings[:3])
-        self.assertTrue(headings[1].startswith("v0.8.3"), headings[:3])
-        self.assertTrue(headings[2].startswith("v0.8.2"), headings[:3])
+        self.assertTrue(headings[0].startswith("v0.8.5"), headings[:3])
+        self.assertTrue(headings[1].startswith("v0.8.4"), headings[:3])
+        self.assertTrue(headings[2].startswith("v0.8.3"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('__version__ = "0.8.4"', init)
+        self.assertIn('__version__ = "0.8.5"', init)
+
+    def test_the_v085_section_covers_the_agy_skills_and_the_warning(self):
+        section = self.text[self.text.index("## v0.8.5"):self.text.index("## v0.8.4")]
+        for topic in ("without running AGY", "skills.json", "~/.agents/skills", "No false launch warning"):
+            self.assertIn(topic, section, topic)
 
     def test_the_v084_section_says_agy_cards_are_not_started(self):
         section = self.text[self.text.index("## v0.8.4"):self.text.index("## v0.8.3")]
