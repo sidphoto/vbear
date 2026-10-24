@@ -76,7 +76,7 @@ def unread_activation(activation: str, reason: str, why: str) -> tuple[str, str]
 class SkillRecord:
     skill_id: str
     name: str
-    tool: str  # "claude" | "codex"
+    tool: str  # "claude" | "codex" | "shared" | "agy"
     scope: str  # user | project | plugin | marketplace | system | vendor | backup
     activation: str
     activation_reason: str
@@ -102,6 +102,10 @@ class SkillRecord:
 
     # filled in by the indexer
     duplicate_of: list = field(default_factory=list)
+    # Other tools whose own files say they read this skill, beyond `tool`; today only "agy". Never a launch
+    # promise: it is where the file sits and what that tool's config lists. read_by_evidence says why, per tool.
+    read_by: list = field(default_factory=list)
+    read_by_evidence: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return _dump(self)

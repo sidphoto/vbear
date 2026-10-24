@@ -1530,6 +1530,7 @@ def make_handler(console: Console):
                     "name": s["name"],
                     "invoke_name": s.get("invoke_name", ""),
                     "tool": s.get("tool", ""),
+                    "read_by": loadout_mod.read_by(s),
                     "scope": s.get("scope", ""),
                     "activation": s.get("activation", ""),
                     "excerpt": desc[:140],

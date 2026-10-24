@@ -147,7 +147,8 @@ class RoleCardOfAgyTests(unittest.TestCase):
         self.assertEqual([i["will_load"] for i in sk["items"]], [False])
         self.assertIs(sk["all_inactive"], True)
         self.assertEqual(sk["note"], loadout.AGY_SKILLS_NOTE)
-        self.assertIn("VBear 還不知道 AGY 會讀哪些技能", loadout.AGY_SKILLS_NOTE)
+        self.assertNotIn("不知道 AGY 會讀哪些技能", loadout.AGY_SKILLS_NOTE)  # P22: it is now judged from AGY's own files
+        self.assertIn("不代表 AGY 會載入", loadout.AGY_SKILLS_NOTE)
         self.assertNotIn("shared", sk["note"])
         self.assertNotIn("Claude", sk["note"])
 

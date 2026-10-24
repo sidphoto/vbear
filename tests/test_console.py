@@ -199,7 +199,7 @@ class IndexCacheTests(unittest.TestCase):
         cfg.index_path().write_text(json.dumps({"skills": [], "roles": []}), encoding="utf-8")
         data = Store().static()
         self.assertTrue(data["skills"])
-        self.assertEqual(data["index_version"], 1)
+        self.assertEqual(data["index_version"], 2)
 
 
 class UsageTests(unittest.TestCase):

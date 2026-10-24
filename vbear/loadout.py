@@ -25,7 +25,8 @@ CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互�
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
 CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
 SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
-AGY_SKILLS_NOTE = "VBear 還不會啟動 AGY，而且 VBear 還不知道 AGY 會讀哪些技能；已選技能只是你的挑選紀錄，不代表 AGY 會載入。"
+AGY_SKILLS_NOTE = ("VBear 還不會啟動 AGY，已選技能只是你的挑選紀錄，不代表 AGY 會載入；「AGY 不會讀」是依這台電腦的 "
+                   "AGY 設定判斷的，AGY 的內建與外掛技能不在這裡。")
 TOOLS_ONLY_CLAUDE = "VBear 目前只支援用角色卡啟動 Claude Code"
 TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
 TOOLS_AGY_NOT_RECORDED = "VBear 還不會啟動 AGY，也沒有記錄 AGY 的可用工具清單"
@@ -105,16 +106,32 @@ def _will_load(tool, skill_id: str) -> bool:
     return False
 
 
+def read_by(rec: dict) -> list:
+    """The other tools whose own files say they read this skill (today only "agy"), as the scan stored them."""
+    value = rec.get("read_by")
+    return [t for t in value if isinstance(t, str) and len(t) <= 16][:8] if isinstance(value, list) else []
+
+
+def agy_reads(rec: dict) -> bool:
+    """Whether AGY reads this skill, by where it sits and what AGY's config lists. Not a promise that a launch loads it."""
+    return rec.get("tool") == "agy" or "agy" in read_by(rec)
+
+
 def _skill(skill_id: str, static: dict | None, live: dict | None, tool=None) -> dict:
     will_load = _will_load(tool, skill_id)
+    # only an AGY card says whether AGY reads the skill; None is "the index cannot say"
+    agy = {"agy_reads": None} if tool == "agy" else {}
     if static is None:
-        return {"skill_id": skill_id, "state": "index_not_loaded", "effective": False, "will_load": will_load}
+        return {"skill_id": skill_id, "state": "index_not_loaded", "effective": False, "will_load": will_load, **agy}
     rec = next((s for s in static.get("skills", []) if s.get("skill_id") == skill_id), None)
     if rec is None:
         return {"skill_id": skill_id, "state": "not_in_index", "effective": False, "will_load": will_load,
-                "note": INDEX_MISSING, "indexed_at": static.get("generated_at")}
+                "note": INDEX_MISSING, "indexed_at": static.get("generated_at"), **agy}
     refs = [r for r in (rec.get("referenced_files") or []) if isinstance(r, dict)]
+    if tool == "agy":
+        agy = {"agy_reads": agy_reads(rec)}
     return {
+        **agy,
         "skill_id": skill_id, "state": "in_index", "effective": False, "will_load": will_load,
         "name": rec.get("name"), "invoke_name": rec.get("invoke_name"), "tool": rec.get("tool"),
         "scope": rec.get("scope"), "activation": rec.get("activation"),
@@ -245,6 +262,12 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
     }
 
 
+def _read_by_detail(rec: dict) -> str:
+    evidence = rec.get("read_by_evidence")
+    text = evidence.get("agy") if isinstance(evidence, dict) else None
+    return text[:200] if isinstance(text, str) and text else "掃描位置與 AGY 設定檔判讀"
+
+
 INSTALLED_STATES = frozenset({"active", "disabled", "superseded"})
 MAX_CARD_REFS = 100
 
@@ -274,6 +297,7 @@ def skill_card(static: dict, skill_id: str, profiles, live: dict | None) -> dict
             "skill_id": skill_id, "name": _derived(rec.get("name"), "技能檔案（掃描整理）"),
             "invoke_name": rec.get("invoke_name"),
             "tool": _derived(rec.get("tool"), "掃描位置判讀"), "scope": _derived(rec.get("scope"), "掃描位置判讀"),
+            "read_by": _derived(read_by(rec), _read_by_detail(rec)),
             "activation": rec.get("activation"), "activation_reason": rec.get("activation_reason"),
             "installed": rec.get("activation") in INSTALLED_STATES,
             "status_source": {"origin": "derived", "detail": "掃描位置與設定檔判讀"},

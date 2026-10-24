@@ -23,7 +23,7 @@ from . import runtime as rt
 from .model import (
     ACT_ACTIVE, ACT_UNKNOWN, AgentRole, SkillRecord, Sourced, stable_id,
 )
-from .scan import claude, codex, shared, usage
+from .scan import agy, claude, codex, shared, usage
 from .scan.document import MAX_FILE_BYTES
 
 def HOME() -> Path:
@@ -37,7 +37,7 @@ def HOME() -> Path:
     return Path.home()
 TOOL_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "shared": "skills CLI"}
 LIVE_TTL_S = 3.0
-INDEX_VERSION = 1  # bump when the static index shape changes
+INDEX_VERSION = 2  # bump when the static index shape changes (2: skills carry read_by)
 STALE_AFTER_S = 24 * 3600
 
 
@@ -95,9 +95,13 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
     skills: list[SkillRecord] = []
     roles: list[AgentRole] = []
     source_rows: list[dict] = []
+    scanned_roots: list[Path] = []     # every skill folder scanned so far
+    disabled_roots: list[Path] = []    # skill folders the person turned off
 
     for src in cfg.sources_from(conf):
         path = src.resolved()
+        if src.kind in ("skills", "plugin_cache", "marketplace"):
+            (scanned_roots if src.enabled else disabled_roots).append(path)
         row = {"source_id": src.source_id, "label": src.label, "tool": src.tool,
                "kind": src.kind, "path": src.path, "enabled": src.enabled,
                "exists": path.exists(), "count": 0, "scope": src.scope}
@@ -154,11 +158,23 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
             else:
                 rec.activation, rec.activation_reason = (
                     ACT_UNKNOWN, "專案層 Codex 技能位置；本機設定未確認 Codex 會載入此路徑")
+        if Path(src.path).parts[-2:] == (".agents", "skills"):
+            agy.mark_project_agents(Path(src.path), found)
         skills += found
         source_rows.append({"source_id": src.source_id, "label": src.label, "tool": src.tool,
                             "kind": "skills", "path": src.path, "enabled": True,
                             "exists": True, "count": len(found), "scope": "project",
                             "discovered": True})
+        scanned_roots.append(Path(src.path))
+
+    # What AGY reads, from its own files: skills already recorded get a mark, unscanned folders become records.
+    try:
+        seen = agy.collect(skills, scanned_roots, disabled_roots)
+        skills += seen.new_skills
+        source_rows += seen.rows
+        problems += seen.problems
+    except Exception as exc:
+        problems.append(f"判讀 AGY 會讀的技能失敗（{type(exc).__name__}）")
 
     # Same name, different source: keep every copy, cross-reference them.
     by_name: dict[str, list[SkillRecord]] = defaultdict(list)
@@ -193,7 +209,7 @@ def build_static(conf: dict, extra_project_roots: list[Path] | None = None) -> d
 
     # Subagent -> skill links, only where a file actually says so.
     active_names = {r.name.lower(): r.skill_id for r in skills
-                    if r.activation == ACT_ACTIVE}
+                    if r.activation == ACT_ACTIVE and r.tool != "agy"}
     for role in roles:
         if role.kind != "subagent":
             continue

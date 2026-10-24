@@ -128,6 +128,21 @@ class AgentBuilderAPITests(unittest.TestCase):
         sd.mkdir(parents=True, exist_ok=True)
         os.chmod(sd, 0o700)
 
+    def test_catalog_skills_say_which_other_tools_read_them(self):
+        skill = {"tool": "codex", "scope": "user", "activation": "active", "description": {"value": "d"}}
+        self.console.store._static = {"skills": [
+            {**skill, "skill_id": "s-1", "name": "one", "read_by": ["agy"]},
+            {**skill, "skill_id": "s-2", "name": "two"},
+            {**skill, "skill_id": "s-3", "name": "three", "read_by": "agy"},
+            {**skill, "skill_id": "s-4", "name": "four", "read_by": ["agy", 7, None, "x" * 99]}], "roles": []}
+        self.console.store._static_stamp = None
+        try:
+            _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        finally:
+            self.console.store._static = None
+        got = {s["skill_id"]: s["read_by"] for s in body["skills"]}
+        self.assertEqual(got, {"s-1": ["agy"], "s-2": [], "s-3": [], "s-4": ["agy"]})
+
     def test_catalog_endpoint_lists_tool_and_permission_enums(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
