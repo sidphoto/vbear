@@ -108,7 +108,12 @@ LIVE_STALE_S = 30.0
 # agent_profiles' (a test keeps them equal); the revision is agent_profiles.profile_digest, a sha256 hex string.
 PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 SNAPSHOT_KEYS = frozenset({"name", "tool", "model_id", "revision"})
-SNAPSHOT_TOOLS = ("claude", "codex", "shared")
+SNAPSHOT_TOOLS = ("claude", "codex", "agy", "shared")
+# The family each tool implies (agent_profiles.TOOL_FAMILY, repeated because this module must not import it; a test
+# keeps them equal). Only an AGY card's family is enforced: the other tools were accepted with any family before this
+# table existed, and flows already stored must keep loading. A card of the new tool is always Google.
+SNAPSHOT_TOOL_FAMILY = {"claude": "anthropic", "codex": "openai", "agy": "google", "shared": "unknown"}
+FAMILY_FIXED_TOOLS = ("agy",)
 MAX_SNAPSHOT_NAME = 200
 MAX_SNAPSHOT_MODEL_ID = 200
 ROLE_CARD_KEYS = frozenset({"profile_id", "profile_snapshot"})
@@ -174,6 +179,8 @@ def _role_card_problem(role: dict) -> str | None:
         return "profile_snapshot.model_id 不合法"
     if snap["tool"] not in SNAPSHOT_TOOLS:
         return "profile_snapshot.tool 不合法"
+    if snap["tool"] in FAMILY_FIXED_TOOLS and role.get("family") != SNAPSHOT_TOOL_FAMILY[snap["tool"]]:
+        return f"這張角色卡的工具是 {snap['tool']}，模型家族必須是 {SNAPSHOT_TOOL_FAMILY[snap['tool']]}"
     if not (isinstance(snap["revision"], str) and _SHA256_RE.match(snap["revision"])):
         return "profile_snapshot.revision 不合法（要 64 碼小寫十六進位）"
     return None

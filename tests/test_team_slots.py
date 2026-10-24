@@ -214,7 +214,7 @@ class RoleCardFieldsTests(FlowCase):
             "model_id not str": snapshot(model_id=None),
             "model_id too long": snapshot(model_id="m" * 201),
             "model_id nul": snapshot(model_id="a\x00"),
-            "tool unknown": snapshot(tool="agy"),
+            "tool unknown": snapshot(tool="gemini"),
             "tool upper": snapshot(tool="Claude"),
             "tool not str": snapshot(tool=["claude"]),
             "revision short": snapshot(revision="a" * 63),
@@ -243,7 +243,7 @@ class RoleCardFieldsTests(FlowCase):
                 self.bad(roles(planner=role), "一起")
 
     def test_every_position_is_checked(self):
-        bad = self.role(profile_snapshot=snapshot(tool="agy"))
+        bad = self.role(profile_snapshot=snapshot(tool="gemini"))
         self.bad(roles(planner=bad), "profile_snapshot")
         self.bad(roles(executor=bad), "profile_snapshot")
         self.bad(roles(reviewers=[{"name": "r", "family": "openai"}, bad]), "profile_snapshot")
@@ -289,7 +289,7 @@ class StoredShapeTests(FlowCase):
     def test_bad_stored_snapshots_block(self):
         mutators = {
             "extra key": lambda r: r["planner"]["profile_snapshot"].update(extra=1),
-            "bad tool": lambda r: r["planner"]["profile_snapshot"].update(tool="agy"),
+            "bad tool": lambda r: r["planner"]["profile_snapshot"].update(tool="gemini"),
             "bad revision": lambda r: r["planner"]["profile_snapshot"].update(revision="xyz"),
             "snapshot dropped": lambda r: r["planner"].pop("profile_snapshot"),
             "id dropped": lambda r: r["planner"].pop("profile_id"),
@@ -303,7 +303,7 @@ class StoredShapeTests(FlowCase):
                 self.assertIsNotNone(flows._entry_problem(fid, data[fid]))
 
     def test_a_corrupt_card_blocks_the_store_on_load(self):
-        fid, data = self.corrupt(lambda r: r["planner"]["profile_snapshot"].update(tool="agy"))
+        fid, data = self.corrupt(lambda r: r["planner"]["profile_snapshot"].update(tool="gemini"))
         (self.home / "flows.json").write_text(json.dumps(data))
         with self.assertRaises(StoreError):
             flows.list_flows()
@@ -435,10 +435,55 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(got["flow"]["roles"]["planner"]["profile_snapshot"]["revision"], made["revision"])
         self.assertNotEqual(now["profile"]["revision"], made["revision"])
 
+    def test_a_flow_keeps_an_agy_card_through_the_api_and_reads_it_back(self):
+        status, made = _request("POST", self.port, "/api/agent-profiles", _sample(name="AGY 審查員", model={"tool": "agy", "model_id": ""}))
+        self.assertEqual(status, 200, made)
+        made = made["profile"]
+        self.assertEqual(made["model"]["tool"], "agy")
+        status, task = _request("POST", self.port, "/api/tasks", {"title": "T"})
+        snap = {"name": made["name"], "tool": "agy", "model_id": "", "revision": made["revision"]}
+        reviewer = {"name": "AGY 審查員", "family": "google", "profile_id": made["id"], "profile_snapshot": snap}
+        status, created = _request("POST", self.port, "/api/flows",
+                                   {"task_id": task["task"]["id"], "roles": roles(reviewers=[reviewer])})
+        self.assertEqual(status, 200, created)
+        status, got = _request("GET", self.port, f"/api/flows/{created['flow']['id']}")
+        self.assertEqual(status, 200, got)
+        back = got["flow"]["roles"]["reviewers"][0]
+        self.assertEqual((back["family"], back["profile_snapshot"]), ("google", snap))
+        self.assertEqual(back["independent_of_executor"], {"counted": True, "why": ""})   # beside an Anthropic executor
+        self.assertEqual(back["family_label"], "Google（Gemini）")
+        # read from the stored file, not from the response
+        again = flows.get_flow(created["flow"]["id"])
+        self.assertEqual(again["roles"]["reviewers"][0]["profile_snapshot"], snap)
+
+    def test_a_flow_with_an_agy_card_and_another_family_is_refused_with_400(self):
+        status, task = _request("POST", self.port, "/api/tasks", {"title": "T"})
+        snap = {"name": "AGY 審查員", "tool": "agy", "model_id": "", "revision": REV1}
+        for family in ("anthropic", "openai", "unknown"):
+            with self.subTest(family=family):
+                reviewer = {"name": "AGY 審查員", "family": family, "profile_id": "prof-agy", "profile_snapshot": snap}
+                status, body = _request("POST", self.port, "/api/flows",
+                                        {"task_id": task["task"]["id"], "roles": roles(reviewers=[reviewer])})
+                self.assertEqual(status, 400, body)
+                self.assertIn("google", body["error"])
+
+    def test_an_agy_card_beside_a_google_executor_is_not_an_independent_review(self):
+        status, made = _request("POST", self.port, "/api/agent-profiles", _sample(name="AGY 審查員", model={"tool": "agy", "model_id": ""}))
+        made = made["profile"]
+        status, task = _request("POST", self.port, "/api/tasks", {"title": "T"})
+        snap = {"name": made["name"], "tool": "agy", "model_id": "", "revision": made["revision"]}
+        reviewer = {"name": "AGY 審查員", "family": "google", "profile_id": made["id"], "profile_snapshot": snap}
+        team = roles(executor={"name": "手填的 Gemini", "family": "google"}, reviewers=[reviewer])
+        status, created = _request("POST", self.port, "/api/flows", {"task_id": task["task"]["id"], "roles": team})
+        self.assertEqual(status, 200, created)
+        got = created["flow"]["roles"]["reviewers"][0]["independent_of_executor"]
+        self.assertFalse(got["counted"])
+        self.assertIn("Google（Gemini）", got["why"])
+
     def test_the_api_refuses_a_bad_snapshot_with_400(self):
         status, task = _request("POST", self.port, "/api/tasks", {"title": "T"})
         bad = roles(planner={"name": "CEO", "family": "anthropic", "profile_id": "prof-a",
-                             "profile_snapshot": snapshot(tool="agy")})
+                             "profile_snapshot": snapshot(tool="gemini")})
         status, body = _request("POST", self.port, "/api/flows", {"task_id": task["task"]["id"], "roles": bad})
         self.assertEqual(status, 400)
         self.assertIn("profile_snapshot", body["error"])

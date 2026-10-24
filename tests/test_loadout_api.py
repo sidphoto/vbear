@@ -444,7 +444,7 @@ class LoadoutTests(_Helpers, unittest.TestCase):
 
     def test_will_load_is_false_for_every_tool_and_all_inactive_holds_with_no_skills(self):
         c, port = self.serve(static=_static())
-        for tool in ("claude", "codex", "shared"):
+        for tool in ("claude", "codex", "agy", "shared"):
             self.save(c, model={"tool": tool, "model_id": ""}, equipped_skill_ids=["s-code"])
             _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
             self.assertEqual([s["will_load"] for s in body["skills"]["items"]], [False], tool)

@@ -133,7 +133,9 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertEqual(set(body["tools"]),
-                         {"claude", "codex", "shared"})
+                         {"claude", "codex", "agy", "shared"})
+        # the camps in the order the wizard offers them: AGY sits before the generic shared camp
+        self.assertEqual(body["tools"], ["claude", "codex", "agy", "shared"])
         self.assertEqual(body["permission_keys"], ["read", "write", "test", "deploy"])
         self.assertEqual(body["permission_values"],
                          ["allow", "deny", "unspecified"])

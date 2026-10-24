@@ -138,6 +138,12 @@ def intent_blockers(intents: dict) -> list[dict]:
     return launch_blockers(stand_in, True, {"enabled": False, "approved_domains": []})
 
 
+# What is said when the card's tool is one VBear does not start. An AGY card is a record for building teams: VBear
+# has no managed launch for Antigravity and says so, rather than leaving a button that looks as if it might work.
+TOOL_NOT_LAUNCHABLE = {"shared": "shared 不是可啟動的工具",
+                       "agy": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"}
+
+
 def launch_blockers(profile: dict, commit, network) -> list[dict]:
     """Why this Profile and these launch inputs cannot be started as they are.
     Empty means the one verified configuration honours them."""
@@ -148,8 +154,7 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
 
     tool = (profile.get("model") or {}).get("tool")
     if tool not in {"claude", "codex"}:
-        block("tool_not_launchable",
-              "shared 不是可啟動的工具" if tool == "shared" else "此 Agent 工具沒有受管啟動設定")
+        block("tool_not_launchable", TOOL_NOT_LAUNCHABLE.get(tool, "此 Agent 工具沒有受管啟動設定"))
     if profile.get("enabled") is False:
         block("profile_disabled", "此角色卡已停用")
     intents = profile.get("permission_intents") or {}

@@ -19,13 +19,16 @@ VERSION_BASIS = ("以已驗證設定為準：這是 VBear 有實測證據的那�
                  "實際守到什麼程度，要等出發通行證才知道")
 CODEX_BASIS = ("以 VBear 已記錄的 Codex 驗證證據為準；證據不全的項目是「未知」。這台 Mac 的 Codex 版本"
                "實際守到什麼程度，要等出發通行證才知道")
-ARMOR_NOT_APPLICABLE = {"shared": "shared 不是可啟動的工具，沒有防具"}
+ARMOR_NOT_APPLICABLE = {"shared": "shared 不是可啟動的工具，沒有防具",
+                        "agy": "VBear 還不會啟動 AGY，沒有防具"}
 CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）"
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
 CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
 SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
+AGY_SKILLS_NOTE = "VBear 還不會啟動 AGY，而且 VBear 還不知道 AGY 會讀哪些技能；已選技能只是你的挑選紀錄，不代表 AGY 會載入。"
 TOOLS_ONLY_CLAUDE = "VBear 目前只支援用角色卡啟動 Claude Code"
 TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
+TOOLS_AGY_NOT_RECORDED = "VBear 還不會啟動 AGY，也沒有記錄 AGY 的可用工具清單"
 TOOLS_SOURCE = "與 VBear 啟動 Claude Code 時傳入的 --tools／--disallowedTools 相同（同一組常數）"
 
 
@@ -41,7 +44,8 @@ def _sourced(value) -> dict:
 
 def _label_only(tool) -> str:
     return "職業只是標籤，不會把角色指示載入 " + ("Codex" if tool == "codex" else
-                                                   "Claude Code" if tool == "claude" else "任何工具")
+                                                   "Claude Code" if tool == "claude" else
+                                                   "AGY" if tool == "agy" else "任何工具")
 
 
 def _derived(value, detail: str) -> dict:
@@ -191,6 +195,8 @@ def _skills_section(tool: str, codex_not_launchable: bool, items: list) -> dict:
                             "其他版本是否停用技能未驗證")
     elif tool == "codex":
         out["note"] = CODEX_SKILLS_NOTE if codex_not_launchable else CODEX_SKILLS_NOTE_LAUNCHABLE
+    elif tool == "agy":
+        out["note"] = AGY_SKILLS_NOTE
     else:
         out["note"] = SHARED_SKILLS_NOTE
     return out
@@ -205,6 +211,8 @@ def _tools(tool, codex_not_launchable: bool) -> dict:
                 "blocked": list(agent_sessions.CLAUDE_TOOLS_BLOCKED), "source": TOOLS_SOURCE}
     if tool == "codex":
         reason = CODEX_NOT_LAUNCHABLE if codex_not_launchable else TOOLS_CODEX_NOT_RECORDED
+    elif tool == "agy":
+        reason = TOOLS_AGY_NOT_RECORDED
     else:
         reason = TOOLS_ONLY_CLAUDE
     return {"known": False, "allowed": [], "blocked": [], "unknown_reason": reason}

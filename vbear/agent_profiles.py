@@ -69,7 +69,21 @@ PERMISSION_VALUES: tuple[str, ...] = ("allow", "deny", "unspecified")
 # Anything else a client claims as model.tool is rejected; a future Phase C
 # slice that adds new tools must add them here too. There is intentionally
 # no separate "model registry" file: this list IS the registry.
-KNOWN_TOOLS: frozenset[str] = frozenset({"claude", "codex", "shared"})
+#
+# "agy" is Antigravity (AGY). VBear does not launch it (agent_launch.launch_blockers refuses it) and does not know
+# which skills it reads: an AGY card is a record for building a team, and its model family is always Google.
+# TOOL_ORDER is the order the camps are offered in, with the generic "shared" camp last.
+TOOL_ORDER: tuple[str, ...] = ("claude", "codex", "agy", "shared")
+KNOWN_TOOLS: frozenset[str] = frozenset(TOOL_ORDER)
+
+# The model family each tool implies, for the team places (web/app.js TEAM_TOOL_FAMILY repeats it; a test keeps
+# them equal, and flows.SNAPSHOT_TOOL_FAMILY too). "shared" is no model at all, so its family is unknown.
+TOOL_FAMILY: dict[str, str] = {"claude": "anthropic", "codex": "openai", "agy": "google", "shared": "unknown"}
+
+
+def family_of_tool(tool) -> str:
+    """The model family a card of this tool stands for; unknown for anything this build does not list."""
+    return TOOL_FAMILY.get(tool, "unknown") if isinstance(tool, str) else "unknown"
 
 # The suggested positions of a role card on a team. A position is only a label the front end remembers; it is not a
 # profile field, so it never reaches the stored schema.
@@ -408,7 +422,7 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
         raise ValueError("model 必須是物件")
     tool = _clean_str(model_raw.get("tool") or "", MAX_TOOL_ID)
     if not tool or tool not in KNOWN_TOOLS:
-        raise ValueError(f"model.tool 必須是支援的工具之一：{', '.join(sorted(KNOWN_TOOLS))}")
+        raise ValueError(f"model.tool 必須是支援的工具之一：{', '.join(TOOL_ORDER)}")
     model_id = _clean_str(model_raw.get("model_id", ""), MAX_MODEL_ID)
 
     skills_in = value.get("equipped_skill_ids")

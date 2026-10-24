@@ -1549,7 +1549,7 @@ def make_handler(console: Console):
 
             return {
                 "ok": True,
-                "tools": sorted(agent_profiles.KNOWN_TOOLS),
+                "tools": list(agent_profiles.TOOL_ORDER),
                 "permission_keys": list(agent_profiles.PERMISSION_KEYS),
                 "permission_values": list(agent_profiles.PERMISSION_VALUES),
                 "permission_intent_only": True,

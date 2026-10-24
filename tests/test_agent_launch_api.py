@@ -184,6 +184,7 @@ class PreviewApiCase(ServerCase):
             ({"intents": dict(GOOD, read="deny")}, {}, "read_deny_unenforceable"),
             ({"intents": dict(GOOD, test="deny")}, {}, "test_deny_unenforceable"),
             ({"tool": "shared"}, {}, "tool_not_launchable"),
+            ({"tool": "agy"}, {}, "tool_not_launchable"),
             ({}, {"commit": False}, "commit_not_enforceable"),
             ({}, {"network": {"enabled": True, "approved_domains": ["example.com"]}}, "network_not_available"),
             ({"enabled": False}, {}, "profile_disabled"),
@@ -218,6 +219,23 @@ class PreviewApiCase(ServerCase):
         self.assertIn(agent_launch.UNVERIFIED, [lv for g in agent_launch.armor_groups("claude") for lv in g["levels"]])
         self.assertNotIn(agent_launch.UNVERIFIED, [lv for g in agent_launch.armor_groups("codex") for lv in g["levels"]])
         self.assertNotIn(agent_launch.UNVERIFIED, [lv for g in agent_launch.armor_groups("shared") for lv in g["levels"]])
+
+    def test_an_agy_profile_preview_is_refused_in_clear_words_and_carries_no_tool_words(self):
+        pid = self.profile(tool="agy")
+        st, r = self.preview(pid)
+        self.assertEqual(st, 200, r)
+        p = r["preview"]
+        self.assertFalse(p["launchable"])
+        self.assertIsNone(p["preview_id"])
+        self.assertEqual([x["message"] for x in p["reasons"]], ["VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"])
+        self.assertIsNone(p["cli"])
+        text = json.dumps({"labels": p["derived_labels"], "groups": p["armor_groups"]}, ensure_ascii=False)
+        self.assertNotIn("Claude", text)
+        self.assertNotIn("Codex", text)
+        self.assertEqual(self.preview(pid, tool="agy")[0], 200)
+        self.assertEqual(self.preview(pid, tool="claude")[0], 400)           # does not match the Profile
+        self.assertEqual(self.launch_dirs(), [])
+        self.assertEqual(self.sessions(), [])
 
     def test_unverified_cli_version_launches_only_when_acknowledged(self):
         self.binary.write_text(FAKE_CLI % {"py": sys.executable, "version": "2.1.287"}, encoding="utf-8")
