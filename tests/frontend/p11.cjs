@@ -486,7 +486,7 @@ test("3.1 if recording fails the person is told, and the terminal is still opene
   await launchFromTask({ over: { "POST /api/tasks/task-1": () => jsonResponse({ error: "磁碟寫入失敗" }, false, 500) } });
   assert.strictEqual(global.location.hash, `#/workbench/${PANE}?task=task-1`);
   const t = text(h.dom().toastEl);
-  assert(t.startsWith("終端已開啟，但沒能記到任務卡上：") && t.includes("磁碟寫入失敗") && t.includes("終端可以照常使用"), t);
+  assert(t.startsWith("終端已開啟，但沒能記到任務卡上。") && t.includes("磁碟寫入失敗") && t.includes("終端可以照常使用"), t);   // P19: a sentence, then the original in brackets
   assert.strictEqual(app.hasFreshTerminalGrant(PANE), true);
   app.takeFreshTerminalGrant(PANE);
 });

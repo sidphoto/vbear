@@ -10,6 +10,16 @@
   gone (taking a skill off a role card redraws the card) it goes to the main region of the page instead of the top.
   The same fault is fixed where it was found elsewhere: taking a skill off the card with its 移除 button in the card
   wizard, and choosing a task card or a place in the 放上任務卡 window, no longer drop the focus when the list is drawn again.
+- **Terminal, takeover and handoff failures are said in plain words.** When a takeover, 改成只觀看, typing, closing a
+  terminal, opening a terminal, the stream, a handoff, or recording a terminal on a task card fails, the page used to
+  print what the server or the runtime had answered (`目前沒有這個 Terminal`, `內部錯誤：TypeError`, `HTTP 502`, the
+  reason a closed terminal's scratch was kept). It now says what happened and what to do next in a sentence of its own
+  (for example 這個終端已經不存在了（可能已關閉）。要繼續的話，請重新開啟一個終端。). An answer the page does not know gets
+  only a general sentence such as 沒能接手這個終端。 and no guess at the cause. The original is always kept: behind 「技術細節」
+  in a notice (the takeover reminder now shows its failure inside the dialog, where it stays), and in brackets after the
+  sentence in a toast (`（原文：…）`). The words are one table, shared with the line under a closed terminal. What the server
+  and the runtime send, and their codes, are unchanged. A terminal that could not be recorded on its task card now says so
+  in a sentence and puts the original at the end of the message.
 
 ## v0.8.2 — hardening and a dark icon
 

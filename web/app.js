@@ -512,8 +512,9 @@ async function linkLaunchedTerminal(task, paneId, { sameFolder = true } = {}) {
       message: `終端已開啟，並記到任務卡「${title}」上（只是追蹤記錄）。` +
         (stillRunning ? "這張卡原本關聯的終端還在執行，可以從左邊的清單打開。" : "") };
   } catch (e) {
+    const w = terminalWords(e, "");
     return { linked: false, previous: null,
-      message: `終端已開啟，但沒能記到任務卡上：${e && e.message ? e.message : "原因不明"}。終端可以照常使用；需要的話在任務卡按「關聯目前的終端」。` };
+      message: `終端已開啟，但沒能記到任務卡上。${w.text}${w.next}終端可以照常使用；需要的話在任務卡按「關聯目前的終端」。${w.detail ? `（原文：${w.detail}）` : ""}` };
   }
 }
 
@@ -581,10 +582,13 @@ async function readTakeoverData() {
 
 // The dialog both terminal pages open. It opens at once and fills in the task/flow lines when they are read; 確認接手 stays
 // off until then, and the focus starts on 取消 (or the window), so a stray Enter never takes the keyboard.
-// onConfirm({ close, confirmBtn }): the caller's request (requestTerminalControl) and what follows it.
+// onConfirm({ close, confirmBtn, showProblem }): the caller's request (requestTerminalControl) and what follows it; showProblem(node)
+// puts what went wrong inside the dialog, where it stays until the next try.
 function openTakeoverReminder({ titleId, paneId, session, pane, onConfirm, onClosed, readData = readTakeoverData }) {
+  const problemBox = el("div", { "data-takeover": "problem" });
+  const showProblem = (node) => setKids(problemBox, node);
   const confirmBtn = el("button", { class: "btn primary", type: "button", disabled: true, "data-takeover": "confirm",
-    on: { click: async () => { confirmBtn.disabled = true; await onConfirm({ close: () => closeModal(), confirmBtn }); } } }, "確認接手");
+    on: { click: async () => { confirmBtn.disabled = true; showProblem(null); await onConfirm({ close: () => closeModal(), confirmBtn, showProblem }); } } }, "確認接手");
   const cancelBtn = el("button", { class: "btn", type: "button", "data-takeover": "cancel", on: { click: () => closeModal() } }, "取消");
   const factsBox = el("ul", { class: "takeover-facts", "data-takeover": "facts" }, el("li", { class: "muted" }, "正在讀取這個終端的情況…"));
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
@@ -595,6 +599,7 @@ function openTakeoverReminder({ titleId, paneId, session, pane, onConfirm, onClo
       el("div", { class: "notice warn", style: "margin: 4px 0" },
         el("span", { class: "ico", "aria-hidden": "true" }, "!"),
         el("ul", { class: "takeover-fixed", "data-takeover": "fixed" }, TAKEOVER_FIXED.map(([k, t]) => el("li", { "data-fixed": k }, t)))),
+      problemBox,
       el("div", { class: "modal-actions" }, cancelBtn, confirmBtn)));
   document.body.append(modal);
   // the opener is captured before the focus moves in, so closing returns the focus to the button that opened it
@@ -1701,7 +1706,7 @@ function closeSessionButton(paneId, afterHash = "#/team") {
         const m = r.managed;
         toast(!m ? "終端已關閉"
           : m.cleaned ? "終端已關閉，暫存區與設定已清除"
-          : `終端已關閉；暫存區保留待檢查：${m.retained_reason || "原因未知"}`);
+          : `終端已關閉；暫存區保留待檢查。${terminalFailureLine(m.retained_reason || "", m.retained_reason ? "沒能確認原因。" : "原因未知。")}`);
         if (location.hash === afterHash) route();  // no hashchange: re-render in place
         else if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
       } catch (e) {
@@ -1710,7 +1715,7 @@ function closeSessionButton(paneId, afterHash = "#/team") {
           if (!location.hash.startsWith("#/workbench")) location.hash = afterHash;
           return;
         }
-        toast("關閉失敗：" + e.message);
+        toast(terminalFailureLine(e, TERM_GENERAL.close));
         btn.disabled = false;
       }
     } } }, "關閉終端");
@@ -1742,17 +1747,90 @@ function notice(kind, text) {
   const ico = { warn: "!", info: "i", bad: "×" }[kind] || "i";
   return el("div", { class: `notice ${kind}`, role: kind === "bad" ? "alert" : "note" }, el("span", { class: "ico", "aria-hidden": "true" }, ico), el("div", null, text));
 }
+// What the server and the runtime say when a terminal, a takeover, a close, a handoff or a link to a task card does not work
+// (P19). One table of the sentences they really send: each is said in plain words with what to do next, and the original is kept,
+// whole, for the person to open (a fold 「技術細節」 in a notice, in brackets in a toast). A sentence the table does not know gets
+// only the general sentence of the place, never a guess at the cause. The server's and the runtime's own text and codes are not changed
+// (a test finds each sentence below in their code). raw: a string matched by the regex (or by `test`); text: the plain words;
+// next: what can be done; gone: the answer was "no such session", so there is nothing left to reconnect to.
+const TERMINAL_WORDS = [
+  { re: /沒有這個 session|沒有這個 Terminal/, text: "這個終端已經不存在了（可能已關閉）。", next: "要繼續的話，請重新開啟一個終端。", gone: true },
+  { re: /連線上限|同時開啟的 Terminal 過多/, text: "這個終端的連線數已滿，暫時連不上；關閉其他正在看它的分頁後可以再試。" },
+  { re: /目前不是這個 Terminal 的操作者/, text: "你現在不是這個終端的操作者，所以輸入沒有送出（可能其他分頁接手了，或已經改成只觀看）。", next: "要打字請先按「接管操作」。" },
+  { re: /缺少輸入內容/, text: "沒有內容可以送出。" },
+  { re: /單次輸入過長/, text: "一次輸入的內容太長，沒有送出。", next: "請分成幾段再貼。" },
+  { re: /背景程序正在關閉，不接受新的 session/, text: "VBear 的背景程序正在關閉，現在不能開新的終端。", next: "請稍後再試。" },
+  { re: /VBear runtime|無法連線到 runtime/, text: "VBear 的背景程序現在連不上，終端暫時操作不了。", next: "請稍後再試；一直這樣的話，請重新開啟 VBear。" },
+  { re: /無效的 session id/, text: "這個終端的編號對不上，沒有處理。", next: "請重新整理頁面，再從列表打開它。" },
+  { re: /需要從 VBear 開啟/, text: "這個分頁沒有 VBear 的通行證，VBear 不接受它的要求。", next: "請從 VBear 重新開啟一個分頁。" },
+  { re: /^(forbidden|invalid host)$/, text: "VBear 擋下了這個要求，因為它不是從 VBear 自己的頁面送出的。", next: "請從 VBear 重新開啟頁面再試。" },
+  { re: /^內部錯誤：/, text: "VBear 這邊出了內部錯誤，這次沒有完成。", next: "請稍後再試一次。" },
+  { test: (raw, x) => (x && x.name === "TypeError") || /^(failed to fetch|load failed|networkerror|網路錯誤)/i.test(raw),
+    text: "連不上 VBear（它可能已經關掉，或網路中斷了）。", next: "請確認 VBear 還開著，再試一次。" },
+  { re: /^HTTP \d{3}$/, text: "VBear 回了一個沒有說明的錯誤，這次沒有完成。", next: "請稍後再試一次。" },
+  { re: /找不到此任務卡/, text: "找不到這張任務卡（可能已經被刪除）。", next: "請回到任務卡清單重新整理，再看一次。" },
+  { re: /交接必須填寫接手的對象/, text: "交接要寫明交給誰。", next: "請在「交給」欄填上接手的角色、Agent 或人。" },
+  { re: /此任務卡已結案，不能再交接/, text: "這張任務卡已經結案，不能再交接。", next: "請從最新的一張接續。" },
+  { re: /^任務卡已達上限/, text: "任務卡的數量已經到上限。", next: "請先刪掉用不到的卡，再試一次。" },
+  { re: /任務儲存/, text: "VBear 的任務卡儲存區現在讀寫不了，這次沒有完成。", next: "它的說明在原文裡；處理好之後再試。" },
+  // why the scratch of a closed managed terminal was kept (the runtime's reasons, agent_sessions.cleanup_launch and daemon._finish_managed)
+  { re: /^leader 尚未結束/, text: "終端裡的主程式還沒結束。", next: "VBear 先保留著，沒有刪。" },
+  { re: /process group 仍有程序/, text: "主程式那一組裡還有程式在跑。", next: "VBear 先保留著，沒有刪。" },
+  { re: /^仍有已觀測的後代程序存活/, text: "它啟動的程式裡還有沒結束的。", next: "VBear 先保留著，沒有刪。" },
+  { re: /^無法取得程序表或有無法確認身分的後代/, text: "查不到有哪些程式在跑，確認不了是不是都結束了。", next: "VBear 先保留著，沒有刪。" },
+  { re: /^無法證明程序已全部結束/, text: "沒辦法證明裡面的程式都已經結束。", next: "VBear 先保留著，沒有刪。" },
+  { re: /^leader 已被回收|^leader 已不是未回收|^leader 在回收前已失去/, text: "沒辦法確認主程式那一組是不是都結束了。", next: "VBear 先保留著，沒有刪。" },
+  { re: /^launch 目錄身分與 manifest 不符|^暫存區位置與核准樣式不符|^暫存區 inode 與 manifest 不符/, text: "暫存區的記錄和實際內容對不上，為了安全沒有刪它。", next: "VBear 先保留著，沒有刪。" },
+  { re: /刪除後仍存在/, text: "刪除之後暫存區還在，沒刪乾淨。", next: "VBear 先保留著，沒有刪。" },
+  { re: /^清理檢查失敗|^manifest 無法讀取/, text: "清理前的檢查沒通過，所以沒有刪。", next: "VBear 先保留著，沒有刪。" },
+  // the folder of a new built-in terminal (server._terminal_open)
+  { re: /資料夾必須在你的家目錄內/, text: "這個資料夾不在你的家目錄裡。", next: "請換一個家目錄裡的資料夾。" },
+  { re: /找不到這個資料夾/, text: "找不到這個資料夾。", next: "請確認路徑打對了、資料夾還在。" },
+  { re: /資料夾必須是絕對路徑，或以 ~ 開頭/, text: "資料夾路徑要從 / 或 ~ 開頭。", next: "請改成完整的路徑。" },
+];
+// The general sentence of each place: what did not work, nothing about why.
+const TERM_GENERAL = {
+  takeover: "沒能接手這個終端。",
+  autoTakeover: "沒能取得這個終端的輸入控制。",
+  release: "沒能改成只觀看，仍維持可操作的狀態。",
+  input: "鍵盤輸入沒有送出，沒送出的內容已經捨棄（不會自動重送）。",
+  stream: "沒能連上這個終端的畫面。",
+  close: "沒能關閉這個終端。",
+  handoff: "沒能交接這張任務卡。",
+  link: "沒能更新任務卡和終端的關聯。",
+  open: "沒能開啟這個終端機。",
+};
+// x: the original (a string, or an Error or a server answer that carries it). -> { text, next, detail, gone, known }
+function terminalWords(x, general) {
+  const raw = typeof x === "string" ? x.trim()
+    : x && typeof x.message === "string" ? x.message.trim()
+    : x && typeof x.error === "string" ? x.error.trim() : "";
+  const hit = raw || (x && x.name === "TypeError") ? TERMINAL_WORDS.find((w) => (w.re ? w.re.test(raw) : w.test(raw, x))) : null;
+  if (hit) return { text: hit.text, next: hit.next || "", detail: raw, gone: Boolean(hit.gone), known: true };
+  return { text: general, next: "", detail: raw, gone: false, known: false };
+}
+// For a toast, which holds one line of plain text: the plain words, then the original in brackets.
+function terminalFailureLine(x, general) {
+  const w = terminalWords(x, general);
+  return `${w.text}${w.next}${w.detail ? `（原文：${w.detail}）` : ""}`;
+}
+// For a notice: the plain words, and the original behind 「技術細節」.
+function terminalFailureNotice(x, general, kind = "bad") {
+  const w = terminalWords(x, general);
+  return notice(kind, [`${w.text}${w.next}`,
+    w.detail ? el("details", { class: "small term-tech", "data-term": "tech" },
+      el("summary", null, "技術細節"), el("code", { class: "term-tech-raw" }, w.detail)) : null]);
+}
 // The runtime's words for a terminal it could not attach to arrive as "terminal attach failed: <its message>" (P14). The ones
-// known are said in plain words, with the original kept in a fold ("技術細節"); one that is not known gets only a general
-// line, never a guess at the cause. Any other reason (for example 終端機已結束) is shown as it is. The server's text and
-// codes are not changed. gone: the answer was "no such session", so there is nothing left to reconnect to.
+// known are said in plain words (the table above), with the original kept in a fold ("技術細節"); one that is not known gets only
+// a general line. Any other reason (for example 終端機已結束) is shown as it is. The server's text and codes are not changed.
+// gone: the answer was "no such session", so there is nothing left to reconnect to.
 function terminalClosedView(reason) {
   const raw = typeof reason === "string" ? reason.trim() : "";
   const m = /^terminal attach failed:\s*([\s\S]*)$/.exec(raw);
   if (!m) return { text: raw, gone: false, detail: "" };
-  if (m[1].includes("沒有這個 session")) return { text: "這個終端已經不存在了（可能已關閉）。", gone: true, detail: raw };
-  if (m[1].includes("連線上限")) return { text: "這個終端的連線數已滿，暫時連不上；關閉其他正在看它的分頁後可以再試。", gone: false, detail: raw };
-  return { text: "沒能連上這個終端。", gone: false, detail: raw };
+  const w = terminalWords(m[1], "沒能連上這個終端。");
+  return { text: w.text, gone: w.gone, detail: raw };
 }
 // The line under the terminal when its stream has closed: the reason (plain words), what to do next, and the original.
 function terminalClosedNotice(reason, sessionGone, goneAdvice) {
@@ -6520,7 +6598,7 @@ function newTerminalForm() {
     ev.preventDefault();
     btn.disabled = true;
     try { await openShellTerminal(input.value); }
-    catch (e) { toast("無法開啟終端機：" + e.message); btn.disabled = false; }
+    catch (e) { toast(terminalFailureLine(e, TERM_GENERAL.open)); btn.disabled = false; }
   } } }, el("label", { class: "small" }, "資料夾"), input, btn);
   return form;
 }
@@ -6579,6 +6657,7 @@ async function viewTerminal(paneId) {
   let closedReason = "";
   let sessionGone = false;  // the runtime answered 404: nothing left to reconnect to or close
   let errorMsg = "";
+  let streamError = "";   // what the server said when the stream could not be opened (shown through terminalFailureNotice)
   let retryTimer = null;
   let resizeTimer = null;
   let abortController = null;
@@ -6621,7 +6700,7 @@ async function viewTerminal(paneId) {
   }, {
     onError: (err) => {
       if (isDisposed) return;
-      toast("鍵盤輸入傳送失敗，已捨棄未送出之內容（不自動重播）：" + (err ? err.message : "網路錯誤"));
+      toast(terminalFailureLine(err || "網路錯誤", TERM_GENERAL.input));
     },
   });
 
@@ -6663,7 +6742,7 @@ async function viewTerminal(paneId) {
         : "已達最大重試次數，請手動點選「重新連線」。";
       notices.push(notice("bad", `與伺服器終端串流中斷。${waitText}`));
     } else if (connState === "error") {
-      notices.push(notice("bad", `連線錯誤：${errorMsg || "無法連接終端串流"}`));
+      notices.push(streamError ? terminalFailureNotice(streamError, TERM_GENERAL.stream) : notice("bad", `連線錯誤：${errorMsg || "無法連接終端串流"}`));
     }
     setKids(bannerWrap, notices);
 
@@ -6694,7 +6773,7 @@ async function viewTerminal(paneId) {
     const reminder = openTakeoverReminder({
       titleId: "modal-takeover-title", paneId, session, pane,
       onClosed: () => { modalElem = null; },
-      onConfirm: ({ close, confirmBtn }) => requestTerminalControl({
+      onConfirm: ({ close, confirmBtn, showProblem }) => requestTerminalControl({
         paneId, term, isDisposed: () => isDisposed, setPending: (p) => { pendingTakeover = p; },
         onLive: (r) => {
           mode = "control";
@@ -6706,7 +6785,7 @@ async function viewTerminal(paneId) {
           updateUI();
           if (term) term.focus();
         },
-        onError: (msg) => { toast("接手失敗：" + msg); confirmBtn.disabled = false; },
+        onError: (msg) => { showProblem(terminalFailureNotice(msg, TERM_GENERAL.takeover)); confirmBtn.disabled = false; },
       }),
     });
     modalElem = reminder.modal;
@@ -6726,7 +6805,7 @@ async function viewTerminal(paneId) {
         updateUI();
         if (term) term.focus();
       },
-      onError: (msg) => toast("無法取得輸入控制：" + msg),
+      onError: (msg) => toast(terminalFailureLine(msg, TERM_GENERAL.autoTakeover)),
     });
   }
 
@@ -6745,7 +6824,7 @@ async function viewTerminal(paneId) {
         updateUI();
       },
       onError: (err) => {
-        toast("釋放控制失敗，維持操作模式：" + (err ? err.message : "網路錯誤"));
+        toast(terminalFailureLine(err || "網路錯誤", TERM_GENERAL.release));
         updateUI();
       },
     });
@@ -6790,6 +6869,7 @@ async function viewTerminal(paneId) {
       abortController = null;
     }
     connState = "connecting";
+    streamError = "";
     updateUI();
 
     abortController = new AbortController();
@@ -6812,15 +6892,10 @@ async function viewTerminal(paneId) {
           connState = "closed";
           sessionGone = true;
           closedReason = "此終端已不存在（已關閉或從未存在）。";
-        } else if (res.status === 429) {
-          connState = "error";
-          errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
-        } else if (res.status === 403) {
-          connState = "error";
-          errorMsg = "權限不足 (403)";
         } else {
           connState = "error";
-          errorMsg = `連線失敗 (HTTP ${res.status})`;
+          const data = typeof res.json === "function" ? await res.json().catch(() => null) : null;
+          streamError = (data && typeof data.error === "string" && data.error) || `HTTP ${res.status}`;
         }
         updateUI();
         return;
@@ -7506,6 +7581,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     let closedReason = "";
     let sessionGone = false;  // the runtime answered 404: nothing left to reconnect to or close
     let errorMsg = "";
+    let streamError = "";   // what the server said when the stream could not be opened (shown through terminalFailureNotice)
     let retryTimer = null;
     let resizeTimer = null;
     let abortController = null;
@@ -7543,7 +7619,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }, {
       onError: (err) => {
         if (isDisposed) return;
-        toast("鍵盤輸入傳送失敗，已捨棄未送出內容：" + (err ? err.message : "網路錯誤"));
+        toast(terminalFailureLine(err || "網路錯誤", TERM_GENERAL.input));
       },
     });
 
@@ -7582,7 +7658,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           : "已達最大重試次數，請手動點選「重新連線」。";
         notices.push(notice("bad", `與伺服器終端串流中斷。${waitText}`));
       } else if (connState === "error") {
-        notices.push(notice("bad", `連線錯誤：${errorMsg || "無法連接終端串流"}`));
+        notices.push(streamError ? terminalFailureNotice(streamError, TERM_GENERAL.stream) : notice("bad", `連線錯誤：${errorMsg || "無法連接終端串流"}`));
       }
       setKids(bannerWrap, notices);
 
@@ -7626,7 +7702,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       const reminder = openTakeoverReminder({
         titleId: "wb-modal-takeover-title", paneId: currentPane, session, pane,
         onClosed: () => { modalElem = null; },
-        onConfirm: ({ close, confirmBtn }) => requestTerminalControl({
+        onConfirm: ({ close, confirmBtn, showProblem }) => requestTerminalControl({
           paneId: currentPane, term, isDisposed: () => isDisposed, setPending: (p) => { pendingTakeover = p; },
           onLive: (r) => {
             mode = "control";
@@ -7638,7 +7714,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
             updateUI();
             if (term) term.focus();
           },
-          onError: (msg) => { toast("接手失敗：" + msg); confirmBtn.disabled = false; },
+          onError: (msg) => { showProblem(terminalFailureNotice(msg, TERM_GENERAL.takeover)); confirmBtn.disabled = false; },
         }),
       });
       modalElem = reminder.modal;
@@ -7656,7 +7732,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           updateUI();
           if (term) term.focus();
         },
-        onError: (msg) => toast("無法取得輸入控制：" + msg),
+        onError: (msg) => toast(terminalFailureLine(msg, TERM_GENERAL.autoTakeover)),
       });
     }
 
@@ -7675,7 +7751,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           updateUI();
         },
         onError: (err) => {
-          toast("釋放控制失敗，維持操作模式：" + (err ? err.message : "網路錯誤"));
+          toast(terminalFailureLine(err || "網路錯誤", TERM_GENERAL.release));
           updateUI();
         },
       });
@@ -7720,6 +7796,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         abortController = null;
       }
       connState = "connecting";
+      streamError = "";
       updateUI();
 
       abortController = new AbortController();
@@ -7742,15 +7819,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
             connState = "closed";
             sessionGone = true;
             closedReason = "此終端已不存在（已關閉或從未存在）。";
-          } else if (res.status === 429) {
-            connState = "error";
-            errorMsg = "終端連線已達上限（最多 4 個），請關閉其他終端分頁 (429)";
-          } else if (res.status === 403) {
-            connState = "error";
-            errorMsg = "權限不足 (403)";
           } else {
             connState = "error";
-            errorMsg = `連線失敗 (HTTP ${res.status})`;
+            const data = typeof res.json === "function" ? await res.json().catch(() => null) : null;
+            streamError = (data && typeof data.error === "string" && data.error) || `HTTP ${res.status}`;
           }
           updateUI();
           return;
@@ -8091,7 +8163,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
               toast(isAssociatedWithCurrent ? "已解除終端的追蹤關聯" : "已將任務卡與目前的終端關聯（僅追蹤）");
               renderRightColumn();
             } catch (err) {
-              toast("關聯更新失敗：" + err.message);
+              toast(terminalFailureLine(err, TERM_GENERAL.link));
             }
           },
         },
@@ -9003,7 +9075,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         closeModal();
         renderRightColumn();
       } catch (err) {
-        toast("交接失敗：" + err.message);
+        toast(terminalFailureLine(err, TERM_GENERAL.handoff));
         saveBtn.disabled = false;
       }
     }
