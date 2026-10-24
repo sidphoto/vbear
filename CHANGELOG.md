@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.4 — an Antigravity (AGY) camp
 
 **Role cards can be Antigravity (AGY) cards.** The card wizard's 「陣營」 row, and the card editor, now offer
 Antigravity（AGY） beside Claude Code, Codex CLI and 共用. VBear does not start Antigravity (and does not yet know how
