@@ -1257,6 +1257,12 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .cw-choices, .cw-species { display: flex; flex-wrap: wrap; gap: 8px; }
 .cw-choice { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; font-size: 13.5px; }
 .cw-choice[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 650; }
+/* The camp row (four buttons) lays out by the width it really has: four in a row if they all fit, else two by two, else
+   one in a column, never three and one. The type stays the size it is; a button is as wide as its column. */
+.cw-tools-wrap { container-type: inline-size; }
+.cw-tools { display: grid; grid-template-columns: repeat(1, minmax(0, 1fr)); gap: 8px; }
+@container (min-width: 420px) { .cw-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (min-width: 780px) { .cw-tools { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .cw-details { border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; }
 .cw-details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
 .cw-intent-grid { display: grid; gap: 8px; margin: 10px 0 4px; }

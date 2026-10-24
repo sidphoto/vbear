@@ -2076,7 +2076,9 @@ async function test(name, fn) {
     await tick();
     assert.strictEqual(fetchCalls.filter((c) => /agent-launch|preview|launch/.test(c.url) && c.options && c.options.method === "POST").length, 0, "no request to preview or start");
     const why = walk(d).find((n) => n.className === "small agent-launch-why");
-    assert.ok(why && findText(why, AGY_NOT_LAUNCHED), "the reason beside the disabled button");
+    assert.ok(why && findText(why, "現在不能出發：見上方「這張角色卡目前無法啟動」。"), "the reason beside the disabled button points up");
+    assert.strictEqual(textOf(d).split(AGY_NOT_LAUNCHED).length - 1, 1, "the sentence is on the pass once, not twice");
+    assert.ok(!findText(why, AGY_NOT_LAUNCHED), "the reason beside the button does not say it again");
     assert.ok(!walk(d).some((n) => /armor-shield|pass-lines/.test(n.className || "")), "no shield, no limits listed");
     assert.ok(!byData(d, "data-pass", "front").length);
     // a Claude card's pass has no such notice
@@ -2087,6 +2089,50 @@ async function test(name, fn) {
     await tick();
     assert.strictEqual(byData(dialog(), "data-pass", "agy-not-launchable").length, 0);
     assert.strictEqual(btnByText(dialog(), "產生預覽").disabled, false);
+  });
+
+  await test("P23 the AGY pass: the reason beside the off button is short, and a Claude card's reason is as it was", async () => {
+    const p = mkProfile("p-agy", "AGY 一號", "agy", VERIFIED);
+    const ctx = freshContext(baseHandlers([p], catalogAgy, { "GET /api/agent-profiles/p-agy/loadout": () => jsonResponse(agyLoadout(p)) }));
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null, "p-agy", true);
+    await tick();
+    const d = dialog();
+    const why = walk(d).find((n) => n.className === "small agent-launch-why");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true);
+    assert.strictEqual((why.textContent || "").trim(), "現在不能出發：見上方「這張角色卡目前無法啟動」。");
+    assert.strictEqual(textOf(d).split("這張角色卡目前無法啟動").length - 1, 2, "the heading, and the pointer to it");
+    const c = mkProfile("p-1", "Mine", "claude", ALL_DENY);
+    const ctx2 = freshContext(baseHandlers([c], catalogAgy, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(c)) }));
+    evalAgentBuilderSlice(ctx2);
+    await ctx2.viewWorkbench(null, null, "p-1", true);
+    await tick();
+    const why2 = walk(dialog()).find((n) => n.className === "small agent-launch-why");
+    assert.strictEqual((why2.textContent || "").trim(),
+      "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾、勾選存下版本紀錄（commit）的知悉，再按「產生預覽」。");
+  });
+
+  await test("P23 wizard step 2: only the camp row has the layout class; its CSS gives four, then two, then one per row", async () => {
+    const { d } = await openWizard([], catalogAgy);
+    typeName(d, "Layout");
+    btnByText(d, "下一步").dispatch("click");
+    const tools = walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("aria-label") === "陣營（工具）");
+    const position = walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("aria-label") === "建議位置");
+    assert.strictEqual(tools.length, 1); assert.strictEqual(position.length, 1);
+    assert.ok(tools[0].classList.contains("cw-choices") && tools[0].classList.contains("cw-tools"), "the camp row has its own class");
+    assert.ok(!position[0].classList.contains("cw-tools"), "the position row does not");
+    assert.ok(tools[0].parentNode.classList.contains("cw-tools-wrap"), "measured through its wrapper");
+    assert.strictEqual(walk(tools[0]).filter((n) => n.tag === "button").length, 4, "four camps");
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    const cols = (re) => { const m = re.exec(css); return m ? Number(m[1]) : null; };
+    assert.strictEqual(cols(/\.cw-tools\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*repeat\(\s*(\d+)\s*,/), 1, "one to a row by default");
+    assert.strictEqual(cols(/@container\s*\(min-width:\s*4\d\dpx\)\s*\{\s*\.cw-tools\s*\{[^}]*repeat\(\s*(\d+)\s*,/), 2, "two by two when there is room for two");
+    assert.strictEqual(cols(/@container\s*\(min-width:\s*7\d\dpx\)\s*\{\s*\.cw-tools\s*\{[^}]*repeat\(\s*(\d+)\s*,/), 4, "four to a row when all fit");
+    assert.ok(/\.cw-tools-wrap\s*\{[^}]*container-type:\s*inline-size/.test(css), "the wrapper is what is measured");
+    const counts = [...css.matchAll(/\.cw-tools\s*\{[^}]*repeat\(\s*(\d+)\s*,/g)].map((m) => Number(m[1]));
+    assert.deepStrictEqual(counts, [1, 2, 4], "only 1, 2 or 4 columns, so never three and one");
+    assert.ok(!/\.cw-choices\s*\{[^}]*grid-template-columns/.test(css), "the other choice rows are not touched");
+    assert.ok(!/\.cw-tools[^{]*\{[^}]*(font-size|text-overflow|overflow:\s*hidden)/.test(css), "no smaller type, no cut-off text");
   });
 
   await test("P20 source: the pass and the wizard speak of AGY in the words the server uses, and no AGY string claims a load or a protection", () => {

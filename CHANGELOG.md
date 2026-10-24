@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Small tidy-ups from the last two reviews.** In the card wizard's second step the four camp buttons now line up
+  by the room they have: four in a row if they all fit, two by two otherwise, one under another on a narrow screen,
+  and never three and one (the other button rows are unchanged). The launch pass of an Antigravity (AGY) card says
+  once that VBear does not start AGY; the line beside the off start button now only points up to it. In the settings
+  list, the AGY config file's row no longer repeats its own name at the front of each problem; the overview's problem
+  list keeps the name, since it has no row title above it. How the file is read, and what it refuses, is unchanged.
+
 ## v0.8.5 — the skills AGY reads
 
 - **An AGY card can now hold the skills AGY actually reads.** VBear used to say it did not know which skills

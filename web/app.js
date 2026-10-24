@@ -4062,7 +4062,7 @@ function openCardWizard(opts) {
     st.touched = false;
   }
   function stepTwo() {
-    const toolGroup = el("div", { class: "cw-choices", role: "group", "aria-label": "陣營（工具）" },
+    const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "陣營（工具）" },
       tools.map((t) => el("button", { type: "button", class: "cw-choice", "data-tool": t,
         "aria-pressed": String(st.tool === t), on: { click: () => setTool(t) } },
         officeSprite(speciesFor({ tool: t }), campOf({ tool: t }).key, 2),
@@ -4121,7 +4121,7 @@ function openCardWizard(opts) {
     if (profSelect) profSelect.value = st.profession;
 
     return [
-      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), toolGroup,
+      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
         el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote, sharedNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), posGroup,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
@@ -8544,7 +8544,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
-      if (isAgy) return "現在不能出發：" + AGY_NOT_LAUNCHED + "。";
+      // the notice at the top of the pass already says it, once; here only where to read it
+      if (isAgy) return "現在不能出發：見上方「這張角色卡目前無法啟動」。";
       if (!current) {
         if (lastPreview && !lastPreview.launchable) {
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
