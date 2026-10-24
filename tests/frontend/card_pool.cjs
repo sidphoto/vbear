@@ -1631,6 +1631,227 @@ async function test(name, fn) {
     assert.ok(/S\.skillsChanged\s*=\s*async/.test(view) && /S\.reloadRoster\(\)/.test(view.slice(view.indexOf("S.skillsChanged"))), "the view wires it to the roster reload");
   });
 
+  // ---- P20: Antigravity (AGY) as a fourth camp -----------------------------------------------------------------------
+  const catalogAgy = { ...catalog, tools: ["claude", "codex", "agy", "shared"] };
+  const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
+  const agyLoadout = (p) => loadoutBody(p, {
+    armor: { applicable: false, why: "VBear 還不會啟動 AGY，沒有防具" },
+    blockers: [{ code: "tool_not_launchable", message: AGY_NOT_LAUNCHED }],
+    skills: { title: "技能卡（收藏中：VBear 啟動時不載入）", all_inactive: true, note: "x",
+      items: (p.equipped_skill_ids || []).map((id) => ({ skill_id: id, state: "in_index", name: id, will_load: false, effective: false })) } });
+  const shadowOf = (root) => { const n = walk(root).find((x) => x.getAttribute && /box-shadow/.test(x.getAttribute("style") || "")); return n ? n.getAttribute("style") : ""; };
+
+  await test("P20 the vocabulary: the camp is Antigravity（AGY）, short AGY, and it sits before the shared camp", () => {
+    const label = vm.runInContext("CARD_TOOL_LABEL", pure), short = vm.runInContext("CARD_TOOL_SHORT", pure);
+    assert.deepStrictEqual(Object.keys(label), ["claude", "codex", "agy", "shared"]);
+    assert.strictEqual(label.agy, "Antigravity（AGY）");
+    assert.strictEqual(short.agy, "AGY");
+    assert.deepStrictEqual(Object.keys(short), ["claude", "codex", "agy", "shared"]);
+    assert.strictEqual(vm.runInContext("TOOL.agy", pure), "Antigravity（AGY）");
+  });
+
+  await test("P20 look: an AGY card is the fox in the Google colours; any other tool string is still the alien, and nothing else changed", () => {
+    assert.strictEqual(pure.speciesFor({ tool: "agy" }), "fox");
+    assert.strictEqual(pure.campOf({ tool: "agy" }).key, "google");
+    assert.strictEqual(pure.campOf({ tool: "agy" }).shirt, pure.campOf({ family: "google" }).shirt);
+    assert.strictEqual(pure.speciesFor({ tool: "agy" }, "bear"), "bear", "the person may still pick another species");
+    for (const tool of ["gemini", "AGY", "antigravity", "agy ", ""]) {
+      assert.strictEqual(pure.speciesFor({ tool }), "alien", tool);
+      assert.strictEqual(pure.campOf({ tool }).key, "other", tool);
+    }
+    assert.strictEqual(pure.speciesFor({ tool: "claude" }), "bear");
+    assert.strictEqual(pure.speciesFor({ tool: "codex" }), "robot");
+    assert.strictEqual(pure.campOf({ tool: "claude" }).key, "anthropic");
+    assert.strictEqual(pure.campOf({ tool: "codex" }).key, "openai");
+    assert.strictEqual(pure.campOf({ tool: "shared" }).key, "other");
+    assert.strictEqual(pure.campKeyOf({ model: { tool: "agy" } }), "google");
+  });
+
+  await test("P20 skillCompatible: an AGY card takes shared skill cards only (a record, not a load); VBear does not know what AGY reads", () => {
+    const rows = [["agy", "shared", true], ["agy", "claude", false], ["agy", "codex", false], ["agy", "agy", false],
+      ["agy", "", false], ["agy", undefined, false], ["claude", "agy", false], ["codex", "agy", false], ["shared", "agy", false]];
+    for (const [tool, source, want] of rows) assert.strictEqual(pure.skillCompatible({ tool: source }, tool), want, `${tool} card, ${source} skill`);
+    assert.strictEqual(pure.skillIncompatibleNote("agy"), "VBear 還不知道 AGY 會讀哪些技能");
+    assert.strictEqual(pure.skillIncompatibleNote("claude"), "Claude Code 不會讀這張卡");
+    assert.strictEqual(pure.skillIncompatibleNote("codex"), "Codex 不會讀這張卡");
+    assert.strictEqual(pure.skillIncompatibleNote("shared"), "共用角色卡只能插共用的技能卡");
+  });
+
+  await test("P20 wizard step 2: AGY is in the camp row with the others, drawn as the fox, and choosing it saves tool agy", async () => {
+    const { posts, d } = await openWizard([], catalogAgy);
+    typeName(d, "AGY 審查員");
+    btnByText(d, "下一步").dispatch("click");
+    const group = byData(dialog(), "role", "group").find((n) => n.getAttribute("aria-label") === "陣營（工具）");
+    const buttons = group.children.filter((n) => n.tag === "button");
+    assert.deepStrictEqual(buttons.map((b) => b.getAttribute("data-tool")), ["claude", "codex", "agy", "shared"], "one row, in this order");
+    const agy = buttons[2];
+    assert.ok(findText(agy, "Antigravity（AGY）"));
+    assert.strictEqual(shadowOf(agy), shadowOf(pure.officeSprite("fox", "google", 2)), "the fox in the Google colours");
+    assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0, "the note shows only for AGY");
+    agy.dispatch("click");
+    const now = dialog();
+    assert.strictEqual(byData(now, "data-tool", "agy")[0].getAttribute("aria-pressed"), "true");
+    assert.strictEqual(byData(now, "data-tool", "claude")[0].getAttribute("aria-pressed"), "false");
+    const note = byData(now, "data-cw", "agy-note")[0];
+    assert.ok(note && findText(note, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), "says it plainly beside the choice");
+    assert.ok(!findText(now, "找不到 Codex"));
+    btnByText(now, "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].model.tool, "agy");
+  });
+
+  await test("P20 wizard: a catalog from an older server (three tools) offers three camps, as before", async () => {
+    const { d } = await openWizard();
+    typeName(d, "Old");
+    btnByText(d, "下一步").dispatch("click");
+    assert.deepStrictEqual(byData(dialog(), "data-tool", "agy").length, 0);
+    assert.deepStrictEqual(walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("data-tool")).map((n) => n.getAttribute("data-tool")), ["claude", "codex", "shared"]);
+  });
+
+  await test("P20 wizard step 1: the 'by camp' look of an AGY card is the fox", async () => {
+    const existing = mkProfile("p-agy", "AGY 一號", "agy", VERIFIED);
+    const ctx = await openPool([existing], catalogAgy, { "GET /api/agent-profiles/p-agy/loadout": () => jsonResponse(agyLoadout(existing)) });
+    cardOf("p-agy").dispatch("click");
+    byData(cardOf("p-agy"), "data-pcard", "flip")[0].dispatch("click");
+    byData(cardOf("p-agy"), "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    assert.ok(findText(dialog(), "依陣營（狐）"), "the automatic choice names the fox");
+  });
+
+  await test("P20 wizard step 3: with an AGY card only shared skill cards can be inserted, the rest say VBear does not know what AGY reads", async () => {
+    const { posts, d } = await openWizard([], catalogAgy);
+    typeName(d, "AGY 收藏");
+    btnByText(d, "下一步").dispatch("click");
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    const cur = dialog();
+    const note = byData(cur, "data-cw", "agy-skills-note")[0];
+    assert.ok(note && findText(note, "VBear 還不知道 AGY 會讀哪些技能") && findText(note, "只是收藏"), "the page says it before any skill is picked");
+    const sk = (id) => byData(dialog(), "data-skill", id)[0];
+    for (const id of ["s-c", "s-x"]) {
+      assert.strictEqual(sk(id).getAttribute("aria-disabled"), "true", id);
+      assert.ok(findText(sk(id), "VBear 還不知道 AGY 會讀哪些技能"), id);
+      sk(id).dispatch("click");
+      assert.strictEqual(sk(id).getAttribute("aria-pressed"), "false", `${id} cannot be inserted`);
+    }
+    assert.strictEqual(sk("s-s").getAttribute("aria-disabled"), null);
+    sk("s-s").dispatch("click");
+    assert.strictEqual(sk("s-s").getAttribute("aria-pressed"), "true");
+    assert.ok(!findText(dialog(), "AGY 會載入") || findText(dialog(), "不代表"), "no sentence claims a load");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-s"]);
+    assert.strictEqual(posts[0].model.tool, "agy");
+  });
+
+  await test("P20 wizard: switching to AGY drops the Claude and Codex skill cards and the profession label, and says so", async () => {
+    const { posts, d } = await openWizard([], catalogAgy);
+    typeName(d, "Switch to AGY");
+    btnByText(d, "下一步").dispatch("click");
+    const sel = walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("id") === "cw-profession");
+    sel.value = "r-1"; sel.dispatch("change");
+    btnByText(dialog(), "下一步").dispatch("click");
+    byData(dialog(), "data-skill", "s-c")[0].dispatch("click");
+    byData(dialog(), "data-skill", "s-s")[0].dispatch("click");
+    btnByText(dialog(), "上一步").dispatch("click");
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.ok(findText(dialog(), "換了陣營，已移除 1 張這個陣營不會讀的技能卡。"));
+    assert.ok(findText(dialog(), "已插入（1）"));
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].profession_role_id, null, "the Claude role label does not stay on an AGY card");
+    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-s"]);
+  });
+
+  await test("P20 wizard 進階: an AGY card lists no profession labels and says VBear has not scanned any; the other tools still list theirs", async () => {
+    const { d } = await openWizard([], catalogAgy);
+    typeName(d, "Prof");
+    btnByText(d, "下一步").dispatch("click");
+    const options = () => walk(byData(dialog(), "data-cw", "advanced")[0]).filter((n) => n.tag === "option").map((n) => (n.textContent || "").trim());
+    assert.deepStrictEqual(options(), ["（不綁定）", "Writer (claude)"]);
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    assert.deepStrictEqual(options(), ["（不綁定）"], "no Claude or Codex role stands in for an AGY one");
+    const adv = byData(dialog(), "data-cw", "advanced")[0];
+    assert.ok(findText(adv, "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
+    byData(dialog(), "data-tool", "shared")[0].dispatch("click");
+    assert.deepStrictEqual(options(), ["（不綁定）", "Writer (claude)"]);
+  });
+
+  await test("P20 the card: the front and back of an AGY card — Antigravity（AGY）, the fox, the Google frame, a red light with the plain reason and no shield", async () => {
+    const p = mkProfile("p-agy", "AGY 一號", "agy", VERIFIED, { equipped_skill_ids: ["s-s"] });
+    await openPool([p], catalogAgy, { "GET /api/agent-profiles/p-agy/loadout": () => jsonResponse(agyLoadout(p)) });
+    const card = cardOf("p-agy");
+    assert.strictEqual(card.getAttribute("data-camp"), "google");
+    const front = faceOf(card, "front"), back = faceOf(card, "back");
+    assert.ok(findText(front, "Antigravity（AGY）"));
+    assert.strictEqual(shadowOf(front), shadowOf(pure.officeSprite("fox", "google", 3)), "the fox in the Google colours");
+    const light = byData(card, "data-light", "blocked")[0];
+    assert.ok(light, "the light is the red one, not a green");
+    assert.ok(findText(light, "目前不能出發") && findText(light, AGY_NOT_LAUNCHED));
+    assert.strictEqual(byData(card, "data-pcard", "pass-line").filter((n) => !n.hasAttribute("hidden")).length, 0, "no line about what a start does");
+    assert.ok(!walk(card).some((n) => /armor-shield/.test(n.className || "")), "no shield anywhere on the card");
+    assert.ok(findText(back, "Antigravity（AGY）"));
+    assert.ok(findText(byData(back, "data-rc", "blockers")[0], AGY_NOT_LAUNCHED));
+    assert.ok(findText(byData(front, "data-slot", "collected")[0].parentNode, "收藏中"));
+    assert.strictEqual(byData(card, "data-slot", "active").length, 0, "no skill is shown as in effect");
+    const adv = byData(back, "data-rc", "advanced")[0];
+    assert.ok(findText(adv, "Tool ID") && findText(adv, "agy"));
+  });
+
+  await test("P20 the pool: the camp filter has AGY in order and keeps only AGY cards", async () => {
+    const profiles = [mkProfile("a", "A", "claude", ALL_DENY), mkProfile("b", "B", "agy", ALL_DENY), mkProfile("c", "C", "codex", ALL_DENY)];
+    const ctx = await openPool(profiles, catalogAgy, { "GET /api/agent-profiles/b/loadout": () => jsonResponse(agyLoadout(profiles[1])) });
+    const bar = byData(main, "role", "group").find((n) => n.getAttribute("aria-label") === "依陣營篩選");
+    assert.deepStrictEqual(bar.children.filter((n) => n.tag === "button").map((n) => n.getAttribute("data-filter")), ["all", "claude", "codex", "agy", "shared"]);
+    assert.ok(findText(byData(main, "data-filter", "agy")[0], "Antigravity（AGY）"));
+    ctx.localStorage.setItem("sid:teamCardTool", JSON.stringify("agy"));
+    await ctx.viewTeam();
+    const ids = walk(main).filter((n) => n.tag === "article" && n.getAttribute("data-profile-id")).map((n) => n.getAttribute("data-profile-id"));
+    assert.deepStrictEqual(ids, ["b"]);
+  });
+
+  await test("P20 出發 on an AGY card: the pass says VBear does not start AGY, offers no preview or start, makes no request and shows no shield", async () => {
+    const p = mkProfile("p-agy", "AGY 一號", "agy", VERIFIED);
+    const ctx = freshContext(baseHandlers([p], catalogAgy, { "GET /api/agent-profiles/p-agy/loadout": () => jsonResponse(agyLoadout(p)) }));
+    evalAgentBuilderSlice(ctx);
+    await ctx.viewWorkbench(null, null, "p-agy", true);
+    await tick();
+    const d = dialog();
+    assert.ok(d && findText(d, "出發通行證：AGY 一號"), "the pass opens");
+    const notice = byData(d, "data-pass", "agy-not-launchable")[0];
+    assert.ok(notice, "the plain sentence is on the pass before anything is typed");
+    assert.ok(findText(notice, AGY_NOT_LAUNCHED));
+    assert.ok(!findText(notice, "保護") && !findText(notice, "擋住"), "no word of protection");
+    const confirm = btnByText(d, "確認啟動"), preview = btnByText(d, "產生預覽");
+    assert.strictEqual(confirm.disabled, true);
+    assert.strictEqual(preview.disabled, true, "there is nothing to preview");
+    preview.dispatch("click"); confirm.dispatch("click");
+    await tick();
+    assert.strictEqual(fetchCalls.filter((c) => /agent-launch|preview|launch/.test(c.url) && c.options && c.options.method === "POST").length, 0, "no request to preview or start");
+    const why = walk(d).find((n) => n.className === "small agent-launch-why");
+    assert.ok(why && findText(why, AGY_NOT_LAUNCHED), "the reason beside the disabled button");
+    assert.ok(!walk(d).some((n) => /armor-shield|pass-lines/.test(n.className || "")), "no shield, no limits listed");
+    assert.ok(!byData(d, "data-pass", "front").length);
+    // a Claude card's pass has no such notice
+    const c = mkProfile("p-1", "Mine", "claude", ALL_DENY);
+    const ctx2 = freshContext(baseHandlers([c], catalogAgy, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(c)) }));
+    evalAgentBuilderSlice(ctx2);
+    await ctx2.viewWorkbench(null, null, "p-1", true);
+    await tick();
+    assert.strictEqual(byData(dialog(), "data-pass", "agy-not-launchable").length, 0);
+    assert.strictEqual(btnByText(dialog(), "產生預覽").disabled, false);
+  });
+
+  await test("P20 source: the pass and the wizard speak of AGY in the words the server uses, and no AGY string claims a load or a protection", () => {
+    const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
+    assert.ok(!/AGY[^"`\n]*(會載入|已保護|受保護|安全)/.test(wizard.replace(/不代表[^"]*/g, "")));
+    assert.ok(source.includes("VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"));
+    assert.ok(source.includes("VBear 還不知道 AGY 會讀哪些技能"));
+    assert.ok(source.includes("VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
+  });
+
   console.log(`\n${passed} passed`);
   if (process.exitCode) process.exit(process.exitCode);
   console.log("ALL CARD POOL FRONTEND TESTS PASSED");

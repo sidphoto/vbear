@@ -301,8 +301,8 @@ async function test(name, fn) {
   const pure = newCtx();
 
   // ---- pure functions --------------------------------------------------------------------------------------------
-  await test("teamFamily: claude is anthropic, codex is openai, shared and anything else is unknown", () => {
-    const rows = [["claude", "anthropic"], ["codex", "openai"], ["shared", "unknown"], ["agy", "unknown"], ["", "unknown"], [null, "unknown"],
+  await test("teamFamily: claude is anthropic, codex is openai, agy is google, shared and anything else is unknown", () => {
+    const rows = [["claude", "anthropic"], ["codex", "openai"], ["shared", "unknown"], ["agy", "google"], ["gemini", "unknown"], ["AGY", "unknown"], ["", "unknown"], [null, "unknown"],
       [undefined, "unknown"], ["toString", "unknown"], ["constructor", "unknown"], [5, "unknown"]];
     for (const [tool, want] of rows) assert.strictEqual(pure.teamFamily(tool), want, String(tool));
   });
@@ -388,7 +388,7 @@ async function test(name, fn) {
 
   await test("roleFromCard: without a usable revision (or an unknown tool) the role carries no card fields at all", () => {
     for (const bad of [{ ...CEO, revision: undefined }, { ...CEO, revision: "short" }, { ...CEO, revision: "A".repeat(64) }, { ...CEO, revision: 5 },
-      { ...CEO, model: { tool: "agy", model_id: "" } }]) {
+      { ...CEO, model: { tool: "gemini", model_id: "" } }]) {
       const role = plain(pure.roleFromCard(bad));
       assert.ok(!("profile_id" in role) && !("profile_snapshot" in role), JSON.stringify(bad.revision));
     }
@@ -1155,6 +1155,137 @@ async function test(name, fn) {
     assert.ok(!/url\(\s*["']?https?:/.test(css));
     const teamCss = css.slice(css.indexOf("/* ---- team slots and next steps"));
     assert.ok(!/#da251d|--vn-red/i.test(teamCss), "the red of 'your turn' is not used here");
+  });
+
+  // ---- P20: Antigravity (AGY) cards in the team places ---------------------------------------------------------------
+  const AGY = mkCard("p-agy", "AGY 審查員", "agy", REV("5"));
+  const AGY2 = mkCard("p-agy2", "AGY 二號", "agy", REV("6"));
+  const spriteStyle = (root) => { const n = walk(root).find((x) => x.getAttribute && /box-shadow/.test(x.getAttribute("style") || "")); return n ? n.getAttribute("style") : ""; };
+  const GOOGLE_HAND = { name: "手填的 Gemini", family: "google" };
+
+  await test("P20 roleFromCard: an AGY card becomes a role of the Google family with its snapshot; a hand-written Google role is not read back as AGY", () => {
+    const role = plain(pure.roleFromCard(AGY));
+    assert.deepStrictEqual(role, { name: "AGY 審查員", family: "google", profile_id: "p-agy",
+      profile_snapshot: { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") } });
+    assert.strictEqual(pure.teamCardFamily(AGY), "google");
+    assert.strictEqual(pure.teamCardFamily(role), "google");
+    assert.strictEqual(pure.teamCardTool(role), "agy", "a role filled from the card says its tool in its snapshot");
+    assert.strictEqual(pure.teamCardTool({ family: "google" }), "", "a Google role written by hand is not an AGY card");
+    assert.strictEqual(pure.teamCardTool({ family: "google", name: "x" }), "");
+  });
+
+  await test("P20 slotProblem: an AGY card in a review place — fine against Claude or Codex, red against a Google executor or another AGY card", () => {
+    const claude = { model: { tool: "claude" } }, codex = { model: { tool: "codex" } }, agy = { model: { tool: "agy" } };
+    const rows = [
+      ["reviewer1", agy, claude, null],
+      ["reviewer1", agy, codex, null],
+      ["reviewer2", agy, claude, null],
+      ["reviewer1", agy, GOOGLE_HAND, "same_family"],
+      ["reviewer1", agy, agy, "same_family"],
+      ["reviewer1", claude, agy, null],
+      ["reviewer1", codex, agy, null],
+      ["reviewer1", { family: "google" }, agy, "same_family"],
+      ["planner", agy, claude, null],
+      ["executor", agy, claude, null],
+    ];
+    for (const [slot, card, executor, want] of rows) {
+      const got = pure.slotProblem(slot, card, { executor });
+      assert.strictEqual(got ? got.code : null, want, `${slot} ${JSON.stringify(card)} vs ${JSON.stringify(executor)}`);
+    }
+    const red = pure.slotProblem("reviewer1", agy, { executor: GOOGLE_HAND });
+    assert.strictEqual(red.text, "這個位置需要和執行位不同陣營的卡，審查結果才算數");
+    assert.ok(red.why.includes("Google（Gemini）"), red.why);
+    assert.strictEqual(pure.slotProblem("reviewer1", agy, { executor: { ...AGY2, profile_id: "p-agy2", model: { tool: "agy" } } }).code, "same_family");
+    // the very same card in both places is still the first thing said
+    assert.strictEqual(pure.slotProblem("reviewer1", pure.roleFromCard(AGY), { executor: pure.roleFromCard(AGY) }).code, "same_card");
+  });
+
+  await test("P20 board: an AGY review place beside a Claude executor shows no red; beside a hand-written Google executor it does, in the existing words", () => {
+    const profiles = [...PROFILES, AGY];
+    const ok = board(newCtx(), { profiles });
+    putVia(ok, "executor", "p-maker");
+    putVia(ok, "reviewer1", "p-agy");
+    assert.strictEqual(byData(slotNode(ok.node, "reviewer1"), "data-slot-problem", "same_family").length, 0);
+    assert.strictEqual(byData(ok.node, "data-slot-problem", "same_family").length, 0);
+    assert.strictEqual(ok.state.slots.reviewer1.family, "google");
+    assert.strictEqual(ok.state.slots.reviewer1.profile_snapshot.tool, "agy");
+    const fl = flowView();
+    fl.roles.executor = { ...fl.roles.executor, ...GOOGLE_HAND, profile_id: undefined, profile_snapshot: undefined };
+    delete fl.roles.executor.profile_id; delete fl.roles.executor.profile_snapshot;
+    const red = board(newCtx(), { flow: fl, profiles });
+    putVia(red, "reviewer2", "p-agy");
+    const problem = byData(slotNode(red.node, "reviewer2"), "data-slot-problem", "same_family")[0];
+    assert.ok(problem, "red beside a Google executor");
+    assert.ok(findText(problem, "不算數"));
+    assert.ok(findText(problem, "這個位置需要和執行位不同陣營的卡，審查結果才算數"));
+    assert.ok(findText(problem, "Google（Gemini）"));
+  });
+
+  await test("P20 board: the menu warns an AGY card before it is put beside a Google executor, and not beside a Claude one", () => {
+    const profiles = [...PROFILES, AGY];
+    const claudeExec = board(newCtx(), { flow: flowView(), profiles });
+    slotButton(claudeExec.node, "reviewer2").click();
+    assert.ok(pick(claudeExec.node, "p-agy"));
+    assert.ok(!findText(pick(claudeExec.node, "p-agy"), "放這裡審查不算數"));
+    const fl = flowView();
+    fl.roles.executor = { name: "手填", family: "google", workdir: REPO };
+    const googleExec = board(newCtx(), { flow: fl, profiles });
+    slotButton(googleExec.node, "reviewer2").click();
+    assert.ok(findText(pick(googleExec.node, "p-agy"), "放這裡審查不算數"));
+  });
+
+  await test("P20 board: an AGY card is drawn as the fox in the Google colours, and its place says AGY and Google", () => {
+    const profiles = [...PROFILES, AGY];
+    const b = board(newCtx(), { profiles });
+    putVia(b, "reviewer1", "p-agy");
+    const node = slotNode(b.node, "reviewer1");
+    assert.strictEqual(spriteStyle(byData(node, "data-ts", "name")[0].parentNode.parentNode), spriteStyle(newCtx().officeSprite("fox", "google", 3)));
+    assert.ok(findText(node, "AGY"), "the short name");
+    assert.ok(findText(node, "Google（Gemini）"), "the family");
+    const chipNode = chip(b.node, "p-agy");
+    assert.strictEqual(chipNode.getAttribute("data-camp"), "google");
+    assert.ok(findText(chipNode, "AGY"));
+  });
+
+  await test("P20 board: nothing offers to launch an AGY card — no 出發 on its place, no 讓 … 出發 in the next steps", () => {
+    const profiles = [...PROFILES, AGY];
+    const fl = flowView();
+    fl.roles.executor = { name: "AGY 審查員", family: "google", workdir: REPO, session_id: "n-0123456789ab", profile_id: "p-agy",
+      profile_snapshot: { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") } };
+    const b = board(newCtx(), { flow: fl, profiles });
+    assert.ok(!act(slotNode(b.node, "executor"), "launch"), "an AGY place has no launch link");
+    assert.ok(act(slotNode(b.node, "planner"), "launch"), "a Claude place still has one");
+    const ctx = newCtx();
+    const act1 = plain(ctx.nextStepAction({ ...fl, phase: { key: "implementing", label: "實作中", reason: "" }, automation: { mode: "manual" } }, { profiles }));
+    assert.strictEqual(act1.step, "implement");
+    assert.deepStrictEqual(act1.launches, [], "the executor is an AGY card: nothing to start");
+    assert.ok(act1.note.includes("在終端裡完成這一步後，回到這裡記錄"), "the manual way is still said");
+    const claudeFlow = plain(ctx.nextStepAction({ ...flowView(), phase: { key: "implementing", label: "實作中", reason: "" } }, { profiles }));
+    assert.deepStrictEqual(claudeFlow.launches.map((l) => l.profile_id), ["p-maker"]);
+    const reviewFlow = flowView();
+    reviewFlow.roles.reviewers = [reviewFlow.roles.reviewers[0], { name: "AGY 審查員", family: "google", profile_id: "p-agy",
+      profile_snapshot: { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") } }];
+    const review = plain(ctx.nextStepAction({ ...reviewFlow, phase: { key: "in_review", label: "審查中", reason: "" } }, { profiles }));
+    assert.deepStrictEqual(review.launches.map((l) => l.profile_id), ["p-rev"], "the Codex reviewer stays, the AGY one is left out");
+  });
+
+  await test("P20 board: saving a team with an AGY card sends the Google family and the AGY snapshot", async () => {
+    const ctx = newCtx({ "POST /api/flows": () => jsonResponse({ ok: true, flow: flowView() }) });
+    const b = board(ctx, { profiles: [...PROFILES, AGY] });
+    putVia(b, "planner", "p-ceo");
+    putVia(b, "executor", "p-maker");
+    putVia(b, "reviewer1", "p-agy");
+    saveButton(b.node).click();
+    await tick();
+    const sent = bodyOf(posts()[0]);
+    assert.strictEqual(sent.roles.reviewers[0].family, "google");
+    assert.deepStrictEqual(sent.roles.reviewers[0].profile_snapshot, { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") });
+  });
+
+  await test("P20 flow view: a role filled from an AGY card says its tool in the camp's name", () => {
+    const ctx = newCtx();
+    const role = { name: "AGY 審查員", family: "google", profile_id: "p-agy", profile_snapshot: { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") } };
+    assert.strictEqual(ctx.flowRoleToolText(role), "Antigravity（AGY）（放上隊伍時的角色卡：AGY 審查員）");
   });
 
   console.log(`\n${passed} passed`);

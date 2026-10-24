@@ -772,6 +772,39 @@ test("the species of a profile can be changed, is stored, and a bad stored value
   global.localStorage._store = {};
 });
 
+// ---- P20: an AGY card in the lounge ----------------------------------------------------------------------------
+
+test("P20 the lounge draws an AGY card as the fox in the Google colours with its camp's name; the other cards did not change", () => {
+  const m = model(null, null, profilesOf([profile("a", "claude"), profile("g", "agy"), profile("b", "codex"), profile("s", "shared")]));
+  assert.deepStrictEqual(m.lounge.items.map((p) => [p.tool, p.species, p.camp, p.toolLabel]), [
+    ["claude", "bear", "anthropic", "Claude Code"],
+    ["agy", "fox", "google", "Antigravity（AGY）"],
+    ["codex", "robot", "openai", "Codex CLI"],
+    ["shared", "alien", "other", "skills CLI"],
+  ]);
+  // an override still wins, as for every card
+  assert.strictEqual(model(null, null, profilesOf([profile("g", "agy")]), { g: "bear" }).lounge.items[0].species, "bear");
+});
+
+test("P20 the lounge page names the AGY camp on the plate and says it is a roster", async () => {
+  setPage({ profiles: profilesOf([profile("g", "agy")]) });
+  const main = await open();
+  const ch = byKey(main, "profile:g");
+  assert(ch, "the AGY card is in the lounge");
+  assert(text(ch).includes("Antigravity（AGY）") || (ch.getAttribute("aria-label") || "").includes("Antigravity（AGY）"));
+  assert.strictEqual(ch.getAttribute("data-camp") || app.campOf({ tool: "agy" }).key, "google");
+  const lounge = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "lounge");
+  assert(text(lounge).includes("名冊：角色設定，不代表正在出勤"));
+});
+
+test("P20 a live terminal is still drawn by what the runtime says it is: VBear does not guess which terminal is AGY", () => {
+  // the runtime's agent field is claude or codex for the terminals VBear can tell; anything else is 'other'
+  const [d] = model(live({ sessions: [session("t-1", { agent: "agy" })] })).desks;
+  assert.deepStrictEqual([d.tool, d.species, d.camp], ["other", "alien", "other"]);
+  const [c] = model(live({ sessions: [session("t-2", { agent: "claude" })] })).desks;
+  assert.deepStrictEqual([c.tool, c.species, c.camp], ["claude", "bear", "anthropic"]);
+});
+
 test("a refresh repaints only when something shown changed; the selection stays and the focus follows it", async () => {
   const sc = scene();
   setPage({ flows: flowsOf(sc.flows), live: live({ sessions: [session("t-1")] }) });

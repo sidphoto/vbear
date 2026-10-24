@@ -958,7 +958,7 @@ function categoryZh(label) {
   return Object.prototype.hasOwnProperty.call(CATEGORY_ZH, k) ? CATEGORY_ZH[k] : label;
 }
 
-const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity" };
+const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）" };
 const ACT = {
   active:        ["可使用", "b-ok", "位於工具的載入範圍，且沒有被停用"],
   disabled:      ["已停用", "b-mute", "已安裝，但被設定關閉"],
@@ -2292,7 +2292,9 @@ const OFFICE_BOUND_FLOWS_SHOWN = 2;
 const OFFICE_SPECIES = ["bear", "fox", "robot", "alien"];
 const OFFICE_SPECIES_LABEL = { bear: "熊", fox: "狐", robot: "機械人", alien: "外星人" };
 const OFFICE_FAMILY_SPECIES = { anthropic: "bear", openai: "robot", google: "fox" };
-const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot" };
+// agy is a card's tool (an Antigravity card is the fox of the Google camp); a live terminal is still read from the
+// runtime's own agent name (officeToolOf), and VBear does not know what the runtime would call an AGY terminal.
+const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot", agy: "fox" };
 // The camp is the maker of the model; its shirt colour is lighter than every species' fur (tested), so a
 // character reads the same whichever species it was given.
 const OFFICE_CAMPS = {
@@ -2301,7 +2303,7 @@ const OFFICE_CAMPS = {
   google: { label: "Google", shirt: "#38bdf8", badge: "#e0f2fe" },
   other: { label: "其他", shirt: "#a855f7", badge: "#f3e8ff" },
 };
-const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai" };
+const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai", agy: "google" };
 // 16x16 supplied frames. C is the camp shirt; R is its badge.
 const OFFICE_SPRITES = {
   "bear": [
@@ -3785,8 +3787,13 @@ const CARD_POSITION_LABEL = { planner: "規劃", executor: "執行", reviewer: "
 const CARD_POSITION_KEY = "card.position.";
 const CARD_INTENT_KEYS = [["read", "讀取檔案"], ["write", "編輯寫入"], ["test", "執行測試"], ["deploy", "部署上線"]];
 const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還沒決定" };
-const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", shared: "共用（skills CLI）" };
-const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", shared: "共用卡" };
+const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
+const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
+// VBear does not start Antigravity and does not know which skills it reads: an AGY card is a record for building teams.
+const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
+const AGY_SKILLS_UNKNOWN = "VBear 還不知道 AGY 會讀哪些技能";
+const AGY_SKILLS_NOTE = "AGY 卡只能收藏共用的技能卡，只是收藏：" + AGY_SKILLS_UNKNOWN + "，不代表 AGY 會載入。";
+const AGY_NO_PROFESSIONS = "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
 const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
@@ -3858,19 +3865,22 @@ function sortCards(profiles, catalog) {
 }
 
 // Skill cards of the other tool's own, or of an unknown source, cannot be inserted: a Codex card does not read a
-// Claude skill and the other way round. A shared skill fits any card; a shared card takes only shared skills.
+// Claude skill and the other way round. A shared skill fits any card; a shared card takes only shared skills. An AGY
+// card takes only shared ones too, and only as a collection: VBear does not know which skills Antigravity reads, so
+// no skill is ever marked as one it would load (an "agy" source is not matched: there is no such scan).
 function skillCompatible(skill, tool) {
   const source = skill && skill.tool;
   if (source === "shared") return true;
-  return typeof source === "string" && source === tool;
+  return typeof source === "string" && source === tool && tool !== "agy";
 }
 function skillIncompatibleNote(tool) {
-  return tool === "shared" ? "共用角色卡只能插共用的技能卡" : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
+  return tool === "shared" ? "共用角色卡只能插共用的技能卡"
+    : tool === "agy" ? AGY_SKILLS_UNKNOWN : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
 }
 
 function cardCatalogTools(catalog) {
   const tools = catalog && Array.isArray(catalog.tools) ? catalog.tools.filter((t) => typeof t === "string") : [];
-  return tools.length ? tools : ["claude", "codex", "shared"];
+  return tools.length ? tools : ["claude", "codex", "agy", "shared"];
 }
 
 function cardAvatar(p, scale = 3) {
@@ -4044,6 +4054,7 @@ function openCardWizard(opts) {
     const codexNote = st.tool === "codex" && catalog.codex_installed === false
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
         "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
+    const agyNote = st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, AGY_NOT_LAUNCHED + "。") : null;
 
     const posChoices = [["", "先不指定"], ...CARD_POSITIONS.map((p) => [p, CARD_POSITION_LABEL[p]])];
     const posGroup = el("div", { class: "cw-choices", role: "group", "aria-label": "建議位置" },
@@ -4078,9 +4089,11 @@ function openCardWizard(opts) {
         el("span", null, "職業標籤"),
         el("select", { id: "cw-profession", on: { change: (e) => { st.profession = e.target.value; } } },
           el("option", { value: "" }, "（不綁定）"),
-          professions.map((r) => el("option", { value: r.role_id || "", selected: st.profession === r.role_id ? "selected" : null },
+          // VBear scans no Agent role of Antigravity, and a Claude or Codex role does not stand in for one
+          // (a label an AGY card already holds, set outside this page, stays visible so that it can be unbound)
+          st.tool === "agy" ? (st.profession ? el("option", { value: st.profession }, `${st.profession}（目前綁定）`) : null) : professions.map((r) => el("option", { value: r.role_id || "", selected: st.profession === r.role_id ? "selected" : null },
             `${r.name || r.role_id} (${r.tool || "?"})`))),
-        el("small", null, "你電腦裡現成的角色範本，可以不選，只是標籤，不會寫回來源。")),
+        el("small", null, st.tool === "agy" ? AGY_NO_PROFESSIONS : "你電腦裡現成的角色範本，可以不選，只是標籤，不會寫回來源。")),
       el("label", { class: "cw-field", for: "cw-model" },
         el("span", null, "模型 (Model ID)"),
         el("input", { type: "text", id: "cw-model", maxlength: String(catalog.model_id_max_length || 200),
@@ -4092,7 +4105,7 @@ function openCardWizard(opts) {
 
     return [
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), toolGroup,
-        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote),
+        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), posGroup,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
       el("div", { class: "cw-field" },
@@ -4123,6 +4136,8 @@ function openCardWizard(opts) {
     });
     for (const sid of gone) st.equipped.delete(sid);
     removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
+    // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
+    if (t === "agy") st.profession = "";
     draw();
     focusBy("data-tool", t);
   }
@@ -4211,6 +4226,7 @@ function openCardWizard(opts) {
     if (!T.loaded) refreshTranslations().then(() => { if (modal.contains(list)) { drawList(); syncChosen(); } }).catch(() => {});
     return [
       el("p", { class: "small muted", "data-cw": "skills-note" }, CARD_SKILLS_NOTE),
+      st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-skills-note" }, AGY_SKILLS_NOTE) : null,
       removedNote ? note : null,
       el("div", { class: "cw-field" }, countLabel, chosenBox),
       el("div", { class: "cw-field" }, search), list,
@@ -8483,10 +8499,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const isClaude = tool === "claude";
     const isCodex = tool === "codex";
     const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : "";
+    // VBear has no managed launch for Antigravity: the pass says so first and offers no preview and no start, so
+    // there is no limit and no shield on it to read.
+    const isAgy = tool === "agy";
+    if (isAgy) previewBtn.disabled = true;
     function needsAck(pv) { return Boolean(isClaude && pv && pv.cli && pv.cli.verified === false); }
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
+      if (isAgy) return "現在不能出發：" + AGY_NOT_LAUNCHED + "。";
       if (!current) {
         if (lastPreview && !lastPreview.launchable) {
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
@@ -8523,12 +8544,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
         el("h2", { id: titleId }, `出發通行證：${p.name || p.id}`),
-        el("p", { class: "small muted" },
+        isAgy ? el("div", { class: "notice warn", "data-pass": "agy-not-launchable" },
+          el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+          el("div", null, el("strong", null, "這張角色卡目前無法啟動"), el("p", { class: "small" }, AGY_NOT_LAUNCHED)))
+        : el("p", { class: "small muted" },
           "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動角色。"),
-        el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
-        el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
-        workdirRange,
-        el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
+        isAgy ? null : el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
+        isAgy ? null : el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
+        isAgy ? null : workdirRange,
+        isAgy ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
           el("span", null, PASS_COMMIT_ACK, el("span", { class: "small muted" }, " 不勾選就無法啟動。"))),
         out,
@@ -8536,7 +8560,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("div", { class: "modal-actions" }, cancelBtn, previewBtn, confirmBtn)));
     document.body.append(modalElem);
     const closeModal = withModalA11y(modalElem, () => modalElem.remove());
-    workdirInput.focus();
+    (isAgy ? cancelBtn : workdirInput).focus();
     why.textContent = whyOff();
 
     // A reason it cannot go, with the button that leads to where it is changed (PASS_FIXES). The editor closes when
@@ -8738,7 +8762,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
 
     async function doPreview() {
-      if (busy) return;
+      if (busy || isAgy) return;
       busy = true;
       previewBtn.disabled = true;
       invalidate("正在產生預覽…");
@@ -8773,7 +8797,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     if (launchOpts.autoPreview !== false && workdirInput.value.trim() && commitBox.checked) doPreview();
 
     async function doLaunch() {
-      if (busy || !current) return;
+      if (busy || !current || isAgy) return;
       busy = true;
       confirmBtn.disabled = true;
       const pv = current;
@@ -9219,7 +9243,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 // rule enforced on screen is the one the server already enforces for a review: it counts when the reviewer's and the
 // executor's model families are both known and different.
 
-const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", shared: "unknown" };
+const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", agy: "google", shared: "unknown" };
 const TEAM_FAMILY_LABEL = { anthropic: "Anthropic（Claude）", openai: "OpenAI（Codex）", google: "Google（Gemini）",
   minimax: "MiniMax", other: "其他", unknown: "不明" };
 const TEAM_SLOTS = [
@@ -9257,7 +9281,8 @@ function teamCardFamily(card) {
   return teamFamily(tool);
 }
 // The tool of a card or a role, for its look: a card says it; a role filled from a card says it in its snapshot; a
-// hand-written role only has a family, and the two families that have a tool here map back to it.
+// hand-written role only has a family, and the two families that have a tool here map back to it. Google does not map
+// back to agy: a Gemini role written by hand is not an Antigravity card, and nothing is guessed from a family.
 const TEAM_FAMILY_TOOL = { anthropic: "claude", openai: "codex" };
 function teamCardTool(card) {
   if (!card || typeof card !== "object") return "";
@@ -9296,7 +9321,7 @@ function slotProblem(slot, card, team) {
 }
 
 // A role as the flow stores it, made from a role card. The family comes from the card's tool (claude is anthropic, codex
-// is openai, shared is unknown); the revision is the one the server showed for the card. opts.keep is the role that was
+// is openai, agy is google, shared is unknown); the revision is the one the server showed for the card. opts.keep is the role that was
 // in the place before: an executor keeps its session and folder when only the card changes; opts.workdir is the folder
 // to start from when there is none.
 function roleFromCard(p, opts = {}) {
@@ -9472,6 +9497,8 @@ function nextStepAction(flow, opts = {}) {
   const launches = !startable ? [] : holders
     .filter((r) => r && typeof r.profile_id === "string" && r.profile_id)
     .filter((r) => !profiles || profiles.some((c) => c && c.id === r.profile_id && c.enabled !== false))
+    // VBear does not start Antigravity: an AGY card gets no button here (the step is done in its own terminal)
+    .filter((r) => teamCardTool(r) !== "agy")
     .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
   const recordWords = NEXT_STEP_RECORD[step.key];
   return { step: step.key, ask: NEXT_STEP_ASK[step.key], turn: ns.turn, manual: !auto, launches, recordWords,
@@ -9765,7 +9792,7 @@ function teamBoard(opts) {
         el("button", { type: "button", class: "btn small", "data-act": "clear", on: { click: () => clearSlot(def.key) } }, "拿下來"),
         // from a place, the launch check opens with this task card's folder already in it (design 3.6); not while there
         // are changes that only exist on this page, and not for a card that is gone
-        entry.profile_id && state.state !== "gone" && (!flow || !dirty)
+        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && teamCardTool(entry) !== "agy"
           ? el("a", { class: "btn small", "data-act": "launch", title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的",
               href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1&step=${STEP_OF_SLOT[def.key]}` }, "出發") : null) : null,
       problem ? el("p", { class: "ts-problem small", "data-slot-problem": problem.code, role: "status" }, el("strong", null, "不算數："), problem.text, el("span", { class: "muted" }, `（${problem.why}）`)) : null,
