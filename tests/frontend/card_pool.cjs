@@ -1779,6 +1779,120 @@ async function test(name, fn) {
     assert.deepStrictEqual(options(), ["（不綁定）", "Writer (claude)"]);
   });
 
+  // ---- P21: a camp VBear does not start shows no "this combination cannot be launched" ------------------------------
+  const WRITE_DENY_URL = CHECK + "read=allow&write=deny&test=allow&deploy=deny";
+  const asksOfServer = () => fetchCalls.filter((c) => c.url.includes("intent-check")).length;
+  const checkBoxText = () => textOf(byData(dialog(), "data-cw", "intent-check")[0]);
+  const writeDenyAnswer = { [WRITE_DENY_URL]: () => jsonResponse({ ok: true, can_launch: false, blockers: writeDenyBlockers }) };
+
+  await test("P21 the list of tools VBear does not start is one constant on the page: shared and agy, not claude or codex", () => {
+    assert.deepStrictEqual([...vm.runInContext("UNLAUNCHABLE_TOOLS", pure)].sort(), ["agy", "shared"]);
+  });
+
+  for (const tool of ["agy", "shared"]) {
+    await test(`P21 wizard step 2: a ${tool} card with 編輯寫入・拒絕 shows no launch warning and asks the server nothing`, async () => {
+      const { posts, d } = await openWizard([], catalogAgy, writeDenyAnswer);
+      typeName(d, "No warning");
+      btnByText(d, "下一步").dispatch("click");
+      byData(dialog(), "data-tool", tool)[0].dispatch("click");
+      setIntent("編輯寫入", "deny");
+      await tick(4);
+      const now = dialog();
+      assert.strictEqual(selectOf("編輯寫入").value, "deny");
+      assert.ok(!findText(now, "這個組合目前不能出發"), "no headline");
+      assert.ok(!findText(now, writeDenyBlockers[0].message), "no reason");
+      assert.ok(!findText(now, "檢查這個組合能不能出發"), "no 'checking'");
+      assert.ok(!findText(now, "讀不到這個組合的檢查"), "no 'cannot read the check'");
+      assert.ok(byData(now, "data-cw", "intent-check")[0].hasAttribute("hidden"), "the box is hidden");
+      assert.strictEqual(asksOfServer(), 0, "and the request is not sent");
+      assert.ok(findText(byData(now, "data-cw", "intent-note")[0], "權限意圖是隊伍分工的標記"), "the intent sentence is as before");
+      btnByText(now, "下一步").dispatch("click");
+      btnByText(dialog(), "建立").dispatch("click");
+      await tick();
+      assert.strictEqual(posts[0].model.tool, tool);
+      assert.strictEqual(posts[0].permission_intents.write, "deny", "the intent is saved as chosen");
+    });
+  }
+
+  await test("P21 wizard step 2: the AGY note stays, and a shared card says in plain words that it cannot start and its intents are a record", async () => {
+    const { d } = await openWizard([], catalogAgy);
+    typeName(d, "Notes");
+    btnByText(d, "下一步").dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0);
+    assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0);
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄。"));
+    assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0);
+    byData(dialog(), "data-tool", "shared")[0].dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0);
+    assert.ok(findText(byData(dialog(), "data-cw", "shared-note")[0], "共用卡不能出發，權限意圖只是分工記錄。"));
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0, "the shared sentence belongs to the shared camp only");
+  });
+
+  await test("P21 wizard step 2: a Claude Code card and a Codex card with 編輯寫入・拒絕 keep the warning, one question each combination", async () => {
+    const { d } = await openWizard([], catalogAgy, writeDenyAnswer);
+    typeName(d, "Claude keeps it");
+    btnByText(d, "下一步").dispatch("click");
+    setIntent("編輯寫入", "deny");
+    await tick(4);
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能出發"));
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], writeDenyBlockers[0].message));
+    assert.strictEqual(asksOfServer(), 1);
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
+    await tick(4);
+    assert.ok(findText(byData(dialog(), "data-cw", "intent-check")[0], "這個組合目前不能出發"), "Codex: unchanged");
+    assert.strictEqual(asksOfServer(), 1, "answered once, remembered");
+  });
+
+  await test("P21 wizard step 2: switching the camp updates the warning on the spot, both ways", async () => {
+    const { d } = await openWizard([], catalogAgy, writeDenyAnswer);
+    typeName(d, "Switch");
+    btnByText(d, "下一步").dispatch("click");
+    setIntent("編輯寫入", "deny");
+    await tick(4);
+    assert.ok(findText(dialog(), "這個組合目前不能出發"), "Claude Code: the warning");
+    assert.strictEqual(asksOfServer(), 1);
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    assert.ok(!findText(dialog(), "這個組合目前不能出發"), "to AGY: gone, no waiting for a reply");
+    assert.ok(byData(dialog(), "data-cw", "intent-check")[0].hasAttribute("hidden"));
+    byData(dialog(), "data-tool", "claude")[0].dispatch("click");
+    await tick(4);
+    assert.ok(findText(dialog(), "這個組合目前不能出發"), "back to Claude Code: the warning is back");
+    byData(dialog(), "data-tool", "shared")[0].dispatch("click");
+    assert.ok(!findText(dialog(), "這個組合目前不能出發"), "to the shared camp: gone");
+    assert.strictEqual(asksOfServer(), 1, "never asked again");
+  });
+
+  await test("P21 wizard step 2: an answer that arrives after the person switched to AGY does not bring the warning back", async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const { d } = await openWizard([], catalogAgy, { [WRITE_DENY_URL]: async () => { await gate; return jsonResponse({ ok: true, can_launch: false, blockers: writeDenyBlockers }); } });
+    typeName(d, "Late answer");
+    btnByText(d, "下一步").dispatch("click");
+    setIntent("編輯寫入", "deny");
+    assert.ok(findText(dialog(), "檢查這個組合能不能出發"), "Claude Code: asking");
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    release(); await tick(6);
+    assert.ok(!findText(dialog(), "這個組合目前不能出發") && !findText(dialog(), "檢查這個組合能不能出發"));
+    assert.ok(byData(dialog(), "data-cw", "intent-check")[0].hasAttribute("hidden"));
+  });
+
+  await test("P21 wizard: editing an AGY card whose intents cannot be launched shows no warning and asks nothing", async () => {
+    const mine = mkProfile("p-agy-edit", "AGY 兩號", "agy", ALL_DENY);
+    await openPool([mine], catalogAgy, { "GET /api/agent-profiles/p-agy-edit/loadout": () => jsonResponse(agyLoadout(mine)), ...writeDenyAnswer,
+      [CHECK + "read=deny&write=deny&test=deny&deploy=deny"]: () => jsonResponse({ ok: true, can_launch: false, blockers: writeDenyBlockers }) });
+    cardOf("p-agy-edit").dispatch("click");
+    byData(cardOf("p-agy-edit"), "data-pcard", "flip")[0].dispatch("click");
+    byData(cardOf("p-agy-edit"), "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(4);
+    assert.strictEqual(selectOf("編輯寫入").value, "deny");
+    assert.ok(!findText(dialog(), "這個組合目前不能出發"));
+    assert.strictEqual(asksOfServer(), 0);
+  });
+
   await test("P20 the card: the front and back of an AGY card — Antigravity（AGY）, the fox, the Google frame, a red light with the plain reason and no shield", async () => {
     const p = mkProfile("p-agy", "AGY 一號", "agy", VERIFIED, { equipped_skill_ids: ["s-s"] });
     await openPool([p], catalogAgy, { "GET /api/agent-profiles/p-agy/loadout": () => jsonResponse(agyLoadout(p)) });

@@ -3791,6 +3791,10 @@ const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antig
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
 // VBear does not start Antigravity and does not know which skills it reads: an AGY card is a record for building teams.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
+// The tools VBear never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
+// these has no launch, so the wizard does not ask whether its permission combination could be launched.
+const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
+const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
 const AGY_SKILLS_UNKNOWN = "VBear 還不知道 AGY 會讀哪些技能";
 const AGY_SKILLS_NOTE = "AGY 卡只能收藏共用的技能卡，只是收藏：" + AGY_SKILLS_UNKNOWN + "，不代表 AGY 會載入。";
 const AGY_NO_PROFESSIONS = "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。";
@@ -4013,6 +4017,8 @@ function openCardWizard(opts) {
   function paintIntentCheck() {
     const box = intentBox;
     if (!box) return;
+    // a camp VBear does not start: nothing to say about launching, and nothing is asked
+    if (UNLAUNCHABLE_TOOLS.includes(st.tool)) { box.setAttribute("hidden", ""); setKids(box); return; }
     const key = intentKey();
     const entry = intentChecks.get(key);
     if (intentIsVerified()) { box.setAttribute("hidden", ""); setKids(box); return; }
@@ -4055,6 +4061,7 @@ function openCardWizard(opts) {
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
         "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
     const agyNote = st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, AGY_NOT_LAUNCHED + "。") : null;
+    const sharedNote = st.tool === "shared" ? el("p", { class: "small cw-hint", "data-cw": "shared-note" }, SHARED_NOT_LAUNCHED + "。") : null;
 
     const posChoices = [["", "先不指定"], ...CARD_POSITIONS.map((p) => [p, CARD_POSITION_LABEL[p]])];
     const posGroup = el("div", { class: "cw-choices", role: "group", "aria-label": "建議位置" },
@@ -4105,7 +4112,7 @@ function openCardWizard(opts) {
 
     return [
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), toolGroup,
-        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote),
+        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote, sharedNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), posGroup,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
       el("div", { class: "cw-field" },

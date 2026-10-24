@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **No false launch warning on AGY and shared cards.** In the card wizard's second step, an Antigravity (AGY) card or a
+  共用 card set to something like 「編輯寫入・拒絕」 no longer shows 「這個組合目前不能出發」. VBear never starts those
+  cards, so the warning was noise; their permission intents stay what they always were, a record for building teams.
+  A shared card now says so beside the camp row (「共用卡不能出發，權限意圖只是分工記錄。」), and the AGY card keeps its
+  existing sentence. Switching the camp updates the step at once: from AGY back to Claude Code the warning returns when
+  the combination cannot be launched. Claude Code and Codex cards, the launch pass and the server's launch checks are
+  unchanged.
+
 ## v0.8.4 — an Antigravity (AGY) camp
 
 **Role cards can be Antigravity (AGY) cards.** The card wizard's 「陣營」 row, and the card editor, now offer

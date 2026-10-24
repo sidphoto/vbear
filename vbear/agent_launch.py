@@ -142,6 +142,10 @@ def intent_blockers(intents: dict) -> list[dict]:
 # has no managed launch for Antigravity and says so, rather than leaving a button that looks as if it might work.
 TOOL_NOT_LAUNCHABLE = {"shared": "shared 不是可啟動的工具",
                        "agy": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"}
+# The tools of a role card that VBear never starts, whatever its permission intents say. The card wizard's step 2
+# repeats this list (UNLAUNCHABLE_TOOLS in web/app.js) to stay quiet about a launch that was never going to happen;
+# tests/test_p20_agy_page.py keeps the two equal.
+UNLAUNCHABLE_TOOLS = tuple(TOOL_NOT_LAUNCHABLE)
 
 
 def launch_blockers(profile: dict, commit, network) -> list[dict]:
