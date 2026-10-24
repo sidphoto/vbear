@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.8.3 — keyboard focus and plain-language terminal errors
+
+Two small interface fixes.
 
 - **The keyboard stays inside the skill card window.** The window put the focus on 返回, then drew its buttons again
   once the skill had loaded, and the focus fell to the page: Esc did not close it and Tab started from the top of the
