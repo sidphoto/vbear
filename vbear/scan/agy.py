@@ -79,8 +79,9 @@ def _under(path: str, base: str) -> bool:
     return path != base and path.startswith(base.rstrip("/") + "/")
 
 
-def _issue(text: str) -> str:
-    return f"AGY 設定檔 skills.json：{text}"
+# Config issues are stored as the config row lists them, under its own title and so without it; the overview
+# problems list has no such title, so it adds this.
+CONFIG_ISSUE_PREFIX = "AGY 設定檔 skills.json："
 
 
 def resolve_folder(text: str) -> tuple[Folder | None, str]:
@@ -160,31 +161,31 @@ def read_config() -> Config:
     conf.present = True
     raw, why = _read_config_bytes()
     if raw is None:
-        conf.issues.append(_issue(why))
+        conf.issues.append(why)
         return conf
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, RecursionError):  # UnicodeDecodeError is a ValueError
-        conf.issues.append(_issue("不是有效的 JSON，當成沒有這個檔"))
+        conf.issues.append("不是有效的 JSON，當成沒有這個檔")
         return conf
     if not isinstance(data, dict):
-        conf.issues.append(_issue("最外層不是物件，當成沒有這個檔"))
+        conf.issues.append("最外層不是物件，當成沒有這個檔")
         return conf
     entries = data.get("entries")
     if entries is None:
         return conf
     if not isinstance(entries, list):
-        conf.issues.append(_issue("entries 不是清單，當成沒有這個檔"))
+        conf.issues.append("entries 不是清單，當成沒有這個檔")
         return conf
     if len(entries) > MAX_ENTRIES:
-        conf.issues.append(_issue(f"項目超過 {MAX_ENTRIES} 個上限，只讀前 {MAX_ENTRIES} 個"))
+        conf.issues.append(f"項目超過 {MAX_ENTRIES} 個上限，只讀前 {MAX_ENTRIES} 個")
     for n, entry in enumerate(entries[:MAX_ENTRIES], 1):
         if not isinstance(entry, dict):
-            conf.issues.append(_issue(f"第 {n} 項不是物件，已略過"))
+            conf.issues.append(f"第 {n} 項不是物件，已略過")
             continue
         folder, why = resolve_folder(entry.get("path"))
         if folder is None:
-            conf.issues.append(_issue(f"第 {n} 項已略過：{why}"))
+            conf.issues.append(f"第 {n} 項已略過：{why}")
             continue
         include = _entry_include(entry, n, conf)
         if include is False:
@@ -203,15 +204,15 @@ def _entry_include(entry: dict, n: int, conf: Config):
         return None
     raw = entry["include_only"]
     if not isinstance(raw, list) or not all(isinstance(i, str) for i in raw):
-        conf.issues.append(_issue(f"第 {n} 項的 include_only 不是文字清單，整項已略過"))
+        conf.issues.append(f"第 {n} 項的 include_only 不是文字清單，整項已略過")
         return False
     if len(raw) > MAX_INCLUDE_ITEMS:
-        conf.issues.append(_issue(f"第 {n} 項的 include_only 超過 {MAX_INCLUDE_ITEMS} 個上限，只讀前 {MAX_INCLUDE_ITEMS} 個"))
+        conf.issues.append(f"第 {n} 項的 include_only 超過 {MAX_INCLUDE_ITEMS} 個上限，只讀前 {MAX_INCLUDE_ITEMS} 個")
     include: list[str] = []
     for item in raw[:MAX_INCLUDE_ITEMS]:
         cleaned = _include_item(item)
         if cleaned is None:
-            conf.issues.append(_issue(f"第 {n} 項的 include_only 有不能用的路徑，該路徑已略過"))
+            conf.issues.append(f"第 {n} 項的 include_only 有不能用的路徑，該路徑已略過")
         elif cleaned not in include:
             include.append(cleaned)
     return include
@@ -329,7 +330,8 @@ def collect(skills: list[SkillRecord], source_roots: list[Path], disabled_roots:
         out.rows.append({"source_id": CONFIG_ROW_ID, "label": "AGY 設定檔 skills.json", "tool": "agy",
                          "kind": "config", "path": CONFIG_SHOWN, "enabled": True, "exists": True,
                          "count": conf.accepted, "scope": "user", "discovered": True, "issues": list(conf.issues)})
-        out.problems.extend(conf.issues)
+        # the overview list has no row title above it, so there each issue carries the name of the file
+        out.problems.extend(CONFIG_ISSUE_PREFIX + issue for issue in conf.issues)
     by_dir: dict[str, list[SkillRecord]] = {}
     for rec in skills:
         by_dir.setdefault(os.path.realpath(os.path.dirname(rec.path)), []).append(rec)

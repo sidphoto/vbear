@@ -1870,7 +1870,7 @@ async function test(name, fn) {
   await test("P22 the sources list: the AGY config row shows its folders and its issues as they are; an ordinary row is as before", async () => {
     const ctx = freshContext({});
     evalAgentBuilderSlice(ctx);
-    const issue = "AGY 設定檔 skills.json：第 1 項已略過：「/etc」不在家目錄之下，未採用";
+    const issue = "第 1 項已略過：「/etc」不在家目錄之下，未採用";
     const row = ctx.sourceRow({ source_id: "agy-skills-json", label: "AGY 設定檔 skills.json", tool: "agy", kind: "config",
       path: "~/.gemini/config/skills.json", enabled: true, exists: true, count: 2, scope: "user", discovered: true, issues: [issue] }, true, () => {});
     assert.ok(findText(row, "AGY 設定檔 skills.json") && findText(row, "Antigravity（AGY）") && findText(row, "2 個資料夾"));

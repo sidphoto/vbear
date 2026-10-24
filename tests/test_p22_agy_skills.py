@@ -218,13 +218,17 @@ class DefaultsAreNotAgyTests(AgyCase):
         self.assertEqual(self.agy_rows(data), [])
 
 
+PREFIX = "AGY 設定檔 skills.json："
+
+
 class RefusedConfigTests(AgyCase):
     def assert_refused(self, data, note):
         row = self.config_row(data)
         self.assertTrue(row["issues"], note)
         for issue in row["issues"]:
             self.assertIsInstance(issue, str)
-        self.assertTrue(any(i in data["problems"] for i in row["issues"]), "also listed in problems")
+        self.assertEqual([i for i in data["problems"] if i.startswith(PREFIX)], [PREFIX + i for i in row["issues"]],
+                         "also listed in problems, the same text with the row's name in front")
         self.assertEqual([s for s in data["skills"] if s["tool"] == "agy"], [], note)
 
     def test_broken_json_counts_as_no_file_and_is_reported(self):
@@ -477,3 +481,32 @@ class LoadoutAndCardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IssueWordingTests(AgyCase):
+    """P23: under the config row's own title its issues do not repeat the title; the overview problems, which have no
+    row title above them, keep it. Both say the same thing."""
+
+    def test_row_issues_have_no_prefix_and_overview_problems_have_it(self):
+        write_skill(self.home / "pack", "one")
+        self.entries({"path": "/etc"}, {"path": "~/pack", "include_only": "one"}, 5)
+        data = self.build()
+        row = self.config_row(data)
+        self.assertGreaterEqual(len(row["issues"]), 3, row["issues"])
+        for issue in row["issues"]:
+            self.assertFalse(issue.startswith("AGY 設定檔"), issue)
+            self.assertNotIn("skills.json", issue)
+            self.assertIn(PREFIX + issue, data["problems"], "the overview has the same text with the name in front")
+        mine = [p for p in data["problems"] if p.startswith(PREFIX)]
+        self.assertEqual(mine, [PREFIX + i for i in row["issues"]], "same items, same order, only the prefix differs")
+
+    def test_a_refused_file_is_worded_the_same_way(self):
+        self.config_file(raw=b"{ not json")
+        data = self.build()
+        row = self.config_row(data)
+        self.assertEqual(row["issues"], ["不是有效的 JSON，當成沒有這個檔"])
+        self.assertIn(PREFIX + "不是有效的 JSON，當成沒有這個檔", data["problems"])
+
+    def test_the_row_title_is_unchanged(self):
+        self.entries({"path": "~/missing"})
+        self.assertEqual(self.config_row(self.build())["label"], "AGY 設定檔 skills.json")
