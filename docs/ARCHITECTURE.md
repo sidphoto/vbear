@@ -296,6 +296,9 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
 ```
 
 - The preview and launch endpoints accept only `profile_id`, `workdir`, `commit`, `network` and `tool`.
+  The tools a role card may name are `agent_profiles.TOOL_ORDER` (`claude`, `codex`, `agy`, `shared`), and each implies a
+  model family (`TOOL_FAMILY`; `agy` is Google). Only `claude` and `codex` can be launched; an `agy` card is refused
+  with its own sentence (`agent_launch.TOOL_NOT_LAUNCHABLE`).
   They never take an argv, environment variables, settings or credentials.
 - **Cleanup.** When the session ends, the scratch directory and the per-launch files are removed only after
   every tracked process is proven dead. Otherwise the launch is kept in a `manual_review` state for you

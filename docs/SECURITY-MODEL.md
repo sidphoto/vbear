@@ -175,6 +175,11 @@ Other safeguards:
   owner-only. Any program running as you could edit it, as it could edit anything else you own.
 - **Fail closed** otherwise: the launch is refused if the sandbox is unavailable (`failIfUnavailable`), or if the
   profile, work directory, Claude Code binary or config changed since the preview.
+- **Antigravity (AGY) is not launched.** A role card whose tool is `agy` is a record for building teams: `launch_blockers`
+  always refuses it (`tool_not_launchable`, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), so no preview is
+  prepared, no manifest is written and the loadout shows no armor and no tool list. VBear does not know which skills
+  AGY reads, so no chosen skill is reported as one that loads. The automatic review is unchanged: it is the Codex that
+  VBear starts, and an AGY card on a review place is only the record of a manual review.
 - **No caller-supplied launch details.** The daemon's `open_managed` takes only a launch ID. It reads
   the manifest from its own state directory and re-validates the work directory. A launch ID is single-use.
 - **Cleanup only when it is proven safe.** Files belonging to a launch are removed only after every
@@ -287,7 +292,9 @@ Other safeguards:
   afterwards: the page compares the recorded revision with the card's current one, says so, and updates the role
   only when the person presses the button (`POST /api/flows/<id>/roles`). The snapshot does not decide anything: the
   family a review is judged by is still the role's own `family`, which the page fills from the card's tool and the
-  server neither derives nor cross-checks. Placing a card on a task card's team writes only `flows.json`; it starts,
+  server does not derive. The one cross-check is for an Antigravity (AGY) card, a tool added after flows were already
+  stored: a snapshot with tool `agy` must sit on a role of family `google`, on input and in the stored shape; the other
+  tools are accepted with any family, as before. Placing a card on a task card's team writes only `flows.json`; it starts,
   sends and loads nothing.
 
 ## The home page's first game

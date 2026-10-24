@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+**Role cards can be Antigravity (AGY) cards.** The card wizard's 「陣營」 row, and the card editor, now offer
+Antigravity（AGY） beside Claude Code, Codex CLI and 共用. VBear does not start Antigravity (and does not yet know how
+to), so an AGY card is a record for building teams, and the app says so in plain words wherever it matters.
+
+- **The card.** An AGY card is the fox in the Google colours. Its model family is always Google, in the page and on the
+  server alike: put on a task card's review place beside a Claude Code or Codex executor it counts as an independent
+  review, and beside an executor written by hand as Google (Gemini), or beside another AGY card, it turns red with
+  the usual reason. A flow that holds an AGY card with any other family is refused.
+- **No launch.** 出發 on an AGY card opens a pass that says 「VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄」, with no
+  preview, no start button, no shield and no limits listed; the card's light says the same. The server refuses to
+  prepare a launch for it, and a team place or the next-steps list offers no 出發 for an AGY card.
+- **Skill cards and role labels.** VBear does not know which skills AGY reads, so no skill is shown as one it would
+  load. An AGY card can hold shared skill cards, as a collection only; every other skill card is greyed with
+  「VBear 還不知道 AGY 會讀哪些技能」. VBear scans no Agent role of Antigravity, so there is no role label to pick, and a
+  Claude Code or Codex one does not stand in for it.
+- **Automatic mode is unchanged.** The automatic review is still the Codex that VBear starts, and it is recorded as
+  that. An AGY card on a review place is a record of who reviews by hand; it is never described as the automatic reviewer.
+- **Nothing existing changed.** Role cards and flows already stored read back as before, and any other tool name
+  (`gemini`, `antigravity`, `AGY`) is still refused.
+
 ## v0.8.3 — keyboard focus and plain-language terminal errors
 
 Two small interface fixes.
