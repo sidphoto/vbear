@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **An AGY card can now hold the skills AGY actually reads.** VBear used to say it did not know which skills
+  Antigravity (AGY) reads and let an AGY card hold only shared skill cards. It now works it out from files on your
+  Mac, without running AGY: a project's `.agents/skills`, `~/.gemini/antigravity-cli/skills`, and the folders listed in
+  `~/.gemini/config/skills.json` (only the skills directly in a folder, or the ones its `include_only` names). Skills
+  VBear already knew are marked as read by AGY instead of being copied; a folder it did not scan becomes an AGY source in
+  the settings list. In the card wizard those skills can be inserted and the rest are greyed with
+  「AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）」. The shared store `~/.agents/skills` is not AGY's unless that file
+  lists it. A card saved earlier with a shared skill keeps it and shows 「AGY 不會讀」 on it, for you to take off or
+  keep. It stays a collection (VBear does not start AGY), AGY's built-in and plugin skills are not covered, and only
+  that one config file under `~/.gemini` is opened; a missing or unusable file is skipped and shown in the settings
+  list. Claude Code, Codex and shared cards are unchanged.
 - **No false launch warning on AGY and shared cards.** In the card wizard's second step, an Antigravity (AGY) card or a
   共用 card set to something like 「編輯寫入・拒絕」 no longer shows 「這個組合目前不能出發」. VBear never starts those
   cards, so the warning was noise; their permission intents stay what they always were, a record for building teams.

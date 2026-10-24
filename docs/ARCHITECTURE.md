@@ -20,7 +20,8 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   which `vbear launch` and the app use.
 - **Index.** The `vbear/scan/` adapters read skills, plugins and agent roles from the Claude Code,
   Codex and shared skill directories. `vbear/index.py` combines them into a static index
-  (`~/.vbear/index.json`) and a live view of running sessions from the runtime.
+  (`~/.vbear/index.json`) and a live view of running sessions from the runtime. `scan/agy.py` works out which skills
+  Antigravity reads from files only (`read_by` on a record, plus sources of tool `agy`); see the SECURITY-MODEL.
 - **Usage evidence.** `scan/usage.py` reads agent session logs and keeps only skill names, model names,
   session IDs, working directories and timestamps.
 - **Local data.** Notes (`annotations.py`), task cards (`tasks.py`) and Agent Profiles

@@ -177,8 +177,9 @@ Other safeguards:
   profile, work directory, Claude Code binary or config changed since the preview.
 - **Antigravity (AGY) is not launched.** A role card whose tool is `agy` is a record for building teams: `launch_blockers`
   always refuses it (`tool_not_launchable`, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), so no preview is
-  prepared, no manifest is written and the loadout shows no armor and no tool list. VBear does not know which skills
-  AGY reads, so no chosen skill is reported as one that loads. The automatic review is unchanged: it is the Codex that
+  prepared, no manifest is written and the loadout shows no armor and no tool list. Which skills AGY reads is judged
+  from files only (see "Which skills AGY reads"), and even a skill AGY reads is never reported as one that loads: a
+  skill chosen on an AGY card is a collection. The automatic review is unchanged: it is the Codex that
   VBear starts, and an AGY card on a review place is only the record of a manual review.
 - **No caller-supplied launch details.** The daemon's `open_managed` takes only a launch ID. It reads
   the manifest from its own state directory and re-validates the work directory. A launch ID is single-use.
@@ -666,6 +667,40 @@ to 500; the approval is refused when the chosen limits could write more than the
     the merge gate, a stop while a review runs, a console restart while a review runs; Claude Code 2.1.296 as the
     executor and Codex 0.160.0 as the reviewer, on a small toy project) are recorded in
     [`docs/evidence/s3-real-e2e-2026-10-12.md`](evidence/s3-real-e2e-2026-10-12.md).
+
+## Which skills AGY reads
+
+VBear judges whether Antigravity (AGY) reads a skill from files alone. It never runs `agy` or `gemini`. The index
+(`vbear/scan/agy.py`) reads three places, and what it finds only marks a skill (`read_by`) or adds a source of tool `agy`:
+
+- a project's `.agents/skills` (already scanned; the skills directly under it get `read_by: ["agy"]` and stay Codex records),
+- `~/.gemini/antigravity-cli/skills` (a new source; scanned only if it exists),
+- every folder named by a `path` in `~/.gemini/config/skills.json` (`{"entries":[{"path":"..."}]}`, optionally with
+  `include_only`). A folder VBear already scans (such as `~/.codex/skills`) is marked, not scanned again; any other
+  folder becomes a new `agy` source. Only the skills directly under a folder count, or exactly the ones `include_only`
+  lists (a listed path may be nested). Skills in a folder you turned off in the settings stay unscanned.
+
+What is read, and what is not:
+
+- **One config file.** `~/.gemini/config/skills.json` is the only file under `~/.gemini` that is opened, apart from the
+  `SKILL.md` files of the skills folders above. It is opened by its real path, which must be a regular file inside the
+  home folder; a symlink that leaves the home folder is not followed. It is read up to 64 KB and at most 50 entries
+  (200 `include_only` items per entry). Login, credential, settings and every other file there are never opened or listed.
+- **Unusable input is skipped and shown, never guessed.** Bad JSON, a wrong shape, an oversized file, a `path` that is
+  not a string, a malformed `include_only` (the whole entry is skipped, so a restriction never turns into "everything"),
+  a missing folder: each is listed under the config file in the settings page's source list and in the scan problems,
+  and the file counts as absent where it cannot be used.
+- **Paths.** Only an absolute path or a path starting with `~/`, strictly below the home folder, with no `..`, whose
+  real path is also strictly below the home folder. The home folder itself, `~/.ssh`, `~/.aws` and `~/.gnupg` are
+  refused. A symlinked skill folder inside a listed folder is not followed, and a `SKILL.md` that resolves outside its
+  folder is not read.
+- **Content.** Each skill is read like any other: only its `SKILL.md` (size-capped, secrets masked), and no file it
+  mentions is opened or run.
+- **Not covered.** AGY's built-in and plugin skills (under `~/.gemini/antigravity-cli/plugins`) are not scanned, and
+  neither is the older `.agent/skills` spelling. The shared store `~/.agents/skills` is not read by AGY unless
+  `skills.json` lists it.
+- **A judgement, not a launch.** `read_by` says where a skill sits and what AGY's own config lists. It does not prove
+  AGY loads the skill (VBear cannot see a per-skill switch), and a role card with such a skill is still only a record.
 
 ## Data handling
 

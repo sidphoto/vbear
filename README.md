@@ -31,7 +31,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 |---|---|---|
 | **Character** | A **role card** (角色卡): a saved setup (name, recommended place, tool, skill cards, permission intents) that you can launch. Cards live in the **card pool** (角色卡池) | 角色卡池; the workbench's 「角色」 tab in the right column |
 | **Class** | A **role label** (職業標籤) on the card, chosen from the agent roles VBear found for Claude Code or Codex (VBear scans none for Antigravity, so an AGY card has no role label to pick). It is only a label: launching does not load the role's instructions into Claude Code | The card wizard's 「進階」 |
-| **Faction** | The **tool** it runs on (陣營): Claude Code, Codex CLI or Antigravity (AGY). Launching from a role card works with Claude Code only for now. VBear does not start Antigravity: an AGY card is a record for building teams, its model family is always Google, and VBear does not know which skills AGY reads, so an AGY card can only hold shared skill cards, as a collection | The card's front |
+| **Faction** | The **tool** it runs on (陣營): Claude Code, Codex CLI or Antigravity (AGY). Launching from a role card works with Claude Code only for now. VBear does not start Antigravity: an AGY card is a record for building teams and its model family is always Google. An AGY card can hold the skills AGY reads on this Mac (judged from AGY's own settings, see below), as a collection only; any other skill card is greyed with 「AGY 不會讀這張技能卡」 | The card's front |
 | **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. A card slot is dashed (收藏中: kept in the card, not loaded by a launch) or solid (生效中: only when VBear reports that it loads, which no launch does today) | 技能庫, and the slots on a role card |
 | **Launch pass** | The **protection a launch actually puts on, and the weak spots it does not cover** (出發通行證). Three lines on its front, each worded by what was actually verified: where it can write, whether the network is blocked, and always that **commits cannot be blocked**. A shield is solid (enforced), dashed (only a record) or empty (not blocked); partly blocked, untested and unknown items get no shield and are written out in words. The seven permission labels sit behind 「看七項細節」 | 角色卡的「出發」 |
 | **Task card** | One **folder** on your Mac (任務卡). Bring an existing project in with 「＋ 任務卡（導入專案）」: VBear reads the folder (read-only: whether it is a git repository, branch and HEAD, project skills, how many terminals are in it) and never writes into it | 冒險者大廳, 流程, the workbench's 「任務卡」 tab |
@@ -354,13 +354,20 @@ and what you can do about each.
 |---|---|---|
 | Claude Code | yes | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, 2.1.296, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
 | Codex CLI | yes | **not yet.** The preview explains why: 0.159.2's interactive mode still loads your global config |
-| Antigravity (AGY) | VBear does not know yet | **no.** VBear does not start it. An AGY role card is only a record for building teams (it can be placed on a task card's team), and its launch pass says so |
+| Antigravity (AGY) | no | **no.** VBear does not start it. An AGY role card is only a record for building teams (it can be placed on a task card's team), and its launch pass says so |
 
 The executor (the Claude Code that a flow runs in the background) needs Claude Code 2.1.292 or 2.1.296; Codex review
 needs Codex 0.160.0. Other versions are refused with the reason before anything starts.
 
 Skill and role scanning reads Claude Code (`~/.claude`), Codex (`~/.codex`) and shared skills
 (`~/.agents`). It never modifies them.
+
+To tell which skills Antigravity (AGY) reads, VBear also looks at a project's `.agents/skills`,
+`~/.gemini/antigravity-cli/skills` and the folders listed in `~/.gemini/config/skills.json`, reading only files, never
+running `agy`. Skills in those places are marked as read by AGY (a skill VBear already knows is marked, not copied; a
+new folder is added as an AGY source). Nothing else under `~/.gemini` is opened, the shared store `~/.agents/skills` is
+not AGY's unless that file lists it, and AGY's built-in and plugin skills are not covered. A skill AGY reads is still not a
+skill that loads: VBear does not start AGY. See [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 
 ## Install
 
