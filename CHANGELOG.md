@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **The keyboard stays inside the skill card window.** The window put the focus on 返回, then drew its buttons again
+  once the skill had loaded, and the focus fell to the page: Esc did not close it and Tab started from the top of the
+  page. The focus now ends up on 返回 after the load (also when the load fails), unless you had already moved it
+  somewhere else in the window. A window you closed while it was still loading is left alone: nothing is drawn into it
+  and the focus does not move. Closing returns the focus to the button that opened the window; when that button is
+  gone (taking a skill off a role card redraws the card) it goes to the main region of the page instead of the top.
+  The same fault is fixed where it was found elsewhere: taking a skill off the card with its 移除 button in the card
+  wizard, and choosing a task card or a place in the 放上任務卡 window, no longer drop the focus when the list is drawn again.
+
 ## v0.8.2 — hardening and a dark icon
 
 Hardening that follows the first security review of v0.8.1. It found no confirmed vulnerability; these two changes make

@@ -112,7 +112,8 @@ function withModalA11y(modalElem, teardown) {
     modalElem.removeEventListener("keydown", onKeyDown);
     restoreBackground();
     teardown();
-    if (trigger && typeof trigger.focus === "function") trigger.focus();
+    if (trigger && trigger.isConnected === false) focusMainIfLost();   // the opener left the page while the dialog was open
+    else if (trigger && typeof trigger.focus === "function") trigger.focus();
   }
 
   function onKeyDown(e) {
@@ -150,6 +151,32 @@ function withModalA11y(modalElem, teardown) {
 
   openModalCloses.push(close);
   return close;
+}
+
+// Where the keyboard goes when the node it was on has left the page and nothing else took it: <body>, where Tab starts again
+// at the top of the page. The main region takes it instead (it has tabindex -1). Does nothing when the focus is somewhere.
+function focusMainIfLost() {
+  const a = document.activeElement;
+  if (a && a !== document.body) return;
+  const m = document.getElementById("main");
+  if (m && typeof m.focus === "function") m.focus({ preventScroll: true });
+}
+
+// A dialog that draws part of itself again (its buttons after a load, a row that was taken out) loses the keyboard when the
+// node that had it is among those replaced: the focus falls to <body>, and Esc no longer reaches the dialog. Call this
+// before the redraw, and the function it returns after it, with the node the focus should go to (or a function that finds it).
+// The focus is only put back when it was in the dialog and is now nowhere: where the person moved it, or where it never was,
+// it stays, and a dialog that has been closed since is not touched.
+function keepDialogFocus(modalElem) {
+  const was = document.activeElement;
+  const inDialog = Boolean(was) && modalElem.contains(was);
+  return (pick) => {
+    if (!inDialog || !modalElem.parentNode) return;
+    const now = document.activeElement;
+    if (now && now !== document.body && modalElem.contains(now)) return;
+    const target = typeof pick === "function" ? pick() : pick;
+    if (target && modalElem.contains(target) && typeof target.focus === "function") target.focus();
+  };
 }
 
 // Every open modal is registered here by withModalA11y itself (registration
@@ -1551,16 +1578,26 @@ async function openSkillCard(skillId, opts = {}) {
     el("div", { class: "modal-box sc-box" },
       el("h2", { id: titleId }, "技能卡"), body, actions));
   document.body.append(modalElem);
-  const closeModal = withModalA11y(modalElem, () => { modalElem.remove(); });
+  let open = true;
+  const closeModal = withModalA11y(modalElem, () => { open = false; modalElem.remove(); });
   const backBtn = el("button", { class: "btn", type: "button", on: { click: () => closeModal() } }, "返回");
   setKids(actions, backBtn);
   backBtn.focus();
   let d;
+  let failure = null;
   try {
     await refreshTranslations();
     d = await api.get(`/api/skills/${encodeURIComponent(skillId)}?view=card`);
   } catch (e) {
-    setKids(body, notice("bad", "無法顯示技能卡：" + (e && e.message ? e.message : "未知錯誤")));
+    failure = e;
+  }
+  // closed while it was loading: nothing is drawn into the window that is gone, and the focus is where closing put it
+  if (!open) return;
+  // the buttons below are built again, which takes the focus off 返回; it goes back there unless the person moved it
+  const restoreFocus = keepDialogFocus(modalElem);
+  if (failure) {
+    setKids(body, notice("bad", "無法顯示技能卡：" + (failure && failure.message ? failure.message : "未知錯誤")));
+    restoreFocus(backBtn);
     return;
   }
   const sk = d.skill || {};
@@ -1625,6 +1662,7 @@ async function openSkillCard(skillId, opts = {}) {
         toast("已從角色移除");
         closeModal();
         if (typeof opts.onChanged === "function") await opts.onChanged();
+        focusMainIfLost();   // the card behind was drawn again, and the button that opened this window went with it
       } catch (err) {
         toast("移除失敗：" + err.message);
       }
@@ -1634,6 +1672,7 @@ async function openSkillCard(skillId, opts = {}) {
     on: { click: () => closeModal() } }, "打開技能檔案"));
   kids.push(backBtn);
   setKids(actions, ...kids);
+  restoreFocus(backBtn);
 }
 
 // Plain-language names for the terminal-title checks of 「驗證這個版本」.
@@ -4024,7 +4063,9 @@ function openCardWizard(opts) {
     const list = el("div", { class: "cw-skill-list" });
     const note = el("p", { class: "small cw-hint", "data-cw": "removed-note", role: "status" }, removedNote);
 
+    let removedAt = 0;   // the place in the row of the chip that was just taken off
     function syncChosen() {
+      const restoreFocus = keepDialogFocus(modal);
       countLabel.textContent = `已插入（${st.equipped.size}）`;
       for (const [sid, b] of buttons) {
         const on = st.equipped.has(sid);
@@ -4036,8 +4077,13 @@ function openCardWizard(opts) {
         return el("span", { class: "tag cw-chosen-tag", "data-chosen": sid },
           s ? `${CARD_TOOL_SHORT[s.tool] || s.tool || "?"} · ${s.name}` : `${sid}（目前索引找不到）`, " ",
           el("button", { type: "button", class: "cw-x", "aria-label": `移除 ${s ? s.name : sid}`,
-            on: { click: () => { st.equipped.delete(sid); syncChosen(); } } }, "移除"));
+            on: { click: () => { removedAt = [...st.equipped].indexOf(sid); st.equipped.delete(sid); syncChosen(); } } }, "移除"));
       }) : el("span", { class: "small muted" }, "還沒有插任何技能卡。這一步可以略過。"));
+      // the 移除 that was pressed is gone with its chip: the focus goes to the chip that took its place, or to the search box
+      restoreFocus(() => {
+        const xs = Array.from(chosenBox.querySelectorAll("button"));
+        return xs[Math.min(removedAt, xs.length - 1)] || search;
+      });
     }
 
     function drawList() {
@@ -9814,6 +9860,13 @@ function openPlaceDialog(p, opts = {}) {
 
   function draw() {
     if (st.done) { drawDone(); return; }
+    // a task or place that was picked from the keyboard is drawn again with the list, and the buttons below with it: the
+    // focus stays on that row, or on the same button of the footer
+    const restoreFocus = keepDialogFocus(modal);
+    const held = document.activeElement;
+    const heldAttr = held && held.getAttribute ? ["data-place-task", "data-place-slot"].find((k) => held.getAttribute(k) !== null) : null;
+    const heldValue = heldAttr ? held.getAttribute(heldAttr) : null;
+    const heldFoot = !heldAttr && held && foot.contains(held) ? Array.from(foot.querySelectorAll("button, a")).indexOf(held) : -1;
     const t = task();
     const open = (st.tasks || []);
     const rows = open.map((x) => el("li", null, el("button", { type: "button", class: "fp-item", "data-place-task": x.id, "aria-pressed": String(x.id === st.taskId),
@@ -9845,6 +9898,8 @@ function openPlaceDialog(p, opts = {}) {
     const go1 = el("button", { type: "button", class: "btn primary", "data-act": "place", disabled: !t || !st.slot || st.busy, on: { click: go } },
       st.busy ? "放上去…" : "放上去");
     setKids(foot, el("button", { type: "button", class: "btn", on: { click: close } }, "取消"), go1);
+    restoreFocus(() => heldAttr ? Array.from(body.querySelectorAll("button")).find((b) => b.getAttribute(heldAttr) === heldValue)
+      : Array.from(foot.querySelectorAll("button, a"))[heldFoot]);
   }
   draw();
   Promise.all([api.get("/api/tasks"), api.get("/api/flows").catch(() => ({ flows: [] }))]).then(([tr, fr]) => {
