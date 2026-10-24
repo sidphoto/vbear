@@ -1609,6 +1609,8 @@ async function openSkillCard(skillId, opts = {}) {
   const refs = sk.referenced_files || {};
   const roles = (d.added_to_roles && d.added_to_roles.items) || [];
   const scopeSrc = sk.scope ? { ...sk.scope, value: SCOPE[sk.scope.value] || sk.scope.value } : null;
+  // the other tools whose own files say they read this skill (today AGY), worded as the camps are
+  const readBy = sk.read_by && Array.isArray(sk.read_by.value) ? sk.read_by.value.filter((t) => typeof t === "string").map((t) => TOOL[t] || t) : [];
   const nameValue = sk.name && typeof sk.name === "object" ? sk.name.value : sk.name;
   const nameText = nameValue ? String(nameValue) : `未提供（ID：${skillId}）`;
   const nameSrc = sk.name && typeof sk.name === "object" ? sk.name : { origin: "missing", detail: "" };
@@ -1624,6 +1626,7 @@ async function openSkillCard(skillId, opts = {}) {
     notice("info", fixed),
     skillCardField("類別", sk.categories && Array.isArray(sk.categories.value) ? { ...sk.categories, value: sk.categories.value.map(categoryZh) } : sk.categories),
     skillCardField("陣營", sk.tool),
+    readBy.length ? skillCardField("也會讀它的工具", { ...sk.read_by, value: readBy }) : null,
     skillCardField("來源（位置）", scopeSrc),
     translationPanel(skillId, el("div", null,
     skillCardField("效果（技能作者的說明）", sk.description),
@@ -3789,14 +3792,16 @@ const CARD_INTENT_KEYS = [["read", "讀取檔案"], ["write", "編輯寫入"], [
 const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還沒決定" };
 const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
-// VBear does not start Antigravity and does not know which skills it reads: an AGY card is a record for building teams.
+// VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
+// server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
 // The tools VBear never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
 const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
 const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
-const AGY_SKILLS_UNKNOWN = "VBear 還不知道 AGY 會讀哪些技能";
-const AGY_SKILLS_NOTE = "AGY 卡只能收藏共用的技能卡，只是收藏：" + AGY_SKILLS_UNKNOWN + "，不代表 AGY 會載入。";
+const AGY_UNREAD_MARK = "AGY 不會讀";
+const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
+const AGY_SKILLS_NOTE = "這些是 AGY 依你電腦上的設定會讀到的技能；VBear 不啟動 AGY，插在卡上只是收藏。AGY 的內建與外掛技能不在這裡。";
 const AGY_NO_PROFESSIONS = "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
@@ -3869,17 +3874,22 @@ function sortCards(profiles, catalog) {
 }
 
 // Skill cards of the other tool's own, or of an unknown source, cannot be inserted: a Codex card does not read a
-// Claude skill and the other way round. A shared skill fits any card; a shared card takes only shared skills. An AGY
-// card takes only shared ones too, and only as a collection: VBear does not know which skills Antigravity reads, so
-// no skill is ever marked as one it would load (an "agy" source is not matched: there is no such scan).
+// Claude skill and the other way round. A shared skill fits any card except an AGY one; a shared card takes only
+// shared skills. An AGY card takes what AGY reads: the skills of its own folders and the ones the server marked
+// read_by agy (a project's .agents/skills, or a folder in ~/.gemini/config/skills.json). The shared store is not
+// AGY's unless that config lists it. Even then it is only a collection: VBear does not start AGY.
+function skillReadByAgy(skill) {
+  return Boolean(skill) && (skill.tool === "agy" || (Array.isArray(skill.read_by) && skill.read_by.includes("agy")));
+}
 function skillCompatible(skill, tool) {
+  if (tool === "agy") return skillReadByAgy(skill) && typeof (skill && skill.tool) === "string" && skill.tool !== "";
   const source = skill && skill.tool;
   if (source === "shared") return true;
-  return typeof source === "string" && source === tool && tool !== "agy";
+  return typeof source === "string" && source === tool;
 }
 function skillIncompatibleNote(tool) {
   return tool === "shared" ? "共用角色卡只能插共用的技能卡"
-    : tool === "agy" ? AGY_SKILLS_UNKNOWN : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
+    : tool === "agy" ? AGY_NOT_READ : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
 }
 
 function cardCatalogTools(catalog) {
@@ -4174,8 +4184,11 @@ function openCardWizard(opts) {
       }
       setKids(chosenBox, st.equipped.size ? [...st.equipped].map((sid) => {
         const s = skillById.get(sid);
+        // a skill an AGY card already holds but AGY does not read stays, marked, for the person to decide
+        const unread = s && st.tool === "agy" && !skillCompatible(s, "agy");
         return el("span", { class: "tag cw-chosen-tag", "data-chosen": sid },
-          s ? `${CARD_TOOL_SHORT[s.tool] || s.tool || "?"} · ${s.name}` : `${sid}（目前索引找不到）`, " ",
+          s ? `${CARD_TOOL_SHORT[s.tool] || s.tool || "?"} · ${s.name}` : `${sid}（目前索引找不到）`,
+          unread ? el("span", { class: "small cw-error", "data-cw": "agy-unread" }, `（${AGY_UNREAD_MARK}）`) : null, " ",
           el("button", { type: "button", class: "cw-x", "aria-label": `移除 ${s ? s.name : sid}`,
             on: { click: () => { removedAt = [...st.equipped].indexOf(sid); st.equipped.delete(sid); syncChosen(); } } }, "移除"));
       }) : el("span", { class: "small muted" }, "還沒有插任何技能卡。這一步可以略過。"));
@@ -4208,6 +4221,7 @@ function openCardWizard(opts) {
           } } },
           el("strong", null, s.name || s.skill_id),
           el("span", { class: "tag" }, CARD_TOOL_SHORT[s.tool] || s.tool || "?"),
+          st.tool === "agy" && s.tool !== "agy" && ok ? el("span", { class: "tag", "data-cw": "agy-reads" }, "AGY 會讀") : null,
           s.activation === "disabled" ? el("span", { class: "small muted" }, "（停用）") : null,
           pick.badge, pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
           ok ? null : el("span", { class: "small cw-error", "data-cw": "incompatible" }, skillIncompatibleNote(st.tool)));
@@ -4718,6 +4732,7 @@ function cardSlotState(item) { return item && item.will_load === true ? "active"
 // loadoutState: { state: "loading" | "ok" | "error", data } or null. rows follow the loadout when it is read (so a skill
 // the index does not know is a row too), and the profile's own list before that.
 function cardSlots(p, loadoutState, catalog) {
+  const isAgy = Boolean(p && p.model && p.model.tool === "agy");
   const sk = loadoutState && loadoutState.state === "ok" && loadoutState.data && typeof loadoutState.data.skills === "object"
     ? loadoutState.data.skills : null;
   const names = new Map((catalog && Array.isArray(catalog.skills) ? catalog.skills : []).map((s) => [s.skill_id, s.invoke_name || s.name]));
@@ -4725,12 +4740,16 @@ function cardSlots(p, loadoutState, catalog) {
   if (sk && Array.isArray(sk.items)) {
     const rows = sk.items.filter((x) => x && typeof x === "object" && typeof x.skill_id === "string").map((x) => ({
       id: x.skill_id, state: cardSlotState(x), name: x.invoke_name || x.name || names.get(x.skill_id) || x.skill_id,
-      missing: x.state === "not_in_index", unread: x.state === "index_not_loaded" }));
+      missing: x.state === "not_in_index", unread: x.state === "index_not_loaded",
+      // an AGY card only: the server says whether AGY reads this skill (false), or that the index cannot say (null)
+      agyOff: isAgy && x.agy_reads === false }));
     const active = rows.some((r) => r.state === "active");
     return { loaded: true, rows, active,
       allInactive: typeof sk.all_inactive === "boolean" ? sk.all_inactive && !active : null };
   }
-  return { loaded: false, rows: ids.map((id) => ({ id, state: "collected", name: names.get(id) || id, missing: false, unread: false })),
+  const byId = new Map((catalog && Array.isArray(catalog.skills) ? catalog.skills : []).map((s) => [s.skill_id, s]));
+  return { loaded: false, rows: ids.map((id) => ({ id, state: "collected", name: names.get(id) || id, missing: false, unread: false,
+      agyOff: isAgy && byId.has(id) && !skillCompatible(byId.get(id), "agy") })),
     active: false, allInactive: null };
 }
 
@@ -4911,7 +4930,8 @@ function profileCard(p, opts = {}) {
       slots.rows.length
         ? el("ul", { class: "rcard-slot-list" }, shown.map((r) => el("li", { class: `rcard-slot skill-chip rcard-slot-${r.state}`, "data-slot": r.state },
           el("span", { class: "rcard-slot-name" }, r.name),
-          el("span", { class: "rcard-slot-label" }, CARD_SLOT_LABEL[r.state]))),
+          el("span", { class: "rcard-slot-label" }, CARD_SLOT_LABEL[r.state]),
+          r.agyOff ? el("span", { class: "rcard-slot-label cw-error", "data-slot-mark": "agy-unread" }, AGY_UNREAD_MARK) : null)),
         slots.rows.length > shown.length ? el("li", { class: "rcard-slot-more small muted" }, `另有 ${slots.rows.length - shown.length} 張`) : null)
         : el("p", { class: "small muted rcard-slot-empty" }, cardArt("icons", "emptySlot", 1), "沒有插技能卡"),
       slots.allInactive === true ? el("p", { class: "small muted", "data-slot-note": "inactive" }, CARD_SLOT_NOTE)
@@ -4925,6 +4945,7 @@ function profileCard(p, opts = {}) {
       setKids(skillsBox, el("h4", null, "已插的技能卡"),
         el("ul", { class: "small rcard-skill-rows" }, slots.rows.map((r) => el("li", { class: "rcard-skill-row", "data-skill-row": r.id },
           el("span", { class: "rcard-skill-name" }, r.name),
+          r.agyOff ? el("span", { class: "small cw-error", "data-slot-mark": "agy-unread" }, `　${AGY_UNREAD_MARK}`) : null,
           r.missing
             ? el("span", { class: "muted" }, "　目前索引找不到；要拿掉請到角色卡池編輯這張卡")
             : el("button", { type: "button", class: "btn small", "data-pcard": "skill-card", "aria-label": `看「${r.name}」的技能卡特性`,
@@ -5287,6 +5308,21 @@ function onboardingSettings(conf, saveConf) {
     btn);
 }
 
+// One line of the scan sources: the switch (a discovered source cannot be switched off here), its name and how many
+// it found. A source can carry issues (the AGY config file that could not be used); they are shown under it as they are.
+function sourceRow(s, advanced, saveConf) {
+  const found = s.kind === "config" ? `${s.count} 個資料夾` : `${s.count} 項`;
+  const issues = Array.isArray(s.issues) ? s.issues.filter((x) => typeof x === "string") : [];
+  return el("label", { class: "switch" },
+    s.discovered ? el("input", { type: "checkbox", checked: true, disabled: true, title: s.tool === "agy" ? "依 AGY 的設定自動發現" : "由專案目錄自動發現" })
+      : el("input", { type: "checkbox", checked: s.enabled, on: { change: (e) => saveConf({ source_enabled: { [s.source_id]: e.target.checked } }, "已更新來源") } }),
+    el("div", null,
+      el("div", { class: "t" }, s.label, " ", el("span", { class: "tag" }, TOOL[s.tool] || s.tool), " ",
+        s.exists ? el("span", { class: "small muted" }, found) : badge("路徑不存在", "b-warn")),
+      advanced ? el("div", { class: "small muted mono" }, home(s.path)) : null,
+      issues.map((x) => el("div", { class: "small cw-error", "data-src": "issue" }, x))));
+}
+
 async function viewSettings() {
   const token = seq;
   await loadStatic();
@@ -5307,13 +5343,7 @@ async function viewSettings() {
     } catch (e) { toast("儲存失敗：" + e.message); }
   };
 
-  const srcRow = (s) => el("label", { class: "switch" },
-    s.discovered ? el("input", { type: "checkbox", checked: true, disabled: true, title: "由專案目錄自動發現" })
-      : el("input", { type: "checkbox", checked: s.enabled, on: { change: (e) => saveConf({ source_enabled: { [s.source_id]: e.target.checked } }, "已更新來源") } }),
-    el("div", null,
-      el("div", { class: "t" }, s.label, " ", el("span", { class: "tag" }, TOOL[s.tool] || s.tool), " ",
-        s.exists ? el("span", { class: "small muted" }, `${s.count} 項`) : badge("路徑不存在", "b-warn")),
-      advanced ? el("div", { class: "small muted mono" }, home(s.path)) : null));
+  const srcRow = (s) => sourceRow(s, advanced, saveConf);
 
   setKids(main, 
     el("h1", null, "設定"),
@@ -5325,7 +5355,7 @@ async function viewSettings() {
       el("div", { class: "panel pad" },
         el("h2", { style: "margin-bottom:6px" }, "掃描來源"),
         el("div", null, sources.filter((s) => !s.discovered).map(srcRow)),
-        sources.some((s) => s.discovered) ? [el("h3", { style: "margin:14px 0 4px" }, "自動發現的專案技能"), sources.filter((s) => s.discovered).map(srcRow)] : null,
+        sources.some((s) => s.discovered) ? [el("h3", { style: "margin:14px 0 4px" }, "自動發現的位置（專案技能、AGY 設定）"), sources.filter((s) => s.discovered).map(srcRow)] : null,
         el("div", { class: "row", style: "margin-top:12px" }, el("button", { class: "btn primary", on: { click: rescan } }, "重新掃描"))),
       el("div", { style: "display:grid;gap:16px;align-content:start" },
         el("div", { class: "panel pad" },

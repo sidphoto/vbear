@@ -1632,7 +1632,11 @@ async function test(name, fn) {
   });
 
   // ---- P20: Antigravity (AGY) as a fourth camp -----------------------------------------------------------------------
-  const catalogAgy = { ...catalog, tools: ["claude", "codex", "agy", "shared"] };
+  // P22: a Codex skill that AGY's own config lists (read_by), and a skill of AGY's own folders
+  const catalogAgy = { ...catalog, tools: ["claude", "codex", "agy", "shared"], skills: [...catalog.skills,
+    { skill_id: "s-ar", name: "codex-agy-skill", tool: "codex", read_by: ["agy"], scope: "user", activation: "active", excerpt: "codex, AGY reads it too" },
+    { skill_id: "s-an", name: "agy-own-skill", tool: "agy", read_by: ["agy"], scope: "user", activation: "active", excerpt: "in AGY's folder" }] };
+  const AGY_OFF = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
   const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
   const agyLoadout = (p) => loadoutBody(p, {
     armor: { applicable: false, why: "VBear 還不會啟動 AGY，沒有防具" },
@@ -1667,11 +1671,23 @@ async function test(name, fn) {
     assert.strictEqual(pure.campKeyOf({ model: { tool: "agy" } }), "google");
   });
 
-  await test("P20 skillCompatible: an AGY card takes shared skill cards only (a record, not a load); VBear does not know what AGY reads", () => {
-    const rows = [["agy", "shared", true], ["agy", "claude", false], ["agy", "codex", false], ["agy", "agy", false],
-      ["agy", "", false], ["agy", undefined, false], ["claude", "agy", false], ["codex", "agy", false], ["shared", "agy", false]];
-    for (const [tool, source, want] of rows) assert.strictEqual(pure.skillCompatible({ tool: source }, tool), want, `${tool} card, ${source} skill`);
-    assert.strictEqual(pure.skillIncompatibleNote("agy"), "VBear 還不知道 AGY 會讀哪些技能");
+  await test("P22 skillCompatible: an AGY card takes the skills AGY reads (its own, or read_by agy); the shared ones only when listed", () => {
+    const rows = [
+      ["agy", { tool: "agy" }, true], ["agy", { tool: "agy", read_by: ["agy"] }, true],
+      ["agy", { tool: "codex", read_by: ["agy"] }, true], ["agy", { tool: "shared", read_by: ["agy"] }, true],
+      ["agy", { tool: "claude", read_by: ["x", "agy"] }, true],
+      ["agy", { tool: "shared" }, false], ["agy", { tool: "shared", read_by: [] }, false], ["agy", { tool: "codex" }, false],
+      ["agy", { tool: "claude" }, false], ["agy", { tool: "", read_by: [] }, false], ["agy", { read_by: ["agy"] }, false],
+      ["agy", { tool: "shared", read_by: "agy" }, false], ["agy", { tool: "shared", read_by: [7, null] }, false],
+      ["agy", { tool: "shared", read_by: { agy: true } }, false], ["agy", {}, false],
+      // the other three camps are exactly as before: read_by changes nothing there
+      ["claude", { tool: "agy" }, false], ["codex", { tool: "agy" }, false], ["shared", { tool: "agy" }, false],
+      ["claude", { tool: "codex", read_by: ["agy"] }, false], ["codex", { tool: "codex", read_by: ["agy"] }, true],
+      ["shared", { tool: "codex", read_by: ["agy"] }, false], ["claude", { tool: "shared", read_by: ["agy"] }, true],
+    ];
+    for (const [tool, skill, want] of rows) assert.strictEqual(pure.skillCompatible(skill, tool), want, `${tool} card, ${JSON.stringify(skill)}`);
+    assert.strictEqual(pure.skillCompatible(null, "agy"), false);
+    assert.strictEqual(pure.skillIncompatibleNote("agy"), AGY_OFF);
     assert.strictEqual(pure.skillIncompatibleNote("claude"), "Claude Code 不會讀這張卡");
     assert.strictEqual(pure.skillIncompatibleNote("codex"), "Codex 不會讀這張卡");
     assert.strictEqual(pure.skillIncompatibleNote("shared"), "共用角色卡只能插共用的技能卡");
@@ -1719,7 +1735,7 @@ async function test(name, fn) {
     assert.ok(findText(dialog(), "依陣營（狐）"), "the automatic choice names the fox");
   });
 
-  await test("P20 wizard step 3: with an AGY card only shared skill cards can be inserted, the rest say VBear does not know what AGY reads", async () => {
+  await test("P22 wizard step 3: an AGY card takes the skills AGY reads; the rest are greyed with AGY's own words", async () => {
     const { posts, d } = await openWizard([], catalogAgy);
     typeName(d, "AGY 收藏");
     btnByText(d, "下一步").dispatch("click");
@@ -1727,42 +1743,157 @@ async function test(name, fn) {
     btnByText(dialog(), "下一步").dispatch("click");
     const cur = dialog();
     const note = byData(cur, "data-cw", "agy-skills-note")[0];
-    assert.ok(note && findText(note, "VBear 還不知道 AGY 會讀哪些技能") && findText(note, "只是收藏"), "the page says it before any skill is picked");
+    assert.ok(note && findText(note, "這些是 AGY 依你電腦上的設定會讀到的技能；VBear 不啟動 AGY，插在卡上只是收藏"), "the honest sentence, before any skill is picked");
+    assert.ok(findText(note, "AGY 的內建與外掛技能不在這裡"));
+    assert.ok(!findText(cur, "VBear 還不知道 AGY 會讀哪些技能"), "the old 'does not know' wording is gone");
     const sk = (id) => byData(dialog(), "data-skill", id)[0];
-    for (const id of ["s-c", "s-x"]) {
+    for (const id of ["s-c", "s-x", "s-s"]) {
       assert.strictEqual(sk(id).getAttribute("aria-disabled"), "true", id);
-      assert.ok(findText(sk(id), "VBear 還不知道 AGY 會讀哪些技能"), id);
+      assert.ok(findText(sk(id), AGY_OFF), id);
       sk(id).dispatch("click");
       assert.strictEqual(sk(id).getAttribute("aria-pressed"), "false", `${id} cannot be inserted`);
     }
-    assert.strictEqual(sk("s-s").getAttribute("aria-disabled"), null);
-    sk("s-s").dispatch("click");
-    assert.strictEqual(sk("s-s").getAttribute("aria-pressed"), "true");
-    assert.ok(!findText(dialog(), "AGY 會載入") || findText(dialog(), "不代表"), "no sentence claims a load");
+    for (const id of ["s-ar", "s-an"]) {
+      assert.strictEqual(sk(id).getAttribute("aria-disabled"), null, id);
+      assert.ok(!findText(sk(id), AGY_OFF), id);
+      sk(id).dispatch("click");
+      assert.strictEqual(sk(id).getAttribute("aria-pressed"), "true", id);
+    }
+    assert.ok(findText(sk("s-ar"), "AGY 會讀"), "a Codex skill says why it fits an AGY card");
+    assert.ok(!findText(sk("s-an"), "AGY 會讀"), "AGY's own skill needs no extra tag beside its camp tag");
+    assert.ok(!findText(dialog(), "AGY 會載入") || findText(dialog(), "只是收藏"), "no sentence claims a load");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
-    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-s"]);
+    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-ar", "s-an"]);
     assert.strictEqual(posts[0].model.tool, "agy");
   });
 
-  await test("P20 wizard: switching to AGY drops the Claude and Codex skill cards and the profession label, and says so", async () => {
+  await test("P22 the other cards' step 3 says nothing about AGY: no AGY note, no AGY tag", async () => {
+    const { d } = await openWizard([], catalogAgy);
+    typeName(d, "Plain");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "agy-skills-note").length, 0);
+    assert.ok(!findText(byData(dialog(), "data-skill", "s-ar")[0], "AGY 會讀"));
+    assert.strictEqual(byData(dialog(), "data-skill", "s-ar")[0].getAttribute("aria-disabled"), "true", "a Codex skill still does not fit a Claude card");
+    assert.strictEqual(byData(dialog(), "data-skill", "s-an")[0].getAttribute("aria-disabled"), "true");
+    assert.strictEqual(byData(dialog(), "data-skill", "s-s")[0].getAttribute("aria-disabled"), null, "the shared skill still fits a Claude card");
+  });
+
+  await test("P22 wizard: switching to AGY drops the skill cards AGY does not read (a shared one too) and keeps the ones it reads, and says so", async () => {
     const { posts, d } = await openWizard([], catalogAgy);
     typeName(d, "Switch to AGY");
     btnByText(d, "下一步").dispatch("click");
     const sel = walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("id") === "cw-profession");
     sel.value = "r-1"; sel.dispatch("change");
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
-    byData(dialog(), "data-skill", "s-c")[0].dispatch("click");
-    byData(dialog(), "data-skill", "s-s")[0].dispatch("click");
+    for (const id of ["s-x", "s-s", "s-ar"]) byData(dialog(), "data-skill", id)[0].dispatch("click");
+    assert.ok(findText(dialog(), "已插入（3）"));
     btnByText(dialog(), "上一步").dispatch("click");
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
-    assert.ok(findText(dialog(), "換了陣營，已移除 1 張這個陣營不會讀的技能卡。"));
+    assert.ok(findText(dialog(), "換了陣營，已移除 2 張這個陣營不會讀的技能卡。"));
     assert.ok(findText(dialog(), "已插入（1）"));
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
     assert.strictEqual(posts[0].profession_role_id, null, "the Claude role label does not stay on an AGY card");
-    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-s"]);
+    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-ar"]);
+  });
+
+  // an AGY card that v0.8.4 saved with a shared skill: the skill stays, and it is marked, so the person decides
+  const oldAgy = () => mkProfile("p-old", "Old AGY", "agy", VERIFIED, { equipped_skill_ids: ["s-s", "s-ar", "gone"] });
+
+  await test("P22 an AGY card saved with a shared skill keeps it in the edit window and marks it 'AGY 不會讀'; saving changes nothing by itself", async () => {
+    const existing = oldAgy();
+    const posts = [];
+    const ctx = await openPool([existing], catalogAgy, {
+      "GET /api/agent-profiles/p-old/loadout": () => jsonResponse(agyLoadout(existing)),
+      "POST /api/agent-profiles/p-old": (_u, o) => { posts.push(JSON.parse(o.body)); return jsonResponse({ ok: true, profile: existing }); } });
+    cardOf("p-old").dispatch("click");
+    byData(cardOf("p-old"), "data-pcard", "flip")[0].dispatch("click");
+    byData(cardOf("p-old"), "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    const chip = (id) => byData(dialog(), "data-chosen", id)[0];
+    assert.ok(findText(chip("s-s"), "AGY 不會讀"), "the shared skill is marked");
+    assert.ok(!findText(chip("s-ar"), "AGY 不會讀"), "the one AGY reads is not");
+    assert.ok(findText(chip("gone"), "目前索引找不到"));
+    assert.ok(!findText(chip("gone"), "AGY 不會讀"), "a skill the index lacks is not claimed unreadable");
+    assert.ok(findText(dialog(), "已插入（3）"), "nothing was dropped");
+    assert.strictEqual(byData(dialog(), "data-skill", "s-s")[0].getAttribute("aria-disabled"), "true", "it cannot be inserted again");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts[0].equipped_skill_ids, ["s-s", "s-ar", "gone"], "the save keeps all three");
+  });
+
+  await test("P22 on the card: a skill AGY does not read is marked on the front slot and on the back row; one it reads is not", async () => {
+    const existing = oldAgy();
+    const lo = agyLoadout(existing);
+    lo.skills.items = [{ skill_id: "s-s", state: "in_index", name: "shared-skill", will_load: false, effective: false, agy_reads: false },
+      { skill_id: "s-ar", state: "in_index", name: "codex-agy-skill", will_load: false, effective: false, agy_reads: true },
+      { skill_id: "gone", state: "not_in_index", will_load: false, effective: false, agy_reads: null }];
+    await openPool([existing], catalogAgy, { "GET /api/agent-profiles/p-old/loadout": () => jsonResponse(lo) });
+    const card = cardOf("p-old");
+    const slot = (id) => walk(card).find((n) => n.tag === "li" && n.getAttribute("data-slot") && findText(n, id));
+    assert.ok(findText(slot("shared-skill"), "AGY 不會讀"), "front slot");
+    assert.ok(!findText(slot("codex-agy-skill"), "AGY 不會讀"));
+    assert.strictEqual(slot("shared-skill").getAttribute("data-slot"), "collected", "still a dashed collection slot");
+    const row = (id) => byData(card, "data-skill-row", id)[0];
+    assert.ok(findText(row("s-s"), "AGY 不會讀"), "back row");
+    assert.ok(!findText(row("s-ar"), "AGY 不會讀"));
+    assert.ok(!findText(row("gone"), "AGY 不會讀"));
+    assert.strictEqual(byData(card, "data-slot", "active").length, 0);
+  });
+
+  await test("P22 the skill card window names AGY as a reader when the skill says so, with where that comes from; otherwise it adds nothing", async () => {
+    const withReadBy = (id) => {
+      const b = skillBody(id, `name-${id}`);
+      b.skill.read_by = { value: ["agy"], origin: "derived", detail: "AGY 的設定檔 skills.json 列出了這個技能所在的資料夾" };
+      return b;
+    };
+    const ctx = freshContext({ "GET /api/skills/s-ar?view=card": () => jsonResponse(withReadBy("s-ar")),
+      "GET /api/skills/s-c?view=card": () => jsonResponse(skillBody("s-c", "name-s-c")) });
+    evalAgentBuilderSlice(ctx);
+    await ctx.openSkillCard("s-ar"); await tick(8);
+    const win = dialog();
+    assert.ok(findText(win, "也會讀它的工具") && findText(win, "Antigravity（AGY）"), "AGY is named");
+    assert.ok(findText(win, "skills.json"), "with its evidence");
+    assert.ok(!findText(win, "AGY 會載入"), "no load is claimed");
+    const ctx2 = freshContext({ "GET /api/skills/s-c?view=card": () => jsonResponse(skillBody("s-c", "name-s-c")) });
+    evalAgentBuilderSlice(ctx2);
+    await ctx2.openSkillCard("s-c"); await tick(8);
+    assert.ok(!findText(dialogsNow().pop(), "也會讀它的工具"), "a skill nobody else reads has no such row");
+  });
+
+  await test("P22 the sources list: the AGY config row shows its folders and its issues as they are; an ordinary row is as before", async () => {
+    const ctx = freshContext({});
+    evalAgentBuilderSlice(ctx);
+    const issue = "AGY 設定檔 skills.json：第 1 項已略過：「/etc」不在家目錄之下，未採用";
+    const row = ctx.sourceRow({ source_id: "agy-skills-json", label: "AGY 設定檔 skills.json", tool: "agy", kind: "config",
+      path: "~/.gemini/config/skills.json", enabled: true, exists: true, count: 2, scope: "user", discovered: true, issues: [issue] }, true, () => {});
+    assert.ok(findText(row, "AGY 設定檔 skills.json") && findText(row, "Antigravity（AGY）") && findText(row, "2 個資料夾"));
+    assert.strictEqual(byData(row, "data-src", "issue").length, 1);
+    assert.ok(findText(byData(row, "data-src", "issue")[0], issue));
+    const box = walk(row).find((n) => n.tag === "input");
+    assert.ok(box.disabled === true && box.getAttribute("title") === "依 AGY 的設定自動發現", "a discovered source cannot be switched off here");
+    const plain = ctx.sourceRow({ source_id: "codex-skills", label: "Codex CLI 技能", tool: "codex", kind: "skills", path: "~/.codex/skills",
+      enabled: true, exists: true, count: 3, scope: "user" }, false, () => {});
+    assert.ok(findText(plain, "3 項") && !findText(plain, "個資料夾"));
+    assert.strictEqual(byData(plain, "data-src", "issue").length, 0);
+    const folder = ctx.sourceRow({ source_id: "agy:x", label: "AGY 設定檔列出的資料夾", tool: "agy", kind: "skills", path: "~/x", enabled: true,
+      exists: true, count: 4, scope: "user", discovered: true }, false, () => {});
+    assert.ok(findText(folder, "4 項"));
+    assert.ok(!source.includes("自動發現的專案技能"), "the heading no longer says only projects");
+  });
+
+  await test("P22 other cards' slots never carry the AGY mark, even when the loadout rows have the field", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { equipped_skill_ids: ["s-c"] });
+    const lo = loadoutBody(p, { skills: { title: "t", all_inactive: true, note: "x",
+      items: [{ skill_id: "s-c", state: "in_index", name: "claude-skill", will_load: false, effective: false, agy_reads: false }] } });
+    await openPool([p], catalogAgy, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(lo) });
+    assert.ok(!findText(cardOf("p-1"), "AGY 不會讀"));
   });
 
   await test("P20 wizard 進階: an AGY card lists no profession labels and says VBear has not scanned any; the other tools still list theirs", async () => {
@@ -1962,7 +2093,9 @@ async function test(name, fn) {
     const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
     assert.ok(!/AGY[^"`\n]*(會載入|已保護|受保護|安全)/.test(wizard.replace(/不代表[^"]*/g, "")));
     assert.ok(source.includes("VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"));
-    assert.ok(source.includes("VBear 還不知道 AGY 會讀哪些技能"));
+    assert.ok(source.includes("這些是 AGY 依你電腦上的設定會讀到的技能；VBear 不啟動 AGY，插在卡上只是收藏"));
+    assert.ok(source.includes("AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"));
+    assert.ok(!source.includes("VBear 還不知道 AGY 會讀哪些技能"), "P22: it is judged from AGY's own files now");
     assert.ok(source.includes("VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
   });
 
