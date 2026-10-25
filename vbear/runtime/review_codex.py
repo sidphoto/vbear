@@ -93,7 +93,7 @@ def build_env(codex_home: str, run_home: str) -> dict:
     user's git config and their login shell; nothing that could name another
     API endpoint (OPENAI_BASE_URL and the like) is passed on."""
     from .daemon import build_env as daemon_env
-    src = daemon_env()
+    src = daemon_env(user_bin=False)
     env = {}
     for k in ("PATH", "USER", "LOGNAME", "LANG"):
         if not (isinstance(src.get(k), str) and src[k]):

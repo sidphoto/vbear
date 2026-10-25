@@ -100,7 +100,8 @@ ENV_ALLOW = ("PATH", "TERM", "LANG", "HOME")  # caller may override these
 # Claude Code looks up its Keychain login by USER; without it the CLI reports
 # "Login expired" (Gate 9 finding).
 ENV_IDENTITY = ("USER", "LOGNAME")
-EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
+SYSTEM_EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
+USER_BIN = (".local", "bin")  # where Claude Code's own installer puts `claude` (and Codex's, `codex`)
 SESSION_RE = re.compile(r"^n-[0-9a-f]{12}\Z")
 MAX_ATTACHMENTS = 4           # per session (contract v2 §6)
 ATTACH_QUEUE_MAX = 256        # lines queued per attachment (frames and notices alike): frames resync, notices pause reads
@@ -251,13 +252,45 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
-def build_env(overrides: dict | None = None) -> dict:
+def extra_path(home: str | None = None) -> tuple[str, ...]:
+    """The one place that says where VBear looks for the `claude` / `codex` CLIs
+    beyond the PATH it was started with: Homebrew and the system dirs, then
+    ``<home>/.local/bin`` last, so a user-writable dir never comes ahead of
+    them. Nothing else is scanned, no shell file is read and no login shell is
+    started. A HOME that is not a plain absolute path adds nothing. The
+    macOS launcher (macos/VBear/main.swift) builds the same list."""
+    extra = SYSTEM_EXTRA_PATH
+    if (isinstance(home, str) and os.path.isabs(home) and os.pathsep not in home
+            and "\0" not in home):
+        extra += (os.path.join(home, *USER_BIN),)
+    return extra
+
+
+def with_extra_path(path: str, home: str | None) -> str:
+    """``path`` with the missing ``extra_path(home)`` entries appended; the
+    existing entries keep their order."""
+    parts = [p for p in path.split(os.pathsep) if p]
+    for extra in extra_path(home):
+        if extra not in parts:
+            parts.append(extra)
+    return os.pathsep.join(parts)
+
+
+def cli_search_path() -> str:
+    """PATH for finding a CLI from the current process: its own PATH plus the
+    extra directories, using the same HOME as ``build_env``."""
+    return with_extra_path(os.environ.get("PATH", ""), os.environ.get("HOME") or str(Path.home()))
+
+
+def build_env(overrides: dict | None = None, *, user_bin: bool = True) -> dict:
     """Child environment: PATH/TERM/LANG/HOME (contract v2 §5) plus the
     daemon user's USER/LOGNAME, which callers cannot override.
 
-    PATH gets the usual Homebrew/system dirs appended when missing, because a
-    daemon started from Finder / an .app does not inherit the login shell
-    PATH. Existing entries keep their order."""
+    PATH gets the usual Homebrew/system dirs and ``~/.local/bin`` appended when
+    missing (see ``extra_path``), because a daemon started from Finder / an
+    .app does not inherit the login shell PATH. Existing entries keep their
+    order. ``user_bin=False`` leaves the home directory out (the Codex review,
+    which runs a pinned binary and has no use for it)."""
     env = {k: os.environ[k] for k in ENV_ALLOW if os.environ.get(k)}
     env.update({k: v for k, v in (overrides or {}).items() if k in ENV_ALLOW})
     try:
@@ -271,11 +304,7 @@ def build_env(overrides: dict | None = None) -> dict:
     env.setdefault("TERM", "xterm-256color")
     env.setdefault("LANG", "en_US.UTF-8")
     env.setdefault("HOME", str(Path.home()))
-    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
-    for extra in EXTRA_PATH:
-        if extra not in parts:
-            parts.append(extra)
-    env["PATH"] = os.pathsep.join(parts)
+    env["PATH"] = with_extra_path(env.get("PATH", ""), env["HOME"] if user_bin else None)
     return env
 
 

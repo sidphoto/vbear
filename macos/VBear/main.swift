@@ -282,7 +282,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             if let v = env[key] { child[key] = v }
         }
         child["LANG"] = env["LANG"] ?? "zh_TW.UTF-8"
-        child["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        // Same list as vbear/runtime/daemon.py extra_path: the home directory's .local/bin
+        // (where Claude Code and Codex install themselves) comes last.
+        var path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let home = child["HOME"], home.hasPrefix("/"), !home.contains(":") {
+            path += ":" + home + "/.local/bin"
+        }
+        child["PATH"] = path
         child["PYTHONPATH"] = appDir.path
         child["PYTHONDONTWRITEBYTECODE"] = "1"
         return child

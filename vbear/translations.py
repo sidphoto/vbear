@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import config as cfg, strictjson
 from .jsonstore import GuardedJsonStore, StoreError
+from .runtime import daemon
 from .scan.document import redact, redact_value
 
 FIELDS = ("name", "description", "when_to_use", "inputs", "outputs", "dependencies")
@@ -46,6 +47,7 @@ MISSING = "原文未提供"
 LIMITS = strictjson.Limits(MAX_OUTPUT, 4000, 16, MAX_OUTPUT)
 ERRORS = {
     "boundary_unverified": "這個 Claude Code 版本的翻譯安全邊界還沒驗證；Codex 翻譯仍未開放",
+    "cli_not_found": "找不到 Claude Code。VBear 會在 Homebrew、/usr/local/bin 與你家目錄的 .local/bin 裡找；如果裝在別處，請告訴我們。",
     "not_traditional": "翻譯含有簡體字，未儲存",
     "bad_request": "翻譯要求不符格式", "busy": "已有翻譯工作，請等待或取消",
     "invalid_output": "CLI 未回傳合格的翻譯 JSON", "cli_failed": "CLI 執行失敗，請自行檢查登入與額度",
@@ -243,9 +245,9 @@ class BoundaryStore(GuardedJsonStore):
 
 
 def claude_identity():
-    binary = shutil.which("claude")
+    binary = shutil.which("claude", path=daemon.cli_search_path())
     if not binary:
-        raise TranslationError("boundary_unverified")
+        raise TranslationError("cli_not_found")
     raw = _execute(lambda tmp: [binary, "--version"], b"", threading.Event(), timeout=5)
     match = re.fullmatch(rb"([0-9]+\.[0-9]+\.[0-9]+)(?: \(Claude Code\))?\s*", raw)
     if not match:
@@ -519,7 +521,7 @@ class TranslationManager:
                     if code == "process_unconfirmed":
                         self.blocked = True
                         cfg.write_private(cfg.state_dir() / "translation-worker.blocked", "process_unconfirmed\n")
-                if code in ("cancelled", "storage", "boundary_unverified", "process_unconfirmed"):
+                if code in ("cancelled", "storage", "boundary_unverified", "cli_not_found", "process_unconfirmed"):
                     break
             except Exception:
                 with self.lock:

@@ -151,7 +151,7 @@ def pick_claude(explicit: str | None) -> str:
                        key=lambda p: tuple(int(x) for x in p.name.split(".")))
         if found:
             return str(found[-1])
-    which = shutil.which("claude")
+    which = shutil.which("claude", path=daemon.cli_search_path())
     if not which:
         raise SystemExit("找不到 claude；請用 --claude 指定")
     return which
