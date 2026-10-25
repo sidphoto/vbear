@@ -1098,7 +1098,69 @@ async function runWorkbenchTests() {
     console.log("ok: Category 20 - legacy raw-status cards are flagged, not silently downgraded");
   }
 
-  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (20/20 categories verified)");
+  // 21. Deleting a task card asks in the page (the app window cannot show a native confirm()):
+  // the dialog names the card, cancelling sends nothing, and 刪除 sends the delete request.
+  {
+    const sample = (await FETCH_ROUTES["/api/tasks"]().json()).tasks[0];
+    const calls = [];
+    const realFetch = global.fetch;
+    global.fetch = async (url, opts = {}) => {
+      const path = String(url).split("?")[0];
+      if (opts.method === "POST" && path === `/api/tasks/${sample.id}/delete`) {
+        calls.push(path);
+        return jsonResponse({ ok: true, deleted: sample.id });
+      }
+      return realFetch(url, opts);
+    };
+    const hadConfirm = Object.prototype.hasOwnProperty.call(global, "confirm");
+    let nativeAsked = 0;
+    global.confirm = () => { nativeAsked += 1; return false; };
+    const openDialog = async () => {
+      mainEl.find((n) => n.tag === "button" && n.textContent === "刪除任務").click();
+      await flushMicrotasks();
+      return document.body.find((n) => n.hasClass("modal-backdrop"));
+    };
+    const pick = (modal, label) => modal.find((n) => n.tag === "button" && n.textContent === label);
+    try {
+      global.location.hash = "#/workbench";
+      dom = resetDom();
+      mainEl = dom.mainEl;
+      await app.route();
+      mainEl.find((n) => n.getAttribute("role") === "tab" && n.textContent.includes("[T]")).click();
+
+      let modal = await openDialog();
+      assert.ok(modal, "deleting a task card must open an in-page dialog");
+      assert.ok(modal.find((n) => n.tag === "h2" && n.textContent === "刪除任務卡"), "the dialog has a plain title");
+      assert.ok(modal.find((n) => n.tag === "p" && n.textContent === `確定要刪除任務卡「${sample.title}」嗎？刪除後無法復原。`),
+        "the dialog names the card and says it cannot be undone");
+      assert.strictEqual(nativeAsked, 0, "the native confirm() must not be used");
+      assert.deepStrictEqual(calls, [], "nothing is sent before the dialog is answered");
+
+      pick(modal, "取消").click();
+      await flushMicrotasks();
+      assert.strictEqual(modal.parentNode, null, "cancel closes the dialog");
+      assert.deepStrictEqual(calls, [], "cancelling sends no delete request");
+
+      modal = await openDialog();
+      modal.dispatch("keydown", { key: "Escape" });
+      await flushMicrotasks();
+      assert.strictEqual(modal.parentNode, null, "Escape closes the dialog");
+      assert.deepStrictEqual(calls, [], "closing with Escape sends no delete request");
+
+      modal = await openDialog();
+      pick(modal, "刪除").click();
+      await flushMicrotasks();
+      assert.deepStrictEqual(calls, [`/api/tasks/${sample.id}/delete`], "刪除 sends the delete request");
+      assert.strictEqual(modal.parentNode, null, "the dialog closes after 刪除");
+      assert.strictEqual(nativeAsked, 0, "the native confirm() was never asked");
+    } finally {
+      global.fetch = realFetch;
+      if (!hadConfirm) delete global.confirm;
+    }
+    console.log("ok: Category 21 - deleting a task card asks in the page and sends nothing on cancel");
+  }
+
+  console.log("\nALL WORKBENCH FRONTEND TESTS PASSED (21/21 categories verified)");
 }
 
 runWorkbenchTests()
