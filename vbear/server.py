@@ -1537,6 +1537,9 @@ def make_handler(console: Console):
                     # the picker folds same-named copies and keeps the newest; 0 is "not known"
                     "mtime": mtime if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else 0,
                     "excerpt": desc[:140],
+                    # the use categories the scan gave it (by keywords in its text), for the picker's category row
+                    "categories": [c["id"] for c in (s.get("categories") or [])
+                                   if isinstance(c, dict) and isinstance(c.get("id"), str)],
                 })
             skills_for_picker.sort(key=lambda x: (x["tool"], x["name"].lower()))
 
@@ -1562,6 +1565,9 @@ def make_handler(console: Console):
                 "max_skills_per_profile": agent_profiles.MAX_SKILLS_PER_PROFILE,
                 "professions": roles,
                 "skills": skills_for_picker,
+                "skill_categories": [{"id": c["id"], "label": c["label"]}
+                                     for c in console.store.static().get("category_table", [])
+                                     if isinstance(c, dict) and isinstance(c.get("id"), str) and isinstance(c.get("label"), str)],
                 # Honest disclosure: a chosen skill is not a loaded skill, an intent is not a limit.
                 # This text is shown to the user verbatim, never as an HTML
                 # permission warning or as an enforced UI block.

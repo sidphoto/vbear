@@ -181,11 +181,16 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_release_heading_matches_the_version(self):
         headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.8.8"), headings[:3])
-        self.assertTrue(headings[1].startswith("v0.8.7"), headings[:3])
-        self.assertTrue(headings[2].startswith("v0.8.6"), headings[:3])
+        self.assertTrue(headings[0].startswith("v0.8.9"), headings[:3])
+        self.assertTrue(headings[1].startswith("v0.8.8"), headings[:3])
+        self.assertTrue(headings[2].startswith("v0.8.7"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('__version__ = "0.8.8"', init)
+        self.assertIn('__version__ = "0.8.9"', init)
+
+    def test_the_v089_section_covers_the_category_row(self):
+        section = self.text[self.text.index("## v0.8.9"):self.text.index("## v0.8.8")]
+        for topic in ("sorts the skills by use", "全部", "其他", "rough"):
+            self.assertIn(topic, section, topic)
 
     def test_the_v088_section_covers_the_whole_chinese_summary(self):
         section = self.text[self.text.index("## v0.8.8"):self.text.index("## v0.8.7")]

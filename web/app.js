@@ -3799,6 +3799,7 @@ const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還�
 const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
 const SKILL_SHARED_TAG = "共用";
+const SKILL_CAT_OTHER = "_other";
 const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
 // VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
@@ -3981,6 +3982,9 @@ function openCardWizard(opts) {
   const tools = cardCatalogTools(catalog);
   const skillCatalog = Array.isArray(catalog.skills) ? catalog.skills : [];
   const skillById = new Map(skillCatalog.map((s) => [s.skill_id, s]));
+  // the use categories (資安、設計、寫作…) the scan gives skills by keywords; a skill can be in several, or in none
+  const skillCategories = Array.isArray(catalog.skill_categories)
+    ? catalog.skill_categories.filter((c) => c && typeof c.id === "string" && typeof c.label === "string") : [];
   const professions = Array.isArray(catalog.professions) ? catalog.professions : [];
   const permissionKeys = CARD_INTENT_KEYS.map(([k]) => k);
 
@@ -4005,6 +4009,7 @@ function openCardWizard(opts) {
     query: "",
     shown: CARD_PAGE_SIZE,
     showUnused: false,
+    category: "",   // "" is every category; SKILL_CAT_OTHER is the skills in none
     nameError: "",
     busy: false,
   };
@@ -4321,9 +4326,14 @@ function openCardWizard(opts) {
         return `${e.skill.name || ""} ${e.skill.excerpt || ""} ${e.skill.tool || ""} ${zh.zh ? `${zh.text} ${zh.when} ${zh.full}` : ""}`
           .toLowerCase().includes(q);
       };
-      const listedHits = plan.listed.filter(match);
-      const unusedHits = plan.unused.filter(match);
-      counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${q ? `，符合搜尋的有 ${listedHits.length} 張` : ""}`;
+      const catsOf = (e) => (Array.isArray(e.skill.categories) ? e.skill.categories : []).filter((c) => catLabel.has(c));
+      const inCat = (e) => !st.category || (st.category === SKILL_CAT_OTHER ? !catsOf(e).length : catsOf(e).includes(st.category));
+      drawCategories(st.showUnused ? [...plan.listed, ...plan.unused] : plan.listed, catsOf);
+      const listedHits = plan.listed.filter((e) => match(e) && inCat(e));
+      const unusedHits = plan.unused.filter((e) => match(e) && inCat(e));
+      const narrowed = q || st.category;
+      const catText = st.category ? `「${st.category === SKILL_CAT_OTHER ? "其他" : catLabel.get(st.category)}」` : "";
+      counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${narrowed ? `，${catText}${q ? (catText ? "裡" : "") + "符合搜尋" : ""}的有 ${listedHits.length} 張` : ""}`;
       const rows = st.showUnused ? [...listedHits, ...unusedHits] : listedHits;
       if (!rows.length) {
         const hint = q && !st.showUnused && unusedHits.length
@@ -4351,6 +4361,32 @@ function openCardWizard(opts) {
         rest.length ? grid(rest) : null, more);
     }
 
+    // the category row: 全部 and each category this list has, with how many; one at a time, combined with the search
+    const catLabel = new Map(skillCategories.map((c) => [c.id, c.label]));
+    const catRow = el("div", { class: "cw-cat-row", role: "group", "aria-label": "依用途分類", "data-cw": "skill-categories" });
+    const catChips = new Map();
+    function drawCategories(entries, catsOf) {
+      const count = new Map();
+      let none = 0;
+      for (const e of entries) {
+        const cs = catsOf(e);
+        if (!cs.length) none += 1;
+        for (const c of cs) count.set(c, (count.get(c) || 0) + 1);
+      }
+      if (st.category && st.category !== SKILL_CAT_OTHER && !count.has(st.category)) st.category = "";
+      if (st.category === SKILL_CAT_OTHER && !none) st.category = "";
+      const chip = (id, label, n) => el("button", { type: "button", class: "cw-cat", "data-cat": id || "all",
+        "aria-pressed": String(st.category === id), on: { click: () => {
+          st.category = id; st.shown = CARD_PAGE_SIZE; drawList(); syncChosen();
+          const again = catChips.get(id); if (again) again.focus();   // the row was drawn again
+        } } }, `${label} ${n}`);
+      const cats = skillCategories.filter((c) => count.has(c.id)).sort((a, b) => count.get(b.id) - count.get(a.id));
+      const chips = cats.length ? [["", "全部", entries.length], ...cats.map((c) => [c.id, c.label, count.get(c.id)]),
+        ...(none ? [[SKILL_CAT_OTHER, "其他", none]] : [])].map(([id, label, n]) => [id, chip(id, label, n)]) : [];
+      catChips.clear();
+      for (const [id, b] of chips) catChips.set(id, b);
+      setKids(catRow, chips.length ? chips.map(([, b]) => b) : null);
+    }
     const search = el("input", { type: "search", id: "cw-skill-q", value: st.query, placeholder: "搜尋技能卡",
       "aria-label": "搜尋技能卡", on: { input: (e) => {
         st.query = e.target.value; st.shown = CARD_PAGE_SIZE; drawList(); syncChosen(); } } });
@@ -4371,7 +4407,7 @@ function openCardWizard(opts) {
       st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-skills-note" }, AGY_SKILLS_NOTE) : null,
       removedNote ? note : null,
       el("div", { class: "cw-field" }, countLabel, chosenBox),
-      el("div", { class: "cw-field" }, counter, search, toggle), list,
+      el("div", { class: "cw-field" }, counter, search, catRow, toggle), list,
     ];
   }
 

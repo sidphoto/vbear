@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.9 — skills sorted by use
+
+- **Step 3 of the card wizard sorts the skills by use.** Above the skill cards there is now a row of categories with
+  how many skills each has, such as 設計與介面, 寫作與內容, 測試與審查 and AI 與代理, plus 全部 and 其他 (skills in no
+  category). Pick one to see only those skills; it works together with the search box. These are the categories VBear
+  already gives skills from words in their text, the same as in the skill library, so a skill can be in more than one
+  and the sorting can be rough. Only categories the list has are shown, and which skills a card can take is unchanged.
+
 ## v0.8.8 — skill cards you can read in Chinese
 
 - **A translated skill card in the card wizard reads whole, in Chinese.** The card used to show the first sentence of

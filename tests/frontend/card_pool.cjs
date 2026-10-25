@@ -1201,6 +1201,48 @@ async function test(name, fn) {
     assert.ok(cell("s-3") && !cell("s-c"), "a Chinese search finds the translated skill");
   });
 
+  await test("P29 step 3 groups skills by use: 全部 and each category with its count, one at a time, with the search on top", async () => {
+    const sk = (id, name, cats) => ({ skill_id: id, name, invoke_name: name, tool: "claude", scope: "user", activation: "active", excerpt: name + " desc", categories: cats });
+    const cat = { ...catalog, skill_categories: [{ id: "design", label: "設計與介面" }, { id: "writing", label: "寫作與內容" }, { id: "security", label: "資安與防護" }],
+      skills: [sk("k-1", "logo-maker", ["design"]), sk("k-2", "copy-writer", ["writing"]), sk("k-3", "brand-voice", ["design", "writing"]),
+        sk("k-4", "misc-tool", []), sk("k-5", "odd-tool", ["unknown-cat"])] };
+    const { d } = await openWizard([], cat, {});
+    typeName(d, "Alpha");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(d, "下一步").dispatch("click");
+    await tick(8);
+    const row = () => byData(d, "data-cw", "skill-categories")[0];
+    const chips = () => walk(row()).filter((n) => n.tag === "button").map((b) => b.textContent);
+    assert.deepStrictEqual(chips(), ["全部 5", "設計與介面 2", "寫作與內容 2", "其他 2"], "only categories this list has; none and unknown are 其他");
+    const ids = () => byData(d, "data-cw", "skill-grid").flatMap((g) => walk(g).filter((n) => n.tag === "button" && n.getAttribute("data-skill")).map((n) => n.getAttribute("data-skill")));
+    const chip = (text) => walk(row()).find((n) => n.tag === "button" && n.textContent.startsWith(text));
+    assert.strictEqual(chip("全部").getAttribute("aria-pressed"), "true");
+    chip("設計與介面").dispatch("click");
+    assert.deepStrictEqual(ids().sort(), ["k-1", "k-3"]);
+    assert.strictEqual(chip("設計與介面").getAttribute("aria-pressed"), "true");
+    assert.ok(byData(d, "data-cw", "skill-count")[0].textContent.includes("「設計與介面」的有 2 張"));
+    chip("其他").dispatch("click");
+    assert.deepStrictEqual(ids().sort(), ["k-4", "k-5"]);
+    chip("寫作與內容").dispatch("click");
+    const q = walk(d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-skill-q");
+    q.value = "brand"; q.dispatch("input", { target: q });
+    assert.deepStrictEqual(ids(), ["k-3"], "the category and the search narrow together");
+    chip("全部").dispatch("click");
+    assert.deepStrictEqual(ids(), ["k-3"]);
+    byData(d, "data-skill", "k-3")[0].dispatch("click");
+    assert.ok(findText(d, "已插入（1）"), "picking still works");
+  });
+
+  await test("P29 no category row when the catalog has no categories", async () => {
+    const { d } = await openWizard([], catalog, {});
+    typeName(d, "Alpha");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(d, "下一步").dispatch("click");
+    await tick(8);
+    const row = byData(d, "data-cw", "skill-categories")[0];
+    assert.ok(!row || walk(row).filter((n) => n.tag === "button").length === 0);
+  });
+
   await test("P7 #4 the back of a card calls the intents 「權限意圖（分工記號）」", () => {
     const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
     const back = byData(pure.profileCard(p, { catalog, face: "back" }).node, "data-rc", "intents")[0];

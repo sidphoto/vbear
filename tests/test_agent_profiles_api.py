@@ -158,6 +158,21 @@ class AgentBuilderAPITests(unittest.TestCase):
         got = {s["skill_id"]: s["mtime"] for s in body["skills"]}
         self.assertEqual(got, {"s-1": 1700000000.5, "s-2": 0, "s-3": 0, "s-4": 0})
 
+    def test_catalog_carries_the_use_categories_for_the_picker_category_row(self):
+        skill = {"tool": "claude", "scope": "user", "activation": "active", "description": {"value": "d"}}
+        self.console.store._static = {"skills": [
+            {**skill, "skill_id": "s-1", "name": "one",
+             "categories": [{"id": "design", "label": "設計與介面", "keyword": "ui", "origin": "derived"}, "junk", {"id": 3}]},
+            {**skill, "skill_id": "s-2", "name": "two"}], "roles": [],
+            "category_table": [{"id": "design", "label": "設計與介面", "query": ["ui"]}, {"id": 5, "label": "x"}, "junk"]}
+        self.console.store._static_stamp = None
+        try:
+            _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        finally:
+            self.console.store._static = None
+        self.assertEqual({s["skill_id"]: s["categories"] for s in body["skills"]}, {"s-1": ["design"], "s-2": []})
+        self.assertEqual(body["skill_categories"], [{"id": "design", "label": "設計與介面"}])
+
     def test_catalog_endpoint_lists_tool_and_permission_enums(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
