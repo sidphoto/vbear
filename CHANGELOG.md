@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.6 — skill cards you can read
 
 - **Small tidy-ups from the last two reviews.** In the card wizard's second step the four camp buttons now line up
   by the room they have: four in a row if they all fit, two by two otherwise, one under another on a narrow screen,
