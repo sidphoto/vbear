@@ -41,6 +41,7 @@ from . import agent_launch
 from . import agent_profiles
 from . import armory
 from . import loadout as loadout_mod
+from . import model_options
 from . import claude_verify
 from . import config as cfg
 from . import flow_executor
@@ -1589,7 +1590,18 @@ def make_handler(console: Console):
                 "demo_id_prefix": agent_profiles.DEMO_ID_PREFIX,
                 # Whether a pinned Codex install exists on this machine: one stat, no program is run.
                 "codex_installed": self._codex_pinned_found(),
+                # The model names the wizard's drop-down offers (P31): Claude's aliases plus the names the usage scan
+                # saw, and what Codex lists in its own cache. Nothing is run and nothing is fetched.
+                "model_options": model_options.build(HOME(), self._usage_sessions_cached()),
             }
+
+        def _usage_sessions_cached(self) -> list:
+            """The usage rows of the last live view, however old; [] when none was built. Like the flows, this only reads
+            what is already there: it never builds the live view, which would call the runtime."""
+            live = console.store.live_cached()
+            usage = live.get("usage") if isinstance(live, dict) else None
+            sessions = usage.get("sessions") if isinstance(usage, dict) else None
+            return sessions if isinstance(sessions, list) else []
 
         def _with_pickup(self, items: list[dict]) -> list[dict]:
             """Each card plus its pickup state, derived now from the live view.
