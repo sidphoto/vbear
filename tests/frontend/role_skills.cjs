@@ -46,7 +46,7 @@ vm.runInContext(source.slice(source.indexOf("function el("), source.indexOf("con
 vm.runInContext(`
 const D={roles:[{role_id:'r',name:'Test',kind:'subagent',tool:'claude',skill_link_basis:'declared',skills:[]}],live:{sessions:[]},byId:new Map()};
 for(let i=0;i<250;i++){const s={skill_id:String(i),name:'skill-'+i};D.roles[0].skills.push(s);D.byId.set(s.skill_id,s);}
-const loadStatic=async()=>{},loadLive=async()=>{},BASIS={};
+const loadStatic=async()=>{},loadLive=async()=>{},ensureRoleTranslations=async()=>{},roleLabel=(id,n)=>n,BASIS={};
 const crumbs=()=>null,notice=()=>null,prov=()=>null,toolTag=()=>null,sectionHead=()=>null,initialOf=()=>'',home=x=>x;
 let searches=0;
 function searchSkills(q,pool){searches++;return pool.filter(s=>s.name.includes(q)).map(s=>({s,why:''}));}

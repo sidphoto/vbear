@@ -221,6 +221,7 @@ const staticData = {
 function freshContext(handlers) {
   Object.keys(fetchHandlers).forEach((k) => delete fetchHandlers[k]);
   fetchHandlers["GET /api/translations"] = () => jsonResponse({entries:{},counts:{fresh:0,stale:0,none:0,orphan:0},job:null,engine:"claude"});
+  fetchHandlers["GET /api/role-translations"] = () => jsonResponse({entries:{},counts:{fresh:0,stale:0,none:0,orphan:0},job:null,engine:"claude"});
   Object.assign(fetchHandlers, handlers);
   fetchCalls.length = 0;
   for (const id of [...idRegistry.keys()]) idRegistry.delete(id);
@@ -2600,6 +2601,171 @@ async function test(name, fn) {
     assert.ok(/\.cw-skill-ex\s*\{[^}]*-webkit-line-clamp:\s*2/.test(css), "two lines for the description");
     const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
     assert.ok(!/cw-skill/.test(html), "no other page uses the card");
+  });
+
+  // ---- P30: role (profession) names in Chinese ----
+  const rtEntry = (zh, state = "fresh") => ({ state, entry: { engine: "claude", model: "claude-haiku-5-5", cli_version: "2.1.296", created_at: 1, name_zh: zh, what: "一句話職責" } });
+  const rtView = (entries, counts, job = null) => ({ entries, counts: { fresh: 0, stale: 0, none: 0, orphan: 0, ...counts }, job, engine: "claude", provider: "fake" });
+  const rtRoutes = (view) => ({ "GET /api/role-translations": () => jsonResponse(typeof view === "function" ? view() : view) });
+  const catalogP30 = { ...catalog, professions: [
+    { role_id: "r-1", name: "Writer", tool: "claude", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" },
+    { role_id: "r-2", name: "Brand Guardian", tool: "codex", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" },
+    { role_id: "r-3", name: "Trend Researcher", tool: "codex", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" }] };
+  const confirmDlg = () => body.children.find((c) => c !== main && walk(c).some((n) => n.getAttribute && n.getAttribute("id") === "modal-confirm-title"));
+  const profField = () => byData(dialog(), "data-cw", "profession-field")[0];
+  const profSelect = () => walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("id") === "cw-profession");
+  const optTexts = () => profSelect().children.filter((n) => n.tag === "option").map((n) => n.textContent);
+  async function profWizard(view, extra = {}) {
+    const { ctx, posts } = await openWizard([], catalogP30, { ...rtRoutes(view), ...extra });
+    typeName(dialog(), "X");
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(6);
+    return { ctx, posts };
+  }
+  const translateBtn = () => byData(dialog(), "data-cw", "role-translate")[0];
+
+  await test("P30 the profession menu shows 中文名稱（English name）・tool when a name is translated, and the old English line when not", async () => {
+    await profWizard(rtView({ "r-1": rtEntry("作家"), "r-2": rtEntry("品牌守護者"), "r-3": { state: "none", entry: null } }, { fresh: 2, none: 1 }));
+    assert.deepStrictEqual(optTexts(), ["（不綁定）", "作家（Writer）・Claude Code", "品牌守護者（Brand Guardian）・Codex", "Trend Researcher (codex)"]);
+    const values = profSelect().children.filter((n) => n.tag === "option").map((n) => n.getAttribute("value"));
+    assert.deepStrictEqual(values, ["", "r-1", "r-2", "r-3"], "the stored value is still the role id");
+  });
+
+  await test("P30 a stale translation is not used for the menu (the original changed since); the English line stays", async () => {
+    await profWizard(rtView({ "r-1": rtEntry("作家", "stale") }, { stale: 1, none: 2 }));
+    assert.strictEqual(optTexts()[1], "Writer (claude)");
+  });
+
+  await test("P30 the line under the menu says the Chinese names are machine translation, only when one is shown", async () => {
+    await profWizard(rtView({ "r-1": rtEntry("作家") }, { fresh: 1, none: 2 }));
+    assert.ok(findText(profField(), "中文名稱是機器翻譯"));
+    await profWizard(rtView({}, { none: 3 }));
+    assert.ok(!findText(profField(), "中文名稱是機器翻譯"));
+  });
+
+  await test("P30 the translate button counts what is not translated, asks first in the page, and says what is sent", async () => {
+    const { posts } = await profWizard(rtView({ "r-1": rtEntry("作家") }, { fresh: 1, none: 2 }), {
+      "POST /api/role-translations/batch": (url, options) => { posts.push(JSON.parse(options.body)); return jsonResponse({ job: { id: "j", status: "running" } }, 202); } });
+    const btn = translateBtn();
+    assert.strictEqual(btn.tag, "button");
+    assert.strictEqual(btn.textContent.trim(), "把職業名稱翻成中文（2 個未翻）");
+    btn.dispatch("click");
+    await tick();
+    const dlg = confirmDlg();
+    assert.ok(dlg, "a confirm box in the page");
+    const text = textOf(dlg);
+    assert.ok(text.includes("Claude 帳號") && text.includes("不到 1 美分"), text);
+    assert.ok(text.includes("名稱") && text.includes("作者") && text.includes("說明"), "what is sent: the names and the author's descriptions");
+    assert.strictEqual(posts.length, 0, "nothing is sent before the answer");
+    btnByText(dlg, "取消").dispatch("click");
+    await tick();
+    assert.strictEqual(posts.length, 0, "no means no");
+    translateBtn().dispatch("click");
+    await tick();
+    btnByText(confirmDlg(), "翻成中文").dispatch("click");
+    await tick(6);
+    assert.deepStrictEqual(posts, [{ which: "stale+none" }]);
+  });
+
+  await test("P30 no button when nothing is left to translate; and a failed state read says so instead of guessing", async () => {
+    await profWizard(rtView({ "r-1": rtEntry("作家"), "r-2": rtEntry("甲"), "r-3": rtEntry("乙") }, { fresh: 3 }));
+    assert.strictEqual(translateBtn(), undefined);
+    await profWizard(() => { throw new Error("boom"); });
+    assert.strictEqual(translateBtn(), undefined, "an unknown state offers no button");
+    assert.deepStrictEqual(optTexts().slice(1), ["Writer (claude)", "Brand Guardian (codex)", "Trend Researcher (codex)"]);
+  });
+
+  await test("P30 the menu is drawn again when the translations arrive, without closing the wizard or losing the choice", async () => {
+    let done = false;
+    const { ctx } = await profWizard(() => (done ? rtView({ "r-1": rtEntry("作家"), "r-2": rtEntry("甲"), "r-3": rtEntry("乙") }, { fresh: 3 })
+      : rtView({}, { none: 3 })), { "POST /api/role-translations/batch": () => { done = true; return jsonResponse({ job: { id: "j", status: "running" } }, 202); } });
+    const sel = profSelect();
+    sel.value = "r-2"; sel.dispatch("change");
+    translateBtn().dispatch("click");
+    await tick();
+    btnByText(confirmDlg(), "翻成中文").dispatch("click");
+    await tick(8);
+    assert.ok(dialog(), "the wizard stays open");
+    assert.deepStrictEqual(optTexts(), ["（不綁定）", "作家（Writer）・Claude Code", "甲（Brand Guardian）・Codex", "乙（Trend Researcher）・Codex"]);
+    assert.strictEqual(profSelect().value, "r-2", "the chosen role stays chosen");
+    assert.strictEqual(translateBtn(), undefined);
+  });
+
+  await test("P30 a running job shows progress and a cancel, not a second start", async () => {
+    await profWizard(rtView({}, { none: 3 }, { id: "j", status: "running", total: 3, done: 1, failed: 0, error: null }));
+    assert.strictEqual(translateBtn(), undefined);
+    const status = byData(dialog(), "data-cw", "role-translate-status")[0];
+    assert.ok(status && status.textContent.includes("1") && status.textContent.includes("3"));
+    assert.ok(btnByText(status.parentNode || dialog(), "取消翻譯"));
+  });
+
+  await test("P30 a failed job says why in the job's own words", async () => {
+    await profWizard(rtView({}, { none: 3 }, { id: "j", status: "failed", total: 3, done: 1, failed: 1, error: { code: "cli_not_found", message: "找不到 Claude Code。" } }));
+    assert.ok(findText(profField(), "找不到 Claude Code。"));
+    assert.ok(translateBtn(), "the button comes back, to try again");
+  });
+
+  await test("P30 the back of a role card names the profession in Chinese with the English in brackets; without a translation, as before", async () => {
+    const p = mkProfile("p-1", "Mine", "codex", { read: "allow", write: "deny", test: "allow", deploy: "deny" }, { profession_role_id: "r-1" });
+    const pool = async (view) => {
+      await openPool([p], catalog, { ...rtRoutes(view), "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, {
+        profession: { state: "found", role_id: "r-1", name: "Writer", description: { value: "Writes docs", origin: "author", detail: "front matter" } } })) });
+      return faceOf(cardOf("p-1"), "back");
+    };
+    let back = await pool(rtView({ "r-1": rtEntry("作家") }, { fresh: 1 }));
+    assert.ok(findText(back, "作家（Writer）") && findText(back, "只是標籤"));
+    assert.ok(findText(back, "Writes docs"), "the author's own words stay as they are");
+    back = await pool(rtView({}, { none: 1 }));
+    assert.ok(findText(back, "Writer") && !findText(back, "（Writer）"));
+  });
+
+  await test("P30 roleLabel: translated name with the English in brackets; nothing translated, or stale, gives the name itself", () => {
+    const set = (entries) => vm.runInContext(`RT.entries = ${JSON.stringify(entries)}`, pure);
+    set({ a: rtEntry("甲"), b: rtEntry("乙", "stale"), c: { state: "none", entry: null }, d: { state: "fresh", entry: { name_zh: "" } } });
+    assert.strictEqual(pure.roleLabel("a", "Alpha"), "甲（Alpha）");
+    for (const id of ["b", "c", "d", "zzz", "__proto__", "constructor"]) assert.strictEqual(pure.roleLabel(id, "Name"), "Name", id);
+    assert.strictEqual(pure.roleLabel("a", ""), "甲");
+    assert.strictEqual(pure.roleLabel("a", null), "甲");
+    set({});
+  });
+
+  await test("P30 pollRoleTranslations reads the state only while a role job runs or before the first read", async () => {
+    const ctx = freshContext({});
+    evalAgentBuilderSlice(ctx);
+    let reads = 0;
+    fetchHandlers["GET /api/role-translations"] = () => { reads += 1; return jsonResponse(rtView({}, { none: 1 }, reads === 1 ? { id: "j", status: "running", total: 1, done: 0, failed: 0, error: null } : { id: "j", status: "completed", total: 1, done: 1, failed: 0, error: null })); };
+    await ctx.pollRoleTranslations();   // first read
+    await ctx.pollRoleTranslations();   // running: read again
+    await ctx.pollRoleTranslations();   // finished: no read
+    await ctx.pollRoleTranslations();
+    assert.strictEqual(reads, 2);
+  });
+
+  await test("P30 the team page role cards and the role page use the Chinese name with the English in brackets", async () => {
+    const sub = { role_id: "r-1", name: "Writer", tool: "claude", kind: "subagent", skill_link_ids: [], skill_link_basis: "undeclared", skills: [] };
+    const ctx = freshContext({});
+    evalAgentBuilderSlice(ctx);
+    vm.runInContext(`RT.entries = ${JSON.stringify({ "r-1": rtEntry("作家") })}`, ctx);
+    const titles = walk(ctx.roleCard(sub)).filter((n) => n.className === "card-title").map((n) => n.textContent);
+    assert.deepStrictEqual(titles, ["作家（Writer）"]);
+    assert.ok(source.includes("roleLabel(r.role_id, r.name)"));
+  });
+
+  await test("P30 the settings page has one line for the role-name translations: counts when known, 狀態未知 when not", () => {
+    const line = () => walk(pure.translationSettings({}, async () => null)).find((n) => n.getAttribute && n.getAttribute("data-translation") === "roles").textContent;
+    vm.runInContext("RT.loaded = false; RT.error = null", pure);
+    assert.ok(line().includes("狀態未知"));
+    vm.runInContext("RT.loaded = true; RT.counts = { fresh: 4, none: 2, stale: 1 }", pure);
+    assert.ok(line().includes("已翻 4") && line().includes("未翻 3"), line());
+    vm.runInContext("RT.loaded = false; RT.counts = {}", pure);
+  });
+
+  await test("P30 the sources hold no innerHTML, emoji or outside address for the new code", () => {
+    const start = source.indexOf("// ---------- role-name translations"), end = source.indexOf("// ---------- data");
+    assert.ok(start > 0 && end > start);
+    const chunk = source.slice(start, end);
+    assert.ok(!/innerHTML|insertAdjacentHTML|https?:\/\//.test(chunk));
+    assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(chunk));
   });
 
   console.log(`\n${passed} passed`);

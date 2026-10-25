@@ -1252,6 +1252,8 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .cw-field input[type="text"], .cw-field input[type="search"], .cw-field select, .cw-intent-row select { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--ink); font: inherit; font-size: 14px; }
 .cw-field small { color: var(--ink-3); font-weight: 400; }
 .cw-hint { color: var(--info); margin: 0; }
+.cw-role-translate { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.cw-role-translate p { margin: 0; }
 .cw-error { color: var(--bad); margin: 0; }
 .cw-tag { margin-left: 8px; font-weight: 400; }
 .cw-choices, .cw-species { display: flex; flex-wrap: wrap; gap: 8px; }

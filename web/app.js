@@ -1323,6 +1323,8 @@ function translationSettings(conf, saveConf) {
     el("label", { class: "switch" }, auto, el("span", null, "原文變更時自動重翻（預設關閉）")),
     el("p", { class: "small muted" }, "第一次開啟需確認資料送出、額度與費用。更換引擎會關閉自動重翻，請重新同意。關閉時也會停止目前工作。"),
     el("p", null, `孤兒翻譯：${T.error ? "未知" : T.counts.orphan || 0}`),
+    el("p", { class: "small", "data-translation": "roles" }, RT.error || !RT.loaded ? "職業名稱翻譯：狀態未知"
+      : `職業名稱翻譯：已翻 ${RT.counts.fresh || 0} · 未翻 ${roleUntranslated()}（在角色卡精靈的「進階」裡翻譯）`),
     el("button", { class: "btn small", type: "button", on: { click: async () => {
       if (T.error) return;
       if (!(await confirmInPage("檢查孤兒翻譯", `目前有 ${T.counts.orphan || 0} 個索引已找不到的翻譯；只清除快取，不會刪除技能。`, "繼續"))) return;
@@ -1333,6 +1335,87 @@ function translationSettings(conf, saveConf) {
     el("p", { class: "small muted" }, T.provider === "fake" ? "QA 假 CLI；不打真模型。" : "翻譯前會核對版本。若未通過：這個 Claude Code 版本的翻譯安全邊界還沒驗證。Codex 翻譯仍未開放。"),
     el("p", { class: "small muted" }, "驗證會花極少量額度，只送固定的無害提示，不送技能資料。"),
     conf.translation_engine === "claude" ? el("button", { class: "btn small", type: "button", on: { click: verifyTranslationBoundary } }, "驗證") : null);
+}
+
+// ---------- role-name translations (the profession menu; a cache apart from the skills') ------
+// A role template (a Claude Code subagent, a Codex agent) has an English name. The user can have the names put into
+// Chinese, once, on their own account; the result is a machine translation kept in its own file. Only a fresh
+// translation is shown (one whose source changed is not), always with the English beside it.
+const RT = { entries: {}, counts: {}, job: null, engine: "claude", error: null, loaded: false, listeners: new Set() };
+const ROLE_TOOL_ZH = { claude: "Claude Code", codex: "Codex" };
+function roleZhName(id) {
+  if (typeof id !== "string" || !Object.prototype.hasOwnProperty.call(RT.entries, id)) return "";
+  const t = RT.entries[id];
+  return t && t.state === "fresh" && t.entry && typeof t.entry.name_zh === "string" ? t.entry.name_zh.trim() : "";
+}
+// 中文名稱（English name); the name alone when there is no fresh translation.
+function roleLabel(id, name) {
+  const en = typeof name === "string" ? name : "";
+  const zh = roleZhName(id);
+  return !zh ? en : en ? `${zh}（${en}）` : zh;
+}
+// One line of the profession menu: 中文名稱（English name）・Claude Code, or as it always was: English name (tool).
+function professionOptionText(r) {
+  const zh = roleZhName(r.role_id);
+  if (!zh) return `${r.name || r.role_id} (${r.tool || "?"})`;
+  return `${zh}（${r.name || r.role_id}）・${ROLE_TOOL_ZH[r.tool] || r.tool || "?"}`;
+}
+function roleUntranslated() { return (RT.counts.none || 0) + (RT.counts.stale || 0); }
+function roleJobRunning() { return !!(RT.job && (RT.job.status === "running" || RT.job.status === "cancelling")); }
+async function refreshRoleTranslations() {
+  try {
+    const data = await api.get("/api/role-translations");
+    if (!data || !data.entries || typeof data.entries !== "object") throw new Error("職業翻譯狀態未知");
+    Object.assign(RT, { entries: data.entries, counts: data.counts || {}, job: data.job || null,
+      engine: data.engine || "claude", loaded: true, error: null });
+  } catch (e) { RT.error = e.message || "職業翻譯狀態未知"; }
+  for (const listener of [...RT.listeners]) listener();
+}
+function ensureRoleTranslations() { return RT.loaded ? Promise.resolve() : refreshRoleTranslations(); }
+// The timer's turn: read again only before the first read and while a role job runs.
+function pollRoleTranslations() { return !RT.loaded || roleJobRunning() ? refreshRoleTranslations() : Promise.resolve(); }
+function roleTranslationSummary(count, engine = RT.engine) {
+  const what = count === 1 ? "這個職業名稱" : `這 ${count} 個職業名稱`;
+  return (engine === "claude"
+    ? `會用你自己的 Claude 帳號翻譯${what}，${count === 1 ? "" : "每個"}通常不到 1 美分。`
+    : `會用你自己的 Codex 帳號翻譯${what}，費用上限未知。`) + "送出的只有職業名稱和作者自己寫的說明，不送路徑、模型或其他欄位。";
+}
+function roleTranslationDisclosure(count, engine = RT.engine) {
+  const budget = engine === "claude"
+    ? `Claude 請求預算每項 US$0.05，${count} 項合計 US$${(count * 0.05).toFixed(2)}；CLI 在回合結束檢查，這不是保證帳單上限。`
+    : "Codex 費用上限未知。";
+  return `將 ${count} 個職業（角色範本）的名稱，以及作者自己寫的說明（沒有就不送），送到本機已登入的 ${engine} CLI，可能消耗該帳號的額度或產生費用。${budget} Token 消耗未知。` +
+    "送出前會先遮蔽疑似金鑰；不送檔案路徑、模型、能力、適用任務或限制。中文名稱是機器翻譯，存在這台電腦的 role-translations.json，" +
+    "不會改動角色範本本身，也不會載入或執行它。每項最多 60 秒；可以隨時取消。";
+}
+async function startRoleTranslation() {
+  const count = roleUntranslated();
+  if (!count || RT.error || roleJobRunning()) return;
+  if (!(await confirmInPage("確認送出職業名稱", roleTranslationSummary(count), "翻成中文", { details: roleTranslationDisclosure(count) }))) return;
+  try { await api.post("/api/role-translations/batch", { which: "stale+none" }); await refreshRoleTranslations(); }
+  catch (e) { toast("無法翻譯：" + e.message); }
+}
+async function cancelRoleTranslation() {
+  try { await api.post("/api/role-translations/batch/cancel", {}); await refreshRoleTranslations(); }
+  catch (e) { toast(e.message); }
+}
+// What goes under the profession menu: the button (only when something is left), the progress while a job runs, and
+// the reason when the last job failed.
+function roleTranslateRow() {
+  const kids = [];
+  if (RT.error) kids.push(el("p", { class: "small muted", "data-cw": "role-translate-error" }, "職業名稱的翻譯狀態讀不到，先顯示英文。"));
+  else if (roleJobRunning()) {
+    const j = RT.job;
+    kids.push(el("p", { class: "small", role: "status", "data-cw": "role-translate-status" }, `職業名稱翻譯中（${j.done || 0} / ${j.total || 0}）`),
+      el("button", { class: "btn small", type: "button", "data-cw": "role-translate-cancel", on: { click: cancelRoleTranslation } }, "取消翻譯"));
+  } else {
+    if (RT.job && RT.job.status === "failed" && RT.job.error)
+      kids.push(el("p", { class: "small cw-error", role: "status", "data-cw": "role-translate-failed" }, "上次職業名稱翻譯沒有完成：" + String(RT.job.error.message || "原因不明")));
+    const n = roleUntranslated();
+    if (n) kids.push(el("button", { class: "btn small", type: "button", "data-cw": "role-translate", on: { click: startRoleTranslation } },
+      `把職業名稱翻成中文（${n} 個未翻）`));
+  }
+  return kids;
 }
 
 // ---------- data -----------------------------------------------------------
@@ -1738,7 +1821,7 @@ function roleCard(r) {
       el("div", { class: "who" },
         el("div", { class: "avatar", "aria-hidden": "true" }, r.emoji || initialOf(r.name)),
         el("div", null,
-          el("div", { class: "card-title" }, r.name),
+          el("div", { class: "card-title" }, roleLabel(r.role_id, r.name)),
           el("div", { class: "card-sub" }, r.kind === "cli" ? "主代理（直接執行的工具）" : "子代理／角色設定"))),
       toolTag(r.tool)),
     r.description && r.description.value ? el("p", { class: "clamp" }, firstSentence(r.description.value, 160)) : el("p", { class: "muted" }, "沒有描述"),
@@ -3699,7 +3782,7 @@ async function viewSkillDetail(id) {
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "誰可以使用"),
           d.roles.length ? el("ul", { class: "tree" }, d.roles.map((r) => el("li", null,
-            el("a", { href: `#/team/role/${r.role_id}` }, r.name), " ", el("span", { class: "small muted" }, BASIS[r.basis] || r.basis))))
+            el("a", { href: `#/team/role/${r.role_id}` }, roleLabel(r.role_id, r.name)), " ", el("span", { class: "small muted" }, BASIS[r.basis] || r.basis))))
             : el("p", { class: "muted small" }, s.activation === "active" ? "沒有角色宣告使用此技能。" : "此技能目前不在任何工具的載入範圍，沒有角色能直接使用。")),
         el("div", { class: "panel pad" },
           el("h2", { style: "margin-bottom:10px" }, "使用紀錄"),
@@ -4129,6 +4212,33 @@ function openCardWizard(opts) {
     st.suggested = Boolean(st.position);
     st.touched = false;
   }
+  // the profession menu draws itself again when the role-name translations arrive; the rest of the step stays as it is
+  function professionField() {
+    const box = el("div", { "data-cw": "profession-field" });
+    box._rtInitial = true;
+    const draw = () => {
+      if (!box._rtInitial && !modal.contains(box)) { RT.listeners.delete(draw); return; }
+      box._rtInitial = false;
+      const shownZh = st.tool !== "agy" && professions.some((r) => roleZhName(r.role_id));
+      const select = el("select", { id: "cw-profession", on: { change: (e) => { st.profession = e.target.value; } } },
+        el("option", { value: "" }, "（不綁定）"),
+        // VBear scans no Agent role of Antigravity, and a Claude or Codex role does not stand in for one
+        // (a label an AGY card already holds, set outside this page, stays visible so that it can be unbound)
+        st.tool === "agy" ? (st.profession ? el("option", { value: st.profession }, `${st.profession}（目前綁定）`) : null) : professions.map((r) => el("option", { value: r.role_id || "", selected: st.profession === r.role_id ? "selected" : null },
+          professionOptionText(r))));
+      select.value = st.profession;
+      setKids(box,
+        el("label", { class: "cw-field", for: "cw-profession" },
+          el("span", null, "職業標籤"), select,
+          el("small", null, st.tool === "agy" ? AGY_NO_PROFESSIONS
+            : "你電腦裡現成的角色範本，可以不選，只是標籤，不會寫回來源。" + (shownZh ? "中文名稱是機器翻譯。" : ""))),
+        st.tool === "agy" ? null : el("div", { class: "cw-role-translate", "data-cw": "role-translate-row" }, roleTranslateRow()));
+    };
+    RT.listeners.add(draw);
+    draw();
+    if (!RT.loaded) refreshRoleTranslations();
+    return box;
+  }
   function stepTwo() {
     const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "陣營（工具）" },
       tools.map((t) => el("button", { type: "button", class: "cw-choice", "data-tool": t,
@@ -4170,23 +4280,13 @@ function openCardWizard(opts) {
     const advanced = el("details", { class: "cw-details", "data-cw": "advanced", open: advancedOpen,
       on: { toggle: (e) => { advancedOpen = e.target.open; } } },
       el("summary", null, "進階"),
-      el("label", { class: "cw-field", for: "cw-profession" },
-        el("span", null, "職業標籤"),
-        el("select", { id: "cw-profession", on: { change: (e) => { st.profession = e.target.value; } } },
-          el("option", { value: "" }, "（不綁定）"),
-          // VBear scans no Agent role of Antigravity, and a Claude or Codex role does not stand in for one
-          // (a label an AGY card already holds, set outside this page, stays visible so that it can be unbound)
-          st.tool === "agy" ? (st.profession ? el("option", { value: st.profession }, `${st.profession}（目前綁定）`) : null) : professions.map((r) => el("option", { value: r.role_id || "", selected: st.profession === r.role_id ? "selected" : null },
-            `${r.name || r.role_id} (${r.tool || "?"})`))),
-        el("small", null, st.tool === "agy" ? AGY_NO_PROFESSIONS : "你電腦裡現成的角色範本，可以不選，只是標籤，不會寫回來源。")),
+      professionField(),
       el("label", { class: "cw-field", for: "cw-model" },
         el("span", null, "模型 (Model ID)"),
         el("input", { type: "text", id: "cw-model", maxlength: String(catalog.model_id_max_length || 200),
           placeholder: "例如 opus-4.1、gpt-test；留空視為該工具預設", value: st.modelId,
           on: { input: (e) => { st.modelId = e.target.value; } } }),
         el("small", null, `工具 ID：${st.tool}。模型設定只是記錄，不是執行環境。`)));
-    const profSelect = advanced.querySelector("select");
-    if (profSelect) profSelect.value = st.profession;
 
     return [
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
@@ -5137,7 +5237,7 @@ function profileCard(p, opts = {}) {
     let profText = "載入中…";
     if (loadoutState && loadoutState.state === "error") profText = "讀不到職業標籤";
     else if (pr) {
-      profText = pr.state === "found" ? (pr.name || pr.role_id) : pr.state === "none" ? "（未選職業標籤）"
+      profText = pr.state === "found" ? (roleLabel(pr.role_id, pr.name || "") || pr.role_id) : pr.state === "none" ? "（未選職業標籤）"
         : pr.state === "not_in_index" ? `${pr.role_id}（目前索引找不到這個職業）` : `${pr.role_id || ""}（索引未載入）`;
     } else if (!loadoutState) profText = p.profession_role_id ? String(p.profession_role_id) : "（未選職業標籤）";
     setKids(profBox, profText, pr ? el("span", { class: "small muted" }, "　只是標籤，不會把角色指示載入工具") : null);
@@ -5186,7 +5286,8 @@ async function viewTeam(params = {}) {
   const [, , profilesRes, catalogRes] = await Promise.all([loadStatic(), loadLive(),
     api.get("/api/agent-profiles").then((r) => ({ ok: true, profiles: (r && r.profiles) || [] }))
       .catch((e) => ({ ok: false, error: e.message, profiles: [] })),
-    api.get("/api/agent-builder/catalog").then((r) => (r && r.ok ? r : null)).catch(() => null)]);
+    api.get("/api/agent-builder/catalog").then((r) => (r && r.ok ? r : null)).catch(() => null),
+    ensureRoleTranslations()]);
   const main = claim(token);
   const L = D.live;
   const catalog = catalogRes;
@@ -5297,7 +5398,7 @@ const STATUS_ORDER = { "needs-input": 0, waiting: 1, working: 2, unknown: 3, exi
 
 async function viewRole(id) {
   const token = seq;
-  await Promise.all([loadStatic(), loadLive()]);
+  await Promise.all([loadStatic(), loadLive(), ensureRoleTranslations()]);
   const r = D.roles.find((x) => x.role_id === id);
   const main = claim(token);
   if (!r) { setKids(main, crumbs([["角色卡池", "#/team"]]), notice("bad", "找不到這個角色（索引可能已更新）")); return; }
@@ -5352,8 +5453,8 @@ async function viewRole(id) {
   q.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) search.now(); });
 
   setKids(main, 
-    crumbs([["角色卡池", "#/team"], [r.name]]),
-    el("div", { class: "row" }, el("div", { class: "avatar", "aria-hidden": "true" }, r.emoji || initialOf(r.name)), el("h1", null, r.name), toolTag(r.tool)),
+    crumbs([["角色卡池", "#/team"], [roleLabel(r.role_id, r.name)]]),
+    el("div", { class: "row" }, el("div", { class: "avatar", "aria-hidden": "true" }, r.emoji || initialOf(r.name)), el("h1", null, roleLabel(r.role_id, r.name)), toolTag(r.tool)),
     el("p", { class: "lede" }, r.kind === "cli" ? "主代理：直接在終端機執行的工具。" : "角色設定：可以被主代理委派工作的子代理。"),
     (r.warnings || []).map((w) => notice("warn", w)),
     el("div", { class: "grid-2 section" },
@@ -5484,6 +5585,7 @@ async function viewSettings() {
   const token = seq;
   await loadStatic();
   await refreshTranslations();
+  await refreshRoleTranslations();
   const main = claim(token);
   const c = await api.get("/api/config");
   if (token !== seq) return;
@@ -10872,7 +10974,7 @@ async function route() {
 }
 
 setTheme(store.get("theme", "auto"));
-setInterval(() => { if (!document.hidden && !authLostShown && !authPending) refreshTranslations(); }, 2500);
+setInterval(() => { if (!document.hidden && !authLostShown && !authPending) { refreshTranslations(); pollRoleTranslations(); } }, 2500);
 // Coming back to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick && !authPending) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).
