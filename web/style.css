@@ -1275,6 +1275,11 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .cw-skill strong { overflow-wrap: anywhere; }
 .cw-skill[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .cw-skill-off { border-style: dashed; background: var(--mute-soft); color: var(--ink-3); cursor: not-allowed; }
+.cw-skill-dead { border-style: dashed; background: var(--mute-soft); color: var(--ink-2); }
+.cw-skill-dead[aria-pressed="true"] { background: var(--accent-soft); }
+.cw-field > .btn[data-cw="unused-toggle"] { justify-self: start; margin-top: 6px; }
+.cw-field > .btn[data-cw="unused-toggle"][aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+[data-cw="unused-heading"] { margin: 10px 0 6px; }
 .cw-skill-ex { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cw-deck { display: grid; gap: 12px; }
 .cw-deck-row { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }

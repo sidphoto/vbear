@@ -9,6 +9,18 @@
   list, the AGY config file's row no longer repeats its own name at the front of each problem; the overview's problem
   list keeps the name, since it has no row title above it. How the file is read, and what it refuses, is unchanged.
 
+- **Step 3 of the card wizard, the skill cards, is now readable.** The step opens with a few plain sentences: a skill
+  card is a work note written for an AI (how to make slides, how to handle a PDF); inserting one only records what the
+  role is good at, so the team looks divided when you build it; VBear does not load these skills when a role departs
+  yet; and the step can be skipped. The list now shows only what the card's camp really uses: a Claude Code or Codex
+  card lists that tool's active skills plus the shared ones, an AGY card what AGY reads, a shared card the shared skills.
+  Skills of other camps, old cached versions, copies in a plugin marketplace that is not installed, disabled ones and
+  ones a plugin ships but the tool does not load are behind a switch, "also show the skills that cannot be used (N)";
+  with it on they are greyed or marked in plain words. Copies of one skill with the same name are listed once, with
+  "N more with this name" on it. A skill already inserted stays under "inserted" with its reason even if the list
+  hides it. Search looks only at what is shown, and says how many matches wait behind the switch. Which skills a card
+  can take is unchanged, and so are the skill overview, the skill card page and the launch pass.
+
 ## v0.8.5 — the skills AGY reads
 
 - **An AGY card can now hold the skills AGY actually reads.** VBear used to say it did not know which skills

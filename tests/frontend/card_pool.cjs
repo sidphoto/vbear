@@ -519,6 +519,9 @@ async function test(name, fn) {
     await tick();
     return { ctx, posts, d: dialog() };
   }
+  // P24: the skills a card does not use are behind a switch in step 3
+  const ids24 = (root) => walk(root).filter((n) => n.getAttribute && n.getAttribute("data-skill")).map((n) => n.getAttribute("data-skill"));
+  const showUnused = () => byData(dialog(), "data-cw", "unused-toggle")[0].dispatch("click");
   const typeName = (d, text) => { const i = walk(d).find((n) => n.tag === "input"); i.value = text; i.dispatch("input"); return i; };
 
   await test("wizard: three steps, the controls at the bottom, no step entered without a name", async () => {
@@ -542,7 +545,7 @@ async function test(name, fn) {
     btnByText(d, "下一步").dispatch("click");
     assert.ok(findText(d, "陣營就是這張卡用哪個工具") && btnByText(d, "上一步"));
     btnByText(d, "下一步").dispatch("click");
-    assert.ok(btnByText(d, "建立") && !btnByText(d, "下一步") && findText(d, "收藏中"));
+    assert.ok(btnByText(d, "建立") && !btnByText(d, "下一步") && findText(d, "只是記錄"));
     btnByText(d, "上一步").dispatch("click");
     btnByText(d, "上一步").dispatch("click");
     assert.ok(walk(d).some((n) => n.tag === "input" && n.getAttribute("id") === "cw-name"));
@@ -714,7 +717,9 @@ async function test(name, fn) {
     btnByText(d, "下一步").dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
     const cur = dialog();
-    assert.ok(findText(cur, "這次的安全啟動不會載入它們"));
+    assert.ok(findText(cur, "目前不會自動載入"));
+    assert.strictEqual(byData(dialog(), "data-skill", "s-x").length, 0, "P24: the other tool's card is not in the default list");
+    showUnused();
     const sk = (id) => byData(dialog(), "data-skill", id)[0];
     assert.strictEqual(sk("s-c").getAttribute("aria-disabled"), null);
     assert.strictEqual(sk("s-x").getAttribute("aria-disabled"), "true");
@@ -745,6 +750,7 @@ async function test(name, fn) {
     assert.ok(findText(dialog(), "換了陣營，已移除 1 張這個陣營不會讀的技能卡。"));
     assert.ok(findText(dialog(), "已插入（1）"));
     assert.strictEqual(byData(dialog(), "data-skill", "s-x")[0].getAttribute("aria-disabled"), null, "now the codex skill fits");
+    showUnused();
     assert.strictEqual(byData(dialog(), "data-skill", "s-c")[0].getAttribute("aria-disabled"), "true");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
@@ -1188,6 +1194,7 @@ async function test(name, fn) {
     btnByText(d, "下一步").dispatch("click");
     btnByText(d, "下一步").dispatch("click");
     await tick(8);                           // translations the page had not read are read when the list opens
+    byData(d, "data-cw", "unused-toggle")[0].dispatch("click");   // P24: s-x is another tool's, so it is behind the switch
     const cell = (id) => byData(d, "data-skill-cell", id)[0];
     const fresh = cell("s-c");
     assert.strictEqual(byData(fresh, "data-cw", "skill-zh")[0].textContent, "替程式變更做審查，並列出有風險的行，同時標出需要補測試的地方。");
@@ -1743,9 +1750,11 @@ async function test(name, fn) {
     btnByText(dialog(), "下一步").dispatch("click");
     const cur = dialog();
     const note = byData(cur, "data-cw", "agy-skills-note")[0];
-    assert.ok(note && findText(note, "這些是 AGY 依你電腦上的設定會讀到的技能；VBear 不啟動 AGY，插在卡上只是收藏"), "the honest sentence, before any skill is picked");
+    assert.ok(note && findText(note, "這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）"), "the honest sentence, before any skill is picked");
     assert.ok(findText(note, "AGY 的內建與外掛技能不在這裡"));
     assert.ok(!findText(cur, "VBear 還不知道 AGY 會讀哪些技能"), "the old 'does not know' wording is gone");
+    assert.deepStrictEqual(ids24(dialog()).sort(), ["s-an", "s-ar"], "P24: the default list is what AGY reads");
+    showUnused();
     const sk = (id) => byData(dialog(), "data-skill", id)[0];
     for (const id of ["s-c", "s-x", "s-s"]) {
       assert.strictEqual(sk(id).getAttribute("aria-disabled"), "true", id);
@@ -1774,6 +1783,8 @@ async function test(name, fn) {
     btnByText(d, "下一步").dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
     assert.strictEqual(byData(dialog(), "data-cw", "agy-skills-note").length, 0);
+    assert.strictEqual(byData(dialog(), "data-skill", "s-ar").length, 0, "P24: a Codex skill is not offered on a Claude card by default");
+    showUnused();
     assert.ok(!findText(byData(dialog(), "data-skill", "s-ar")[0], "AGY 會讀"));
     assert.strictEqual(byData(dialog(), "data-skill", "s-ar")[0].getAttribute("aria-disabled"), "true", "a Codex skill still does not fit a Claude card");
     assert.strictEqual(byData(dialog(), "data-skill", "s-an")[0].getAttribute("aria-disabled"), "true");
@@ -1822,6 +1833,7 @@ async function test(name, fn) {
     assert.ok(findText(chip("gone"), "目前索引找不到"));
     assert.ok(!findText(chip("gone"), "AGY 不會讀"), "a skill the index lacks is not claimed unreadable");
     assert.ok(findText(dialog(), "已插入（3）"), "nothing was dropped");
+    showUnused();
     assert.strictEqual(byData(dialog(), "data-skill", "s-s")[0].getAttribute("aria-disabled"), "true", "it cannot be inserted again");
     btnByText(dialog(), "儲存修改").dispatch("click");
     await tick();
@@ -2139,10 +2151,240 @@ async function test(name, fn) {
     const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
     assert.ok(!/AGY[^"`\n]*(會載入|已保護|受保護|安全)/.test(wizard.replace(/不代表[^"]*/g, "")));
     assert.ok(source.includes("VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"));
-    assert.ok(source.includes("這些是 AGY 依你電腦上的設定會讀到的技能；VBear 不啟動 AGY，插在卡上只是收藏"));
+    assert.ok(source.includes("這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）"));
     assert.ok(source.includes("AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"));
     assert.ok(!source.includes("VBear 還不知道 AGY 會讀哪些技能"), "P22: it is judged from AGY's own files now");
     assert.ok(source.includes("VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
+  });
+
+  // ---- P24: the skill picker of step 3 says what the step is, lists what the card's camp really uses, folds same names ----
+  const sk24 = (skill_id, name, tool, activation, over = {}) => ({ skill_id, name, invoke_name: over.invoke_name === undefined ? `p24:${name}` : over.invoke_name,
+    tool, scope: "user", activation, mtime: 100, excerpt: `${name} excerpt`, read_by: [], ...over });
+  const catalog24 = { ...catalog, tools: ["claude", "codex", "agy", "shared"], skills: [
+    sk24("c-act-old", "deck-maker", "claude", "active", { mtime: 100 }),
+    sk24("c-act-new", "deck-maker", "claude", "active", { mtime: 200 }),
+    sk24("c-notes", "note-taker", "claude", "active"),
+    sk24("c-plain-a", "plain-skill", "claude", "active", { invoke_name: "", mtime: 10 }),
+    sk24("c-plain-b", "plain-skill", "claude", "active", { invoke_name: "", mtime: 20 }),
+    sk24("c-sup", "old-formatter", "claude", "superseded"),
+    sk24("c-ni", "market-copy", "claude", "not_installed"),
+    sk24("c-dis", "paused-helper", "claude", "disabled"),
+    sk24("c-nl", "bundled-extra", "claude", "not_loaded"),
+    sk24("x-sheet", "sheet-helper", "codex", "active"),
+    sk24("x-sup", "old-sheet", "codex", "superseded"),
+    sk24("x-lint", "lint-guide", "codex", "active", { read_by: ["agy"] }),
+    sk24("sh-writer", "shared-writer", "shared", "unknown"),
+    sk24("sh-check", "shared-checker", "shared", "active"),
+    sk24("a-notes", "agy-notes", "agy", "active", { read_by: ["agy"] }),
+  ] };
+  async function step3Of(tool, over = {}, cat = catalog24, extra = {}) {
+    const existing = mkProfile("p-24", "Card 24", tool, VERIFIED, { equipped_skill_ids: over.equipped || [] });
+    const ctx = await openPool([existing], cat, extra);
+    ctx.openCardWizard({ catalog: cat, profiles: [existing], existing, start: 3, onSaved: () => {} });
+    await tick(8);
+    return { ctx, d: dialog() };
+  }
+  const toggleOf = (d) => byData(d, "data-cw", "unused-toggle")[0];
+  const reasonOf = (d, id) => { const n = byData(byData(d, "data-skill-cell", id)[0], "data-cw", "unused-reason")[0]; return n ? n.textContent : null; };
+
+  await test("P24 step 3 opens with a plain explanation: what a skill card is, what inserting does, that nothing is loaded, that it can be skipped", async () => {
+    const { d } = await step3Of("claude");
+    const note = byData(d, "data-cw", "skills-note")[0];
+    const t = note.textContent;
+    assert.ok(note && /寫給 AI 的.*(工作說明|說明)/.test(t) && /簡報/.test(t) && /PDF/.test(t), "what a skill card is, with an example");
+    assert.ok(/擅長/.test(t) && /分工/.test(t), "what inserting is for");
+    assert.ok(/不會自動載入/.test(t) && /只是記錄/.test(t), "honest: recorded, not loaded");
+    assert.ok(/略過/.test(t), "it can be skipped");
+    assert.ok(!/這次的安全啟動不會載入它們/.test(t), "the old one-liner is replaced");
+    assert.ok(t.split(/[。；]/).filter(Boolean).length <= 4, "short");
+    assert.ok(!/(activation|superseded|invoke|scope)/i.test(t), "no jargon");
+  });
+
+  await test("P24 the AGY card keeps its own sentence and does not repeat the general one", async () => {
+    const { d } = await step3Of("agy");
+    const general = byData(d, "data-cw", "skills-note")[0].textContent;
+    const agy = byData(d, "data-cw", "agy-skills-note")[0];
+    assert.ok(agy && /AGY 依你電腦上的設定會讀到的技能/.test(agy.textContent) && /AGY 的內建與外掛技能不在這裡/.test(agy.textContent));
+    assert.ok(/VBear 不啟動 AGY/.test(agy.textContent));
+    assert.ok(!/只是收藏|只是記錄/.test(agy.textContent), "'only a record' is said once, in the general note");
+    assert.ok(/只是記錄/.test(general));
+  });
+
+  await test("P24 Claude card: the default list is Claude's active skills plus the shared ones, same names folded, nothing else", async () => {
+    const { d } = await step3Of("claude");
+    assert.deepStrictEqual(ids24(d).sort(), ["c-act-new", "c-notes", "c-plain-b", "sh-check", "sh-writer"].sort());
+    for (const hidden of ["c-sup", "c-ni", "c-dis", "c-nl", "x-sheet", "x-lint", "a-notes", "c-act-old", "c-plain-a"]) assert.strictEqual(byData(d, "data-skill", hidden).length, 0, hidden);
+    // the representative is the newest copy, and the card says how many more there are
+    assert.ok(findText(byData(d, "data-skill-cell", "c-act-new")[0], "另有 1 份同名"));
+    assert.ok(findText(byData(d, "data-skill-cell", "c-plain-b")[0], "另有 1 份同名"), "no invoke name: the name stands in");
+    assert.ok(!findText(byData(d, "data-skill-cell", "c-notes")[0], "份同名"));
+    assert.ok(findText(d, "可插 5 張"), "the total of what can be picked");
+  });
+
+  await test("P24 the representative of a same-name group is the active one, then the newest", async () => {
+    const cat = { ...catalog24, skills: [
+      sk24("r-old-act", "twin", "claude", "active", { mtime: 50 }),
+      sk24("r-new-sup", "twin", "claude", "superseded", { mtime: 900 }),
+      sk24("r-new-act", "twin", "claude", "active", { mtime: 60 }),
+      sk24("q-a", "pair", "claude", "active", { mtime: 5 }), sk24("q-b", "pair", "claude", "active", { mtime: 5 })] };
+    const { d } = await step3Of("claude", {}, cat);
+    assert.deepStrictEqual(ids24(d).sort(), ["q-a", "r-new-act"].sort(), "a newer superseded copy does not win; a tie is settled the same way every time");
+    assert.ok(findText(byData(d, "data-skill-cell", "r-new-act")[0], "另有 1 份同名"), "the superseded copy is not counted among the usable same names");
+  });
+
+  await test("P24 Codex card: Codex's active skills plus the shared ones", async () => {
+    const { d } = await step3Of("codex");
+    assert.deepStrictEqual(ids24(d).sort(), ["sh-check", "sh-writer", "x-lint", "x-sheet"].sort());
+    assert.ok(findText(d, "可插 4 張"));
+  });
+
+  await test("P24 shared card: the shared skills only; AGY card: what AGY reads", async () => {
+    const shared = await step3Of("shared");
+    assert.deepStrictEqual(ids24(shared.d).sort(), ["sh-check", "sh-writer"].sort());
+    const agy = await step3Of("agy");
+    assert.deepStrictEqual(ids24(agy.d).sort(), ["a-notes", "x-lint"].sort());
+    assert.ok(findText(agy.d, "可插 2 張"));
+  });
+
+  await test("P24 the camp tag shows only where the skill is not the card's own camp (shared, or any skill on an AGY card)", async () => {
+    const { d } = await step3Of("claude");
+    const tags = (id) => walk(byData(d, "data-skill", id)[0]).filter((n) => n.tag === "span" && n.className.split(" ").includes("tag")).map((n) => n.textContent);
+    assert.deepStrictEqual(tags("c-notes"), [], "the same for every card: no tag");
+    assert.deepStrictEqual(tags("sh-check"), ["共用卡"]);
+    const agy = await step3Of("agy");
+    assert.ok(walk(byData(agy.d, "data-skill", "a-notes")[0]).some((n) => n.textContent === "AGY"));
+  });
+
+  await test("P24 the switch: off by default with its count; on, the rest show greyed or marked with a plain reason; the picking rules stay", async () => {
+    const { d } = await step3Of("claude");
+    const t = toggleOf(d);
+    assert.ok(t && t.tag === "button" && t.getAttribute("aria-pressed") === "false");
+    assert.ok(t.textContent.includes("也顯示用不到的技能（10 張）"), t.textContent);
+    t.dispatch("click");
+    const on = dialog();
+    assert.strictEqual(toggleOf(on).getAttribute("aria-pressed"), "true");
+    assert.strictEqual(ids24(on).length, 15, "every skill is there now");
+    // a Claude skill of an old version: still pickable, marked
+    const sup = byData(on, "data-skill", "c-sup")[0];
+    assert.strictEqual(sup.getAttribute("aria-disabled"), null);
+    assert.strictEqual(reasonOf(on, "c-sup"), "舊版本，現在用的是新版");
+    assert.strictEqual(reasonOf(on, "c-ni"), "外掛市集裡的副本，沒有安裝");
+    assert.ok(reasonOf(on, "c-dis").includes("已停用"));
+    assert.strictEqual(reasonOf(on, "c-nl"), "外掛附帶，但不會被載入");
+    assert.ok(reasonOf(on, "c-act-old").includes("同名"), "a same-name copy says so");
+    sup.dispatch("click");
+    assert.strictEqual(sup.getAttribute("aria-pressed"), "true", "what could be picked before can still be picked");
+    // other camps: greyed, the present words, not pickable
+    for (const id of ["x-sheet", "x-lint", "a-notes"]) {
+      const b = byData(on, "data-skill", id)[0];
+      assert.strictEqual(b.getAttribute("aria-disabled"), "true", id);
+      assert.ok(findText(b, "Claude Code 不會讀這張卡"), id);
+      b.dispatch("click");
+      assert.strictEqual(b.getAttribute("aria-pressed"), "false", id);
+    }
+    // off again: the default list returns
+    toggleOf(dialog()).dispatch("click");
+    assert.strictEqual(ids24(dialog()).length, 5);
+  });
+
+  await test("P24 a skill that was hidden and is pickable can be pulled in and saved", async () => {
+    const { posts, d } = await openWizard([], catalog24);
+    typeName(d, "Hidden pick");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    toggleOf(dialog()).dispatch("click");
+    byData(dialog(), "data-skill", "c-sup")[0].dispatch("click");
+    byData(dialog(), "data-skill", "c-act-new")[0].dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts[0].equipped_skill_ids.sort(), ["c-act-new", "c-sup"]);
+  });
+
+  await test("P24 AGY card with the switch on: the rest are greyed with AGY's own words", async () => {
+    const { d } = await step3Of("agy");
+    toggleOf(d).dispatch("click");
+    const on = dialog();
+    assert.strictEqual(ids24(on).length, 15);
+    for (const id of ["c-act-new", "x-sheet", "sh-check"]) {
+      assert.strictEqual(byData(on, "data-skill", id)[0].getAttribute("aria-disabled"), "true", id);
+      assert.ok(findText(byData(on, "data-skill", id)[0], "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"), id);
+    }
+  });
+
+  await test("P24 already inserted but hidden by default: it stays in 已插入 with its reason, and can be taken off", async () => {
+    const { d } = await step3Of("claude", { equipped: ["c-sup", "c-act-old", "c-ni", "x-sheet"] });
+    assert.ok(findText(d, "已插入（4）"));
+    const chip = (id) => byData(byData(d, "data-cw", "chosen")[0], "data-chosen", id)[0];
+    const reason = (id) => byData(chip(id), "data-cw", "equipped-reason")[0];
+    assert.ok(findText(chip("c-sup"), "deck-maker") === false && findText(chip("c-sup"), "old-formatter"));
+    assert.strictEqual(reason("c-sup").textContent, "（舊版本，現在用的是新版）");
+    assert.strictEqual(reason("c-ni").textContent, "（外掛市集裡的副本，沒有安裝）");
+    assert.ok(reason("c-act-old").textContent.includes("同名"));
+    assert.ok(reason("x-sheet").textContent.includes("Claude Code 不會讀這張卡"));
+    assert.strictEqual(byData(d, "data-skill", "c-sup").length, 0, "the list itself still hides it");
+    walk(chip("c-sup")).find((n) => n.tag === "button").dispatch("click");
+    assert.ok(findText(dialog(), "已插入（3）"));
+    assert.strictEqual(byData(byData(dialog(), "data-cw", "chosen")[0], "data-chosen", "c-sup").length, 0);
+    assert.strictEqual(byData(byData(dialog(), "data-cw", "chosen")[0], "data-chosen", "c-ni").length, 1, "nothing else was removed");
+  });
+
+  await test("P24 AGY card: an inserted skill AGY does not read keeps its old mark; one it reads has no mark", async () => {
+    const { d } = await step3Of("agy", { equipped: ["c-act-new", "a-notes"] });
+    const chosen = byData(d, "data-cw", "chosen")[0];
+    assert.ok(findText(byData(chosen, "data-chosen", "c-act-new")[0], "AGY 不會讀"));
+    assert.strictEqual(byData(chosen, "data-cw", "agy-unread").length, 1);
+    assert.ok(!findText(byData(chosen, "data-chosen", "a-notes")[0], "不會讀"));
+  });
+
+  await test("P24 search stays inside what is shown; when only the unused ones match it says how many and offers the switch", async () => {
+    const { d } = await step3Of("claude");
+    const search = walk(d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-skill-q");
+    search.value = "old-formatter"; search.dispatch("input");
+    assert.strictEqual(ids24(dialog()).length, 0, "the default scope has no match");
+    const hint = byData(dialog(), "data-cw", "unused-hint")[0];
+    assert.ok(hint && findText(hint, "在用不到的技能裡有 1 張符合"));
+    assert.ok(!findText(dialog(), "沒有符合的技能卡。") || findText(hint, "1 張"));
+    btnByText(hint, "顯示這些技能").dispatch("click");
+    assert.strictEqual(toggleOf(dialog()).getAttribute("aria-pressed"), "true");
+    assert.deepStrictEqual(ids24(dialog()), ["c-sup"]);
+    assert.strictEqual(byData(dialog(), "data-cw", "unused-hint").length, 0, "no hint once the switch is on");
+    // a word that matches nowhere: plain message, no hint
+    const s2 = walk(dialog()).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-skill-q");
+    s2.value = "zzz-nothing"; s2.dispatch("input");
+    assert.ok(findText(dialog(), "沒有符合的技能卡。"));
+    assert.strictEqual(byData(dialog(), "data-cw", "unused-hint").length, 0);
+  });
+
+  await test("P24 search with the switch off finds only the default ones, and no hint when something matched", async () => {
+    const { d } = await step3Of("claude");
+    const search = walk(d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-skill-q");
+    search.value = "deck"; search.dispatch("input");
+    assert.deepStrictEqual(ids24(dialog()), ["c-act-new"]);
+    assert.strictEqual(byData(dialog(), "data-cw", "unused-hint").length, 0);
+  });
+
+  await test("P24 skillCompatible answers exactly as it did before, for every fake skill and every camp", () => {
+    // the function as it stood at the P23 head (8d870d2), kept here word for word
+    const before = (skill, tool) => {
+      const readBy = Boolean(skill) && (skill.tool === "agy" || (Array.isArray(skill.read_by) && skill.read_by.includes("agy")));
+      if (tool === "agy") return readBy && typeof (skill && skill.tool) === "string" && skill.tool !== "";
+      const source = skill && skill.tool;
+      if (source === "shared") return true;
+      return typeof source === "string" && source === tool;
+    };
+    let n = 0;
+    for (const s of [...catalog24.skills, null, {}, { tool: "" }, { tool: 3 }, { tool: "agy" }, { tool: "x", read_by: ["agy"] }]) {
+      for (const tool of ["claude", "codex", "agy", "shared", "other", undefined]) {
+        assert.strictEqual(pure.skillCompatible(s, tool), before(s, tool), `${s && s.skill_id} on ${tool}`); n += 1;
+      }
+    }
+    assert.ok(n > 100);
+  });
+
+  await test("P24 source: no innerHTML, no emoji, no outside address in the picker's new words", () => {
+    const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
+    assert.ok(!/innerHTML/.test(wizard));
+    assert.ok(!/\p{Extended_Pictographic}/u.test(wizard));
   });
 
   console.log(`\n${passed} passed`);

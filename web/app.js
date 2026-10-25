@@ -3801,7 +3801,7 @@ const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
 const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
 const AGY_UNREAD_MARK = "AGY 不會讀";
 const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-const AGY_SKILLS_NOTE = "這些是 AGY 依你電腦上的設定會讀到的技能；VBear 不啟動 AGY，插在卡上只是收藏。AGY 的內建與外掛技能不在這裡。";
+const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）。AGY 的內建與外掛技能不在這裡。";
 const AGY_NO_PROFESSIONS = "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
@@ -3809,7 +3809,21 @@ const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear
 // Beside the suggested intents, after CARD_INTENT_NOTE (design v1.2 R10): why the suggestions are all the same set.
 const CARD_INTENT_LAUNCH_NOTE = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
 const CARD_SPECIES_NOTE = "種族只換外觀，不影響能力。";
-const CARD_SKILLS_NOTE = "技能卡收藏在角色卡上，只是你的挑選紀錄（收藏中）：這次的安全啟動不會載入它們。";
+// What step 3 is, in plain words (P24): what a skill card is, what inserting one does, that VBear loads none of them
+// when a role departs (loadout._will_load is False for every tool), and that the step can be skipped.
+const CARD_SKILLS_NOTE = "技能卡是寫給 AI 的一份工作說明，例如怎麼做簡報、怎麼處理 PDF。插在這個角色上，是替它記下擅長什麼，排隊伍時看得出分工。"
+  + "VBear 讓角色出發時目前不會自動載入這些技能，只是記錄；這一步可以略過。";
+// Why a skill card is not in the default list of step 3. The keys are the index's activation values.
+const SKILL_UNUSED_REASON = {
+  superseded: "舊版本，現在用的是新版",
+  not_installed: "外掛市集裡的副本，沒有安裝",
+  disabled: "外掛已停用（或在設定裡被關閉）",
+  not_loaded: "外掛附帶，但不會被載入",
+  archived: "備份或匯入的副本，不在載入範圍",
+  unknown: "無法確認會不會被載入",
+};
+const SKILL_NEVER_LISTED = new Set(["superseded", "not_installed", "disabled", "not_loaded", "archived"]);
+const SKILL_SAME_NAME_NOTE = "同名的另一份，預設只列一張";
 const CARD_PAGE_SIZE = 48;
 const CARD_DEFAULT_DEMO_PREFIX = "demo-";
 
@@ -3892,6 +3906,46 @@ function skillIncompatibleNote(tool) {
     : tool === "agy" ? AGY_NOT_READ : `${CARD_TOOL_SHORT[tool] || "這個工具"} 不會讀這張卡`;
 }
 
+// What step 3 lists by default (P24). Who may be inserted is still skillCompatible, unchanged; this only decides what
+// the person sees first. A Claude Code or Codex card lists its own tool's skills that are active, and the shared ones
+// (the shared store's skills are never "active": no config shows a tool loading that folder, so they stay listed unless
+// the index calls them old, uninstalled, disabled, not loaded or archived). An AGY or shared card lists what
+// skillCompatible lets it take, minus those same states. Of skills with one name in one tool only one is listed: the
+// active one, then the newest by mtime, then the smaller skill_id. Everything else goes to `unused` with its reason,
+// and is shown only when the person asks. Nothing here is removed from the index or from a card.
+function skillPickPlan(skills, tool) {
+  const list = Array.isArray(skills) ? skills.filter((s) => s && typeof s === "object") : [];
+  const listed = [];
+  const unused = [];
+  const groups = new Map();
+  for (const s of list) {
+    if (!skillCompatible(s, tool)) { unused.push({ skill: s, kind: "other", reason: skillIncompatibleNote(tool) }); continue; }
+    const act = s.activation;
+    const strict = (tool === "claude" || tool === "codex") && s.tool === tool;
+    const usable = strict ? act === "active" : !SKILL_NEVER_LISTED.has(act);
+    if (!usable) { unused.push({ skill: s, kind: "dead", reason: SKILL_UNUSED_REASON[act] || SKILL_UNUSED_REASON.unknown }); continue; }
+    const key = `${s.tool}\u0000${s.invoke_name || s.name || s.skill_id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+  const mtimeOf = (s) => (typeof s.mtime === "number" && Number.isFinite(s.mtime) ? s.mtime : 0);
+  const rank = (a, b) => ((a.activation === "active" ? 0 : 1) - (b.activation === "active" ? 0 : 1))
+    || (mtimeOf(b) - mtimeOf(a)) || String(a.skill_id).localeCompare(String(b.skill_id));
+  for (const members of groups.values()) {
+    members.sort(rank);
+    listed.push({ skill: members[0], kind: "listed", reason: "", copies: members.length - 1 });
+    for (const dup of members.slice(1)) unused.push({ skill: dup, kind: "dup", reason: SKILL_SAME_NAME_NOTE });
+  }
+  const byName = (a, b) => ((a.skill.tool === tool ? 0 : 1) - (b.skill.tool === tool ? 0 : 1))
+    || String(a.skill.name || "").toLowerCase().localeCompare(String(b.skill.name || "").toLowerCase())
+    || String(a.skill.skill_id).localeCompare(String(b.skill.skill_id));
+  listed.sort(byName);
+  const order = { dead: 0, dup: 1, other: 2 };
+  unused.sort((a, b) => (order[a.kind] - order[b.kind]) || byName(a, b));
+  const hidden = new Map(unused.map((e) => [e.skill.skill_id, e]));
+  return { listed, unused, hidden };
+}
+
 function cardCatalogTools(catalog) {
   const tools = catalog && Array.isArray(catalog.tools) ? catalog.tools.filter((t) => typeof t === "string") : [];
   return tools.length ? tools : ["claude", "codex", "agy", "shared"];
@@ -3942,6 +3996,7 @@ function openCardWizard(opts) {
     equipped: new Set(existing ? (existing.equipped_skill_ids || []).filter((x) => typeof x === "string") : []),
     query: "",
     shown: CARD_PAGE_SIZE,
+    showUnused: false,
     nameError: "",
     busy: false,
   };
@@ -4168,10 +4223,20 @@ function openCardWizard(opts) {
   // ---- step 3
   function stepThree() {
     const buttons = new Map();
+    const plan = skillPickPlan(skillCatalog, st.tool);
     const countLabel = el("span", { class: "cw-label" });
     const chosenBox = el("div", { class: "cw-chosen", "data-cw": "chosen" });
     const list = el("div", { class: "cw-skill-list" });
+    const counter = el("p", { class: "small muted", "data-cw": "skill-count", role: "status" });
     const note = el("p", { class: "small cw-hint", "data-cw": "removed-note", role: "status" }, removedNote);
+
+    // why a skill the person already inserted is not in the default list; the marks of an AGY card stay as they were
+    function chipMark(s) {
+      if (!s) return null;
+      if (st.tool === "agy" && !skillCompatible(s, "agy")) return AGY_UNREAD_MARK;
+      const hit = plan.hidden.get(s.skill_id);
+      return hit ? hit.reason : null;
+    }
 
     let removedAt = 0;   // the place in the row of the chip that was just taken off
     function syncChosen() {
@@ -4184,11 +4249,14 @@ function openCardWizard(opts) {
       }
       setKids(chosenBox, st.equipped.size ? [...st.equipped].map((sid) => {
         const s = skillById.get(sid);
-        // a skill an AGY card already holds but AGY does not read stays, marked, for the person to decide
+        // a skill the card already holds stays, marked, for the person to decide: one AGY does not read, or one the
+        // default list hides (an old version, not installed, another camp's, a same-name copy)
+        const mark = chipMark(s);
         const unread = s && st.tool === "agy" && !skillCompatible(s, "agy");
         return el("span", { class: "tag cw-chosen-tag", "data-chosen": sid },
           s ? `${CARD_TOOL_SHORT[s.tool] || s.tool || "?"} · ${s.name}` : `${sid}（目前索引找不到）`,
-          unread ? el("span", { class: "small cw-error", "data-cw": "agy-unread" }, `（${AGY_UNREAD_MARK}）`) : null, " ",
+          unread ? el("span", { class: "small cw-error", "data-cw": "agy-unread" }, `（${AGY_UNREAD_MARK}）`)
+            : mark ? el("span", { class: "small muted", "data-cw": "equipped-reason" }, `（${mark}）`) : null, " ",
           el("button", { type: "button", class: "cw-x", "aria-label": `移除 ${s ? s.name : sid}`,
             on: { click: () => { removedAt = [...st.equipped].indexOf(sid); st.equipped.delete(sid); syncChosen(); } } }, "移除"));
       }) : el("span", { class: "small muted" }, "還沒有插任何技能卡。這一步可以略過。"));
@@ -4199,48 +4267,76 @@ function openCardWizard(opts) {
       });
     }
 
+    function skillCard(e) {
+      const s = e.skill;
+      const ok = skillCompatible(s, st.tool);
+      const pick = skillPickText(s);
+      const tagged = s.tool !== st.tool || st.tool === "agy";
+      const btn = el("button", { type: "button", class: `cw-skill${ok ? "" : " cw-skill-off"}${e.kind === "dead" || e.kind === "dup" ? " cw-skill-dead" : ""}`,
+        "data-skill": s.skill_id, "aria-pressed": String(st.equipped.has(s.skill_id)),
+        "aria-disabled": ok ? null : "true", title: ok ? null : skillIncompatibleNote(st.tool),
+        on: { click: () => {
+          if (!ok) return;
+          if (st.equipped.has(s.skill_id)) st.equipped.delete(s.skill_id); else st.equipped.add(s.skill_id);
+          syncChosen();
+        } } },
+        el("strong", null, s.name || s.skill_id),
+        tagged ? el("span", { class: "tag" }, CARD_TOOL_SHORT[s.tool] || s.tool || "?") : null,
+        st.tool === "agy" && s.tool !== "agy" && ok ? el("span", { class: "tag", "data-cw": "agy-reads" }, "AGY 會讀") : null,
+        pick.badge, pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
+        e.copies ? el("span", { class: "small muted", "data-cw": "same-name" }, `另有 ${e.copies} 份同名`) : null,
+        e.kind === "dead" || e.kind === "dup" ? el("span", { class: "small muted", "data-cw": "unused-reason" }, e.reason) : null,
+        ok ? null : el("span", { class: "small cw-error", "data-cw": "incompatible" }, skillIncompatibleNote(st.tool)));
+      buttons.set(s.skill_id, btn);
+      // the original is beside the card, not inside it: a button cannot hold another control
+      return el("div", { class: "cw-skill-cell", "data-skill-cell": s.skill_id }, btn,
+        pick.zh && s.excerpt ? el("details", { class: "small cw-skill-orig", "data-cw": "skill-orig" }, el("summary", null, "看原文"),
+          el("p", { class: "small muted" }, s.excerpt)) : null);
+    }
+
     function drawList() {
       buttons.clear();
       const q = st.query.trim().toLowerCase();
-      const hits = skillCatalog.filter((s) => !q || `${s.name || ""} ${s.excerpt || ""} ${s.tool || ""}`.toLowerCase().includes(q));
-      if (!hits.length) {
-        setKids(list, el("p", { class: "small muted" }, skillCatalog.length ? "沒有符合的技能卡。" : "目前沒有可用的技能卡。"));
+      const match = (e) => !q || `${e.skill.name || ""} ${e.skill.excerpt || ""} ${e.skill.tool || ""}`.toLowerCase().includes(q);
+      const listedHits = plan.listed.filter(match);
+      const unusedHits = plan.unused.filter(match);
+      counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${q ? `，符合搜尋的有 ${listedHits.length} 張` : ""}`;
+      const rows = st.showUnused ? [...listedHits, ...unusedHits] : listedHits;
+      if (!rows.length) {
+        const hint = q && !st.showUnused && unusedHits.length
+          ? el("div", { class: "small cw-hint", "data-cw": "unused-hint", role: "status" },
+            `在用不到的技能裡有 ${unusedHits.length} 張符合。 `,
+            el("button", { type: "button", class: "btn small", on: { click: () => setShowUnused(true) } }, "顯示這些技能")) : null;
+        const text = !skillCatalog.length ? "目前沒有可用的技能卡。"
+          : q ? (hint ? "這個陣營用得到的技能裡沒有符合的。" : "沒有符合的技能卡。")
+            : "目前沒有這個陣營用得到的技能卡。";
+        setKids(list, el("p", { class: "small muted" }, text), hint);
         return;
       }
-      const visible = hits.slice(0, st.shown);
-      const grid = el("div", { class: "cw-skill-grid", "data-cw": "skill-grid" }, visible.map((s) => {
-        const ok = skillCompatible(s, st.tool);
-        const pick = skillPickText(s);
-        const btn = el("button", { type: "button", class: `cw-skill${ok ? "" : " cw-skill-off"}`,
-          "data-skill": s.skill_id, "aria-pressed": String(st.equipped.has(s.skill_id)),
-          "aria-disabled": ok ? null : "true", title: ok ? null : skillIncompatibleNote(st.tool),
-          on: { click: () => {
-            if (!ok) return;
-            if (st.equipped.has(s.skill_id)) st.equipped.delete(s.skill_id); else st.equipped.add(s.skill_id);
-            syncChosen();
-          } } },
-          el("strong", null, s.name || s.skill_id),
-          el("span", { class: "tag" }, CARD_TOOL_SHORT[s.tool] || s.tool || "?"),
-          st.tool === "agy" && s.tool !== "agy" && ok ? el("span", { class: "tag", "data-cw": "agy-reads" }, "AGY 會讀") : null,
-          s.activation === "disabled" ? el("span", { class: "small muted" }, "（停用）") : null,
-          pick.badge, pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
-          ok ? null : el("span", { class: "small cw-error", "data-cw": "incompatible" }, skillIncompatibleNote(st.tool)));
-        buttons.set(s.skill_id, btn);
-        // the original is beside the card, not inside it: a button cannot hold another control
-        return el("div", { class: "cw-skill-cell", "data-skill-cell": s.skill_id }, btn,
-          pick.zh && s.excerpt ? el("details", { class: "small cw-skill-orig", "data-cw": "skill-orig" }, el("summary", null, "看原文"),
-            el("p", { class: "small muted" }, s.excerpt)) : null);
-      }));
-      const more = hits.length > visible.length
+      const visible = rows.slice(0, st.shown);
+      const used = visible.filter((e) => e.kind === "listed");
+      const rest = visible.filter((e) => e.kind !== "listed");
+      const grid = (es) => el("div", { class: "cw-skill-grid", "data-cw": "skill-grid" }, es.map(skillCard));
+      const more = rows.length > visible.length
         ? el("button", { type: "button", class: "btn small", "data-cw": "more",
           on: { click: () => { st.shown += CARD_PAGE_SIZE; drawList(); syncChosen(); } } },
-          `顯示更多（剩 ${hits.length - visible.length} 張）`) : null;
-      setKids(list, grid, more);
+          `顯示更多（剩 ${rows.length - visible.length} 張）`) : null;
+      setKids(list, used.length ? grid(used) : null,
+        rest.length ? el("p", { class: "small cw-label", "data-cw": "unused-heading" }, `用不到的技能（${unusedHits.length} 張）`) : null,
+        rest.length ? grid(rest) : null, more);
     }
 
     const search = el("input", { type: "search", id: "cw-skill-q", value: st.query, placeholder: "搜尋技能卡",
       "aria-label": "搜尋技能卡", on: { input: (e) => {
         st.query = e.target.value; st.shown = CARD_PAGE_SIZE; drawList(); syncChosen(); } } });
+    const unusedText = `也顯示用不到的技能（${plan.unused.length} 張）`;
+    const toggle = plan.unused.length ? el("button", { type: "button", class: "btn small", "data-cw": "unused-toggle",
+      "aria-pressed": String(st.showUnused), on: { click: () => setShowUnused(!st.showUnused) } }, unusedText) : null;
+    function setShowUnused(on) {
+      st.showUnused = on; st.shown = CARD_PAGE_SIZE;
+      if (toggle) { toggle.setAttribute("aria-pressed", String(on)); toggle.focus(); }   // the hint button goes away with the redraw
+      drawList(); syncChosen();
+    }
     drawList();
     syncChosen();
     // translations the page has not read yet arrive a moment later; the list is drawn again with them
@@ -4250,7 +4346,7 @@ function openCardWizard(opts) {
       st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-skills-note" }, AGY_SKILLS_NOTE) : null,
       removedNote ? note : null,
       el("div", { class: "cw-field" }, countLabel, chosenBox),
-      el("div", { class: "cw-field" }, search), list,
+      el("div", { class: "cw-field" }, counter, search, toggle), list,
     ];
   }
 
