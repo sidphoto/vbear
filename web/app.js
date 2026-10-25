@@ -3972,6 +3972,29 @@ function intentChip(k, zh, value) {
 
 // ---- the wizard: name and look, then tool and position, then skill cards ------------------------------------
 
+// ---- the model drop-down (P31): the lists come from the catalog's model_options, the page holds none ----
+const MODEL_OTHER = "__vbear_other__";   // not a model name: names start with a letter or a digit
+// The choices for a tool, or null when the tool has no list (AGY, shared, or a server that does not send one): the
+// card then keeps its text box.
+function modelChoices(catalog, tool) {
+  const all = catalog && catalog.model_options;
+  const src = all && typeof all === "object" && Object.prototype.hasOwnProperty.call(all, tool) ? all[tool] : null;
+  if (!src || typeof src !== "object" || Array.isArray(src)) return null;
+  const max = Number(catalog.model_id_max_length) || 200;
+  const seen = new Set();
+  const take = (list, text) => (Array.isArray(list) ? list : []).flatMap((o) => {
+    if (!o || typeof o.value !== "string" || !o.value || o.value.length > max || seen.has(o.value)) return [];
+    seen.add(o.value);
+    return [{ value: o.value, text: text(o.value, typeof o.label === "string" && o.label !== o.value ? o.label : "") }];
+  });
+  const groups = [
+    ["自動用最新版（別名）", take(src.latest, (v) => `${v} — 自動用最新版`)],
+    ["這台電腦的清單", take(src.listed, (v, label) => (label ? `${label}（${v}）` : v))],
+    ["你用過的", take(src.observed, (v) => v)],
+  ].filter(([, items]) => items.length).map(([label, items]) => ({ label, items }));
+  return { groups, values: seen, problem: typeof src.problem === "string" ? src.problem.slice(0, 200) : "" };
+}
+
 // opts: { catalog, profiles, existing, start (1-3), openIntents, onSaved(profile) }. The same wizard serves the card
 // pool page and the workbench's role tab. Creating and editing are the same three steps.
 function openCardWizard(opts) {
@@ -3996,6 +4019,7 @@ function openCardWizard(opts) {
       : (tools.includes("claude") ? "claude" : tools[0]),
     position: existing ? cardPosition(existing.id) : null,
     modelId: existing && existing.model ? String(existing.model.model_id || "") : "",
+    modelOther: false,   // 其他 was chosen in the model drop-down (a name in no list shows as 其他 without this)
     profession: existing && existing.profession_role_id ? existing.profession_role_id : "",
     // a new card starts from the suggestion for no position (the one combination a launch honours, R10); a card that
     // exists keeps its own choices
@@ -4129,6 +4153,43 @@ function openCardWizard(opts) {
     st.suggested = Boolean(st.position);
     st.touched = false;
   }
+  // The model field: a drop-down for a tool with a list (Claude Code, Codex), the text box otherwise. The value saved is
+  // still the one string in st.modelId.
+  function modelField() {
+    const max = String(catalog.model_id_max_length || 200);
+    const choices = modelChoices(catalog, st.tool);
+    const toolNote = `工具 ID：${st.tool}。模型設定只是記錄，不是執行環境。`;
+    if (!choices) {
+      return el("label", { class: "cw-field", for: "cw-model" },
+        el("span", null, "模型 (Model ID)"),
+        el("input", { type: "text", id: "cw-model", maxlength: max, placeholder: "留空視為該工具預設", value: st.modelId,
+          on: { input: (e) => { st.modelId = e.target.value; } } }),
+        el("small", null, toolNote));
+    }
+    const other = st.modelOther || (st.modelId !== "" && !choices.values.has(st.modelId));
+    const select = el("select", { id: "cw-model-select", on: { change: (e) => {
+      const v = e.target.value;
+      if (v === MODEL_OTHER) { st.modelOther = true; if (choices.values.has(st.modelId)) st.modelId = ""; }
+      else { st.modelOther = false; st.modelId = v; }
+      draw();
+      const again = document.getElementById(v === MODEL_OTHER ? "cw-model" : "cw-model-select"); if (again) again.focus(); } } },
+      el("option", { value: "" }, "工具預設（不指定）"),
+      choices.groups.map((g) => el("optgroup", { label: g.label }, g.items.map((o) => el("option", { value: o.value }, o.text)))),
+      el("option", { value: MODEL_OTHER }, "其他（自己輸入）…"));
+    select.value = other ? MODEL_OTHER : st.modelId;
+    const text = other ? el("input", { type: "text", id: "cw-model", maxlength: max, "aria-label": "模型名稱（自己輸入）",
+      placeholder: "輸入完整的模型名稱；留空視為該工具預設", value: st.modelId,
+      on: { input: (e) => { st.modelId = e.target.value; } } }) : null;
+    const source = st.tool === "claude" ? "Claude 的別名永遠指向最新版；「你用過的」是這台電腦的用量紀錄裡出現過的完整名稱。"
+      : st.tool === "codex" ? "Codex 的清單來自 Codex 自己的快取，開過 Codex 才會更新。" : "";
+    const problem = st.tool === "codex" && choices.problem && !choices.groups.some((g) => g.label === "這台電腦的清單")
+      ? `${choices.problem}。` : "";
+    return el("div", { class: "cw-field", "data-cw": "model" },
+      el("label", { class: "cw-label", for: "cw-model-select" }, "模型 (Model ID)"),
+      select, text,
+      el("small", null, [source, problem, toolNote].filter(Boolean).join(" ")));
+  }
+
   function stepTwo() {
     const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "陣營（工具）" },
       tools.map((t) => el("button", { type: "button", class: "cw-choice", "data-tool": t,
@@ -4179,12 +4240,7 @@ function openCardWizard(opts) {
           st.tool === "agy" ? (st.profession ? el("option", { value: st.profession }, `${st.profession}（目前綁定）`) : null) : professions.map((r) => el("option", { value: r.role_id || "", selected: st.profession === r.role_id ? "selected" : null },
             `${r.name || r.role_id} (${r.tool || "?"})`))),
         el("small", null, st.tool === "agy" ? AGY_NO_PROFESSIONS : "你電腦裡現成的角色範本，可以不選，只是標籤，不會寫回來源。")),
-      el("label", { class: "cw-field", for: "cw-model" },
-        el("span", null, "模型 (Model ID)"),
-        el("input", { type: "text", id: "cw-model", maxlength: String(catalog.model_id_max_length || 200),
-          placeholder: "例如 opus-4.1、gpt-test；留空視為該工具預設", value: st.modelId,
-          on: { input: (e) => { st.modelId = e.target.value; } } }),
-        el("small", null, `工具 ID：${st.tool}。模型設定只是記錄，不是執行環境。`)));
+      modelField());
     const profSelect = advanced.querySelector("select");
     if (profSelect) profSelect.value = st.profession;
 
@@ -4223,6 +4279,7 @@ function openCardWizard(opts) {
     removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
     if (t === "agy") st.profession = "";
+    st.modelOther = false;   // the carried value shows as 其他 if the new tool's list lacks it
     draw();
     focusBy("data-tool", t);
   }

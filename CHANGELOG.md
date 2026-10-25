@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **The model box in the card wizard is now a drop-down.** For a Claude Code or Codex card, step 2 (進階) lets you pick
+  the model instead of typing it: 工具預設 (leave it to the tool), then for Claude the aliases `fable`, `opus`,
+  `sonnet` and `haiku` (an alias always means the newest version, so it needs no update), then the full names VBear
+  has seen in your own Claude Code usage. For Codex it lists the models Codex itself lists, taken from the cache Codex
+  keeps, so it is only as fresh as the last time you opened Codex. 其他（自己輸入）… still lets you type any name, and a
+  card that already holds a name not in the list keeps it. Antigravity and shared cards keep the text box. What is
+  saved is the same text as before. VBear reads only each model's name from Codex's cache (never its other fields),
+  runs no program and uses no network for this.
+
 ## v0.8.9 — skills sorted by use
 
 - **Step 3 of the card wizard sorts the skills by use.** Above the skill cards there is now a row of categories with

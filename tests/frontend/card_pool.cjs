@@ -2602,6 +2602,182 @@ async function test(name, fn) {
     assert.ok(!/cw-skill/.test(html), "no other page uses the card");
   });
 
+  // ---- P31: the model drop-down ----
+  const OTHER = "__vbear_other__";
+  const catalogModels = {
+    ...catalog, tools: ["claude", "codex", "agy", "shared"],
+    model_options: {
+      claude: { latest: ["fable", "opus", "sonnet", "haiku"].map((v) => ({ value: v, label: v })), listed: [],
+        observed: [{ value: "claude-test-5", label: "claude-test-5" }], problem: "" },
+      codex: { latest: [], listed: [{ value: "gpt-test-1", label: "Test One" }, { value: "gpt-test-2", label: "Test Two" }],
+        observed: [{ value: "gpt-seen-3", label: "gpt-seen-3" }], problem: "" },
+    },
+  };
+  const modelSelect = () => walk(dialog()).find((n) => n.tag === "select" && n.id === "cw-model-select");
+  const modelText = () => walk(dialog()).find((n) => n.tag === "input" && n.id === "cw-model");
+  const optionValues = (sel) => walk(sel).filter((n) => n.tag === "option").map((n) => n.getAttribute("value"));
+  const pickModel = (value) => { const sel = modelSelect(); sel.value = value; sel.dispatch("change"); };
+  async function wizardAtStepTwo(tool, cat = catalogModels, name = "M") {
+    const w = await openWizard([], cat);
+    typeName(w.d, name);
+    btnByText(w.d, "下一步").dispatch("click");
+    if (tool !== "claude") byData(dialog(), "data-tool", tool)[0].dispatch("click");
+    return w;
+  }
+
+  await test("P31 a Claude Code card offers a drop-down: tool default, the latest-version aliases, what you used, then 其他", async () => {
+    await wizardAtStepTwo("claude");
+    const sel = modelSelect();
+    assert.ok(sel, "a drop-down");
+    assert.strictEqual(modelText(), undefined, "no text box until 其他 is chosen");
+    assert.deepStrictEqual(optionValues(sel), ["", "fable", "opus", "sonnet", "haiku", "claude-test-5", OTHER]);
+    const options = walk(sel).filter((n) => n.tag === "option");
+    assert.strictEqual(options[0].textContent, "工具預設（不指定）");
+    assert.strictEqual(options[2].textContent, "opus — 自動用最新版");
+    assert.strictEqual(options[5].textContent, "claude-test-5");
+    assert.strictEqual(options[6].textContent, "其他（自己輸入）…");
+    const groups = walk(sel).filter((n) => n.tag === "optgroup").map((n) => n.getAttribute("label"));
+    assert.deepStrictEqual(groups, ["自動用最新版（別名）", "你用過的"]);
+    assert.strictEqual(sel.value, "", "a new card starts on the tool default");
+    assert.ok(findText(dialog(), "Claude 的別名永遠指向最新版"));
+    assert.ok(!findText(dialog(), "opus-4.1") && !findText(dialog(), "gpt-test；"), "the old examples are gone");
+    assert.ok(walk(dialog()).some((n) => n.tag === "label" && n.getAttribute("for") === "cw-model-select" && findText(n, "Model ID")));
+  });
+
+  await test("P31 a Codex card lists Codex's own models first (by the label it gives), then the ones you used", async () => {
+    await wizardAtStepTwo("codex");
+    const sel = modelSelect();
+    assert.deepStrictEqual(optionValues(sel), ["", "gpt-test-1", "gpt-test-2", "gpt-seen-3", OTHER]);
+    assert.deepStrictEqual(walk(sel).filter((n) => n.tag === "optgroup").map((n) => n.getAttribute("label")), ["這台電腦的清單", "你用過的"]);
+    const options = walk(sel).filter((n) => n.tag === "option");
+    assert.strictEqual(options[1].textContent, "Test One（gpt-test-1）");
+    assert.ok(findText(dialog(), "Codex 的清單來自 Codex 自己的快取，開過 Codex 才會更新"));
+    assert.ok(!findText(dialog(), "Claude 的別名永遠指向最新版"), "only the note that fits the tool");
+  });
+
+  await test("P31 a Codex cache that could not be read is said plainly, and 其他 still works", async () => {
+    const cat = { ...catalogModels, model_options: { ...catalogModels.model_options,
+      codex: { latest: [], listed: [], observed: [], problem: "這台電腦沒有 Codex 的模型快取" } } };
+    await wizardAtStepTwo("codex", cat);
+    assert.deepStrictEqual(optionValues(modelSelect()), ["", OTHER]);
+    assert.ok(findText(dialog(), "這台電腦沒有 Codex 的模型快取"));
+  });
+
+  await test("P31 choosing a listed model saves that name; the tool default saves an empty string", async () => {
+    const a = await wizardAtStepTwo("claude");
+    pickModel("opus");
+    assert.strictEqual(modelSelect().value, "opus", "the choice stays after the redraw");
+    assert.strictEqual(modelText(), undefined);
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(a.posts[0].model.model_id, "opus");
+    assert.strictEqual(a.posts[0].model.tool, "claude");
+    const b = await wizardAtStepTwo("codex");
+    pickModel("gpt-test-2");
+    pickModel("");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(b.posts[0].model.model_id, "");
+  });
+
+  await test("P31 choosing 其他 shows the text box with the usual length limit, and what is typed is saved (trimmed)", async () => {
+    const w = await wizardAtStepTwo("claude");
+    pickModel(OTHER);
+    const text = modelText();
+    assert.ok(text, "the text box shows");
+    assert.strictEqual(text.getAttribute("maxlength"), "200");
+    assert.strictEqual(modelSelect().value, OTHER);
+    text.value = "  claude-made-up-9  ";
+    text.dispatch("input");
+    assert.strictEqual(modelSelect().value, OTHER, "typing a name that is in no list keeps the drop-down on 其他");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(w.posts[0].model.model_id, "claude-made-up-9");
+  });
+
+  await test("P31 typing into 其他 a name that is in the list does not jump the drop-down away from 其他", async () => {
+    await wizardAtStepTwo("claude");
+    pickModel(OTHER);
+    const text = modelText();
+    text.value = "opus"; text.dispatch("input");
+    assert.strictEqual(modelSelect().value, OTHER);
+    assert.strictEqual(modelText().value, "opus");
+  });
+
+  await test("P31 an existing card whose model is in no list opens on 其他 with the value in the box; nothing is lost", async () => {
+    const mine = mkProfile("p-1", "Mine", "claude", VERIFIED, { model: { tool: "claude", model_id: "claude-retired-1" } });
+    const saved = [];
+    await openPool([mine], catalogModels, { "POST /api/agent-profiles/p-1": (url, options) => {
+      saved.push(JSON.parse(options.body)); return jsonResponse({ ok: true, profile: { ...mine } }); } });
+    byData(main, "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(4);
+    assert.strictEqual(modelSelect().value, OTHER);
+    assert.strictEqual(modelText().getAttribute("value"), "claude-retired-1");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved[0].model.model_id, "claude-retired-1");
+  });
+
+  await test("P31 an existing card whose model is in the list opens on that entry, with no text box", async () => {
+    const mine = mkProfile("p-2", "Mine", "codex", VERIFIED, { model: { tool: "codex", model_id: "gpt-test-2" } });
+    await openPool([mine], catalogModels);
+    byData(main, "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(4);
+    assert.strictEqual(modelSelect().value, "gpt-test-2");
+    assert.strictEqual(modelText(), undefined);
+  });
+
+  await test("P31 changing the tool keeps a typed or earlier value (as text) instead of dropping it", async () => {
+    const w = await wizardAtStepTwo("claude");
+    pickModel("opus");
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
+    assert.strictEqual(modelSelect().value, OTHER, "opus is not a Codex name, so it is shown as typed text");
+    assert.strictEqual(modelText().getAttribute("value"), "opus");
+    assert.ok(w);
+  });
+
+  await test("P31 AGY and shared cards keep a text box, with a placeholder that does not age", async () => {
+    for (const tool of ["agy", "shared"]) {
+      await wizardAtStepTwo(tool);
+      assert.strictEqual(modelSelect(), undefined, `${tool}: no drop-down`);
+      const text = modelText();
+      assert.ok(text, `${tool}: a text box`);
+      assert.strictEqual(text.getAttribute("placeholder"), "留空視為該工具預設");
+      assert.ok(!/opus-4\.1|gpt-test/.test(text.getAttribute("placeholder")));
+    }
+  });
+
+  await test("P31 a catalog from an older server (no model_options) keeps the text box for every tool", async () => {
+    for (const tool of ["claude", "codex"]) {
+      const w = await wizardAtStepTwo(tool, catalog);
+      assert.strictEqual(modelSelect(), undefined);
+      const text = modelText();
+      assert.ok(text);
+      text.value = "typed-name"; text.dispatch("input");
+      btnByText(dialog(), "下一步").dispatch("click");
+      btnByText(dialog(), "建立").dispatch("click");
+      await tick();
+      assert.strictEqual(w.posts[0].model.model_id, "typed-name");
+    }
+  });
+
+  await test("P31 odd entries in model_options are ignored; nothing is built from them", async () => {
+    const cat = { ...catalogModels, model_options: { claude: { latest: [null, 7, { value: 5 }, { value: "opus", label: "<b>x</b>" }],
+      listed: "no", observed: [{ value: "" }, { value: "a".repeat(300) }, { value: "claude-ok-1" }], problem: 3 }, codex: null } };
+    await wizardAtStepTwo("claude", cat);
+    assert.deepStrictEqual(optionValues(modelSelect()), ["", "opus", "claude-ok-1", OTHER]);
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
+    assert.strictEqual(modelSelect(), undefined, "a tool whose entry is not an object keeps the text box");
+    assert.ok(modelText());
+  });
+
   console.log(`\n${passed} passed`);
   if (process.exitCode) process.exit(process.exitCode);
   console.log("ALL CARD POOL FRONTEND TESTS PASSED");

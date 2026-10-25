@@ -218,6 +218,14 @@ Other safeguards:
   nothing and starts no process; the four values must each be given once and be `allow`, `deny` or `unspecified`
   (anything else is `400`). The wizard uses it to tell a person, before saving, that a combination cannot be
   launched; the page holds none of those rules.
+- **The wizard's model drop-down reads one cache for names.** `GET /api/agent-builder/catalog` carries `model_options`
+  (P31). For Codex, VBear opens `~/.codex/models_cache.json` and keeps only each model's `slug` and `display_name`
+  (using `visibility` and `priority` to choose and order them); no other field is read out or sent on. The read is
+  bounded: a regular file owned by you, at most 1 MiB, never followed through a symbolic link at the file (the
+  `.codex` folder may be a link only if it stays inside your home folder), strict JSON, a cap on entries, and a name
+  must be letters, digits and `. - _ : /`. A missing or broken file gives an empty list and a one-line reason. The Claude
+  list is the aliases from `claude --help` plus model names the usage scan already collected. No program is run and
+  nothing is fetched. The list only fills a drop-down; it grants nothing, and the saved `model_id` is checked as before.
 - **A Codex card's light.** Codex cannot open a terminal from VBear (`codex_` reasons), but the flow's automatic
   review does run it, in a scratch copy. When every reason on a card starts with `codex_` the card shows a neutral
   "can't open a terminal directly" light instead of the red one; any other reason keeps the red. It is a reading of
