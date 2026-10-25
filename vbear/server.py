@@ -213,6 +213,18 @@ class Console:
             raise translations.TranslationError("not_found")
         return {s["skill_id"]: s for s in static["skills"]}
 
+    def role_translation_manager(self):
+        with self.lock:
+            if not hasattr(self, "role_translations"):
+                self.role_translations = translations.RoleTranslationManager()
+            return self.role_translations
+
+    def role_translation_records(self):
+        static = self.store.static_if_loaded()
+        if static is None:
+            raise translations.TranslationError("not_found")
+        return {r["role_id"]: r for r in static.get("roles", []) if isinstance(r.get("role_id"), str) and r["role_id"]}
+
     def previews(self):
         """Preview store for Profile-managed launches; native runtime only."""
         with self.lock:
@@ -468,6 +480,8 @@ def make_handler(console: Console):
                     return self._static(STATIC_FILES[path])
                 if path in ("/api/translations", "/api/translations/batch"):
                     return self._translation_call("view")
+                if path in ("/api/role-translations", "/api/role-translations/batch"):
+                    return self._translation_call("view", roles=True)
                 if path == "/api/overview":
                     return self._json(self._overview())
                 if path == "/api/skills":
@@ -625,6 +639,10 @@ def make_handler(console: Console):
                     return self._translation_call("cancel")
                 if path == "/api/translations/batch":
                     return self._translation_call("batch", self._body_strict())
+                if path == "/api/role-translations/batch/cancel":
+                    return self._translation_call("cancel", roles=True)
+                if path == "/api/role-translations/batch":
+                    return self._translation_call("batch", self._body_strict(), roles=True)
                 if path.startswith("/api/skills/") and path.endswith("/translate"):
                     return self._translation_call("single", self._body_strict(),
                                                   unquote(path[len("/api/skills/"):-len("/translate")]))
@@ -1298,19 +1316,19 @@ def make_handler(console: Console):
                 "recent_skill_ids": [s["skill_id"] for s in recent],
             }
 
-        def _translation_call(self, action, body=None, skill_id=None):
+        def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
-                manager = console.translation_manager()
+                manager = console.role_translation_manager() if roles else console.translation_manager()
                 if action == "cancel":
                     return self._json({"job": manager.cancel()})
                 if action == "verify":
                     if not isinstance(body, dict) or body:
                         raise translations.TranslationError("bad_request")
                     return self._json(translations.verify_boundary(console.store.conf.get("translation_engine", "claude")))
-                records = console.translation_records()
+                records = console.role_translation_records() if roles else console.translation_records()
                 if action == "view":
                     return self._json({**manager.view(records), "engine": console.store.conf.get("translation_engine", "claude"),
-                                       "provider": "version_required" if manager.run is translations.run_cli else "fake"})
+                                       "provider": "version_required" if manager.run is manager.default_run else "fake"})
                 if action == "orphans":
                     try:
                         return self._json({"deleted": manager.store.remove_orphans(records)})
@@ -1487,6 +1505,8 @@ def make_handler(console: Console):
                 console.store.set_conf(conf)
             if body.get("translation_auto") is False or ("translation_engine" in body):
                 console.translation_manager().cancel()
+            if "translation_engine" in body:
+                console.role_translation_manager().cancel()
             return {"ok": True, "config": conf, "rescan_needed": "source_enabled" in body
                     or "project_roots" in body}
 
