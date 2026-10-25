@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The profession menu in the card wizard can show the role names in Chinese.** Under 進階 → 職業標籤, a new button,
+  「把職業名稱翻成中文（N 個未翻）」, translates the role names (Brand Guardian, Trend Researcher, …) on your own
+  Claude account, usually under 1 US cent each, after a confirmation that says what is sent: only each role's name and
+  the description its author wrote. Translated entries read 中文名稱（English name）・Claude Code, untranslated ones
+  stay as they were, and the same Chinese name (with the English in brackets) is used on the back of a role card, on the
+  role cards in the card pool and on the role page. The Chinese names are a machine translation and the menu says so.
+  Nothing is translated unless you press the button, and the skill translations are not changed.
+
 ## v0.8.9 — skills sorted by use
 
 - **Step 3 of the card wizard sorts the skills by use.** Above the skill cards there is now a row of categories with

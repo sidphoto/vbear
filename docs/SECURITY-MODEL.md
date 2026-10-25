@@ -778,3 +778,13 @@ use fixed classifications, not filesystem/CLI excerpts. Source hash mismatch kee
 an in-flight old result cannot appear fresh against a new index. Orphan deletion rechecks the current loaded
 index and removes only cache entries, never skill files. Jobs are in-memory: console restart loses progress,
 retains accepted translations and does not resume outbound work automatically.
+
+Role-name translations (the profession menu of the card wizard) reuse this boundary but keep their own cache,
+`role-translations.json` (same envelope, 2 MiB limit, 0600 and quarantine rules), so the skill cache's format and
+data are untouched. Only the role's `name` and, when its origin is `author`, its `description` are sent, redacted the
+same way; no path, tool, kind, model, capabilities, suitable tasks or limits. The result is `name_zh` (30 characters)
+and `what` (50 characters, forced to 「原文未提供」 when there is no author description), checked for Traditional
+characters. It uses the same provider resolution (a verified Claude Code version only), the same worker lock (a skill
+job and a role job cannot run together) and the same error codes. It is started only by the user, from
+`POST /api/role-translations/batch` after a confirmation in the page; `translation_auto` never starts it. A
+translation whose source name or description changed is stale and is not shown.
