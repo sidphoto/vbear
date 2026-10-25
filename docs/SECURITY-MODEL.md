@@ -169,6 +169,13 @@ Other safeguards:
   authentication. VBear prefers Claude Code's own versioned install (`~/.local/share/claude/versions/<version>`),
   pins the file's identity between preview and launch, and shows the path in the preview. A program that can put
   itself first on your `PATH` already runs as you, so this is not treated as a boundary.
+- **Where VBear looks for the CLIs.** Besides the `PATH` it was started with, VBear looks for `claude` and `codex` in
+  Homebrew's `/opt/homebrew/bin`, `/usr/local/bin`, the system folders, and `.local/bin` under your home directory
+  (where Claude Code's own installer puts it), in that order, after your own `PATH`. These folders are writable by
+  you (and, for Homebrew, by your admin group), the same trust as your `PATH`. VBear scans no other folder, reads no
+  shell startup file and starts no login shell. Finding the file changes none of the checks above: the version, the
+  verified list and the translation boundary are decided afterwards, exactly as before. The Codex review does not use
+  `.local/bin`; it runs the pinned Codex build only.
 - **Verifying on this Mac.** 「驗證這個版本」 runs `vbear/boundary_check.py` headless and interactive against
   the binary a launch would use. The version is recorded as verified only if both runs pass every check; a
   refusal only counts if it is the sandbox's (`EPERM`/`EACCES`, or the proxy's 403). The record file is

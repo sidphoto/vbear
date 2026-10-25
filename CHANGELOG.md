@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The VBear app now finds Claude Code and Codex installed in your home folder's `.local/bin`.** Claude Code's own
+  installer puts `claude` there, but an app started from Finder does not see your terminal's search path, so VBear
+  could not find it. The translation check then wrongly said the safety boundary was "not verified", and the version
+  check before a Claude Code launch could miss it the same way. VBear now also looks in `.local/bin` (after Homebrew
+  and the system folders, never ahead of them), and nowhere else. If `claude` still cannot be found, the translation check now says
+  so plainly ("找不到 Claude Code …") instead of blaming the boundary. "Not verified" appears only when the check
+  really did not pass. No safety check was relaxed: finding the file does not verify it.
+
 ## v0.8.6 — skill cards you can read
 
 - **Small tidy-ups from the last two reviews.** In the card wizard's second step the four camp buttons now line up
