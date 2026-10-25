@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.7 — the app finds Claude Code; delete works
 
 - **The VBear app now finds Claude Code and Codex installed in your home folder's `.local/bin`.** Claude Code's own
   installer puts `claude` there, but an app started from Finder does not see your terminal's search path, so VBear
