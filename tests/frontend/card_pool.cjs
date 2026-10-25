@@ -1177,6 +1177,30 @@ async function test(name, fn) {
     assert.ok(box().hasAttribute("hidden"));
   });
 
+  await test("P28 a translated card shows the whole short summary (not cut), 什麼時候用 when the author said it, and Chinese search finds it", async () => {
+    const long = "第一句很長很長的說明文字，用來確認卡片不會只顯示被截斷的長說明。第二句。";
+    const entry = (what, when) => ({ engine: "claude", model: "haiku", cli_version: "2.1.296", created_at: 1, description_zh: long,
+      summary: { what, when, needs: "原文未提供" } });
+    const cat = { ...catalog, skills: [...catalog.skills, { skill_id: "s-3", name: "gamma", invoke_name: "tool:gamma", tool: "shared", scope: "user", activation: "active", excerpt: "gamma desc" }] };
+    const { d } = await openWizard([], cat, { "GET /api/translations": () => jsonResponse({
+      entries: { "s-c": { state: "fresh", entry: entry("替程式變更做審查", "準備合併前") }, "s-3": { state: "fresh", entry: entry("整理會議紀錄", "原文未提供") } },
+      counts: { fresh: 2, stale: 0, none: 0, orphan: 0 }, job: null, engine: "claude" }) });
+    typeName(d, "Alpha");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(d, "下一步").dispatch("click");
+    await tick(8);
+    const cell = (id) => byData(d, "data-skill-cell", id)[0];
+    const zh = byData(cell("s-c"), "data-cw", "skill-zh")[0];
+    assert.strictEqual(zh.textContent, "替程式變更做審查", "the summary, whole");
+    assert.ok(!zh.className.includes("cw-skill-ex"), "the Chinese summary is not clamped to two lines");
+    assert.strictEqual(byData(cell("s-c"), "data-cw", "skill-when")[0].textContent, "什麼時候用：準備合併前");
+    assert.strictEqual(byData(cell("s-3"), "data-cw", "skill-when").length, 0, "原文未提供 is not shown as a line");
+    assert.strictEqual(byData(byData(cell("s-3"), "data-cw", "skill-orig")[0], "data-cw", "skill-full")[0].textContent, long);
+    const q = walk(d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-skill-q");
+    q.value = "會議紀錄"; q.dispatch("input", { target: q });
+    assert.ok(cell("s-3") && !cell("s-c"), "a Chinese search finds the translated skill");
+  });
+
   await test("P7 #4 the back of a card calls the intents 「權限意圖（分工記號）」", () => {
     const p = mkProfile("p-1", "Mine", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" });
     const back = byData(pure.profileCard(p, { catalog, face: "back" }).node, "data-rc", "intents")[0];
@@ -1202,8 +1226,9 @@ async function test(name, fn) {
     assert.ok(findText(d, "說明是機器翻譯"));
     const orig = byData(fresh, "data-cw", "skill-orig")[0];
     assert.ok(orig && orig.tag === "details" && !orig.hasAttribute("open"), "folded");
-    assert.strictEqual(orig.children[0].textContent, "看原文");
-    assert.ok(textOf(orig).includes("for claude"));
+    assert.strictEqual(orig.children[0].textContent, "看完整說明");
+    assert.strictEqual(byData(orig, "data-cw", "skill-full")[0].textContent, "替程式變更做審查，並列出有風險的行，同時標出需要補測試的地方。");
+    assert.ok(byData(orig, "data-cw", "skill-original")[0].textContent.startsWith("原文：") && textOf(orig).includes("for claude"));
     assert.ok(!walk(byData(fresh, "data-skill", "s-c")[0]).includes(orig), "the original is beside the card, not inside the button");
     const stale = cell("s-x");
     assert.ok(findText(stale, "過期") && byData(stale, "data-cw", "skill-zh")[0].textContent === "舊的翻譯。");
@@ -2482,7 +2507,7 @@ async function test(name, fn) {
     const note = noteOf(fresh.d);
     assert.ok(note, "the line is there");
     assert.strictEqual(byData(fresh.d, "data-cw", "translated-note").length, 1, "once, not once per card");
-    assert.strictEqual(note.textContent, "說明是機器翻譯，可能不準；點「看原文」對照");
+    assert.strictEqual(note.textContent, "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文");
     const grid = byData(fresh.d, "data-cw", "skill-grid")[0];
     const parent = walk(fresh.d).find((n) => n.children.includes(note));
     assert.ok(parent.children.indexOf(note) < parent.children.indexOf(grid), "above the list");

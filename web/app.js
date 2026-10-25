@@ -1087,16 +1087,22 @@ function translationFailureFor(id) {
   if (!job || job.status !== "failed" || T.attempts[job.id] !== id) return null;
   return { message: job.error && job.error.message ? job.error.message : "原因不明" };
 }
-// What a skill says about itself in the picker: its Chinese "what it does" when a translation exists, otherwise the
-// original excerpt. -> { zh, text, badge }. That the text is a machine translation is said once above the list (P26),
-// so the only mark a card keeps is 過期, when the original changed since.
+// What a skill says about itself in the picker: its Chinese "what it does" when a translation exists (the short summary,
+// whole, so nothing is cut off; the first sentence of the long text when the summary is missing), otherwise the
+// original excerpt. -> { zh, text, when, full, badge }. `when` is the summary's "when to use" if the author said it;
+// `full` is the whole Chinese text for the 看完整說明 fold. That the text is a machine translation is said once above
+// the list (P26), so the only mark a card keeps is 過期, when the original changed since.
+const SUMMARY_MISSING = "原文未提供";
 function skillPickText(s) {
   const t = s && s.skill_id ? translationOf(s.skill_id) : { entry: null };
   if (t.entry && t.entry.description_zh) {
-    return { zh: true, text: firstSentence(t.entry.description_zh, 90),
+    const sum = t.entry.summary || {};
+    const said = (v) => typeof v === "string" && v.trim() && v.trim() !== SUMMARY_MISSING ? v.trim() : "";
+    return { zh: true, text: said(sum.what) || firstSentence(t.entry.description_zh, 90), when: said(sum.when),
+      full: String(t.entry.description_zh),
       badge: t.state === "stale" ? badge("過期", "b-warn", "原文改過，這段翻譯可能已經不準；看原文確認") : null };
   }
-  return { zh: false, text: s && s.excerpt ? String(s.excerpt) : "", badge: null };
+  return { zh: false, text: s && s.excerpt ? String(s.excerpt) : "", when: "", full: "", badge: null };
 }
 function translationBadge(id) {
   const t = translationOf(id);
@@ -3793,7 +3799,7 @@ const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還�
 const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
 const SKILL_SHARED_TAG = "共用";
-const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看原文」對照";
+const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
 // VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
@@ -4294,18 +4300,27 @@ function openCardWizard(opts) {
         // three parts: the name, one row of small tags (none, no row), the description
         el("strong", { "data-cw": "skill-name" }, s.name || s.skill_id),
         tags.length ? el("span", { class: "cw-skill-tags", "data-cw": "skill-tags" }, tags) : null,
-        pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null);
+        // a Chinese summary is short (50 characters at most) and shown whole; the English excerpt is cut at two lines
+        pick.text ? el("span", { class: `small ${pick.zh ? "cw-skill-zh" : "cw-skill-ex muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
+        pick.when ? el("span", { class: "small muted cw-skill-zh", "data-cw": "skill-when" }, "什麼時候用：" + pick.when) : null);
       buttons.set(s.skill_id, btn);
-      // the original is beside the card, not inside it: a button cannot hold another control
+      // the full text is beside the card, not inside it: a button cannot hold another control
       return el("div", { class: "cw-skill-cell", "data-skill-cell": s.skill_id }, btn,
-        pick.zh && s.excerpt ? el("details", { class: "small cw-skill-orig", "data-cw": "skill-orig" }, el("summary", null, "看原文"),
-          el("p", { class: "small muted" }, s.excerpt)) : null);
+        pick.zh ? el("details", { class: "small cw-skill-orig", "data-cw": "skill-orig" }, el("summary", null, "看完整說明"),
+          el("p", { class: "small", "data-cw": "skill-full" }, pick.full),
+          s.excerpt ? el("p", { class: "small muted", "data-cw": "skill-original" }, "原文：" + s.excerpt) : null) : null);
     }
 
     function drawList() {
       buttons.clear();
       const q = st.query.trim().toLowerCase();
-      const match = (e) => !q || `${e.skill.name || ""} ${e.skill.excerpt || ""} ${e.skill.tool || ""}`.toLowerCase().includes(q);
+      // the Chinese is searched too, so a search in Chinese finds a translated skill
+      const match = (e) => {
+        if (!q) return true;
+        const zh = skillPickText(e.skill);
+        return `${e.skill.name || ""} ${e.skill.excerpt || ""} ${e.skill.tool || ""} ${zh.zh ? `${zh.text} ${zh.when} ${zh.full}` : ""}`
+          .toLowerCase().includes(q);
+      };
       const listedHits = plan.listed.filter(match);
       const unusedHits = plan.unused.filter(match);
       counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${q ? `，符合搜尋的有 ${listedHits.length} 張` : ""}`;

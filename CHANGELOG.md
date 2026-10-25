@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.8 — skill cards you can read in Chinese
+
+- **A translated skill card in the card wizard reads whole, in Chinese.** The card used to show the first sentence of
+  the long Chinese text, cut off after two lines with "…", and the fold beside it, 看原文, only held the English. The
+  card now shows the translation's short "what it does" in full (50 characters at most, never cut) and, when the
+  author said it, a line 「什麼時候用：…」. The fold is now 看完整說明: the whole Chinese text first, then the original.
+  The search box also looks at the Chinese, so typing Chinese finds a translated skill. Cards without a translation
+  are as before.
+
 ## v0.8.7 — the app finds Claude Code; delete works
 
 - **The VBear app now finds Claude Code and Codex installed in your home folder's `.local/bin`.** Claude Code's own
