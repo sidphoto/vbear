@@ -1525,6 +1525,7 @@ def make_handler(console: Console):
             skills_for_picker = []
             for s in index.values():
                 desc = (s.get("description") or {}).get("value") or ""
+                mtime = s.get("mtime")
                 skills_for_picker.append({
                     "skill_id": s["skill_id"],
                     "name": s["name"],
@@ -1533,6 +1534,8 @@ def make_handler(console: Console):
                     "read_by": loadout_mod.read_by(s),
                     "scope": s.get("scope", ""),
                     "activation": s.get("activation", ""),
+                    # the picker folds same-named copies and keeps the newest; 0 is "not known"
+                    "mtime": mtime if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else 0,
                     "excerpt": desc[:140],
                 })
             skills_for_picker.sort(key=lambda x: (x["tool"], x["name"].lower()))

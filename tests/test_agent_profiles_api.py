@@ -143,6 +143,21 @@ class AgentBuilderAPITests(unittest.TestCase):
         got = {s["skill_id"]: s["read_by"] for s in body["skills"]}
         self.assertEqual(got, {"s-1": ["agy"], "s-2": [], "s-3": [], "s-4": ["agy"]})
 
+    def test_catalog_skills_carry_the_modified_time_the_picker_uses_to_pick_one_of_same_named_copies(self):
+        skill = {"tool": "claude", "scope": "user", "activation": "active", "description": {"value": "d"}}
+        self.console.store._static = {"skills": [
+            {**skill, "skill_id": "s-1", "name": "one", "mtime": 1700000000.5},
+            {**skill, "skill_id": "s-2", "name": "two"},
+            {**skill, "skill_id": "s-3", "name": "three", "mtime": "soon"},
+            {**skill, "skill_id": "s-4", "name": "four", "mtime": True}], "roles": []}
+        self.console.store._static_stamp = None
+        try:
+            _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        finally:
+            self.console.store._static = None
+        got = {s["skill_id"]: s["mtime"] for s in body["skills"]}
+        self.assertEqual(got, {"s-1": 1700000000.5, "s-2": 0, "s-3": 0, "s-4": 0})
+
     def test_catalog_endpoint_lists_tool_and_permission_enums(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
