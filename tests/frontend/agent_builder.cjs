@@ -250,7 +250,7 @@ function freshContext(handlers) {
     location: { hash: "" },
     history: { replaceState: () => {} },
     URLSearchParams,
-    confirm: () => true,
+    confirm: () => { throw new Error("native confirm() must not be used"); },
     fetch: fetchStub,
     window: {
       addEventListener: () => {}, removeEventListener: () => {}, innerWidth: 1024,
@@ -457,13 +457,32 @@ function findModalInBody() {
     assert.ok(deleteBtn, "delete button labelled  刪除, on the First card");
     assert.ok(cardButton("First", "編輯") && cardButton("First", "複製") && cardButton("First", "停用"), "and its siblings");
     assert.ok(cardButton("Stuck", "啟用"), "a card that is switched off offers 啟用");
+    const settle = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
+    const dialogButton = (dlg, label) => walk(dlg).find((n) => n.tag === "button" && (n.textContent || "").trim() === label);
+    // Cancel: the in-page dialog opens (naming the card), and nothing is sent.
     deleteBtn.dispatch("click");
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    await settle();
+    let dlg = findModalInBody();
+    assert.ok(dlg, "deleting a role card opens an in-page confirmation");
+    assert.ok(walk(dlg).some((n) => n.tag === "h2" && n.textContent === "刪除角色卡"), "plain title");
+    assert.ok(walk(dlg).some((n) => n.tag === "p" && n.textContent === "確定要刪除角色卡「First」嗎？刪除後無法復原。"),
+              "the dialog names the card and says it cannot be undone");
+    assert.deepStrictEqual(posts, [], "nothing is sent before the dialog is answered");
+    dialogButton(dlg, "取消").dispatch("click");
+    await settle();
+    assert.ok(!findModalInBody(), "cancel closes the dialog");
+    assert.deepStrictEqual(posts, [], "cancelling sends no delete request");
+    // Confirm: 刪除 sends the delete request.
+    deleteBtn.dispatch("click");
+    await settle();
+    dlg = findModalInBody();
+    assert.ok(dlg, "the dialog opens again");
+    dialogButton(dlg, "刪除").dispatch("click");
+    await settle();
     assert.ok(posts.some((x) => x.url === "/api/agent-profiles/p-1/delete"),
               "delete POST was made to /<id>/delete");
-    console.log("ok delete confirm → POST to /<id>/delete");
+    assert.ok(!findModalInBody(), "the dialog closes after 刪除");
+    console.log("ok delete confirm → in-page dialog; cancel sends nothing, 刪除 → POST to /<id>/delete");
   }
 
   // Preview-and-launch dialog (R3 S0): preview first, confirm only when the

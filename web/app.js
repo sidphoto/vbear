@@ -4532,8 +4532,8 @@ async function duplicateCard(p, onDone) {
     if (typeof onDone === "function") await onDone(res.profile);
   } catch (err) { toast("複製失敗：" + err.message); }
 }
-function deleteCard(p, onDone) {
-  if (!confirm(`確定要刪除角色卡「${p.name || p.id}」嗎？此動作不可回復。`)) return;
+async function deleteCard(p, onDone) {
+  if (!(await confirmInPage("刪除角色卡", `確定要刪除角色卡「${p.name || p.id}」嗎？刪除後無法復原。`, "刪除"))) return;
   api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}/delete`, {})
     .then(async () => {
       toast("角色卡已刪除");
@@ -9332,8 +9332,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
   }
 
-  function promptDeleteTask(task) {
-    if (!confirm(`確定要刪除任務卡「${task.title}」嗎？此動作不可回復。`)) return;
+  async function promptDeleteTask(task) {
+    if (!(await confirmInPage("刪除任務卡", `確定要刪除任務卡「${task.title}」嗎？刪除後無法復原。`, "刪除"))) return;
     api.post(`/api/tasks/${encodeURIComponent(task.id)}/delete`)
       .then(() => {
         tasksList = tasksList.filter((t) => t.id !== task.id);

@@ -13,6 +13,12 @@
   page keep their own translation badge. Long names still wrap instead of being cut, and picking, taking off, the
   keyboard and the greyed cards work as before.
 
+- **The delete buttons on role cards and task cards now work in the app window.** They used the browser's own yes/no
+  box, which the app window never shows, so pressing 刪除 did nothing there. They now ask in the page, like the other
+  confirmations: a box titled 刪除角色卡 or 刪除任務卡 that names the card and says it cannot be undone. 取消 or closing
+  the box sends nothing; 刪除 deletes the card as before. No other place used the browser's own boxes, and a test now
+  keeps it that way.
+
 ## v0.8.6 — skill cards you can read
 
 - **Small tidy-ups from the last two reviews.** In the card wizard's second step the four camp buttons now line up
