@@ -196,6 +196,44 @@ class AgentBuilderAPITests(unittest.TestCase):
         for old in ("Agent Profile", "Permission Intents", "Equipped Skill Loadout"):
             self.assertNotIn(old, joined)
 
+    def test_catalog_carries_model_options_from_the_cache_and_the_usage_scan(self):
+        codex_dir = FAKE_HOME / ".codex"
+        cache = codex_dir / "models_cache.json"
+        had_dir = codex_dir.exists()
+        codex_dir.mkdir(exist_ok=True)
+        self.assertFalse(cache.exists(), "the fake home holds no cache before this test")
+        cache.write_text(json.dumps({"identity": "FAKE-IDENTITY", "models": [
+            {"slug": "gpt-test-1", "display_name": "Test One", "visibility": "list", "priority": 1, "base_instructions": "FAKE"},
+            {"slug": "gpt-test-hidden", "display_name": "Hidden", "visibility": "hide", "priority": 0}]}))
+        self.console.store._static = {"skills": [], "roles": []}
+        self.console.store._static_stamp = None
+        self.console.store._live = {"usage": {"sessions": [
+            {"tool": "claude", "models": {"claude-test-5": 3}, "last_ts": "2026-10-20T00:00:00Z"}]}}
+        try:
+            status, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        finally:
+            self.console.store._live = None
+            self.console.store._static = None
+            cache.unlink()
+            if not had_dir:
+                codex_dir.rmdir()
+        self.assertEqual(status, 200)
+        options = body["model_options"]
+        self.assertEqual(set(options), {"claude", "codex"})
+        self.assertEqual([o["value"] for o in options["claude"]["latest"]], ["fable", "opus", "sonnet", "haiku"])
+        self.assertEqual([o["value"] for o in options["claude"]["observed"]], ["claude-test-5"])
+        self.assertEqual(options["codex"]["listed"], [{"value": "gpt-test-1", "label": "Test One"}])
+        self.assertNotIn("FAKE", json.dumps(body))
+        self.assertNotIn("IDENTITY", json.dumps(body))
+
+    def test_catalog_without_a_cache_or_usage_still_answers_with_the_aliases(self):
+        self.console.store._live = None
+        status, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["model_options"]["claude"]["observed"], [])
+        self.assertEqual(body["model_options"]["codex"]["listed"], [])
+        self.assertTrue(body["model_options"]["codex"]["problem"])
+
     def test_catalog_serves_the_starter_deck_exactly(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
