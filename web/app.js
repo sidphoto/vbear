@@ -1087,14 +1087,14 @@ function translationFailureFor(id) {
   if (!job || job.status !== "failed" || T.attempts[job.id] !== id) return null;
   return { message: job.error && job.error.message ? job.error.message : "原因不明" };
 }
-// What a skill says about itself in the picker: its Chinese "what it does" when a translation exists (marked as machine
-// translation, and 過期 when the original changed since), otherwise the original excerpt. -> { zh, text, badge }.
+// What a skill says about itself in the picker: its Chinese "what it does" when a translation exists, otherwise the
+// original excerpt. -> { zh, text, badge }. That the text is a machine translation is said once above the list (P26),
+// so the only mark a card keeps is 過期, when the original changed since.
 function skillPickText(s) {
   const t = s && s.skill_id ? translationOf(s.skill_id) : { entry: null };
   if (t.entry && t.entry.description_zh) {
     return { zh: true, text: firstSentence(t.entry.description_zh, 90),
-      badge: badge(t.state === "stale" ? "過期" : "機器翻譯", t.state === "stale" ? "b-warn" : "b-info",
-        t.state === "stale" ? "原文改過，這段翻譯可能已經不準；看原文確認" : "機器翻譯，內容未經 VBear 驗證") };
+      badge: t.state === "stale" ? badge("過期", "b-warn", "原文改過，這段翻譯可能已經不準；看原文確認") : null };
   }
   return { zh: false, text: s && s.excerpt ? String(s.excerpt) : "", badge: null };
 }
@@ -3792,6 +3792,8 @@ const CARD_INTENT_KEYS = [["read", "讀取檔案"], ["write", "編輯寫入"], [
 const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還沒決定" };
 const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
 const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
+const SKILL_SHARED_TAG = "共用";
+const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看原文」對照";
 // VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
@@ -4271,7 +4273,16 @@ function openCardWizard(opts) {
       const s = e.skill;
       const ok = skillCompatible(s, st.tool);
       const pick = skillPickText(s);
-      const tagged = s.tool !== st.tool || st.tool === "agy";
+      // the camp is told only where it is news: not for the card's own camp
+      const camp = s.tool === st.tool ? null : s.tool === "shared" ? SKILL_SHARED_TAG : (CARD_TOOL_SHORT[s.tool] || s.tool || "?");
+      const dead = e.kind === "dead" || e.kind === "dup";
+      const tags = [
+        camp ? el("span", { class: "tag", "data-cw": "skill-camp" }, camp) : null,
+        e.copies ? el("span", { class: "small muted", "data-cw": "same-name" }, `另有 ${e.copies} 份同名`) : null,
+        dead ? el("span", { class: "small muted", "data-cw": "unused-reason" }, e.reason) : null,
+        ok ? null : el("span", { class: "small cw-error", "data-cw": "incompatible" }, skillIncompatibleNote(st.tool)),
+        pick.badge,
+      ].filter(Boolean);
       const btn = el("button", { type: "button", class: `cw-skill${ok ? "" : " cw-skill-off"}${e.kind === "dead" || e.kind === "dup" ? " cw-skill-dead" : ""}`,
         "data-skill": s.skill_id, "aria-pressed": String(st.equipped.has(s.skill_id)),
         "aria-disabled": ok ? null : "true", title: ok ? null : skillIncompatibleNote(st.tool),
@@ -4280,13 +4291,10 @@ function openCardWizard(opts) {
           if (st.equipped.has(s.skill_id)) st.equipped.delete(s.skill_id); else st.equipped.add(s.skill_id);
           syncChosen();
         } } },
-        el("strong", null, s.name || s.skill_id),
-        tagged ? el("span", { class: "tag" }, CARD_TOOL_SHORT[s.tool] || s.tool || "?") : null,
-        st.tool === "agy" && s.tool !== "agy" && ok ? el("span", { class: "tag", "data-cw": "agy-reads" }, "AGY 會讀") : null,
-        pick.badge, pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
-        e.copies ? el("span", { class: "small muted", "data-cw": "same-name" }, `另有 ${e.copies} 份同名`) : null,
-        e.kind === "dead" || e.kind === "dup" ? el("span", { class: "small muted", "data-cw": "unused-reason" }, e.reason) : null,
-        ok ? null : el("span", { class: "small cw-error", "data-cw": "incompatible" }, skillIncompatibleNote(st.tool)));
+        // three parts: the name, one row of small tags (none, no row), the description
+        el("strong", { "data-cw": "skill-name" }, s.name || s.skill_id),
+        tags.length ? el("span", { class: "cw-skill-tags", "data-cw": "skill-tags" }, tags) : null,
+        pick.text ? el("span", { class: `small cw-skill-ex${pick.zh ? "" : " muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null);
       buttons.set(s.skill_id, btn);
       // the original is beside the card, not inside it: a button cannot hold another control
       return el("div", { class: "cw-skill-cell", "data-skill-cell": s.skill_id }, btn,
@@ -4314,6 +4322,7 @@ function openCardWizard(opts) {
         return;
       }
       const visible = rows.slice(0, st.shown);
+      const translated = visible.some((e) => skillPickText(e.skill).zh);
       const used = visible.filter((e) => e.kind === "listed");
       const rest = visible.filter((e) => e.kind !== "listed");
       const grid = (es) => el("div", { class: "cw-skill-grid", "data-cw": "skill-grid" }, es.map(skillCard));
@@ -4321,7 +4330,8 @@ function openCardWizard(opts) {
         ? el("button", { type: "button", class: "btn small", "data-cw": "more",
           on: { click: () => { st.shown += CARD_PAGE_SIZE; drawList(); syncChosen(); } } },
           `顯示更多（剩 ${rows.length - visible.length} 張）`) : null;
-      setKids(list, used.length ? grid(used) : null,
+      setKids(list, translated ? el("p", { class: "small muted", "data-cw": "translated-note" }, SKILL_TRANSLATED_NOTE) : null,
+        used.length ? grid(used) : null,
         rest.length ? el("p", { class: "small cw-label", "data-cw": "unused-heading" }, `用不到的技能（${unusedHits.length} 張）`) : null,
         rest.length ? grid(rest) : null, more);
     }

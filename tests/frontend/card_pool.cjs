@@ -1198,7 +1198,8 @@ async function test(name, fn) {
     const cell = (id) => byData(d, "data-skill-cell", id)[0];
     const fresh = cell("s-c");
     assert.strictEqual(byData(fresh, "data-cw", "skill-zh")[0].textContent, "替程式變更做審查，並列出有風險的行，同時標出需要補測試的地方。");
-    assert.ok(findText(fresh, "機器翻譯") && !findText(fresh, "過期"));
+    assert.ok(!findText(fresh, "機器翻譯") && !findText(fresh, "過期"), "P26: a card no longer carries the machine-translation mark; one line above the list says it");
+    assert.ok(findText(d, "說明是機器翻譯"));
     const orig = byData(fresh, "data-cw", "skill-orig")[0];
     assert.ok(orig && orig.tag === "details" && !orig.hasAttribute("open"), "folded");
     assert.strictEqual(orig.children[0].textContent, "看原文");
@@ -1768,8 +1769,8 @@ async function test(name, fn) {
       sk(id).dispatch("click");
       assert.strictEqual(sk(id).getAttribute("aria-pressed"), "true", id);
     }
-    assert.ok(findText(sk("s-ar"), "AGY 會讀"), "a Codex skill says why it fits an AGY card");
-    assert.ok(!findText(sk("s-an"), "AGY 會讀"), "AGY's own skill needs no extra tag beside its camp tag");
+    assert.ok(findText(sk("s-ar"), "Codex") && !findText(sk("s-ar"), "AGY 會讀"), "P26: a Codex skill on an AGY card shows its source, and no longer says AGY reads it (all of them do)");
+    assert.ok(!findText(sk("s-an"), "AGY 會讀"), "AGY's own skill needs no extra tag");
     assert.ok(!findText(dialog(), "AGY 會載入") || findText(dialog(), "只是收藏"), "no sentence claims a load");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
@@ -2250,9 +2251,11 @@ async function test(name, fn) {
     const { d } = await step3Of("claude");
     const tags = (id) => walk(byData(d, "data-skill", id)[0]).filter((n) => n.tag === "span" && n.className.split(" ").includes("tag")).map((n) => n.textContent);
     assert.deepStrictEqual(tags("c-notes"), [], "the same for every card: no tag");
-    assert.deepStrictEqual(tags("sh-check"), ["共用卡"]);
+    assert.deepStrictEqual(tags("sh-check"), ["共用"]);
     const agy = await step3Of("agy");
-    assert.ok(walk(byData(agy.d, "data-skill", "a-notes")[0]).some((n) => n.textContent === "AGY"));
+    assert.deepStrictEqual(walk(byData(agy.d, "data-skill", "a-notes")[0]).filter((n) => n.tag === "span" && n.className.split(" ").includes("tag")).map((n) => n.textContent), [],
+      "P26: AGY's own skill on an AGY card is the card's own camp: no tag");
+    assert.ok(walk(byData(agy.d, "data-skill", "x-lint")[0]).some((n) => n.tag === "span" && n.className.split(" ").includes("tag") && n.textContent === "Codex"));
   });
 
   await test("P24 the switch: off by default with its count; on, the rest show greyed or marked with a plain reason; the picking rules stay", async () => {
@@ -2385,6 +2388,151 @@ async function test(name, fn) {
     const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
     assert.ok(!/innerHTML/.test(wizard));
     assert.ok(!/\p{Extended_Pictographic}/u.test(wizard));
+  });
+
+  // ---- P26: a small skill card is three parts (name, one row of small tags, description); tags that tell nothing are gone ----
+  const classes = (n) => (n.className || "").split(" ");
+  const kids26 = (btn) => btn.children.filter((c) => c && c.tag !== "#text");
+  const tagRow = (btn) => kids26(btn).find((c) => classes(c).includes("cw-skill-tags"));
+  const tagTexts = (btn) => { const r = tagRow(btn); return r ? kids26(r).map((c) => textOf(c) || c.textContent) : []; };
+  const zhEntry = (zh) => ({ engine: "claude", model: "haiku", cli_version: "2.1.296", created_at: 1, name_zh: "甲", description_zh: zh });
+  const transOf = (entries) => ({ "GET /api/translations": () => jsonResponse({ entries, counts: { fresh: 0, stale: 0, none: 0, orphan: 0 }, job: null, engine: "claude" }) });
+  const noteOf = (d) => byData(d, "data-cw", "translated-note")[0];
+
+  await test("P26 a small card is three parts in a row: the name, one row of small tags (only when it has some), the description", async () => {
+    const { d } = await step3Of("claude");
+    const plain = byData(d, "data-skill", "c-notes")[0];
+    assert.deepStrictEqual(kids26(plain).map((c) => c.getAttribute("data-cw")), ["skill-name", "skill-en"], "nothing to tag: no empty row");
+    assert.strictEqual(kids26(plain)[0].tag, "strong");
+    assert.strictEqual(kids26(plain)[0].textContent, "note-taker");
+    const dup = byData(d, "data-skill", "c-act-new")[0];
+    assert.deepStrictEqual(kids26(dup).map((c) => c.getAttribute("data-cw")), ["skill-name", "skill-tags", "skill-en"]);
+    assert.deepStrictEqual(tagTexts(dup), ["另有 1 份同名"]);
+    const shared = byData(d, "data-skill", "sh-check")[0];
+    assert.deepStrictEqual(kids26(shared).map((c) => c.getAttribute("data-cw")), ["skill-name", "skill-tags", "skill-en"]);
+    assert.deepStrictEqual(tagTexts(shared), ["共用"]);
+    // no tag, badge or reason is a direct child of the card: they all sit in the row
+    for (const id of ["c-notes", "c-act-new", "sh-check"]) {
+      for (const c of kids26(byData(d, "data-skill", id)[0])) {
+        assert.ok(!classes(c).includes("tag") && !classes(c).includes("badge") && c.getAttribute("data-cw") !== "same-name", `${id}: ${c.getAttribute("data-cw")}`);
+      }
+    }
+    // the card is still one button with the same press state, and the description keeps its two-line clamp class
+    assert.strictEqual(plain.tag, "button");
+    assert.ok(classes(kids26(plain)[1]).includes("cw-skill-ex"));
+    plain.dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-skill", "c-notes")[0].getAttribute("aria-pressed"), "true");
+  });
+
+  await test("P26 with the switch on, the reasons and the other camp's name sit in the same row, and the grey card is as it was", async () => {
+    const { d } = await step3Of("claude");
+    toggleOf(d).dispatch("click");
+    const on = dialog();
+    const sup = byData(on, "data-skill", "c-sup")[0];
+    assert.deepStrictEqual(tagTexts(sup), ["舊版本，現在用的是新版"]);
+    assert.ok(tagTexts(byData(on, "data-skill", "c-dis")[0]).some((t) => t.includes("已停用")));
+    assert.deepStrictEqual(tagTexts(byData(on, "data-skill", "c-act-old")[0]).length, 1);
+    const dupOld = tagTexts(byData(on, "data-skill", "c-act-old")[0])[0];
+    assert.ok(dupOld.includes("同名"), dupOld);
+    const x = byData(on, "data-skill", "x-sheet")[0];
+    assert.strictEqual(x.getAttribute("aria-disabled"), "true");
+    assert.ok(x.getAttribute("title").includes("Claude Code 不會讀這張卡"));
+    assert.deepStrictEqual(tagTexts(x), ["Codex", "Claude Code 不會讀這張卡"], "the other camp's skill still names its camp, in the row");
+    assert.deepStrictEqual(kids26(x).map((c) => c.getAttribute("data-cw")), ["skill-name", "skill-tags", "skill-en"]);
+    assert.ok(classes(x).includes("cw-skill-off"));
+    x.dispatch("click");
+    assert.strictEqual(x.getAttribute("aria-pressed"), "false");
+  });
+
+  await test("P26 AGY card: no 「AGY 會讀」 on any card; a skill of another camp names its source in the row; AGY's own has no camp tag", async () => {
+    const { d } = await step3Of("agy");
+    assert.ok(!findText(d, "AGY 會讀") || findText(byData(d, "data-cw", "agy-skills-note")[0], "AGY 會讀"), "only the sentence above the list may say it");
+    assert.strictEqual(byData(d, "data-cw", "agy-reads").length, 0);
+    for (const id of ["x-lint", "a-notes"]) assert.ok(!findText(byData(d, "data-skill", id)[0], "AGY 會讀"), id);
+    assert.deepStrictEqual(tagTexts(byData(d, "data-skill", "x-lint")[0]), ["Codex"]);
+    assert.deepStrictEqual(tagTexts(byData(d, "data-skill", "a-notes")[0]), [], "same camp as the card");
+    assert.strictEqual(tagRow(byData(d, "data-skill", "a-notes")[0]), undefined);
+    assert.deepStrictEqual(ids24(d).sort(), ["a-notes", "x-lint"]);
+    // a skill AGY does not read: grey, with the reason, in the row
+    toggleOf(d).dispatch("click");
+    const grey = byData(dialog(), "data-skill", "c-act-new")[0];
+    assert.strictEqual(grey.getAttribute("aria-disabled"), "true");
+    assert.deepStrictEqual(tagTexts(grey).slice(0, 2), ["Claude Code", "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"]);
+    assert.ok(!findText(dialog(), "AGY 會讀") || findText(byData(dialog(), "data-cw", "agy-skills-note")[0], "AGY 會讀"));
+  });
+
+  await test("P26 the card's own camp shows no camp tag, on every camp; the shared skill says 共用 on the other camps", async () => {
+    const claude = await step3Of("claude");
+    for (const id of ["c-notes", "c-act-new", "c-plain-b"]) assert.ok(!tagTexts(byData(claude.d, "data-skill", id)[0]).includes("Claude Code"), id);
+    assert.ok(tagTexts(byData(claude.d, "data-skill", "sh-writer")[0]).includes("共用"));
+    const codex = await step3Of("codex");
+    for (const id of ["x-sheet", "x-lint"]) { assert.deepStrictEqual(tagTexts(byData(codex.d, "data-skill", id)[0]), [], id); assert.strictEqual(tagRow(byData(codex.d, "data-skill", id)[0]), undefined, id); }
+    assert.deepStrictEqual(tagTexts(byData(codex.d, "data-skill", "sh-check")[0]), ["共用"]);
+    const shared = await step3Of("shared");
+    for (const id of ["sh-check", "sh-writer"]) assert.deepStrictEqual(tagTexts(byData(shared.d, "data-skill", id)[0]), [], `${id}: the shared card's own camp`);
+    toggleOf(shared.d).dispatch("click");
+    assert.deepStrictEqual(tagTexts(byData(dialog(), "data-skill", "c-notes")[0]).slice(0, 1), ["Claude Code"], "with the switch on, another camp's skill still names its camp");
+  });
+
+  await test("P26 the machine-translation line stands once above the list, only while a listed card is translated; cards carry only 過期", async () => {
+    const none = await step3Of("claude");
+    assert.strictEqual(noteOf(none.d), undefined, "no translation, no line");
+    assert.ok(!findText(none.d, "說明是機器翻譯"));
+    const fresh = await step3Of("claude", {}, catalog24, transOf({ "c-notes": { state: "fresh", entry: zhEntry("記錄會議內容，整理成條列。") }, "sh-check": { state: "fresh", entry: zhEntry("檢查共用設定。") } }));
+    const note = noteOf(fresh.d);
+    assert.ok(note, "the line is there");
+    assert.strictEqual(byData(fresh.d, "data-cw", "translated-note").length, 1, "once, not once per card");
+    assert.strictEqual(note.textContent, "說明是機器翻譯，可能不準；點「看原文」對照");
+    const grid = byData(fresh.d, "data-cw", "skill-grid")[0];
+    const parent = walk(fresh.d).find((n) => n.children.includes(note));
+    assert.ok(parent.children.indexOf(note) < parent.children.indexOf(grid), "above the list");
+    for (const id of ["c-notes", "sh-check"]) {
+      const btn = byData(fresh.d, "data-skill", id)[0];
+      assert.ok(!findText(btn, "機器翻譯") && !findText(btn, "過期"), id);
+      assert.strictEqual(byData(btn, "data-cw", "skill-zh").length, 1, "its Chinese description is still the description");
+    }
+    assert.ok(byData(fresh.d, "data-skill-cell", "c-notes")[0] && byData(byData(fresh.d, "data-skill-cell", "c-notes")[0], "data-cw", "skill-orig").length === 1, "the original is still one tap away");
+    // the line is about what is on screen: search the translated ones away and it goes
+    const search = walk(fresh.d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-skill-q");
+    search.value = "deck"; search.dispatch("input");
+    assert.deepStrictEqual(ids24(dialog()), ["c-act-new"]);
+    assert.strictEqual(noteOf(dialog()), undefined, "nothing translated is listed");
+    search.value = ""; search.dispatch("input");
+    assert.ok(noteOf(dialog()), "and it comes back");
+  });
+
+  await test("P26 an out-of-date translation is the one mark a card keeps, in its row; the line above stays", async () => {
+    const stale = await step3Of("claude", {}, catalog24, transOf({ "c-notes": { state: "stale", entry: zhEntry("舊的翻譯。") } }));
+    const btn = byData(stale.d, "data-skill", "c-notes")[0];
+    assert.deepStrictEqual(tagTexts(btn), ["過期"]);
+    assert.ok(classes(tagRow(btn).children[0]).includes("b-warn"));
+    assert.ok(noteOf(stale.d), "it is still a machine translation");
+    assert.ok(!findText(btn, "機器翻譯"));
+    // a translation of a skill that is behind the switch does not make the line appear until it is shown
+    const hidden = await step3Of("claude", {}, catalog24, transOf({ "c-sup": { state: "fresh", entry: zhEntry("舊版本的說明。") } }));
+    assert.strictEqual(noteOf(hidden.d), undefined, "the translated skill is not on the list");
+    toggleOf(hidden.d).dispatch("click");
+    assert.ok(noteOf(dialog()), "now it is");
+  });
+
+  await test("P26 the skill library and the skill page keep their own translation badge (translationBadge is not touched)", () => {
+    assert.ok(source.includes('translationBadge(id)'));
+    const fn = source.slice(source.indexOf("function translationBadge("), source.indexOf("function translationDisclosure("));
+    assert.ok(fn.includes('"機器翻譯 · 過期"') && fn.includes('"機器翻譯"'));
+    const pick = pure.skillPickText({ skill_id: "zz", excerpt: "orig" });
+    assert.strictEqual(pick.badge, null);
+    assert.strictEqual(pick.zh, false);
+  });
+
+  await test("P26 the CSS: the tag row is a small wrapping flex row; the card is not changed elsewhere", () => {
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    const rule = /\.cw-skill-tags\s*\{([^}]*)\}/.exec(css);
+    assert.ok(rule, "the row rule");
+    assert.ok(/display:\s*flex/.test(rule[1]) && /flex-wrap:\s*wrap/.test(rule[1]) && /gap:\s*\d+px/.test(rule[1]));
+    assert.ok(/\.cw-skill strong\s*\{[^}]*overflow-wrap:\s*anywhere/.test(css), "a long name still wraps, never cut");
+    assert.ok(/\.cw-skill-ex\s*\{[^}]*-webkit-line-clamp:\s*2/.test(css), "two lines for the description");
+    const html = fs.readFileSync(path.join(__dirname, "..", "..", "web", "index.html"), "utf8");
+    assert.ok(!/cw-skill/.test(html), "no other page uses the card");
   });
 
   console.log(`\n${passed} passed`);

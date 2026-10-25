@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **The small skill cards in step 3 of the card wizard read in one glance.** Each card is now three parts: the
+  name, one small row of tags, and the description (still two lines). Before, every tag sat on a line of its own and
+  a card was a stack of five or six short lines. Tags that told nothing are gone: "AGY reads it" (every skill an AGY
+  card lists is read by AGY), the camp tag on a skill of the card's own camp (a Claude Code skill on a Claude Code
+  card), and the "machine translation" badge on every card. A shared skill says "shared" on the other camps' cards, a
+  skill from another camp says which one (for example "Codex" on an AGY card), and the row also holds the plain
+  reason a skill is greyed or marked, "N more with this name" and "out of date". When some listed description is a
+  machine translation, one line above the list says so and points to "see the original"; the library and the skill
+  page keep their own translation badge. Long names still wrap instead of being cut, and picking, taking off, the
+  keyboard and the greyed cards work as before.
+
 ## v0.8.6 — skill cards you can read
 
 - **Small tidy-ups from the last two reviews.** In the card wizard's second step the four camp buttons now line up
