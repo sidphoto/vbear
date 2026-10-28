@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The card wizard's profession is now a picker you can read and use.** It moved out of 進階 to step 2, under the
+  suggested position, as one line (目前：…) that opens into a search, buttons for the position each role probably fits,
+  and a list. It lists only your card's own tool (a Claude Code card no longer lists Codex roles) and no longer lists the
+  two "main agent" entries, which were the tools themselves, not professions. Every name shows in Chinese beside the
+  English once translated, with 待翻 on the ones that are not, and each row has one line of what the role does: the
+  translated sentence (marked 機器翻譯), or the author's first 60 characters (marked 原文), plus a position guess made
+  from the name or the first sentence of the description (marked as a guess; the roles it cannot place sit in 其他).
+  Choosing a role shows what it brings and each item is one click: its guessed position (put on the card only when the
+  card has none, otherwise offered as a button), the skills the template names that your card's tool can read (一起插上,
+  seen in step 3), and the model it names (套用模型). Choosing only labels the card: launching still does not load the
+  role's instructions. When names are still English, the open picker says so and offers 把職業名稱翻成中文; it asks
+  before anything is sent, and when the first translation needs the one-time safety check it offers 先檢查 there (also
+  asking first). 先不翻 folds the prompt into one small button. A label the card already holds from another tool, from
+  the tool itself, or from a role the index no longer finds stays, with the reason and a 解除 button; nothing is cleared
+  for you. Roles of a plugin that is switched off are behind 也顯示用不到的. The back of a card calls the row 職業 and adds
+  the one Chinese sentence. VBear's own two main-agent names are no longer sent for translation. The choice is still
+  saved as the role id.
 - **A role card's suggested position now follows the division of work of a one-person company.** Step 2 of the card
   wizard offers nine positions in two rows, with 先不指定 beside them: the places of a task card (規劃, 執行, 品質驗證,
   獨立審查) and staff and support (產品, 研究, 商業, 設計, 紀錄). A position you pick shows what it does, where on a task

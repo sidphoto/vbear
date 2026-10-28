@@ -524,6 +524,14 @@ async function test(name, fn) {
   const ids24 = (root) => walk(root).filter((n) => n.getAttribute && n.getAttribute("data-skill")).map((n) => n.getAttribute("data-skill"));
   const showUnused = () => byData(dialog(), "data-cw", "unused-toggle")[0].dispatch("click");
   const typeName = (d, text) => { const i = walk(d).find((n) => n.tag === "input"); i.value = text; i.dispatch("input"); return i; };
+  // P32-4: the profession picker (one line when closed; a search, groups and a list when open)
+  const profOpen = () => byData(dialog(), "data-cw", "profession-open")[0];
+  const profPicker = () => byData(dialog(), "data-cw", "profession-picker")[0];
+  const profRows = () => byData(dialog(), "data-cw", "profession-row");
+  const profIds = () => profRows().map((n) => n.getAttribute("data-profession"));
+  const profNames = () => profRows().map((n) => textOf(byData(n, "data-cw", "prof-name")[0]).trim());
+  const openPicker = () => { if (!profPicker()) profOpen().dispatch("click"); };
+  const pickProfession = (id) => { openPicker(); byData(dialog(), "data-profession", id)[0].dispatch("click"); };
 
   await test("wizard: three steps, the controls at the bottom, no step entered without a name", async () => {
     const { d } = await openWizard();
@@ -765,14 +773,27 @@ async function test(name, fn) {
     assert.ok(findText(box, "這個組合目前不能出發") && findText(box, "無法強制禁止讀取") && findText(box, writeDenyBlockers[0].message));
   });
 
-  await test("wizard step 2: the profession label and Model ID sit in 進階, with the new explanation", async () => {
+  await test("wizard step 2: the order is camp, position, profession, intents, 進階; the profession is not under 進階, the Model ID is", async () => {
     const { d } = await openWizard();
     typeName(d, "X");
     btnByText(d, "下一步").dispatch("click");
-    const adv = byData(dialog(), "data-cw", "advanced")[0];
+    const cur = dialog();
+    const adv = byData(cur, "data-cw", "advanced")[0];
     assert.strictEqual(adv.tag, "details");
     assert.ok(!adv.hasAttribute("open"));
-    assert.ok(findText(adv, "職業標籤") && findText(adv, "你電腦裡現成的角色範本，可以不選，只是標籤") && findText(adv, "Model ID"));
+    const all = walk(cur);
+    const labelAt = (text) => all.findIndex((n) => n.classList && n.classList.contains("cw-label") && (n.textContent || "").startsWith(text));
+    const order = [labelAt("陣營"), labelAt("建議位置"), labelAt("職業（角色範本，選填）"), labelAt("權限意圖"), all.indexOf(adv)];
+    assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
+    assert.deepStrictEqual([...order].sort((a, b) => a - b), order, "the order on the screen");
+    const field = byData(cur, "data-cw", "profession-field")[0];
+    assert.ok(field && !adv.contains(field), "the profession is out of 進階");
+    assert.ok(findText(adv, "Model ID") && !findText(adv, "職業"));
+    assert.ok(findText(field, "你電腦裡現成的角色範本") && findText(field, "出發時不會把範本的指示交給工具"));
+    assert.strictEqual(profPicker(), undefined, "closed: one line");
+    assert.ok(findText(byData(field, "data-cw", "profession-current")[0], "不用範本"));
+    assert.strictEqual(profOpen().textContent.trim(), "挑一個");
+    assert.strictEqual(profOpen().getAttribute("aria-expanded"), "false");
   });
 
   await test("wizard step 3: skill cards in a grid, one click inserts; the other tool's cards are greyed with the reason", async () => {
@@ -1935,8 +1956,7 @@ async function test(name, fn) {
     const { posts, d } = await openWizard([], catalogAgy);
     typeName(d, "Switch to AGY");
     btnByText(d, "下一步").dispatch("click");
-    const sel = walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("id") === "cw-profession");
-    sel.value = "r-1"; sel.dispatch("change");
+    pickProfession("r-1");
     byData(dialog(), "data-tool", "codex")[0].dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
     for (const id of ["s-x", "s-s", "s-ar"]) byData(dialog(), "data-skill", id)[0].dispatch("click");
@@ -2048,18 +2068,19 @@ async function test(name, fn) {
     assert.ok(!findText(cardOf("p-1"), "AGY 不會讀"));
   });
 
-  await test("P20 wizard 進階: an AGY card lists no profession labels and says VBear has not scanned any; the other tools still list theirs", async () => {
+  await test("P20 wizard: an AGY card lists no professions and says VBear has not scanned any; the other tools still list theirs", async () => {
     const { d } = await openWizard([], catalogAgy);
     typeName(d, "Prof");
     btnByText(d, "下一步").dispatch("click");
-    const options = () => walk(byData(dialog(), "data-cw", "advanced")[0]).filter((n) => n.tag === "option").map((n) => (n.textContent || "").trim());
-    assert.deepStrictEqual(options(), ["（不綁定）", "Writer (claude)"]);
+    openPicker();
+    assert.deepStrictEqual(profIds(), ["r-1"]);
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
-    assert.deepStrictEqual(options(), ["（不綁定）"], "no Claude or Codex role stands in for an AGY one");
-    const adv = byData(dialog(), "data-cw", "advanced")[0];
-    assert.ok(findText(adv, "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
+    assert.deepStrictEqual(profIds(), [], "no Claude or Codex role stands in for an AGY one");
+    assert.strictEqual(profOpen(), undefined, "nothing to pick");
+    assert.ok(findText(byData(dialog(), "data-cw", "profession-field")[0], "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業"));
     byData(dialog(), "data-tool", "shared")[0].dispatch("click");
-    assert.deepStrictEqual(options(), ["（不綁定）", "Writer (claude)"]);
+    openPicker();
+    assert.deepStrictEqual(profIds(), ["r-1"]);
   });
 
   // ---- P21: a camp VBear does not start shows no "this combination cannot be launched" ------------------------------
@@ -2680,34 +2701,33 @@ async function test(name, fn) {
   const rtRoutes = (view) => ({ "GET /api/role-translations": () => jsonResponse(typeof view === "function" ? view() : view) });
   const catalogP30 = { ...catalog, professions: [
     { role_id: "r-1", name: "Writer", tool: "claude", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" },
-    { role_id: "r-2", name: "Brand Guardian", tool: "codex", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" },
-    { role_id: "r-3", name: "Trend Researcher", tool: "codex", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" }] };
+    { role_id: "r-2", name: "Brand Guardian", tool: "claude", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" },
+    { role_id: "r-3", name: "Trend Researcher", tool: "claude", kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared" }] };
   const confirmDlg = () => body.children.find((c) => c !== main && walk(c).some((n) => n.getAttribute && n.getAttribute("id") === "modal-confirm-title"));
   const profField = () => byData(dialog(), "data-cw", "profession-field")[0];
-  const profSelect = () => walk(dialog()).find((n) => n.tag === "select" && n.getAttribute("id") === "cw-profession");
-  const optTexts = () => profSelect().children.filter((n) => n.tag === "option").map((n) => n.textContent);
-  async function profWizard(view, extra = {}) {
+  const sortedNames = () => profNames().sort();
+  async function profWizard(view, extra = {}, open = true) {
     const { ctx, posts } = await openWizard([], catalogP30, { ...rtRoutes(view), ...extra });
     typeName(dialog(), "X");
     btnByText(dialog(), "下一步").dispatch("click");
     await tick(6);
+    if (open) openPicker();
     return { ctx, posts };
   }
   const translateBtn = () => byData(dialog(), "data-cw", "role-translate")[0];
 
-  await test("P30 the profession menu shows 中文名稱（English name）・tool when a name is translated, and the old English line when not", async () => {
+  await test("P30 the picker shows 中文名稱（English name） when a name is translated, and the English name alone when not; the stored value is the role id", async () => {
     await profWizard(rtView({ "r-1": rtEntry("作家"), "r-2": rtEntry("品牌守護者"), "r-3": { state: "none", entry: null } }, { fresh: 2, none: 1 }));
-    assert.deepStrictEqual(optTexts(), ["（不綁定）", "作家（Writer）・Claude Code", "品牌守護者（Brand Guardian）・Codex", "Trend Researcher (codex)"]);
-    const values = profSelect().children.filter((n) => n.tag === "option").map((n) => n.getAttribute("value"));
-    assert.deepStrictEqual(values, ["", "r-1", "r-2", "r-3"], "the stored value is still the role id");
+    assert.deepStrictEqual(sortedNames(), ["Trend Researcher", "作家（Writer）", "品牌守護者（Brand Guardian）"].sort());
+    assert.deepStrictEqual(profIds().sort(), ["r-1", "r-2", "r-3"], "the stored value is still the role id");
   });
 
-  await test("P30 a stale translation is not used for the menu (the original changed since); the English line stays", async () => {
+  await test("P30 a stale translation is not used for the picker (the original changed since); the English name stays", async () => {
     await profWizard(rtView({ "r-1": rtEntry("作家", "stale") }, { stale: 1, none: 2 }));
-    assert.strictEqual(optTexts()[1], "Writer (claude)");
+    assert.ok(sortedNames().includes("Writer") && !sortedNames().some((t) => t.includes("作家")));
   });
 
-  await test("P30 the line under the menu says the Chinese names are machine translation, only when one is shown", async () => {
+  await test("P30 the line in the picker says the Chinese names are machine translation, only when one is shown", async () => {
     await profWizard(rtView({ "r-1": rtEntry("作家") }, { fresh: 1, none: 2 }));
     assert.ok(findText(profField(), "中文名稱是機器翻譯"));
     await profWizard(rtView({}, { none: 3 }));
@@ -2743,22 +2763,23 @@ async function test(name, fn) {
     assert.strictEqual(translateBtn(), undefined);
     await profWizard(() => { throw new Error("boom"); });
     assert.strictEqual(translateBtn(), undefined, "an unknown state offers no button");
-    assert.deepStrictEqual(optTexts().slice(1), ["Writer (claude)", "Brand Guardian (codex)", "Trend Researcher (codex)"]);
+    assert.deepStrictEqual(sortedNames(), ["Brand Guardian", "Trend Researcher", "Writer"], "English, and no 待翻 mark on a guess");
+    assert.strictEqual(byData(dialog(), "data-cw", "prof-pending").length, 0);
   });
 
-  await test("P30 the menu is drawn again when the translations arrive, without closing the wizard or losing the choice", async () => {
+  await test("P30 the picker is drawn again when the translations arrive, without closing the wizard or the picker, or losing the choice", async () => {
     let done = false;
-    const { ctx } = await profWizard(() => (done ? rtView({ "r-1": rtEntry("作家"), "r-2": rtEntry("甲"), "r-3": rtEntry("乙") }, { fresh: 3 })
+    await profWizard(() => (done ? rtView({ "r-1": rtEntry("作家"), "r-2": rtEntry("甲"), "r-3": rtEntry("乙") }, { fresh: 3 })
       : rtView({}, { none: 3 })), { "POST /api/role-translations/batch": () => { done = true; return jsonResponse({ job: { id: "j", status: "running" } }, 202); } });
-    const sel = profSelect();
-    sel.value = "r-2"; sel.dispatch("change");
+    pickProfession("r-2");
     translateBtn().dispatch("click");
     await tick();
     btnByText(confirmDlg(), "翻成中文").dispatch("click");
     await tick(8);
     assert.ok(dialog(), "the wizard stays open");
-    assert.deepStrictEqual(optTexts(), ["（不綁定）", "作家（Writer）・Claude Code", "甲（Brand Guardian）・Codex", "乙（Trend Researcher）・Codex"]);
-    assert.strictEqual(profSelect().value, "r-2", "the chosen role stays chosen");
+    assert.ok(profPicker(), "the picker stays open");
+    assert.deepStrictEqual(sortedNames(), ["作家（Writer）", "甲（Brand Guardian）", "乙（Trend Researcher）"].sort());
+    assert.strictEqual(byData(dialog(), "data-profession", "r-2")[0].getAttribute("aria-pressed"), "true", "the chosen role stays chosen");
     assert.strictEqual(translateBtn(), undefined);
   });
 
@@ -2786,8 +2807,16 @@ async function test(name, fn) {
     let back = await pool(rtView({ "r-1": rtEntry("作家") }, { fresh: 1 }));
     assert.ok(findText(back, "作家（Writer）") && findText(back, "只是標籤"));
     assert.ok(findText(back, "Writes docs"), "the author's own words stay as they are");
+    // P32-4: the label is 職業, with the one Chinese sentence of the translation under it, said to be machine translation
+    assert.ok(walk(back).some((n) => n.tag === "dt" && n.textContent === "職業"), "the row is called 職業");
+    assert.ok(!walk(back).some((n) => n.tag === "dt" && n.textContent === "職業標籤"));
+    const zh = byData(back, "data-rc", "profession-zh")[0];
+    assert.ok(zh && findText(zh, "一句話職責") && findText(zh, "機器翻譯"), "the sentence, marked");
     back = await pool(rtView({}, { none: 1 }));
     assert.ok(findText(back, "Writer") && !findText(back, "（Writer）"));
+    assert.strictEqual(byData(back, "data-rc", "profession-zh").length, 0, "no translation, no Chinese sentence");
+    back = await pool(rtView({ "r-1": { state: "fresh", entry: { name_zh: "作家", what: "原文未提供" } } }, { fresh: 1 }));
+    assert.strictEqual(byData(back, "data-rc", "profession-zh").length, 0, "the translator's 'not provided' is not a sentence");
   });
 
   await test("P30 roleLabel: translated name with the English in brackets; nothing translated, or stale, gives the name itself", () => {
@@ -2837,6 +2866,381 @@ async function test(name, fn) {
     const chunk = source.slice(start, end);
     assert.ok(!/innerHTML|insertAdjacentHTML|https?:\/\//.test(chunk));
     assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(chunk));
+  });
+
+  // ---- P32-4: the profession picker ----
+  const dept = (id) => ({ id, keyword: id, origin: "derived" });
+  const prof = (role_id, name, tool, extra = {}) => ({ role_id, name, tool, kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared",
+    description: null, department: null, declared_skill_ids: [], model_hint: null, unavailable: null, ...extra });
+  const catalog324 = { ...catalog, tools: ["claude", "codex", "agy", "shared"],
+    model_options: {
+      claude: { latest: [{ value: "opus", label: "opus" }, { value: "sonnet", label: "sonnet" }], listed: [], observed: [], problem: "" },
+      codex: { latest: [], listed: [{ value: "gpt-test-1", label: "Test One" }], observed: [], problem: "" } },
+    professions: [
+      prof("cli-claude", "Claude Code 主代理", "claude", { kind: "cli" }),
+      prof("cli-codex", "Codex 主代理", "codex", { kind: "cli" }),
+      prof("c-res", "Trend Researcher", "claude", { description: { value: "Finds new trends and market chances.", origin: "author" }, department: dept("research"),
+        declared_skill_ids: ["s-c", "s-x", "s-s", "gone"], skill_link_count: 4, skill_link_basis: "declared", model_hint: "opus" }),
+      prof("c-rev", "Code Reviewer", "claude", { description: { value: "Reviews code before it merges.", origin: "author" }, department: dept("reviewer"), model_hint: "claude-obscure-9" }),
+      prof("c-exe", "Frontend Developer", "claude", { department: dept("executor"), model_hint: "bad model name" }),
+      prof("c-zeb", "Zebra", "claude"),
+      prof("c-off", "Old Plugin Agent", "claude", { unavailable: "外掛已停用" }),
+      prof("x-brand", "Brand Guardian", "codex", { description: { value: "Keeps the brand voice.", origin: "author" }, department: dept("business") }),
+      prof("x-qa", "Test Engineer", "codex", { department: dept("qa") })] };
+  const rt324 = (extra = {}) => rtView({ "c-res": rtEntry("趨勢研究員"), "c-rev": rtEntry("程式碼審查員"), "c-exe": { state: "none", entry: null },
+    "c-zeb": { state: "fresh", entry: { name_zh: "斑馬", what: "原文未提供" } }, "x-brand": rtEntry("品牌守護者") }, { fresh: 4, none: 4 }, null);
+  async function wiz324(view = rt324(), extra = {}, { open = true, tool = null } = {}) {
+    const w = await openWizard([], catalog324, { ...rtRoutes(view), ...extra });
+    typeName(dialog(), "P");
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(6);
+    if (tool) byData(dialog(), "data-tool", tool)[0].dispatch("click");
+    if (open) openPicker();
+    return w;
+  }
+  const rowOf = (id) => byData(dialog(), "data-profession", id)[0];
+  const groupBtns = () => byData(dialog(), "data-cw", "profession-groups")[0].children.filter((n) => n.tag === "button");
+  const groupTexts = () => groupBtns().map((b) => b.textContent.trim());
+  const search324 = (text) => { const i = byData(dialog(), "data-cw", "profession-search")[0]; i.value = text; i.dispatch("input"); };
+  const brings = () => byData(dialog(), "data-cw", "profession-brings")[0];
+  const posOn = () => walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("data-position") && n.getAttribute("data-position") !== "none"
+    && n.getAttribute("aria-pressed") === "true").map((n) => n.getAttribute("data-position"));
+
+  await test("P32-4 the picker lists only the card's own camp, never the tool itself; a shared card lists both camps with the camp named", async () => {
+    await wiz324();
+    assert.deepStrictEqual(profIds().sort(), ["c-exe", "c-res", "c-rev", "c-zeb"].sort(), "Claude Code: no Codex role, no main agent, no switched-off plugin");
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
+    openPicker();
+    assert.deepStrictEqual(profIds().sort(), ["x-brand", "x-qa"], "Codex");
+    assert.strictEqual(byData(dialog(), "data-cw", "prof-camp").length, 0, "the camp is told only where it is news");
+    byData(dialog(), "data-tool", "shared")[0].dispatch("click");
+    openPicker();
+    assert.strictEqual(profIds().length, 6);
+    assert.deepStrictEqual(byData(rowOf("x-qa"), "data-cw", "prof-camp").map(textOf), ["Codex"]);
+    assert.deepStrictEqual(byData(rowOf("c-res"), "data-cw", "prof-camp").map(textOf), ["Claude Code"]);
+    assert.ok(!profIds().some((id) => id.startsWith("cli-")));
+  });
+
+  await test("P32-4 an empty camp says so in one sentence", async () => {
+    const cat = { ...catalog324, professions: [prof("cli-claude", "Claude Code 主代理", "claude", { kind: "cli" })] };
+    const w = await openWizard([], cat, rtRoutes(rt324()));
+    typeName(dialog(), "P");
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(6);
+    openPicker();
+    assert.deepStrictEqual(profIds(), []);
+    assert.ok(findText(profPicker(), "這個陣營沒有掃描到角色範本"));
+  });
+
+  await test("P32-4 groups by the guessed position with counts, the card's own position first; a group button narrows the list", async () => {
+    await wiz324();
+    assert.deepStrictEqual(groupTexts(), ["全部 4", "執行 1", "獨立審查 1", "研究 1", "其他 1"]);
+    assert.deepStrictEqual(profIds(), ["c-exe", "c-rev", "c-res", "c-zeb"], "the order of the positions, 其他 last");
+    byData(dialog(), "data-pgroup", "research")[0].dispatch("click");
+    assert.deepStrictEqual(profIds(), ["c-res"]);
+    assert.strictEqual(byData(dialog(), "data-pgroup", "research")[0].getAttribute("aria-pressed"), "true");
+    byData(dialog(), "data-pgroup", "other")[0].dispatch("click");
+    assert.deepStrictEqual(profIds(), ["c-zeb"]);
+    byData(dialog(), "data-pgroup", "all")[0].dispatch("click");
+    assert.strictEqual(profIds().length, 4);
+    // the position of the card puts that group first
+    byData(dialog(), "data-position", "research")[0].dispatch("click");
+    openPicker();
+    assert.deepStrictEqual(profIds()[0], "c-res");
+  });
+
+  await test("P32-4 each row says something in Chinese: the translated sentence (marked), or the guessed position; untranslated names say 待翻", async () => {
+    await wiz324();
+    assert.deepStrictEqual(profNames().sort(), ["Frontend Developer", "Zebra".replace("Zebra", "斑馬（Zebra）"), "程式碼審查員（Code Reviewer）", "趨勢研究員（Trend Researcher）"].sort());
+    const res = rowOf("c-res");
+    assert.ok(findText(res, "一句話職責") && findText(byData(res, "data-cw", "prof-what-tag")[0], "機器翻譯"));
+    assert.ok(findText(byData(res, "data-cw", "prof-dept")[0], "位置推測：研究"));
+    assert.strictEqual(byData(res, "data-cw", "prof-pending").length, 0);
+    const exe = rowOf("c-exe");
+    assert.ok(findText(byData(exe, "data-cw", "prof-pending")[0], "待翻"), "not translated yet");
+    assert.ok(findText(byData(exe, "data-cw", "prof-dept")[0], "位置推測：執行"));
+    assert.ok(findText(byData(exe, "data-cw", "prof-what")[0], "作者沒有寫說明"));
+    assert.ok(findText(byData(rowOf("c-zeb"), "data-cw", "prof-dept")[0], "位置推測：看不出來"));
+    assert.ok(findText(byData(rowOf("c-zeb"), "data-cw", "prof-what")[0], "作者沒有寫說明"), "the translator's 'not provided' is said in our words");
+    const rev = byData(rowOf("c-rev"), "data-cw", "prof-what")[0];
+    assert.ok(findText(rev, "一句話職責"), "this one is translated too");
+  });
+
+  await test("P32-4 an untranslated row shows the author's first 60 characters marked 原文", async () => {
+    const cat = { ...catalog324, professions: [prof("c-long", "Long One", "claude", { description: { value: "A".repeat(100), origin: "author" }, department: dept("planner") })] };
+    await openWizard([], cat, rtRoutes(rtView({}, { none: 1 })));
+    typeName(dialog(), "P"); btnByText(dialog(), "下一步").dispatch("click"); await tick(6); openPicker();
+    const row = rowOf("c-long");
+    assert.ok(findText(byData(row, "data-cw", "prof-what")[0], "A".repeat(60) + "…") && !findText(row, "A".repeat(61)));
+    assert.ok(findText(byData(row, "data-cw", "prof-what-tag")[0], "原文"));
+  });
+
+  await test("P32-4 search finds a role by its Chinese name, its English name, the author's words or the position name", async () => {
+    await wiz324();
+    const found = (q) => { search324(q); return profIds().sort(); };
+    assert.deepStrictEqual(found("斑馬"), ["c-zeb"]);
+    assert.deepStrictEqual(found("趨勢"), ["c-res"], "Chinese");
+    assert.deepStrictEqual(found("TREND"), ["c-res"], "English, any case");
+    assert.deepStrictEqual(found("market chances"), ["c-res"], "the author's words");
+    assert.deepStrictEqual(found("獨立審查"), ["c-rev"], "the guessed position's name");
+    assert.deepStrictEqual(found("審查"), ["c-rev"]);
+    assert.deepStrictEqual(found("  "), ["c-exe", "c-res", "c-rev", "c-zeb"], "blank is everything");
+    search324("nothing like this");
+    assert.deepStrictEqual(profIds(), []);
+    assert.ok(findText(profPicker(), "沒有符合的職業"));
+  });
+
+  await test("P32-4 choosing a role stores its role id; 不用範本 stores nothing", async () => {
+    const { posts } = await wiz324();
+    pickProfession("c-rev");
+    assert.strictEqual(rowOf("c-rev").getAttribute("aria-pressed"), "true");
+    assert.ok(findText(byData(dialog(), "data-cw", "profession-current")[0], "程式碼審查員（Code Reviewer）"));
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].profession_role_id, "c-rev");
+    const w2 = await wiz324();
+    pickProfession("c-rev");
+    byData(dialog(), "data-cw", "profession-none")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(w2.posts[0].profession_role_id, null);
+  });
+
+  await test("P32-4 a card with no position takes the role's guessed position, says so, and the position can still be changed", async () => {
+    const { posts } = await wiz324();
+    assert.deepStrictEqual(posOn(), []);
+    pickProfession("c-res");
+    assert.deepStrictEqual(posOn(), ["research"]);
+    assert.ok(findText(brings(), "依職業建議") && findText(brings(), "研究"), "said, in the box");
+    assert.ok(findText(byData(dialog(), "data-cw", "profession-auto-note")[0], "依職業建議"), "and where the picker is closed");
+    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "研究"));
+    byData(dialog(), "data-position", "design")[0].dispatch("click");
+    assert.deepStrictEqual(posOn(), ["design"], "the person has the last word");
+    assert.strictEqual(byData(dialog(), "data-cw", "profession-auto-note").length, 0, "no longer the profession's suggestion");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].position, "design");
+  });
+
+  await test("P32-4 a card that has a position keeps it; the role's position is offered as a button", async () => {
+    const { posts } = await wiz324();
+    byData(dialog(), "data-position", "planner")[0].dispatch("click");
+    pickProfession("c-res");
+    assert.deepStrictEqual(posOn(), ["planner"], "never changed by itself");
+    assert.strictEqual(byData(dialog(), "data-cw", "profession-auto-note").length, 0);
+    const btn = byData(brings(), "data-cw", "profession-set-position")[0];
+    assert.ok(btn && btn.textContent.trim() === "改成這個位置" && findText(brings(), "建議位置：研究"));
+    assert.ok(findText(brings(), "依名稱推測"), "told that it is a guess");
+    btn.dispatch("click");
+    assert.deepStrictEqual(posOn(), ["research"]);
+    pickProfession("c-zeb");
+    assert.strictEqual(byData(brings(), "data-cw", "profession-set-position").length, 0, "no guess, no button");
+    assert.ok(findText(brings(), "看不出來"));
+    assert.deepStrictEqual(posOn(), ["research"]);
+    pickProfession("c-res");
+    byData(dialog(), "data-position", "research")[0].dispatch("click");
+    assert.strictEqual(byData(brings(), "data-cw", "profession-set-position").length, 0, "already that position");
+    assert.ok(findText(brings(), "和這張卡一樣"));
+  });
+
+  await test("P32-4 the box says what the role brings: equip only the skills this camp can read and the index has, once", async () => {
+    const { posts } = await wiz324();
+    pickProfession("c-res");
+    const equip = byData(brings(), "data-cw", "profession-equip")[0];
+    assert.ok(findText(brings(), "範本寫明會用的技能卡：2 張"), textOf(brings()));
+    assert.ok(findText(brings(), "另有 2 張") && findText(brings(), "不會讀或目前索引找不到"));
+    assert.strictEqual(equip.textContent.trim(), "一起插上");
+    equip.dispatch("click");
+    assert.ok(findText(brings(), "已插上 2 張"));
+    byData(brings(), "data-cw", "profession-equip")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.ok(findText(dialog(), "已插入（2）"), "step 3 shows them");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts[0].equipped_skill_ids.sort(), ["s-c", "s-s"]);
+  });
+
+  await test("P32-4 no skills declared: the box says nothing about equipping", async () => {
+    await wiz324();
+    pickProfession("c-rev");
+    assert.strictEqual(byData(brings(), "data-cw", "profession-equip").length, 0);
+    assert.ok(!findText(brings(), "一起插上"));
+  });
+
+  await test("P32-4 the model a role names fills the model field: a listed name is picked, another goes in the 其他 box, a odd one is only shown", async () => {
+    const { posts } = await wiz324();
+    const modelSelect = () => walk(dialog()).find((n) => n.tag === "select" && n.id === "cw-model-select");
+    pickProfession("c-res");
+    assert.ok(findText(brings(), "範本建議的模型：opus"));
+    byData(brings(), "data-cw", "profession-model")[0].dispatch("click");
+    assert.strictEqual(modelSelect().value, "opus");
+    assert.ok(byData(dialog(), "data-cw", "advanced")[0].hasAttribute("open"), "the field is shown");
+    pickProfession("c-rev");
+    byData(brings(), "data-cw", "profession-model")[0].dispatch("click");
+    assert.strictEqual(modelSelect().value, "__vbear_other__");
+    assert.strictEqual(walk(dialog()).find((n) => n.tag === "input" && n.id === "cw-model").getAttribute("value"), "claude-obscure-9");
+    pickProfession("c-exe");
+    assert.strictEqual(byData(brings(), "data-cw", "profession-model").length, 0, "a name with spaces is not poured into the field");
+    assert.ok(findText(brings(), "bad model name") && findText(brings(), "自己輸入"));
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].model.model_id, "claude-obscure-9");
+  });
+
+  await test("P32-4 the box says again that nothing is loaded, and shows the author's own words folded", async () => {
+    await wiz324();
+    pickProfession("c-res");
+    assert.ok(findText(brings(), "出發時不會把範本的指示交給工具；這只是標籤"));
+    const orig = byData(brings(), "data-cw", "profession-original")[0];
+    assert.strictEqual(orig.tag, "details");
+    assert.ok(!orig.hasAttribute("open") && findText(orig, "Finds new trends and market chances."));
+  });
+
+  async function edit324(p, view = rt324(), extra = {}) {
+    const posts = [];
+    const ctx = await openPool([p], catalog324, { ...rtRoutes(view),
+      [`POST /api/agent-profiles/${p.id}`]: (_u, o) => { posts.push(JSON.parse(o.body)); return jsonResponse({ ok: true, profile: p }); }, ...extra });
+    cardOf(p.id).dispatch("click");
+    byData(cardOf(p.id), "data-pcard", "flip")[0].dispatch("click");
+    byData(cardOf(p.id), "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    await tick(4);
+    return { ctx, posts };
+  }
+  const saveEdit = async () => { btnByText(dialog(), "下一步").dispatch("click"); btnByText(dialog(), "儲存修改").dispatch("click"); await tick(); };
+
+  await test("P32-4 a label from another camp, the tool itself, or a role the index lost stays, with the reason and a way to let go; saving keeps it", async () => {
+    for (const [role, reason] of [["x-brand", "Codex 的範本"], ["cli-claude", "工具本身（等於不用範本）"], ["lost-role", "目前索引找不到這個範本"], ["c-off", "外掛已停用"]]) {
+      const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { profession_role_id: role });
+      const { posts } = await edit324(p);
+      assert.ok(findText(byData(dialog(), "data-cw", "profession-current")[0], "目前"), role);
+      openPicker();
+      const bound = byData(dialog(), "data-cw", "profession-bound")[0];
+      assert.ok(bound && findText(bound, reason), `${role}: ${bound && textOf(bound)}`);
+      await saveEdit();
+      assert.strictEqual(posts[0].profession_role_id, role, `${role} is not cleared by a save`);
+    }
+  });
+
+  await test("P32-4 let go of a bound label: 解除 clears it and the save says null", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { profession_role_id: "x-brand" });
+    const { posts } = await edit324(p);
+    openPicker();
+    btnByText(byData(dialog(), "data-cw", "profession-bound")[0], "解除").dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "profession-bound").length, 0);
+    await saveEdit();
+    assert.strictEqual(posts[0].profession_role_id, null);
+  });
+
+  await test("P32-4 a card bound to a role of its own camp shows no 'bound' row, only the pressed row; the AGY card with a label keeps it to let go", async () => {
+    const p = mkProfile("p-1", "Mine", "claude", VERIFIED, { profession_role_id: "c-rev" });
+    await edit324(p);
+    openPicker();
+    assert.strictEqual(byData(dialog(), "data-cw", "profession-bound").length, 0);
+    assert.strictEqual(rowOf("c-rev").getAttribute("aria-pressed"), "true");
+    const agy = mkProfile("p-2", "Old", "agy", VERIFIED, { profession_role_id: "c-res" });
+    const { posts } = await edit324(agy);
+    assert.strictEqual(profOpen(), undefined);
+    const bound = byData(dialog(), "data-cw", "profession-bound")[0];
+    assert.ok(bound && findText(bound, "AGY") && btnByText(bound, "解除"));
+    await saveEdit();
+    assert.strictEqual(posts[0].profession_role_id, "c-res", "kept until the person lets go");
+  });
+
+  await test("P32-4 roles that cannot be used (a plugin switched off) are behind a switch, with the reason", async () => {
+    await wiz324();
+    const toggle = byData(dialog(), "data-cw", "profession-unused-toggle")[0];
+    assert.strictEqual(toggle.textContent.trim(), "也顯示用不到的（1）");
+    assert.ok(!profIds().includes("c-off"));
+    toggle.dispatch("click");
+    assert.ok(profIds().includes("c-off"));
+    assert.ok(findText(byData(rowOf("c-off"), "data-cw", "prof-unavailable")[0], "外掛已停用"));
+    assert.deepStrictEqual(groupTexts()[0], "全部 4", "the counts are of what can be used");
+  });
+
+  await test("P32-4 the translate prompt is in the open picker only; asking first; 先不翻 folds it into one small button, remembered in the browser", async () => {
+    const { ctx } = await wiz324(rt324(), {}, { open: false });
+    assert.strictEqual(translateBtn(), undefined, "closed: no prompt");
+    openPicker();
+    const hint = byData(dialog(), "data-cw", "role-translate-row")[0];
+    assert.ok(findText(hint, "還有 4 個職業是英文") && translateBtn());
+    btnByText(hint, "先不翻").dispatch("click");
+    assert.strictEqual(translateBtn(), undefined);
+    assert.strictEqual(ctx.__ls.get("sid:cw.rolehint"), "true");
+    const small = byData(dialog(), "data-cw", "role-translate-show")[0];
+    assert.ok(small);
+    small.dispatch("click");
+    assert.ok(translateBtn());
+    assert.strictEqual(ctx.__ls.get("sid:cw.rolehint"), "false");
+  });
+
+  await test("P32-4 the first translation needs a safety check: the prompt offers 先檢查, asks first, and the translate button comes back after it passes", async () => {
+    let checked = 0;
+    const { posts } = await wiz324(rt324(), {
+      "POST /api/role-translations/batch": () => jsonResponse({ error: "這個 Claude Code 版本的翻譯安全邊界還沒驗證", code: "boundary_unverified" }, 409),
+      "POST /api/translations/verify": () => { checked += 1; return jsonResponse({ version: "2.1.296" }); } });
+    translateBtn().dispatch("click");
+    await tick();
+    btnByText(confirmDlg(), "翻成中文").dispatch("click");
+    await tick(6);
+    assert.strictEqual(translateBtn(), undefined, "no translate button until the check has passed");
+    const hint = byData(dialog(), "data-cw", "role-translate-row")[0];
+    assert.ok(findText(hint, "第一次翻譯前要先做一次安全檢查"));
+    const check = byData(hint, "data-cw", "role-translate-check")[0];
+    assert.strictEqual(check.textContent.trim(), "先檢查");
+    check.dispatch("click");
+    await tick();
+    assert.strictEqual(checked, 0, "asked first");
+    btnByText(confirmDlg(), "取消").dispatch("click");
+    await tick();
+    assert.strictEqual(checked, 0);
+    byData(dialog(), "data-cw", "role-translate-check")[0].dispatch("click");
+    await tick();
+    btnByText(confirmDlg(), "驗證").dispatch("click");
+    await tick(8);
+    assert.strictEqual(checked, 1);
+    assert.strictEqual(byData(dialog(), "data-cw", "role-translate-check").length, 0);
+    assert.ok(translateBtn(), "the translate button is back");
+  });
+
+  await test("P32-4 a missing Claude Code is said in the prompt in the server's words; a Codex engine says translation is not open yet", async () => {
+    await wiz324(rt324(), { "POST /api/role-translations/batch": () => jsonResponse({ error: "找不到 Claude Code。請告訴我們它在哪裡。", code: "cli_not_found" }, 409) });
+    translateBtn().dispatch("click");
+    await tick();
+    btnByText(confirmDlg(), "翻成中文").dispatch("click");
+    await tick(6);
+    assert.ok(findText(byData(dialog(), "data-cw", "role-translate-row")[0], "找不到 Claude Code。請告訴我們它在哪裡。"));
+    const codex = { ...rt324(), engine: "codex" };
+    await wiz324(codex);
+    assert.strictEqual(translateBtn(), undefined);
+    assert.ok(findText(byData(dialog(), "data-cw", "role-translate-row")[0], "Codex 翻譯還沒開放，可以到設定改用 Claude Code"));
+  });
+
+  await test("P32-4 nothing is sent just by opening the picker, searching, or choosing", async () => {
+    const { posts } = await wiz324();
+    search324("x"); search324(""); pickProfession("c-res");
+    byData(brings(), "data-cw", "profession-equip")[0].dispatch("click");
+    const sends = fetchCalls.filter((c) => c.options && c.options.method === "POST");
+    assert.strictEqual(sends.length, 0, JSON.stringify(sends.map((c) => c.url)));
+  });
+
+  await test("P32-4 the settings page points to the profession in the wizard, not to 進階", () => {
+    assert.ok(source.includes("在角色卡精靈的「職業」裡翻譯") && !source.includes("在角色卡精靈的「進階」裡翻譯"));
+  });
+
+  await test("P32-4 the picker's code holds no innerHTML, emoji or outside address, and the CSS has its rules", () => {
+    const start = source.indexOf("function professionField()"), end = source.indexOf("function modelField()");
+    assert.ok(start > 0 && end > start);
+    const chunk = source.slice(start, end);
+    assert.ok(!/innerHTML|insertAdjacentHTML|https?:\/\//.test(chunk));
+    assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(chunk));
+    const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
+    for (const c of [".cw-prof-list", ".cw-prof-row", ".cw-prof-brings", ".cw-prof-hint"]) assert.ok(css.includes(c), c);
   });
 
   // ---- P31: the model drop-down ----
