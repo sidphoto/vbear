@@ -1093,12 +1093,13 @@ function translationFailureFor(id) {
 // `full` is the whole Chinese text for the 看完整說明 fold. That the text is a machine translation is said once above
 // the list (P26), so the only mark a card keeps is 過期, when the original changed since.
 const SUMMARY_MISSING = "原文未提供";
+// a summary field the author left out is stored as this phrase, and is not an answer
+function saidOf(v) { return typeof v === "string" && v.trim() && v.trim() !== SUMMARY_MISSING ? v.trim() : ""; }
 function skillPickText(s) {
   const t = s && s.skill_id ? translationOf(s.skill_id) : { entry: null };
   if (t.entry && t.entry.description_zh) {
     const sum = t.entry.summary || {};
-    const said = (v) => typeof v === "string" && v.trim() && v.trim() !== SUMMARY_MISSING ? v.trim() : "";
-    return { zh: true, text: said(sum.what) || firstSentence(t.entry.description_zh, 90), when: said(sum.when),
+    return { zh: true, text: saidOf(sum.what) || firstSentence(t.entry.description_zh, 90), when: saidOf(sum.when),
       full: String(t.entry.description_zh),
       badge: t.state === "stale" ? badge("過期", "b-warn", "原文改過，這段翻譯可能已經不準；看原文確認") : null };
   }
@@ -1109,6 +1110,153 @@ function translationBadge(id) {
   return t.entry ? badge(t.state === "stale" ? "機器翻譯 · 過期" : "機器翻譯", t.state === "stale" ? "b-warn" : "b-info",
     `${t.entry.engine} ${t.entry.model} · ${fmtTime(t.entry.created_at)}；內容未經 VBear 驗證`) : null;
 }
+// ---------- skill help float --------------------------------------------------
+// One box for the whole page (P33) that shows a skill's description whole: the cards cut it short to be easy to scan, and
+// this is where the rest is read. It is built once and moved from card to card, opens after the pointer rests on a card for a
+// moment or when the keyboard reaches it, stays while the pointer is inside it (it scrolls), and goes with Esc, with the
+// pointer, with the focus, or with its card. It never takes the focus and never covers the card it belongs to.
+const SKILL_TIP_ID = "skill-tip";
+const SKILL_TIP_WAIT = 350;     // the pointer rests this long before the box opens
+const SKILL_TIP_LEAVE = 150;    // and may cross the gap to the box in this long before it closes
+const SKILL_TIP_POLL = 400;     // how often an open box checks that its card is still on the page
+const SKILL_TIP_MARGIN = 8;     // the least room kept between the box and the window edge
+const SKILL_TIP_GAP = 6;        // between the box and its card
+const SKILL_TIP_MIN_HEIGHT = 120;
+const SKILL_TIP = { el: null, anchor: null, describe: null, pending: null, showT: 0, hideT: 0, pollT: 0 };
+
+// Where the box goes: under its card with the left edges together; flipped to the card's right edge when it would run past
+// the window, and above the card when there is more room there. Always whole inside the window: when neither side has room
+// for it all, it takes the roomier one and maxHeight says how tall it may be (it scrolls inside). Plain numbers in and out.
+// anchor {left, top, right, bottom}, size {width, height} (the box as it measures), view {width, height} -> {left, top, side, maxHeight}
+function skillTipPlace(anchor, size, view) {
+  const m = SKILL_TIP_MARGIN;
+  const width = Math.min(size.width, Math.max(view.width - 2 * m, 0));
+  let left = anchor.left;
+  if (left + width > view.width - m) left = anchor.right - width;
+  left = Math.max(m, Math.min(left, view.width - m - width));
+  const below = view.height - m - (anchor.bottom + SKILL_TIP_GAP);
+  const above = anchor.top - SKILL_TIP_GAP - m;
+  const side = below >= size.height ? "below" : above >= size.height ? "above" : below >= above ? "below" : "above";
+  const floor = Math.min(SKILL_TIP_MIN_HEIGHT, Math.max(view.height - 2 * m, 1));
+  const maxHeight = Math.min(Math.max(Math.min(size.height, side === "below" ? below : above), floor), Math.max(view.height - 2 * m, 1));
+  const top = side === "below" ? anchor.bottom + SKILL_TIP_GAP : anchor.top - SKILL_TIP_GAP - maxHeight;
+  return { left, top: Math.max(m, Math.min(top, view.height - m - maxHeight)), side, maxHeight };
+}
+
+function skillTipOriginal(s) {
+  return String((s && s.description && s.description.value) || (s && s.excerpt) || "").trim();
+}
+// What the box says: the Chinese in full with when / needs when the author gave them, a line that it is a machine translation,
+// then the original in full under a small heading; without a translation, the original alone. null when there is nothing.
+function skillTipNodes(s) {
+  if (!s) return null;
+  const t = s.skill_id ? translationOf(s.skill_id) : { entry: null };
+  const original = skillTipOriginal(s);
+  if (t.entry && t.entry.description_zh) {
+    const sum = t.entry.summary || {};
+    const line = (label, v) => v ? el("p", { class: "skill-tip-line" }, el("strong", null, label), v) : null;
+    return [
+      el("p", { class: "skill-tip-text" }, String(t.entry.description_zh)),
+      line("什麼時候用：", saidOf(sum.when)),
+      line("需要什麼：", saidOf(sum.needs)),
+      el("p", { class: "small muted" }, t.state === "stale" ? "機器翻譯，可能不準。原文改過，這段翻譯可能已經過期。" : "機器翻譯，可能不準"),
+      original ? el("div", { class: "skill-tip-orig" }, el("strong", { class: "small" }, "原文"), el("p", { class: "small muted skill-tip-text" }, original)) : null,
+    ];
+  }
+  return original ? [el("p", { class: "skill-tip-text" }, original)] : null;
+}
+
+function skillTipBox() {
+  if (!SKILL_TIP.el) {
+    SKILL_TIP.el = el("div", { class: "skill-tip", id: SKILL_TIP_ID, role: "tooltip", hidden: true, on: {
+      mouseenter: () => clearTimeout(SKILL_TIP.hideT),
+      mouseleave: () => { if (skillTipOpen()) SKILL_TIP.hideT = setTimeout(hideSkillTip, SKILL_TIP_LEAVE); },
+    } });
+    // Esc closes the box before it closes anything behind it (a dialog with a skill list in it), so the capture phase;
+    // with no box open Esc is not touched
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !skillTipOpen()) return;
+      hideSkillTip(); e.stopPropagation(); e.preventDefault();
+    }, true);
+    // a page scroll would leave it behind its card; scrolling inside the box itself is what it is for
+    window.addEventListener("scroll", (e) => {
+      if (skillTipOpen() && !(e && e.target && SKILL_TIP.el.contains(e.target))) hideSkillTip();
+    }, true);
+    window.addEventListener("resize", () => hideSkillTip());
+  }
+  return SKILL_TIP.el;
+}
+function skillTipOpen() { return Boolean(SKILL_TIP.el && !SKILL_TIP.el.hidden && SKILL_TIP.anchor); }
+
+function hideSkillTip() {
+  const S = SKILL_TIP;
+  clearTimeout(S.showT); clearTimeout(S.hideT); clearTimeout(S.pollT);
+  S.showT = S.hideT = S.pollT = 0;
+  if (S.describe && S.describe.getAttribute("aria-describedby") === SKILL_TIP_ID) S.describe.removeAttribute("aria-describedby");
+  S.anchor = S.describe = S.pending = null;
+  if (S.el) S.el.hidden = true;
+}
+
+function showSkillTip(anchor, skill, describe) {
+  const S = SKILL_TIP;
+  const nodes = skillTipNodes(skill);
+  if (!nodes || anchor.isConnected === false) { hideSkillTip(); return; }
+  hideSkillTip();
+  const box = skillTipBox();
+  // inside a dialog the box lives in the dialog: everything else on the page is inert while one is open, a box there could not be scrolled
+  const home = (anchor.closest && anchor.closest(".modal-backdrop")) || document.body;
+  if (box.parentNode !== home) home.append(box);
+  box.replaceChildren();
+  append(box, nodes);
+  box.scrollTop = 0;
+  box.hidden = false;
+  box.style.visibility = "hidden";
+  box.style.left = "0px"; box.style.top = "0px"; box.style.maxHeight = "";
+  const view = { width: window.innerWidth || document.documentElement.clientWidth, height: window.innerHeight || document.documentElement.clientHeight };
+  const r = box.getBoundingClientRect();
+  const at = skillTipPlace(anchor.getBoundingClientRect(), { width: r.width, height: r.height }, view);
+  box.style.left = `${Math.round(at.left)}px`; box.style.top = `${Math.round(at.top)}px`;
+  box.style.maxHeight = `${Math.floor(at.maxHeight)}px`;
+  box.style.visibility = "visible";
+  S.anchor = anchor; S.describe = describe;
+  if (describe && !describe.hasAttribute("aria-describedby")) describe.setAttribute("aria-describedby", SKILL_TIP_ID);
+  const poll = () => {
+    if (!S.anchor) return;
+    if (S.anchor.isConnected === false) { hideSkillTip(); return; }
+    S.pollT = setTimeout(poll, SKILL_TIP_POLL);
+  };
+  S.pollT = setTimeout(poll, SKILL_TIP_POLL);
+}
+
+// Gives `node` the box: hover on it (after a rest), and the keyboard on `opts.focus` (default: the node itself; a table row
+// uses the row, so the link in it brings the box up), which describes `opts.describe` (default: the node). Returns the node.
+function withSkillTip(node, skill, opts = {}) {
+  const S = SKILL_TIP;
+  const focusNode = opts.focus || node;
+  const describe = opts.describe || node;
+  const open = (now) => {
+    clearTimeout(S.hideT);
+    if (S.anchor === node && skillTipOpen()) return;
+    clearTimeout(S.showT);
+    S.pending = node;
+    if (now) showSkillTip(node, skill, describe);
+    else S.showT = setTimeout(() => showSkillTip(node, skill, describe), SKILL_TIP_WAIT);
+  };
+  const away = (now) => {
+    if (S.pending === node) { clearTimeout(S.showT); S.pending = null; }
+    if (S.anchor !== node) return;
+    if (now) hideSkillTip(); else S.hideT = setTimeout(hideSkillTip, SKILL_TIP_LEAVE);
+  };
+  // only the keyboard opens it at once: a click that also focuses the card is not a reason to cover the page
+  const byKeyboard = (e) => { try { const t = e && e.target; return !(t && t.matches) || t.matches(":focus-visible"); } catch (err) { return true; } };
+  node.addEventListener("mouseenter", () => open(false));
+  node.addEventListener("mouseleave", () => away(false));
+  focusNode.addEventListener("focusin", (e) => { if (byKeyboard(e)) open(true); });
+  focusNode.addEventListener("focusout", () => away(true));
+  return node;
+}
+// ---------- end skill help float ----------------------------------------------
+
 function translationDisclosure(count, engine = T.engine, automatic = false) {
   const budget = engine === "claude"
     ? `Claude 請求預算每項 US$0.05，${count} 項合計 US$${(count * 0.05).toFixed(2)}；CLI 在回合結束檢查，這不是保證帳單上限。`
@@ -1520,7 +1668,7 @@ function searchSkills(query, pool) {
 function skillCard(s, why) {
   const dups = (s.duplicate_of || []).length;
   // a chip card: the corner cut and the band across the top are in the colours of the tool the skill belongs to (the tag says it too)
-  return el("a", { class: "card skill-chip camp-frame", "data-camp": campKeyOf(s), href: `#/skills/${s.skill_id}` },
+  return withSkillTip(el("a", { class: "card skill-chip camp-frame", "data-camp": campKeyOf(s), href: `#/skills/${s.skill_id}` },
     el("div", { class: "card-top" },
       el("div", { style: "min-width:0" },
         el("div", { class: "card-title" }, displayName(s)),
@@ -1537,7 +1685,7 @@ function skillCard(s, why) {
       (s.categories || []).slice(0, 2).map((c) => el("span", { class: "tag cat", title: `自動分類：描述中出現「${c.keyword}」` }, categoryZh(c.label))),
       dups ? badge(`同名 ${dups + 1} 份`, "b-warn", "有其他來源使用相同名稱，詳情頁可比較") : null,
       (s.missing_files || []).length ? badge("引用檔缺失", "b-bad", s.missing_files.join(", ")) : null),
-    why && why.length ? el("div", { class: "card-sub" }, "符合：" + why.join("、")) : null);
+    why && why.length ? el("div", { class: "card-sub" }, "符合：" + why.join("、")) : null), s);
 }
 
 function sessionCard(x) {
@@ -3595,12 +3743,19 @@ async function viewSkills(params) {
   let shown = 0;
   let hits = [];
   const card = ({ s, why }) => skillCard(s, why);
-  const row = ({ s, why }) => el("tr", null,
-    el("td", null, el("a", { href: `#/skills/${s.skill_id}` }, displayName(s)), displayName(s) !== s.name ? el("div", { class: "small muted mono" }, s.name) : null, (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine" }, "#" + t))) : null, (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
-    el("td", null, translationBadge(s.skill_id), firstSentence(translationDescription(s), 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null),
-    el("td", null, TOOL[s.tool] || s.tool),
-    el("td", null, SCOPE[s.scope] || s.scope, s.origin_package && s.origin_package.version ? el("div", { class: "small muted" }, s.origin_package.version) : null),
-    el("td", null, actBadge(s.activation)));
+  // hovering the description cell, or the keyboard reaching the row, opens the whole description (P33)
+  const row = ({ s, why }) => {
+    const link = el("a", { href: `#/skills/${s.skill_id}` }, displayName(s));
+    const desc = el("td", null, translationBadge(s.skill_id), firstSentence(translationDescription(s), 110) || el("span", { class: "muted" }, "未提供"), why.length ? el("div", { class: "small muted" }, "符合：" + why.join("、")) : null);
+    const tr = el("tr", null,
+      el("td", null, link, displayName(s) !== s.name ? el("div", { class: "small muted mono" }, s.name) : null, (ann(s).tags || []).length ? el("div", { class: "chips" }, ann(s).tags.map((t) => el("span", { class: "tag mine" }, "#" + t))) : null, (s.duplicate_of || []).length ? el("div", null, badge(`同名 ${s.duplicate_of.length + 1} 份`, "b-warn")) : null),
+      desc,
+      el("td", null, TOOL[s.tool] || s.tool),
+      el("td", null, SCOPE[s.scope] || s.scope, s.origin_package && s.origin_package.version ? el("div", { class: "small muted" }, s.origin_package.version) : null),
+      el("td", null, actBadge(s.activation)));
+    withSkillTip(desc, s, { focus: tr, describe: link });
+    return tr;
+  };
   const more = el("button", { type: "button", class: "btn", style: "margin-top:14px", on: { click: showMore } });
   let holder = null;  // grid or tbody that the next batch is appended to
 
@@ -3695,6 +3850,7 @@ async function viewArmory() {
     el("div", { class: "armory-label" }, badge(label, cls), helpTip(label, hint)),
     el("span", { class: "small muted" }, "依據：", source), value);
   const rows = data.skills || [];
+  const libraryById = D.byId || new Map();   // filled when the library was opened; empty before that
   setKids(main,
     crumbs([["技能庫", "#/skills"], ["四態總覽"]]),
     el("div", { class: "row" }, el("h1", null, "技能四態總覽"), el("a", { class: "btn small", href: "#/skills" }, "回技能庫")),
@@ -3703,8 +3859,9 @@ async function viewArmory() {
       ? notice("warn", `有 ${data.unresolved_equipped.length} 張角色卡引用的技能卡，目前索引找不到；不會自動刪除。`) : null,
     el("div", { class: "grid armory-grid" }, rows.map((s) => {
       const x = s.states || {}, loaded = x.loaded || {}, equipped = x.equipped || [];
-      return el("div", { class: "card skill-chip camp-frame", "data-camp": campKeyOf(s) },
-        el("div", { class: "card-top" }, el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name), actBadge(s.activation)),
+      const title = el("a", { href: `#/skills/${s.skill_id}`, class: "card-title" }, s.name);
+      const armoryCard = el("div", { class: "card skill-chip camp-frame", "data-camp": campKeyOf(s) },
+        el("div", { class: "card-top" }, title, actBadge(s.activation)),
         el("div", null, el("button", { class: "btn small", type: "button",
           on: { click: () => openSkillCard(s.skill_id) } }, "技能卡特性")),
         translationBadge(s.skill_id),
@@ -3721,6 +3878,8 @@ async function viewArmory() {
             "收藏在角色卡上只是你替角色做的挑選紀錄；出發時不會自動載入或套用這個 Skill。", "b-accent"),
           state("使用證據", loaded.observed ? badge("曾觀察到使用", "b-warn") : badge("尚無證據", "b-mute"), s.sources.loaded,
             "只有執行紀錄確實觀察到使用時才會顯示；尚無證據不代表沒有載入。", "b-warn")));
+      // the overview rows carry no original text; the library has it, so the box can show both
+      return translationOf(s.skill_id).entry ? withSkillTip(armoryCard, { ...s, description: (libraryById.get(s.skill_id) || {}).description }, { describe: title }) : armoryCard;
     })));
   window.scrollTo(0, 0);
 }
@@ -4465,6 +4624,7 @@ function openCardWizard(opts) {
         // a Chinese summary is short (50 characters at most) and shown whole; the English excerpt is cut at two lines
         pick.text ? el("span", { class: `small ${pick.zh ? "cw-skill-zh" : "cw-skill-ex muted"}`, "data-cw": pick.zh ? "skill-zh" : "skill-en" }, pick.text) : null,
         pick.when ? el("span", { class: "small muted cw-skill-zh", "data-cw": "skill-when" }, "什麼時候用：" + pick.when) : null);
+      withSkillTip(btn, s);   // the whole description on hover or keyboard focus; the 看完整說明 fold below is for touch
       buttons.set(s.skill_id, btn);
       // the full text is beside the card, not inside it: a button cannot hold another control
       return el("div", { class: "cw-skill-cell", "data-skill-cell": s.skill_id }, btn,
@@ -4474,6 +4634,7 @@ function openCardWizard(opts) {
     }
 
     function drawList() {
+      hideSkillTip();   // the cards it belonged to are about to be replaced
       buttons.clear();
       const q = st.query.trim().toLowerCase();
       // the Chinese is searched too, so a search in Chinese finds a translated skill
@@ -10959,6 +11120,7 @@ async function route() {
   seq += 1;
   cleanupActiveTerminal();
   cleanupActiveView();
+  hideSkillTip();
   routedHash = location.hash;
   const { parts, params } = parseHash();
   const top = parts[0] || "home";
@@ -11269,6 +11431,9 @@ if (typeof module !== "undefined" && module.exports) {
     flowTitleHint,
     cardPassLine,
     skillPickText,
+    skillTipPlace,
+    withSkillTip,
+    hideSkillTip,
     launchRangeText,
     launchMemoRead,
     launchMemoAdd,

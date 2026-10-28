@@ -1288,6 +1288,17 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 [data-cw="unused-heading"] { margin: 10px 0 6px; }
 .cw-skill-ex { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cw-skill-zh { overflow-wrap: anywhere; line-height: 1.5; }
+/* the box that shows a skill's whole description on hover or keyboard focus (P33); the one element is moved from card to card */
+.skill-tip { position: fixed; z-index: 120; box-sizing: border-box; width: max-content; max-width: min(420px, calc(100vw - 16px)); max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); color: var(--ink); box-shadow: var(--shadow), 0 8px 24px rgba(0, 0, 0, .18); font: 13px/1.6 var(--sans); text-align: left; animation: skill-tip-in .12s ease; }
+.skill-tip[hidden] { display: none; }
+.skill-tip p { margin: 0; }
+.skill-tip > * + * { margin-top: 8px; }
+.skill-tip-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.skill-tip-line strong { color: var(--ink-2); font-weight: 600; }
+.skill-tip-orig { border-top: 1px solid var(--line); padding-top: 8px; }
+.skill-tip-orig > strong { color: var(--ink-3); }
+@keyframes skill-tip-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .skill-tip { animation: none; } }
 .cw-deck { display: grid; gap: 12px; }
 .cw-deck-row { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .cw-deck-main { display: grid; gap: 8px; min-width: 0; }

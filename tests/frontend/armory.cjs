@@ -23,7 +23,7 @@ const context = { Node, console, main, window: { scrollTo() {} }, store: { get: 
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf("function el("), source.indexOf("const api =")), context);
 vm.runInContext(`
-seq=1; function claim(){ return main; }
+seq=1; const D={byId:new Map()}; function claim(){ return main; }
 function crumbs(){ return null; } function notice(){ return null; }
 function badge(label){ return el('span', null, label); } function actBadge(a){ return badge(a); }
 function campKeyOf(s){ return s && s.tool === 'claude' ? 'anthropic' : s && s.tool === 'codex' ? 'openai' : 'other'; }
