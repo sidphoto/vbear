@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Skill descriptions that are cut short on a card can now be read whole.** Rest the pointer on a skill card (in the
+  skill library, the four-state overview and step 3 of the card wizard) or on the description in the skills table, or
+  move to it with the Tab key, and a small box opens with the full text: the whole Chinese description, when to use it
+  and what it needs if the author said so, a line that it is a machine translation, and the original underneath; a
+  skill that has no translation shows its whole original. A long text scrolls inside the box, you can move the pointer
+  into it, and it moves out of the way of the window edge. Esc, moving away, or leaving the card closes it, and it never
+  takes the keyboard focus or covers the card. The cards keep their short line, and 看完整說明 in the wizard is still
+  there for touch screens. To make this possible the card wizard is now sent up to 2000 characters of a skill's
+  original description (it was 140); nothing is sent anywhere else.
+
 ## v0.8.9 — skills by use, role names in Chinese, a model menu
 
 - **The profession menu in the card wizard can show the role names in Chinese.** Under 進階 → 職業標籤, a new button,
