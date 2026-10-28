@@ -7,6 +7,7 @@ Run: python3 -m unittest tests.test_p32_positions -v
 
 from __future__ import annotations
 
+import hashlib
 import os
 os.environ["VBEAR_RUNTIME_AUTOSTART"] = "0"  # never spawn a runtime daemon from tests
 import re
@@ -20,8 +21,20 @@ from vbear import agent_profiles  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 IDS = ["planner", "executor", "qa", "reviewer", "product", "research", "business", "design", "records"]
-# names of a private team never go into a public repository (the screens say generic job titles)
-PRIVATE_WORDS = ("Orion", "Forge", "Aegis", "Sentinel", "Atlas", "Mercury", "Scout", "Ledger", "Herdr", "JAOS")
+# names of a private team never go into a public repository (the screens say generic job titles); the names
+# themselves are kept out of this file too, so the test compares the first 16 hex of the sha256 of each lower-cased word
+PRIVATE_WORD_HASHES = frozenset((
+    "2b7847b7b705781d",
+    "3608e4bd0e693177",
+    "598f7a741a1e3a05",
+    "71b41d6dd48dc58e",
+    "78193ef266c1e3c2",
+    "7c82602500857aa6",
+    "8cd0001a4c013ab3",
+    "a925617886e8799c",
+    "b769a6983b42d565",
+    "fe14010b4fe83303",
+))
 
 
 class PositionTableTests(unittest.TestCase):
@@ -65,8 +78,9 @@ class PositionTableTests(unittest.TestCase):
     def test_no_row_carries_a_permission_and_no_private_name_is_in_the_words(self):
         for r in agent_profiles.POSITION_TABLE:
             self.assertFalse({"permission_intents", "intents"} & set(r), r["id"])
-            for w in PRIVATE_WORDS:
-                self.assertNotIn(w, " ".join(str(v) for v in r.values()), r["id"])
+            words = re.findall(r"[A-Za-z]+", " ".join(str(v) for v in r.values()))
+            for w in words:
+                self.assertNotIn(hashlib.sha256(w.lower().encode()).hexdigest()[:16], PRIVATE_WORD_HASHES, r["id"])
 
     def test_the_starter_deck_stays_the_three_cards_of_the_task_card(self):
         self.assertEqual([c["position"] for c in agent_profiles.STARTER_DECK], ["planner", "executor", "reviewer"])

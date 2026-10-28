@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.9.0 — one-person-company positions and a profession picker you can read
 
 - **The card wizard's profession is now a picker you can read and use.** It moved out of 進階 to step 2, under the
   suggested position, as one line (目前：…) that opens into a search, buttons for the position each role probably fits,
