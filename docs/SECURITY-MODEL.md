@@ -233,6 +233,15 @@ Other safeguards:
   allows, but it is part of the card's digest, so changing it makes an open launch preview or a placed card read as
   changed, the same as any other field. A card without a position stores no key, so its digest is the one it had
   before.
+- **The wizard's profession picker is shown and pre-filled from what the scan already holds.** For each role template
+  the catalog (P32-4) also carries the first 300 characters of the author's own description (never VBear's wording),
+  a guess at the position it fits (`origin: "derived"`, with the matched keyword, from a small visible table in
+  `vbear/role_departments.py`), the skills it declares, the model it names (not `inherit`; control characters
+  removed, at most 200 characters) and whether its plugin is switched off. These are fields `/api/roles` already
+  serves to the same page, behind the same Host, token and Origin checks; the catalog adds no path, capability or
+  limit. They only draw the picker and fill the card's own fields on a click (position, equipped skills, model
+  string). The model string is saved through the same `model_id` check as a typed one, and equipped skills stay a
+  collection. Choosing a profession still loads nothing into a tool and changes nothing about a launch.
 - **A Codex card's light.** Codex cannot open a terminal from VBear (`codex_` reasons), but the flow's automatic
   review does run it, in a scratch copy. When every reason on a card starts with `codex_` the card shows a neutral
   "can't open a terminal directly" light instead of the red one; any other reason keeps the red. It is a reading of
@@ -803,3 +812,6 @@ characters. It uses the same provider resolution (a verified Claude Code version
 job and a role job cannot run together) and the same error codes. It is started only by the user, from
 `POST /api/role-translations/batch` after a confirmation in the page; `translation_auto` never starts it. A
 translation whose source name or description changed is stale and is not shown.
+VBear's own two main agents (`cli-claude`, `cli-codex`, kind `cli`) are not listed for translation and their names
+are not sent: their Chinese names are VBear's, and the author wrote no description for them. An older translation of
+one stays in `role-translations.json` unused; nothing reads it.

@@ -275,6 +275,21 @@ class RoleTranslationApiTests(fixtures.TranslationTests):
         self.assertNotIn('Protects the brand voice', json.dumps(view))
         self.assertIsNone(self.console.role_translations.job)
 
+    def test_the_tools_own_main_agents_are_not_listed_to_translate_or_sent(self):
+        # cli-claude / cli-codex are VBear's own names with its own Chinese; the author wrote nothing to translate
+        self.console.store._static["roles"] += [
+            role(role_id="cli-codex", name="Codex 主代理", kind="cli", description={"value": "VBear's own words", "origin": "derived"}),
+            role(role_id="cli-claude", name="Claude Code 主代理", tool="claude", kind="cli",
+                 description={"value": "VBear's own words", "origin": "derived"})]
+        view = self.call('/api/role-translations')[1]
+        self.assertEqual(view['counts']['none'], 2, view)
+        status, result = self.call('/api/role-translations/batch', 'POST', {})
+        self.assertEqual((status, result['job']['total']), (202, 2), result)
+        self.wait(self.console.role_translations)
+        view = self.call('/api/role-translations')[1]
+        self.assertEqual(sorted(view['entries']), ['r-one', 'r-two'])
+        self.assertEqual(view['counts']['fresh'], 2)
+
     def test_batch_success_then_fresh_and_skill_view_unchanged(self):
         status, result = self.call('/api/role-translations/batch', 'POST', {})
         self.assertEqual(status, 202, result)

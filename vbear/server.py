@@ -54,12 +54,14 @@ from . import flows
 from . import previews as previews_mod
 from .api_error import ApiError
 from . import risk_acceptance
+from . import role_departments
 from . import translations
 from . import tasks
 from . import runtime as rt
 from .runtime import cli_versions, pipeline_store
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
+from .scan import claude as claude_scan
 from .scan import document
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -92,6 +94,9 @@ SKILL_SUMMARY_FIELDS = (
     "mtime", "categories",
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
+PROFESSION_DESCRIPTION_LIMIT = 300  # the most of a role template's own description the profession picker is sent
+PROFESSION_SKILLS_LIMIT = 50        # the most skills a template declares that the picker is told of
+PROFESSION_MODEL_LIMIT = 200
 EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sent, for its hover box
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
@@ -225,7 +230,10 @@ class Console:
         static = self.store.static_if_loaded()
         if static is None:
             raise translations.TranslationError("not_found")
-        return {r["role_id"]: r for r in static.get("roles", []) if isinstance(r.get("role_id"), str) and r["role_id"]}
+        # the tool's own main agents (kind "cli") are VBear's names with VBear's Chinese; the author wrote nothing to
+        # translate, so they are neither listed nor sent
+        return {r["role_id"]: r for r in static.get("roles", [])
+                if isinstance(r.get("role_id"), str) and r["role_id"] and r.get("kind") != "cli"}
 
     def previews(self):
         """Preview store for Profile-managed launches; native runtime only."""
@@ -302,6 +310,44 @@ def login_shell() -> str:
     if os.path.isabs(shell) and shell in listed and os.access(shell, os.X_OK):
         return shell
     return "/bin/zsh"
+
+
+def _sourced_author_text(field) -> str:
+    """The text of a Sourced field when its author wrote it ("" when not: VBear's own words are not the author's)."""
+    if isinstance(field, dict) and field.get("origin") == "author" and isinstance(field.get("value"), str):
+        return field["value"]
+    return ""
+
+
+def role_department(role: dict) -> dict | None:
+    """Which position a role template probably fits, from its name and its author's own description."""
+    return role_departments.department(role.get("name"), _sourced_author_text(role.get("description")) or None)
+
+
+def _profession_view(role: dict) -> dict:
+    """One role template for the wizard's profession picker. Only what the page shows or fills in: the cut author
+    description, the guess at its position, the skills it declares, the model it names, whether it can be used. No path,
+    no capabilities, no limits."""
+    description = _sourced_author_text(role.get("description")).strip()
+    declared = role.get("skill_link_basis") == "declared"
+    hint = _sourced_author_text(role.get("model"))
+    hint = "".join(ch for ch in hint if ord(ch) >= 32 and ord(ch) != 127)[:PROFESSION_MODEL_LIMIT].strip()
+    return {
+        "role_id": role.get("role_id"),
+        "name": role.get("name"),
+        "tool": role.get("tool"),
+        "kind": role.get("kind"),
+        "skill_link_count": len(role.get("skill_link_ids") or []),
+        "skill_link_basis": role.get("skill_link_basis"),
+        "description": ({"value": description[:PROFESSION_DESCRIPTION_LIMIT], "origin": "author"}
+                        if description else None),
+        "department": role_department(role),
+        "declared_skill_ids": ([i for i in (role.get("skill_link_ids") or []) if isinstance(i, str) and i]
+                               [:PROFESSION_SKILLS_LIMIT] if declared else []),
+        "model_hint": hint if hint and hint.lower() != "inherit" else None,
+        "unavailable": ("外掛已停用" if any(claude_scan.is_plugin_disabled_warning(w) for w in role.get("warnings") or [])
+                        else None),
+    }
 
 
 def make_handler(console: Console):
@@ -1446,7 +1492,7 @@ def make_handler(console: Console):
             roles = []
             for role in console.store.static()["roles"]:
                 linked = [index[i] for i in role.get("skill_link_ids", []) if i in index]
-                roles.append({**role, "skills": [
+                roles.append({**role, "department": role_department(role), "skills": [
                     {"skill_id": s["skill_id"], "name": s["name"], "invoke_name": s["invoke_name"],
                      "scope": s["scope"], "description": (s["description"] or {}).get("value")}
                     for s in linked]})
@@ -1566,16 +1612,7 @@ def make_handler(console: Console):
                 })
             skills_for_picker.sort(key=lambda x: (x["tool"], x["name"].lower()))
 
-            roles = []
-            for r in console.store.static().get("roles", []):
-                roles.append({
-                    "role_id": r.get("role_id"),
-                    "name": r.get("name"),
-                    "tool": r.get("tool"),
-                    "kind": r.get("kind"),
-                    "skill_link_count": len(r.get("skill_link_ids") or []),
-                    "skill_link_basis": r.get("skill_link_basis"),
-                })
+            roles = [_profession_view(r) for r in console.store.static().get("roles", [])]
 
             return {
                 "ok": True,

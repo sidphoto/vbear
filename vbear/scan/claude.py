@@ -81,6 +81,19 @@ def _plugin_key_from_cache_path(path: Path) -> tuple[str, str, str]:
     return f"{plugin}@{owner}", version, install_dir
 
 
+# The note on a role of a plugin that settings.json switches off. One sentence made in one place: the catalog tells the
+# profession picker "unavailable" by asking is_plugin_disabled_warning, not by matching a copy of the words.
+_PLUGIN_OFF = "在 settings.json 中停用，此角色目前不可用"
+
+
+def plugin_disabled_warning(key: str) -> str:
+    return f"外掛 {key} {_PLUGIN_OFF}"
+
+
+def is_plugin_disabled_warning(text) -> bool:
+    return isinstance(text, str) and text.startswith("外掛 ") and text.endswith(" " + _PLUGIN_OFF)
+
+
 def plugin_manifest(install_dir: str) -> dict:
     path = Path(install_dir) / ".claude-plugin" / "plugin.json"
     try:
@@ -367,7 +380,7 @@ def scan_plugin_agents(facts: dict) -> list[AgentRole]:
             desc = meta.get("description")
             warnings = [document.redact(w) for w in raw["warnings"]]
             if enabled is False:
-                warnings.append(f"外掛 {key} 在 settings.json 中停用，此角色目前不可用")
+                warnings.append(plugin_disabled_warning(key))
             elif enabled is None:
                 warnings.append(f"外掛 {key} 的啟用狀態未記錄")
             roles.append(AgentRole(
