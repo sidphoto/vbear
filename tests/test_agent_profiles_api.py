@@ -309,6 +309,27 @@ class AgentBuilderAPITests(unittest.TestCase):
                              body=_sample(position="planner"))
         self.assertEqual(status, 400)
 
+    def test_posting_only_enabled_keeps_the_card_profession(self):
+        # P32-1: the workbench 停用／啟用 button posts {"enabled": ...} and nothing else
+        status, made = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
+                                body=_sample(name="Keeps profession", profession_role_id="ghost-role"))
+        self.assertEqual(status, 200, made)
+        pid = made["profile"]["id"]
+        for flag in (False, True):
+            status, saved = _request("POST", self.port, f"/api/agent-profiles/{pid}",
+                                     headers=_write_headers(), body={"enabled": flag})
+            self.assertEqual(status, 200, saved)
+            self.assertEqual(saved["profile"]["enabled"], flag)
+            self.assertEqual(saved["profile"]["profession_role_id"], "ghost-role")
+        status, listing = _request("GET", self.port, "/api/agent-profiles")
+        mine = [p for p in listing["profiles"] if p["id"] == pid][0]
+        self.assertEqual(mine["profession_role_id"], "ghost-role")
+        # an explicit null still clears it
+        status, saved = _request("POST", self.port, f"/api/agent-profiles/{pid}",
+                                 headers=_write_headers(), body={"profession_role_id": None})
+        self.assertEqual(status, 200, saved)
+        self.assertIsNone(saved["profile"]["profession_role_id"])
+
     def test_intent_check_names_the_launch_rules_reasons_and_nothing_else(self):
         def check(**q):
             from urllib.parse import urlencode

@@ -397,12 +397,21 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
     if not name:
         raise ValueError("Profile 名稱不得為空")
 
-    profession = value.get("profession_role_id")
+    # A missing key keeps the stored value (a partial update such as 停用／啟用
+    # posts only {"enabled": ...}); null or an empty string clears it; a new
+    # card without the key has none.
+    if "profession_role_id" in value:
+        profession = value["profession_role_id"]
+    else:
+        profession = existing.get("profession_role_id") if existing else None
     if profession is not None and not isinstance(profession, str):
         raise ValueError("profession_role_id 必須是字串或 null")
     if isinstance(profession, str):
         profession = _clean_str(profession, 256)
-        if profession and profession not in known_roles:
+        if not profession:
+            stored_profession = None
+            profession_unresolved = False
+        elif profession not in known_roles:
             # Keep the reference but mark it unresolved so the UI can still
             # render and the user can re-pick. Silently rewriting to null
             # would lose data.

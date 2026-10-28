@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Switching a card off or on no longer clears its profession.** The 停用／啟用 button on the 角色 tab of the terminal
+  workbench sends only the new on/off state, and the save treated the missing profession as "none", so the card lost
+  its profession. A save that leaves out the profession now keeps the stored one; sending `null` or an empty value still
+  clears it, and the card wizard and the starter deck send the same data as before.
 - **Skill descriptions that are cut short on a card can now be read whole.** Rest the pointer on a skill card (in the
   skill library, the four-state overview and step 3 of the card wizard) or on the description in the skills table, or
   move to it with the Tab key, and a small box opens with the full text: the whole Chinese description, when to use it

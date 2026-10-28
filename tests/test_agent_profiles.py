@@ -260,6 +260,54 @@ class UnresolvedReferenceTests(unittest.TestCase):
         self.assertEqual(rec["profession_role_id"], "ghost-prof")
         self.assertTrue(rec["_unresolved"]["profession"])
 
+    def test_update_without_profession_key_keeps_the_stored_profession(self):
+        # the card list's 停用／啟用 posts only {"enabled": ...}
+        rec = ap.save_profile(None, _sample(prof="writer"), known_skills=set(),
+                              known_roles={"writer"})
+        rec2 = ap.save_profile(rec["id"], {"enabled": False}, known_skills=set(),
+                               known_roles={"writer"})
+        self.assertFalse(rec2["enabled"])
+        self.assertEqual(rec2["profession_role_id"], "writer")
+        on_disk = ap.get_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+        self.assertEqual(on_disk["profession_role_id"], "writer")
+
+    def test_update_without_profession_key_keeps_an_unresolved_profession(self):
+        rec = ap.save_profile(None, _sample(prof="ghost-prof"), known_skills=set(),
+                              known_roles=set())
+        rec2 = ap.save_profile(rec["id"], {"enabled": False}, known_skills=set(),
+                               known_roles=set())
+        self.assertEqual(rec2["profession_role_id"], "ghost-prof")
+        self.assertTrue(rec2["_unresolved"]["profession"])
+
+    def test_update_with_null_or_empty_profession_clears_it(self):
+        for cleared in (None, "", "   "):
+            rec = ap.save_profile(None, _sample(prof="writer"), known_skills=set(),
+                                  known_roles={"writer"})
+            rec2 = ap.save_profile(rec["id"], {"profession_role_id": cleared},
+                                   known_skills=set(), known_roles={"writer"})
+            self.assertIsNone(rec2["profession_role_id"], repr(cleared))
+            self.assertFalse(rec2["_unresolved"]["profession"], repr(cleared))
+
+    def test_update_with_a_new_profession_replaces_it(self):
+        rec = ap.save_profile(None, _sample(prof="writer"), known_skills=set(),
+                              known_roles={"writer", "reviewer"})
+        rec2 = ap.save_profile(rec["id"], {"profession_role_id": "reviewer"},
+                               known_skills=set(), known_roles={"writer", "reviewer"})
+        self.assertEqual(rec2["profession_role_id"], "reviewer")
+
+    def test_new_profile_without_profession_key_has_none(self):
+        body = _sample()
+        del body["profession_role_id"]
+        rec = ap.save_profile(None, body, known_skills=set(), known_roles={"writer"})
+        self.assertIsNone(rec["profession_role_id"])
+
+    def test_non_string_profession_is_still_rejected_on_update(self):
+        rec = ap.save_profile(None, _sample(prof="writer"), known_skills=set(),
+                              known_roles={"writer"})
+        with self.assertRaises(ValueError):
+            ap.save_profile(rec["id"], {"profession_role_id": 5}, known_skills=set(),
+                            known_roles={"writer"})
+
     def test_load_all_re_decorates_against_today_catalog(self):
         rec = ap.save_profile(None, _sample(skills=["now-missing"]),
                               known_skills={"now-missing"}, known_roles=set())

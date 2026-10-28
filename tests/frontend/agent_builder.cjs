@@ -421,6 +421,8 @@ function findModalInBody() {
     assert.deepEqual(createPost.body.permission_intents,
                      { read: "allow", write: "allow", test: "allow", deploy: "deny" });
     assert.equal(createPost.body.enabled, true);
+    // P32-1: the wizard still says the profession outright (null here), so the server's keep-when-missing rule never fires for it
+    assert.ok(Object.prototype.hasOwnProperty.call(createPost.body, "profession_role_id") && createPost.body.profession_role_id === null);
     console.log("ok wizard sends POST with every intent decided (the verified combination without a position, R10)");
   }
 
