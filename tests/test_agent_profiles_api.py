@@ -158,6 +158,23 @@ class AgentBuilderAPITests(unittest.TestCase):
         got = {s["skill_id"]: s["mtime"] for s in body["skills"]}
         self.assertEqual(got, {"s-1": 1700000000.5, "s-2": 0, "s-3": 0, "s-4": 0})
 
+    def test_catalog_excerpt_keeps_a_long_description_whole_up_to_a_stated_limit(self):
+        # the wizard's hover box shows the original in full; the old cut at 140 characters left it a stub
+        skill = {"tool": "claude", "scope": "user", "activation": "active"}
+        long_text = "Fake skill text. " * 60          # 1020 characters
+        huge_text = "Z" * 5000
+        self.console.store._static = {"skills": [
+            {**skill, "skill_id": "s-1", "name": "one", "description": {"value": long_text}},
+            {**skill, "skill_id": "s-2", "name": "two", "description": {"value": huge_text}}], "roles": []}
+        self.console.store._static_stamp = None
+        try:
+            _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        finally:
+            self.console.store._static = None
+        got = {s["skill_id"]: s["excerpt"] for s in body["skills"]}
+        self.assertEqual(got["s-1"], long_text)
+        self.assertEqual(len(got["s-2"]), 2000)
+
     def test_catalog_carries_the_use_categories_for_the_picker_category_row(self):
         skill = {"tool": "claude", "scope": "user", "activation": "active", "description": {"value": "d"}}
         self.console.store._static = {"skills": [

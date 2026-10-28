@@ -92,6 +92,7 @@ SKILL_SUMMARY_FIELDS = (
     "mtime", "categories",
 )
 SEARCH_EXCERPT_CHARS = 280  # enough of "when to use" for search; full text is in detail
+EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sent, for its hover box
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
                    "recent_folders", "onboarding_dismissed"}
@@ -1557,7 +1558,8 @@ def make_handler(console: Console):
                     "activation": s.get("activation", ""),
                     # the picker folds same-named copies and keeps the newest; 0 is "not known"
                     "mtime": mtime if isinstance(mtime, (int, float)) and not isinstance(mtime, bool) else 0,
-                    "excerpt": desc[:140],
+                    # the card shows a short line of it; the hover box shows it whole, so the cut is a limit, not a summary
+                    "excerpt": desc[:EXCERPT_LIMIT],
                     # the use categories the scan gave it (by keywords in its text), for the picker's category row
                     "categories": [c["id"] for c in (s.get("categories") or [])
                                    if isinstance(c, dict) and isinstance(c.get("id"), str)],
