@@ -254,7 +254,9 @@ class AgentBuilderAPITests(unittest.TestCase):
     def test_catalog_serves_the_starter_deck_exactly(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
-        self.assertEqual(body["positions"], ["planner", "executor", "reviewer"])
+        self.assertEqual(body["positions"], ["planner", "executor", "qa", "reviewer", "product", "research", "business",
+                                             "design", "records"])
+        self.assertEqual(body["position_table"], [dict(r) for r in agent_profiles.POSITION_TABLE])
         self.assertEqual(body["demo_id_prefix"], "demo-")
         deck = body["starter_deck"]
         self.assertEqual([(c["key"], c["name"], c["position"], c["tool"]) for c in deck], [
@@ -275,7 +277,9 @@ class AgentBuilderAPITests(unittest.TestCase):
     def test_starter_deck_constant_is_safe_to_save_and_has_a_cross_tool_reviewer(self):
         deck = agent_profiles.STARTER_DECK
         self.assertEqual(len(deck), 3)
-        self.assertEqual([c["position"] for c in deck], list(agent_profiles.POSITIONS))
+        # the starter deck is still the three cards of the task card's places; the other six positions are not in it
+        self.assertEqual([c["position"] for c in deck], ["planner", "executor", "reviewer"])
+        self.assertTrue(set(c["position"] for c in deck) <= set(agent_profiles.POSITIONS))
         for card in deck:
             self.assertIn(card["tool"], agent_profiles.KNOWN_TOOLS)
             self.assertEqual(set(card["permission_intents"]), set(agent_profiles.PERMISSION_KEYS))

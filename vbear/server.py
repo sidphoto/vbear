@@ -1606,6 +1606,7 @@ def make_handler(console: Console):
                 "starter_deck": [dict(card, permission_intents=dict(card["permission_intents"]))
                                  for card in agent_profiles.STARTER_DECK],
                 "positions": list(agent_profiles.POSITIONS),
+                "position_table": [dict(row) for row in agent_profiles.POSITION_TABLE],
                 # The one combination of intents a managed launch honours; the starter deck and the wizard's
                 # suggestions both use it (design card-play v1.2 R10).
                 "verified_intents": dict(agent_profiles.VERIFIED_INTENTS),

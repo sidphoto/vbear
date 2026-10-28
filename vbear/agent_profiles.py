@@ -85,9 +85,45 @@ def family_of_tool(tool) -> str:
     """The model family a card of this tool stands for; unknown for anything this build does not list."""
     return TOOL_FAMILY.get(tool, "unknown") if isinstance(tool, str) else "unknown"
 
-# The suggested positions of a role card on a team. A position is only a label the front end remembers; it is not a
-# profile field, so it never reaches the stored schema.
-POSITIONS: tuple[str, ...] = ("planner", "executor", "reviewer")
+# The suggested positions of a role card: the division of work of a one-person company, nine of them in two tiers
+# (P32-2). The first four are the places of a task card ("team": slot says which place of the flow the position suits;
+# qa and reviewer both suit the review places), the other five are staff and support that take no place on a task
+# card ("staff": slot is None). The three ids that existed before (planner, executor, reviewer) keep their meaning.
+# A position is only a label the front end remembers; it is not a profile field, so it never reaches the stored schema.
+# It carries no permission either: a managed launch honours one combination only (VERIFIED_INTENTS), so the suggested
+# intents are the same for every position, and what differs is told in the reminder, which a person writes into the
+# task card's goal because VBear cannot enforce it. The page repeats this table (web/app.js CARD_POSITION_TABLE) so a
+# card can be drawn without the catalog; a test keeps the two equal. Only generic job titles go here.
+POSITION_TABLE: tuple[dict[str, Any], ...] = (
+    {"id": "planner", "label": "規劃", "glyph": "規", "tier": "team", "slot": "planner",
+     "duty": "統籌全局：拆解需求、擬計畫、分派工作，最後驗收。",
+     "reminder": "只寫計畫與交接，不自己大量改程式。"},
+    {"id": "executor", "label": "執行", "glyph": "執", "tier": "team", "slot": "executor",
+     "duty": "照計畫動手做：寫程式、修問題、做出成品，先自己檢查一遍。",
+     "reminder": "需求不清楚就停下來回報，不自己猜。"},
+    {"id": "qa", "label": "品質驗證", "glyph": "驗", "tier": "team", "slot": "reviewer",
+     "duty": "實際跑起來，照驗收條件一項項確認，附上證據。",
+     "reminder": "沒實際跑過不算通過；找到問題只回報，不自己修。"},
+    {"id": "reviewer", "label": "獨立審查", "glyph": "審", "tier": "team", "slot": "reviewer",
+     "duty": "用和執行不同陣營的模型檢查程式、資安與隱藏問題。",
+     "reminder": "只回報問題，不重寫、不接手。"},
+    {"id": "product", "label": "產品", "glyph": "產", "tier": "staff", "slot": None,
+     "duty": "把想法整理成需求：做什麼、為誰做、怎樣算完成。",
+     "reminder": "只寫需求與驗收條件，不決定技術做法。"},
+    {"id": "research", "label": "研究", "glyph": "研", "tier": "staff", "slot": None,
+     "duty": "查資料、比較做法、附上出處；給建議，不拍板。",
+     "reminder": "查不到就說查不到，只交研究報告。"},
+    {"id": "business", "label": "商業", "glyph": "商", "tier": "staff", "slot": None,
+     "duty": "評估值不值得做：成本、定價、推廣方式。",
+     "reminder": "不自己假設市場數據，要資料找研究。"},
+    {"id": "design", "label": "設計", "glyph": "設", "tier": "staff", "slot": None,
+     "duty": "做畫面、圖示與素材，交給執行整合。",
+     "reminder": "素材放在指定資料夾，不直接改產品程式。"},
+    {"id": "records", "label": "紀錄", "glyph": "記", "tier": "staff", "slot": None,
+     "duty": "記下決定、進度與變更紀錄；只記事，不派工。",
+     "reminder": "只記已確認的事，不改任務。"},
+)
+POSITIONS: tuple[str, ...] = tuple(row["id"] for row in POSITION_TABLE)
 
 # The one combination of intents a managed launch honours today (agent_launch.launch_blockers is a whitelist on it):
 # read, write and test allowed, deploy denied. It lives here, beside the starter deck, so the deck, the wizard's

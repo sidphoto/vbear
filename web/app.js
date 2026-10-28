@@ -4032,8 +4032,36 @@ function crumbs(items) {
 // A role card is an Agent Profile of the console. The words on screen are the card words (角色卡, 技能卡, 陣營,
 // 權限意圖); the API field names are unchanged. Nothing here starts, loads or limits anything: a card is a record.
 
-const CARD_POSITIONS = ["planner", "executor", "reviewer"];
-const CARD_POSITION_LABEL = { planner: "規劃", executor: "執行", reviewer: "審查" };
+// The suggested positions: the division of work of a one-person company (P32-2). This table is the server's
+// POSITION_TABLE (vbear/agent_profiles.py) repeated, because a card is drawn without the catalog; a test keeps them
+// equal. tier "team" is a place of a task card (slot says which kind of place it suits: qa and reviewer both suit the
+// review places), tier "staff" takes no place on a task card. A position is a label: it carries no permission, and
+// the reminder is words for the person to write into a task card's goal, which VBear cannot enforce.
+const CARD_POSITION_TABLE = [
+  { id: "planner", label: "規劃", glyph: "規", tier: "team", slot: "planner",
+    duty: "統籌全局：拆解需求、擬計畫、分派工作，最後驗收。", reminder: "只寫計畫與交接，不自己大量改程式。" },
+  { id: "executor", label: "執行", glyph: "執", tier: "team", slot: "executor",
+    duty: "照計畫動手做：寫程式、修問題、做出成品，先自己檢查一遍。", reminder: "需求不清楚就停下來回報，不自己猜。" },
+  { id: "qa", label: "品質驗證", glyph: "驗", tier: "team", slot: "reviewer",
+    duty: "實際跑起來，照驗收條件一項項確認，附上證據。", reminder: "沒實際跑過不算通過；找到問題只回報，不自己修。" },
+  { id: "reviewer", label: "獨立審查", glyph: "審", tier: "team", slot: "reviewer",
+    duty: "用和執行不同陣營的模型檢查程式、資安與隱藏問題。", reminder: "只回報問題，不重寫、不接手。" },
+  { id: "product", label: "產品", glyph: "產", tier: "staff", slot: null,
+    duty: "把想法整理成需求：做什麼、為誰做、怎樣算完成。", reminder: "只寫需求與驗收條件，不決定技術做法。" },
+  { id: "research", label: "研究", glyph: "研", tier: "staff", slot: null,
+    duty: "查資料、比較做法、附上出處；給建議，不拍板。", reminder: "查不到就說查不到，只交研究報告。" },
+  { id: "business", label: "商業", glyph: "商", tier: "staff", slot: null,
+    duty: "評估值不值得做：成本、定價、推廣方式。", reminder: "不自己假設市場數據，要資料找研究。" },
+  { id: "design", label: "設計", glyph: "設", tier: "staff", slot: null,
+    duty: "做畫面、圖示與素材，交給執行整合。", reminder: "素材放在指定資料夾，不直接改產品程式。" },
+  { id: "records", label: "紀錄", glyph: "記", tier: "staff", slot: null,
+    duty: "記下決定、進度與變更紀錄；只記事，不派工。", reminder: "只記已確認的事，不改任務。" },
+];
+const CARD_POSITIONS = CARD_POSITION_TABLE.map((r) => r.id);
+const CARD_POSITION_LABEL = Object.fromEntries(CARD_POSITION_TABLE.map((r) => [r.id, r.label]));
+const CARD_REVIEW_PLACE_TEXT = "審查位或第二位審查（要和執行位不同陣營）";
+const CARD_STAFF_PLACE_TEXT = "不佔任務卡的位置，通常單獨出發；需要時可以放規劃位";
+const CARD_STAFF_PLACE_NOTE = "這是幕僚卡，通常不上任務卡；需要時可以放規劃位";
 // Where a person suggested a card for is a front-end preference (design 3.3): it is not a profile field.
 const CARD_POSITION_KEY = "card.position.";
 const CARD_INTENT_KEYS = [["read", "讀取檔案"], ["write", "編輯寫入"], ["test", "執行測試"], ["deploy", "部署上線"]];
@@ -4086,6 +4114,29 @@ function cardPosition(id) {
 }
 function setCardPosition(id, position) {
   store.set(CARD_POSITION_KEY + id, CARD_POSITIONS.includes(position) ? position : null);
+}
+// The table row of a position; null for none, or for a value this page does not know (it is shown as not specified).
+function cardPositionRow(position) {
+  return typeof position === "string" ? CARD_POSITION_TABLE.find((r) => r.id === position) || null : null;
+}
+// Where on a task card a position is suggested to go: the words of the wizard's box.
+function cardPositionPlaceText(row) {
+  if (!row) return "";
+  if (row.tier === "staff") return CARD_STAFF_PLACE_TEXT;
+  return row.slot === "reviewer" ? CARD_REVIEW_PLACE_TEXT : row.slot === "executor" ? "執行位" : "規劃位";
+}
+// The title of a small card in the pool of a task card's board.
+function cardPositionTitle(position) {
+  const row = cardPositionRow(position);
+  if (!row) return "位置未指定";
+  if (row.tier === "staff") return `你建議的位置是「${row.label}」（幕僚卡，通常不上任務卡）`;
+  const word = row.slot === "reviewer" ? "審查" : row.label;
+  return `你建議放「${word}」位${word === row.label ? "" : `（${row.label}）`}`;
+}
+// Whether a card's suggested position suits a kind of place of a task card (planner, executor, reviewer).
+function cardFitsSlot(card, slotKind) {
+  const row = card ? cardPositionRow(cardPosition(card.id)) : null;
+  return Boolean(row && row.slot === slotKind);
 }
 
 // The suggested intents of a position, from the starter deck the server serves (design 3.3, v1.2 R10). The deck and
@@ -4471,11 +4522,21 @@ function openCardWizard(opts) {
     const agyNote = st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, AGY_NOT_LAUNCHED + "。") : null;
     const sharedNote = st.tool === "shared" ? el("p", { class: "small cw-hint", "data-cw": "shared-note" }, SHARED_NOT_LAUNCHED + "。") : null;
 
-    const posChoices = [["", "先不指定"], ...CARD_POSITIONS.map((p) => [p, CARD_POSITION_LABEL[p]])];
-    const posGroup = el("div", { class: "cw-choices", role: "group", "aria-label": "建議位置" },
-      posChoices.map(([v, label]) => el("button", { type: "button", class: "cw-choice",
-        "data-position": v || "none", "aria-pressed": String((st.position || "") === v),
-        on: { click: () => setPosition(v || null) } }, el("span", null, label))));
+    const posButton = (id, label) => el("button", { type: "button", class: "cw-choice",
+      "data-position": id || "none", "aria-pressed": String((st.position || "") === id),
+      on: { click: () => setPosition(id || null) } }, el("span", null, label));
+    const tierRow = (title, rowsOf, extra) => el("div", { class: "cw-pos-tier" },
+      el("span", { class: "small muted cw-pos-title" }, title),
+      el("div", { class: "cw-choices", role: "group", "aria-label": title },
+        rowsOf.map((r) => posButton(r.id, r.label)), extra));
+    const posGroup = el("div", { class: "cw-positions", role: "group", "aria-label": "建議位置" },
+      tierRow("任務卡上的位置", CARD_POSITION_TABLE.filter((r) => r.tier === "team")),
+      tierRow("幕僚與支援", CARD_POSITION_TABLE.filter((r) => r.tier === "staff"), posButton("", "先不指定")));
+    const posRow = cardPositionRow(st.position);
+    const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
+      el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
+      el("p", { class: "small muted" }, (posRow.tier === "team" ? "任務卡上建議放：" : "") + cardPositionPlaceText(posRow)),
+      el("p", { class: "small muted" }, `分工提醒：${posRow.reminder}`)) : null;
 
     const rows = CARD_INTENT_KEYS.map(([k, zh]) => {
       const values = ["allow", "deny", ...(st.intents[k] === "unspecified" ? ["unspecified"] : [])];
@@ -4506,7 +4567,7 @@ function openCardWizard(opts) {
     return [
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
         el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote, sharedNote),
-      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), posGroup,
+      el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), posGroup, posBox,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
       el("div", { class: "cw-field" },
         el("span", { class: "cw-label" }, "權限意圖",
@@ -4514,7 +4575,8 @@ function openCardWizard(opts) {
         summary,
         undecided ? el("p", { class: "small cw-error" }, "有權限意圖還沒決定；出發前要先決定。") : null,
         el("p", { class: "small muted", "data-cw": "intent-note" }, CARD_INTENT_NOTE),
-        el("p", { class: "small muted", "data-cw": "launch-note" }, CARD_INTENT_LAUNCH_NOTE),
+        el("p", { class: "small muted", "data-cw": "launch-note" }, CARD_INTENT_LAUNCH_NOTE,
+          posRow ? ` 「${posRow.label}」的分工提醒：${posRow.reminder}` : null),
         (intentBox = el("div", { "data-cw": "intent-check", "aria-live": "polite" })), intents),
       advanced,
     ];
@@ -4951,10 +5013,11 @@ const CARD_PIXELS = {
 
 // The position badge (art v3 positionBadges): a square with a hard 2px border and one Chinese character, drawn in CSS from
 // the camp's tokens (--pos-bg, --pos-text, --pos-border in style.css). The 12x12 position pixel maps of v1 and v2 are not used.
+// Nine positions and "not specified", all made from CARD_POSITION_TABLE; the three that existed before keep their keys.
+const CARD_POSITION_BADGE_KEY = Object.fromEntries(CARD_POSITION_TABLE.map((r) =>
+  [r.id, { planner: "planning", executor: "execution", reviewer: "review" }[r.id] || r.id]));
 const CARD_POSITION_BADGES = {
-  planning: { glyph: "規", label: "規劃" },
-  execution: { glyph: "執", label: "執行" },
-  review: { glyph: "審", label: "審查" },
+  ...Object.fromEntries(CARD_POSITION_TABLE.map((r) => [CARD_POSITION_BADGE_KEY[r.id], { glyph: r.glyph, label: r.label }])),
   unspecified: { glyph: "？", label: "未指定" },
 };
 
@@ -5021,7 +5084,6 @@ function cardPatternStrip() {
 }
 
 const CARD_BACK_MORE_TEXT = "往下捲動看更多";
-const CARD_POSITION_BADGE_KEY = { planner: "planning", executor: "execution", reviewer: "review" };
 function cardPositionBadgeKey(position) { return cardHas(CARD_POSITION_BADGE_KEY, position) ? CARD_POSITION_BADGE_KEY[position] : "unspecified"; }
 // The badge of a suggested position: the square with its one character (decoration, the words next to it say the same)
 // and the words. The colours come from the camp frame the badge sits in.
@@ -5030,7 +5092,7 @@ function positionBadge(position) {
   const b = CARD_POSITION_BADGES[key];
   return el("span", { class: "rcard-pos", "data-pcard": "position", "data-pos": key },
     el("span", { class: "pos-glyph", "aria-hidden": "true" }, b.glyph),
-    el("span", { class: "pos-text" }, position ? `${CARD_POSITION_LABEL[position]}位` : "位置未指定"));
+    el("span", { class: "pos-text" }, cardHas(CARD_POSITION_LABEL, position) ? CARD_POSITION_LABEL[position] : "位置未指定"));
 }
 
 // Just the square with its character, for a place or a small card that already says the position in words (art v3
@@ -9762,10 +9824,10 @@ const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", agy: "google", 
 const TEAM_FAMILY_LABEL = { anthropic: "Anthropic（Claude）", openai: "OpenAI（Codex）", google: "Google（Gemini）",
   minimax: "MiniMax", other: "其他", unknown: "不明" };
 const TEAM_SLOTS = [
-  { key: "planner", label: "規劃位", short: "規劃", position: "planner" },
-  { key: "executor", label: "執行位", short: "執行", position: "executor" },
-  { key: "reviewer1", label: "審查位", short: "審查 1", position: "reviewer" },
-  { key: "reviewer2", label: "第二位審查", short: "審查 2", position: "reviewer", optional: true },
+  { key: "planner", label: "規劃位", short: "規劃", position: "planner", fit: "規劃" },
+  { key: "executor", label: "執行位", short: "執行", position: "executor", fit: "執行" },
+  { key: "reviewer1", label: "審查位", short: "審查 1", position: "reviewer", fit: "獨立審查、品質驗證" },
+  { key: "reviewer2", label: "第二位審查", short: "審查 2", position: "reviewer", fit: "獨立審查、品質驗證", optional: true },
 ];
 const TEAM_ROLE_NAME_MAX = 80;
 const TEAM_DRAFT_KEY = "team.draft.";
@@ -10225,7 +10287,7 @@ function teamBoard(opts) {
     const tool = p.model && p.model.tool;
     const on = selected === p.id;
     return el("button", { type: "button", class: `ts-chip camp-frame${on ? " ts-chip-on" : ""}`, "data-card": p.id, "data-camp": campKeyOf(p), draggable: "true",
-      "aria-pressed": String(on), title: `拖到位置上；或先點這張卡，再點位置（${cardPosition(p.id) ? `你建議放「${CARD_POSITION_LABEL[cardPosition(p.id)]}」位` : "位置未指定"}）`,
+      "aria-pressed": String(on), title: `拖到位置上；或先點這張卡，再點位置（${cardPositionTitle(cardPosition(p.id))}）`,
       on: {
         click: () => { selected = on ? null : p.id; openKey = null; paint(); },
         dragstart: (e) => {
@@ -10243,14 +10305,16 @@ function teamBoard(opts) {
   function menuFor(key) {
     const def = slotDef(key);
     const q = query.trim().toLowerCase();
-    const matches = cards.filter((p) => !q || String(p.name || "").toLowerCase().includes(q));
+    const found = cards.filter((p) => !q || String(p.name || "").toLowerCase().includes(q));
+    // the cards whose suggested position suits this place come first (the order inside each group is the pool's)
+    const matches = [...found.filter((p) => cardFitsSlot(p, def.position)), ...found.filter((p) => !cardFitsSlot(p, def.position))];
     const search = el("input", { type: "search", class: "input", "aria-label": "用名字找角色卡", placeholder: "用名字找角色卡", value: query,
       on: { input: (e) => { query = e.target.value; focusKey = "search"; paint(); } } });
     focusRefs.set("search", search);
     const rows = matches.slice(0, TEAM_MENU_MAX).map((p) => {
       const trial = { ...slots, [key]: roleFromCard(p, { executor: key === "executor" }) };
       const problem = slotProblem(key, trial[key], trial);
-      const suggested = cardPosition(p.id) === def.position;
+      const suggested = cardFitsSlot(p, def.position);
       return el("li", null, el("button", { type: "button", class: "ts-pick", "data-pick": p.id, on: { click: () => place(key, p) } },
         cardAvatar(p, 2),
         el("span", { class: "ts-pick-body" },
@@ -10301,7 +10365,7 @@ function teamBoard(opts) {
         keydown: (e) => { if (e.key === "Escape" && openKey === def.key) { openKey = null; focusKey = def.key; paint(); } },
       } },
       el("div", { class: "ts-head" }, entry ? positionGlyph(def.position) : null, el("strong", null, def.label),
-        el("span", { class: "small muted" }, def.position === "reviewer" ? "要和執行位不同陣營" : `建議放「${def.short}」位的卡`)),
+        el("span", { class: "small muted" }, `適合：${def.fit}${def.position === "reviewer" ? "・要和執行位不同陣營" : ""}`)),
       button,
       entry ? el("div", { class: "ts-tools" },
         el("button", { type: "button", class: "btn small", "data-act": "clear", on: { click: () => clearSlot(def.key) } }, "拿下來"),
@@ -10340,7 +10404,7 @@ function teamBoard(opts) {
       : el("div", { class: "ts-tray" }, el("p", { class: "small muted" }, "角色卡池是空的。"),
           el("a", { class: "btn small", href: "#/team" }, "到角色卡池拿卡"));
     setKids(host,
-      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。" : "把角色卡放上來：規劃、執行、審查各一位，第二位審查選填。"),
+      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。審查位可以放獨立審查或品質驗證的卡。" : "把角色卡放上來：規劃、執行、審查各一位，第二位審查選填。審查位可以放獨立審查或品質驗證的卡。"),
       selected ? el("p", { class: "small ts-armed-note", role: "status" }, `已拿起「${(cardById(selected) || {}).name || ""}」，點一個位置放下去。`,
         el("button", { type: "button", class: "btn small", on: { click: () => { selected = null; paint(); } } }, "放開")) : null,
       el("ul", { class: "team-slots" }, TEAM_SLOTS.map((d) => slotNode(d, problems))),
@@ -10418,6 +10482,19 @@ function openPlaceDialog(p, opts = {}) {
     return f ? teamSlotsFromRoles(f.roles) : teamDraftRead(t.id, profiles, t.workdir);
   };
 
+  // The place a card made for a place of the task card is chosen for: planner and executor to their own place, a
+  // review card to the review place that is empty (the first when both hold a card; the row then says it is replaced).
+  // Only a choice on screen: nothing is written until 放上去 is pressed. A staff card, or one with no position, gets none.
+  const presetSlot = () => {
+    const t = task();
+    const row = cardPositionRow(cardPosition(p.id));
+    if (!t || !row || !row.slot) return null;
+    if (row.slot !== "reviewer") return row.slot;
+    const slots = slotsOf(t);
+    return !slots.reviewer1 ? "reviewer1" : !slots.reviewer2 ? "reviewer2" : "reviewer1";
+  };
+  const staffCard = (() => { const row = cardPositionRow(cardPosition(p.id)); return Boolean(row && row.tier === "staff"); })();
+
   async function go() {
     const t = task();
     if (!t || !st.slot || st.busy) return;
@@ -10484,7 +10561,7 @@ function openPlaceDialog(p, opts = {}) {
     const t = task();
     const open = (st.tasks || []);
     const rows = open.map((x) => el("li", null, el("button", { type: "button", class: "fp-item", "data-place-task": x.id, "aria-pressed": String(x.id === st.taskId),
-      on: { click: () => { st.taskId = x.id; st.slot = null; st.error = ""; draw(); } } },
+      on: { click: () => { st.taskId = x.id; st.slot = presetSlot(); st.error = ""; draw(); } } },
       el("strong", null, x.title || "（沒有名稱）"),
       el("span", { class: "small muted fp-path" }, x.workdir ? `${folderBaseName(x.workdir)}・${x.workdir}` : "還沒有資料夾"),
       st.same && st.same.has(x.title) && taskDayText(x.created_at) ? el("span", { class: "small muted", "data-hint": "same-title" }, `建立於 ${taskDayText(x.created_at)}`) : null,
@@ -10502,6 +10579,7 @@ function openPlaceDialog(p, opts = {}) {
     }) : [];
     setKids(body,
       el("p", { class: "small muted" }, "挑一張任務卡，再挑它的一個位置。放上去只是把這張卡的名字、陣營和模型記進隊伍，不會啟動任何東西。"),
+      staffCard ? el("p", { class: "small muted", "data-place": "staff-note" }, CARD_STAFF_PLACE_NOTE + "。") : null,
       st.loadError ? notice("bad", st.loadError) : null,
       st.tasks === null ? el("p", { class: "small muted" }, "讀取任務卡…")
         : open.length ? el("ul", { class: "fp-items", "data-place": "tasks" }, rows)
@@ -10520,7 +10598,7 @@ function openPlaceDialog(p, opts = {}) {
     st.tasks = ((tr && tr.tasks) || []).filter((x) => x && x.status !== "closed" && x.status !== "handed_off");
     st.flows = (fr && fr.flows) || [];
     st.same = duplicateTitles(st.tasks);
-    if (opts.taskId && st.tasks.some((x) => x.id === opts.taskId)) st.taskId = opts.taskId;
+    if (opts.taskId && st.tasks.some((x) => x.id === opts.taskId)) { st.taskId = opts.taskId; st.slot = presetSlot(); }
     draw();
   }).catch((e) => { st.tasks = []; st.loadError = "讀不到任務卡：" + (e && e.message || ""); draw(); });
   return { modal, close, state: st };

@@ -632,6 +632,69 @@ async function test(name, fn) {
     assert.ok(!fetchCalls.some((c) => c.url.includes("intent-check")));
   });
 
+  await test("P32-2 wizard step 2: nine positions in two rows with 先不指定, a box with the duty, the place and the reminder; the intents are the verified ones for every one", async () => {
+    const { ctx, posts, d } = await openWizard();
+    typeName(d, "Position one");
+    btnByText(d, "下一步").dispatch("click");
+    let cur = dialog();
+    const groups = walk(cur).filter((n) => n.getAttribute && n.getAttribute("role") === "group");
+    const groupBy = (label) => groups.find((n) => n.getAttribute("aria-label") === label);
+    const outer = groupBy("建議位置");
+    assert.ok(outer, "one group named 建議位置 holds both rows");
+    const team = groupBy("任務卡上的位置"), staff = groupBy("幕僚與支援");
+    assert.ok(team && staff && outer.contains(team) && outer.contains(staff));
+    const posButtons = (g) => walk(g).filter((n) => n.tag === "button" && n.getAttribute("data-position"));
+    assert.deepStrictEqual(posButtons(team).map((b) => b.getAttribute("data-position")), ["planner", "executor", "qa", "reviewer"]);
+    assert.deepStrictEqual(posButtons(staff).map((b) => b.getAttribute("data-position")), ["product", "research", "business", "design", "records", "none"]);
+    assert.deepStrictEqual(posButtons(team).map((b) => textOf(b).trim()), ["規劃", "執行", "品質驗證", "獨立審查"]);
+    assert.deepStrictEqual(posButtons(staff).map((b) => textOf(b).trim()), ["產品", "研究", "商業", "設計", "紀錄", "先不指定"]);
+    assert.ok(!team.classList.contains("cw-tools") && !staff.classList.contains("cw-tools"), "the camp row layout is not used");
+    assert.strictEqual(byData(cur, "data-cw", "position-box").length, 0, "nothing chosen: no box");
+    assert.strictEqual(byData(cur, "data-position", "none")[0].getAttribute("aria-pressed"), "true");
+    const verified = (c) => textOf(byData(c, "data-cw", "intent-summary")[0]);
+    const base = verified(cur);
+    const launchSentence = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
+    const rows = vm.runInContext("CARD_POSITION_TABLE", ctx);
+    assert.strictEqual(rows.length, 9);
+    for (const r of rows) {
+      byData(dialog(), "data-position", r.id)[0].dispatch("click");
+      cur = dialog();
+      assert.strictEqual(byData(cur, "data-position", r.id)[0].getAttribute("aria-pressed"), "true", r.id);
+      const box = byData(cur, "data-cw", "position-box")[0];
+      assert.ok(box, r.id);
+      assert.ok(findText(box, r.duty) && findText(box, r.reminder), r.id + ": duty and reminder");
+      assert.ok(findText(box, r.tier === "team" ? "任務卡上建議放" : "不佔任務卡的位置"), r.id + ": where it goes");
+      assert.ok(findText(byData(cur, "data-cw", "launch-note")[0], launchSentence), r.id + ": the R10 sentence stays");
+      assert.ok(findText(byData(cur, "data-cw", "launch-note")[0], r.reminder), r.id + ": and the reminder is brought into it");
+      assert.strictEqual(verified(cur), base, r.id + ": the suggestion is the verified combination");
+      assert.ok(byData(cur, "data-cw", "suggested").length === 1, r.id);
+    }
+    byData(dialog(), "data-position", "qa")[0].dispatch("click");
+    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "審查位或第二位審查（要和執行位不同陣營）"));
+    byData(dialog(), "data-position", "none")[0].dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "position-box").length, 0);
+    assert.ok(!findText(byData(dialog(), "data-cw", "launch-note")[0], "分工提醒"), "no position, no reminder");
+    byData(dialog(), "data-position", "records")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.deepStrictEqual(posts[0].permission_intents, VERIFIED);
+    assert.ok(!("position" in posts[0]), "a position is still not a profile field (P32-3 changes that)");
+    assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-NEW")), "records", "and it is still remembered in the browser");
+  });
+
+  await test("P32-2: a stored position the page does not know is shown as 先不指定 and never rewritten; a stored qa shows on the existing card", async () => {
+    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY)]);
+    ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("boss"));
+    assert.strictEqual(ctx.cardPosition("p-1"), null);
+    assert.strictEqual(ctx.localStorage.getItem("sid:card.position.p-1"), JSON.stringify("boss"), "read only: the stored value stays");
+    ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("qa"));
+    assert.strictEqual(ctx.cardPosition("p-1"), "qa");
+    ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("records"));
+    assert.strictEqual(ctx.cardPosition("p-1"), "records");
+    assert.deepStrictEqual(Array.from(vm.runInContext("CARD_POSITIONS", ctx)), ["planner", "executor", "qa", "reviewer", "product", "research", "business", "design", "records"]);
+  });
+
   await test("wizard step 2 (R10): a hand-made combination is kept on a position change, asks the server why it cannot go, and says so on the spot", async () => {
     const { posts, d } = await openWizard([], catalog, {
       [CHECK + "read=allow&write=deny&test=allow&deploy=deny"]: () => jsonResponse({ ok: true, can_launch: false, blockers: writeDenyBlockers }) });
@@ -1398,7 +1461,8 @@ async function test(name, fn) {
     assert.strictEqual(cardOf("demo-1").getAttribute("data-camp"), "openai");
     assert.strictEqual(cardOf("p-3").getAttribute("data-camp"), "other");
     const pos = byData(cardOf("p-1"), "data-pcard", "position")[0];
-    assert.ok(findText(pos, "審查位"), "words");
+    assert.ok(findText(pos, "獨立審查"), "words: the old reviewer position is now called 獨立審查, without 位");
+    assert.ok(!findText(pos, "審查位"));
     const glyph = (node) => walk(node).find((n) => n.className === "pos-glyph");
     assert.strictEqual(textOf(glyph(pos)), "審", "and the badge: one Chinese character (art v3), not a pixel map");
     assert.strictEqual(glyph(pos).getAttribute("aria-hidden"), "true", "decoration: the words say the same");
@@ -1409,6 +1473,11 @@ async function test(name, fn) {
     assert.deepStrictEqual(["planner", "executor", "reviewer", null, "x", "__proto__", "constructor"].map((x) => pure.cardPositionBadgeKey(x)),
       ["planning", "execution", "review", "unspecified", "unspecified", "unspecified", "unspecified"]);
     assert.deepStrictEqual(["planner", "executor", "reviewer", null].map((x) => textOf(glyph(pure.positionBadge(x)))), ["規", "執", "審", "？"]);
+    // P32-2: the six new positions have their own character and the badge says the short name
+    assert.deepStrictEqual(["qa", "product", "research", "business", "design", "records"].map((x) => textOf(glyph(pure.positionBadge(x)))),
+      ["驗", "產", "研", "商", "設", "記"]);
+    assert.deepStrictEqual(["qa", "product", "research", "business", "design", "records"].map((x) => pure.cardPositionBadgeKey(x)),
+      ["qa", "product", "research", "business", "design", "records"]);
   });
 
   await test("readLoadouts: at most four requests in flight, every id once, and it stops when the page is gone", async () => {
@@ -1474,8 +1543,9 @@ async function test(name, fn) {
 
   await test("position badges (art v3): one character and one label per position, a hard 2px square coloured by the camp", () => {
     const b = vm.runInContext("CARD_POSITION_BADGES", pure);
-    assert.deepStrictEqual(Object.keys(b), ["planning", "execution", "review", "unspecified"]);
-    assert.deepStrictEqual(Object.values(b).map((x) => [x.glyph, x.label]), [["規", "規劃"], ["執", "執行"], ["審", "審查"], ["？", "未指定"]]);
+    assert.deepStrictEqual(Object.keys(b), ["planning", "execution", "qa", "review", "product", "research", "business", "design", "records", "unspecified"]);
+    assert.deepStrictEqual(Object.values(b).map((x) => [x.glyph, x.label]), [["規", "規劃"], ["執", "執行"], ["驗", "品質驗證"], ["審", "獨立審查"],
+      ["產", "產品"], ["研", "研究"], ["商", "商業"], ["設", "設計"], ["記", "紀錄"], ["？", "未指定"]]);
     const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
     const rule = /\.pos-glyph\s*\{([^}]*)\}/.exec(css);
     assert.ok(rule, "the badge rule");

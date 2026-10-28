@@ -1264,6 +1264,13 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .cw-cat[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); font-weight: 650; }
 /* The camp row (four buttons) lays out by the width it really has: four in a row if they all fit, else two by two, else
    one in a column, never three and one. The type stays the size it is; a button is as wide as its column. */
+/* P32-2: the suggested positions in two rows (the places of a task card, then staff and support) and the box under them */
+.cw-positions { display: grid; gap: 10px; }
+.cw-pos-tier { display: grid; gap: 4px; }
+.cw-pos-title { font-weight: 650; }
+.cw-position-box { margin: 4px 0 0; padding: 8px 10px; border: 1px solid var(--line-2); border-left-width: 4px; border-radius: 8px; background: var(--panel-2); font-size: 13px; }
+.cw-position-box p { margin: 0 0 4px; }
+.cw-position-box p:last-child { margin-bottom: 0; }
 .cw-tools-wrap { container-type: inline-size; }
 .cw-tools { display: grid; grid-template-columns: repeat(1, minmax(0, 1fr)); gap: 8px; }
 @container (min-width: 420px) { .cw-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -1318,6 +1325,8 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .fp-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); max-height: 220px; overflow-y: auto; }
 .fp-item { display: grid; gap: 2px; justify-items: start; width: 100%; text-align: left; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); border-radius: 10px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: 13.5px; min-width: 0; }
 .fp-item:hover { border-color: var(--accent); }
+/* P32-2: a task card or a place that is chosen (a place can now be chosen for you, so it has to show) */
+.fp-item[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .fp-item > * { max-width: 100%; }
 .fp-path { overflow-wrap: anywhere; word-break: break-all; color: var(--ink-3); }
 /* A list in a box of fixed height: while rows are hidden below the edge, the edge fades out and a line says so. */

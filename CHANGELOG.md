@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A role card's suggested position now follows the division of work of a one-person company.** Step 2 of the card
+  wizard offers nine positions in two rows, with 先不指定 beside them: the places of a task card (規劃, 執行, 品質驗證,
+  獨立審查) and staff and support (產品, 研究, 商業, 設計, 紀錄). A position you pick shows what it does, where on a task
+  card it is suggested to go, and a one-line reminder of the division of work, which is also added to the note about
+  permissions. Positions are labels only: every one still suggests the same permission intents (the one combination a
+  launch honours), and the reminder is words for you to write into the task card's goal, because VBear cannot enforce
+  it. A card saved before as 審查 now reads 獨立審查 (its badge is still 審); 規劃 and 執行 are unchanged. On a task
+  card each place says what suits it (適合：…), the quality-check and independent-review cards are both marked 你建議放這裡
+  at the review place and the second review place and are listed first, and 放上任務卡 on a card made for a place of the
+  task card has that place chosen for you (a review card gets the empty review place); nothing is written until you
+  press 放上去. A staff card says it normally does not go on a task card and gets no place chosen. The task card's
+  places and its saved flow are unchanged. The position is still kept in the browser, not on the card; going back to an
+  earlier version shows a position it does not know as not specified, and saving the card there clears it.
 - **Switching a card off or on no longer clears its profession.** The 停用／啟用 button on the 角色 tab of the terminal
   workbench sends only the new on/off state, and the save treated the missing profession as "none", so the card lost
   its profession. A save that leaves out the profession now keeps the stored one; sending `null` or an empty value still
