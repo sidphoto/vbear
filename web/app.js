@@ -4108,7 +4108,15 @@ const CARD_DEFAULT_DEMO_PREFIX = "demo-";
 
 function cardHas(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
 
-function cardPosition(id) {
+// The suggested position of a card (P32-3): the card's own field first, because it travels with the card to another
+// port or browser; only a card that has none falls back to the note this browser kept (cards saved before P32-3, and
+// the note a save still writes). A field this page does not list reads as not specified and is not replaced by the
+// note. Pass the card; a bare id reads the browser's note alone.
+function cardPosition(card) {
+  const own = card && typeof card === "object" && typeof card.position === "string" && card.position ? card.position : null;
+  if (own) return CARD_POSITIONS.includes(own) ? own : null;
+  const id = card && typeof card === "object" ? card.id : card;
+  if (typeof id !== "string" || !id) return null;
   const v = store.get(CARD_POSITION_KEY + id, null);
   return typeof v === "string" && CARD_POSITIONS.includes(v) ? v : null;
 }
@@ -4135,7 +4143,7 @@ function cardPositionTitle(position) {
 }
 // Whether a card's suggested position suits a kind of place of a task card (planner, executor, reviewer).
 function cardFitsSlot(card, slotKind) {
-  const row = card ? cardPositionRow(cardPosition(card.id)) : null;
+  const row = card ? cardPositionRow(cardPosition(card)) : null;
   return Boolean(row && row.slot === slotKind);
 }
 
@@ -4310,7 +4318,7 @@ function openCardWizard(opts) {
     species: existing ? (store.get(OFFICE_SPECIES_KEY + existing.id, null) || "") : "",
     tool: existing && existing.model && tools.includes(existing.model.tool) ? existing.model.tool
       : (tools.includes("claude") ? "claude" : tools[0]),
-    position: existing ? cardPosition(existing.id) : null,
+    position: existing ? cardPosition(existing) : null,
     modelId: existing && existing.model ? String(existing.model.model_id || "") : "",
     modelOther: false,   // 其他 was chosen in the model drop-down (a name in no list shows as 其他 without this)
     profession: existing && existing.profession_role_id ? existing.profession_role_id : "",
@@ -4821,11 +4829,16 @@ function openCardWizard(opts) {
       const payload = {
         name,
         profession_role_id: st.profession || null,
+        position: st.position || null,
         model: { tool: st.tool, model_id: st.modelId.trim() },
         equipped_skill_ids: [...st.equipped],
         permission_intents: Object.fromEntries(permissionKeys.map((k) => [k, st.intents[k] || "deny"])),
         enabled: existing ? !!existing.enabled : true,
       };
+      // a position this page does not list (a newer version wrote it) stays on the card unless one is chosen: the key
+      // is left out, and the server keeps what it has
+      if (!st.position && existing && typeof existing.position === "string" && existing.position
+        && !CARD_POSITIONS.includes(existing.position)) delete payload.position;
       const path = existing ? `/api/agent-profiles/${encodeURIComponent(existing.id)}` : "/api/agent-profiles";
       const res = await api.post(path, payload);
       const saved = res.profile;
@@ -4926,7 +4939,7 @@ function openStarterDeck(opts) {
     for (const r of rows.filter((x) => x.checked && !x.created)) {
       try {
         const res = await api.post("/api/agent-profiles", {
-          name: r.name.trim(), profession_role_id: null, model: { tool: r.card.tool, model_id: "" },
+          name: r.name.trim(), profession_role_id: null, position: r.card.position, model: { tool: r.card.tool, model_id: "" },
           equipped_skill_ids: [], permission_intents: { ...r.card.permission_intents }, enabled: true });
         setCardPosition(res.profile.id, r.card.position);
         r.created = res.profile; r.checked = false;
@@ -4957,8 +4970,9 @@ function openStarterDeck(opts) {
 async function duplicateCard(p, onDone) {
   try {
     const res = await api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}/duplicate`, {});
-    const pos = cardPosition(p.id);
-    if (pos) setCardPosition(res.profile.id, pos);
+    // the server copies the position field; a note that exists only in this browser is carried over here
+    const pos = cardPosition(p);
+    if (pos && !res.profile.position) setCardPosition(res.profile.id, pos);
     toast("已建立副本：" + res.profile.name);
     if (typeof onDone === "function") await onDone(res.profile);
   } catch (err) { toast("複製失敗：" + err.message); }
@@ -5340,7 +5354,7 @@ function profileCard(p, opts = {}) {
   const handlers = opts.handlers || {};
   const tool = p.model && typeof p.model.tool === "string" ? p.model.tool : "";
   const camp = campOf({ tool });
-  const pos = cardPosition(p.id);
+  const pos = cardPosition(p);
   const demo = isDemoCard(p, catalog);
   const launchOff = p.enabled === false;
   const name = p.name || p.id;
@@ -10287,7 +10301,7 @@ function teamBoard(opts) {
     const tool = p.model && p.model.tool;
     const on = selected === p.id;
     return el("button", { type: "button", class: `ts-chip camp-frame${on ? " ts-chip-on" : ""}`, "data-card": p.id, "data-camp": campKeyOf(p), draggable: "true",
-      "aria-pressed": String(on), title: `拖到位置上；或先點這張卡，再點位置（${cardPositionTitle(cardPosition(p.id))}）`,
+      "aria-pressed": String(on), title: `拖到位置上；或先點這張卡，再點位置（${cardPositionTitle(cardPosition(p))}）`,
       on: {
         click: () => { selected = on ? null : p.id; openKey = null; paint(); },
         dragstart: (e) => {
@@ -10299,7 +10313,7 @@ function teamBoard(opts) {
       cardAvatar(p, 2), el("span", { class: "ts-chip-name" }, p.name || p.id),
       el("span", { class: "tag" }, CARD_TOOL_SHORT[tool] || tool || "?"),
       // the position this card was made for (the one you suggested), or "？" when you did not say
-      positionGlyph(cardPosition(p.id)));
+      positionGlyph(cardPosition(p)));
   }
 
   function menuFor(key) {
@@ -10487,13 +10501,13 @@ function openPlaceDialog(p, opts = {}) {
   // Only a choice on screen: nothing is written until 放上去 is pressed. A staff card, or one with no position, gets none.
   const presetSlot = () => {
     const t = task();
-    const row = cardPositionRow(cardPosition(p.id));
+    const row = cardPositionRow(cardPosition(p));
     if (!t || !row || !row.slot) return null;
     if (row.slot !== "reviewer") return row.slot;
     const slots = slotsOf(t);
     return !slots.reviewer1 ? "reviewer1" : !slots.reviewer2 ? "reviewer2" : "reviewer1";
   };
-  const staffCard = (() => { const row = cardPositionRow(cardPosition(p.id)); return Boolean(row && row.tier === "staff"); })();
+  const staffCard = (() => { const row = cardPositionRow(cardPosition(p)); return Boolean(row && row.tier === "staff"); })();
 
   async function go() {
     const t = task();

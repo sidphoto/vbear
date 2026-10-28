@@ -226,6 +226,13 @@ Other safeguards:
   must be letters, digits and `. - _ : /`. A missing or broken file gives an empty list and a one-line reason. The Claude
   list is the aliases from `claude --help` plus model names the usage scan already collected. No program is run and
   nothing is fetched. The list only fills a drop-down; it grants nothing, and the saved `model_id` is checked as before.
+- **A card's suggested position is a record, kept on the card.** The role card has an optional `position` field (P32-3):
+  a save without the key keeps the stored value, `null` or an empty string clears it, and anything outside the nine
+  listed positions is `400`. Reading is looser on purpose: only the type is checked (a string of at most 32
+  characters), so a position a newer build wrote does not isolate the card file. It does not change what a launch
+  allows, but it is part of the card's digest, so changing it makes an open launch preview or a placed card read as
+  changed, the same as any other field. A card without a position stores no key, so its digest is the one it had
+  before.
 - **A Codex card's light.** Codex cannot open a terminal from VBear (`codex_` reasons), but the flow's automatic
   review does run it, in a scratch copy. When every reason on a card starts with `codex_` the card shows a neutral
   "can't open a terminal directly" light instead of the red one; any other reason keeps the red. It is a reading of

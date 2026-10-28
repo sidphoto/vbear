@@ -679,7 +679,7 @@ async function test(name, fn) {
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
     assert.deepStrictEqual(posts[0].permission_intents, VERIFIED);
-    assert.ok(!("position" in posts[0]), "a position is still not a profile field (P32-3 changes that)");
+    assert.strictEqual(posts[0].position, "records", "P32-3: the position goes with the card");
     assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-NEW")), "records", "and it is still remembered in the browser");
   });
 
@@ -880,6 +880,7 @@ async function test(name, fn) {
     for (const p of posts) for (const v of Object.values(p.permission_intents)) assert.ok(v === "allow" || v === "deny");
     assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-1")), "planner");
     assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-3")), "reviewer");
+    assert.deepStrictEqual(posts.map((p) => p.position), ["planner", "executor", "reviewer"], "P32-3: each card is posted with its position");
     assert.ok(!dialog(), "closed after the deck was made");
   });
 
@@ -3012,6 +3013,128 @@ async function test(name, fn) {
     byData(dialog(), "data-tool", "codex")[0].dispatch("click");
     assert.strictEqual(modelSelect(), undefined, "a tool whose entry is not an object keeps the text box");
     assert.ok(modelText());
+  });
+
+
+  // ---- P32-3: the position is a field of the card; the browser's note is only the fallback ----
+  const POSITION_LS = "sid:card.position.";
+  const savedBodies = (id) => { const out = []; return { out, handler: { [`POST /api/agent-profiles/${id}`]: (_u, o) => {
+    const b = JSON.parse(o.body); out.push(b); return jsonResponse({ ok: true, profile: mkProfile(id, b.name, b.model.tool, b.permission_intents, b.position ? { position: b.position } : {}) }); } } }; };
+  const editCard = async (card, extra = {}) => {
+    const ctx = await openPool([card], catalog, extra);
+    byData(main, "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    return ctx;
+  };
+
+  await test("P32-3 cardPosition reads the card's own field first, then the browser's note; a field it does not know is not replaced by the note", async () => {
+    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY)]);
+    const card = (extra) => mkProfile("p-1", "Mine", "claude", ALL_DENY, extra);
+    assert.strictEqual(ctx.cardPosition(card({ position: "qa" })), "qa", "the field alone");
+    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("records"));
+    assert.strictEqual(ctx.cardPosition(card({ position: "qa" })), "qa", "the field wins over the browser's note");
+    assert.strictEqual(ctx.cardPosition(card({})), "records", "no field: the browser's note");
+    assert.strictEqual(ctx.cardPosition(card({ position: null })), "records", "a null field is no field");
+    assert.strictEqual(ctx.cardPosition(card({ position: "boss" })), null, "a value this page does not list reads as not specified");
+    assert.strictEqual(ctx.localStorage.getItem(POSITION_LS + "p-1"), JSON.stringify("records"), "and nothing is rewritten by reading");
+    assert.strictEqual(ctx.cardPosition("p-1"), "records", "an id alone still reads the browser's note");
+    assert.strictEqual(ctx.cardPosition(null), null);
+  });
+
+  await test("P32-3 two browsers (two separate stores) show the same position for a card that carries it", async () => {
+    const card = mkProfile("p-1", "Mine", "claude", ALL_DENY, { position: "research" });
+    const a = await openPool([card]);
+    const b = await openPool([card]);
+    assert.notStrictEqual(a.__ls, b.__ls);
+    assert.strictEqual(a.cardPosition(card), "research");
+    assert.strictEqual(b.cardPosition(card), "research");
+    const old = mkProfile("p-2", "Old", "claude", ALL_DENY);
+    a.localStorage.setItem(POSITION_LS + "p-2", JSON.stringify("qa"));
+    assert.strictEqual(a.cardPosition(old), "qa", "a card with no field still shows the note kept in this browser");
+    assert.strictEqual(b.cardPosition(old), null, "and another browser has no note to show");
+  });
+
+  await test("P32-3 the card on the pool page draws its own field in a store that has no note", async () => {
+    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY, { position: "qa" })]);
+    assert.strictEqual(ctx.__ls.size === 0 || !ctx.__ls.has(POSITION_LS + "p-1"), true);
+    assert.ok(findText(cardOf("p-1"), "驗"), "the badge glyph of 品質驗證");
+  });
+
+  await test("P32-3 editing a card that carries a position opens on it and a save posts it again; the note is refreshed", async () => {
+    const saved = savedBodies("p-1");
+    const ctx = await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "design" }), saved.handler);
+    assert.strictEqual(byData(dialog(), "data-position", "design")[0].getAttribute("aria-pressed"), "true");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved.out[0].position, "design");
+    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-1")), "design");
+  });
+
+  await test("P32-3 a card with only a note in the browser shows it in the wizard, and saving writes it onto the card", async () => {
+    const saved = savedBodies("p-1");
+    const card = mkProfile("p-1", "Mine", "claude", VERIFIED);
+    const ctx = await openPool([card], catalog, saved.handler);
+    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("reviewer"));
+    byData(main, "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-position", "reviewer")[0].getAttribute("aria-pressed"), "true");
+    assert.strictEqual(saved.out.length, 0, "opening writes nothing");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved.out[0].position, "reviewer", "the save is what puts it on the card");
+  });
+
+  await test("P32-3 choosing 先不指定 on a card that has a position posts null, which clears it", async () => {
+    const saved = savedBodies("p-1");
+    const ctx = await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "qa" }), saved.handler);
+    byData(dialog(), "data-position", "none")[0].dispatch("click");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok("position" in saved.out[0] && saved.out[0].position === null);
+    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-1")), null);
+  });
+
+  await test("P32-3 a card whose position this page does not list keeps it when the position is left alone, and loses it only by a choice", async () => {
+    const saved = savedBodies("p-1");
+    await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "future-position" }), saved.handler);
+    assert.strictEqual(byData(dialog(), "data-position", "none")[0].getAttribute("aria-pressed"), "true", "shown as 先不指定");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok(!("position" in saved.out[0]), "no position key: the server keeps the stored value");
+    const saved2 = savedBodies("p-1");
+    await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "future-position" }), saved2.handler);
+    byData(dialog(), "data-position", "qa")[0].dispatch("click");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved2.out[0].position, "qa", "a choice replaces it");
+  });
+
+  await test("P32-3 a new card with no position posts null", async () => {
+    const { posts, d } = await openWizard();
+    typeName(d, "Plain");
+    btnByText(d, "下一步").dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.ok("position" in posts[0] && posts[0].position === null);
+  });
+
+  await test("P32-3 a copy: the server's copy carries the position; a note that exists only in this browser is still copied", async () => {
+    const dupPosts = [];
+    const source = mkProfile("p-1", "Mine", "claude", VERIFIED);
+    const ctx = await openPool([source], catalog, {
+      "POST /api/agent-profiles/p-1/duplicate": () => { dupPosts.push(1); return jsonResponse({ ok: true, profile: mkProfile("p-9", "Mine (副本)", "claude", VERIFIED) }); } });
+    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("qa"));
+    await ctx.duplicateCard(source, async () => {});
+    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-9")), "qa", "a card with only a note keeps it on the copy");
+    const carrier = mkProfile("p-2", "Has field", "claude", VERIFIED, { position: "records" });
+    const ctx2 = await openPool([carrier], catalog, {
+      "POST /api/agent-profiles/p-2/duplicate": () => jsonResponse({ ok: true, profile: mkProfile("p-8", "Has field (副本)", "claude", VERIFIED, { position: "records" }) }) });
+    await ctx2.duplicateCard(carrier, async () => {});
+    assert.ok(!ctx2.__ls.has(POSITION_LS + "p-8"), "the server's copy carries it, nothing is copied by hand");
+    assert.strictEqual(dupPosts.length, 1);
   });
 
   console.log(`\n${passed} passed`);

@@ -423,6 +423,8 @@ function findModalInBody() {
     assert.equal(createPost.body.enabled, true);
     // P32-1: the wizard still says the profession outright (null here), so the server's keep-when-missing rule never fires for it
     assert.ok(Object.prototype.hasOwnProperty.call(createPost.body, "profession_role_id") && createPost.body.profession_role_id === null);
+    // P32-3: the position goes with the card (null here: none was chosen)
+    assert.ok(Object.prototype.hasOwnProperty.call(createPost.body, "position") && createPost.body.position === null);
     console.log("ok wizard sends POST with every intent decided (the verified combination without a position, R10)");
   }
 

@@ -640,6 +640,20 @@ async function test(name, fn) {
     assert.deepStrictEqual(plain(e.ids), ["p-ceo", "p-maker", "p-rev", "p-shared"], "nothing is suggested: the order is the pool's");
   });
 
+  await test("P32-3 board: a card's own position field is used with nothing kept in the browser", () => {
+    const ctx = newCtx();
+    const withField = (card, position) => ({ ...card, position });
+    const profiles = [withField(CEO, "planner"), withField(MAKER, "qa"), withField(REVIEWER, "reviewer"), withField(SHARED, "records")];
+    const b = board(ctx, { profiles });
+    assert.strictEqual(ctx.__ls.size, 0, "no note in this store");
+    slotButton(b.node, "reviewer1").click();
+    assert.ok(findText(pick(b.node, "p-maker"), "你建議放這裡"), "a qa card from its field");
+    assert.ok(findText(pick(b.node, "p-rev"), "你建議放這裡"));
+    assert.ok(!findText(pick(b.node, "p-ceo"), "你建議放這裡"));
+    assert.ok(chip(b.node, "p-shared").getAttribute("title").includes("幕僚卡"), chip(b.node, "p-shared").getAttribute("title"));
+    assert.ok(chip(b.node, "p-maker").getAttribute("title").includes("品質驗證"));
+  });
+
   await test("P32-2 board: each place says what suits it; the pool's small cards say the position in the title", () => {
     const ctx = newCtx();
     const b = board(ctx);
@@ -1089,6 +1103,17 @@ async function test(name, fn) {
     const first = byData(dlg(), "data-place-slot", "reviewer1")[0];
     assert.strictEqual(first.getAttribute("aria-pressed"), "true");
     assert.ok(findText(first, "會換成這張"));
+  });
+
+  await test("P32-3 place dialog: the card's own position field chooses the place and a staff card gets the note", async () => {
+    const ctx = newCtx();
+    await placeFlow(ctx, { ...CEO, position: "executor" });
+    byData(dlg(), "data-place-task", "task-1")[0].click();
+    assert.strictEqual(byData(dlg(), "data-place-slot", "executor")[0].getAttribute("aria-pressed"), "true");
+    dlg().dispatch("keydown", { key: "Escape" });
+    await placeFlow(ctx, { ...CEO, position: "research" });
+    byData(dlg(), "data-place-task", "task-1")[0].click();
+    assert.ok(byData(dlg(), "data-place", "staff-note")[0]);
   });
 
   await test("P32-2 place dialog: a staff card says it is not for the task card and preselects nothing; a card with no position says nothing extra", async () => {

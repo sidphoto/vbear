@@ -50,6 +50,7 @@ MAX_PROFILES = 500
 MAX_TEXT_NAME = 200
 MAX_MODEL_ID = 200
 MAX_TOOL_ID = 64
+MAX_POSITION = 32
 MAX_SKILLS_PER_PROFILE = 200
 MAX_PROFILE_ID_LEN = 64
 MAX_PROFILE_ID_BODY = 63
@@ -89,7 +90,8 @@ def family_of_tool(tool) -> str:
 # (P32-2). The first four are the places of a task card ("team": slot says which place of the flow the position suits;
 # qa and reviewer both suit the review places), the other five are staff and support that take no place on a task
 # card ("staff": slot is None). The three ids that existed before (planner, executor, reviewer) keep their meaning.
-# A position is only a label the front end remembers; it is not a profile field, so it never reaches the stored schema.
+# A position is only a label, but since P32-3 it is kept on the card (the optional field "position"), so it follows the
+# card to another port or browser. It is not stored for a card without one, so such a card keeps its revision.
 # It carries no permission either: a managed launch honours one combination only (VERIFIED_INTENTS), so the suggested
 # intents are the same for every position, and what differs is told in the reminder, which a person writes into the
 # task card's goal because VBear cannot enforce it. The page repeats this table (web/app.js CARD_POSITION_TABLE) so a
@@ -379,6 +381,11 @@ def _entry_schema_problem(key: Any, value: Any, known_skills: set[str],
     if isinstance(profession, str) and len(profession) > 256:
         return "profession_role_id 過長"
 
+    # Only the type is checked: a value this build does not list (written by a newer one) must not isolate the file.
+    position = value.get("position")
+    if position is not None and (not isinstance(position, str) or len(position) > MAX_POSITION):
+        return "position 必須是字串或 null"
+
     model = value.get("model")
     if not isinstance(model, dict):
         return "model 不是物件"
@@ -460,6 +467,16 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
         stored_profession = None
         profession_unresolved = False
 
+    # The suggested position: a missing key keeps the stored value (even one this build does not list); null or an
+    # empty string clears it; anything else must be one of POSITIONS. A card without one has no key on disk.
+    if "position" in value:
+        position = value["position"]
+        if position is not None and (not isinstance(position, str) or (position and position not in POSITIONS)):
+            raise ValueError(f"position 必須是 {', '.join(POSITIONS)} 之一，或 null")
+        position = position or None
+    else:
+        position = existing.get("position") if existing else None
+
     model_raw = value.get("model")
     if model_raw is None and existing is not None:
         model_raw = existing.get("model", {})
@@ -532,7 +549,7 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
     unknown_fields = sorted(
         k for k in value.keys()
         if k not in {
-            "id", "name", "profession_role_id", "model", "equipped_skill_ids",
+            "id", "name", "profession_role_id", "position", "model", "equipped_skill_ids",
             "permission_intents", "enabled",
         }
     )
@@ -561,6 +578,8 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
             "skills": skill_unresolved,
         },
     }
+    if position:
+        normalized["position"] = position
     return normalized
 
 
@@ -788,6 +807,9 @@ def duplicate_profile(profile_id: str,
             existing_ids=set(all_profiles.keys()),
             known_skills=skills_cat, known_roles=roles_cat,
         )
+        # the copy carries the position as it is stored, one this build does not list included
+        if isinstance(existing.get("position"), str) and existing["position"]:
+            normalized["position"] = existing["position"]
         on_disk = {k: v for k, v in normalized.items() if not k.startswith("_")}
         all_profiles[new_id] = on_disk
         data_str = json.dumps(all_profiles, ensure_ascii=False, indent=2)

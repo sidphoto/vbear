@@ -468,6 +468,130 @@ class FailClosedOnReadTests(unittest.TestCase):
         self.assertIsNotNone(ap.get_profile("t-before-perm"))
 
 
+class CardPositionFieldTests(unittest.TestCase):
+    """P32-3: the suggested position is a field of the role card, not only a note in the browser."""
+
+    def setUp(self):
+        _reset_state_dir()
+
+    def tearDown(self):
+        marker = ap._corrupt_marker_path()
+        if marker.exists() or marker.is_symlink():
+            marker.unlink()
+        for f in ap._path().parent.glob("agent_profiles.json.corrupt-*"):
+            f.unlink(missing_ok=True)
+        if ap._path().exists() or ap._path().is_symlink():
+            ap._path().unlink()
+
+    def _save(self, pid, body):
+        return ap.save_profile(pid, body, known_skills=set(), known_roles={"writer"})
+
+    def _on_disk(self, pid):
+        return json.loads(ap._path().read_text(encoding="utf-8"))[pid]
+
+    def test_every_listed_position_is_stored_and_read_back(self):
+        for position in ap.POSITIONS:
+            rec = self._save(None, {**_sample(), "position": position})
+            self.assertEqual(rec["position"], position)
+            self.assertEqual(self._on_disk(rec["id"])["position"], position)
+            got = ap.get_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+            self.assertEqual(got["position"], position)
+
+    def test_update_without_position_key_keeps_the_stored_position(self):
+        # the workbench 停用／啟用 posts only {"enabled": ...}
+        rec = self._save(None, {**_sample(), "position": "qa"})
+        for flag in (False, True):
+            rec2 = self._save(rec["id"], {"enabled": flag})
+            self.assertEqual(rec2["enabled"], flag)
+            self.assertEqual(rec2["position"], "qa")
+            self.assertEqual(self._on_disk(rec["id"])["position"], "qa")
+        # a full save that leaves the key out (an older page) keeps it too
+        rec3 = self._save(rec["id"], _sample(name="Renamed"))
+        self.assertEqual(rec3["position"], "qa")
+
+    def test_update_with_null_or_empty_position_clears_it(self):
+        for cleared in (None, ""):
+            rec = self._save(None, {**_sample(), "position": "research"})
+            rec2 = self._save(rec["id"], {"position": cleared})
+            self.assertNotIn("position", rec2, repr(cleared))
+            self.assertNotIn("position", self._on_disk(rec["id"]), repr(cleared))
+
+    def test_update_with_a_new_position_replaces_it(self):
+        rec = self._save(None, {**_sample(), "position": "planner"})
+        rec2 = self._save(rec["id"], {"position": "records"})
+        self.assertEqual(rec2["position"], "records")
+
+    def test_unknown_or_non_string_position_is_rejected_on_save(self):
+        rec = self._save(None, {**_sample(), "position": "planner"})
+        for bad in ("boss", "QA", " qa", "qa ", " ", 5, True, ["qa"], {"id": "qa"}):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self._save(None, {**_sample(), "position": bad})
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self._save(rec["id"], {"position": bad})
+        self.assertEqual(self._on_disk(rec["id"])["position"], "planner")
+        self.assertEqual(len(ap.list_profiles(known_skills=set(), known_roles={"writer"})), 1)
+
+    def test_a_card_without_a_position_has_no_position_key_on_disk(self):
+        rec = self._save(None, _sample())
+        self.assertNotIn("position", rec)
+        self.assertNotIn("position", self._on_disk(rec["id"]))
+        rec2 = self._save(None, {**_sample(), "position": None})
+        self.assertNotIn("position", self._on_disk(rec2["id"]))
+
+    def test_digest_of_a_card_without_a_position_is_unchanged(self):
+        # a golden value: cards saved before P32-3 keep the revision a task card recorded for them
+        card = {"id": "prof-gold", "name": "Gold", "profession_role_id": "writer",
+                "model": {"tool": "claude", "model_id": "opus"}, "equipped_skill_ids": ["a"],
+                "permission_intents": {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"},
+                "enabled": True, "created_at": 1000.0, "updated_at": 2000.0}
+        self.assertEqual(ap.profile_digest(card),
+                         "5b3dd856d36ba42913c23c774fe2e927ccb7cea56f0ea728128424e57769216c")
+        # a position counts in the revision, as any other field does
+        self.assertNotEqual(ap.profile_digest({**card, "position": "qa"}), ap.profile_digest(card))
+
+    def test_a_position_this_build_does_not_know_is_kept_and_not_quarantined(self):
+        rec = self._save(None, {**_sample(), "position": "planner"})
+        data = json.loads(ap._path().read_text(encoding="utf-8"))
+        data[rec["id"]]["position"] = "future-position"
+        ap._path().write_text(json.dumps(data), encoding="utf-8")
+        # reading does not isolate the file, and the value is handed on as it is
+        got = ap.get_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+        self.assertEqual(got["position"], "future-position")
+        self.assertFalse(ap._corrupt_marker_path().exists())
+        # a save that leaves the key out keeps it; so does a copy
+        rec2 = self._save(rec["id"], {"enabled": False})
+        self.assertEqual(rec2["position"], "future-position")
+        dup = ap.duplicate_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+        self.assertEqual(dup["position"], "future-position")
+        self.assertEqual(self._on_disk(dup["id"])["position"], "future-position")
+        # only an explicit clear removes it
+        rec3 = self._save(rec["id"], {"position": None})
+        self.assertNotIn("position", rec3)
+
+    def test_a_stored_position_of_the_wrong_type_is_a_storage_error(self):
+        for bad in (5, ["qa"], {"id": "qa"}, "x" * 33):
+            _reset_state_dir()
+            marker = ap._corrupt_marker_path()
+            if marker.exists():
+                marker.unlink()
+            rec = self._save(None, _sample())
+            data = json.loads(ap._path().read_text(encoding="utf-8"))
+            data[rec["id"]]["position"] = bad
+            ap._path().write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(ap.AgentProfileStorageError, msg=repr(bad)):
+                ap.list_profiles()
+            self.assertTrue(ap._corrupt_marker_path().exists(), repr(bad))
+
+    def test_duplicate_copies_the_position(self):
+        rec = self._save(None, {**_sample(name="Original"), "position": "design"})
+        dup = ap.duplicate_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+        self.assertEqual(dup["position"], "design")
+        self.assertEqual(self._on_disk(dup["id"])["position"], "design")
+        plain = self._save(None, _sample(name="Plain"))
+        dup2 = ap.duplicate_profile(plain["id"], known_skills=set(), known_roles={"writer"})
+        self.assertNotIn("position", self._on_disk(dup2["id"]))
+
+
 class ConcurrencyTests(unittest.TestCase):
     def setUp(self):
         _reset_state_dir()

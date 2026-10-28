@@ -13,8 +13,18 @@
   at the review place and the second review place and are listed first, and 放上任務卡 on a card made for a place of the
   task card has that place chosen for you (a review card gets the empty review place); nothing is written until you
   press 放上去. A staff card says it normally does not go on a task card and gets no place chosen. The task card's
-  places and its saved flow are unchanged. The position is still kept in the browser, not on the card; going back to an
-  earlier version shows a position it does not know as not specified, and saving the card there clears it.
+  places and its saved flow are unchanged. Going back to an earlier version shows a position it does not know as not
+  specified, and saving the card there clears it.
+- **A role card's position is now kept on the card, not only in the browser.** The card has an optional `position`
+  field, so the position is still there in another browser or on another port (the app picks 7789 and up when 7788 is
+  busy, and each port was its own browser store). The wizard and the starter deck send the position with the card, a
+  copy carries it, and switching a card off or on leaves it alone. A card whose position was only remembered in the
+  browser looks as before, and the position is written onto the card when you save it in the wizard; the browser's
+  note is still written too. A card with no position stores nothing new, so its revision does not change, while a
+  position counts in the revision like any other field. A position this version does not list (written by a newer
+  one) shows as 先不指定, is kept when you save without touching it, and does not make the card file unreadable. The
+  save refuses a position outside the nine listed ones. Going back to an earlier version reads the card file as
+  before, and the page there falls back to the position the browser remembers.
 - **Switching a card off or on no longer clears its profession.** The 停用／啟用 button on the 角色 tab of the terminal
   workbench sends only the new on/off state, and the save treated the missing profession as "none", so the card lost
   its profession. A save that leaves out the profession now keeps the stored one; sending `null` or an empty value still

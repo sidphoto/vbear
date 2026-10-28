@@ -308,10 +308,45 @@ class AgentBuilderAPITests(unittest.TestCase):
                 "equipped_skill_ids": [], "permission_intents": dict(card["permission_intents"]), "enabled": True})
             self.assertEqual(status, 200, saved)
             self.assertEqual(saved["profile"]["permission_intents"], card["permission_intents"])
-        # a position is not a profile field: the stored schema still rejects it
+        # the card's suggested position is a profile field since P32-3: a listed one is stored, an unknown one is a 400
+        status, kept = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
+                                body=_sample(position="planner"))
+        self.assertEqual(status, 200, kept)
+        self.assertEqual(kept["profile"]["position"], "planner")
         status, _ = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
-                             body=_sample(position="planner"))
+                             body=_sample(position="boss"))
         self.assertEqual(status, 400)
+
+    def test_position_is_saved_listed_kept_by_enabled_and_cleared(self):
+        status, made = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
+                                body=_sample(name="Has position", position="qa"))
+        self.assertEqual(status, 200, made)
+        pid = made["profile"]["id"]
+        self.assertEqual(made["profile"]["position"], "qa")
+        # 停用／啟用 posts only the on/off state: neither the position nor the profession moves
+        for flag in (False, True):
+            status, saved = _request("POST", self.port, f"/api/agent-profiles/{pid}",
+                                     headers=_write_headers(), body={"enabled": flag})
+            self.assertEqual(status, 200, saved)
+            self.assertEqual(saved["profile"]["position"], "qa")
+        status, listing = _request("GET", self.port, "/api/agent-profiles")
+        mine = [p for p in listing["profiles"] if p["id"] == pid][0]
+        self.assertEqual(mine["position"], "qa")
+        # an unknown value is refused and changes nothing
+        status, _ = _request("POST", self.port, f"/api/agent-profiles/{pid}",
+                             headers=_write_headers(), body={"position": "boss"})
+        self.assertEqual(status, 400)
+        status, one = _request("GET", self.port, f"/api/agent-profiles/{pid}")
+        self.assertEqual(one["profile"]["position"], "qa")
+        # a copy carries it
+        status, dup = _request("POST", self.port, f"/api/agent-profiles/{pid}/duplicate", headers=_write_headers(), body={})
+        self.assertEqual(status, 200, dup)
+        self.assertEqual(dup["profile"]["position"], "qa")
+        # null clears it
+        status, cleared = _request("POST", self.port, f"/api/agent-profiles/{pid}",
+                                   headers=_write_headers(), body={"position": None})
+        self.assertEqual(status, 200, cleared)
+        self.assertNotIn("position", cleared["profile"])
 
     def test_posting_only_enabled_keeps_the_card_profession(self):
         # P32-1: the workbench 停用／啟用 button posts {"enabled": ...} and nothing else
