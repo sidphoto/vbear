@@ -12411,7 +12411,9 @@ function meetingPreviewDialog(pv, opts) {
       blockers.map((b) => notice("warn", (b && b.message) || "不能開始")),
       pv.decision_again ? notice("info", `這一位重試後，CEO 會重問一次（共 ${pv.calls} 次呼叫）。`) : null,
       el("ul", { class: "small" },
-        el("li", null, `Claude Code ${cli.version || "（找不到版本）"}：${cli.verified === true ? "已通過無工具安全檢查" : "還沒通過無工具安全檢查"}`),
+        // the server leaves the version out whenever its provider check fails; which failure it was is its blocker above
+        el("li", null, cli.version ? `Claude Code ${cli.version}：${cli.verified === true ? "已通過無工具安全檢查" : "還沒通過無工具安全檢查"}`
+          : "Claude Code：沒有讀到已通過無工具安全檢查的版本（原因見上方），所以不能開始"),
         el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
         today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，每日上限 US$${today.daily_usd}`) : null,
         pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null),

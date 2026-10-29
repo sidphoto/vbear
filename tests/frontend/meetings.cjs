@@ -386,6 +386,20 @@ test("an unverified Claude Code version shows 'check first' and no start button;
   assert.strictEqual(posts("/api/meetings/preview").length, 1, "the preview is made again after the check");
 });
 
+test("a preview without a version does not say Claude Code was not found: the reason is the server's blocker", async () => {
+  // the server leaves the version out whenever the provider check fails (not found, not checked, storage): only its blocker says which
+  setPage({ preview: previewOf({ startable: false, preview_id: null, cli: { version: null, verified: false },
+    blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
+  const main = await open("#/meetings");
+  fill(main, {});
+  q(main, "preview").click();
+  await settle();
+  const all = text(dialog());
+  assert(!all.includes("找不到版本"), all.slice(0, 400));
+  assert(all.includes("沒有讀到已通過無工具安全檢查的版本"), all.slice(0, 400));
+  assert(all.includes("這個 Claude Code 版本還沒通過無工具安全檢查"), "the blocker itself is shown");
+});
+
 test("saying no to the tool-less check sends nothing", async () => {
   setPage({ preview: previewOf({ startable: false, preview_id: null, cli: { version: "2.1.999", verified: false },
     blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
