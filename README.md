@@ -14,7 +14,7 @@ ordinary terminal and is not covered by these protections.)
 
 [繁體中文說明](README.zh-TW.md) · [Architecture](docs/ARCHITECTURE.md) · [Security model](docs/SECURITY-MODEL.md) · [Contributing](.github/CONTRIBUTING.md)
 
-> **Status: early (v0.8).** It is built and used daily by one person on macOS.
+> **Status: early (v0.9).** It is built and used daily by one person on macOS.
 > The interface is in Traditional Chinese (zh-TW).
 > Expect rough edges, and read [Good to know before you start](#good-to-know-before-you-start) before relying on it.
 
@@ -29,26 +29,30 @@ The game words below are only a way to read VBear's screens. Each one points at 
 
 | In a game | In VBear | Where you see it |
 |---|---|---|
-| **Character** | A **role card** (角色卡): a saved setup (name, recommended place, tool, skill cards, permission intents) that you can launch. Cards live in the **card pool** (角色卡池) | 角色卡池; the workbench's 「角色」 tab in the right column |
+| **Character** | A **role card** (角色卡): a saved setup (name, position, instructions, launch mode, tool, skill cards, permission intents) that you can launch. Cards live in the **card pool** (角色卡池) | 角色卡池; the workbench's 「角色」 tab in the right column |
 | **Class** | A **role template** (職業) on the card, optional, chosen from the agent roles VBear found for Claude Code or Codex (VBear scans none for Antigravity, so an AGY card has none to pick). The picker lists only your card's own tool, groups the roles by the position each probably fits (a guess from its name, marked as one), is searchable, and shows each name in Chinese beside the English once you have had the names translated. Choosing one can fill in the position, the skills and the model the role names, each with one click. It is only a label: launching does not load the role's instructions into the tool | The card wizard's step 2, under the suggested position |
 | **Suggested position** | The **suggested position** (建議位置) on a role card, taken from the division of work of a one-person company and shown in two rows. Positions done on a task card: CEO (the chief executive), 全端工程師 (full-stack engineer), 社群媒體經理 (social media manager), 藝術總監 (art director). Staff: PM (project manager), 法務經理 (legal), 會計師 (accountant). The independent review is not a position of the company: it is VBear's own review gate, offered apart for the review places of a task card. You can also leave it unspecified. Once chosen, the wizard says what the position does, where on a task card it is suggested to go (the review gate suits a review place or the second review place, which must be of another maker than the executor), the camp and model it is suggested for (the art director's is AGY, which VBear does not start) and a one-line reminder. Cards saved with the positions of an earlier local build are read as the position they became and marked as old. It is a label only: every position suggests the same permission intents (a launch honours one combination today), and the reminder is for you to write into the task card's goal because VBear cannot enforce it. The position is saved on the card itself, so it is still there in another browser or on another port (one that was only remembered in the browser is written onto the card when you save it in the wizard); a staff card normally does not go on a task card and is started on its own when needed | Step 2 of the card wizard; the team places of a task card |
-| **Faction** | The **tool** it runs on (陣營): Claude Code, Codex CLI or Antigravity (AGY). Launching from a role card works with Claude Code only for now. VBear does not start Antigravity: an AGY card is a record for building teams and its model family is always Google. An AGY card can hold the skills AGY reads on this Mac (judged from AGY's own settings, see below), as a collection only; any other skill card is greyed with 「AGY 不會讀這張技能卡」 | The card's front |
-| **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. A card slot is dashed (收藏中: kept in the card, not loaded by a launch) or solid (生效中: only when VBear reports that it loads, which no launch does today) | 技能庫, and the slots on a role card |
-| **Launch pass** | The **protection a launch actually puts on, and the weak spots it does not cover** (出發通行證). Three lines on its front, each worded by what was actually verified: where it can write, whether the network is blocked, and always that **commits cannot be blocked**. A shield is solid (enforced), dashed (only a record) or empty (not blocked); partly blocked, untested and unknown items get no shield and are written out in words. The seven permission labels sit behind 「看七項細節」 | 角色卡的「出發」 |
+| **Orders** | The **instructions** (職位指示) on a role card: words for the AI, starting from the position's default (up to 2000 characters, with 回復預設 to go back to it). A full-mode Claude Code card carries them as one `--append-system-prompt` argument, shown in full on the pass (VBear did not verify that Claude Code receives them); otherwise 貼上職位指示 pastes them into a terminal you took over and you press Enter yourself, because VBear never does. A meeting sends them with each speaker's call, and the executor's card puts them first in the plan of automatic mode. Under them the wizard lists the position's boundaries, each marked as enforced when launched, only a reminder, not possible or not applicable | Step 2 of the card wizard; the back of a card; a terminal's 貼上職位指示 |
+| **Play style** | The **launch mode** (出發方式) of a role card. 完整模式 (full mode, the default for a new card) starts the tool the way you would in your own terminal, with your own settings, skills, `CLAUDE.md`, MCP servers, plugins and the network, and VBear limits nothing. 安全模式 (safe mode) is the sandboxed launch with the shields of the launch pass. A card saved before v0.9.0 has no `launch_mode` and stays in safe mode | Step 2 of the card wizard; the launch pass |
+| **Faction** | The **tool** it runs on (陣營): Claude Code, Codex CLI or Antigravity (AGY). In full mode a card of any of the three is started from its role card; in safe mode only a Claude Code card is (VBear cannot sandbox Codex yet, and Antigravity has no safe launch, so such a card is then a record for building teams). An AGY card's model family is always Google. An AGY card can hold the skills AGY reads on this Mac (judged from AGY's own settings, see below), as a collection only; any other skill card is greyed with 「AGY 不會讀這張技能卡」 | The card's front |
+| **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. A card slot is dashed (收藏中: kept in the card, not loaded by a launch) or solid (生效中: only when VBear reports that it loads, which no launch does today; a full-mode launch loads whatever skills your own settings load, which VBear does not track for a card) | 技能庫, and the slots on a role card |
+| **Launch pass** | The **protection a launch actually puts on, and the weak spots it does not cover** (出發通行證). Three lines on its front, each worded by what was actually verified: where it can write, whether the network is blocked, and always that **commits cannot be blocked**. A shield is solid (enforced), dashed (only a record) or empty (not blocked); partly blocked, untested and unknown items get no shield and are written out in words. The seven permission labels sit behind 「看七項細節」. A full-mode card's pass draws no shield: it starts with 「VBear 沒有限制這張卡」 and shows the command it will run | 角色卡的「出發」 |
 | **Task card** | One **folder** on your Mac (任務卡). Bring an existing project in with 「＋ 任務卡（導入專案）」: VBear reads the folder (read-only: whether it is a git repository, branch and HEAD, project skills, how many terminals are in it) and never writes into it | 冒險者大廳, 流程, the workbench's 「任務卡」 tab |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task card, each with a model family. You put role cards on the **team places** (規劃位, 執行位, 審查位 and an optional second review place); a review place that would not count (same maker as the executor, or a shared card) turns red at once and says why; an AGY card counts as Google, so it is independent of a Claude Code or Codex executor and not of a Google one. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | The task card's team; 流程 |
 | **Quest board** | The **home page** (冒險者大廳): what waits for you first (flows at a gate, agents waiting for your reply), then the other tasks in progress; each flow card shows its team and whose turn the next step is. For someone with no team yet, the top shows **the first game** (新手第一局): get role cards, bring in a project, put the team on it, each step ticked from real data. Each card is something VBear already has; nothing is scored | Home page |
-| **Office** | A **pixel office** page (辦公室, `#/office`): the flows' teams stand at the **workstation** where their task is (計畫板, 實作區, 審查室, 合併關卡), live terminals sit at **desks** (the words over a character are its state), and the saved role cards stay in the **lounge** (the roster: a role setting, not attendance; it shows at most 24 characters and links to the 「角色卡池」 page for the rest). Click a character for its **weapons** (the tools a launch offers, read from the same constants as the launch's argv), armor and skill cards. A station only says where the task is, never what an agent is doing | 辦公室 |
+| **Office** | A **pixel office** page (辦公室, `#/office`): the flows' teams stand at the **workstation** where their task is (計畫板, 實作區, 審查室, 合併關卡), live terminals sit at **desks** (the words over a character are its state), and the saved role cards stay in the **lounge** (the roster: a role setting, not attendance; it shows at most 24 characters and links to the 「角色卡池」 page for the rest). Click a character for its **weapons** (the tools a launch offers, read from the same constants as the launch's argv), armor and skill cards. A station only says where the task is, never what an agent is doing. The **meeting room** (會議室) seats the newest running meeting or one waiting for you, with words over each character taken only from the meeting's record, and the **chairman's desk** (董事長桌) counts the meetings waiting for your approval, with 去核准 | 辦公室 |
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | The board's 「輪到你」 and the flow page |
+| **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 Role cards come in three moves: **collect** (take cards from the card pool, or the starter deck of three), **equip** (put skill cards into a card) and **play** (put the card on a task card's team place, then set out). The permission intents on a card are a team-work marker: they do not mean VBear has limited the program's real abilities. The only limits are the ones on the launch pass.
 
 VBear has no levels, hit points or scores. It shows only what it can read or check, and says *unknown* when it
-cannot. Putting a skill card into a role card only records your choice. VBear starts Claude Code in its safe mode. By Claude
-Code's own help, that switches off skills, CLAUDE.md files, installed plugins, hooks and MCP servers; for skills, a
-test on Claude Code 2.1.299 confirmed it. So a launched Claude Code does not use skills for now: a role card's skill
-list is a record of your picks.
+cannot. Putting a skill card into a role card only records your choice. In safe mode VBear starts Claude Code with
+`--safe-mode`, which by Claude Code's own help switches off skills, CLAUDE.md files, installed plugins, hooks and MCP
+servers; for skills, a test on Claude Code 2.1.299 confirmed it. So a safe launch does not use skills: a role card's
+skill list is a record of your picks. A full-mode launch loads whatever your own settings load, the card's picks or not,
+and VBear does not track which.
 
 ### What it looks like
 
@@ -205,8 +209,9 @@ When you launch Claude Code from a role card, you get a launch pass: three lines
 network is blocked, and that commits cannot be blocked) worded by what was verified, with the seven permission labels
 (read, write, test, commit, deploy, network, filesystem) one click behind them, each with how strongly it holds and the
 evidence. A launch starts only after you confirm. If a reason stops it, the pass puts a button next to the reason
-(for example 「現在決定」 for an undecided permission intent) and comes back to the same pass with a new preview. The Bash tool can write only to the work directory and a private temporary
-folder, and it has no network; where a limit does not hold (reading files, commits), the label says so.
+(for example 「現在決定」 for an undecided permission intent) and comes back to the same pass with a new preview. In safe mode the Bash tool can write only to the work directory and a private temporary
+folder, and it has no network; where a limit does not hold (reading files, commits), the label says so. A card in full
+mode gets a pass that says first 「VBear 沒有限制這張卡」 and shows the exact command, which you still confirm.
 
 **Keep your skills and roles in one place, and save your picks as role cards.**
 VBear reads the skills and agent roles it finds for Claude Code and Codex and shows, for each one, whether
@@ -235,18 +240,30 @@ nothing resumes by itself. It has been run end to end with real models
 stop-loss: when one is reached VBear stops the flow, and since some usage is only known afterwards, the real figure
 can end up above it, so set them low the first time. VBear never runs `git`: merging and pushing stay with you.
 
+**Hold a meeting of your positions, and keep the big decisions.**
+On the 會議 page (`#/meetings`, or 開會討論 on a task card) you write a topic and pick a CEO card to chair and up to six
+other positions to speak. Before anything is sent, a preview shows every text each call will send and what it may cost;
+only 開始開會 starts it. Each position answers once without seeing the others, then the CEO decides. A fixed table
+decides whether that goes to you, and you approve or veto at the 董事長桌. VBear never carries out a decision: 寫進任務卡
+only fills in the task card's editor for you to save.
+
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
-`127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear.
+`127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear;
+a meeting or a skill translation is sent the same way, through your own Claude Code.
 
 ## What VBear promises, in short
 
-- **It holds:** Claude Code that VBear starts can write only inside the work directory, has no network, and changes
-  files only through the Bash tool.
+- **It holds:** Claude Code that VBear starts in safe mode can write only inside the work directory, has no network,
+  and changes files only through the Bash tool.
+- **In full mode VBear limits nothing.** A full-mode card starts its tool the way you would yourself: it can read,
+  write, use the network, commit, publish or pay as far as the tool's own permission prompts let it.
 - **It does not hold:** reading, because Claude Code can still read any file your Mac account can read, and
   commands you type yourself after `!`, which are not sandboxed.
 - **Merging, pushing and publishing are always yours.** VBear never runs `git` for you.
 - **Automatic mode uses your accounts' usage.** The limits you set are a stop-loss, not a guarantee of the bill.
+- **A meeting sends its texts to Anthropic through your Claude Code and spends your usage.** Its decision is only a
+  record, and what is major waits for you.
 - **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
 - **Deleting a flow cannot be undone.**
 - **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →
@@ -263,16 +280,17 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
    [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
    Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
    down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
-2. **Open VBear.** The app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 辦公室, 終端機, 終端工作台, 流程,
+2. **Open VBear.** The app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 辦公室, 會議, 終端機, 終端工作台, 流程,
    技能庫, 角色卡池, 專案 and 設定 (on a phone-width window it folds into one menu button that names the page you are on). VBear lists the skills and agent roles it finds on your Mac (read-only; it
    changes none of them). The top of the home page walks you through the first game in three steps.
 3. **Collect, bring in a project, and play.**
-   - Open **角色卡池** and press **用起手牌組開始** for three ready cards (a planner, an executor and a reviewer), or
-     **＋ 新角色卡** for a three-step wizard (name and look, tool and place, skill cards). Pressing **起手牌組** needs
-     no typing; the reviewer card is left unticked when Codex is not on this Mac. The three cards carry the one set of
-     permission intents VBear can launch today (read, write and test allowed; deploy denied). A Codex card shows a
-     neutral "can't open a terminal directly" light: VBear cannot start Codex in a terminal yet, but a Codex card on a
-     task card's review place is used by the automatic review.
+   - Open **角色卡池** and press **用起手牌組開始** for three ready cards (CEO, 全端工程師 and 審查員 for the review gate),
+     or **＋ 新角色卡** for a three-step wizard (name and look; tool, position, instructions and launch mode; skill
+     cards). Pressing **起手牌組** needs no typing; the reviewer card is left unticked when Codex is not on this Mac. The
+     three cards are safe-mode cards and carry the one set of permission intents a safe launch honours (read, write and
+     test allowed; deploy denied). A safe-mode Codex card shows a neutral "can't open a terminal directly" light: VBear
+     cannot start Codex in its sandbox yet, but a Codex card on a task card's review place is used by the automatic
+     review.
    - Press **＋ 任務卡（導入專案）** on the home page and pick a project folder from the list of projects VBear saw on your
      Mac, from the recent folders, or paste a path (the app window also has 選擇資料夾…). The check shows whether the
      folder is a git repository, its branch and HEAD, and warns when it is not (a folder without git can still be a
@@ -280,22 +298,26 @@ No telemetry, no accounts, no cloud. VBear makes no outbound network requests an
      available). VBear never runs `git init` for you.
    - Put role cards on the task card's team places (click a place and pick from the card pool, drag a card, or press
      **放上任務卡** on a card). Then press **出發** on a card to open its launch pass.
-   - Read the three lines on the pass. 「只能改這個資料夾」 and 「擋住網路」 appear only when that limit was really
+   - Read the pass. A full-mode card's pass says 「VBear 沒有限制這張卡」 and shows the command; you confirm it and the
+     tool starts as it would in your own terminal. For a safe-mode card, read the three lines. 「只能改這個資料夾」 and 「擋住網路」 appear only when that limit was really
      verified for this launch; otherwise the line says 部分擋住, 還沒實測 or 不明. The commit line always says
      it cannot be blocked. Behind 「看七項細節」 are the seven labels in five boxes (擋住了 blocked, 部分擋住 partly
      blocked, 沒有專用權限 no dedicated permission, 沒有擋 not blocked, 未證明 not proven), each keeping its own name and the word
      for how strongly it holds, and the list of skill cards you chose, marked as not going with the launch. The words:
      「強制」 and 「部分強制」 mean the limit really holds; 「僅意圖」, 「未限制」, 「未驗證」 and 「未知」 mean it is not
      enforced or not proven; 「不授予」 means it is not given at all. Reading is not limited: it can read any file you can read.
-   - Tick the box that says the role will create and change files in this folder and can save commits, which VBear cannot
-     block, and press **確認啟動** only if you are happy with what you see.
+   - In safe mode, tick the box that says the role will create and change files in this folder and can save commits,
+     which VBear cannot block. Press **確認啟動** only if you are happy with what you see.
 
 ## Good to know before you start
 
 VBear's rule is to say how far each protection really reaches, and where it does not. Here is where it does not,
 and what you can do about each.
 
-- **Files can still be read.** Claude Code launched from a role card can write only inside the work directory and its
+- **A full-mode card is your own terminal.** VBear adds no sandbox, no `--safe-mode`, no tool list and no network
+  block to it, and its permission intents are not applied; the tool's own permission prompts are the only gate left.
+  Pick full mode for a card you would trust in your own terminal, in a folder you chose for it.
+- **Files can still be read.** Claude Code launched from a safe-mode role card can write only inside the work directory and its
   own temporary folder, and it has no network. It can still *read* anything your Mac account can read. Choose the
   work directory with that in mind.
 - **Commands you type after `!` are not sandboxed.** In Claude Code, a command you type yourself after `!` runs as
@@ -304,11 +326,12 @@ and what you can do about each.
   commit is a saved snapshot of the code in git) there. You tick a box to acknowledge this before launch; look over
   the history before you merge or push. The launch pass says this on its front, as its own line.
 - **Permission intents are a record, not a lock.** The four intents on a role card (read, edit, test, deploy) are
-  there to mark the team's division of work. Only one combination can be launched today (read, edit and test allowed,
-  deploy denied); a card with another combination shows why it cannot set out. The real limits are the ones on the launch pass.
-- **One launch shape for now.** Only Bash is allowed, Edit and Write are off, and there is no network. Read-only,
-  network-enabled and Codex launches are planned, not built.
-- **Skills are switched off in launches for now.** VBear starts Claude Code with `--safe-mode`, which (as Claude
+  there to mark the team's division of work. Only one combination can be launched in safe mode (read, edit and test allowed,
+  deploy denied); a card with another combination shows why it cannot set out. In full mode they are not applied at all,
+  and the pass lists an intent written as "deny" as not kept. The real limits are the ones on the launch pass.
+- **One safe launch shape.** In safe mode only Bash is allowed, Edit and Write are off, and there is no network. A
+  read-only safe launch and a sandboxed Codex launch are not built; full mode is the other way to start a card.
+- **Skills are switched off in safe launches.** VBear starts Claude Code with `--safe-mode`, which (as Claude
   Code's own help says) disables skills, CLAUDE.md files, installed plugins, hooks, MCP servers and custom commands
   and agents, and leaves sign-in and model choice as they are. VBear's launch also opens only the Bash tool, so no
   other built-in tool is available in it. A role card's skill list is therefore a
@@ -319,7 +342,7 @@ and what you can do about each.
 - **"Working / waiting" is not known everywhere.** It is shown only for Claude Code launched from a role card, on a
   version with recorded evidence (2.1.291, 2.1.292, or verified on your Mac). After Claude Code updates itself, the
   new version shows *unknown* until you press 「驗證這個版本」 on the launch pass. It cannot tell waiting for your
-  next message from waiting on a dialog, and other terminals and Codex show *unknown*.
+  next message from waiting on a dialog, and other terminals, full-mode terminals and Codex show *unknown*.
 - **A task card goes out of date only when a commit changes.** Uncommitted changes made after an approval do not
   make it stale, so commit before you approve.
 - **Automatic mode runs while you are away.** It spends usage on your accounts. The limits you set work like a
@@ -334,6 +357,12 @@ and what you can do about each.
   as designed, not a guarantee for your project. Start with low limits, and read the
   [evidence](docs/evidence/s3-real-e2e-2026-10-12.md) and the
   [security model](docs/SECURITY-MODEL.md#phase-3-automatic-mode) before turning it on.
+- **A meeting is opinions, sent to Anthropic.** Each speech is a Claude Code call with no tools, checked on every call,
+  and its texts go to Anthropic under your account (a task card's folder is never sent). The figures are Claude Code's
+  estimates, with limits per call, per meeting and per day (`meeting_limits`); a subscription plan is not billed that way.
+  VBear checks that the legal manager wrote a source, not that the source is real, and it cannot tell whether the
+  accountant used a program. The keyword table that sends a decision to you can miss a paraphrase, so tick the 涉及 boxes
+  when you open the meeting. Approval is a record in the console (主控台記錄（未驗證身分）), not proof of who pressed it.
 - **A review PASS is not proof.** Letting an agent do the work and Codex review it carries risks you accept once per
   flow (Codex's tools cannot be listed in advance and its multi-agent mode cannot be turned off, only detected; the
   limits differ in strength; settings managed by an organization cannot be seen locally). The same content can get
@@ -351,14 +380,15 @@ and what you can do about each.
 
 ## Supported agents
 
-| Agent | Watch and type in terminals | Launch from a role card, with a launch pass and sandbox |
-|---|---|---|
-| Claude Code | yes | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, 2.1.296, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
-| Codex CLI | yes | **not yet.** The preview explains why: 0.159.2's interactive mode still loads your global config |
-| Antigravity (AGY) | no | **no.** VBear does not start it. An AGY role card is only a record for building teams (it can be placed on a task card's team), and its launch pass says so |
+| Agent | Watch and type in terminals | Full mode from a role card (VBear limits nothing) | Safe mode from a role card (launch pass and sandbox) |
+|---|---|---|---|
+| Claude Code | yes | yes: `claude [--model X] [--append-system-prompt …]`, the card's instructions as one argument | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, 2.1.296, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
+| Codex CLI | yes | yes: `codex [-m X]`; the instructions only through 貼上職位指示 | no: the pass explains why (0.159.2's interactive mode still loads your global config) |
+| Antigravity (AGY) | only a terminal started in full mode | yes: `agy [--model X]`; the instructions only through 貼上職位指示 | no: an AGY card in safe mode is only a record for building teams (it can be placed on a task card's team), and its pass says so |
 
 The executor (the Claude Code that a flow runs in the background) needs Claude Code 2.1.292 or 2.1.296; Codex review
-needs Codex 0.160.0. Other versions are refused with the reason before anything starts.
+needs Codex 0.160.0. Other versions are refused with the reason before anything starts. A meeting needs a Claude Code
+version that passed the tool-less check (see below); full mode looks at no version.
 
 Skill and role scanning reads Claude Code (`~/.claude`), Codex (`~/.codex`) and shared skills
 (`~/.agents`). It never modifies them.
@@ -368,7 +398,8 @@ To tell which skills Antigravity (AGY) reads, VBear also looks at a project's `.
 running `agy`. Skills in those places are marked as read by AGY (a skill VBear already knows is marked, not copied; a
 new folder is added as an AGY source). Nothing else under `~/.gemini` is opened, the shared store `~/.agents/skills` is
 not AGY's unless that file lists it, and AGY's built-in and plugin skills are not covered. A skill AGY reads is still not a
-skill that loads: VBear does not start AGY. See [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
+skill VBear loads: in safe mode VBear does not start AGY, and in full mode AGY reads its own settings as it would without
+VBear. See [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 
 ## Install
 
@@ -434,7 +465,9 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   binds to `127.0.0.1` only.
 - Scanning the agents' own logs extracts only skill names, model names, session IDs, working directories and
   timestamps. Conversation content is never read out or stored. You can turn this off in Settings.
-- The agents you launch talk to their own providers under your own login, as they would without VBear.
+- The agents you launch talk to their own providers under your own login, as they would without VBear. A meeting or a
+  skill translation goes through your own Claude Code to Anthropic, only after a preview or a confirmation that shows
+  what is sent.
 
 ## The details behind the cards
 
@@ -446,7 +479,14 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   Typing into a running one takes an explicit takeover with a reminder first, and only one tab can type at a time; a terminal
   this tab has just started from a launch pass is the one you can type into at once. A start from a task card stays in the
   workbench, with the new terminal beside that card.
-- **Previewed, sandboxed Claude launches** (launches that VBear starts and keeps watch of). You pick a role card and a work directory, and you
+- **Full-mode launches.** A card whose launch mode is 完整模式 starts Claude Code, Codex or AGY in the folder you chose,
+  with the command built on the server as a list (never a shell string) and shown on the pass: `claude [--model X]
+  [--append-system-prompt …]`, `codex [-m X]` or `agy [--model X]`. VBear adds no sandbox and no `--safe-mode`, so the
+  tool uses your own settings, skills, `CLAUDE.md`, MCP servers, plugins and the network. You still confirm the exact
+  command; an edited card or a replaced program voids the preview. The terminal shows in the office and the workbench,
+  with its state as 狀態未知 because nothing was checked for it. See the
+  [security model](docs/SECURITY-MODEL.md#full-mode-launches).
+- **Previewed, sandboxed Claude launches in safe mode** (launches that VBear starts and keeps watch of). You pick a role card and a work directory, and you
   get a launch pass; behind its three lines are seven permission labels (read, write, test, commit, deploy, network, filesystem).
   Each label says how strongly it is enforced, with the evidence. The launch starts only after you
   confirm it. Claude's Bash tool can write only to the work directory and a private temporary directory
@@ -494,6 +534,20 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   automatic flow is stopped and runs again only when you press 「繼續」. VBear first checks that your risk acceptance
   still counts and that HEAD, the reviews and the limits allow it. A turn that was cut off is charged at its worst
   case (often the session's whole budget): then you raise the limit, accept again and approve automatic mode again.
+- **Meetings.** The 會議 page (`#/meetings`) holds one written round: a chair (an enabled card whose saved position is
+  CEO) and up to six speakers, one card per position, each answering once without seeing the others, then the CEO's
+  decision. 預覽（還不會開始） shows every card's instructions and the whole text each call sends (the task card's fields,
+  never its folder; secret-shaped text masked), the models, the calls, the money reserved and the day's spending;
+  開始開會 runs it, one call at a time. Each call is Claude Code with no tools at all: its start must list only
+  StructuredOutput and no MCP server, or the call is stopped, its answer is not used and that version must be checked
+  again (先做無工具安全檢查, the same check as the translations'). A Codex or AGY card is spoken for by Claude with that
+  position's instructions (代發言). A fixed table, R1–R8, sends the decision to you, 輪到你：董事長核准, when something you
+  ticked, an action, a keyword, an amount of money, a high or unsourced risk, the legal manager's opposition, a failed
+  speaker or a request says so; a model can only raise this. You approve or veto at the 董事長桌 (主控台記錄（未驗證身分）).
+  The limits are in `config.json` as `meeting_limits` (US$0.20 per call, 1.50 per meeting, 3.00 per day by default),
+  yellow at 80% of the day and closed at 100%. A failed speaker is retried only by you, twice at most, and a restart
+  resumes nothing. Each meeting is one file under `meetings/` in the state folder; no task card, flow or project folder
+  is written. See the [security model](docs/SECURITY-MODEL.md#meetings-tool-less-headless-speech).
 - **Names on the screens.** Some names changed to match the game words above (old → new): 「Agent 團隊」 →
   「角色卡池」; 「Agent Profile」/「Profile」 → 「角色卡」 (the 「建立 Agent Profile」 button is 「＋ 新角色卡」); 「已選技能」 →
   「技能卡」 (「收藏中」 or 「生效中」); 「工具（遊戲用語：陣營）」 → 「陣營」; 「Permission Intents」 → 「權限意圖」
@@ -502,7 +556,9 @@ Data lives in `~/.vbear/`. Set `VBEAR_HOME` to use another directory.
   「任務卡」 that is one folder; a flow's planner/executor/reviewers → 「規劃位, 執行位, 審查位」; the red text
   about what is missing → a 「下一步」 list that says whose turn each step is. Earlier changes: 「角色裝備」 tab → 「角色」;
   「職業角色」 → 「職業」 (now 「職業標籤」); 「預覽並啟動」 → 「出發前檢查」 → 「出發通行證」; the limits' heading
-  「上限」 → 「體力（停損設定）」; a flow's 「階段」 → 「任務進度」 and its 「角色」 section → 「隊伍」.
+  「上限」 → 「體力（停損設定）」; a flow's 「階段」 → 「任務進度」 and its 「角色」 section → 「隊伍」. In v0.9.0 the suggested
+  positions 規劃, 執行 and 審查 became CEO, 全端工程師 and 獨立審查 (their badges 規, 執, 審 became 長, 工, 審; a task
+  card's three progress lights keep 規, 執, 審, because they are phases), and the starter deck's 工匠 is now 全端工程師.
 - **Your own notes.** Give skills friendly names, tags and notes. These are stored locally and never
   written into the skill files.
 
@@ -574,11 +630,11 @@ Changing engines disables automation until consent is renewed; clearing orphan c
 confirmations. Claude's requested US$0.05 per-item budget is not a guaranteed invoice cap. Codex cost and
 all token estimates are unknown.
 
-**Real translation execution is currently blocked.** The exact no-tools CLI boundary has no version-specific
-evidence yet; existing agent-launch evidence includes Bash and cannot be reused. Both production providers
-fail closed before spawning a CLI. The UI, cache, worker and API are a reviewable candidate; enabling real
-execution needs separately authorized CLI verification and a reviewed provider change. No real CLI/model was
-called for this feature's tests. Existing agent launch and dispatch behaviour is unchanged.
+**A translation runs only after a check.** The installed Claude Code version must first pass a one-time check, on
+your own account, that its translation call offers no tool but StructuredOutput and no MCP server (Settings →
+「驗證翻譯安全邊界」); the pass is kept per version in `translation-boundaries.json`, and a meeting's check is the same
+probe and the same record. Until it passes, nothing is spawned. The Codex engine can be chosen but refuses every
+translation, because its boundary cannot be proven. No real CLI or model was called for the tests.
 
 AGY can exercise both engine choices with a synthetic HOME, temporary state, random console port and fake
 translation CLI:

@@ -1,16 +1,17 @@
 # VBear 參考資料（繁體中文）
 
-這份文件收錄原本放在 [README.zh-TW.md](../README.zh-TW.md) 的參考章節：畫面、資料從哪裡來、我的註記、技能狀態、安全、狀態目錄、結構。內容逐字搬移（只有一個相對連結隨檔案位置調整）；英文版請看 [ARCHITECTURE](ARCHITECTURE.md) 與 [安全模型](SECURITY-MODEL.md)。
+這份文件收錄原本放在 [README.zh-TW.md](../README.zh-TW.md) 的參考章節：畫面、資料從哪裡來、我的註記、技能狀態、安全、狀態目錄、結構。內容最初從 README 原樣搬來，之後隨版本補上新的頁面、檔案與模組（v0.9.0 補了角色卡池、會議、完整模式出發）；英文版請看 [ARCHITECTURE](ARCHITECTURE.md) 與 [安全模型](SECURITY-MODEL.md)。
 
 ## 畫面
 
 | 頁面 | 內容 |
 |---|---|
 | 冒險者大廳（首頁） | 任務告示板：輪到你的流程與等你回覆的 Agent、其他進行中的任務（最多 4 則）；用自然語言找技能、最近專案、有問題的技能 |
-| 辦公室 | 像素辦公室：工作站（流程隊伍依階段站在計畫板、實作區、審查室、合併關卡）、辦公桌（出勤中的終端與狀態）、休息室（Profile 名冊）；點角色看武器、防具、技能卡。只讀 VBear 已有的資料 |
+| 辦公室 | 像素辦公室：工作站（流程隊伍依階段站在計畫板、實作區、審查室、合併關卡）、辦公桌（出勤中的終端與狀態）、會議室（最新一場進行中或等核准的會議，頭上的字只取自會議紀錄，代發言另外標示）與董事長桌（幾場會議等你核准）、休息室（Profile 名冊）；點角色看武器、防具、技能卡。只讀 VBear 已有的資料 |
+| 會議 | 今日花費燈號（80% 黃燈、100% 不能再開會）、會議紀錄清單、開一場會（議題、補充說明、任務卡、CEO 主席、最多 6 位發言者、「涉及」勾選）、開會前的預覽（每段指示與送出全文、模型、預留金額、是否通過無工具安全檢查）；單場會議的發言與證據列、CEO 決定、董事長桌（核准／否決）、重試、取消、寫進任務卡（只預填任務卡編輯器） |
 | 終端工作台 | 統一三欄版面（左側角色、中間真實 Terminal、右側 Task Card 與 G/P/A/T 治理骨架）、專注模式、可收合側欄 |
 | 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
-| Agent 團隊 | 工作中的 Terminal（VBear runtime 管理的 Claude／Codex，角色名、本次模型、本次用過的技能、開啟終端）與角色設定（主代理、子代理） |
+| 角色卡池 | 我的角色卡（正反兩面、起手牌組、建立角色卡精靈：第 2 步選職位、寫職位指示、選出發方式並看邊界，第 3 步插技能卡）、開啟中的終端（VBear runtime 管理的 Claude／Codex／AGY，角色名、本次模型、本次用過的技能、開啟終端）與角色設定（主代理、子代理）；這頁以前叫「Agent 團隊」 |
 | 專案 | 依 git 儲存庫歸類：專案 → 各角色 Terminal |
 | 流程 | 多 Agent 合作的任務卡：角色與模型家族、推導出的階段、審查輪次、時間軸、手動記錄事件 |
 | 設定 | 掃描來源開關、使用紀錄範圍、進階模式、資料流向說明 |
@@ -77,6 +78,13 @@
   符號連結先解析成實際路徑再比對，會包含這些位置的工作目錄也不行。拒絕發生在檢查資料夾是否存在之前，位置存不存在訊息都一樣，
   錯誤碼是 `invalid_workdir`；預覽會顯示為不可啟動的原因，啟動前會再檢查一次。因此放在 `~/Library`（例如 iCloud Drive）或 `~/.config`
   底下的資料夾不能當受管啟動的工作目錄。
+- 完整模式出發（角色卡的 `launch_mode` 是 `full`）：VBear 不加沙盒、`--safe-mode`、設定檔、工具清單與暫存區，什麼都不擋；工具用你自己的設定、技能、
+  `CLAUDE.md`、MCP 與網路。指令由伺服器組成，是一串引數、不經 shell（`claude [--model X] [--append-system-prompt …]`、`codex [-m X]`、`agy [--model X]`），
+  runtime 只透過 `open_full` 接受 `agent_sessions.full_argv` 組得出來的形狀。仍然要先預覽、按確認；預覽單次使用、5 分鐘過期，卡片或程式檔變了就作廢（`cli_drift`）。
+  資料夾規則和安全模式相同。沒有 `launch_mode` 的卡一律是安全模式。詳見 [安全模型](SECURITY-MODEL.md#full-mode-launches)。
+- 會議：每次發言都是完全沒有工具的 Claude Code headless 呼叫（argv 沿用翻譯的 `translation_argv`），每次都即時檢查 init 只有 `StructuredOutput`、沒有 MCP，
+  不符就殺掉整個 process group、結果不採用、撤銷這個版本的通過紀錄。送出前的預覽列出全文；送出的是任務卡欄位，不含資料夾路徑。會議只寫 `meetings/`，
+  不寫任務卡、流程或專案資料夾；重大與否每次讀取時依固定規則 R1–R8 推導，模型只能升級。詳見 [安全模型](SECURITY-MODEL.md#meetings-tool-less-headless-speech)。
 - **終端工作台（Terminal Workbench）安全模型與資料流向**：
   - **資料流向與本機邊界**：終端畫面走本機 SSE 串流 (`GET /api/term/<pane>/stream`)，輸出僅於記憶體中轉送，不落地儲存，絕不上傳外部或雲端。
   - **端點防護與 Fetch-SSE**：瀏覽器不使用原生 `EventSource`（因其無法攜帶自訂標頭），改由原生 `fetch()` 串流。端點防護精確區分：串流讀取 (`GET /api/term/<pane>/stream`) 透過 Host 檢驗、強制 `X-VBear: 1` 自訂標頭及 Fetch Metadata (`Sec-Fetch-Site`) 阻擋跨站讀取；操作與輸入寫入 (`POST /api/term/<pane>/...`) 則透過 Host 檢驗、`X-VBear: 1` 標頭及同源 `Origin` 檢驗完整防禦 CSRF。
@@ -114,8 +122,10 @@
 
 ## 狀態目錄
 
-`~/.vbear/`（可用 `VBEAR_HOME` 覆寫）：`config.json`、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`flows.json`、`agent_profiles.json`、`server.log`、
-VBear runtime 的 `runtime.sock`／`runtimed.lock`／`runtimed.log`，以及 Profile 管理 session 的 `sessions/<launch-id>/`（session 暫存區在 `/private/tmp/sc-<隨機>/`）。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
+`~/.vbear/`（可用 `VBEAR_HOME` 覆寫）：`config.json`（含會議上限 `meeting_limits`）、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`flows.json`、`agent_profiles.json`、`server.log`、
+VBear runtime 的 `runtime.sock`／`runtimed.lock`／`runtimed.log`，以及 Profile 管理 session 的 `sessions/<launch-id>/`（session 暫存區在 `/private/tmp/sc-<隨機>/`）。
+翻譯與會議：`translations.json`、`role-translations.json`、`translation-boundaries.json`（依版本記錄通過無工具安全檢查的 Claude Code，翻譯與會議共用）、`translation-worker.lock`／`translation-worker.blocked`，
+以及 `meetings/`（每場會議一個 `m-<12 位十六進位>.json`）與 `meeting-worker.lock`／`meeting-worker.blocked`。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
 
 ## 結構
 
@@ -127,7 +137,13 @@ vbear/
   runtime/daemon.py native.py         VBear runtime 背景程序與用戶端（PTY session）
   runtime/agent_sessions.py proctrack.py  Profile 管理 session 的設定／暫存區／清理，與後代程序追蹤
   runtime/cli_versions.py             Agent CLI 版本檢查
-  agent_launch.py                     啟動前預覽與確認、七項權限標籤
+  agent_launch.py                     啟動前預覽與確認、七項權限標籤、完整模式出發的預覽
+  agent_profiles.py                   角色卡（職位、職位指示、出發方式；本機儲存）
+  position_guide.py                   職位的預設指示、邊界、推薦技能分類與建議資料夾
+  headless_cli.py                     無工具 headless 呼叫的共用執行器（翻譯與會議）
+  translations.py                     技能與職業名稱翻譯、無工具安全檢查
+  meetings.py meeting_rules.py        會議紀錄、輸出檢查、prompt、花費；重大規則表 R1–R8
+  meeting_runner.py                   會議的預覽、一次一個呼叫的 worker、重試與取消
   index.py                            靜態索引＋即時視圖
   annotations.py                      我的註記（別名、標籤、備註）
   tasks.py                            任務卡（Task Card MVP、狀態證明、結果綁定 commit、結案理由、交接、本機儲存）
