@@ -37,7 +37,7 @@ def HOME() -> Path:
     return Path.home()
 TOOL_LABEL = {"claude": "Claude Code", "codex": "Codex CLI", "shared": "skills CLI"}
 LIVE_TTL_S = 3.0
-INDEX_VERSION = 2  # bump when the static index shape changes (2: skills carry read_by)
+INDEX_VERSION = 3  # bump when the static index shape changes (2: skills carry read_by; 3: legal and finance categories)
 STALE_AFTER_S = 24 * 3600
 
 

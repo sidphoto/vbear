@@ -55,6 +55,14 @@ CATEGORIES = [
      "query": ["自動化", "流程", "排程", "工作流", "交接", "派工", "workflow", "automation"],
      "match": ["workflow", "automat", "schedule", "cron", "loop", "pipeline", "orchestrat",
                "handoff", "routing", "自動化", "排程", "交接"]},
+    {"id": "legal", "label": "法規與合規",
+     "query": ["法律", "法規", "合規", "合約", "授權", "個資", "隱私", "版權", "legal", "compliance", "gdpr", "privacy"],
+     "match": ["legal", "compliance", "gdpr", "privacy", "licens", "contract", " law ", "lawyer", "attorney",
+               "regulat", "copyright", "terms of service", "法規", "法律", "合規", "合約", "授權", "個資", "著作權"]},
+    {"id": "finance", "label": "財務與帳務",
+     "query": ["會計", "帳務", "財務", "預算", "報稅", "發票", "成本", "finance", "accounting", "budget", "invoice", "tax"],
+     "match": ["bookkeep", "accounting", "accountant", "invoice", "payroll", "budget", "finance", "financial",
+               " tax ", "taxes", "會計", "帳務", "財務", "預算", "報稅", "發票"]},
 ]
 
 
