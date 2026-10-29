@@ -815,6 +815,73 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.ok(!/防具（這次/.test(app));
   });
 
+  // ---- P34-2: the launch mode, the position's boundaries and the suggested folder on the pass ----
+  const positionPass = (over = {}) => previewOf(LV.enforced, LV.enforced, {
+    launch_mode: "safe", position: "art",
+    mode_note: "安全模式：標「擋得住」的是這次出發實際套上的限制。",
+    folder_warning: "這張卡建議在名為「素材」的資料夾（或它裡面）出發；你選的是「demo」。只是提醒，不會擋。",
+    boundaries: { position: "art", launch_mode: "safe", tool: "claude", mode_note: "安全模式：標「擋得住」的是這次出發實際套上的限制。",
+      items: [{ id: "network", text: "連不上網路", kind: "enforced_if_launched" }, { id: "gen", text: "生圖服務做不到", kind: "not_possible" },
+        { id: "brand", text: "照品牌色", kind: "reminder" }] }, ...over });
+
+  await test("P34-2 pass: a suggested-folder warning is shown beside the front as a warning, from the server's words, and does not stop the button", async () => {
+    const ctx = mkPass([roleP], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: positionPass() }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR; commitBox(d).checked = true;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    const warn = byData(d, "data-pass", "folder-warning")[0];
+    assert.ok(warn && findText(warn, "建議在名為「素材」的資料夾") && findText(warn, "只是提醒，不會擋"));
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, false, "a warning is not a block");
+    const mode = byData(d, "data-pass", "mode")[0];
+    assert.ok(mode && findText(mode, "安全模式") && findText(mode, "實際套上的限制"));
+  });
+
+  await test("P34-2 pass: the position's boundaries sit behind the fold with the three words, as text", async () => {
+    const pv = positionPass();
+    pv.boundaries.items[2].text = "<script>x</script>照品牌色";
+    const ctx = mkPass([roleP], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: pv }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR; commitBox(d).checked = true;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    const details = byData(d, "data-pass", "details")[0];
+    const box = byData(details, "data-pass", "position-boundaries")[0];
+    assert.ok(box, "inside the fold of the seven items");
+    const rows = byData(box, "data-cw", "boundary-row");
+    assert.deepStrictEqual(rows.map((r) => r.getAttribute("data-kind")), ["enforced_if_launched", "not_possible", "reminder"]);
+    assert.deepStrictEqual(rows.map((r) => (byData(r, "data-cw", "boundary-badge")[0].textContent || "").trim()), ["擋得住", "做不到", "只是提醒"]);
+    assert.ok(findText(box, "<script>x</script>照品牌色") && !walk(box).some((n) => n.tag === "script"));
+  });
+
+  await test("P34-2 pass: a preview from an older server (no mode, no folder, no boundaries) draws none of it", async () => {
+    const ctx = mkPass([roleP], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: previewOf(LV.enforced, LV.enforced) }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR; commitBox(d).checked = true;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    for (const k of ["folder-warning", "mode", "position-boundaries"]) assert.ok(!byData(d, "data-pass", k).length, k);
+  });
+
+  await test("P34-2 pass: a full-mode card that cannot depart yet shows the server's reason with a way to the launch mode, and no front", async () => {
+    const full = mkProfile("p-1", "Full", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" }, { launch_mode: "full" });
+    const blocked = previewOf(LV.unknown, LV.unknown, { launchable: false, preview_id: null, cli: null, settings_digest: null,
+      reasons: [{ code: "full_mode_not_available", message: "完整模式的出發還沒開放：這個版本只能用安全模式出發" }] });
+    const ctx = mkPass([full], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: blocked }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR; commitBox(d).checked = true;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    assert.ok(findText(d, "完整模式的出發還沒開放"));
+    assert.ok(!byData(d, "data-pass", "front").length);
+    const fix = byData(d, "data-pass-fix", "mode")[0];
+    assert.ok(fix && fix.textContent === "改出發方式", "the reason points at where the mode is changed");
+    fix.dispatch("click");
+    await tick(8);
+    const wiz = body.children.filter((c) => c.getAttribute && c.getAttribute("role") === "dialog").pop();
+    assert.ok(wiz !== d && findText(wiz, "陣營就是這張卡用哪個工具"), "the editor opens on step 2");
+  });
+
   await test("CSS: the pass is styled — a tone per kind, wraps on a phone, the details fold", () => {
     for (const sel of [".pass-front", ".pass-line", ".pass-ok", ".pass-open", ".pass-unknown", ".pass-legend", ".pass-details"]) assert.ok(css.includes(sel), sel);
     assert.ok(/\.pass-line\s*\{[^}]*flex-wrap:\s*wrap/.test(css), "a line wraps, so a long path does not push the page sideways");

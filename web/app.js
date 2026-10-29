@@ -4227,6 +4227,109 @@ function cardFitsSlot(card, slotKind) {
   return Boolean(row && row.slot === slotKind);
 }
 
+// ---- P34-2: boundaries in three words, and the paste button ------------------------------------------------------
+// What a position's boundaries are told as (the kinds the server resolves, vbear/position_guide.py): the page holds none of
+// the sentences, only the words for the kinds. 擋得住 is VBear's own claim, and it is true only when VBear launches the card in
+// safe mode on a version it verified; the pass shows what a launch really applies.
+const BOUNDARY_WORDS = { enforced_if_launched: "擋得住", reminder: "只是提醒", not_possible: "做不到", not_applicable: "不適用" };
+const BOUNDARY_HELP = {
+  enforced_if_launched: "VBear 出發這張卡時實際套上，限已驗證的版本",
+  reminder: "寫給 AI 的話，VBear 沒有檢查",
+  not_possible: "VBear 做不到，也擋不住",
+  not_applicable: "VBear 不幫這張卡出發，這一條用不上",
+};
+const BOUNDARY_LEGEND = "「擋得住」只在 VBear 出發這張卡、而且版本已驗證時成立，實際以出發通行證為準；「只是提醒」是寫給 AI 的話，VBear 沒有檢查。";
+// A resolved boundary view ({ mode_note, items: [{ id, text, kind }] }) as a list, or null when there is nothing to show.
+// attr is the data attribute the rows carry ("data-cw" in the wizard and the pass, "data-rc" on the card's back).
+function boundaryList(view, attr = "data-cw") {
+  if (!view || typeof view !== "object" || !Array.isArray(view.items)) return null;
+  const items = view.items.filter((b) => b && typeof b === "object" && typeof b.text === "string" && cardHas(BOUNDARY_WORDS, b.kind));
+  if (!items.length) return null;
+  return el("div", { class: "cw-boundaries-box" },
+    typeof view.mode_note === "string" && view.mode_note ? el("p", { class: "small muted", [attr]: "boundary-note" }, view.mode_note) : null,
+    el("ul", { class: "cw-boundaries" }, items.map((b) => el("li", { class: `cw-boundary cw-boundary-${b.kind}`, [attr]: "boundary-row",
+      "data-boundary": typeof b.id === "string" ? b.id : "", "data-kind": b.kind },
+      el("span", { class: "tag cw-boundary-badge", [attr]: "boundary-badge", title: BOUNDARY_HELP[b.kind] }, BOUNDARY_WORDS[b.kind]),
+      el("span", { class: "small" }, ` ${b.text}`)))));
+}
+
+// A role's instructions as the text to paste into a terminal's input. It never ends in a line break, and has no control
+// characters. A line break inside is kept only when the program asked the terminal for bracketed paste (xterm then wraps the
+// paste, and the program takes the break as part of the text); otherwise each break becomes a space, because a bare break
+// reaching a program that did not ask for it is Enter.
+function rolePasteText(text, bracketed) {
+  if (typeof text !== "string") return "";
+  let t = text.replace(/\r\n?/g, "\n").replace(/\t/g, " ").replace(/[\u0000-\u0008\u000b-\u001f\u007f\u0085\u2028\u2029]/g, "").trim();
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return bracketed ? t : t.replace(/\n+/g, " ");
+}
+// Puts the text into the terminal as a paste (term.paste), which only types it into the program's input. It sends no Enter.
+function pasteRoleInstructions(term, text) {
+  if (!term || typeof term.paste !== "function") return { ok: false, reason: "no_terminal" };
+  const bracketed = Boolean(term.modes && term.modes.bracketedPasteMode);
+  const t = rolePasteText(text, bracketed);
+  if (!t) return { ok: false, reason: "empty" };
+  term.paste(t);
+  return { ok: true, bracketed };
+}
+const ROLE_PASTE_SOURCE = { custom: "這張卡自訂的指示", default: "職位的預設指示" };
+const ROLE_PASTE_REFUSED = { no_terminal: "終端還沒準備好，沒有貼上任何東西", empty: "這份指示是空的，沒有貼上任何東西" };
+// The 貼上職位指示 control of a terminal (the page and the workbench each carry one). opts: { getTerm(), isControl() }.
+// It is shown only while the person controls the terminal. Which card the text comes from is the person's pick: a terminal
+// does not know which card started it. The text is read from the server when the button is pressed, so it is the current one.
+function rolePasteControl(opts) {
+  const node = el("div", { class: "term-paste", "data-term": "paste-role", hidden: true });
+  const status = el("span", { class: "small muted", "data-term": "paste-status", role: "status" });
+  let cards = null;
+  let loading = false;
+  let busy = false;
+  let chosen = "";
+  const select = el("select", { "aria-label": "挑一張角色卡，貼上它的職位指示", "data-term": "paste-card",
+    on: { change: (e) => { chosen = e.target.value; setKids(status); } } },
+  el("option", { value: "" }, "挑一張角色卡…"));
+  const button = el("button", { class: "btn small", type: "button", "data-term": "paste-instructions",
+    title: "只貼進輸入框，不會按 Enter；要送出時由你按 Enter", on: { click: () => run() } }, "貼上職位指示");
+  setKids(node, select, button, status);
+  function say(text) { status.textContent = text; }
+  async function load() {
+    loading = true;
+    try {
+      const r = await api.get("/api/agent-profiles");
+      cards = (r && Array.isArray(r.profiles) ? r.profiles : []).filter((c) => c && typeof c.id === "string");
+    } catch (e) {
+      cards = [];
+      say("讀不到角色卡清單");
+    }
+    loading = false;
+    setKids(select, el("option", { value: "" }, cards.length ? "挑一張角色卡…" : "沒有角色卡"),
+      cards.map((c) => el("option", { value: c.id }, String(c.name || c.id))));
+  }
+  async function run() {
+    if (busy) return;
+    if (!chosen) { say("先挑一張角色卡"); return; }
+    busy = true;
+    try {
+      const r = await api.get(`/api/agent-profiles/${encodeURIComponent(chosen)}/instructions`);
+      const name = String((r && r.name) || chosen);
+      if (!r || typeof r.text !== "string" || !r.text.trim()) { say(`「${name}」沒有指示，沒有貼上任何東西`); return; }
+      if (!opts.isControl()) { say("你已經不是這個終端的操作者，沒有貼上任何東西"); return; }
+      const res = pasteRoleInstructions(opts.getTerm(), r.text);
+      if (!res.ok) { say(ROLE_PASTE_REFUSED[res.reason] || "沒有貼上任何東西"); return; }
+      say(`已貼上「${name}」的${ROLE_PASTE_SOURCE[r.source] || "指示"}，還沒送出：請先看一下內容，要送出時按 Enter；VBear 不會替你送出。`);
+    } catch (e) {
+      say(`沒有貼上：${e && e.message ? e.message : "讀不到指示"}`);
+    } finally {
+      busy = false;
+    }
+  }
+  function refresh() {
+    if (!opts.isControl()) { node.setAttribute("hidden", ""); return; }
+    node.removeAttribute("hidden");
+    if (cards === null && !loading) load();
+  }
+  return { node, refresh };
+}
+
 // The suggested intents of a position, from the starter deck the server serves (design 3.3, v1.2 R10). The deck and
 // the fallback for no position (or one the deck does not know) both come from the server: the one combination a
 // managed launch honours (catalog.verified_intents). The page holds no copy of it; only when the catalog gives none
@@ -4391,6 +4494,18 @@ function openCardWizard(opts) {
     ? catalog.skill_categories.filter((c) => c && typeof c.id === "string" && typeof c.label === "string") : [];
   const professions = Array.isArray(catalog.professions) ? catalog.professions : [];
   const permissionKeys = CARD_INTENT_KEYS.map(([k]) => k);
+  // P34-2: what the server says about a position (default instructions, suggested skill categories and folder, boundaries
+  // by tool and launch mode), the launch modes it offers and the limit of an instruction. The page holds none of those
+  // words; a server without them (an older one) leaves the parts below out.
+  const guide = catalog.position_guide && typeof catalog.position_guide === "object" ? catalog.position_guide : {};
+  const guideRow = (pos) => (typeof pos === "string" && cardHas(guide, pos) && guide[pos] && typeof guide[pos] === "object" ? guide[pos] : null);
+  const defaultInstr = (pos) => { const g = guideRow(pos); return g && typeof g.prompt === "string" ? g.prompt : ""; };
+  const launchModes = Array.isArray(catalog.launch_modes)
+    ? catalog.launch_modes.filter((m) => m && (m.id === "full" || m.id === "safe") && typeof m.label === "string") : [];
+  const modesOffered = launchModes.length > 0;
+  const maxInstr = Number(catalog.max_instructions) > 0 ? Number(catalog.max_instructions) : 0;
+  const storedInstr = existing && typeof existing.instructions === "string" && existing.instructions.trim() ? existing.instructions : null;
+  const startPosition = existing ? cardPosition(existing) : null;
 
   const st = {
     step: Math.min(3, Math.max(1, Number(opts.start) || 1)),
@@ -4404,6 +4519,18 @@ function openCardWizard(opts) {
     profession: existing && existing.profession_role_id ? existing.profession_role_id : "",
     autoPosition: null,   // the role id whose guessed position was put on this card (the person can still change it)
     positionTouched: false,   // a position button was pressed: only then does a stored value this page cannot show give way
+    // P34-2. A card with no stored mode is a safe one (an old card is not loosened by opening it); a new card starts on the
+    // catalog's default. The mode is posted for a new card, and for an old one only when the person chose.
+    launchMode: !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe")
+      : (launchModes.some((m) => m.id === catalog.default_launch_mode) ? catalog.default_launch_mode : "safe"),
+    launchModeTouched: false,
+    // the text in the instructions box; custom is when it differs from the position's default, stored when the card has
+    // its own text on disk, changed when the person typed or restored it (an untouched box posts nothing)
+    instrText: storedInstr !== null ? storedInstr : defaultInstr(startPosition),
+    instrCustom: storedInstr !== null,
+    instrStored: storedInstr !== null,
+    instrChanged: false,
+    recommendOnly: false,
     // a new card starts from the suggestion for no position (the one combination a launch honours, R10); a card that
     // exists keeps its own choices
     intents: Object.fromEntries(permissionKeys.map((k) => [k,
@@ -4533,6 +4660,14 @@ function openCardWizard(opts) {
         el("ul", { class: "small" }, (reasons.length ? reasons : ["原因未提供"]).map((r) => el("li", null, r))))));
   }
 
+  // the default text follows the position until the text is the person's own; an own text stays, and is the default again
+  // once it equals the new position's default
+  function syncInstructionsToPosition() {
+    const d = defaultInstr(st.position);
+    if (!st.instrCustom) st.instrText = d;
+    else st.instrCustom = st.instrText.trim() !== d.trim();
+  }
+
   function applySuggestion() {
     st.intents = permissionSuggestion(catalog, st.position);
     st.suggested = Boolean(st.position);
@@ -4576,7 +4711,7 @@ function openCardWizard(opts) {
     const row = r && r.department ? cardPositionRow(r.department.id) : null;
     // only a card that has no position takes the role's: one that has a position is only offered the button
     if (row && !st.position) {
-      st.position = row.id; st.autoPosition = id;
+      st.position = row.id; st.autoPosition = id; syncInstructionsToPosition();
       if (!st.touched) applySuggestion();
     }
     draw();
@@ -4626,7 +4761,7 @@ function openCardWizard(opts) {
         `建議位置：${row.label}（${fromName ? "依名稱推測" : "依說明推測"}：${r.department.keyword}，可能不準）`,
         same ? (professionAutoActive() ? `；已依職業建議設成「${row.label}」，可改。` : "；和這張卡一樣。") : ""),
         same ? null : el("button", { type: "button", class: "btn small", "data-cw": "profession-set-position",
-          on: { click: () => { st.position = row.id; st.autoPosition = null; if (!st.touched) applySuggestion(); draw(); focusBy("data-position", row.id); } } }, "改成這個位置"));
+          on: { click: () => { st.position = row.id; st.autoPosition = null; syncInstructionsToPosition(); if (!st.touched) applySuggestion(); draw(); focusBy("data-position", row.id); } } }, "改成這個位置"));
     }
     // the skills it names
     const declared = (Array.isArray(r.declared_skill_ids) ? r.declared_skill_ids : []).filter((x) => typeof x === "string");
@@ -4822,6 +4957,78 @@ function openCardWizard(opts) {
       el("small", null, [source, problem, toolNote].filter(Boolean).join(" ")));
   }
 
+  function suggestedFolderNote() {
+    const g = guideRow(st.position);
+    return g && typeof g.suggested_folder === "string" && g.suggested_folder
+      ? el("p", { class: "small muted", "data-cw": "suggested-folder" },
+        `建議資料夾：出發時選名為「${g.suggested_folder}」的資料夾（或它裡面）。只是建議，出發通行證會提醒，不會擋。`) : null;
+  }
+  function setLaunchMode(m) {
+    st.launchMode = m;
+    st.launchModeTouched = true;
+    draw();
+    focusBy("data-launch-mode", m);
+  }
+  // How the card is to be started: two modes, the sentence of the chosen one, and while full mode has no launch yet, that
+  function launchModeField() {
+    if (!modesOffered) return null;
+    const cur = launchModes.find((m) => m.id === st.launchMode) || launchModes[0];
+    const oldCard = Boolean(existing) && !st.launchModeTouched && existing.launch_mode !== "full" && existing.launch_mode !== "safe";
+    return el("div", { class: "cw-field", "data-cw": "launch-mode" },
+      el("span", { class: "cw-label" }, "出發方式"),
+      el("div", { class: "cw-choices", role: "group", "aria-label": "出發方式" }, launchModes.map((m) => el("button", { type: "button",
+        class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
+      el("span", null, m.label)))),
+      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      st.launchMode === "full" && catalog.full_mode_launchable !== true
+        ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
+          "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
+  }
+  // The position's instructions: the default is shown in the box and can be changed; 回復預設 brings it back
+  function instructionsField() {
+    if (!maxInstr) return null;
+    const title = el("span", { class: "cw-label", "data-cw": "instructions-title" });
+    const count = el("small", { "data-cw": "instructions-count" });
+    const resetSlot = el("span", { "data-cw": "instructions-reset-slot" });
+    const area = el("textarea", { id: "cw-instructions", rows: "6", maxlength: String(maxInstr), "data-cw": "instructions-text",
+      "aria-describedby": "cw-instructions-where", on: { input: (e) => {
+        st.instrText = e.target.value;
+        st.instrChanged = true;
+        st.instrCustom = st.instrText.trim() !== defaultInstr(st.position).trim();
+        paintMeta();
+      } } });
+    area.value = st.instrText;
+    const reset = el("button", { type: "button", class: "btn small", "data-cw": "instructions-reset", on: { click: () => {
+      st.instrText = defaultInstr(st.position);
+      st.instrCustom = false;
+      st.instrChanged = true;
+      area.value = st.instrText;
+      paintMeta();
+      area.focus();
+    } } }, "回復預設");
+    function paintMeta() {
+      title.textContent = st.instrCustom ? "職位指示（自訂）" : defaultInstr(st.position) ? "職位指示（預設，可改）" : "職位指示（可自己寫）";
+      count.textContent = `${Array.from(st.instrText).length} / ${maxInstr}`;
+      setKids(resetSlot, st.instrCustom && (defaultInstr(st.position) || st.instrStored) ? reset : null);
+    }
+    paintMeta();
+    return el("div", { class: "cw-field", "data-cw": "instructions" },
+      el("div", { class: "cw-instr-head" }, title, count), area, resetSlot,
+      typeof catalog.instructions_where === "string" && catalog.instructions_where
+        ? el("p", { class: "small muted", id: "cw-instructions-where", "data-cw": "instructions-where" }, catalog.instructions_where) : null);
+  }
+  // what the position's words say it is, by this card's tool and launch mode (resolved by the server)
+  function boundariesField() {
+    const g = guideRow(st.position);
+    const mode = modesOffered ? st.launchMode : "safe";
+    const byTool = g && g.views && typeof g.views === "object" && cardHas(g.views, st.tool) ? g.views[st.tool] : null;
+    const list = boundaryList(byTool && typeof byTool === "object" && cardHas(byTool, mode) ? byTool[mode] : null, "data-cw");
+    if (!list) return null;
+    return el("div", { class: "cw-field", "data-cw": "boundaries" },
+      el("span", { class: "cw-label" }, "邊界（依陣營與出發方式）"), list,
+      el("p", { class: "small muted", "data-cw": "boundary-legend" }, BOUNDARY_LEGEND));
+  }
+
   function stepTwo() {
     const toolGroup = el("div", { class: "cw-choices cw-tools", role: "group", "aria-label": "陣營（工具）" },
       tools.map((t) => el("button", { type: "button", class: "cw-choice", "data-tool": t,
@@ -4862,7 +5069,8 @@ function openCardWizard(opts) {
       el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
       el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "任務卡上建議放：") + cardPositionPlaceText(posRow)),
       el("p", { class: "small muted" }, campWord(posRow)),
-      el("p", { class: "small muted" }, `分工提醒：${posRow.reminder}`)) : null;
+      el("p", { class: "small muted" }, `分工提醒：${posRow.reminder}`),
+      suggestedFolderNote()) : null;
 
     const rows = CARD_INTENT_KEYS.map(([k, zh]) => {
       const values = ["allow", "deny", ...(st.intents[k] === "unspecified" ? ["unspecified"] : [])];
@@ -4895,6 +5103,9 @@ function openCardWizard(opts) {
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), legacyNote, posGroup, posBox,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
       professionField(),
+      launchModeField(),
+      instructionsField(),
+      boundariesField(),
       el("div", { class: "cw-field" },
         el("span", { class: "cw-label" }, "權限意圖",
           st.suggested ? el("span", { class: "tag cw-tag", "data-cw": "suggested" }, "建議，可改") : null),
@@ -4934,6 +5145,7 @@ function openCardWizard(opts) {
     st.position = v;
     st.positionTouched = true;
     st.autoPosition = null;
+    syncInstructionsToPosition();
     if (!st.touched) applySuggestion();
     draw();
     focusBy("data-position", v || "none");
@@ -4986,6 +5198,14 @@ function openCardWizard(opts) {
       });
     }
 
+    // P34-2: the skill categories the position suggests (the server's table, named by the catalog's category table).
+    // A suggestion only: it marks, sorts first and can narrow the list, and inserts nothing.
+    const recRow = guideRow(st.position);
+    const recIds = recRow && Array.isArray(recRow.skill_categories) ? recRow.skill_categories.filter((c) => typeof c === "string") : [];
+    const recSet = new Set(recIds.filter((c) => skillCategories.some((k) => k.id === c)));
+    const isRecommended = (sk) => recSet.size > 0 && Array.isArray(sk.categories) && sk.categories.some((c) => recSet.has(c));
+    const recFirst = (rows) => [...rows.filter((e) => isRecommended(e.skill)), ...rows.filter((e) => !isRecommended(e.skill))];
+
     function skillCard(e) {
       const s = e.skill;
       const ok = skillCompatible(s, st.tool);
@@ -4994,6 +5214,7 @@ function openCardWizard(opts) {
       const camp = s.tool === st.tool ? null : s.tool === "shared" ? SKILL_SHARED_TAG : (CARD_TOOL_SHORT[s.tool] || s.tool || "?");
       const dead = e.kind === "dead" || e.kind === "dup";
       const tags = [
+        isRecommended(s) ? el("span", { class: "tag", "data-cw": "skill-recommended", title: "依你選的職位推薦，只是參考" }, "推薦") : null,
         camp ? el("span", { class: "tag", "data-cw": "skill-camp" }, camp) : null,
         e.copies ? el("span", { class: "small muted", "data-cw": "same-name" }, `另有 ${e.copies} 份同名`) : null,
         dead ? el("span", { class: "small muted", "data-cw": "unused-reason" }, e.reason) : null,
@@ -5037,8 +5258,9 @@ function openCardWizard(opts) {
       const catsOf = (e) => (Array.isArray(e.skill.categories) ? e.skill.categories : []).filter((c) => catLabel.has(c));
       const inCat = (e) => !st.category || (st.category === SKILL_CAT_OTHER ? !catsOf(e).length : catsOf(e).includes(st.category));
       drawCategories(st.showUnused ? [...plan.listed, ...plan.unused] : plan.listed, catsOf);
-      const listedHits = plan.listed.filter((e) => match(e) && inCat(e));
-      const unusedHits = plan.unused.filter((e) => match(e) && inCat(e));
+      const recOk = (e) => !(st.recommendOnly && recSet.size) || isRecommended(e.skill);
+      const listedHits = recFirst(plan.listed.filter((e) => match(e) && inCat(e) && recOk(e)));
+      const unusedHits = recFirst(plan.unused.filter((e) => match(e) && inCat(e) && recOk(e)));
       const narrowed = q || st.category;
       const catText = st.category ? `「${st.category === SKILL_CAT_OTHER ? "其他" : catLabel.get(st.category)}」` : "";
       counter.textContent = `可插 ${plan.listed.length} 張（這個陣營用得到的）${narrowed ? `，${catText}${q ? (catText ? "裡" : "") + "符合搜尋" : ""}的有 ${listedHits.length} 張` : ""}`;
@@ -5106,6 +5328,22 @@ function openCardWizard(opts) {
       if (toggle) { toggle.setAttribute("aria-pressed", String(on)); toggle.focus(); }   // the hint button goes away with the redraw
       drawList(); syncChosen();
     }
+    // the line about the position's suggestion: which categories, that it is only a suggestion, and the switch
+    let recBox = null;
+    if (recSet.size) {
+      const posLabel = (cardPositionRow(st.position) || { label: "" }).label;
+      const names = recIds.filter((c) => recSet.has(c)).map((c) => catLabel.get(c));
+      const recOnlyBtn = el("button", { type: "button", class: "btn small", "data-cw": "recommend-only", "aria-pressed": String(st.recommendOnly),
+        on: { click: () => {
+          st.recommendOnly = !st.recommendOnly; st.shown = CARD_PAGE_SIZE;
+          recOnlyBtn.setAttribute("aria-pressed", String(st.recommendOnly));
+          drawList(); syncChosen();
+        } } }, "只看推薦的");
+      recBox = el("div", { class: "cw-field", "data-cw": "skill-recommend" },
+        el("p", { class: "small" }, `「${posLabel}」建議看這幾類：${names.join("、")}。推薦只是參考，不會自動插入；`
+          + "技能會不會被載入，要看出發方式：VBear 的安全模式出發不載入技能。"),
+        recOnlyBtn);
+    }
     drawList();
     syncChosen();
     // translations the page has not read yet arrive a moment later; the list is drawn again with them
@@ -5114,6 +5352,7 @@ function openCardWizard(opts) {
       el("p", { class: "small muted", "data-cw": "skills-note" }, CARD_SKILLS_NOTE),
       st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-skills-note" }, AGY_SKILLS_NOTE) : null,
       removedNote ? note : null,
+      recBox,
       el("div", { class: "cw-field" }, countLabel, chosenBox),
       el("div", { class: "cw-field" }, counter, search, catRow, toggle), list,
     ];
@@ -5160,6 +5399,13 @@ function openCardWizard(opts) {
       // id that maps to a position is posted as that position, which is how a save rewrites it.
       if (!st.position && !st.positionTouched && existing && typeof existing.position === "string" && existing.position
         && !CARD_POSITIONS.includes(existing.position)) delete payload.position;
+      // P34-2: the launch mode of a new card is posted; an old card's only when the person chose. The instructions are
+      // posted only when the box was changed: the text, or null to clear it (back to the position's default).
+      if (modesOffered && (isNew || st.launchModeTouched)) payload.launch_mode = st.launchMode;
+      if (maxInstr && st.instrChanged) {
+        if (st.instrCustom && st.instrText.trim()) payload.instructions = st.instrText;
+        else if (st.instrStored) payload.instructions = null;
+      }
       const path = existing ? `/api/agent-profiles/${encodeURIComponent(existing.id)}` : "/api/agent-profiles";
       const res = await api.post(path, payload);
       const saved = res.profile;
@@ -5583,6 +5829,7 @@ const PASS_FIXES = {
   intents_not_supported: { act: "intents", label: "調整權限意圖" },
   tool_not_launchable: { act: "tool", label: "改選陣營" },
   commit_not_enforceable: { act: "commit", label: "回去勾選知悉" },
+  full_mode_not_available: { act: "mode", label: "改出發方式" },
 };
 function passFix(code) { return typeof code === "string" && cardHas(PASS_FIXES, code) ? PASS_FIXES[code] : null; }
 // A preview that was refused because of the folder (the server answers 400 for a missing, relative or outside folder).
@@ -5691,6 +5938,7 @@ function profileCard(p, opts = {}) {
   const evidenceBox = el("dd", { "data-rc": "evidence" });
   const englishBox = el("dd", { "data-rc": "english" });
   const reasonBox = el("section", { class: "rcard-block", "data-rc": "blockers" });
+  const instrBox = el("section", { class: "rcard-block", "data-rc": "instructions", hidden: true });
   const skillsBox = el("section", { class: "rcard-block rcard-skills", "data-rc": "skills" });
 
   const flipButton = (label, aria) => el("button", { type: "button", class: "btn small rcard-flip", "data-pcard": "flip",
@@ -5733,6 +5981,7 @@ function profileCard(p, opts = {}) {
       el("p", { class: "small" }, "只是記錄，不是授權。"),
       el("p", { class: "small muted", "data-rc": "intent-note" }, CARD_INTENT_NOTE),
       chips),
+    instrBox,
     reasonBox,
     skillsBox,
     (handlers.edit || handlers.duplicate || handlers.remove) ? el("div", { class: "rcard-actions" },
@@ -5793,6 +6042,30 @@ function profileCard(p, opts = {}) {
     }
     // the button that was pressed is now hidden: the same button of the face that is up takes the focus
     if (moveFocus) (face === "front" ? frontFlip : backFlip).focus();
+  }
+
+  // P34-2: the launch mode, the instructions and where they go, and the boundaries; all from the loadout the server built,
+  // and all set as text. A loadout from an older server has none of them, and the block is then left out.
+  const INSTR_SOURCE = { custom: "自訂", default: "預設（跟著位置）", none: "還沒有指示（沒有選位置，也沒有自己寫）" };
+  function paintInstructions(ld) {
+    const ins = ld && ld.instructions && typeof ld.instructions === "object" ? ld.instructions : null;
+    const mode = ld && ld.launch_mode && typeof ld.launch_mode === "object" ? ld.launch_mode : null;
+    const bounds = ld && ld.boundaries && typeof ld.boundaries === "object" ? ld.boundaries : null;
+    if (!ins && !mode && !bounds) { instrBox.setAttribute("hidden", ""); setKids(instrBox); return; }
+    instrBox.removeAttribute("hidden");
+    setKids(instrBox,
+      el("h4", null, "職位指示與邊界"),
+      mode ? el("p", { class: "small", "data-rc": "launch-mode" }, el("strong", null, "出發方式："), `${mode.label || ""}　`,
+        el("span", { class: "muted" }, typeof mode.text === "string" ? mode.text : "")) : null,
+      ins ? el("p", { class: "small", "data-rc": "instructions-source" }, el("strong", null, "職位指示："),
+        INSTR_SOURCE[ins.source] || "未知") : null,
+      ins && typeof ins.text === "string" && ins.text
+        ? el("details", { class: "fold", "data-rc": "instructions-text" }, el("summary", null, "看指示全文"),
+          el("p", { class: "small cw-instr-text" }, ins.text)) : null,
+      ins ? el("p", { class: "small muted", "data-rc": "instructions-where" }, el("strong", null, ins.title || "這份指示會交到哪裡"), "：",
+        typeof ins.where === "string" ? ins.where : "") : null,
+      bounds ? el("p", { class: "small muted" }, BOUNDARY_LEGEND) : null,
+      boundaryList(bounds, "data-rc"));
   }
 
   function paint() {
@@ -5865,6 +6138,8 @@ function profileCard(p, opts = {}) {
       pr && pr.state === "found" && pr.description ? el("div", { class: "small" }, "職業標籤的說明：", prov(pr.description)) : null);
     const desc = pr && pr.state === "found" && pr.description ? pr.description.value : null;
     setKids(englishBox, desc ? String(desc) : "—");
+
+    paintInstructions(ld);
 
     const reasons = dep.state === "blocked" || dep.state === "codex" ? dep.reasons : [];
     if (reasons.length) {
@@ -7626,6 +7901,9 @@ async function viewTerminal(paneId) {
   const termElem = el("div", { class: "term-container", role: "region", "aria-label": `終端 ${paneId}` });
   const termWrap = el("div", { class: "term-container-wrap" }, termElem);
 
+  // 貼上職位指示: only for a role's terminal, and only while this tab controls it (a shell has no role to paste)
+  const pasteControl = isShell ? null : rolePasteControl({ getTerm: () => term, isControl: () => mode === "control" });
+
   const inputBatcher = createInputBatcher(async (text) => {
     if (isDisposed || mode !== "control") return;
     await api.post(`/api/term/${encodeURIComponent(paneId)}/input`, { text });
@@ -7685,6 +7963,10 @@ async function viewTerminal(paneId) {
       } else if (!freshControl) {
         actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, FRESH_TERMINAL_RELEASE));
       }
+    }
+    if (pasteControl) {
+      pasteControl.refresh();
+      if (connState === "connected") actions.push(pasteControl.node);
     }
     if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
@@ -8545,6 +8827,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const termElem = el("div", { class: "term-container", role: "region", "aria-label": `終端 ${currentPane}` });
     const termWrap = el("div", { class: "term-container-wrap" }, termElem);
 
+    // 貼上職位指示 (see the page terminal): shown only while this tab controls the terminal
+    const pasteControl = rolePasteControl({ getTerm: () => term, isControl: () => mode === "control" });
+
     const inputBatcher = createInputBatcher(async (text) => {
       if (isDisposed || mode !== "control") return;
       await api.post(`/api/term/${encodeURIComponent(currentPane)}/input`, { text });
@@ -8606,6 +8891,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           actions.push(el("button", { class: "btn small", type: "button", on: { click: doRelease } }, FRESH_TERMINAL_RELEASE));
         }
       }
+      pasteControl.refresh();
+      if (connState === "connected") actions.push(pasteControl.node);
       if (!sessionGone && shouldShowTerminalRetryAction({ isDisposed, termReady, connState })) {
         actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
       }
@@ -9497,7 +9784,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
     function fixAction(fix) {
       if (!fix) return null;
-      const run = fix.act === "intents" ? fixRole(true) : fix.act === "tool" ? fixRole(false)
+      const run = fix.act === "intents" ? fixRole(true) : fix.act === "tool" || fix.act === "mode" ? fixRole(false)
         : fix.act === "commit" ? () => { commitBox.focus(); }
         : fix.act === "folder" ? openFolderPicker : null;
       return run ? el("button", { class: "btn small", type: "button", "data-pass-fix": fix.act, on: { click: run } }, fix.label) : null;
@@ -9526,6 +9813,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           el("dt", null, PASS_WORKDIR_LABEL), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
           el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
           el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
+        // P34-2: how the card is started, and a suggestion when the folder is not the one the position suggests (words only)
+        if (typeof pv.launch_mode === "string" && typeof pv.mode_note === "string" && pv.mode_note) {
+          kids.push(el("div", { class: "notice info", "data-pass": "mode" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+            el("div", { class: "small" }, el("strong", null, `出發方式：${pv.launch_mode === "full" ? "完整模式" : "安全模式"}`),
+              el("p", { style: "margin:4px 0" }, pv.mode_note))));
+        }
+        if (typeof pv.folder_warning === "string" && pv.folder_warning) {
+          kids.push(el("div", { class: "notice warn", role: "note", "data-pass": "folder-warning" }, el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+            el("div", { class: "small" }, pv.folder_warning)));
+        }
         if (isCodex) kids.push(codexEvidenceNote(pv));
         else if (!isClaude) { /* another tool: nothing about a version or a title to say */ }
         else if (needsAck(pv)) kids.push(unverifiedBox(pv));
@@ -9559,8 +9856,18 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           "使用者在進階終端仍可自行改變工具的行為，沒有一項是不可繞過的邊界。"),
         el("div", { class: "rc-armor-grid agent-launch-labels", "data-armor": "preview" },
           groups.map((g) => rcArmorGroup(g, items))),
+        positionBoundariesBox(pv),
         chosenSkillsList()));
       setKids(out, ...kids);
+    }
+
+    // The boundaries of the card's position for this launch (P34-2), in the three words; the seven items above are what
+    // the launch applies, these say which of the position's lines that covers.
+    function positionBoundariesBox(pv) {
+      const list = boundaryList(pv.boundaries, "data-cw");
+      if (!list) return null;
+      return el("section", { class: "rc-block", "data-pass": "position-boundaries" },
+        el("h4", null, "這個職位的邊界"), list, el("p", { class: "rc-note" }, BOUNDARY_LEGEND));
     }
 
     // The profile's chosen skills as a list that is only a record: they do not go with the launch.
@@ -11723,6 +12030,10 @@ if (typeof module !== "undefined" && module.exports) {
     CARD_SLOT_LABEL,
     CARD_INTENT_NOTE,
     viewTerminal,
+    rolePasteText,
+    pasteRoleInstructions,
+    rolePasteControl,
+    boundaryList,
     shellPanes,
     shellLabel,
     shellTabLabels,

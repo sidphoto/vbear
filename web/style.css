@@ -1271,6 +1271,23 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .cw-position-box { margin: 4px 0 0; padding: 8px 10px; border: 1px solid var(--line-2); border-left-width: 4px; border-radius: 8px; background: var(--panel-2); font-size: 13px; }
 .cw-position-box p { margin: 0 0 4px; }
 .cw-position-box p:last-child { margin-bottom: 0; }
+/* P34-2: a card's instructions, the boundaries by launch mode, and the terminal's paste-instructions control */
+.cw-field textarea { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.5; resize: vertical; }
+.cw-instr-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between; }
+.cw-boundaries-box { display: grid; gap: 6px; }
+.cw-boundaries-box > p { margin: 0; }
+.cw-boundaries { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.cw-boundary { display: grid; grid-template-columns: max-content 1fr; gap: 8px; align-items: start; }
+.cw-boundary-badge { white-space: nowrap; }
+.cw-boundary > .small { overflow-wrap: anywhere; }
+.cw-boundary-enforced_if_launched .cw-boundary-badge { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+.cw-boundary-reminder .cw-boundary-badge { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+.cw-boundary-not_possible .cw-boundary-badge { color: var(--bad); background: var(--bad-soft); border-color: var(--bad); }
+.cw-boundary-not_applicable .cw-boundary-badge { border-style: dashed; }
+.cw-instr-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.term-paste { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.term-paste select { max-width: 220px; padding: 3px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--ink); font: inherit; font-size: 13px; }
+.term-paste[hidden] { display: none; }
 /* P32-4: the profession picker of the card wizard: one line when closed; a search, position groups and a list when open */
 .cw-prof-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .cw-prof-picker { display: grid; gap: 8px; margin-top: 4px; padding: 10px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel-2); }

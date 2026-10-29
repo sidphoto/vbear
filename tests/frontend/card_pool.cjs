@@ -3616,6 +3616,381 @@ async function test(name, fn) {
     assert.strictEqual(dupPosts.length, 1);
   });
 
+  // ---- P34-2: the launch mode, the instructions, the boundaries and the recommended skills ----
+  // The guide the server serves (position_guide.catalog_view): per position the default instructions, the skill categories
+  // it suggests, the folder it suggests, and the boundaries already resolved for each tool and launch mode. The page holds
+  // none of those words; these fixtures stand in for the server's.
+  const BOUND = (id, text, kind) => ({ id, text, kind });
+  const guideView = (tool, mode) => {
+    if (mode === "full") return { position: "legal", launch_mode: "full", tool, mode_note: "完整模式：VBear 沒有限制這張卡；只剩工具自己的權限詢問。",
+      items: [BOUND("network", "完整模式可以上網，VBear 不擋", "reminder"), BOUND("cite", "每項風險附出處", "reminder")] };
+    if (tool === "claude") return { position: "legal", launch_mode: "safe", tool, mode_note: "安全模式：標「擋得住」的是出發時實際套上的限制。",
+      items: [BOUND("network", "連不上網路", "enforced_if_launched"), BOUND("read", "讀檔沒有隔離", "not_possible"), BOUND("cite", "每項風險附出處", "reminder")] };
+    return { position: "legal", launch_mode: "safe", tool, mode_note: "VBear 不幫這張卡出發，以下的「擋得住」都不適用，指示只是紀錄。",
+      items: [BOUND("network", "連不上網路", "not_applicable"), BOUND("cite", "每項風險附出處", "reminder")] };
+  };
+  const views = () => Object.fromEntries(["claude", "codex", "agy", "shared"].map((t) => [t, { safe: guideView(t, "safe"), full: guideView(t, "full") }]));
+  const LEGAL_PROMPT = "你是法務經理，每項風險附出處。";
+  const catalog342 = { ...catalog, tools: ["claude", "codex", "agy", "shared"],
+    launch_modes: [{ id: "full", label: "完整模式", help: "像在終端機自己用：可以上網，VBear 不加限制。" },
+      { id: "safe", label: "安全模式", help: "有沙盒、不能上網，是 VBear 已驗證的出發方式。" }],
+    default_launch_mode: "full", max_instructions: 2000,
+    instructions_where: "這份指示不會自動交給工具；開了終端、接管之後按「貼上職位指示」才會貼進去，由你按 Enter 送出。",
+    position_guide: {
+      legal: { prompt: LEGAL_PROMPT, skill_categories: ["security", "legal"], suggested_folder: "法務報告", views: views() },
+      executor: { prompt: "你是全端工程師。", skill_categories: ["frontend"], suggested_folder: null, views: views() },
+      reviewer: { prompt: "你是獨立審查。", skill_categories: [], suggested_folder: null, views: views() },
+    },
+    skill_categories: [{ id: "security", label: "資安與防護" }, { id: "legal", label: "法規與合規" }, { id: "frontend", label: "網站與前端" }],
+    skills: [
+      { skill_id: "s-a", name: "alpha-ui", tool: "claude", scope: "user", activation: "active", excerpt: "ui", categories: ["frontend"] },
+      { skill_id: "s-b", name: "beta-law", tool: "claude", scope: "user", activation: "active", excerpt: "law", categories: ["legal"] },
+      { skill_id: "s-c2", name: "gamma-sec", tool: "claude", scope: "user", activation: "active", excerpt: "sec", categories: ["security"] },
+      { skill_id: "s-d", name: "delta-none", tool: "claude", scope: "user", activation: "active", excerpt: "none", categories: [] },
+    ] };
+  const LS_NOTE = "sid:card.position.";
+  const editCard342 = async (card, extra = {}) => {
+    await openPool([card], catalog342, extra);
+    byData(main, "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+  };
+  async function wizard342(profiles = [], extra = {}, cat = catalog342) {
+    const posts = [];
+    const ctx = await openPool(profiles, cat, {
+      "POST /api/agent-profiles": (_u, o) => { const b = JSON.parse(o.body); posts.push(b);
+        return jsonResponse({ ok: true, profile: mkProfile("p-NEW", b.name, b.model.tool, b.permission_intents, {}) }); }, ...extra });
+    btnByText(main, "＋ 新角色卡").dispatch("click");
+    await tick();
+    typeName(dialog(), "Law");
+    btnByText(dialog(), "下一步").dispatch("click");
+    return { ctx, posts };
+  }
+  const modeBtn = (m) => byData(dialog(), "data-launch-mode", m)[0];
+  const instrBox = () => byData(dialog(), "data-cw", "instructions-text")[0];
+  const typeInstr = (text) => { const t = instrBox(); t.value = text; t.dispatch("input"); };
+  const boundaryRows = () => byData(dialog(), "data-cw", "boundary-row");
+  const kindsOf = () => boundaryRows().map((n) => `${n.getAttribute("data-boundary")}:${n.getAttribute("data-kind")}`);
+
+  await test("P34-2 launch mode: a new card is offered full mode, the person can switch, and the choice is posted; the words say what each mode is", async () => {
+    const { posts } = await wizard342();
+    const box = byData(dialog(), "data-cw", "launch-mode")[0];
+    assert.ok(box, "the launch mode field is on step 2");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true", "a new card starts on the catalog's default");
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "false");
+    assert.ok(findText(box, "完整模式") && findText(box, "安全模式"));
+    assert.ok(findText(byData(box, "data-cw", "launch-mode-note")[0], "VBear 不加限制"), "the note under it is the mode's own help");
+    modeBtn("safe").dispatch("click");
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true");
+    assert.ok(findText(byData(dialog(), "data-cw", "launch-mode-note")[0], "有沙盒"));
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].launch_mode, "safe");
+    const again = await wizard342();
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(again.posts[0].launch_mode, "full", "left alone, a new card is posted as full");
+  });
+
+  await test("P34-2 launch mode: an older server (no launch_modes in the catalog) shows no mode and posts no mode key", async () => {
+    const { posts } = await wizard342([], {}, { ...catalog342, launch_modes: undefined, default_launch_mode: undefined });
+    assert.ok(!byData(dialog(), "data-cw", "launch-mode").length);
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.ok(!("launch_mode" in posts[0]));
+  });
+
+  await test("P34-2 launch mode: a card with no stored mode opens as safe, says it is an old card, and is saved without the key unless the person switches", async () => {
+    const saved = savedBodies("p-1");
+    await editCard342(mkProfile("p-1", "Old", "claude", VERIFIED), { ...saved.handler });
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true");
+    assert.ok(findText(byData(dialog(), "data-cw", "launch-mode")[0], "舊卡沒有設定，一律當安全模式"));
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok(!("launch_mode" in saved.out[0]), "an untouched old card stays as it is on disk");
+    const saved2 = savedBodies("p-1");
+    await editCard342(mkProfile("p-1", "Old", "claude", VERIFIED), { ...saved2.handler });
+    modeBtn("full").dispatch("click");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved2.out[0].launch_mode, "full");
+    const saved3 = savedBodies("p-1");
+    await editCard342(mkProfile("p-1", "Has", "claude", VERIFIED, { launch_mode: "full" }), { ...saved3.handler });
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok(!("launch_mode" in saved3.out[0]), "a stored mode is not posted again unless it was changed");
+  });
+
+  await test("P34-2 instructions: choosing a position shows its default text; typing makes it the card's own; 回復預設 brings the default back", async () => {
+    const { posts } = await wizard342();
+    assert.ok(!instrBox() || instrBox().value === "", "no position, no default text");
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    assert.strictEqual(instrBox().value, LEGAL_PROMPT);
+    assert.strictEqual(instrBox().getAttribute("maxlength"), "2000");
+    assert.ok(findText(byData(dialog(), "data-cw", "instructions")[0], "職位指示（預設，可改）"));
+    assert.ok(!byData(dialog(), "data-cw", "instructions-reset").length, "nothing to restore yet");
+    typeInstr("自己寫的指示");
+    assert.ok(findText(byData(dialog(), "data-cw", "instructions")[0], "職位指示（自訂）"));
+    assert.ok(findText(byData(dialog(), "data-cw", "instructions-count")[0], "6 / 2000"));
+    const reset = byData(dialog(), "data-cw", "instructions-reset")[0];
+    assert.ok(reset && (reset.textContent || "").trim() === "回復預設");
+    reset.dispatch("click");
+    assert.strictEqual(instrBox().value, LEGAL_PROMPT);
+    assert.ok(!byData(dialog(), "data-cw", "instructions-reset").length);
+    assert.ok(findText(byData(dialog(), "data-cw", "instructions-where")[0], "不會自動交給工具"), "where it goes, from the server's words");
+    typeInstr("再寫一次");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].instructions, "再寫一次");
+  });
+
+  await test("P34-2 instructions: left as the default, nothing is posted for a new card; the default follows the position until the text is the person's own", async () => {
+    const { posts } = await wizard342();
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    byData(dialog(), "data-position", "executor")[0].dispatch("click");
+    assert.strictEqual(instrBox().value, "你是全端工程師。", "the default moved with the position");
+    typeInstr("我的");
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    assert.strictEqual(instrBox().value, "我的", "an own text stays when the position changes");
+    typeInstr("你是全端工程師。");
+    byData(dialog(), "data-position", "executor")[0].dispatch("click");
+    assert.ok(!byData(dialog(), "data-cw", "instructions-reset").length, "typing the default back is the default again");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.ok(!("instructions" in posts[0]), "no key: the card keeps using the position's default");
+  });
+
+  await test("P34-2 instructions: a stored text opens as the card's own; an untouched save leaves the key out; 回復預設 posts null, which clears it", async () => {
+    const saved = savedBodies("p-1");
+    await editCard342(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "legal", instructions: "舊的自訂" }), saved.handler);
+    assert.strictEqual(instrBox().value, "舊的自訂");
+    assert.ok(findText(byData(dialog(), "data-cw", "instructions")[0], "職位指示（自訂）"));
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok(!("instructions" in saved.out[0]), "unchanged: the server keeps what it has");
+    const saved2 = savedBodies("p-1");
+    await editCard342(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "legal", instructions: "舊的自訂" }), saved2.handler);
+    byData(dialog(), "data-cw", "instructions-reset")[0].dispatch("click");
+    assert.strictEqual(instrBox().value, LEGAL_PROMPT);
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok("instructions" in saved2.out[0] && saved2.out[0].instructions === null);
+    const saved3 = savedBodies("p-1");
+    await editCard342(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "legal", instructions: "舊的自訂" }), saved3.handler);
+    typeInstr("");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved3.out[0].instructions, null, "an emptied box clears the text");
+  });
+
+  await test("P34-2 instructions: text that is only shown by the page (an escaped tag) stays text; the box takes it as a value, never as markup", async () => {
+    await wizard342();
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    typeInstr("<img src=x onerror=alert(1)> 照做");
+    assert.strictEqual(instrBox().value, "<img src=x onerror=alert(1)> 照做");
+    assert.ok(!walk(dialog()).some((n) => n.tag === "img"));
+  });
+
+  await test("P34-2 boundaries: three words for what VBear holds, what is a reminder and what it cannot do; full mode makes every line a reminder; a camp VBear does not start says not applicable", async () => {
+    await wizard342();
+    assert.ok(!byData(dialog(), "data-cw", "boundaries").length, "no position, no boundaries");
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    modeBtn("safe").dispatch("click");
+    assert.deepStrictEqual(kindsOf(), ["network:enforced_if_launched", "read:not_possible", "cite:reminder"]);
+    const badge = (row) => (byData(row, "data-cw", "boundary-badge")[0].textContent || "").trim();
+    assert.deepStrictEqual(boundaryRows().map(badge), ["擋得住", "做不到", "只是提醒"]);
+    assert.ok(findText(byData(dialog(), "data-cw", "boundaries")[0], "連不上網路"));
+    assert.ok(findText(byData(dialog(), "data-cw", "boundaries")[0], "標「擋得住」的是出發時實際套上的限制"), "the mode note comes with it");
+    modeBtn("full").dispatch("click");
+    assert.deepStrictEqual(kindsOf(), ["network:reminder", "cite:reminder"]);
+    assert.ok(findText(byData(dialog(), "data-cw", "boundaries")[0], "VBear 沒有限制這張卡"));
+    modeBtn("safe").dispatch("click");
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    assert.deepStrictEqual(kindsOf(), ["network:not_applicable", "cite:reminder"]);
+    assert.deepStrictEqual(boundaryRows().map(badge), ["不適用", "只是提醒"]);
+    assert.ok(findText(byData(dialog(), "data-cw", "boundaries")[0], "VBear 不幫這張卡出發"));
+  });
+
+  await test("P34-2 boundaries: a position the guide does not list (or an older server) shows none and never invents any", async () => {
+    await wizard342([], {}, { ...catalog342, position_guide: undefined });
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    assert.ok(!byData(dialog(), "data-cw", "boundaries").length);
+    assert.ok(!byData(dialog(), "data-cw", "instructions-text").length || instrBox().value === "", "no default text to offer");
+  });
+
+  await test("P34-2 the folder the position suggests is told on step 2 as a suggestion, never as a limit", async () => {
+    await wizard342();
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    const note = byData(dialog(), "data-cw", "suggested-folder")[0];
+    assert.ok(note && findText(note, "法務報告") && findText(note, "只是建議"));
+    byData(dialog(), "data-position", "executor")[0].dispatch("click");
+    assert.ok(!byData(dialog(), "data-cw", "suggested-folder").length);
+  });
+
+  await test("P34-2 step 3: skills in the categories of the position are marked 推薦 and listed first; a switch shows only those; the note says it is only a suggestion", async () => {
+    await wizard342();
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    const rec = byData(dialog(), "data-cw", "skill-recommend")[0];
+    assert.ok(rec && findText(rec, "資安與防護") && findText(rec, "法規與合規") && findText(rec, "只是參考"), "the categories are named from the catalog's table");
+    assert.deepStrictEqual(ids24(dialog()), ["s-b", "s-c2", "s-a", "s-d"], "recommended first, then the rest in the old order");
+    assert.strictEqual(byData(dialog(), "data-cw", "skill-recommended").length, 2);
+    byData(dialog(), "data-cw", "recommend-only")[0].dispatch("click");
+    assert.deepStrictEqual(ids24(dialog()), ["s-b", "s-c2"]);
+    assert.strictEqual(byData(dialog(), "data-cw", "recommend-only")[0].getAttribute("aria-pressed"), "true");
+    byData(dialog(), "data-cw", "recommend-only")[0].dispatch("click");
+    assert.strictEqual(ids24(dialog()).length, 4);
+  });
+
+  await test("P34-2 step 3: no position (or one that suggests nothing) draws no recommendation and no mark", async () => {
+    await wizard342();
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.ok(!byData(dialog(), "data-cw", "skill-recommend").length);
+    assert.ok(!byData(dialog(), "data-cw", "skill-recommended").length);
+    assert.deepStrictEqual(ids24(dialog()), ["s-a", "s-b", "s-d", "s-c2"], "the old order: by name");
+    btnByText(dialog(), "上一步").dispatch("click");
+    byData(dialog(), "data-position", "reviewer")[0].dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.ok(!byData(dialog(), "data-cw", "skill-recommend").length, "a position with no suggested category says nothing");
+  });
+
+  await test("P34-2 the card's back: the instructions with where they go, the launch mode and the boundaries; every word is text", async () => {
+    const p = mkProfile("p-1", "Law", "claude", VERIFIED, { position: "legal", launch_mode: "safe" });
+    const ld = loadoutBody(p, {
+      launch_mode: { mode: "safe", stored: true, label: "安全模式", text: "安全模式：標「擋得住」的是出發時實際套上的限制。" },
+      instructions: { title: "這份指示會交到哪裡", source: "custom", position: "legal", text: "<b>自訂</b>的指示", automatic: false,
+        where: "只有按「貼上職位指示」才會貼進終端，由你按 Enter；VBear 不會自動帶上。" },
+      boundaries: guideView("claude", "safe") });
+    await openPool([p], catalog342, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(ld) });
+    const box = byData(main, "data-rc", "instructions")[0];
+    assert.ok(box, "the back has an instructions block");
+    const text = textOf(box);
+    assert.ok(text.includes("職位指示") && text.includes("自訂") && text.includes("<b>自訂</b>的指示"), "set as text");
+    assert.ok(text.includes("這份指示會交到哪裡") && text.includes("由你按 Enter") && text.includes("不會自動帶上"));
+    assert.ok(!walk(box).some((n) => n.tag === "b"), "no markup came out of it");
+    assert.ok(findText(byData(main, "data-rc", "launch-mode")[0], "安全模式"));
+    const rows = byData(main, "data-rc", "boundary-row");
+    assert.deepStrictEqual(rows.map((n) => n.getAttribute("data-kind")), ["enforced_if_launched", "not_possible", "reminder"]);
+  });
+
+  await test("P34-2 the card's back: a card without a position or with the default text says which; a loadout from an older server draws no block and no error", async () => {
+    const p = mkProfile("p-1", "Plain", "claude", VERIFIED);
+    await openPool([p], catalog342, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p)) });
+    const none = byData(main, "data-rc", "instructions")[0];
+    assert.ok(!none || (none.hasAttribute("hidden") && !textOf(none).trim()), "the block is hidden and empty");
+    assert.ok(!byData(main, "data-rc", "boundary-row").length);
+    const ld = loadoutBody(p, { instructions: { title: "這份指示會交到哪裡", source: "none", position: null, text: null, automatic: false, where: "沒有指示。" } });
+    await openPool([p], catalog342, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(ld) });
+    const box = byData(main, "data-rc", "instructions")[0];
+    assert.ok(box && findText(box, "還沒有指示"), "none is said, not left blank");
+  });
+
+  await test("P34-2 a full-mode card cannot depart yet: the light is red with the server's reason, not green", async () => {
+    const p = mkProfile("p-1", "Full", "claude", VERIFIED, { launch_mode: "full" });
+    const blocked = [{ code: "full_mode_not_available", message: "完整模式的出發還沒開放" }];
+    await openPool([p], catalog342, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, { blockers: blocked })) });
+    const light = byData(main, "data-pcard", "light")[0] || byData(main, "data-light", "blocked")[0];
+    assert.strictEqual(light.getAttribute("data-light"), "blocked");
+    assert.ok(findText(main, "完整模式的出發還沒開放"));
+  });
+
+  // ---- the paste button: instructions into the terminal's input, never Enter ----
+  await test("P34-2 rolePasteText: no break at the end; a break inside is kept only when the terminal asked for bracketed paste, otherwise it is a space (a bare break would be Enter)", () => {
+    const f = pure.rolePasteText;
+    assert.strictEqual(f("第一行\n第二行\n", true), "第一行\n第二行");
+    assert.strictEqual(f("第一行\n第二行\n", false), "第一行 第二行");
+    assert.strictEqual(f("a\r\nb\r\n\r\n", false), "a b");
+    assert.strictEqual(f("  \n 前後空白 \n ", true), "前後空白");
+    assert.strictEqual(f("a\n\n\nb", true), "a\n\nb", "runs of blank lines are folded to one");
+    assert.strictEqual(f("", true), "");
+    assert.strictEqual(f(null, true), "");
+    assert.ok(!/[\r\u0000-\u0008\u000b-\u001f\u007f]/.test(f("a\x1b[31mb\x07\rc", true)), "control characters never reach the terminal");
+  });
+
+  await test("P34-2 pasteRoleInstructions: uses the terminal's paste (not its input), reads the bracketed-paste mode, and refuses with a reason when it cannot", () => {
+    const calls = [];
+    const term = (bracketed) => ({ paste: (t) => calls.push(t), modes: { bracketedPasteMode: bracketed } });
+    assert.deepStrictEqual({ ...pure.pasteRoleInstructions(term(true), "a\nb") }, { ok: true, bracketed: true });
+    assert.deepStrictEqual({ ...pure.pasteRoleInstructions(term(false), "a\nb") }, { ok: true, bracketed: false });
+    assert.deepStrictEqual(calls, ["a\nb", "a b"]);
+    for (const [t, why] of [[null, "no_terminal"], [{}, "no_terminal"], [term(true), "empty"]]) {
+      const r = pure.pasteRoleInstructions(t, t && t.paste ? "  \n" : "x");
+      assert.strictEqual(r.ok, false); assert.strictEqual(r.reason, why);
+    }
+    assert.strictEqual(calls.length, 2, "nothing was pasted by a refusal");
+    assert.ok(!/\\r|\\u000d|sendKeys|\.write\(/.test(source.slice(source.indexOf("function pasteRoleInstructions("), source.indexOf("function pasteRoleInstructions(") + 900)),
+      "the paste never writes a carriage return or keys of its own");
+  });
+
+  await test("P34-2 the paste control: shown only while the person controls the terminal; lists the cards; pastes the server's text; says what it did and that Enter is theirs", async () => {
+    const cards = [mkProfile("p-1", "Law", "claude", VERIFIED, { position: "legal" }), mkProfile("p-2", "Plain", "claude", VERIFIED)];
+    const pasted = [];
+    const ctx = freshContext({ "GET /api/agent-profiles": () => jsonResponse({ ok: true, profiles: cards }),
+      "GET /api/agent-profiles/p-1/instructions": () => jsonResponse({ ok: true, name: "Law", source: "default", position: "legal", text: "第一行\n第二行" }),
+      "GET /api/agent-profiles/p-2/instructions": () => jsonResponse({ ok: true, name: "Plain", source: "none", position: null, text: null }) });
+    evalAgentBuilderSlice(ctx);
+    let control = false;
+    const term = { paste: (t) => pasted.push(t), modes: { bracketedPasteMode: true } };
+    const c = ctx.rolePasteControl({ getTerm: () => term, isControl: () => control });
+    await tick(6);
+    assert.ok(c.node.hasAttribute("hidden"), "hidden in observe mode");
+    control = true; c.refresh(); await tick(6);
+    assert.ok(!c.node.hasAttribute("hidden"));
+    const select = byData(c.node, "data-term", "paste-card")[0];
+    const opts = walk(select).filter((n) => n.tag === "option");
+    assert.deepStrictEqual(opts.map((o) => o.getAttribute("value")), ["", "p-1", "p-2"]);
+    const btn = byData(c.node, "data-term", "paste-instructions")[0];
+    assert.strictEqual((btn.textContent || "").trim(), "貼上職位指示");
+    btn.dispatch("click"); await tick(4);
+    assert.strictEqual(pasted.length, 0, "no card chosen, nothing pasted");
+    select.value = "p-2"; select.dispatch("change");
+    btn.dispatch("click"); await tick(6);
+    assert.strictEqual(pasted.length, 0, "a card with no instructions pastes nothing");
+    assert.ok(findText(c.node, "沒有指示"));
+    select.value = "p-1"; select.dispatch("change");
+    btn.dispatch("click"); await tick(6);
+    assert.deepStrictEqual(pasted, ["第一行\n第二行"]);
+    assert.ok(findText(c.node, "按 Enter") && findText(c.node, "VBear 不會替你送出"));
+    control = false; c.refresh();
+    assert.ok(c.node.hasAttribute("hidden"), "hidden again when control is released");
+  });
+
+  await test("P34-2 the paste control: a terminal that went away, a failed read says so and pastes nothing", async () => {
+    const pasted = [];
+    const ctx = freshContext({ "GET /api/agent-profiles": () => jsonResponse({ ok: true, profiles: [mkProfile("p-1", "Law", "claude", VERIFIED)] }),
+      "GET /api/agent-profiles/p-1/instructions": () => jsonResponse({ error: "找不到這張角色卡" }, 404) });
+    evalAgentBuilderSlice(ctx);
+    let term = { paste: (t) => pasted.push(t) };
+    const c = ctx.rolePasteControl({ getTerm: () => term, isControl: () => true });
+    c.refresh(); await tick(6);
+    const select = byData(c.node, "data-term", "paste-card")[0];
+    select.value = "p-1"; select.dispatch("change");
+    byData(c.node, "data-term", "paste-instructions")[0].dispatch("click"); await tick(6);
+    assert.ok(findText(c.node, "找不到這張角色卡"));
+    assert.strictEqual(pasted.length, 0);
+    const ctx2 = freshContext({ "GET /api/agent-profiles": () => jsonResponse({ ok: true, profiles: [mkProfile("p-1", "Law", "claude", VERIFIED)] }),
+      "GET /api/agent-profiles/p-1/instructions": () => jsonResponse({ ok: true, source: "default", text: "x" }) });
+    evalAgentBuilderSlice(ctx2);
+    term = null;
+    const c2 = ctx2.rolePasteControl({ getTerm: () => term, isControl: () => true });
+    c2.refresh(); await tick(6);
+    const s2 = byData(c2.node, "data-term", "paste-card")[0]; s2.value = "p-1"; s2.dispatch("change");
+    byData(c2.node, "data-term", "paste-instructions")[0].dispatch("click"); await tick(6);
+    assert.ok(findText(c2.node, "終端還沒準備好"));
+  });
+
+  await test("P34-2 both terminals (the page and the workbench) carry the paste control, and neither sends Enter for it", () => {
+    assert.strictEqual((source.match(/rolePasteControl\(\{/g) || []).length, 2, "one control in each terminal implementation");
+    assert.ok(!/paste-instructions[\s\S]{0,400}(inputBatcher\.push|\/input)/.test(source.slice(source.indexOf("function rolePasteControl("), source.indexOf("function rolePasteControl(") + 3500)),
+      "the control goes through term.paste, not the input endpoint");
+  });
+
   console.log(`\n${passed} passed`);
   if (process.exitCode) process.exit(process.exitCode);
   console.log("ALL CARD POOL FRONTEND TESTS PASSED");
