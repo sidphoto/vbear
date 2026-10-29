@@ -13,17 +13,13 @@ import json
 import math
 import os
 import re
-import selectors
-import signal
 import shutil
-import subprocess
-import tempfile
 import threading
 import time
 import uuid
 from pathlib import Path
 
-from . import config as cfg, strictjson
+from . import config as cfg, headless_cli, strictjson
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import daemon
 from .scan.document import redact, redact_value
@@ -425,81 +421,13 @@ def verify_boundary(engine):
         os.close(fd)
 
 
-def _group_exists(pgid):
-    try:
-        os.killpg(pgid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 def _execute(argv, prompt, cancel, timeout=TIMEOUT):
-    """Bounded runner shared by version, boundary and translation probes."""
-    with tempfile.TemporaryDirectory(prefix="vbear-translate-") as tmp:
-        env = {k: os.environ[k] for k in ("PATH", "HOME", "USER", "LOGNAME", "LANG") if k in os.environ}
-        # The authenticated CLI normally needs HOME. No config or credentials
-        # are copied into the scratch directory, prompt, cache or error text.
-        env["TMPDIR"] = tmp
-        proc = None
-        try:
-            proc = subprocess.Popen(argv(tmp), cwd=tmp, env=env,
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    start_new_session=True)
-            deadline, output = time.monotonic() + timeout, bytearray()
-            with selectors.DefaultSelector() as sel:
-                os.set_blocking(proc.stdin.fileno(), False)
-                os.set_blocking(proc.stdout.fileno(), False)
-                sel.register(proc.stdin, selectors.EVENT_WRITE, "in")
-                sel.register(proc.stdout, selectors.EVENT_READ, "out")
-                while sel.get_map():
-                    if cancel.is_set():
-                        raise TranslationError("cancelled")
-                    if time.monotonic() >= deadline:
-                        raise TranslationError("timeout")
-                    for key, _ in sel.select(0.05):
-                        if key.data == "in":
-                            sent = os.write(key.fd, prompt[:8192])
-                            prompt = prompt[sent:]
-                            if not prompt:
-                                sel.unregister(key.fileobj)
-                                proc.stdin.close()
-                        else:
-                            chunk = os.read(key.fd, 8192)
-                            if not chunk:
-                                sel.unregister(key.fileobj)
-                            output.extend(chunk)
-                            if len(output) > MAX_OUTPUT:
-                                raise TranslationError("invalid_output")
-                while proc.poll() is None:
-                    if cancel.wait(0.02):
-                        raise TranslationError("cancelled")
-                    if time.monotonic() >= deadline:
-                        raise TranslationError("timeout")
-            if proc.returncode != 0:
-                raise TranslationError("cli_failed")
-            return bytes(output)
-        except (OSError, ValueError):
-            raise TranslationError("cli_failed") from None
-        finally:
-            if proc is not None:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.close()
-                proc.stdout.close()
-                for _ in range(20):
-                    if not _group_exists(proc.pid):
-                        break
-                    time.sleep(0.01)
-                else:
-                    cfg.ensure_state_dir()
-                    cfg.write_private(cfg.state_dir() / "translation-worker.blocked", "process_unconfirmed\n")
-                    raise TranslationError("process_unconfirmed")
+    """Bounded runner shared by version, boundary and translation probes (the call itself is headless_cli's)."""
+    try:
+        return headless_cli.run(argv, prompt, cancel, timeout=timeout, max_output=MAX_OUTPUT,
+                                blocked_name="translation-worker.blocked", prefix="vbear-translate-").output
+    except headless_cli.HeadlessError as exc:
+        raise TranslationError(exc.code) from None
 
 
 def _run_structured(engine, identity, prompt, schema, cancel, timeout):
