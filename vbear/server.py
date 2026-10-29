@@ -57,6 +57,8 @@ from .api_error import ApiError
 from . import risk_acceptance
 from . import role_departments
 from . import translations
+from . import meeting_runner as meeting_runner_mod
+from . import meetings
 from . import tasks
 from . import runtime as rt
 from .runtime import cli_versions, pipeline_store
@@ -101,11 +103,14 @@ PROFESSION_MODEL_LIMIT = 200
 EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sent, for its hover box
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
-                   "recent_folders", "onboarding_dismissed"}
+                   "recent_folders", "onboarding_dismissed", "meeting_limits"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
 # GET /api/flows/<id>/reports | reviews | reviews/<job>/draft | merge-gate (S2c-3)
+# /api/meetings/<id>[/retry-preview | /retry | /cancel | /chairman] (P34-4)
+MEETING_RE = re.compile(r"^/api/meetings/(m-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
+MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 FLOW_GET_RE = re.compile(
     r"^/api/flows/(flow-[0-9a-f]{12})/(reports|merge-gate|reviews|automation)(?:/(r-[0-9a-f]{16})/draft)?\Z")
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
@@ -208,6 +213,14 @@ class Console:
         with self.lock:
             kept = self.__dict__.setdefault("_preview_folders", {})
             return kept.pop(preview_id, None) if isinstance(preview_id, str) else None
+
+    def meeting_runner(self):
+        """The one meeting runner. Built on first use, which is when a meeting left running by a stopped console is
+        found and interrupted."""
+        with self.lock:
+            if not hasattr(self, "meetings"):
+                self.meetings = meeting_runner_mod.MeetingRunner()
+            return self.meetings
 
     def translation_manager(self):
         with self.lock:
@@ -531,6 +544,13 @@ def make_handler(console: Console):
                     return self._translation_call("view")
                 if path in ("/api/role-translations", "/api/role-translations/batch"):
                     return self._translation_call("view", roles=True)
+                if path == "/api/meetings":
+                    return self._meeting_call("list")
+                if path == "/api/meetings/ledger":
+                    return self._meeting_call("ledger")
+                if path.startswith("/api/meetings/"):
+                    found = MEETING_RE.match(path)
+                    return self._meeting_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path == "/api/overview":
                     return self._json(self._overview())
                 if path == "/api/skills":
@@ -692,6 +712,15 @@ def make_handler(console: Console):
             try:
                 if path == "/api/auth":
                     return self._auth_exchange(self._body())
+                if path == "/api/meetings/preview":
+                    return self._meeting_call("preview", None, self._body_strict())
+                if path == "/api/meetings":
+                    return self._meeting_call("start", None, self._body_strict())
+                if path.startswith("/api/meetings/"):
+                    found = MEETING_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._meeting_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/translations/verify":
                     return self._translation_call("verify", self._body_strict())
                 if path == "/api/translations/batch/cancel":
@@ -861,6 +890,9 @@ def make_handler(console: Console):
             try:
                 if path == "/api/translations/orphans":
                     return self._translation_call("orphans")
+                if path.startswith("/api/meetings/"):
+                    found = MEETING_RE.match(path)
+                    return self._meeting_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path.startswith("/api/tasks/"):
                     task_id = path[len("/api/tasks/"):]
                     ok = tasks.delete_task(task_id)
@@ -1385,6 +1417,48 @@ def make_handler(console: Console):
                 "recent_skill_ids": [s["skill_id"] for s in recent],
             }
 
+        def _meeting_call(self, action, meeting_id=None, body=None):
+            """The meeting endpoints. Reads run nothing; a preview asks which Claude Code is installed (its version) and
+            nothing else; only a confirmed preview starts the tool-less calls."""
+            try:
+                runner = console.meeting_runner()
+                conf = console.store.conf
+                sources = meeting_runner_mod.Sources(
+                    profile=lambda pid: agent_profiles.get_profile_readonly(pid),
+                    task=lambda tid: tasks.get_task(tid),
+                    flows=lambda tid: [f for f in flows.list_flows() if f.get("task_id") == tid],
+                    conf=conf)
+                if action == "list":
+                    return self._json(runner.list())
+                if action == "ledger":
+                    return self._json(runner.ledger(conf))
+                if action == "get":
+                    return self._json(runner.get(meeting_id))
+                if action == "delete":
+                    runner.delete(meeting_id)
+                    return self._json({"ok": True, "deleted": meeting_id})
+                if not isinstance(body, dict):
+                    raise meetings.MeetingError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "preview":
+                    return self._json(runner.preview(body, sources))
+                if action in ("start", "retry"):
+                    if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
+                        raise meetings.MeetingError("bad_request", "只需要 preview_id")
+                    if action == "start":
+                        return self._json(runner.start(body["preview_id"], sources), 202)
+                    return self._json(runner.retry(body["preview_id"], sources, meeting_id), 202)
+                if action == "retry-preview":
+                    return self._json(runner.retry_preview(meeting_id, body, sources))
+                if action == "cancel":
+                    if body:
+                        raise meetings.MeetingError("bad_request", "取消不需要內容")
+                    return self._json(runner.cancel(meeting_id))
+                if action == "chairman":
+                    return self._json(runner.chairman(meeting_id, body))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
         def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
                 manager = console.role_translation_manager() if roles else console.translation_manager()
@@ -1561,6 +1635,8 @@ def make_handler(console: Console):
                         value = folders.clean_recent_folders(value)
                     if key == "onboarding_dismissed" and type(value) is not bool:
                         raise ValueError("onboarding_dismissed 必須是布林值")
+                    if key == "meeting_limits":
+                        value = meetings.validate_limits(value, meetings.limits_from(conf))
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):

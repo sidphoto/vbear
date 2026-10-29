@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from vbear import activity, agent_launch, claude_verify, numbers, title_check
+from vbear import activity, agent_launch, claude_verify, meeting_rules, meetings, numbers, title_check
 from vbear.runtime import cli_versions
 
 NAN, INF = float("nan"), float("inf")
@@ -203,6 +203,39 @@ class ArbitrateEntryTests(unittest.TestCase):
                               ([[0.0, "waiting"], [1.0, "working"]], big)):
             r = title_check.title_checks(events, typed)
             self.assertFalse(r["passed"])
+
+
+class MeetingEntryTests(unittest.TestCase):
+    """The meeting entries (P34-4): money and what a model wrote never raise, and a bad value is never taken as a number."""
+
+    def test_money_and_limits_refuse_every_bad_number(self):
+        for bad in (None, True, False, "x", NAN, INF, -INF, -1, 10 ** 400, float("1e999"), [], {}, b"1"):
+            self.assertIsNone(meetings.money(bad))
+            with self.assertRaises(ValueError):
+                meetings.validate_limits({"per_call_usd": bad}, meetings.DEFAULT_LIMITS)
+            self.assertEqual(meetings.limits_from({"meeting_limits": {"daily_usd": bad}})["daily_usd"], meetings.DEFAULT_LIMITS["daily_usd"])
+
+    def test_a_cost_the_cli_reports_wrongly_is_not_a_cost(self):
+        for bad in (NAN, INF, -1, True, None, "1e999", [], {}):
+            self.assertIsNone(meetings.money(bad))
+
+    def test_outputs_with_wrong_types_raise_the_one_error_and_nothing_else(self):
+        good = {"stance": "支持", "summary": "好", "points": [], "risks": [], "needs_chairman": False}
+        for key, bad in (("stance", NAN), ("stance", None), ("summary", 5), ("summary", None), ("points", "x"), ("points", [NAN]),
+                         ("risks", [[]]), ("risks", [None]), ("risks", {}), ("needs_chairman", 0), ("needs_chairman", NAN)):
+            with self.subTest(key=key, bad=bad), self.assertRaises(meetings.OutputError):
+                meetings.validate_opinion({**good, key: bad})
+        with self.assertRaises(meetings.OutputError):
+            meetings.validate_decision({"decision": 1})
+
+    def test_the_rules_read_any_record_without_raising(self):
+        for turns in ([None], [{}], [{"kind": "decision", "state": "done", "output": []}],
+                      [{"kind": "decision", "state": "done", "output": {"actions": "x", "escalate": NAN}}],
+                      [{"kind": "opinion", "state": "done", "output": {"risks": [None, 5, {"level": NAN}]}}]):
+            with self.subTest(turns=turns):
+                verdict = meeting_rules.evaluate({"topic": NAN, "context": None, "flags_by_chairman": None, "participants": [None],
+                                                  "turns": turns})
+                self.assertIsInstance(verdict["major"], bool)
 
 
 if __name__ == "__main__":

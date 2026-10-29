@@ -102,6 +102,10 @@ def _position(meeting: dict, profile_id) -> str | None:
 def evaluate(meeting: dict, amount_threshold: Decimal = AMOUNT_THRESHOLD) -> dict:
     """{"major": bool, "rules": [{"id", "text"}, ...]} for the rules that hold now. Reads the record, changes nothing."""
     held: set[str] = set()
+    turns = meeting.get("turns")
+    # a record is validated before it is stored; if one with a turn that is not a record gets here anyway, that turn is a
+    # failed one (R7) rather than a crash
+    meeting = {**meeting, "turns": [t if isinstance(t, dict) else {"state": "failed"} for t in turns] if isinstance(turns, list) else []}
     if meeting.get("flags_by_chairman"):
         held.add("R1")
     texts = _texts(meeting)

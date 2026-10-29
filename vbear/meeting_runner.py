@@ -249,6 +249,13 @@ class Context:
                                spend=spend if person["position"] == "accountant" else None)
 
 
+def _flows(sources: Sources, task_id: str) -> list | None:
+    try:
+        return sources.flows(task_id)
+    except Exception:
+        return None  # the flow store cannot be read: the PM is told so, not that there are none
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -395,7 +402,7 @@ class MeetingRunner:
         blockers: list = []
         binary, version = self._provider_state(blockers)
         ctx = Context(topic=topic, context=context, flags=flags, task_id=task_id, task=task,
-                      progress=mt.progress_summary(task, sources.flows(task_id)) if task_id else None,
+                      progress=mt.progress_summary(task, _flows(sources, task_id)) if task_id else None,
                       chair=participant(*chair_card), speakers=[participant(*c) for c in speaker_cards],
                       instructions={c[0]["id"]: _instructions_of(c[0]) for c in [chair_card] + speaker_cards},
                       limits=limits, daily_usd=limits["daily_usd"], version=version or "", binary=binary or "")
@@ -653,7 +660,7 @@ class MeetingRunner:
         chair, speakers = people[-1], people[:-1]
         cards = {p["profile_id"]: sources.profile(p["profile_id"]) for p in people}
         return Context(topic=rec["topic"], context=rec["context"], flags=rec["flags_by_chairman"], task_id=rec.get("task_id"),
-                       task=task, progress=mt.progress_summary(task, sources.flows(rec["task_id"])) if rec.get("task_id") else None,
+                       task=task, progress=mt.progress_summary(task, _flows(sources, rec["task_id"])) if rec.get("task_id") else None,
                        chair=chair, speakers=speakers, instructions={k: _instructions_of(v) for k, v in cards.items()},
                        limits={"per_call_usd": mt.money(rec["limits"]["per_call_usd"]), "meeting_usd": mt.money(rec["limits"]["meeting_usd"]),
                                "daily_usd": limits["daily_usd"]},
@@ -706,7 +713,11 @@ class MeetingRunner:
             out["preview_id"] = self._keep({"kind": "retry", "meeting_id": mid, "seq": turn["seq"], "version": version, "calls": calls})
         return out
 
-    def retry(self, preview_id, sources: Sources) -> dict:
+    def retry(self, preview_id, sources: Sources, meeting_id: str | None = None) -> dict:
+        with self.lock:  # a preview named under another meeting's address is refused and is not used up
+            seen = self.previews.get(preview_id) if isinstance(preview_id, str) else None
+            if seen is not None and meeting_id is not None and seen.get("meeting_id") != meeting_id:
+                raise mt.MeetingError("preview_expired")
         entry = self._take(preview_id, "retry")
         mid, seq = entry["meeting_id"], entry["seq"]
         rec, turn, again = self._retry_plan(mid, seq, sources)

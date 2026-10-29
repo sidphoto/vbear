@@ -11,6 +11,7 @@ the most one call may cost (the worst case), and the record says which of the tw
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -70,6 +71,8 @@ ERRORS = {
     "already_decided": "董事長已經決定了",
     "not_needed": "這場會議不需要董事長核准",
     "not_decided": "CEO 還沒有決定，不能核准",
+    "not_running": "這場會議沒有在進行",
+    "changed": "角色卡或任務卡在開會之後變了，不能重試；請開新的會議",
 }
 
 
@@ -81,15 +84,19 @@ class MeetingError(Exception):
 
 # ---- money ------------------------------------------------------------------------------------------------------
 
+MAX_MONEY = Decimal(1_000_000)  # a sum above this is not a cost of a meeting; it is a number that is wrong
+
+
 def money(value) -> Decimal | None:
-    """A Decimal for a finite, non-negative number or its text; None for anything else (a bool, NaN, a negative)."""
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+    """A Decimal for a finite, non-negative number or its text, at most MAX_MONEY; None for anything else (a bool, NaN, a
+    negative, a number too large to be a cost)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)) or (isinstance(value, str) and len(value) > 40):
         return None
     try:
         result = Decimal(str(value))
-    except InvalidOperation:
+    except (InvalidOperation, ValueError):
         return None
-    return result if result.is_finite() and result >= 0 else None
+    return result if result.is_finite() and 0 <= result <= MAX_MONEY else None
 
 
 def fmt(value: Decimal) -> str:
@@ -269,12 +276,16 @@ def task_context(task) -> dict | None:
     return {k: task.get(k) for k in TASK_FIELDS if task.get(k) not in (None, "", [])}
 
 
-def progress_summary(task, task_flows: list[dict]) -> str:
-    """The PM's progress, put together by VBear from the task card and the flow records, without a model."""
+def progress_summary(task, task_flows: list[dict] | None) -> str:
+    """The PM's progress, put together by VBear from the task card and the flow records, without a model. ``None`` for the
+    flows means they could not be read, which is not the same as having none."""
     if not isinstance(task, dict):
         return "沒有任務卡，沒有進度紀錄。"
     lines = [f"任務卡「{task.get('title', '')}」的狀態：{task.get('status', '未知')}。"]
-    if not task_flows:
+    if task_flows is None:
+        lines.append("流程紀錄目前無法讀取，所以不知道這張任務卡有沒有流程。")
+        task_flows = []
+    elif not task_flows:
         lines.append("這張任務卡沒有流程紀錄。")
     for flow in task_flows:
         events = flow.get("events") if isinstance(flow, dict) else None
@@ -316,7 +327,7 @@ def build_prompt(kind: str, *, instructions: str | None, position: str | None, t
 # ---- the record ----------------------------------------------------------------------------------------------------
 
 _RECORD_KEYS = {"id", "topic", "context", "flags_by_chairman", "created_at", "participants", "limits", "turns", "chairman"}
-_OPTIONAL_KEYS = {"task_id", "major_at_decision"}
+_OPTIONAL_KEYS = {"task_id", "major_at_decision", "inputs_sha256"}
 _PARTICIPANT_KEYS = {"profile_id", "name", "position", "tool", "model_used", "revision", "proxy"}
 _TURN_KEYS = {"seq", "profile_id", "kind", "state", "attempts", "started_at", "ended_at", "prompt_sha256", "evidence", "output",
               "error_code"}
@@ -355,6 +366,8 @@ def record_problem(rec) -> str | None:
         return "task_id 不符"
     if "major_at_decision" in rec and type(rec["major_at_decision"]) is not bool:
         return "major_at_decision 不符"
+    if "inputs_sha256" in rec and not (isinstance(rec["inputs_sha256"], str) and HEX64_RE.match(rec["inputs_sha256"])):
+        return "inputs_sha256 不符"
     if not isinstance(rec["topic"], str) or not rec["topic"] or len(rec["topic"]) > TOPIC_MAX:
         return "議題不符"
     if not isinstance(rec["context"], str) or len(rec["context"]) > CONTEXT_MAX:
@@ -413,8 +426,14 @@ def new_id() -> str:
     return "m-" + secrets.token_hex(6)
 
 
+def inputs_hash(task: dict | None) -> str:
+    """What a retry compares to know the task card is the one the meeting started from."""
+    raw = json.dumps(task_context(task), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def new_record(meeting_id: str, *, topic: str, context: str, flags: list[str], task_id: str | None, chair: dict,
-               speakers: list[dict], limits: dict[str, Decimal], now: float) -> dict:
+               speakers: list[dict], limits: dict[str, Decimal], now: float, inputs_sha256: str | None = None) -> dict:
     """A meeting that has just been confirmed: every turn queued, the decision last, the chairman pending. ``chair`` and
     ``speakers`` are participants ({profile_id, name, position, tool, model_used, revision, proxy})."""
     def turn(seq, person, kind):
@@ -427,6 +446,8 @@ def new_record(meeting_id: str, *, topic: str, context: str, flags: list[str], t
               "turns": turns, "chairman": {"state": "pending", "at": None, "note": ""}}
     if task_id:
         record["task_id"] = task_id
+    if inputs_sha256:
+        record["inputs_sha256"] = inputs_sha256
     return record
 
 
@@ -527,11 +548,12 @@ def delete(meeting_id: str) -> None:
 # ---- money spent, status, the view ---------------------------------------------------------------------------------
 
 def turn_cost(turn: dict, per_call: Decimal) -> Decimal:
-    """What a turn cost: the recorded cost, the most one call may cost while it is running, nothing if it never ran."""
+    """What a turn cost: the cost recorded over all its attempts, plus, while it is running, the most one call may cost;
+    nothing if it never ran."""
     evidence = turn.get("evidence")
-    if isinstance(evidence, dict) and money(evidence.get("cost_usd")) is not None:
-        return money(evidence["cost_usd"])
-    return per_call if turn.get("state") == "running" else Decimal(0)
+    recorded = money(evidence.get("cost_usd")) if isinstance(evidence, dict) else None
+    recorded = recorded if recorded is not None else Decimal(0)
+    return recorded + per_call if turn.get("state") == "running" else recorded
 
 
 def spent(meeting: dict) -> Decimal:
@@ -588,8 +610,9 @@ def view(meeting: dict, limits: dict[str, Decimal] | None = None) -> dict:
         chair["state"] = "not_needed"
     chair["label"] = CHAIRMAN_NOTE
     out = {k: meeting[k] for k in ("id", "topic", "context", "flags_by_chairman", "created_at", "participants", "limits", "turns")}
-    if "task_id" in meeting:
-        out["task_id"] = meeting["task_id"]
+    for key in ("task_id", "inputs_sha256"):
+        if key in meeting:
+            out[key] = meeting[key]
     out.update({"status": status_of(meeting, major), "major": major, "rules": verdict["rules"], "chairman": chair,
                 "spent_usd": fmt(spent(meeting)),
                 "retryable": [t["seq"] for t in meeting["turns"] if t["state"] in RETRYABLE_STATES]})
