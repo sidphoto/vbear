@@ -189,7 +189,7 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_v090_section_covers_positions_professions_and_the_hover_box(self):
         section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
-        for topic in ("one-person company", "品質驗證", "picker you can read", "no longer clears its profession",
+        for topic in ("one-person company", "全端工程師", "審查關卡", "picker you can read", "no longer clears its profession",
                       "kept on the card", "read whole"):
             self.assertIn(topic, section, topic)
 

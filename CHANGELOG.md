@@ -19,19 +19,26 @@
   for you. Roles of a plugin that is switched off are behind 也顯示用不到的. The back of a card calls the row 職業 and adds
   the one Chinese sentence. VBear's own two main-agent names are no longer sent for translation. The choice is still
   saved as the role id.
-- **A role card's suggested position now follows the division of work of a one-person company.** Step 2 of the card
-  wizard offers nine positions in two rows, with 先不指定 beside them: the places of a task card (規劃, 執行, 品質驗證,
-  獨立審查) and staff and support (產品, 研究, 商業, 設計, 紀錄). A position you pick shows what it does, where on a task
-  card it is suggested to go, and a one-line reminder of the division of work, which is also added to the note about
+- **A role card's suggested position now follows the seven positions of a one-person company.** Step 2 of the card
+  wizard offers CEO, 全端工程師, 社群媒體經理 and 藝術總監 as the positions done on a task card, PM, 法務經理 and 會計師
+  as staff, and 先不指定 beside the staff row. The independent review is not one of the seven: it is VBear's own review
+  gate, offered apart as 「VBear 內建：審查關卡（給任務卡的審查位）」. A position you pick shows what it does, where on a
+  task card it is suggested to go, the camp and model it is suggested for (the art director's is AGY, which VBear does not
+  start, and the box says so), and a one-line reminder of the division of work, which is also added to the note about
   permissions. Positions are labels only: every one still suggests the same permission intents (the one combination a
   launch honours), and the reminder is words for you to write into the task card's goal, because VBear cannot enforce
-  it. A card saved before as 審查 now reads 獨立審查 (its badge is still 審); 規劃 and 執行 are unchanged. On a task
-  card each place says what suits it (適合：…), the quality-check and independent-review cards are both marked 你建議放這裡
-  at the review place and the second review place and are listed first, and 放上任務卡 on a card made for a place of the
-  task card has that place chosen for you (a review card gets the empty review place); nothing is written until you
-  press 放上去. A staff card says it normally does not go on a task card and gets no place chosen. The task card's
-  places and its saved flow are unchanged. Going back to an earlier version shows a position it does not know as not
-  specified, and saving the card there clears it.
+  it. The ids planner, executor and reviewer keep their meaning and only change their words (CEO, 全端工程師, 獨立審查;
+  the badges are 長, 工, 審), so a card saved in v0.8.9 reads as before. The starter deck's second card is now named
+  全端工程師. The ids that only a local build of this version wrote are read as the position they became (qa as 獨立審查,
+  product and records as PM, design as 藝術總監) and marked 舊位置; research and business have no successor, so those cards
+  show 先不指定 with 請重選. Nothing is rewritten by looking: a card is rewritten when you save it in the wizard, and a
+  stored value the page cannot show stays until you press a position button. A save accepts only the eight listed ids.
+  On a task card each place says what suits it (適合：…), and 放上任務卡 on a card made for a place of the task card has
+  that place chosen for you (a review card gets the empty review place; a PM or other staff card gets none); nothing is
+  written until you press 放上去. The profession picker guesses among the same eight positions (a security, test or review
+  role fits the review gate, a legal or compliance role 法務經理, a finance role 會計師). The task card's places and its
+  saved flow are unchanged. Going back to an earlier version shows a position it does not know as not specified, and
+  saving the card there clears it.
 - **A role card's position is now kept on the card, not only in the browser.** The card has an optional `position`
   field, so the position is still there in another browser or on another port (the app picks 7789 and up when 7788 is
   busy, and each port was its own browser store). The wizard and the starter deck send the position with the card, a
@@ -40,7 +47,7 @@
   note is still written too. A card with no position stores nothing new, so its revision does not change, while a
   position counts in the revision like any other field. A position this version does not list (written by a newer
   one) shows as 先不指定, is kept when you save without touching it, and does not make the card file unreadable. The
-  save refuses a position outside the nine listed ones. Going back to an earlier version reads the card file as
+  save refuses a position outside the eight listed ones. Going back to an earlier version reads the card file as
   before, and the page there falls back to the position the browser remembers.
 - **Switching a card off or on no longer clears its profession.** The 停用／啟用 button on the 角色 tab of the terminal
   workbench sends only the new on/off state, and the save treated the missing profession as "none", so the card lost

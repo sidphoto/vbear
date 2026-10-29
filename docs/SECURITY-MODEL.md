@@ -227,9 +227,10 @@ Other safeguards:
   list is the aliases from `claude --help` plus model names the usage scan already collected. No program is run and
   nothing is fetched. The list only fills a drop-down; it grants nothing, and the saved `model_id` is checked as before.
 - **A card's suggested position is a record, kept on the card.** The role card has an optional `position` field (P32-3):
-  a save without the key keeps the stored value, `null` or an empty string clears it, and anything outside the nine
-  listed positions is `400`. Reading is looser on purpose: only the type is checked (a string of at most 32
-  characters), so a position a newer build wrote does not isolate the card file. It does not change what a launch
+  a save without the key keeps the stored value, `null` or an empty string clears it, and anything outside the eight
+  listed positions is `400`; the ids that only the unreleased v0.9.0 wrote (`RETIRED_POSITIONS`) are no longer listed,
+  so saving one is `400` too. Reading is looser on purpose: only the type is checked (a string of at most 32
+  characters), so a position a newer build wrote, or a retired one, does not isolate the card file. It does not change what a launch
   allows, but it is part of the card's digest, so changing it makes an open launch preview or a placed card read as
   changed, the same as any other field. A card without a position stores no key, so its digest is the one it had
   before.
