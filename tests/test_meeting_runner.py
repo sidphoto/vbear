@@ -10,9 +10,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from tests.test_meetings import SHA, decision, finish, opinion, person, record
+from tests.test_meetings import decision, finish, opinion, record
 from vbear import agent_profiles as ap, config as cfg, meeting_runner as mr, meetings as mt, translations as tr
-from vbear.jsonstore import StoreError
 
 VERSION = "2.1.296"
 FAKE = '''#!{python}
@@ -210,6 +209,15 @@ class PreviewTests(Base):
         self.assertIsNone(preview["preview_id"])
         self.assertEqual(preview["blockers"][0]["code"], "boundary_unverified")
         self.assertIn("檢查", preview["blockers"][0]["message"])
+
+    def test_a_provider_that_fails_for_any_other_reason_reads_as_not_verified(self):
+        for code, expected in (("cli_failed", "boundary_unverified"), ("timeout", "boundary_unverified"), ("cli_not_found", "cli_not_found"),
+                               ("storage", "storage")):
+            def refuse(engine, code=code):
+                raise tr.TranslationError(code)
+            preview = mr.MeetingRunner(provider=refuse).preview(self.body(), self.sources())
+            with self.subTest(code=code):
+                self.assertEqual(preview["blockers"][0]["code"], expected)
 
     def test_the_reserve_must_fit_the_meeting_and_what_is_left_of_today(self):
         runner = self.runner()

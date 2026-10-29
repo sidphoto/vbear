@@ -3,7 +3,6 @@ import json
 import os
 import tempfile
 import threading
-import time
 import unittest
 import urllib.error
 import urllib.request
@@ -12,7 +11,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from vbear import agent_profiles as ap, config as cfg, meeting_runner as mr, meetings as mt, server, tasks
+from vbear import agent_profiles as ap, config as cfg, meeting_runner as mr, server, tasks
 from vbear.index import Store
 
 VERSION = "2.1.296"

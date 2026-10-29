@@ -17,14 +17,12 @@ The decision is a record. Nothing in this module acts on it: it writes no task c
 """
 from __future__ import annotations
 
-import copy
 import hashlib
-import json
 import os
 import re
+import secrets
 import threading
 import time
-import secrets
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Callable
@@ -249,6 +247,12 @@ class Context:
                                spend=spend if person["position"] == "accountant" else None)
 
 
+def _provider_code(exc: tr.TranslationError) -> str:
+    """Why no Claude Code can be used, in the meeting's words: not installed, storage, an unconfirmed process, or (for
+    anything else, such as a version query that failed or timed out) not verified."""
+    return exc.code if exc.code in ("cli_not_found", "storage", "process_unconfirmed") else "boundary_unverified"
+
+
 def _flows(sources: Sources, task_id: str) -> list | None:
     try:
         return sources.flows(task_id)
@@ -298,8 +302,7 @@ class MeetingRunner:
         try:
             return self.provider("claude")
         except tr.TranslationError as exc:
-            code = exc.code if exc.code in mt.ERRORS else "storage"
-            raise mt.MeetingError(code) from None
+            raise mt.MeetingError(_provider_code(exc)) from None
 
     def _all(self) -> list[dict]:
         out = []
@@ -375,7 +378,7 @@ class MeetingRunner:
             binary, version = self.provider("claude")
             return binary, version
         except tr.TranslationError as exc:
-            code = exc.code if exc.code in mt.ERRORS else "storage"
+            code = _provider_code(exc)
             blockers.append({"code": code, "message": mt.ERRORS[code]})
             return None, None
 

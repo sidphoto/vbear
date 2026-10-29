@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from vbear import config as cfg, meeting_rules as rules, meetings as mt
+from vbear import meeting_rules as rules, meetings as mt
 from vbear.jsonstore import StoreError
 
 SHA = "a" * 64

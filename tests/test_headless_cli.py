@@ -1,6 +1,5 @@
 """The shared runner of one headless CLI call (translations and meetings). No real CLI: owned synthetic scripts only."""
 import os
-import signal
 import sys
 import tempfile
 import threading

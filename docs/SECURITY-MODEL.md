@@ -835,7 +835,7 @@ preview id; nothing starts one by itself, and a decision is never carried out by
   sent through Claude Code to Anthropic under your account; VBear sends nothing anywhere else. A card of another tool
   (Codex, AGY) does not speak itself: Claude speaks for it with that position's instructions, and the record and the
   preview mark it as `proxy`.
-- **The preview is the consent.** It is held in memory, used once, and gone after five minutes. It shows every text that
+- **The preview is the consent.** The only program a preview runs is `claude --version`, to learn which version is installed. It is held in memory, used once, and gone after five minutes. It shows every text that
   would be sent in full, the model each call uses, the number of calls, what is reserved, the day's spending and whether
   this Claude Code version has passed the no-tool check. A speaker's text carries a SHA-256 the worker checks before the call
   is made; the CEO's and the accountant's texts depend on what happened before them, so the preview shows their shape and
