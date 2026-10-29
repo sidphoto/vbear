@@ -12374,15 +12374,18 @@ function meetingPreviewDialog(pv, opts) {
   const actions = [cancel];
   const failure = (e) => { toast(e.message); };
   if (needsCheck) {
+    // The same check as the settings page's 「驗證翻譯安全邊界」 (POST /api/translations/verify): it runs Claude Code once
+    // with the person's account, so it is asked in the page first, as there.
     const verify = el("button", { class: "btn", type: "button", "data-mt": "verify", on: { click: async () => {
-      verify.disabled = true;
+      close();
+      if (!(await confirmInPage("無工具安全檢查", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。這和設定頁的「驗證翻譯安全邊界」是同一個檢查。", "檢查",
+        { details: "將用固定的無害提示檢查目前 Claude Code 版本是否只有 StructuredOutput、沒有 MCP。會花極少量額度；請求預算 US$0.05，這不是保證帳單上限。檢查完會重新產生預覽，還不會開始開會。" }))) return;
       try {
         const r = await api.post("/api/translations/verify", {});
         toast(`Claude Code ${r.version} 通過無工具安全檢查`);
-        close();
-        if (opts.onRecheck) await opts.onRecheck();
-      } catch (e) { toast("檢查失敗：" + e.message); verify.disabled = false; }
-    } } }, "先做一次無工具安全檢查（用你的 Claude 帳號，約 1 美分，請求預算 US$0.05）");
+      } catch (e) { toast("檢查失敗：" + e.message); return; }
+      if (opts.onRecheck) await opts.onRecheck();
+    } } }, "先做無工具安全檢查（用你的 Claude 帳號，通常不到 1 美分）");
     actions.push(verify);
   }
   if (pv.startable === true && typeof pv.preview_id === "string" && pv.preview_id) {
@@ -12452,9 +12455,13 @@ function meetingListNode(list) {
 
 function meetingForm(env) {
   const cards = (Array.isArray(env.profiles) ? env.profiles : []).filter((p) => p && typeof p === "object" && typeof p.id === "string" && p.enabled !== false);
-  const positionOf = (p) => cardPosition(p);
+  // The position the server checks is the one stored on the card (vbear/agent_profiles.py position_of): a note kept only in
+  // this browser is not sent, so a card that has only that note is not offered, and the page says how many there are.
+  const positionOf = (p) => cardPosition({ position: p.position });
+  const fits = (pos) => pos === MEETING_CHAIR_POSITION || MEETING_SPEAKER_POSITIONS.includes(pos);
   const chairs = cards.filter((p) => positionOf(p) === MEETING_CHAIR_POSITION);
   const speakers = cards.filter((p) => MEETING_SPEAKER_POSITIONS.includes(positionOf(p)));
+  const noteOnly = cards.filter((p) => !fits(positionOf(p)) && fits(cardPosition(p))).length;
   const tasksList = (Array.isArray(env.tasks) ? env.tasks : []).filter((t) => t && typeof t === "object" && typeof t.id === "string" && t.status !== "closed");
   const init = env.initial || {};
   const topic = el("textarea", { rows: "2", maxlength: "500", "data-mt": "topic", "aria-label": "議題", placeholder: "這場會議要討論什麼？（最多 500 字）" });
@@ -12516,6 +12523,9 @@ function meetingForm(env) {
     sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方），CEO 收斂後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
     !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的角色卡，沒有主席就不能開會。到 ", el("a", { href: "#/team" }, "角色卡池"), " 建一張（精靈第 2 步選 CEO）。")) : null,
     !speakers.length ? notice("warn", "還沒有可以發言的職位卡（PM、社群媒體經理、全端工程師、藝術總監、法務經理、會計師）。") : null,
+    noteOnly ? el("p", { class: "small muted", "data-mt": "note-only" },
+      `有 ${noteOnly} 張卡的職位只記在這個瀏覽器（舊版的備註），沒有存在卡片上；開會看的是卡片上存的職位，所以這裡沒有列出。`,
+      "要讓它們參加，到角色卡池用精靈重新選一次職位並儲存。") : null,
     el("label", null, "議題 *", topic),
     el("label", null, "補充說明", context),
     el("label", null, "綁在哪張任務卡（選填）", taskSel),

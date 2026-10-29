@@ -374,9 +374,33 @@ test("an unverified Claude Code version shows 'check first' and no start button;
   page.preview = previewOf();
   FETCH_LOG.length = 0;
   verify.click();
+  await settle();
+  // the check uses the person's Claude account: like the settings page, it asks in the page first
+  assert.strictEqual(posts("/api/translations/verify").length, 0, "nothing is sent by the first click");
+  const ask = h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("aria-labelledby") === "modal-confirm-title");
+  assert(ask, "a confirmation in the page");
+  assert(text(ask).includes("無工具安全檢查") && text(ask).includes("不到 1 美分") && text(ask).includes("驗證翻譯安全邊界"), text(ask));
+  ask.find((n) => n.tag === "button" && n.hasClass("primary")).click();
   await settle(80);
   assert.strictEqual(posts("/api/translations/verify").length, 1);
   assert.strictEqual(posts("/api/meetings/preview").length, 1, "the preview is made again after the check");
+});
+
+test("saying no to the tool-less check sends nothing", async () => {
+  setPage({ preview: previewOf({ startable: false, preview_id: null, cli: { version: "2.1.999", verified: false },
+    blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
+  const main = await open("#/meetings");
+  fill(main, {});
+  q(main, "preview").click();
+  await settle();
+  FETCH_LOG.length = 0;
+  q(dialog(), "verify").click();
+  await settle();
+  const ask = h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("aria-labelledby") === "modal-confirm-title");
+  assert(ask, "a confirmation in the page");
+  ask.find((n) => n.tag === "button" && !n.hasClass("primary")).click();
+  await settle(80);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "POST").length, 0);
 });
 
 test("a budget blocker is shown and cannot be started", async () => {
@@ -473,6 +497,27 @@ test("a code the page does not know is shown as it is, never guessed", async () 
   m.turns[0] = turn(1, "law", "opinion", "failed", { error_code: "brand_new_code", evidence: null });
   const main = await open("#/meetings/" + MID);
   assert(text(qa(main, "seat")[0]).includes("brand_new_code"));
+});
+
+test("the form goes by the position stored on the card (what the server checks), not a note kept only in this browser", async () => {
+  setPage({ profiles: [cardOf("ceo", "執行長卡", "planner"), cardOf("law", "法務卡", "legal"), cardOf("old-pm", "舊位置的 PM", "records"),
+    { id: "note-ceo", name: "只有備註的 CEO", enabled: true, model: { tool: "claude", model_id: "" } },
+    { id: "note-pm", name: "只有備註的 PM", enabled: true, model: { tool: "claude", model_id: "" } }] });
+  app.setCardPosition("note-ceo", "planner");
+  app.setCardPosition("note-pm", "pm");
+  try {
+    const main = await open("#/meetings");
+    const chairOptions = q(main, "chair").findAll((n) => n.tag === "option").map((n) => n.getAttribute("value"));
+    assert.deepStrictEqual(chairOptions, ["ceo"], "a card whose CEO position is only a browser note cannot chair: the server would refuse it");
+    assert.deepStrictEqual(qa(main, "speaker").map((s) => s.getAttribute("data-profile")).sort(), ["law", "old-pm"],
+      "a retired id counts as its successor, as on the server");
+    const note = q(main, "note-only");
+    assert(note, "the page says why two cards are missing");
+    assert(text(note).includes("2 張") && text(note).includes("這個瀏覽器"), text(note));
+  } finally {
+    app.setCardPosition("note-ceo", null);
+    app.setCardPosition("note-pm", null);
+  }
 });
 
 test("the chairman's desk: approve or reject with a note, marked as an unverified console record", async () => {
