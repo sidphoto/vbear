@@ -373,16 +373,23 @@ class FullModeLaunchTests(unittest.TestCase):
         self.assertEqual(agent_launch.launch_blockers(self.card(), True, self.NET), [])
         self.assertEqual(agent_launch.launch_blockers(self.card(launch_mode="safe"), True, self.NET), [])
 
-    def test_a_full_card_is_blocked_with_a_code_and_words_that_do_not_pretend(self):
-        self.assertIs(agent_launch.FULL_MODE_LAUNCHABLE, False)
-        out = agent_launch.launch_blockers(self.card(launch_mode="full"), True, self.NET)
-        self.assertEqual([b["code"] for b in out], ["full_mode_not_available"])
-        self.assertIn("完整模式", out[0]["message"])
-        self.assertIn("安全模式", out[0]["message"])
+    def test_a_full_card_is_not_held_to_the_rules_of_the_safe_launch(self):
+        # intents, the commit sentence and the network input belong to the safe launch; a full one applies none of them
+        self.assertIs(agent_launch.FULL_MODE_LAUNCHABLE, True)
+        self.assertEqual(agent_launch.launch_blockers(self.card(launch_mode="full"), True, self.NET), [])
+        odd = {"read": "deny", "write": "deny", "test": "unspecified", "deploy": "allow"}
+        self.assertEqual(agent_launch.launch_blockers(self.card(launch_mode="full", permission_intents=odd), False, None), [])
+        for tool in ("claude", "codex", "agy"):
+            card = self.card(launch_mode="full", model={"tool": tool, "model_id": ""})
+            self.assertEqual(agent_launch.launch_blockers(card, False, None), [], tool)
 
-    def test_a_disabled_full_card_says_both(self):
+    def test_a_full_card_is_still_stopped_by_a_tool_that_is_not_started_and_by_being_off(self):
+        out = agent_launch.launch_blockers(self.card(launch_mode="full", model={"tool": "shared", "model_id": ""}), True, self.NET)
+        self.assertEqual([b["code"] for b in out], ["tool_not_launchable"])
+
+    def test_a_disabled_full_card_says_so(self):
         out = agent_launch.launch_blockers(self.card(launch_mode="full", enabled=False), True, self.NET)
-        self.assertEqual([b["code"] for b in out], ["profile_disabled", "full_mode_not_available"])
+        self.assertEqual([b["code"] for b in out], ["profile_disabled"])
 
     def test_the_wizards_combination_check_is_not_affected(self):
         self.assertEqual(agent_launch.intent_blockers(dict(agent_profiles.VERIFIED_INTENTS)), [])
@@ -468,11 +475,11 @@ class LoadoutSectionsTests(unittest.TestCase):
         self.assertNotIn("enforced_if_launched", {b["kind"] for b in codex["boundaries"]["items"]})
         self.assertIsNone(self.build()["boundaries"])   # no position, no boundaries
 
-    def test_a_full_card_has_no_armor_to_show_and_cannot_depart(self):
+    def test_a_full_card_has_no_armor_to_show_and_can_depart(self):
         d = self.build(position="executor", launch_mode="full")
         self.assertFalse(d["armor"]["applicable"])
         self.assertIn("沒有限制", d["armor"]["why"])
-        self.assertEqual([b["code"] for b in d["blockers"]], ["full_mode_not_available"])
+        self.assertEqual(d["blockers"], [])
 
     def test_a_safe_card_keeps_its_armor(self):
         d = self.build(position="executor")

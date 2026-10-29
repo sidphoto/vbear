@@ -246,11 +246,13 @@ def _launch_mode(profile: dict, tool, mode: str) -> dict:
     return {"mode": mode, "stored": stored, "label": position_guide.MODE_LABELS[mode], "text": text}
 
 
-def _instructions(profile: dict) -> dict:
-    """The card's instructions with where they go: nowhere by themselves, only to a paste the person makes."""
+def _instructions(profile: dict, tool, mode: str) -> dict:
+    """The card's instructions with where they go: carried by a full-mode launch of Claude Code (one argument), else
+    only to a paste the person makes."""
     got = agent_profiles.instructions_of(profile)
+    delivery = position_guide.instructions_delivery(tool, mode)
     return {"title": "這份指示會交到哪裡", "source": got["source"], "position": got["position"], "text": got["text"],
-            "automatic": False, "where": position_guide.INSTRUCTIONS_WHERE}
+            "automatic": delivery == "argv" and bool(got["text"]), "where": position_guide.instructions_where(tool, mode)}
 
 
 def build(profile: dict, static: dict | None, live: dict | None, verification: dict | None) -> dict:
@@ -276,7 +278,7 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
         "version_status": version,
         "tools": _tools(tool, codex_not_launchable),
         "launch_mode": _launch_mode(profile, tool, mode),
-        "instructions": _instructions(profile),
+        "instructions": _instructions(profile, tool, mode),
         "boundaries": position_guide.resolve(agent_profiles.position_of(profile), tool, mode),
         "armor": _armor(tool, version, mode) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),
         "blockers": blockers,

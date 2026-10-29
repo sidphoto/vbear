@@ -31,6 +31,7 @@ import platform
 import queue as queue_mod
 import re
 import secrets
+import shutil
 import socket
 import threading
 import time
@@ -89,11 +90,26 @@ def _pinned_codex_binary() -> str:
     return str(pinned)
 
 
+def _full_cli_path(engine: str) -> str | None:
+    """Where the person's own ``claude`` / ``codex`` / ``agy`` is: the first one on the search path the runtime uses
+    for the CLIs (its own PATH plus the usual Homebrew and ``~/.local/bin`` folders), as an absolute path with the
+    name it was found under (a link is not followed, so the tool sees the name it is used to). None when there is
+    none, or when it is found by a relative PATH entry."""
+    if engine not in _agent_sessions.FULL_ENGINES:
+        return None
+    found = shutil.which(engine, path=_d.cli_search_path())
+    if not found or not os.path.isabs(found) or os.path.basename(found) != engine:
+        return None
+    return found
+
+
 def _agent_engine(info: dict) -> str | None:
-    """Which Agent CLI a daemon session runs: the managed launch's engine, or
+    """Which Agent CLI a daemon session runs: the managed launch's engine, a full-mode terminal's, or
     the command name for a plain session started as ``claude`` / ``codex``."""
     engine = info.get("engine")
     if engine in ("claude", "codex"):
+        return engine
+    if engine == "agy" and info.get("launch_mode") == "full":
         return engine
     if engine == "claude-stream":
         return "claude"
@@ -533,6 +549,39 @@ class NativeRuntime(RuntimeBase):
             model_id=spec.get("model_id") or None,
             commit=spec.get("commit", True), read_only=spec.get("read_only", False))
         return {"manifest": manifest, "assertion": assertion}
+
+    def full_cli(self, engine: str) -> dict | None:
+        """The person's own CLI for a full-mode launch: ``{"path", "identity"}``, or None when it is not there. Nothing
+        is run: the file is only looked at (its identity is what a later look is compared with)."""
+        path = _full_cli_path(engine)
+        if path is None:
+            return None
+        try:
+            return {"path": path, "identity": _agent_sessions.binary_identity(path)}
+        except OSError:
+            return None
+
+    def launch_full_agent(self, engine: str, argv: list, cwd: str, *, cols: int | None = None,
+                          rows: int | None = None) -> dict:
+        """Open a terminal for a card in full mode (``agent_sessions.full_argv`` builds ``argv``). The daemon checks
+        the shape again. There is no launch state, no sandbox and no version assertion: this is the person's own
+        tool, started where they chose."""
+        dims = {}
+        for dim, value in (("cols", cols), ("rows", rows)):
+            if value is not None:
+                if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 1000:
+                    raise NativeRuntimeError(f"Agent {dim} 必須是 1–1000 的整數")
+                dims[dim] = value
+        try:
+            r = self._rpc("open_full", timeout=5.0, engine=engine, argv=argv, cwd=cwd, **dims)
+        except (FileNotFoundError, ConnectionRefusedError) as exc:
+            raise NativeRuntimeUnavailable(f"VBear runtime 未啟動或無法連線：{exc}") from exc
+        except (OSError, ValueError) as exc:
+            raise NativeRuntimeUnavailable(f"VBear runtime 無法連線：{exc}") from exc
+        if not r.get("ok"):
+            err = r.get("error") or {}
+            raise NativeRuntimeError(str(err.get("message") or "無法開啟"))
+        return r["result"]
 
     def discard_prepared_claude_launch(self, launch_id: str) -> dict:
         """Remove a prepared launch that will not be started (expired preview)."""

@@ -16,6 +16,7 @@ boundary: a user typing in the advanced terminal can change what the CLI does.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ from pathlib import Path
 from . import activity, position_guide
 from .agent_profiles import (VERIFIED_INTENTS, effective_launch_mode, position_of,  # moved there so a team slot / the starter deck share them; same values
                              profile_digest)
+from .agent_profiles import instructions_of as agent_profiles_instructions
 from .runtime import agent_sessions, cli_versions
 from .runtime.native import NativeRuntimeError, NativeRuntimeUnavailable
 
@@ -46,10 +48,11 @@ EVIDENCE_DIR = "docs/evidence"
 # (HTTPS refused by the sandbox proxy, direct TCP EPERM). Set to False to
 # report Network as unknown again if the settings shape changes.
 NETWORK_VERIFIED = True
-# Whether VBear can start a card in full mode (P34-2). It cannot yet: the launch is built in the next batch, together
-# with the rules for it in launch_blockers. The catalog reports this so the wizard says it, and launch_blockers refuses
-# a full-mode card whatever this says, so a card set to full is never started as a safe one behind the person's back.
-FULL_MODE_LAUNCHABLE = False
+# Whether VBear can start a card in full mode (P34-3). It can: the tool is started as the person would start it (the
+# user's own settings, the network, no sandbox), and the pass says that VBear limits nothing. The catalog reports this
+# so the wizard says it; a card without the mode, or with anything but "full", is a safe one.
+FULL_MODE_LAUNCHABLE = True
+FULL_MODE_NOTE = "完整模式沒有 commit 與網路這兩項輸入：VBear 不限制，也不替它們把關"
 
 
 def _last_title_failure(engine: str | None, version: str) -> list[str] | None:
@@ -163,12 +166,14 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         out.append({"code": code, "message": message})
 
     if effective_launch_mode(profile) == "full":
-        # The launch for this mode does not exist yet. The rules below are the safe launch's, so none of them is read as
-        # a verdict on a full-mode card; the card says why it cannot go and how to make it go.
+        # None of the rules below is read for a full-mode card: they are the safe launch's (intents, commit, network and
+        # the evidence of one verified configuration), and a full launch applies none of them. What stops it is only
+        # that the card is off or its tool is not one VBear starts this way.
+        tool = (profile.get("model") or {}).get("tool")
+        if tool not in agent_sessions.FULL_ENGINES:
+            block("tool_not_launchable", "shared 不是可啟動的工具" if tool == "shared" else "此 Agent 工具沒有可啟動的設定")
         if profile.get("enabled") is False:
             block("profile_disabled", "此角色卡已停用")
-        block("full_mode_not_available",
-              "完整模式的出發還沒開放：這個版本只能用安全模式出發。要現在出發，請把這張卡的出發方式改成安全模式")
         return out
     tool = (profile.get("model") or {}).get("tool")
     if tool not in {"claude", "codex"}:
@@ -466,6 +471,8 @@ class PreviewStore:
             self._sweep(now)
             if len(self._previews) >= MAX_PREVIEWS:
                 raise PreviewError(429, "too_many_previews", "待確認的 preview 過多，請稍後再試")
+        if effective_launch_mode(profile) == "full":
+            return self._create_full(profile, canonical, now)
         blockers = launch_blockers(profile, commit, network)
         prepared = None
         engine = (profile.get("model") or {}).get("tool")
@@ -520,6 +527,105 @@ class PreviewStore:
             body["expires_at"] = entry["expires"]
         return body
 
+    def _create_full(self, profile: dict, canonical: str, now: float) -> dict:
+        """The pass of a card in full mode: nothing is prepared (no launch state, no scratch, no settings), so there is
+        nothing to remove if it is not confirmed. It shows the exact command, where the tool was found, what is carried
+        and what is not, and states that VBear limits nothing. The digest is of the command, the folder and the file."""
+        engine = (profile.get("model") or {}).get("tool")
+        blockers = launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
+        if not blockers:
+            blockers += self._full_folder_blockers(canonical)
+        found = argv = view = command = None
+        digest = None
+        if not blockers:
+            found = self._runtime.full_cli(engine) if hasattr(self._runtime, "full_cli") else None
+            if found is None:
+                blockers.append({"code": "cli_not_found", "message":
+                                 f"找不到 {engine}：它不在 VBear 找指令的路徑上（PATH、Homebrew、~/.local/bin）。請先安裝，或確認它能在終端機直接執行"})
+        if not blockers:
+            model_id = (profile.get("model") or {}).get("model_id") or None
+            got = agent_profiles_instructions(profile)
+            try:
+                argv = agent_sessions.full_argv(engine, found["path"], model_id, got["text"])
+            except agent_sessions.LaunchRefused as exc:
+                blockers.append({"code": exc.code, "message": str(exc)})
+        if argv is not None:
+            view, command = self._full_command_view(engine, argv, got)
+            digest = hashlib.sha256(json.dumps(
+                {"engine": engine, "argv": argv, "cwd": canonical, "identity": list(found["identity"])},
+                ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        body = {
+            "preview_id": None,
+            "profile_id": profile.get("id"),
+            "profile_revision": profile_digest(profile),
+            "launchable": not blockers,
+            "reasons": blockers,
+            "launch_inputs": {"applies": False, "note": FULL_MODE_NOTE},
+            "cli": ({"binary": found["path"], "version": None, "verified": None, "activity_verified": None,
+                     "activity_last_failure": None,
+                     "note": "這是你自己的工具：VBear 沒有執行它、沒有檢查版本，也沒有驗證它的任何行為"}
+                    if found else None),
+            "settings_digest": digest,
+            "canonical_paths": {"workdir": canonical, "scratch": None},
+            "derived_labels": {},
+            "armor_groups": [],
+            **self._position_view(profile, engine, canonical),
+            "command": command,
+            "instructions": view,
+            "notes": self._full_notes(profile),
+            "expires_at": None,
+            "persisted": "完整模式的出發不會寫回角色卡，也不會留下任何出發紀錄檔",
+        }
+        if argv is not None and not blockers:
+            preview_id = "p-" + secrets.token_hex(PREVIEW_ID_BYTES)
+            entry = {"prepared": None, "launch_id": None, "profile_id": profile.get("id"),
+                     "profile_digest": body["profile_revision"], "settings_digest": digest,
+                     "full": {"engine": engine, "argv": argv, "cwd": canonical, "path": found["path"],
+                              "identity": list(found["identity"])},
+                     "expires": now + self._ttl, "consumed": False}
+            with self._lock:
+                self._previews[preview_id] = entry
+            body["preview_id"] = preview_id
+            body["expires_at"] = entry["expires"]
+        return body
+
+    def _full_folder_blockers(self, canonical: str) -> list[dict]:
+        """The folders a launch may not start in are the same as for the safe one (the home directory itself, credentials,
+        tool state, the state directory): a full-mode terminal starts in the folder, and the person chose it here."""
+        from . import config as cfg
+        allowed_root = self._allowed_root() if callable(self._allowed_root) else self._allowed_root
+        try:
+            agent_sessions._check_workdir(canonical, allowed_root or str(Path.home()), Path(cfg.state_dir()))
+        except agent_sessions.LaunchRefused as exc:
+            return [{"code": exc.code, "message": str(exc)}]
+        return []
+
+    @staticmethod
+    def _full_command_view(engine: str, argv: list, got: dict) -> tuple[dict, list]:
+        """(what is carried and how, the command as the pass shows it). The instruction argument is shown as a
+        placeholder with its length in the command and in full under ``instructions.text``."""
+        carried = None
+        if engine == "claude" and "--append-system-prompt" in argv:
+            carried = argv[argv.index("--append-system-prompt") + 1]
+        command = [f"<職位指示，共 {len(carried)} 字>" if carried is not None and a == carried else a for a in argv]
+        has_text = bool(got.get("text"))
+        delivery = position_guide.instructions_delivery(engine, "full") if has_text else "none"
+        if delivery == "argv" and carried is None:
+            delivery = "none"                               # nothing usable was left of it after cleaning
+        view = {"delivery": delivery, "source": got["source"], "position": got["position"],
+                "text": carried if delivery == "argv" else got.get("text"),
+                "where": position_guide.instructions_where(engine, "full") if delivery != "none"
+                else "這張卡沒有職位指示（沒有自訂，也沒有選職位），所以出發時不帶任何指示。"}
+        return view, command
+
+    @staticmethod
+    def _full_notes(profile: dict) -> list[str]:
+        """What the card says that a full launch will not do. An intent of "deny" is a record in a card; the safe launch
+        refuses a card it cannot honour, the full one does not look at it, so the pass says that it is not kept."""
+        intents = profile.get("permission_intents") or {}
+        return [f"這張卡的權限意圖把「{INTENT_LABELS[key]}」寫成禁止；完整模式不會執行這個意圖，VBear 也不會擋"
+                for key in ("read", "write", "test", "deploy") if intents.get(key) == "deny"]
+
     @staticmethod
     def _position_view(profile: dict, engine, canonical) -> dict:
         """What the pass says about the card's launch mode and position (P34-2): the mode and its sentence, the
@@ -564,22 +670,25 @@ class PreviewStore:
             current = load_profile(entry["profile_id"])
             if current is None or profile_digest(current) != entry["profile_digest"]:
                 raise PreviewError(409, "profile_drift", "角色卡在預覽之後已變更；請重新產生預覽")
-            try:
-                if manifest.get("cli_verified") is False:
-                    # accept_unverified_cli is True here (checked above, before consuming).
-                    launch = self._runtime.launch_prepared_agent_after_acknowledgement
-                else:
-                    launch = getattr(self._runtime, "launch_prepared_agent", None)
-                    if launch is None:
-                        launch = self._runtime.launch_prepared_claude
-                result = launch(entry["prepared"], cols=cols, rows=rows)
-            except cli_versions.VersionAssertionError as exc:
-                raise PreviewError(409, "cli_drift", f"CLI 在 preview 之後已變更：{exc}") from exc
-            except NativeRuntimeUnavailable as exc:
-                raise PreviewError(503, "runtime_unavailable", str(exc)) from exc
-            except NativeRuntimeError as exc:
-                # The daemon re-validates settings, paths and the CLI file and refuses on any change.
-                raise PreviewError(409, "launch_refused", f"啟動前重新驗證未通過：{exc}；請重新 preview") from exc
+            if entry.get("full"):
+                result = self._launch_full(entry, cols, rows)
+            else:
+                try:
+                    if manifest.get("cli_verified") is False:
+                        # accept_unverified_cli is True here (checked above, before consuming).
+                        launch = self._runtime.launch_prepared_agent_after_acknowledgement
+                    else:
+                        launch = getattr(self._runtime, "launch_prepared_agent", None)
+                        if launch is None:
+                            launch = self._runtime.launch_prepared_claude
+                    result = launch(entry["prepared"], cols=cols, rows=rows)
+                except cli_versions.VersionAssertionError as exc:
+                    raise PreviewError(409, "cli_drift", f"CLI 在 preview 之後已變更：{exc}") from exc
+                except NativeRuntimeUnavailable as exc:
+                    raise PreviewError(503, "runtime_unavailable", str(exc)) from exc
+                except NativeRuntimeError as exc:
+                    # The daemon re-validates settings, paths and the CLI file and refuses on any change.
+                    raise PreviewError(409, "launch_refused", f"啟動前重新驗證未通過：{exc}；請重新 preview") from exc
         except PreviewError as exc:
             # 503: either nothing was sent (the runtime already removed the prepared
             # state) or the outcome is unknown and the daemon may own the launch; a
@@ -599,6 +708,22 @@ class PreviewStore:
         with self._lock:
             self._previews.pop(preview_id, None)
         return result
+
+    def _launch_full(self, entry: dict, cols, rows) -> dict:
+        """Start the terminal of a full-mode preview. Only the file is looked at again: if the tool is not where it was,
+        or is not the same file, the preview is void. Nothing is checked about its version or what it will do."""
+        full = entry["full"]
+        found = self._runtime.full_cli(full["engine"])
+        if found is None or found["path"] != full["path"] or list(found["identity"]) != list(full["identity"]):
+            raise PreviewError(409, "cli_drift", f"{full['engine']} 在預覽之後已變更或消失；請重新產生預覽")
+        try:
+            session = self._runtime.launch_full_agent(full["engine"], full["argv"], full["cwd"], cols=cols, rows=rows)
+        except NativeRuntimeUnavailable as exc:
+            raise PreviewError(503, "runtime_unavailable", str(exc)) from exc
+        except NativeRuntimeError as exc:
+            raise PreviewError(409, "launch_refused", f"啟動被拒絕：{exc}；請重新 preview") from exc
+        return {"session": session, "launch_id": None, "version_assertion": None, "boundary": None,
+                "state": "full_mode", "launch_mode": "full"}
 
     def close(self) -> None:
         with self._lock:

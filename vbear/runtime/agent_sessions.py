@@ -297,6 +297,81 @@ def codex_argv(manifest: dict) -> list[str]:
     return argv
 
 
+# --- full mode (P34-3) ----------------------------------------------------------------------------------------
+# A card set to full mode starts the tool the way a person would start it in their own terminal: the user's own
+# settings, skills, CLAUDE.md, MCP servers and plugins, and the network. VBear adds no sandbox, no settings file, no
+# tool list and no scratch directory, so nothing here is a limit and none of the evidence of the safe launch applies.
+# The command is a list built on the server (never a shell); the daemon checks the shape again before it opens the
+# terminal. Only Claude Code takes the card's instructions on the command line (one `--append-system-prompt`
+# argument); for Codex and AGY the instructions are what the paste button gives, and nothing is added for them.
+FULL_ENGINES = ("claude", "codex", "agy")
+FULL_INSTRUCTION_MAX = 2000
+# What leads an instruction that starts with a dash, so that no argument of the command can be read as a flag.
+FULL_INSTRUCTION_LEAD = "職位指示："
+_FULL_MODEL_FLAG = {"claude": "--model", "codex": "-m", "agy": "--model"}
+
+
+def full_instruction_arg(text) -> str | None:
+    """The card's instructions as one command-line argument, or None for none: control, format and separator
+    characters (other than a line break or a tab) are removed, line breaks become a single newline, the ends are
+    trimmed, the length is cut to FULL_INSTRUCTION_MAX characters, and a text that starts with a dash gets a sentence
+    in front so it can never be taken for an option."""
+    import unicodedata
+    if not isinstance(text, str):
+        return None
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(ch for ch in text if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cf", "Zl", "Zp"))
+    text = text.strip()[:FULL_INSTRUCTION_MAX].strip()
+    if not text:
+        return None
+    return FULL_INSTRUCTION_LEAD + text if text.startswith("-") else text
+
+
+def full_argv(engine, binary, model_id, instructions) -> list[str]:
+    """The command of a full-mode launch. ``binary`` is the absolute path the tool was found at (its file name is the
+    tool's name). Raises LaunchRefused for anything that is not a plain case: an engine VBear does not start this way,
+    a binary that is not an absolute path to the tool, a model id that could be taken for an option."""
+    if engine not in FULL_ENGINES:
+        raise LaunchRefused("manifest_invalid", "完整模式只能出發 Claude Code、Codex 或 AGY")
+    if (not isinstance(binary, str) or not binary or "\0" in binary or not os.path.isabs(binary)
+            or os.path.basename(binary) != engine):
+        raise LaunchRefused("invalid_binary", f"{engine} 必須是絕對路徑，檔名就是 {engine}")
+    argv = [binary]
+    if model_id:
+        if not isinstance(model_id, str) or not MODEL_ID_RE.match(model_id):
+            raise LaunchRefused("invalid_model", "model id 格式不符")
+        argv += [_FULL_MODEL_FLAG[engine], model_id]
+    if engine == "claude":
+        arg = full_instruction_arg(instructions)
+        if arg:
+            argv += ["--append-system-prompt", arg]
+    return argv
+
+
+def full_argv_problem(engine, argv) -> str | None:
+    """Why ``argv`` is not a command ``full_argv`` could have built for ``engine`` (None when it is). The daemon asks
+    this before it opens a full-mode terminal, so it never starts a command with a flag the server would not add."""
+    if engine not in FULL_ENGINES:
+        return "不支援的工具"
+    if not (isinstance(argv, list) and 1 <= len(argv) <= 5 and all(isinstance(x, str) and x and "\0" not in x for x in argv)):
+        return "argv 的形狀不對"
+    binary, rest = argv[0], argv[1:]
+    if not os.path.isabs(binary) or os.path.basename(binary) != engine:
+        return f"argv[0] 必須是 {engine} 的絕對路徑"
+    flag, instruction = _FULL_MODEL_FLAG[engine], "--append-system-prompt"
+    if rest[:1] == [flag]:
+        if len(rest) < 2 or not MODEL_ID_RE.match(rest[1]):
+            return "model id 格式不符"
+        rest = rest[2:]
+    if rest and engine == "claude" and rest[0] == instruction:
+        if len(rest) != 2 or rest[1].startswith("-") or len(rest[1]) > FULL_INSTRUCTION_MAX + len(FULL_INSTRUCTION_LEAD):
+            return "職位指示必須是單一個不以 - 開頭、長度受限的引數"
+        rest = []
+    if rest:
+        return "argv 含有完整模式不會加的引數"
+    return None
+
+
 def managed_argv(manifest: dict) -> list[str]:
     engine = manifest.get("engine")
     if engine == "claude":

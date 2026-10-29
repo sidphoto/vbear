@@ -92,7 +92,7 @@ class CatalogTests(P342ApiCase):
         self.assertEqual(legal["views"]["claude"]["full"]["launch_mode"], "full")
         self.assertEqual([m["id"] for m in cat["launch_modes"]], ["full", "safe"])
         self.assertEqual(cat["default_launch_mode"], "full")
-        self.assertIs(cat["full_mode_launchable"], False)
+        self.assertIs(cat["full_mode_launchable"], True)
         self.assertEqual(cat["max_instructions"], 2000)
         self.assertIn("貼上職位指示", cat["instructions_where"])
         self.assertIn("legal", {c["id"] for c in cat["skill_categories"]} | {"legal"})
@@ -208,25 +208,28 @@ class PassTests(P342ApiCase):
         pv = r["preview"]
         self.assertEqual((pv["launch_mode"], pv["position"], pv["boundaries"], pv["folder_warning"]), ("safe", None, None, None))
 
-    def test_a_full_mode_card_is_not_started_and_nothing_is_prepared(self):
+    def test_a_full_mode_card_is_never_started_as_a_safe_one(self):
+        # the launch of a full card is tests/test_p34_full_launch.py's; here, that a tool nobody can find is said, and that
+        # nothing was prepared or started for it
         pid = self.save(position="executor", launch_mode="full")
         before = self.sessions()
-        st, r = self.preview(pid)
+        with mock.patch("vbear.runtime.native._full_cli_path", return_value=None):
+            st, r = self.preview(pid)
         self.assertEqual(st, 200, r)
         pv = r["preview"]
         self.assertFalse(pv["launchable"])
         self.assertIsNone(pv["preview_id"])
-        self.assertEqual([x["code"] for x in pv["reasons"]], ["full_mode_not_available"])
+        self.assertEqual([x["code"] for x in pv["reasons"]], ["cli_not_found"])
         self.assertIsNone(pv["settings_digest"])
         self.assertEqual(pv["launch_mode"], "full")
         self.assertEqual({b["kind"] for b in pv["boundaries"]["items"]}, {"reminder"})
         self.assertEqual(self.sessions(), before, "no session was started")
 
-    def test_the_loadout_of_a_full_card_says_it_cannot_depart_and_has_no_armor(self):
+    def test_the_loadout_of_a_full_card_has_no_blocker_and_no_armor(self):
         pid = self.save(position="executor", launch_mode="full")
         st, ld = self.req("GET", f"/api/agent-profiles/{pid}/loadout")
         self.assertEqual(st, 200)
-        self.assertEqual([b["code"] for b in ld["blockers"]], ["full_mode_not_available"])
+        self.assertEqual(ld["blockers"], [])
         self.assertFalse(ld["armor"]["applicable"])
         self.assertEqual(ld["launch_mode"]["mode"], "full")
 

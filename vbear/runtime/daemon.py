@@ -131,6 +131,7 @@ RPC_OPS: dict[str, frozenset] = {
     "shutdown": frozenset({"force"}),
     "open": frozenset({"argv", "cwd", "cols", "rows", "env", "kind"}),
     "open_managed": frozenset({"launch_id", "cols", "rows"}),
+    "open_full": frozenset({"engine", "argv", "cwd", "cols", "rows"}),
     "list": frozenset(),
     "close": frozenset({"session_id"}),
     "attach": frozenset({"session_id", "mode", "cols", "rows"}),
@@ -351,6 +352,7 @@ class Session:
         self.launch_id: str | None = None
         self.engine: str | None = None      # "claude" / "codex" for a managed session
         self.kind: str | None = None        # "shell" for a user-opened login shell (label only)
+        self.launch_mode: str | None = None  # "full" for a full-mode terminal (P34-3); it has no launch state and no sandbox
         self.tracker: proctrack.DescendantTracker | None = None
         self.extra_groups: list[int] = []   # verified descendant groups, from the last look
         self.extra_alive = False            # an observed descendant outside our group still exists
@@ -453,6 +455,7 @@ class Session:
                 "attachments": len(self.attachments),
                 "control_attachment": self.control.aid if self.control else None,
                 "managed": self.launch_id, "engine": self.engine, "kind": self.kind,
+                "launch_mode": self.launch_mode,
                 "cli_version": self.cli_version,
                 "activity_evidence": ({"claude_title": self.titles.snapshot()}
                                       if self.titles is not None else None)}
@@ -1184,6 +1187,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             return self._op_open(rid, req)
         if op == "open_managed":
             return self._op_open_managed(rid, req)
+        if op == "open_full":
+            return self._op_open_full(rid, req)
         if op == "close":
             return self._op_close(rid, req, conn)
         if op == "shutdown":
@@ -1458,6 +1463,38 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         except OSError as exc:
             return _err(rid, "internal", f"無法啟動：{exc}")
         sess.kind = kind
+        return _ok(rid, sess.info())
+
+    def _op_open_full(self, rid: str, req: dict) -> dict:
+        """Open a terminal for a card set to full mode (P34-3): the tool as the person would start it themselves.
+
+        There is no launch id, no manifest, no settings file and no scratch: nothing is limited, so nothing is
+        recorded as a limit. The command must be exactly a shape ``agent_sessions.full_argv`` builds; the
+        environment is the plain one (PATH, TERM, LANG, HOME and the user's name), no credential is added."""
+        if self._shutdown_requested:
+            return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
+        engine, argv = req.get("engine"), req.get("argv")
+        problem = agent_sessions.full_argv_problem(engine, argv)
+        if problem:
+            return _err(rid, "bad_request", problem)
+        cwd = req.get("cwd")
+        if not (isinstance(cwd, str) and "\0" not in cwd and os.path.isabs(cwd) and os.path.isdir(cwd)):
+            return _err(rid, "bad_request", "cwd 必須是既存的絕對路徑資料夾")
+        cols, rows = req.get("cols", 80), req.get("rows", 24)
+        if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
+            return _err(rid, "bad_request", "cols/rows 必須是 1–1000 的整數")
+        refused = self._session_room(rid)          # terminals, streams and held leaders together
+        if refused:
+            return refused
+        env = build_env()
+        if _resolve(argv[0], cwd, env["PATH"]) is None:
+            return _err(rid, "not_found", f"找不到可執行的指令：{argv[0]}")
+        try:
+            sess = self._spawn(argv, cwd, cols, rows, env)
+        except OSError as exc:
+            return _err(rid, "internal", f"無法啟動：{exc}")
+        sess.engine = engine
+        sess.launch_mode = "full"
         return _ok(rid, sess.info())
 
     def _op_open_managed(self, rid: str, req: dict) -> dict:
