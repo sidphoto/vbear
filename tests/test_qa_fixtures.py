@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from tests import qa_game_ui as qa
-from vbear import flows, tasks, translations
+from vbear import flows, headless_cli, tasks, translations
 
 
 class _Qa(qa._Env):
@@ -49,7 +49,7 @@ class FakeTranslationTests(_Qa):
 
     def test_verify_succeeds_and_never_looks_for_the_real_claude(self):
         with mock.patch.object(translations.shutil, "which", side_effect=AssertionError("the real claude")), \
-             mock.patch.object(translations.subprocess, "Popen", wraps=translations.subprocess.Popen) as popen:
+             mock.patch.object(headless_cli.subprocess, "Popen", wraps=headless_cli.subprocess.Popen) as popen:  # the one place a translation starts a program
             status, result = self.call("/api/translations/verify", "POST", {})
         self.assertEqual(status, 200, result)
         self.assertEqual(result["version"], "2.1.296")
