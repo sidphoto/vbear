@@ -1,24 +1,14 @@
 # Changelog
 
-## v0.9.0 — one-person-company positions and a profession picker you can read
+## v0.9.0 — seven positions, role instructions, full-mode launches and office meetings
 
-- **The card wizard's profession is now a picker you can read and use.** It moved out of 進階 to step 2, under the
-  suggested position, as one line (目前：…) that opens into a search, buttons for the position each role probably fits,
-  and a list. It lists only your card's own tool (a Claude Code card no longer lists Codex roles) and no longer lists the
-  two "main agent" entries, which were the tools themselves, not professions. Every name shows in Chinese beside the
-  English once translated, with 待翻 on the ones that are not, and each row has one line of what the role does: the
-  translated sentence (marked 機器翻譯), or the author's first 60 characters (marked 原文), plus a position guess made
-  from the name or the first sentence of the description (marked as a guess; the roles it cannot place sit in 其他).
-  Choosing a role shows what it brings and each item is one click: its guessed position (put on the card only when the
-  card has none, otherwise offered as a button), the skills the template names that your card's tool can read (一起插上,
-  seen in step 3), and the model it names (套用模型). Choosing only labels the card: launching still does not load the
-  role's instructions. When names are still English, the open picker says so and offers 把職業名稱翻成中文; it asks
-  before anything is sent, and when the first translation needs the one-time safety check it offers 先檢查 there (also
-  asking first). 先不翻 folds the prompt into one small button. A label the card already holds from another tool, from
-  the tool itself, or from a role the index no longer finds stays, with the reason and a 解除 button; nothing is cleared
-  for you. Roles of a plugin that is switched off are behind 也顯示用不到的. The back of a card calls the row 職業 and adds
-  the one Chinese sentence. VBear's own two main-agent names are no longer sent for translation. The choice is still
-  saved as the role id.
+Role cards now follow the seven positions of a one-person company, carry instructions and a launch mode, and can hold
+a meeting: the positions talk a question over in writing, the CEO decides, and what is major waits for you, the
+chairman. A card in the new full mode starts its tool the way you would in your own terminal, with nothing limited by
+VBear; the safe mode is the sandboxed launch VBear had before, unchanged, and every card saved before this version
+stays in it. This version was never published on its own, so this section is everything since v0.8.9, the profession
+picker and the hover box for skill descriptions included; going back to v0.8.9 is described once, at the end.
+
 - **A role card's suggested position now follows the seven positions of a one-person company.** Step 2 of the card
   wizard offers CEO, 全端工程師, 社群媒體經理 and 藝術總監 as the positions done on a task card, PM, 法務經理 and 會計師
   as staff, and 先不指定 beside the staff row. The independent review is not one of the seven: it is VBear's own review
@@ -37,8 +27,7 @@
   that place chosen for you (a review card gets the empty review place; a PM or other staff card gets none); nothing is
   written until you press 放上去. The profession picker guesses among the same eight positions (a security, test or review
   role fits the review gate, a legal or compliance role 法務經理, a finance role 會計師). The task card's places and its
-  saved flow are unchanged. Going back to an earlier version shows a position it does not know as not specified, and
-  saving the card there clears it.
+  saved flow are unchanged.
 - **A role card's position is now kept on the card, not only in the browser.** The card has an optional `position`
   field, so the position is still there in another browser or on another port (the app picks 7789 and up when 7788 is
   busy, and each port was its own browser store). The wizard and the starter deck send the position with the card, a
@@ -47,21 +36,7 @@
   note is still written too. A card with no position stores nothing new, so its revision does not change, while a
   position counts in the revision like any other field. A position this version does not list (written by a newer
   one) shows as 先不指定, is kept when you save without touching it, and does not make the card file unreadable. The
-  save refuses a position outside the eight listed ones. Going back to an earlier version reads the card file as
-  before, and the page there falls back to the position the browser remembers.
-- **Switching a card off or on no longer clears its profession.** The 停用／啟用 button on the 角色 tab of the terminal
-  workbench sends only the new on/off state, and the save treated the missing profession as "none", so the card lost
-  its profession. A save that leaves out the profession now keeps the stored one; sending `null` or an empty value still
-  clears it, and the card wizard and the starter deck send the same data as before.
-- **Skill descriptions that are cut short on a card can now be read whole.** Rest the pointer on a skill card (in the
-  skill library, the four-state overview and step 3 of the card wizard) or on the description in the skills table, or
-  move to it with the Tab key, and a small box opens with the full text: the whole Chinese description, when to use it
-  and what it needs if the author said so, a line that it is a machine translation, and the original underneath; a
-  skill that has no translation shows its whole original. A long text scrolls inside the box, you can move the pointer
-  into it, and it moves out of the way of the window edge. Esc, moving away, or leaving the card closes it, and it never
-  takes the keyboard focus or covers the card. The cards keep their short line, and 看完整說明 in the wizard is still
-  there for touch screens. To make this possible the card wizard is now sent up to 2000 characters of a skill's
-  original description (it was 140); nothing is sent anywhere else.
+  save refuses a position outside the eight listed ones.
 - **A role card can carry its own instructions, a launch mode and the boundaries that go with them.** The card
   wizard's step 2 has a box for the position's instructions (starting from the position's default, up to 2000
   characters, with 回復預設), a choice of how the card departs (完整模式 for a new card, 安全模式 for the sandboxed
@@ -72,7 +47,7 @@
   a card and the pass say where the instructions go, the pass suggests a folder name for the position (a suggestion, not
   a check), and step 3 marks the skills that fit the position as 推薦 with a 只看推薦 toggle. Two skill categories are new,
   法規與合規 and 財務與帳務, so the skill index version is now 3 and the index is rebuilt once. Cards without the new
-  fields store nothing new. An earlier version does not know the two fields: it still reads the card file, and whether the fields survive saving a card there is not promised.
+  fields store nothing new.
 - **A card in full mode now departs, with nothing limited.** 完整模式 starts Claude Code, Codex or AGY the way you would
   start it in your own terminal: your own settings, skills, `CLAUDE.md`, MCP servers and plugins, and the network. VBear
   adds no sandbox, no `--safe-mode`, no settings file, no tool list and no scratch folder, so the pass for such a card
@@ -89,6 +64,84 @@
   followed by the task; with no card or no instructions the plan is the same text as before, and an already approved
   flow keeps its own plan. The approval dialog says which card, and the dispatch box has 加上職位指示, which puts the same
   text first in the box without sending anything.
+- **Meetings: the positions talk a question over in writing, the CEO decides, and what is major waits for you.** The new
+  會議 page (`#/meetings`, also 開會討論 on a task card of the home page and of the workbench) takes a topic, an optional
+  supplement and task card, a chair (an enabled card whose saved position is CEO), up to six speakers with one card per
+  position (PM, 全端工程師, 社群媒體經理, 藝術總監, 法務經理, 會計師) and six 涉及 boxes (對外發布, 花錢, 刪除資料, 法律或合約,
+  上線部署, 個資). 預覽（還不會開始） shows, before anything is sent, every card's instructions and the whole text each call
+  will send, the model, the number of calls and the money reserved, the day's spending and whether this Claude Code
+  version has passed the tool-less check; only 開始開會 starts the meeting, and the preview is used once and lapses after
+  five minutes. Each speaker answers once without seeing the others (with a task card, the PM also gets a progress
+  summary VBear writes from its records, and the accountant what the meeting has cost so far); then the CEO reads every
+  answer and writes a decision with its reasons and actions. Every call is Claude Code with no tools at all, the kind of
+  call a skill translation makes: each call's own start is checked for only StructuredOutput and no MCP server, and
+  anything else stops it at once, throws its answer away and voids that version's check until it is checked again. A
+  Codex or AGY card does not speak itself: Claude speaks for it with that position's instructions, marked 代發言. The
+  texts go through your own Claude Code to Anthropic under your account, with secret-shaped text masked; a task card's
+  fields are sent, never its folder. A fixed table, R1–R8, decides whether the decision goes to you: a box you ticked;
+  an action that publishes, deploys, pays, deletes, signs or changes a price; a keyword or any amount of money in the
+  topic, the supplement or the decision; a high risk, or a legal risk with no source (查無出處); the legal manager
+  opposing; a speaker that failed; or anyone asking for you. A model's fields are read only to raise that verdict, never
+  to lower it, and the keyword list can miss a paraphrase, which is what the 涉及 boxes are for. You approve or veto at
+  the 董事長桌 with a note, a record in the console (主控台記錄（未驗證身分）): anyone who can use the console can press it.
+  A decision that does not need you reads CEO 已決定, and you can still veto it. A decision is only a record: VBear
+  carries out nothing, and 寫進任務卡 opens the task card's editor with the decision added to its goal, for you to save.
+  Spending has three limits, kept in `config.json` as `meeting_limits` (US$0.20 per call, 1.50 per meeting and 3.00 per
+  day by default): a call counts what Claude Code reported, or the per-call limit when it reported nothing; the figures
+  are Claude Code's estimates, not a bill; the page turns yellow at 80% of the day's limit and starts no meeting and no
+  retry at 100%. A failed speaker is never retried by itself: you can retry it twice through its own small preview, and
+  a third failure blocks it. When the console restarts, the call that was running is interrupted and nothing resumes.
+  When this Claude Code version has not passed the check, the preview offers 先做無工具安全檢查, asked in the page first:
+  it is the translations' check and is kept in the same record, but always of Claude Code, whichever engine the
+  translations use. Each meeting is one file in `meetings/` in VBear's state folder; a meeting writes no task card, no
+  flow and nothing in a project folder.
+- **The office has a meeting room and a chairman's desk, and the home page lists the meetings that wait for you.** The
+  office's 會議室 shows the newest meeting that is running or waiting for you (the others as 還有 N 場): each participant
+  at the table, drawn by its card's tool, with the words over it taken only from the meeting's record through a closed
+  list (等發言, 發言中, 支持, 反對, 有條件支持, 要更多資訊, 失敗, …; for the CEO 整理意見中, 已決定, 交董事長), and a
+  spoken-for card marked 代發言. The 董事長桌 under it counts the meetings waiting for your approval and has 去核准. The home
+  page's 輪到你 lists those meetings (輪到你：董事長核准), and a task card in the workbench lists its own meetings. A meeting
+  record that cannot be read is said so, never taken for no meeting.
+- **The card wizard's profession is now a picker you can read and use.** It moved out of 進階 to step 2, under the
+  suggested position, as one line (目前：…) that opens into a search, buttons for the position each role probably fits,
+  and a list. It lists only your card's own tool (a Claude Code card no longer lists Codex roles) and no longer lists the
+  two "main agent" entries, which were the tools themselves, not professions. Every name shows in Chinese beside the
+  English once translated, with 待翻 on the ones that are not, and each row has one line of what the role does: the
+  translated sentence (marked 機器翻譯), or the author's first 60 characters (marked 原文), plus a position guess made
+  from the name or the first sentence of the description (marked as a guess; the roles it cannot place sit in 其他).
+  Choosing a role shows what it brings and each item is one click: its guessed position (put on the card only when the
+  card has none, otherwise offered as a button), the skills the template names that your card's tool can read (一起插上,
+  seen in step 3), and the model it names (套用模型). Choosing only labels the card: launching still does not load the
+  role's instructions. When names are still English, the open picker says so and offers 把職業名稱翻成中文; it asks
+  before anything is sent, and when the first translation needs the one-time safety check it offers 先檢查 there (also
+  asking first). 先不翻 folds the prompt into one small button. A label the card already holds from another tool, from
+  the tool itself, or from a role the index no longer finds stays, with the reason and a 解除 button; nothing is cleared
+  for you. Roles of a plugin that is switched off are behind 也顯示用不到的. The back of a card calls the row 職業 and adds
+  the one Chinese sentence. VBear's own two main-agent names are no longer sent for translation. The choice is still
+  saved as the role id.
+- **Switching a card off or on no longer clears its profession.** The 停用／啟用 button on the 角色 tab of the terminal
+  workbench sends only the new on/off state, and the save treated the missing profession as "none", so the card lost
+  its profession. A save that leaves out the profession now keeps the stored one; sending `null` or an empty value still
+  clears it, and the card wizard and the starter deck send the same data as before.
+- **Skill descriptions that are cut short on a card can now be read whole.** Rest the pointer on a skill card (in the
+  skill library, the four-state overview and step 3 of the card wizard) or on the description in the skills table, or
+  move to it with the Tab key, and a small box opens with the full text: the whole Chinese description, when to use it
+  and what it needs if the author said so, a line that it is a machine translation, and the original underneath; a
+  skill that has no translation shows its whole original. A long text scrolls inside the box, you can move the pointer
+  into it, and it moves out of the way of the window edge. Esc, moving away, or leaving the card closes it, and it never
+  takes the keyboard focus or covers the card. The cards keep their short line, and 看完整說明 in the wizard is still
+  there for touch screens. To make this possible the card wizard is now sent up to 2000 characters of a skill's
+  original description (it was 140); nothing is sent anywhere else.
+- **Going back to v0.8.9.** v0.8.9 reads what this version wrote. It reads the role card file and leaves the new fields
+  `position`, `instructions` and `launch_mode` on every card it does not touch, but saving or copying a card there
+  writes that card without them. It has no full mode: a card made for it is started there with v0.8.9's sandboxed launch
+  (which starts Claude Code cards only). The page there shows the position this browser remembers, and only the three
+  positions it knows (CEO, 全端工程師 and 獨立審查, which it calls 規劃, 執行 and 審查); any other reads as not specified.
+  The skill index is rebuilt once each way (its version is 3 here and 2 there), and the two new skill categories are not
+  there. The `meetings/` folder and the `meeting_limits` in `config.json` are left as they are and not used, so coming
+  back finds them again. A flow approved here keeps the plan it saved in `plan.txt`, instructions included, and
+  `translation-boundaries.json` is the same file both ways, so a version checked for meetings counts for translations
+  there too.
 
 ## v0.8.9 — skills by use, role names in Chinese, a model menu
 

@@ -193,6 +193,32 @@ class ChangelogRelease(unittest.TestCase):
                       "kept on the card", "read whole"):
             self.assertIn(topic, section, topic)
 
+    def test_the_v090_section_covers_the_meetings_and_the_office(self):
+        section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
+        for topic in ("`#/meetings`", "開會討論", "no tools", "StructuredOutput", "代發言", "R1–R8", "only to raise",
+                      "董事長桌", "未驗證身分", "寫進任務卡", "`meeting_limits`", "80%", "Anthropic", "never its folder",
+                      "會議室", "去核准", "輪到你：董事長核准", "carries out nothing"):
+            self.assertIn(topic, section, topic)
+
+    def test_the_v090_section_is_one_release_with_one_way_back(self):
+        """v0.9.0 was never published on its own: its section reads as one release (a title that names the meetings, a
+        short summary first) and says once, in one place, what going back to v0.8.9 does."""
+        self.assertEqual(self.text.count("\n## v0.9.0"), 1)
+        heading = re.search(r"^## (v0\.9\.0.*)$", self.text, re.M)[1]
+        self.assertIn("meetings", heading)
+        section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
+        first = section.split("\n\n")[1]
+        self.assertFalse(first.startswith("- "), "a summary comes before the list")
+        for scattered in ("Going back to an earlier version", "An earlier version does not know",
+                          "Going back to an earlier version reads the card file"):
+            self.assertNotIn(scattered, section)
+        self.assertEqual(section.count("**Going back to v0.8.9.**"), 1)
+        back = section[section.index("**Going back to v0.8.9.**"):]
+        for fact in ("`position`", "`instructions`", "`launch_mode`", "saving or copying a card", "sandboxed launch",
+                     "this browser remembers", "index", "`meetings/`", "`meeting_limits`", "`plan.txt`",
+                     "`translation-boundaries.json`"):
+            self.assertIn(fact, back, fact)
+
     def test_the_v089_section_covers_the_category_row(self):
         section = self.text[self.text.index("## v0.8.9"):self.text.index("## v0.8.8")]
         for topic in ("sorts the skills by use", "全部", "其他", "rough"):
