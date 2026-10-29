@@ -12089,13 +12089,15 @@ const MEETING_FLAGS = [["publish", "對外發布"], ["spend", "花錢"], ["delet
 // The positions that may speak and the one that chairs (vbear/meeting_runner.py SPEAKER_POSITIONS and CHAIR_POSITION).
 const MEETING_SPEAKER_POSITIONS = ["pm", "social", "executor", "art", "legal", "accountant"];
 const MEETING_CHAIR_POSITION = "planner";
-// What a failed turn's code means. A code not in this table is shown as it is.
+// What a turn's code means: the codes vbear/meeting_runner.py, headless_cli.py and meetings.py end a turn with (a test reads
+// them from those files). A code not in this table is shown as it is. What a turn cost is in its evidence, not here.
 const MEETING_ERROR_TEXT = {
   timeout: "逾時（超過 120 秒）", cli_failed: "Claude Code 執行失敗", cli_error: "Claude Code 回報錯誤",
-  invalid_output: "輸出不合格式，已丟棄", tools_not_clean: "這次呼叫的工具清單不是只有 StructuredOutput，已停止並撤銷這個版本的通過紀錄",
+  invalid_output: "輸出不合格式，已丟棄", not_traditional: "輸出含簡體字，已丟棄",
+  tools_not_clean: "這次呼叫回報的工具不是只有 StructuredOutput（或有 MCP），已停止、結果不採用，並撤銷這個版本的通過紀錄",
   budget: "額度不夠，沒有送出", no_opinions: "沒有任何發言可以整理，沒有送出", prompt_changed: "送出前的內容和預覽不同，沒有送出",
-  restart: "主控台重新啟動，這一位被中斷（費用以最壞情況計）", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
-  process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行",
+  restart: "主控台重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
+  process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行", internal: "VBear 內部錯誤，這次的結果不採用",
 };
 function meetingErrorText(code) {
   if (typeof code !== "string" || !code) return "";
@@ -12616,9 +12618,14 @@ async function viewMeetingDetail(token, id) {
       const why = meetingErrorText(t.error_code);
       body.push(el("p", { class: "small", "data-mt": "reason" }, `${MEETING_BUBBLES.includes(seat.bubble) ? seat.bubble : MEETING_UNKNOWN}${why ? "：" + why : ""}`));
     } else body.push(el("p", { class: "small muted" }, "紀錄裡沒有這一位的發言。"));
-    const retry = t && Array.isArray(cur.retryable) && cur.retryable.includes(t.seq) && cur.status !== "running"
+    // the server refuses a retry once the chairman has decided (already_decided): it is not offered, and the page says so
+    const chair = cur.chairman && typeof cur.chairman === "object" ? cur.chairman.state : "";
+    const decided = chair === "approved" || chair === "rejected";
+    const canRetry = t && Array.isArray(cur.retryable) && cur.retryable.includes(t.seq) && cur.status !== "running";
+    const retry = canRetry && !decided
       ? el("button", { class: "btn small", type: "button", "data-mt": "retry", on: { click: () => retryOf(t.seq) } },
-        `重試這一位（先給你看預覽）`) : null;
+        `重試這一位（先給你看預覽）`)
+      : canRetry ? el("p", { class: "small muted", "data-mt": "no-retry" }, "董事長已經決定了，這場會議不能再重試；要重新討論，請開新的會議。") : null;
     return el("article", { class: "card mt-card", "data-mt": "seat", "data-profile": seat.profileId },
       el("div", { class: "mt-card-head" }, officeSprite(seat.species, seat.camp, 2),
         el("div", { style: "min-width:0" }, el("strong", null, seat.name),
@@ -13028,6 +13035,7 @@ if (typeof module !== "undefined" && module.exports) {
     boardTeamKey,
     ONBOARD_STEPS,
     MEETING_BUBBLES,
+    MEETING_ERROR_TEXT,
     meetingBubble,
     meetingSeats,
     meetingSeatNode,

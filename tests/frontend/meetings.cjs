@@ -499,6 +499,45 @@ test("a code the page does not know is shown as it is, never guessed", async () 
   assert(text(qa(main, "seat")[0]).includes("brand_new_code"));
 });
 
+test("every code the back end ends a turn with has plain words; no cost is claimed that the record does not hold", async () => {
+  // the codes are read from the back end's own source, so a new one there fails here until it has words
+  const src = (f) => fs.readFileSync(path.join(__dirname, "..", "..", "vbear", f), "utf8");
+  const codes = new Set(["invalid_output"]);   // meetings.OutputError's default
+  const grab = (s, re) => { for (const m of s.matchAll(re)) codes.add(m[1]); };
+  grab(src("headless_cli.py"), /HeadlessError\("([a-z_]+)"/g);
+  const runner = src("meeting_runner.py");
+  for (const re of [/HeadlessError\("([a-z_]+)"/g, /CallFailed\("([a-z_]+)"/g, /_end\(mid, [^,]+, "[a-z]+", "([a-z_]+)"/g, /\bcode = "([a-z_]+)"/g,
+    /\bstop = "([a-z_]+)"/g, /error_code="([a-z_]+)"/g]) grab(runner, re);
+  grab(src("meetings.py"), /OutputError\("([a-z_]+)"/g);
+  for (const code of ["timeout", "cli_failed", "tools_not_clean", "not_traditional", "internal", "restart", "budget", "no_opinions"]) {
+    assert(codes.has(code), "the scan finds " + code);
+  }
+  assert.strictEqual(typeof app.MEETING_ERROR_TEXT, "object");
+  for (const code of codes) assert(Object.prototype.hasOwnProperty.call(app.MEETING_ERROR_TEXT, code), "no words for " + code);
+  setPage();
+  const m = detail(meeting({ status: "incomplete", major: true, chairman: { state: "pending", at: null, note: "", label: "x" } }));
+  m.turns[0] = turn(1, "law", "opinion", "failed", { error_code: "not_traditional", evidence: evidence() });
+  m.turns[1] = turn(2, "art", "opinion", "interrupted", { error_code: "restart", attempts: 0, evidence: null });
+  m.turns[2] = turn(3, "ceo", "decision", "interrupted", { error_code: "restart", attempts: 0, evidence: null });
+  const main = await open("#/meetings/" + MID);
+  const seats = qa(main, "seat");
+  assert(text(seats[0]).includes("簡體"), text(seats[0]));
+  const reason = text(q(seats[1], "reason"));
+  assert(reason.includes("主控台重新啟動"), reason);
+  assert(!reason.includes("最壞情況"), "a turn that never ran is not said to be charged: " + reason);
+});
+
+test("once the chairman has decided, a failed speaker is not offered a retry, and the page says why", async () => {
+  setPage();
+  for (const state of ["approved", "rejected"]) {
+    const m = detail(meeting({ status: state, major: true, retryable: [2], chairman: { state, at: 1790009999, note: "", label: "x" } }));
+    m.turns[1] = turn(2, "art", "opinion", "failed", { error_code: "timeout", evidence: null });
+    const main = await open("#/meetings/" + MID);
+    assert.strictEqual(qa(main, "retry").length, 0, state);
+    assert(text(qa(main, "seat")[1]).includes("董事長已經決定"), text(qa(main, "seat")[1]));
+  }
+});
+
 test("the form goes by the position stored on the card (what the server checks), not a note kept only in this browser", async () => {
   setPage({ profiles: [cardOf("ceo", "執行長卡", "planner"), cardOf("law", "法務卡", "legal"), cardOf("old-pm", "舊位置的 PM", "records"),
     { id: "note-ceo", name: "只有備註的 CEO", enabled: true, model: { tool: "claude", model_id: "" } },
