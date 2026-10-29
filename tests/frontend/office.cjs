@@ -556,10 +556,10 @@ test("the office page: three areas, the counts twice, jump links, one button per
   const main = await open();
   assert.strictEqual(text(main.find((n) => n.tag === "h1")), "辦公室");
   const heads = main.findAll((n) => n.tag === "h2").map(text);
-  assert.deepStrictEqual(heads.slice(0, 3), ["工作站", "辦公桌", "休息室"]);
+  assert.deepStrictEqual(heads.slice(0, 4), ["工作站", "辦公桌", "會議室", "休息室"], "the meeting room (P34-5) sits between the desks and the lounge");
   assert.strictEqual(byClass(main, "office-counts").length, 2, "the counts at the top and at the foot of the scene");
   const jumps = byClass(main, "office-jump").map(text);
-  assert.deepStrictEqual(jumps, ["工作站", "辦公桌", "休息室"]);
+  assert.deepStrictEqual(jumps, ["工作站", "辦公桌", "會議室", "休息室"]);
   assert(text(main).includes("每 5 秒更新"));
   // each team and character is one button with a label of its name and its state or place
   const buttons = main.findAll((n) => n.getAttribute && n.getAttribute("data-office-key"));
@@ -1008,8 +1008,8 @@ test("on a phone: no scene, a list in the design's order; a row opens a full pan
     const main = await open();
     assert.strictEqual(byClass(main, "office-scene").length, 0, "the scene is not drawn");
     const heads = main.findAll((n) => n.tag === "h2").map(text);
-    assert.deepStrictEqual(heads, ["輪到你", "計畫板", "實作區", "審查室", "合併關卡", "辦公桌", "休息室"]);
-    assert.deepStrictEqual(byClass(main, "office-jump").map(text), ["輪到你", "工作站", "辦公桌", "休息室"]);
+    assert.deepStrictEqual(heads, ["輪到你", "計畫板", "實作區", "審查室", "合併關卡", "辦公桌", "休息室", "會議室"], "the meeting room (P34-5) closes the phone's list");
+    assert.deepStrictEqual(byClass(main, "office-jump").map(text), ["輪到你", "工作站", "辦公桌", "休息室", "會議室"]);
     const rows = byClass(main, "office-row");
     assert(rows.length >= 7);
     for (const r of rows) assert.strictEqual(r.tag, "button");

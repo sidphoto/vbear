@@ -147,7 +147,7 @@ test("all empty: flows loaded and empty, no agent waiting, runtime connected", (
   assert.strictEqual(g.allEmpty, true);
   assert.strictEqual(g.error, "");
   assert.deepStrictEqual(Object.keys(g).sort(),
-    ["allEmpty", "error", "inProgress", "moreInProgress", "runtimeAvailable", "yourTurnFlows", "yourTurnSessions"]);
+    ["allEmpty", "error", "inProgress", "meetingsError", "moreInProgress", "runtimeAvailable", "yourTurnFlows", "yourTurnMeetings", "yourTurnSessions"]);
 });
 
 // ---- boardKey -------------------------------------------------------------------------------------------------

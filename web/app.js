@@ -1598,7 +1598,7 @@ function roleTranslateRow() {
 
 // ---------- data -----------------------------------------------------------
 
-const D = { overview: null, skills: null, categories: [], roles: null, live: null, config: null, byId: new Map() };
+const D = { overview: null, skills: null, categories: [], roles: null, live: null, config: null, meetings: null, byId: new Map() };
 
 async function loadStatic(force) {
   if (force || !D.overview) D.overview = await api.get("/api/overview");
@@ -2155,7 +2155,7 @@ async function viewHome() {
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
   const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null)]);
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings()]);
   const L = D.live;
   const main = claim(token);
   const onboardingHost = el("div", { id: "h-onboarding" });
@@ -2193,7 +2193,7 @@ async function viewHome() {
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   noteTasks(tasksRes && tasksRes.tasks);
-  const board = boardGroups(L, D.flows);
+  const board = boardGroups(L, D.flows, D.meetings);
   boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
@@ -2244,7 +2244,9 @@ function waitsForYou(f) {
   return !!(f.phase && f.phase.key === "review_stale" && (!a || a.mode !== "auto" || a.held));
 }
 
-function boardGroups(live, flowsData) {
+// meetingsData (optional): the answer of GET /api/meetings. A meeting that waits for the chairman is on the board; a read that
+// failed is said (meetingsError); an answer that is not a list is treated as not read.
+function boardGroups(live, flowsData, meetingsData) {
   const L = live || {};
   const runtimeAvailable = !!(L.runtime && L.runtime.available);
   const sessions = Array.isArray(L.sessions) ? L.sessions : [];
@@ -2260,12 +2262,14 @@ function boardGroups(live, flowsData) {
   const open = flows.filter((f) => !(f.phase && f.phase.key === "done"));
   const yourTurnFlows = open.filter(waitsForYou);
   const rest = open.filter((f) => !waitsForYou(f));
+  const yourTurnMeetings = meetingsNeedingYou(meetingsData);
+  const meetingsError = meetingsData && typeof meetingsData === "object" && meetingsData.error ? String(meetingsData.error) : "";
   return {
-    error, yourTurnFlows, yourTurnSessions,
+    error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError,
     inProgress: rest.slice(0, BOARD_IN_PROGRESS_MAX),
     moreInProgress: Math.max(0, rest.length - BOARD_IN_PROGRESS_MAX),
     runtimeAvailable,
-    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable,
+    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length,
   };
 }
 
@@ -2308,6 +2312,7 @@ function boardKey(g, ctx) {
   return JSON.stringify({ error: g.error || "", runtime: !!g.runtimeAvailable, liveError: liveError || "",
     more: g.moreInProgress || 0, allEmpty: !!g.allEmpty,
     turn: g.yourTurnFlows.map(flowFields), sessions: g.yourTurnSessions.map(sessionFields),
+    meetings: (g.yourTurnMeetings || []).map((m) => [m.id, m.topic, m.status, m.created_at, m.spent_usd]), meetingsError: g.meetingsError || "",
     progress: g.inProgress.map(flowFields) });
 }
 
@@ -2435,12 +2440,14 @@ function boardSection(g, opts = {}) {
       el("div", { class: "empty-state quest-start" },
         el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
         el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到終端工作台"),
-        el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。")));
+        el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。"),
+        g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null));
   }
   const nTurn = g.yourTurnFlows.length;
   const nAgents = g.yourTurnSessions.length;
-  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
-  const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...g.yourTurnSessions.map(sessionCard)];
+  const nMeetings = (g.yourTurnMeetings || []).length;
+  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
+  const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard), ...g.yourTurnSessions.map(sessionCard)];
   let turnBody;
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
@@ -2458,6 +2465,7 @@ function boardSection(g, opts = {}) {
     el("section", { class: "section", "data-board": "turn" },
       sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到角色卡池頁查看`),
       flowsError(),
+      g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
       turnBody),
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
@@ -2992,6 +3000,7 @@ function officeKey(model) {
     stations: OFFICE_STATIONS.map((st) => [st, m.stations[st].more, m.stations[st].teams.map(team)]),
     desks: m.desks.map(desk),
     lounge: [m.lounge.more, m.lounge.total, m.lounge.items.map((p) => [p.key, p.name, p.tool, p.modelId, p.species, p.camp])],
+    room: m.room ? meetingRoomKey(m.room) : null,
   });
 }
 
@@ -3419,6 +3428,7 @@ function officeSections(m, S, fresh) {   // S.reloadRoster is set by the view
     el("section", { class: "office-section", "data-office-section": "desks" },
       el("h2", { id: "office-desks", tabindex: "-1" }, "辦公桌"),
       el("p", { class: "small muted" }, "出勤中的終端，頭上的字是它目前的狀態。"), desksBody),
+    ...(m.room ? [meetingRoomSection(m.room)] : []),
     el("section", { class: "office-section", "data-office-section": "lounge" },
       el("h2", { id: "office-lounge", tabindex: "-1", class: "office-lounge-title" }, officeProp(OFFICE_LOUNGE_PROP), "休息室"),
       el("p", { class: "small muted" }, "名冊：角色設定，不代表正在出勤。"),
@@ -3494,14 +3504,19 @@ async function readProfiles() {
 async function viewOffice() {
   const token = seq;
   await loadLive(false, FLOW_LIVE_TIMEOUT_MS);   // first: /api/flows only reads the live cache
-  const [, profilesData] = await Promise.all([loadFlows(), readProfiles()]);
+  const [, profilesData, meetingsRead] = await Promise.all([loadFlows(), readProfiles(), loadMeetingRoom()]);
   if (token !== seq) return;
   const main = claim(token);
-  const S = { key: "", name: "", station: "", notice: "", loadout: null, face: "front", profiles: profilesData, model: null, shownKey: "", mobile: officeIsMobile() };
+  const S = { key: "", name: "", station: "", notice: "", loadout: null, face: "front", profiles: profilesData, meetings: meetingsRead, model: null, shownKey: "", mobile: officeIsMobile() };
   const fresh = new Set();
   const statusLine = el("p", { class: "small muted office-status", role: "status", "aria-live": "polite" });
   const root = el("div", { class: "office" });
-  const computeModel = () => officeModel(D.live, D.flows, S.profiles, officeOverrides(S.profiles.profiles, store));
+  // the meeting room is read beside the office (the list, and the picked meeting in full); it is part of what a repaint compares
+  const computeModel = () => {
+    const m = officeModel(D.live, D.flows, S.profiles, officeOverrides(S.profiles.profiles, store));
+    m.room = meetingRoomModel(S.meetings.list, S.meetings.detail);
+    return m;
+  };
 
   const select = (key) => {
     const idx = officeIndex(S.model);
@@ -3579,9 +3594,9 @@ async function viewOffice() {
       el("p", { class: "small muted" }, "每 5 秒更新・資料來自流程、終端與角色名冊，沒有的就不畫"),
       officeCountsBar(m, pick),
       el("nav", { class: "office-jumps", "aria-label": "跳到" }, S.mobile
-        ? [["輪到你", "office-turn"], ["工作站", "office-station-board"], ["辦公桌", "office-desks"], ["休息室", "office-lounge"]]
+        ? [["輪到你", "office-turn"], ["工作站", "office-station-board"], ["辦公桌", "office-desks"], ["休息室", "office-lounge"], ["會議室", "office-meeting-room"]]
           .map(([label, id]) => officeJump(label, id))
-        : [["工作站", "office-stations"], ["辦公桌", "office-desks"], ["休息室", "office-lounge"]]
+        : [["工作站", "office-stations"], ["辦公桌", "office-desks"], ["會議室", "office-meeting-room"], ["休息室", "office-lounge"]]
           .map(([label, id]) => officeJump(label, id))),
       statusLine);
     let body;
@@ -3591,7 +3606,7 @@ async function viewOffice() {
         el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台"));
     } else if (S.mobile) {
       body = S.key ? el("div", { class: "office-mobile-panel" }, panelNode())
-        : el("div", { class: "office-list" }, officeListView(m, S));
+        : el("div", { class: "office-list" }, officeListView(m, S), m.room ? meetingRoomSection(m.room) : null);
     } else {
       body = el("div", { class: "office-layout" },
         el("div", { class: "office-scene" }, officeSections(m, S, fresh),
@@ -3650,6 +3665,7 @@ async function viewOffice() {
   officeTick = async () => {
     await loadLive();
     await loadFlows();
+    S.meetings = await loadMeetingRoom();
     const m = computeModel();
     const key = officeKey(m);
     if (key === S.shownKey) return;
@@ -8613,11 +8629,11 @@ function workbenchStacked() {
   catch (_) { return false; }
 }
 
-async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, autoLaunch = false, initialStep = "") {
+async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, autoLaunch = false, initialStep = "", initialMeeting = "") {
   const token = seq;
   cleanupActiveTerminal();
   const [staticData, liveData, tasksRes, templatesRes, govRes,
-          profilesRes, catalogRes] = await Promise.all([
+          profilesRes, catalogRes, meetingsRes] = await Promise.all([
     loadStatic(),
     loadLive(),
     api.get("/api/tasks").catch(() => ({ ok: false, tasks: [] })),
@@ -8625,6 +8641,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     api.get("/api/governance").catch(() => ({ ok: false })),
     api.get("/api/agent-profiles").catch(() => ({ ok: false, profiles: [] })),
     api.get("/api/agent-builder/catalog").catch(() => ({ ok: false })),
+    api.get("/api/meetings").catch(() => null),
   ]);
 
   const main = claim(token);
@@ -9646,6 +9663,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       renderField("實測證據 (Evidence)", activeTask.evidence),
       stepsSection,
       artifactsSection,
+      taskMeetingsBlock(activeTask.id, meetingsRes),
       advancedBox,
       actionRow
     );
@@ -10444,10 +10462,13 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     });
   }
 
-  function promptEditTask(task) {
+  // opts.goalNote: text to put at the end of the goal, for the person to read and save (a meeting's decision). Nothing is
+  // saved until 儲存修改; the goal is cut at tasks.MAX_TEXT_LONG when saved, so a goal that would be too long says so.
+  function promptEditTask(task, opts = {}) {
     let modal;
     const titleInput = el("input", { type: "text", value: task.title || "", required: true });
-    const goalInput = el("textarea", { rows: "3" }, task.goal || "");
+    const goalText = opts.goalNote ? (task.goal ? `${task.goal}\n\n${opts.goalNote}` : opts.goalNote) : (task.goal || "");
+    const goalInput = el("textarea", { rows: opts.goalNote ? "8" : "3" }, goalText);
     const scopeInput = el("textarea", { rows: "2" }, (task.scope || []).join("\n"));
     const outOfScopeInput = el("textarea", { rows: "2" }, (task.out_of_scope || []).join("\n"));
     const deliverablesInput = el("textarea", { rows: "2" }, (task.deliverables || []).join("\n"));
@@ -10464,6 +10485,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("div", { class: "wb-form" },
           el("label", null, "任務標題 *", titleInput),
           el("label", null, "目標 (Goal)", goalInput),
+          opts.goalNote ? el("p", { class: "small muted", "data-mt": "goal-note" },
+            "會議的決定放在「目標」的最後面，還沒有存；看過、需要的話改一改，按「儲存修改」才會寫進任務卡。") : null,
+          opts.goalNote && goalText.length > TASK_GOAL_MAX ? notice("warn", `目標加上會議的決定超過 ${TASK_GOAL_MAX} 字，儲存時最後面會被截掉，請先刪減。`) : null,
           el("label", null, "範圍 (Scope，每行一項)", scopeInput),
           el("label", null, "範圍外 (Out of Scope，每行一項)", outOfScopeInput),
           el("label", null, "交付物 (Deliverables，每行一項)", deliverablesInput),
@@ -10523,11 +10547,30 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       .catch((err) => toast("刪除失敗：" + err.message));
   }
 
+  // Arriving from a meeting ("write into the task card"): read the meeting again and open the editor with its note. The
+  // note comes from the record, not from the address; nothing is saved.
+  async function openMeetingNote(meetingId) {
+    const task = tasksList.find((t) => t.id === activeTaskId);
+    if (!task) return;
+    let view;
+    try { view = await api.get(`/api/meetings/${encodeURIComponent(meetingId)}`); }
+    catch (e) { toast("讀不到那場會議：" + e.message); return; }
+    if (token !== seq) return;
+    if (view.task_id && view.task_id !== task.id) { toast("這場會議是針對另一張任務卡開的，沒有寫進這一張。"); return; }
+    const offer = meetingTaskNoteOffer(view);
+    if (!offer.ok) { toast(offer.why); return; }
+    promptEditTask(task, { goalNote: meetingTaskNote(view) });
+  }
+
   // Initial layout assembly
   syncLayoutClasses();
   renderLeftColumn();
   renderCenterColumn();
   renderRightColumn();
+  if (initialMeeting && /^m-[0-9a-f]{12}$/.test(initialMeeting) && initialTaskId) {
+    history.replaceState(null, "", location.pathname + location.search + `#/workbench?task=${encodeURIComponent(initialTaskId)}`);
+    openMeetingNote(initialMeeting);
+  }
 
   setKids(main,
     crumbs([["角色卡池", "#/team"], ["終端工作台"]]),
@@ -11878,7 +11921,8 @@ function taskFrontCard(task, opts = {}) {
       : flow === null ? el("div", { class: "tf-team small muted", "data-tf": "team" }, "還沒有隊伍 · ",
           el("a", { href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "把角色卡放上去")) : null,
     el("div", { class: "tf-actions" },
-      el("a", { class: "btn small", href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "打開")));
+      el("a", { class: "btn small", href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "打開"),
+      el("a", { class: "btn small", href: `#/meetings?task=${encodeURIComponent(task.id)}`, "data-tf": "meeting" }, "開會討論")));
 }
 
 // The lobby's section of task cards: the unfinished ones, newest first.
@@ -11955,7 +11999,8 @@ async function route() {
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
-    else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step);
+    else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
+    else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();
     else if (top === "skills" && parts[1]) await viewSkillDetail(parts[1]);
     else if (top === "skills") await viewSkills(params);
@@ -11981,9 +12026,10 @@ async function route() {
     liveTick = async () => {
       await loadLive();
       await loadFlows();
+      await loadMeetings();
       const box = document.getElementById("h-board");
       if (!box) return;
-      const g = boardGroups(D.live, D.flows);
+      const g = boardGroups(D.live, D.flows, D.meetings);
       const key = boardKey(g, boardKeyContext());
       if (key === boardShownKey) return;
       boardShownKey = key;
@@ -12000,6 +12046,7 @@ async function route() {
     };
   }
   if (top === "office") liveTick = officeTick;
+  if (top === "meetings") liveTick = meetingsTick;
   if (top === "flows" && parts[1]) {
     // the executor, reviews and gate change without the user doing anything: refresh them quietly
     liveTick = async () => { if (flowCoordinator) await flowCoordinator.tick(); };
@@ -12014,6 +12061,680 @@ async function route() {
     };
   }
   if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
+}
+
+// ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
+// The pages of the meeting back end (vbear/meeting_runner.py): the list and the new meeting, one meeting with its
+// evidence and the chairman's desk, the meeting room of the office, the home page's "your turn", the entry on a task
+// card. Everything shown is the record. A bubble, a status or a lamp is looked up in a closed table from what the server
+// stored; a value the table does not know reads 「狀態不明」 and is never guessed. What a speaker wrote (a model wrote it) is
+// set as text, like every other string here. Nothing on these pages runs a meeting by itself: a meeting starts only from
+// a preview the person confirmed, a decision is only a record, and "write into the task card" only opens the editor.
+
+const TASK_GOAL_MAX = 5000;   // vbear/tasks.py MAX_TEXT_LONG
+const MEETING_STATUS = {
+  running: ["進行中", "b-info"], waiting_chairman: ["輪到你：董事長核准", "b-warn"], decided: ["CEO 已決定", "b-ok"],
+  approved: ["董事長已核准", "b-ok"], rejected: ["董事長已否決", "b-mute"], cancelled: ["已取消", "b-mute"],
+  incomplete: ["沒有完成", "b-bad"],
+};
+function meetingStatusText(status) { return cardHas(MEETING_STATUS, status) ? MEETING_STATUS[status][0] : "狀態不明"; }
+function meetingStatusBadge(status) {
+  return badge(meetingStatusText(status), cardHas(MEETING_STATUS, status) ? MEETING_STATUS[status][1] : "b-mute");
+}
+const MEETING_UNKNOWN = "狀態不明";
+const MEETING_COST_NOTE = "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。";
+const MEETING_CHAIRMAN_NOTE = "主控台記錄（未驗證身分）";
+const MEETING_FLAGS = [["publish", "對外發布"], ["spend", "花錢"], ["delete", "刪除資料"], ["legal", "法律或合約"], ["deploy", "上線部署"],
+  ["personal", "個資"]];
+// The positions that may speak and the one that chairs (vbear/meeting_runner.py SPEAKER_POSITIONS and CHAIR_POSITION).
+const MEETING_SPEAKER_POSITIONS = ["pm", "social", "executor", "art", "legal", "accountant"];
+const MEETING_CHAIR_POSITION = "planner";
+// What a failed turn's code means. A code not in this table is shown as it is.
+const MEETING_ERROR_TEXT = {
+  timeout: "逾時（超過 120 秒）", cli_failed: "Claude Code 執行失敗", cli_error: "Claude Code 回報錯誤",
+  invalid_output: "輸出不合格式，已丟棄", tools_not_clean: "這次呼叫的工具清單不是只有 StructuredOutput，已停止並撤銷這個版本的通過紀錄",
+  budget: "額度不夠，沒有送出", no_opinions: "沒有任何發言可以整理，沒有送出", prompt_changed: "送出前的內容和預覽不同，沒有送出",
+  restart: "主控台重新啟動，這一位被中斷（費用以最壞情況計）", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
+  process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行",
+};
+function meetingErrorText(code) {
+  if (typeof code !== "string" || !code) return "";
+  return cardHas(MEETING_ERROR_TEXT, code) ? `${MEETING_ERROR_TEXT[code]}（${code}）` : `代碼：${code}`;
+}
+
+// ---- bubbles and seats: all from the record ----
+
+const MEETING_STANCE_BUBBLE = { 支持: "支持", 反對: "反對", 有條件支持: "有條件支持", 需要更多資訊: "要更多資訊" };
+// The only words a seat's bubble can say. Whatever the record holds, the bubble is one of these.
+const MEETING_BUBBLES = ["等發言", "發言中", "支持", "反對", "有條件支持", "要更多資訊", "失敗", "卡住", "額度不夠沒發言", "沒有發言",
+  "已取消", "中斷", "整理意見中", "已決定", "交董事長", "董事長已核准", "董事長已否決", MEETING_UNKNOWN];
+// ctx: { major, chairmanState } of the meeting, for the CEO's seat.
+function meetingBubble(turn, ctx) {
+  const c = ctx && typeof ctx === "object" ? ctx : {};
+  if (!turn || typeof turn !== "object") return MEETING_UNKNOWN;
+  const decision = turn.kind === "decision";
+  switch (turn.state) {
+    case "queued": return "等發言";
+    case "running": return decision ? "整理意見中" : "發言中";
+    case "failed": return "失敗";
+    case "blocked": return "卡住";
+    case "skipped": return turn.error_code === "budget" ? "額度不夠沒發言" : "沒有發言";
+    case "cancelled": return "已取消";
+    case "interrupted": return "中斷";
+    case "done": {
+      if (decision) {
+        if (c.chairmanState === "approved") return "董事長已核准";
+        if (c.chairmanState === "rejected") return "董事長已否決";
+        return c.major === true && c.chairmanState === "pending" ? "交董事長" : "已決定";
+      }
+      const stance = turn.output && typeof turn.output === "object" ? turn.output.stance : undefined;
+      return typeof stance === "string" && cardHas(MEETING_STANCE_BUBBLE, stance) ? MEETING_STANCE_BUBBLE[stance] : MEETING_UNKNOWN;
+    }
+    default: return MEETING_UNKNOWN;
+  }
+}
+
+// One seat per person in the order of the record (the chair's decision comes last); a person with no turn in the record is
+// still seated, with 「狀態不明」.
+function meetingSeats(view) {
+  const v = view && typeof view === "object" ? view : {};
+  const people = (Array.isArray(v.participants) ? v.participants : []).filter((p) => p && typeof p === "object");
+  const turns = (Array.isArray(v.turns) ? v.turns : []).filter((t) => t && typeof t === "object");
+  const ctx = { major: v.major === true, chairmanState: v.chairman && typeof v.chairman === "object" ? v.chairman.state : "" };
+  const used = new Set();
+  const rows = [];
+  for (const t of turns) {
+    const p = people.find((x) => x.profile_id === t.profile_id);
+    if (p && !used.has(p)) { used.add(p); rows.push([p, t]); }
+  }
+  for (const p of people) if (!used.has(p)) rows.push([p, null]);
+  return rows.map(([p, t]) => {
+    const tool = typeof p.tool === "string" ? p.tool : "";
+    const position = typeof p.position === "string" ? p.position : "";
+    const positionLabel = cardHas(CARD_POSITION_LABEL, position) ? CARD_POSITION_LABEL[position] : "位置未指定";
+    const bubble = meetingBubble(t, ctx);
+    const name = typeof p.name === "string" && p.name ? p.name : "（沒有名稱）";
+    const proxy = p.proxy === true;
+    const where = t && Number.isInteger(t.seq) ? `第 ${t.seq} 位` : "（這一位沒有紀錄）";
+    return { key: `${v.id}:${p.profile_id}`, seq: t ? t.seq : null, profileId: p.profile_id, name, position, positionLabel, tool,
+      model: typeof p.model_used === "string" ? p.model_used : "", proxy, species: speciesFor({ tool }), camp: campOf({ tool }).key,
+      kind: t ? t.kind : "", state: t ? t.state : "", bubble, turn: t,
+      label: `${name}，${positionLabel}${proxy ? "，代發言" : ""}，${bubble}。依據：會議紀錄 ${v.id} ${where}` };
+  });
+}
+
+function meetingSeatNode(seat, opts = {}) {
+  return el(opts.href ? "a" : "div", { class: `mt-seat mt-camp-${seat.camp}`, href: opts.href || null, "aria-label": seat.label,
+    "data-mt-seat": seat.profileId },
+  el("span", { class: "mt-bubble" }, seat.bubble),
+  officeSprite(seat.species, seat.camp, 3),
+  el("span", { class: "mt-seat-name" }, seat.name),
+  el("span", { class: "small muted" }, seat.positionLabel),
+  seat.proxy ? el("span", { class: "mt-proxy", title: "這張卡的工具不是 Claude Code，由 Claude Code 照這個職位的指示代為發言" }, "代發言") : null);
+}
+
+// ---- the ledger lamp ----
+
+function meetingLamp(ledgerData) {
+  const l = ledgerData && typeof ledgerData === "object" ? ledgerData : null;
+  const unknown = { key: "unknown", word: "額度不明", canOpen: false, warn: false,
+    text: "讀不到今天的花費，所以先不開新的會議。" };
+  if (!l) return unknown;
+  const num = (x) => typeof x === "string" && /^[0-9]+(\.[0-9]+)?$/.test(x);
+  if (!num(l.spent_usd) || !num(l.daily_usd)) return unknown;
+  const base = `今天已花 US$${l.spent_usd}，每日上限 US$${l.daily_usd}`;
+  const note = typeof l.note === "string" && l.note ? l.note : MEETING_COST_NOTE;
+  if (l.blocked === true) {
+    return { key: "red", word: "已封鎖", canOpen: false, warn: true,
+      text: `${base}。無法確認上一場會議的程序已結束，已封鎖新的會議，請人工檢查 VBear 的狀態目錄。` };
+  }
+  if (l.lamp === "red") {
+    return { key: "red", word: "額度用完（亮紅燈）", canOpen: false, warn: true,
+      text: `${base}。已達上限（亮紅燈）：今天不能開新的會議，也不能重試，隔天（本機日期）才會重算。${note}` };
+  }
+  if (l.lamp === "yellow") {
+    return { key: "yellow", word: "額度快用完（亮黃燈）", canOpen: true, warn: true,
+      text: `${base}。已用到 80% 以上（亮黃燈），到 100% 就不能再開會。${note}` };
+  }
+  if (l.lamp === "green") return { key: "green", word: "額度正常", canOpen: true, warn: false, text: `${base}。${note}` };
+  return unknown;
+}
+function meetingLampNode(lamp) {
+  return el("div", { class: `mt-lamp mt-lamp-${lamp.key}`, "data-mt": "lamp", "data-lamp": lamp.key, role: "status" },
+    el("span", { class: "mt-lamp-dot", "aria-hidden": "true" }), el("strong", null, lamp.word), el("span", { class: "small" }, lamp.text));
+}
+
+// ---- lists: the meetings that wait for the chairman, the room's pick ----
+
+function meetingItems(list) {
+  return list && typeof list === "object" && Array.isArray(list.meetings) ? list.meetings.filter((m) => m && typeof m === "object") : [];
+}
+const meetingNewest = (a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0);
+function meetingsNeedingYou(list) {
+  return meetingItems(list).filter((m) => !m.blocked && m.status === "waiting_chairman").sort(meetingNewest);
+}
+function meetingRoomPick(list) {
+  const items = meetingItems(list);
+  const ok = items.filter((m) => !m.blocked);
+  const active = ok.filter((m) => m.status === "running" || m.status === "waiting_chairman").sort(meetingNewest);
+  const waiting = ok.filter((m) => m.status === "waiting_chairman").sort(meetingNewest);
+  return { id: active.length ? active[0].id : null, active: active.length, more: Math.max(0, active.length - 1), waiting: waiting.length,
+    firstWaitingId: waiting.length ? waiting[0].id : null, blocked: items.length - ok.length };
+}
+// list: the answer of GET /api/meetings (or { error }); detail: the answer for the picked meeting, when it was read.
+function meetingRoomModel(list, detail) {
+  const base = { error: "", empty: false, id: null, topic: "", status: "", statusText: "", seats: [], detailMissing: false, more: 0,
+    waiting: 0, firstWaitingId: null, blocked: 0 };
+  if (!list || typeof list !== "object") return { ...base, error: "還沒有讀取到會議" };
+  if (list.error) return { ...base, error: String(list.error) };
+  if (!Array.isArray(list.meetings)) return { ...base, error: "會議資料的格式無法辨識" };
+  const pick = meetingRoomPick(list);
+  const out = { ...base, more: pick.more, waiting: pick.waiting, firstWaitingId: pick.firstWaitingId, blocked: pick.blocked };
+  if (!pick.id) return { ...out, empty: true };
+  out.id = pick.id;
+  if (detail && typeof detail === "object" && detail.id === pick.id) {
+    out.topic = typeof detail.topic === "string" ? detail.topic : "";
+    out.status = detail.status;
+    out.statusText = meetingStatusText(detail.status);
+    out.seats = meetingSeats(detail);
+  } else {
+    const row = meetingItems(list).find((m) => m.id === pick.id) || {};
+    out.topic = typeof row.topic === "string" ? row.topic : "";
+    out.status = row.status;
+    out.statusText = meetingStatusText(row.status);
+    out.detailMissing = true;
+  }
+  return out;
+}
+function meetingRoomKey(m) {
+  return JSON.stringify([m.error, m.id, m.topic, m.status, m.detailMissing, m.more, m.waiting, m.firstWaitingId, m.blocked,
+    m.seats.map((s) => [s.profileId, s.name, s.positionLabel, s.proxy, s.bubble, s.species, s.camp])]);
+}
+// What the office reads: the list, and the picked meeting in full. A failed read is kept as an error, not as "none".
+async function loadMeetingRoom() {
+  let list;
+  try { list = await api.get("/api/meetings"); }
+  catch (e) { return { list: { error: e.message || "讀不到" }, detail: null }; }
+  const pick = meetingRoomPick(list);
+  let detail = null;
+  if (pick.id) { try { detail = await api.get(`/api/meetings/${encodeURIComponent(pick.id)}`); } catch (_) { detail = null; } }
+  return { list, detail };
+}
+
+function meetingRoomSection(room) {
+  const body = [];
+  if (room.error) body.push(notice("warn", `讀不到會議：${room.error}`));
+  else if (room.empty) {
+    body.push(el("p", { class: "small muted office-empty" }, "目前沒有進行中或等你核准的會議。"),
+      el("a", { class: "btn small", href: "#/meetings" }, "到會議頁開一場"));
+  } else {
+    const href = `#/meetings/${encodeURIComponent(room.id)}`;
+    body.push(
+      el("div", { class: "mt-room-head" }, el("strong", null, room.topic || "（沒有議題）"), meetingStatusBadge(room.status)),
+      room.detailMissing ? notice("warn", "讀不到這場會議的內容，所以先不畫座位。") : el("div", { class: "mt-seats" },
+        room.seats.map((s) => meetingSeatNode(s, { href }))),
+      room.more ? el("a", { class: "btn small office-more", href: "#/meetings" }, `還有 ${room.more} 場 →`) : null);
+  }
+  const deskHref = room.firstWaitingId ? `#/meetings/${encodeURIComponent(room.firstWaitingId)}` : "#/meetings";
+  return el("section", { class: "office-section mt-room", "data-office-section": "meeting-room" },
+    el("h2", { id: "office-meeting-room", tabindex: "-1" }, "會議室"),
+    el("p", { class: "small muted" }, "座位頭上的字只來自會議紀錄；點座位看完整的發言與證據。"),
+    body,
+    !room.error ? el("div", { class: `mt-desk${room.waiting ? " mt-desk-waits" : ""}`, "data-mt": "chairman-desk" },
+      el("strong", null, "董事長桌"),
+      el("span", null, room.waiting ? `${room.waiting} 場等你核准` : "沒有等你核准的會議"),
+      room.waiting ? el("a", { class: "btn small primary", href: deskHref }, "去核准") : null) : null,
+    room.blocked ? el("p", { class: "small muted" }, `有 ${room.blocked} 場會議的紀錄無法讀取，請到會議頁查看。`) : null);
+}
+
+// ---- the home page's card ----
+
+function meetingTurnCard(m) {
+  return el("article", { class: "card quest quest-turn", "data-quest": "meeting", "data-mt": "board-card", "data-meeting-id": m.id },
+    el("div", { class: "card-top" },
+      el("div", { style: "min-width:0" },
+        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/meetings/${encodeURIComponent(m.id)}` }, m.topic || "（沒有議題）")),
+        el("div", { class: "card-sub" }, "CEO 已做出決定，這件事要董事長核准（原因在會議頁）")),
+      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), "董事長核准")),
+    el("div", { class: "stat-line" }, el("span", null, "花費 ", el("b", null, `US$${m.spent_usd}`), "（Claude Code 回報的估值）")),
+    el("div", { class: "quest-go" }, "前往處理 →"));
+}
+
+// ---- the note for a task card ----
+
+function meetingDecision(view) {
+  const turns = view && Array.isArray(view.turns) ? view.turns : [];
+  const t = [...turns].reverse().find((x) => x && x.kind === "decision" && x.state === "done" && x.output && typeof x.output === "object");
+  return t ? t.output : null;
+}
+// Whether the decision may go into a task card: only one the CEO has made, and when it went to the chairman, one the chairman
+// approved. A rejected or waiting one is not offered.
+function meetingTaskNoteOffer(view) {
+  const status = view && view.status;
+  if (status === "waiting_chairman") return { ok: false, why: "這場會議要董事長核准，核准之後才能寫進任務卡。" };
+  if (status === "rejected") return { ok: false, why: "董事長已否決，不寫進任務卡。" };
+  if (status === "running") return { ok: false, why: "會議還在進行，CEO 做出決定之後才能寫進任務卡。" };
+  if ((status === "decided" || status === "approved") && meetingDecision(view)) return { ok: true, why: "" };
+  return { ok: false, why: "CEO 還沒有做出決定，沒有東西可以寫進任務卡。" };
+}
+const MEETING_NOTE_MAX = 2000;
+const MEETING_NOTE_ACTIONS_MAX = 1900;
+function meetingTaskNote(view) {
+  const d = meetingDecision(view) || {};
+  const cut = (s, n) => (typeof s === "string" && s.length > n ? s.slice(0, n - 1) + "…" : String(s || ""));
+  const lines = [`會議決定（${view.id}，${meetingStatusText(view.status)}）`, `議題：${cut(view.topic, 120)}`, `決定：${cut(d.decision, 300)}`,
+    `理由：${cut(d.rationale, 600)}`];
+  let text = lines.join("\n");
+  const actions = Array.isArray(d.actions) ? d.actions : [];
+  if (actions.length) {
+    text += "\n要做的事：";
+    let shown = 0;
+    for (const a of actions) {
+      const line = `\n- [${cut(a && a.type, 20)}] ${cut(a && a.text, 200)}`;
+      if (text.length + line.length > MEETING_NOTE_ACTIONS_MAX) break;
+      text += line;
+      shown += 1;
+    }
+    if (shown < actions.length) text += `\n（還有 ${actions.length - shown} 項，請看會議紀錄）`;
+  }
+  return text.slice(0, MEETING_NOTE_MAX);
+}
+
+// ---- evidence ----
+
+function meetingEvidenceNode(turn) {
+  const e = turn && turn.evidence && typeof turn.evidence === "object" ? turn.evidence : null;
+  if (!e) return el("p", { class: "small muted", "data-mt": "evidence" }, "沒有證據紀錄（這一位沒有成功呼叫）。");
+  const checked = Array.isArray(e.tools_reported) && e.tools_reported.length === 1 && e.tools_reported[0] === "StructuredOutput"
+    && Array.isArray(e.mcp_servers_reported) && e.mcp_servers_reported.length === 0;
+  const cost = e.cost_usd === undefined || e.cost_usd === null ? "沒有紀錄"
+    : `US$${e.cost_usd}（${e.cost_source === "cli" ? "Claude Code 回報" : e.cost_source === "worst_case" ? "沒有回報，以最壞情況計" : "來源不明"}）`;
+  return el("ul", { class: "small mt-evidence", "data-mt": "evidence" },
+    el("li", null, `Claude Code ${e.cli_version || "版本沒有紀錄"}；回報的模型：${e.model_reported || "沒有紀錄"}`),
+    checked ? el("li", { "data-mt": "checked" }, "本次確認：只有 StructuredOutput、沒有 MCP")
+      : el("li", null, "本次確認：沒有紀錄（紀錄裡沒有可核對的工具清單）"),
+    el("li", null, `花費 ${cost}`),
+    Number.isFinite(e.duration_ms) ? el("li", null, `耗時 ${(e.duration_ms / 1000).toFixed(1)} 秒`) : null,
+    Number.isInteger(turn.attempts) && turn.attempts > 1 ? el("li", null, `第 ${turn.attempts} 次嘗試`) : null);
+}
+
+// ---- the preview dialog (a new meeting and a retry) ----
+
+function meetingPreviewDialog(pv, opts) {
+  const people = Array.isArray(pv.participants) ? [...pv.participants, ...(pv.chair ? [pv.chair] : [])] : (pv.participant ? [{ ...pv.participant, prompt: pv.prompt,
+    prompt_sha256: pv.prompt_sha256 }] : []);
+  const cli = pv.cli && typeof pv.cli === "object" ? pv.cli : {};
+  const today = pv.today && typeof pv.today === "object" ? pv.today : {};
+  const lim = pv.limits && typeof pv.limits === "object" ? pv.limits : null;
+  const blockers = Array.isArray(pv.blockers) ? pv.blockers : [];
+  const needsCheck = blockers.some((b) => b && b.code === "boundary_unverified") || cli.verified === false;
+  const titleId = "mt-preview-title";
+  let modal;
+  const cancel = el("button", { class: "btn", type: "button", "data-mt": "cancel-preview", on: { click: () => close() } }, "取消");
+  const actions = [cancel];
+  const failure = (e) => { toast(e.message); };
+  if (needsCheck) {
+    const verify = el("button", { class: "btn", type: "button", "data-mt": "verify", on: { click: async () => {
+      verify.disabled = true;
+      try {
+        const r = await api.post("/api/translations/verify", {});
+        toast(`Claude Code ${r.version} 通過無工具安全檢查`);
+        close();
+        if (opts.onRecheck) await opts.onRecheck();
+      } catch (e) { toast("檢查失敗：" + e.message); verify.disabled = false; }
+    } } }, "先做一次無工具安全檢查（用你的 Claude 帳號，約 1 美分，請求預算 US$0.05）");
+    actions.push(verify);
+  }
+  if (pv.startable === true && typeof pv.preview_id === "string" && pv.preview_id) {
+    const start = el("button", { class: "btn primary", type: "button", "data-mt": "start", on: { click: async () => {
+      start.disabled = true;
+      try { close(); await opts.onStart(pv.preview_id); } catch (e) { failure(e); }
+    } } }, opts.startLabel || "開始");
+    actions.push(start);
+  }
+  const person = (p) => el("details", { class: "mt-person", open: true },
+    el("summary", null, `${p.name}（${cardHas(CARD_POSITION_LABEL, p.position) ? CARD_POSITION_LABEL[p.position] : "位置未指定"}）・模型 ${p.model || p.model_used || "未知"}`,
+      p.proxy ? "・代發言（這張卡的工具不是 Claude Code，由 Claude Code 照這個職位的指示發言）" : ""),
+    el("div", { class: "small muted" }, "職位指示全文"),
+    el("pre", { class: "mt-pre", "data-mt": "instructions" }, typeof p.instructions === "string" ? p.instructions : ""),
+    el("div", { class: "small muted" }, "會送出的完整內容（含 VBear 固定的會議規則）"),
+    p.dynamic ? el("p", { class: "small" }, "這一段要等前面的結果才組得出來，下面是它的形狀；實際送出的內容會記在會議紀錄裡。") : null,
+    el("pre", { class: "mt-pre", "data-mt": "prompt" }, typeof p.prompt === "string" ? p.prompt : ""));
+  modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-mt": "preview-dialog" },
+    el("div", { class: "modal-box mt-preview", style: "max-width: 780px; max-height: 88vh; overflow-y: auto;" },
+      el("h2", { id: titleId }, opts.title || "開會前的預覽"),
+      blockers.map((b) => notice("warn", (b && b.message) || "不能開始")),
+      pv.decision_again ? notice("info", `這一位重試後，CEO 會重問一次（共 ${pv.calls} 次呼叫）。`) : null,
+      el("ul", { class: "small" },
+        el("li", null, `Claude Code ${cli.version || "（找不到版本）"}：${cli.verified === true ? "已通過無工具安全檢查" : "還沒通過無工具安全檢查"}`),
+        el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
+        today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，每日上限 US$${today.daily_usd}`) : null,
+        pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null),
+      notice("info", pv.disclosure || ""),
+      el("p", { class: "small muted" }, pv.cost_note || MEETING_COST_NOTE),
+      people.map(person),
+      Array.isArray(pv.rules) && pv.rules.length ? el("details", null, el("summary", null, "什麼情況會交給董事長（固定規則，不是 AI 判斷）"),
+        el("ul", { class: "small" }, pv.rules.map((r) => el("li", null, `${r.id}：${r.text}`)))) : null,
+      el("div", { class: "modal-actions" }, actions)));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  return close;
+}
+
+// ---- the page ----
+
+let meetingsTick = null;
+
+async function loadMeetings() {
+  try { D.meetings = await api.get("/api/meetings"); }
+  catch (e) { D.meetings = { error: e.message, meetings: [] }; }
+  return D.meetings;
+}
+
+function meetingRow(m) {
+  if (m.blocked) {
+    return el("li", { class: "mt-row card", "data-mt": "meeting-row" },
+      el("strong", null, `無法讀取的會議紀錄 ${m.id}`), badge("無法讀取", "b-bad"),
+      el("span", { class: "small muted" }, m.error || "這場會議的紀錄無法安全讀取，已留在清單裡，沒有被刪掉。"));
+  }
+  return el("li", { class: "mt-row card", "data-mt": "meeting-row", "data-meeting-id": m.id },
+    el("a", { class: "mt-row-title", href: `#/meetings/${encodeURIComponent(m.id)}` }, m.topic || "（沒有議題）"),
+    meetingStatusBadge(m.status),
+    m.major ? badge("重大", "b-warn", "符合交給董事長的固定規則") : null,
+    el("span", { class: "small muted" }, `${fmtTime(m.created_at)}・${m.participants} 位・US$${m.spent_usd}（估值）`));
+}
+function meetingListNode(list) {
+  if (!list || list.error) return notice("warn", `讀不到會議：${(list && list.error) || "還沒有讀取到"}`);
+  const items = meetingItems(list);
+  if (!items.length) return emptyState("還沒有開過會", "在上面選好參加的職位、寫下議題，按「預覽」。");
+  return el("ul", { class: "mt-list" }, [...items].sort(meetingNewest).map(meetingRow));
+}
+
+function meetingForm(env) {
+  const cards = (Array.isArray(env.profiles) ? env.profiles : []).filter((p) => p && typeof p === "object" && typeof p.id === "string" && p.enabled !== false);
+  const positionOf = (p) => cardPosition(p);
+  const chairs = cards.filter((p) => positionOf(p) === MEETING_CHAIR_POSITION);
+  const speakers = cards.filter((p) => MEETING_SPEAKER_POSITIONS.includes(positionOf(p)));
+  const tasksList = (Array.isArray(env.tasks) ? env.tasks : []).filter((t) => t && typeof t === "object" && typeof t.id === "string" && t.status !== "closed");
+  const init = env.initial || {};
+  const topic = el("textarea", { rows: "2", maxlength: "500", "data-mt": "topic", "aria-label": "議題", placeholder: "這場會議要討論什麼？（最多 500 字）" });
+  topic.value = typeof init.topic === "string" ? init.topic : "";
+  const context = el("textarea", { rows: "3", maxlength: "4000", "data-mt": "context", "aria-label": "補充說明", placeholder: "補充說明（選填，最多 4000 字）：不要貼密碼、金鑰或個資" });
+  const taskSel = el("select", { "data-mt": "task", "aria-label": "任務卡" },
+    el("option", { value: "" }, "（不綁任務卡）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
+  taskSel.value = typeof init.task === "string" && tasksList.some((t) => t.id === init.task) ? init.task : "";
+  const chairSel = el("select", { "data-mt": "chair", "aria-label": "主席（CEO）" },
+    chairs.map((p) => el("option", { value: p.id }, p.name || p.id)));
+  if (chairs.length) chairSel.value = chairs[0].id;
+  const speakerBoxes = speakers.map((p) => {
+    const box = el("input", { type: "checkbox", "data-mt": "speaker", "data-profile": p.id });
+    const tool = p.model && typeof p.model === "object" ? p.model.tool : "";
+    const label = el("label", { class: "mt-check" }, box,
+      el("span", null, `${CARD_POSITION_LABEL[positionOf(p)]}：${p.name || p.id}`, tool && tool !== "claude" ? "（工具不是 Claude Code，由 Claude Code 代發言）" : ""));
+    return { box, label, p };
+  });
+  const flagBoxes = MEETING_FLAGS.map(([id, text]) => {
+    const box = el("input", { type: "checkbox", "data-mt": "flag", "data-flag": id });
+    return { box, label: el("label", { class: "mt-check" }, box, el("span", null, text)) };
+  });
+  const lampNote = el("p", { class: "small", "data-mt": "lamp-note" });
+  const preview = el("button", { class: "btn primary", type: "button", "data-mt": "preview", on: { click: () => run() } }, "預覽（還不會開始）");
+  const update = (lamp) => {
+    const blocked = !lamp.canOpen || !chairs.length || !speakers.length;
+    preview.disabled = blocked;
+    lampNote.textContent = lamp.canOpen ? ""
+      : (lamp.key === "red" ? "今日額度已用完（或已封鎖），先不開新的會議。" : "讀不到今天的花費，先不開新的會議。");
+  };
+  async function run() {
+    const t = topic.value.trim();
+    if (!t) { toast("請寫下議題"); topic.focus(); return; }
+    if (t.length > 500) { toast("議題不可超過 500 字"); return; }
+    if (context.value.trim().length > 4000) { toast("補充說明不可超過 4000 字"); return; }
+    if (!chairs.length || !chairSel.value) { toast("需要一張 CEO 職位的角色卡當主席"); return; }
+    const chosen = speakerBoxes.filter((s) => s.box.checked);
+    if (!chosen.length) { toast("請至少選一個發言的職位"); return; }
+    if (chosen.length > 6) { toast("最多 6 位發言者"); return; }
+    if (new Set(chosen.map((s) => positionOf(s.p))).size !== chosen.length) { toast("每個職位只能有一張卡發言"); return; }
+    const body = { topic: t, chair_profile_id: chairSel.value, speaker_profile_ids: chosen.map((s) => s.p.id),
+      flags: flagBoxes.filter((f) => f.box.checked).map((f) => f.box.getAttribute("data-flag")) };
+    if (context.value.trim()) body.context = context.value.trim();
+    if (taskSel.value) body.task_id = taskSel.value;
+    preview.disabled = true;
+    try {
+      const pv = await api.post("/api/meetings/preview", body);
+      meetingPreviewDialog(pv, { title: "開會前的預覽", startLabel: "開始開會",
+        onRecheck: run,
+        onStart: async (previewId) => {
+          const res = await api.post("/api/meetings", { preview_id: previewId });
+          toast("會議開始了");
+          location.hash = `#/meetings/${encodeURIComponent(res.id)}`;
+        } });
+    } catch (e) { toast(e.message); }
+    finally { preview.disabled = false; env.syncLamp(); }
+  }
+  const node = el("section", { class: "section mt-form", "data-mt": "form" },
+    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方），CEO 收斂後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
+    !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的角色卡，沒有主席就不能開會。到 ", el("a", { href: "#/team" }, "角色卡池"), " 建一張（精靈第 2 步選 CEO）。")) : null,
+    !speakers.length ? notice("warn", "還沒有可以發言的職位卡（PM、社群媒體經理、全端工程師、藝術總監、法務經理、會計師）。") : null,
+    el("label", null, "議題 *", topic),
+    el("label", null, "補充說明", context),
+    el("label", null, "綁在哪張任務卡（選填）", taskSel),
+    el("label", null, "主席（CEO）", chairSel),
+    el("fieldset", { class: "mt-fieldset" }, el("legend", null, "誰來發言（每個職位一張卡）"),
+      speakerBoxes.length ? speakerBoxes.map((s) => s.label) : el("span", { class: "small muted" }, "沒有可選的卡")),
+    el("fieldset", { class: "mt-fieldset" }, el("legend", null, "這件事涉及（勾了就一定交給你核准）"), flagBoxes.map((f) => f.label)),
+    lampNote,
+    el("div", { class: "row" }, preview));
+  return { node, update };
+}
+
+async function viewMeetings(id, params) {
+  const token = seq;
+  if (id) return viewMeetingDetail(token, id);
+  const [list, ledgerData, profilesRes, tasksRes] = await Promise.all([
+    api.get("/api/meetings").catch((e) => ({ error: e.message, meetings: [] })),
+    api.get("/api/meetings/ledger").catch(() => null),
+    api.get("/api/agent-profiles").catch(() => null),
+    api.get("/api/tasks").catch(() => null)]);
+  const main = claim(token);
+  let current = { list, lamp: meetingLamp(ledgerData) };
+  const lampBox = el("div", { class: "mt-lamp-box" });
+  const listBox = el("div", { class: "mt-list-box" });
+  const form = meetingForm({ profiles: profilesRes && profilesRes.profiles, tasks: tasksRes && tasksRes.tasks, initial: params || {},
+    syncLamp: () => form.update(current.lamp) });
+  const draw = () => {
+    setKids(lampBox, meetingLampNode(current.lamp));
+    setKids(listBox, meetingListNode(current.list));
+    form.update(current.lamp);
+  };
+  draw();
+  setKids(main,
+    el("h1", null, "會議"),
+    el("p", { class: "lede" }, "各職位發言，CEO 做決定，重大的事交給你（董事長）。決定只是紀錄，不會自己去執行。"),
+    lampBox,
+    form.node,
+    el("section", { class: "section" }, sectionHead("會議紀錄", "每 5 秒更新"), listBox));
+  meetingsTick = async () => {
+    const [l2, g2] = await Promise.all([api.get("/api/meetings").catch((e) => ({ error: e.message, meetings: [] })),
+      api.get("/api/meetings/ledger").catch(() => null)]);
+    current = { list: l2, lamp: meetingLamp(g2) };
+    D.meetings = l2;
+    if (token === seq) draw();
+  };
+  activeViewCleanup = () => { meetingsTick = null; };
+}
+
+async function viewMeetingDetail(token, id) {
+  let cur;
+  try { cur = await api.get(`/api/meetings/${encodeURIComponent(id)}`); }
+  catch (e) {
+    setKids(claim(token), crumbs([["會議", "#/meetings"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這場會議：" + e.message));
+    return;
+  }
+  const tasksRes = await api.get("/api/tasks").catch(() => null);
+  const tasksList = tasksRes && Array.isArray(tasksRes.tasks) ? tasksRes.tasks.filter((t) => t && typeof t.id === "string") : [];
+  const main = claim(token);
+  const root = el("div", { class: "mt-detail" });
+  const reload = async () => {
+    try { cur = await api.get(`/api/meetings/${encodeURIComponent(id)}`); } catch (e) { toast("讀不到這場會議：" + e.message); return; }
+    if (token === seq) draw();
+  };
+  const act = async (fn) => {
+    try { const res = await fn(); if (res && typeof res === "object" && res.id === id) cur = res; if (token === seq) draw(); }
+    catch (e) { toast(e.message); await reload(); }
+  };
+
+  function seatCard(seat) {
+    const t = seat.turn;
+    const o = t && t.output && typeof t.output === "object" ? t.output : null;
+    const body = [];
+    if (t && t.state === "done" && t.kind === "opinion" && o) {
+      body.push(el("p", null, badge(typeof o.stance === "string" ? o.stance : MEETING_UNKNOWN, "b-info"), " ", o.summary || ""));
+      if (Array.isArray(o.points) && o.points.length) body.push(el("ul", { class: "small" }, o.points.map((p) => el("li", null, String(p)))));
+      if (Array.isArray(o.risks) && o.risks.length) {
+        body.push(el("div", { class: "small muted" }, "風險"), el("ul", { class: "small" }, o.risks.map((r) =>
+          el("li", null, badge(r && r.level ? String(r.level) : "?", r && r.level === "高" ? "b-bad" : r && r.level === "中" ? "b-warn" : "b-mute"), " ",
+            String((r && r.text) || ""), r && r.source ? el("span", { class: "muted" }, `（出處：${r.source}）`) : null))));
+      }
+      if (o.needs_chairman === true) body.push(el("p", { class: "small" }, badge("要求交董事長", "b-warn")));
+      if (seat.position === "accountant") body.push(el("p", { class: "small muted" }, "會計師的數字是 AI 寫的，未經程式核算；VBear 只自己核算花費。"));
+    } else if (t && t.state === "done" && t.kind === "decision") {
+      body.push(el("p", { class: "small muted" }, "CEO 的決定在下面「CEO 決定」。"));
+    } else if (t && t.state === "queued") body.push(el("p", { class: "small muted" }, "還沒輪到。"));
+    else if (t && t.state === "running") body.push(el("p", { class: "small muted" }, "正在發言…"));
+    else if (t) {
+      const why = meetingErrorText(t.error_code);
+      body.push(el("p", { class: "small", "data-mt": "reason" }, `${MEETING_BUBBLES.includes(seat.bubble) ? seat.bubble : MEETING_UNKNOWN}${why ? "：" + why : ""}`));
+    } else body.push(el("p", { class: "small muted" }, "紀錄裡沒有這一位的發言。"));
+    const retry = t && Array.isArray(cur.retryable) && cur.retryable.includes(t.seq) && cur.status !== "running"
+      ? el("button", { class: "btn small", type: "button", "data-mt": "retry", on: { click: () => retryOf(t.seq) } },
+        `重試這一位（先給你看預覽）`) : null;
+    return el("article", { class: "card mt-card", "data-mt": "seat", "data-profile": seat.profileId },
+      el("div", { class: "mt-card-head" }, officeSprite(seat.species, seat.camp, 2),
+        el("div", { style: "min-width:0" }, el("strong", null, seat.name),
+          el("div", { class: "small muted" }, `${seat.positionLabel}・${TOOL[seat.tool] || seat.tool || "未知工具"}・模型 ${seat.model || "未知"}`)),
+        seat.proxy ? badge("代發言", "b-info", "這張卡的工具不是 Claude Code，由 Claude Code 照這個職位的指示代為發言") : null,
+        el("span", { class: "mt-bubble" }, seat.bubble)),
+      body, meetingEvidenceNode(t), retry);
+  }
+
+  async function retryOf(seqNo) {
+    let pv;
+    try { pv = await api.post(`/api/meetings/${encodeURIComponent(id)}/retry-preview`, { seq: seqNo }); }
+    catch (e) { toast(e.message); return; }
+    meetingPreviewDialog(pv, { title: "重試前的預覽", startLabel: "重試",
+      onRecheck: () => retryOf(seqNo),
+      onStart: async (previewId) => { await act(() => api.post(`/api/meetings/${encodeURIComponent(id)}/retry`, { preview_id: previewId })); } });
+  }
+
+  function decisionBlock() {
+    const d = meetingDecision(cur);
+    if (!d) return null;
+    return el("section", { class: "section", "data-mt": "decision" },
+      sectionHead("CEO 決定", "這只是紀錄：VBear 不會去執行它。要做的話，寫進任務卡，再照原本的流程。"),
+      el("div", { class: "card pad" },
+        el("p", null, el("strong", null, d.decision || "")),
+        el("p", null, d.rationale || ""),
+        Array.isArray(d.dissent_addressed) && d.dissent_addressed.length ? [el("div", { class: "small muted" }, "對不同意見的回應"),
+          el("ul", { class: "small" }, d.dissent_addressed.map((x) => el("li", null, String(x))))] : null,
+        Array.isArray(d.actions) && d.actions.length ? [el("div", { class: "small muted" }, "要做的事"),
+          el("ul", null, d.actions.map((a) => el("li", null, badge(String((a && a.type) || "?"), "b-info"), " ", String((a && a.text) || ""))))] : null,
+        d.escalate === true ? notice("warn", `CEO 要求交給董事長：${d.escalate_reason || "（沒有寫原因）"}`) : null,
+        Array.isArray(d.follow_up_topics) && d.follow_up_topics.length ? [el("div", { class: "small muted" }, "CEO 提議的下一場議題（只會填進表單，要你按預覽才會開）"),
+          d.follow_up_topics.map((x) => el("button", { class: "btn small", type: "button", "data-mt": "follow-up", on: { click: () => {
+            location.hash = `#/meetings?topic=${encodeURIComponent(String(x))}${cur.task_id ? "&task=" + encodeURIComponent(cur.task_id) : ""}`;
+          } } }, `開新會議討論：${x}`))] : null));
+  }
+
+  function chairmanBlock() {
+    const c = cur.chairman && typeof cur.chairman === "object" ? cur.chairman : { state: "pending" };
+    const note = el("textarea", { rows: "2", maxlength: "500", "data-mt": "chairman-note", "aria-label": "備註（選填）", placeholder: "備註（選填，最多 500 字）" });
+    const decide = (decision) => act(() => api.post(`/api/meetings/${encodeURIComponent(id)}/chairman`, { decision, note: note.value.trim() }));
+    let head;
+    const buttons = [];
+    if (cur.status === "running") head = "會議進行中，結束後才能決定。";
+    else if (c.state === "approved") head = "董事長已核准";
+    else if (c.state === "rejected") head = "董事長已否決";
+    else if (cur.status === "waiting_chairman") {
+      head = "輪到你：董事長核准";
+      buttons.push(el("button", { class: "btn primary", type: "button", "data-mt": "approve", on: { click: () => decide("approve") } }, "核准"));
+    } else head = cur.status === "decided" ? "CEO 已決定（不需要董事長核准，你仍然可以否決）" : "CEO 還沒有做出決定";
+    if (cur.status !== "running" && c.state !== "approved" && c.state !== "rejected") {
+      buttons.push(el("button", { class: "btn", type: "button", "data-mt": "reject", on: { click: () => decide("reject") } }, "否決"));
+    }
+    return el("section", { class: `section mt-chairman${cur.status === "waiting_chairman" ? " mt-chairman-waits" : ""}`, "data-mt": "chairman" },
+      sectionHead("董事長桌", MEETING_CHAIRMAN_NOTE),
+      el("div", { class: "card pad" },
+        el("p", null, el("strong", null, head)),
+        Array.isArray(cur.rules) && cur.rules.length ? [el("div", { class: "small muted" }, "為什麼要交給董事長（固定規則，AI 只能把它升級、不能降級）"),
+          el("ul", { class: "small", "data-mt": "rules" }, cur.rules.map((r) => el("li", null, `${r.id}：${r.text}`)))] : null,
+        c.note ? el("p", { class: "small" }, `備註：${c.note}`) : null,
+        c.at ? el("p", { class: "small muted" }, `${fmtTime(c.at)}・${MEETING_CHAIRMAN_NOTE}`) : null,
+        buttons.length ? [el("label", null, "備註", note), el("div", { class: "row" }, buttons)] : null));
+  }
+
+  function taskNoteBlock() {
+    const offer = meetingTaskNoteOffer(cur);
+    const nodes = [];
+    const go = (taskId) => { location.hash = `#/workbench?task=${encodeURIComponent(taskId)}&meeting=${encodeURIComponent(id)}`; };
+    if (!offer.ok) nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, offer.why));
+    else if (cur.task_id) {
+      nodes.push(el("button", { class: "btn", type: "button", "data-mt": "write-task", on: { click: () => go(cur.task_id) } }, "把決定寫進任務卡"),
+        el("span", { class: "small muted" }, "只會打開任務卡的編輯器並填好文字，要你自己按「儲存修改」。"));
+    } else if (tasksList.length) {
+      const pick = el("select", { class: "mt-task-pick", "data-mt": "write-task-pick", "aria-label": "寫進哪張任務卡" },
+        el("option", { value: "" }, "（選一張任務卡）"), tasksList.map((t) => el("option", { value: t.id }, t.title || t.id)));
+      const btn = el("button", { class: "btn", type: "button", disabled: true, "data-mt": "write-task", on: { click: () => { if (pick.value) go(pick.value); } } },
+        "把決定寫進任務卡");
+      pick.addEventListener("change", () => { btn.disabled = !pick.value; });
+      nodes.push(pick, btn, el("span", { class: "small muted" }, "只會打開編輯器並填好文字，要你自己按「儲存修改」。"));
+    } else nodes.push(el("p", { class: "small muted", "data-mt": "write-task-why" }, "沒有任務卡可以寫。"));
+    return el("section", { class: "section", "data-mt": "task-note" }, sectionHead("寫進任務卡", null), el("div", { class: "row" }, nodes));
+  }
+
+  function draw() {
+    const seats = meetingSeats(cur);
+    const task = cur.task_id ? tasksList.find((t) => t.id === cur.task_id) : null;
+    const running = cur.status === "running";
+    const flags = Array.isArray(cur.flags_by_chairman) ? cur.flags_by_chairman : [];
+    setKids(root,
+      el("div", { class: "row" }, el("h1", null, cur.topic || "（沒有議題）")),
+      el("div", { class: "row small" }, meetingStatusBadge(cur.status), cur.major ? badge("重大", "b-warn", "符合交給董事長的固定規則") : null,
+        el("span", { class: "muted" }, `會議紀錄 ${cur.id}・${fmtTime(cur.created_at)}・花費 US$${cur.spent_usd}（估值）`),
+        cur.task_id ? el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, task ? `任務卡：${task.title}` : "任務卡") : null),
+      flags.length ? el("p", { class: "small" }, `你建立時勾了：${flags.map((f) => (MEETING_FLAGS.find((x) => x[0] === f) || [f, f])[1]).join("、")}`) : null,
+      cur.context ? el("p", { class: "small" }, `補充說明：${cur.context}`) : null,
+      el("p", { class: "small muted" }, MEETING_COST_NOTE),
+      el("section", { class: "section" }, sectionHead("座位", "每一位的內容都是紀錄裡的原文；模型寫的字一律當文字顯示，這裡只有證據是 VBear 自己整理的。"),
+        el("div", { class: "mt-cards" }, seats.map(seatCard))),
+      decisionBlock(), chairmanBlock(), taskNoteBlock(),
+      el("div", { class: "row" },
+        running ? el("button", { class: "btn", type: "button", "data-mt": "cancel", on: { click: () => act(() => api.post(`/api/meetings/${encodeURIComponent(id)}/cancel`, {})) } }, "取消這場會議") : null,
+        !running ? el("button", { class: "btn", type: "button", "data-mt": "delete", on: { click: async () => {
+          if (!(await confirmInPage("刪除會議", `確定要刪除這場會議「${cur.topic}」的紀錄嗎？刪除後無法復原。`, "刪除"))) return;
+          try { await api.del(`/api/meetings/${encodeURIComponent(id)}`); toast("會議已刪除"); location.hash = "#/meetings"; }
+          catch (e) { toast("刪除失敗：" + e.message); }
+        } } }, "刪除這場會議") : null));
+  }
+  draw();
+  setKids(main, crumbs([["會議", "#/meetings"], [cur.topic || id]]), root);
+  if (cur.status === "running") {
+    meetingsTick = async () => { if (cur.status === "running") await reload(); };
+    activeViewCleanup = () => { meetingsTick = null; };
+  }
+}
+
+// A task card's meetings: the ones about it, newest first, and the way to a new one.
+function taskMeetingsBlock(taskId, data) {
+  const rows = data && Array.isArray(data.meetings)
+    ? data.meetings.filter((m) => m && typeof m === "object" && !m.blocked && m.task_id === taskId).sort(meetingNewest) : null;
+  return el("div", { class: "wb-field-group", "data-mt": "task-meetings" },
+    el("div", { class: "wb-field-label" }, "相關會議"),
+    el("div", { class: "wb-field-val" },
+      rows && rows.length ? el("ul", { style: "margin:0 0 6px; padding-left:18px" }, rows.slice(0, 5).map((m) =>
+        el("li", null, el("a", { href: `#/meetings/${encodeURIComponent(m.id)}` }, m.topic || "（沒有議題）"), " ", meetingStatusBadge(m.status))))
+        : el("p", { class: "small muted" }, rows ? "這張任務卡還沒有開過會。" : "讀不到會議清單。"),
+      el("a", { class: "btn small", href: `#/meetings?task=${encodeURIComponent(taskId)}` }, "開會討論")));
 }
 
 setTheme(store.get("theme", "auto"));
@@ -12296,5 +13017,20 @@ if (typeof module !== "undefined" && module.exports) {
     questNext,
     boardTeamKey,
     ONBOARD_STEPS,
+    MEETING_BUBBLES,
+    meetingBubble,
+    meetingSeats,
+    meetingSeatNode,
+    meetingStatusText,
+    meetingLamp,
+    meetingsNeedingYou,
+    meetingRoomPick,
+    meetingRoomModel,
+    meetingRoomKey,
+    meetingRoomSection,
+    meetingTaskNote,
+    meetingTaskNoteOffer,
+    taskMeetingsBlock,
+    viewMeetings,
   };
 }
