@@ -327,7 +327,8 @@ class LoadoutTests(_Helpers, unittest.TestCase):
         self.save(c)
         _, body = _get(port, "/api/agent-profiles/prof-a/loadout")
         self.assertEqual(set(body), {"ok", "profile", "index", "profession", "skills", "version_status", "tools",
-                                     "armor", "blockers", "blockers_note"})
+                                     "armor", "blockers", "blockers_note",
+                                     "launch_mode", "instructions", "boundaries"})   # P34-2
 
     def snapshot(self):
         """Every file under the state directory: size, mtime and content hash, so that 'nothing changed' is
@@ -395,7 +396,10 @@ class LoadoutTests(_Helpers, unittest.TestCase):
         self.save(c, model={"tool": "codex", "model_id": ""})
         status, body = _get(port, "/api/agent-profiles/prof-a/loadout")
         self.assertEqual(status, 200)
-        text = json.dumps(body, ensure_ascii=False)
+        # P34-2: the card's own launch-mode record (a field of every card, said as such) may use its name; nothing
+        # else in a Codex card's loadout may talk about Claude's safe mode.
+        self.assertEqual(body["launch_mode"]["mode"], "safe")
+        text = json.dumps({k: v for k, v in body.items() if k != "launch_mode"}, ensure_ascii=False)
         for word in ("Claude", "claude", "2.1.296", "安全模式", "safe-mode", "--safe", "safe_mode"):
             self.assertNotIn(word, text, word)
         self.assertEqual(body["version_status"]["state"], "unknown")

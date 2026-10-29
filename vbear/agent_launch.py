@@ -22,10 +22,12 @@ import re
 import secrets
 import threading
 import time
+import unicodedata
 from pathlib import Path
 
-from . import activity
-from .agent_profiles import VERIFIED_INTENTS, profile_digest  # moved there so a team slot / the starter deck share them; same values
+from . import activity, position_guide
+from .agent_profiles import (VERIFIED_INTENTS, effective_launch_mode, position_of,  # moved there so a team slot / the starter deck share them; same values
+                             profile_digest)
 from .runtime import agent_sessions, cli_versions
 from .runtime.native import NativeRuntimeError, NativeRuntimeUnavailable
 
@@ -44,6 +46,10 @@ EVIDENCE_DIR = "docs/evidence"
 # (HTTPS refused by the sandbox proxy, direct TCP EPERM). Set to False to
 # report Network as unknown again if the settings shape changes.
 NETWORK_VERIFIED = True
+# Whether VBear can start a card in full mode (P34-2). It cannot yet: the launch is built in the next batch, together
+# with the rules for it in launch_blockers. The catalog reports this so the wizard says it, and launch_blockers refuses
+# a full-mode card whatever this says, so a card set to full is never started as a safe one behind the person's back.
+FULL_MODE_LAUNCHABLE = False
 
 
 def _last_title_failure(engine: str | None, version: str) -> list[str] | None:
@@ -156,6 +162,14 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     def block(code, message):
         out.append({"code": code, "message": message})
 
+    if effective_launch_mode(profile) == "full":
+        # The launch for this mode does not exist yet. The rules below are the safe launch's, so none of them is read as
+        # a verdict on a full-mode card; the card says why it cannot go and how to make it go.
+        if profile.get("enabled") is False:
+            block("profile_disabled", "此角色卡已停用")
+        block("full_mode_not_available",
+              "完整模式的出發還沒開放：這個版本只能用安全模式出發。要現在出發，請把這張卡的出發方式改成安全模式")
+        return out
     tool = (profile.get("model") or {}).get("tool")
     if tool not in {"claude", "codex"}:
         block("tool_not_launchable", TOOL_NOT_LAUNCHABLE.get(tool, "此 Agent 工具沒有受管啟動設定"))
@@ -190,6 +204,27 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
     if tool == "codex" and _codex_evidence_reference() is None:
         block("codex_evidence_missing", "Codex 0.159.2 本輪 OS sandbox 驗收尚未完成；Network/Filesystem 維持未知並拒絕啟動")
     return out
+
+
+def folder_advice(position, mode, workdir) -> str | None:
+    """A suggestion when the folder chosen for a launch is not the one the card's position suggests (`suggested_folder`
+    of the guide), or None. It is words only and never stops a launch: a folder named like the suggestion, or one inside
+    it, is quiet. Only the folder's name is quoted, not the path. Names are compared as text (macOS may spell an
+    accent or a Chinese character in a different Unicode form than the one typed)."""
+    row = position_guide.GUIDE.get(position) if isinstance(position, str) else None
+    want = row["suggested_folder"] if row else None
+    if not want or not isinstance(workdir, str) or not workdir:
+        return None
+    norm = lambda text: unicodedata.normalize("NFC", text)
+    parts = [norm(p) for p in Path(workdir).parts]
+    if norm(want) in parts:
+        return None
+    chosen = (parts[-1] if parts else workdir)[:80]
+    if mode == "full":
+        return (f"這張卡建議在名為「{want}」的資料夾（或它裡面）出發；你選的是「{chosen}」。"
+                "完整模式不限制寫入位置，這只是建議，不會擋。")
+    return (f"這張卡建議在名為「{want}」的資料夾（或它裡面）出發，這樣寫入範圍就只在那裡；你選的是「{chosen}」，"
+            f"寫入範圍會是整個「{chosen}」。只是提醒，不會擋。")
 
 
 # --- the armor: what each of the seven labels says -----------------------------------------------------------
@@ -469,6 +504,7 @@ class PreviewStore:
             "canonical_paths": {"workdir": canonical, "scratch": manifest["scratch"]["path"] if manifest else None},
             "derived_labels": derive_labels(manifest, canonical, (profile.get("model") or {}).get("tool")),
             "armor_groups": armor_groups(engine),
+            **self._position_view(profile, engine, canonical),
             "expires_at": None,
             "persisted": "commit 與 network 是本次啟動的輸入，不會寫回角色卡",
         }
@@ -483,6 +519,17 @@ class PreviewStore:
             body["preview_id"] = preview_id
             body["expires_at"] = entry["expires"]
         return body
+
+    @staticmethod
+    def _position_view(profile: dict, engine, canonical) -> dict:
+        """What the pass says about the card's launch mode and position (P34-2): the mode and its sentence, the
+        boundaries of the position for this tool and mode, and a suggestion about the folder. Words, not limits."""
+        mode = effective_launch_mode(profile)
+        position = position_of(profile)
+        resolved = position_guide.resolve(position, engine, mode)
+        return {"launch_mode": mode, "position": position,
+                "mode_note": position_guide.mode_note(engine, mode),
+                "boundaries": resolved, "folder_warning": folder_advice(position, mode, canonical)}
 
     def consume(self, preview_id, expected_settings_digest, user_confirmed, load_profile,
                 *, cols: int | None = None, rows: int | None = None,

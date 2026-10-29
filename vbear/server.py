@@ -39,6 +39,7 @@ from . import activity
 from . import annotations
 from . import agent_launch
 from . import agent_profiles
+from . import position_guide
 from . import armory
 from . import loadout as loadout_mod
 from . import model_options
@@ -619,6 +620,16 @@ def make_handler(console: Console):
                         # a read that must change nothing found the store damaged or blocked: it says so, in
                         # fixed words (the exception's own text can carry a path), and leaves the file and the
                         # marker alone; the profile page is where it is dealt with
+                        _log_profile_store_problem(exc)
+                        return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "profile_store_damaged",
+                                           "hint": PROFILE_STORE_HINT}, 409)
+                    if out is None:
+                        return self._error(404, "找不到這張角色卡")
+                    return self._json(out)
+                if path.startswith("/api/agent-profiles/") and path.endswith("/instructions"):
+                    try:
+                        out = self._instructions(path[len("/api/agent-profiles/"):-len("/instructions")])
+                    except agent_profiles.AgentProfileStorageError as exc:
                         _log_profile_store_problem(exc)
                         return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "profile_store_damaged",
                                            "hint": PROFILE_STORE_HINT}, 409)
@@ -1219,6 +1230,16 @@ def make_handler(console: Console):
             return loadout_mod.build(profile, static, console.store.live_cached(),
                                      verifier.status() if verifier is not None else None)
 
+        def _instructions(self, profile_id):
+            """The text the terminal's 貼上職位指示 button pastes: the card's own instructions, else its position's
+            default. A read that changes nothing (the store is not quarantined by it)."""
+            profile = agent_profiles.get_profile_readonly(profile_id)
+            if profile is None:
+                return None
+            got = agent_profiles.instructions_of(profile)
+            return {"ok": True, "id": profile.get("id"), "name": profile.get("name"), "source": got["source"],
+                    "position": got["position"], "text": got["text"]}
+
         def _load_profile(self, profile_id):
             index = console.skill_index()
             known_roles = {r.get("role_id") for r in console.store.static().get("roles", [])
@@ -1645,6 +1666,15 @@ def make_handler(console: Console):
                 "positions": list(agent_profiles.POSITIONS),
                 "position_table": [dict(row) for row in agent_profiles.POSITION_TABLE],
                 "retired_positions": {k: dict(v) for k, v in agent_profiles.RETIRED_POSITIONS.items()},
+                # P34-2: per position the default instructions, the skill categories and folder it suggests, and its
+                # boundaries resolved for each tool and launch mode; the launch modes and what the page needs to draw them.
+                "position_guide": position_guide.catalog_view(),
+                "launch_modes": [{"id": m, "label": position_guide.MODE_LABELS[m], "help": position_guide.MODE_HELP[m]}
+                                 for m in agent_profiles.LAUNCH_MODES],
+                "default_launch_mode": agent_profiles.DEFAULT_LAUNCH_MODE_FOR_NEW,
+                "full_mode_launchable": agent_launch.FULL_MODE_LAUNCHABLE,
+                "max_instructions": agent_profiles.MAX_INSTRUCTIONS,
+                "instructions_where": position_guide.INSTRUCTIONS_WHERE,
                 # The one combination of intents a managed launch honours; the starter deck and the wizard's
                 # suggestions both use it (design card-play v1.2 R10).
                 "verified_intents": dict(agent_profiles.VERIFIED_INTENTS),

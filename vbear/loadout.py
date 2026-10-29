@@ -10,7 +10,7 @@ Profile in them.
 
 from __future__ import annotations
 
-from . import agent_launch
+from . import agent_launch, agent_profiles, position_guide
 from .runtime import agent_sessions
 
 NOT_KNOWN_AT_PREVIEW = "產生出發通行證時才知道"
@@ -30,6 +30,9 @@ AGY_SKILLS_NOTE = ("VBear 還不會啟動 AGY，已選技能只是你的挑選�
 TOOLS_ONLY_CLAUDE = "VBear 目前只支援用角色卡啟動 Claude Code"
 TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
 TOOLS_AGY_NOT_RECORDED = "VBear 還不會啟動 AGY，也沒有記錄 AGY 的可用工具清單"
+ARMOR_FULL_MODE = ("完整模式：VBear 沒有限制這張卡，只剩工具自己的權限詢問，所以沒有防具可以列。"
+                   "（這個版本還不能以完整模式出發。）")
+LAUNCH_MODE_NOT_SET = "這張卡沒有設定出發方式（舊卡沒有這個欄位），一律當安全模式；沒有改動這張卡。"
 TOOLS_SOURCE = "與 VBear 啟動 Claude Code 時傳入的 --tools／--disallowedTools 相同（同一組常數）"
 
 
@@ -169,7 +172,9 @@ def _version_status(tool: str, verification: dict | None) -> dict:
             "text": "未知（這個畫面不探測 Claude Code；要到出發通行證才會讀取版本）"}
 
 
-def _armor(tool: str, version_status: dict) -> dict:
+def _armor(tool: str, version_status: dict, mode: str = "safe") -> dict:
+    if mode == "full":
+        return {"applicable": False, "why": ARMOR_FULL_MODE}
     if tool not in ("claude", "codex"):
         return {"applicable": False, "why": ARMOR_NOT_APPLICABLE.get(tool, "此工具沒有受管啟動設定")}
     codex_ok = bool(agent_launch._codex_evidence_reference()) if tool == "codex" else False
@@ -235,10 +240,24 @@ def _tools(tool, codex_not_launchable: bool) -> dict:
     return {"known": False, "allowed": [], "blocked": [], "unknown_reason": reason}
 
 
+def _launch_mode(profile: dict, tool, mode: str) -> dict:
+    stored = profile.get("launch_mode") in agent_profiles.LAUNCH_MODES
+    text = position_guide.mode_note(tool, mode) if stored else LAUNCH_MODE_NOT_SET + position_guide.mode_note(tool, mode)
+    return {"mode": mode, "stored": stored, "label": position_guide.MODE_LABELS[mode], "text": text}
+
+
+def _instructions(profile: dict) -> dict:
+    """The card's instructions with where they go: nowhere by themselves, only to a paste the person makes."""
+    got = agent_profiles.instructions_of(profile)
+    return {"title": "這份指示會交到哪裡", "source": got["source"], "position": got["position"], "text": got["text"],
+            "automatic": False, "where": position_guide.INSTRUCTIONS_WHERE}
+
+
 def build(profile: dict, static: dict | None, live: dict | None, verification: dict | None) -> dict:
     """The loadout of one Profile from what is already loaded (see the module note)."""
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
     tool = model.get("tool")
+    mode = agent_profiles.effective_launch_mode(profile)
     version = _version_status(tool, verification)
     blockers = agent_launch.launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
     codex_not_launchable = tool == "codex" and any(
@@ -256,7 +275,10 @@ def build(profile: dict, static: dict | None, live: dict | None, verification: d
         "skills": _skills_section(tool, codex_not_launchable, [_skill(sid, static, live, tool) for sid in equipped]),
         "version_status": version,
         "tools": _tools(tool, codex_not_launchable),
-        "armor": _armor(tool, version) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),
+        "launch_mode": _launch_mode(profile, tool, mode),
+        "instructions": _instructions(profile),
+        "boundaries": position_guide.resolve(agent_profiles.position_of(profile), tool, mode),
+        "armor": _armor(tool, version, mode) | ({"launch_note": CODEX_NOT_LAUNCHABLE} if codex_not_launchable else {}),
         "blockers": blockers,
         "blockers_note": "假設你已勾選知悉 commit、並維持關閉網路；實際以出發通行證為準",
     }

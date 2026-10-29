@@ -41,16 +41,20 @@ import stat
 import tempfile
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 from . import config as cfg
+from . import position_guide
 
 MAX_PROFILES = 500
 MAX_TEXT_NAME = 200
 MAX_MODEL_ID = 200
 MAX_TOOL_ID = 64
 MAX_POSITION = 32
+MAX_INSTRUCTIONS = position_guide.MAX_INSTRUCTIONS
+MAX_LAUNCH_MODE = 16
 MAX_SKILLS_PER_PROFILE = 200
 MAX_PROFILE_ID_LEN = 64
 MAX_PROFILE_ID_BODY = 63
@@ -148,6 +152,62 @@ RETIRED_POSITIONS: dict[str, dict[str, Any]] = {
     "research": {"label": "研究", "to": None},
     "business": {"label": "商業", "to": None},
 }
+
+# How a card is to be started (P34-2). "full" is the tool as the person runs it by hand, with no limit from VBear;
+# "safe" is the verified, sandboxed launch every card had before. A card without the key is "safe": an old card is not
+# loosened by an upgrade, and only the word "full" reads as full. A new card is offered "full" (the wizard reads this
+# from the catalog); nothing writes it for a card the person did not set.
+LAUNCH_MODES: tuple[str, ...] = position_guide.LAUNCH_MODES
+DEFAULT_LAUNCH_MODE_FOR_NEW = "full"
+
+
+def effective_launch_mode(profile) -> str:
+    """The launch mode a card is to be started in: "full" only when the card says exactly that, otherwise "safe"."""
+    return "full" if isinstance(profile, dict) and profile.get("launch_mode") == "full" else "safe"
+
+
+def position_of(profile) -> str | None:
+    """The position a card stands in today: its own when this build lists it, the successor of a retired v0.9.0 id, or
+    None (no position, one that was retired without a successor, or one a newer build wrote)."""
+    raw = profile.get("position") if isinstance(profile, dict) else None
+    if not isinstance(raw, str) or not raw:
+        return None
+    if raw in POSITIONS:
+        return raw
+    retired = RETIRED_POSITIONS.get(raw)
+    return retired["to"] if retired else None
+
+
+def clean_instructions(value) -> str:
+    """The text of a card's instructions as it is stored, or "" for none: every line break becomes a single newline, the ends are trimmed,
+    and anything that is not plain text (control, format and separator characters other than a line break or a tab)
+    is refused, so it can later be pasted into a terminal or passed as an argument without surprises."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("instructions 必須是文字或 null")
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    for ch in text:
+        if ch not in "\n\t" and unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
+            raise ValueError("instructions 不可含控制字元")
+    text = text.strip()
+    if len(text) > MAX_INSTRUCTIONS:
+        raise ValueError(f"instructions 不可超過 {MAX_INSTRUCTIONS} 字")
+    return text
+
+
+def instructions_of(profile) -> dict[str, Any]:
+    """The instructions of a card: its own text ("custom"), else its position's default ("default"), else none. `default`
+    is the position's text either way, so a screen can offer to go back to it."""
+    pos = position_of(profile)
+    default = position_guide.GUIDE[pos]["prompt"] if pos in position_guide.GUIDE else None
+    stored = profile.get("instructions") if isinstance(profile, dict) else None
+    if isinstance(stored, str) and stored.strip():
+        return {"source": "custom", "text": stored, "position": pos, "default": default}
+    if default:
+        return {"source": "default", "text": default, "position": pos, "default": default}
+    return {"source": "none", "text": None, "position": pos, "default": None}
+
 
 # The one combination of intents a managed launch honours today (agent_launch.launch_blockers is a whitelist on it):
 # read, write and test allowed, deploy denied. It lives here, beside the starter deck, so the deck, the wizard's
@@ -408,6 +468,15 @@ def _entry_schema_problem(key: Any, value: Any, known_skills: set[str],
     if position is not None and (not isinstance(position, str) or len(position) > MAX_POSITION):
         return "position 必須是字串或 null"
 
+    # P34-2: both are optional and only their type is checked (a text longer than this build writes, a mode it does not
+    # list, came from a newer build and must not isolate the file; the mode then reads as safe)
+    instructions = value.get("instructions")
+    if instructions is not None and not isinstance(instructions, str):
+        return "instructions 必須是字串或 null"
+    launch_mode = value.get("launch_mode")
+    if launch_mode is not None and (not isinstance(launch_mode, str) or len(launch_mode) > MAX_LAUNCH_MODE):
+        return "launch_mode 必須是字串或 null"
+
     model = value.get("model")
     if not isinstance(model, dict):
         return "model 不是物件"
@@ -499,6 +568,23 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
     else:
         position = existing.get("position") if existing else None
 
+    # The card's own instructions: a missing key keeps the stored text; null, an empty or a blank text clears it (the
+    # position's default is used again); anything else is stored as plain text. A card without any has no key on disk.
+    if "instructions" in value:
+        instructions = clean_instructions(value["instructions"]) or None
+    else:
+        instructions = existing.get("instructions") if existing else None
+
+    # How the card is to be started: a missing key keeps the stored value; null or an empty string clears it (which
+    # reads as safe); otherwise one of LAUNCH_MODES. A card without one has no key on disk.
+    if "launch_mode" in value:
+        launch_mode = value["launch_mode"]
+        if launch_mode is not None and (not isinstance(launch_mode, str) or (launch_mode and launch_mode not in LAUNCH_MODES)):
+            raise ValueError(f"launch_mode 必須是 {', '.join(LAUNCH_MODES)} 之一，或 null")
+        launch_mode = launch_mode or None
+    else:
+        launch_mode = existing.get("launch_mode") if existing else None
+
     model_raw = value.get("model")
     if model_raw is None and existing is not None:
         model_raw = existing.get("model", {})
@@ -571,8 +657,8 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
     unknown_fields = sorted(
         k for k in value.keys()
         if k not in {
-            "id", "name", "profession_role_id", "position", "model", "equipped_skill_ids",
-            "permission_intents", "enabled",
+            "id", "name", "profession_role_id", "position", "instructions", "launch_mode", "model",
+            "equipped_skill_ids", "permission_intents", "enabled",
         }
     )
     if unknown_fields:
@@ -602,6 +688,10 @@ def _normalize_profile(value: dict[str, Any], *, profile_id: str,
     }
     if position:
         normalized["position"] = position
+    if instructions:
+        normalized["instructions"] = instructions
+    if launch_mode:
+        normalized["launch_mode"] = launch_mode
     return normalized
 
 
@@ -832,6 +922,10 @@ def duplicate_profile(profile_id: str,
         # the copy carries the position as it is stored, one this build does not list included
         if isinstance(existing.get("position"), str) and existing["position"]:
             normalized["position"] = existing["position"]
+        # and the instructions and the launch mode as they are stored
+        for key in ("instructions", "launch_mode"):
+            if isinstance(existing.get(key), str) and existing[key]:
+                normalized[key] = existing[key]
         on_disk = {k: v for k, v in normalized.items() if not k.startswith("_")}
         all_profiles[new_id] = on_disk
         data_str = json.dumps(all_profiles, ensure_ascii=False, indent=2)
