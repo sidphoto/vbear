@@ -254,14 +254,15 @@ class AgentBuilderAPITests(unittest.TestCase):
     def test_catalog_serves_the_starter_deck_exactly(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
-        self.assertEqual(body["positions"], ["planner", "executor", "qa", "reviewer", "product", "research", "business",
-                                             "design", "records"])
+        self.assertEqual(body["positions"], ["planner", "executor", "social", "art", "pm", "legal", "accountant",
+                                             "reviewer"])
+        self.assertEqual(body["retired_positions"], agent_profiles.RETIRED_POSITIONS)
         self.assertEqual(body["position_table"], [dict(r) for r in agent_profiles.POSITION_TABLE])
         self.assertEqual(body["demo_id_prefix"], "demo-")
         deck = body["starter_deck"]
         self.assertEqual([(c["key"], c["name"], c["position"], c["tool"]) for c in deck], [
             ("planner", "CEO", "planner", "claude"),
-            ("executor", "工匠", "executor", "claude"),
+            ("executor", "全端工程師", "executor", "claude"),
             ("reviewer", "審查員", "reviewer", "codex")])
         # v1.2 R10: every card carries the one combination a managed launch honours, taken from one place
         self.assertEqual([c["permission_intents"] for c in deck], [dict(agent_launch.VERIFIED_INTENTS)] * 3)
@@ -277,7 +278,7 @@ class AgentBuilderAPITests(unittest.TestCase):
     def test_starter_deck_constant_is_safe_to_save_and_has_a_cross_tool_reviewer(self):
         deck = agent_profiles.STARTER_DECK
         self.assertEqual(len(deck), 3)
-        # the starter deck is still the three cards of the task card's places; the other six positions are not in it
+        # the starter deck is still the three cards of the task card's places; the other five positions are not in it
         self.assertEqual([c["position"] for c in deck], ["planner", "executor", "reviewer"])
         self.assertTrue(set(c["position"] for c in deck) <= set(agent_profiles.POSITIONS))
         for card in deck:
@@ -319,29 +320,29 @@ class AgentBuilderAPITests(unittest.TestCase):
 
     def test_position_is_saved_listed_kept_by_enabled_and_cleared(self):
         status, made = _request("POST", self.port, "/api/agent-profiles", headers=_write_headers(),
-                                body=_sample(name="Has position", position="qa"))
+                                body=_sample(name="Has position", position="legal"))
         self.assertEqual(status, 200, made)
         pid = made["profile"]["id"]
-        self.assertEqual(made["profile"]["position"], "qa")
+        self.assertEqual(made["profile"]["position"], "legal")
         # 停用／啟用 posts only the on/off state: neither the position nor the profession moves
         for flag in (False, True):
             status, saved = _request("POST", self.port, f"/api/agent-profiles/{pid}",
                                      headers=_write_headers(), body={"enabled": flag})
             self.assertEqual(status, 200, saved)
-            self.assertEqual(saved["profile"]["position"], "qa")
+            self.assertEqual(saved["profile"]["position"], "legal")
         status, listing = _request("GET", self.port, "/api/agent-profiles")
         mine = [p for p in listing["profiles"] if p["id"] == pid][0]
-        self.assertEqual(mine["position"], "qa")
+        self.assertEqual(mine["position"], "legal")
         # an unknown value is refused and changes nothing
         status, _ = _request("POST", self.port, f"/api/agent-profiles/{pid}",
                              headers=_write_headers(), body={"position": "boss"})
         self.assertEqual(status, 400)
         status, one = _request("GET", self.port, f"/api/agent-profiles/{pid}")
-        self.assertEqual(one["profile"]["position"], "qa")
+        self.assertEqual(one["profile"]["position"], "legal")
         # a copy carries it
         status, dup = _request("POST", self.port, f"/api/agent-profiles/{pid}/duplicate", headers=_write_headers(), body={})
         self.assertEqual(status, 200, dup)
-        self.assertEqual(dup["profile"]["position"], "qa")
+        self.assertEqual(dup["profile"]["position"], "legal")
         # null clears it
         status, cleared = _request("POST", self.port, f"/api/agent-profiles/{pid}",
                                    headers=_write_headers(), body={"position": None})

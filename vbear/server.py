@@ -1644,6 +1644,7 @@ def make_handler(console: Console):
                                  for card in agent_profiles.STARTER_DECK],
                 "positions": list(agent_profiles.POSITIONS),
                 "position_table": [dict(row) for row in agent_profiles.POSITION_TABLE],
+                "retired_positions": {k: dict(v) for k, v in agent_profiles.RETIRED_POSITIONS.items()},
                 # The one combination of intents a managed launch honours; the starter deck and the wizard's
                 # suggestions both use it (design card-play v1.2 R10).
                 "verified_intents": dict(agent_profiles.VERIFIED_INTENTS),

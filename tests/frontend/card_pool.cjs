@@ -177,7 +177,7 @@ const catalogBody = {
   starter_deck: [
     { key: "planner", name: "CEO", position: "planner", tool: "claude",
       permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
-    { key: "executor", name: "工匠", position: "executor", tool: "claude",
+    { key: "executor", name: "全端工程師", position: "executor", tool: "claude",
       permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex",
       permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
@@ -300,7 +300,7 @@ const catalog = {
   verified_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" },
   starter_deck: [
     { key: "planner", name: "CEO", position: "planner", tool: "claude", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
-    { key: "executor", name: "工匠", position: "executor", tool: "claude", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
+    { key: "executor", name: "全端工程師", position: "executor", tool: "claude", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
     { key: "reviewer", name: "審查員", position: "reviewer", tool: "codex", permission_intents: { read: "allow", write: "allow", test: "allow", deploy: "deny" } },
   ],
   positions: ["planner", "executor", "reviewer"], demo_id_prefix: "demo-", codex_installed: true,
@@ -640,7 +640,7 @@ async function test(name, fn) {
     assert.ok(!fetchCalls.some((c) => c.url.includes("intent-check")));
   });
 
-  await test("P32-2 wizard step 2: nine positions in two rows with 先不指定, a box with the duty, the place and the reminder; the intents are the verified ones for every one", async () => {
+  await test("P34-1 wizard step 2: seven positions in two rows with 先不指定, the review gate apart as VBear's own, a box with the duty, the place, the suggested camp and the reminder; the intents are the verified ones for every one", async () => {
     const { ctx, posts, d } = await openWizard();
     typeName(d, "Position one");
     btnByText(d, "下一步").dispatch("click");
@@ -648,14 +648,19 @@ async function test(name, fn) {
     const groups = walk(cur).filter((n) => n.getAttribute && n.getAttribute("role") === "group");
     const groupBy = (label) => groups.find((n) => n.getAttribute("aria-label") === label);
     const outer = groupBy("建議位置");
-    assert.ok(outer, "one group named 建議位置 holds both rows");
-    const team = groupBy("任務卡上的位置"), staff = groupBy("幕僚與支援");
-    assert.ok(team && staff && outer.contains(team) && outer.contains(staff));
+    assert.ok(outer, "one group named 建議位置 holds the rows");
+    const team = groupBy("任務卡上的位置"), staff = groupBy("幕僚與支援"), gate = groupBy("VBear 內建");
+    assert.ok(team && staff && gate && outer.contains(team) && outer.contains(staff) && outer.contains(gate));
     const posButtons = (g) => walk(g).filter((n) => n.tag === "button" && n.getAttribute("data-position"));
-    assert.deepStrictEqual(posButtons(team).map((b) => b.getAttribute("data-position")), ["planner", "executor", "qa", "reviewer"]);
-    assert.deepStrictEqual(posButtons(staff).map((b) => b.getAttribute("data-position")), ["product", "research", "business", "design", "records", "none"]);
-    assert.deepStrictEqual(posButtons(team).map((b) => textOf(b).trim()), ["規劃", "執行", "品質驗證", "獨立審查"]);
-    assert.deepStrictEqual(posButtons(staff).map((b) => textOf(b).trim()), ["產品", "研究", "商業", "設計", "紀錄", "先不指定"]);
+    assert.deepStrictEqual(posButtons(team).map((b) => b.getAttribute("data-position")), ["planner", "executor", "social", "art"]);
+    assert.deepStrictEqual(posButtons(staff).map((b) => b.getAttribute("data-position")), ["pm", "legal", "accountant", "none"]);
+    assert.deepStrictEqual(posButtons(team).map((b) => textOf(b).trim()), ["CEO", "全端工程師", "社群媒體經理", "藝術總監"]);
+    assert.deepStrictEqual(posButtons(staff).map((b) => textOf(b).trim()), ["PM", "法務經理", "會計師", "先不指定"]);
+    // the independent review is not one of the seven: one separate option, below the rows, that says what it is
+    assert.deepStrictEqual(posButtons(gate).map((b) => b.getAttribute("data-position")), ["reviewer"]);
+    assert.strictEqual(textOf(posButtons(gate)[0]).trim(), "VBear 內建：審查關卡（給任務卡的審查位）");
+    assert.ok(findText(byData(cur, "data-cw", "position-gate")[0], "VBear 的品質關卡，不是公司職位"), "and it says it is the system's gate, not a position of the company");
+    assert.ok(!team.contains(posButtons(gate)[0]) && !staff.contains(posButtons(gate)[0]), "not among the seven");
     assert.ok(!team.classList.contains("cw-tools") && !staff.classList.contains("cw-tools"), "the camp row layout is not used");
     assert.strictEqual(byData(cur, "data-cw", "position-box").length, 0, "nothing chosen: no box");
     assert.strictEqual(byData(cur, "data-position", "none")[0].getAttribute("aria-pressed"), "true");
@@ -663,7 +668,8 @@ async function test(name, fn) {
     const base = verified(cur);
     const launchSentence = "目前 VBear 能啟動的只有這一組權限。想讓規劃者或審查者不改檔案，VBear 現在無法強制，請在任務卡的目標裡寫清楚。";
     const rows = vm.runInContext("CARD_POSITION_TABLE", ctx);
-    assert.strictEqual(rows.length, 9);
+    assert.strictEqual(rows.length, 8);
+    const campWord = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）" };
     for (const r of rows) {
       byData(dialog(), "data-position", r.id)[0].dispatch("click");
       cur = dialog();
@@ -671,36 +677,42 @@ async function test(name, fn) {
       const box = byData(cur, "data-cw", "position-box")[0];
       assert.ok(box, r.id);
       assert.ok(findText(box, r.duty) && findText(box, r.reminder), r.id + ": duty and reminder");
-      assert.ok(findText(box, r.tier === "team" ? "任務卡上建議放" : "不佔任務卡的位置"), r.id + ": where it goes");
+      assert.ok(findText(box, r.tier === "staff" ? (r.slot ? "沒有 CEO 時可以放規劃位" : "不佔任務卡的位置") : "任務卡上建議放"), r.id + ": where it goes");
+      assert.ok(findText(box, `建議陣營：${campWord[r.suggested_tool]}` + (r.suggested_model_alias ? `（${r.suggested_model_alias}）` : "")), r.id + ": the suggested camp");
+      assert.strictEqual(findText(box, "VBear 不會幫這個陣營的卡出發"), r.suggested_tool === "agy", r.id + ": only an AGY suggestion says VBear does not start it");
       assert.ok(findText(byData(cur, "data-cw", "launch-note")[0], launchSentence), r.id + ": the R10 sentence stays");
       assert.ok(findText(byData(cur, "data-cw", "launch-note")[0], r.reminder), r.id + ": and the reminder is brought into it");
       assert.strictEqual(verified(cur), base, r.id + ": the suggestion is the verified combination");
       assert.ok(byData(cur, "data-cw", "suggested").length === 1, r.id);
     }
-    byData(dialog(), "data-position", "qa")[0].dispatch("click");
+    byData(dialog(), "data-position", "reviewer")[0].dispatch("click");
     assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "審查位或第二位審查（要和執行位不同陣營）"));
+    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "不是公司職位"));
     byData(dialog(), "data-position", "none")[0].dispatch("click");
     assert.strictEqual(byData(dialog(), "data-cw", "position-box").length, 0);
     assert.ok(!findText(byData(dialog(), "data-cw", "launch-note")[0], "分工提醒"), "no position, no reminder");
-    byData(dialog(), "data-position", "records")[0].dispatch("click");
+    byData(dialog(), "data-position", "accountant")[0].dispatch("click");
     btnByText(dialog(), "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
     assert.deepStrictEqual(posts[0].permission_intents, VERIFIED);
-    assert.strictEqual(posts[0].position, "records", "P32-3: the position goes with the card");
-    assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-NEW")), "records", "and it is still remembered in the browser");
+    assert.strictEqual(posts[0].position, "accountant", "P32-3: the position goes with the card");
+    assert.strictEqual(JSON.parse(ctx.__ls.get("sid:card.position.p-NEW")), "accountant", "and it is still remembered in the browser");
   });
 
-  await test("P32-2: a stored position the page does not know is shown as 先不指定 and never rewritten; a stored qa shows on the existing card", async () => {
+  await test("P34-1: a stored position the page does not know is shown as 先不指定 and never rewritten; a retired one shows under the position it became", async () => {
     const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY)]);
     ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("boss"));
     assert.strictEqual(ctx.cardPosition("p-1"), null);
     assert.strictEqual(ctx.localStorage.getItem("sid:card.position.p-1"), JSON.stringify("boss"), "read only: the stored value stays");
     ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("qa"));
-    assert.strictEqual(ctx.cardPosition("p-1"), "qa");
+    assert.strictEqual(ctx.cardPosition("p-1"), "reviewer");
     ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("records"));
-    assert.strictEqual(ctx.cardPosition("p-1"), "records");
-    assert.deepStrictEqual(Array.from(vm.runInContext("CARD_POSITIONS", ctx)), ["planner", "executor", "qa", "reviewer", "product", "research", "business", "design", "records"]);
+    assert.strictEqual(ctx.cardPosition("p-1"), "pm");
+    ctx.localStorage.setItem("sid:card.position.p-1", JSON.stringify("research"));
+    assert.strictEqual(ctx.cardPosition("p-1"), null, "a retired position with no successor reads as not specified");
+    assert.strictEqual(ctx.localStorage.getItem("sid:card.position.p-1"), JSON.stringify("research"), "and the note is not rewritten");
+    assert.deepStrictEqual(Array.from(vm.runInContext("CARD_POSITIONS", ctx)), ["planner", "executor", "social", "art", "pm", "legal", "accountant", "reviewer"]);
   });
 
   await test("wizard step 2 (R10): a hand-made combination is kept on a position change, asks the server why it cannot go, and says so on the spot", async () => {
@@ -887,7 +899,7 @@ async function test(name, fn) {
     const d = dialog();
     const rows = walk(d).filter((n) => n.getAttribute && n.getAttribute("data-deck"));
     assert.deepStrictEqual(rows.map((r) => r.getAttribute("data-deck")), ["planner", "executor", "reviewer"]);
-    assert.ok(findText(d, "規劃") && findText(d, "執行") && findText(d, "審查"));
+    assert.ok(findText(d, "CEO") && findText(d, "全端工程師") && findText(d, "獨立審查"));
     assert.ok(findText(d, "不代表 VBear 已經限制這個程式的真實能力"));
     const names = walk(d).filter((n) => n.tag === "input" && n.getAttribute("type") === "text");
     names[1].value = "我的工匠"; names[1].dispatch("input");
@@ -916,7 +928,7 @@ async function test(name, fn) {
     await tick();
     const d = dialog();
     const rev = byData(d, "data-deck", "reviewer")[0];
-    assert.ok(findText(rev, "這台電腦找不到 Codex") && findText(rev, "審查位需要和工匠不同陣營的卡"));
+    assert.ok(findText(rev, "這台電腦找不到 Codex") && findText(rev, "審查位需要和全端工程師不同陣營的卡"));
     const box = walk(rev).find((n) => n.tag === "input" && n.getAttribute("type") === "checkbox");
     assert.strictEqual(box.hasAttribute("checked"), false);
     assert.ok(btnByText(d, "建立 2 張角色卡"));
@@ -939,7 +951,7 @@ async function test(name, fn) {
     await tick(8);
     const d = dialog();
     assert.ok(d, "the dialog stays");
-    assert.ok(findText(d, "已建立 1 張；") && findText(d, "「工匠」建立失敗：") && findText(d, "名稱重複的測試錯誤"));
+    assert.ok(findText(d, "已建立 1 張；") && findText(d, "「全端工程師」建立失敗：") && findText(d, "名稱重複的測試錯誤"));
     assert.ok(btnByText(d, "建立 2 張角色卡"), "what is left can be retried without making the first one twice");
   });
 
@@ -1494,12 +1506,14 @@ async function test(name, fn) {
     assert.strictEqual(textOf(glyph(none)), "？");
     assert.deepStrictEqual(["planner", "executor", "reviewer", null, "x", "__proto__", "constructor"].map((x) => pure.cardPositionBadgeKey(x)),
       ["planning", "execution", "review", "unspecified", "unspecified", "unspecified", "unspecified"]);
-    assert.deepStrictEqual(["planner", "executor", "reviewer", null].map((x) => textOf(glyph(pure.positionBadge(x)))), ["規", "執", "審", "？"]);
-    // P32-2: the six new positions have their own character and the badge says the short name
-    assert.deepStrictEqual(["qa", "product", "research", "business", "design", "records"].map((x) => textOf(glyph(pure.positionBadge(x)))),
-      ["驗", "產", "研", "商", "設", "記"]);
+    assert.deepStrictEqual(["planner", "executor", "reviewer", null].map((x) => textOf(glyph(pure.positionBadge(x)))), ["長", "工", "審", "？"]);
+    // P34-1: the new positions have their own character, and a retired id has none (a card shows the one it became)
+    assert.deepStrictEqual(["social", "art", "pm", "legal", "accountant"].map((x) => textOf(glyph(pure.positionBadge(x)))),
+      ["社", "藝", "專", "法", "帳"]);
+    assert.deepStrictEqual(["social", "art", "pm", "legal", "accountant"].map((x) => pure.cardPositionBadgeKey(x)),
+      ["social", "art", "pm", "legal", "accountant"]);
     assert.deepStrictEqual(["qa", "product", "research", "business", "design", "records"].map((x) => pure.cardPositionBadgeKey(x)),
-      ["qa", "product", "research", "business", "design", "records"]);
+      ["unspecified", "unspecified", "unspecified", "unspecified", "unspecified", "unspecified"]);
   });
 
   await test("readLoadouts: at most four requests in flight, every id once, and it stops when the page is gone", async () => {
@@ -1565,9 +1579,9 @@ async function test(name, fn) {
 
   await test("position badges (art v3): one character and one label per position, a hard 2px square coloured by the camp", () => {
     const b = vm.runInContext("CARD_POSITION_BADGES", pure);
-    assert.deepStrictEqual(Object.keys(b), ["planning", "execution", "qa", "review", "product", "research", "business", "design", "records", "unspecified"]);
-    assert.deepStrictEqual(Object.values(b).map((x) => [x.glyph, x.label]), [["規", "規劃"], ["執", "執行"], ["驗", "品質驗證"], ["審", "獨立審查"],
-      ["產", "產品"], ["研", "研究"], ["商", "商業"], ["設", "設計"], ["記", "紀錄"], ["？", "未指定"]]);
+    assert.deepStrictEqual(Object.keys(b), ["planning", "execution", "social", "art", "pm", "legal", "accountant", "review", "unspecified"]);
+    assert.deepStrictEqual(Object.values(b).map((x) => [x.glyph, x.label]), [["長", "CEO"], ["工", "全端工程師"], ["社", "社群媒體經理"], ["藝", "藝術總監"],
+      ["專", "PM"], ["法", "法務經理"], ["帳", "會計師"], ["審", "獨立審查"], ["？", "未指定"]]);
     const css = fs.readFileSync(path.join(__dirname, "..", "..", "web", "style.css"), "utf8");
     const rule = /\.pos-glyph\s*\{([^}]*)\}/.exec(css);
     assert.ok(rule, "the badge rule");
@@ -2869,7 +2883,7 @@ async function test(name, fn) {
   });
 
   // ---- P32-4: the profession picker ----
-  const dept = (id) => ({ id, keyword: id, origin: "derived" });
+  const dept = (id, keyword = id) => ({ id, keyword, origin: "derived" });
   const prof = (role_id, name, tool, extra = {}) => ({ role_id, name, tool, kind: "subagent", skill_link_count: 0, skill_link_basis: "undeclared",
     description: null, department: null, declared_skill_ids: [], model_hint: null, unavailable: null, ...extra });
   const catalog324 = { ...catalog, tools: ["claude", "codex", "agy", "shared"],
@@ -2879,14 +2893,14 @@ async function test(name, fn) {
     professions: [
       prof("cli-claude", "Claude Code 主代理", "claude", { kind: "cli" }),
       prof("cli-codex", "Codex 主代理", "codex", { kind: "cli" }),
-      prof("c-res", "Trend Researcher", "claude", { description: { value: "Finds new trends and market chances.", origin: "author" }, department: dept("research"),
+      prof("c-res", "Trend Researcher", "claude", { description: { value: "Finds new trends and market chances.", origin: "author" }, department: dept("legal", "researcher"),   // a fixture: the keyword is the word of the name that matched
         declared_skill_ids: ["s-c", "s-x", "s-s", "gone"], skill_link_count: 4, skill_link_basis: "declared", model_hint: "opus" }),
       prof("c-rev", "Code Reviewer", "claude", { description: { value: "Reviews code before it merges.", origin: "author" }, department: dept("reviewer"), model_hint: "claude-obscure-9" }),
       prof("c-exe", "Frontend Developer", "claude", { department: dept("executor"), model_hint: "bad model name" }),
       prof("c-zeb", "Zebra", "claude"),
       prof("c-off", "Old Plugin Agent", "claude", { unavailable: "外掛已停用" }),
-      prof("x-brand", "Brand Guardian", "codex", { description: { value: "Keeps the brand voice.", origin: "author" }, department: dept("business") }),
-      prof("x-qa", "Test Engineer", "codex", { department: dept("qa") })] };
+      prof("x-brand", "Brand Guardian", "codex", { description: { value: "Keeps the brand voice.", origin: "author" }, department: dept("social") }),
+      prof("x-qa", "Test Engineer", "codex", { department: dept("reviewer") })] };
   const rt324 = (extra = {}) => rtView({ "c-res": rtEntry("趨勢研究員"), "c-rev": rtEntry("程式碼審查員"), "c-exe": { state: "none", entry: null },
     "c-zeb": { state: "fresh", entry: { name_zh: "斑馬", what: "原文未提供" } }, "x-brand": rtEntry("品牌守護者") }, { fresh: 4, none: 4 }, null);
   async function wiz324(view = rt324(), extra = {}, { open = true, tool = null } = {}) {
@@ -2934,17 +2948,17 @@ async function test(name, fn) {
 
   await test("P32-4 groups by the guessed position with counts, the card's own position first; a group button narrows the list", async () => {
     await wiz324();
-    assert.deepStrictEqual(groupTexts(), ["全部 4", "執行 1", "獨立審查 1", "研究 1", "其他 1"]);
-    assert.deepStrictEqual(profIds(), ["c-exe", "c-rev", "c-res", "c-zeb"], "the order of the positions, 其他 last");
-    byData(dialog(), "data-pgroup", "research")[0].dispatch("click");
+    assert.deepStrictEqual(groupTexts(), ["全部 4", "全端工程師 1", "法務經理 1", "獨立審查 1", "其他 1"]);
+    assert.deepStrictEqual(profIds(), ["c-exe", "c-res", "c-rev", "c-zeb"], "the order of the positions, 其他 last");
+    byData(dialog(), "data-pgroup", "legal")[0].dispatch("click");
     assert.deepStrictEqual(profIds(), ["c-res"]);
-    assert.strictEqual(byData(dialog(), "data-pgroup", "research")[0].getAttribute("aria-pressed"), "true");
+    assert.strictEqual(byData(dialog(), "data-pgroup", "legal")[0].getAttribute("aria-pressed"), "true");
     byData(dialog(), "data-pgroup", "other")[0].dispatch("click");
     assert.deepStrictEqual(profIds(), ["c-zeb"]);
     byData(dialog(), "data-pgroup", "all")[0].dispatch("click");
     assert.strictEqual(profIds().length, 4);
     // the position of the card puts that group first
-    byData(dialog(), "data-position", "research")[0].dispatch("click");
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
     openPicker();
     assert.deepStrictEqual(profIds()[0], "c-res");
   });
@@ -2954,11 +2968,11 @@ async function test(name, fn) {
     assert.deepStrictEqual(profNames().sort(), ["Frontend Developer", "Zebra".replace("Zebra", "斑馬（Zebra）"), "程式碼審查員（Code Reviewer）", "趨勢研究員（Trend Researcher）"].sort());
     const res = rowOf("c-res");
     assert.ok(findText(res, "一句話職責") && findText(byData(res, "data-cw", "prof-what-tag")[0], "機器翻譯"));
-    assert.ok(findText(byData(res, "data-cw", "prof-dept")[0], "位置推測：研究"));
+    assert.ok(findText(byData(res, "data-cw", "prof-dept")[0], "位置推測：法務經理"));
     assert.strictEqual(byData(res, "data-cw", "prof-pending").length, 0);
     const exe = rowOf("c-exe");
     assert.ok(findText(byData(exe, "data-cw", "prof-pending")[0], "待翻"), "not translated yet");
-    assert.ok(findText(byData(exe, "data-cw", "prof-dept")[0], "位置推測：執行"));
+    assert.ok(findText(byData(exe, "data-cw", "prof-dept")[0], "位置推測：全端工程師"));
     assert.ok(findText(byData(exe, "data-cw", "prof-what")[0], "作者沒有寫說明"));
     assert.ok(findText(byData(rowOf("c-zeb"), "data-cw", "prof-dept")[0], "位置推測：看不出來"));
     assert.ok(findText(byData(rowOf("c-zeb"), "data-cw", "prof-what")[0], "作者沒有寫說明"), "the translator's 'not provided' is said in our words");
@@ -3012,17 +3026,17 @@ async function test(name, fn) {
     const { posts } = await wiz324();
     assert.deepStrictEqual(posOn(), []);
     pickProfession("c-res");
-    assert.deepStrictEqual(posOn(), ["research"]);
-    assert.ok(findText(brings(), "依職業建議") && findText(brings(), "研究"), "said, in the box");
+    assert.deepStrictEqual(posOn(), ["legal"]);
+    assert.ok(findText(brings(), "依職業建議") && findText(brings(), "法務經理"), "said, in the box");
     assert.ok(findText(byData(dialog(), "data-cw", "profession-auto-note")[0], "依職業建議"), "and where the picker is closed");
-    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "研究"));
-    byData(dialog(), "data-position", "design")[0].dispatch("click");
-    assert.deepStrictEqual(posOn(), ["design"], "the person has the last word");
+    assert.ok(findText(byData(dialog(), "data-cw", "position-box")[0], "法務經理"));
+    byData(dialog(), "data-position", "art")[0].dispatch("click");
+    assert.deepStrictEqual(posOn(), ["art"], "the person has the last word");
     assert.strictEqual(byData(dialog(), "data-cw", "profession-auto-note").length, 0, "no longer the profession's suggestion");
     btnByText(dialog(), "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
-    assert.strictEqual(posts[0].position, "design");
+    assert.strictEqual(posts[0].position, "art");
   });
 
   await test("P32-4 a card that has a position keeps it; the role's position is offered as a button", async () => {
@@ -3032,16 +3046,16 @@ async function test(name, fn) {
     assert.deepStrictEqual(posOn(), ["planner"], "never changed by itself");
     assert.strictEqual(byData(dialog(), "data-cw", "profession-auto-note").length, 0);
     const btn = byData(brings(), "data-cw", "profession-set-position")[0];
-    assert.ok(btn && btn.textContent.trim() === "改成這個位置" && findText(brings(), "建議位置：研究"));
+    assert.ok(btn && btn.textContent.trim() === "改成這個位置" && findText(brings(), "建議位置：法務經理"));
     assert.ok(findText(brings(), "依名稱推測"), "told that it is a guess");
     btn.dispatch("click");
-    assert.deepStrictEqual(posOn(), ["research"]);
+    assert.deepStrictEqual(posOn(), ["legal"]);
     pickProfession("c-zeb");
     assert.strictEqual(byData(brings(), "data-cw", "profession-set-position").length, 0, "no guess, no button");
     assert.ok(findText(brings(), "看不出來"));
-    assert.deepStrictEqual(posOn(), ["research"]);
+    assert.deepStrictEqual(posOn(), ["legal"]);
     pickProfession("c-res");
-    byData(dialog(), "data-position", "research")[0].dispatch("click");
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
     assert.strictEqual(byData(brings(), "data-cw", "profession-set-position").length, 0, "already that position");
     assert.ok(findText(brings(), "和這張卡一樣"));
   });
@@ -3432,47 +3446,108 @@ async function test(name, fn) {
     return ctx;
   };
 
-  await test("P32-3 cardPosition reads the card's own field first, then the browser's note; a field it does not know is not replaced by the note", async () => {
+  await test("P34-1 cardPosition reads the card's own field first, then the browser's note; a retired id reads as the position it became; a field it does not know is not replaced by the note", async () => {
     const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY)]);
     const card = (extra) => mkProfile("p-1", "Mine", "claude", ALL_DENY, extra);
-    assert.strictEqual(ctx.cardPosition(card({ position: "qa" })), "qa", "the field alone");
-    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("records"));
-    assert.strictEqual(ctx.cardPosition(card({ position: "qa" })), "qa", "the field wins over the browser's note");
-    assert.strictEqual(ctx.cardPosition(card({})), "records", "no field: the browser's note");
-    assert.strictEqual(ctx.cardPosition(card({ position: null })), "records", "a null field is no field");
+    assert.strictEqual(ctx.cardPosition(card({ position: "legal" })), "legal", "the field alone");
+    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("accountant"));
+    assert.strictEqual(ctx.cardPosition(card({ position: "legal" })), "legal", "the field wins over the browser's note");
+    assert.strictEqual(ctx.cardPosition(card({})), "accountant", "no field: the browser's note");
+    assert.strictEqual(ctx.cardPosition(card({ position: null })), "accountant", "a null field is no field");
     assert.strictEqual(ctx.cardPosition(card({ position: "boss" })), null, "a value this page does not list reads as not specified");
-    assert.strictEqual(ctx.localStorage.getItem(POSITION_LS + "p-1"), JSON.stringify("records"), "and nothing is rewritten by reading");
-    assert.strictEqual(ctx.cardPosition("p-1"), "records", "an id alone still reads the browser's note");
+    assert.strictEqual(ctx.localStorage.getItem(POSITION_LS + "p-1"), JSON.stringify("accountant"), "and nothing is rewritten by reading");
+    assert.strictEqual(ctx.cardPosition("p-1"), "accountant", "an id alone still reads the browser's note");
     assert.strictEqual(ctx.cardPosition(null), null);
+    // the ids v0.8.9 wrote are unchanged; the ids of the unreleased v0.9.0 read as the position they became
+    for (const [old, now] of [["planner", "planner"], ["executor", "executor"], ["reviewer", "reviewer"], ["qa", "reviewer"],
+      ["product", "pm"], ["records", "pm"], ["design", "art"], ["research", null], ["business", null]]) {
+      assert.strictEqual(ctx.cardPosition(card({ position: old })), now, old);
+    }
+    assert.strictEqual(ctx.cardPosition(card({ position: "research" })), null, "and the retired field is not replaced by the note either");
   });
 
-  await test("P32-3 two browsers (two separate stores) show the same position for a card that carries it", async () => {
-    const card = mkProfile("p-1", "Mine", "claude", ALL_DENY, { position: "research" });
+  await test("P34-1 cardLegacyPosition names a retired id and what it became, and nothing for a listed or unknown one", async () => {
+    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY)]);
+    const card = (extra) => mkProfile("p-1", "Mine", "claude", ALL_DENY, extra);
+    const plainOf = (x) => (x ? JSON.parse(JSON.stringify(x)) : x);
+    assert.deepStrictEqual(plainOf(ctx.cardLegacyPosition(card({ position: "qa" }))), { from: "qa", label: "品質驗證", to: "reviewer" });
+    assert.deepStrictEqual(plainOf(ctx.cardLegacyPosition(card({ position: "records" }))), { from: "records", label: "紀錄", to: "pm" });
+    assert.deepStrictEqual(plainOf(ctx.cardLegacyPosition(card({ position: "research" }))), { from: "research", label: "研究", to: null });
+    assert.strictEqual(ctx.cardLegacyPosition(card({ position: "planner" })), null);
+    assert.strictEqual(ctx.cardLegacyPosition(card({ position: "boss" })), null);
+    assert.strictEqual(ctx.cardLegacyPosition(card({})), null);
+    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("design"));
+    assert.deepStrictEqual(plainOf(ctx.cardLegacyPosition(card({}))), { from: "design", label: "設計", to: "art" }, "the browser's note counts too");
+    assert.strictEqual(ctx.cardLegacyPosition(card({ position: "legal" })), null, "a listed own field hides the note");
+  });
+
+  await test("P34-1 two browsers (two separate stores) show the same position for a card that carries it", async () => {
+    const card = mkProfile("p-1", "Mine", "claude", ALL_DENY, { position: "legal" });
     const a = await openPool([card]);
     const b = await openPool([card]);
     assert.notStrictEqual(a.__ls, b.__ls);
-    assert.strictEqual(a.cardPosition(card), "research");
-    assert.strictEqual(b.cardPosition(card), "research");
+    assert.strictEqual(a.cardPosition(card), "legal");
+    assert.strictEqual(b.cardPosition(card), "legal");
     const old = mkProfile("p-2", "Old", "claude", ALL_DENY);
     a.localStorage.setItem(POSITION_LS + "p-2", JSON.stringify("qa"));
-    assert.strictEqual(a.cardPosition(old), "qa", "a card with no field still shows the note kept in this browser");
+    assert.strictEqual(a.cardPosition(old), "reviewer", "a card with no field still shows the note kept in this browser");
     assert.strictEqual(b.cardPosition(old), null, "and another browser has no note to show");
   });
 
-  await test("P32-3 the card on the pool page draws its own field in a store that has no note", async () => {
-    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY, { position: "qa" })]);
+  await test("P34-1 the card on the pool page draws its own field in a store that has no note; a retired one says it is an old position", async () => {
+    const ctx = await openPool([mkProfile("p-1", "Mine", "claude", ALL_DENY, { position: "qa" }),
+      mkProfile("p-2", "Other", "claude", ALL_DENY, { position: "research" }), mkProfile("p-3", "Fine", "claude", ALL_DENY, { position: "legal" })]);
     assert.strictEqual(ctx.__ls.size === 0 || !ctx.__ls.has(POSITION_LS + "p-1"), true);
-    assert.ok(findText(cardOf("p-1"), "驗"), "the badge glyph of 品質驗證");
+    const glyphOf = (id) => walk(byData(cardOf(id), "data-pcard", "position")[0]).find((n) => n.className === "pos-glyph");
+    assert.strictEqual(textOf(glyphOf("p-1")), "審", "the badge glyph of the independent review, which 品質驗證 became");
+    assert.ok(findText(cardOf("p-1"), "舊位置：原本是「品質驗證」，現在算「獨立審查」"));
+    assert.strictEqual(textOf(glyphOf("p-2")), "？", "no position of today fits 研究");
+    assert.ok(findText(cardOf("p-2"), "原本是「研究」，現在沒有這個職位，請重選"));
+    assert.strictEqual(textOf(glyphOf("p-3")), "法");
+    assert.strictEqual(byData(cardOf("p-3"), "data-pcard", "legacy-position").length, 0, "a listed position says nothing extra");
   });
 
-  await test("P32-3 editing a card that carries a position opens on it and a save posts it again; the note is refreshed", async () => {
+  await test("P34-1 editing a card that carries a position opens on it and a save posts it again; the note is refreshed", async () => {
     const saved = savedBodies("p-1");
-    const ctx = await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "design" }), saved.handler);
-    assert.strictEqual(byData(dialog(), "data-position", "design")[0].getAttribute("aria-pressed"), "true");
+    const ctx = await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "legal" }), saved.handler);
+    assert.strictEqual(byData(dialog(), "data-position", "legal")[0].getAttribute("aria-pressed"), "true");
     btnByText(dialog(), "儲存修改").dispatch("click");
     await tick();
-    assert.strictEqual(saved.out[0].position, "design");
-    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-1")), "design");
+    assert.strictEqual(saved.out[0].position, "legal");
+    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-1")), "legal");
+  });
+
+  await test("P34-1 a card with a retired position opens on the position it became, says so, and is rewritten only by a save", async () => {
+    for (const [old, now, said] of [["qa", "reviewer", "舊位置：原本是「品質驗證」，現在算「獨立審查」"],
+      ["design", "art", "舊位置：原本是「設計」，現在算「藝術總監」"], ["product", "pm", "舊位置：原本是「產品」，現在算「PM」"],
+      ["records", "pm", "舊位置：原本是「紀錄」，現在算「PM」"]]) {
+      const saved = savedBodies("p-1");
+      await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: old }), saved.handler);
+      assert.strictEqual(byData(dialog(), "data-position", now)[0].getAttribute("aria-pressed"), "true", old);
+      assert.ok(findText(byData(dialog(), "data-cw", "legacy-note")[0], said), old);
+      assert.strictEqual(saved.out.length, 0, "opening writes nothing");
+      btnByText(dialog(), "儲存修改").dispatch("click");
+      await tick();
+      assert.strictEqual(saved.out[0].position, now, old + ": the save writes the new id");
+    }
+  });
+
+  await test("P34-1 a card whose retired position has no successor opens on 先不指定 with 請重選, keeps the stored value until a choice is made, and a choice replaces it", async () => {
+    for (const old of ["research", "business"]) {
+      const saved = savedBodies("p-1");
+      await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: old }), saved.handler);
+      assert.strictEqual(byData(dialog(), "data-position", "none")[0].getAttribute("aria-pressed"), "true", old);
+      assert.ok(findText(byData(dialog(), "data-cw", "legacy-note")[0], `原本是「${old === "research" ? "研究" : "商業"}」，現在沒有這個職位，請重選`), old);
+      btnByText(dialog(), "儲存修改").dispatch("click");
+      await tick();
+      assert.ok(!("position" in saved.out[0]), old + ": left alone, the server keeps the stored value");
+      const saved2 = savedBodies("p-1");
+      await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: old }), saved2.handler);
+      byData(dialog(), "data-position", "legal")[0].dispatch("click");
+      btnByText(dialog(), "儲存修改").dispatch("click");
+      await tick();
+      assert.strictEqual(saved2.out[0].position, "legal", old + ": a choice replaces it");
+    }
   });
 
   await test("P32-3 a card with only a note in the browser shows it in the wizard, and saving writes it onto the card", async () => {
@@ -3490,7 +3565,7 @@ async function test(name, fn) {
     assert.strictEqual(saved.out[0].position, "reviewer", "the save is what puts it on the card");
   });
 
-  await test("P32-3 choosing 先不指定 on a card that has a position posts null, which clears it", async () => {
+  await test("P34-1 choosing 先不指定 on a card that has a position (a retired one included) posts null, which clears it", async () => {
     const saved = savedBodies("p-1");
     const ctx = await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "qa" }), saved.handler);
     byData(dialog(), "data-position", "none")[0].dispatch("click");
@@ -3509,10 +3584,10 @@ async function test(name, fn) {
     assert.ok(!("position" in saved.out[0]), "no position key: the server keeps the stored value");
     const saved2 = savedBodies("p-1");
     await editCard(mkProfile("p-1", "Mine", "claude", VERIFIED, { position: "future-position" }), saved2.handler);
-    byData(dialog(), "data-position", "qa")[0].dispatch("click");
+    byData(dialog(), "data-position", "legal")[0].dispatch("click");
     btnByText(dialog(), "儲存修改").dispatch("click");
     await tick();
-    assert.strictEqual(saved2.out[0].position, "qa", "a choice replaces it");
+    assert.strictEqual(saved2.out[0].position, "legal", "a choice replaces it");
   });
 
   await test("P32-3 a new card with no position posts null", async () => {
@@ -3530,9 +3605,9 @@ async function test(name, fn) {
     const source = mkProfile("p-1", "Mine", "claude", VERIFIED);
     const ctx = await openPool([source], catalog, {
       "POST /api/agent-profiles/p-1/duplicate": () => { dupPosts.push(1); return jsonResponse({ ok: true, profile: mkProfile("p-9", "Mine (副本)", "claude", VERIFIED) }); } });
-    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("qa"));
+    ctx.localStorage.setItem(POSITION_LS + "p-1", JSON.stringify("legal"));
     await ctx.duplicateCard(source, async () => {});
-    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-9")), "qa", "a card with only a note keeps it on the copy");
+    assert.strictEqual(JSON.parse(ctx.__ls.get(POSITION_LS + "p-9")), "legal", "a card with only a note keeps it on the copy");
     const carrier = mkProfile("p-2", "Has field", "claude", VERIFIED, { position: "records" });
     const ctx2 = await openPool([carrier], catalog, {
       "POST /api/agent-profiles/p-2/duplicate": () => jsonResponse({ ok: true, profile: mkProfile("p-8", "Has field (副本)", "claude", VERIFIED, { position: "records" }) }) });

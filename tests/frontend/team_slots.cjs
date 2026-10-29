@@ -613,12 +613,12 @@ async function test(name, fn) {
     assert.ok(!byData(b.node, "data-menu", "planner")[0]);
   });
 
-  await test("P32-2 board: a qa card and an independent-review card are both suggested at both review places, and the suggested cards come first", () => {
+  await test("P34-1 board: two cards made for the independent review are both suggested at both review places, and the suggested cards come first", () => {
     const ctx = newCtx();
     ctx.setCardPosition("p-rev", "reviewer");
-    ctx.setCardPosition("p-maker", "qa");
+    ctx.setCardPosition("p-maker", "reviewer");
     ctx.setCardPosition("p-ceo", "planner");
-    ctx.setCardPosition("p-shared", "records");
+    ctx.setCardPosition("p-shared", "legal");
     const order = (key) => {
       const b = board(ctx);
       slotButton(b.node, key).click();
@@ -643,7 +643,7 @@ async function test(name, fn) {
   await test("P32-3 board: a card's own position field is used with nothing kept in the browser", () => {
     const ctx = newCtx();
     const withField = (card, position) => ({ ...card, position });
-    const profiles = [withField(CEO, "planner"), withField(MAKER, "qa"), withField(REVIEWER, "reviewer"), withField(SHARED, "records")];
+    const profiles = [withField(CEO, "planner"), withField(MAKER, "qa"), withField(REVIEWER, "reviewer"), withField(SHARED, "legal")];
     const b = board(ctx, { profiles });
     assert.strictEqual(ctx.__ls.size, 0, "no note in this store");
     slotButton(b.node, "reviewer1").click();
@@ -651,28 +651,28 @@ async function test(name, fn) {
     assert.ok(findText(pick(b.node, "p-rev"), "你建議放這裡"));
     assert.ok(!findText(pick(b.node, "p-ceo"), "你建議放這裡"));
     assert.ok(chip(b.node, "p-shared").getAttribute("title").includes("幕僚卡"), chip(b.node, "p-shared").getAttribute("title"));
-    assert.ok(chip(b.node, "p-maker").getAttribute("title").includes("品質驗證"));
+    assert.ok(chip(b.node, "p-maker").getAttribute("title").includes("獨立審查"), "a retired qa field reads as the review it became");
   });
 
   await test("P32-2 board: each place says what suits it; the pool's small cards say the position in the title", () => {
     const ctx = newCtx();
     const b = board(ctx);
     const head = (key) => textOf(byData(slotNode(b.node, key), "data-ts", "")[0] || walk(slotNode(b.node, key)).find((n) => n.className === "ts-head"));
-    assert.ok(head("planner").includes("適合：規劃"));
-    assert.ok(head("executor").includes("適合：執行"));
+    assert.ok(head("planner").includes("適合：CEO、PM"));
+    assert.ok(head("executor").includes("適合：全端工程師、社群媒體經理、藝術總監"));
     for (const key of ["reviewer1", "reviewer2"]) {
-      assert.ok(head(key).includes("適合：獨立審查、品質驗證"), key);
+      assert.ok(head(key).includes("適合：獨立審查、另一陣營的全端工程師"), key);
       assert.ok(head(key).includes("要和執行位不同陣營"), key);
     }
-    assert.ok(findText(b.node, "審查位可以放獨立審查或品質驗證的卡"));
+    assert.ok(findText(b.node, "審查位可以放獨立審查，或另一陣營的全端工程師的卡"));
     assert.ok(findText(b.node, "審查各一位，第二位審查選填。"));
-    ctx.setCardPosition("p-rev", "qa");
-    ctx.setCardPosition("p-shared", "design");
+    ctx.setCardPosition("p-rev", "reviewer");
+    ctx.setCardPosition("p-shared", "legal");
     const b2 = board(ctx);
     assert.ok(chip(b2.node, "p-rev").getAttribute("title").includes("你建議放「審查」位"), chip(b2.node, "p-rev").getAttribute("title"));
-    assert.ok(chip(b2.node, "p-rev").getAttribute("title").includes("品質驗證"));
+    assert.ok(chip(b2.node, "p-rev").getAttribute("title").includes("獨立審查"));
     const staff = chip(b2.node, "p-shared").getAttribute("title");
-    assert.ok(staff.includes("設計") && staff.includes("通常不上任務卡"), staff);
+    assert.ok(staff.includes("法務經理") && staff.includes("通常不上任務卡"), staff);
   });
 
   await test("P32-2 board: the places keep their keys, names and families (the flow format is not touched)", () => {
@@ -1065,7 +1065,7 @@ async function test(name, fn) {
   });
 
   await test("P32-2 place dialog: a card made for a place of the task card has that place chosen once the task is picked", async () => {
-    const cases = [["planner", "planner"], ["executor", "executor"], ["qa", "reviewer1"], ["reviewer", "reviewer1"]];
+    const cases = [["planner", "planner"], ["executor", "executor"], ["social", "executor"], ["art", "executor"], ["reviewer", "reviewer1"]];
     for (const [position, want] of cases) {
       const ctx = newCtx();
       ctx.setCardPosition("p-ceo", position);
@@ -1079,18 +1079,30 @@ async function test(name, fn) {
     }
   });
 
+  await test("P34-1 place dialog: a card with a retired qa field is preselected to the review place it became; a PM card preselects nothing", async () => {
+    const ctx = newCtx();
+    await placeFlow(ctx, { ...CEO, position: "qa" });
+    byData(dlg(), "data-place-task", "task-1")[0].click();
+    assert.strictEqual(byData(dlg(), "data-place-slot", "reviewer1")[0].getAttribute("aria-pressed"), "true");
+    dlg().dispatch("keydown", { key: "Escape" });
+    await placeFlow(ctx, { ...CEO, position: "pm" });
+    byData(dlg(), "data-place-task", "task-1")[0].click();
+    assert.strictEqual(walk(dlg()).filter((n) => n.getAttribute && n.getAttribute("data-place-slot") && n.getAttribute("aria-pressed") === "true").length, 0);
+    assert.ok(byData(dlg(), "data-place", "staff-note")[0], "and says it is a staff card");
+  });
+
   await test("P32-2 place dialog: a review card is preselected to the empty review place; a preselected place is still only put when the person presses the button", async () => {
     const withFirst = flowView();
     const ctx = newCtx({
       "GET /api/flows": () => jsonResponse({ ok: true, flows: [withFirst], families: [] }),
       [`POST /api/flows/${FLOW_ID}/roles`]: () => jsonResponse({ ok: true, flow: withFirst }),
     });
-    ctx.setCardPosition("p-shared", "qa");
+    ctx.setCardPosition("p-shared", "reviewer");
     ctx.setCardPosition("p-ceo", "reviewer");
     await placeFlow(ctx, REVIEWER, "task-1");
     assert.strictEqual(byData(dlg(), "data-place-slot", "reviewer1")[0].getAttribute("aria-pressed"), "false", "a card with no position preselects nothing");
     dlg().dispatch("keydown", { key: "Escape" });
-    ctx.setCardPosition("p-rev", "qa");
+    ctx.setCardPosition("p-rev", "reviewer");
     await placeFlow(ctx, REVIEWER, "task-1");
     assert.strictEqual(byData(dlg(), "data-place-slot", "reviewer2")[0].getAttribute("aria-pressed"), "true", "reviewer1 holds a card already: the empty one is chosen");
     assert.strictEqual(posts().length, 0, "nothing was written by choosing");
@@ -1111,20 +1123,20 @@ async function test(name, fn) {
     byData(dlg(), "data-place-task", "task-1")[0].click();
     assert.strictEqual(byData(dlg(), "data-place-slot", "executor")[0].getAttribute("aria-pressed"), "true");
     dlg().dispatch("keydown", { key: "Escape" });
-    await placeFlow(ctx, { ...CEO, position: "research" });
+    await placeFlow(ctx, { ...CEO, position: "legal" });
     byData(dlg(), "data-place-task", "task-1")[0].click();
     assert.ok(byData(dlg(), "data-place", "staff-note")[0]);
   });
 
   await test("P32-2 place dialog: a staff card says it is not for the task card and preselects nothing; a card with no position says nothing extra", async () => {
-    for (const position of ["product", "research", "business", "design", "records"]) {
+    for (const position of ["pm", "legal", "accountant"]) {
       const ctx = newCtx();
       ctx.setCardPosition("p-ceo", position);
       await placeFlow(ctx, CEO);
       byData(dlg(), "data-place-task", "task-1")[0].click();
       const note = byData(dlg(), "data-place", "staff-note")[0];
       assert.ok(note, position);
-      assert.ok(findText(note, "這是幕僚卡，通常不上任務卡；需要時可以放規劃位"), position);
+      assert.ok(findText(note, position === "pm" ? "這是幕僚卡，通常不上任務卡；沒有 CEO 時可以放規劃位" : "這是幕僚卡，不佔任務卡的位置，通常單獨出發"), position);
       assert.strictEqual(walk(dlg()).filter((n) => n.getAttribute && n.getAttribute("data-place-slot") && n.getAttribute("aria-pressed") === "true").length, 0, position);
       assert.strictEqual(act(dlg(), "place").disabled, true, position);
       dlg().dispatch("keydown", { key: "Escape" });

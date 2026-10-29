@@ -25,7 +25,7 @@ def sourced(value, origin="author", detail="front matter"):
 
 
 def role(**changes):
-    data = {"role_id": "r-1", "name": "Trend Researcher", "tool": "codex", "kind": "subagent",
+    data = {"role_id": "r-1", "name": "Legal Counsel", "tool": "codex", "kind": "subagent",
             "path": "/do-not-send/agent.toml", "description": sourced("Finds new trends in the market."),
             "capabilities": sourced("private capabilities"), "model": sourced("gpt-fake-1"),
             "skill_link_ids": [], "skill_link_basis": "undeclared", "warnings": []}
@@ -79,7 +79,7 @@ class CatalogProfessionTests(unittest.TestCase):
         got = self.catalog([role(),
                             role(role_id="z", name="Zebra", description=sourced("Plain words.")),
                             role(role_id="y", name="Zebra", description=sourced("Audits the code."))])
-        self.assertEqual(got["r-1"]["department"], {"id": "research", "keyword": "researcher", "origin": "derived"})
+        self.assertEqual(got["r-1"]["department"], {"id": "legal", "keyword": "legal", "origin": "derived"})
         self.assertIsNone(got["z"]["department"])
         self.assertEqual(got["y"]["department"]["id"], "reviewer", "the author's first sentence, when the name says nothing")
 
@@ -132,7 +132,7 @@ class CatalogProfessionTests(unittest.TestCase):
     def test_roles_endpoint_carries_the_same_guess(self):
         body = self.professions([role(), role(role_id="z", name="Zebra", description=sourced("Plain words."))], "/api/roles")
         by_id = {r["role_id"]: r for r in body["roles"]}
-        self.assertEqual(by_id["r-1"]["department"], {"id": "research", "keyword": "researcher", "origin": "derived"})
+        self.assertEqual(by_id["r-1"]["department"], {"id": "legal", "keyword": "legal", "origin": "derived"})
         self.assertIsNone(by_id["z"]["department"])
 
     def test_the_catalog_still_lists_every_role_the_scan_found(self):

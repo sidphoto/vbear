@@ -499,27 +499,27 @@ class CardPositionFieldTests(unittest.TestCase):
 
     def test_update_without_position_key_keeps_the_stored_position(self):
         # the workbench 停用／啟用 posts only {"enabled": ...}
-        rec = self._save(None, {**_sample(), "position": "qa"})
+        rec = self._save(None, {**_sample(), "position": "legal"})
         for flag in (False, True):
             rec2 = self._save(rec["id"], {"enabled": flag})
             self.assertEqual(rec2["enabled"], flag)
-            self.assertEqual(rec2["position"], "qa")
-            self.assertEqual(self._on_disk(rec["id"])["position"], "qa")
+            self.assertEqual(rec2["position"], "legal")
+            self.assertEqual(self._on_disk(rec["id"])["position"], "legal")
         # a full save that leaves the key out (an older page) keeps it too
         rec3 = self._save(rec["id"], _sample(name="Renamed"))
-        self.assertEqual(rec3["position"], "qa")
+        self.assertEqual(rec3["position"], "legal")
 
     def test_update_with_null_or_empty_position_clears_it(self):
         for cleared in (None, ""):
-            rec = self._save(None, {**_sample(), "position": "research"})
+            rec = self._save(None, {**_sample(), "position": "accountant"})
             rec2 = self._save(rec["id"], {"position": cleared})
             self.assertNotIn("position", rec2, repr(cleared))
             self.assertNotIn("position", self._on_disk(rec["id"]), repr(cleared))
 
     def test_update_with_a_new_position_replaces_it(self):
         rec = self._save(None, {**_sample(), "position": "planner"})
-        rec2 = self._save(rec["id"], {"position": "records"})
-        self.assertEqual(rec2["position"], "records")
+        rec2 = self._save(rec["id"], {"position": "social"})
+        self.assertEqual(rec2["position"], "social")
 
     def test_unknown_or_non_string_position_is_rejected_on_save(self):
         rec = self._save(None, {**_sample(), "position": "planner"})
@@ -547,7 +547,7 @@ class CardPositionFieldTests(unittest.TestCase):
         self.assertEqual(ap.profile_digest(card),
                          "5b3dd856d36ba42913c23c774fe2e927ccb7cea56f0ea728128424e57769216c")
         # a position counts in the revision, as any other field does
-        self.assertNotEqual(ap.profile_digest({**card, "position": "qa"}), ap.profile_digest(card))
+        self.assertNotEqual(ap.profile_digest({**card, "position": "legal"}), ap.profile_digest(card))
 
     def test_a_position_this_build_does_not_know_is_kept_and_not_quarantined(self):
         rec = self._save(None, {**_sample(), "position": "planner"})
@@ -568,6 +568,28 @@ class CardPositionFieldTests(unittest.TestCase):
         rec3 = self._save(rec["id"], {"position": None})
         self.assertNotIn("position", rec3)
 
+    def test_a_retired_position_is_refused_on_save_and_kept_when_read(self):
+        # P34-1: the ids only the unreleased v0.9.0 wrote are no longer accepted, but a card that carries one is not
+        # damaged: it is read, copied and left alone by a save that does not mention the position
+        for old in ap.RETIRED_POSITIONS:
+            with self.assertRaises(ValueError, msg=old):
+                self._save(None, {**_sample(), "position": old})
+        rec = self._save(None, {**_sample(), "position": "planner"})
+        data = json.loads(ap._path().read_text(encoding="utf-8"))
+        data[rec["id"]]["position"] = "qa"
+        ap._path().write_text(json.dumps(data), encoding="utf-8")
+        got = ap.get_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+        self.assertEqual(got["position"], "qa")
+        self.assertFalse(ap._corrupt_marker_path().exists())
+        with self.assertRaises(ValueError):
+            self._save(rec["id"], {"position": "research"})
+        self.assertEqual(self._on_disk(rec["id"])["position"], "qa")
+        rec2 = self._save(rec["id"], {"enabled": False})
+        self.assertEqual(rec2["position"], "qa")
+        dup = ap.duplicate_profile(rec["id"], known_skills=set(), known_roles={"writer"})
+        self.assertEqual(dup["position"], "qa")
+        self.assertEqual(self._save(rec["id"], {"position": "reviewer"})["position"], "reviewer")
+
     def test_a_stored_position_of_the_wrong_type_is_a_storage_error(self):
         for bad in (5, ["qa"], {"id": "qa"}, "x" * 33):
             _reset_state_dir()
@@ -583,10 +605,10 @@ class CardPositionFieldTests(unittest.TestCase):
             self.assertTrue(ap._corrupt_marker_path().exists(), repr(bad))
 
     def test_duplicate_copies_the_position(self):
-        rec = self._save(None, {**_sample(name="Original"), "position": "design"})
+        rec = self._save(None, {**_sample(name="Original"), "position": "art"})
         dup = ap.duplicate_profile(rec["id"], known_skills=set(), known_roles={"writer"})
-        self.assertEqual(dup["position"], "design")
-        self.assertEqual(self._on_disk(dup["id"])["position"], "design")
+        self.assertEqual(dup["position"], "art")
+        self.assertEqual(self._on_disk(dup["id"])["position"], "art")
         plain = self._save(None, _sample(name="Plain"))
         dup2 = ap.duplicate_profile(plain["id"], known_skills=set(), known_roles={"writer"})
         self.assertNotIn("position", self._on_disk(dup2["id"]))

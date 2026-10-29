@@ -240,7 +240,7 @@ test("C1 a place with a card takes that card's camp frame and the badge of the p
   assert.deepStrictEqual(["planner", "executor", "reviewer1"].map((k) => slot(k).getAttribute("data-camp")), ["anthropic", "anthropic", "openai"]);
   for (const k of ["planner", "executor", "reviewer1"]) assert(slot(k).hasClass("camp-frame") && slot(k).hasClass("ts-filled"), k);
   const glyphOf = (k) => slot(k).find((n) => n.hasClass && n.hasClass("pos-glyph"));
-  assert.deepStrictEqual(["planner", "executor", "reviewer1"].map((k) => text(glyphOf(k))), ["規", "執", "審"], "the badge is the place's position, not a guess about the card");
+  assert.deepStrictEqual(["planner", "executor", "reviewer1"].map((k) => text(glyphOf(k))), ["長", "工", "審"], "the badge is the place's position, not a guess about the card");
   assert.strictEqual(glyphOf("planner").getAttribute("aria-hidden"), "true", "the words beside it say the same");
   const empty = slot("reviewer2");
   assert(!empty.hasClass("camp-frame") && empty.getAttribute("data-camp") === null);
@@ -279,7 +279,7 @@ test("C2 the pool under the places is small cards: camp frame, the name, the too
   assert.deepStrictEqual(PROFILES.map((p) => chip(p.id).getAttribute("data-camp")), ["anthropic", "anthropic", "openai", "other"]);
   for (const p of PROFILES) { assert(chip(p.id).hasClass("camp-frame") && chip(p.id).hasClass("ts-chip")); assert.strictEqual(chip(p.id).getAttribute("draggable"), "true"); }
   const glyph = (id) => chip(id).find((n) => n.hasClass && n.hasClass("pos-glyph"));
-  assert.strictEqual(text(glyph("p-ceo")), "規");
+  assert.strictEqual(text(glyph("p-ceo")), "長");
   assert.strictEqual(text(glyph("p-rev")), "審");
   assert.strictEqual(text(glyph("p-maker")), "？", "a card with no suggested position says so");
   assert.strictEqual(glyph("p-maker").getAttribute("data-pos"), "unspecified");
@@ -365,8 +365,8 @@ test("C4 each starter card is a framed card of its camp with the badge of its po
   const rows = byData(d, "data-deck", "a").concat(byData(d, "data-deck", "b"));
   assert.deepStrictEqual(rows.map((r) => r.getAttribute("data-camp")), ["anthropic", "openai"]);
   assert(rows.every((r) => r.hasClass("camp-frame")));
-  assert.deepStrictEqual(rows.map((r) => text(r.find((n) => n.hasClass && n.hasClass("pos-glyph")))), ["規", "審"]);
-  assert(text(rows[0]).includes("規劃") && text(rows[1]).includes("審查"), "and the words are still there");
+  assert.deepStrictEqual(rows.map((r) => text(r.find((n) => n.hasClass && n.hasClass("pos-glyph")))), ["長", "審"]);
+  assert(text(rows[0]).includes("CEO") && text(rows[1]).includes("獨立審查"), "and the words are still there");
   closeDialogs();
 });
 
