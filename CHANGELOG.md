@@ -62,6 +62,18 @@
   takes the keyboard focus or covers the card. The cards keep their short line, and 看完整說明 in the wizard is still
   there for touch screens. To make this possible the card wizard is now sent up to 2000 characters of a skill's
   original description (it was 140); nothing is sent anywhere else.
+- **A role card can carry its own instructions, a launch mode and the boundaries that go with them.** The card
+  wizard's step 2 has a box for the position's instructions (starting from the position's default, up to 2000
+  characters, with 回復預設), a choice of how the card departs (完整模式 for a new card, 安全模式 for the sandboxed
+  launch; a card saved before this stays safe) and, below, what each position's boundaries are for the tool and mode you
+  chose, each marked as enforced when launched, only a reminder, not possible or not applicable. Full mode is recorded
+  but cannot depart yet: the pass says 完整模式的出發還沒開放 and offers 改出發方式; it never starts
+  such a card as a safe one. The instructions are not sent into the tool when it starts. After you take over a terminal,
+  貼上職位指示 pastes them into the input box without pressing Enter; you read them and press Enter yourself. The back of
+  a card and the pass say where the instructions go, the pass suggests a folder name for the position (a suggestion, not
+  a check), and step 3 marks the skills that fit the position as 推薦 with a 只看推薦 toggle. Two skill categories are new,
+  法規與合規 and 財務與帳務, so the skill index version is now 3 and the index is rebuilt once. Cards without the new
+  fields store nothing new. An earlier version does not know the two fields: it still reads the card file, and whether the fields survive saving a card there is not promised.
 
 ## v0.8.9 — skills by use, role names in Chinese, a model menu
 

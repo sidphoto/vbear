@@ -77,6 +77,15 @@ discarded if the session closes in the meantime.
 - Output stays in memory and is never written to disk by VBear. On connect, only the most recent
   output is replayed, up to 64 KiB.
 - xterm.js runs with `linkHandler: null` and with window operations disabled. No clipboard (OSC 52) or link addon is loaded.
+- **貼上職位指示 (P34-2) types nothing for you.** After you hold control of a terminal, the button next to a card's name
+  reads that card's instructions with `GET /api/agent-profiles/<id>/instructions` (read-only; same Host, token and
+  Origin checks as every other `GET /api/`) and hands them to xterm's `paste()`. The text is trimmed and control
+  characters are removed; line breaks stay only while the program in the terminal has switched bracketed paste on,
+  and become spaces otherwise, so the paste cannot submit itself. VBear never sends Enter: the text sits in the
+  program's input box and you read it and press Enter yourself, or clear it. It goes through the same input path as
+  your own typing, so it needs the same takeover, and it is only a convenience: a tool that ignores it, or a person who
+  edits it, changes nothing VBear can see. The terminal does not know which card started it, so you pick the card in a
+  drop-down beside the button; nothing is pasted until you press it, and a launch never pastes by itself.
 
 Terminal sessions and interactive boundary probes detect leader exits with
 `waitid(WEXITED | WNOHANG | WNOWAIT)`, without reaping. Group signals are sent
@@ -243,6 +252,30 @@ Other safeguards:
   limit. They only draw the picker and fill the card's own fields on a click (position, equipped skills, model
   string). The model string is saved through the same `model_id` check as a typed one, and equipped skills stay a
   collection. Choosing a profession still loads nothing into a tool and changes nothing about a launch.
+- **A card's instructions are text you may paste, not a rule (P34-2).** The role card has two more optional fields,
+  `instructions` (text, at most 2000 characters; control, format and line/paragraph-separator characters other than a
+  line break or tab are refused with `400`, CRLF is stored as LF, blank or `null` clears it, and a save without the key
+  keeps it) and `launch_mode` (`full` or `safe`). Reading only checks the type, so a card a newer build wrote does not
+  isolate the card file. A card without either key stores nothing new, so its digest is the one it had before. When
+  `instructions` is empty the position's default text is used (`vbear/position_guide.py`, served in the catalog;
+  `CARD_POSITION_TABLE` and its parity test are not changed). The text is never put into a launch: no launch argument,
+  environment variable, settings file or prompt carries it, and the card back and the pass say so (「這份指示不會自動交給工具」).
+- **Boundaries are resolved by tool and by launch mode, and only what a launch enforces is called enforced.** Each
+  position lists boundaries of four kinds: *enforced if launched* (it names an `armor_items` item whose level must be
+  ENFORCED or PARTIAL; a contract test fails if one names an item that is missing or not enforced), *reminder*,
+  *not possible* and *not applicable*. For Claude Code in safe mode the table's kinds stand. For Codex, AGY and a shared
+  card nothing is enforced by VBear (it does not start them), so enforced and not-possible rows read as *not applicable*
+  and only reminders stay. In full mode every row reads as a reminder. VBear still does not claim that skills, CLAUDE.md,
+  hooks or MCP are switched off, and it lists no boundary for meetings, which do not exist yet.
+- **`launch_mode` is a record, and full mode cannot be launched yet.** The wizard offers `full` for a new card and `safe`
+  on request; the server never writes the field itself, and a card without the key reads as `safe`. Only the exact word
+  `full` reads as full; a missing, null or unknown value is safe. Full-mode launching does not exist in this build:
+  `launch_blockers` returns `full_mode_not_available` for a full card, so the pass, the card back and the loadout say it
+  cannot depart (改出發方式 opens the wizard), nothing is prepared, and no session is started as a safe one instead.
+  The loadout shows no armor for it. The mode is part of the card's digest like any other field.
+- **The suggested work folder is advice.** The pass compares the folder's own name (NFC-normalized, one path component) with the
+  position's suggestion (社群草稿, 素材, 法務報告, 帳務報告) and, if they differ, says so. It quotes only the folder name,
+  never the path, refuses nothing and checks nothing about the folder's contents.
 - **A Codex card's light.** Codex cannot open a terminal from VBear (`codex_` reasons), but the flow's automatic
   review does run it, in a scratch copy. When every reason on a card starts with `codex_` the card shows a neutral
   "can't open a terminal directly" light instead of the red one; any other reason keeps the red. It is a reading of
