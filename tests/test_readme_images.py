@@ -116,6 +116,32 @@ class ReadmeImages(unittest.TestCase):
         for old in ("（v0.7）", "（v0.8）"):
             self.assertNotIn(old, zh)
 
+    def test_the_v090_screens_are_shown_in_both_readmes(self):
+        """The screens this release added: step 2 of the card wizard, a full-mode launch pass, a meeting and the office's
+        meeting room."""
+        for name in READMES:
+            refs = referenced(name)
+            for picture in ("card-wizard-position.png", "launch-pass-full.png", "meeting.png", "office-meeting-room.png"):
+                self.assertIn(f"docs/images/{picture}", refs, f"{name}: {picture}")
+
+    def test_the_position_badges_are_the_ones_the_pages_draw_now(self):
+        """The starter deck and a task card's team places show the badge of the position (長, 工, 審 for CEO, 全端工程師
+        and the review gate); a task card's three progress lights keep 規, 執, 審, which are phases, not positions."""
+        app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        for glyph in ('glyph: "長"', 'glyph: "工"', 'glyph: "審"'):
+            self.assertIn(glyph, app)
+        for name, starter, team, lights, badges, old in (
+                ("README.md", "Left: the **starter deck**", "A flow's **progress and team places**", "**Task cards** (demo data)",
+                 "(長, 工, 審)", "(規, 執, 審)"),
+                ("README.zh-TW.md", "左：**起手牌組**", "流程的**任務進度與隊伍位置**", "**任務卡**（示範資料）",
+                 "（長、工、審）", "（規、執、審）")):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            for start in (starter, team):
+                block = text[text.index(start):].split("\n\n", 1)[0]
+                self.assertIn(badges, block, f"{name}: {start}")
+                self.assertNotIn(old, block, f"{name}: {start}")
+            self.assertIn(old, text[text.index(lights):].split("\n\n", 1)[0], f"{name}: the progress lights")
+
     def test_every_caption_says_demo_data(self):
         for name, start, end, mark in (("README.md", "### What it looks like", "## What you can do with it", "demo data"),
                                        ("README.zh-TW.md", "### 畫面長這樣", "## 你可以用它做什麼", "示範資料")):
@@ -155,13 +181,18 @@ class ReadmeImages(unittest.TestCase):
         app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
         quoted = ("接手提醒", "改成只觀看", "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent", "核准計畫並開啟自動執行…",
                   "終端工作台", "標記：", "這是什麼", "打開角色卡", "回角色卡池", "回任務卡", "往下捲動看更多", "確認啟動",
-                  "這個終端沒有關聯任務卡", "現在打字可能打斷它", "名冊，不代表正在出勤", "收藏中", "生效中", "看七項細節")
+                  "這個終端沒有關聯任務卡", "現在打字可能打斷它", "名冊，不代表正在出勤", "收藏中", "生效中", "看七項細節",
+                  # v0.9.0: the wizard's step 2, the full-mode pass, the meeting pages and the office's meeting room
+                  "VBear 內建：審查關卡（給任務卡的審查位）", "出發方式", "回復預設", "貼上職位指示", "VBear 沒有限制這張卡",
+                  "開會討論", "預覽（還不會開始）", "開始開會", "代發言", "董事長桌", "去核准", "寫進任務卡", "輪到你：董事長核准")
         for phrase in quoted:
             self.assertIn(phrase, app, phrase)
         en = (ROOT / "README.md").read_text(encoding="utf-8")
         zh = (ROOT / "README.zh-TW.md").read_text(encoding="utf-8")
         for phrase in ("接手提醒", "改成只觀看", "這是你剛開的終端，可以直接打字；打的字會直接送給 Agent", "核准計畫並開啟自動執行…",
-                       "這個終端沒有關聯任務卡", "現在打字可能打斷它"):
+                       "這個終端沒有關聯任務卡", "現在打字可能打斷它",
+                       "VBear 內建：審查關卡（給任務卡的審查位）", "回復預設", "貼上職位指示", "VBear 沒有限制這張卡", "開會討論",
+                       "開始開會", "代發言", "董事長桌", "去核准", "寫進任務卡", "輪到你：董事長核准"):
             self.assertIn(phrase, en, phrase)
             self.assertIn(phrase, zh, phrase)
 

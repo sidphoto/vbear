@@ -57,7 +57,7 @@ and VBear does not track which.
 ### What it looks like
 
 All screens below show **demo data**: a synthetic Claude Code and Codex in a temporary folder, not a real project.
-Where a picture shows a folder, the temporary folder of the demo run is replaced by a stand-in name such as
+Where a picture shows a folder or a program's path, the temporary path of the demo run is replaced by a stand-in such as
 `~/projects/notes-site`; your own screens show your real paths. Most pictures are the light theme; two are the dark
 theme, and both themes show the same things.
 
@@ -85,16 +85,28 @@ only partly limited, and a commit is not stopped). 「名冊，不代表正在�
 faction and model, the role label, where the evidence came from and the permission intents, each marked as a record and
 not a grant. A skill card is a chip with one cut corner; in a slot it is dashed 「收藏中」: kept on the card, and
 「這次的安全啟動不會載入」. A solid 「生效中」 slot would appear only if VBear reported that a skill loads, which no launch
-does today, so none appears here. A skill that the index cannot find is called out on the card.
+does today, so none appears here. A skill that the index cannot find is called out on the card. (This picture was taken
+with v0.8; on a v0.9.0 card the back also says how the card departs and where its instructions go.)
 
 <p>
-<img src="docs/images/card-pool-starter.png" alt="The starter deck dialog: three ready role cards for planning, doing and reviewing, each with a position badge and an editable name" width="520">
+<img src="docs/images/card-pool-starter.png" alt="The starter deck dialog: three ready role cards, CEO, 全端工程師 and a reviewer for the review gate, each with a position badge and an editable name" width="520">
 <img src="docs/images/card-pool-dark.png" alt="The card pool in the dark theme" width="640">
 </p>
 
-Left: the **starter deck** 「用起手牌組開始」 (demo data): three ready cards (planner, doer, reviewer), each with the
-badge of its position (規, 執, 審) and a name you can edit; the permission advice behind each is folded. Right: the card
-pool in the **dark theme** (demo data).
+Left: the **starter deck** 「用起手牌組開始」 (demo data): three ready cards (CEO, 全端工程師 and 審查員 for the review
+gate), each with the badge of its position (長, 工, 審) and a name you can edit; the permission advice behind each is
+folded, and the three are safe-mode cards. Right: the card pool in the **dark theme** (demo data).
+
+<img src="docs/images/card-wizard-position.png" alt="Step 2 of the card wizard: the seven positions in two rows, the review gate offered apart, the chosen position's box, the launch mode and the position's instructions" width="560">
+
+**Step 2 of the card wizard** (demo data; the dialog scrolls, and this part of it, from 建議位置 to the instructions, is
+shown unrolled): the
+positions done on a task card (CEO, 全端工程師, 社群媒體經理, 藝術總監), the staff (PM, 法務經理, 會計師) with 先不指定, and
+the review gate offered apart, 「VBear 內建：審查關卡（給任務卡的審查位）」. The chosen position says what it does, where on
+a task card it goes, the camp and model it suits and a one-line reminder. Below are the profession, the launch mode (完整模式
+is chosen here, 「像你自己在終端機用：可以上網，VBear 不加任何限制，只剩工具自己的權限詢問。」) and the position's
+instructions, starting from its default with a character count (回復預設 appears once you change them), and a line that
+says where they go. The boundaries and the permission intents follow further down.
 
 <img src="docs/images/task-cards.png" alt="The task cards section: a row of task cards, each a folder with a header, three progress lights, its branch, its team and its next step" width="992">
 
@@ -111,14 +123,15 @@ that linking is only a record. (The demo's cards all use the same folder, so the
 **Bringing in a project** (demo data), 「＋ 任務卡（導入專案）」: pick a folder VBear found on your computer, or paste a
 path. The dialog says VBear only reads the folder's basic facts, writes nothing and runs no git in it.
 
-<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates, the next steps, and its team: planning, doing and reviewing places framed in their camp colours with position badges, a second reviewer place and the card pool to drag from" width="984">
+<img src="docs/images/flow-progress-team.png" alt="A flow's progress as seven gates, the next steps, and its team: planning, doing and reviewing places framed in their camp colours with position badges and the positions that suit them, a second reviewer place and the card pool to drag from" width="984">
 
 A flow's **progress and team places** (demo data): the gates passed and the current one, the next steps, and the team
-on the task card: the planning, doing and reviewing places, each with its model family (the reviewer's place needs a
-different family from the doer's) and, once a role card sits there, that card's camp colour and the place's badge
-(規, 執, 審). An empty place stays plain. There is an optional second reviewer, and below is the card pool as small
-cards (name, tool and the position you saved on it; 「？」 means none) to put on a place. Saving the team writes a line
-to the timeline.
+on the task card: the planning, doing and reviewing places, each saying which positions suit it (適合：…) and its model
+family (the reviewer's place needs a different family from the doer's) and, once something sits there, its camp
+colour and the place's badge (長, 工, 審); the three here were written in by hand, so each says it has no role card
+behind it. An empty place stays plain. There is an optional second reviewer, and below is the card pool as small cards
+(name, tool and the position you saved on it; 「？」 means none) to put on a place. Saving the team writes a line to the
+timeline.
 
 <p>
 <img src="docs/images/workbench-task.png" alt="The task card in the terminal workbench: the card header with its phase, the folder, and the next steps with the buttons for the step that waits for you" width="360">
@@ -164,6 +177,14 @@ folded 「看七項細節」 follow.
 What 「看七項細節」 opens (demo data): the seven labels in five groups with each one's evidence and, where it applies, its
 shield, and the chosen skill cards marked 「本次不會載入」.
 
+<img src="docs/images/launch-pass-full.png" alt="The launch pass of a full-mode card: VBear limits nothing, the command with the instructions as one argument, the instructions in full, and no shield" width="570">
+
+The launch pass of a **full-mode card** (demo data; the program's path and the folder are stand-ins): it starts with
+「VBear 沒有限制這張卡」, shows the exact command (`claude --model sonnet --append-system-prompt …`) and the whole text of the
+instructions it carries, names the permission intent that will not be kept (deploy denied), says that VBear neither ran
+this tool nor checked its version, and draws no shield. There is no acknowledgement to tick; you still confirm with
+確認啟動.
+
 <img src="docs/images/skill-card.png" alt="A skill card: the one-line use with its source tag, fields the author did not give, and where the skill sits on role cards" width="992">
 
 A **skill card** (demo data): every field carries where it came from, a field the skill file does not give says so, and
@@ -201,6 +222,21 @@ lines with evidence labels and expandable reasons, plus a collapsible SVG charac
 words and color for attendance; teams show their task's station and role cards show the roster. The browser saves
 the stage collapse preference locally. The characters are original pixel art, inspired by the way
 [Pixel-Crew](https://github.com/juinwei7/Pixel-Crew) (MIT) shows an office; no art or code is taken from it.
+
+<img src="docs/images/office-meeting-room.png" alt="The office's meeting room: three participants with the words from the meeting's record over them, a spoken-for card marked, the count of other meetings and the chairman's desk with two meetings waiting" width="400">
+
+The office's **meeting room** 「會議室」 (demo data): the newest running meeting, its participants drawn by their card's
+tool, and over each a word taken only from the meeting's record (支持, 發言中, 等發言); the art director's card is AGY, so
+Claude speaks for it, marked 代發言. 「還有 2 場」 leads to the other meetings, and the **chairman's desk** 「董事長桌」 counts
+the meetings waiting for your approval, with 去核准. A meeting record that cannot be read is said so under it.
+
+<img src="docs/images/meeting.png" alt="A meeting waiting for the chairman: the topic, its badges, what was ticked, and a seat per participant with the speech, its risks and its evidence" width="868">
+
+A **meeting** waiting for you on the 會議 page (demo data): 「輪到你：董事長核准」 and 「重大」, what you ticked when you opened
+it, and a seat per participant with the stance, the points and the risks as the record holds them (the legal manager
+opposes and has a high risk with no source, 「查無出處，需人工複核」), then the evidence: the Claude Code version, the model it
+reported, 「本次確認：只有 StructuredOutput、沒有 MCP」, the cost Claude Code reported and the time it took. The CEO's decision,
+the rules that sent it to you and the 董事長桌, where you approve or veto, follow further down.
 
 ## What you can do with it
 
