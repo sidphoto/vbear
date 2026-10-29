@@ -32,7 +32,7 @@ import stat
 import time
 from pathlib import Path
 
-from . import acceptance, config as cfg, flows, login_identity, previews, risk_acceptance, risk_text, tasks
+from . import acceptance, agent_profiles, config as cfg, flows, login_identity, previews, risk_acceptance, risk_text, tasks
 from .api_error import ApiError
 from .flow_executor import FlowExecutor
 from .runtime import codex_constants, pipeline_store
@@ -48,17 +48,25 @@ _DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 # ---- the plan text and its file --------------------------------------------------------------------------
 
-def build_plan_text(task: dict) -> str:
+def build_plan_text(task: dict, instructions: dict | None = None) -> str:
     """The plan, from the task card: title, goal, scope, out of scope,
     deliverables, acceptance criteria, evidence. Control characters are made
     visible (the same sanitising a dispatch gets) so the file holds exactly
-    what could be sent."""
+    what could be sent.
+
+    ``instructions`` ({"name", "text"}) is the executor card's position instructions (P34-3): when it has text, a block
+    that names the card is the first thing in the plan, before the task. Without it the text is exactly what it was."""
     def lines(name: str, items) -> list[str]:
         if not isinstance(items, list) or not items:
             return []
         return [f"{name}：", *[f"- {str(x)}" for x in items if isinstance(x, (str, int, float)) and str(x).strip()]]
 
-    parts = [f"任務：{task.get('title', '')}"]
+    parts = []
+    text = instructions.get("text") if isinstance(instructions, dict) else None
+    if isinstance(text, str) and text.strip():
+        name = str(instructions.get("name") or "").strip()[:80]
+        parts += [f"職位指示（來自角色卡「{name}」）：", text.strip(), ""]
+    parts.append(f"任務：{task.get('title', '')}")
     goal = task.get("goal")
     if isinstance(goal, str) and goal.strip():
         parts.append(f"目標：{goal.strip()}")
@@ -69,6 +77,34 @@ def build_plan_text(task: dict) -> str:
         return sp.sanitize("\n".join(parts))
     except ValueError as exc:
         raise ApiError(409, "bad_plan", f"任務卡的內容無法形成計畫：{exc}") from exc
+
+
+def executor_instructions(flow: dict) -> tuple[dict | None, dict | None]:
+    """(what goes into the plan, what the screen says about it) for a flow's executor card.
+
+    The card is read as it is now, not as it was when it was placed (a flow does not follow its card; the screen says
+    when it has changed). Nothing here can stop an approval: a flow whose executor has no card, a card that is gone or
+    cannot be read, and a card with no instructions all give the plan it always gave, and the second value says why."""
+    role = ((flow.get("roles") or {}).get("executor")) or {}
+    pid = role.get("profile_id")
+    if not isinstance(pid, str) or not pid:
+        return None, None
+    snapshot = role.get("profile_snapshot") if isinstance(role.get("profile_snapshot"), dict) else {}
+    say = {"included": False, "profile_id": pid, "name": snapshot.get("name"), "source": None, "position": None,
+           "length": 0, "changed_since_placed": False, "reason": ""}
+    try:
+        profile = agent_profiles.get_profile_readonly(pid)
+    except agent_profiles.AgentProfileStorageError:
+        return None, {**say, "reason": "角色卡檔案目前無法讀取，所以這份計畫沒有帶職位指示"}
+    if profile is None:
+        return None, {**say, "reason": "找不到這個位置上的角色卡（可能已刪除），所以這份計畫沒有帶職位指示"}
+    got = agent_profiles.instructions_of(profile)
+    say.update(name=profile.get("name"), source=got["source"], position=got["position"],
+               changed_since_placed=agent_profiles.profile_digest(profile) != snapshot.get("revision"))
+    text = got["text"].strip() if isinstance(got["text"], str) else ""
+    if not text:
+        return None, {**say, "reason": "這張角色卡沒有職位指示（沒有自訂，也沒有選職位），所以這份計畫沒有帶職位指示"}
+    return {"name": profile.get("name"), "text": text}, {**say, "included": True, "length": len(text)}
 
 
 def _plan_dir(state, flow_id: str, *, create: bool) -> int:
@@ -398,7 +434,8 @@ class FlowAutomation:
             flow = self.executor._flow(flow_id)
             risk_acceptance._check_families(flow)
             task = self._preconditions(flow)
-            plan = build_plan_text(task)
+            carried, instructions_view = executor_instructions(flow)
+            plan = build_plan_text(task, carried)
             raw = plan.encode("utf-8")
             if not 0 < len(raw) <= acceptance.PLAN_MAX_BYTES:
                 raise ApiError(409, "bad_plan", f"計畫文字必須是 1 到 {acceptance.PLAN_MAX_BYTES} bytes（目前 {len(raw)}）")
@@ -437,6 +474,7 @@ class FlowAutomation:
         shown = risk_acceptance._display({k: fields[k] for k in acceptance.FIELDS})
         return {"preview_id": rec["preview_id"], "expires_at": rec["expires"], "ttl_s": previews.TTL,
                 "plan_text": plan, "plan_sha256": fields["plan_sha256"], "plan_bytes": fields["plan_bytes"],
+                "instructions": instructions_view,
                 "risk_text": {"zh": risk_text.render("zh"), "en": risk_text.render("en")},
                 "auto_text": {"zh": risk_text.render_auto("zh"), "en": risk_text.render_auto("en")},
                 "fixed_rules": list(FIXED_RULES), "values": shown,
