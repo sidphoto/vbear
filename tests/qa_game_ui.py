@@ -27,6 +27,11 @@ network; nothing under the real ~/.vbear, ~/.claude, ~/.codex or ~/.claude.json 
       the index cannot find). VBEAR_QA_OFFICE=stress: every station full with a "more" link (20 flows), ten
       sessions and 33 profiles (the environment's two, the one whose skill is missing, and thirty more; the lounge
       shows 24 and links to the rest).
+      Optional VBEAR_QA_MEETINGS=1: the meeting pages (#/meetings, the office's meeting room, the home board's
+      "your turn"): three synthetic role cards (CEO, legal, and an art director on AGY, who is spoken for by Claude),
+      and five synthetic meetings written straight into the state folder (one waits for the chairman, one is running,
+      one is decided without the chairman, one has a failed speaker, one is damaged). No model runs and no Claude Code is looked for: the meeting
+      runner is told not to settle meetings that look running, so they stay as they were written.
       Optional VBEAR_QA_CODEX_BLOCKED=1: leave the Codex checks as they really are (no synthetic evidence), so
       the Codex role cannot be launched from VBear: its card and the 出發通行證 dialog then show the reason.
       Without it the synthetic Codex evidence is on and its preview is launchable, which shows the evidence
@@ -62,7 +67,7 @@ from unittest import mock
 
 from tests.test_automation_runner import RunnerCase
 from tests.test_runtimed_managed import FAKE_CLI, FAKE_CODEX_CLI
-from vbear import agent_launch, agent_profiles, flows, tasks, translations
+from vbear import agent_launch, agent_profiles, flows, meeting_runner, meetings, tasks, translations
 from vbear import config as cfg
 
 PROBE = "<img src=x onerror=alert(document.domain)>"
@@ -104,6 +109,7 @@ class _Env(RunnerCase):
             self._flow()
             self._lobby()
             self._office()
+            self._meetings()
         self._translations()
 
     # ---- the index: skills and professions, as files in the temporary HOME
@@ -414,6 +420,94 @@ else:
                     "name": f"示範角色 {i + 1}", "model": {"tool": tool, "model_id": ""}, "enabled": True,
                     "equipped_skill_ids": [by_dir["code-review"]] if tool != "shared" else [],
                     "permission_intents": dict(GOOD)}, known_skills=known, known_roles=set())
+
+    # ---- meetings: synthetic cards and records, nothing runs
+
+    def _meetings(self) -> None:
+        if os.environ.get("VBEAR_QA_MEETINGS") != "1":
+            return
+        # a record that looks running is settled to "interrupted" when the runner is built (it does that so that a stopped
+        # console never shows a ghost): leave the synthetic ones as written
+        patcher = mock.patch.object(meeting_runner.MeetingRunner, "recover", lambda self: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        known = {s["skill_id"] for s in self.index["skills"]}
+        cards = {}
+        for pid, name, position, tool in (("demo-ceo-role", "執行長（示範）", "planner", "claude"),
+                                          ("demo-legal-role", "法務經理（示範）", "legal", "claude"),
+                                          ("demo-art-role", "藝術總監（示範）", "art", "agy")):
+            agent_profiles.save_profile(pid, {"name": name, "model": {"tool": tool, "model_id": ""}, "enabled": True,
+                                              "position": position, "equipped_skill_ids": [],
+                                              "permission_intents": dict(GOOD)}, known_skills=known, known_roles=set())
+            profile = agent_profiles.get_profile_readonly(pid)
+            cards[pid] = {"profile_id": pid, "name": name, "position": position, "tool": tool,
+                          "model_used": "opus" if position == "planner" else "sonnet", "revision": agent_profiles.profile_digest(profile),
+                          "proxy": tool != "claude"}
+        ceo, legal, art = cards["demo-ceo-role"], cards["demo-legal-role"], cards["demo-art-role"]
+        task_id = next(iter(tasks.load_all()))
+        now = time.time()
+        sha = "a" * 64
+        limits = {"per_call_usd": meetings.DEFAULT_LIMITS["per_call_usd"], "meeting_usd": meetings.DEFAULT_LIMITS["meeting_usd"]}
+
+        def evidence(cost="0.0412"):
+            return {"cli_version": "2.1.296", "model_reported": "claude-sonnet-demo", "tools_reported": ["StructuredOutput"],
+                    "mcp_servers_reported": [], "exit_code": 0, "duration_ms": 4200, "cost_usd": cost, "cost_source": "cli"}
+
+        def opinion(stance, summary, risks=()):
+            return {"stance": stance, "summary": summary, "points": ["依據任務卡的說明（示範資料）"], "risks": list(risks), "needs_chairman": False}
+
+        def settle(rec, index, state, *, output=None, error=None, cost="0.0412"):
+            t = rec["turns"][index]
+            t.update(state=state, attempts=0 if state == "queued" else 1, prompt_sha256=sha, output=output, error_code=error,
+                     started_at=None if state == "queued" else rec["created_at"] + index,
+                     ended_at=rec["created_at"] + index + 5 if state not in ("queued", "running") else None,
+                     evidence=evidence(cost) if state == "done" else None)
+
+        def save(rec):
+            meetings.MeetingStore(rec["id"]).save(rec)
+
+        # 1. waits for the chairman: the legal card is against it, the art card is spoken for by Claude
+        rec = meetings.new_record("m-aaaaaaaaaaa1", topic="是否在週五上架新的價格方案", context="需要先確認廣告費與退款條款（示範資料）",
+                                  flags=["spend"], task_id=task_id, chair=ceo, speakers=[legal, art], limits=limits, now=now - 3600)
+        settle(rec, 0, "done", output=opinion("反對", "退款條款沒有出處，先不要上架", [
+            {"level": "高", "text": "退款期限的寫法可能違反消費者保護規定", "source": "查無出處，需人工複核"}]))
+        settle(rec, 1, "done", output=opinion("有條件支持", "素材可以在週四前備好"))
+        settle(rec, 2, "done", output={"decision": "先補齊退款條款，下週再決定上架時間", "rationale": "法務指出條款沒有出處；風險高於收益。",
+                                       "dissent_addressed": ["法務的疑慮列為上架前的必要條件"],
+                                       "actions": [{"type": "修改文件", "text": "補上退款條款並請法務複核"}, {"type": "調整價格", "text": "暫緩新方案"}],
+                                       "escalate": True, "escalate_reason": "涉及價格與退款", "follow_up_topics": ["下週的上架日期"]})
+        rec["major_at_decision"] = True
+        save(rec)
+        # 2. running: the legal card has spoken, the art card is speaking, the CEO waits
+        rec = meetings.new_record("m-bbbbbbbbbbb2", topic="下個月的社群貼文主題", context="", flags=[], task_id=task_id, chair=ceo,
+                                  speakers=[legal, art], limits=limits, now=now - 60)
+        settle(rec, 0, "done", output=opinion("支持", "主題沒有法規問題"))
+        settle(rec, 1, "running")
+        settle(rec, 2, "queued")
+        save(rec)
+        # 3. decided, no chairman needed
+        rec = meetings.new_record("m-ccccccccccc3", topic="整理本週的貼文草稿", context="", flags=[], task_id=None, chair=ceo,
+                                  speakers=[legal, art], limits=limits, now=now - 86400)
+        settle(rec, 0, "done", output=opinion("支持", "草稿內容沒有問題"))
+        settle(rec, 1, "done", output=opinion("有條件支持", "素材放進草稿資料夾就可以"))
+        settle(rec, 2, "done", output={"decision": "草稿先留著，等藝術總監的素材", "rationale": "草稿沒有問題，素材備好再一起處理。", "dissent_addressed": [],
+                                       "actions": [{"type": "寫草稿", "text": "把三則貼文草稿放進任務卡"}], "escalate": False,
+                                       "escalate_reason": "", "follow_up_topics": []})
+        save(rec)
+        # 4. a speaker failed: the page says why, a retry is offered, and the meeting goes to the chairman (rule R7)
+        rec = meetings.new_record("m-eeeeeeeeeee5", topic="整理本週的貼文草稿（藝術總監沒有發言）", context="", flags=[], task_id=None, chair=ceo,
+                                  speakers=[legal, art], limits=limits, now=now - 7200)
+        settle(rec, 0, "done", output=opinion("支持", "草稿內容沒有問題"))
+        settle(rec, 1, "failed", error="timeout")
+        settle(rec, 2, "done", output={"decision": "先用現有草稿", "rationale": "藝術總監逾時，沒有這一位的意見。", "dissent_addressed": [],
+                                       "actions": [{"type": "寫草稿", "text": "把草稿放進任務卡"}], "escalate": False,
+                                       "escalate_reason": "", "follow_up_topics": []})
+        rec["major_at_decision"] = True
+        save(rec)
+        # 5. a damaged record: it stays in the list as blocked
+        folder = meetings.folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        cfg.write_private(folder / "m-ddddddddddd4.json", "{ not json")
 
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/#auth={self.token}"
