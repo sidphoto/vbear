@@ -194,6 +194,11 @@ class PromptTests(unittest.TestCase):
         with self.assertRaises(mt.MeetingError):
             self.build(context="字" * 30000)
 
+    def test_the_hash_a_retry_compares_ignores_the_status_that_moves_by_itself(self):
+        task = {"title": "T", "goal": "G", "status": "draft", "workdir": "/x"}
+        self.assertEqual(mt.inputs_hash(task), mt.inputs_hash({**task, "status": "in_progress", "workdir": "/y"}))
+        self.assertNotEqual(mt.inputs_hash(task), mt.inputs_hash({**task, "goal": "other"}))
+
     def test_the_progress_is_put_together_without_a_model(self):
         self.assertIn("沒有任務卡", mt.progress_summary(None, []))
         text = mt.progress_summary({"title": "T", "status": "in_progress"}, [{"id": "flow-1", "events": [{"kind": "plan_approved"}]}])

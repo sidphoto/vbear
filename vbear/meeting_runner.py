@@ -449,7 +449,10 @@ class MeetingRunner:
             raise mt.MeetingError("budget")
         fd = self._worker()
         try:
-            rec = mt.new_record(mt.new_id(), topic=ctx.topic, context=ctx.context, flags=ctx.flags, task_id=ctx.task_id,
+            mid = mt.new_id()
+            while mt.MeetingStore(mid).path().exists() or mt.MeetingStore(mid).marker_path().exists():
+                mid = mt.new_id()
+            rec = mt.new_record(mid, topic=ctx.topic, context=ctx.context, flags=ctx.flags, task_id=ctx.task_id,
                                 chair=ctx.chair, speakers=ctx.speakers, limits=limits, now=self.clock(),
                                 inputs_sha256=mt.inputs_hash(ctx.task) if ctx.task_id else None)
             store = mt.MeetingStore(rec["id"])

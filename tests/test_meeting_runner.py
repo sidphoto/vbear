@@ -707,8 +707,12 @@ class CancelRecoverChairmanTests(Base):
         m = self.finished(runner)
         bad = mt.MeetingStore("m-ffffffffffff")
         bad.path().write_text("{broken")
-        listing = runner.list()["meetings"]
-        self.assertEqual({x["id"]: x.get("blocked", False) for x in listing}, {m["id"]: False, "m-ffffffffffff": True})
+        for _ in range(2):  # the first read quarantines the file; the meeting stays in the list as blocked
+            listing = runner.list()["meetings"]
+            self.assertEqual({x["id"]: x.get("blocked", False) for x in listing}, {m["id"]: False, "m-ffffffffffff": True})
+        with self.assertRaises(mt.MeetingError) as cm:
+            runner.delete("m-ffffffffffff")
+        self.assertEqual(cm.exception.code, "storage")
 
     def test_the_meeting_count_is_capped(self):
         runner = self.runner()

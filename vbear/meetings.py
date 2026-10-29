@@ -428,7 +428,10 @@ def new_id() -> str:
 
 def inputs_hash(task: dict | None) -> str:
     """What a retry compares to know the task card is the one the meeting started from."""
-    raw = json.dumps(task_context(task), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # not "status": it is derived from the work as it goes (and from the folder's HEAD), so it moves without the task
+    # being edited
+    fields = {k: v for k, v in (task_context(task) or {}).items() if k != "status"}
+    raw = json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -514,14 +517,16 @@ def folder() -> Path:
 
 
 def meeting_ids() -> list[str]:
-    """The ids of the meeting files in the folder (a name that is not a meeting's is ignored)."""
+    """The ids of the meetings in the folder: a meeting file, or the marker a damaged one left (so that it stays in the list,
+    blocked, instead of vanishing). A name that is not a meeting's is ignored."""
     try:
         names = os.listdir(folder())
     except FileNotFoundError:
         return []
     except OSError as exc:
         raise MeetingError("storage") from exc
-    return sorted(n[:-5] for n in names if n.endswith(".json") and MEETING_ID_RE.match(n[:-5]))
+    found = {n.split(".", 1)[0] for n in names if n.endswith((".json", ".json.corrupted"))}
+    return sorted(i for i in found if MEETING_ID_RE.match(i))
 
 
 def load(meeting_id: str) -> dict:
@@ -536,6 +541,8 @@ def load(meeting_id: str) -> dict:
 
 def delete(meeting_id: str) -> None:
     store = MeetingStore(meeting_id)
+    if store.marker_path().exists():
+        raise MeetingError("storage", f"這場會議的紀錄先前偵測到損毀，需人工復原後才能操作。詳見 {store.marker_path()}")
     try:
         with store.locked():
             if not store.path().exists():
