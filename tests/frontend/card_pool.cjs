@@ -3891,13 +3891,30 @@ async function test(name, fn) {
     assert.ok(box && findText(box, "還沒有指示"), "none is said, not left blank");
   });
 
-  await test("P34-2 a full-mode card cannot depart yet: the light is red with the server's reason, not green", async () => {
-    const p = mkProfile("p-1", "Full", "claude", VERIFIED, { launch_mode: "full" });
-    const blocked = [{ code: "full_mode_not_available", message: "完整模式的出發還沒開放" }];
-    await openPool([p], catalog342, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, { blockers: blocked })) });
-    const light = byData(main, "data-pcard", "light")[0] || byData(main, "data-light", "blocked")[0];
-    assert.strictEqual(light.getAttribute("data-light"), "blocked");
-    assert.ok(findText(main, "完整模式的出發還沒開放"));
+  await test("P34-3 a full-mode card's light does not wait for the permission intents; a blocker the server names still makes it red", async () => {
+    const open = { read: "unspecified", write: "unspecified", test: "unspecified", deploy: "unspecified" };
+    const p = mkProfile("p-1", "Full", "claude", open, { launch_mode: "full" });
+    await openPool([p], catalog342, { "GET /api/agent-profiles/p-1/loadout": () => jsonResponse(loadoutBody(p, { blockers: [] })) });
+    assert.strictEqual(byData(main, "data-pcard", "light")[0].getAttribute("data-light"), "green", "intents hold nothing back in full mode");
+    const safe = mkProfile("p-2", "Safe", "claude", open);
+    await openPool([safe], catalog342, { "GET /api/agent-profiles/p-2/loadout": () => jsonResponse(loadoutBody(safe, { blockers: [] })) });
+    assert.strictEqual(byData(main, "data-pcard", "light")[0].getAttribute("data-light"), "yellow", "a safe card still waits for them");
+    const off = mkProfile("p-3", "Off", "claude", VERIFIED, { launch_mode: "full", enabled: false });
+    const blocked = [{ code: "profile_disabled", message: "此角色卡已停用" }];
+    await openPool([off], catalog342, { "GET /api/agent-profiles/p-3/loadout": () => jsonResponse(loadoutBody(off, { blockers: blocked })) });
+    assert.strictEqual(byData(main, "data-pcard", "light")[0].getAttribute("data-light"), "blocked");
+    assert.ok(findText(main, "此角色卡已停用"));
+  });
+
+  await test("P34-3 wizard: an AGY card in full mode is not said to be unlaunchable; in the safe mode it still is", async () => {
+    await wizard342([], {}, { ...catalog342, full_mode_launchable: true });
+    byData(dialog(), "data-tool", "agy")[0].dispatch("click");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true");
+    const full = byData(dialog(), "data-cw", "agy-note")[0];
+    assert.ok(findText(full, "完整模式可以從 VBear 出發") && !findText(full, "還不會啟動 AGY"));
+    assert.ok(!byData(dialog(), "data-cw", "launch-mode-pending").length, "the 'not open yet' hint is gone once the server can start it");
+    modeBtn("safe").dispatch("click");
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "VBear 還不會啟動 AGY"));
   });
 
   // ---- the paste button: instructions into the terminal's input, never Enter ----

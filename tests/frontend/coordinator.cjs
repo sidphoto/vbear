@@ -64,6 +64,7 @@ const gate = (over = {}) => ({
 });
 
 let state;
+let BASE_HANDLER = null;           // the handler reset() installed, for a test that answers a few more addresses
 function reset(over = {}) {
   state = { executor: executor(), reports: { ok: true, reports: [], latest_dispatch_id: null }, reviews: { ok: true, reviews: [] },
     gate: gate(), preview: null, accept: null, post: {},
@@ -73,7 +74,7 @@ function reset(over = {}) {
       flows: [{ flow_id: FLOW, task_id: "task-1", bytes: 1048576, sessions: 1, reviews: 2, has_data: true, held: false,
         deletable: true, reasons: [], note: "" }] }, ...over };
   FETCH_LOG.length = 0;
-  setHandler((url, opts) => {
+  setHandler(BASE_HANDLER = (url, opts) => {
     const p = url.split("?")[0];
     const post = (opts.method || "GET") === "POST";
     const answer = (v, st = 200) => jsonResponse(v, st < 400, st);
@@ -1258,6 +1259,122 @@ test("the limits are bars with the words; what cannot be counted is not drawn as
   const freshPanel = byS2(fresh.node, "executor");
   assert(text(freshPanel).includes("尚未開始"));
   assert(!freshPanel.findAll((n) => n.tag === "progress").some((b) => (b.getAttribute("aria-label") || "").startsWith("經過時間")));
+});
+
+// ---- P34-3: the executor card's instructions in the dispatch box and in the approval --------------------------------------
+
+const CARD = "prof-aaaaaaaaaaaa";
+// the flow page, then the card's instructions, as the server answers them
+function cardHandler(roleCard, ins) {
+  const base = BASE_HANDLER;
+  setHandler((url, opts) => {
+    const p = url.split("?")[0];
+    if ((opts.method || "GET") === "GET" && p.endsWith(`/api/flows/${FLOW}`)) {
+      return jsonResponse({ ok: true, flow: { id: FLOW, roles: { planner: { name: "p", family: "anthropic" },
+        executor: roleCard ? { name: "e", family: "anthropic", profile_id: CARD, profile_snapshot: { name: "全端工程師", tool: "claude", model_id: "", revision: "r".repeat(64) } }
+          : { name: "e", family: "anthropic" }, reviewers: [] } } }, true);
+    }
+    if ((opts.method || "GET") === "GET" && p.endsWith(`/api/agent-profiles/${CARD}/instructions`)) return jsonResponse(ins, true);
+    return base ? base(url, opts) : null;
+  });
+}
+const toastText = () => { const t = global.document.getElementById("toast"); return t ? String(t.textContent) : ""; };
+
+test("P34-3 dispatch box: 加上職位指示 puts the executor card's instructions first in the box and sends nothing", async () => {
+  const c = await mount({ executor: executor({ sessions: [liveSession()] }) });
+  cardHandler(true, { ok: true, id: CARD, name: "全端工程師", source: "default", position: "executor", text: "先寫測試。<b>x</b>" });
+  const box = find(byS2(c.node, "dispatch"), (n) => n.tag === "textarea");
+  box.value = "請做 add()";
+  const btn = button(byS2(c.node, "dispatch"), "加上職位指示");
+  assert(btn && !btn.disabled, "the button is there");
+  FETCH_LOG.length = 0;
+  btn.click();
+  await settle();
+  assert.strictEqual(box.value, "職位指示（來自角色卡「全端工程師」）：\n先寫測試。<b>x</b>\n\n請做 add()");
+  assert(!posts().length, "filling the box sends nothing; the preview and the approval are the dispatch's own");
+  assert.strictEqual(byS2(c.node, "dispatch").findAll((n) => n.tag === "b").length, 0, "text, not markup");
+  // a second press does not add it twice
+  btn.click();
+  await settle();
+  assert.strictEqual(box.value, "職位指示（來自角色卡「全端工程師」）：\n先寫測試。<b>x</b>\n\n請做 add()");
+  assert(toastText().includes("已經加上"), toastText());
+  // the preview that follows is the dispatch's own, with the box as it is
+  state.post["dispatch-preview"] = [{ ok: true, preview_id: "p".repeat(32), expires_at: 1791000300, dispatch_id: "x",
+    launch_id: "l-" + "1".repeat(16), text: box.value, text_sha256: "f".repeat(64), bytes: 9, rewritten: false, ready: true, not_ready_reason: "" }];
+  button(byS2(c.node, "dispatch"), "預覽").click();
+  await settle();
+  const pre = posts().find((x) => x.url.endsWith("/dispatch-preview"));
+  assert.strictEqual(pre.body.text, box.value);
+  c.stop();
+});
+
+test("P34-3 dispatch box: no card on the executor, or a card with no instructions, says so and leaves the box alone", async () => {
+  let c = await mount({ executor: executor({ sessions: [liveSession()] }) });
+  cardHandler(false, null);
+  let box = find(byS2(c.node, "dispatch"), (n) => n.tag === "textarea");
+  box.value = "原本的";
+  button(byS2(c.node, "dispatch"), "加上職位指示").click();
+  await settle();
+  assert.strictEqual(box.value, "原本的");
+  assert(toastText().includes("沒有放角色卡"), toastText());
+  c.stop();
+  c = await mount({ executor: executor({ sessions: [liveSession()] }) });
+  cardHandler(true, { ok: true, id: CARD, name: "全端工程師", source: "none", position: null, text: null });
+  box = find(byS2(c.node, "dispatch"), (n) => n.tag === "textarea");
+  box.value = "原本的";
+  button(byS2(c.node, "dispatch"), "加上職位指示").click();
+  await settle();
+  assert.strictEqual(box.value, "原本的");
+  assert(toastText().includes("沒有職位指示"), toastText());
+  c.stop();
+});
+
+test("P34-3 dispatch box: in automatic mode the button is off with the rest of the box", async () => {
+  const c = await mount({ executor: executor({ sessions: [liveSession()], automation: { mode: "auto", approval_id: "auto-7", problem: null } }) });
+  assert(button(byS2(c.node, "dispatch"), "加上職位指示").disabled);
+  c.stop();
+});
+
+test("P34-3 approval: the dialog says which card's instructions open the plan, from where, and that only the first dispatch carries them", async () => {
+  reset();
+  state.post["automation-preview"] = [{ ...autoPreview(), plan_text: "職位指示（來自角色卡「全端工程師」）：\n先寫測試。\n\n任務：實作 add()",
+    instructions: { included: true, profile_id: CARD, name: "全端工程師", source: "default", position: "executor", length: 5, changed_since_placed: true, reason: "" } }];
+  app.openAcceptanceDialog(FLOW, () => {}, { auto: true });
+  await settle();
+  const m = dom().bodyEl.children[dom().bodyEl.children.length - 1];
+  const note = find(m, (n) => n.getAttribute && n.getAttribute("data-s2-auto-instructions") === "included");
+  assert(note, "a note about the instructions is on the approval");
+  const t = text(note);
+  assert(t.includes("全端工程師") && t.includes("預設（跟著職位）") && t.includes("5 字"), t);
+  assert(t.includes("第一則派工") && t.includes("使用者訊息") && t.includes("不是系統提示"), t);
+  assert(t.includes("改過") && t.includes("現在的內容"), "the card changed since it was placed, and it says so");
+  assert(text(m).includes("職位指示（來自角色卡「全端工程師」）：\n先寫測試。"), "and the text itself is in the plan above");
+});
+
+test("P34-3 approval: a card that could not be read says why nothing was added; a flow with no card says nothing", async () => {
+  reset();
+  state.post["automation-preview"] = [{ ...autoPreview(), instructions: { included: false, profile_id: CARD, name: "全端工程師", source: null,
+    position: null, length: 0, changed_since_placed: false, reason: "找不到這個位置上的角色卡（可能已刪除），所以這份計畫沒有帶職位指示" } }];
+  app.openAcceptanceDialog(FLOW, () => {}, { auto: true });
+  await settle();
+  let m = dom().bodyEl.children[dom().bodyEl.children.length - 1];
+  const note = find(m, (n) => n.getAttribute && n.getAttribute("data-s2-auto-instructions") === "none");
+  assert(note && text(note).includes("找不到這個位置上的角色卡"), "the server's reason");
+  m.remove && m.remove();
+  reset();
+  state.post["automation-preview"] = [{ ...autoPreview(), instructions: null }];
+  app.openAcceptanceDialog(FLOW, () => {}, { auto: true });
+  await settle();
+  m = dom().bodyEl.children[dom().bodyEl.children.length - 1];
+  assert(!find(m, (n) => n.getAttribute && n.getAttribute("data-s2-auto-instructions")), "no card, no note");
+  const old = { ...autoPreview() };
+  delete old.instructions;
+  reset();
+  state.post["automation-preview"] = [old];
+  app.openAcceptanceDialog(FLOW, () => {}, { auto: true });
+  await settle();
+  m = dom().bodyEl.children[dom().bodyEl.children.length - 1];
+  assert(!find(m, (n) => n.getAttribute && n.getAttribute("data-s2-auto-instructions")), "an older server's preview has none either");
 });
 
 // ---- run ------------------------------------------------------------------------------------------------------

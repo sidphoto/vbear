@@ -863,23 +863,127 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     for (const k of ["folder-warning", "mode", "position-boundaries"]) assert.ok(!byData(d, "data-pass", k).length, k);
   });
 
-  await test("P34-2 pass: a full-mode card that cannot depart yet shows the server's reason with a way to the launch mode, and no front", async () => {
-    const full = mkProfile("p-1", "Full", "claude", { read: "allow", write: "allow", test: "allow", deploy: "deny" }, { launch_mode: "full" });
-    const blocked = previewOf(LV.unknown, LV.unknown, { launchable: false, preview_id: null, cli: null, settings_digest: null,
-      reasons: [{ code: "full_mode_not_available", message: "完整模式的出發還沒開放：這個版本只能用安全模式出發" }] });
-    const ctx = mkPass([full], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: blocked }) });
+  // ---- P34-3: a card in full mode departs with no limit from VBear ----
+  const fullCard = (tool = "claude", extra = {}) => mkProfile("p-1", "Full", tool, { read: "unspecified", write: "unspecified", test: "unspecified", deploy: "unspecified" },
+    { launch_mode: "full", ...extra });
+  const fullPass = (over = {}) => ({
+    preview_id: "p-" + "f".repeat(32), launchable: true, reasons: [], launch_inputs: { applies: false, note: "x" },
+    cli: { binary: "/Users/u/.local/bin/claude", version: null, verified: null, activity_verified: null },
+    settings_digest: "e".repeat(64), canonical_paths: { workdir: WORKDIR, scratch: null }, derived_labels: {}, armor_groups: [],
+    launch_mode: "full", position: "executor", mode_note: "完整模式：VBear 沒有限制這張卡；只剩工具自己的權限詢問。職位的邊界全都只是提醒。",
+    boundaries: { position: "executor", launch_mode: "full", tool: "claude", mode_note: "x",
+      items: [{ id: "net", text: "完整模式可以上網", kind: "reminder" }] },
+    folder_warning: null,
+    command: ["/Users/u/.local/bin/claude", "--model", "opus", "--append-system-prompt", "<職位指示，共 12 字>"],
+    instructions: { delivery: "argv", source: "default", position: "executor", text: "你是工程師<script>x</script>", where: "完整模式出發這張卡時，這份指示會用 --append-system-prompt 當成一個引數交給 Claude Code。" },
+    notes: ["這張卡的權限意圖把「部署上線」寫成禁止；完整模式不會執行這個意圖，VBear 也不會擋"],
+    expires_at: 2000000000, ...over });
+
+  await test("P34-3 pass: a full card needs no commit sentence, says first that VBear limits nothing, and shows the command", async () => {
+    const launches = []; const previews = [];
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"),
+      "POST /api/native/agent-previews": (_u, o) => { previews.push(JSON.parse(o.body)); return jsonResponse({ ok: true, preview: fullPass() }); },
+      "POST /api/native/agent-launches": (_u, o) => { launches.push(JSON.parse(o.body)); return jsonResponse({ ok: true, launch: { session: { session_id: "n-0123456789ab" } } }); } });
     const d = await openPass(ctx);
-    field(d).value = WORKDIR; commitBox(d).checked = true;
+    assert.ok(!commitBox(d), "there is no commit sentence for a launch that VBear does not limit");
+    assert.ok(!findText(d, "不勾選就無法啟動"));
+    assert.ok(findText(d, "這次會執行的指令"));
+    field(d).value = WORKDIR;
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true);
     btnByText(d, "產生預覽").dispatch("click");
     await tick(6);
-    assert.ok(findText(d, "完整模式的出發還沒開放"));
+    assert.strictEqual(previews.length, 1);
+    const front = byData(d, "data-pass", "front")[0];
+    assert.strictEqual(front.getAttribute("data-mode"), "full");
+    assert.ok(findText(byData(front, "data-pass", "full-lead")[0], "VBear 沒有限制這張卡") && findText(front, "可以上網"));
+    assert.strictEqual((byData(front, "data-pass", "command")[0].textContent || "").trim(),
+      "/Users/u/.local/bin/claude --model opus --append-system-prompt <職位指示，共 12 字>");
+    assert.ok(findText(byData(front, "data-pass", "instructions")[0], "--append-system-prompt"));
+    assert.ok(findText(front, "你是工程師<script>x</script>") && !walk(front).some((n) => n.tag === "script"), "the instruction is text");
+    assert.ok(findText(byData(front, "data-pass", "notes")[0], "完整模式不會執行這個意圖"));
+    assert.ok(!byData(d, "data-pass-line", "write").length && !byData(d, "data-pass-line", "network").length, "no shield lines: nothing was limited");
+    assert.ok(!findText(d, "盾牌圖例") && !findText(d, "暫存區"), "no legend and no scratch folder");
+    assert.ok(findText(byData(d, "data-pass", "mode")[0], "完整模式"));
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, false, "no acknowledgement box stands in the way");
+    btnByText(d, "確認啟動").dispatch("click");
+    await tick(6);
+    assert.deepStrictEqual(launches, [{ preview_id: "p-" + "f".repeat(32), expected_settings_digest: "e".repeat(64), user_confirmed: true }]);
+  });
+
+  await test("P34-3 pass: a full card with a folder already filled in is previewed when the pass opens, without a commit sentence; the confirm still needs a click", async () => {
+    const task = { id: "task-1", title: "T", template: "custom", goal: "", scope: [], out_of_scope: [], deliverables: [], acceptance_criteria: [], evidence: [],
+      steps: [], artifacts: [], status: "draft", workdir: WORKDIR, provenance: { agent: "pending", tests: "untested", human: "pending", verified: false,
+        verification_asserted: false, notes: "", source: "unauthenticated_console_ui" }, associated_pane_id: null, associated_session_id: null,
+      association_mode: "tracking_only", association_label: "x", created_at: 1, updated_at: 1 };
+    const previews = []; const launches = [];
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"), "GET /api/tasks": () => jsonResponse({ ok: true, tasks: [task] }),
+      "POST /api/native/agent-previews": (_u, o) => { previews.push(JSON.parse(o.body)); return jsonResponse({ ok: true, preview: fullPass() }); },
+      "POST /api/native/agent-launches": (_u, o) => { launches.push(JSON.parse(o.body)); return jsonResponse({ ok: true, launch: { session: { session_id: "n-0123456789ab" } } }); } });
+    focusLog.length = 0;
+    await ctx.viewWorkbench(null, "task-1", "p-1", true);
+    await tick(10);
+    const d = dialog();
+    assert.strictEqual(previews.length, 1, "the folder of the task card is previewed on its own");
+    assert.deepStrictEqual(previews[0], { profile_id: "p-1", workdir: WORKDIR, commit: false });
+    const confirm = btnByText(d, "確認啟動");
+    assert.strictEqual(confirm.disabled, false);
+    assert.ok(!focusLog.includes(confirm), "the focus was never given to 確認啟動");
+    assert.strictEqual(launches.length, 0, "nothing launched until the click");
+    confirm.dispatch("click");
+    await tick(6);
+    assert.strictEqual(launches.length, 1);
+  });
+
+  await test("P34-3 pass: Codex and AGY cards say their instructions are pasted, and show the short command", async () => {
+    for (const tool of ["codex", "agy"]) {
+      const pv = fullPass({ cli: { binary: `/Users/u/bin/${tool}`, version: null }, command: [`/Users/u/bin/${tool}`],
+        instructions: { delivery: "paste", source: "default", position: "legal", text: "你是法務", where: "這張卡的工具沒有可以在出發時帶入指示的選項，所以出發時不會帶上。" } });
+      const ctx = mkPass([fullCard(tool)], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: pv }) });
+      const d = await openPass(ctx);
+      assert.strictEqual(btnByText(d, "產生預覽").disabled, false, `${tool}: a full card can be previewed`);
+      assert.ok(!byData(d, "data-pass", "agy-not-launchable").length, `${tool}: the refusal of the safe launch is not shown`);
+      field(d).value = WORKDIR;
+      btnByText(d, "產生預覽").dispatch("click");
+      await tick(6);
+      const front = byData(d, "data-pass", "front")[0];
+      assert.strictEqual(byData(front, "data-pass", "instructions")[0].getAttribute("data-delivery"), "paste");
+      assert.ok(findText(front, "貼上職位指示"), tool);
+      assert.ok(!byData(front, "data-pass", "instruction-text").length, "nothing is said to be carried");
+      assert.strictEqual((byData(front, "data-pass", "command")[0].textContent || "").trim(), `/Users/u/bin/${tool}`);
+      assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+      btnByText(d, "取消").dispatch("click");
+      await tick(2);
+    }
+  });
+
+  await test("P34-3 pass: an AGY card in the safe launch is still refused as before", async () => {
+    const ctx = mkPass([mkProfile("p-1", "Safe AGY", "agy", { read: "allow", write: "allow", test: "allow", deploy: "deny" })], { ...loadoutFor("p-1") });
+    const d = await openPass(ctx);
+    assert.ok(byData(d, "data-pass", "agy-not-launchable").length);
+    assert.strictEqual(btnByText(d, "產生預覽").disabled, true);
+  });
+
+  await test("P34-3 pass: a full card the server cannot start shows the server's reason, and no front", async () => {
+    const blocked = fullPass({ launchable: false, preview_id: null, cli: null, settings_digest: null, command: null, instructions: null,
+      reasons: [{ code: "cli_not_found", message: "找不到 agy：它不在 VBear 找指令的路徑上" }] });
+    const ctx = mkPass([fullCard("agy")], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: blocked }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    assert.ok(findText(d, "找不到 agy"));
     assert.ok(!byData(d, "data-pass", "front").length);
-    const fix = byData(d, "data-pass-fix", "mode")[0];
-    assert.ok(fix && fix.textContent === "改出發方式", "the reason points at where the mode is changed");
-    fix.dispatch("click");
-    await tick(8);
-    const wiz = body.children.filter((c) => c.getAttribute && c.getAttribute("role") === "dialog").pop();
-    assert.ok(wiz !== d && findText(wiz, "陣營就是這張卡用哪個工具"), "the editor opens on step 2");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true);
+  });
+
+  await test("P34-3 pass: a preview from an older server (no command, no instructions) for a full card draws without them", async () => {
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true,
+      preview: fullPass({ command: undefined, instructions: undefined, notes: undefined }) }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    assert.ok(byData(d, "data-pass", "front").length && findText(d, "VBear 沒有限制這張卡"));
   });
 
   await test("CSS: the pass is styled — a tone per kind, wraps on a phone, the details fold", () => {

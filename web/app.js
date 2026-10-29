@@ -4135,6 +4135,8 @@ const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看�
 // VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
+// In full mode VBear does start an AGY card (as a terminal, with the person's own settings); the safe launch never does.
+const AGY_FULL_NOTE = "AGY 在完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
 // The tools VBear never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
 const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
@@ -5038,7 +5040,8 @@ function openCardWizard(opts) {
     const codexNote = st.tool === "codex" && catalog.codex_installed === false
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
         "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
-    const agyNote = st.tool === "agy" ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, AGY_NOT_LAUNCHED + "。") : null;
+    const agyNote = st.tool === "agy"
+      ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, (st.launchMode === "full" && catalog.full_mode_launchable === true ? AGY_FULL_NOTE : AGY_NOT_LAUNCHED) + "。") : null;
     const sharedNote = st.tool === "shared" ? el("p", { class: "small cw-hint", "data-cw": "shared-note" }, SHARED_NOT_LAUNCHED + "。") : null;
 
     const posButton = (id, label) => el("button", { type: "button", class: "cw-choice",
@@ -5064,7 +5067,9 @@ function openCardWizard(opts) {
     const legacyNote = legacy ? el("p", { class: "small cw-hint", "data-cw": "legacy-note" }, cardLegacyText(legacy) + "。按儲存才會改寫成新的位置。") : null;
     const campWord = (row) => `建議陣營：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
       + (row.suggested_model_alias ? `（${row.suggested_model_alias}）` : "")
-      + (UNLAUNCHABLE_TOOLS.includes(row.suggested_tool) ? "。VBear 不會幫這個陣營的卡出發，只做紀錄" : "");
+      + (UNLAUNCHABLE_TOOLS.includes(row.suggested_tool)
+        ? (row.suggested_tool === "agy" && st.launchMode === "full" && catalog.full_mode_launchable === true
+          ? "。AGY 只有完整模式才能從 VBear 出發" : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
     const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
       el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
       el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "任務卡上建議放：") + cardPositionPlaceText(posRow)),
@@ -5810,6 +5815,29 @@ function passFront(pv) {
     passLegend());
 }
 
+// The front of a pass for a card in full mode: no shield and no limit to read, because VBear sets none. It says that first,
+// then what will be run (the command, with the instructions in full below it) and what the card says that is not kept.
+// Everything the server sent is shown as text.
+function passFullFront(pv) {
+  const ins = pv.instructions && typeof pv.instructions === "object" ? pv.instructions : null;
+  const command = Array.isArray(pv.command) ? pv.command.filter((x) => typeof x === "string") : [];
+  const notes = Array.isArray(pv.notes) ? pv.notes.filter((x) => typeof x === "string" && x) : [];
+  const how = !ins ? "" : ins.delivery === "argv" ? "出發時帶進去：用 --append-system-prompt 當成一個引數交給 Claude Code"
+    : ins.delivery === "paste" ? "出發時不帶：開了終端、接管之後按「貼上職位指示」，由你按 Enter" : "沒有職位指示，出發時不帶";
+  return el("section", { class: "pass-front pass-full", "data-pass": "front", "data-mode": "full", "aria-label": "這次出發沒有限制" },
+    el("p", { class: "pass-full-lead", "data-pass": "full-lead" }, el("strong", null, "VBear 沒有限制這張卡。"),
+      "　它用你自己的設定啟動，可以上網；讀寫檔案、commit、發布、付款，都和你自己在終端機執行一樣，只剩工具自己的權限詢問。"),
+    el("dl", { class: "kv small" },
+      el("dt", null, "會執行的指令"), el("dd", { class: "mono pass-command", "data-pass": "command" }, command.join(" ")),
+      el("dt", null, "職位指示"), el("dd", { "data-pass": "instructions", "data-delivery": ins ? String(ins.delivery) : "" }, how,
+        ins && typeof ins.where === "string" && ins.where ? el("div", { class: "small muted" }, ins.where) : null)),
+    ins && ins.delivery === "argv" && typeof ins.text === "string"
+      ? el("details", { class: "pass-instruction", "data-pass": "instruction-text", open: "" },
+        el("summary", null, `帶進去的職位指示全文（${ins.text.length} 字）`),
+        el("pre", { class: "s2-plain pass-instruction-text", tabindex: "0" }, ins.text)) : null,
+    notes.length ? el("ul", { class: "small pass-notes", "data-pass": "notes" }, notes.map((n) => el("li", null, n))) : null);
+}
+
 function passLegend() {
   return el("div", { class: "pass-legend small muted", "data-pass": "legend" },
     el("span", { class: "pass-legend-title" }, "盾牌圖例："),
@@ -5829,7 +5857,6 @@ const PASS_FIXES = {
   intents_not_supported: { act: "intents", label: "調整權限意圖" },
   tool_not_launchable: { act: "tool", label: "改選陣營" },
   commit_not_enforceable: { act: "commit", label: "回去勾選知悉" },
-  full_mode_not_available: { act: "mode", label: "改出發方式" },
 };
 function passFix(code) { return typeof code === "string" && cardHas(PASS_FIXES, code) ? PASS_FIXES[code] : null; }
 // A preview that was refused because of the folder (the server answers 400 for a missing, relative or outside folder).
@@ -5897,7 +5924,9 @@ const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它�
 // What the light says. Yellow is the intents (as cardLight); once they are all decided, green is only for a loadout that
 // was read and lists no reason against a launch. Not read yet, not readable, or with reasons: not green.
 function cardDeparture(p, loadoutState) {
-  const base = cardLight(p);
+  // a card in full mode is started without the permission intents (VBear limits nothing), so undecided ones hold nothing back
+  const base = p && p.launch_mode === "full"
+    ? { state: "green", undecided: [], text: "可以出發（完整模式不看權限意圖）" } : cardLight(p);
   if (base.state === "yellow") return { ...base, reasons: [] };
   if (!loadoutState || loadoutState.state === "loading") return { state: "checking", text: "確認出發條件中…", reasons: [] };
   const blockers = loadoutState.state === "ok" && loadoutState.data ? loadoutState.data.blockers : null;
@@ -6987,6 +7016,26 @@ function s2Pre(text, cls) {
   return el("pre", { class: `s2-plain ${cls || ""}`.trim(), tabindex: "0" }, text == null ? "" : String(text));
 }
 
+// P34-3: what the approval says about the executor card's instructions at the head of the plan. Null for a flow whose
+// executor has no card (and for a server that does not send it); the text of the instructions is in the plan above.
+const S2_INSTRUCTION_SOURCE = { custom: "自訂", default: "預設（跟著職位）" };
+function s2InstructionsNote(ins) {
+  if (!ins || typeof ins !== "object") return null;
+  const name = typeof ins.name === "string" && ins.name ? `「${ins.name}」` : "（名稱不明）";
+  if (ins.included !== true) {
+    return el("div", { class: "notice info", role: "note", "data-s2-auto-instructions": "none" },
+      el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+      el("div", { class: "small" }, `執行位的角色卡${name}沒有職位指示放進這份計畫：${typeof ins.reason === "string" ? ins.reason : ""}`));
+  }
+  return el("div", { class: "notice info", role: "note", "data-s2-auto-instructions": "included" },
+    el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", { class: "small" },
+      el("p", { style: "margin:0 0 4px" }, `這份計畫的開頭是執行位的角色卡${name}的職位指示（${S2_INSTRUCTION_SOURCE[ins.source] || "來源不明"}，${ins.length} 字）。`),
+      el("p", { style: "margin:0 0 4px" }, "它和任務卡一起，在第一則派工裡當作使用者訊息交給執行者，不是系統提示；之後轉送審查意見的派工不會再帶。"),
+      ins.changed_since_placed === true
+        ? el("p", { style: "margin:0" }, "這張卡在放上這個位置之後改過；這裡用的是它現在的內容。") : null));
+}
+
 function s2Copy(text, label) {
   return el("button", { class: "btn small", type: "button", on: { click: async () => {
     try { await navigator.clipboard.writeText(text); toast("已複製"); }
@@ -7146,6 +7195,7 @@ function openAcceptanceDialog(flowId, onDone, opts = {}) {
       el("p", null, az.intro),
       el("h3", null, "這份計畫（核准的就是這一份）"),
       s2Pre(res.plan_text),
+      s2InstructionsNote(res.instructions),
       el("p", { class: "small muted" }, `計畫長度 ${res.plan_bytes} 位元組；計畫雜湊（sha256）前 16 碼 ${String(res.plan_sha256).slice(0, 16)}；` +
         "核准之後任務卡再改，不會影響已核准的這一份。"),
       az.sections.map((s, i) => el("section", { class: "s2-risk", "data-s2-auto": s.id },
@@ -7414,10 +7464,13 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
     placeholder: "寫下要請執行者做的事（會先預覽，核准後才送出）" });
   const out = el("div", { class: "s2-preview" });
   const previewBtn = el("button", { class: "btn small primary", type: "button", on: { click: doPreview } }, "預覽");
+  // P34-3: the executor card's instructions, put first in the box; it only fills the box, the dispatch is still previewed and approved
+  const instrBtn = el("button", { class: "btn small", type: "button", "data-s2": "add-instructions",
+    title: "把放在執行位的角色卡的職位指示，加在派工內容的最前面；不會送出", on: { click: addInstructions } }, "加上職位指示");
   const autoNote = el("div", { class: "s2-auto-note" });
   const node = el("section", { class: "section s2-panel", "data-s2": "dispatch" },
     sectionHead("派工", "每一則都要你核准；送出的就是預覽裡顯示的那一份。"), autoNote, text,
-    el("div", { class: "row" }, previewBtn), out);
+    el("div", { class: "row" }, previewBtn, instrBtn), out);
   // In automatic mode the dispatches are the runner's: a manual one is refused by the server and the daemon, so
   // the box says so instead of offering it.
   let automatic = false;
@@ -7427,9 +7480,28 @@ function s2DispatchComposer(flowId, getExecutor, refresh) {
     generation += 1;                            // a preview request already on its way is void
     text.disabled = on;
     previewBtn.disabled = on;
+    instrBtn.disabled = on;
     if (on) setKids(out);                       // a preview made before the switch can no longer be approved here
     setKids(autoNote, on ? notice("info", "自動執行中：派工由 VBear 依核准的計畫進行，手動派工一律拒絕。" +
       "要手動派工，請先停止流程並切回手動。") : null);
+  }
+  async function addInstructions() {
+    instrBtn.disabled = true;
+    try {
+      const flow = await api.get(`/api/flows/${encodeURIComponent(flowId)}`);
+      const role = flow && flow.flow && flow.flow.roles && flow.flow.roles.executor;
+      const pid = role && typeof role.profile_id === "string" ? role.profile_id : "";
+      if (!pid) { toast("這個流程的執行者沒有放角色卡，沒有職位指示可以加"); return; }
+      const got = await api.get(`/api/agent-profiles/${encodeURIComponent(pid)}/instructions`);
+      const body = got && typeof got.text === "string" ? got.text.trim() : "";
+      if (!body) { toast("這張角色卡沒有職位指示"); return; }
+      const block = `職位指示（來自角色卡「${String(got.name || "").trim().slice(0, 80)}」）：\n${body}\n\n`;
+      if (text.value.startsWith(block)) { toast("已經加上這份職位指示了"); return; }
+      text.value = block + text.value;
+      text.focus();
+      toast("已加在派工內容的最前面；還沒有送出，要先預覽、再核准");
+    } catch (e) { toast("無法讀取職位指示：" + e.message); }
+    finally { instrBtn.disabled = automatic; }
   }
   function target() {
     const ex = getExecutor();
@@ -9701,12 +9773,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const tool = p.model && p.model.tool;
     const isClaude = tool === "claude";
     const isCodex = tool === "codex";
-    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : "";
-    // VBear has no managed launch for Antigravity: the pass says so first and offers no preview and no start, so
-    // there is no limit and no shield on it to read.
-    const isAgy = tool === "agy";
+    // A card whose mode is exactly "full" departs with the person's own settings and no limit from VBear (P34-3); any
+    // other value is the safe launch, as before.
+    const isFull = p.launch_mode === "full";
+    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : tool === "agy" ? "AGY" : "";
+    // VBear has no safe launch for Antigravity: the pass says so first and offers no preview and no start, so
+    // there is no limit and no shield on it to read. In full mode an AGY card goes like any other.
+    const isAgy = tool === "agy" && !isFull;
     if (isAgy) previewBtn.disabled = true;
-    function needsAck(pv) { return Boolean(isClaude && pv && pv.cli && pv.cli.verified === false); }
+    function needsAck(pv) { return Boolean(isClaude && !isFull && pv && pv.cli && pv.cli.verified === false); }
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
@@ -9717,7 +9792,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
           return "現在不能出發：" + (reasons.join("；") || "這張角色卡目前無法啟動") + "。";
         }
-        return "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾、勾選存下版本紀錄（commit）的知悉，再按「產生預覽」。";
+        return isFull ? "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾，再按「產生預覽」。"
+          : "現在不能出發：還沒有產生這次的預覽。先填「在哪裡做」的資料夾、勾選存下版本紀錄（commit）的知悉，再按「產生預覽」。";
       }
       if (needsAck(current) && !(ackBox && ackBox.checked)) {
         return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
@@ -9744,6 +9820,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       invalidate("輸入已變更，請重新產生預覽。");
       if (launchOpts.autoPreview !== false && workdirInput.value.trim() && commitBox.checked) doPreview();
     });
+    // full mode has no commit sentence: a folder that is already filled in is previewed when the pass opens
 
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
@@ -9751,12 +9828,13 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         isAgy ? el("div", { class: "notice warn", "data-pass": "agy-not-launchable" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
           el("div", null, el("strong", null, "這張角色卡目前無法啟動"), el("p", { class: "small" }, AGY_NOT_LAUNCHED)))
-        : el("p", { class: "small muted" },
-          "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動角色。"),
+        : el("p", { class: "small muted" }, isFull
+          ? "出發前先看這張通行證：這次會執行的指令，和 VBear 沒有限制的地方。確認後才會啟動。"
+          : "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動角色。"),
         isAgy ? null : el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
         isAgy ? null : el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
         isAgy ? null : workdirRange,
-        isAgy ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
+        isAgy || isFull ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
           el("span", null, PASS_COMMIT_ACK, el("span", { class: "small muted" }, " 不勾選就無法啟動。"))),
         out,
@@ -9784,7 +9862,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
     function fixAction(fix) {
       if (!fix) return null;
-      const run = fix.act === "intents" ? fixRole(true) : fix.act === "tool" || fix.act === "mode" ? fixRole(false)
+      const run = fix.act === "intents" ? fixRole(true) : fix.act === "tool" ? fixRole(false)
         : fix.act === "commit" ? () => { commitBox.focus(); }
         : fix.act === "folder" ? openFolderPicker : null;
       return run ? el("button", { class: "btn small", type: "button", "data-pass-fix": fix.act, on: { click: run } }, fix.label) : null;
@@ -9803,16 +9881,26 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
             el("strong", null, "這張角色卡目前無法啟動"),
             el("ul", { class: "small pass-reasons" }, (pv.reasons || []).map(reasonItem)))));
       } else {
-        kids.push(passFront(pv));
-        kids.push(el("dl", { class: "kv small" },
-          el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " " : ""}${pv.cli.version} · ${pv.cli.binary}`),
-          el("dt", null, "版本驗證"),
-          el("dd", null, isCodex ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
-            : !isClaude ? "不適用"
-            : pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
-          el("dt", null, PASS_WORKDIR_LABEL), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
-          el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
-          el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
+        if (pv.launch_mode === "full") {
+          // P34-3: nothing is prepared and nothing is limited, so there is no scratch folder, no version check and no shield
+          kids.push(passFullFront(pv));
+          kids.push(el("dl", { class: "kv small" },
+            el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " · " : ""}${pv.cli ? pv.cli.binary : ""}`),
+            el("dt", null, "版本驗證"), el("dd", null, "不適用：這是你自己的工具，VBear 沒有執行它、沒有檢查版本"),
+            el("dt", null, PASS_WORKDIR_LABEL), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
+            el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
+        } else {
+          kids.push(passFront(pv));
+          kids.push(el("dl", { class: "kv small" },
+            el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " " : ""}${pv.cli.version} · ${pv.cli.binary}`),
+            el("dt", null, "版本驗證"),
+            el("dd", null, isCodex ? "以 VBear 已記錄的證據為準（見下方各項的證據欄）"
+              : !isClaude ? "不適用"
+              : pv.cli.verified === true ? "已驗證" : pv.cli.verified === false ? "未驗證（見下方）" : "未知"),
+            el("dt", null, PASS_WORKDIR_LABEL), el("dd", { class: "mono" }, pv.canonical_paths.workdir),
+            el("dt", null, "本次暫存區"), el("dd", { class: "mono" }, pv.canonical_paths.scratch),
+            el("dt", null, "預覽有效至"), el("dd", null, new Date(pv.expires_at * 1000).toLocaleTimeString())));
+        }
         // P34-2: how the card is started, and a suggestion when the folder is not the one the position suggests (words only)
         if (typeof pv.launch_mode === "string" && typeof pv.mode_note === "string" && pv.mode_note) {
           kids.push(el("div", { class: "notice info", "data-pass": "mode" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
@@ -9823,7 +9911,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           kids.push(el("div", { class: "notice warn", role: "note", "data-pass": "folder-warning" }, el("span", { class: "ico", "aria-hidden": "true" }, "!"),
             el("div", { class: "small" }, pv.folder_warning)));
         }
-        if (isCodex) kids.push(codexEvidenceNote(pv));
+        if (pv.launch_mode === "full") { /* nothing about a version, a title or a shield: VBear checks none of it here */ }
+        else if (isCodex) kids.push(codexEvidenceNote(pv));
         else if (!isClaude) { /* another tool: nothing about a version or a title to say */ }
         else if (needsAck(pv)) kids.push(unverifiedBox(pv));
         else if (pv.cli && pv.cli.activity_verified === false) kids.push(activityUnverifiedBox(pv));
@@ -9848,6 +9937,14 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       // the groups with the level words this tool can show (the server knows; the table is the fallback)
       const groups = Array.isArray(pv.armor_groups) && pv.armor_groups.length ? pv.armor_groups
         : ARMOR_GROUPS_UI.map((g) => ({ ...g, levels: g.levels.filter((lv) => isClaude || !/Claude/.test(lv)) }));
+      if (pv.launch_mode === "full") {
+        kids.push(el("details", { class: "pass-details", "data-pass": "details" },
+          el("summary", null, "這個職位的邊界與技能卡清單"),
+          positionBoundariesBox(pv),
+          chosenSkillsList()));
+        setKids(out, ...kids);
+        return;
+      }
       kids.push(el("details", { class: "pass-details", "data-pass": "details" },
         el("summary", null, PASS_DETAILS_LABEL),
         el("h4", { class: "agent-launch-h" }, "七項標示（這次出發通行證的實際標示）"),
@@ -9876,8 +9973,10 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       const catalog = (agentBuilderCatalog && agentBuilderCatalog.skills) || [];
       const gone = new Set((p._unresolved && p._unresolved.skills) || []);
       return el("section", { class: "rc-block", "data-launch": "chosen-skills" },
-        el("h4", null, "技能卡清單（收藏中），本次不會載入"),
-        el("p", { class: "rc-note" }, "這是你替這張角色卡收藏的清單，只是紀錄；這次出發不會把這些技能帶上。"),
+        el("h4", null, isFull ? "技能卡清單（收藏中），VBear 不會替它挑技能" : "技能卡清單（收藏中），本次不會載入"),
+        el("p", { class: "rc-note" }, isFull
+          ? "這是你替這張角色卡收藏的清單，只是紀錄。完整模式下，工具會照你自己的設定載入它的技能、CLAUDE.md、MCP 與外掛，不是這份清單。"
+          : "這是你替這張角色卡收藏的清單，只是紀錄；這次出發不會把這些技能帶上。"),
         ids.length ? el("ul", null, ids.map((sid) => {
           const rec = catalog.find((x) => x.skill_id === sid);
           const name = rec && rec.name ? String(rec.name) : `未提供（ID：${sid}）`;
@@ -10018,7 +10117,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     // single-use, 5-minute one); the focus stays on the folder box or the preview button, never on 確認啟動.
     // The commit sentence is never ticked for the person: without it the server refuses every preview, so the pass
     // would open on a warning about a box nobody has had a chance to read; ticking it is what asks for the preview.
-    if (launchOpts.autoPreview !== false && workdirInput.value.trim() && commitBox.checked) doPreview();
+    if (launchOpts.autoPreview !== false && workdirInput.value.trim() && (isFull || commitBox.checked)) doPreview();
 
     async function doLaunch() {
       if (busy || !current || isAgy) return;

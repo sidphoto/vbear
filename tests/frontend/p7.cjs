@@ -888,7 +888,7 @@ const hrefOf = (root, pred) => (anchors(root).find(pred) || { getAttribute: () =
     const app = fs.readFileSync(path.join(__dirname, "..", "..", "web", "app.js"), "utf8");
     assert.strictEqual(pure.PASS_WORKDIR_LABEL, "在哪裡做（工作資料夾）");
     const dlg = app.slice(app.indexOf("function promptAgentLaunch("), app.indexOf("function promptDeleteAgentProfile("));
-    assert.strictEqual((dlg.match(/PASS_WORKDIR_LABEL/g) || []).length, 2, "the field and the preview line");
+    assert.strictEqual((dlg.match(/PASS_WORKDIR_LABEL/g) || []).length, 3, "the field and the preview line of the safe pass and of the full-mode pass (P34-3)");
     assert.ok(!dlg.includes('"工作目錄"'));
     assert.ok(dlg.includes("出發後 VBear 暫時看不出它在忙還是在等你"));
     assert.ok(!/的「工作中／等你回覆」判斷還沒有驗證/.test(app));

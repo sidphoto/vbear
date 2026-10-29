@@ -1521,6 +1521,13 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .pass-legend-note { flex-basis: 100%; }
 .pass-details { margin-top: 10px; }
 .pass-details > summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+/* a pass for a card in full mode (P34-3): no shield, only what will be run and what is not limited */
+.pass-full { border-color: var(--warn); }
+.pass-full-lead { margin: 0; overflow-wrap: anywhere; }
+.pass-command { overflow-wrap: anywhere; word-break: break-word; }
+.pass-instruction > summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.pass-instruction-text { margin: 6px 0 0; max-height: 14em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pass-notes { margin: 0; padding-left: 1.2em; }
 .pass-reasons li { margin-bottom: 6px; }
 .pass-reasons .btn { margin-left: 6px; }
 
