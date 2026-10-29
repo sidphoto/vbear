@@ -3601,9 +3601,14 @@ async function viewOffice() {
       statusLine);
     let body;
     if (m.allEmpty) {
-      body = el("div", { class: "empty-state office-start" },
-        el("strong", null, "辦公室目前沒有人。到終端工作台建立角色。"),
-        el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台"));
+      // no card, flow or terminal; a meeting can still run or wait for the chairman (its record keeps the seats, even of a
+      // deleted card), and unreadable records are still worth saying: then the room stays under the empty state
+      const room = m.room && (!m.room.empty || m.room.blocked) ? meetingRoomSection(m.room) : null;
+      body = el("div", null,
+        el("div", { class: "empty-state office-start" },
+          el("strong", null, room ? "名冊上沒有角色卡，也沒有流程或終端。到終端工作台建立角色。" : "辦公室目前沒有人。到終端工作台建立角色。"),
+          el("a", { class: "btn primary", href: "#/workbench" }, "到終端工作台")),
+        room);
     } else if (S.mobile) {
       body = S.key ? el("div", { class: "office-mobile-panel" }, panelNode())
         : el("div", { class: "office-list" }, officeListView(m, S), m.room ? meetingRoomSection(m.room) : null);
@@ -12298,7 +12303,8 @@ function meetingTurnCard(m) {
         el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/meetings/${encodeURIComponent(m.id)}` }, m.topic || "（沒有議題）")),
         el("div", { class: "card-sub" }, "CEO 已做出決定，這件事要董事長核准（原因在會議頁）")),
       el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), "董事長核准")),
-    el("div", { class: "stat-line" }, el("span", null, "花費 ", el("b", null, `US$${m.spent_usd}`), "（Claude Code 回報的估值）")),
+    // the total may hold a call that reported nothing (counted at the per-call limit): the card says so, as the meeting page does
+    el("div", { class: "stat-line" }, el("span", null, "花費 ", el("b", null, `US$${m.spent_usd}`), "（Claude Code 回報的估值；沒有回報的呼叫以每次上限計）")),
     el("div", { class: "quest-go" }, "前往處理 →"));
 }
 
@@ -12376,14 +12382,15 @@ function meetingPreviewDialog(pv, opts) {
   const actions = [cancel];
   const failure = (e) => { toast(e.message); };
   if (needsCheck) {
-    // The same check as the settings page's 「驗證翻譯安全邊界」 (POST /api/translations/verify): it runs Claude Code once
-    // with the person's account, so it is asked in the page first, as there.
+    // The settings page's 「驗證翻譯安全邊界」 check, through the meetings' own route (POST /api/meetings/verify): that one is
+    // always of Claude Code, as every meeting is, while the settings page's checks the translations' engine, which may be
+    // Codex. It runs Claude Code once with the person's account, so it is asked in the page first, as there.
     const verify = el("button", { class: "btn", type: "button", "data-mt": "verify", on: { click: async () => {
       close();
-      if (!(await confirmInPage("無工具安全檢查", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。這和設定頁的「驗證翻譯安全邊界」是同一個檢查。", "檢查",
-        { details: "將用固定的無害提示檢查目前 Claude Code 版本是否只有 StructuredOutput、沒有 MCP。會花極少量額度；請求預算 US$0.05，這不是保證帳單上限。檢查完會重新產生預覽，還不會開始開會。" }))) return;
+      if (!(await confirmInPage("無工具安全檢查", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。這和設定頁的「驗證翻譯安全邊界」是同一個檢查；會議一律用 Claude Code，所以不論翻譯引擎選哪一個，這裡都檢查 Claude Code。", "檢查",
+        { details: "將用固定的無害提示檢查目前 Claude Code 版本是否只有 StructuredOutput、沒有 MCP。會花極少量額度；請求預算 US$0.05，這不是保證帳單上限。不會改你的翻譯設定。檢查完會重新產生預覽，還不會開始開會。" }))) return;
       try {
-        const r = await api.post("/api/translations/verify", {});
+        const r = await api.post("/api/meetings/verify", {});
         toast(`Claude Code ${r.version} 通過無工具安全檢查`);
       } catch (e) { toast("檢查失敗：" + e.message); return; }
       if (opts.onRecheck) await opts.onRecheck();
@@ -12528,7 +12535,7 @@ function meetingForm(env) {
     finally { preview.disabled = false; env.syncLamp(); }
   }
   const node = el("section", { class: "section mt-form", "data-mt": "form" },
-    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方），CEO 收斂後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
+    sectionHead("開一場會", "你是董事長。各職位各發言一次（彼此看不到對方的發言；有選任務卡時 PM 另外會拿到它的進度摘要，會計師會拿到這場會議到目前為止的花費），CEO 看完全部發言後做決定；重大的事交給你核准。開始前一定先給你看會送出的全文。"),
     !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的角色卡，沒有主席就不能開會。到 ", el("a", { href: "#/team" }, "角色卡池"), " 建一張（精靈第 2 步選 CEO）。")) : null,
     !speakers.length ? notice("warn", "還沒有可以發言的職位卡（PM、社群媒體經理、全端工程師、藝術總監、法務經理、會計師）。") : null,
     noteOnly ? el("p", { class: "small muted", "data-mt": "note-only" },

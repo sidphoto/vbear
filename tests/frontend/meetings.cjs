@@ -63,7 +63,7 @@ function setPage(over = {}) {
   app.D.overview = null; app.D.skills = null; app.D.roles = null;
   page = { meetings: [], details: {}, ledger: ledger(), profiles: [cardOf("ceo", "執行長卡", "planner"), cardOf("law", "法務卡", "legal"),
     cardOf("art", "藝術卡", "art", "agy"), cardOf("old", "停用的 PM", "pm", "claude", { enabled: false })], tasks: [task()],
-  preview: null, previewStatus: 200, ...over };
+  preview: null, previewStatus: 200, verifyStatus: 200, verifyError: "", meetingsError: "", ...over };
   setHandler((url, opts) => {
     const p = url.split("?")[0];
     const method = (opts && opts.method) || "GET";
@@ -76,7 +76,7 @@ function setPage(over = {}) {
     if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: page.tasks });
     if (p === "/api/config") return jsonResponse({ ok: true, config: {} });
     if (p === "/api/agent-builder/catalog") return jsonResponse({ ok: false });
-    if (p === "/api/meetings" && method === "GET") return jsonResponse({ meetings: page.meetings });
+    if (p === "/api/meetings" && method === "GET") return page.meetingsError ? jsonResponse({ error: page.meetingsError }, false, 500) : jsonResponse({ meetings: page.meetings });
     if (p === "/api/meetings/ledger") return jsonResponse(page.ledger);
     if (p === "/api/meetings/preview") return page.previewStatus === 200 ? jsonResponse(page.preview) : jsonResponse(page.preview, false, page.previewStatus);
     if (p === "/api/meetings" && method === "POST") return jsonResponse(page.details[MID] || meeting(), true, 202);
@@ -85,7 +85,10 @@ function setPage(over = {}) {
     if (m && m[2] === "chairman") return jsonResponse(page.details[m[1]]);
     if (m && m[2] === "retry-preview") return jsonResponse(page.retryPreview);
     if (m && m[2] === "retry") return jsonResponse(page.details[m[1]], true, 202);
-    if (p === "/api/translations/verify") return jsonResponse({ ok: true, version: "2.1.296" });
+    if (p === "/api/meetings/verify") return page.verifyStatus === 200 ? jsonResponse({ version: "2.1.296", passed_at: 1790000000 })
+      : jsonResponse({ code: "boundary_unverified", error: page.verifyError }, false, page.verifyStatus);
+    // what the real server says to the translations' check when Codex is the translation engine: a meeting must not use it
+    if (p === "/api/translations/verify") return jsonResponse({ code: "boundary_unverified", error: "這個 Claude Code 版本的翻譯安全邊界還沒驗證；Codex 翻譯仍未開放" }, false, 409);
     if (p === "/api/translations") return jsonResponse({ counts: {}, jobs: [] });
     return null;
   });
@@ -252,6 +255,8 @@ test("home: a meeting that waits for the chairman is on the 'your turn' board, a
   assert.strictEqual(card.getAttribute("href") || (card.find((n) => n.tag === "a") || card).getAttribute("href"), "#/meetings/" + MID);
   assert(text(card).includes("要花錢的事"));
   assert(text(card).includes(EVIL), "the topic is text, not markup");
+  // the total can hold a worst-case cost (a call that reported nothing): the card does not call all of it the CLI's figure
+  assert(text(card).includes("沒有回報的呼叫以每次上限計"), text(card));
   assert.strictEqual(main.findAll((n) => n.tag === "img").length, 0);
   assert(text(main).includes("1 場會議等你"));
   // the board's key changes when a meeting joins it, so the 5-second refresh repaints
@@ -358,7 +363,7 @@ test("preview shows every instruction and prompt in full as text, and 'start' se
   assert.strictEqual(global.location.hash, "#/meetings/" + MID);
 });
 
-test("an unverified Claude Code version shows 'check first' and no start button; the check is the tool-less one", async () => {
+test("an unverified Claude Code version shows 'check first' and no start button; the check is the tool-less one, of Claude", async () => {
   setPage({ preview: previewOf({ startable: false, preview_id: null, cli: { version: "2.1.999", verified: false },
     blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
   const main = await open("#/meetings");
@@ -376,14 +381,39 @@ test("an unverified Claude Code version shows 'check first' and no start button;
   verify.click();
   await settle();
   // the check uses the person's Claude account: like the settings page, it asks in the page first
-  assert.strictEqual(posts("/api/translations/verify").length, 0, "nothing is sent by the first click");
+  assert.strictEqual(posts("/verify").length, 0, "nothing is sent by the first click");
   const ask = h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("aria-labelledby") === "modal-confirm-title");
   assert(ask, "a confirmation in the page");
   assert(text(ask).includes("無工具安全檢查") && text(ask).includes("不到 1 美分") && text(ask).includes("驗證翻譯安全邊界"), text(ask));
+  assert(text(ask).includes("不論翻譯引擎選哪一個，這裡都檢查 Claude Code") && text(ask).includes("不會改你的翻譯設定"), text(ask));
   ask.find((n) => n.tag === "button" && n.hasClass("primary")).click();
   await settle(80);
-  assert.strictEqual(posts("/api/translations/verify").length, 1);
+  // the meetings' own check, always of Claude: the translations' one checks the translation engine, which may be Codex
+  assert.deepStrictEqual(posts("/api/meetings/verify").map((c) => c.body), [{}]);
+  assert.strictEqual(posts("/api/translations/verify").length, 0);
+  assert.strictEqual(posts("/api/config").length, 0, "the translation settings are not changed to make the check pass");
+  assert(text(h.dom().toastEl).includes("Claude Code 2.1.296 通過無工具安全檢查"), text(h.dom().toastEl));
   assert.strictEqual(posts("/api/meetings/preview").length, 1, "the preview is made again after the check");
+});
+
+test("a failed tool-less check says the server's reason and makes no new preview", async () => {
+  const reason = "這個 Claude Code 版本沒有通過無工具安全檢查（版本或檢查的回應看不懂，或它回報的不是只有 StructuredOutput、沒有 MCP），會議仍然不能開始";
+  setPage({ verifyStatus: 409, verifyError: reason, preview: previewOf({ startable: false, preview_id: null, cli: { version: "2.1.999", verified: false },
+    blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
+  const main = await open("#/meetings");
+  fill(main, {});
+  q(main, "preview").click();
+  await settle();
+  FETCH_LOG.length = 0;
+  q(dialog(), "verify").click();
+  await settle();
+  const ask = h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("aria-labelledby") === "modal-confirm-title");
+  ask.find((n) => n.tag === "button" && n.hasClass("primary")).click();
+  await settle(80);
+  assert.strictEqual(posts("/api/meetings/verify").length, 1);
+  assert(text(h.dom().toastEl).includes("檢查失敗：" + reason), text(h.dom().toastEl));
+  assert(!text(h.dom().toastEl).includes("Codex"), "not the translations' wording");
+  assert.strictEqual(posts("/api/meetings/preview").length, 0, "nothing passed, so nothing is previewed again");
 });
 
 test("a preview without a version does not say Claude Code was not found: the reason is the server's blocker", async () => {
@@ -776,6 +806,33 @@ test("the office says so when the meetings could not be read, and when there are
   main = await open("#/office");
   const room2 = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room");
   assert(text(room2).includes("讀不到會議"), text(room2));
+});
+
+test("an office with no card, flow or terminal still shows a meeting that waits for the chairman", async () => {
+  // P34-5 r1: the empty state used to replace the whole office, the meeting room with it
+  const wait = meeting({ id: MID2, status: "waiting_chairman", major: true });
+  setPage({ profiles: [], meetings: [summary(wait)] });
+  detail(wait);
+  let main = await open("#/office");
+  assert(text(main).includes("名冊上沒有角色卡，也沒有流程或終端"), text(main).slice(0, 400));
+  assert(!text(main).includes("辦公室目前沒有人"), "people still sit in the meeting room");
+  const room = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room");
+  assert(room, "the meeting room is kept");
+  const desk = q(room, "chairman-desk");
+  assert(desk && desk.find((n) => n.tag === "a" && n.getAttribute("href") === "#/meetings/" + MID2));
+  assert.strictEqual(byClass(room, "mt-seat").length, 3, "the seats come from the record, not from the roster");
+  // meetings that cannot be read are not claimed to be none
+  setPage({ profiles: [], meetingsError: "壞了" });
+  main = await open("#/office");
+  assert(text(main).includes("名冊上沒有角色卡，也沒有流程或終端"), "the empty branch: " + text(main).slice(0, 400));
+  assert(!text(main).includes("辦公室目前沒有人"));
+  const unread = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room");
+  assert(unread && text(unread).includes("讀不到會議"), text(main).slice(0, 400));
+  // with no meeting either, it is the plain empty state
+  setPage({ profiles: [], meetings: [] });
+  main = await open("#/office");
+  assert(text(main).includes("辦公室目前沒有人。到終端工作台建立角色。"));
+  assert.strictEqual(main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room"), null);
 });
 
 test("a meeting joining or changing repaints the office (it is in the repaint key)", () => {

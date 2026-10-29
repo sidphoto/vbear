@@ -716,6 +716,8 @@ def make_handler(console: Console):
                     return self._meeting_call("preview", None, self._body_strict())
                 if path == "/api/meetings":
                     return self._meeting_call("start", None, self._body_strict())
+                if path == "/api/meetings/verify":
+                    return self._meeting_call("verify", None, self._body_strict())
                 if path.startswith("/api/meetings/"):
                     found = MEETING_RE.match(path)
                     if not found or not found.group(2):
@@ -1441,6 +1443,10 @@ def make_handler(console: Console):
                     raise meetings.MeetingError("bad_request", "請求內容必須是一個 JSON 物件")
                 if action == "preview":
                     return self._json(runner.preview(body, sources))
+                if action == "verify":
+                    if body:
+                        raise meetings.MeetingError("bad_request", "無工具安全檢查不需要內容")
+                    return self._json(runner.verify())
                 if action in ("start", "retry"):
                     if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
                         raise meetings.MeetingError("bad_request", "只需要 preview_id")

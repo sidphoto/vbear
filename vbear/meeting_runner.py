@@ -253,6 +253,19 @@ def _provider_code(exc: tr.TranslationError) -> str:
     return exc.code if exc.code in ("cli_not_found", "storage", "process_unconfirmed") else "boundary_unverified"
 
 
+# A failed tool-less check in the meeting's words: the translations' own texts speak of translating (and of Codex). A code
+# not listed keeps the translations' text, which already fits (Claude Code not found).
+CHECK_ERRORS = {
+    "boundary_unverified": "這個 Claude Code 版本沒有通過無工具安全檢查（版本或檢查的回應看不懂，或它回報的不是只有 StructuredOutput、沒有 MCP），會議仍然不能開始",
+    "busy": "正在翻譯或正在做另一次檢查，請等它結束再檢查",
+    "timeout": "檢查超過 60 秒，已停止",
+    "invalid_output": "Claude Code 沒有回傳看得懂的檢查結果",
+    "cli_failed": "Claude Code 執行失敗，請自行檢查登入與額度",
+    "storage": "無工具安全檢查的紀錄無法安全讀寫，請人工檢查狀態目錄",
+    "process_unconfirmed": "無法確認檢查的程序群組已結束，已封鎖後續的翻譯與檢查，請人工檢查",
+}
+
+
 def _flows(sources: Sources, task_id: str) -> list | None:
     try:
         return sources.flows(task_id)
@@ -286,9 +299,11 @@ def _opinions_for_chair(rec: dict, ctx: Context) -> list[dict]:
 # ---- the runner ----------------------------------------------------------------------------------------------------
 
 class MeetingRunner:
-    def __init__(self, *, call: Callable | None = None, provider: Callable | None = None, clock: Callable[[], float] = time.time):
+    def __init__(self, *, call: Callable | None = None, provider: Callable | None = None, verifier: Callable | None = None,
+                 clock: Callable[[], float] = time.time):
         self.call = call or default_call
         self.provider = provider or tr.resolve_provider
+        self.verifier = verifier or tr.verify_boundary
         self.clock = clock
         self.lock = threading.RLock()
         self.previews: dict[str, dict] = {}
@@ -381,6 +396,17 @@ class MeetingRunner:
             code = _provider_code(exc)
             blockers.append({"code": code, "message": mt.ERRORS[code]})
             return None, None
+
+    # -- the tool-less check ---------------------------------------------------------------------------------------
+
+    def verify(self) -> dict:
+        """The tool-less check of the Claude Code every meeting uses, asked by a person from a preview: the probe and the record
+        of the settings page's check (translations.verify_boundary), but always of Claude. The translations' engine is not
+        read: a meeting speaks only through Claude Code, and with Codex chosen for translations that check refuses at once."""
+        try:
+            return self.verifier("claude")
+        except tr.TranslationError as exc:
+            raise mt.MeetingError(exc.code, CHECK_ERRORS.get(exc.code, str(exc))) from None
 
     # -- a new meeting ---------------------------------------------------------------------------------------------
 

@@ -841,7 +841,10 @@ preview id; nothing starts one by itself, and a decision is never carried out by
   is made; the CEO's and the accountant's texts depend on what happened before them, so the preview shows their shape and
   the record keeps the hash of what was actually sent. A card that changed after the preview, or a Claude Code version
   that is not the one previewed, voids it. Without a passed check for the exact version the preview is not startable and
-  says so (先檢查); it is the check of `POST /api/translations/verify`, kept in `translation-boundaries.json`.
+  says so (先檢查). That check is `POST /api/meetings/verify` (empty body, asked in the page first): the probe of
+  `POST /api/translations/verify` and its record in `translation-boundaries.json`, but always of Claude Code, because a
+  meeting speaks through nothing else. The translations' check follows the translation engine instead, and with Codex
+  chosen there it refuses without running anything; the meeting's check does not read or change that setting.
 - **The call.** The argv is `translations.translation_argv` with only `--model`, `--max-budget-usd` and the schema changed,
   and the output a stream with `--verbose` (the shape the check verified): `-p --safe-mode --tools "" --strict-mcp-config
   --mcp-config '{"mcpServers":{}}' --no-session-persistence`. The runner is the translations' (`headless_cli`): an empty
@@ -882,7 +885,8 @@ preview id; nothing starts one by itself, and a decision is never carried out by
   each turn's state, evidence and output, and the chairman's record; it never stores a prompt, only its hash. Deleting a
   meeting removes that file only. A meeting writes no task card, no flow, no `plan.txt` and nothing in a project folder.
 - **API.** `GET /api/meetings`, `/api/meetings/ledger`, `/api/meetings/<id>` (reads run nothing); `POST /api/meetings/preview`,
-  `/api/meetings`, `/api/meetings/<id>/retry-preview`, `/retry`, `/cancel`, `/chairman`; `DELETE /api/meetings/<id>`. They sit behind
+  `/api/meetings`, `/api/meetings/verify`, `/api/meetings/<id>/retry-preview`, `/retry`, `/cancel`, `/chairman`;
+  `DELETE /api/meetings/<id>`. They sit behind
   the same Host, token, Origin and `X-VBear` checks as every other route; bodies are strict (an unknown field, a bool or NaN
   where a number is wanted, or an over-long text is a 400).
 

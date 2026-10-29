@@ -1,6 +1,7 @@
 """The meeting endpoints (P34-4) over a real loopback server, with a fake call: no CLI runs, nothing leaves the machine."""
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -11,7 +12,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from vbear import agent_profiles as ap, config as cfg, meeting_runner as mr, server, tasks
+from tests.test_translations import FAKE
+from vbear import agent_profiles as ap, config as cfg, meeting_runner as mr, server, tasks, translations as tr
 from vbear.index import Store
 
 VERSION = "2.1.296"
@@ -130,7 +132,8 @@ class MeetingApiTests(unittest.TestCase):
     def test_the_same_guards_as_every_other_endpoint(self):
         mid = self.meet()
         for path, method, body in (("/api/meetings/preview", "POST", self.body()), ("/api/meetings", "POST", {"preview_id": "x"}),
-                                   (f"/api/meetings/{mid}/chairman", "POST", {"decision": "reject"}), (f"/api/meetings/{mid}", "DELETE", None)):
+                                   (f"/api/meetings/{mid}/chairman", "POST", {"decision": "reject"}), (f"/api/meetings/{mid}", "DELETE", None),
+                                   ("/api/meetings/verify", "POST", {})):
             with self.subTest(path=path, method=method):
                 self.assertEqual(self.call(path, method, body, headers={"Authorization": "Bearer wrong"})[0], 401)
                 self.assertEqual(self.call(path, method, body, headers={"X-VBear": "0"})[0], 403)
@@ -164,6 +167,9 @@ class MeetingApiTests(unittest.TestCase):
         for body in ({}, {"seq": "1"}, {"seq": True}, {"seq": float("nan")}, {"seq": 1, "x": 1}, {"seq": 99}):
             with self.subTest(retry=body):
                 self.assertEqual(self.call(f"/api/meetings/{mid}/retry-preview", "POST", raw=json.dumps(body).encode())[0], 400)
+        for raw in (b'{"engine": "claude"}', b'{"engine": "codex"}', b'{"version": "2.1.296"}', b"[]", b"null"):
+            with self.subTest(verify=raw):
+                self.assertEqual(self.call("/api/meetings/verify", "POST", raw=raw)[0], 400)
         self.assertEqual(self.call("/api/meetings/m-nothing")[0], 404)
         self.assertEqual(self.call("/api/meetings/m-0123456789ab/unknown", "POST", {})[0], 404)
 
@@ -177,6 +183,50 @@ class MeetingApiTests(unittest.TestCase):
                 self.assertEqual(self.call("/api/config", "POST", {"meeting_limits": bad})[0], 400)
         self.assertEqual(self.call("/api/config", "POST", raw=b'{"meeting_limits": {"daily_usd": NaN}}')[0], 400)
         self.assertEqual(cfg.load()["meeting_limits"]["per_call_usd"], 0.3)
+
+    def test_the_check_of_a_preview_is_of_claude_even_when_codex_translates(self):
+        # P34-5 r1: the preview's 「先做無工具安全檢查」 promised Claude, but the translations' check follows the translation
+        # engine and, with Codex there, refused at once; the meeting stayed blocked. The real probe runs against a fake CLI.
+        cfg.save({**cfg.load(), "translation_engine": "codex"})
+        self.console.store.set_conf(cfg.load())
+        settings = cfg.config_path().read_bytes()
+        self.console.meetings = mr.MeetingRunner(call=fake_call)  # the real version check and the real probe
+        script = Path(self.tmp.name) / "fake-claude"
+        init = {"type": "system", "subtype": "init", "tools": ["StructuredOutput"], "mcp_servers": []}
+        script.write_text(FAKE.format(python=sys.executable, action="print(json.dumps(" + repr(init) + "))"))
+        script.chmod(0o700)
+        with mock.patch.object(tr.shutil, "which", return_value=str(script)):
+            status, preview = self.call("/api/meetings/preview", "POST", self.body())
+            self.assertEqual(status, 200, preview)
+            self.assertFalse(preview["startable"])
+            self.assertEqual([b["code"] for b in preview["blockers"]], ["boundary_unverified"])
+            status, refused = self.call("/api/translations/verify", "POST", {})
+            self.assertEqual((status, refused["code"]), (409, "boundary_unverified"), "the translations' check is still Codex's")
+            self.assertEqual(tr.BoundaryStore().load(), {})
+            status, passed = self.call("/api/meetings/verify", "POST", {})
+            self.assertEqual(status, 200, passed)
+            self.assertEqual(passed["version"], VERSION)
+            self.assertEqual(set(tr.BoundaryStore().load()), {VERSION})
+            status, preview = self.call("/api/meetings/preview", "POST", self.body())
+            self.assertEqual(status, 200, preview)
+            self.assertTrue(preview["startable"], preview["blockers"])
+            self.assertEqual(preview["cli"]["version"], VERSION)
+        self.assertEqual(cfg.config_path().read_bytes(), settings, "the translation settings are not changed")
+        self.assertEqual(self.console.store.conf["translation_engine"], "codex")
+
+    def test_a_failed_check_says_so_in_the_meetings_words(self):
+        for code, status, text in (("boundary_unverified", 409, mr.CHECK_ERRORS["boundary_unverified"]),
+                                   ("busy", 409, mr.CHECK_ERRORS["busy"]), ("storage", 503, mr.CHECK_ERRORS["storage"]),
+                                   ("cli_not_found", 409, tr.ERRORS["cli_not_found"])):
+            def refuse(engine, code=code):
+                self.assertEqual(engine, "claude")
+                raise tr.TranslationError(code)
+            self.console.meetings = mr.MeetingRunner(provider=lambda engine: ("unused", VERSION), verifier=refuse, call=fake_call)
+            with self.subTest(code=code):
+                got, out = self.call("/api/meetings/verify", "POST", {})
+                self.assertEqual((got, out["code"], out["error"]), (status, code, text))
+                self.assertNotIn("Codex", out["error"])
+                self.assertNotIn("翻譯安全邊界", out["error"])
 
     def test_a_meeting_never_touches_the_task_card(self):
         before = tasks.get_task(self.task_id)
