@@ -12405,9 +12405,12 @@ function meetingPreviewDialog(pv, opts) {
     el("div", { class: "small muted" }, "會送出的完整內容（含 VBear 固定的會議規則）"),
     p.dynamic ? el("p", { class: "small" }, "這一段要等前面的結果才組得出來，下面是它的形狀；實際送出的內容會記在會議紀錄裡。") : null,
     el("pre", { class: "mt-pre", "data-mt": "prompt" }, typeof p.prompt === "string" ? p.prompt : ""));
+  // The buttons are under every full text: the title takes the keyboard instead, so the dialog opens at its top, where the
+  // blockers and the money are (Tab still goes to the buttons).
+  const head = el("h2", { id: titleId, tabindex: "-1" }, opts.title || "開會前的預覽");
   modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-mt": "preview-dialog" },
     el("div", { class: "modal-box mt-preview", style: "max-width: 780px; max-height: 88vh; overflow-y: auto;" },
-      el("h2", { id: titleId }, opts.title || "開會前的預覽"),
+      head,
       blockers.map((b) => notice("warn", (b && b.message) || "不能開始")),
       pv.decision_again ? notice("info", `這一位重試後，CEO 會重問一次（共 ${pv.calls} 次呼叫）。`) : null,
       el("ul", { class: "small" },
@@ -12425,6 +12428,7 @@ function meetingPreviewDialog(pv, opts) {
       el("div", { class: "modal-actions" }, actions)));
   document.body.append(modal);
   const close = withModalA11y(modal, () => modal.remove());
+  head.focus();
   return close;
 }
 

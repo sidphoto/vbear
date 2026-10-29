@@ -400,6 +400,18 @@ test("a preview without a version does not say Claude Code was not found: the re
   assert(all.includes("這個 Claude Code 版本還沒通過無工具安全檢查"), "the blocker itself is shown");
 });
 
+test("the preview opens at its top: the title has the keyboard, not the buttons below the full texts", async () => {
+  // the first button is under every prompt: focusing it would scroll the blockers and the money out of view
+  setPage({ preview: previewOf({ startable: false, preview_id: null, blockers: [{ code: "budget", message: "預留超過每日上限" }] }) });
+  const main = await open("#/meetings");
+  fill(main, {});
+  q(main, "preview").click();
+  await settle();
+  const title = dialog().find((n) => n.tag === "h2");
+  assert.strictEqual(global.document.activeElement, title, "focus: " + (global.document.activeElement && global.document.activeElement.tag));
+  assert.strictEqual(title.getAttribute("tabindex"), "-1", "reachable by script, not a Tab stop");
+});
+
 test("saying no to the tool-less check sends nothing", async () => {
   setPage({ preview: previewOf({ startable: false, preview_id: null, cli: { version: "2.1.999", verified: false },
     blockers: [{ code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" }] }) });
