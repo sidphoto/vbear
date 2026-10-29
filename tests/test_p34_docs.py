@@ -43,6 +43,16 @@ class DocsTests(unittest.TestCase):
                        "exactly the text it was before", "already approved flow keeps its own"):
             self.assertIn(phrase, approval)
 
+    def test_meetings_says_what_is_sent_what_is_checked_and_what_is_not_proven(self):
+        meetings = self.model.split("## Meetings (tool-less headless speech)", 1)[1].split("\n## ", 1)[0]
+        for phrase in ("new outbound data path", "never its folder", "`proxy`", "used once", "five minutes", "`translations.translation_argv`",
+                       "checks its own init event as the line arrives", "revoked", "`meeting_limits`", "`cost_source`",
+                       "`decimal.Decimal`", "twice at most", "`interrupted`", "`meeting-worker.blocked`", "R1–R8",
+                       "only to raise the verdict", "wire transfer", "未驗證身分", "writes no task card, no flow",
+                       "not read isolation", "查無出處，需人工複核"):
+            self.assertIn(phrase, meetings)
+        self.assertNotIn("which do not exist yet", self.model)
+
     def test_the_changelog_names_the_new_things(self):
         entry = self.changelog.split("## v0.9.0", 1)[1].split("\n## ", 1)[0]
         for phrase in ("貼上職位指示", "完整模式", "安全模式", "法規與合規", "財務與帳務", "skill index version is now 3",

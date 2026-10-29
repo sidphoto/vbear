@@ -307,7 +307,8 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   *not possible* and *not applicable*. For Claude Code in safe mode the table's kinds stand. For Codex, AGY and a shared
   card nothing is enforced by VBear (it does not start them), so enforced and not-possible rows read as *not applicable*
   and only reminders stay. In full mode every row reads as a reminder. VBear still does not claim that skills, CLAUDE.md,
-  hooks or MCP are switched off, and it lists no boundary for meetings, which do not exist yet.
+  hooks or MCP are switched off. A position's boundaries say nothing about meetings: a meeting does not use the card's launch, only its
+  instructions and its model (see "Meetings" below).
 - **`launch_mode` chooses between two launches, and only the exact word `full` chooses the full one.** The wizard offers
   `full` for a new card and `safe` on request; the server never writes the field itself, and a card without the key
   reads as `safe`. A missing, null or unknown value is safe, so an older card is never loosened by this build. A card in
@@ -817,6 +818,73 @@ What is read, and what is not:
   `skills.json` lists it.
 - **A judgement, not a launch.** `read_by` says where a skill sits and what AGY's own config lists. It does not prove
   AGY loads the skill (VBear cannot see a per-skill switch), and a role card with such a skill is still only a record.
+
+## Meetings (tool-less headless speech)
+
+A meeting is a written discussion between role cards, held with the same kind of call as a skill translation: Claude Code
+started with no tools at all. It is **a new outbound data path through your authenticated local Claude Code** that
+uses your quota or money. Only you start one, from `POST /api/meetings/preview` and then `POST /api/meetings` with the
+preview id; nothing starts one by itself, and a decision is never carried out by VBear.
+
+- **What is sent, and to whom.** For each speaker: the card's instructions (its own text, else the position's default),
+  VBear's fixed meeting rules, the topic, and, inside `BEGIN/END_UNTRUSTED_JSON_STRING`, your supplement and the fields of
+  the task card (title, goal, scope, out of scope, deliverables, acceptance criteria, evidence, status; never its folder,
+  its id or anything else). The PM also gets a progress summary VBear writes from the task card and its flows' records,
+  the accountant what the meeting has cost so far (summed by VBear with `decimal.Decimal`). The CEO gets the same and
+  every speaker's answer, after the answers passed the format check. Everything is redacted for secret-shaped text and
+  sent through Claude Code to Anthropic under your account; VBear sends nothing anywhere else. A card of another tool
+  (Codex, AGY) does not speak itself: Claude speaks for it with that position's instructions, and the record and the
+  preview mark it as `proxy`.
+- **The preview is the consent.** It is held in memory, used once, and gone after five minutes. It shows every text that
+  would be sent in full, the model each call uses, the number of calls, what is reserved, the day's spending and whether
+  this Claude Code version has passed the no-tool check. A speaker's text carries a SHA-256 the worker checks before the call
+  is made; the CEO's and the accountant's texts depend on what happened before them, so the preview shows their shape and
+  the record keeps the hash of what was actually sent. A card that changed after the preview, or a Claude Code version
+  that is not the one previewed, voids it. Without a passed check for the exact version the preview is not startable and
+  says so (先檢查); it is the check of `POST /api/translations/verify`, kept in `translation-boundaries.json`.
+- **The call.** The argv is `translations.translation_argv` with only `--model`, `--max-budget-usd` and the schema changed,
+  and the output a stream with `--verbose` (the shape the check verified): `-p --safe-mode --tools "" --strict-mcp-config
+  --mcp-config '{"mcpServers":{}}' --no-session-persistence`. The runner is the translations' (`headless_cli`): an empty
+  scratch directory, the prompt on stdin, no credential added, a 120-second deadline, a 256 KiB output limit and one
+  process group that is killed and confirmed gone. **Every call checks its own init event as the line arrives:** exactly
+  one, with `tools == ["StructuredOutput"]` and `mcp_servers == []`, and no `tool_use` of anything else. Anything else
+  kills the group on the spot, the output is not used, and the version's pass is revoked until it is checked again. A
+  stream that does not parse, has no result, or has a negative or non-numeric cost is a failure, not a guess. The empty
+  directory is not read isolation, and HOME is still needed for the login, as for translations.
+- **What the checks cannot prove.** That an opinion is true, that a legal source is real (VBear checks that a source is
+  written, not that it exists: a risk of the legal manager with none is kept with 「查無出處，需人工複核」 and holds the
+  meeting for you), or that the accountant used a program. A model's text is shown as text and never run.
+- **Money.** Limits are in `config.json` as `meeting_limits` (US$0.20 per call, 1.50 per meeting, 3.00 per day by default;
+  capped at 1, 10 and 50; validated on write, and an unusable stored value falls back to the default). The preview reserves
+  calls × the per-call limit and refuses a meeting that does not fit the meeting's or the day's room; each call is checked
+  again before it is made and is skipped (`budget`) if it would pass a limit. A call costs what Claude Code reported in
+  `total_cost_usd`, or the per-call limit when it reported nothing, and the record says which (`cost_source`). The figures
+  are the CLI's estimate and a subscription plan is not billed that way. The day is the local date; at 80% of the day's
+  limit the ledger shows yellow, at 100% no meeting starts and no retry is offered.
+- **Failure, retry, restart.** A failed call is never repeated by itself. A person can retry a failed or interrupted turn
+  through its own preview (twice at most; the third failure is `blocked`), and only while the cards and the task card are the
+  ones the meeting started from; retrying a speaker asks the CEO again, and costs are kept over all attempts. When the
+  console restarts, the turn that was running is `interrupted` and costs the per-call limit, queued turns are
+  interrupted without cost, and nothing resumes. One meeting runs at a time (`meeting-worker.lock`); a process group that
+  cannot be confirmed gone writes `meeting-worker.blocked` and blocks later meetings until a person removes it.
+- **When it goes to you.** `meeting_rules.py` is a fixed, visible table (R1–R8): something you ticked when making the
+  meeting; a decision action of a type that publishes, deploys, pays, deletes, signs or changes a price (or one the table
+  does not list); a keyword or an amount (any amount by default) in the topic, the supplement or the decision; a high risk or
+  a legal source of 「查無出處」; the legal manager opposing; a turn that failed, was blocked, skipped or interrupted; or a
+  speaker or the CEO asking for you. A model's fields are only read, and only to raise the verdict. The verdict is derived on
+  every read, and the verdict stored when the decision was made can only keep a meeting major. The keyword list is Chinese
+  and English only and matches words, so a paraphrase can be missed (for example a wire transfer is not a keyword); that is
+  what the "涉及" boxes are for. Approval or a veto is a record in the console (「主控台記錄（未驗證身分）」): anyone who can
+  use the console can press it.
+- **Where it is kept.** One file per meeting, `<state>/meetings/m-<12 hex>.json` (0600, folder 0700, 256 KiB, at most 200
+  meetings), written through the guarded store: a file that does not parse, is not a meeting this module could have written,
+  is a link or is too big blocks that meeting and no other. A meeting stores the topic, the supplement, the participants,
+  each turn's state, evidence and output, and the chairman's record; it never stores a prompt, only its hash. Deleting a
+  meeting removes that file only. A meeting writes no task card, no flow, no `plan.txt` and nothing in a project folder.
+- **API.** `GET /api/meetings`, `/api/meetings/ledger`, `/api/meetings/<id>` (reads run nothing); `POST /api/meetings/preview`,
+  `/api/meetings`, `/api/meetings/<id>/retry-preview`, `/retry`, `/cancel`, `/chairman`; `DELETE /api/meetings/<id>`. They sit behind
+  the same Host, token, Origin and `X-VBear` checks as every other route; bodies are strict (an unknown field, a bool or NaN
+  where a number is wanted, or an over-long text is a 400).
 
 ## Data handling
 
