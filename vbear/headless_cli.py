@@ -128,13 +128,14 @@ def run(argv: Callable[[str], list[str]], prompt: bytes, cancel, *, timeout: flo
                     raise HeadlessError("process_unconfirmed")
 
 
-def acquire_worker(name: str) -> int:
+def acquire_worker(name: str, *, check_blocked: bool = True) -> int:
     """Take the exclusive lock of one worker (``<name>.lock`` in the state directory) and return its descriptor; the
     caller closes it when the worker is done. ``busy`` when another holds it, ``process_unconfirmed`` while a
-    ``<name>.blocked`` marker is there (checked again after the lock is taken)."""
+    ``<name>.blocked`` marker is there (checked again after the lock is taken). ``check_blocked=False`` is for the one
+    caller that only tidies records and starts no program."""
     cfg.ensure_state_dir()
     blocked = cfg.state_dir() / f"{name}.blocked"
-    if blocked.exists():
+    if check_blocked and blocked.exists():
         raise HeadlessError("process_unconfirmed")
     fd = os.open(cfg.state_dir() / f"{name}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, cfg.STATE_FILE_MODE)
     try:
@@ -142,7 +143,7 @@ def acquire_worker(name: str) -> int:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise HeadlessError("busy") from None
-        if blocked.exists():
+        if check_blocked and blocked.exists():
             raise HeadlessError("process_unconfirmed")
     except BaseException:
         os.close(fd)
