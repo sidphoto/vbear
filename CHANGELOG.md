@@ -66,14 +66,29 @@
   wizard's step 2 has a box for the position's instructions (starting from the position's default, up to 2000
   characters, with 回復預設), a choice of how the card departs (完整模式 for a new card, 安全模式 for the sandboxed
   launch; a card saved before this stays safe) and, below, what each position's boundaries are for the tool and mode you
-  chose, each marked as enforced when launched, only a reminder, not possible or not applicable. Full mode is recorded
-  but cannot depart yet: the pass says 完整模式的出發還沒開放 and offers 改出發方式; it never starts
-  such a card as a safe one. The instructions are not sent into the tool when it starts. After you take over a terminal,
+  chose, each marked as enforced when launched, only a reminder, not possible or not applicable. In the safe mode the
+  instructions are not sent into the tool when it starts. After you take over a terminal,
   貼上職位指示 pastes them into the input box without pressing Enter; you read them and press Enter yourself. The back of
   a card and the pass say where the instructions go, the pass suggests a folder name for the position (a suggestion, not
   a check), and step 3 marks the skills that fit the position as 推薦 with a 只看推薦 toggle. Two skill categories are new,
   法規與合規 and 財務與帳務, so the skill index version is now 3 and the index is rebuilt once. Cards without the new
   fields store nothing new. An earlier version does not know the two fields: it still reads the card file, and whether the fields survive saving a card there is not promised.
+- **A card in full mode now departs, with nothing limited.** 完整模式 starts Claude Code, Codex or AGY the way you would
+  start it in your own terminal: your own settings, skills, `CLAUDE.md`, MCP servers and plugins, and the network. VBear
+  adds no sandbox, no `--safe-mode`, no settings file, no tool list and no scratch folder, so the pass for such a card
+  starts with 「VBear 沒有限制這張卡」 and shows no shield; only the tool's own permission prompts are left, and a
+  permission intent written as "deny" is listed as not kept. The command is built on the server and shown on the pass
+  (`claude [--model X] [--append-system-prompt …]`, `codex [-m X]`, `agy [--model X]`); you confirm it as before, and the
+  preview is voided if the card or the program file changes. Claude Code is started with the card's instructions as one
+  `--append-system-prompt` argument, shown in full on the pass (VBear did not verify that Claude Code receives them);
+  Codex and AGY have no such option, so their instructions stay the 貼上職位指示 button's. AGY can now be started this
+  way (not in the safe mode). The terminal appears in the office and the workbench as an agent whose state reads 狀態未知,
+  because no signal was checked for it. A card without `launch_mode` is still the safe one, started exactly as before.
+- **The executor's role card can open the plan of automatic mode with its instructions.** When the card placed on a flow's
+  executor place has instructions, the plan the approval shows, hashes and saves starts with them (naming the card),
+  followed by the task; with no card or no instructions the plan is the same text as before, and an already approved
+  flow keeps its own plan. The approval dialog says which card, and the dispatch box has 加上職位指示, which puts the same
+  text first in the box without sending anything.
 
 ## v0.8.9 — skills by use, role names in Chinese, a model menu
 

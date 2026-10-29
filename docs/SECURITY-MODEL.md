@@ -202,6 +202,45 @@ Other safeguards:
 - **Cleanup only when it is proven safe.** Files belonging to a launch are removed only after every
   descendant process is confirmed gone. Otherwise the launch is kept for manual review.
 
+## Full-mode launches
+
+A role card whose `launch_mode` is exactly `full` is started the way you would start the tool yourself in your own
+terminal, and **VBear limits nothing about it.** Everything in "Profile-managed Claude launches" above is a claim about the
+safe launch; none of it is claimed here, and the pass for a full card says so first (「VBear 沒有限制這張卡」).
+
+- **What is the same as typing the command yourself.** The tool runs with your own settings, skills, `CLAUDE.md`, MCP
+  servers and plugins, in the folder you chose, and it can use the network. It can read and write anywhere your account
+  can, commit, publish or pay, exactly as a tool you started in Terminal.app can. The only gate left is the tool's own
+  permission prompts. The position's boundaries read as reminders only; a card's permission intents are not applied (the
+  pass lists any intent written as "deny" and says it is not kept). There is no sandbox, no `--safe-mode`, no settings
+  file, no tool list, no scratch directory, no `CLAUDE_CODE_TMPDIR` and no launch manifest.
+- **The command is built on the server and is a list, never a shell string.** `claude [--model X] [--append-system-prompt
+  <text>]`, `codex [-m X]`, `agy [--model X]`, with the tool found as the first `claude`, `codex` or `agy` on the search
+  path VBear uses for the CLIs (its own `PATH`, Homebrew and `~/.local/bin`), by its absolute path. The pass shows the
+  command and the path. The daemon accepts it only through its own `open_full` operation, which takes nothing but the
+  tool name, that list, the folder and the terminal size, and refuses any list `agent_sessions.full_argv` could not have
+  built (another flag, a model that looks like an option, a program with another name). The environment is the plain one
+  every terminal gets (`PATH`, `TERM`, `LANG`, `HOME`, your user name); no credential is added, so the tool uses the login
+  it already has.
+- **Only Claude Code takes the instructions on the command line.** The card's instructions (its own text, else the
+  position's default) go in as a single `--append-system-prompt` argument: control, format and separator characters other
+  than a line break or tab are removed, it is cut to 2000 characters, and a text that starts with `-` gets a sentence in
+  front, so it can never be read as a flag. The pass shows the whole text that will be carried. VBear did not verify that
+  Claude Code receives it, or does what it says; it is words for the AI, as before. Codex and AGY have no such option, so
+  nothing is added for them: their instructions are only the paste button's (Terminals above), and VBear never presses
+  Enter.
+- **You still confirm, and the confirmation is for this exact command.** The preview is one-use and five minutes. It is
+  bound to the card's digest (an edited card voids it) and to a digest of the command, the folder and the tool file's
+  identity (a program replaced since the preview voids it, `cli_drift`), and `user_confirmed: true` is required. VBear does
+  not run the tool to look at its version and makes no claim about it. The folder follows the same rules as the safe launch
+  (inside the allowed root, never the home directory itself, credentials, tool state or VBear's own state), because it is
+  the place the tool starts in. The commit sentence and the network input of the safe launch do not apply and are not asked.
+- **What VBear says about its state is unchanged and small.** The terminal appears in the office and the workbench as an
+  agent. VBear reads a working or waiting state only from signals checked against that tool and version in the safe
+  launch; nothing was checked for a full-mode terminal, so it reads 狀態未知 and says why.
+- **Not changed.** The safe launch, its argv and its evidence; automatic mode (the executor there is still the sandboxed
+  stream session); the translation and review boundaries. A card without `launch_mode` is safe.
+
 ## Task cards
 
 - **Commit binding never runs `git`.** Repository config (clean filters, fsmonitor and the like) can make git
@@ -258,8 +297,10 @@ Other safeguards:
   keeps it) and `launch_mode` (`full` or `safe`). Reading only checks the type, so a card a newer build wrote does not
   isolate the card file. A card without either key stores nothing new, so its digest is the one it had before. When
   `instructions` is empty the position's default text is used (`vbear/position_guide.py`, served in the catalog;
-  `CARD_POSITION_TABLE` and its parity test are not changed). The text is never put into a launch: no launch argument,
-  environment variable, settings file or prompt carries it, and the card back and the pass say so (「這份指示不會自動交給工具」).
+  `CARD_POSITION_TABLE` and its parity test are not changed). The safe launch never carries it: no launch argument,
+  environment variable, settings file or prompt does. A full-mode launch of Claude Code carries it as one
+  `--append-system-prompt` argument (see "Full-mode launches" below); nothing else does, and the card back and the pass
+  say which of the two applies to the card in front of you.
 - **Boundaries are resolved by tool and by launch mode, and only what a launch enforces is called enforced.** Each
   position lists boundaries of four kinds: *enforced if launched* (it names an `armor_items` item whose level must be
   ENFORCED or PARTIAL; a contract test fails if one names an item that is missing or not enforced), *reminder*,
@@ -267,12 +308,12 @@ Other safeguards:
   card nothing is enforced by VBear (it does not start them), so enforced and not-possible rows read as *not applicable*
   and only reminders stay. In full mode every row reads as a reminder. VBear still does not claim that skills, CLAUDE.md,
   hooks or MCP are switched off, and it lists no boundary for meetings, which do not exist yet.
-- **`launch_mode` is a record, and full mode cannot be launched yet.** The wizard offers `full` for a new card and `safe`
-  on request; the server never writes the field itself, and a card without the key reads as `safe`. Only the exact word
-  `full` reads as full; a missing, null or unknown value is safe. Full-mode launching does not exist in this build:
-  `launch_blockers` returns `full_mode_not_available` for a full card, so the pass, the card back and the loadout say it
-  cannot depart (改出發方式 opens the wizard), nothing is prepared, and no session is started as a safe one instead.
-  The loadout shows no armor for it. The mode is part of the card's digest like any other field.
+- **`launch_mode` chooses between two launches, and only the exact word `full` chooses the full one.** The wizard offers
+  `full` for a new card and `safe` on request; the server never writes the field itself, and a card without the key
+  reads as `safe`. A missing, null or unknown value is safe, so an older card is never loosened by this build. A card in
+  full mode is started by the launch described in "Full-mode launches" and by no other: it is never started as a safe
+  one instead, and a safe card is never started as a full one. The loadout shows no armor for a full card (there is
+  none to show). The mode is part of the card's digest like any other field.
 - **The suggested work folder is advice.** The pass compares the folder's own name (NFC-normalized, one path component) with the
   position's suggestion (社群草稿, 素材, 法務報告, 帳務報告) and, if they differ, says so. It quotes only the folder name,
   never the path, refuses nothing and checks nothing about the folder's contents.
@@ -645,6 +686,16 @@ That is what the approval has to be informed consent for.
   that `.git` is writable, how to stop and what happens after a stop), the three residual risks of Phase 2 in full,
   both account fingerprint prefixes and the nine limits (elapsed time is prefilled at 4 hours). Confirming
   (`POST .../automation`) carries only the preview id.
+- **The executor card's instructions open the plan (P34-3).** When the flow's executor role holds a role card (the card
+  placed on that place of the task card) and the card has instructions, its own or its position's default, the plan
+  text starts with a block that names the card (`職位指示（來自角色卡「…」）：`), followed by the task. The card is read
+  as it is at preview time; the dialog says which card, where the text comes from and, if the card changed after it was
+  placed, that this is its current content. The block is part of the text the dialog shows, of the hash and size the
+  event records and of `plan.txt`, so the daemon's checks cover it like the rest. It travels as the first dispatch, a
+  user message, not a system prompt, and the later dispatches that forward review comments do not repeat it. With no card,
+  an unreadable or missing card, or no instructions, the plan is exactly the text it was before (the dialog says why
+  nothing was added). An already approved flow keeps its own `plan.txt`; editing or deleting the card later changes
+  nothing in it. The instructions are words for the AI like any line of the plan: they add no limit to the executor.
 - **One event is the plan approval and the risk acceptance.** It is a `risk_acknowledged` event with four more
   fields (`auto_text_version`, `automation_scope`, `plan_sha256`, `plan_bytes`). The plan text is saved
   (`<state>/automation/<flow>/plan.txt`, 0600, atomically, under one cross-process lock together with the event and
