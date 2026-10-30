@@ -4502,8 +4502,8 @@ function modelChoices(catalog, tool) {
   return { groups, values: seen, problem: typeof src.problem === "string" ? src.problem.slice(0, 200) : "" };
 }
 
-// opts: { catalog, profiles, existing, start (1-3), openIntents, onSaved(profile) }. The same wizard serves the card
-// pool page and the workbench's role tab. Creating and editing are the same three steps.
+// opts: { catalog, profiles, existing, start (1-3), openIntents, draft, onSaved(profile) }. The same wizard serves the card
+// pool page, the workbench's role tab and a staffing proposal's new card (draft). Creating and editing are the same three steps.
 function openCardWizard(opts) {
   const catalog = opts.catalog || {};
   const profiles = Array.isArray(opts.profiles) ? opts.profiles : [];
@@ -4529,15 +4529,21 @@ function openCardWizard(opts) {
   const maxInstr = Number(catalog.max_instructions) > 0 ? Number(catalog.max_instructions) : 0;
   const storedInstr = existing && typeof existing.instructions === "string" && existing.instructions.trim() ? existing.instructions : null;
   const startPosition = existing ? cardPosition(existing) : null;
+  // P35-4: a draft from a staffing proposal (opts.draft: name, position, tool, modelId, skillIds) fills a new card's
+  // wizard. What the page does not offer is not taken (a model alias only for a Claude card, a skill only when this tool
+  // reads it), and the person still takes every step and presses 建立; a card that exists never takes a draft.
+  const draft = isNew && opts.draft && typeof opts.draft === "object" ? opts.draft : null;
+  const draftTool = draft && tools.includes(draft.tool) ? draft.tool : null;
 
   const st = {
     step: Math.min(3, Math.max(1, Number(opts.start) || 1)),
-    name: existing ? String(existing.name || "") : "",
+    name: existing ? String(existing.name || "") : draft && typeof draft.name === "string" ? draft.name.slice(0, 200) : "",
     species: existing ? (store.get(OFFICE_SPECIES_KEY + existing.id, null) || "") : "",
     tool: existing && existing.model && tools.includes(existing.model.tool) ? existing.model.tool
-      : (tools.includes("claude") ? "claude" : tools[0]),
-    position: existing ? cardPosition(existing) : null,
-    modelId: existing && existing.model ? String(existing.model.model_id || "") : "",
+      : draftTool || (tools.includes("claude") ? "claude" : tools[0]),
+    position: existing ? cardPosition(existing) : draft && CARD_POSITIONS.includes(draft.position) ? draft.position : null,
+    modelId: existing && existing.model ? String(existing.model.model_id || "")
+      : draft && (draftTool || "claude") === "claude" && typeof draft.modelId === "string" ? draft.modelId.slice(0, Number(catalog.model_id_max_length) || 200) : "",
     modelOther: false,   // 其他 was chosen in the model drop-down (a name in no list shows as 其他 without this)
     profession: existing && existing.profession_role_id ? existing.profession_role_id : "",
     autoPosition: null,   // the role id whose guessed position was put on this card (the person can still change it)
@@ -4571,6 +4577,13 @@ function openCardWizard(opts) {
     busy: false,
   };
   if (!OFFICE_SPECIES.includes(st.species)) st.species = "";
+  let draftDropped = 0;
+  if (draft) {
+    const wanted = Array.isArray(draft.skillIds) ? [...new Set(draft.skillIds.filter((x) => typeof x === "string"))] : [];
+    for (const sid of wanted) { const sk = skillById.get(sid); if (sk && skillCompatible(sk, st.tool)) st.equipped.add(sid); }
+    draftDropped = wanted.length - st.equipped.size;
+    if (st.position) { syncInstructionsToPosition(); applySuggestion(); }
+  }
   // the profession picker: open or one line, what is typed and chosen to look at; not part of the card until chosen
   const pk = { open: false, query: "", group: "all", showUnused: false, shown: CARD_PAGE_SIZE, note: "" };
   let advancedOpen = false;
@@ -4582,8 +4595,11 @@ function openCardWizard(opts) {
   const stepper = el("ol", { class: "cw-steps", "aria-label": "步驟" });
   const foot = el("div", { class: "modal-actions cw-foot" });
   const heading = el("h2", { id: titleId }, isNew ? "新角色卡" : `編輯角色卡：${existing.name || existing.id}`);
+  const draftNote = draft ? el("p", { class: "small cw-hint", "data-cw": "draft-note" },
+    "這張卡是照 CEO 的組隊提案先填好的：名字、職位、陣營、模型和技能都可以改，按「建立」才會存。",
+    draftDropped ? `CEO 建議的技能有 ${draftDropped} 張這張卡讀不到或找不到，沒有預選。` : "") : null;
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
-    el("div", { class: "modal-box cw-box" }, heading, stepper, body, foot));
+    el("div", { class: "modal-box cw-box" }, heading, draftNote, stepper, body, foot));
   document.body.append(modal);
   const closeModal = withModalA11y(modal, () => modal.remove());
 

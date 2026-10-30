@@ -2332,6 +2332,62 @@ async function test(name, fn) {
     assert.ok(source.includes("VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
   });
 
+  // ---- P35-4: a draft from a staffing proposal fills the wizard of a new card; the person still takes every step ----
+  async function draftWizard(draft, extra = {}) {
+    const posts = [];
+    const ctx = await openPool([], catalog, { "POST /api/agent-profiles": (url, options) => {
+      const b = JSON.parse(options.body); posts.push(b);
+      return jsonResponse({ ok: true, profile: mkProfile("p-NEW", b.name, b.model.tool, b.permission_intents, { equipped_skill_ids: b.equipped_skill_ids, position: b.position }) });
+    } });
+    const saved = [];
+    const w = ctx.openCardWizard({ catalog, profiles: [], draft, onSaved: (p) => saved.push(p), ...extra });
+    await tick(8);
+    return { ctx, w, posts, saved, d: dialog() };
+  }
+  const writes35 = () => fetchCalls.filter((c) => c.options && c.options.method && c.options.method !== "GET");
+
+  await test("P35-4 a draft from a staffing proposal fills the new card's wizard; nothing is saved until 建立 on step 3", async () => {
+    const { w, posts, saved, d } = await draftWizard({ name: "法務新卡 <img src=x onerror=alert(1)>", position: "legal", tool: "claude",
+      modelId: "sonnet", skillIds: ["s-c", "s-s", "s-x", "s-gone"] });
+    assert.strictEqual(walk(d).find((n) => n.tag === "h2").textContent, "新角色卡");
+    assert.strictEqual(walk(d).find((n) => n.tag === "input" && n.getAttribute("id") === "cw-name").getAttribute("value"), "法務新卡 <img src=x onerror=alert(1)>");
+    const note = byData(d, "data-cw", "draft-note")[0];
+    assert.ok(note && /CEO 的組隊提案/.test(note.textContent) && /按「建立」才會存/.test(note.textContent), note && note.textContent);
+    assert.ok(/2 張.*讀不到或找不到/.test(note.textContent), "the skills that were not taken are counted: " + note.textContent);
+    assert.ok(!walk(d).some((n) => n.tag === "img"), "the name stays text");
+    assert.strictEqual(writes35().length, 0, "opening sends nothing");
+    assert.ok(!btnByText(d, "建立"), "step 1 has no save");
+    assert.deepStrictEqual([w.state.step, w.state.position, w.state.tool, w.state.modelId], [1, "legal", "claude", "sonnet"]);
+    btnByText(d, "下一步").dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-position", "legal")[0].getAttribute("aria-pressed"), "true");
+    assert.strictEqual(byData(dialog(), "data-tool", "claude")[0].getAttribute("aria-pressed"), "true");
+    assert.ok(byData(dialog(), "data-cw", "draft-note")[0], "the note stays on every step");
+    btnByText(dialog(), "下一步").dispatch("click");
+    assert.deepStrictEqual(byData(dialog(), "data-cw", "chosen")[0].children.map((c) => c.getAttribute && c.getAttribute("data-chosen")), ["s-c", "s-s"]);
+    assert.strictEqual(writes35().length, 0, "nothing is sent by walking the steps");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick(8);
+    assert.strictEqual(posts.length, 1);
+    assert.deepStrictEqual([posts[0].name, posts[0].position, posts[0].model, posts[0].equipped_skill_ids, posts[0].enabled],
+      ["法務新卡 <img src=x onerror=alert(1)>", "legal", { tool: "claude", model_id: "sonnet" }, ["s-c", "s-s"], true]);
+    assert.deepStrictEqual(saved.map((p) => p.id), ["p-NEW"]);
+  });
+
+  await test("P35-4 a draft is not used for a card that exists, and what the page does not offer is not taken from it", async () => {
+    const existing = mkProfile("p-1", "Old name", "codex", VERIFIED);
+    const ctx = await openPool([existing], catalog);
+    const w = ctx.openCardWizard({ catalog, profiles: [existing], existing, draft: { name: "X", tool: "claude", position: "legal" }, onSaved: () => {} });
+    await tick(8);
+    assert.deepStrictEqual([w.state.name, w.state.tool], ["Old name", "codex"]);
+    assert.ok(!byData(dialog(), "data-cw", "draft-note")[0]);
+    w.close();
+    const odd = await draftWizard({ name: 5, tool: "evil", position: "boss", modelId: { x: 1 }, skillIds: "s-c" });
+    assert.deepStrictEqual([odd.w.state.name, odd.w.state.tool, odd.w.state.position, odd.w.state.modelId, odd.w.state.equipped.size], ["", "claude", null, "", 0]);
+    const codex = await draftWizard({ name: "C", tool: "codex", modelId: "sonnet", skillIds: ["s-x", "s-c"] });
+    assert.deepStrictEqual([codex.w.state.tool, codex.w.state.modelId, [...codex.w.state.equipped]], ["codex", "", ["s-x"]],
+      "a Claude alias is not a Codex model, and a Claude skill is not a Codex card's");
+  });
+
   // ---- P24: the skill picker of step 3 says what the step is, lists what the card's camp really uses, folds same names ----
   const sk24 = (skill_id, name, tool, activation, over = {}) => ({ skill_id, name, invoke_name: over.invoke_name === undefined ? `p24:${name}` : over.invoke_name,
     tool, scope: "user", activation, mtime: 100, excerpt: `${name} excerpt`, read_by: [], ...over });
