@@ -12088,6 +12088,36 @@ function meetingStatusBadge(status) {
 }
 const MEETING_UNKNOWN = "狀態不明";
 const MEETING_COST_NOTE = "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。";
+// Why a meeting costs money at all (the chairman's decision 7): said beside the money on every page of a meeting.
+const MEETING_MONEY_WHY = "為什麼要花錢：每一位發言（和 CEO）都是用你自己的 Claude Code 呼叫一次模型。這裡的美元是 Claude Code 依 token 回報的估值；"
+  + "用訂閱登入時，是用掉你的使用額度，不是另外扣款。";
+function meetingMoneyWhyNode() { return el("p", { class: "small muted", "data-mt": "money-why" }, MEETING_MONEY_WHY); }
+// How fast a meeting is (the chairman's decision 8; vbear/meetings.py speed_from and speed_view): Claude Code thinks at low
+// or medium effort only. A value the page does not know reads 「未知」.
+const MEETING_EFFORT_LABEL = { low: "低", medium: "中" };
+function meetingEffortText(effort) { return typeof effort === "string" && cardHas(MEETING_EFFORT_LABEL, effort) ? MEETING_EFFORT_LABEL[effort] : "未知"; }
+function meetingSpeedText(speed) {
+  const s = speed && typeof speed === "object" ? speed : null;
+  if (!s) return null;
+  const minutes = Number.isInteger(s.max_minutes) ? `這場最多 ${s.max_minutes} 分鐘（從開始算）` : "這場的時間上限：未知";
+  const reserve = Number.isInteger(s.chair_reserve_minutes) ? `，最後 ${s.chair_reserve_minutes} 分鐘留給 CEO` : "";
+  return `思考強度：低／中（會議為了快，不提供高）。發言者${meetingEffortText(s.speaker_effort)}、CEO ${meetingEffortText(s.chair_effort)}。`
+    + `${minutes}${reserve}；時間到還沒發言的人不再發言，超過時間的呼叫會被停止，以最壞情況計費。`;
+}
+// The clock of a meeting running now (the server's `clock`, by the console's own time): what is left, and what is left of it
+// for the speakers. null when the record has no clock (it is not running here) or the clock cannot be read.
+function meetingClockText(clock) {
+  const c = clock && typeof clock === "object" ? clock : null;
+  const num = (x) => typeof x === "number" && Number.isFinite(x);
+  if (!c || !num(c.remaining_s) || !num(c.deadline_at) || !num(c.speakers_until) || !Number.isInteger(c.max_minutes)) return null;
+  const now = c.deadline_at - c.remaining_s;
+  const left = Math.max(0, Math.round(c.remaining_s));
+  const speak = Math.max(0, Math.round(c.speakers_until - now));
+  const reserve = Math.max(0, Math.round((c.deadline_at - c.speakers_until) / 60));
+  const mmss = (x) => `${Math.floor(x / 60)} 分 ${String(x % 60).padStart(2, "0")} 秒`;
+  return `剩下 ${mmss(left)}（這場最多 ${c.max_minutes} 分鐘，從開始算；最後 ${reserve} 分鐘留給 CEO`
+    + `${speak > 0 ? `，發言者還有 ${mmss(speak)}` : "，發言時間已到"}）。依主控台的時鐘，每 5 秒更新。`;
+}
 const MEETING_CHAIRMAN_NOTE = "主控台記錄（未驗證身分）";
 const MEETING_FLAGS = [["publish", "對外發布"], ["spend", "花錢"], ["delete", "刪除資料"], ["legal", "法律或合約"], ["deploy", "上線部署"],
   ["personal", "個資"]];
@@ -12114,8 +12144,8 @@ function meetingErrorText(code) {
 
 const MEETING_STANCE_BUBBLE = { 支持: "支持", 反對: "反對", 有條件支持: "有條件支持", 需要更多資訊: "要更多資訊" };
 // The only words a seat's bubble can say. Whatever the record holds, the bubble is one of these.
-const MEETING_BUBBLES = ["等發言", "發言中", "支持", "反對", "有條件支持", "要更多資訊", "失敗", "卡住", "額度不夠沒發言", "沒有發言",
-  "已取消", "中斷", "整理意見中", "已決定", "交董事長", "董事長已核准", "董事長已否決", MEETING_UNKNOWN];
+const MEETING_BUBBLES = ["等發言", "發言中", "支持", "反對", "有條件支持", "要更多資訊", "失敗", "卡住", "額度不夠沒發言", "時間到沒發言",
+  "沒有發言", "已取消", "中斷", "整理意見中", "已決定", "交董事長", "董事長已核准", "董事長已否決", MEETING_UNKNOWN];
 // ctx: { major, chairmanState } of the meeting, for the CEO's seat.
 function meetingBubble(turn, ctx) {
   const c = ctx && typeof ctx === "object" ? ctx : {};
@@ -12126,7 +12156,7 @@ function meetingBubble(turn, ctx) {
     case "running": return decision ? "整理意見中" : "發言中";
     case "failed": return "失敗";
     case "blocked": return "卡住";
-    case "skipped": return turn.error_code === "budget" ? "額度不夠沒發言" : "沒有發言";
+    case "skipped": return turn.error_code === "budget" ? "額度不夠沒發言" : turn.error_code === "time_up" ? "時間到沒發言" : "沒有發言";
     case "cancelled": return "已取消";
     case "interrupted": return "中斷";
     case "done": {
@@ -12407,6 +12437,7 @@ function meetingPreviewDialog(pv, opts) {
   }
   const person = (p) => el("details", { class: "mt-person", open: true },
     el("summary", null, `${p.name}（${cardHas(CARD_POSITION_LABEL, p.position) ? CARD_POSITION_LABEL[p.position] : "位置未指定"}）・模型 ${p.model || p.model_used || "未知"}`,
+      p.effort !== undefined ? ["・", el("span", { "data-mt": "effort" }, `思考強度 ${meetingEffortText(p.effort)}`)] : null,
       p.proxy ? "・代發言（這張卡的工具不是 Claude Code，由 Claude Code 照這個職位的指示發言）" : ""),
     el("div", { class: "small muted" }, "職位指示全文"),
     el("pre", { class: "mt-pre", "data-mt": "instructions" }, typeof p.instructions === "string" ? p.instructions : ""),
@@ -12427,9 +12458,11 @@ function meetingPreviewDialog(pv, opts) {
           : "Claude Code：沒有讀到已通過無工具安全檢查的版本（原因見上方），所以不能開始"),
         el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
         today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，每日上限 US$${today.daily_usd}`) : null,
-        pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null),
+        pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null,
+        meetingSpeedText(pv.speed) ? el("li", { "data-mt": "speed" }, meetingSpeedText(pv.speed)) : null),
       notice("info", pv.disclosure || ""),
       el("p", { class: "small muted" }, pv.cost_note || MEETING_COST_NOTE),
+      meetingMoneyWhyNode(),
       people.map(person),
       Array.isArray(pv.rules) && pv.rules.length ? el("details", null, el("summary", null, "什麼情況會交給董事長（固定規則，不是 AI 判斷）"),
         el("ul", { class: "small" }, pv.rules.map((r) => el("li", null, `${r.id}：${r.text}`)))) : null,
@@ -12578,6 +12611,7 @@ async function viewMeetings(id, params) {
     el("h1", null, "會議"),
     el("p", { class: "lede" }, "各職位發言，CEO 做決定，重大的事交給你（董事長）。決定只是紀錄，不會自己去執行。"),
     lampBox,
+    meetingMoneyWhyNode(),
     form.node,
     el("section", { class: "section" }, sectionHead("會議紀錄", "每 5 秒更新"), listBox));
   meetingsTick = async () => {
@@ -12735,7 +12769,9 @@ async function viewMeetingDetail(token, id) {
         cur.task_id ? el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, task ? `任務卡：${task.title}` : "任務卡") : null),
       flags.length ? el("p", { class: "small" }, `你建立時勾了：${flags.map((f) => (MEETING_FLAGS.find((x) => x[0] === f) || [f, f])[1]).join("、")}`) : null,
       cur.context ? el("p", { class: "small" }, `補充說明：${cur.context}`) : null,
+      meetingClockText(cur.clock) ? el("p", { class: "small mt-clock", "data-mt": "clock", role: "status" }, meetingClockText(cur.clock)) : null,
       el("p", { class: "small muted" }, MEETING_COST_NOTE),
+      meetingMoneyWhyNode(),
       el("section", { class: "section" }, sectionHead("座位", "每一位的內容都是紀錄裡的原文；模型寫的字一律當文字顯示，這裡只有證據是 VBear 自己整理的。"),
         el("div", { class: "mt-cards" }, seats.map(seatCard))),
       decisionBlock(), chairmanBlock(), taskNoteBlock(),
@@ -13050,6 +13086,9 @@ if (typeof module !== "undefined" && module.exports) {
     ONBOARD_STEPS,
     MEETING_BUBBLES,
     MEETING_ERROR_TEXT,
+    MEETING_MONEY_WHY,
+    meetingClockText,
+    meetingSpeedText,
     meetingBubble,
     meetingSeats,
     meetingSeatNode,

@@ -842,6 +842,93 @@ test("a meeting joining or changing repaints the office (it is in the repaint ke
   assert.strictEqual(app.meetingRoomKey(a), app.meetingRoomKey(clone(a)));
 });
 
+// ---- P35-3: how fast a meeting is, and why it costs money (the chairman's decisions 7 and 8) -------------------------
+
+const speedOf = (over = {}) => ({ speaker_effort: "low", chair_effort: "medium", max_minutes: 15, chair_reserve_minutes: 3,
+  labels: { speaker_effort: "低", chair_effort: "中" }, note: "伺服器的說明", ...over });
+
+test("the preview says the effort is low or medium only, each person's effort, and the time the meeting has", async () => {
+  const pv = previewOf({ speed: speedOf() });
+  pv.participants = pv.participants.map((p) => ({ ...p, effort: "low" }));
+  pv.chair = { ...pv.chair, effort: "medium" };
+  setPage({ preview: pv });
+  const main = await open("#/meetings");
+  fill(main, { speakers: ["law", "art"] });
+  q(main, "preview").click();
+  await settle();
+  const dlg = dialog();
+  const speed = q(dlg, "speed");
+  assert(speed, "a line on the speed");
+  for (const piece of ["思考強度：低／中（會議為了快，不提供高）", "發言者低", "CEO 中", "最多 15 分鐘", "最後 3 分鐘留給 CEO"]) {
+    assert(text(speed).includes(piece), piece + " | " + text(speed));
+  }
+  const efforts = qa(dlg, "effort").map(text);
+  assert.deepStrictEqual(efforts, ["思考強度 低", "思考強度 低", "思考強度 中"]);
+  // a value the page does not know is not shown as one it does
+  const odd = previewOf({ speed: speedOf({ speaker_effort: "high", labels: { speaker_effort: "高", chair_effort: "中" } }) });
+  odd.participants = odd.participants.map((p) => ({ ...p, effort: "high" }));
+  page.preview = odd;
+  dlg.remove();
+  q(main, "preview").click();
+  await settle();
+  const again = dialog();
+  assert(!text(again).includes("思考強度 高") && !text(q(again, "speed")).includes("發言者高"), text(again));
+  assert(text(q(again, "speed")).includes("未知"), text(q(again, "speed")));
+});
+
+test("a preview from a server that sends no speed claims none", async () => {
+  setPage({ preview: previewOf() });
+  const main = await open("#/meetings");
+  fill(main, {});
+  q(main, "preview").click();
+  await settle();
+  assert.strictEqual(q(dialog(), "speed"), null);
+  assert.strictEqual(qa(dialog(), "effort").length, 0);
+});
+
+test("why a meeting costs money is said where the money is: an estimate from the tokens; a subscription uses its quota", async () => {
+  assert.strictEqual(typeof app.MEETING_MONEY_WHY, "string");
+  for (const piece of ["Claude Code", "token", "估值", "訂閱", "使用額度", "不是另外扣款"]) assert(app.MEETING_MONEY_WHY.includes(piece), piece);
+  setPage({ preview: previewOf() });
+  let main = await open("#/meetings");
+  assert(text(q(main, "money-why")).includes("不是另外扣款"), "on the meetings page");
+  fill(main, {});
+  q(main, "preview").click();
+  await settle();
+  assert(text(q(dialog(), "money-why")).includes("不是另外扣款"), "in the preview");
+  dialog().remove();
+  detail(meeting());
+  main = await open("#/meetings/" + MID);
+  assert(text(q(main, "money-why")).includes("不是另外扣款"), "on a meeting");
+});
+
+test("a running meeting shows the time left by the console's clock, and the speakers' share of it", async () => {
+  assert.strictEqual(typeof app.meetingClockText, "function");
+  const clock = { started_at: 1790000000, deadline_at: 1790000900, speakers_until: 1790000720, max_minutes: 15, remaining_s: 600.4 };
+  const words = app.meetingClockText(clock);
+  for (const piece of ["剩下 10 分 00 秒", "最多 15 分鐘", "最後 3 分鐘留給 CEO", "發言者還有 7 分 00 秒", "主控台"]) assert(words.includes(piece), piece + " | " + words);
+  const late = app.meetingClockText({ ...clock, remaining_s: 100 });
+  assert(late.includes("剩下 1 分 40 秒") && late.includes("發言時間已到"), late);
+  for (const bad of [null, {}, { ...clock, remaining_s: "600" }, { ...clock, max_minutes: 15.5 }, { ...clock, deadline_at: null }]) {
+    assert.strictEqual(app.meetingClockText(bad), null, JSON.stringify(bad));
+  }
+  setPage();
+  const m = detail(meeting({ status: "running", clock }));
+  m.turns[2] = turn(3, "ceo", "decision", "queued");
+  const main = await open("#/meetings/" + MID);
+  assert(text(q(main, "clock")).includes("剩下 10 分 00 秒"), text(main));
+  detail(meeting());
+  const done = await open("#/meetings/" + MID);
+  assert.strictEqual(q(done, "clock"), null, "a meeting that is not running here has no clock");
+});
+
+test("a speaker the meeting's clock skipped reads 時間到沒發言", () => {
+  assert(app.MEETING_BUBBLES.includes("時間到沒發言"));
+  assert.strictEqual(app.meetingBubble(turn(1, "law", "opinion", "skipped", { error_code: "time_up" }), {}), "時間到沒發言");
+  // the CEO's turn the clock stopped is a failure that may be retried, not "did not speak"
+  assert.strictEqual(app.meetingBubble(turn(3, "ceo", "decision", "failed", { error_code: "time_up" }), {}), "失敗");
+});
+
 // ---- navigation, wording, rules of the code -------------------------------------------------------------------------
 
 test("the nav has the meetings, and the code keeps its rules", () => {
