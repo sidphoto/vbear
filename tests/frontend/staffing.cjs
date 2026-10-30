@@ -300,6 +300,242 @@ test("a refused preview says what the server said and opens nothing", async () =
   assert(text(h.dom().toastEl).includes("已有一場會議或組隊會議在進行"), text(h.dom().toastEl));
 });
 
+// ---- one staffing meeting: fixtures ----------------------------------------------------------------------------------
+
+const REV = (c) => c.repeat(64);
+const SENT = () => ({ cards: [["C1", "ceo"], ["C2", "pm"], ["C3", "eng"], ["C4", "eng2"], ["C5", "law"], ["C6", "art-off"], ["C7", "rev"], ["C8", "gone"]]
+  .map(([alias, profile_id]) => ({ alias, profile_id, revision: REV("a"), enabled: profile_id !== "art-off" })),
+  skills: [["S1", "sk-web"], ["S2", "sk-test"], ["S3", "sk-gone"], ["S4", "sk-codex"], ["S5", "sk-law-agy"]].map(([alias, skill_id]) => ({ alias, skill_id })),
+  omitted: { cards: 0, skills: 2 }, inputs_sha256: REV("e") });
+const skillOf = (skill_id, name, tool, categories, over = {}) => ({ skill_id, name, invoke_name: name, tool, read_by: [], scope: "user",
+  activation: "active", mtime: 1, excerpt: "", categories, ...over });
+const CATALOG = () => ({ ok: true, tools: ["claude", "codex", "agy", "shared"],
+  skills: [skillOf("sk-web", "網站前端 " + EVIL, "claude", ["frontend"]), skillOf("sk-test", "測試檢查", "shared", ["quality"]),
+    skillOf("sk-codex", "Codex 測試", "codex", ["quality"]), skillOf("sk-law-agy", "授權檢查（AGY）", "agy", ["legal"], { read_by: ["agy"] }),
+    skillOf("sk-law-codex", "授權檢查（Codex）", "codex", ["legal"]), skillOf("sk-more", "前端再一張", "claude", ["frontend"])],
+  skill_categories: [{ id: "frontend", label: "網站與前端" }, { id: "legal", label: "法律與合規" }, { id: "quality", label: "測試與審查" }] });
+const people3 = () => [
+  { profile_id: "pm", name: "PM 卡", position: "pm", tool: "claude", model_used: "sonnet", revision: REV("a"), proxy: false },
+  { profile_id: "law", name: "法務卡", position: "legal", tool: "agy", model_used: "sonnet", revision: REV("a"), proxy: true },
+  { profile_id: "ceo", name: "執行長卡", position: "planner", tool: "claude", model_used: "opus", revision: REV("a"), proxy: false }];
+const evidence = (over = {}) => ({ cli_version: "2.1.296", model_reported: "claude-sonnet-x", tools_reported: ["StructuredOutput"],
+  mcp_servers_reported: [], exit_code: 0, duration_ms: 4200, cost_usd: "0.0412", cost_source: "cli", ...over });
+const sturn = (seq, profile_id, kind, state, over = {}) => ({ seq, profile_id, kind, state, attempts: 1, started_at: 1790000000 + seq,
+  ended_at: state === "queued" || state === "running" ? null : 1790000010 + seq, prompt_sha256: REV("a"),
+  evidence: state === "done" ? evidence() : null, output: null, error_code: null, ...over });
+const pmSaid = () => ({ kept: { summary: "進度在前端 " + EVIL, needs: [{ what: "會測試的人 " + EVIL, position: "executor" }],
+  recommend: [{ card: "C3", position: "executor", slot: "executor", why: "會前端 " + EVIL, flags: [] },
+    { card: "", position: "legal", slot: "staff", why: "沒有合適的法務卡", flags: [] },
+    { card: "C8", position: "reviewer", slot: "reviewer1", why: "已刪掉的卡", flags: [] },
+    { card: "C6", position: "art", slot: "staff", why: "停用的藝術", flags: ["disabled"] }],
+  skills: [{ skill: "S1", for: "C3", why: "已經插著", flags: ["already_equipped"] }, { skill: "S2", for: "executor", why: "給執行的人", flags: [] },
+    { skill: "S3", for: "C3", why: "已不在技能庫", flags: [] }],
+  skill_gaps: [{ need: "圖片授權檢查 " + EVIL, category: "legal", search_words: ["授權", EVIL] }],
+  risks: [{ level: "中", text: "時程緊 " + EVIL, source: "" }] },
+  notes: [{ code: "unknown_skill", text: "提到清單上沒有的技能「S99」，已拿掉" }] });
+const lawSaid = () => ({ kept: { summary: "注意授權", needs: [], recommend: [], skills: [], skill_gaps: [],
+  risks: [{ level: "高", text: "圖片沒有授權", source: "查無出處，需人工複核" }] }, notes: [] });
+const ceoSaid = () => ({ kept: { summary: "用全端工程師做，Codex 審查 " + EVIL,
+  team: [
+    { slot: "planner", pick: "existing", card: "C1", new_ref: "", reason: "CEO 規劃", skills: [], flags: [] },
+    { slot: "executor", pick: "existing", card: "C3", new_ref: "", reason: "會前端 " + EVIL,
+      skills: [{ skill: "S1", why: "已經有", flags: ["already_equipped"] }, { skill: "S2", why: "要會測試", flags: [] }], flags: [] },
+    { slot: "reviewer1", pick: "existing", card: "C4", new_ref: "", reason: "陣營不同", skills: [{ skill: "S4", why: "Codex 的測試", flags: [] }], flags: [] },
+    { slot: "reviewer2", pick: "existing", card: "C2", new_ref: "", reason: "多一雙眼", skills: [], flags: ["slot_fit", "same_family"] }],
+  staff: [{ position: "legal", pick: "new", card: "", new_ref: "N1", reason: "要一張法務卡", skills: [], flags: [] },
+    { position: "art", pick: "existing", card: "C6", new_ref: "", reason: "停用中的藝術", skills: [], flags: ["disabled"] }],
+  new_cards: [{ ref: "N1", position: "legal", tool: "claude", model_alias: "sonnet", name: "法務新卡 " + EVIL, reason: "沒有 Claude 的法務", skills: [] }],
+  skill_gaps: [{ for: "C3", need: "圖片授權檢查", category: "legal", search_words: ["授權 檢查"], why: "技能庫沒有" },
+    { for: "reviewer1", need: "資安", category: "other", search_words: [], why: "以後再說" }],
+  risks: ["授權風險 " + EVIL], questions_for_chairman: ["要不要先做首頁？ " + EVIL],
+  opinions_used: [{ from: "pm", point: "要會測試", adopted: true, why: "範圍需要 " + EVIL },
+    { from: "legal", point: "加第二位審查", adopted: false, why: "範圍小" }] },
+  notes: [{ code: "missing", text: "還差：審查位" }] });
+function record(over = {}) {
+  return { id: SID, kind: "staffing", task_id: "task-1", note: "補充 " + EVIL, created_at: 1790000000, participants: people3(),
+    suggested: [{ profile_id: "pm", why: "有 PM 卡，負責講進度與分工" }, { profile_id: "eng", why: "任務分類有「網站與前端」" }],
+    sent: SENT(), limits: { per_call_usd: "0.20", proposal_call_usd: "0.50", total_usd: "2.00" },
+    turns: [sturn(1, "pm", "opinion", "done", { output: pmSaid() }), sturn(2, "law", "opinion", "done", { output: lawSaid() }),
+      sturn(3, "ceo", "proposal", "done", { output: ceoSaid() })],
+    status: "ready", chairman: { state: "pending", at: null, note: "", adopted: null, label: "主控台記錄（未驗證身分）" },
+    spent_usd: "0.6100", retryable: [], high_risk: true, changed_cards: ["C3"], ...over };
+}
+function detail(r) { page.details[r.id] = r; return r; }
+const PROFILES3 = () => PROFILES().map((p) => (p.id === "eng" ? { ...p, equipped_skill_ids: ["sk-web"] } : p));
+function setRecord(over = {}, pageOver = {}) {
+  setPage({ profiles: PROFILES3(), catalog: CATALOG(), ...pageOver });
+  return detail(record(over));
+}
+
+// ---- the bubbles and the seats ---------------------------------------------------------------------------------------
+
+test("a staffing bubble comes from the record only, from a closed table of its own", () => {
+  const table = new Set(app.STAFFING_BUBBLES);
+  for (const w of ["等發言", "發言中", "已建議", "失敗", "卡住", "額度不夠沒發言", "時間到沒發言", "整理意見中", "已提案"]) assert(table.has(w), w);
+  const b = (kind, state, code = null) => app.staffingBubble({ kind, state, error_code: code });
+  assert.deepStrictEqual(["queued", "running", "done", "failed", "blocked"].map((s) => b("opinion", s)), ["等發言", "發言中", "已建議", "失敗", "卡住"]);
+  assert.strictEqual(b("opinion", "skipped", "budget"), "額度不夠沒發言");
+  assert.strictEqual(b("opinion", "skipped", "time_up"), "時間到沒發言");
+  assert.strictEqual(b("opinion", "skipped", "boundary_revoked"), "沒有發言");
+  assert.strictEqual(b("proposal", "running"), "整理意見中");
+  assert.strictEqual(b("proposal", "done"), "已提案");
+  assert.strictEqual(b("proposal", "skipped", "no_opinions"), "沒有發言");
+  for (const kind of ["opinion", "proposal", "decision", EVIL]) for (const state of ["queued", "running", "done", "failed", "blocked", "skipped", "cancelled", "interrupted", "x", undefined]) {
+    for (const code of [null, "budget", "time_up", EVIL]) assert(table.has(b(kind, state, code)), JSON.stringify({ kind, state, code }));
+  }
+  assert.strictEqual(app.staffingBubble(null), "狀態不明");
+  assert.strictEqual(b("decision", "done"), "狀態不明", "a meeting's kind is not a staffing one");
+});
+
+test("seats: the speakers in order, the CEO last, a spoken-for card marked, the label names the staffing record", () => {
+  const seats = app.staffingSeats(record());
+  assert.deepStrictEqual(seats.map((s) => s.profileId), ["pm", "law", "ceo"]);
+  assert.deepStrictEqual(seats.map((s) => s.bubble), ["已建議", "已建議", "已提案"]);
+  assert.deepStrictEqual(seats.map((s) => s.proxy), [false, true, false]);
+  assert(seats[2].label.includes("組隊紀錄 " + SID), seats[2].label);
+});
+
+// ---- one staffing meeting ----------------------------------------------------------------------------------------
+
+test("one staffing meeting: what each speaker said, with every alias shown as a name or as 「找不到」, all as text", async () => {
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  noMarkup(main);
+  const all = text(main);
+  for (const piece of ["官網改版", "CEO 已提案：等你看", "0.6100", "2.00", "補充 ", "進度在前端", "會測試的人", "時程緊", "提到清單上沒有的技能「S99」，已拿掉",
+    "圖片沒有授權", "查無出處，需人工複核", "2.1.296", "0.0412", "不是另外扣款"]) assert(all.includes(piece), piece);
+  assert(all.includes(EVIL));
+  const seats = qa(main, "seat");
+  assert.strictEqual(seats.length, 3);
+  assert(text(seats[1]).includes("代發言"));
+  const recs = qa(seats[0], "recommend").map(text);
+  assert(recs[0].includes("全端工程師") && recs[0].includes("執行位") && !recs[0].includes("C3"), recs[0]);
+  assert(recs[1].includes("沒有合適的卡") && recs[1].includes("開會時找的幕僚") && recs[1].includes("法務經理"), recs[1]);
+  assert(recs[2].includes("找不到"), "a card deleted since: " + recs[2]);
+  assert(recs[3].includes("停用的藝術") && recs[3].includes("停用中"), recs[3]);
+  const picks = qa(seats[0], "skill-pick").map(text);
+  assert(picks[0].includes("網站前端") && picks[0].includes("全端工程師") && picks[0].includes("已插上"), picks[0]);
+  assert(picks[1].includes("測試檢查") && picks[1].includes("全端工程師"), "a position is named by its label: " + picks[1]);
+  assert(picks[2].includes("找不到"), "a skill gone from the index: " + picks[2]);
+  const legal = text(seats[1]);
+  assert(legal.includes("高"), legal);
+});
+
+test("the CEO's proposal: the places, the staff, the new cards, the gaps, and the opinions adopted and not, in two columns", async () => {
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  const prop = q(main, "proposal");
+  assert(prop, "the proposal");
+  noMarkup(prop);
+  const rows = qa(prop, "team-row");
+  assert.deepStrictEqual(rows.map((r) => r.getAttribute("data-slot")), ["planner", "executor", "reviewer1", "reviewer2"]);
+  assert(text(rows[0]).includes("規劃位") && text(rows[0]).includes("執行長卡"), text(rows[0]));
+  assert(text(rows[1]).includes("全端工程師") && text(rows[1]).includes("網站前端") && text(rows[1]).includes("已插上") && text(rows[1]).includes("CEO 建議"), text(rows[1]));
+  assert(text(rows[3]).includes("審查位和執行位同一陣營，審查結果不算數") && text(rows[3]).includes("職位和這個位置不太合"), text(rows[3]));
+  const staff = qa(prop, "staff-row").map(text);
+  assert(staff[0].includes("法務經理") && staff[0].includes("法務新卡") && staff[0].includes("建議新建"), staff[0]);
+  assert(staff[1].includes("停用的藝術") && staff[1].includes("這張卡停用中，要先啟用"), staff[1]);
+  assert(text(q(prop, "new-card")).includes("法務新卡") && text(q(prop, "new-card")).includes("Claude Code"), text(q(prop, "new-card")));
+  const adopted = q(prop, "adopted");
+  const not = q(prop, "not-adopted");
+  assert(text(adopted).includes("採納的意見") && text(adopted).includes("PM") && text(adopted).includes("要會測試") && text(adopted).includes("範圍需要"), text(adopted));
+  assert(text(not).includes("沒採納的意見") && text(not).includes("法務經理") && text(not).includes("加第二位審查"), text(not));
+  assert(!text(adopted).includes("加第二位審查") && !text(not).includes("要會測試"));
+  for (const piece of ["授權風險", "要不要先做首頁", "還差：審查位", "用全端工程師做"]) assert(text(prop).includes(piece), piece);
+  assert(text(main).includes("這只是提醒"), "a high risk is a reminder, not a block");
+  assert(text(q(main, "changed")).includes("全端工程師"), "the cards changed since are named");
+});
+
+test("a skill gap is plain text with a search of the skill library in this console, never a link out", async () => {
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  const links = qa(main, "gap-link");
+  assert(links.length >= 3, "a search per word");
+  for (const a of links) {
+    const href = a.getAttribute("href");
+    assert(href.startsWith("#/skills?q="), href);
+    assert(!href.includes("<") && !href.includes(" ") && !href.includes("://"), href);
+  }
+  const evil = links.find((a) => a.getAttribute("href").includes(encodeURIComponent(EVIL)));
+  assert(evil && evil.getAttribute("href").endsWith("&cat=legal"), "a word is encoded, the category kept");
+  const other = links.find((a) => a.getAttribute("href") === "#/skills?q=" + encodeURIComponent("授權 檢查") + "&cat=legal");
+  assert(other, links.map((a) => a.getAttribute("href")).join(" "));
+  const states = qa(main, "gap-state").map(text);
+  assert(states.some((s) => s.includes("技能庫有 2 張") && s.includes("這張卡讀不到")), states.join("|"));
+  assert(states.some((s) => s.includes("其他")), "a gap of 「其他」 is not counted: " + states.join("|"));
+});
+
+test("a running staffing meeting shows its clock and can be cancelled; nothing can be recorded meanwhile", async () => {
+  const clock = { started_at: 1790000000, deadline_at: 1790000900, speakers_until: 1790000720, max_minutes: 15, remaining_s: 300 };
+  const r = setRecord({ status: "running", clock, high_risk: false, changed_cards: [] });
+  r.turns[1] = sturn(2, "law", "opinion", "running");
+  r.turns[2] = sturn(3, "ceo", "proposal", "queued");
+  const main = await open("#/staffing/" + SID);
+  assert(text(qm(main, "clock")).includes("剩下 5 分 00 秒"), text(main));
+  assert.deepStrictEqual(app.staffingSeats(r).map((s) => s.bubble), ["已建議", "發言中", "等發言"]);
+  assert.strictEqual(q(main, "proposal"), null);
+  assert.strictEqual(qm(main, "delete"), null, "a running one is not deleted");
+  page.details[SID] = record({ status: "incomplete", high_risk: false, changed_cards: [] });
+  qm(main, "cancel").click();
+  await settle();
+  assert.strictEqual(posts("/cancel").length, 1);
+  assert.deepStrictEqual(posts("/cancel")[0].body, {});
+});
+
+test("a failed speaker shows why and can be tried again after its own preview; the CEO is asked again", async () => {
+  const r = setRecord({ status: "incomplete", retryable: [2], high_risk: false });
+  r.turns[1] = sturn(2, "law", "opinion", "failed", { error_code: "timeout", evidence: null });
+  page.retryPreview = { preview_id: "rp-1", startable: true, blockers: [], staffing_id: SID, seq: 2,
+    participant: { ...people3()[1], effort: "low", instructions: "指示" }, prompt: "重試的 prompt " + EVIL, prompt_sha256: REV("f"),
+    calls: 2, reserve_usd: "0.70", proposal_again: true, attempt: 2, today: { spent_usd: "0.5", daily_usd: "3.00", lamp: "green" },
+    cli: { version: "2.1.296", verified: true }, speed: SPEED, disclosure: "送到 Anthropic", cost_note: "估值" };
+  const main = await open("#/staffing/" + SID);
+  const seat = qa(main, "seat")[1];
+  assert(text(seat).includes("失敗") && text(seat).includes("逾時"), text(seat));
+  q(seat, "retry").click();
+  await settle();
+  assert.deepStrictEqual(posts("/retry-preview")[0].body, { seq: 2 });
+  const dlg = dialog();
+  noMarkup(dlg);
+  assert(text(dlg).includes("重試的 prompt") && text(dlg).includes("CEO 會重問"), text(dlg));
+  assert(text(q(dlg, "reserve")).includes("預留 US$0.70"), text(q(dlg, "reserve")));
+  qm(dlg, "start").click();
+  await settle();
+  assert.deepStrictEqual(posts("/retry")[0].body, { preview_id: "rp-1" });
+});
+
+test("a decision the chairman recorded is shown as a record of the console; this page offers no way to record one", async () => {
+  setRecord({ status: "adopted", chairman: { state: "adopted", at: 1790009999, note: "照做 " + EVIL, adopted: null, label: "主控台記錄（未驗證身分）" } });
+  const main = await open("#/staffing/" + SID);
+  const desk = q(main, "chairman");
+  assert(text(desk).includes("採用") && text(desk).includes("主控台記錄（未驗證身分）") && text(desk).includes("照做"), text(desk));
+  noMarkup(desk);
+  assert.strictEqual(posts("/chairman").length, 0);
+  assert.strictEqual(desk.findAll((n) => n.tag === "button").length, 0);
+});
+
+test("every flag of the server has words; a code the page does not know is shown as it is", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "..", "vbear", "staffing.py"), "utf8");
+  const block = src.slice(src.indexOf("FLAGS = {"), src.indexOf("}", src.indexOf("FLAGS = {")));
+  const codes = [...block.matchAll(/"([a-z_]+)": "([^"]+)"/g)];
+  assert.strictEqual(codes.length, 8, block);
+  for (const [, code, words] of codes) assert.strictEqual(app.STAFFING_FLAG_TEXT[code], words, code);
+  assert.strictEqual(app.staffingFlagText("brand_new"), "代碼：brand_new");
+});
+
+test("deleting a staffing record asks first; a record that cannot be read says so", async () => {
+  setRecord();
+  let main = await open("#/staffing/" + SID);
+  qm(main, "delete").click();
+  await settle();
+  const ask = h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("aria-labelledby") === "modal-confirm-title");
+  assert(ask, "asked in the page");
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "DELETE").length, 0, "nothing deleted by the first click");
+  ask.remove();
+  main = await open("#/staffing/s-ffffffffffff");
+  assert(text(main).includes("找不到這份組隊紀錄"), text(main));
+});
+
 // ---- run ---------------------------------------------------------------------------------------------------------
 
 (async () => {

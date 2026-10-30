@@ -12181,7 +12181,10 @@ function meetingBubble(turn, ctx) {
 
 // One seat per person in the order of the record (the chair's decision comes last); a person with no turn in the record is
 // still seated, with 「狀態不明」.
-function meetingSeats(view) {
+// opts (a staffing meeting's): { bubble(turn, ctx), record: the words that name the record }
+function meetingSeats(view, opts = {}) {
+  const bubbleOf = typeof opts.bubble === "function" ? opts.bubble : meetingBubble;
+  const record = opts.record || "會議紀錄";
   const v = view && typeof view === "object" ? view : {};
   const people = (Array.isArray(v.participants) ? v.participants : []).filter((p) => p && typeof p === "object");
   const turns = (Array.isArray(v.turns) ? v.turns : []).filter((t) => t && typeof t === "object");
@@ -12197,14 +12200,14 @@ function meetingSeats(view) {
     const tool = typeof p.tool === "string" ? p.tool : "";
     const position = typeof p.position === "string" ? p.position : "";
     const positionLabel = cardHas(CARD_POSITION_LABEL, position) ? CARD_POSITION_LABEL[position] : "位置未指定";
-    const bubble = meetingBubble(t, ctx);
+    const bubble = bubbleOf(t, ctx);
     const name = typeof p.name === "string" && p.name ? p.name : "（沒有名稱）";
     const proxy = p.proxy === true;
     const where = t && Number.isInteger(t.seq) ? `第 ${t.seq} 位` : "（這一位沒有紀錄）";
     return { key: `${v.id}:${p.profile_id}`, seq: t ? t.seq : null, profileId: p.profile_id, name, position, positionLabel, tool,
       model: typeof p.model_used === "string" ? p.model_used : "", proxy, species: speciesFor({ tool }), camp: campOf({ tool }).key,
       kind: t ? t.kind : "", state: t ? t.state : "", bubble, turn: t,
-      label: `${name}，${positionLabel}${proxy ? "，代發言" : ""}，${bubble}。依據：會議紀錄 ${v.id} ${where}` };
+      label: `${name}，${positionLabel}${proxy ? "，代發言" : ""}，${bubble}。依據：${record} ${v.id} ${where}` };
   });
 }
 
@@ -13044,6 +13047,232 @@ async function viewStaffing(id, params) {
   activeViewCleanup = () => { staffingTick = null; };
 }
 
+// ---- one staffing meeting: bubbles, seats, names ----
+
+// The only words a seat's bubble can say on a staffing meeting. Whatever the record holds, the bubble is one of these.
+const STAFFING_BUBBLES = ["等發言", "發言中", "已建議", "失敗", "卡住", "額度不夠沒發言", "時間到沒發言", "沒有發言", "已取消", "中斷",
+  "整理意見中", "已提案", MEETING_UNKNOWN];
+function staffingBubble(turn) {
+  if (!turn || typeof turn !== "object" || (turn.kind !== "opinion" && turn.kind !== "proposal")) return MEETING_UNKNOWN;
+  const chair = turn.kind === "proposal";
+  switch (turn.state) {
+    case "queued": return "等發言";
+    case "running": return chair ? "整理意見中" : "發言中";
+    case "done": return chair ? "已提案" : "已建議";
+    case "failed": return "失敗";
+    case "blocked": return "卡住";
+    case "skipped": return turn.error_code === "budget" ? "額度不夠沒發言" : turn.error_code === "time_up" ? "時間到沒發言" : "沒有發言";
+    case "cancelled": return "已取消";
+    case "interrupted": return "中斷";
+    default: return MEETING_UNKNOWN;
+  }
+}
+function staffingSeats(view) { return meetingSeats(view, { bubble: staffingBubble, record: "組隊紀錄" }); }
+
+// What VBear says of an item it kept but did not tick in advance (vbear/staffing.py FLAGS; a test keeps them equal).
+const STAFFING_FLAG_TEXT = {
+  disabled: "這張卡停用中，要先啟用",
+  cannot_start: "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY，或共用卡）",
+  slot_fit: "這張卡的職位和這個位置不太合",
+  same_card: "同一張卡不能審查自己",
+  reviewer_family_unknown: "審查位的陣營是「共用」或不明，審查結果不算數",
+  executor_family_unknown: "執行位的陣營是「共用」或不明，審查結果不算數",
+  same_family: "審查位和執行位同一陣營，審查結果不算數",
+  already_equipped: "這張卡已經插著這張技能",
+};
+function staffingFlagText(code) { return typeof code === "string" && cardHas(STAFFING_FLAG_TEXT, code) ? STAFFING_FLAG_TEXT[code] : `代碼：${code}`; }
+function staffingFlagNodes(flags) {
+  const list = Array.isArray(flags) ? flags : [];
+  return list.map((f) => (f === "already_equipped" ? badge("已插上", "b-mute", STAFFING_FLAG_TEXT.already_equipped) : badge(staffingFlagText(f), "b-warn")));
+}
+const STAFFING_NOT_FOUND = "找不到";
+const STAFFING_SLOT_LABEL = { planner: "規劃位", executor: "執行位", reviewer1: "審查位", reviewer2: "第二位審查", staff: "開會時找的幕僚" };
+const STAFFING_SLOTS = ["planner", "executor", "reviewer1", "reviewer2"];
+function staffingPositionText(position) { return cardHas(CARD_POSITION_LABEL, position) ? CARD_POSITION_LABEL[position] : "位置未指定"; }
+
+function staffingKept(turn) {
+  return turn && turn.state === "done" && turn.output && typeof turn.output === "object" && turn.output.kept && typeof turn.output.kept === "object"
+    ? turn.output.kept : null;
+}
+function staffingProposalOf(view) {
+  const turns = view && Array.isArray(view.turns) ? view.turns : [];
+  const last = turns.length ? turns[turns.length - 1] : null;
+  return last && last.kind === "proposal" ? staffingKept(last) : null;
+}
+function staffingList(obj, key) { return obj && Array.isArray(obj[key]) ? obj[key].filter((x) => x && typeof x === "object") : []; }
+
+// What each alias of a record stands for today: a card (C#) through the record's list to the card as it is now, a skill (S#)
+// to the skill in the catalog, a new card (N#) to the CEO's new cards. What cannot be found reads 「找不到」, with its alias.
+function staffingNames(view, profiles, skills) {
+  const sent = view && view.sent && typeof view.sent === "object" ? view.sent : {};
+  const cardAlias = new Map(staffingList(sent, "cards").map((c) => [c.alias, c]));
+  const skillAlias = new Map(staffingList(sent, "skills").map((s) => [s.alias, s]));
+  const byId = new Map((Array.isArray(profiles) ? profiles : []).filter((p) => p && typeof p.id === "string").map((p) => [p.id, p]));
+  const skillById = new Map((Array.isArray(skills) ? skills : []).filter((s) => s && typeof s.skill_id === "string").map((s) => [s.skill_id, s]));
+  const news = new Map(staffingList(staffingProposalOf(view), "new_cards").map((n) => [n.ref, n]));
+  const changed = new Set(view && Array.isArray(view.changed_cards) ? view.changed_cards : []);
+  const missing = (kind, alias) => ({ kind, alias, found: false, text: `${STAFFING_NOT_FOUND}（${typeof alias === "string" ? alias : ""}）` });
+  function card(alias) {
+    const row = cardAlias.get(alias);
+    const p = row ? byId.get(row.profile_id) : null;
+    if (!p) return missing("card", alias);
+    const tool = p.model && typeof p.model.tool === "string" ? p.model.tool : "";
+    return { kind: "card", alias, found: true, profile: p, profileId: p.id, tool, enabled: p.enabled !== false, changed: changed.has(alias),
+      text: String(p.name || p.id) };
+  }
+  function newCard(ref) {
+    const n = news.get(ref);
+    return n ? { kind: "new", alias: ref, found: true, newCard: n, tool: n.tool, text: `新卡「${n.name}」（建議新建）` } : missing("new", ref);
+  }
+  function skill(alias) {
+    const row = skillAlias.get(alias);
+    const s = row ? skillById.get(row.skill_id) : null;
+    return s ? { alias, found: true, skill: s, skillId: s.skill_id, text: String(s.name || s.skill_id) } : missing("skill", alias);
+  }
+  // a skill's or a gap's "for": a card, a new card, then a position (a speaker's) or a place (the CEO's)
+  function place(v, prefer) {
+    if (typeof v !== "string") return missing("place", "");
+    if (/^C[0-9]+$/.test(v)) return card(v);
+    if (/^N[0-9]+$/.test(v)) return newCard(v);
+    const pos = cardHas(CARD_POSITION_LABEL, v) ? CARD_POSITION_LABEL[v] : null;
+    const slot = cardHas(STAFFING_SLOT_LABEL, v) ? STAFFING_SLOT_LABEL[v] : null;
+    const words = prefer === "slot" ? slot || pos : pos || slot;
+    return words ? { kind: "place", alias: v, found: true, text: words } : missing("place", v);
+  }
+  return { card, newCard, skill, place, byId, skillById };
+}
+
+// ---- skill gaps: plain text, and a search of this console's skill library ----
+
+function staffingGapLink(word, category) {
+  const cat = typeof category === "string" && category && category !== "other" ? `&cat=${encodeURIComponent(category)}` : "";
+  return `#/skills?q=${encodeURIComponent(typeof word === "string" ? word : "")}${cat}`;
+}
+function staffingCategoryLabel(id, table) {
+  if (id === "other") return "其他";
+  const row = (Array.isArray(table) ? table : []).find((c) => c && c.id === id);
+  return row && typeof row.label === "string" ? row.label : String(id || "");
+}
+// What the skill library holds of a gap's category: none, some this card reads, or only some it does not. No card (a
+// speaker's gap): only how many there are.
+function staffingGapState(gap, tool, skills, table) {
+  if (!gap || gap.category === "other") return "分類是「其他」，VBear 沒有比對技能庫";
+  const label = staffingCategoryLabel(gap.category, table);
+  const same = (Array.isArray(skills) ? skills : []).filter((s) => s && Array.isArray(s.categories) && s.categories.includes(gap.category));
+  if (!same.length) return `技能庫沒有「${label}」分類的技能（目前沒有安裝）`;
+  if (!tool) return `技能庫有 ${same.length} 張「${label}」分類的技能`;
+  const can = same.filter((s) => skillCompatible(s, tool)).length;
+  if (!can) return `技能庫有 ${same.length} 張可能相關，但這張卡讀不到`;
+  return `技能庫有 ${can} 張「${label}」分類、這張卡讀得到的技能${same.length > can ? `（另有 ${same.length - can} 張讀不到）` : ""}`;
+}
+// ctx: { names, skills, categories, toolOf(gap) -> tool or "" , prefer }
+function staffingGapsNode(gaps, ctx) {
+  if (!gaps.length) return null;
+  return [el("div", { class: "small muted" }, "技能缺口（只是清單：要不要裝、去哪裡裝由你決定；VBear 不會安裝或下載）"),
+    el("ul", { class: "small st-gaps" }, gaps.map((g) => {
+      const words = Array.isArray(g.search_words) ? g.search_words.filter((w) => typeof w === "string" && w) : [];
+      const label = staffingCategoryLabel(g.category, ctx.categories);
+      return el("li", { "data-st": "gap" },
+        el("strong", null, String(g.need || "")), `（${label}）`,
+        typeof g.for === "string" ? `，給 ${ctx.names.place(g.for, ctx.prefer).text}` : "",
+        g.why ? `：${g.why}` : "",
+        el("div", { class: "muted", "data-st": "gap-state" }, staffingGapState(g, ctx.toolOf ? ctx.toolOf(g) : "", ctx.skills, ctx.categories)),
+        words.length ? el("div", { class: "row" }, words.map((w) => el("a", { class: "btn small", href: staffingGapLink(w, g.category), "data-st": "gap-link" },
+          `去技能庫搜尋「${w}」`)))
+          : g.category !== "other" ? el("a", { class: "btn small", href: staffingGapLink("", g.category), "data-st": "gap-link" }, `去技能庫看「${label}」分類`) : null);
+    }))];
+}
+
+// ---- what one speaker said, by names ----
+
+function staffingOpinionNodes(kept, ctx) {
+  const n = ctx.names;
+  const out = [el("p", null, String(kept.summary || ""))];
+  const needs = staffingList(kept, "needs");
+  if (needs.length) {
+    out.push(el("div", { class: "small muted" }, "這個任務需要的能力"),
+      el("ul", { class: "small" }, needs.map((x) => el("li", null, `${x.what}（${staffingPositionText(x.position)}）`))));
+  }
+  const rec = staffingList(kept, "recommend");
+  if (rec.length) {
+    out.push(el("div", { class: "small muted" }, "推薦的人選"), el("ul", { class: "small" }, rec.map((x) => el("li", { "data-st": "recommend" },
+      el("strong", null, x.card ? n.card(x.card).text : "沒有合適的卡"),
+      x.slot === "staff" ? `：${STAFFING_SLOT_LABEL.staff}` : `：放${STAFFING_SLOT_LABEL[x.slot] || STAFFING_NOT_FOUND}`,
+      `（${staffingPositionText(x.position)}）`, x.why ? `：${x.why}` : "", " ", staffingFlagNodes(x.flags)))));
+  }
+  const picks = staffingList(kept, "skills");
+  if (picks.length) {
+    out.push(el("div", { class: "small muted" }, "建議插的技能"), el("ul", { class: "small" }, picks.map((x) => el("li", { "data-st": "skill-pick" },
+      el("strong", null, n.skill(x.skill).text), ` 給 ${n.place(x.for, "position").text}`, x.why ? `：${x.why}` : "", " ", staffingFlagNodes(x.flags)))));
+  }
+  const gaps = staffingGapsNode(staffingList(kept, "skill_gaps"), { ...ctx, prefer: "position", toolOf: () => "" });
+  if (gaps) out.push(gaps);
+  const risks = staffingList(kept, "risks");
+  if (risks.length) {
+    out.push(el("div", { class: "small muted" }, "風險"), el("ul", { class: "small" }, risks.map((r) =>
+      el("li", null, badge(String(r.level || "?"), r.level === "高" ? "b-bad" : r.level === "中" ? "b-warn" : "b-mute"), " ", String(r.text || ""),
+        r.source ? el("span", { class: "muted" }, `（出處：${r.source}）`) : null))));
+  }
+  return out;
+}
+function staffingNotesNode(output) {
+  const notes = output && Array.isArray(output.notes) ? output.notes.filter((x) => x && typeof x.text === "string") : [];
+  return notes.length ? [el("div", { class: "small muted" }, "VBear 拿掉或改動的地方"),
+    el("ul", { class: "small", "data-st": "notes" }, notes.map((x) => el("li", null, x.text)))] : null;
+}
+
+// ---- the CEO's proposal, by names ----
+
+function staffingProposalNode(kept, output, ctx) {
+  const n = ctx.names;
+  const who = (x) => (x.pick === "existing" ? n.card(x.card).text : x.pick === "new" ? n.newCard(x.new_ref).text : "空著");
+  const skillsOf = (x) => {
+    const list = staffingList(x, "skills");
+    return list.length ? el("ul", { class: "small" }, list.map((s) => el("li", null, el("strong", null, n.skill(s.skill).text), s.why ? `：${s.why}` : "", " ",
+      badge("CEO 建議", "b-info"), " ", staffingFlagNodes(s.flags)))) : null;
+  };
+  const team = staffingList(kept, "team");
+  const toolOfSlot = (slot) => {
+    const x = team.find((t) => t.slot === slot);
+    return !x ? "" : x.pick === "existing" ? n.card(x.card).tool || "" : x.pick === "new" ? n.newCard(x.new_ref).tool || "" : "";
+  };
+  const toolOfGap = (g) => (/^[CN][0-9]+$/.test(g.for) ? n.place(g.for, "slot").tool || "" : toolOfSlot(g.for));
+  const used = staffingList(kept, "opinions_used");
+  const opinion = (x) => el("li", null, el("strong", null, staffingPositionText(x.from)), `：${x.point}`, x.why ? `——${x.why}` : "");
+  const lines = (key, title) => {
+    const list = Array.isArray(kept[key]) ? kept[key].filter((x) => typeof x === "string") : [];
+    return list.length ? [el("h3", null, title), el("ul", { class: "small" }, list.map((x) => el("li", null, x)))] : null;
+  };
+  return el("div", { class: "card pad st-proposal" },
+    el("p", null, el("strong", null, String(kept.summary || ""))),
+    el("h3", null, "任務卡的 4 個位置"),
+    el("ul", { class: "st-rows" }, STAFFING_SLOTS.map((slot) => {
+      const x = team.find((t) => t.slot === slot);
+      if (!x) return el("li", { "data-st": "team-row", "data-slot": slot }, el("strong", null, STAFFING_SLOT_LABEL[slot]), "：（CEO 沒有寫這個位置）");
+      return el("li", { "data-st": "team-row", "data-slot": slot },
+        el("strong", null, STAFFING_SLOT_LABEL[slot]), `：${who(x)} `, staffingFlagNodes(x.flags),
+        x.reason ? el("div", { class: "small" }, `理由：${x.reason}`) : null, skillsOf(x));
+    })),
+    staffingList(kept, "staff").length ? [el("h3", null, "開會時找的幕僚"), el("ul", { class: "st-rows" }, staffingList(kept, "staff").map((x) =>
+      el("li", { "data-st": "staff-row", "data-position": x.position }, el("strong", null, staffingPositionText(x.position)), `：${who(x)} `, staffingFlagNodes(x.flags),
+        x.reason ? el("div", { class: "small" }, `理由：${x.reason}`) : null, skillsOf(x))))] : null,
+    staffingList(kept, "new_cards").length ? [el("h3", null, "建議新建的卡（要你自己用精靈建）"), el("ul", { class: "st-rows" }, staffingList(kept, "new_cards").map((x) =>
+      el("li", { "data-st": "new-card" }, el("strong", null, String(x.name || "")),
+        `（${staffingPositionText(x.position)}・${CARD_TOOL_LABEL[x.tool] || x.tool}${x.model_alias ? `・模型 ${x.model_alias}` : ""}）`,
+        x.reason ? el("div", { class: "small" }, `理由：${x.reason}`) : null, skillsOf(x))))] : null,
+    staffingGapsNode(staffingList(kept, "skill_gaps"), { ...ctx, prefer: "slot", toolOf: toolOfGap }),
+    el("h3", null, "採納與沒採納的意見"),
+    el("div", { class: "st-opinions" },
+      el("div", { "data-st": "adopted" }, el("h4", null, "採納的意見"), used.filter((x) => x.adopted === true).length
+        ? el("ul", { class: "small" }, used.filter((x) => x.adopted === true).map(opinion)) : el("p", { class: "small muted" }, "（沒有）")),
+      el("div", { "data-st": "not-adopted" }, el("h4", null, "沒採納的意見"), used.filter((x) => x.adopted === false).length
+        ? el("ul", { class: "small" }, used.filter((x) => x.adopted === false).map(opinion)) : el("p", { class: "small muted" }, "（沒有）"))),
+    lines("risks", "CEO 看到的風險"), lines("questions_for_chairman", "要問你（董事長）的"),
+    staffingNotesNode(output));
+}
+
+// ---- the page ----
+
 async function viewStaffingDetail(token, id) {
   let cur;
   try { cur = await api.get(`/api/staffing/${encodeURIComponent(id)}`); }
@@ -13051,15 +13280,121 @@ async function viewStaffingDetail(token, id) {
     setKids(claim(token), crumbs([["組隊會議", "#/staffing"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份組隊紀錄：" + e.message));
     return;
   }
-  const tasksRes = await api.get("/api/tasks").catch(() => null);
+  const [tasksRes, profilesRes, catalog] = await Promise.all([api.get("/api/tasks").catch(() => null),
+    api.get("/api/agent-profiles").catch(() => null), api.get("/api/agent-builder/catalog").catch(() => null)]);
   const tasksList = tasksRes && Array.isArray(tasksRes.tasks) ? tasksRes.tasks.filter((t) => t && typeof t.id === "string") : [];
-  const title = staffingTaskTitle(cur.task_id, tasksList);
-  const limits = cur.limits && typeof cur.limits === "object" ? cur.limits : {};
-  setKids(claim(token), crumbs([["組隊會議", "#/staffing"], [title]]),
-    el("h1", null, `組隊會議：${title}`),
-    el("div", { class: "row small" }, staffingStatusBadge(cur.status),
-      el("span", { class: "muted" }, `組隊紀錄 ${cur.id}・${fmtTime(cur.created_at)}・花費 US$${cur.spent_usd}（估值）／這份上限 US$${limits.total_usd}`)),
-    el("p", { class: "small muted" }, MEETING_COST_NOTE), meetingMoneyWhyNode());
+  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : [];
+  const skills = catalog && Array.isArray(catalog.skills) ? catalog.skills : [];
+  const categories = catalog && Array.isArray(catalog.skill_categories) ? catalog.skill_categories : [];
+  const main = claim(token);
+  const root = el("div", { class: "mt-detail" });
+  const reload = async () => {
+    try { cur = await api.get(`/api/staffing/${encodeURIComponent(id)}`); } catch (e) { toast("讀不到這份組隊紀錄：" + e.message); return; }
+    if (token === seq) draw();
+  };
+  const act = async (fn) => {
+    try { const res = await fn(); if (res && typeof res === "object" && res.id === id) cur = res; if (token === seq) draw(); }
+    catch (e) { toast(e.message); await reload(); }
+  };
+
+  function seatCard(seat, ctx) {
+    const t = seat.turn;
+    const kept = staffingKept(t);
+    const body = [];
+    if (kept && t.kind === "opinion") body.push(staffingOpinionNodes(kept, ctx), staffingNotesNode(t.output));
+    else if (kept && t.kind === "proposal") body.push(el("p", { class: "small muted" }, "CEO 的組隊提案在下面。"));
+    else if (t && t.state === "queued") body.push(el("p", { class: "small muted" }, "還沒輪到。"));
+    else if (t && t.state === "running") body.push(el("p", { class: "small muted" }, t.kind === "proposal" ? "正在整理意見…" : "正在發言…"));
+    else if (t) {
+      const why = meetingErrorText(t.error_code);
+      body.push(el("p", { class: "small", "data-st": "reason" }, `${STAFFING_BUBBLES.includes(seat.bubble) ? seat.bubble : MEETING_UNKNOWN}${why ? "：" + why : ""}`));
+    } else body.push(el("p", { class: "small muted" }, "紀錄裡沒有這一位的發言。"));
+    const chair = cur.chairman && typeof cur.chairman === "object" ? cur.chairman.state : "";
+    const decided = chair === "adopted" || chair === "dismissed";
+    const canRetry = t && Array.isArray(cur.retryable) && cur.retryable.includes(t.seq) && cur.status !== "running";
+    const retry = canRetry && !decided
+      ? el("button", { class: "btn small", type: "button", "data-st": "retry", on: { click: () => retryOf(t.seq) } }, "重試這一位（先給你看預覽）")
+      : canRetry ? el("p", { class: "small muted" }, "董事長已經記下採用與否，這份組隊會議不能再重試；要重新討論，請開新的組隊會議。") : null;
+    return el("article", { class: "card mt-card", "data-st": "seat", "data-profile": seat.profileId },
+      el("div", { class: "mt-card-head" }, officeSprite(seat.species, seat.camp, 2),
+        el("div", { style: "min-width:0" }, el("strong", null, seat.name),
+          el("div", { class: "small muted" }, `${seat.positionLabel}・${TOOL[seat.tool] || seat.tool || "未知工具"}・模型 ${seat.model || "未知"}`)),
+        seat.proxy ? badge("代發言", "b-info", "這張卡的工具不是 Claude Code，由 Claude Code 照這個職位的指示代為發言") : null,
+        el("span", { class: "mt-bubble" }, seat.bubble)),
+      body, meetingEvidenceNode(t), retry);
+  }
+
+  async function retryOf(seqNo) {
+    let pv;
+    try { pv = await api.post(`/api/staffing/${encodeURIComponent(id)}/retry-preview`, { seq: seqNo }); }
+    catch (e) { toast(e.message); return; }
+    meetingPreviewDialog(pv, { title: "重試前的預覽", startLabel: "重試", facts: staffingPreviewFacts(pv),
+      onRecheck: () => retryOf(seqNo),
+      onStart: async (previewId) => { await act(() => api.post(`/api/staffing/${encodeURIComponent(id)}/retry`, { preview_id: previewId })); } });
+  }
+
+  function chairmanBlock() {
+    const c = cur.chairman && typeof cur.chairman === "object" ? cur.chairman : { state: "pending" };
+    const head = c.state === "adopted" ? "董事長記下：採用" : c.state === "dismissed" ? "董事長記下：不採用"
+      : cur.status === "running" ? "組隊會議進行中" : "還沒有記下採用或不採用";
+    return el("section", { class: "section", "data-st": "chairman" }, sectionHead("董事長桌", MEETING_CHAIRMAN_NOTE),
+      el("div", { class: "card pad" }, el("p", null, el("strong", null, head)),
+        c.note ? el("p", { class: "small" }, `備註：${c.note}`) : null,
+        c.at ? el("p", { class: "small muted" }, `${fmtTime(c.at)}・${MEETING_CHAIRMAN_NOTE}`) : null,
+        el("p", { class: "small muted" }, "記下採用與否只是紀錄，不會建卡、插技能或排隊伍。")));
+  }
+
+  function draw() {
+    const names = staffingNames(cur, profiles, skills);
+    const ctx = { names, skills, categories };
+    const seats = staffingSeats(cur);
+    const title = staffingTaskTitle(cur.task_id, tasksList);
+    const running = cur.status === "running";
+    const limits = cur.limits && typeof cur.limits === "object" ? cur.limits : {};
+    const proposal = staffingProposalOf(cur);
+    const last = Array.isArray(cur.turns) && cur.turns.length ? cur.turns[cur.turns.length - 1] : null;
+    const changed = Array.isArray(cur.changed_cards) ? cur.changed_cards : null;
+    const suggested = Array.isArray(cur.suggested) ? cur.suggested.filter((x) => x && typeof x.profile_id === "string") : [];
+    const spoke = new Set((Array.isArray(cur.participants) ? cur.participants : []).map((p) => p && p.profile_id));
+    const clock = meetingClockText(cur.clock);
+    setKids(root,
+      el("div", { class: "row" }, el("h1", null, `組隊會議：${title}`)),
+      el("div", { class: "row small" }, staffingStatusBadge(cur.status),
+        cur.high_risk === true ? badge("有高風險", "b-warn", "有發言者把風險標成「高」；這只是提醒") : null,
+        el("span", { class: "muted" }, `組隊紀錄 ${cur.id}・${fmtTime(cur.created_at)}・花費 US$${cur.spent_usd}（估值）／這份組隊提案最多 US$${limits.total_usd}`),
+        el("a", { href: `#/workbench?task=${encodeURIComponent(cur.task_id)}` }, `任務卡：${title}`)),
+      clock ? el("p", { class: "small mt-clock", "data-mt": "clock", role: "status" }, clock) : null,
+      el("p", { class: "small muted" }, MEETING_COST_NOTE),
+      meetingMoneyWhyNode(),
+      cur.high_risk === true ? notice("warn", "有發言者把風險標成「高」，請先看過再決定。這只是提醒，不會擋住採用。") : null,
+      changed && changed.length ? el("div", { "data-st": "changed" }, notice("warn", `組隊會議之後，這些卡改過：${changed.map((a) => names.card(a).text).join("、")}。看提案時請以卡現在的樣子為準。`))
+        : changed ? null : el("p", { class: "small muted", "data-st": "changed" }, "VBear 這次沒有比對卡片有沒有改過（不代表沒有改過）。"),
+      cur.note ? el("p", { class: "small" }, `補充說明：${cur.note}`) : null,
+      suggested.length ? el("details", { class: "small" }, el("summary", null, "VBear 建議的人選與理由（固定規則，不是 AI 判斷）"),
+        el("ul", null, suggested.map((x) => el("li", null, `${(names.byId.get(x.profile_id) || {}).name || "（這張卡已不在）"}：${x.why}——`,
+          spoke.has(x.profile_id) ? "這次有發言" : "這次沒有發言")))) : null,
+      el("section", { class: "section" }, sectionHead("座位", "每一位各自發言一次，彼此看不到；頭上的字只來自組隊紀錄。"),
+        el("div", { class: "mt-seats" }, seats.map((s) => meetingSeatNode(s))),
+        el("div", { class: "mt-cards" }, seats.map((s) => seatCard(s, ctx)))),
+      proposal ? el("section", { class: "section", "data-st": "proposal" },
+        sectionHead("CEO 的組隊提案", "這只是建議：VBear 不會自己建卡、插技能或排隊伍。卡和技能是用代號寫的，這裡換成它們現在的名稱；找不到的寫「找不到」。"),
+        staffingProposalNode(proposal, last.output, ctx)) : null,
+      chairmanBlock(),
+      el("div", { class: "row" },
+        running ? el("button", { class: "btn", type: "button", "data-mt": "cancel", on: { click: () => act(() => api.post(`/api/staffing/${encodeURIComponent(id)}/cancel`, {})) } },
+          "取消這場組隊會議") : null,
+        !running ? el("button", { class: "btn", type: "button", "data-mt": "delete", on: { click: async () => {
+          if (!(await confirmInPage("刪除組隊紀錄", `確定要刪除「${title}」的這份組隊紀錄嗎？刪除後無法復原。`, "刪除"))) return;
+          try { await api.del(`/api/staffing/${encodeURIComponent(id)}`); toast("組隊紀錄已刪除"); location.hash = "#/staffing"; }
+          catch (e) { toast("刪除失敗：" + e.message); }
+        } } }, "刪除這份組隊紀錄") : null));
+  }
+  draw();
+  setKids(main, crumbs([["組隊會議", "#/staffing"], [staffingTaskTitle(cur.task_id, tasksList)]]), root);
+  if (cur.status === "running") {
+    staffingTick = async () => { if (cur.status === "running") await reload(); };
+    activeViewCleanup = () => { staffingTick = null; };
+  }
 }
 
 setTheme(store.get("theme", "auto"));
@@ -13362,6 +13697,14 @@ if (typeof module !== "undefined" && module.exports) {
     taskMeetingsBlock,
     viewMeetings,
     STAFFING_SPEAKER_ORDER,
+    STAFFING_BUBBLES,
+    STAFFING_FLAG_TEXT,
+    staffingBubble,
+    staffingSeats,
+    staffingFlagText,
+    staffingNames,
+    staffingGapLink,
+    staffingGapState,
     taskStaffingBlock,
     viewStaffing,
   };

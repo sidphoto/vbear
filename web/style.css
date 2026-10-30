@@ -1494,6 +1494,15 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .st-speakers { flex-direction: column; flex-wrap: nowrap; gap: 2px; }
 .st-speaker { flex-wrap: wrap; gap: 2px 10px; }
 .st-why { flex-basis: 100%; padding-left: 26px; color: var(--ink-2); }
+.st-proposal h3 { margin: 14px 0 6px; font-size: 14px; }
+.st-proposal h4 { margin: 0 0 4px; font-size: 13px; }
+.st-rows { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.st-rows ul { margin: 2px 0 0; padding-left: 18px; }
+.st-gaps { padding-left: 18px; display: grid; gap: 6px; }
+.st-gaps .row { margin-top: 4px; gap: 6px; }
+.st-opinions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.st-opinions > div { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+@media (max-width: 720px) { .st-opinions { grid-template-columns: 1fr; } }
 .mt-clock { padding: 6px 10px; border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 6px; color: var(--ink); }
 @media (max-width: 720px) { .mt-cards { grid-template-columns: 1fr; } .mt-seats { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .mt-seat { transition: none; } }
