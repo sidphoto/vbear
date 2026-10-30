@@ -1598,7 +1598,7 @@ function roleTranslateRow() {
 
 // ---------- data -----------------------------------------------------------
 
-const D = { overview: null, skills: null, categories: [], roles: null, live: null, config: null, meetings: null, byId: new Map() };
+const D = { overview: null, skills: null, categories: [], roles: null, live: null, config: null, meetings: null, staffing: null, byId: new Map() };
 
 async function loadStatic(force) {
   if (force || !D.overview) D.overview = await api.get("/api/overview");
@@ -2155,7 +2155,7 @@ async function viewHome() {
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
   const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings()]);
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList()]);
   const L = D.live;
   const main = claim(token);
   const onboardingHost = el("div", { id: "h-onboarding" });
@@ -2193,7 +2193,7 @@ async function viewHome() {
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   noteTasks(tasksRes && tasksRes.tasks);
-  const board = boardGroups(L, D.flows, D.meetings);
+  const board = boardGroups(L, D.flows, D.meetings, D.staffing);
   boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
@@ -2245,8 +2245,9 @@ function waitsForYou(f) {
 }
 
 // meetingsData (optional): the answer of GET /api/meetings. A meeting that waits for the chairman is on the board; a read that
-// failed is said (meetingsError); an answer that is not a list is treated as not read.
-function boardGroups(live, flowsData, meetingsData) {
+// failed is said (meetingsError); an answer that is not a list is treated as not read. staffingData (optional, P35-4): the
+// answer of GET /api/staffing, the same way: a proposal that waits for the chairman to look at it is on the board.
+function boardGroups(live, flowsData, meetingsData, staffingData) {
   const L = live || {};
   const runtimeAvailable = !!(L.runtime && L.runtime.available);
   const sessions = Array.isArray(L.sessions) ? L.sessions : [];
@@ -2264,12 +2265,14 @@ function boardGroups(live, flowsData, meetingsData) {
   const rest = open.filter((f) => !waitsForYou(f));
   const yourTurnMeetings = meetingsNeedingYou(meetingsData);
   const meetingsError = meetingsData && typeof meetingsData === "object" && meetingsData.error ? String(meetingsData.error) : "";
+  const yourTurnStaffing = staffingNeedingYou(staffingData);
+  const staffingError = staffingData && typeof staffingData === "object" && staffingData.error ? String(staffingData.error) : "";
   return {
-    error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError,
+    error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError, yourTurnStaffing, staffingError,
     inProgress: rest.slice(0, BOARD_IN_PROGRESS_MAX),
     moreInProgress: Math.max(0, rest.length - BOARD_IN_PROGRESS_MAX),
     runtimeAvailable,
-    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length,
+    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length,
   };
 }
 
@@ -2313,6 +2316,8 @@ function boardKey(g, ctx) {
     more: g.moreInProgress || 0, allEmpty: !!g.allEmpty,
     turn: g.yourTurnFlows.map(flowFields), sessions: g.yourTurnSessions.map(sessionFields),
     meetings: (g.yourTurnMeetings || []).map((m) => [m.id, m.topic, m.status, m.created_at, m.spent_usd]), meetingsError: g.meetingsError || "",
+    staffing: (g.yourTurnStaffing || []).map((x) => [x.id, staffingTurnTitle(x), x.status, x.created_at, x.spent_usd, x.high_risk === true]),
+    staffingError: g.staffingError || "",
     progress: g.inProgress.map(flowFields) });
 }
 
@@ -2441,13 +2446,17 @@ function boardSection(g, opts = {}) {
         el("strong", null, "大廳目前沒有任務。想開始第一個任務？"),
         el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到終端工作台"),
         el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。"),
-        g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null));
+        g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
+        g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null));
   }
   const nTurn = g.yourTurnFlows.length;
   const nAgents = g.yourTurnSessions.length;
   const nMeetings = (g.yourTurnMeetings || []).length;
-  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
-  const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard), ...g.yourTurnSessions.map(sessionCard)];
+  const nStaffing = (g.yourTurnStaffing || []).length;
+  const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nStaffing ? `${nStaffing} 份組隊提案等你` : "",
+    nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
+  const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard),
+    ...(g.yourTurnStaffing || []).map(staffingTurnCard), ...g.yourTurnSessions.map(sessionCard)];
   let turnBody;
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
@@ -2466,6 +2475,7 @@ function boardSection(g, opts = {}) {
       sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到角色卡池頁查看`),
       flowsError(),
       g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
+      g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
       turnBody),
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
@@ -3514,7 +3524,7 @@ async function viewOffice() {
   // the meeting room is read beside the office (the list, and the picked meeting in full); it is part of what a repaint compares
   const computeModel = () => {
     const m = officeModel(D.live, D.flows, S.profiles, officeOverrides(S.profiles.profiles, store));
-    m.room = meetingRoomModel(S.meetings.list, S.meetings.detail);
+    m.room = meetingRoomModel(S.meetings.list, S.meetings.detail, S.meetings.staffing);
     return m;
   };
 
@@ -3603,7 +3613,7 @@ async function viewOffice() {
     if (m.allEmpty) {
       // no card, flow or terminal; a meeting can still run or wait for the chairman (its record keeps the seats, even of a
       // deleted card), and unreadable records are still worth saying: then the room stays under the empty state
-      const room = m.room && (!m.room.empty || m.room.blocked) ? meetingRoomSection(m.room) : null;
+      const room = m.room && (!m.room.empty || m.room.blocked || m.room.staffingBlocked) ? meetingRoomSection(m.room) : null;
       body = el("div", null,
         el("div", { class: "empty-state office-start" },
           el("strong", null, room ? "名冊上沒有角色卡，也沒有流程或終端。到終端工作台建立角色。" : "辦公室目前沒有人。到終端工作台建立角色。"),
@@ -12089,9 +12099,10 @@ async function route() {
       await loadLive();
       await loadFlows();
       await loadMeetings();
+      await loadStaffingList();
       const box = document.getElementById("h-board");
       if (!box) return;
-      const g = boardGroups(D.live, D.flows, D.meetings);
+      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing);
       const key = boardKey(g, boardKeyContext());
       if (key === boardShownKey) return;
       boardShownKey = key;
@@ -12320,70 +12331,137 @@ function meetingRoomPick(list) {
   return { id: active.length ? active[0].id : null, active: active.length, more: Math.max(0, active.length - 1), waiting: waiting.length,
     firstWaitingId: waiting.length ? waiting[0].id : null, blocked: items.length - ok.length };
 }
+// P35-4: the staffing meetings (組隊會議) share the room. The staffing records that run or wait for the chairman to look at
+// the proposal; a damaged one is counted, never drawn.
+function staffingItems(list) {
+  return list && typeof list === "object" && Array.isArray(list.staffing) ? list.staffing.filter((x) => x && typeof x === "object") : [];
+}
+function staffingNeedingYou(list) {
+  return staffingItems(list).filter((x) => !x.blocked && x.status === "ready").sort(meetingNewest);
+}
+function staffingRoomPick(list) {
+  const items = staffingItems(list);
+  const ok = items.filter((x) => !x.blocked);
+  const active = ok.filter((x) => x.status === "running" || x.status === "ready").sort(meetingNewest);
+  const waiting = staffingNeedingYou(list);
+  return { row: active[0] || null, active: active.length, waiting: waiting.length, firstWaitingId: waiting.length ? waiting[0].id : null,
+    blocked: items.length - ok.length };
+}
 // list: the answer of GET /api/meetings (or { error }); detail: the answer for the picked meeting, when it was read.
-function meetingRoomModel(list, detail) {
+// staffing (optional): { list: the answer of GET /api/staffing (or { error }), detail: the picked record, when it was read,
+// tasks: the task cards, or null }. Without it the room is the meetings' alone, as before; with it the newest of either
+// kind is drawn, and a staffing list that could not be read is said (staffingError), not taken as none.
+function meetingRoomModel(list, detail, staffing) {
   const base = { error: "", empty: false, id: null, topic: "", status: "", statusText: "", seats: [], detailMissing: false, more: 0,
-    waiting: 0, firstWaitingId: null, blocked: 0 };
-  if (!list || typeof list !== "object") return { ...base, error: "還沒有讀取到會議" };
-  if (list.error) return { ...base, error: String(list.error) };
-  if (!Array.isArray(list.meetings)) return { ...base, error: "會議資料的格式無法辨識" };
-  const pick = meetingRoomPick(list);
-  const out = { ...base, more: pick.more, waiting: pick.waiting, firstWaitingId: pick.firstWaitingId, blocked: pick.blocked };
-  if (!pick.id) return { ...out, empty: true };
-  out.id = pick.id;
-  if (detail && typeof detail === "object" && detail.id === pick.id) {
+    waiting: 0, firstWaitingId: null, blocked: 0, kind: "meeting", href: "", moreMeetings: 0, moreStaffing: 0, staffingShown: false,
+    staffingError: "", staffingWaiting: 0, firstStaffingWaitingId: null, staffingBlocked: 0 };
+  const out = { ...base };
+  if (!list || typeof list !== "object") out.error = "還沒有讀取到會議";
+  else if (list.error) out.error = String(list.error);
+  else if (!Array.isArray(list.meetings)) out.error = "會議資料的格式無法辨識";
+  const sList = staffing && typeof staffing === "object" ? staffing.list : undefined;
+  if (staffing && typeof staffing === "object") {
+    out.staffingShown = true;
+    if (!sList || typeof sList !== "object") out.staffingError = "還沒有讀取到組隊會議";
+    else if (sList.error) out.staffingError = String(sList.error);
+    else if (!Array.isArray(sList.staffing)) out.staffingError = "組隊會議資料的格式無法辨識";
+  }
+  const pick = out.error ? null : meetingRoomPick(list);
+  const sPick = out.staffingShown && !out.staffingError ? staffingRoomPick(sList) : null;
+  if (pick) Object.assign(out, { waiting: pick.waiting, firstWaitingId: pick.firstWaitingId, blocked: pick.blocked });
+  if (sPick) Object.assign(out, { staffingWaiting: sPick.waiting, firstStaffingWaitingId: sPick.firstWaitingId, staffingBlocked: sPick.blocked });
+  const mRow = pick && pick.id ? meetingItems(list).find((m) => m.id === pick.id) || { id: pick.id } : null;
+  const sRow = sPick ? sPick.row : null;
+  if (!mRow && !sRow) return { ...out, empty: !out.error && !out.staffingError };
+  const useStaffing = Boolean(sRow && (!mRow || (Number(sRow.created_at) || 0) > (Number(mRow.created_at) || 0)));
+  out.moreMeetings = Math.max(0, (pick ? pick.active : 0) - (useStaffing ? 0 : 1));
+  out.moreStaffing = Math.max(0, (sPick ? sPick.active : 0) - (useStaffing ? 1 : 0));
+  out.more = out.moreMeetings + out.moreStaffing;
+  if (useStaffing) {
+    const tasks = staffing.tasks;
+    out.kind = "staffing";
+    out.id = sRow.id;
+    out.href = `#/staffing/${encodeURIComponent(sRow.id)}`;
+    out.topic = Array.isArray(tasks) ? staffingTaskTitle(sRow.task_id, tasks) : "（讀不到任務卡的名稱）";
+    const d = staffing.detail;
+    if (d && typeof d === "object" && d.id === sRow.id) { out.status = d.status; out.seats = staffingSeats(d); }
+    else { out.status = sRow.status; out.detailMissing = true; }
+    out.statusText = staffingStatusText(out.status);
+    return out;
+  }
+  out.id = mRow.id;
+  out.href = `#/meetings/${encodeURIComponent(mRow.id)}`;
+  if (detail && typeof detail === "object" && detail.id === mRow.id) {
     out.topic = typeof detail.topic === "string" ? detail.topic : "";
     out.status = detail.status;
     out.statusText = meetingStatusText(detail.status);
     out.seats = meetingSeats(detail);
   } else {
-    const row = meetingItems(list).find((m) => m.id === pick.id) || {};
-    out.topic = typeof row.topic === "string" ? row.topic : "";
-    out.status = row.status;
-    out.statusText = meetingStatusText(row.status);
+    out.topic = typeof mRow.topic === "string" ? mRow.topic : "";
+    out.status = mRow.status;
+    out.statusText = meetingStatusText(mRow.status);
     out.detailMissing = true;
   }
   return out;
 }
 function meetingRoomKey(m) {
   return JSON.stringify([m.error, m.id, m.topic, m.status, m.detailMissing, m.more, m.waiting, m.firstWaitingId, m.blocked,
-    m.seats.map((s) => [s.profileId, s.name, s.positionLabel, s.proxy, s.bubble, s.species, s.camp])]);
+    m.kind, m.href, m.moreMeetings, m.moreStaffing, m.staffingShown, m.staffingError, m.staffingWaiting, m.firstStaffingWaitingId, m.staffingBlocked,
+    m.seats.map((s) => [s.profileId, s.name, s.positionLabel, s.proxy, s.bubble, s.species, s.camp, s.label])]);
 }
-// What the office reads: the list, and the picked meeting in full. A failed read is kept as an error, not as "none".
+// What the office reads: both lists, and the picked meeting or staffing record in full (with the task cards for a staffing
+// record's title). A failed read is kept as an error, not as "none".
 async function loadMeetingRoom() {
-  let list;
-  try { list = await api.get("/api/meetings"); }
-  catch (e) { return { list: { error: e.message || "讀不到" }, detail: null }; }
-  const pick = meetingRoomPick(list);
+  const [list, sList] = await Promise.all([api.get("/api/meetings").catch((e) => ({ error: e.message || "讀不到" })),
+    api.get("/api/staffing").catch((e) => ({ error: e.message || "讀不到" }))]);
+  const staffing = { list: sList, detail: null, tasks: null };
+  const picked = meetingRoomModel(list, null, staffing);
   let detail = null;
-  if (pick.id) { try { detail = await api.get(`/api/meetings/${encodeURIComponent(pick.id)}`); } catch (_) { detail = null; } }
-  return { list, detail };
+  if (picked.id && picked.kind === "meeting") {
+    try { detail = await api.get(`/api/meetings/${encodeURIComponent(picked.id)}`); } catch (_) { detail = null; }
+  } else if (picked.id) {
+    const [d, t] = await Promise.all([api.get(`/api/staffing/${encodeURIComponent(picked.id)}`).catch(() => null), api.get("/api/tasks").catch(() => null)]);
+    staffing.detail = d;
+    staffing.tasks = t && Array.isArray(t.tasks) ? t.tasks : null;
+  }
+  return { list, detail, staffing };
 }
 
 function meetingRoomSection(room) {
   const body = [];
   if (room.error) body.push(notice("warn", `讀不到會議：${room.error}`));
-  else if (room.empty) {
+  if (room.staffingError) body.push(notice("warn", `讀不到組隊會議：${room.staffingError}`));
+  if (room.id) {
+    const staffing = room.kind === "staffing";
+    body.push(
+      el("div", { class: "mt-room-head" }, staffing ? badge("組隊會議", "b-info") : null, el("strong", null, room.topic || "（沒有議題）"),
+        staffing ? staffingStatusBadge(room.status) : meetingStatusBadge(room.status)),
+      room.detailMissing ? notice("warn", staffing ? "讀不到這場組隊會議的內容，所以先不畫座位。" : "讀不到這場會議的內容，所以先不畫座位。")
+        : el("div", { class: "mt-seats" }, room.seats.map((s) => meetingSeatNode(s, { href: room.href }))),
+      room.moreMeetings ? el("a", { class: "btn small office-more", href: "#/meetings" }, `還有 ${room.moreMeetings} 場會議 →`) : null,
+      room.moreStaffing ? el("a", { class: "btn small office-more", href: "#/staffing" }, `還有 ${room.moreStaffing} 場組隊會議 →`) : null);
+  } else if (!room.error && !room.staffingError) {
     body.push(el("p", { class: "small muted office-empty" }, "目前沒有進行中或等你核准的會議。"),
       el("a", { class: "btn small", href: "#/meetings" }, "到會議頁開一場"));
-  } else {
-    const href = `#/meetings/${encodeURIComponent(room.id)}`;
-    body.push(
-      el("div", { class: "mt-room-head" }, el("strong", null, room.topic || "（沒有議題）"), meetingStatusBadge(room.status)),
-      room.detailMissing ? notice("warn", "讀不到這場會議的內容，所以先不畫座位。") : el("div", { class: "mt-seats" },
-        room.seats.map((s) => meetingSeatNode(s, { href }))),
-      room.more ? el("a", { class: "btn small office-more", href: "#/meetings" }, `還有 ${room.more} 場 →`) : null);
   }
   const deskHref = room.firstWaitingId ? `#/meetings/${encodeURIComponent(room.firstWaitingId)}` : "#/meetings";
+  const desk = [];
+  if (!room.error) {
+    desk.push(el("span", null, room.waiting ? `${room.waiting} 場等你核准` : "沒有等你核准的會議"),
+      room.waiting ? el("a", { class: "btn small primary", href: deskHref }, "去核准") : null);
+  }
+  if (room.staffingShown && !room.staffingError) {
+    desk.push(el("span", null, room.staffingWaiting ? `${room.staffingWaiting} 份組隊提案待你看` : "沒有待你看的組隊提案"),
+      room.staffingWaiting ? el("a", { class: "btn small primary", href: `#/staffing/${encodeURIComponent(room.firstStaffingWaitingId)}` }, "去看提案") : null);
+  }
+  const waits = room.waiting || room.staffingWaiting;
   return el("section", { class: "office-section mt-room", "data-office-section": "meeting-room" },
     el("h2", { id: "office-meeting-room", tabindex: "-1" }, "會議室"),
     el("p", { class: "small muted" }, "座位頭上的字只來自會議紀錄；點座位看完整的發言與證據。"),
     body,
-    !room.error ? el("div", { class: `mt-desk${room.waiting ? " mt-desk-waits" : ""}`, "data-mt": "chairman-desk" },
-      el("strong", null, "董事長桌"),
-      el("span", null, room.waiting ? `${room.waiting} 場等你核准` : "沒有等你核准的會議"),
-      room.waiting ? el("a", { class: "btn small primary", href: deskHref }, "去核准") : null) : null,
-    room.blocked ? el("p", { class: "small muted" }, `有 ${room.blocked} 場會議的紀錄無法讀取，請到會議頁查看。`) : null);
+    desk.length ? el("div", { class: `mt-desk${waits ? " mt-desk-waits" : ""}`, "data-mt": "chairman-desk" }, el("strong", null, "董事長桌"), desk) : null,
+    room.blocked ? el("p", { class: "small muted" }, `有 ${room.blocked} 場會議的紀錄無法讀取，請到會議頁查看。`) : null,
+    room.staffingBlocked ? el("p", { class: "small muted" }, `有 ${room.staffingBlocked} 份組隊紀錄無法讀取，請到組隊會議頁查看。`) : null);
 }
 
 // ---- the home page's card ----
@@ -12397,6 +12475,23 @@ function meetingTurnCard(m) {
       el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), "董事長核准")),
     // the total may hold a call that reported nothing (counted at the per-call limit): the card says so, as the meeting page does
     el("div", { class: "stat-line" }, el("span", null, "花費 ", el("b", null, `US$${m.spent_usd}`), "（Claude Code 回報的估值；沒有回報的呼叫以每次上限計）")),
+    el("div", { class: "quest-go" }, "前往處理 →"));
+}
+
+// P35-4: a staffing proposal that waits for the chairman. Its task card's title is the one the page last read (taskIndex).
+function staffingTurnTitle(x) {
+  const t = taskIndex.get(x.task_id);
+  return t ? String(t.title || "（沒有名稱）") : "（任務卡的名稱讀不到，或已刪除）";
+}
+function staffingTurnCard(x) {
+  return el("article", { class: "card quest quest-turn", "data-quest": "staffing", "data-st": "board-card", "data-staffing-id": x.id },
+    el("div", { class: "card-top" },
+      el("div", { style: "min-width:0" },
+        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/staffing/${encodeURIComponent(x.id)}` }, `組隊會議：${staffingTurnTitle(x)}`)),
+        el("div", { class: "card-sub" }, "CEO 已提出組隊提案，等你看過、決定要不要採用")),
+      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), "組隊提案")),
+    x.high_risk === true ? el("div", { class: "small" }, badge("有高風險", "b-warn", "有發言者把風險標成「高」；這只是提醒")) : null,
+    el("div", { class: "stat-line" }, el("span", null, "花費 ", el("b", null, `US$${x.spent_usd}`), "（Claude Code 回報的估值；沒有回報的呼叫以每次上限計）")),
     el("div", { class: "quest-go" }, "前往處理 →"));
 }
 
@@ -12545,6 +12640,12 @@ async function loadMeetings() {
   try { D.meetings = await api.get("/api/meetings"); }
   catch (e) { D.meetings = { error: e.message, meetings: [] }; }
   return D.meetings;
+}
+// P35-4: the staffing records, for the home page's board
+async function loadStaffingList() {
+  try { D.staffing = await api.get("/api/staffing"); }
+  catch (e) { D.staffing = { error: e.message, staffing: [] }; }
+  return D.staffing;
 }
 
 function meetingRow(m) {

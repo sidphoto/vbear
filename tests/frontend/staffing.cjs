@@ -114,6 +114,7 @@ function setPage(over = {}) {
     }
     if (p === "/api/staffing/preview") return page.previewStatus === 200 ? jsonResponse(page.preview) : jsonResponse(page.preview, false, page.previewStatus);
     if (p === "/api/staffing" && method === "GET") {
+      if (page.staffingError) return jsonResponse({ code: "io", error: page.staffingError }, false, 500);
       const t = params.get("task_id");
       return jsonResponse({ staffing: t ? page.list.filter((r) => r.blocked || r.task_id === t) : page.list });
     }
@@ -891,6 +892,92 @@ test("a card made in the wizard that is gone, too many skills, or a card that ch
   const max = (file, name) => Number(new RegExp(`^${name} = (\\d+)$`, "m").exec(fs.readFileSync(path.join(__dirname, "..", "..", "vbear", file), "utf8"))[1]);
   assert.strictEqual(app.CARD_SKILLS_MAX, max("agent_profiles.py", "MAX_SKILLS_PER_PROFILE"));
   assert.strictEqual(app.STAFFING_ADOPTED_SKILLS_MAX, max("staffing.py", "ADOPTED_SKILLS_MAX"));
+});
+
+// ---- P35-4: the office's meeting room and chairman's desk, and the home page's 「輪到你」 ----------------------------------
+
+const byClass = (n, c) => n.findAll((x) => x.hasClass && x.hasClass(c));
+const roomOf = (main) => main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room");
+function runningStaffing() {
+  return detail(record({ id: SID2, task_id: "task-9", status: "running", created_at: 1790000500,
+    turns: [sturn(1, "pm", "opinion", "done", { output: pmSaid() }), sturn(2, "law", "opinion", "running"), sturn(3, "ceo", "proposal", "queued")],
+    chairman: { state: "pending", at: null, note: "", adopted: null, label: "主控台記錄（未驗證身分）" } }));
+}
+
+test("the office's meeting room shows a staffing meeting that runs, called 組隊會議; the desk counts the proposals waiting for you", async () => {
+  setRecord();
+  page.list = [row(), row({ id: SID2, task_id: "task-9", status: "running", created_at: 1790000500 })];
+  runningStaffing();
+  const main = await open("#/office");
+  const room = roomOf(main);
+  assert(room, "a meeting room");
+  noMarkup(room);
+  assert(text(room).includes("組隊會議") && text(room).includes("別張卡"), text(room));
+  const seats = byClass(room, "mt-seat");
+  assert.deepStrictEqual(seats.map((x) => text(byClass(x, "mt-bubble")[0])), ["已建議", "發言中", "等發言"], "the bubbles are the record's");
+  assert(seats.every((x) => x.getAttribute("href") === "#/staffing/" + SID2), "a seat leads to the staffing record");
+  assert(text(room).includes("還有 1 場組隊會議"), text(room));
+  const desk = qm(room, "chairman-desk");
+  assert(desk && text(desk).includes("1 份組隊提案待你看"), text(desk));
+  const go = desk.find((n) => n.tag === "a" && n.getAttribute("href") === "#/staffing/" + SID);
+  assert(go && text(go) === "去看提案", "the desk leads to the proposal");
+  assert.strictEqual(writes().length, 0);
+});
+
+test("the room picks the newest of the meetings and the staffing meetings; without the staffing ones it is as before", () => {
+  const meetings = { meetings: [{ id: "m-0123456789ab", topic: "會議", status: "running", created_at: 1790000100 }] };
+  const staffing = { list: { staffing: [row(), row({ id: SID2, task_id: "task-9", status: "running", created_at: 1790000500 })] }, detail: runningStaffing(),
+    tasks: [TASK(), TASK({ id: "task-9", title: "別張卡" })] };
+  const plain = app.meetingRoomModel(meetings, null);
+  assert.strictEqual(plain.kind, "meeting");
+  assert.strictEqual(plain.id, "m-0123456789ab");
+  const both = app.meetingRoomModel(meetings, null, staffing);
+  assert.deepStrictEqual([both.kind, both.id, both.topic, both.href, both.more], ["staffing", SID2, "別張卡", "#/staffing/" + SID2, 2]);
+  assert.deepStrictEqual([both.staffingWaiting, both.firstStaffingWaitingId], [1, SID]);
+  assert.strictEqual(both.seats.length, 3);
+  const older = app.meetingRoomModel(meetings, null, { ...staffing, list: { staffing: [row({ created_at: 1790000000 })] } });
+  assert.deepStrictEqual([older.kind, older.id, older.more], ["meeting", "m-0123456789ab", 1], "a proposal that waits is in the room too");
+  assert.notStrictEqual(app.meetingRoomKey(both), app.meetingRoomKey(plain), "a staffing meeting joining repaints the office");
+  const unread = app.meetingRoomModel(meetings, null, { list: { error: "壞了" }, detail: null, tasks: null });
+  assert.strictEqual(unread.staffingError, "壞了");
+  assert.strictEqual(unread.id, "m-0123456789ab", "the meetings are still drawn");
+  assert.notStrictEqual(app.meetingRoomKey(unread), app.meetingRoomKey(plain));
+  assert.strictEqual(app.meetingRoomModel({ meetings: [] }, null, { list: { error: "壞了" } }).empty, false, "not read is not none");
+});
+
+test("the office says so when the staffing meetings could not be read, and when there is nothing in the room", async () => {
+  setRecord({}, { staffingError: "讀檔失敗 " + EVIL });
+  let main = await open("#/office");
+  let room = roomOf(main);
+  assert(room && text(room).includes("讀不到組隊會議：讀檔失敗"), text(room));
+  noMarkup(room);
+  setRecord({}, { list: [] });
+  main = await open("#/office");
+  room = roomOf(main);
+  assert(text(room).includes("目前沒有進行中或等你核准的會議") && text(room).includes("沒有待你看的組隊提案"), text(room));
+});
+
+test("home: a staffing proposal waiting for the chairman is on the 'your turn' board; a running one is not", async () => {
+  setRecord();
+  const L = { runtime: { available: true } };
+  const g = app.boardGroups(L, { flows: [] }, { meetings: [] }, { staffing: page.list });
+  assert.deepStrictEqual(g.yourTurnStaffing.map((x) => x.id), [SID]);
+  assert.strictEqual(g.allEmpty, false);
+  assert.strictEqual(app.boardGroups(L, { flows: [] }, { meetings: [] }, { staffing: [row({ status: "running" })] }).allEmpty, true);
+  assert.strictEqual(app.boardGroups(L, { flows: [] }, { meetings: [] }).yourTurnStaffing.length, 0, "the fourth argument is optional");
+  assert.strictEqual(app.boardGroups(L, { flows: [] }, { meetings: [] }, { error: "壞了" }).staffingError, "壞了");
+  const k0 = app.boardKey(app.boardGroups(L, { flows: [] }, { meetings: [] }, { staffing: [] }), { liveError: "", projects: [] });
+  assert.notStrictEqual(k0, app.boardKey(g, { liveError: "", projects: [] }), "a proposal joining repaints the board");
+  const main = await open("#/");
+  const card = q(main, "board-card");
+  assert(card, "a card on the board: " + text(main).slice(0, 400));
+  assert(card.find((n) => n.tag === "a" && n.getAttribute("href") === "#/staffing/" + SID));
+  assert(text(card).includes("官網改版") && text(card).includes("組隊提案"), text(card));
+  assert(text(main).includes("1 份組隊提案等你"), text(main).slice(0, 600));
+  noMarkup(main);
+  setRecord({}, { staffingError: "壞了" });
+  const bad = await open("#/");
+  assert(text(bad).includes("讀不到組隊會議：壞了"), text(bad).slice(0, 600));
 });
 
 // ---- run ---------------------------------------------------------------------------------------------------------

@@ -78,6 +78,8 @@ function setPage(over = {}) {
     if (p === "/api/agent-builder/catalog") return jsonResponse({ ok: false });
     if (p === "/api/meetings" && method === "GET") return page.meetingsError ? jsonResponse({ error: page.meetingsError }, false, 500) : jsonResponse({ meetings: page.meetings });
     if (p === "/api/meetings/ledger") return jsonResponse(page.ledger);
+    // the office and the home page read the staffing meetings too (P35-4; tests/frontend/staffing.cjs has its own): here there are none
+    if (p === "/api/staffing" && method === "GET") return jsonResponse({ staffing: [] });
     if (p === "/api/meetings/preview") return page.previewStatus === 200 ? jsonResponse(page.preview) : jsonResponse(page.preview, false, page.previewStatus);
     if (p === "/api/meetings" && method === "POST") return jsonResponse(page.details[MID] || meeting(), true, 202);
     const m = /^\/api\/meetings\/(m-[0-9a-f]{12})(?:\/([a-z-]+))?$/.exec(p);
@@ -816,7 +818,8 @@ test("the office says so when the meetings could not be read, and when there are
   const room = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room");
   assert(text(room).includes("目前沒有進行中或等你核准的會議"));
   assert(room.find((n) => n.tag === "a" && n.getAttribute("href") === "#/meetings"));
-  setHandler((url) => (url.split("?")[0] === "/api/meetings" ? jsonResponse({ error: "壞了" }, false, 500) : null));
+  setHandler((url) => (url.split("?")[0] === "/api/meetings" ? jsonResponse({ error: "壞了" }, false, 500)
+    : url.split("?")[0] === "/api/staffing" ? jsonResponse({ staffing: [] }) : null));
   main = await open("#/office");
   const room2 = main.find((n) => n.getAttribute && n.getAttribute("data-office-section") === "meeting-room");
   assert(text(room2).includes("讀不到會議"), text(room2));

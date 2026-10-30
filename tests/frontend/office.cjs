@@ -523,8 +523,10 @@ function setPage(over = {}) {
     if (p === "/api/live") return page.liveError ? jsonResponse({ error: page.liveError }, false, 500) : jsonResponse(page.live);
     if (p === "/api/flows") return page.flowsError ? jsonResponse({ error: page.flowsError }, false, 500) : jsonResponse(page.flows);
     if (p === "/api/agent-profiles") return page.profilesError ? jsonResponse({ error: page.profilesError }, false, 500) : jsonResponse(page.profiles);
-    // the office reads the meetings too (P34-5; tests/frontend/meetings.cjs has its own): here there are none
+    // the office reads the meetings and the staffing meetings too (P34-5, P35-4; tests/frontend/meetings.cjs and staffing.cjs
+    // have their own): here there are none
     if (p === "/api/meetings") return jsonResponse({ meetings: [] });
+    if (p === "/api/staffing") return jsonResponse({ staffing: [] });
     const m = /^\/api\/agent-profiles\/([^/]+)\/loadout$/.exec(p);
     if (m) return page.loadoutError ? jsonResponse({ error: page.loadoutError }, false, 500) : jsonResponse(page.loadout[m[1]] || loadoutOf("claude"));
     return null;
