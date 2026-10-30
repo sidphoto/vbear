@@ -1508,6 +1508,12 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .st-draft-row .row { gap: 6px 10px; }
 .st-draft-skills { margin: 0; padding-left: 18px; }
 .st-draft select { max-width: 100%; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); }
+.st-adopt-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.st-adopt-step { display: grid; gap: 6px; }
+.st-adopt-step .row { gap: 6px 10px; }
+.st-adopt-step ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.st-adopt-step textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); }
+.st-confirm-line { display: block; }
 .mt-clock { padding: 6px 10px; border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 6px; color: var(--ink); }
 @media (max-width: 720px) { .mt-cards { grid-template-columns: 1fr; } .mt-seats { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .mt-seat { transition: none; } }

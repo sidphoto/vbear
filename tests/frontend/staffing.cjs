@@ -83,7 +83,25 @@ function setPage(over = {}) {
     if (p === "/api/skills") return jsonResponse({ skills: [], categories: [] });
     if (p === "/api/roles") return jsonResponse({ roles: [] });
     if (p === "/api/live") return jsonResponse({ runtime: { available: true, problems: [] }, sessions: [], attention: [], projects: [] });
-    if (p === "/api/flows") return jsonResponse({ ok: true, flows: [] });
+    if (p === "/api/flows" && method === "GET") return jsonResponse({ ok: true, flows: page.flows || [] });
+    if (p === "/api/flows" && method === "POST") {
+      const b = JSON.parse(opts.body);
+      const f = { id: "flow-0123456789ab", task_id: b.task_id, roles: b.roles, phase: { key: "planning", label: "規劃中" } };
+      page.flows = [f];
+      return jsonResponse({ ok: true, flow: f });
+    }
+    if (p === "/api/agent-profiles" && method === "POST") {
+      const b = JSON.parse(opts.body);
+      const made = { id: "made-law", revision: REV("c"), ...b };
+      page.profiles = [...page.profiles, made];
+      return jsonResponse({ ok: true, profile: made });
+    }
+    const card = /^\/api\/agent-profiles\/([^/]+)$/.exec(p);
+    if (card && method === "POST") {
+      const b = JSON.parse(opts.body);
+      page.profiles = page.profiles.map((x) => (x.id === card[1] ? { ...x, ...b, revision: REV(((Number.parseInt(x.revision[0], 16) + 1) % 16).toString(16)) } : x));
+      return jsonResponse({ ok: true, profile: page.profiles.find((x) => x.id === card[1]) });
+    }
     if (p === "/api/agent-profiles") return jsonResponse({ ok: true, profiles: page.profiles });
     if (p === "/api/tasks") return jsonResponse({ ok: true, tasks: page.tasks });
     if (p === "/api/config") return jsonResponse({ ok: true, config: {} });
@@ -105,6 +123,13 @@ function setPage(over = {}) {
     if (m && !m[2] && method === "DELETE") return jsonResponse({ ok: true, deleted: m[1] });
     if (m && m[2] === "retry-preview") return jsonResponse(page.retryPreview);
     if (m && (m[2] === "retry" || m[2] === "cancel")) return jsonResponse(page.details[m[1]], true, m[2] === "retry" ? 202 : 200);
+    if (m && m[2] === "chairman") {
+      const b = JSON.parse(opts.body);
+      const state = b.decision === "adopt" ? "adopted" : "dismissed";
+      page.details[m[1]] = { ...page.details[m[1]], status: state,
+        chairman: { state, at: 1790010000, note: b.note || "", adopted: b.adopted || null, label: "主控台記錄（未驗證身分）" } };
+      return jsonResponse(page.details[m[1]]);
+    }
     if (p === "/api/meetings/verify") return jsonResponse({ version: "2.1.296", passed_at: 1790000000 });
     if (p === "/api/translations") return jsonResponse({ counts: {}, jobs: [] });
     return null;
@@ -691,6 +716,181 @@ test("the page's places fit the positions the server's do", () => {
     assert(m, slot);
     assert.deepStrictEqual(app.STAFFING_SLOT_FIT[slot], [...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]), slot);
   }
+});
+
+// ---- P35-4: adopting the proposal, one step at a time ---------------------------------------------------------------
+
+const madeKey = "sid:staffing.made." + SID;
+const stepOf = (main, key) => qa(main, "adopt-step").find((x) => x.getAttribute("data-step") === key);
+const stateOf = (main, key) => text(q(stepOf(main, key), "step-state"));
+const doBtn = (main, key, attr, value) => qa(main, key).find((b) => !attr || b.getAttribute(attr) === value);
+async function tick(main, key) { const box = q(draftRow(main, key), "take"); box.checked = true; box.dispatch("change"); await settle(); }
+function freshAdoption() { delete global.localStorage._store[draftKey]; delete global.localStorage._store[madeKey]; }
+
+test("the adoption list: its six steps in a fixed order, each the person's own button, and nothing sent by opening it", async () => {
+  freshAdoption();
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  const list = q(main, "adopt");
+  assert(list, "an adoption list under the draft");
+  noMarkup(list);
+  assert.deepStrictEqual(qa(list, "adopt-step").map((x) => x.getAttribute("data-step")), ["enable", "create", "skills", "team", "meeting", "record"]);
+  assert(text(list).includes("每一步都要你自己按") && text(list).includes("不會安裝或下載"), text(list));
+  assert.strictEqual(stateOf(main, "enable"), "沒有要做的", "no disabled card is ticked");
+  assert.strictEqual(stateOf(main, "create"), "輪到這一步");
+  assert(doBtn(main, "do-create", "data-ref", "N1") && !doBtn(main, "do-create", "data-ref", "N1").disabled);
+  assert(stateOf(main, "skills").includes("先做完第 2 步"), stateOf(main, "skills"));
+  assert(qa(main, "do-insert").every((b) => b.disabled), "a later step waits");
+  assert(q(main, "do-team").disabled);
+  assert(q(main, "do-adopt").disabled && text(q(main, "adopt-why")).includes("先做完"), text(q(main, "adopt-why")));
+  assert(!q(main, "do-dismiss").disabled, "不採用 is always the chairman's to record");
+  assert.strictEqual(writes().length, 0, "opening the page sends nothing");
+});
+
+test("a row VBear flagged can still be ticked by the person, and a disabled card adds the step 啟用", async () => {
+  freshAdoption();
+  setRecord();
+  let main = await open("#/staffing/" + SID);
+  await tick(main, "staff:art");
+  assert(takeOf(draftRow(main, "staff:art")), "the person's own tick holds, flagged or not");
+  q(draftRow(main, "slot:executor"), "draft-skill").dispatch("change");
+  await settle();
+  assert(takeOf(draftRow(main, "staff:art")), "a change elsewhere does not take it back");
+  assert.strictEqual(stateOf(main, "enable"), "輪到這一步");
+  const enable = doBtn(main, "do-enable", "data-profile", "art-off");
+  assert(enable && text(enable).includes("停用的藝術"), "the card is named");
+  assert(doBtn(main, "do-create", "data-ref", "N1").disabled && stateOf(main, "create").includes("先做完第 1 步"));
+  enable.click();
+  await settle();
+  assert.deepStrictEqual(posts("/api/agent-profiles/art-off").map((c) => c.body), [{ enabled: true }], "only the switch is sent");
+  main = h.dom().mainEl;
+  assert.strictEqual(stateOf(main, "enable"), "已完成");
+  assert.strictEqual(stateOf(main, "create"), "輪到這一步");
+});
+
+test("from the proposal to an adopted team: enable, the wizard, the skills, the team board, the meeting, the record", async () => {
+  freshAdoption();
+  const rec = setRecord({}, { flows: [] });
+  rec.turns[2].output.kept.new_cards[0].skills = ["S2", "S5"];   // a shared skill the new Claude card reads, and an AGY one it does not
+  let main = await open("#/staffing/" + SID);
+  await tick(main, "staff:art");
+  doBtn(main, "do-enable", "data-profile", "art-off").click();
+  await settle();
+  main = h.dom().mainEl;
+  // 2: the CEO's new card, through the wizard, filled from the proposal
+  doBtn(main, "do-create", "data-ref", "N1").click();
+  await settle();
+  let dlg = dialog();
+  assert(dlg && text(dlg).includes("CEO 的組隊提案"), "the wizard opens with the draft");
+  assert.strictEqual(posts("/api/agent-profiles").length, 0, "the wizard is not saved by opening it");
+  for (let i = 0; i < 2; i++) { dlg.find((n) => n.getAttribute && n.getAttribute("data-cw") === "next").click(); await settle(); }
+  dlg.find((n) => n.getAttribute && n.getAttribute("data-cw") === "save").click();
+  await settle();
+  const made = posts("/api/agent-profiles")[0].body;
+  assert.deepStrictEqual([made.name, made.position, made.model], ["法務新卡 " + EVIL, "legal", { tool: "claude", model_id: "sonnet" }]);
+  assert.deepStrictEqual(made.equipped_skill_ids, ["sk-test"], "the CEO's skills for the new card that it can read");
+  main = h.dom().mainEl;
+  assert.strictEqual(stateOf(main, "create"), "已完成");
+  assert(text(draftRow(main, "staff:legal")).includes("由 CEO 建議的新卡建立"), text(draftRow(main, "staff:legal")));
+  // 3: each card's skills, after a page of its own that shows the list before and after
+  assert.strictEqual(stateOf(main, "skills"), "輪到這一步");
+  assert.deepStrictEqual(qa(main, "do-insert").map((b) => b.getAttribute("data-profile")), ["eng", "eng2"]);
+  doBtn(main, "do-insert", "data-profile", "eng").click();
+  await settle();
+  dlg = dialog();
+  for (const words of ["插上前（1 張）", "網站前端", "插上後（2 張）", "新增：測試檢查", "只是紀錄"]) assert(text(dlg).includes(words), words + ": " + text(dlg));
+  noMarkup(dlg);
+  dlg.find((n) => n.tag === "button" && text(n) === "取消").click();
+  await settle();
+  assert.strictEqual(posts("/api/agent-profiles/eng").length, 0, "取消 sends nothing");
+  for (const id of ["eng", "eng2"]) {
+    doBtn(h.dom().mainEl, "do-insert", "data-profile", id).click();
+    await settle();
+    dialog().find((n) => n.tag === "button" && text(n) === "插上").click();
+    await settle();
+  }
+  assert.deepStrictEqual(posts("/api/agent-profiles/eng").map((c) => c.body), [{ equipped_skill_ids: ["sk-web", "sk-test"] }]);
+  assert.deepStrictEqual(posts("/api/agent-profiles/eng2").map((c) => c.body), [{ equipped_skill_ids: ["sk-codex"] }]);
+  main = h.dom().mainEl;
+  assert.strictEqual(stateOf(main, "skills"), "已完成");
+  // 4: the team goes to the task card's board, unsaved; only 建立隊伍 there writes the flow
+  assert.strictEqual(stateOf(main, "team"), "輪到這一步");
+  assert(q(main, "do-adopt").disabled, "not before the team");
+  q(main, "do-team").click();
+  await settle();
+  assert.strictEqual(global.location.hash, "#/workbench?task=task-1");
+  assert.strictEqual(posts("/api/flows").length, 0);
+  const board = app.teamBoard({ task: TASK(), flow: null, profiles: page.profiles, catalog: CATALOG(), gitState: "git" });
+  assert.deepStrictEqual(["planner", "executor", "reviewer1", "reviewer2"].map((k) => board.state.slots[k] && board.state.slots[k].profile_id),
+    ["ceo", "eng", "eng2", null]);
+  assert.strictEqual(board.state.dirty, true);
+  assert.strictEqual(posts("/api/flows").length, 0, "the board sends nothing until 建立隊伍");
+  board.node.find((n) => n.getAttribute && n.getAttribute("data-act") === "save").click();
+  await settle();
+  assert.strictEqual(posts("/api/flows").length, 1);
+  // 5 and 6, back on the staffing page
+  main = await open("#/staffing/" + SID);
+  assert.strictEqual(stateOf(main, "team"), "已完成");
+  assert.strictEqual(q(main, "do-meeting").getAttribute("href"), "#/meetings?task=task-1&speakers=made-law%2Cart-off");
+  assert(!q(main, "do-adopt").disabled);
+  q(main, "adopt-note").value = "照這樣組隊 " + EVIL;
+  q(main, "do-adopt").click();
+  await settle();
+  const sent = posts("/chairman").map((c) => c.body);
+  assert.deepStrictEqual(sent, [{ decision: "adopt", note: "照這樣組隊 " + EVIL, adopted: { rows: [
+    { kind: "slot", place: "planner", profile_id: "ceo", new_ref: "", skill_ids: [] },
+    { kind: "slot", place: "executor", profile_id: "eng", new_ref: "", skill_ids: ["sk-web", "sk-test"] },
+    { kind: "slot", place: "reviewer1", profile_id: "eng2", new_ref: "", skill_ids: ["sk-codex"] },
+    { kind: "staff", place: "legal", profile_id: "made-law", new_ref: "N1", skill_ids: ["sk-test"] },
+    { kind: "staff", place: "art", profile_id: "art-off", new_ref: "", skill_ids: [] }] } }]);
+  main = h.dom().mainEl;
+  const desk = q(main, "chairman");
+  noMarkup(desk);
+  for (const words of ["董事長記下：採用", "主控台記錄（未驗證身分）", "執行位：全端工程師", "插 2 張技能", "法務新卡", "由 CEO 建議的新卡 N1 建立）・插 1 張技能"]) {
+    assert(text(desk).includes(words), words + ": " + text(desk));
+  }
+  assert.strictEqual(q(main, "adopt"), null, "nothing more to adopt");
+  assert.strictEqual(JSON.parse(global.localStorage._store[draftKey] || "null"), null, "the draft is let go once it is recorded");
+  assert.strictEqual(JSON.parse(global.localStorage._store[madeKey] || "null"), null);
+});
+
+test("不採用 is recorded with its note and nothing else; a record the CEO could not finish can only be dismissed", async () => {
+  freshAdoption();
+  setRecord();
+  let main = await open("#/staffing/" + SID);
+  q(main, "adopt-note").value = "先不做";
+  q(main, "do-dismiss").click();
+  await settle();
+  assert.deepStrictEqual(posts("/chairman").map((c) => c.body), [{ decision: "dismiss", note: "先不做" }]);
+  const r = setRecord({ status: "incomplete", high_risk: false });
+  r.turns[2] = sturn(3, "ceo", "proposal", "failed", { error_code: "invalid_output", evidence: null });
+  main = await open("#/staffing/" + SID);
+  assert.strictEqual(q(main, "adopt"), null);
+  const desk = q(main, "chairman");
+  assert.strictEqual(q(desk, "do-adopt"), null);
+  q(desk, "do-dismiss").click();
+  await settle();
+  assert.deepStrictEqual(posts("/chairman").map((c) => c.body), [{ decision: "dismiss", note: "" }]);
+});
+
+test("a card made in the wizard that is gone, too many skills, or a card that changed under the team is said, not done", async () => {
+  freshAdoption();
+  global.localStorage._store[madeKey] = JSON.stringify({ N1: "gone-card" });
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  assert(text(stepOf(main, "create")).includes("用精靈建的卡已不在"), text(stepOf(main, "create")));
+  assert(doBtn(main, "do-create", "data-ref", "N1"), "it can be made again");
+  const many = Array.from({ length: 200 }, (_, i) => "x-" + i);
+  setRecord({}, { profiles: PROFILES3().map((p) => (p.id === "eng" ? { ...p, equipped_skill_ids: many } : p)) });
+  global.localStorage._store[madeKey] = JSON.stringify({ N1: "eng2" });
+  const full = await open("#/staffing/" + SID);
+  const step = stepOf(full, "skills");
+  assert(text(step).includes("最多 200 張"), text(step));
+  assert(doBtn(full, "do-insert", "data-profile", "eng").disabled);
+  freshAdoption();
+  const max = (file, name) => Number(new RegExp(`^${name} = (\\d+)$`, "m").exec(fs.readFileSync(path.join(__dirname, "..", "..", "vbear", file), "utf8"))[1]);
+  assert.strictEqual(app.CARD_SKILLS_MAX, max("agent_profiles.py", "MAX_SKILLS_PER_PROFILE"));
+  assert.strictEqual(app.STAFFING_ADOPTED_SKILLS_MAX, max("staffing.py", "ADOPTED_SKILLS_MAX"));
 });
 
 // ---- run ---------------------------------------------------------------------------------------------------------

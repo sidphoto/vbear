@@ -12715,6 +12715,74 @@ async function viewMeetingDetail(token, id) {
     try { const res = await fn(); if (res && typeof res === "object" && res.id === id) cur = res; if (token === seq) draw(); }
     catch (e) { toast(e.message); await reload(); }
   };
+  // P35-4: adopting the draft. Each step is the person's press, through an endpoint that already exists; afterwards the
+  // cards and the flows are read again and the list is drawn from them.
+  const did = new Set();
+  const made = staffingMadeRead(id);
+  let stepBusy = false;
+  const refreshCards = async () => {
+    const [p, f] = await Promise.all([api.get("/api/agent-profiles").catch(() => null), api.get("/api/flows").catch(() => null)]);
+    if (p && Array.isArray(p.profiles)) profiles = p.profiles;
+    flows = f && Array.isArray(f.flows) ? f.flows : null;
+  };
+  const stepDone = async (key, fn) => {
+    if (stepBusy) return;
+    stepBusy = true;
+    try { if ((await fn()) !== false) did.add(key); } catch (e) { toast(e.message); }
+    stepBusy = false;
+    await refreshCards();
+    if (token === seq) draw();
+  };
+  const skillName = (sid) => { const sk = skills.find((x) => x && x.skill_id === sid); return sk ? String(sk.name || sid) : `${STAFFING_NOT_FOUND}（${sid}）`; };
+  const recorded = (res) => {
+    store.set(STAFFING_DRAFT_KEY + id, null);
+    store.set(STAFFING_MADE_KEY + id, null);
+    return res;
+  };
+  function adoptActs(view, env, draft, keep) {
+    const task = tasksList.find((t) => t.id === view.task_id);
+    return {
+      canWizard: Boolean(catalog && Array.isArray(catalog.tools)),
+      taskFound: Boolean(task),
+      enable: (p) => { keep(); stepDone("enable", () => api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}`, { enabled: true })); },
+      create: (ref) => {
+        keep();
+        const n = env.news.get(ref);
+        if (!n) return;
+        // the wizard ticks what it can of these: the skills of every taken row of this new card, and the CEO's for it
+        const skillIds = [...new Set(draft.rows.filter((r) => r.take && r.who && r.who.type === "new" && r.who.ref === ref)
+          .flatMap((r) => staffingAdoptSkills(r, env)))];
+        openCardWizard({ catalog, profiles, draft: { name: n.name, position: n.position, tool: n.tool, modelId: n.model_alias, skillIds },
+          onSaved: async (saved) => {
+            if (saved && typeof saved.id === "string") { made[ref] = saved.id; store.set(STAFFING_MADE_KEY + id, made); did.add("create"); }
+            await refreshCards();
+            if (token === seq) draw();
+          } });
+      },
+      insert: (c) => {
+        keep();
+        stepDone("skills", async () => {
+          const line = (words) => el("span", { class: "st-confirm-line" }, words);
+          const names = (ids) => (ids.length ? ids.map(skillName).join("、") : "（沒有）");
+          const after = c.before.concat(c.add);
+          const ok = await confirmInPage(`插上技能：${c.card.name || c.card.id}`, [
+            line(`插上前（${c.before.length} 張）：${names(c.before)}`), line(`插上後（${after.length} 張）：${names(after)}`),
+            line(`新增：${names(c.add)}`), c.skipped.length ? line(`有 ${c.skipped.length} 張這張卡讀不到或不在技能庫，不插：${names(c.skipped)}`) : null,
+            line("插上技能只是紀錄，不會安裝或下載。")], "插上");
+          if (!ok) return false;
+          return api.post(`/api/agent-profiles/${encodeURIComponent(c.card.id)}`, { equipped_skill_ids: after });
+        });
+      },
+      team: (slots) => {
+        keep();
+        setTeamPreset({ taskId: view.task_id, from: id, slots });
+        location.hash = `#/workbench?task=${encodeURIComponent(view.task_id)}`;
+      },
+      meetingHref: (staff) => `#/meetings?task=${encodeURIComponent(view.task_id)}&speakers=${encodeURIComponent(staff.join(","))}`,
+      adopt: (note, rows) => act(async () => recorded(await api.post(`/api/staffing/${encodeURIComponent(id)}/chairman`, { decision: "adopt", note, adopted: { rows } }))),
+      dismiss: (note) => act(async () => recorded(await api.post(`/api/staffing/${encodeURIComponent(id)}/chairman`, { decision: "dismiss", note }))),
+    };
+  }
 
   function seatCard(seat) {
     const t = seat.turn;
@@ -13360,7 +13428,8 @@ function staffingDraftBasis(view) {
   const t = turns[turns.length - 1] || {};
   return `${t.seq}:${t.attempts}:${t.ended_at}`;
 }
-// env: { byId (cards by id, as they are now), news (the CEO's new cards by ref), skills, skillById, names }
+// env: { byId (cards by id, as they are now), news (the CEO's new cards by ref), skills, skillById, names, made (P35-4: the
+// card the wizard made from a new card, by ref) }. A new card made in the wizard is that card, as it is now.
 function staffingDraftWho(who, env) {
   if (!who || typeof who !== "object") return null;
   if (who.type === "card") {
@@ -13371,6 +13440,11 @@ function staffingDraftWho(who, env) {
       equipped: Array.isArray(p.equipped_skill_ids) ? p.equipped_skill_ids : [] };
   }
   const n = who.type === "new" ? env.news.get(who.ref) : null;
+  const madeId = n && env.made && cardHas(env.made, who.ref) ? env.made[who.ref] : "";
+  if (madeId && env.byId.has(madeId)) {
+    const w = staffingDraftWho({ type: "card", profileId: madeId }, env);
+    return { ...w, made: true, text: `${w.text}（由 CEO 建議的新卡建立）` };
+  }
   return n ? { found: true, key: who.ref, text: `新卡「${n.name}」（建議新建）`, tool: n.tool, position: n.position, enabled: true, equipped: [] }
     : { found: false, text: STAFFING_NOT_FOUND, tool: "", position: null, equipped: [] };
 }
@@ -13449,9 +13523,16 @@ function staffingDraftSection(id, view, env) {
   const changed = new Set(Array.isArray(view.changed_cards) ? view.changed_cards : []);
   const changedIds = new Set((view.sent && Array.isArray(view.sent.cards) ? view.sent.cards : []).filter((c) => c && changed.has(c.alias)).map((c) => c.profile_id));
   const save = () => store.set(STAFFING_DRAFT_KEY + id, draft);
-  // after any change: a row VBear now flags is not ticked; nothing is ticked by a change in another row
-  const settleRows = () => { for (const r of draft.rows) if (staffingDraftFlags(r, draft.rows, env).length) r.take = false; };
-  const change = (fn) => { fn(); settleRows(); save(); paint(); };
+  // after any change: a row VBear flags anew (its flags are not what they were) is not ticked; the person's own tick of a
+  // row already flagged holds (要不要採用由你決定); nothing is ticked by a change in another row
+  const flagsNow = (r) => staffingDraftFlags(r, draft.rows, env).join(",");
+  const change = (fn) => {
+    const before = new Map(draft.rows.map((r) => [r, flagsNow(r)]));
+    fn();
+    for (const r of draft.rows) { const f = flagsNow(r); if (f && f !== before.get(r)) r.take = false; }
+    save();
+    paint();
+  };
   const placeLabel = (r) => (r.kind === "slot" ? STAFFING_SLOT_LABEL[r.place] : `幕僚：${staffingPositionText(r.place)}`);
   const cards = [...env.byId.values()];
 
@@ -13549,9 +13630,177 @@ function staffingDraftSection(id, view, env) {
       el("p", { class: "small", "data-st": "draft-sum", role: "status" }, `草稿：要採用 ${taken.length} 列，要插 ${inserts} 張技能（不含已插上的）。插上技能只是紀錄，不會安裝或下載。`),
       el("ul", { class: "st-draft-rows" }, draft.rows.map(rowNode)),
       addStaff ? el("div", { class: "row" }, addStaff) : null);
+    if (adoptHost) setKids(adoptHost, env.adopt(draft, save));
   }
+  const adoptHost = typeof env.adopt === "function" ? el("div", { "data-st": "adopt-host" }) : null;
   paint();
-  return host;
+  return adoptHost ? [host, adoptHost] : host;
+}
+
+// ---- adopting the draft, one step at a time (P35-4) ----
+// What adopting the draft still asks of the person, read from the cards, the task card's flow and this browser as they
+// are now, in a fixed order: 啟用 → 建新卡 → 插技能 → 帶到隊伍, then the meeting (it may be skipped) and the record.
+// Each step is a button the person presses and goes through an endpoint that already exists; VBear does none of it by
+// itself, and a step waits for the ones before it. The team is put on the task card's board unsaved, so flows.json is
+// written only by 建立隊伍 or 儲存隊伍 there. The cards made in the wizard are kept in this browser (staffing.made.<id>).
+const STAFFING_MADE_KEY = "staffing.made.";
+const CARD_SKILLS_MAX = 200;   // vbear/agent_profiles.py MAX_SKILLS_PER_PROFILE; a test keeps them equal
+const STAFFING_ADOPTED_SKILLS_MAX = 40;   // vbear/staffing.py ADOPTED_SKILLS_MAX
+const STAFFING_ADOPT_STEPS = [["enable", "啟用"], ["create", "建新卡"], ["skills", "插技能"], ["team", "帶到隊伍"], ["meeting", "帶去開會"], ["record", "記下"]];
+const STAFFING_ADOPT_NOTE = "每一步都要你自己按，VBear 不會自己做；順序固定：啟用 → 建新卡 → 插技能 → 帶到隊伍，前一步做完才能做下一步。"
+  + "插上技能只是紀錄，不會安裝或下載。";
+
+function staffingMadeRead(id) {
+  const raw = store.get(STAFFING_MADE_KEY + id, null);
+  const out = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [ref, cid] of Object.entries(raw)) if (/^N[1-3]$/.test(ref) && typeof cid === "string" && cid) out[ref] = cid;
+  }
+  return out;
+}
+// The skills a row adopts: those ticked in the draft and, for a new card, those the CEO gave it, by their ids today.
+function staffingAdoptSkills(r, env) {
+  const ids = r.skills.filter((s) => s.take).map((s) => s.skillId);
+  const n = r.who && r.who.type === "new" ? env.news.get(r.who.ref) : null;
+  for (const alias of n && Array.isArray(n.skills) ? n.skills : []) {
+    const sk = env.names.skill(alias);
+    if (sk.found && !ids.includes(sk.skillId)) ids.push(sk.skillId);
+  }
+  return [...new Set(ids)];
+}
+// env: the draft's env, with did (the steps done from this page) and sentOff (the cards that were disabled at the meeting).
+// flow: the task card's flow, null when it has none, undefined when it could not be read.
+function staffingAdoptPlan(draft, env, flow) {
+  const rows = [];
+  let lost = 0;
+  for (const r of draft.rows) {
+    if (!r.take) continue;
+    const w = staffingDraftWho(r.who, env);
+    if (!w || !w.found) { lost += 1; continue; }
+    rows.push({ r, w, card: r.who.type === "card" || w.made ? env.byId.get(w.key) : null });
+  }
+  const did = env.did || new Set();
+  const equipped = (p) => (Array.isArray(p.equipped_skill_ids) ? p.equipped_skill_ids.filter((x) => typeof x === "string") : []);
+  // 1. 啟用
+  const cardIds = [...new Set(rows.filter((x) => x.card).map((x) => x.card.id))];
+  const off = cardIds.map((cid) => env.byId.get(cid)).filter((p) => p.enabled === false);
+  const wasOff = cardIds.some((cid) => env.sentOff && env.sentOff.has(cid));
+  const enable = { todo: off, state: off.length ? "todo" : wasOff || did.has("enable") ? "done" : "none" };
+  // 2. 建新卡
+  const made = env.made || {};
+  const refs = [...new Set(rows.filter((x) => x.r.who.type === "new").map((x) => x.r.who.ref))];
+  const create = { todo: refs.filter((ref) => !(cardHas(made, ref) && env.byId.has(made[ref])))
+    .map((ref) => ({ ref, newCard: env.news.get(ref), gone: cardHas(made, ref) })), done: refs.filter((ref) => cardHas(made, ref) && env.byId.has(made[ref])) };
+  create.state = create.todo.length ? "todo" : refs.length ? "done" : "none";
+  // 3. 插技能: per card, the ticked skills it does not have yet; one it cannot read, or not in the library, is said, not inserted
+  const want = new Map();
+  for (const x of rows) {
+    if (!x.card) continue;
+    const list = want.get(x.card.id) || [];
+    for (const s of x.r.skills) if (s.take && !list.includes(s.skillId)) list.push(s.skillId);
+    want.set(x.card.id, list);
+  }
+  const cards = [];
+  let on = 0;
+  for (const [cid, list] of want) {
+    const p = env.byId.get(cid);
+    const before = equipped(p);
+    const tool = p.model && typeof p.model.tool === "string" ? p.model.tool : "";
+    const add = [];
+    const skipped = [];
+    for (const sid of list) {
+      if (before.includes(sid)) { on += 1; continue; }
+      const sk = env.skillById.get(sid);
+      if (sk && skillCompatible(sk, tool)) add.push(sid); else skipped.push(sid);
+    }
+    if (add.length || skipped.length) cards.push({ card: p, before, add, skipped, over: before.length + add.length > CARD_SKILLS_MAX });
+  }
+  const skills = { cards, todo: cards.filter((c) => c.add.length) };
+  skills.state = skills.todo.length ? "todo" : on ? "done" : "none";
+  // 4. 帶到隊伍: done when the task card's flow has each place's card, put there as the card is now
+  const slotRows = rows.filter((x) => x.r.kind === "slot");
+  const slots = {};
+  for (const x of slotRows) if (x.card) slots[x.r.place] = x.card.id;
+  const inFlow = flow ? teamSlotsFromRoles(flow.roles) : null;
+  const placed = slotRows.filter((x) => x.card && inFlow && inFlow[x.r.place] && inFlow[x.r.place].profile_id === x.card.id
+    && teamCardState(inFlow[x.r.place], [...env.byId.values()]).state === "same");
+  const team = { slots, unread: flow === undefined, missing: slotRows.length - placed.length,
+    state: !slotRows.length ? "none" : placed.length === slotRows.length ? "done" : "todo" };
+  // 5. 帶去開會 (it may be skipped): the staff the draft takes
+  const staff = [...new Set(rows.filter((x) => x.r.kind === "staff" && x.card).map((x) => x.card.id))];
+  // 6. 記下: the rows as they are on the cards now; a skill counts once it is on the card (for a card the wizard made, the
+  // skills the CEO gave the new card too, as the wizard ticked them first)
+  const adopted = rows.filter((x) => x.card).map((x) => {
+    const ids = staffingAdoptSkills(x.r, env);
+    return { kind: x.r.kind, place: x.r.place, profile_id: x.card.id, new_ref: x.r.who.type === "new" ? x.r.who.ref : "",
+      skill_ids: ids.filter((sid) => equipped(x.card).includes(sid)) };
+  });
+  const first = [enable, create, skills, team].findIndex((x) => x.state === "todo");
+  let why = "記下採用只是紀錄：不會再改角色卡、技能或隊伍。";
+  if (first >= 0) why = `先做完第 ${first + 1} 步，才能記下採用。`;
+  else if (!adopted.length) why = "草稿沒有勾任何一列，沒有東西可以採用；不採用的話，按「記下：不採用」。";
+  else if (adopted.some((x) => x.skill_ids.length > STAFFING_ADOPTED_SKILLS_MAX)) why = `一列最多記 ${STAFFING_ADOPTED_SKILLS_MAX} 張技能，請在草稿少勾幾張。`;
+  const canAdopt = first < 0 && adopted.length > 0 && !adopted.some((x) => x.skill_ids.length > STAFFING_ADOPTED_SKILLS_MAX);
+  return { rows, lost, enable, create, skills, team, staff, adopted, first, canAdopt, why };
+}
+
+// acts: { enable(p), create(ref), insert(c), team(slots), meetingHref(staff), adopt(note, rows), dismiss(note), canWizard, taskFound }
+function staffingAdoptSection(plan, acts) {
+  const name = (p) => String(p.name || p.id);
+  const gate = (i) => plan.first >= 0 && plan.first < i;
+  const stateText = (i, x) => (x.state === "done" ? "已完成" : x.state === "none" ? "沒有要做的"
+    : plan.first === i ? "輪到這一步" : `先做完第 ${plan.first + 1} 步`);
+  const btn = (attrs, label, click, primary) => el("button", { class: primary ? "btn small primary" : "btn small", type: "button", ...attrs,
+    on: { click } }, label);
+  const bodies = {
+    enable: () => [plan.enable.todo.length
+      ? el("ul", { class: "small" }, plan.enable.todo.map((p) => el("li", null,
+        btn({ "data-st": "do-enable", "data-profile": p.id }, `啟用「${name(p)}」`, () => acts.enable(p)))))
+      : el("p", { class: "small muted" }, plan.enable.state === "done" ? "草稿要用的卡都啟用了。" : "草稿要用的卡都是啟用的。"),
+    el("p", { class: "small muted" }, "啟用只會打開角色卡的開關，不會改別的。")],
+    create: () => [plan.create.todo.length ? el("ul", { class: "small" }, plan.create.todo.map((t) => el("li", null,
+      btn({ "data-st": "do-create", "data-ref": t.ref, disabled: gate(1) || !acts.canWizard }, `用精靈建「${t.newCard ? t.newCard.name : t.ref}」`, () => acts.create(t.ref)),
+      t.gone ? el("span", { class: "small muted" }, " 用精靈建的卡已不在（可能刪掉了），可以再建一次。") : null))) : null,
+    plan.create.done.length ? el("p", { class: "small muted" }, `已用精靈建好：${plan.create.done.join("、")}。`) : null,
+    plan.create.todo.length ? el("p", { class: "small muted" }, acts.canWizard
+      ? "會打開建角色卡的精靈，照 CEO 的提案先填好；都可以改，按「建立」才會存。" : "讀不到建卡用的清單，現在不能打開精靈；請重新整理這一頁。") : null],
+    skills: () => [plan.skills.cards.length ? el("ul", { class: "small" }, plan.skills.cards.map((c) => el("li", null,
+      `${name(c.card)}：要插 ${c.add.length} 張`, c.skipped.length ? `；${c.skipped.length} 張這張卡讀不到或不在技能庫，不插` : "", "。",
+      c.over ? el("span", { class: "small" }, ` 插上後會有 ${c.before.length + c.add.length} 張，角色卡最多 ${CARD_SKILLS_MAX} 張；請先到角色卡拿掉一些，或在草稿少勾幾張。`) : null,
+      c.add.length ? [" ", btn({ "data-st": "do-insert", "data-profile": c.card.id, disabled: gate(2) || c.over }, `插上（${name(c.card)}）`, () => acts.insert(c))] : null)))
+      : el("p", { class: "small muted" }, plan.skills.state === "done" ? "草稿勾的技能都已經插在卡上。" : "草稿沒有要插的技能。"),
+    el("p", { class: "small muted" }, "按下去會先給你看插上前後的技能清單，確定了才會存。")],
+    team: () => [plan.team.state === "todo" ? el("p", { class: "small" }, plan.team.unread ? "讀不到任務卡的隊伍，不知道放好了沒有；請重新整理這一頁。"
+      : `還有 ${plan.team.missing} 個位置不在任務卡的隊伍上，或卡在放上去以後改過。`) : null,
+    plan.team.state === "done" ? el("p", { class: "small muted" }, "任務卡的隊伍已經是草稿的樣子。") : null,
+    plan.team.state === "todo" ? btn({ "data-st": "do-team", disabled: gate(3) || !acts.taskFound }, "帶到任務卡的隊伍", () => acts.team(plan.team.slots)) : null,
+    plan.team.state === "todo" && !acts.taskFound ? el("p", { class: "small" }, "找不到這張任務卡，不能帶過去。") : null,
+    el("p", { class: "small muted" }, "會打開任務卡，把草稿的位置先放上隊伍，還沒儲存；要你在那裡按「建立隊伍」或「儲存隊伍」才會寫入。提案沒有提到的位置維持原樣。")],
+    meeting: () => [plan.staff.length && plan.first < 0
+      ? el("a", { class: "btn small", "data-st": "do-meeting", href: acts.meetingHref(plan.staff) }, "帶這幾位幕僚去開會")
+      : null,
+    el("p", { class: "small muted" }, plan.staff.length ? "只會在開會頁勾好發言者；要不要開、找誰，由你決定，按「預覽」才會送出。這一步可以跳過。"
+      : "草稿沒有要找的幕僚。")],
+    record: () => {
+      const note = el("textarea", { rows: "2", maxlength: "500", "data-st": "adopt-note", "aria-label": "備註（選填）", placeholder: "備註（選填，最多 500 字）" });
+      return [note,
+        el("div", { class: "row" },
+          btn({ "data-st": "do-adopt", disabled: !plan.canAdopt }, "記下：採用", () => acts.adopt(note.value.trim(), plan.adopted), true),
+          btn({ "data-st": "do-dismiss" }, "記下：不採用", () => acts.dismiss(note.value.trim()))),
+        el("p", { class: "small", "data-st": "adopt-why", role: "status" }, plan.canAdopt ? `會記下 ${plan.adopted.length} 列。${plan.why}` : plan.why)];
+    },
+  };
+  const states = {
+    enable: stateText(0, plan.enable), create: stateText(1, plan.create), skills: stateText(2, plan.skills), team: stateText(3, plan.team),
+    meeting: !plan.staff.length ? "沒有要做的" : plan.first >= 0 ? `先做完第 ${plan.first + 1} 步` : "可以做，也可以跳過",
+    record: plan.canAdopt ? "輪到這一步" : plan.first >= 0 ? `先做完第 ${plan.first + 1} 步` : "沒有可以採用的列",
+  };
+  return el("section", { class: "section st-adopt", "data-st": "adopt" },
+    sectionHead("照草稿採用", STAFFING_ADOPT_NOTE),
+    plan.lost ? el("p", { class: "small" }, `有 ${plan.lost} 列勾了，但卡找不到，不算進採用。`) : null,
+    el("ol", { class: "st-adopt-steps" }, STAFFING_ADOPT_STEPS.map(([key, label], i) => el("li", { class: "card pad st-adopt-step", "data-st": "adopt-step", "data-step": key },
+      el("div", { class: "row" }, el("strong", null, `第 ${i + 1} 步：${label}`), el("span", { class: "small muted", "data-st": "step-state" }, states[key])),
+      bodies[key]()))));
 }
 
 // ---- the page ----
@@ -13563,10 +13812,12 @@ async function viewStaffingDetail(token, id) {
     setKids(claim(token), crumbs([["組隊會議", "#/staffing"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份組隊紀錄：" + e.message));
     return;
   }
-  const [tasksRes, profilesRes, catalog] = await Promise.all([api.get("/api/tasks").catch(() => null),
-    api.get("/api/agent-profiles").catch(() => null), api.get("/api/agent-builder/catalog").catch(() => null)]);
+  const [tasksRes, profilesRes, catalog, flowsRes] = await Promise.all([api.get("/api/tasks").catch(() => null),
+    api.get("/api/agent-profiles").catch(() => null), api.get("/api/agent-builder/catalog").catch(() => null),
+    api.get("/api/flows").catch(() => null)]);
   const tasksList = tasksRes && Array.isArray(tasksRes.tasks) ? tasksRes.tasks.filter((t) => t && typeof t.id === "string") : [];
-  const profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : [];
+  let profiles = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : [];
+  let flows = flowsRes && Array.isArray(flowsRes.flows) ? flowsRes.flows : null;   // null: could not be read
   const skills = catalog && Array.isArray(catalog.skills) ? catalog.skills : [];
   const categories = catalog && Array.isArray(catalog.skill_categories) ? catalog.skill_categories : [];
   const main = claim(token);
@@ -13579,6 +13830,74 @@ async function viewStaffingDetail(token, id) {
     try { const res = await fn(); if (res && typeof res === "object" && res.id === id) cur = res; if (token === seq) draw(); }
     catch (e) { toast(e.message); await reload(); }
   };
+  // P35-4: adopting the draft. Each step is the person's press, through an endpoint that already exists; afterwards the
+  // cards and the flows are read again and the list is drawn from them.
+  const did = new Set();
+  const made = staffingMadeRead(id);
+  let stepBusy = false;
+  const refreshCards = async () => {
+    const [p, f] = await Promise.all([api.get("/api/agent-profiles").catch(() => null), api.get("/api/flows").catch(() => null)]);
+    if (p && Array.isArray(p.profiles)) profiles = p.profiles;
+    flows = f && Array.isArray(f.flows) ? f.flows : null;
+  };
+  const stepDone = async (key, fn) => {
+    if (stepBusy) return;
+    stepBusy = true;
+    try { if ((await fn()) !== false) did.add(key); } catch (e) { toast(e.message); }
+    stepBusy = false;
+    await refreshCards();
+    if (token === seq) draw();
+  };
+  const skillName = (sid) => { const sk = skills.find((x) => x && x.skill_id === sid); return sk ? String(sk.name || sid) : `${STAFFING_NOT_FOUND}（${sid}）`; };
+  const recorded = (res) => {
+    store.set(STAFFING_DRAFT_KEY + id, null);
+    store.set(STAFFING_MADE_KEY + id, null);
+    return res;
+  };
+  function adoptActs(view, env, draft, keep) {
+    const task = tasksList.find((t) => t.id === view.task_id);
+    return {
+      canWizard: Boolean(catalog && Array.isArray(catalog.tools)),
+      taskFound: Boolean(task),
+      enable: (p) => { keep(); stepDone("enable", () => api.post(`/api/agent-profiles/${encodeURIComponent(p.id)}`, { enabled: true })); },
+      create: (ref) => {
+        keep();
+        const n = env.news.get(ref);
+        if (!n) return;
+        // the wizard ticks what it can of these: the skills of every taken row of this new card, and the CEO's for it
+        const skillIds = [...new Set(draft.rows.filter((r) => r.take && r.who && r.who.type === "new" && r.who.ref === ref)
+          .flatMap((r) => staffingAdoptSkills(r, env)))];
+        openCardWizard({ catalog, profiles, draft: { name: n.name, position: n.position, tool: n.tool, modelId: n.model_alias, skillIds },
+          onSaved: async (saved) => {
+            if (saved && typeof saved.id === "string") { made[ref] = saved.id; store.set(STAFFING_MADE_KEY + id, made); did.add("create"); }
+            await refreshCards();
+            if (token === seq) draw();
+          } });
+      },
+      insert: (c) => {
+        keep();
+        stepDone("skills", async () => {
+          const line = (words) => el("span", { class: "st-confirm-line" }, words);
+          const names = (ids) => (ids.length ? ids.map(skillName).join("、") : "（沒有）");
+          const after = c.before.concat(c.add);
+          const ok = await confirmInPage(`插上技能：${c.card.name || c.card.id}`, [
+            line(`插上前（${c.before.length} 張）：${names(c.before)}`), line(`插上後（${after.length} 張）：${names(after)}`),
+            line(`新增：${names(c.add)}`), c.skipped.length ? line(`有 ${c.skipped.length} 張這張卡讀不到或不在技能庫，不插：${names(c.skipped)}`) : null,
+            line("插上技能只是紀錄，不會安裝或下載。")], "插上");
+          if (!ok) return false;
+          return api.post(`/api/agent-profiles/${encodeURIComponent(c.card.id)}`, { equipped_skill_ids: after });
+        });
+      },
+      team: (slots) => {
+        keep();
+        setTeamPreset({ taskId: view.task_id, from: id, slots });
+        location.hash = `#/workbench?task=${encodeURIComponent(view.task_id)}`;
+      },
+      meetingHref: (staff) => `#/meetings?task=${encodeURIComponent(view.task_id)}&speakers=${encodeURIComponent(staff.join(","))}`,
+      adopt: (note, rows) => act(async () => recorded(await api.post(`/api/staffing/${encodeURIComponent(id)}/chairman`, { decision: "adopt", note, adopted: { rows } }))),
+      dismiss: (note) => act(async () => recorded(await api.post(`/api/staffing/${encodeURIComponent(id)}/chairman`, { decision: "dismiss", note }))),
+    };
+  }
 
   function seatCard(seat, ctx) {
     const t = seat.turn;
@@ -13616,14 +13935,34 @@ async function viewStaffingDetail(token, id) {
       onStart: async (previewId) => { await act(() => api.post(`/api/staffing/${encodeURIComponent(id)}/retry`, { preview_id: previewId })); } });
   }
 
-  function chairmanBlock() {
+  // adoptable: the list of steps is on the page, and it holds the buttons; otherwise a record that is not running and not
+  // decided can only be dismissed here (the server takes an adoption only of a finished proposal)
+  function chairmanBlock(adoptable) {
     const c = cur.chairman && typeof cur.chairman === "object" ? cur.chairman : { state: "pending" };
     const head = c.state === "adopted" ? "董事長記下：採用" : c.state === "dismissed" ? "董事長記下：不採用"
       : cur.status === "running" ? "組隊會議進行中" : "還沒有記下採用或不採用";
-    return el("section", { class: "section", "data-st": "chairman" }, sectionHead("董事長桌", MEETING_CHAIRMAN_NOTE),
+    const rows = c.state === "adopted" && c.adopted && Array.isArray(c.adopted.rows) ? c.adopted.rows.filter((r) => r && typeof r === "object") : [];
+    const byId = new Map(profiles.filter((p) => p && typeof p.id === "string").map((p) => [p.id, p]));
+    const placeOf = (r) => (r.kind === "slot" && cardHas(STAFFING_SLOT_LABEL, r.place) ? STAFFING_SLOT_LABEL[r.place] : `幕僚：${staffingPositionText(r.place)}`);
+    const rowText = (r) => {
+      const p = byId.get(r.profile_id);
+      const n = Array.isArray(r.skill_ids) ? r.skill_ids.length : 0;
+      return `${placeOf(r)}：${p ? String(p.name || p.id) : `${STAFFING_NOT_FOUND}（${r.profile_id}）`}${r.new_ref ? `（由 CEO 建議的新卡 ${r.new_ref} 建立）` : ""}`
+        + (n ? `・插 ${n} 張技能` : "");
+    };
+    let dismiss = null;
+    if (!adoptable && c.state === "pending" && cur.status !== "running") {
+      const note = el("textarea", { rows: "2", maxlength: "500", "data-st": "chairman-note", "aria-label": "備註（選填）", placeholder: "備註（選填，最多 500 字）" });
+      dismiss = [el("p", { class: "small" }, "CEO 沒有完成提案，這份組隊紀錄不能採用；可以記下不採用。"), note,
+        el("div", { class: "row" }, el("button", { class: "btn small", type: "button", "data-st": "do-dismiss", on: { click: () => act(async () =>
+          recorded(await api.post(`/api/staffing/${encodeURIComponent(id)}/chairman`, { decision: "dismiss", note: note.value.trim() }))) } }, "記下：不採用"))];
+    }
+    return el("section", { class: "section mt-chairman", "data-st": "chairman" }, sectionHead("董事長桌", MEETING_CHAIRMAN_NOTE),
       el("div", { class: "card pad" }, el("p", null, el("strong", null, head)),
         c.note ? el("p", { class: "small" }, `備註：${c.note}`) : null,
         c.at ? el("p", { class: "small muted" }, `${fmtTime(c.at)}・${MEETING_CHAIRMAN_NOTE}`) : null,
+        rows.length ? el("ul", { class: "small", "data-st": "adopted-rows" }, rows.map((r) => el("li", null, rowText(r)))) : null,
+        dismiss,
         el("p", { class: "small muted" }, "記下採用與否只是紀錄，不會建卡、插技能或排隊伍。")));
   }
 
@@ -13640,6 +13979,11 @@ async function viewStaffingDetail(token, id) {
     const suggested = Array.isArray(cur.suggested) ? cur.suggested.filter((x) => x && typeof x.profile_id === "string") : [];
     const spoke = new Set((Array.isArray(cur.participants) ? cur.participants : []).map((p) => p && p.profile_id));
     const clock = meetingClockText(cur.clock);
+    const adoptable = Boolean(proposal && cur.status === "ready" && cur.chairman && cur.chairman.state === "pending");
+    const sentOff = new Set((cur.sent && Array.isArray(cur.sent.cards) ? cur.sent.cards : []).filter((c) => c && c.enabled === false).map((c) => c.profile_id));
+    const flow = flows === null ? undefined : flows.find((f) => f && f.task_id === cur.task_id) || null;
+    const env = { byId: names.byId, news: names.news, skills, skillById: names.skillById, names, made, did, sentOff };
+    env.adopt = (draft, keep) => staffingAdoptSection(staffingAdoptPlan(draft, env, flow), adoptActs(cur, env, draft, keep));
     setKids(root,
       el("div", { class: "row" }, el("h1", null, `組隊會議：${title}`)),
       el("div", { class: "row small" }, staffingStatusBadge(cur.status),
@@ -13662,9 +14006,8 @@ async function viewStaffingDetail(token, id) {
       proposal ? el("section", { class: "section", "data-st": "proposal" },
         sectionHead("CEO 的組隊提案", "這只是建議：VBear 不會自己建卡、插技能或排隊伍。卡和技能是用代號寫的，這裡換成它們現在的名稱；找不到的寫「找不到」。"),
         staffingProposalNode(proposal, last.output, ctx)) : null,
-      proposal && cur.status === "ready" && cur.chairman && cur.chairman.state === "pending"
-        ? staffingDraftSection(id, cur, { byId: names.byId, news: names.news, skills, skillById: names.skillById, names }) : null,
-      chairmanBlock(),
+      adoptable ? staffingDraftSection(id, cur, env) : null,
+      chairmanBlock(adoptable),
       el("div", { class: "row" },
         running ? el("button", { class: "btn", type: "button", "data-mt": "cancel", on: { click: () => act(() => api.post(`/api/staffing/${encodeURIComponent(id)}/cancel`, {})) } },
           "取消這場組隊會議") : null,
@@ -13992,6 +14335,9 @@ if (typeof module !== "undefined" && module.exports) {
     staffingGapLink,
     staffingGapState,
     STAFFING_SLOT_FIT,
+    CARD_SKILLS_MAX,
+    STAFFING_ADOPTED_SKILLS_MAX,
+    staffingAdoptPlan,
     taskStaffingBlock,
     viewStaffing,
   };
