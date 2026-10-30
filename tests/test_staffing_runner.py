@@ -335,10 +335,12 @@ class SuggestAndPreviewTests(Base):
         src = self.sources()
         preview = runner.preview(self.body(speaker_profile_ids=["acct", "law"]), src)
         self.assertTrue(preview["participants"][0]["dynamic"])
-        self.task["status"] = "in_progress"
+        self.task["status"] = "in_progress"  # the same object the source handed out, changed in place
         view = runner.start(preview["preview_id"], src)
         runner.wait(10)
-        self.assertEqual(st.view(st.load(view["id"]))["status"], "ready")
+        m = st.view(st.load(view["id"]))
+        self.assertEqual((m["status"], [t["state"] for t in m["turns"]]), ("ready", ["done"] * 3))
+        self.assertEqual(m["turns"][1]["prompt_sha256"], preview["participants"][1]["prompt_sha256"])  # what was shown was sent
 
     def test_a_different_cli_version_than_the_one_previewed_is_refused(self):
         versions = iter([VERSION, "2.1.297"])

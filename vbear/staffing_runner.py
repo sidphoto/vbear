@@ -20,6 +20,7 @@ Nothing but the staffing/ folder (and the worker's lock) is written here.
 """
 from __future__ import annotations
 
+import copy
 import os
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -148,7 +149,7 @@ class StaffingRunner(HeadlessBoard):
         task = sources.task(task_id)
         if task is None:
             raise st.StaffingError("not_found", "找不到這張任務卡")
-        return task
+        return copy.deepcopy(task)  # a copy of its own: what the preview shows is what is sent
 
     @staticmethod
     def _fit(task: dict, sources: StaffingSources, instructions: str, note: str, speakers: list[dict]) -> tuple[int, dict]:
@@ -270,7 +271,7 @@ class StaffingRunner(HeadlessBoard):
         StaffingError('changed') when the speakers, the CEO or the list are not what it started from."""
         people = rec["participants"]
         self._same_cards(people, sources, "changed")
-        task = sources.task(rec["task_id"])
+        task = copy.deepcopy(sources.task(rec["task_id"]))
         if task is None:
             raise st.StaffingError("changed")
         chair, speakers = people[-1], people[:-1]
