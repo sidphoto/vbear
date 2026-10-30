@@ -12,6 +12,8 @@ For every kind of board:
   * turns run one after another, never at the same time; the last turn (``final_kind``) is asked only when an earlier
     one has an answer;
   * nothing is retried by itself. A failed turn waits for a person to retry it (twice at most);
+  * a turn whose text cannot be made (over the size limit, ``too_large``) fails without being sent, as does one whose
+    text is not the one previewed; it never stays queued;
   * one worker at a time (``meeting-worker.lock``), with its own ``meeting-worker.blocked`` marker, whatever the kind of
     board, so that two boards never run at the same time;
   * before a board starts, what it reserves must fit what is left of the record's own limit and of the day; before every
@@ -513,10 +515,17 @@ class HeadlessBoard:
         if final and not any(t["state"] == "done" for t in rec["turns"] if t["kind"] != self.final_kind):
             self._end(mid, seq, "skipped", "no_opinions", evidence=None)
             return None
-        prompt = self.prompt(turn["kind"], who, rec, ctx)
+        attempts = turn["attempts"] + 1
+        try:
+            prompt = self.prompt(turn["kind"], who, rec, ctx)
+        except mt.MeetingError:  # the only one a prompt raises: its text is over the size limit
+            self._end(mid, seq, "failed", "too_large", evidence=None, attempts=attempts)  # never sent
+            return None
+        except Exception:
+            self._end(mid, seq, "failed", "internal", evidence=None, attempts=attempts)  # never sent
+            return None
         sha = _sha(prompt)
         expected = ctx.expected_sha.get(who["profile_id"])
-        attempts = turn["attempts"] + 1
         if not final and expected is not None and expected != sha:
             self._end(mid, seq, "failed", "prompt_changed", evidence=None, attempts=attempts)  # never sent
             return None

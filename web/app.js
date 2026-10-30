@@ -12101,6 +12101,7 @@ const MEETING_ERROR_TEXT = {
   invalid_output: "輸出不合格式，已丟棄", not_traditional: "輸出含簡體字，已丟棄",
   tools_not_clean: "這次呼叫回報的工具不是只有 StructuredOutput（或有 MCP），已停止、結果不採用，並撤銷這個版本的通過紀錄",
   budget: "額度不夠，沒有送出", no_opinions: "沒有任何發言可以整理，沒有送出", prompt_changed: "送出前的內容和預覽不同，沒有送出",
+  too_large: "要送出的內容超過大小限制，沒有送出",
   restart: "主控台重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
   process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行", internal: "VBear 內部錯誤，這次的結果不採用",
 };
