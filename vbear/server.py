@@ -59,6 +59,8 @@ from . import role_departments
 from . import translations
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
+from . import staffing
+from . import staffing_runner as staffing_runner_mod
 from . import tasks
 from . import runtime as rt
 from .runtime import cli_versions, pipeline_store
@@ -103,7 +105,7 @@ PROFESSION_MODEL_LIMIT = 200
 EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sent, for its hover box
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
-                   "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed"}
+                   "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -111,6 +113,8 @@ MAX_BODY = 64 * 1024
 # /api/meetings/<id>[/retry-preview | /retry | /cancel | /chairman] (P34-4)
 MEETING_RE = re.compile(r"^/api/meetings/(m-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
 MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
+# /api/staffing/<id>[/retry-preview | /retry | /cancel | /chairman] (P35-2); the codes and statuses are the meetings'
+STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
 FLOW_GET_RE = re.compile(
     r"^/api/flows/(flow-[0-9a-f]{12})/(reports|merge-gate|reviews|automation)(?:/(r-[0-9a-f]{16})/draft)?\Z")
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
@@ -214,13 +218,22 @@ class Console:
             kept = self.__dict__.setdefault("_preview_folders", {})
             return kept.pop(preview_id, None) if isinstance(preview_id, str) else None
 
-    def meeting_runner(self):
-        """The one meeting runner. Built on first use, which is when a meeting left running by a stopped console is
-        found and interrupted."""
+    def _boards(self):
+        """The one meeting runner and the one staffing runner, built together on the first use of either: each finds and
+        interrupts what a stopped console left running when it is built, which it can do only while the worker they
+        share is free, so neither is built after the other has started anything."""
         with self.lock:
             if not hasattr(self, "meetings"):
                 self.meetings = meeting_runner_mod.MeetingRunner()
-            return self.meetings
+            if not hasattr(self, "staffing"):
+                self.staffing = staffing_runner_mod.StaffingRunner()
+            return self.meetings, self.staffing
+
+    def meeting_runner(self):
+        return self._boards()[0]
+
+    def staffing_runner(self):
+        return self._boards()[1]
 
     def translation_manager(self):
         with self.lock:
@@ -551,6 +564,12 @@ def make_handler(console: Console):
                 if path.startswith("/api/meetings/"):
                     found = MEETING_RE.match(path)
                     return self._meeting_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path in ("/api/staffing", "/api/staffing/suggest"):
+                    task_id = parse_qs(url.query).get("task_id", [None])[0]
+                    return self._staffing_call("list" if path == "/api/staffing" else "suggest", task_id=task_id)
+                if path.startswith("/api/staffing/"):
+                    found = STAFFING_RE.match(path)
+                    return self._staffing_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path == "/api/overview":
                     return self._json(self._overview())
                 if path == "/api/skills":
@@ -723,6 +742,15 @@ def make_handler(console: Console):
                     if not found or not found.group(2):
                         return self._error(404, "not found")
                     return self._meeting_call(found.group(2), found.group(1), self._body_strict())
+                if path == "/api/staffing/preview":
+                    return self._staffing_call("preview", None, self._body_strict())
+                if path == "/api/staffing":
+                    return self._staffing_call("start", None, self._body_strict())
+                if path.startswith("/api/staffing/"):
+                    found = STAFFING_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._staffing_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/translations/verify":
                     return self._translation_call("verify", self._body_strict())
                 if path == "/api/translations/batch/cancel":
@@ -895,6 +923,9 @@ def make_handler(console: Console):
                 if path.startswith("/api/meetings/"):
                     found = MEETING_RE.match(path)
                     return self._meeting_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path.startswith("/api/staffing/"):
+                    found = STAFFING_RE.match(path)
+                    return self._staffing_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path.startswith("/api/tasks/"):
                     task_id = path[len("/api/tasks/"):]
                     ok = tasks.delete_task(task_id)
@@ -1465,6 +1496,82 @@ def make_handler(console: Console):
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
 
+        def _staffing_sources(self, conf) -> staffing_runner_mod.StaffingSources:
+            """Where a staffing meeting reads from: the stored cards (read without quarantining), the task cards and their
+            flows, the skill index in memory or on disk, and the fresh Chinese summaries of the skills (translations.json
+            read without its lock: a damaged or missing one gives none, and every line is then the author's own, marked
+            so). A card store that cannot be read refuses the request (storage)."""
+            def profile(pid):
+                try:
+                    return agent_profiles.get_profile_readonly(pid)
+                except agent_profiles.AgentProfileStorageError:
+                    raise staffing.StaffingError("storage", PROFILE_STORE_UNREADABLE) from None
+
+            def profiles():
+                try:
+                    return list(agent_profiles.load_all(None, None, mark_corrupt=False).values())
+                except agent_profiles.AgentProfileStorageError:
+                    raise staffing.StaffingError("storage", PROFILE_STORE_UNREADABLE) from None
+
+            def skills():
+                return list(console.store.static().get("skills") or [])
+
+            def summaries():
+                records = {s.get("skill_id"): s for s in skills() if isinstance(s, dict)}
+                try:
+                    entries = translations.TranslationStore().load().get("entries")
+                except translations.StoreError:
+                    return {}
+                out = {}
+                for key, entry in (entries.items() if isinstance(entries, dict) else ()):
+                    if (key in records and translations.entry_problem(key, entry) is None
+                            and translations.translation_state(records[key], entry) == "fresh"
+                            and entry["summary"]["what"] != translations.MISSING):
+                        out[key] = entry["summary"]["what"]
+                return out
+            return staffing_runner_mod.StaffingSources(
+                profile=profile, task=lambda tid: tasks.get_task(tid),
+                flows=lambda tid: [f for f in flows.list_flows() if f.get("task_id") == tid],
+                profiles=profiles, skills=skills, summaries=summaries, conf=conf)
+
+        def _staffing_call(self, action, staffing_id=None, body=None, task_id=None):
+            """The staffing meeting endpoints (P35-2). Reads and the suggestion run nothing; a preview asks which Claude
+            Code is installed (its version) and nothing else; only a confirmed preview starts the tool-less calls."""
+            try:
+                runner = console.staffing_runner()
+                conf = console.store.conf
+                sources = self._staffing_sources(conf)
+                if action == "list":
+                    return self._json(runner.list(task_id))
+                if action == "suggest":
+                    return self._json(runner.suggest(task_id, sources))
+                if action == "get":
+                    return self._json(runner.get(staffing_id, sources))
+                if action == "delete":
+                    runner.delete(staffing_id)
+                    return self._json({"ok": True, "deleted": staffing_id})
+                if not isinstance(body, dict):
+                    raise staffing.StaffingError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "preview":
+                    return self._json(runner.preview(body, sources))
+                if action in ("start", "retry"):
+                    if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
+                        raise staffing.StaffingError("bad_request", "只需要 preview_id")
+                    if action == "start":
+                        return self._json(runner.start(body["preview_id"], sources), 202)
+                    return self._json(runner.retry(body["preview_id"], sources, staffing_id), 202)
+                if action == "retry-preview":
+                    return self._json(runner.retry_preview(staffing_id, body, sources))
+                if action == "cancel":
+                    if body:
+                        raise staffing.StaffingError("bad_request", "取消不需要內容")
+                    return self._json(runner.cancel(staffing_id))
+                if action == "chairman":
+                    return self._json(runner.chairman(staffing_id, body))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
         def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
                 manager = console.role_translation_manager() if roles else console.translation_manager()
@@ -1620,7 +1727,8 @@ def make_handler(console: Console):
                 if body.get("translation_auto") is True and (conf.get("translation_auto") is not True or requested_engine != conf.get("translation_engine")):
                     if body.get("translation_consent_engine") != requested_engine:
                         raise ValueError("請先確認引擎、資料送出與額度說明")
-                for key in CONFIG_WRITABLE & body.keys():
+                # staffing_limits last: it is checked against the day of the meeting_limits written in the same request
+                for key in sorted(CONFIG_WRITABLE & body.keys(), key=lambda k: k == "staffing_limits"):
                     value = body[key]
                     if key == "translation_engine" and (not isinstance(value, str) or value not in translations.MODELS):
                         raise ValueError("不支援的翻譯引擎")
@@ -1645,6 +1753,8 @@ def make_handler(console: Console):
                         value = meetings.validate_limits(value, meetings.limits_from(conf))
                     if key == "meeting_speed":
                         value = meetings.validate_speed(value, meetings.speed_from(conf))
+                    if key == "staffing_limits":
+                        value = staffing.validate_limits(value, staffing.limits_from(conf))
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):

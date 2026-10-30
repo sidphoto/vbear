@@ -383,6 +383,8 @@ class StaffingRunner(HeadlessBoard):
 
     def list(self, task_id: str | None = None) -> dict:
         """Every staffing record, or those of one task card; a damaged one is listed, blocked, whatever its task."""
+        if task_id is not None and (not isinstance(task_id, str) or not st.TASK_ID_RE.match(task_id)):
+            raise st.StaffingError("bad_request", "task_id 不符格式")
         out = []
         for sid in st.record_ids():
             try:
