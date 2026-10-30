@@ -1433,6 +1433,59 @@ async function test(name, fn) {
     assert.deepStrictEqual(sent.roles.reviewers[0].profile_snapshot, { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") });
   });
 
+  // ---- P35-4: a staffing proposal's team, put on the places once, never saved by itself ----
+  const PRESET_SID = "s-0123456789ab";
+  const draftOf = (ctx, taskId) => { const k = [...ctx.__ls.keys()].find((x) => x.includes("team.draft." + taskId)); return k ? JSON.parse(ctx.__ls.get(k)) : null; };
+
+  await test("P35-4 a staffing proposal's team fills the places once: not saved, not kept as the browser's draft; only 建立隊伍 sends it", async () => {
+    const created = flowView();
+    const ctx = newCtx({ "POST /api/flows": () => jsonResponse({ ok: true, flow: created }) });
+    ctx.setTeamPreset({ taskId: "task-1", from: PRESET_SID, slots: { planner: "p-ceo", executor: "p-maker", reviewer1: "p-rev", reviewer2: "p-gone" } });
+    const b = board(ctx);
+    assert.deepStrictEqual(["planner", "executor", "reviewer1", "reviewer2"].map((k) => b.state.slots[k] && b.state.slots[k].profile_id),
+      ["p-ceo", "p-maker", "p-rev", null]);
+    assert.strictEqual(b.state.slots.executor.workdir, REPO, "the executor starts from the task card's folder");
+    assert.strictEqual(b.state.dirty, true);
+    const note = byData(b.node, "data-team", "preset")[0];
+    assert.ok(note, "the board says where the places came from");
+    for (const words of ["CEO 的組隊提案", PRESET_SID, "還沒儲存", "建立隊伍", "有 1 張卡找不到"]) assert.ok(findText(note, words), words);
+    assert.strictEqual(draftOf(ctx, "task-1"), null, "the browser's draft of the team is not written");
+    assert.strictEqual(posts().length, 0, "nothing is sent");
+    assert.strictEqual(saveButton(b.node).disabled, false);
+    const again = ctx.teamBoard({ task: baseTask(), flow: null, profiles: PROFILES, catalog, gitState: "git" });
+    assert.deepStrictEqual([again.state.slots.planner, again.state.dirty, byData(again.node, "data-team", "preset").length], [null, false, 0],
+      "it is used once");
+    saveButton(b.node).click();
+    await tick();
+    assert.strictEqual(posts().length, 1);
+    const sent = bodyOf(posts()[0]);
+    assert.deepStrictEqual([sent.task_id, sent.roles.planner.profile_id, sent.roles.executor.profile_id, sent.roles.reviewers.map((r) => r.profile_id)],
+      ["task-1", "p-ceo", "p-maker", ["p-rev"]]);
+  });
+
+  await test("P35-4 a preset waits for its own task card, and on a saved team it changes only the places it names", async () => {
+    const ctx = newCtx();
+    ctx.setTeamPreset({ taskId: "task-9", from: PRESET_SID, slots: { planner: "p-ceo" } });
+    const other = board(ctx);
+    assert.deepStrictEqual([other.state.slots.planner, other.state.dirty, byData(other.node, "data-team", "preset").length], [null, false, 0]);
+    const own = board(ctx, { task: baseTask({ id: "task-9" }) });
+    assert.strictEqual(own.state.slots.planner.profile_id, "p-ceo");
+    ctx.setTeamPreset({ taskId: "task-1", from: PRESET_SID, slots: { executor: "p-maker", reviewer1: "p-shared" } });
+    const f = board(ctx, { flow: flowView() });
+    assert.deepStrictEqual([f.state.slots.planner.profile_id, f.state.slots.executor.profile_id, f.state.slots.executor.session_id,
+      f.state.slots.executor.workdir, f.state.slots.reviewer1.profile_id], ["p-ceo", "p-maker", "n-0123456789ab", REPO, "p-shared"]);
+    assert.ok(byData(slotNode(f.node, "reviewer1"), "data-slot-problem", "reviewer_family_unknown")[0], "a review that would not count is said");
+    assert.strictEqual(f.state.dirty, true);
+    assert.strictEqual(saveButton(f.node).disabled, false);
+    assert.ok(findText(byData(f.node, "data-team", "preset")[0], "儲存隊伍"));
+    assert.strictEqual(posts().length, 0);
+    for (const junk of [null, 5, { taskId: "task-1" }, { taskId: "task-1", slots: { boss: "p-ceo" }, from: PRESET_SID }]) {
+      ctx.setTeamPreset(junk);
+      const j = board(ctx);
+      assert.deepStrictEqual([j.state.slots.planner, j.state.dirty], [null, false], JSON.stringify(junk));
+    }
+  });
+
   await test("P20 flow view: a role filled from an AGY card says its tool in the camp's name", () => {
     const ctx = newCtx();
     const role = { name: "AGY 審查員", family: "google", profile_id: "p-agy", profile_snapshot: { name: "AGY 審查員", tool: "agy", model_id: "", revision: REV("5") } };

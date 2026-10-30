@@ -10803,6 +10803,24 @@ function teamDraftWrite(taskId, slots) {
   store.set(TEAM_DRAFT_KEY + taskId, Object.keys(ids).length ? ids : null);
 }
 
+// P35-4: a staffing proposal's team, brought to its task card: { taskId, from (the staffing record), slots: place -> card id }.
+// It lives in this page's memory only (never the browser's draft of the team) and the first board of that task card takes it
+// and fills the places it names; nothing is saved until the person presses 建立隊伍 or 儲存隊伍.
+let teamPreset = null;
+function setTeamPreset(preset) {
+  const ok = preset && typeof preset === "object" && typeof preset.taskId === "string" && typeof preset.from === "string"
+    && preset.slots && typeof preset.slots === "object" && !Array.isArray(preset.slots);
+  const slots = {};
+  if (ok) for (const def of TEAM_SLOTS) if (typeof preset.slots[def.key] === "string" && preset.slots[def.key]) slots[def.key] = preset.slots[def.key];
+  teamPreset = ok && Object.keys(slots).length ? { taskId: preset.taskId, from: preset.from, slots } : null;
+}
+function takeTeamPreset(taskId) {
+  if (!teamPreset || teamPreset.taskId !== taskId) return null;
+  const out = teamPreset;
+  teamPreset = null;
+  return out;
+}
+
 // ---- the next steps (design 3.5) ----------------------------------------------------------------------------------
 // 「輪到你」「輪到工匠」「輪到 CEO」: a space only where a Latin letter or digit meets the Chinese (P14: no stray space
 // in 「輪到 你」). turnAfter is the same rule for a name that is followed by more text: 「你在終端裡」「CEO 在終端裡」.
@@ -11013,6 +11031,19 @@ function teamBoard(opts) {
   let flow = opts.flow || null;
   let slots = flow ? teamSlotsFromRoles(flow.roles) : teamDraftRead(task.id, profiles, task.workdir);
   let dirty = false;
+  // P35-4: a staffing proposal brought here fills the places it names, once; the rest stay as they were
+  const preset = takeTeamPreset(task.id);
+  let presetNote = null;
+  if (preset) {
+    let lost = 0;
+    for (const [key, id] of Object.entries(preset.slots)) {
+      const p = profiles.find((x) => x && x.id === id);
+      if (!p) { lost += 1; continue; }
+      slots[key] = roleFromCard(p, { executor: key === "executor", keep: slots[key], workdir: key === "executor" ? task.workdir : undefined });
+      dirty = true;
+    }
+    presetNote = { from: preset.from, lost, placed: Object.keys(preset.slots).length - lost };
+  }
   let busy = false;
   let selected = null;       // a card id picked in the tray (touch: pick a card, then a place)
   let openKey = null;        // the place whose card list is open
@@ -11219,6 +11250,10 @@ function teamBoard(opts) {
       sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。審查位可以放獨立審查，或另一陣營的全端工程師的卡。" : "把角色卡放上來：規劃、執行、審查各一位，第二位審查選填。審查位可以放獨立審查，或另一陣營的全端工程師的卡。",
         opts.task && typeof opts.task.id === "string" ? el("a", { class: "btn small", href: `#/staffing?task=${encodeURIComponent(opts.task.id)}`, "data-team": "staffing",
           title: "各職位先發言，CEO 再寫組隊提案；提案只是建議，放不放上來由你決定" }, "請 CEO 組隊") : null),
+      presetNote && dirty ? el("div", { "data-team": "preset" }, notice("info",
+        `這是 CEO 的組隊提案（組隊紀錄 ${presetNote.from}），已經放進 ${presetNote.placed} 個位置，還沒儲存；`
+        + `按「${flow ? "儲存隊伍" : "建立隊伍"}」才會寫入。提案沒有提到的位置維持原樣；離開這一頁，就要回組隊頁再帶一次。`
+        + (presetNote.lost ? `有 ${presetNote.lost} 張卡找不到，沒有放上。` : ""))) : null,
       selected ? el("p", { class: "small ts-armed-note", role: "status" }, `已拿起「${(cardById(selected) || {}).name || ""}」，點一個位置放下去。`,
         el("button", { type: "button", class: "btn small", on: { click: () => { selected = null; paint(); } } }, "放開")) : null,
       el("ul", { class: "team-slots" }, TEAM_SLOTS.map((d) => slotNode(d, problems))),
@@ -13900,6 +13935,7 @@ if (typeof module !== "undefined" && module.exports) {
     turnAfter,
     teamAvatars,
     teamBoard,
+    setTeamPreset,
     teamSection,
     openPlaceDialog,
     flowRoleToolText,
