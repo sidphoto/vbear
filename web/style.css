@@ -1511,6 +1511,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .st-adopt-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
 .st-adopt-step { display: grid; gap: 6px; }
 .st-adopt-step .row { gap: 6px 10px; }
+.st-adopt-step > .btn { justify-self: start; }
 .st-adopt-step ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 .st-adopt-step textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); }
 .st-confirm-line { display: block; }
