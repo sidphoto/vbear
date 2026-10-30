@@ -12332,10 +12332,7 @@ function meetingRoomPick(list) {
     firstWaitingId: waiting.length ? waiting[0].id : null, blocked: items.length - ok.length };
 }
 // P35-4: the staffing meetings (組隊會議) share the room. The staffing records that run or wait for the chairman to look at
-// the proposal; a damaged one is counted, never drawn.
-function staffingItems(list) {
-  return list && typeof list === "object" && Array.isArray(list.staffing) ? list.staffing.filter((x) => x && typeof x === "object") : [];
-}
+// the proposal (staffingItems is with the staffing pages); a damaged one is counted, never drawn.
 function staffingNeedingYou(list) {
   return staffingItems(list).filter((x) => !x.blocked && x.status === "ready").sort(meetingNewest);
 }
@@ -13763,8 +13760,8 @@ function staffingMadeRead(id) {
 function staffingAdoptSkills(r, env) {
   const ids = r.skills.filter((s) => s.take).map((s) => s.skillId);
   const n = r.who && r.who.type === "new" ? env.news.get(r.who.ref) : null;
-  for (const alias of n && Array.isArray(n.skills) ? n.skills : []) {
-    const sk = env.names.skill(alias);
+  for (const x of staffingList(n, "skills")) {   // { skill (an alias), why, flags }, as the server keeps them
+    const sk = env.names.skill(x.skill);
     if (sk.found && !ids.includes(sk.skillId)) ids.push(sk.skillId);
   }
   return [...new Set(ids)];

@@ -772,7 +772,8 @@ test("a row VBear flagged can still be ticked by the person, and a disabled card
 test("from the proposal to an adopted team: enable, the wizard, the skills, the team board, the meeting, the record", async () => {
   freshAdoption();
   const rec = setRecord({}, { flows: [] });
-  rec.turns[2].output.kept.new_cards[0].skills = ["S2", "S5"];   // a shared skill the new Claude card reads, and an AGY one it does not
+  // a shared skill the new Claude card reads, and an AGY one it does not, in the shape the server keeps (vbear/staffing.py)
+  rec.turns[2].output.kept.new_cards[0].skills = [{ skill: "S2", why: "要會測試", flags: [] }, { skill: "S5", why: "授權", flags: [] }];
   let main = await open("#/staffing/" + SID);
   await tick(main, "staff:art");
   doBtn(main, "do-enable", "data-profile", "art-off").click();
