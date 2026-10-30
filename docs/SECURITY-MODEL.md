@@ -875,14 +875,16 @@ preview id; nothing starts one by itself, and a decision is never carried out by
   calls × the per-call limit and refuses a meeting that does not fit the meeting's or the day's room; each call is checked
   again before it is made and is skipped (`budget`) if it would pass a limit. A call costs what Claude Code reported in
   `total_cost_usd`, or the per-call limit when it reported nothing, and the record says which (`cost_source`). The figures
-  are the CLI's estimate and a subscription plan is not billed that way. The day is the local date; at 80% of the day's
-  limit the ledger shows yellow, at 100% no meeting starts and no retry is offered.
+  are the CLI's estimate and a subscription plan is not billed that way. The day is the local date, and it counts the
+  staffing meetings too (below); at 80% of the day's limit the ledger shows yellow, at 100% no meeting starts and no retry
+  is offered.
 - **Failure, retry, restart.** A failed call is never repeated by itself. A person can retry a failed or interrupted turn
   through its own preview (twice at most; the third failure is `blocked`), and only while the cards and the task card are the
   ones the meeting started from; retrying a speaker asks the CEO again, and costs are kept over all attempts. When the
   console restarts, the turn that was running is `interrupted` and costs the per-call limit, queued turns are
-  interrupted without cost, and nothing resumes. One meeting runs at a time (`meeting-worker.lock`); a process group that
-  cannot be confirmed gone writes `meeting-worker.blocked` and blocks later meetings until a person removes it.
+  interrupted without cost, and nothing resumes. One meeting runs at a time, a staffing meeting included
+  (`meeting-worker.lock`); a process group that cannot be confirmed gone writes `meeting-worker.blocked` and blocks later
+  meetings until a person removes it.
 - **When it goes to you.** `meeting_rules.py` is a fixed, visible table (R1–R8): something you ticked when making the
   meeting; a decision action of a type that publishes, deploys, pays, deletes, signs or changes a price (or one the table
   does not list); a keyword or an amount (any amount by default) in the topic, the supplement or the decision; a high risk or
@@ -902,6 +904,63 @@ preview id; nothing starts one by itself, and a decision is never carried out by
   `DELETE /api/meetings/<id>`. They sit behind
   the same Host, token, Origin and `X-VBear` checks as every other route; bodies are strict (an unknown field, a bool or NaN
   where a number is wanted, or an over-long text is a 400).
+
+## Staffing meetings (組隊會議)
+
+A staffing meeting asks the CEO card to staff one task card, after the staff have spoken. It is held by the meetings'
+engine, so what the section above says of the call, its check, the time, the worker and a restart holds here too; this
+section says what differs. Like a meeting it is **a new outbound data path through your authenticated local Claude Code**
+that uses your quota or money. Only you start one, from `POST /api/staffing/preview` and then `POST /api/staffing` with
+the preview id, and nothing in it is carried out by VBear.
+
+- **Who speaks.** VBear suggests the speakers from a fixed table (the PM always; the full-stack engineer, the legal
+  manager, the accountant, the social media manager and the art director when the task card's categories, derived from its
+  words by the skills' keyword table, or an amount in it call for them), one enabled card per position, each with the
+  reason; you change any of it. `GET /api/staffing/suggest?task_id=` only reads. Then each speaker says once, alone,
+  without seeing the others, then the CEO writes a staffing proposal from what they said; when no speaker has an answer
+  the CEO is not asked. A disabled card cannot speak, but it is on the list, marked, and may be proposed: enabling it is
+  your step.
+- **What is sent.** As for a meeting: the card's instructions, VBear's fixed rules, and inside
+  `BEGIN/END_UNTRUSTED_JSON_STRING`, redacted, the same fields of the task card (never its folder or its id), your note,
+  and a list of the role cards and of the skills a card can use. Every card and skill is on the list under an alias (`C1`,
+  `S1`, ...), never its id; the record keeps the ids under the aliases. A skill's line is its fresh Chinese summary when
+  there is one (a translation made from the skill as it is now), else its author's own text, marked as such. A speaker
+  gets a short view of the list; the CEO the whole of it and every speaker's answer (cut to 3 KiB each, saying so). The
+  CEO's list is made at the preview, at the most bytes (in whole KiB) that keep the CEO's text within its 64 KiB limit
+  whatever the speakers write (each answer counted at the most the CEO can be given of it); a shorter list says how many
+  cards and skills it left out, and a task card too long even for 1 KiB of list is refused at the preview (`too_large`).
+  A start on a list that is not the one previewed (a card, a skill, a summary or the task card's words changed), or a
+  retry on one that is not the one the record started from, is refused.
+- **The call and the worker.** It is the meetings' call: the same argv and `--effort` (`meeting_speed`), the init event
+  checked on every call and a version's pass revoked on a tool, the same clock with its last three minutes kept for the
+  CEO (whose own call may run up to three minutes). It shares the meetings' one worker (`meeting-worker.lock`) and its
+  `meeting-worker.blocked` marker, so a meeting and a staffing meeting run never at the same time: the one started second
+  is refused (`busy`).
+- **Money.** A speaker's call costs at most `meeting_limits.per_call_usd`, the CEO's at most
+  `staffing_limits.proposal_call_usd` (US$0.50 by default, capped at 1), and a whole staffing record at most
+  `staffing_limits.total_usd` (US$2.00 by default, capped at 10). `staffing_limits` is a top-level key of `config.json`,
+  validated on write (the CEO's call ≤ the record ≤ the day); an unusable stored value falls back to the default. The
+  preview reserves every speaker's call and the CEO's, and refuses what does not fit the record's room or what is left of
+  the day; every call is checked again before it is made and skipped (`budget`) if it would pass a limit. A call that
+  reported no cost, or one a stopped console left running, costs the worst case of its own kind of turn. It counts in
+  the same day as the meetings: `meeting_limits.daily_usd` covers both, and the ledger says so
+  (`includes: ["meetings", "staffing"]`).
+- **Failure, retry, restart.** As for a meeting: nothing is repeated by itself; a person retries a failed or interrupted
+  turn through its own preview (twice at most, then `blocked`), and retrying a speaker asks the CEO again; a restart
+  interrupts what was running and resumes nothing.
+- **What it is not.** No rule of the meetings (R1–R8) is run, and a staffing meeting is never held for you; a high risk a
+  speaker wrote is shown as a reminder. The proposal is a record: VBear creates no card, inserts no skill and puts no one
+  on a team; each of those is a step you take on its own page. The chairman's answer (adopt or dismiss, with a note) is a
+  record of the console (「主控台記錄（未驗證身分）」) and does nothing by itself.
+- **Where it is kept.** One file per staffing meeting, `<state>/staffing/s-<12 hex>.json` (0600, folder 0700, 256 KiB, at
+  most 200), through the guarded store as a meeting is: a damaged file blocks that record and no other. Not in
+  `meetings/`, which v0.9.0 would quarantine. It stores the task card's id, your note, the participants, who VBear
+  suggested and why, the ids and revisions under the aliases, the limits, each turn and the chairman's record; never a
+  prompt, only its hash. A staffing meeting writes nothing else but the worker's lock.
+- **API.** `GET /api/staffing[?task_id=]`, `/api/staffing/suggest?task_id=`, `/api/staffing/<id>` (reads run nothing);
+  `POST /api/staffing/preview`, `/api/staffing`, `/api/staffing/<id>/retry-preview`, `/retry`, `/cancel`, `/chairman`;
+  `DELETE /api/staffing/<id>`. The no-tool check is the meetings' (`POST /api/meetings/verify`). They sit behind the same
+  Host, token, Origin and `X-VBear` checks as every other route, and their bodies are as strict.
 
 ## Data handling
 
