@@ -131,6 +131,60 @@ def validate_limits(body, current: dict[str, Decimal]) -> dict[str, float]:
     return {key: float(value) for key, value in merged.items()}
 
 
+# ---- how fast a meeting is ---------------------------------------------------------------------------------------
+
+# Every meeting (a staffing meeting too) is short (P35-2, the chairman's decision 8): Claude Code thinks at low or medium
+# effort only (--effort), a speaker at low and the CEO at medium by default, and a meeting runs at most max_minutes from
+# when it (or a retry) starts. The speakers stop CHAIR_RESERVE_S before the end, which is kept for the CEO; a call is not
+# started with less than MIN_TURN_S of its time left. In config.json as the top-level ``meeting_speed`` (not inside
+# meeting_limits: v0.9.0 drops a key it does not know from there when it saves).
+EFFORTS = ("low", "medium")
+EFFORT_LABELS = {"low": "低", "medium": "中"}
+DEFAULT_SPEED = {"speaker_effort": "low", "chair_effort": "medium", "max_minutes": 15}
+MINUTES_MIN, MINUTES_MAX = 5, 30
+CHAIR_RESERVE_S = 180.0
+MIN_TURN_S = 60.0
+
+
+def speed_from(conf) -> dict:
+    """The speed in force: config's ``meeting_speed`` where it holds a usable value, the default for each key where not."""
+    stored = conf.get("meeting_speed") if isinstance(conf, dict) else None
+    out = dict(DEFAULT_SPEED)
+    if isinstance(stored, dict):
+        for key in ("speaker_effort", "chair_effort"):
+            if isinstance(stored.get(key), str) and stored[key] in EFFORTS:
+                out[key] = stored[key]
+        minutes = stored.get("max_minutes")
+        if type(minutes) is int and MINUTES_MIN <= minutes <= MINUTES_MAX:
+            out["max_minutes"] = minutes
+    return out
+
+
+def validate_speed(body, current: dict) -> dict:
+    """The new ``meeting_speed`` of config.json from a request, or ValueError. Keys not in the request keep their value."""
+    if not isinstance(body, dict) or set(body) - set(DEFAULT_SPEED):
+        raise ValueError("meeting_speed 只能含 speaker_effort、chair_effort、max_minutes")
+    merged = dict(current)
+    for key, value in body.items():
+        if key == "max_minutes":
+            if type(value) is not int or not MINUTES_MIN <= value <= MINUTES_MAX:
+                raise ValueError(f"max_minutes 必須是 {MINUTES_MIN} 到 {MINUTES_MAX} 的整數")
+        elif not isinstance(value, str) or value not in EFFORTS:
+            raise ValueError(f"{key} 只能是 low 或 medium（會議為了快，不提供 high）")
+        merged[key] = value
+    return merged
+
+
+def speed_view(speed: dict) -> dict:
+    """The speed as a preview shows it."""
+    reserve = int(CHAIR_RESERVE_S // 60)
+    return {**speed, "chair_reserve_minutes": reserve,
+            "labels": {"speaker_effort": EFFORT_LABELS[speed["speaker_effort"]], "chair_effort": EFFORT_LABELS[speed["chair_effort"]]},
+            "note": (f"思考強度：低／中（會議為了快，不提供高）。發言者{EFFORT_LABELS[speed['speaker_effort']]}、"
+                     f"CEO {EFFORT_LABELS[speed['chair_effort']]}。這場最多 {speed['max_minutes']} 分鐘（從開始算），"
+                     f"最後 {reserve} 分鐘留給 CEO；時間到還沒發言的人不再發言，超過時間的呼叫會被停止，以最壞情況計費。")}
+
+
 # ---- what a model may write --------------------------------------------------------------------------------------
 
 def _obj(properties: dict, required: list[str] | None = None) -> dict:

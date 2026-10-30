@@ -762,10 +762,10 @@ class ProductionProviderTests(Base):
 
     def test_the_meeting_argv_differs_from_the_translation_argv_in_three_values_only(self):
         a = tr.translation_argv("claude", "bin", "/x", mt.OPINION_SCHEMA)
-        b = mr.meeting_argv("bin", "sonnet", mt.OPINION_SCHEMA, Decimal("0.2"))
+        b = mr.meeting_argv("bin", "sonnet", mt.OPINION_SCHEMA, Decimal("0.2"), "low")
         diff = [(x, y) for x, y in zip(a, b) if x != y]
         self.assertEqual(diff, [("claude-haiku-5-5", "sonnet"), ("json", "stream-json"), ("0.05", "0.2")])
-        self.assertEqual(b[len(a):], ["--verbose"])
+        self.assertEqual(b[len(a):], ["--verbose", "--effort", "low"])  # P35-2: every meeting call thinks at low or medium
 
 
 if __name__ == "__main__":

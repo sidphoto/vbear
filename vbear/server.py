@@ -103,7 +103,7 @@ PROFESSION_MODEL_LIMIT = 200
 EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sent, for its hover box
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
-                   "recent_folders", "onboarding_dismissed", "meeting_limits"}
+                   "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -1643,6 +1643,8 @@ def make_handler(console: Console):
                         raise ValueError("onboarding_dismissed 必須是布林值")
                     if key == "meeting_limits":
                         value = meetings.validate_limits(value, meetings.limits_from(conf))
+                    if key == "meeting_speed":
+                        value = meetings.validate_speed(value, meetings.speed_from(conf))
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):

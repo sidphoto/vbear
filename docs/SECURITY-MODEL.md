@@ -847,13 +847,26 @@ preview id; nothing starts one by itself, and a decision is never carried out by
   chosen there it refuses without running anything; the meeting's check does not read or change that setting.
 - **The call.** The argv is `translations.translation_argv` with only `--model`, `--max-budget-usd` and the schema changed,
   and the output a stream with `--verbose` (the shape the check verified): `-p --safe-mode --tools "" --strict-mcp-config
-  --mcp-config '{"mcpServers":{}}' --no-session-persistence`. The runner is the translations' (`headless_cli`): an empty
+  --mcp-config '{"mcpServers":{}}' --no-session-persistence`; then `--effort low` or `--effort medium`: a speaker at
+  `meeting_speed.speaker_effort` (low by default), the CEO at `chair_effort` (medium by default). Nothing else is accepted,
+  on write or in the argv, so a meeting never asks for high effort. The check that recorded the version's pass ran without
+  `--effort`; what keeps the boundary is that every call checks its own init event (below), so a version that gave a tool
+  with `--effort` would be stopped on its first call and its pass revoked. A version that does not know `--effort` fails
+  the call (`cli_failed`), counted at the worst case, and keeps its pass. The runner is the translations' (`headless_cli`): an empty
   scratch directory, the prompt on stdin, no credential added, a 120-second deadline, a 256 KiB output limit and one
   process group that is killed and confirmed gone. **Every call checks its own init event as the line arrives:** exactly
   one, with `tools == ["StructuredOutput"]` and `mcp_servers == []`, and no `tool_use` of anything else. Anything else
   kills the group on the spot, the output is not used, and the version's pass is revoked until it is checked again. A
   stream that does not parse, has no result, or has a negative or non-numeric cost is a failure, not a guess. The empty
   directory is not read isolation, and HOME is still needed for the login, as for translations.
+- **Time.** A meeting runs at most `meeting_speed.max_minutes` (15 by default, 5 to 30) from when it starts, and a retry
+  on a clock of its own. The speakers' calls may run until three minutes before the end, which is kept for the CEO; no
+  call runs longer than its own deadline. A speaker with less than a minute left is skipped (`time_up`, shown as
+  「時間到沒發言」, and the CEO is told so); a call the clock cuts short is a failure (`time_up`) that costs what it reported
+  or its worst case; a CEO's turn with less than a minute left fails without being sent and can be retried. The clock is
+  kept in memory while the meeting runs (`GET /api/meetings/<id>` shows it); a restart ends the run as before.
+  `meeting_speed` is a top-level key of `config.json`, not inside `meeting_limits` (v0.9.0 drops an unknown key there
+  when it saves).
 - **What the checks cannot prove.** That an opinion is true, that a legal source is real (VBear checks that a source is
   written, not that it exists: a risk of the legal manager with none is kept with 「查無出處，需人工複核」 and holds the
   meeting for you), or that the accountant used a program. A model's text is shown as text and never run.

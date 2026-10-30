@@ -14,7 +14,7 @@
     "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
    ],
    "reserve_usd": "1.5",
-   "sha256": "399bf22a34c04ad165af45a970791a5eaf0a2d4e3745375dcfb0e500254267dc",
+   "sha256": "933c4297d1ec378b02549b8607651ee512a0ba17bd8f756d97c9d44044babee4",
    "startable": true,
    "today": {
     "daily_usd": "9",
@@ -609,7 +609,7 @@
     "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
    ],
    "reserve_usd": "0.6",
-   "sha256": "75bd16156ce32e8307c61ecc4f6a19b7956b56ae381cd863c1a3b586a1ec73e8",
+   "sha256": "a4c226d38e76a1073be9e3ea08ab31002c11e96a1d1773683beb7399e9a98080",
    "startable": true,
    "today": {
     "daily_usd": "20",
@@ -1045,7 +1045,7 @@
     "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761"
    ],
    "reserve_usd": "0.4",
-   "sha256": "77035f5c5ac833ca2abd7f6a13d1ff6bead9263ff2c9accc7173f7f45f90a6a1",
+   "sha256": "5d35a816ebe65a72a9ee97e95502942866a93a3d7539184fc887c3f00c6e9969",
    "startable": true,
    "today": {
     "daily_usd": "20",
@@ -1811,7 +1811,7 @@
     "bcdeabbf57a4ce4131dac3f3061a48b45c28f0fb8078f52a301023956e049a3f"
    ],
    "reserve_usd": "1",
-   "sha256": "33ab38b1cf36a3f1aa7fd5d62c2e0103cc8d2a009e0c85d3198bb85298fe754e",
+   "sha256": "7c9c54c6406f9a986eb4cf1cdaf32dc9a44e77218aee147c1a7f887e2c708677",
    "startable": true,
    "today": {
     "daily_usd": "20",
@@ -2496,7 +2496,7 @@
     "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
    ],
    "reserve_usd": "0.4",
-   "sha256": "8b0eef1acb7d7a7a4b51201eea8efb81c6ede3bebf05dc93986db8b10bbfc2d6",
+   "sha256": "d86f50cec7943cd6c7994e46356a5f6cb6376d570bc09986275be2e90516ab60",
    "startable": false,
    "today": {
     "daily_usd": "20",
@@ -2617,6 +2617,13 @@
     "label": "主控台記錄（未驗證身分）",
     "note": "",
     "state": "not_needed"
+   },
+   "clock": {
+    "deadline_at": 1893456900.0,
+    "max_minutes": 15,
+    "remaining_s": 900.0,
+    "speakers_until": 1893456720.0,
+    "started_at": 1893456000.0
    },
    "context": "",
    "created_at": 1893456000.0,
@@ -3048,7 +3055,7 @@
    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
   ],
   "reserve_usd": "0.4",
-  "sha256": "bcce086fb6cdb22b2bbeedd262cdbb4389b442d662986bcf5bac9799df01ac63",
+  "sha256": "1992fffea9221af2b549333e2b9de05ac94b280d0b7de8caae1317182679d6d7",
   "startable": false,
   "today": {
    "daily_usd": "1",
@@ -3070,7 +3077,7 @@
     "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
    ],
    "reserve_usd": "0.4",
-   "sha256": "567d1dba504a6c61383fc746cdd73c290c52a7fb87dc9efab6841b72ae144881",
+   "sha256": "ec10ada213a7ea2447c651d43605c904ef4e30f02b544fe4f46bc1d317140552",
    "startable": true,
    "today": {
     "daily_usd": "20",
@@ -3331,7 +3338,7 @@
    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761"
   ],
   "reserve_usd": "0.4",
-  "sha256": "8eff938d029e2d9debb9dbf82ea6f5d472a6869dcded8cad102e6d645a06c368",
+  "sha256": "cc43e026dcb6eb45a79c6ab08e040c29ad795a7a3bdfc918a8695bf8c2294c9e",
   "startable": false,
   "today": {
    "daily_usd": "20",
@@ -3360,7 +3367,7 @@
    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
   ],
   "reserve_usd": "2.5",
-  "sha256": "fdc99836d06d09afc7f6ee4b23f5c388f757dfe9e009f3e2034e5b2f6ea54e96",
+  "sha256": "81a2cda12419777a6bb61710d2eb41f96ec0ff2e4deb7d165aebcd312dbf45dd",
   "startable": false,
   "today": {
    "daily_usd": "9",
@@ -3386,7 +3393,7 @@
     "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
    ],
    "reserve_usd": "0.6",
-   "sha256": "3eb3ada91f43ca0e1801db5062580ae2ac3bc50d4107ee8512832ee8dd08f220",
+   "sha256": "8e2a1bfdeeaa657774b0a74623c95735759516db0687c1ff1d9d99e62a50617c",
    "startable": true,
    "today": {
     "daily_usd": "20",
@@ -3710,7 +3717,7 @@
     "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
    ],
    "reserve_usd": "0.4",
-   "sha256": "97ec1f92c72d469e657e36e22c3557470508a91861f696582797d03ad3edde00",
+   "sha256": "30324f58708670ca886826886ba5f48eb0aae7fe9965fce279a90be87d00b0b7",
    "startable": true,
    "today": {
     "daily_usd": "20",
@@ -4007,7 +4014,7 @@
     "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc"
    ],
    "reserve_usd": "0.2",
-   "sha256": "8ec7ebdc50390fcc4827d104dd44477bc90d369583394a42c7b4d391d0757afa",
+   "sha256": "7500b21c9e7b5018a687003ec1bca188b2d7ec0a846daed0b71d4c923e1df8b0",
    "startable": true,
    "today": {
     "daily_usd": "20",

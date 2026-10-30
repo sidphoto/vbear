@@ -4,8 +4,9 @@ turns say, which rules judge them, or what the chairman may decide.
 
 For every kind of board:
 
-  * every call is the translation argv plus three changed values (--model, --max-budget-usd and the schema) and a stream
-    output with --verbose, so that its init event can be read; the init event must say that the only tool is
+  * every call is the translation argv plus three changed values (--model, --max-budget-usd and the schema), a stream
+    output with --verbose, so that its init event can be read, and --effort low or medium (meetings.EFFORTS: a speaker
+    at the meeting speed's speaker_effort, the last turn at its chair_effort); the init event must say that the only tool is
     StructuredOutput and that there are no MCP servers, checked on every call as the line arrives. A call that says
     anything else is killed (the whole process group) on the spot, its result is not used, and the version's pass in
     translation-boundaries.json is revoked until it is checked again;
@@ -19,12 +20,17 @@ For every kind of board:
   * before a board starts, what it reserves must fit what is left of the record's own limit and of the day; before every
     call, the most that turn's call may cost must fit both again, or the turn is skipped;
   * what a call cost is what the CLI reported, or the most that turn's call may cost when it reported nothing; a turn
-    left running by a stopped console costs that too, and nothing resumes.
+    left running by a stopped console costs that too, and nothing resumes;
+  * a board (or a retry of it) runs at most the meeting speed's max_minutes from when it starts: a speaker's call may run
+    until meetings.CHAIR_RESERVE_S before the end, the last turn's until the end, and none longer than its own timeout. A
+    speaker with less than meetings.MIN_TURN_S left is skipped (``time_up``); a last turn with less is failed without
+    being sent, and may be retried on a new clock; a call stopped by the clock is a failure (``time_up``) that costs what
+    it reported or its worst case.
 
 A kind of board gives the engine its hooks: where its records live (``store_cls``, ``ids``, ``load``, ``view``,
 ``remove``), the schema, the check and the prompt of a turn, the most one turn's call may cost (``per_call``), the most a
-whole record may cost (``total_limit``), whether the chairman has closed the record (``decided``), and what to do when the
-last turn is answered (``on_final``).
+whole record may cost (``total_limit``), how long one call of a kind may run (``timeout``), whether the chairman has closed
+the record (``decided``), and what to do when the last turn is answered (``on_final``).
 """
 from __future__ import annotations
 
@@ -70,6 +76,7 @@ class CallSpec:
     schema: dict
     prompt: str
     per_call: Decimal
+    effort: str
     timeout: float = mt.CALL_TIMEOUT
 
 
@@ -92,14 +99,18 @@ class CallFailed(Exception):
 
 # ---- the call ----------------------------------------------------------------------------------------------------
 
-def meeting_argv(binary: str, model: str, schema: dict, per_call: Decimal) -> list[str]:
+def meeting_argv(binary: str, model: str, schema: dict, per_call: Decimal, effort: str) -> list[str]:
     """The translation argv (tools "", safe mode, strict empty MCP, no session kept) with only the model, the schema and
-    the budget changed, and the output a stream with --verbose: the shape the no-tool check verified."""
+    the budget changed, and the output a stream with --verbose: the shape the no-tool check verified; then the effort,
+    low or medium only (ValueError for anything else). The effort is not part of what the check verified: every call
+    checks its own init event, so a version that gave a tool with it would be stopped and its pass revoked."""
+    if not isinstance(effort, str) or effort not in mt.EFFORTS:
+        raise ValueError("effort must be low or medium")
     args = tr.translation_argv("claude", binary, "", schema)
     args[args.index("--model") + 1] = model
     args[args.index("--max-budget-usd") + 1] = mt.fmt(per_call)
     args[args.index("--output-format") + 1] = "stream-json"
-    return args + ["--verbose"]
+    return args + ["--verbose", "--effort", effort]
 
 
 class _Stream:
@@ -143,7 +154,8 @@ class _Stream:
 def default_call(spec: CallSpec, cancel) -> CallResult:
     stream = _Stream()
     try:
-        run = headless_cli.run(lambda tmp: meeting_argv(spec.binary, spec.model, spec.schema, spec.per_call), spec.prompt.encode(), cancel,
+        argv = meeting_argv(spec.binary, spec.model, spec.schema, spec.per_call, spec.effort)
+        run = headless_cli.run(lambda tmp: argv, spec.prompt.encode(), cancel,
                                timeout=spec.timeout, max_output=MAX_STREAM, blocked_name=f"{WORKER}.blocked",
                                prefix="vbear-meeting-", on_line=stream.feed)
         tail = run.output.rsplit(b"\n", 1)[-1]
@@ -244,6 +256,7 @@ def _sha(text: str) -> str:
 
 POSITION_LABELS = {row["id"]: row["label"] for row in ap.POSITION_TABLE}
 STATE_LABELS = {"failed": "發言失敗", "blocked": "卡住", "skipped": "沒有發言", "cancelled": "已取消", "interrupted": "中斷"}
+TIME_UP_LABEL = "時間到"  # a turn the meeting's clock skipped or stopped, whatever its state
 
 
 def opinions_for_chair(rec: dict, who: Callable[[str], dict], said: Callable[[dict], Any]) -> list[dict]:
@@ -258,7 +271,8 @@ def opinions_for_chair(rec: dict, who: Callable[[str], dict], said: Callable[[di
         if turn["state"] == "done":
             item["發言"] = said(turn)
         else:
-            item["狀態"] = "沒有發言（" + STATE_LABELS.get(turn["state"], turn["state"]) + "）"
+            label = TIME_UP_LABEL if turn.get("error_code") == "time_up" else STATE_LABELS.get(turn["state"], turn["state"])
+            item["狀態"] = "沒有發言（" + label + "）"
         out.append(item)
     return out
 
@@ -267,7 +281,8 @@ def opinions_for_chair(rec: dict, who: Callable[[str], dict], said: Callable[[di
 
 class HeadlessBoard:
     """The engine. A kind of board subclasses it and gives the hooks. ``ctx`` is that kind's own context of a running
-    board; the engine reads only ``who(profile_id)``, ``expected_sha``, ``binary``, ``version`` and ``daily_usd`` of it."""
+    board; the engine reads only ``who(profile_id)``, ``expected_sha``, ``binary``, ``version``, ``daily_usd`` and
+    ``speed`` (meetings.speed_from: the efforts and the minutes) of it."""
 
     final_kind = ""  # the kind of the last turn, the one that answers the others
     store_cls: Any = None  # the GuardedJsonStore of one record, built from its id
@@ -322,6 +337,10 @@ class HeadlessBoard:
     def decided(self, rec: dict) -> bool:
         """Whether the chairman has closed the record, after which no turn is retried."""
         raise NotImplementedError
+
+    def timeout(self, kind: str) -> float:
+        """The longest one call of this kind may run (the meeting's clock may cut it shorter)."""
+        return mt.CALL_TIMEOUT
 
     def on_final(self, rid: str) -> None:
         """Called when the last turn has been answered and kept."""
@@ -451,15 +470,30 @@ class HeadlessBoard:
             raise mt.MeetingError(exc.code if exc.code in mt.ERRORS else "storage") from None
 
     def _launch(self, mid: str, ctx, fd: int) -> None:
+        """Start the worker on a new clock: the board (or this retry of it) runs at most ctx.speed's minutes from now."""
         cancel = threading.Event()
-        thread = threading.Thread(target=self._work, args=(mid, ctx, cancel, fd), daemon=True, name=f"meeting-{mid}")
+        started = self.clock()
+        deadline = started + 60 * ctx.speed["max_minutes"]
+        thread = threading.Thread(target=self._work, args=(mid, ctx, cancel, fd, deadline), daemon=True, name=f"meeting-{mid}")
         with self.lock:
-            self.job = {"meeting_id": mid, "cancel": cancel, "thread": thread}
+            self.job = {"meeting_id": mid, "cancel": cancel, "thread": thread, "started_at": started, "deadline_at": deadline,
+                        "max_minutes": ctx.speed["max_minutes"]}
         thread.start()
+
+    def clock_of(self, rid: str) -> dict | None:
+        """The clock of the board running now, if it is this one: when it started, when it ends, until when a speaker may
+        speak, and how many seconds are left by the console's clock. None when this one is not running here."""
+        with self.lock:
+            job = self.job
+        if job is None or job["meeting_id"] != rid:
+            return None
+        return {"started_at": job["started_at"], "deadline_at": job["deadline_at"],
+                "speakers_until": job["deadline_at"] - mt.CHAIR_RESERVE_S, "max_minutes": job["max_minutes"],
+                "remaining_s": max(job["deadline_at"] - self.clock(), 0.0)}
 
     # -- the worker ------------------------------------------------------------------------------------------------
 
-    def _work(self, mid: str, ctx, cancel, fd: int) -> None:
+    def _work(self, mid: str, ctx, cancel, fd: int, deadline: float) -> None:
         stop = None
         try:
             while True:
@@ -472,7 +506,7 @@ class HeadlessBoard:
                 if stop is not None:
                     self._end(mid, turn["seq"], "cancelled" if stop == "cancelled" else "skipped", stop, evidence=None)
                     continue
-                stop = self._turn(mid, rec, turn, ctx, cancel)
+                stop = self._turn(mid, rec, turn, ctx, cancel, deadline)
         except (mt.MeetingError, StoreError):
             pass  # the record cannot be read or written: nothing more can be said about this board
         finally:
@@ -500,7 +534,7 @@ class HeadlessBoard:
         added = per_call if cost is None else cost
         return {**evidence, "cost_usd": mt.fmt((before or Decimal(0)) + added), "cost_source": "worst_case" if worst else "cli"}
 
-    def _turn(self, mid: str, rec: dict, turn: dict, ctx, cancel) -> str | None:
+    def _turn(self, mid: str, rec: dict, turn: dict, ctx, cancel, deadline: float) -> str | None:
         """Run one queued turn. Returns what must stop the board ("cancelled", "boundary_revoked", "process_unconfirmed")
         or None."""
         seq = turn["seq"]
@@ -515,6 +549,12 @@ class HeadlessBoard:
         if final and not any(t["state"] == "done" for t in rec["turns"] if t["kind"] != self.final_kind):
             self._end(mid, seq, "skipped", "no_opinions", evidence=None)
             return None
+        own = self.timeout(turn["kind"])
+        left = (deadline if final else deadline - mt.CHAIR_RESERVE_S) - self.clock()
+        if left < mt.MIN_TURN_S:  # never sent; the last turn may be asked again, on a new clock
+            self._end(mid, seq, "failed" if final else "skipped", "time_up", evidence=None)
+            return None
+        timeout = min(own, left)
         attempts = turn["attempts"] + 1
         try:
             prompt = self.prompt(turn["kind"], who, rec, ctx)
@@ -534,7 +574,9 @@ class HeadlessBoard:
             r["turns"][seq - 1].update(state="running", attempts=attempts, started_at=self.clock(), ended_at=None,
                                        prompt_sha256=sha, error_code=None, output=None)
         self._update(mid, start)
-        spec = CallSpec(turn["kind"], ctx.binary, ctx.version, who["model_used"], self.schema(turn["kind"]), prompt, per_call)
+        effort = ctx.speed["chair_effort"] if final else ctx.speed["speaker_effort"]
+        spec = CallSpec(turn["kind"], ctx.binary, ctx.version, who["model_used"], self.schema(turn["kind"]), prompt, per_call, effort,
+                        timeout=timeout)
         previous = turn["evidence"]
         output, code, stop = None, None, None
         try:
@@ -545,7 +587,7 @@ class HeadlessBoard:
             except mt.OutputError as exc:
                 code = exc.code
         except CallFailed as exc:
-            code = exc.code
+            code = "time_up" if exc.code == "timeout" and timeout < own else exc.code  # stopped by the meeting's clock
             evidence = self._merged(previous, exc.evidence, exc.cost, per_call)
         except Exception:
             code = "internal"

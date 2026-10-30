@@ -1,7 +1,8 @@
 """Running a meeting (P34-4): the preview the chairman confirms, and what a meeting gives the engine that runs it.
 
 A meeting is held by headless Claude Code calls with no tools, run by board_engine.HeadlessBoard: the call and the check
-of its init event, the one worker, the money and what a restart leaves are described there. What is a meeting's own:
+of its init event, the one worker, the money, the speed (the effort and the clock, meetings.speed_from) and what a restart
+leaves are described there. What is a meeting's own:
 
   * speakers run one after another, never at the same time, and never see each other; then the CEO writes the decision;
   * nothing is retried by itself. A failed turn waits for a person to retry it (twice at most), and the meeting is held
@@ -49,6 +50,7 @@ class Context:
     version: str
     binary: str
     expected_sha: dict = field(default_factory=dict)
+    speed: dict = field(default_factory=lambda: dict(mt.DEFAULT_SPEED))
 
     def people(self) -> list[dict]:
         return self.speakers + [self.chair]
@@ -144,11 +146,12 @@ class MeetingRunner(HeadlessBoard):
             raise mt.MeetingError("too_many")
         blockers: list = []
         binary, version = self._provider_state(blockers)
+        speed = mt.speed_from(sources.conf)  # what the preview shows is what is sent, whatever the config says by then
         ctx = Context(topic=topic, context=context, flags=flags, task_id=task_id, task=task,
                       progress=mt.progress_summary(task, _flows(sources, task_id)) if task_id else None,
                       chair=participant(*chair_card), speakers=[participant(*c) for c in speaker_cards],
                       instructions={c[0]["id"]: _instructions_of(c[0]) for c in [chair_card] + speaker_cards},
-                      limits=limits, daily_usd=limits["daily_usd"], version=version or "", binary=binary or "")
+                      limits=limits, daily_usd=limits["daily_usd"], version=version or "", binary=binary or "", speed=speed)
         calls = len(ctx.speakers) + 1
         more, today = self._blockers(limits["per_call_usd"] * calls, limits["meeting_usd"], limits)
         blockers += more
@@ -159,17 +162,18 @@ class MeetingRunner(HeadlessBoard):
             sha = _sha(text)
             if not dynamic:
                 ctx.expected_sha[person["profile_id"]] = sha
-            people.append({**person, "model": person["model_used"], "instructions": ctx.instructions[person["profile_id"]], "prompt": text,
-                           "prompt_sha256": sha, "dynamic": dynamic})
+            people.append({**person, "model": person["model_used"], "effort": speed["speaker_effort"],
+                           "instructions": ctx.instructions[person["profile_id"]], "prompt": text, "prompt_sha256": sha, "dynamic": dynamic})
         chair = ctx.chair
         chair_text = ctx.prompt("decision", chair, opinions=PLACEHOLDER_OPINIONS)
         out = {"preview_id": None, "startable": not blockers, "blockers": blockers, "topic": topic, "context": context,
                "flags": flags, "task": mt.task_context(task), "participants": people,
-               "chair": {**chair, "model": chair["model_used"], "instructions": ctx.instructions[chair["profile_id"]], "prompt": chair_text,
+               "chair": {**chair, "model": chair["model_used"], "effort": speed["chair_effort"],
+                         "instructions": ctx.instructions[chair["profile_id"]], "prompt": chair_text,
                          "prompt_sha256": _sha(chair_text), "dynamic": True},
                "calls": calls, "reserve_usd": mt.fmt(limits["per_call_usd"] * calls),
                "limits": {k: mt.fmt(v) for k, v in limits.items()}, "today": today,
-               "cli": {"version": version, "verified": version is not None},
+               "cli": {"version": version, "verified": version is not None}, "speed": mt.speed_view(speed),
                "disclosure": DISCLOSURE, "cost_note": COST_NOTE, "rules": [dict(r) for r in rules.RULES]}
         if not blockers:
             out["preview_id"] = self._keep({"kind": "new", "ctx": ctx, "calls": calls})
@@ -241,6 +245,7 @@ class MeetingRunner(HeadlessBoard):
         blockers: list = []
         binary, version = self._provider_state(blockers)
         ctx = self._context_of(rec, sources, binary or "", version or "")
+        ctx.speed = speed = mt.speed_from(sources.conf)
         per_call = mt.money(rec["limits"]["per_call_usd"])
         calls = 1 + (1 if again else 0)
         more, today = self._blockers(per_call * calls, self.room(rec), {**ctx.limits, "daily_usd": ctx.daily_usd})
@@ -251,12 +256,14 @@ class MeetingRunner(HeadlessBoard):
         else:
             text = ctx.prompt("opinion", who, spend=PLACEHOLDER_SPEND if who["position"] == "accountant" else None)
         out = {"preview_id": None, "startable": not blockers, "blockers": blockers, "meeting_id": mid, "seq": turn["seq"],
-               "participant": {**who, "instructions": ctx.instructions[who["profile_id"]]}, "prompt": text, "prompt_sha256": _sha(text),
+               "participant": {**who, "effort": speed["chair_effort" if turn["kind"] == "decision" else "speaker_effort"],
+                               "instructions": ctx.instructions[who["profile_id"]]}, "prompt": text, "prompt_sha256": _sha(text),
                "calls": calls, "reserve_usd": mt.fmt(per_call * calls), "decision_again": again,
                "attempt": turn["attempts"] + 1, "today": today, "cli": {"version": version, "verified": version is not None},
-               "disclosure": DISCLOSURE, "cost_note": COST_NOTE}
+               "speed": mt.speed_view(speed), "disclosure": DISCLOSURE, "cost_note": COST_NOTE}
         if not blockers:
-            out["preview_id"] = self._keep({"kind": "retry", "meeting_id": mid, "seq": turn["seq"], "version": version, "calls": calls})
+            out["preview_id"] = self._keep({"kind": "retry", "meeting_id": mid, "seq": turn["seq"], "version": version, "calls": calls,
+                                            "speed": speed})
         return out
 
     def retry(self, preview_id, sources: Sources, meeting_id: str | None = None) -> dict:
@@ -271,6 +278,7 @@ class MeetingRunner(HeadlessBoard):
         if version != entry["version"]:
             raise mt.MeetingError("stale_preview")
         ctx = self._context_of(rec, sources, binary, version)
+        ctx.speed = entry["speed"]
         per_call = mt.money(rec["limits"]["per_call_usd"])
         calls = 1 + (1 if again else 0)
         more, _ = self._blockers(per_call * calls, self.room(rec), {**ctx.limits, "daily_usd": ctx.daily_usd}, check_lock=False)
@@ -314,7 +322,12 @@ class MeetingRunner(HeadlessBoard):
         return mt.view(self._update(mid, change))
 
     def get(self, mid: str) -> dict:
-        return mt.view(mt.load(mid))
+        """A meeting as mt.view shows it, and, while it runs here, its clock (clock_of)."""
+        out = mt.view(mt.load(mid))
+        clock = self.clock_of(mid)
+        if clock is not None:
+            out["clock"] = clock
+        return out
 
     def list(self) -> dict:
         out = []
