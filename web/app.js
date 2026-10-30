@@ -13139,7 +13139,7 @@ function staffingNames(view, profiles, skills) {
     const words = prefer === "slot" ? slot || pos : pos || slot;
     return words ? { kind: "place", alias: v, found: true, text: words } : missing("place", v);
   }
-  return { card, newCard, skill, place, byId, skillById };
+  return { card, newCard, skill, place, byId, skillById, news };
 }
 
 // ---- skill gaps: plain text, and a search of this console's skill library ----
@@ -13271,6 +13271,217 @@ function staffingProposalNode(kept, output, ctx) {
     staffingNotesNode(output));
 }
 
+// ---- the person's draft of the proposal ----
+// The proposal as the person changes it before adopting it: who is in each place and on the staff, whether a row is to be
+// adopted, and which skills to insert. It is kept in this browser only (staffing.edit.<id>) and sends nothing. VBear checks
+// a row again by the page's own rules (the card as it is now, the place it fits, a review's camp against the executor's,
+// as on a task card) and does not tick a row it flags; a row is never ticked by a change in another row.
+const STAFFING_SLOT_FIT = { planner: ["planner", "pm"], executor: ["executor", "social", "art"], reviewer1: ["reviewer", "executor"],
+  reviewer2: ["reviewer", "executor"] };   // vbear/staffing.py SLOT_FIT; a test keeps them equal
+const STAFFING_STAFF_POSITIONS = ["pm", "legal", "accountant", "social", "art", "executor"];   // vbear/staffing.py STAFF_POSITIONS
+const STAFFING_DRAFT_KEY = "staffing.edit.";
+const STAFFING_DRAFT_NOTE = "草稿只存在這個瀏覽器，不會改角色卡、技能或隊伍；VBear 標出問題的列預設不勾，要不要採用由你決定。";
+const STAFFING_SWAP_NOTE = "換過人：VBear 能不能幫這張卡出發，這裡沒有重新判斷，請看角色卡上的出發通行證。";
+
+function staffingDraftBasis(view) {
+  const turns = Array.isArray(view.turns) ? view.turns : [];
+  const t = turns[turns.length - 1] || {};
+  return `${t.seq}:${t.attempts}:${t.ended_at}`;
+}
+// env: { byId (cards by id, as they are now), news (the CEO's new cards by ref), skills, skillById, names }
+function staffingDraftWho(who, env) {
+  if (!who || typeof who !== "object") return null;
+  if (who.type === "card") {
+    const p = env.byId.get(who.profileId);
+    if (!p) return { found: false, text: STAFFING_NOT_FOUND, tool: "", position: null, equipped: [] };
+    const tool = p.model && typeof p.model.tool === "string" ? p.model.tool : "";
+    return { found: true, key: p.id, text: String(p.name || p.id), tool, position: cardPosition({ position: p.position }), enabled: p.enabled !== false,
+      equipped: Array.isArray(p.equipped_skill_ids) ? p.equipped_skill_ids : [] };
+  }
+  const n = who.type === "new" ? env.news.get(who.ref) : null;
+  return n ? { found: true, key: who.ref, text: `新卡「${n.name}」（建議新建）`, tool: n.tool, position: n.position, enabled: true, equipped: [] }
+    : { found: false, text: STAFFING_NOT_FOUND, tool: "", position: null, equipped: [] };
+}
+function staffingDraftFlags(row, rows, env) {
+  const w = staffingDraftWho(row.who, env);
+  if (!w || !w.found) return [];
+  const out = [];
+  if (w.enabled === false) out.push("disabled");
+  if (!row.swapped && row.serverFlags.includes("cannot_start")) out.push("cannot_start");   // the server's, for the card it was given
+  if (!(row.kind === "slot" ? STAFFING_SLOT_FIT[row.place] : [row.place]).includes(w.position)) out.push("slot_fit");
+  if (row.kind === "slot" && row.place.startsWith("reviewer")) {
+    const ex = rows.find((r) => r.kind === "slot" && r.place === "executor");
+    const ew = ex ? staffingDraftWho(ex.who, env) : null;
+    const like = (x) => ({ profile_id: x.key, tool: x.tool });
+    const problem = slotProblem(row.place, like(w), { executor: ew && ew.found ? like(ew) : null });
+    if (problem) out.push(problem.code);
+  }
+  return out;
+}
+function staffingDraftFrom(view, env) {
+  const kept = staffingProposalOf(view);
+  const row = (x, kind, place) => {
+    let who = null;
+    let lost = "";
+    if (x && x.pick === "existing") {
+      const c = env.names.card(x.card);
+      if (c.found) who = { type: "card", profileId: c.profileId }; else lost = String(x.card || "");
+    } else if (x && x.pick === "new" && typeof x.new_ref === "string") who = { type: "new", ref: x.new_ref };
+    const skills = [];
+    let gone = 0;
+    for (const s of staffingList(x, "skills")) {
+      const sk = env.names.skill(s.skill);
+      if (!sk.found) { gone += 1; continue; }
+      if (!skills.some((y) => y.skillId === sk.skillId)) skills.push({ skillId: sk.skillId, take: true, ceo: true });
+    }
+    return { key: `${kind}:${place}`, kind, place, who, lost, gone, serverFlags: Array.isArray(x && x.flags) ? x.flags.filter((f) => typeof f === "string") : [],
+      swapped: false, take: false, skills, dropped: 0 };
+  };
+  const rows = STAFFING_SLOTS.map((slot) => row(staffingList(kept, "team").find((t) => t.slot === slot), "slot", slot));
+  for (const x of staffingList(kept, "staff")) {
+    if (STAFFING_STAFF_POSITIONS.includes(x.position) && !rows.some((r) => r.key === `staff:${x.position}`)) rows.push(row(x, "staff", x.position));
+  }
+  for (const r of rows) r.take = Boolean(r.who) && !r.serverFlags.length && !staffingDraftFlags(r, rows, env).length;
+  return { basis: staffingDraftBasis(view), rows };
+}
+// A draft kept in this browser, read back only when it is of this very proposal and every row is one this page could
+// have written; anything else is dropped (stale says it was of an earlier proposal).
+function staffingDraftRead(id, view) {
+  const raw = store.get(STAFFING_DRAFT_KEY + id, null);
+  const basis = staffingDraftBasis(view);
+  if (!raw || typeof raw !== "object") return { draft: null, stale: false };
+  if (raw.basis !== basis) return { draft: null, stale: typeof raw.basis === "string" };
+  if (!Array.isArray(raw.rows)) return { draft: null, stale: false };
+  const rows = [];
+  const str = (v) => typeof v === "string";
+  for (const r of raw.rows) {
+    if (!r || typeof r !== "object") return { draft: null, stale: false };
+    const okPlace = r.kind === "slot" ? STAFFING_SLOTS.includes(r.place) : r.kind === "staff" && STAFFING_STAFF_POSITIONS.includes(r.place);
+    const okWho = r.who === null || (r.who && r.who.type === "card" && str(r.who.profileId)) || (r.who && r.who.type === "new" && /^N[1-3]$/.test(r.who.ref));
+    const okSkills = Array.isArray(r.skills) && r.skills.every((s) => s && str(s.skillId) && typeof s.take === "boolean" && typeof s.ceo === "boolean");
+    if (!okPlace || !okWho || !okSkills || typeof r.take !== "boolean" || typeof r.swapped !== "boolean" || !Array.isArray(r.serverFlags)
+        || !r.serverFlags.every(str) || rows.some((x) => x.key === `${r.kind}:${r.place}`)) return { draft: null, stale: false };
+    rows.push({ key: `${r.kind}:${r.place}`, kind: r.kind, place: r.place, who: r.who ? { ...r.who } : null, lost: str(r.lost) ? r.lost : "",
+      gone: Number.isInteger(r.gone) && r.gone > 0 ? r.gone : 0, serverFlags: r.serverFlags.slice(), swapped: r.swapped, take: r.take,
+      skills: r.skills.map((s) => ({ skillId: s.skillId, take: s.take, ceo: s.ceo })), dropped: Number.isInteger(r.dropped) && r.dropped > 0 ? r.dropped : 0 });
+  }
+  if (STAFFING_SLOTS.some((slot) => rows.filter((x) => x.key === `slot:${slot}`).length !== 1)) return { draft: null, stale: false };
+  return { draft: { basis, rows }, stale: false };
+}
+
+function staffingDraftSection(id, view, env) {
+  const read = staffingDraftRead(id, view);
+  let draft = read.draft || staffingDraftFrom(view, env);
+  let stale = read.stale;
+  const host = el("section", { class: "section st-draft", "data-st": "draft" });
+  const changed = new Set(Array.isArray(view.changed_cards) ? view.changed_cards : []);
+  const changedIds = new Set((view.sent && Array.isArray(view.sent.cards) ? view.sent.cards : []).filter((c) => c && changed.has(c.alias)).map((c) => c.profile_id));
+  const save = () => store.set(STAFFING_DRAFT_KEY + id, draft);
+  // after any change: a row VBear now flags is not ticked; nothing is ticked by a change in another row
+  const settleRows = () => { for (const r of draft.rows) if (staffingDraftFlags(r, draft.rows, env).length) r.take = false; };
+  const change = (fn) => { fn(); settleRows(); save(); paint(); };
+  const placeLabel = (r) => (r.kind === "slot" ? STAFFING_SLOT_LABEL[r.place] : `幕僚：${staffingPositionText(r.place)}`);
+  const cards = [...env.byId.values()];
+
+  function swapSelect(r) {
+    const fit = r.kind === "slot" ? STAFFING_SLOT_FIT[r.place] : [r.place];
+    const pos = (p) => cardPosition({ position: p.position });
+    const sorted = [...cards].sort((a, b) => ((fit.includes(pos(a)) ? 0 : 1) - (fit.includes(pos(b)) ? 0 : 1))
+      || ((a.enabled === false ? 1 : 0) - (b.enabled === false ? 1 : 0)) || String(a.name || "").localeCompare(String(b.name || "")) || a.id.localeCompare(b.id));
+    const tool = (p) => (p.model && typeof p.model.tool === "string" ? p.model.tool : "");
+    const sel = el("select", { class: "st-swap", "data-st": "swap", "aria-label": `換人：${placeLabel(r)}` },
+      el("option", { value: "" }, "（空著）"),
+      sorted.map((p) => el("option", { value: `card:${p.id}` }, `${p.name || p.id}（${staffingPositionText(pos(p))}・${CARD_TOOL_SHORT[tool(p)] || tool(p) || "未知工具"}`
+        + `${p.enabled === false ? "・停用中" : ""}）`)),
+      [...env.news.values()].map((n) => el("option", { value: `new:${n.ref}` }, `新卡「${n.name}」（建議新建）`)));
+    sel.value = r.who ? (r.who.type === "card" ? `card:${r.who.profileId}` : `new:${r.who.ref}`) : "";
+    sel.addEventListener("change", () => change(() => {
+      const v = sel.value;
+      r.swapped = true;
+      r.serverFlags = [];
+      r.lost = "";
+      if (!v) { r.who = null; r.skills = []; r.dropped = 0; r.take = false; return; }
+      r.who = v.startsWith("card:") ? { type: "card", profileId: v.slice(5) } : { type: "new", ref: v.slice(4) };
+      const w = staffingDraftWho(r.who, env);
+      const before = r.skills.length;
+      r.skills = r.skills.filter((s) => { const sk = env.skillById.get(s.skillId); return sk && skillCompatible(sk, w.tool); });
+      r.dropped = before - r.skills.length;
+      r.take = !staffingDraftFlags(r, draft.rows, env).length;
+    }));
+    return sel;
+  }
+
+  function rowNode(r) {
+    const w = staffingDraftWho(r.who, env);
+    const flags = staffingDraftFlags(r, draft.rows, env);
+    const take = el("input", { type: "checkbox", "data-st": "take", disabled: !w || !w.found });
+    take.checked = r.take && Boolean(w && w.found);
+    take.addEventListener("change", () => change(() => { r.take = take.checked; }));
+    const skills = r.skills.map((s) => {
+      const sk = env.skillById.get(s.skillId);
+      const equipped = Boolean(w && w.equipped.includes(s.skillId));
+      const box = el("input", { type: "checkbox", "data-st": "draft-skill", "data-skill": s.skillId, disabled: equipped });
+      box.checked = s.take && !equipped;
+      box.addEventListener("change", () => change(() => { s.take = box.checked; }));
+      return el("li", null, el("label", { class: "mt-check" }, box, el("span", null, sk ? String(sk.name || sk.skill_id) : STAFFING_NOT_FOUND)),
+        " ", s.ceo ? badge("CEO 建議", "b-info") : badge("你加的", "b-mute"), equipped ? [" ", badge("已插上", "b-mute", STAFFING_FLAG_TEXT.already_equipped)] : null);
+    });
+    let addSkill = null;
+    if (w && w.found) {
+      const have = new Set(r.skills.map((s) => s.skillId).concat(w.equipped));
+      const offer = skillPickPlan(env.skills, w.tool).listed.map((e) => e.skill).filter((s) => !have.has(s.skill_id));
+      if (offer.length) {
+        addSkill = el("select", { class: "st-add-skill", "data-st": "add-skill", "aria-label": `加一張技能：${placeLabel(r)}` },
+          el("option", { value: "" }, "（加一張這張卡讀得到的技能）"), offer.map((s) => el("option", { value: s.skill_id }, `${s.name}（${CARD_TOOL_SHORT[s.tool] || s.tool}）`)));
+        addSkill.addEventListener("change", () => { if (addSkill.value) change(() => { r.skills.push({ skillId: addSkill.value, take: true, ceo: false }); }); });
+      }
+    }
+    return el("li", { class: "card st-draft-row", "data-st": "draft-row", "data-key": r.key },
+      el("div", { class: "row" },
+        el("label", { class: "mt-check" }, take, el("strong", null, `${placeLabel(r)}：${w ? w.text : "空著"}`)),
+        flags.map((f) => el("span", { "data-st": "draft-flag" }, badge(staffingFlagText(f), "b-warn")))),
+      r.lost ? el("p", { class: "small muted" }, `CEO 提的卡找不到了（${r.lost}）`) : null,
+      w && w.found && r.who.type === "card" && changedIds.has(r.who.profileId) ? el("p", { class: "small muted" }, "這張卡在組隊會議之後改過。") : null,
+      r.swapped && w && w.found ? el("p", { class: "small muted" }, STAFFING_SWAP_NOTE) : null,
+      r.dropped ? el("p", { class: "small" }, `拿掉了 ${r.dropped} 張這張卡讀不到的技能。`) : null,
+      r.gone ? el("p", { class: "small muted" }, `CEO 建議的技能有 ${r.gone} 張在技能庫找不到，沒有放進草稿。`) : null,
+      skills.length ? el("ul", { class: "st-draft-skills" }, skills) : null,
+      el("div", { class: "row" }, swapSelect(r), addSkill,
+        el("button", { class: "btn small", type: "button", "data-st": "remove", on: { click: () => change(() => {
+          if (r.kind === "staff") draft.rows = draft.rows.filter((x) => x !== r);
+          else { r.who = null; r.skills = []; r.take = false; r.swapped = true; r.dropped = 0; r.serverFlags = []; r.lost = ""; }
+        }) } }, r.kind === "staff" ? "拿掉這位幕僚" : "拿掉（空著）")));
+  }
+
+  function paint() {
+    const taken = draft.rows.filter((r) => r.take);
+    const inserts = taken.reduce((n, r) => {
+      const w = staffingDraftWho(r.who, env);
+      return n + r.skills.filter((s) => s.take && !(w && w.equipped.includes(s.skillId))).length;
+    }, 0);
+    const free = STAFFING_STAFF_POSITIONS.filter((p) => !draft.rows.some((r) => r.key === `staff:${p}`));
+    const addStaff = free.length ? el("select", { "data-st": "add-staff", "aria-label": "加一位開會時找的幕僚" },
+      el("option", { value: "" }, "（加一位幕僚）"), free.map((p) => el("option", { value: p }, staffingPositionText(p)))) : null;
+    if (addStaff) addStaff.addEventListener("change", () => { const p = addStaff.value; if (p) change(() => {
+      draft.rows.push({ key: `staff:${p}`, kind: "staff", place: p, who: null, lost: "", gone: 0, serverFlags: [], swapped: true, take: false, skills: [], dropped: 0 });
+    }); });
+    setKids(host,
+      sectionHead("改成你要的樣子（草稿）", STAFFING_DRAFT_NOTE,
+        el("button", { class: "btn small", type: "button", "data-st": "draft-reset", on: { click: () => {
+          store.set(STAFFING_DRAFT_KEY + id, null);
+          draft = staffingDraftFrom(view, env);
+          stale = false;
+          paint();
+        } } }, "回到 CEO 的提案")),
+      stale ? notice("info", "CEO 重新提案過，草稿已改回新的提案。") : null,
+      el("p", { class: "small", "data-st": "draft-sum", role: "status" }, `草稿：要採用 ${taken.length} 列，要插 ${inserts} 張技能（不含已插上的）。插上技能只是紀錄，不會安裝或下載。`),
+      el("ul", { class: "st-draft-rows" }, draft.rows.map(rowNode)),
+      addStaff ? el("div", { class: "row" }, addStaff) : null);
+  }
+  paint();
+  return host;
+}
+
 // ---- the page ----
 
 async function viewStaffingDetail(token, id) {
@@ -13379,6 +13590,8 @@ async function viewStaffingDetail(token, id) {
       proposal ? el("section", { class: "section", "data-st": "proposal" },
         sectionHead("CEO 的組隊提案", "這只是建議：VBear 不會自己建卡、插技能或排隊伍。卡和技能是用代號寫的，這裡換成它們現在的名稱；找不到的寫「找不到」。"),
         staffingProposalNode(proposal, last.output, ctx)) : null,
+      proposal && cur.status === "ready" && cur.chairman && cur.chairman.state === "pending"
+        ? staffingDraftSection(id, cur, { byId: names.byId, news: names.news, skills, skillById: names.skillById, names }) : null,
       chairmanBlock(),
       el("div", { class: "row" },
         running ? el("button", { class: "btn", type: "button", "data-mt": "cancel", on: { click: () => act(() => api.post(`/api/staffing/${encodeURIComponent(id)}/cancel`, {})) } },
@@ -13705,6 +13918,7 @@ if (typeof module !== "undefined" && module.exports) {
     staffingNames,
     staffingGapLink,
     staffingGapState,
+    STAFFING_SLOT_FIT,
     taskStaffingBlock,
     viewStaffing,
   };

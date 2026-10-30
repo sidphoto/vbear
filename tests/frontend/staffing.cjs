@@ -536,6 +536,141 @@ test("deleting a staffing record asks first; a record that cannot be read says s
   assert(text(main).includes("找不到這份組隊紀錄"), text(main));
 });
 
+// ---- the person's draft of the proposal ------------------------------------------------------------------------------
+
+const draftRow = (main, key) => qa(main, "draft-row").find((r) => r.getAttribute("data-key") === key);
+const takeOf = (r) => q(r, "take").checked;
+const skillBoxes = (r) => qa(r, "draft-skill");
+async function choose(select, value) { select.value = value; select.dispatch("change"); await settle(); }
+const draftKey = "sid:staffing.edit." + SID;
+
+test("the draft starts from the proposal: what VBear flagged, a same-camp review included, is not ticked; the CEO's skills are", async () => {
+  delete global.localStorage._store[draftKey];
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  const draft = q(main, "draft");
+  assert(draft, "a draft");
+  noMarkup(draft);
+  assert.deepStrictEqual(qa(draft, "draft-row").map((r) => r.getAttribute("data-key")),
+    ["slot:planner", "slot:executor", "slot:reviewer1", "slot:reviewer2", "staff:legal", "staff:art"]);
+  const ticks = Object.fromEntries(qa(draft, "draft-row").map((r) => [r.getAttribute("data-key"), takeOf(r)]));
+  assert.deepStrictEqual(ticks, { "slot:planner": true, "slot:executor": true, "slot:reviewer1": true, "slot:reviewer2": false,
+    "staff:legal": true, "staff:art": false });
+  const rev2 = draftRow(draft, "slot:reviewer2");
+  assert(text(rev2).includes("審查位和執行位同一陣營，審查結果不算數"), text(rev2));
+  assert(text(draftRow(draft, "staff:art")).includes("這張卡停用中，要先啟用"));
+  const exec = draftRow(draft, "slot:executor");
+  const boxes = skillBoxes(exec);
+  assert.deepStrictEqual(boxes.map((b) => [b.getAttribute("data-skill"), b.checked, b.disabled]), [["sk-web", false, true], ["sk-test", true, false]]);
+  assert(text(exec).includes("已插上") && text(exec).includes("CEO 建議"), text(exec));
+  assert(text(exec).includes("組隊會議之後改過"), "a card changed since says so");
+  assert(text(draftRow(draft, "staff:legal")).includes("法務新卡"), "a new card is the CEO's, by its name");
+  const sum = text(q(draft, "draft-sum"));
+  assert(sum.includes("要採用 4 列") && sum.includes("要插 2 張技能"), sum);
+  assert(text(draft).includes("只存在這個瀏覽器"), "the draft says where it is kept");
+  assert.strictEqual(writes().length, 0, "nothing is sent");
+});
+
+test("換人 checks the review places again by the page's own rule, and takes out the skills the new card cannot read", async () => {
+  delete global.localStorage._store[draftKey];
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  await choose(q(draftRow(main, "slot:executor"), "swap"), "card:eng2");
+  let exec = draftRow(main, "slot:executor");
+  assert(text(exec).includes("Codex 工程師"), text(exec));
+  assert.deepStrictEqual(skillBoxes(exec).map((b) => b.getAttribute("data-skill")), ["sk-test"], "the Claude skill is taken out; the shared one stays");
+  assert(text(exec).includes("拿掉了 1 張這張卡讀不到的技能"), text(exec));
+  assert(text(exec).includes("出發通行證"), "whether VBear can start the card is not judged again here, and the page says so");
+  const rev1 = draftRow(main, "slot:reviewer1");
+  assert(text(rev1).includes("同一張卡不能審查自己") && !takeOf(rev1), "the same card in the execution and a review place");
+  await choose(q(rev1, "swap"), "card:rev");
+  assert(text(draftRow(main, "slot:reviewer1")).includes("審查位和執行位同一陣營"), "a Codex review of a Codex executor");
+  assert(!takeOf(draftRow(main, "slot:reviewer1")));
+  await choose(q(draftRow(main, "slot:executor"), "swap"), "card:eng");
+  const after = draftRow(main, "slot:reviewer1");
+  assert(!text(after).includes("審查結果不算數"), text(after));
+  assert(!takeOf(after), "a row is never ticked by a change in another row");
+  q(after, "take").checked = true;
+  q(after, "take").dispatch("change");
+  await settle();
+  assert(takeOf(draftRow(main, "slot:reviewer1")));
+  assert.strictEqual(writes().length, 0);
+});
+
+test("拿掉 empties a place or takes out a staff row; 加人 adds a staff position; a skill is added only from those the card can read", async () => {
+  delete global.localStorage._store[draftKey];
+  setRecord();
+  const main = await open("#/staffing/" + SID);
+  q(draftRow(main, "slot:reviewer2"), "remove").click();
+  await settle();
+  const rev2 = draftRow(main, "slot:reviewer2");
+  assert(text(rev2).includes("空著") && !takeOf(rev2), text(rev2));
+  q(draftRow(main, "staff:art"), "remove").click();
+  await settle();
+  assert.strictEqual(draftRow(main, "staff:art"), undefined);
+  const add = q(main, "add-staff");
+  assert(add.findAll((n) => n.tag === "option").map((o) => o.getAttribute("value")).includes("accountant"));
+  assert(!add.findAll((n) => n.tag === "option").map((o) => o.getAttribute("value")).includes("legal"), "a position already on the draft is not offered");
+  await choose(add, "accountant");
+  const acc = draftRow(main, "staff:accountant");
+  assert(acc && text(acc).includes("空著"), "a new staff row starts empty");
+  const exec = draftRow(main, "slot:executor");
+  const offered = q(exec, "add-skill").findAll((n) => n.tag === "option").map((o) => o.getAttribute("value")).filter(Boolean);
+  assert.deepStrictEqual(offered.sort(), ["sk-more"], "a Claude card: its own and shared skills not already in the row, nothing of Codex or AGY");
+  await choose(q(exec, "add-skill"), "sk-more");
+  const added = skillBoxes(draftRow(main, "slot:executor")).find((b) => b.getAttribute("data-skill") === "sk-more");
+  assert(added && added.checked, "the added skill is ticked");
+  assert(text(draftRow(main, "slot:executor")).includes("你加的"));
+  assert.strictEqual(writes().length, 0);
+});
+
+test("the draft is kept in this browser only: it comes back on the next visit, and 回到 CEO 的提案 drops it", async () => {
+  delete global.localStorage._store[draftKey];
+  setRecord();
+  let main = await open("#/staffing/" + SID);
+  q(draftRow(main, "slot:reviewer2"), "remove").click();
+  await settle();
+  assert(global.localStorage._store[draftKey], "kept under the record's own key");
+  main = await open("#/staffing/" + SID);
+  assert(text(draftRow(main, "slot:reviewer2")).includes("空著"), "the draft is read back");
+  q(main, "draft-reset").click();
+  await settle();
+  assert(text(draftRow(main, "slot:reviewer2")).includes("PM 卡"), text(draftRow(main, "slot:reviewer2")));
+  assert.strictEqual(JSON.parse(global.localStorage._store[draftKey] || "null"), null, "no draft is kept");
+  assert.strictEqual(writes().length, 0);
+});
+
+test("a draft of an earlier proposal, or one that cannot be read, is not used", async () => {
+  for (const kept of [JSON.stringify({ basis: "3:0:1", rows: [] }), "not json", JSON.stringify({ basis: null, rows: "x" })]) {
+    global.localStorage._store[draftKey] = kept;
+    setRecord();
+    const main = await open("#/staffing/" + SID);
+    assert(text(draftRow(main, "slot:reviewer2")).includes("PM 卡"), "made again from the proposal");
+    if (kept.startsWith("{\"basis\":\"3")) assert(text(q(main, "draft")).includes("CEO 重新提案過"), text(q(main, "draft")));
+  }
+  delete global.localStorage._store[draftKey];
+});
+
+test("no draft while the CEO has not proposed, or once the chairman has recorded a decision", async () => {
+  const r = setRecord({ status: "incomplete", high_risk: false });
+  r.turns[2] = sturn(3, "ceo", "proposal", "failed", { error_code: "invalid_output", evidence: null });
+  let main = await open("#/staffing/" + SID);
+  assert.strictEqual(q(main, "draft"), null);
+  setRecord({ status: "dismissed", chairman: { state: "dismissed", at: 1790009999, note: "", adopted: null, label: "x" } });
+  main = await open("#/staffing/" + SID);
+  assert.strictEqual(q(main, "draft"), null);
+});
+
+test("the page's places fit the positions the server's do", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "..", "vbear", "staffing.py"), "utf8");
+  const block = src.slice(src.indexOf("SLOT_FIT = {"), src.indexOf("\n\n", src.indexOf("SLOT_FIT = {")));
+  for (const slot of ["planner", "executor", "reviewer1", "reviewer2"]) {
+    const m = new RegExp(`"${slot}": \\(([^)]*)\\)`).exec(block);
+    assert(m, slot);
+    assert.deepStrictEqual(app.STAFFING_SLOT_FIT[slot], [...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]), slot);
+  }
+});
+
 // ---- run ---------------------------------------------------------------------------------------------------------
 
 (async () => {

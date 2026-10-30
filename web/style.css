@@ -1503,6 +1503,11 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .st-opinions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .st-opinions > div { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 @media (max-width: 720px) { .st-opinions { grid-template-columns: 1fr; } }
+.st-draft-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.st-draft-row { gap: 6px; }
+.st-draft-row .row { gap: 6px 10px; }
+.st-draft-skills { margin: 0; padding-left: 18px; }
+.st-draft select { max-width: 100%; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); }
 .mt-clock { padding: 6px 10px; border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 6px; color: var(--ink); }
 @media (max-width: 720px) { .mt-cards { grid-template-columns: 1fr; } .mt-seats { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); } }
 @media (prefers-reduced-motion: reduce) { .mt-seat { transition: none; } }
