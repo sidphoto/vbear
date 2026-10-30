@@ -30,7 +30,9 @@ For every kind of board:
 A kind of board gives the engine its hooks: where its records live (``store_cls``, ``ids``, ``load``, ``view``,
 ``remove``), the schema, the check and the prompt of a turn, the most one turn's call may cost (``per_call``), the most a
 whole record may cost (``total_limit``), how long one call of a kind may run (``timeout``), whether the chairman has closed
-the record (``decided``), and what to do when the last turn is answered (``on_final``).
+the record (``decided``), what to do when the last turn is answered (``on_final``), the error it speaks in
+(``error_cls``, a meetings.MeetingError) and every kind whose turns count toward the day's limit (``spend_kinds``: the
+meetings and the staffing meetings share one day).
 """
 from __future__ import annotations
 
@@ -287,6 +289,7 @@ class HeadlessBoard:
     final_kind = ""  # the kind of the last turn, the one that answers the others
     store_cls: Any = None  # the GuardedJsonStore of one record, built from its id
     room_name = ""  # how a message names what is left of one record's own limit
+    error_cls: Any = mt.MeetingError  # the error raised, by code: the server reads the code; the message is the kind's own
 
     def __init__(self, *, call: Callable | None = None, provider: Callable | None = None, verifier: Callable | None = None,
                  clock: Callable[[], float] = time.time):
@@ -345,6 +348,11 @@ class HeadlessBoard:
     def on_final(self, rid: str) -> None:
         """Called when the last turn has been answered and kept."""
 
+    def spend_kinds(self) -> list[tuple[Callable, Callable, Callable]]:
+        """(ids, load, per_call) of every kind of board whose turns count toward the day's limit: this kind's own, unless
+        it shares the day with others."""
+        return [(self.ids, self.load, self.per_call)]
+
     # -- helpers ---------------------------------------------------------------------------------------------------
 
     def _resolve(self):
@@ -352,17 +360,25 @@ class HeadlessBoard:
         try:
             return self.provider("claude")
         except tr.TranslationError as exc:
-            raise mt.MeetingError(_provider_code(exc)) from None
+            raise self._provider_error(_provider_code(exc)) from None
+
+    def _provider_error(self, code: str) -> mt.MeetingError:
+        return self.error_cls(code)
+
+    def _spending(self) -> list[tuple[Callable, dict]]:
+        """(per_call, record) of every record of every kind whose turns count toward the day's limit."""
+        out = []
+        for ids, load, per_call in self.spend_kinds():
+            for rid in ids():
+                try:
+                    out.append((per_call, load(rid)))
+                except mt.MeetingError:
+                    continue  # a damaged record is shown as blocked in the list; it adds nothing here
+        return out
 
     def spend_records(self) -> list[dict]:
-        """The records whose turns count toward the day's limit."""
-        out = []
-        for rid in self.ids():
-            try:
-                out.append(self.load(rid))
-            except mt.MeetingError:
-                continue  # a damaged record is shown as blocked in the list; it adds nothing here
-        return out
+        """The records whose turns count toward the day's limit, of every kind that shares it."""
+        return [rec for _, rec in self._spending()]
 
     def spent(self, rec: dict) -> Decimal:
         return mt.spent(rec, self.per_call)
@@ -372,7 +388,8 @@ class HeadlessBoard:
         return self.total_limit(rec) - self.spent(rec)
 
     def _day(self) -> Decimal:
-        return mt.daily_spent(self.spend_records(), self.clock(), self.per_call)
+        now = self.clock()
+        return sum((mt.daily_spent([rec], now, per_call) for per_call, rec in self._spending()), Decimal(0))
 
     def _update(self, mid: str, change: Callable[[dict], None]) -> dict:
         store = self.store_cls(mid)
@@ -380,12 +397,12 @@ class HeadlessBoard:
             with store.locked():
                 rec = store.load()
                 if not rec:
-                    raise mt.MeetingError("not_found")
+                    raise self.error_cls("not_found")
                 change(rec)
                 store.save(rec)
                 return rec
         except StoreError as exc:
-            raise mt.MeetingError("storage", str(exc)) from None
+            raise self.error_cls("storage", str(exc)) from None
 
     def _take(self, preview_id, kind: str) -> dict:
         with self.lock:
@@ -394,7 +411,7 @@ class HeadlessBoard:
                 del self.previews[key]
             entry = self.previews.pop(preview_id, None) if isinstance(preview_id, str) else None
         if entry is None or entry["kind"] != kind:
-            raise mt.MeetingError("preview_expired")
+            raise self.error_cls("preview_expired")
         return entry
 
     def _keep(self, entry: dict) -> str:
@@ -420,9 +437,9 @@ class HeadlessBoard:
             blockers.append({"code": "budget", "message": f"今天已花 {today['spent_usd']} 美元，加上預留 {mt.fmt(reserve)} 會超過每日上限 {today['daily_usd']}"})
         if check_lock:
             if (cfg.state_dir() / f"{WORKER}.blocked").exists():
-                blockers.append({"code": "process_unconfirmed", "message": mt.ERRORS["process_unconfirmed"]})
+                blockers.append({"code": "process_unconfirmed", "message": str(self.error_cls("process_unconfirmed"))})
             elif self.job is not None or self._worker_busy():
-                blockers.append({"code": "busy", "message": mt.ERRORS["busy"]})
+                blockers.append({"code": "busy", "message": str(self.error_cls("busy"))})
         return blockers, today
 
     @staticmethod
@@ -440,7 +457,7 @@ class HeadlessBoard:
             return binary, version
         except tr.TranslationError as exc:
             code = _provider_code(exc)
-            blockers.append({"code": code, "message": mt.ERRORS[code]})
+            blockers.append({"code": code, "message": str(self._provider_error(code))})
             return None, None
 
     # -- the tool-less check ---------------------------------------------------------------------------------------
@@ -458,16 +475,16 @@ class HeadlessBoard:
         for person in people:
             current = sources.profile(person["profile_id"])
             if current is None or current.get("enabled") is False or ap.profile_digest(current) != person["revision"]:
-                raise mt.MeetingError(code)
+                raise self.error_cls(code)
 
     def _worker(self) -> int:
         with self.lock:
             if self.job is not None:
-                raise mt.MeetingError("busy")
+                raise self.error_cls("busy")
         try:
             return headless_cli.acquire_worker(WORKER)
         except headless_cli.HeadlessError as exc:
-            raise mt.MeetingError(exc.code if exc.code in mt.ERRORS else "storage") from None
+            raise self.error_cls(exc.code if exc.code in mt.ERRORS else "storage") from None
 
     def _launch(self, mid: str, ctx, fd: int) -> None:
         """Start the worker on a new clock: the board (or this retry of it) runs at most ctx.speed's minutes from now."""
@@ -663,20 +680,20 @@ class HeadlessBoard:
         rec = self.load(mid)
         with self.lock:
             if self.job is not None and self.job["meeting_id"] == mid:
-                raise mt.MeetingError("running")
+                raise self.error_cls("running")
         if self.decided(rec):
-            raise mt.MeetingError("already_decided")
+            raise self.error_cls("already_decided")
         if type(seq) is not int or not 1 <= seq <= len(rec["turns"]):
-            raise mt.MeetingError("bad_request", "seq 必須是這場會議的發言編號")
+            raise self.error_cls("bad_request", "seq 必須是這場會議的發言編號")
         turn, last = rec["turns"][seq - 1], rec["turns"][-1]
         if any(t["state"] in ("queued", "running") for t in rec["turns"]):
-            raise mt.MeetingError("running")
+            raise self.error_cls("running")
         if turn["state"] not in mt.RETRYABLE_STATES or turn["attempts"] >= mt.MAX_ATTEMPTS:
-            raise mt.MeetingError("not_retryable")
+            raise self.error_cls("not_retryable")
         again = False
         if turn["kind"] != self.final_kind:
             if last["attempts"] >= mt.MAX_ATTEMPTS and last["state"] != "blocked":
-                raise mt.MeetingError("not_retryable")  # a last turn that cannot be asked again would stand on an old answer
+                raise self.error_cls("not_retryable")  # a last turn that cannot be asked again would stand on an old answer
             again = last["attempts"] < mt.MAX_ATTEMPTS
         return rec, turn, again
 
@@ -686,12 +703,12 @@ class HeadlessBoard:
         with self.lock:
             job = self.job
             if job is None or job["meeting_id"] != mid:
-                raise mt.MeetingError("not_running")
+                raise self.error_cls("not_running")
             job["cancel"].set()
         return self.view(self.load(mid))
 
     def delete(self, mid: str) -> None:
         with self.lock:
             if self.job is not None and self.job["meeting_id"] == mid:
-                raise mt.MeetingError("running")
+                raise self.error_cls("running")
         self.remove(mid)

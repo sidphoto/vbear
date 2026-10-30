@@ -57,11 +57,13 @@ TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 NOTE_MAX, WHY_MAX = 500, 200
 CHAIRMAN_STATES = ("pending", "adopted", "dismissed")
 # What a record may cost (USD): a speaker's call as a meeting's (meeting_limits.per_call_usd), the CEO's call and the
-# whole record their own (the top-level staffing_limits of config.json, read by the runner); the day is the meetings'.
+# whole record their own (the top-level staffing_limits of config.json, limits_from); the day is the meetings'.
 DEFAULT_LIMITS = {"per_call_usd": mt.DEFAULT_LIMITS["per_call_usd"], "proposal_call_usd": Decimal("0.50"), "total_usd": Decimal("2.00")}
+LIMIT_CAPS = {"proposal_call_usd": Decimal("1"), "total_usd": Decimal("10")}
 MAX_CARDS, MAX_SKILLS, MAX_SPEAKER_SKILLS = 40, 120, 40
 LIST_MAX = 40 * 1024  # the CEO's list of cards and skills, as JSON
 SPEAKER_PROMPT_MAX, CHAIR_PROMPT_MAX = 24 * 1024, 64 * 1024
+CHAIR_PROMPT_SLACK = 4 * 1024  # left free by fit_inputs: the task card's status, and a redaction marker longer than its match
 OPINION_FOR_CHAIR_MAX = 3 * 1024  # what one speaker said, as the CEO is given it
 NAME_MAX, MODEL_MAX, HEAD_MAX, LINE_MAX = 80, 200, 120, 60
 CATEGORY_IDS = tuple(c["id"] for c in cats.CATEGORIES)
@@ -75,6 +77,16 @@ ERRORS = {
     "storage": "組隊紀錄無法安全讀寫，請人工檢查狀態目錄",
     "too_many": f"組隊紀錄已有 {MAX_RECORDS} 份，請先刪除不需要的",
     "too_large": "送出的內容超過大小限制，請縮短任務卡、補充說明或角色卡的指示",
+    # the runner's (staffing_runner), in a staffing meeting's words; a code not here keeps the meetings' text
+    "busy": "已有一場會議或組隊會議在進行，請等它結束或取消",
+    "stale_preview": "預覽之後角色卡、技能或任務卡變了，請重新預覽",
+    "budget": "額度不夠：超過這份組隊提案或每日上限",
+    "process_unconfirmed": "無法確認會議的程序群組已結束，已封鎖後續的會議與組隊會議，請人工檢查",
+    "running": "這場組隊會議正在進行",
+    "not_running": "這場組隊會議沒有在進行",
+    "already_decided": "董事長已經記錄了採用或不採用",
+    "not_decided": "CEO 還沒有提案，不能記錄採用",
+    "changed": "角色卡、技能或任務卡在組隊會議之後變了，不能重試；請開新的組隊會議",
 }
 
 
@@ -83,6 +95,41 @@ class StaffingError(mt.MeetingError):
 
     def __init__(self, code: str, message: str | None = None):
         super().__init__(code, message or ERRORS.get(code) or mt.ERRORS[code])
+
+
+# ---- the limits ----------------------------------------------------------------------------------------------------
+
+def limits_from(conf) -> dict[str, Decimal]:
+    """The limits a staffing meeting runs under: a speaker's call and the day as the meetings' (meetings.limits_from);
+    the CEO's call and the whole record from config's ``staffing_limits`` where it holds a usable number (above zero,
+    within the cap), the default for each key where it does not."""
+    meeting = mt.limits_from(conf)
+    stored = conf.get("staffing_limits") if isinstance(conf, dict) else None
+    out = {"per_call_usd": meeting["per_call_usd"], "proposal_call_usd": DEFAULT_LIMITS["proposal_call_usd"],
+           "total_usd": DEFAULT_LIMITS["total_usd"], "daily_usd": meeting["daily_usd"]}
+    if isinstance(stored, dict):
+        for key in LIMIT_CAPS:
+            value = mt.money(stored.get(key))
+            if value is not None and 0 < value <= LIMIT_CAPS[key]:
+                out[key] = value
+    return out
+
+
+def validate_limits(body, current: dict[str, Decimal], daily: Decimal | None = None) -> dict[str, float]:
+    """The new ``staffing_limits`` of config.json from a request, or ValueError. Keys not in the request keep their value;
+    the CEO's call must fit the record, and the record the day (``daily``, the meetings' daily limit in force, by default
+    current's)."""
+    if not isinstance(body, dict) or set(body) - set(LIMIT_CAPS):
+        raise ValueError("staffing_limits 只能含 proposal_call_usd、total_usd")
+    merged = {key: current[key] for key in LIMIT_CAPS}
+    for key, raw in body.items():
+        value = None if isinstance(raw, str) else mt.money(raw)
+        if value is None or value <= 0 or value > LIMIT_CAPS[key]:
+            raise ValueError(f"{key} 必須是大於 0、不超過 {LIMIT_CAPS[key]} 的數字")
+        merged[key] = value
+    if not merged["proposal_call_usd"] <= merged["total_usd"] <= (current["daily_usd"] if daily is None else daily):
+        raise ValueError("上限必須是：CEO 每次 ≤ 每份組隊提案 ≤ 每天")
+    return {key: float(value) for key, value in merged.items()}
 
 
 # ---- the task ------------------------------------------------------------------------------------------------------
@@ -860,6 +907,45 @@ def build_prompt(kind: str, *, instructions: str | None, position: str | None, t
     if cards < 0:
         raise StaffingError("bad_request", ERRORS["too_large"])
     return text(cards, 0)
+
+
+def worst_opinions(speakers: list[dict]) -> list[dict]:
+    """What the CEO could be given of these speakers at the most: for each, the longest answer chair_opinion lets
+    through (OPINION_FOR_CHAIR_MAX and the line that says it was cut), made of the character that grows most when the
+    data is written as a JSON string inside the text (a quotation mark: twice its bytes)."""
+    filler = (OPINION_FOR_CHAIR_MAX + 256 - _size_of({"summary": ""})) // 2
+    return [{"職位": POSITION_LABELS.get(p["position"], p["position"]), "名稱": p["name"], "代發言": p["proxy"],
+             "發言": {"summary": '"' * filler}} for p in speakers]
+
+
+def fit_inputs(task, profiles, skills, *, summaries: dict | None, instructions: str | None, note: str,
+               speakers: list[dict]) -> tuple[int, dict]:
+    """(list_max, list): the list of a staffing meeting (build_inputs) at the most bytes, in whole KiB, that keep the CEO's text within
+    CHAIR_PROMPT_MAX - CHAIR_PROMPT_SLACK whatever the speakers write (worst_opinions); a smaller list says how much it
+    left out. Decided before anyone speaks, from what does not change while the board runs (not the task card's status),
+    so that it is made again the same for a retry. StaffingError (too_large) when even 1 KiB of list does not fit."""
+    bare = {k: v for k, v in task.items() if k != "status"} if isinstance(task, dict) else task
+    worst = worst_opinions(speakers)
+
+    def build(kib: int) -> dict:
+        return build_inputs(task, profiles, skills, summaries=summaries, list_max=kib * 1024)
+
+    def fits(inputs: dict) -> bool:
+        try:
+            text = build_prompt("proposal", instructions=instructions, position="planner", task=bare, note=note, inputs=inputs,
+                                opinions=worst)
+        except StaffingError:
+            return False
+        return len(text.encode()) <= CHAIR_PROMPT_MAX - CHAIR_PROMPT_SLACK
+
+    top = LIST_MAX // 1024
+    whole = build(top)
+    if fits(whole):
+        return LIST_MAX, whole
+    kib = _largest(top - 1, lambda n: fits(build(n + 1))) + 1  # 1 to 40 KiB; 0 when not even 1 KiB fits
+    if kib == 0:
+        raise StaffingError("bad_request", ERRORS["too_large"])
+    return kib * 1024, build(kib)
 
 
 # ---- the record ----------------------------------------------------------------------------------------------------

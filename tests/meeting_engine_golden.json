@@ -2507,6 +2507,10 @@
   "ledger": {
    "blocked": false,
    "daily_usd": "3",
+   "includes": [
+    "meetings",
+    "staffing"
+   ],
    "lamp": "red",
    "meeting_usd": "1.5",
    "note": "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。",
@@ -2714,6 +2718,10 @@
  "ledger": {
   "blocked": false,
   "daily_usd": "3",
+  "includes": [
+   "meetings",
+   "staffing"
+  ],
   "lamp": "red",
   "meeting_usd": "1.5",
   "note": "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。",
@@ -2724,6 +2732,10 @@
  "ledger_tight": {
   "blocked": false,
   "daily_usd": "9",
+  "includes": [
+   "meetings",
+   "staffing"
+  ],
   "lamp": "green",
   "meeting_usd": "1.5",
   "note": "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。",
