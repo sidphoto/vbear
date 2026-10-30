@@ -218,8 +218,7 @@ class ChangelogRelease(unittest.TestCase):
         self.assertTrue(headings[1].startswith("v0.9.0"), headings[:3])
         self.assertTrue(headings[2].startswith("v0.8.9"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        # P35-4 wrote the v0.10.0 section; the release commit, made only with the user's leave, is what sets the version
-        self.assertIn('__version__ = "0.9.0"', init)
+        self.assertIn('__version__ = "0.10.0"', init)
 
     def test_the_v090_section_covers_positions_professions_and_the_hover_box(self):
         section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
