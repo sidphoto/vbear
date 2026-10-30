@@ -1,0 +1,4351 @@
+{
+ "budget": {
+  "preview": {
+   "blockers": [],
+   "calls": 3,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": "kept",
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+    "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+   ],
+   "reserve_usd": "1.5",
+   "sha256": "399bf22a34c04ad165af45a970791a5eaf0a2d4e3745375dcfb0e500254267dc",
+   "startable": true,
+   "today": {
+    "daily_usd": "9",
+    "lamp": "green",
+    "spent_usd": "0.634"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000004",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.5"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.9",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.9",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "budget",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "skipped"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000004",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.5"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": null,
+     "seq": 1,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000004",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.5"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [
+    {
+     "id": "R5",
+     "text": "有發言標了高風險，或法務的出處是「查無出處，需人工複核」。"
+    },
+    {
+     "id": "R7",
+     "text": "有發言或 CEO 決策失敗、卡住、被略過或中斷。"
+    }
+   ],
+   "spent_usd": "1.8",
+   "status": "incomplete",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.9",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.9",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "budget",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "skipped"
+    }
+   ]
+  }
+ },
+ "calls": [
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 1311,
+   "prompt_sha256": "9354c89fad971b89a6d80941467355feadbaa154fe1f9189f397ae3334c2291a",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "sonnet",
+   "per_call": "0.2",
+   "prompt_bytes": 1197,
+   "prompt_sha256": "120f191c89351b8b3c9755969ef737765300c24656f19582a0e664e3698228aa",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 1230,
+   "prompt_sha256": "33484dc53559a58b06e8637d130703379cc45dd305eb4fffe19a412975235818",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "sonnet",
+   "per_call": "0.2",
+   "prompt_bytes": 1052,
+   "prompt_sha256": "b23ed3b2c5681fff006b86defd74646fbe3fcdd9c136b745e15d8198e1617099",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "decision",
+   "model": "claude-opus-5-5",
+   "per_call": "0.2",
+   "prompt_bytes": 2573,
+   "prompt_sha256": "452497a7c94ccd0ae521ae0eb5724c8de31f9f819dfe4f77a5e11dfcae30f7ca",
+   "schema_sha256": "42fa51069ef96b4344dca209aac45082b0a1fe454d9c34b0d33eedab409fef25",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "sonnet",
+   "per_call": "0.2",
+   "prompt_bytes": 1007,
+   "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "decision",
+   "model": "claude-opus-5-5",
+   "per_call": "0.2",
+   "prompt_bytes": 1748,
+   "prompt_sha256": "b8461b88bb2d3f39e279c5e7c702a900ee453c24f7f6f2b0c12dada453cfc0e4",
+   "schema_sha256": "42fa51069ef96b4344dca209aac45082b0a1fe454d9c34b0d33eedab409fef25",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "decision",
+   "model": "claude-opus-5-5",
+   "per_call": "0.2",
+   "prompt_bytes": 1873,
+   "prompt_sha256": "fb02bda58ccea29f6c7175648110d536691405221fbbe7dabf666770cea5c13b",
+   "schema_sha256": "42fa51069ef96b4344dca209aac45082b0a1fe454d9c34b0d33eedab409fef25",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "decision",
+   "model": "claude-opus-5-5",
+   "per_call": "0.2",
+   "prompt_bytes": 1503,
+   "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+   "schema_sha256": "42fa51069ef96b4344dca209aac45082b0a1fe454d9c34b0d33eedab409fef25",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "decision",
+   "model": "claude-opus-5-5",
+   "per_call": "0.2",
+   "prompt_bytes": 1503,
+   "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+   "schema_sha256": "42fa51069ef96b4344dca209aac45082b0a1fe454d9c34b0d33eedab409fef25",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.5",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "sonnet",
+   "per_call": "0.5",
+   "prompt_bytes": 1007,
+   "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  },
+  {
+   "binary": "/nonexistent/claude",
+   "kind": "opinion",
+   "model": "haiku",
+   "per_call": "0.2",
+   "prompt_bytes": 979,
+   "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "schema_sha256": "9f75e3e5128a2ee7bed237835b348d82b4083d0cba553c9e4eabbdc6825b6f53",
+   "timeout": 120.0,
+   "version": "2.1.296"
+  }
+ ],
+ "failed": {
+  "preview": {
+   "blockers": [],
+   "calls": 3,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": "kept",
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+    "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+   ],
+   "reserve_usd": "0.6",
+   "sha256": "75bd16156ce32e8307c61ecc4f6a19b7956b56ae381cd863c1a3b586a1ec73e8",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "0.288"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000002",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major_at_decision": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "cli_failed",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 3,
+      "exit_code": 1,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.03",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "b8461b88bb2d3f39e279c5e7c702a900ee453c24f7f6f2b0c12dada453cfc0e4",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000002",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": null,
+     "seq": 1,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000002",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [
+    1
+   ],
+   "rules": [
+    {
+     "id": "R5",
+     "text": "有發言標了高風險，或法務的出處是「查無出處，需人工複核」。"
+    },
+    {
+     "id": "R7",
+     "text": "有發言或 CEO 決策失敗、卡住、被略過或中斷。"
+    }
+   ],
+   "spent_usd": "0.25",
+   "status": "waiting_chairman",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "cli_failed",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 3,
+      "exit_code": 1,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.03",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "b8461b88bb2d3f39e279c5e7c702a900ee453c24f7f6f2b0c12dada453cfc0e4",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  }
+ },
+ "failed_retry": {
+  "preview": {
+   "attempt": 2,
+   "blockers": [],
+   "calls": 2,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "decision_again": true,
+   "preview_id": "kept",
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761"
+   ],
+   "reserve_usd": "0.4",
+   "sha256": "77035f5c5ac833ca2abd7f6a13d1ff6bead9263ff2c9accc7173f7f45f90a6a1",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "0.538"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000002",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major_at_decision": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 2,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.215",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "補上發言"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 2,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.061",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "fb02bda58ccea29f6c7175648110d536691405221fbbe7dabf666770cea5c13b",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000002",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [
+    {
+     "id": "R5",
+     "text": "有發言標了高風險，或法務的出處是「查無出處，需人工複核」。"
+    }
+   ],
+   "spent_usd": "0.25",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 3,
+      "exit_code": 1,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "queued"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.03",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": "b8461b88bb2d3f39e279c5e7c702a900ee453c24f7f6f2b0c12dada453cfc0e4",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000002",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [
+    {
+     "id": "R5",
+     "text": "有發言標了高風險，或法務的出處是「查無出處，需人工複核」。"
+    }
+   ],
+   "spent_usd": "0.296",
+   "status": "waiting_chairman",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 2,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.215",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "補上發言"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 2,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.061",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "fb02bda58ccea29f6c7175648110d536691405221fbbe7dabf666770cea5c13b",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  }
+ },
+ "full": {
+  "chairman": {
+   "chairman": {
+    "at": 1893456000.0,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "照辦（虛構）",
+    "state": "approved"
+   },
+   "context": "補充：只動首頁",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [
+    "spend"
+   ],
+   "id": "m-000000000001",
+   "inputs_sha256": "ba09afe349e512840bb635815191c9618111f363f2b387d0d80d86dbef76df29",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "haiku",
+     "name": "虛構ACCT",
+     "position": "accountant",
+     "profile_id": "acct",
+     "proxy": false,
+     "revision": "f323be0be1702d8506bb9a36e1902b5df56cb6b41d506849bfab45d2e3db98b3",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構ENG",
+     "position": "executor",
+     "profile_id": "eng",
+     "proxy": true,
+     "revision": "b1b34a638f960af2168dfcee785ff2117ac01d6eec5e4d91d5324ccfa99a53c8",
+     "tool": "codex"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [
+    {
+     "id": "R1",
+     "text": "董事長建立會議時勾了「涉及」的選項（發布、花錢、刪除、法律或合約、上線、個資）。"
+    },
+    {
+     "id": "R5",
+     "text": "有發言標了高風險，或法務的出處是「查無出處，需人工複核」。"
+    }
+   ],
+   "spent_usd": "0.288",
+   "status": "approved",
+   "task_id": "t-1",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.011",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "9354c89fad971b89a6d80941467355feadbaa154fe1f9189f397ae3334c2291a",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "120f191c89351b8b3c9755969ef737765300c24656f19582a0e664e3698228aa",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.013",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "花費可控"
+     },
+     "profile_id": "acct",
+     "prompt_sha256": "33484dc53559a58b06e8637d130703379cc45dd305eb4fffe19a412975235818",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.014",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "工程上可行"
+     },
+     "profile_id": "eng",
+     "prompt_sha256": "b23ed3b2c5681fff006b86defd74646fbe3fcdd9c136b745e15d8198e1617099",
+     "seq": 4,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.05",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "452497a7c94ccd0ae521ae0eb5724c8de31f9f819dfe4f77a5e11dfcae30f7ca",
+     "seq": 5,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  },
+  "preview": {
+   "blockers": [],
+   "calls": 5,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": "kept",
+   "prompts": [
+    "9354c89fad971b89a6d80941467355feadbaa154fe1f9189f397ae3334c2291a",
+    "120f191c89351b8b3c9755969ef737765300c24656f19582a0e664e3698228aa",
+    "e89f4b2822a7b2423e878c8df78d05efd0e648d451e7c49a5ce590d92d8011bc",
+    "b23ed3b2c5681fff006b86defd74646fbe3fcdd9c136b745e15d8198e1617099",
+    "bcdeabbf57a4ce4131dac3f3061a48b45c28f0fb8078f52a301023956e049a3f"
+   ],
+   "reserve_usd": "1",
+   "sha256": "33ab38b1cf36a3f1aa7fd5d62c2e0103cc8d2a009e0c85d3198bb85298fe754e",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "0"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "補充：只動首頁",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [
+    "spend"
+   ],
+   "id": "m-000000000001",
+   "inputs_sha256": "ba09afe349e512840bb635815191c9618111f363f2b387d0d80d86dbef76df29",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major_at_decision": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "haiku",
+     "name": "虛構ACCT",
+     "position": "accountant",
+     "profile_id": "acct",
+     "proxy": false,
+     "revision": "f323be0be1702d8506bb9a36e1902b5df56cb6b41d506849bfab45d2e3db98b3",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構ENG",
+     "position": "executor",
+     "profile_id": "eng",
+     "proxy": true,
+     "revision": "b1b34a638f960af2168dfcee785ff2117ac01d6eec5e4d91d5324ccfa99a53c8",
+     "tool": "codex"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "task_id": "t-1",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.011",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "9354c89fad971b89a6d80941467355feadbaa154fe1f9189f397ae3334c2291a",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "120f191c89351b8b3c9755969ef737765300c24656f19582a0e664e3698228aa",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.013",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "花費可控"
+     },
+     "profile_id": "acct",
+     "prompt_sha256": "33484dc53559a58b06e8637d130703379cc45dd305eb4fffe19a412975235818",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.014",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "工程上可行"
+     },
+     "profile_id": "eng",
+     "prompt_sha256": "b23ed3b2c5681fff006b86defd74646fbe3fcdd9c136b745e15d8198e1617099",
+     "seq": 4,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.05",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "452497a7c94ccd0ae521ae0eb5724c8de31f9f819dfe4f77a5e11dfcae30f7ca",
+     "seq": 5,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "補充：只動首頁",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [
+    "spend"
+   ],
+   "id": "m-000000000001",
+   "inputs_sha256": "ba09afe349e512840bb635815191c9618111f363f2b387d0d80d86dbef76df29",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "haiku",
+     "name": "虛構ACCT",
+     "position": "accountant",
+     "profile_id": "acct",
+     "proxy": false,
+     "revision": "f323be0be1702d8506bb9a36e1902b5df56cb6b41d506849bfab45d2e3db98b3",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構ENG",
+     "position": "executor",
+     "profile_id": "eng",
+     "proxy": true,
+     "revision": "b1b34a638f960af2168dfcee785ff2117ac01d6eec5e4d91d5324ccfa99a53c8",
+     "tool": "codex"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [
+    {
+     "id": "R1",
+     "text": "董事長建立會議時勾了「涉及」的選項（發布、花錢、刪除、法律或合約、上線、個資）。"
+    }
+   ],
+   "spent_usd": "0",
+   "status": "running",
+   "task_id": "t-1",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": null,
+     "seq": 1,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "acct",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "eng",
+     "prompt_sha256": null,
+     "seq": 4,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 5,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "補充：只動首頁",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [
+    "spend"
+   ],
+   "id": "m-000000000001",
+   "inputs_sha256": "ba09afe349e512840bb635815191c9618111f363f2b387d0d80d86dbef76df29",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "haiku",
+     "name": "虛構ACCT",
+     "position": "accountant",
+     "profile_id": "acct",
+     "proxy": false,
+     "revision": "f323be0be1702d8506bb9a36e1902b5df56cb6b41d506849bfab45d2e3db98b3",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構ENG",
+     "position": "executor",
+     "profile_id": "eng",
+     "proxy": true,
+     "revision": "b1b34a638f960af2168dfcee785ff2117ac01d6eec5e4d91d5324ccfa99a53c8",
+     "tool": "codex"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [
+    {
+     "id": "R1",
+     "text": "董事長建立會議時勾了「涉及」的選項（發布、花錢、刪除、法律或合約、上線、個資）。"
+    },
+    {
+     "id": "R5",
+     "text": "有發言標了高風險，或法務的出處是「查無出處，需人工複核」。"
+    }
+   ],
+   "spent_usd": "0.288",
+   "status": "waiting_chairman",
+   "task_id": "t-1",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.011",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "9354c89fad971b89a6d80941467355feadbaa154fe1f9189f397ae3334c2291a",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [
+       {
+        "level": "中",
+        "source": "查無出處，需人工複核",
+        "text": "圖示的授權不明"
+       }
+      ],
+      "stance": "有條件支持",
+      "summary": "授權要先確認"
+     },
+     "profile_id": "legal",
+     "prompt_sha256": "120f191c89351b8b3c9755969ef737765300c24656f19582a0e664e3698228aa",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.013",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "花費可控"
+     },
+     "profile_id": "acct",
+     "prompt_sha256": "33484dc53559a58b06e8637d130703379cc45dd305eb4fffe19a412975235818",
+     "seq": 3,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.014",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "工程上可行"
+     },
+     "profile_id": "eng",
+     "prompt_sha256": "b23ed3b2c5681fff006b86defd74646fbe3fcdd9c136b745e15d8198e1617099",
+     "seq": 4,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.05",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "452497a7c94ccd0ae521ae0eb5724c8de31f9f819dfe4f77a5e11dfcae30f7ca",
+     "seq": 5,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  }
+ },
+ "held": {
+  "busy": {
+   "blockers": [
+    {
+     "code": "busy",
+     "message": "已有一場會議在進行，請等它結束或取消"
+    }
+   ],
+   "calls": 2,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": null,
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+   ],
+   "reserve_usd": "0.4",
+   "sha256": "8b0eef1acb7d7a7a4b51201eea8efb81c6ede3bebf05dc93986db8b10bbfc2d6",
+   "startable": false,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "3.034"
+   }
+  },
+  "ledger": {
+   "blocked": false,
+   "daily_usd": "3",
+   "lamp": "red",
+   "meeting_usd": "1.5",
+   "note": "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。",
+   "per_call_usd": "0.2",
+   "running": "m-000000000007",
+   "spent_usd": "3.034"
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000007",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "cancelled",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": null,
+      "exit_code": null,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "cancelled"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "cancelled",
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "cancelled"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "cancelled",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "cancelled"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000007",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0.2",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "running"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  }
+ },
+ "ledger": {
+  "blocked": false,
+  "daily_usd": "3",
+  "lamp": "red",
+  "meeting_usd": "1.5",
+  "note": "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。",
+  "per_call_usd": "0.2",
+  "running": null,
+  "spent_usd": "3.474"
+ },
+ "ledger_tight": {
+  "blocked": false,
+  "daily_usd": "9",
+  "lamp": "green",
+  "meeting_usd": "1.5",
+  "note": "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。",
+  "per_call_usd": "0.5",
+  "running": null,
+  "spent_usd": "3.474"
+ },
+ "list": {
+  "meetings": [
+   {
+    "chairman_state": "approved",
+    "created_at": 1893456000.0,
+    "id": "m-000000000001",
+    "major": true,
+    "participants": 5,
+    "spent_usd": "0.288",
+    "status": "approved",
+    "task_id": "t-1",
+    "topic": "要不要把首頁按鈕改大（虛構）"
+   },
+   {
+    "chairman_state": "pending",
+    "created_at": 1893456000.0,
+    "id": "m-000000000002",
+    "major": true,
+    "participants": 3,
+    "spent_usd": "0.296",
+    "status": "waiting_chairman",
+    "task_id": null,
+    "topic": "要不要把首頁按鈕改大（虛構）"
+   },
+   {
+    "chairman_state": "not_needed",
+    "created_at": 1893456000.0,
+    "id": "m-000000000003",
+    "major": false,
+    "participants": 2,
+    "spent_usd": "0.05",
+    "status": "decided",
+    "task_id": null,
+    "topic": "要不要把首頁按鈕改大（虛構）"
+   },
+   {
+    "chairman_state": "pending",
+    "created_at": 1893456000.0,
+    "id": "m-000000000004",
+    "major": true,
+    "participants": 3,
+    "spent_usd": "1.8",
+    "status": "incomplete",
+    "task_id": null,
+    "topic": "要不要把首頁按鈕改大（虛構）"
+   },
+   {
+    "chairman_state": "pending",
+    "created_at": 1893456000.0,
+    "id": "m-000000000006",
+    "major": true,
+    "participants": 3,
+    "spent_usd": "0.2",
+    "status": "incomplete",
+    "task_id": null,
+    "topic": "要不要把首頁按鈕改大（虛構）"
+   },
+   {
+    "chairman_state": "not_needed",
+    "created_at": 1893456000.0,
+    "id": "m-000000000007",
+    "major": false,
+    "participants": 3,
+    "spent_usd": "0.2",
+    "status": "cancelled",
+    "task_id": null,
+    "topic": "要不要把首頁按鈕改大（虛構）"
+   },
+   {
+    "chairman_state": "pending",
+    "created_at": 1893456000.0,
+    "id": "m-0000000000a1",
+    "major": true,
+    "participants": 3,
+    "spent_usd": "0.21",
+    "status": "incomplete",
+    "task_id": null,
+    "topic": "重啟前的會議（虛構）"
+   },
+   {
+    "chairman_state": "pending",
+    "created_at": 1893456000.0,
+    "id": "m-0000000000a2",
+    "major": true,
+    "participants": 3,
+    "spent_usd": "0.23",
+    "status": "incomplete",
+    "task_id": null,
+    "topic": "重啟前的會議（虛構）"
+   }
+  ]
+ },
+ "recovered": {
+  "m-0000000000a1": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-0000000000a1",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "重啟前的會議（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.01",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "restart",
+     "evidence": {
+      "cli_version": null,
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": null,
+      "exit_code": null,
+      "mcp_servers_reported": null,
+      "model_reported": null,
+      "tools_reported": null
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "interrupted"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "restart",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "interrupted"
+    }
+   ]
+  },
+  "m-0000000000a2": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-0000000000a2",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "重啟前的會議（虛構）",
+   "turns": [
+    {
+     "attempts": 3,
+     "ended_at": 1893456000.0,
+     "error_code": "restart",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.23",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "blocked"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "restart",
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "interrupted"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "restart",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "interrupted"
+    }
+   ]
+  }
+ },
+ "red": {
+  "blockers": [
+   {
+    "code": "budget",
+    "message": "今天已花 3.474 美元，加上預留 0.4 會超過每日上限 1"
+   }
+  ],
+  "calls": 2,
+  "cli": {
+   "verified": true,
+   "version": "2.1.296"
+  },
+  "preview_id": null,
+  "prompts": [
+   "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+  ],
+  "reserve_usd": "0.4",
+  "sha256": "bcce086fb6cdb22b2bbeedd262cdbb4389b442d662986bcf5bac9799df01ac63",
+  "startable": false,
+  "today": {
+   "daily_usd": "1",
+   "lamp": "red",
+   "spent_usd": "3.474"
+  }
+ },
+ "silent": {
+  "preview": {
+   "blockers": [],
+   "calls": 2,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": "kept",
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+   ],
+   "reserve_usd": "0.4",
+   "sha256": "567d1dba504a6c61383fc746cdd73c290c52a7fb87dc9efab6841b72ae144881",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "2.434"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000005",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "cli_failed",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 3,
+      "exit_code": 1,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "no_opinions",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "skipped"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000005",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": null,
+     "seq": 1,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000005",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [
+    1
+   ],
+   "rules": [
+    {
+     "id": "R7",
+     "text": "有發言或 CEO 決策失敗、卡住、被略過或中斷。"
+    }
+   ],
+   "spent_usd": "0.2",
+   "status": "incomplete",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "cli_failed",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 3,
+      "exit_code": 1,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "no_opinions",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "skipped"
+    }
+   ]
+  }
+ },
+ "silent_retry_blocked": {
+  "attempt": 2,
+  "blockers": [
+   {
+    "code": "budget",
+    "message": "預留 0.4 美元超過這場會議剩下的額度 0.05"
+   }
+  ],
+  "calls": 2,
+  "cli": {
+   "verified": true,
+   "version": "2.1.296"
+  },
+  "decision_again": true,
+  "preview_id": null,
+  "prompts": [
+   "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761"
+  ],
+  "reserve_usd": "0.4",
+  "sha256": "8eff938d029e2d9debb9dbf82ea6f5d472a6869dcded8cad102e6d645a06c368",
+  "startable": false,
+  "today": {
+   "daily_usd": "20",
+   "lamp": "green",
+   "spent_usd": "2.634"
+  }
+ },
+ "too_big": {
+  "blockers": [
+   {
+    "code": "budget",
+    "message": "預留 2.5 美元超過這場會議剩下的額度 1.5"
+   }
+  ],
+  "calls": 5,
+  "cli": {
+   "verified": true,
+   "version": "2.1.296"
+  },
+  "preview_id": null,
+  "prompts": [
+   "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+   "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+   "1d82cccda90aa8b804a10572d8d58146e88107ec1b57e038aa1d72f731a3b06e",
+   "8dc41e6e3a10c62526700977e7ad8a1be5eb6cc2fb619101c1e53ad7dbf923ba",
+   "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+  ],
+  "reserve_usd": "2.5",
+  "sha256": "fdc99836d06d09afc7f6ee4b23f5c388f757dfe9e009f3e2034e5b2f6ea54e96",
+  "startable": false,
+  "today": {
+   "daily_usd": "9",
+   "lamp": "green",
+   "spent_usd": "0.634"
+  }
+ },
+ "unclean": {
+  "boundaries": [
+   "2.1.200"
+  ],
+  "preview": {
+   "blockers": [],
+   "calls": 3,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": "kept",
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+    "264410db54f56e2fe957f56472e3fa5d42d6bc963c4a1f12157f7334bae599b8",
+    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+   ],
+   "reserve_usd": "0.6",
+   "sha256": "3eb3ada91f43ca0e1801db5062580ae2ac3bc50d4107ee8512832ee8dd08f220",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "2.634"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000006",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "tools_not_clean",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput",
+       "Bash"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "boundary_revoked",
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "skipped"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "boundary_revoked",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "skipped"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000006",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": null,
+     "seq": 1,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000006",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "sonnet",
+     "name": "虛構LEGAL",
+     "position": "legal",
+     "profile_id": "legal",
+     "proxy": false,
+     "revision": "cb829a53887b031bb70939a7bb16c4cde3a091e2fd4df9e8e75dfd9ed700e08a",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [
+    1
+   ],
+   "rules": [
+    {
+     "id": "R7",
+     "text": "有發言或 CEO 決策失敗、卡住、被略過或中斷。"
+    }
+   ],
+   "spent_usd": "0.2",
+   "status": "incomplete",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "tools_not_clean",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "worst_case",
+      "cost_usd": "0.2",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput",
+       "Bash"
+      ]
+     },
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "boundary_revoked",
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "legal",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "skipped"
+    },
+    {
+     "attempts": 0,
+     "ended_at": 1893456000.0,
+     "error_code": "boundary_revoked",
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 3,
+     "started_at": null,
+     "state": "skipped"
+    }
+   ]
+  }
+ },
+ "undecided": {
+  "preview": {
+   "blockers": [],
+   "calls": 2,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "preview_id": "kept",
+   "prompts": [
+    "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+    "4ff97be09d3ffe9afa2e31f25d9e7dc9d6b7729f4f89c1ece47112f61d82d69a"
+   ],
+   "reserve_usd": "0.4",
+   "sha256": "97ec1f92c72d469e657e36e22c3557470508a91861f696582797d03ad3edde00",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "0.584"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000003",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.01",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "invalid_output",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000003",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "opinion",
+     "output": null,
+     "profile_id": "pm",
+     "prompt_sha256": null,
+     "seq": 1,
+     "started_at": null,
+     "state": "queued"
+    },
+    {
+     "attempts": 0,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": null,
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": null,
+     "seq": 2,
+     "started_at": null,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000003",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": true,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [
+    2
+   ],
+   "rules": [
+    {
+     "id": "R7",
+     "text": "有發言或 CEO 決策失敗、卡住、被略過或中斷。"
+    }
+   ],
+   "spent_usd": "0.03",
+   "status": "incomplete",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.01",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": "invalid_output",
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "failed"
+    }
+   ]
+  }
+ },
+ "undecided_retry": {
+  "preview": {
+   "attempt": 2,
+   "blockers": [],
+   "calls": 1,
+   "cli": {
+    "verified": true,
+    "version": "2.1.296"
+   },
+   "decision_again": false,
+   "preview_id": "kept",
+   "prompts": [
+    "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc"
+   ],
+   "reserve_usd": "0.2",
+   "sha256": "8ec7ebdc50390fcc4827d104dd44477bc90d369583394a42c7b4d391d0757afa",
+   "startable": true,
+   "today": {
+    "daily_usd": "20",
+    "lamp": "green",
+    "spent_usd": "0.614"
+   }
+  },
+  "record": {
+   "chairman": {
+    "at": null,
+    "note": "",
+    "state": "pending"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000003",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major_at_decision": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.01",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 2,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.04",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  },
+  "started": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000003",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0.03",
+   "status": "running",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.01",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 1,
+     "ended_at": null,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.02",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": null,
+     "profile_id": "ceo",
+     "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "queued"
+    }
+   ]
+  },
+  "view": {
+   "chairman": {
+    "at": null,
+    "label": "主控台記錄（未驗證身分）",
+    "note": "",
+    "state": "not_needed"
+   },
+   "context": "",
+   "created_at": 1893456000.0,
+   "flags_by_chairman": [],
+   "id": "m-000000000003",
+   "limits": {
+    "meeting_usd": "1.5",
+    "per_call_usd": "0.2"
+   },
+   "major": false,
+   "participants": [
+    {
+     "model_used": "haiku",
+     "name": "虛構PM",
+     "position": "pm",
+     "profile_id": "pm",
+     "proxy": false,
+     "revision": "3016eeda6996dd3e77795b3c702195aeb8b92c3de99827d04ec729065773815b",
+     "tool": "claude"
+    },
+    {
+     "model_used": "claude-opus-5-5",
+     "name": "虛構CEO",
+     "position": "planner",
+     "profile_id": "ceo",
+     "proxy": false,
+     "revision": "e37d457cfe83cc4f6bf993520308b86c52c3e5473d85ebfbad69f80102b316e5",
+     "tool": "claude"
+    }
+   ],
+   "retryable": [],
+   "rules": [],
+   "spent_usd": "0.05",
+   "status": "decided",
+   "topic": "要不要把首頁按鈕改大（虛構）",
+   "turns": [
+    {
+     "attempts": 1,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.01",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "opinion",
+     "output": {
+      "needs_chairman": false,
+      "points": [
+       "先做首頁",
+       "再看其他頁"
+      ],
+      "risks": [],
+      "stance": "有條件支持",
+      "summary": "可以做"
+     },
+     "profile_id": "pm",
+     "prompt_sha256": "7ff98cf5e34a75499c192e42d27a51f7507f23aefd6930f949fe7d85f1e10761",
+     "seq": 1,
+     "started_at": 1893456000.0,
+     "state": "done"
+    },
+    {
+     "attempts": 2,
+     "ended_at": 1893456000.0,
+     "error_code": null,
+     "evidence": {
+      "cli_version": "2.1.296",
+      "cost_source": "cli",
+      "cost_usd": "0.04",
+      "duration_ms": 7,
+      "exit_code": 0,
+      "mcp_servers_reported": [],
+      "model_reported": "claude-sonnet-5-5",
+      "tools_reported": [
+       "StructuredOutput"
+      ]
+     },
+     "kind": "decision",
+     "output": {
+      "actions": [
+       {
+        "text": "寫按鈕的改法",
+        "type": "寫草稿"
+       }
+      ],
+      "decision": "先改首頁按鈕",
+      "dissent_addressed": [
+       "法務的授權疑慮：只用自己畫的圖"
+      ],
+      "escalate": false,
+      "escalate_reason": "",
+      "follow_up_topics": [
+       "其他頁要不要跟著改"
+      ],
+      "rationale": "範圍小、可以回復"
+     },
+     "profile_id": "ceo",
+     "prompt_sha256": "b6a98dada9524c31d5b1d943fc1e6de921481b7da9fb3af32bd407f52bfe09dc",
+     "seq": 2,
+     "started_at": 1893456000.0,
+     "state": "done"
+    }
+   ]
+  }
+ }
+}

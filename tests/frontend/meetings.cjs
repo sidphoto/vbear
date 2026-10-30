@@ -561,7 +561,7 @@ test("every code the back end ends a turn with has plain words; no cost is claim
   const codes = new Set(["invalid_output"]);   // meetings.OutputError's default
   const grab = (s, re) => { for (const m of s.matchAll(re)) codes.add(m[1]); };
   grab(src("headless_cli.py"), /HeadlessError\("([a-z_]+)"/g);
-  const runner = src("meeting_runner.py");
+  const runner = src("meeting_runner.py") + src("board_engine.py");  // the engine under the runner ends the turns
   for (const re of [/HeadlessError\("([a-z_]+)"/g, /CallFailed\("([a-z_]+)"/g, /_end\(mid, [^,]+, "[a-z]+", "([a-z_]+)"/g, /\bcode = "([a-z_]+)"/g,
     /\bstop = "([a-z_]+)"/g, /error_code="([a-z_]+)"/g]) grab(runner, re);
   grab(src("meetings.py"), /OutputError\("([a-z_]+)"/g);

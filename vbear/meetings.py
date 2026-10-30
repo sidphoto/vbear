@@ -21,7 +21,7 @@ import time
 import unicodedata
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import config as cfg, meeting_rules as rules, strictjson
 from .jsonstore import GuardedJsonStore, StoreError
@@ -563,9 +563,16 @@ def turn_cost(turn: dict, per_call: Decimal) -> Decimal:
     return recorded + per_call if turn.get("state") == "running" else recorded
 
 
-def spent(meeting: dict) -> Decimal:
-    per_call = money(meeting["limits"]["per_call_usd"]) or Decimal(0)
-    return sum((turn_cost(t, per_call) for t in meeting["turns"]), Decimal(0))
+def per_call_limit(meeting: dict, turn: dict | None = None) -> Decimal:
+    """The most one call of a meeting may cost: the same for every turn."""
+    return money(meeting["limits"]["per_call_usd"]) or Decimal(0)
+
+
+def spent(meeting: dict, per_call_of: Callable[[dict, dict], Decimal] | None = None) -> Decimal:
+    """What a record cost so far. ``per_call_of(record, turn)`` is the most one call of that turn may cost (what a running
+    turn is counted at); a meeting's per-call limit when it is not given."""
+    per_call_of = per_call_of or per_call_limit
+    return sum((turn_cost(t, per_call_of(meeting, t)) for t in meeting["turns"]), Decimal(0))
 
 
 def _local_day(ts: float) -> tuple[int, int, int]:
@@ -573,15 +580,15 @@ def _local_day(ts: float) -> tuple[int, int, int]:
     return t.tm_year, t.tm_mon, t.tm_mday
 
 
-def daily_spent(meetings: list[dict], now: float) -> Decimal:
-    """What the turns of today (the local date) cost, over the meetings given."""
+def daily_spent(meetings: list[dict], now: float, per_call_of: Callable[[dict, dict], Decimal] | None = None) -> Decimal:
+    """What the turns of today (the local date) cost, over the records given; ``per_call_of`` as in spent()."""
+    per_call_of = per_call_of or per_call_limit
     today, total = _local_day(now), Decimal(0)
     for m in meetings:
-        per_call = money(m["limits"]["per_call_usd"]) or Decimal(0)
         for t in m["turns"]:
             when = t.get("ended_at") or t.get("started_at")
             if when and _local_day(when) == today:
-                total += turn_cost(t, per_call)
+                total += turn_cost(t, per_call_of(m, t))
     return total
 
 
