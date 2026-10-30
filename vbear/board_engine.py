@@ -238,6 +238,29 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+# ---- what the last turn is given of the speakers -------------------------------------------------------------------
+
+POSITION_LABELS = {row["id"]: row["label"] for row in ap.POSITION_TABLE}
+STATE_LABELS = {"failed": "發言失敗", "blocked": "卡住", "skipped": "沒有發言", "cancelled": "已取消", "interrupted": "中斷"}
+
+
+def opinions_for_chair(rec: dict, who: Callable[[str], dict], said: Callable[[dict], Any]) -> list[dict]:
+    """For every speaker's turn, in order: the position, the name and whether Claude spoke for the card, then what was
+    said (``said(turn)``, the kind of board's own form of a kept answer) or, when nothing was, why."""
+    out = []
+    for turn in rec["turns"]:
+        if turn["kind"] != "opinion":
+            continue
+        person = who(turn["profile_id"])
+        item = {"職位": POSITION_LABELS.get(person["position"], person["position"]), "名稱": person["name"], "代發言": person["proxy"]}
+        if turn["state"] == "done":
+            item["發言"] = said(turn)
+        else:
+            item["狀態"] = "沒有發言（" + STATE_LABELS.get(turn["state"], turn["state"]) + "）"
+        out.append(item)
+    return out
+
+
 # ---- the engine ----------------------------------------------------------------------------------------------------
 
 class HeadlessBoard:

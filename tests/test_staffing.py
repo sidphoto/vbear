@@ -1,5 +1,6 @@
 """Staffing meetings, the pure part (P35-1): what the speakers and the CEO are given, who VBear suggests, what a model may
 write, the prompts, the record and what is read from it. No CLI runs here."""
+import inspect
 import json
 import random
 import unittest
@@ -146,6 +147,16 @@ class InputTests(unittest.TestCase):
         self.assertEqual((inputs["skills"], inputs["omitted"]["skills"]), ([], 120))
         self.assertGreater(inputs["omitted"]["cards"], 0)
         self.assertEqual(len(inputs["cards"]) + inputs["omitted"]["cards"], 40)
+
+    def test_a_smaller_list_can_be_asked_for(self):
+        lib = [skill(f"s{i:03d}", f"{i:03d}" + "技能" * 30) for i in range(120)]
+        inputs = st.build_inputs(task(), team(), lib, list_max=8 * 1024)
+        self.assertLessEqual(len(json.dumps(st.full_view(inputs), ensure_ascii=False).encode()), 8 * 1024)
+        self.assertEqual(len(inputs["skills"]) + inputs["omitted"]["skills"], 120)
+        self.assertGreater(inputs["omitted"]["skills"], 0)
+        for bad in (0, -1, 1023, st.LIST_MAX + 1, 1.5, True):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                st.build_inputs(task(), team(), lib, list_max=bad)
 
     def test_the_same_inputs_in_any_order_give_the_same_sha_and_a_change_gives_another(self):
         a = st.build_inputs(task(), team(), library())
@@ -556,3 +567,147 @@ class ProposalValidationTests(unittest.TestCase):
     def test_the_places_still_empty_are_named(self):
         out = self.check(proposal())
         self.assertEqual(out["notes"], [{"code": "missing", "text": "還差：規劃位、執行位、審查位"}])
+
+
+def big_opinion(inputs):
+    """An opinion as long as the schema allows, all of it on the list."""
+    a = [c["alias"] for c in inputs["cards"]]
+    s = [x["alias"] for x in inputs["skills"]]
+    return {"summary": "摘" * 120, "needs": [{"what": "需" * 120, "position": "executor"}] * 5,
+            "recommend": [{"card": a[0], "position": "executor", "slot": "executor", "why": "因" * 200}] * 4,
+            "skills": [{"skill": s[0], "for": "executor", "why": "技" * 120}] * 6,
+            "skill_gaps": [{"need": "缺" * 100, "category": "other", "search_words": ["字" * 20] * 3}] * 3,
+            "risks": [{"level": "高", "text": "險" * 200, "source": "源" * 200}] * 5}
+
+
+def turns_of(rec_turns):
+    return {"turns": rec_turns}
+
+
+class PromptTests(unittest.TestCase):
+    def setUp(self):
+        cards = team()
+        cards[1]["id"] = "real-profile-id-123"
+        cards[1]["name"] = "工程師 sk-ant-api03-" + "A" * 40
+        lib = library()
+        lib[0]["skill_id"] = "skill-id-xyz"
+        cards[1]["equipped_skill_ids"] = ["skill-id-xyz"]
+        self.inputs = st.build_inputs(task(), cards, lib)
+
+    def prompt(self, kind="opinion", position="executor", **kw):
+        args = dict(instructions="我自己寫的指示", position=position, task=task(), note="董事長補充：預算有限", inputs=self.inputs)
+        args.update(kw)
+        return st.build_prompt(kind, **args)
+
+    def test_a_speakers_prompt_is_the_cards_words_the_rules_then_the_short_list_as_untrusted_data(self):
+        text = self.prompt()
+        self.assertTrue(text.startswith("我自己寫的指示\n\n"))
+        self.assertLess(text.index("不能使用任何工具"), text.index("BEGIN_UNTRUSTED_JSON_STRING"))
+        self.assertIn("summary（120 字內）", text)
+        data = json.loads(json.loads(text.split("BEGIN_UNTRUSTED_JSON_STRING\n", 1)[1].split("\nEND_UNTRUSTED_JSON_STRING", 1)[0]))
+        self.assertEqual(set(data), {"任務卡", "任務分類", "董事長的補充說明", "角色卡", "技能", "沒有列出"})
+        self.assertEqual(data["任務分類"], ["frontend"])
+        self.assertEqual(data["角色卡"], mt._clean_data(st.speaker_view(self.inputs, "executor")["cards"]))  # redacted
+        self.assertNotIn("folder", data["任務卡"])
+        self.assertTrue(text.endswith("END_UNTRUSTED_JSON_STRING\n"))
+
+    def test_no_path_no_real_id_no_secret_is_sent(self):
+        for text in (self.prompt(), self.prompt("proposal", "planner", opinions=[])):
+            for secret in ("real-profile-id-123", "skill-id-xyz", "/Users/someone", "secret-project", "sk-ant-api03",
+                           self.inputs["cards"][0]["revision"], "profile_id", "skill_id"):
+                self.assertNotIn(secret, text)
+            self.assertIn("工程師", text)
+
+    def test_each_speaker_gets_its_own_rules_and_data(self):
+        self.assertIn(mt.POSITION_RULES["legal"], self.prompt(position="legal"))
+        self.assertNotIn(mt.POSITION_RULES["legal"], self.prompt(position="pm"))
+        pm = self.prompt(position="pm", progress="任務卡「官網改版」的狀態：todo。")
+        self.assertIn("進度", pm)
+        self.assertIn(mt.POSITION_RULES["pm"], pm)
+        acct = self.prompt(position="accountant", spend="0.4")
+        self.assertIn("會議花費", acct)
+        self.assertIn("model_id", acct)
+        self.assertNotIn("model_id", self.prompt(position="legal"))
+        self.assertIn("法務經理", self.prompt(position="legal"))  # the speaker is told who it speaks as
+
+    def test_the_ceo_gets_the_whole_list_and_what_each_speaker_said_by_aliases(self):
+        a = aliases(self.inputs)
+        opinions = [{"職位": "全端工程師", "名稱": "ENG", "代發言": False,
+                     "發言": {"summary": "推薦", "recommend": [{"card": a["real-profile-id-123"]}]}},
+                    {"職位": "法務經理", "名稱": "LAW", "代發言": False, "狀態": "沒有發言（發言失敗）"}]
+        text = self.prompt("proposal", "planner", opinions=opinions)
+        data = json.loads(json.loads(text.split("BEGIN_UNTRUSTED_JSON_STRING\n", 1)[1].split("\nEND_UNTRUSTED_JSON_STRING", 1)[0]))
+        self.assertEqual(data["角色卡"], mt._clean_data(st.full_view(self.inputs)["cards"]))
+        self.assertEqual(data["技能"], st.full_view(self.inputs)["skills"])
+        self.assertEqual(data["各職位的發言"][1]["狀態"], "沒有發言（發言失敗）")
+        self.assertIn("opinions_used", text)
+        self.assertIn("不會被執行", text)
+        self.assertNotIn(mt.POSITION_RULES["legal"], text)
+
+    def test_the_same_inputs_give_the_same_prompt(self):
+        cards, lib = team(), library()
+        random.Random(3).shuffle(cards)
+        random.Random(4).shuffle(lib)
+        again = st.build_inputs(task(), cards, lib)
+        first = st.build_inputs(task(), team(), library())
+        for kind, position in (("opinion", "executor"), ("opinion", "legal"), ("proposal", "planner")):
+            self.assertEqual(self.prompt(kind, position, inputs=first, opinions=[]), self.prompt(kind, position, inputs=again, opinions=[]))
+
+    def test_a_speakers_prompt_stays_within_24_kib_by_showing_less_and_saying_so(self):
+        cards = [profile(f"p{i:02d}", "executor", name="名" * 80) for i in range(40)]
+        lib = [skill(f"s{i:03d}", f"{i:03d}" + "技" * 70, cats=["frontend"]) for i in range(120)]
+        inputs = st.build_inputs(task(), cards, lib)
+        text = self.prompt(inputs=inputs, instructions="指" * 2000)
+        self.assertLessEqual(len(text.encode()), st.SPEAKER_PROMPT_MAX)
+        data = json.loads(json.loads(text.split("BEGIN_UNTRUSTED_JSON_STRING\n", 1)[1].split("\nEND_UNTRUSTED_JSON_STRING", 1)[0]))
+        shown = len(data["技能"])
+        self.assertLess(shown, st.MAX_SPEAKER_SKILLS)
+        self.assertEqual(data["沒有列出"]["技能"], len(inputs["skills"]) + inputs["omitted"]["skills"] - shown)
+        self.assertEqual([s["alias"] for s in data["技能"]], [s["alias"] for s in st.speaker_view(inputs, "executor")["skills"][:shown]])
+        # a task card too long for any list is refused, not cut
+        with self.assertRaises(mt.MeetingError) as caught:
+            self.prompt(task=task(goal="長" * 9000))
+        self.assertEqual(caught.exception.code, "bad_request")
+        self.assertIn("大小", str(caught.exception))
+
+    def test_the_ceos_prompt_fits_the_whole_list_and_six_long_opinions(self):
+        cards = [profile(f"p{i:02d}", "executor", name="名" * 80, instructions="長" * 2000) for i in range(40)]
+        lib = [skill(f"s{i:03d}", f"{i:03d}" + "技" * 70, excerpt="說" * 60) for i in range(120)]
+        inputs = st.build_inputs(task(), cards, lib)
+        said = st.chair_opinion(st.validate_opinion(big_opinion(inputs), "executor", inputs)["kept"])
+        self.assertLessEqual(len(json.dumps(said, ensure_ascii=False).encode()), st.OPINION_FOR_CHAIR_MAX)
+        opinions = [{"職位": "全端工程師", "名稱": "名" * 80, "代發言": True, "發言": said}] * 6
+        text = self.prompt("proposal", "planner", inputs=inputs, opinions=opinions,
+                           instructions=position_guide.GUIDE["planner"]["prompt"])
+        self.assertLessEqual(len(text.encode()), st.CHAIR_PROMPT_MAX)
+        with self.assertRaises(mt.MeetingError):
+            self.prompt("proposal", "planner", inputs=inputs, opinions=opinions, task=task(goal="長" * 5000), instructions="指" * 2000)
+
+    def test_an_opinion_too_long_for_the_ceo_is_cut_from_its_least_needed_lists_and_says_so(self):
+        kept = st.validate_opinion(big_opinion(self.inputs), "executor", self.inputs)["kept"]
+        said = st.chair_opinion(kept)
+        self.assertLessEqual(len(json.dumps(said, ensure_ascii=False).encode()), st.OPINION_FOR_CHAIR_MAX)
+        self.assertEqual(said["summary"], kept["summary"])
+        self.assertIn("VBear", said["截短"])
+        self.assertEqual(len(kept["recommend"]), 4)  # the kept record is not changed
+        cut = sum(len(kept[k]) - len(said[k]) for k in ("needs", "recommend", "skills", "skill_gaps", "risks"))
+        self.assertIn(str(cut), said["截短"])
+        self.assertEqual(said["needs"], [])  # the needs go first, the recommendations last
+        small = st.validate_opinion(staff_opinion(), "executor", self.inputs)["kept"]
+        self.assertEqual(st.chair_opinion(small), small)
+
+
+class OpinionsForChairTests(unittest.TestCase):
+    def test_both_kinds_of_board_say_who_spoke_and_who_did_not_in_the_same_words(self):
+        from vbear import board_engine as be, meeting_runner as mr
+        people = {"a": {"position": "legal", "name": "法務", "proxy": False}, "b": {"position": "pm", "name": "PM", "proxy": True},
+                  "c": {"position": "planner", "name": "CEO", "proxy": False}}
+        turns = [{"profile_id": "a", "kind": "opinion", "state": "done", "output": {"kept": {"summary": "x"}, "notes": []}},
+                 {"profile_id": "b", "kind": "opinion", "state": "failed", "output": None},
+                 {"profile_id": "c", "kind": "proposal", "state": "queued", "output": None}]
+        got = be.opinions_for_chair({"turns": turns}, people.__getitem__, lambda t: t["output"]["kept"])
+        self.assertEqual(got, [{"職位": "法務經理", "名稱": "法務", "代發言": False, "發言": {"summary": "x"}},
+                               {"職位": "PM", "名稱": "PM", "代發言": True, "狀態": "沒有發言（發言失敗）"}])
+        self.assertIs(mr.STATE_LABELS, be.STATE_LABELS)
+        self.assertIn("opinions_for_chair(", inspect.getsource(mr._opinions_for_chair))
+        self.assertIn("opinions_for_chair(", inspect.getsource(st.chair_opinions))

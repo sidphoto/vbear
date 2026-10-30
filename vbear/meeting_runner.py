@@ -18,19 +18,18 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from . import agent_profiles as ap, config as cfg, meeting_rules as rules, meetings as mt
-from .board_engine import HeadlessBoard, Sources, _select, _sha, participant
+from .board_engine import HeadlessBoard, Sources, _select, _sha, opinions_for_chair, participant
 # the names the server and the tests have always found here
 from .board_engine import CHECK_ERRORS, WORKER, CallFailed, CallResult, CallSpec, default_call, meeting_argv, model_for  # noqa: F401
+from .board_engine import POSITION_LABELS, STATE_LABELS  # noqa: F401
 
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
-POSITION_LABELS = {row["id"]: row["label"] for row in ap.POSITION_TABLE}
 
 DISCLOSURE = ("開始後，下面每一段文字會用你的 Claude 帳號送到 Anthropic（由本機的 Claude Code 送出）。VBear 不會把任何文字送到其他地方。"
               "每次發言前，VBear 都會確認這個版本的 Claude Code 沒有任何工具、沒有 MCP；確認不了就不送。")
 COST_NOTE = "金額是 Claude Code 回報的估值；訂閱方案不等於實際帳單。沒有回報時，以每次上限計（最壞情況）。"
 PLACEHOLDER_OPINIONS = [{"說明": "各職位的發言，要等他們發言之後才有；CEO 看到的是已通過格式檢查、遮蔽過敏感字串的內容。"}]
 PLACEHOLDER_SPEND = "（執行時由 VBear 填入這場會議到目前為止的花費）"
-STATE_LABELS = {"failed": "發言失敗", "blocked": "卡住", "skipped": "沒有發言", "cancelled": "已取消", "interrupted": "中斷"}
 
 
 @dataclass
@@ -76,18 +75,7 @@ def _instructions_of(profile: dict) -> str:
 
 
 def _opinions_for_chair(rec: dict, ctx: Context) -> list[dict]:
-    out = []
-    for turn in rec["turns"]:
-        if turn["kind"] != "opinion":
-            continue
-        who = ctx.who(turn["profile_id"])
-        item = {"職位": POSITION_LABELS.get(who["position"], who["position"]), "名稱": who["name"], "代發言": who["proxy"]}
-        if turn["state"] == "done":
-            item["發言"] = turn["output"]
-        else:
-            item["狀態"] = "沒有發言（" + STATE_LABELS.get(turn["state"], turn["state"]) + "）"
-        out.append(item)
-    return out
+    return opinions_for_chair(rec, ctx.who, lambda turn: turn["output"])
 
 
 # ---- the runner ----------------------------------------------------------------------------------------------------
