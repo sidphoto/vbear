@@ -81,6 +81,12 @@ def _amounts(text: str):
         yield Decimal("Infinity")
 
 
+def has_amount(text: str) -> bool:
+    """Whether the text names an amount of money as R4 reads one (any size; one that cannot be read counts). Used outside
+    the rules too: a staffing meeting suggests the accountant for it (staffing.suggest_speakers)."""
+    return isinstance(text, str) and next(_amounts(unicodedata.normalize("NFKC", text)), None) is not None
+
+
 def _outputs(meeting: dict, kind: str):
     for turn in meeting.get("turns") or []:
         if turn.get("kind") == kind and turn.get("state") == "done" and isinstance(turn.get("output"), dict):
