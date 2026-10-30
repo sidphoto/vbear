@@ -8638,7 +8638,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
   const token = seq;
   cleanupActiveTerminal();
   const [staticData, liveData, tasksRes, templatesRes, govRes,
-          profilesRes, catalogRes, meetingsRes] = await Promise.all([
+          profilesRes, catalogRes, meetingsRes, staffingRes] = await Promise.all([
     loadStatic(),
     loadLive(),
     api.get("/api/tasks").catch(() => ({ ok: false, tasks: [] })),
@@ -8647,6 +8647,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     api.get("/api/agent-profiles").catch(() => ({ ok: false, profiles: [] })),
     api.get("/api/agent-builder/catalog").catch(() => ({ ok: false })),
     api.get("/api/meetings").catch(() => null),
+    api.get("/api/staffing").catch(() => null),
   ]);
 
   const main = claim(token);
@@ -9669,6 +9670,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       stepsSection,
       artifactsSection,
       taskMeetingsBlock(activeTask.id, meetingsRes),
+      taskStaffingBlock(activeTask.id, staffingRes),
       advancedBox,
       actionRow
     );
@@ -11198,7 +11200,9 @@ function teamBoard(opts) {
       : el("div", { class: "ts-tray" }, el("p", { class: "small muted" }, "角色卡池是空的。"),
           el("a", { class: "btn small", href: "#/team" }, "到角色卡池拿卡"));
     setKids(host,
-      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。審查位可以放獨立審查，或另一陣營的全端工程師的卡。" : "把角色卡放上來：規劃、執行、審查各一位，第二位審查選填。審查位可以放獨立審查，或另一陣營的全端工程師的卡。"),
+      sectionHead("隊伍", flow ? "任務卡上的隊伍；換掉卡之後按「儲存隊伍」才會寫入。審查位可以放獨立審查，或另一陣營的全端工程師的卡。" : "把角色卡放上來：規劃、執行、審查各一位，第二位審查選填。審查位可以放獨立審查，或另一陣營的全端工程師的卡。",
+        opts.task && typeof opts.task.id === "string" ? el("a", { class: "btn small", href: `#/staffing?task=${encodeURIComponent(opts.task.id)}`, "data-team": "staffing",
+          title: "各職位先發言，CEO 再寫組隊提案；提案只是建議，放不放上來由你決定" }, "請 CEO 組隊") : null),
       selected ? el("p", { class: "small ts-armed-note", role: "status" }, `已拿起「${(cardById(selected) || {}).name || ""}」，點一個位置放下去。`,
         el("button", { type: "button", class: "btn small", on: { click: () => { selected = null; paint(); } } }, "放開")) : null,
       el("ul", { class: "team-slots" }, TEAM_SLOTS.map((d) => slotNode(d, problems))),
@@ -11927,7 +11931,8 @@ function taskFrontCard(task, opts = {}) {
           el("a", { href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "把角色卡放上去")) : null,
     el("div", { class: "tf-actions" },
       el("a", { class: "btn small", href: `#/workbench?task=${encodeURIComponent(task.id)}` }, "打開"),
-      el("a", { class: "btn small", href: `#/meetings?task=${encodeURIComponent(task.id)}`, "data-tf": "meeting" }, "開會討論")));
+      el("a", { class: "btn small", href: `#/meetings?task=${encodeURIComponent(task.id)}`, "data-tf": "meeting" }, "開會討論"),
+      el("a", { class: "btn small", href: `#/staffing?task=${encodeURIComponent(task.id)}`, "data-tf": "staffing" }, "請 CEO 組隊")));
 }
 
 // The lobby's section of task cards: the unfinished ones, newest first.
@@ -12006,6 +12011,7 @@ async function route() {
     if (top === "home") await viewHome();
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
+    else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();
     else if (top === "skills" && parts[1]) await viewSkillDetail(parts[1]);
     else if (top === "skills") await viewSkills(params);
@@ -12052,6 +12058,7 @@ async function route() {
   }
   if (top === "office") liveTick = officeTick;
   if (top === "meetings") liveTick = meetingsTick;
+  if (top === "staffing") liveTick = staffingTick;
   if (top === "flows" && parts[1]) {
     // the executor, reviews and gate change without the user doing anything: refresh them quietly
     liveTick = async () => { if (flowCoordinator) await flowCoordinator.tick(); };
@@ -12451,15 +12458,18 @@ function meetingPreviewDialog(pv, opts) {
     el("div", { class: "modal-box mt-preview", style: "max-width: 780px; max-height: 88vh; overflow-y: auto;" },
       head,
       blockers.map((b) => notice("warn", (b && b.message) || "不能開始")),
-      pv.decision_again ? notice("info", `這一位重試後，CEO 會重問一次（共 ${pv.calls} 次呼叫）。`) : null,
+      pv.decision_again || pv.proposal_again ? notice("info", `這一位重試後，CEO 會重問一次（共 ${pv.calls} 次呼叫）。`) : null,
       el("ul", { class: "small" },
         // the server leaves the version out whenever its provider check fails; which failure it was is its blocker above
         el("li", null, cli.version ? `Claude Code ${cli.version}：${cli.verified === true ? "已通過無工具安全檢查" : "還沒通過無工具安全檢查"}`
           : "Claude Code：沒有讀到已通過無工具安全檢查的版本（原因見上方），所以不能開始"),
-        el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
+        // the money: a meeting's limits by default; a staffing meeting gives its own lines (opts.facts)
+        Array.isArray(opts.facts) ? opts.facts
+          : el("li", null, `共 ${pv.calls} 次呼叫，預留 US$${pv.reserve_usd}${lim ? `（每次上限 US$${lim.per_call_usd}，每場 US$${lim.meeting_usd}，每天 US$${lim.daily_usd}）` : ""}`),
         today.spent_usd !== undefined ? el("li", null, `今天已花 US$${today.spent_usd}，每日上限 US$${today.daily_usd}`) : null,
         pv.task && pv.task.title ? el("li", null, `任務卡：${pv.task.title}（只送出欄位內容，不送資料夾路徑）`) : null,
         meetingSpeedText(pv.speed) ? el("li", { "data-mt": "speed" }, meetingSpeedText(pv.speed)) : null),
+      opts.extra || null,
       notice("info", pv.disclosure || ""),
       el("p", { class: "small muted" }, pv.cost_note || MEETING_COST_NOTE),
       meetingMoneyWhyNode(),
@@ -12804,6 +12814,254 @@ function taskMeetingsBlock(taskId, data) {
       el("a", { class: "btn small", href: `#/meetings?task=${encodeURIComponent(taskId)}` }, "開會討論")));
 }
 
+// ---------- staffing meetings (P35-3) -------------------------------------------------------------------------------
+// The pages of a staffing meeting (vbear/staffing_runner.py): the form on one task card, the preview, the list, and one
+// staffing meeting. VBear ticks who it suggests to speak, with each reason, by a fixed table (vbear/staffing.py
+// SUGGEST_SPEAKERS); the person may change all of it. Every speaker says once, alone, then the CEO writes a staffing
+// proposal. What a page shows is the record: a bubble or a status comes from a closed table, an alias of the record (C1,
+// S1, N1) is shown as the name of what it stands for today, or as 「找不到」, and what a model wrote is set as text. Nothing
+// here creates a card, inserts a skill or puts anyone on a team: a staffing meeting starts only from a preview the person
+// confirmed, and its proposal is a record.
+
+const STAFFING_STATUS = {
+  running: ["進行中", "b-info"], ready: ["CEO 已提案：等你看", "b-warn"], incomplete: ["沒有完成", "b-bad"],
+  adopted: ["已記下：採用", "b-ok"], dismissed: ["已記下：不採用", "b-mute"],
+};
+function staffingStatusText(status) { return cardHas(STAFFING_STATUS, status) ? STAFFING_STATUS[status][0] : MEETING_UNKNOWN; }
+function staffingStatusBadge(status) {
+  return badge(staffingStatusText(status), cardHas(STAFFING_STATUS, status) ? STAFFING_STATUS[status][1] : "b-mute");
+}
+// The speaking positions in the order of VBear's table (vbear/staffing.py SUGGEST_SPEAKERS); a test keeps them equal.
+const STAFFING_SPEAKER_ORDER = ["pm", "executor", "legal", "accountant", "social", "art"];
+const STAFFING_SPEAKERS_MAX = 6;
+const STAFFING_NOTE_MAX = 500;   // vbear/staffing.py NOTE_MAX
+const STAFFING_DISABLED_NOTE = "停用的卡不能發言，但 CEO 可以提案用它（採用時要先由你啟用）。";
+const STAFFING_WHAT = "各職位先各自發言一次（彼此看不到），CEO 看完全部發言後寫組隊提案：4 個位置各放誰、開會找哪些幕僚、要不要新建卡、"
+  + "每人插哪些技能、缺哪些技能，以及採納了誰的意見。提案只是建議：VBear 不會自己建卡、插技能或排隊伍，每一步都由你自己按。";
+
+function staffingItems(list) {
+  return list && typeof list === "object" && Array.isArray(list.staffing) ? list.staffing.filter((r) => r && typeof r === "object") : [];
+}
+function staffingTaskTitle(taskId, tasksList) {
+  const t = (Array.isArray(tasksList) ? tasksList : []).find((x) => x && x.id === taskId);
+  return t ? t.title || "（沒有名稱）" : "（找不到這張任務卡）";
+}
+function staffingRow(r, tasksList) {
+  if (r.blocked) {
+    return el("li", { class: "mt-row card", "data-st": "staffing-row" },
+      el("strong", null, `無法讀取的組隊紀錄 ${r.id}`), badge("無法讀取", "b-bad"),
+      el("span", { class: "small muted" }, r.error || "這份組隊紀錄無法安全讀取，已留在清單裡，沒有被刪掉。"));
+  }
+  return el("li", { class: "mt-row card", "data-st": "staffing-row", "data-staffing-id": r.id },
+    el("a", { class: "mt-row-title", href: `#/staffing/${encodeURIComponent(r.id)}` }, `組隊會議：${staffingTaskTitle(r.task_id, tasksList)}`),
+    staffingStatusBadge(r.status),
+    r.high_risk === true ? badge("有高風險", "b-warn", "有發言者把風險標成「高」；這只是提醒") : null,
+    el("span", { class: "small muted" }, `${fmtTime(r.created_at)}・${r.participants} 位・US$${r.spent_usd}（估值）`));
+}
+function staffingListNode(list, tasksList, empty) {
+  if (!list || list.error) return notice("warn", `讀不到組隊會議：${(list && list.error) || "還沒有讀取到"}`);
+  const items = staffingItems(list);
+  if (!items.length) return emptyState(empty || "還沒有組隊會議", "在任務卡上按「請 CEO 組隊」。");
+  return el("ul", { class: "mt-list" }, [...items].sort(meetingNewest).map((r) => staffingRow(r, tasksList)));
+}
+
+// A task card's staffing meetings, newest first, and the way to a new one (the workbench's task tab).
+function taskStaffingBlock(taskId, data) {
+  const all = data && Array.isArray(data.staffing) ? data.staffing.filter((r) => r && typeof r === "object") : null;
+  const rows = all ? all.filter((r) => !r.blocked && r.task_id === taskId).sort(meetingNewest) : null;
+  const blocked = all ? all.filter((r) => r.blocked).length : 0;
+  return el("div", { class: "wb-field-group", "data-st": "task-staffing" },
+    el("div", { class: "wb-field-label" }, "組隊會議"),
+    el("div", { class: "wb-field-val" },
+      rows && rows.length ? el("ul", { style: "margin:0 0 6px; padding-left:18px" }, rows.slice(0, 5).map((r) =>
+        el("li", null, el("a", { href: `#/staffing/${encodeURIComponent(r.id)}` }, `組隊會議（${fmtTime(r.created_at)}）`), " ", staffingStatusBadge(r.status))))
+        : el("p", { class: "small muted" }, rows ? "這張任務卡還沒有組隊會議。" : "讀不到組隊會議清單。"),
+      blocked ? el("p", { class: "small muted" }, `有 ${blocked} 份組隊紀錄無法讀取，請到組隊會議頁查看。`) : null,
+      el("a", { class: "btn small", href: `#/staffing?task=${encodeURIComponent(taskId)}` }, "請 CEO 組隊")));
+}
+
+// ---- the preview's own lines: the money as a staffing meeting reserves it, the list, VBear's suggestions ----
+
+function staffingPreviewFacts(pv) {
+  const r = pv.reserve && typeof pv.reserve === "object" ? pv.reserve : null;
+  const lim = pv.limits && typeof pv.limits === "object" ? pv.limits : null;
+  const reserve = r ? `預留 US$${pv.reserve_usd} ＝ 發言 ${r.speakers} × US$${r.per_call_usd} ＋ CEO US$${r.proposal_call_usd}` : `預留 US$${pv.reserve_usd}`;
+  const limits = lim ? `；這份組隊提案最多 US$${lim.total_usd}，每天 US$${lim.daily_usd}（和會議共用）` : "";
+  const list = pv.list && typeof pv.list === "object" ? pv.list : null;
+  const left = list && list.omitted && typeof list.omitted === "object" ? list.omitted : {};
+  return [el("li", { "data-st": "reserve" }, `共 ${pv.calls} 次呼叫，${reserve}${limits}`),
+    list ? el("li", { "data-st": "list-size" }, `送出的清單：角色卡 ${list.cards} 張、技能 ${list.skills} 張；另有 ${left.cards} 張角色卡、${left.skills} 張技能沒有列出`
+      + "（發言者和 CEO 看得到這個數字；卡和技能只用代號，不送真正的 id）") : null];
+}
+function staffingSuggestedNode(pv) {
+  const list = Array.isArray(pv.suggested) ? pv.suggested.filter((x) => x && typeof x === "object") : null;
+  if (!list) return null;
+  return el("div", { class: "small", "data-st": "suggested" },
+    el("div", { class: "muted" }, "VBear 建議的人選（固定規則，不是 AI 判斷）"),
+    list.length ? el("ul", null, list.map((x) => el("li", null,
+      `${x.name || x.profile_id}（${cardHas(CARD_POSITION_LABEL, x.position) ? CARD_POSITION_LABEL[x.position] : "位置未指定"}）：${x.why || ""}——`,
+      x.chosen === true ? "你勾了" : "你沒勾")))
+      : el("p", null, "VBear 這次沒有建議任何人選。"));
+}
+
+// ---- the form ----
+
+function staffingForm(env) {
+  const task = env.task;
+  const suggested = Array.isArray(env.suggest.suggested) ? env.suggest.suggested.filter((x) => x && typeof x.profile_id === "string") : [];
+  const why = new Map(suggested.map((x) => [x.profile_id, typeof x.why === "string" ? x.why : ""]));
+  const all = (Array.isArray(env.profiles) ? env.profiles : []).filter((p) => p && typeof p === "object" && typeof p.id === "string");
+  // the position the server checks is the one stored on the card (vbear/agent_profiles.py position_of)
+  const positionOf = (p) => cardPosition({ position: p.position });
+  const cards = all.filter((p) => p.enabled !== false);
+  const chairs = cards.filter((p) => positionOf(p) === MEETING_CHAIR_POSITION);
+  const order = (p) => STAFFING_SPEAKER_ORDER.indexOf(positionOf(p));
+  const speakers = cards.filter((p) => order(p) >= 0).sort((a, b) => (order(a) - order(b)) || ((why.has(a.id) ? 0 : 1) - (why.has(b.id) ? 0 : 1))
+    || String(a.name || "").localeCompare(String(b.name || "")) || a.id.localeCompare(b.id));
+  const disabled = all.filter((p) => p.enabled === false && STAFFING_SPEAKER_ORDER.includes(positionOf(p))).length;
+  const categories = Array.isArray(env.suggest.categories) ? env.suggest.categories.filter((c) => c && typeof c === "object") : [];
+  const chairSel = el("select", { "data-mt": "chair", "aria-label": "主席（CEO）" }, chairs.map((p) => el("option", { value: p.id }, p.name || p.id)));
+  if (chairs.length) chairSel.value = chairs[0].id;
+  const boxes = speakers.map((p) => {
+    const box = el("input", { type: "checkbox", "data-st": "speaker", "data-profile": p.id });
+    box.checked = why.has(p.id);
+    const tool = p.model && typeof p.model === "object" ? p.model.tool : "";
+    const label = el("label", { class: "mt-check st-speaker" }, box,
+      el("span", null, `${CARD_POSITION_LABEL[positionOf(p)]}：${p.name || p.id}`, tool && tool !== "claude" ? "（工具不是 Claude Code，由 Claude Code 代發言）" : ""),
+      why.has(p.id) ? el("span", { class: "small st-why", "data-st": "why" }, `VBear 建議：${why.get(p.id)}`)
+        : el("span", { class: "small muted" }, "VBear 沒有建議（你可以自己勾）"));
+    return { box, label, p };
+  });
+  const note = el("textarea", { rows: "3", maxlength: String(STAFFING_NOTE_MAX), "data-st": "note", "aria-label": "補充說明",
+    placeholder: `給大家的補充說明（選填，最多 ${STAFFING_NOTE_MAX} 字）：不要貼密碼、金鑰或個資` });
+  const lampNote = el("p", { class: "small", "data-mt": "lamp-note" });
+  const preview = el("button", { class: "btn primary", type: "button", "data-mt": "preview", on: { click: () => run() } }, "預覽（還不會開始）");
+  const update = (lamp) => {
+    preview.disabled = !lamp.canOpen || !chairs.length || !speakers.length;
+    lampNote.textContent = lamp.canOpen ? ""
+      : (lamp.key === "red" ? "今日額度已用完（或已封鎖），先不開新的組隊會議。" : "讀不到今天的花費，先不開新的組隊會議。");
+  };
+  async function run() {
+    if (!chairs.length || !chairSel.value) { toast("需要一張 CEO 職位的角色卡當主席"); return; }
+    const chosen = boxes.filter((s) => s.box.checked);
+    if (!chosen.length) { toast("請至少選一位發言者"); return; }
+    if (chosen.length > STAFFING_SPEAKERS_MAX) { toast(`最多 ${STAFFING_SPEAKERS_MAX} 位發言者`); return; }
+    if (new Set(chosen.map((s) => positionOf(s.p))).size !== chosen.length) { toast("每個職位只能有一張卡發言"); return; }
+    const text = note.value.trim();
+    if (text.length > STAFFING_NOTE_MAX) { toast(`補充說明不可超過 ${STAFFING_NOTE_MAX} 字`); return; }
+    const body = { task_id: task.id, chair_profile_id: chairSel.value, speaker_profile_ids: chosen.map((s) => s.p.id) };
+    if (text) body.note = text;
+    preview.disabled = true;
+    try {
+      const pv = await api.post("/api/staffing/preview", body);
+      meetingPreviewDialog(pv, { title: "組隊會議前的預覽", startLabel: "開始組隊會議", facts: staffingPreviewFacts(pv), extra: staffingSuggestedNode(pv),
+        onRecheck: run,
+        onStart: async (previewId) => {
+          const res = await api.post("/api/staffing", { preview_id: previewId });
+          toast("組隊會議開始了");
+          location.hash = `#/staffing/${encodeURIComponent(res.id)}`;
+        } });
+    } catch (e) { toast(e.message); }
+    finally { preview.disabled = false; env.syncLamp(); }
+  }
+  const node = el("section", { class: "section mt-form", "data-st": "form" },
+    sectionHead("請 CEO 組隊", `VBear 依任務內容先勾好建議來開會的人，並寫出理由；你可以改，最多 ${STAFFING_SPEAKERS_MAX} 位，每個職位一張卡。開始前一定先給你看會送出的全文。`),
+    el("p", { class: "small" }, STAFFING_WHAT),
+    !chairs.length ? notice("warn", el("span", null, "還沒有 CEO 職位的角色卡，沒有 CEO 就不能組隊。到 ", el("a", { href: "#/team" }, "角色卡池"), " 建一張（精靈第 2 步選 CEO）。")) : null,
+    !speakers.length ? notice("warn", "還沒有可以發言的職位卡（PM、全端工程師、法務經理、會計師、社群媒體經理、藝術總監）。") : null,
+    el("p", { class: "small", "data-st": "categories" }, categories.length
+      ? `VBear 從任務文字分出的分類：${categories.map((c) => `${c.label}（提到「${c.keyword}」）`).join("、")}`
+      : "VBear 沒有從任務文字分出任何分類。"),
+    el("label", null, "主席（CEO，寫組隊提案）", chairSel),
+    el("fieldset", { class: "mt-fieldset st-speakers" }, el("legend", null, "誰來發言（VBear 先勾好，你可以改；每個職位一張卡）"),
+      boxes.length ? boxes.map((s) => s.label) : el("span", { class: "small muted" }, "沒有可選的卡")),
+    el("p", { class: "small muted", "data-st": "disabled-note" }, disabled ? `有 ${disabled} 張發言職位的卡停用中，沒有列在這裡。` : "", STAFFING_DISABLED_NOTE),
+    el("label", null, "補充說明", note),
+    el("p", { class: "small muted" }, "思考強度只用低或中（會議為了快，不提供高）；每位的強度和這場的時間上限，預覽裡會寫明。"),
+    el("p", { class: "small muted" }, "預留的錢 = 發言人數 × 發言者每次上限 ＋ CEO 每次上限；實際數字、這份組隊提案的上限和每天的上限（和會議共用），預覽裡會寫明。"),
+    lampNote,
+    el("div", { class: "row" }, preview));
+  return { node, update };
+}
+
+// ---- the pages ----
+
+let staffingTick = null;
+
+async function viewStaffing(id, params) {
+  const token = seq;
+  if (id) return viewStaffingDetail(token, id);
+  const taskId = params && typeof params.task === "string" && params.task ? params.task : "";
+  const listPath = taskId ? `/api/staffing?task_id=${encodeURIComponent(taskId)}` : "/api/staffing";
+  const [suggest, list, ledgerData, profilesRes, tasksRes] = await Promise.all([
+    taskId ? api.get(`/api/staffing/suggest?task_id=${encodeURIComponent(taskId)}`).catch((e) => ({ error: e.message || "讀不到" })) : null,
+    api.get(listPath).catch((e) => ({ error: e.message, staffing: [] })),
+    api.get("/api/meetings/ledger").catch(() => null),
+    taskId ? api.get("/api/agent-profiles").catch(() => null) : null,
+    api.get("/api/tasks").catch(() => null)]);
+  const main = claim(token);
+  const tasksList = tasksRes && Array.isArray(tasksRes.tasks) ? tasksRes.tasks.filter((t) => t && typeof t.id === "string") : [];
+  let current = { list, lamp: meetingLamp(ledgerData) };
+  const lampBox = el("div", { class: "mt-lamp-box" });
+  const listBox = el("div", { class: "mt-list-box" });
+  let form = null;
+  const draw = () => {
+    setKids(lampBox, meetingLampNode(current.lamp));
+    setKids(listBox, staffingListNode(current.list, tasksList, taskId ? "這張任務卡還沒有組隊會議" : null));
+    if (form) form.update(current.lamp);
+  };
+  if (taskId) {
+    const task = tasksList.find((t) => t.id === taskId) || { id: taskId, title: "" };
+    if (suggest.error) {
+      setKids(main, crumbs([["組隊會議", "#/staffing"], ["找不到"]]), notice("bad", suggest.error));
+      return;
+    }
+    form = staffingForm({ task, suggest, profiles: profilesRes && profilesRes.profiles, syncLamp: () => form.update(current.lamp) });
+    draw();
+    setKids(main, crumbs([["組隊會議", "#/staffing"], [task.title || taskId]]),
+      el("h1", null, `請 CEO 組隊：${task.title || "（沒有名稱）"}`),
+      lampBox, meetingMoneyWhyNode(), form.node,
+      el("section", { class: "section" }, sectionHead("這張任務卡的組隊會議", "每 5 秒更新"), listBox));
+  } else {
+    const open = tasksList.filter((t) => t.status !== "closed" && t.status !== "handed_off");
+    const pick = el("select", { class: "mt-task-pick", "data-st": "task-pick", "aria-label": "替哪張任務卡組隊" },
+      el("option", { value: "" }, "（選一張任務卡）"), open.map((t) => el("option", { value: t.id }, t.title || t.id)));
+    pick.addEventListener("change", () => { if (pick.value) location.hash = `#/staffing?task=${encodeURIComponent(pick.value)}`; });
+    draw();
+    setKids(main, el("h1", null, "組隊會議"),
+      el("p", { class: "lede" }, STAFFING_WHAT),
+      lampBox, meetingMoneyWhyNode(),
+      el("section", { class: "section" }, sectionHead("替哪張任務卡組隊", "選好之後，VBear 會先勾好建議的人選。"),
+        open.length ? pick : el("p", { class: "small muted" }, "沒有未結案的任務卡。")),
+      el("section", { class: "section" }, sectionHead("組隊紀錄", "每 5 秒更新"), listBox));
+  }
+  staffingTick = async () => {
+    const [l2, g2] = await Promise.all([api.get(listPath).catch((e) => ({ error: e.message, staffing: [] })),
+      api.get("/api/meetings/ledger").catch(() => null)]);
+    current = { list: l2, lamp: meetingLamp(g2) };
+    if (token === seq) draw();
+  };
+  activeViewCleanup = () => { staffingTick = null; };
+}
+
+async function viewStaffingDetail(token, id) {
+  let cur;
+  try { cur = await api.get(`/api/staffing/${encodeURIComponent(id)}`); }
+  catch (e) {
+    setKids(claim(token), crumbs([["組隊會議", "#/staffing"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份組隊紀錄：" + e.message));
+    return;
+  }
+  const tasksRes = await api.get("/api/tasks").catch(() => null);
+  const tasksList = tasksRes && Array.isArray(tasksRes.tasks) ? tasksRes.tasks.filter((t) => t && typeof t.id === "string") : [];
+  const title = staffingTaskTitle(cur.task_id, tasksList);
+  const limits = cur.limits && typeof cur.limits === "object" ? cur.limits : {};
+  setKids(claim(token), crumbs([["組隊會議", "#/staffing"], [title]]),
+    el("h1", null, `組隊會議：${title}`),
+    el("div", { class: "row small" }, staffingStatusBadge(cur.status),
+      el("span", { class: "muted" }, `組隊紀錄 ${cur.id}・${fmtTime(cur.created_at)}・花費 US$${cur.spent_usd}（估值）／這份上限 US$${limits.total_usd}`)),
+    el("p", { class: "small muted" }, MEETING_COST_NOTE), meetingMoneyWhyNode());
+}
+
 setTheme(store.get("theme", "auto"));
 setInterval(() => { if (!document.hidden && !authLostShown && !authPending) { refreshTranslations(); pollRoleTranslations(); } }, 2500);
 // Coming back to this tab: refresh at once instead of waiting.
@@ -13103,5 +13361,8 @@ if (typeof module !== "undefined" && module.exports) {
     meetingTaskNoteOffer,
     taskMeetingsBlock,
     viewMeetings,
+    STAFFING_SPEAKER_ORDER,
+    taskStaffingBlock,
+    viewStaffing,
   };
 }
