@@ -421,6 +421,28 @@ test("one staffing meeting: what each speaker said, with every alias shown as a 
   assert(legal.includes("高"), legal);
 });
 
+test("a note of VBear's names a card or a skill by its alias; the page adds what that alias is today, or that it is not found", async () => {
+  const pm = pmSaid();
+  pm.notes = [{ code: "incompatible_skill", text: "技能「S1」和這張卡的工具不相容，已拿掉" },
+    { code: "duplicate_card", text: "同一張卡「C3」出現在兩個地方，只留第一筆" },
+    { code: "unknown_skill", text: "提到清單上沒有的技能「S99」，已拿掉" }, { code: "missing", text: "還差：審查位" }];
+  const ceo = ceoSaid();
+  ceo.notes = [{ code: "unknown_new_ref", text: "提到沒有寫出來的新卡「N3」，已拿掉" }, { code: "duplicate_ref", text: "新卡的代號「N1」重複，只留第一筆" }];
+  setRecord({ turns: [sturn(1, "pm", "opinion", "done", { output: pm }), sturn(2, "law", "opinion", "done", { output: lawSaid() }),
+    sturn(3, "ceo", "proposal", "done", { output: ceo })] });
+  const main = await open("#/staffing/" + SID);
+  const notes = qa(main, "notes");
+  assert.strictEqual(notes.length, 2, "the speaker's notes and the CEO's");
+  notes.forEach(noMarkup);
+  const said = notes.map(text).join("\n");
+  assert(said.includes("技能「S1」和這張卡的工具不相容，已拿掉（S1 是「網站前端 " + EVIL + "」）"), said);
+  assert(said.includes("同一張卡「C3」出現在兩個地方，只留第一筆（C3 是「全端工程師」）"), said);
+  assert(said.includes("提到清單上沒有的技能「S99」，已拿掉（S99 找不到）"), said);
+  assert(said.includes("還差：審查位") && !said.includes("還差：審查位（"), said);
+  assert(said.includes("提到沒有寫出來的新卡「N3」，已拿掉（N3 找不到）"), said);
+  assert(said.includes("新卡的代號「N1」重複，只留第一筆（N1 是新卡「法務新卡 " + EVIL + "」）"), said);
+});
+
 test("the CEO's proposal: the places, the staff, the new cards, the gaps, and the opinions adopted and not, in two columns", async () => {
   setRecord();
   const main = await open("#/staffing/" + SID);

@@ -13215,10 +13215,23 @@ function staffingOpinionNodes(kept, ctx) {
   }
   return out;
 }
-function staffingNotesNode(output) {
+// A note names what it is about by its alias (「C3」, 「S1」, 「N1」), as the record keeps it; the page adds what each alias is
+// today, by the same names as the rest of the page, or that it is not found.
+function staffingNoteText(words, names) {
+  const aliases = [];
+  for (const m of words.matchAll(/「([CSN][1-9][0-9]{0,2})」/g)) if (!aliases.includes(m[1])) aliases.push(m[1]);
+  if (!names || !aliases.length) return words;
+  const what = aliases.map((a) => {
+    const x = a[0] === "C" ? names.card(a) : a[0] === "S" ? names.skill(a) : names.newCard(a);
+    return !x.found ? `${a} ${STAFFING_NOT_FOUND}` : a[0] === "N" ? `${a} 是新卡「${x.newCard.name}」` : `${a} 是「${x.text}」`;
+  });
+  return `${words}（${what.join("；")}）`;
+}
+
+function staffingNotesNode(output, names) {
   const notes = output && Array.isArray(output.notes) ? output.notes.filter((x) => x && typeof x.text === "string") : [];
   return notes.length ? [el("div", { class: "small muted" }, "VBear 拿掉或改動的地方"),
-    el("ul", { class: "small", "data-st": "notes" }, notes.map((x) => el("li", null, x.text)))] : null;
+    el("ul", { class: "small", "data-st": "notes" }, notes.map((x) => el("li", null, staffingNoteText(x.text, names))))] : null;
 }
 
 // ---- the CEO's proposal, by names ----
@@ -13268,7 +13281,7 @@ function staffingProposalNode(kept, output, ctx) {
       el("div", { "data-st": "not-adopted" }, el("h4", null, "沒採納的意見"), used.filter((x) => x.adopted === false).length
         ? el("ul", { class: "small" }, used.filter((x) => x.adopted === false).map(opinion)) : el("p", { class: "small muted" }, "（沒有）"))),
     lines("risks", "CEO 看到的風險"), lines("questions_for_chairman", "要問你（董事長）的"),
-    staffingNotesNode(output));
+    staffingNotesNode(output, n));
 }
 
 // ---- the person's draft of the proposal ----
@@ -13512,7 +13525,7 @@ async function viewStaffingDetail(token, id) {
     const t = seat.turn;
     const kept = staffingKept(t);
     const body = [];
-    if (kept && t.kind === "opinion") body.push(staffingOpinionNodes(kept, ctx), staffingNotesNode(t.output));
+    if (kept && t.kind === "opinion") body.push(staffingOpinionNodes(kept, ctx), staffingNotesNode(t.output, ctx.names));
     else if (kept && t.kind === "proposal") body.push(el("p", { class: "small muted" }, "CEO 的組隊提案在下面。"));
     else if (t && t.state === "queued") body.push(el("p", { class: "small muted" }, "還沒輪到。"));
     else if (t && t.state === "running") body.push(el("p", { class: "small muted" }, t.kind === "proposal" ? "正在整理意見…" : "正在發言…"));
