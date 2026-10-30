@@ -683,6 +683,44 @@ class ChairmanTests(Base):
             runner.retry_preview(m["id"], {"seq": 1}, self.sources())
         self.assertEqual(caught.exception.code, "already_decided")
 
+    def test_an_adoption_keeps_what_the_chairman_adopted_checked_against_the_proposal(self):
+        """P35-4: 記下：採用 may carry the rows adopted; it is kept as it was sent, a record of the console that VBear does
+        nothing with. What is not of the proposal (a new card it did not write) or of the shape is refused, and so is a
+        dismissal that carries rows."""
+        def answer(spec):
+            a = self.aliases()
+            if spec.kind != "proposal":
+                return opinion(a["eng"])
+            p = proposal(a)
+            p["staff"] = [{"position": "legal", "pick": "new", "card": "", "new_ref": "N1", "reason": "要一張法務卡", "skills": []}]
+            p["new_cards"] = [{"ref": "N1", "position": "legal", "tool": "claude", "model_alias": "sonnet", "name": "虛構法務新卡",
+                               "reason": "沒有法務", "skills": []}]
+            return p
+        self.answer = answer
+        runner = self.board()
+        m = self.run_board(runner)
+        rows = [{"kind": "slot", "place": "executor", "profile_id": "eng", "new_ref": "", "skill_ids": ["s-front"]},
+                {"kind": "staff", "place": "legal", "profile_id": "card-made-1", "new_ref": "N1", "skill_ids": []}]
+        for bad in ({"decision": "adopt", "adopted": {"rows": [dict(rows[1], new_ref="N2")]}},
+                    {"decision": "adopt", "adopted": {"rows": [dict(rows[0], place="boss")]}},
+                    {"decision": "adopt", "adopted": {"rows": []}},
+                    {"decision": "dismiss", "adopted": {"rows": rows}}):
+            with self.subTest(bad=bad), self.assertRaises(mt.MeetingError) as caught:
+                runner.chairman(m["id"], bad)
+            self.assertEqual(caught.exception.code, "bad_request")
+        self.assertEqual(st.load(m["id"])["chairman"]["state"], "pending", "nothing was written by a refused answer")
+        out = runner.chairman(m["id"], {"decision": "adopt", "note": "照這樣組隊（虛構）", "adopted": {"rows": rows}})
+        self.assertEqual((out["status"], out["chairman"]["adopted"]), ("adopted", {"rows": rows}))
+        self.assertEqual(st.load(m["id"])["chairman"]["adopted"], {"rows": rows})
+        self.assertEqual(out["chairman"]["label"], "主控台記錄（未驗證身分）")
+
+    def test_a_dismissal_and_an_adoption_without_rows_hold_none(self):
+        runner = self.board()
+        m = self.run_board(runner)
+        self.assertIsNone(runner.chairman(m["id"], {"decision": "adopt", "adopted": None})["chairman"]["adopted"])
+        m = self.run_board(runner)
+        self.assertIsNone(runner.chairman(m["id"], {"decision": "dismiss", "adopted": None})["chairman"]["adopted"])
+
     def test_a_proposal_that_is_not_there_cannot_be_adopted_but_can_be_dismissed(self):
         def call(spec, cancel):
             raise mr.CallFailed("cli_failed", dict(EVIDENCE), None)

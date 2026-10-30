@@ -951,7 +951,10 @@ the preview id, and nothing in it is carried out by VBear.
 - **What it is not.** No rule of the meetings (R1–R8) is run, and a staffing meeting is never held for you; a high risk a
   speaker wrote is shown as a reminder. The proposal is a record: VBear creates no card, inserts no skill and puts no one
   on a team; each of those is a step you take on its own page. The chairman's answer (adopt or dismiss, with a note) is a
-  record of the console (「主控台記錄（未驗證身分）」) and does nothing by itself.
+  record of the console (「主控台記錄（未驗證身分）」) and does nothing by itself. An adoption may carry what was adopted:
+  each place (one of the four, or a staff position) with the id of the card put there, the CEO's new card it was made
+  from and the skills adopted for it, at most ten rows of 40 skills. VBear checks its shape and that a new card is one of
+  the proposal's; it does not check that the card exists or that any step was done.
 - **Where it is kept.** One file per staffing meeting, `<state>/staffing/s-<12 hex>.json` (0600, folder 0700, 256 KiB, at
   most 200), through the guarded store as a meeting is: a damaged file blocks that record and no other. Not in
   `meetings/`, which v0.9.0 would quarantine. It stores the task card's id, your note, the participants, who VBear

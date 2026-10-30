@@ -1060,8 +1060,49 @@ def record_problem(rec) -> str | None:
     chair = rec["chairman"]
     if (not isinstance(chair, dict) or set(chair) != {"state", "at", "note", "adopted"} or chair["state"] not in CHAIRMAN_STATES
             or (chair["at"] is not None and not mt._epoch(chair["at"])) or not isinstance(chair["note"], str)
-            or len(chair["note"]) > NOTE_MAX or chair["adopted"] is not None):
+            or len(chair["note"]) > NOTE_MAX):
         return "董事長欄位不符"
+    if chair["adopted"] is not None and (chair["state"] != "adopted" or adopted_problem(chair["adopted"], rec) is not None):
+        return "董事長欄位不符"
+    return None
+
+
+# What a chairman who adopted may keep of it (P35-4): the rows of the draft that were adopted, each a place (one of the
+# four, or a staff position), the card put there by id, the CEO's new card it was made from ("" when it was a card of
+# the list) and the skills adopted for it. It is what the console sent, kept as a record: VBear checks its shape and that
+# a new card is one of the proposal's, not that the card exists or that any step was done.
+ADOPTED_ROWS_MAX = len(SLOTS) + len(STAFF_POSITIONS)
+ADOPTED_SKILLS_MAX = 40
+_ADOPTED_ROW_KEYS = {"kind", "place", "profile_id", "new_ref", "skill_ids"}
+
+
+def adopted_problem(value, rec: dict) -> str | None:
+    """None, or why ``value`` is not what the adoption of ``rec``'s proposal could hold."""
+    if not isinstance(value, dict) or set(value) != {"rows"}:
+        return "採用內容的欄位不符"
+    rows = value["rows"]
+    if not isinstance(rows, list) or not 1 <= len(rows) <= ADOPTED_ROWS_MAX:
+        return f"採用的列數要在 1 到 {ADOPTED_ROWS_MAX} 之間"
+    last = rec["turns"][-1] if rec.get("turns") else {}
+    kept = (last.get("output") or {}).get("kept") if last.get("kind") == "proposal" and last.get("state") == "done" else None
+    refs = {n.get("ref") for n in (kept or {}).get("new_cards") or [] if isinstance(n, dict)}
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != _ADOPTED_ROW_KEYS:
+            return "採用的列欄位不符"
+        if not (row["kind"] == "slot" and row["place"] in SLOTS or row["kind"] == "staff" and row["place"] in STAFF_POSITIONS):
+            return "採用的位置不符"
+        if (row["kind"], row["place"]) in seen:
+            return "同一個位置採用了兩次"
+        seen.add((row["kind"], row["place"]))
+        if not isinstance(row["profile_id"], str) or not ap.VALID_PROFILE_ID_RE.match(row["profile_id"]):
+            return "採用的角色卡 id 不符"
+        if row["new_ref"] != "" and not (isinstance(row["new_ref"], str) and NEW_REF_RE.match(row["new_ref"]) and row["new_ref"] in refs):
+            return "採用的新卡不是 CEO 提案裡的"
+        skills = row["skill_ids"]
+        if (not isinstance(skills, list) or len(skills) > ADOPTED_SKILLS_MAX or not all(_id_text(s) for s in skills)
+                or len(set(skills)) != len(skills)):
+            return f"採用的技能不符（每列最多 {ADOPTED_SKILLS_MAX} 張，不重複）"
     return None
 
 

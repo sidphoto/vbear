@@ -736,6 +736,12 @@ def staffing_record(sid="s-0123456789ab", **kw):
     return st.new_record(sid, **args)
 
 
+def broken_copy(rec, change):
+    out = copy.deepcopy(rec)
+    change(out)
+    return out
+
+
 def evidence(cost="0.01", source="cli"):
     return {"cli_version": "2.1.296", "model_reported": "claude-sonnet-5-5", "tools_reported": ["StructuredOutput"],
             "mcp_servers_reported": [], "exit_code": 0, "duration_ms": 12, "cost_usd": cost, "cost_source": source}
@@ -814,6 +820,38 @@ class RecordTests(unittest.TestCase):
         ok = done(copy.deepcopy(good), 1, cost="0.02")
         ok["turns"][0]["output"]["notes"] = [{"code": "unknown_card", "text": "提到清單上沒有的角色卡「C99」，已拿掉"}]
         self.assertIsNone(st.record_problem(ok))
+
+    def test_an_adoption_holds_the_rows_the_chairman_adopted_and_nothing_else(self):
+        """P35-4: a chairman who adopted may keep what was adopted: a place (one of the four, or a staff position), the card
+        put there by id, the CEO's new card it was made from, and the skills adopted for it. Pending or dismissed holds none."""
+        good = done(done(done(staffing_record(), 1), 2), 3, kept={"summary": "好", "new_cards": [{"ref": "N1"}]})
+        row = {"kind": "slot", "place": "executor", "profile_id": "eng", "new_ref": "", "skill_ids": ["s-front"]}
+        made = {"kind": "staff", "place": "legal", "profile_id": "card-made-1", "new_ref": "N1", "skill_ids": []}
+        good["chairman"] = {"state": "adopted", "at": time.time(), "note": "", "adopted": {"rows": [row, made]}}
+        self.assertIsNone(st.record_problem(good))
+        self.assertIsNone(st.adopted_problem({"rows": [dict(row, skill_ids=[f"s-{i}" for i in range(st.ADOPTED_SKILLS_MAX)])]}, good))
+
+        def with_rows(*rows, **chair):
+            rec = copy.deepcopy(good)
+            rec["chairman"].update(adopted={"rows": list(rows)}, **chair)
+            return rec
+        bads = [
+            with_rows(row, state="pending"), with_rows(row, state="dismissed"),
+            with_rows(), with_rows(*([row] * (st.ADOPTED_ROWS_MAX + 1))), with_rows(row, row),
+            broken_copy(good, lambda r: r["chairman"].update(adopted={"rows": [row], "more": 1})),
+            broken_copy(good, lambda r: r["chairman"].update(adopted=[row])),
+            with_rows(dict(row, extra=1)), with_rows({k: v for k, v in row.items() if k != "new_ref"}),
+            with_rows(dict(row, kind="seat")), with_rows(dict(row, place="boss")), with_rows(dict(row, kind="staff", place="reviewer1")),
+            with_rows(dict(row, place="legal")), with_rows(dict(row, profile_id="")), with_rows(dict(row, profile_id="../x")),
+            with_rows(dict(row, profile_id=5)), with_rows(dict(made, new_ref="N9")), with_rows(dict(made, new_ref="N2")),
+            with_rows(dict(made, new_ref=1)), with_rows(dict(row, skill_ids="s-front")), with_rows(dict(row, skill_ids=[""])),
+            with_rows(dict(row, skill_ids=["s-front", "s-front"])), with_rows(dict(row, skill_ids=[5])),
+            with_rows(dict(row, skill_ids=[f"s-{i}" for i in range(st.ADOPTED_SKILLS_MAX + 1)])),
+            with_rows(dict(row, skill_ids=["x" * 257])),
+        ]
+        for bad in bads:
+            with self.subTest(bad=str(bad["chairman"])[:160]):
+                self.assertIsNotNone(st.record_problem(bad))
 
 
 class StatusTests(unittest.TestCase):

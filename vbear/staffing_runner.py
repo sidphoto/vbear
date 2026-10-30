@@ -353,11 +353,15 @@ class StaffingRunner(HeadlessBoard):
     # -- the rest of the API ---------------------------------------------------------------------------------------
 
     def chairman(self, sid: str, body) -> dict:
-        """The chairman's answer to the proposal, adopt or dismiss, with a note: a record of the console, nothing more."""
-        if (not isinstance(body, dict) or not {"decision"} <= set(body) <= {"decision", "note"}
+        """The chairman's answer to the proposal, adopt or dismiss, with a note and, for an adoption, what was adopted
+        (st.adopted_problem): a record of the console, nothing more."""
+        if (not isinstance(body, dict) or not {"decision"} <= set(body) <= {"decision", "note", "adopted"}
                 or body["decision"] not in ("adopt", "dismiss")):
             raise st.StaffingError("bad_request", "decision 必須是 adopt 或 dismiss")
         note = mt.clean_line(body.get("note"), st.NOTE_MAX, "備註", required=False)
+        adopted = body.get("adopted")
+        if adopted is not None and body["decision"] != "adopt":
+            raise st.StaffingError("bad_request", "不採用時不能附上採用內容")
         with self.lock:
             if self.job is not None and self.job["meeting_id"] == sid:
                 raise st.StaffingError("running")
@@ -369,8 +373,10 @@ class StaffingRunner(HeadlessBoard):
                 raise st.StaffingError("already_decided")
             if body["decision"] == "adopt" and rec["turns"][-1]["state"] != "done":
                 raise st.StaffingError("not_decided")
+            if adopted is not None and (problem := st.adopted_problem(adopted, rec)) is not None:
+                raise st.StaffingError("bad_request", problem)
             rec["chairman"] = {"state": "adopted" if body["decision"] == "adopt" else "dismissed", "at": self.clock(),
-                               "note": note, "adopted": None}
+                               "note": note, "adopted": copy.deepcopy(adopted)}
         return st.view(self._update(sid, change))
 
     def get(self, sid: str, sources: StaffingSources | None = None) -> dict:
