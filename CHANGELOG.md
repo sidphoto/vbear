@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.10.0 — staffing meetings, shorter meetings, and adopting a team step by step
+
+The CEO card can now staff a task card: the positions say who and which skills the task needs, the CEO writes a staffing
+proposal, and you change it as a draft and adopt it one step at a time, each step a button you press. Meetings got
+shorter: Claude Code thinks at low or medium effort and a meeting runs on a clock. This section is everything since
+v0.9.0; going back to v0.9.0 is described once, at the end.
+
+- **A staffing meeting (組隊會議) asks the CEO card to staff one task card.** 請 CEO 組隊 on a task card (in the lobby,
+  the workbench and its team board) opens a form (`#/staffing?task=`) with the speakers VBear ticked from a fixed table,
+  one enabled card per position, each with its reason (固定規則，不是 AI 判斷); you change any of it. A disabled card
+  cannot speak, but the CEO may propose it. The preview shows every text each call sends, the models and the effort, the
+  money it reserves (each speaker's call and the CEO's), the day's lamp and how many cards and skills the list left out;
+  only 開始組隊會議 starts it. Each speaker says once, alone, then the CEO writes the proposal: who goes in the four places of
+  the task card, which staff to bring to a meeting, which new cards to make, the skills for each card, the skill gaps,
+  the risks, the questions for you, and which opinions it adopted and which not, with why. Cards and skills are sent
+  under aliases (`C1`, `S1`, ...), never their ids; the page shows each alias as the card's or the skill's name today,
+  or 「找不到」. A skill gap comes with a search of this console's skill library, never a link out. Each record is a
+  file of its own in `staffing/`.
+- **What a staffing meeting costs, and when it can run.** A speaker's call costs at most `meeting_limits.per_call_usd`,
+  the CEO's at most `staffing_limits.proposal_call_usd` (US$0.50 by default) and a whole staffing record at most
+  `staffing_limits.total_usd` (US$2.00 by default); `staffing_limits` is a new top-level key of `config.json`. It counts
+  in the same day as the meetings: `meeting_limits.daily_usd` covers both, and the ledger says so. It uses the meetings'
+  one worker, so a meeting and a staffing meeting never run at the same time; the one started second is refused. A failed
+  turn is retried only by you, through its own preview (twice at most), and retrying a speaker asks the CEO again; a
+  restart interrupts what was running and resumes nothing. VBear runs no rule of the meetings (R1–R8) on it.
+- **Your draft of the proposal.** On a staffing record (`#/staffing/<id>`), 改成你要的樣子（草稿） lets you put
+  someone else in a place, empty a place or take a staff row out, add a staff position, and add or untick skills; only
+  the skills that card can read are offered. VBear checks each row again by the page's own rules (the card as it is now,
+  the place it fits, a review's camp against the executor's, as on a task card) and does not tick a row it flags; a row
+  you tick yourself stays ticked. The draft is kept in this browser only, and a draft of an earlier proposal is not used.
+- **Adopting the draft, one step at a time.** Under the draft, 照草稿採用 lists six steps in a fixed order: 啟用 (switch
+  a disabled card on), 建新卡 (the card wizard opens filled from the CEO's new card: name, position, camp, model and the
+  skills it can read; nothing is saved until 建立), 插技能 (a dialog shows the card's skills before and after;
+  插上技能只是紀錄，不會安裝或下載), 帶到隊伍 (the task card opens with the team placed on its board but not saved: `flows.json` is
+  written only when you press 建立隊伍 or 儲存隊伍 there; a place the proposal does not name stays as it is, and leaving
+  the page drops what was placed), 帶去開會 (optional: the meeting form with the staff ticked as speakers; nothing is
+  sent until 預覽) and 記下. Each step is a button you press and goes through an endpoint VBear already had; a step waits
+  for the ones before it, and 記下：採用 is offered only once the first four are done. The adoption keeps the rows as
+  they are on the cards (each place, the card in it, the CEO's new card it was made from and its skills); like 記下：不採用
+  it is a record of the console (主控台記錄（未驗證身分）) and does nothing by itself. A record whose proposal the CEO did
+  not finish can only be dismissed. The cards made in the wizard are remembered in this browser.
+- **Meetings are shorter, and say why they cost money.** A speaker thinks at low effort and the CEO at medium
+  (`meeting_speed`, a new top-level key of `config.json`; high is not offered), and a meeting runs at most 15 minutes (5
+  to 30) with the last three kept for the CEO; a speaker with less than a minute left is skipped, 時間到沒發言. The
+  meeting pages and their previews say the speed and the clock, and why a meeting costs money: each speaker (and the
+  CEO) is one call of a model through your own Claude Code; the dollars are Claude Code's estimate, and a subscription
+  uses your usage instead of being charged apart. The same holds for a staffing meeting.
+- **The office and the board show the staffing meetings.** The office's 會議室 also seats a staffing meeting that runs
+  or waits, marked 組隊會議, its seats leading to its record, and the 董事長桌 counts 組隊提案待你看, with 去看提案. The home
+  page's 「輪到你」 lists a proposal waiting for you. A staffing list that cannot be read is said (讀不到組隊會議), not
+  taken as none.
+- **Under the meetings.** The meetings' engine is split out of the meeting runner (`board_engine.py`), with no change in
+  how a meeting behaves, and a turn whose text cannot be made now ends as failed instead of staying queued.
+  `skill_fit.py` is a Python copy of the page's rules for which skill a card can take, so the server checks a proposal
+  as the page checks a card.
+- **Going back to v0.9.0.** v0.9.0 reads what this version wrote, except the staffing meetings: it does not know the
+  `staffing/` folder and leaves it as it is, so coming back finds the records again. `staffing_limits` and
+  `meeting_speed` stay in `config.json` (v0.9.0 keeps a top-level key it does not know when it saves) and are not used
+  there; its meetings run without `--effort` and without the clock, and a turn this version skipped for time shows there
+  as 沒有發言 with 代碼：time_up. **v0.9.0's daily ledger does not count what the staffing meetings spent**: on a day a
+  staffing meeting spent money here, v0.9.0 lets meetings spend the whole of `meeting_limits.daily_usd` again, so that
+  day can go over it. `meeting-worker.lock` and `meeting-worker.blocked` are the meetings' own files both ways. The
+  drafts and the cards made in the wizard (kept in this browser) and a team placed on a board but not saved are not used
+  there; a role card, a skill, a task card or a flow changed by an adoption is an ordinary one there, because each step
+  went through an endpoint v0.9.0 has too.
+
 ## v0.9.0 — seven positions, role instructions, full-mode launches and office meetings
 
 Role cards now follow the seven positions of a one-person company, carry instructions and a launch mode, and can hold

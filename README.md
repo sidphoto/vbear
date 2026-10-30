@@ -40,9 +40,10 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Task card** | One **folder** on your Mac (任務卡). Bring an existing project in with 「＋ 任務卡（導入專案）」: VBear reads the folder (read-only: whether it is a git repository, branch and HEAD, project skills, how many terminals are in it) and never writes into it | 冒險者大廳, 流程, the workbench's 「任務卡」 tab |
 | **Party** | A **flow**: the planner (who writes the plan), the executor (who does the work) and the reviewers (who check it) on one task card, each with a model family. You put role cards on the **team places** (規劃位, 執行位, 審查位 and an optional second review place); a review place that would not count (same maker as the executor, or a shared card) turns red at once and says why; an AGY card counts as Google, so it is independent of a Claude Code or Codex executor and not of a Google one. The planner is a role recorded in the flow: automatic mode runs the plan you approved, and VBear never starts a planner | The task card's team; 流程 |
 | **Quest board** | The **home page** (冒險者大廳): what waits for you first (flows at a gate, agents waiting for your reply), then the other tasks in progress; each flow card shows its team and whose turn the next step is. For someone with no team yet, the top shows **the first game** (新手第一局): get role cards, bring in a project, put the team on it, each step ticked from real data. Each card is something VBear already has; nothing is scored | Home page |
-| **Office** | A **pixel office** page (辦公室, `#/office`): the flows' teams stand at the **workstation** where their task is (計畫板, 實作區, 審查室, 合併關卡), live terminals sit at **desks** (the words over a character are its state), and the saved role cards stay in the **lounge** (the roster: a role setting, not attendance; it shows at most 24 characters and links to the 「角色卡池」 page for the rest). Click a character for its **weapons** (the tools a launch offers, read from the same constants as the launch's argv), armor and skill cards. A station only says where the task is, never what an agent is doing. The **meeting room** (會議室) seats the newest running meeting or one waiting for you, with words over each character taken only from the meeting's record, and the **chairman's desk** (董事長桌) counts the meetings waiting for your approval, with 去核准 | 辦公室 |
+| **Office** | A **pixel office** page (辦公室, `#/office`): the flows' teams stand at the **workstation** where their task is (計畫板, 實作區, 審查室, 合併關卡), live terminals sit at **desks** (the words over a character are its state), and the saved role cards stay in the **lounge** (the roster: a role setting, not attendance; it shows at most 24 characters and links to the 「角色卡池」 page for the rest). Click a character for its **weapons** (the tools a launch offers, read from the same constants as the launch's argv), armor and skill cards. A station only says where the task is, never what an agent is doing. The **meeting room** (會議室) seats the newest running meeting or one waiting for you, with words over each character taken only from the meeting's record, and the **chairman's desk** (董事長桌) counts the meetings waiting for your approval, with 去核准; a staffing meeting (組隊會議) is seated there too, and the desk counts the staffing proposals waiting for you (組隊提案待你看, with 去看提案) | 辦公室 |
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | The board's 「輪到你」 and the flow page |
-| **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
+| **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A meeting is kept short: a speaker thinks at low effort and the CEO at medium, and it runs at most 15 minutes by default, the last three kept for the CEO. A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
+| **Staffing meeting** | A **staffing meeting** (組隊會議, `#/staffing`): for one task card the positions say who and which skills it needs, each once and alone, then the CEO card writes a staffing proposal (the four places, the staff to bring to a meeting, new cards to make, the skills of each card and the skills missing). You change it as a draft, then adopt it with 照草稿採用, one button per step in a fixed order (啟用, 建新卡, 插技能, 帶到隊伍, 帶去開會, 記下). VBear makes no card, inserts no skill and saves no team by itself | 請 CEO 組隊 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 Role cards come in three moves: **collect** (take cards from the card pool, or the starter deck of three), **equip** (put skill cards into a card) and **play** (put the card on a task card's team place, then set out). The permission intents on a card are a team-work marker: they do not mean VBear has limited the program's real abilities. The only limits are the ones on the launch pass.
@@ -238,6 +239,13 @@ opposes and has a high risk with no source, 「查無出處，需人工複核」
 reported, 「本次確認：只有 StructuredOutput、沒有 MCP」, the cost Claude Code reported and the time it took. The CEO's decision,
 the rules that sent it to you and the 董事長桌, where you approve or veto, follow further down.
 
+<img src="docs/images/staffing-adopt.png" alt="The adoption list of a staffing record: six steps in their order, step 1 done, step 2 waiting for you with a button that opens the card wizard, the later steps waiting for it, and the buttons to record adopt or dismiss" width="760">
+
+「照草稿採用」 under the draft of a **staffing meeting** 「組隊會議」 (demo data): six steps in a fixed order, each a button
+you press. The art director's card, disabled at the meeting, has been switched on, so step 1 reads 已完成; step 2 opens
+the card wizard filled from the CEO's new legal card, and every later step waits for it (先做完第 2 步). 記下：採用 is
+offered once the first four are done; 記下：不採用 always is.
+
 ## What you can do with it
 
 **See what an agent may do before it starts.**
@@ -283,6 +291,15 @@ only 開始開會 starts it. Each position answers once without seeing the other
 decides whether that goes to you, and you approve or veto at the 董事長桌. VBear never carries out a decision: 寫進任務卡
 only fills in the task card's editor for you to save.
 
+**Let the CEO staff a task card, and adopt it step by step.**
+On a task card, 請 CEO 組隊 opens a staffing meeting (組隊會議). VBear ticks the speakers from a fixed table with the
+reason for each, a preview shows every text and what it may cost, then each position speaks once and the CEO card
+writes a staffing proposal: who goes in the four places, which staff to bring to a meeting, new cards to make and the
+skills for each card. You change it as a draft kept in this browser. 照草稿採用 then lists the steps in their order
+(啟用 → 建新卡 → 插技能 → 帶到隊伍, then 帶去開會 and 記下), each a button you press: the card wizard opens filled from
+the proposal and saves only on 建立, inserting a skill shows the card's list before and after and only records it, and
+the team waits on the task card's board until you press 建立隊伍 or 儲存隊伍.
+
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
 `127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear;
@@ -299,7 +316,8 @@ a meeting or a skill translation is sent the same way, through your own Claude C
 - **Merging, pushing and publishing are always yours.** VBear never runs `git` for you.
 - **Automatic mode uses your accounts' usage.** The limits you set are a stop-loss, not a guarantee of the bill.
 - **A meeting sends its texts to Anthropic through your Claude Code and spends your usage.** Its decision is only a
-  record, and what is major waits for you.
+  record, and what is major waits for you. A staffing meeting is sent and paid for the same way; its proposal is
+  advice, and VBear makes no card, inserts no skill and saves no team for you.
 - **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
 - **Deleting a flow cannot be undone.**
 - **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →

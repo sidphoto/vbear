@@ -955,6 +955,13 @@ the preview id, and nothing in it is carried out by VBear.
   each place (one of the four, or a staff position) with the id of the card put there, the CEO's new card it was made
   from and the skills adopted for it, at most ten rows of 40 skills. VBear checks its shape and that a new card is one of
   the proposal's; it does not check that the card exists or that any step was done.
+- **Adopting.** The page's adoption list (照草稿採用) sends nothing an endpoint VBear already had does not take: switching
+  a card on (`POST /api/agent-profiles/<id>` with `enabled`), the card wizard's own save, a card's skills
+  (`equipped_skill_ids`, after a dialog that shows the list before and after), a task card's team and the chairman's
+  record. Each is a button the person presses, in a fixed order the page keeps (the server does not know the order). The
+  team is put on the task card's board in this page's memory only: nothing reaches flows.json until the person presses
+  建立隊伍 or 儲存隊伍 there. The draft and the cards made in the wizard are kept in this browser
+  (`staffing.edit.<id>`, `staffing.made.<id>`) and sent nowhere.
 - **Where it is kept.** One file per staffing meeting, `<state>/staffing/s-<12 hex>.json` (0600, folder 0700, 256 KiB, at
   most 200), through the guarded store as a meeting is: a damaged file blocks that record and no other. Not in
   `meetings/`, which v0.9.0 would quarantine. It stores the task card's id, your note, the participants, who VBear
