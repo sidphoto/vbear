@@ -19,25 +19,46 @@ What this module holds:
     what is not the schema voids the whole answer (mt.OutputError, the turn fails and may be retried); what points at
     nothing on the list or cannot fit is taken out and said (a note); what is allowed but needs the person's eye is
     kept and flagged, and a flagged item is not ticked in advance. A legal manager's risk without a source is kept with
-    the sentence that says so; it is shown, and no rule of the meetings (R1-R8) is run on any of it.
+    the sentence that says so; it is shown, and no rule of the meetings (R1-R8) is run on any of it;
+  * the record: one file per staffing meeting in <state>/staffing/ (not meetings/: v0.9.0 would quarantine it there),
+    its own shape with the meetings' turn and evidence keys, so that the day's money adds both up (per_call_of: a
+    speaker's turn costs at most meeting_limits.per_call_usd, the CEO's at most staffing_limits.proposal_call_usd); and
+    what is derived from it on every read (view): the status, the money, a high risk to remind the chairman of, and the
+    cards changed since the list was made. A damaged file blocks that record and no other.
 
 Disabled cards are on the list, marked: a disabled card cannot speak, but the CEO may propose it, and enabling it is
-one more step of the person's.
+one more step of the person's. The chairman's answer is a record of the console (not of a verified person) and does
+nothing by itself.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
+import os
 import re
+import secrets
 import unicodedata
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
-from . import agent_profiles as ap, categories as cats, meeting_rules as rules, meetings as mt, model_options, position_guide
-from . import skill_fit
+from . import agent_profiles as ap, categories as cats, config as cfg, meeting_rules as rules, meetings as mt, model_options
+from . import position_guide, skill_fit, strictjson
+from .jsonstore import GuardedJsonStore, StoreError
 from .board_engine import SPEAKER_POSITIONS, opinions_for_chair
 from .runtime import agent_sessions, cli_versions
 
+DIR = "staffing"
+MAX_RECORDS = 200
+MAX_FILE = 256 * 1024
+STAFFING_ID_RE = re.compile(r"^s-[0-9a-f]{12}\Z")
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
+NOTE_MAX, WHY_MAX = 500, 200
+CHAIRMAN_STATES = ("pending", "adopted", "dismissed")
+# What a record may cost (USD): a speaker's call as a meeting's (meeting_limits.per_call_usd), the CEO's call and the
+# whole record their own (the top-level staffing_limits of config.json, read by the runner); the day is the meetings'.
+DEFAULT_LIMITS = {"per_call_usd": mt.DEFAULT_LIMITS["per_call_usd"], "proposal_call_usd": Decimal("0.50"), "total_usd": Decimal("2.00")}
 MAX_CARDS, MAX_SKILLS, MAX_SPEAKER_SKILLS = 40, 120, 40
 LIST_MAX = 40 * 1024  # the CEO's list of cards and skills, as JSON
 SPEAKER_PROMPT_MAX, CHAIR_PROMPT_MAX = 24 * 1024, 64 * 1024
@@ -50,6 +71,9 @@ TASK_TEXT_FIELDS = ("title", "goal", "scope", "deliverables")
 
 ERRORS = {
     "bad_request": "組隊要求不符格式",
+    "not_found": "找不到這份組隊紀錄",
+    "storage": "組隊紀錄無法安全讀寫，請人工檢查狀態目錄",
+    "too_many": f"組隊紀錄已有 {MAX_RECORDS} 份，請先刪除不需要的",
     "too_large": "送出的內容超過大小限制，請縮短任務卡、補充說明或角色卡的指示",
 }
 
@@ -836,3 +860,286 @@ def build_prompt(kind: str, *, instructions: str | None, position: str | None, t
     if cards < 0:
         raise StaffingError("bad_request", ERRORS["too_large"])
     return text(cards, 0)
+
+
+# ---- the record ----------------------------------------------------------------------------------------------------
+
+_RECORD_KEYS = {"id", "kind", "task_id", "note", "created_at", "participants", "suggested", "sent", "limits", "turns", "chairman"}
+_LIMIT_KEYS = set(DEFAULT_LIMITS)
+CARD_ALIAS_RE = re.compile(r"^C[1-9][0-9]?\Z")
+SKILL_ALIAS_RE = re.compile(r"^S[1-9][0-9]{0,2}\Z")
+
+
+def _id_text(value, limit: int = 256) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= limit
+
+
+def _count(value) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _sent_problem(sent) -> str | None:
+    if not isinstance(sent, dict) or set(sent) != {"cards", "skills", "omitted", "inputs_sha256"}:
+        return "清單欄位不符"
+    cards, skills = sent["cards"], sent["skills"]
+    if not isinstance(cards, list) or len(cards) > MAX_CARDS or not isinstance(skills, list) or len(skills) > MAX_SKILLS:
+        return "清單數量不符"
+    for i, c in enumerate(cards):
+        if (not isinstance(c, dict) or set(c) != {"alias", "profile_id", "revision", "enabled"} or c["alias"] != f"C{i + 1}"
+                or not _id_text(c["profile_id"], ap.MAX_PROFILE_ID_LEN) or not isinstance(c["revision"], str)
+                or not mt.HEX64_RE.match(c["revision"]) or type(c["enabled"]) is not bool):
+            return "清單的角色卡不符"
+    for i, x in enumerate(skills):
+        if not isinstance(x, dict) or set(x) != {"alias", "skill_id"} or x["alias"] != f"S{i + 1}" or not _id_text(x["skill_id"]):
+            return "清單的技能不符"
+    omitted = sent["omitted"]
+    if not isinstance(omitted, dict) or set(omitted) != {"cards", "skills"} or not all(_count(v) for v in omitted.values()):
+        return "清單的省略數不符"
+    if not isinstance(sent["inputs_sha256"], str) or not mt.HEX64_RE.match(sent["inputs_sha256"]):
+        return "清單雜湊不符"
+    return None
+
+
+def _output_problem(output) -> str | None:
+    if output is None:
+        return None
+    if not isinstance(output, dict) or set(output) != {"kept", "notes"} or not isinstance(output["kept"], dict):
+        return "發言內容不符"
+    notes = output["notes"]
+    if not isinstance(notes, list) or any(not isinstance(n, dict) or set(n) != {"code", "text"} or n["code"] not in NOTES
+                                          or not isinstance(n["text"], str) or len(n["text"]) > 300 for n in notes):
+        return "註記不符"
+    return None
+
+
+def record_problem(rec) -> str | None:
+    """None, or why this is not a staffing record this module could have written."""
+    if not isinstance(rec, dict) or set(rec) != _RECORD_KEYS:
+        return "欄位不符"
+    if rec["kind"] != "staffing":
+        return "種類不符"
+    if not isinstance(rec["id"], str) or not STAFFING_ID_RE.match(rec["id"]):
+        return "id 不符"
+    if not isinstance(rec["task_id"], str) or not TASK_ID_RE.match(rec["task_id"]):
+        return "task_id 不符"
+    if not isinstance(rec["note"], str) or len(rec["note"]) > NOTE_MAX:
+        return "補充說明不符"
+    if not mt._epoch(rec["created_at"]):
+        return "時間不符"
+    people = rec["participants"]
+    if not isinstance(people, list) or not 2 <= len(people) <= mt.MAX_SPEAKERS + 1:
+        return "參與者不符"
+    ids = set()
+    for p in people:
+        if not isinstance(p, dict) or set(p) != mt._PARTICIPANT_KEYS or type(p["proxy"]) is not bool:
+            return "參與者欄位不符"
+        if not all(isinstance(p[k], str) for k in ("profile_id", "name", "position", "tool", "model_used", "revision")):
+            return "參與者文字不符"
+        if not mt.HEX64_RE.match(p["revision"]) or len(p["name"]) > 200 or len(p["model_used"]) > 200:
+            return "參與者內容不符"
+        ids.add(p["profile_id"])
+    suggested = rec["suggested"]
+    if not isinstance(suggested, list) or len(suggested) > len(SUGGEST_SPEAKERS) or any(
+            not isinstance(x, dict) or set(x) != {"profile_id", "why"} or not _id_text(x["profile_id"], ap.MAX_PROFILE_ID_LEN)
+            or not isinstance(x["why"], str) or len(x["why"]) > WHY_MAX for x in suggested):
+        return "建議人選不符"
+    if (problem := _sent_problem(rec["sent"])) is not None:
+        return problem
+    limits = rec["limits"]
+    if not isinstance(limits, dict) or set(limits) != _LIMIT_KEYS or any(mt.money(v) is None for v in limits.values()):
+        return "上限不符"
+    turns = rec["turns"]
+    if not isinstance(turns, list) or len(turns) != len(people):
+        return "發言不符"
+    for i, t in enumerate(turns):
+        if not isinstance(t, dict) or set(t) != mt._TURN_KEYS or type(t["seq"]) is not int or t["seq"] != i + 1:
+            return "發言欄位不符"
+        if t["profile_id"] not in ids or t["kind"] not in ("opinion", "proposal") or t["state"] not in mt.TURN_STATES:
+            return "發言內容不符"
+        if type(t["attempts"]) is not int or not 0 <= t["attempts"] <= mt.MAX_ATTEMPTS:
+            return "次數不符"
+        for key in ("started_at", "ended_at"):
+            if t[key] is not None and not mt._epoch(t[key]):
+                return "發言時間不符"
+        if t["prompt_sha256"] is not None and not (isinstance(t["prompt_sha256"], str) and mt.HEX64_RE.match(t["prompt_sha256"])):
+            return "prompt 雜湊不符"
+        if t["evidence"] is not None and (problem := mt._evidence_problem(t["evidence"])):
+            return problem
+        if (problem := _output_problem(t["output"])) is not None:
+            return problem
+        if t["error_code"] is not None and (not isinstance(t["error_code"], str) or len(t["error_code"]) > 64):
+            return "錯誤碼不符"
+    if turns[-1]["kind"] != "proposal" or any(t["kind"] != "opinion" for t in turns[:-1]):
+        return "發言順序不符"
+    chair = rec["chairman"]
+    if (not isinstance(chair, dict) or set(chair) != {"state", "at", "note", "adopted"} or chair["state"] not in CHAIRMAN_STATES
+            or (chair["at"] is not None and not mt._epoch(chair["at"])) or not isinstance(chair["note"], str)
+            or len(chair["note"]) > NOTE_MAX or chair["adopted"] is not None):
+        return "董事長欄位不符"
+    return None
+
+
+def new_id() -> str:
+    return "s-" + secrets.token_hex(6)
+
+
+def new_record(staffing_id: str, *, task_id: str, note: str, chair: dict, speakers: list[dict], suggested: list[dict], sent: dict,
+               limits: dict[str, Decimal], now: float) -> dict:
+    """A staffing meeting that has just been confirmed: every speaker's turn queued, the CEO's proposal last, the chairman
+    pending. ``chair`` and ``speakers`` are participants (as a meeting's); ``suggested`` is who VBear ticked and why,
+    whatever the person then chose; ``sent`` is sent_of(the list)."""
+    def turn(seq, person, kind):
+        return {"seq": seq, "profile_id": person["profile_id"], "kind": kind, "state": "queued", "attempts": 0,
+                "started_at": None, "ended_at": None, "prompt_sha256": None, "evidence": None, "output": None, "error_code": None}
+    return {"id": staffing_id, "kind": "staffing", "task_id": task_id, "note": note, "created_at": now,
+            "participants": [dict(p) for p in speakers] + [dict(chair)],
+            "suggested": [{"profile_id": x["profile_id"], "why": x["why"]} for x in suggested],
+            "sent": copy.deepcopy(sent), "limits": {k: mt.fmt(limits[k]) for k in DEFAULT_LIMITS},
+            "turns": [turn(i + 1, p, "opinion") for i, p in enumerate(speakers)] + [turn(len(speakers) + 1, chair, "proposal")],
+            "chairman": {"state": "pending", "at": None, "note": "", "adopted": None}}
+
+
+class StaffingStore(GuardedJsonStore):
+    """One staffing meeting, one file (0600) in a 0700 folder of its own; ``load`` checks the record as a whole and a
+    damaged one is quarantined behind a marker that blocks it alone (as meetings.MeetingStore does)."""
+
+    def __init__(self, staffing_id: str):
+        if not isinstance(staffing_id, str) or not STAFFING_ID_RE.match(staffing_id):
+            raise StaffingError("bad_request", "組隊紀錄識別碼不符")
+        self.staffing_id = staffing_id
+        super().__init__(f"{DIR}/{staffing_id}.json", "組隊紀錄", lambda key, value: None)
+
+    def locked(self, timeout: float = 10.0):
+        self._make_folder()
+        return super().locked(timeout)
+
+    def _make_folder(self):
+        cfg.ensure_state_dir()
+        os.makedirs(self.path().parent, mode=cfg.STATE_DIR_MODE, exist_ok=True)
+        os.chmod(self.path().parent, cfg.STATE_DIR_MODE)
+
+    def _read_raw(self):
+        try:
+            fd, st = strictjson.open_owned(self.path(), max_bytes=MAX_FILE)
+        except strictjson.ReadRefused as exc:
+            if exc.missing:
+                return None
+            raise OSError("組隊紀錄拒絕讀取") from exc
+        try:
+            if st.st_nlink != 1:
+                raise OSError("組隊紀錄有多個連結")
+            return strictjson.read_fd(fd, MAX_FILE).decode("utf-8")
+        except strictjson.ReadRefused as exc:
+            raise OSError("組隊紀錄超過大小限制") from exc
+        finally:
+            os.close(fd)
+
+    def load(self):
+        data = super().load()
+        if data:
+            problem = record_problem(data)
+            if problem is None and data["id"] != self.staffing_id:
+                problem = "id 與檔名不一致"
+            if problem is not None:
+                where = self._quarantine(ValueError(problem))
+                raise StoreError(f"組隊紀錄結構不符（{problem}），已隔離至 {where}，請人工復原後刪除 {self.marker_path()} 以恢復讀寫")
+        return data
+
+    def save(self, data):
+        problem = record_problem(data)
+        if problem is not None:
+            raise StoreError(f"拒絕寫入不符結構的組隊紀錄（{problem}）")
+        if len(json.dumps(data, ensure_ascii=False, indent=2).encode()) > MAX_FILE:
+            raise StoreError("組隊紀錄超過 256 KiB，拒絕寫入")
+        self._make_folder()
+        cfg.write_private(self.path(), json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def folder() -> Path:
+    return cfg.state_dir() / DIR
+
+
+def record_ids() -> list[str]:
+    """The ids of the records in the folder: a record file, or the marker a damaged one left (so that it stays listed,
+    blocked). A name that is not a record's is ignored."""
+    try:
+        names = os.listdir(folder())
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise StaffingError("storage") from exc
+    found = {n.split(".", 1)[0] for n in names if n.endswith((".json", ".json.corrupted"))}
+    return sorted(i for i in found if STAFFING_ID_RE.match(i))
+
+
+def load(staffing_id: str) -> dict:
+    try:
+        data = StaffingStore(staffing_id).load()
+    except StoreError as exc:
+        raise StaffingError("storage", str(exc)) from None
+    if not data:
+        raise StaffingError("not_found")
+    return data
+
+
+def delete(staffing_id: str) -> None:
+    store = StaffingStore(staffing_id)
+    if store.marker_path().exists():
+        raise StaffingError("storage", f"這份組隊紀錄先前偵測到損毀，需人工復原後才能操作。詳見 {store.marker_path()}")
+    try:
+        with store.locked():
+            if not store.path().exists():
+                raise StaffingError("not_found")
+            store.path().unlink()
+    except StoreError as exc:
+        raise StaffingError("storage", str(exc)) from None
+
+
+# ---- money, status, the view ---------------------------------------------------------------------------------------
+
+def per_call_of(rec: dict, turn: dict) -> Decimal:
+    """The most one call of this turn may cost: a speaker's per-call limit, or the CEO's proposal limit. Given to the
+    meetings' spent() and daily_spent(), which hand each turn's to turn_cost()."""
+    key = "proposal_call_usd" if turn.get("kind") == "proposal" else "per_call_usd"
+    return mt.money(rec["limits"][key]) or Decimal(0)
+
+
+def spent(rec: dict) -> Decimal:
+    return mt.spent(rec, per_call_of)
+
+
+def status_of(rec: dict) -> str:
+    turns, chair = rec["turns"], rec["chairman"]["state"]
+    if any(t["state"] in ("queued", "running") for t in turns):
+        return "running"
+    if chair in ("adopted", "dismissed"):
+        return chair
+    return "ready" if turns[-1]["state"] == "done" else "incomplete"
+
+
+def _high_risk(rec: dict) -> bool:
+    for turn in rec["turns"]:
+        kept = (turn.get("output") or {}).get("kept") if turn["kind"] == "opinion" and turn["state"] == "done" else None
+        risks = kept.get("risks") if isinstance(kept, dict) else None
+        if isinstance(risks, list) and any(isinstance(r, dict) and r.get("level") == "高" for r in risks):
+            return True
+    return False
+
+
+def view(rec: dict, profile=None) -> dict:
+    """A staffing record as the pages and the API show it: the record plus what is derived from it now. ``profile`` reads
+    a card by id as it is today; without it whether a card changed is not known (None), which is not "none changed"."""
+    chair = dict(rec["chairman"])
+    chair["label"] = mt.CHAIRMAN_NOTE
+    out = {k: copy.deepcopy(v) for k, v in rec.items() if k != "chairman"}
+    changed = None
+    if profile is not None:
+        changed = []
+        for card in rec["sent"]["cards"]:
+            now = profile(card["profile_id"])
+            if now is None or ap.profile_digest(now) != card["revision"]:
+                changed.append(card["alias"])
+    out.update({"status": status_of(rec), "chairman": chair, "spent_usd": mt.fmt(spent(rec)),
+                "retryable": [t["seq"] for t in rec["turns"] if t["state"] in mt.RETRYABLE_STATES],
+                "high_risk": _high_risk(rec), "changed_cards": changed})
+    return out

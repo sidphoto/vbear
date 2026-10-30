@@ -1,11 +1,20 @@
 """Staffing meetings, the pure part (P35-1): what the speakers and the CEO are given, who VBear suggests, what a model may
 write, the prompts, the record and what is read from it. No CLI runs here."""
+import copy
 import inspect
 import json
+import os
 import random
+import stat
+import tempfile
+import time
 import unittest
+from decimal import Decimal
+from pathlib import Path
+from unittest import mock
 
-from vbear import categories, meeting_rules as rules, meetings as mt, position_guide, staffing as st
+from vbear import board_engine as be, categories, meeting_rules as rules, meetings as mt, position_guide, staffing as st
+from vbear.jsonstore import StoreError
 
 SHA = "b" * 64
 
@@ -711,3 +720,306 @@ class OpinionsForChairTests(unittest.TestCase):
         self.assertIs(mr.STATE_LABELS, be.STATE_LABELS)
         self.assertIn("opinions_for_chair(", inspect.getsource(mr._opinions_for_chair))
         self.assertIn("opinions_for_chair(", inspect.getsource(st.chair_opinions))
+
+
+def person(pid, position, tool="claude"):
+    return {"profile_id": pid, "name": pid.upper(), "position": position, "tool": tool, "model_used": "sonnet", "revision": SHA,
+            "proxy": tool != "claude"}
+
+
+def staffing_record(sid="s-0123456789ab", **kw):
+    inputs = st.build_inputs(task(), team(), library())
+    args = dict(task_id="t-1", note="", chair=person("ceo", "planner"), speakers=[person("eng", "executor"), person("law", "legal")],
+                suggested=[{"profile_id": "eng", "why": "任務分類有「網站與前端」"}], sent=st.sent_of(inputs),
+                limits=st.DEFAULT_LIMITS, now=time.time())
+    args.update(kw)
+    return st.new_record(sid, **args)
+
+
+def evidence(cost="0.01", source="cli"):
+    return {"cli_version": "2.1.296", "model_reported": "claude-sonnet-5-5", "tools_reported": ["StructuredOutput"],
+            "mcp_servers_reported": [], "exit_code": 0, "duration_ms": 12, "cost_usd": cost, "cost_source": source}
+
+
+def done(rec, seq, kept=None, cost="0.01", when=None):
+    when = when or time.time()
+    rec["turns"][seq - 1].update(state="done", attempts=1, started_at=when, ended_at=when, prompt_sha256=SHA,
+                                 output={"kept": kept or {"summary": "好"}, "notes": []}, evidence=evidence(cost))
+    return rec
+
+
+class Isolated(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="vbear-staffing-test-")
+        self.addCleanup(self.tmp.cleanup)
+        home = Path(self.tmp.name) / "home"
+        home.mkdir()
+        patch = mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def save(self, rec):
+        store = st.StaffingStore(rec["id"])
+        with store.locked():
+            store.save(rec)
+        return rec
+
+
+class RecordTests(unittest.TestCase):
+    def test_a_new_record_queues_every_speaker_then_the_ceo_and_waits_for_the_chairman(self):
+        rec = staffing_record()
+        self.assertIsNone(st.record_problem(rec))
+        self.assertEqual(rec["kind"], "staffing")
+        self.assertEqual([(t["kind"], t["profile_id"], t["state"]) for t in rec["turns"]],
+                         [("opinion", "eng", "queued"), ("opinion", "law", "queued"), ("proposal", "ceo", "queued")])
+        self.assertEqual(set(rec["turns"][0]), mt._TURN_KEYS)
+        self.assertEqual(rec["limits"], {"per_call_usd": "0.2", "proposal_call_usd": "0.5", "total_usd": "2"})
+        self.assertEqual(rec["chairman"], {"state": "pending", "at": None, "note": "", "adopted": None})
+        self.assertEqual(rec["participants"][-1]["profile_id"], "ceo")
+        self.assertEqual(set(rec["sent"]), {"cards", "skills", "omitted", "inputs_sha256"})
+
+    def test_only_a_record_this_module_could_have_written_is_one(self):
+        good = staffing_record()
+
+        def broken(change):
+            rec = copy.deepcopy(good)
+            change(rec)
+            return rec
+        bads = [
+            [], {**good, "extra": 1}, {k: v for k, v in good.items() if k != "suggested"},
+            broken(lambda r: r.update(kind="meeting")), broken(lambda r: r.update(id="m-0123456789ab")),
+            broken(lambda r: r.update(task_id="")), broken(lambda r: r.update(task_id="bad id/..")),
+            broken(lambda r: r.update(note="x" * 501)), broken(lambda r: r.update(created_at=-1)),
+            broken(lambda r: r.update(participants=r["participants"][-1:])),
+            broken(lambda r: r["participants"][0].update(proxy="no")), broken(lambda r: r["participants"][0].update(revision="x")),
+            broken(lambda r: r.update(suggested=[{"profile_id": "eng"}])), broken(lambda r: r.update(suggested=[{"profile_id": "eng", "why": 1}])),
+            broken(lambda r: r.update(suggested=[{"profile_id": "eng", "why": "x"}] * 7)),
+            broken(lambda r: r["sent"].update(cards=[{"alias": "X1", "profile_id": "eng", "revision": SHA, "enabled": True}])),
+            broken(lambda r: r["sent"].update(cards=[{"alias": "C1", "profile_id": "eng", "revision": SHA, "enabled": "yes"}])),
+            broken(lambda r: r["sent"].update(cards=[{"alias": "C2", "profile_id": "eng", "revision": SHA, "enabled": True}])),
+            broken(lambda r: r["sent"].update(skills=[{"alias": "S1", "skill_id": 5}])),
+            broken(lambda r: r["sent"].update(omitted={"cards": -1, "skills": 0})), broken(lambda r: r["sent"].update(inputs_sha256="x")),
+            broken(lambda r: r["limits"].pop("total_usd")), broken(lambda r: r["limits"].update(total_usd="NaN")),
+            broken(lambda r: r["turns"][0].update(kind="decision")), broken(lambda r: r["turns"].reverse()),
+            broken(lambda r: r["turns"][0].update(profile_id="nobody")), broken(lambda r: r["turns"][0].update(attempts=4)),
+            broken(lambda r: r["turns"][0].update(output={"kept": {}})), broken(lambda r: r["turns"][0].update(output={"kept": [], "notes": []})),
+            broken(lambda r: r["turns"][0].update(output={"kept": {}, "notes": [{"code": "made_up", "text": "x"}]})),
+            broken(lambda r: r["turns"][0].update(evidence={"cost_usd": "1"})),
+            broken(lambda r: r["chairman"].update(state="approved")), broken(lambda r: r["chairman"].update(adopted={"team": {}})),
+            broken(lambda r: r["chairman"].pop("adopted")), broken(lambda r: r["chairman"].update(note="x" * 501)),
+        ]
+        for bad in bads:
+            with self.subTest(bad=str(bad)[:120]):
+                self.assertIsNotNone(st.record_problem(bad))
+        ok = done(copy.deepcopy(good), 1, cost="0.02")
+        ok["turns"][0]["output"]["notes"] = [{"code": "unknown_card", "text": "提到清單上沒有的角色卡「C99」，已拿掉"}]
+        self.assertIsNone(st.record_problem(ok))
+
+
+class StatusTests(unittest.TestCase):
+    def test_the_status_is_derived_from_the_turns_and_the_chairman(self):
+        rec = staffing_record()
+        self.assertEqual(st.view(rec)["status"], "running")
+        done(rec, 1)
+        done(rec, 2)
+        rec["turns"][2].update(state="skipped", error_code="no_opinions")
+        self.assertEqual(st.view(rec)["status"], "incomplete")
+        done(rec, 3)
+        self.assertEqual(st.view(rec)["status"], "ready")
+        rec["chairman"].update(state="adopted", at=time.time())
+        self.assertEqual(st.view(rec)["status"], "adopted")
+        rec["chairman"]["state"] = "dismissed"
+        self.assertEqual(st.view(rec)["status"], "dismissed")
+        failed = staffing_record()
+        failed["turns"][0].update(state="failed", attempts=1, error_code="cli_error")
+        failed["turns"][1].update(state="cancelled")
+        failed["turns"][2].update(state="cancelled")
+        self.assertEqual(st.view(failed)["status"], "incomplete")
+        self.assertEqual(st.view(failed)["retryable"], [1])
+
+    def test_the_view_counts_each_turn_at_its_own_limit_and_names_the_chairman_as_unverified(self):
+        rec = done(staffing_record(), 1, cost="0.05")
+        rec["turns"][1].update(state="running", attempts=1, started_at=time.time())
+        rec["turns"][2].update(state="running", attempts=1, started_at=time.time())
+        v = st.view(rec)
+        self.assertEqual(v["spent_usd"], "0.75")  # 0.05 reported, a running speaker 0.2, a running CEO 0.5
+        self.assertEqual(v["chairman"]["label"], mt.CHAIRMAN_NOTE)
+        self.assertNotIn("major", v)
+        self.assertNotIn("rules", v)
+
+    def test_a_high_risk_reminds_the_chairman_and_holds_nothing(self):
+        rec = done(staffing_record(), 1, kept={"summary": "x", "risks": [{"level": "高", "text": "授權", "source": "x"}]})
+        self.assertTrue(st.view(rec)["high_risk"])
+        self.assertFalse(st.view(done(staffing_record(), 1))["high_risk"])
+
+    def test_the_cards_changed_since_the_list_was_made_are_named(self):
+        inputs = st.build_inputs(task(), team(), library())
+        rec = staffing_record(sent=st.sent_of(inputs))
+        cards = {p["id"]: p for p in team()}
+        self.assertIsNone(st.view(rec)["changed_cards"])  # not asked: unknown, not "none"
+        self.assertEqual(st.view(rec, cards.get)["changed_cards"], [])
+        cards["eng"] = {**cards["eng"], "name": "改了"}
+        del cards["law"]
+        a = aliases(inputs)
+        self.assertEqual(st.view(rec, cards.get)["changed_cards"], sorted([a["eng"], a["law"]], key=lambda x: int(x[1:])))
+
+    def test_per_call_of_is_the_turns_own_limit_for_the_meetings_money_functions(self):
+        rec = staffing_record(limits={"per_call_usd": Decimal("0.2"), "proposal_call_usd": Decimal("0.7"), "total_usd": Decimal("2")})
+        self.assertEqual([st.per_call_of(rec, t) for t in rec["turns"]], [Decimal("0.2"), Decimal("0.2"), Decimal("0.7")])
+        now = time.time()
+        rec["turns"][2].update(state="running", attempts=1, started_at=now)
+        # turn_cost keeps its (turn, per_call) form: spent and daily_spent ask per_call_of for each turn and hand it over
+        self.assertEqual(mt.turn_cost(rec["turns"][2], st.per_call_of(rec, rec["turns"][2])), Decimal("0.7"))
+        self.assertEqual(st.spent(rec), Decimal("0.7"))
+        self.assertEqual(mt.daily_spent([rec], now, st.per_call_of), Decimal("0.7"))
+        self.assertEqual(mt.spent(rec), Decimal("0.2"))  # the meeting's own rule would count the CEO's turn at 0.2: wrong here
+
+
+class StoreTests(Isolated):
+    def test_one_record_one_private_file_in_its_own_folder(self):
+        rec = self.save(staffing_record())
+        path = st.StaffingStore(rec["id"]).path()
+        self.assertEqual(path.parent.name, "staffing")
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+        self.assertEqual(st.load(rec["id"]), rec)
+        self.assertEqual(st.record_ids(), [rec["id"]])
+        self.assertFalse((Path(os.environ["VBEAR_HOME"]) / "meetings").exists())
+        st.delete(rec["id"])
+        self.assertEqual(st.record_ids(), [])
+        with self.assertRaises(st.StaffingError) as caught:
+            st.load(rec["id"])
+        self.assertEqual(caught.exception.code, "not_found")
+        self.assertIsInstance(caught.exception, mt.MeetingError)
+
+    def test_what_is_not_a_record_is_refused_on_the_way_in(self):
+        rec = staffing_record()
+        rec["kind"] = "meeting"
+        with self.assertRaises(StoreError):
+            self.save(rec)
+        huge = staffing_record()
+        done(huge, 1, kept={"summary": "x" * 300_000})
+        with self.assertRaises(StoreError):
+            self.save(huge)
+        for bad in ("m-0123456789ab", "s-XYZ", "../s-0123456789ab", None):
+            with self.subTest(bad=bad), self.assertRaises(st.StaffingError):
+                st.StaffingStore(bad)
+
+    def test_a_damaged_record_blocks_only_itself(self):
+        good = self.save(staffing_record("s-aaaaaaaaaaaa"))
+        bad = self.save(staffing_record("s-bbbbbbbbbbbb"))
+        st.StaffingStore(bad["id"]).path().write_text("{broken")
+        with self.assertRaises(st.StaffingError) as caught:
+            st.load(bad["id"])
+        self.assertEqual(caught.exception.code, "storage")
+        self.assertTrue(st.StaffingStore(bad["id"]).marker_path().exists())
+        self.assertEqual(st.load(good["id"]), good)
+        self.assertEqual(st.record_ids(), [good["id"], bad["id"]])  # still listed, blocked
+        with self.assertRaises(st.StaffingError):
+            st.delete(bad["id"])
+        st.delete(good["id"])
+        # a meeting's record put in the staffing folder is not a staffing record
+        meeting = json.loads(json.dumps(staffing_record("s-cccccccccccc")))
+        meeting["kind"] = "meeting"
+        path = st.StaffingStore("s-cccccccccccc").path()
+        path.write_text(json.dumps(meeting))
+        path.chmod(0o600)
+        with self.assertRaises(st.StaffingError):
+            st.load("s-cccccccccccc")
+        self.assertTrue(st.StaffingStore("s-cccccccccccc").marker_path().exists())
+        # a file whose id is not its name is refused too
+        other = json.loads(json.dumps(staffing_record("s-dddddddddddd")))
+        path = st.StaffingStore("s-eeeeeeeeeeee").path()
+        path.write_text(json.dumps(other))
+        path.chmod(0o600)
+        with self.assertRaises(st.StaffingError):
+            st.load("s-eeeeeeeeeeee")
+
+    def test_names_that_are_not_records_are_ignored(self):
+        folder = st.folder()
+        folder.mkdir(parents=True)
+        for name in ("s-0123456789ab.json.lock", "notes.txt", "m-0123456789ab.json", "s-ABC.json"):
+            (folder / name).write_text("x")
+        self.assertEqual(st.record_ids(), [])
+
+
+class StaffingBoard(be.HeadlessBoard):
+    """The engine with a staffing record's hooks (the runner itself is the next batch): enough to see the engine plan a
+    retry from the CEO's turn and charge a turn a restart left at that turn's own limit."""
+    final_kind = "proposal"
+    store_cls = st.StaffingStore
+    room_name = "這份組隊提案"
+
+    def ids(self):
+        return st.record_ids()
+
+    def load(self, rid):
+        return st.load(rid)
+
+    def view(self, rec):
+        return st.view(rec)
+
+    def remove(self, rid):
+        st.delete(rid)
+
+    def per_call(self, rec, turn):
+        return st.per_call_of(rec, turn)
+
+    def total_limit(self, rec):
+        return mt.money(rec["limits"]["total_usd"])
+
+    def decided(self, rec):
+        return rec["chairman"]["state"] in ("adopted", "dismissed")
+
+
+class EngineTests(Isolated):
+    def board(self):
+        return StaffingBoard(provider=lambda e: ("x", "2.1.296"), call=lambda spec, cancel: None)
+
+    def test_a_restart_charges_each_running_turn_its_own_limit_and_resumes_nothing(self):
+        rec = staffing_record()
+        rec["turns"][0].update(state="running", attempts=1, started_at=time.time())
+        self.save(rec)
+        other = staffing_record("s-ffffffffffff")
+        done(other, 1)
+        done(other, 2)
+        other["turns"][2].update(state="running", attempts=1, started_at=time.time())
+        self.save(other)
+        board = self.board()
+        first, second = st.load(rec["id"]), st.load(other["id"])
+        self.assertEqual([(t["state"], (t["evidence"] or {}).get("cost_usd")) for t in first["turns"]],
+                         [("interrupted", "0.2"), ("interrupted", None), ("interrupted", None)])
+        self.assertEqual((second["turns"][2]["state"], second["turns"][2]["evidence"]["cost_usd"],
+                          second["turns"][2]["evidence"]["cost_source"]), ("interrupted", "0.5", "worst_case"))
+        self.assertEqual(board.room(second), Decimal("2") - Decimal("0.52"))
+
+    def test_a_retry_is_planned_from_the_ceos_turn(self):
+        rec = done(staffing_record(), 1)
+        done(rec, 2)
+        rec["turns"][2].update(state="failed", attempts=1, error_code="invalid_output", ended_at=time.time())
+        self.save(rec)
+        board = self.board()
+        _, turn, again = board._retry_plan(rec["id"], 3, None)
+        self.assertEqual((turn["kind"], again), ("proposal", False))
+        speaker = staffing_record("s-ffffffffffff")
+        speaker["turns"][0].update(state="failed", attempts=1, error_code="cli_error", ended_at=time.time())
+        done(speaker, 2)
+        done(speaker, 3)
+        self.save(speaker)
+        _, turn, again = board._retry_plan(speaker["id"], 1, None)
+        self.assertEqual((turn["kind"], again), ("opinion", True))  # the CEO is asked again after a speaker's retry
+
+        def adopt(r):
+            r["chairman"].update(state="adopted", at=time.time())
+        board._update(speaker["id"], adopt)
+        with self.assertRaises(mt.MeetingError) as caught:
+            board._retry_plan(speaker["id"], 1, None)
+        self.assertEqual(caught.exception.code, "already_decided")
+
+    def test_the_day_counts_staffing_turns_and_skips_a_damaged_record(self):
+        rec = self.save(done(staffing_record(), 1, cost="0.03"))
+        bad = self.save(staffing_record("s-ffffffffffff"))
+        st.StaffingStore(bad["id"]).path().write_text("{broken")
+        board = self.board()
+        self.assertEqual([r["id"] for r in board.spend_records()], [rec["id"]])
+        self.assertEqual(board._day(), Decimal("0.03"))
