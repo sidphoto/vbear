@@ -498,6 +498,20 @@ test("the task card entry opens the form with that card chosen", async () => {
   assert.strictEqual(q(main, "task").value, "task-1");
 });
 
+test("P35-4 a staffing proposal brings its staff: they are ticked in the form, the rest is the person's, nothing is sent", async () => {
+  setPage();
+  const main = await open("#/meetings?task=task-1&speakers=law,art,old,ceo,gone");
+  const ticked = qa(main, "speaker").filter((b) => b.checked).map((b) => b.getAttribute("data-profile"));
+  assert.deepStrictEqual(ticked, ["law", "art"]);
+  const note = q(main, "speakers-note");
+  assert(note && text(note).includes("組隊提案帶來的 5 位") && text(note).includes("3 位不在可以發言的清單裡"), text(note));
+  assert.strictEqual(q(main, "topic").value, "", "the topic is the person's to write");
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "POST").length, 0, "no preview is asked by itself");
+  const plain = await open("#/meetings?task=task-1");
+  assert.deepStrictEqual(qa(plain, "speaker").filter((b) => b.checked).length, 0);
+  assert.strictEqual(q(plain, "speakers-note"), null);
+});
+
 // ---- one meeting -------------------------------------------------------------------------------------------------
 
 function detail(m) { page.details[m.id] = m; return m; }

@@ -12593,6 +12593,14 @@ function meetingForm(env) {
       el("span", null, `${CARD_POSITION_LABEL[positionOf(p)]}：${p.name || p.id}`, tool && tool !== "claude" ? "（工具不是 Claude Code，由 Claude Code 代發言）" : ""));
     return { box, label, p };
   });
+  // P35-4: a staffing proposal brings its staff (speakers=id,id): the ones this form lists are ticked, the rest is said
+  const brought = typeof init.speakers === "string" ? [...new Set(init.speakers.split(",").filter(Boolean))].slice(0, 12) : [];
+  for (const s of speakerBoxes) if (brought.includes(s.p.id)) s.box.checked = true;
+  const tickedHere = speakerBoxes.filter((s) => s.box.checked).length;
+  const speakersNote = brought.length ? el("p", { class: "small muted", "data-mt": "speakers-note" },
+    `組隊提案帶來的 ${brought.length} 位：勾好了 ${tickedHere} 位`
+    + (brought.length - tickedHere ? `；${brought.length - tickedHere} 位不在可以發言的清單裡（停用、職位不能發言，或卡已不在），沒有勾` : "")
+    + "。要不要開會、找誰，由你決定；按「預覽」才會送出。") : null;
   const flagBoxes = MEETING_FLAGS.map(([id, text]) => {
     const box = el("input", { type: "checkbox", "data-mt": "flag", "data-flag": id });
     return { box, label: el("label", { class: "mt-check" }, box, el("span", null, text)) };
@@ -12643,7 +12651,7 @@ function meetingForm(env) {
     el("label", null, "補充說明", context),
     el("label", null, "綁在哪張任務卡（選填）", taskSel),
     el("label", null, "主席（CEO）", chairSel),
-    el("fieldset", { class: "mt-fieldset" }, el("legend", null, "誰來發言（每個職位一張卡）"),
+    el("fieldset", { class: "mt-fieldset" }, el("legend", null, "誰來發言（每個職位一張卡）"), speakersNote,
       speakerBoxes.length ? speakerBoxes.map((s) => s.label) : el("span", { class: "small muted" }, "沒有可選的卡")),
     el("fieldset", { class: "mt-fieldset" }, el("legend", null, "這件事涉及（勾了就一定交給你核准）"), flagBoxes.map((f) => f.label)),
     lampNote,
