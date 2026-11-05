@@ -602,6 +602,39 @@ class FailureTests(Base):
         runner.wait(10)
         self.assertEqual(st.view(st.load(m["id"]))["status"], "ready")
 
+    def new_card_tools(self):
+        """The tools the CEO's proposal schema lets a new card name, in the last proposal call that was made."""
+        spec = [x for x in self.specs if x.kind == "proposal"][-1]
+        return spec.schema["properties"]["new_cards"]["items"]["properties"]["tool"]["enum"]
+
+    def test_the_ceo_may_not_name_mcode_for_a_new_card_while_show_mcode_is_off(self):
+        for conf in ({}, {"show_mcode": False}, {"show_mcode": "yes"}):
+            with self.subTest(conf=conf):
+                runner = self.board()
+                self.run_board(runner, **conf)
+                tools = self.new_card_tools()
+                self.assertNotIn("mcode", tools)
+                self.assertEqual(tools, ["claude", "codex", "agy", "grok", "shared"])
+
+    def test_the_ceo_may_name_mcode_once_show_mcode_is_on(self):
+        runner = self.board()
+        self.run_board(runner, show_mcode=True)
+        self.assertEqual(self.new_card_tools(), ["claude", "codex", "agy", "grok", "mcode", "shared"])
+
+    def test_the_proposal_schema_takes_the_tools_it_is_given_and_the_shared_constant_is_the_default(self):
+        self.assertEqual(st.proposal_schema(("claude",))["properties"]["new_cards"]["items"]["properties"]["tool"]["enum"], ["claude"])
+        self.assertEqual(st.proposal_schema(), st.PROPOSAL_SCHEMA)
+        self.assertIn("mcode", st.PROPOSAL_SCHEMA["properties"]["new_cards"]["items"]["properties"]["tool"]["enum"])
+
+    def test_a_retry_uses_the_tools_of_the_switch_as_it_is_then(self):
+        runner = self.failing(kinds=("proposal",))
+        m = self.run_board(runner, show_mcode=True)
+        src = self.sources(show_mcode=False)
+        preview = runner.retry_preview(m["id"], {"seq": 3}, src)
+        runner.retry(preview["preview_id"], src, m["id"])
+        runner.wait(10)
+        self.assertNotIn("mcode", self.new_card_tools())
+
     def test_a_retry_is_refused_when_the_list_changed_since(self):
         runner = self.failing(kinds=("proposal",))
         m = self.run_board(runner)

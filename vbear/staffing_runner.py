@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Callable
 
-from . import agent_profiles as ap, meetings as mt, staffing as st, try_spend
+from . import agent_profiles as ap, ai_tools, meetings as mt, staffing as st, try_spend
 from .board_engine import CHAIR_POSITION, CHECK_ERRORS, HeadlessBoard, _select, _sha, participant
 from .jsonstore import StoreError
 from .runtime import chat_store
@@ -68,6 +68,7 @@ class Context:
     expected_sha: dict = field(default_factory=dict)
     speed: dict = field(default_factory=lambda: dict(mt.DEFAULT_SPEED))
     spoke: set = field(default_factory=set)  # the positions whose answer the CEO is given (set when the CEO's text is made)
+    tools: tuple = ap.TOOL_ORDER  # what a new card may name: a hidden tool (MCODE) is left out while its switch is off
 
     def people(self) -> list[dict]:
         return self.speakers + [self.chair]
@@ -107,8 +108,11 @@ class StaffingRunner(HeadlessBoard):
     def remove(self, sid: str) -> None:
         st.delete(sid)
 
-    def schema(self, kind: str) -> dict:
-        return st.PROPOSAL_SCHEMA if kind == "proposal" else st.STAFF_OPINION_SCHEMA
+    def schema(self, kind: str, ctx=None) -> dict:
+        if kind != "proposal":
+            return st.STAFF_OPINION_SCHEMA
+        tools = getattr(ctx, "tools", None)
+        return st.PROPOSAL_SCHEMA if tools is None or tuple(tools) == ap.TOOL_ORDER else st.proposal_schema(tools)
 
     def validate(self, kind: str, output, who: dict, ctx: Context) -> dict:
         if kind == "proposal":
@@ -193,7 +197,8 @@ class StaffingRunner(HeadlessBoard):
         ctx = Context(task_id=body["task_id"], task=task, note=note, inputs=inputs, list_max=list_max,
                       progress=mt.progress_summary(task, _flows(sources, body["task_id"])), chair=chair, speakers=speakers,
                       instructions=instructions, suggested=st.suggest_speakers(task, profiles), limits=limits,
-                      daily_usd=limits["daily_usd"], version=version or "", binary=binary or "", speed=speed)
+                      daily_usd=limits["daily_usd"], version=version or "", binary=binary or "", speed=speed,
+                      tools=ai_tools.visible_ids(sources.conf))
         reserve = _reserve(limits, len(speakers))
         more, today = self._blockers(reserve, limits["total_usd"], limits)
         blockers += more
@@ -289,7 +294,7 @@ class StaffingRunner(HeadlessBoard):
         return Context(task_id=rec["task_id"], task=task, note=rec["note"], inputs=inputs, list_max=list_max,
                        progress=mt.progress_summary(task, _flows(sources, rec["task_id"])), chair=chair, speakers=speakers,
                        instructions=instructions, suggested=rec["suggested"], limits=limits, daily_usd=daily,
-                       version=version, binary=binary)
+                       version=version, binary=binary, tools=ai_tools.visible_ids(sources.conf))
 
     def _retry_reserve(self, rec: dict, turn: dict, again: bool) -> Decimal:
         return self.per_call(rec, turn) + (self.per_call(rec, rec["turns"][-1]) if again else Decimal(0))
