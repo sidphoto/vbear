@@ -81,8 +81,12 @@ class AnswerClockTests(ProcessCase):
         self.assertEqual(line["response"]["response"], {"behavior": "deny", "message": csess.EXPIRED})
         self.assertEqual(self.decisions(), ["expired"])
         self.assertEqual(self.p.answer(c.card_id, c.token, "allow", None, c.expires)[0], "gone")
+        # The deny is taken as written, as the daemon's loop would have done: otherwise the write deadline, which reads
+        # the real monotonic clock, would compare it with this test's made-up one.
+        self.p.out.clear()
+        self.p.write_since = None
         self.p._timers(c.expires + 1)                         # the timer finds nothing more to refuse
-        self.assertEqual(len(self.queued()), 1)
+        self.assertEqual(self.queued(), [])
         self.assertEqual(self.decisions(), ["expired"])
 
     def test_an_answer_just_before_the_expiry_is_taken(self):
