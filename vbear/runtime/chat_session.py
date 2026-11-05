@@ -6,9 +6,9 @@ close_gracefully.
   * The first line written is the ``initialize`` request; a person's message is held until its answer passes
     (chat_protocol.ChatTracker), so a turn whose message was never written costs nothing.
   * Every permission request is judged (chat_protocol.judge): VBear answers it itself, or it becomes a card that
-    only the RPC holding its one-use token can answer, once, before it expires; an expired card is refused. An allow
-    (or a changed input) is judged again when it is given: a call that became one VBear refuses (a folder of its
-    path is now a link out of the work folder) is refused then.
+    only the RPC holding its one-use token can answer, once, before it expires; an expired card is refused, by the
+    answer itself as by the timer. An allow (or a changed input) is judged again when it is given: a call that
+    became one VBear refuses (a folder of its path is now a link out of the work folder) is refused then.
   * A turn ends with its result (it costs what the CLI's cumulative total says it added), or is cut off (stopped,
     timed out, the process ended, a violation): then it costs its cap. Only a turn that never reached the CLI
     costs nothing.
@@ -209,6 +209,9 @@ class ChatProcess(ProcessGroupEnd):
         card = self.cards.get(card_id) if isinstance(card_id, str) else None
         if card is None:
             return "gone", "這張卡片已經回覆過、已過期或不存在"
+        if now >= card.expires:                  # whether or not the timer has run yet
+            self._expire(card)
+            return "expired", "這張卡片已過期，VBear 已視為拒絕"
         if not (isinstance(token, str) and hmac.compare_digest(token.encode("utf-8", "replace"),
                                                                 card.token.encode("ascii"))):
             return "bad_token", "卡片的 token 不符"
@@ -245,6 +248,13 @@ class ChatProcess(ProcessGroupEnd):
                                        "value": value if decision == "modify" else None})
         self.last_activity = now
         return None, ""
+
+    def _expire(self, card: Card) -> None:
+        del self.cards[card.card_id]
+        self.tracker.refuse(card.tool_use_id)
+        self._queue(cp.deny_line(card.request_id, EXPIRED))
+        self._record("card_decision", {"turn": card.turn, "card_id": card.card_id, "decision": "expired",
+                                       "value": None})
 
     def _refuse_on_answer(self, card: Card, decision: str, value, sent: dict, reason: str, now: float) -> None:
         del self.cards[card.card_id]
@@ -574,11 +584,7 @@ class ChatProcess(ProcessGroupEnd):
             return
         for card in sorted(self.cards.values(), key=lambda c: c.expires):
             if now >= card.expires:
-                del self.cards[card.card_id]
-                self.tracker.refuse(card.tool_use_id)
-                self._queue(cp.deny_line(card.request_id, EXPIRED))
-                self._record("card_decision", {"turn": card.turn, "card_id": card.card_id, "decision": "expired",
-                                               "value": None})
+                self._expire(card)
         if self.idle and now - self.last_activity > self.idle_timeout:
             self.close_gracefully("閒置太久，自動關閉", now)
         if self.state == "closing" and self.closing_since is not None and now - self.closing_since > self.close_grace:
