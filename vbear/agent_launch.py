@@ -435,8 +435,10 @@ def _git_state(workdir):
 class PreviewStore:
     """Server-held previews: short TTL, atomic single consumption."""
 
-    def __init__(self, runtime, *, ttl: float = PREVIEW_TTL, allowed_root=None):
-        """``allowed_root`` is a path or a callable returning the current one."""
+    def __init__(self, runtime, *, ttl: float = PREVIEW_TTL, allowed_root=None, hidden_tools=None):
+        """``allowed_root`` is a path or a callable returning the current one. ``hidden_tools`` is a callable returning
+        the hidden AI tools that are switched off (a card of one cannot be started)."""
+        self._hidden_tools = hidden_tools
         self._runtime = runtime
         self._ttl = ttl
         self._allowed_root = allowed_root
@@ -474,7 +476,7 @@ class PreviewStore:
                 raise PreviewError(429, "too_many_previews", "待確認的 preview 過多，請稍後再試")
         if effective_launch_mode(profile) == "full":
             return self._create_full(profile, canonical, now)
-        blockers = launch_blockers(profile, commit, network)
+        blockers = self._hidden_blockers(profile) + launch_blockers(profile, commit, network)
         prepared = None
         engine = (profile.get("model") or {}).get("tool")
         if not blockers:
@@ -533,7 +535,7 @@ class PreviewStore:
         nothing to remove if it is not confirmed. It shows the exact command, where the tool was found, what is carried
         and what is not, and states that VBear limits nothing. The digest is of the command, the folder and the file."""
         engine = (profile.get("model") or {}).get("tool")
-        blockers = launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
+        blockers = self._hidden_blockers(profile) + launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
         if not blockers:
             blockers += self._full_folder_blockers(canonical)
         found = argv = view = command = None
@@ -589,6 +591,12 @@ class PreviewStore:
             body["preview_id"] = preview_id
             body["expires_at"] = entry["expires"]
         return body
+
+    def _hidden_blockers(self, profile: dict) -> list[dict]:
+        """A card whose tool is hidden and switched off cannot be started; it says why and nothing is prepared."""
+        tool = (profile.get("model") or {}).get("tool")
+        off = self._hidden_tools() if callable(self._hidden_tools) else ()
+        return [ai_tools.hidden_blocker(tool)] if tool in off else []
 
     def _full_folder_blockers(self, canonical: str) -> list[dict]:
         """The folders a launch may not start in are the same as for the safe one (the home directory itself, credentials,

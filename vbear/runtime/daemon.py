@@ -102,6 +102,8 @@ ENV_ALLOW = ("PATH", "TERM", "LANG", "HOME")  # caller may override these
 ENV_IDENTITY = ("USER", "LOGNAME")
 SYSTEM_EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin")
 USER_BIN = (".local", "bin")  # where Claude Code's own installer puts `claude` (and Codex's, `codex`)
+# The vendors' own install folders under the home directory (Grok Build and MiniMax Code), searched after USER_BIN.
+VENDOR_BINS = ((".grok", "bin"), (".minimax-code", "bin"))
 SESSION_RE = re.compile(r"^n-[0-9a-f]{12}\Z")
 MAX_ATTACHMENTS = 4           # per session (contract v2 §6)
 ATTACH_QUEUE_MAX = 256        # lines queued per attachment (frames and notices alike): frames resync, notices pause reads
@@ -264,14 +266,15 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
 def extra_path(home: str | None = None) -> tuple[str, ...]:
     """The one place that says where VBear looks for the `claude` / `codex` CLIs
     beyond the PATH it was started with: Homebrew and the system dirs, then
-    ``<home>/.local/bin`` last, so a user-writable dir never comes ahead of
+    ``<home>/.local/bin`` and the vendors' own folders (``~/.grok/bin``,
+    ``~/.minimax-code/bin``) last, so a user-writable dir never comes ahead of
     them. Nothing else is scanned, no shell file is read and no login shell is
     started. A HOME that is not a plain absolute path adds nothing. The
     macOS launcher (macos/VBear/main.swift) builds the same list."""
     extra = SYSTEM_EXTRA_PATH
     if (isinstance(home, str) and os.path.isabs(home) and os.pathsep not in home
             and "\0" not in home):
-        extra += (os.path.join(home, *USER_BIN),)
+        extra += tuple(os.path.join(home, *parts) for parts in (USER_BIN, *VENDOR_BINS))
     return extra
 
 

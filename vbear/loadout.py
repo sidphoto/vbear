@@ -10,7 +10,7 @@ Profile in them.
 
 from __future__ import annotations
 
-from . import agent_launch, agent_profiles, position_guide
+from . import agent_launch, agent_profiles, ai_tools, position_guide
 from .runtime import agent_sessions
 
 NOT_KNOWN_AT_PREVIEW = "產生出發通行證時才知道"
@@ -20,13 +20,16 @@ VERSION_BASIS = ("以已驗證設定為準：這是 VBear 有實測證據的那�
 CODEX_BASIS = ("以 VBear 已記錄的 Codex 驗證證據為準；證據不全的項目是「未知」。這台 Mac 的 Codex 版本"
                "實際守到什麼程度，要等出發通行證才知道")
 ARMOR_NOT_APPLICABLE = {"shared": "shared 不是可啟動的工具，沒有防具",
-                        "agy": "VBear 還不會啟動 AGY，沒有防具"}
+                        "agy": "VBear 還不會啟動 AGY，沒有防具",
+                        "grok": "Grok 目前只能用完整模式，安全模式沒有防具",
+                        "mcode": "MCODE 目前只能用完整模式，安全模式沒有防具"}
 CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）"
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
 CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
 SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
 AGY_SKILLS_NOTE = ("VBear 還不會啟動 AGY，已選技能只是你的挑選紀錄，不代表 AGY 會載入；「AGY 不會讀」是依這台電腦的 "
                    "AGY 設定判斷的，AGY 的內建與外掛技能不在這裡。")
+FULL_ONLY_SKILLS_NOTE = "已選技能是你的挑選紀錄；VBear 沒有驗證這個 AI 工具會載入或使用它們。"
 TOOLS_ONLY_CLAUDE = "VBear 目前只支援用角色卡啟動 Claude Code"
 TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
 TOOLS_AGY_NOT_RECORDED = "VBear 還不會啟動 AGY，也沒有記錄 AGY 的可用工具清單"
@@ -47,9 +50,8 @@ def _sourced(value) -> dict:
 
 
 def _label_only(tool) -> str:
-    return "職業只是標籤，不會把角色指示載入 " + ("Codex" if tool == "codex" else
-                                                   "Claude Code" if tool == "claude" else
-                                                   "AGY" if tool == "agy" else "任何工具")
+    shorts = {t.id: t.short for t in ai_tools.REGISTRY if not t.generic}
+    return "職業只是標籤，不會把角色指示載入 " + shorts.get(tool, "任何工具")
 
 
 def _derived(value, detail: str) -> dict:
@@ -219,6 +221,8 @@ def _skills_section(tool: str, codex_not_launchable: bool, items: list) -> dict:
         out["note"] = CODEX_SKILLS_NOTE if codex_not_launchable else CODEX_SKILLS_NOTE_LAUNCHABLE
     elif tool == "agy":
         out["note"] = AGY_SKILLS_NOTE
+    elif tool in ai_tools.full_only_ids():
+        out["note"] = FULL_ONLY_SKILLS_NOTE
     else:
         out["note"] = SHARED_SKILLS_NOTE
     return out
@@ -255,13 +259,16 @@ def _instructions(profile: dict, tool, mode: str) -> dict:
             "automatic": delivery == "argv" and bool(got["text"]), "where": position_guide.instructions_where(tool, mode)}
 
 
-def build(profile: dict, static: dict | None, live: dict | None, verification: dict | None) -> dict:
+def build(profile: dict, static: dict | None, live: dict | None, verification: dict | None,
+          hidden_off: tuple = ()) -> dict:
     """The loadout of one Profile from what is already loaded (see the module note)."""
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
     tool = model.get("tool")
     mode = agent_profiles.effective_launch_mode(profile)
     version = _version_status(tool, verification)
     blockers = agent_launch.launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
+    if tool in hidden_off:       # a hidden tool that is switched off: the card stays, and says why it cannot be used now
+        blockers = [ai_tools.hidden_blocker(tool), *blockers]
     codex_not_launchable = tool == "codex" and any(
         b.get("code") == "codex_interactive_flags_unsupported" for b in blockers)
     equipped = [s for s in (profile.get("equipped_skill_ids") or []) if isinstance(s, str)]

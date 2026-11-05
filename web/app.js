@@ -958,7 +958,7 @@ function categoryZh(label) {
   return Object.prototype.hasOwnProperty.call(CATEGORY_ZH, k) ? CATEGORY_ZH[k] : label;
 }
 
-const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）" };
+const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）", grok: "Grok", mcode: "MCODE" };
 const ACT = {
   active:        ["可使用", "b-ok", "位於工具的載入範圍，且沒有被停用"],
   disabled:      ["已停用", "b-mute", "已安裝，但被設定關閉"],
@@ -2579,19 +2579,21 @@ const OFFICE_LOUNGE_MAX = 24;
 const OFFICE_BOUND_FLOWS_SHOWN = 2;
 const OFFICE_SPECIES = ["bear", "fox", "robot", "alien"];
 const OFFICE_SPECIES_LABEL = { bear: "熊", fox: "狐", robot: "機械人", alien: "外星人" };
-const OFFICE_FAMILY_SPECIES = { anthropic: "bear", openai: "robot", google: "fox" };
+const OFFICE_FAMILY_SPECIES = { anthropic: "bear", openai: "robot", google: "fox", xai: "alien", minimax: "alien" };
 // agy is a card's tool (an Antigravity card is the fox of the Google camp); a live terminal is still read from the
 // runtime's own agent name (officeToolOf), and VBear does not know what the runtime would call an AGY terminal.
-const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot", agy: "fox" };
+const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot", agy: "fox", grok: "alien", mcode: "alien" };
 // The camp is the maker of the model; its shirt colour is lighter than every species' fur (tested), so a
 // character reads the same whichever species it was given.
 const OFFICE_CAMPS = {
   anthropic: { label: "Anthropic", shirt: "#f59e0b", badge: "#fef3c7" },
   openai: { label: "OpenAI", shirt: "#14b8a6", badge: "#ccfbf1" },
   google: { label: "Google", shirt: "#38bdf8", badge: "#e0f2fe" },
+  xai: { label: "xAI", shirt: "#e5e7eb", badge: "#3f3f46" },
+  minimax: { label: "MiniMax", shirt: "#a3e635", badge: "#ecfccb" },
   other: { label: "其他", shirt: "#a855f7", badge: "#f3e8ff" },
 };
-const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai", agy: "google" };
+const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai", agy: "google", grok: "xai", mcode: "minimax" };
 // 16x16 supplied frames. C is the camp shirt; R is its badge.
 const OFFICE_SPRITES = {
   "bear": [
@@ -4157,8 +4159,8 @@ const CARD_SLOT_WORD = { planner: "規劃", executor: "執行", reviewer: "審�
 const CARD_POSITION_KEY = "card.position.";
 const CARD_INTENT_KEYS = [["read", "讀取檔案"], ["write", "編輯寫入"], ["test", "執行測試"], ["deploy", "部署上線"]];
 const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還沒決定" };
-const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
-const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
+const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", grok: "Grok", mcode: "MCODE", shared: "共用（skills CLI）" };
+const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", grok: "Grok", mcode: "MCODE", shared: "共用卡" };
 const SKILL_SHARED_TAG = "共用";
 const SKILL_CAT_OTHER = "_other";
 const PROFESSION_GROUP_OTHER = "other";   // the profession picker's group for a role whose position cannot be guessed
@@ -4166,16 +4168,24 @@ const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看�
 // The safe launch does not start Antigravity: in safe mode an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
-// In full mode VBear does start an AGY card (as a terminal, with the person's own settings); the safe launch never does.
-const AGY_FULL_NOTE = "AGY 在完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
+// In full mode VBear does start an AGY, Grok or MCODE card (as a terminal, with the person's own settings); the safe launch never does.
 // The tools the safe launch never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
-const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
+const UNLAUNCHABLE_TOOLS = ["shared", "agy", "grok", "mcode"];
+// What the page falls back to when a catalog does not carry tool_list (an older server, a test): the tools only full mode
+// starts, and every tool full mode starts. The server's list is what is read first (toolCaps); a test keeps these equal to
+// vbear/ai_tools.py.
+const FULL_ONLY_TOOLS = ["agy", "grok", "mcode"];
+const FULL_LAUNCH_TOOLS = ["claude", "codex", "agy", "grok", "mcode"];
+// The sentence on a card whose tool the safe mode never starts (GLOSSARY: 安全模式, 完整模式).
+const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
+const FULL_ONLY_SHORT = "只能用完整模式";
+const FULL_ONLY_HELP = "完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
+const NO_PROFESSIONS = (tool) => `VBear 沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤。`;
 const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
 const AGY_UNREAD_MARK = "AGY 不會讀";
 const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
 const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）。AGY 的內建與外掛技能不在這裡。";
-const AGY_NO_PROFESSIONS = "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
 const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
@@ -4474,8 +4484,28 @@ function skillPickPlan(skills, tool) {
 
 function cardCatalogTools(catalog) {
   const tools = catalog && Array.isArray(catalog.tools) ? catalog.tools.filter((t) => typeof t === "string") : [];
-  return tools.length ? tools : ["claude", "codex", "agy", "shared"];
+  return tools.length ? tools : ["claude", "codex", "agy", "grok", "shared"];
 }
+// What one AI tool can do, from the catalog's own lists (the server's registry, vbear/ai_tools.py): { safe, full, note,
+// unavailable } with unavailable the sentence for a hidden tool that is switched off (it is in unavailable_tools, not in
+// tool_list). A tool the catalog does not list (an older server) is read from the fallback tables above.
+function toolCaps(catalog, tool) {
+  const rows = [];
+  for (const key of ["tool_list", "unavailable_tools"]) {
+    if (catalog && Array.isArray(catalog[key])) rows.push(...catalog[key].filter((r) => r && typeof r === "object"));
+  }
+  const row = rows.find((r) => r.id === tool);
+  if (row) {
+    return { safe: row.safe_launch === true, full: row.full_launch === true,
+      note: typeof row.not_launchable_message === "string" ? row.not_launchable_message : "",
+      unavailable: typeof row.unavailable_reason === "string" ? row.unavailable_reason : "" };
+  }
+  return { safe: !UNLAUNCHABLE_TOOLS.includes(tool), full: FULL_LAUNCH_TOOLS.includes(tool),
+    note: "", unavailable: "" };
+}
+// A tool that only full mode starts (the card says so), and one that safe mode never starts at all.
+function toolFullOnly(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safe; }
+function toolNoSafe(catalog, tool) { return !toolCaps(catalog, tool).safe; }
 
 function cardAvatar(p, scale = 3) {
   const tool = p && p.model && typeof p.model.tool === "string" ? p.model.tool : "";
@@ -4544,12 +4574,16 @@ function openCardWizard(opts) {
   // reads it), and the person still takes every step and presses 建立; a card that exists never takes a draft.
   const draft = isNew && opts.draft && typeof opts.draft === "object" ? opts.draft : null;
   const draftTool = draft && tools.includes(draft.tool) ? draft.tool : null;
+  // A card that already names a hidden tool that is switched off (MCODE) keeps it: the tool is shown, said to be hidden, and
+  // cannot be picked again once left. toolCaps(...).unavailable is the server's sentence for it.
+  const existingTool = existing && existing.model && typeof existing.model.tool === "string" ? existing.model.tool : "";
+  const heldTool = existingTool && !tools.includes(existingTool) && toolCaps(catalog, existingTool).unavailable ? existingTool : "";
 
   const st = {
     step: Math.min(3, Math.max(1, Number(opts.start) || 1)),
     name: existing ? String(existing.name || "") : draft && typeof draft.name === "string" ? draft.name.slice(0, 200) : "",
     species: existing ? (store.get(OFFICE_SPECIES_KEY + existing.id, null) || "") : "",
-    tool: existing && existing.model && tools.includes(existing.model.tool) ? existing.model.tool
+    tool: existing && existing.model && (tools.includes(existing.model.tool) || heldTool) ? existing.model.tool
       : draftTool || (tools.includes("claude") ? "claude" : tools[0]),
     position: existing ? cardPosition(existing) : draft && CARD_POSITIONS.includes(draft.position) ? draft.position : null,
     modelId: existing && existing.model ? String(existing.model.model_id || "")
@@ -4681,7 +4715,7 @@ function openCardWizard(opts) {
     const box = intentBox;
     if (!box) return;
     // a camp VBear does not start: nothing to say about launching, and nothing is asked
-    if (UNLAUNCHABLE_TOOLS.includes(st.tool)) { box.setAttribute("hidden", ""); setKids(box); return; }
+    if (toolNoSafe(catalog, st.tool)) { box.setAttribute("hidden", ""); setKids(box); return; }
     const key = intentKey();
     const entry = intentChecks.get(key);
     if (intentIsVerified()) { box.setAttribute("hidden", ""); setKids(box); return; }
@@ -4727,7 +4761,9 @@ function openCardWizard(opts) {
   // probably fits, the skills it names, the model it names) and to be kept as a label on the card. Nothing is loaded
   // into a tool by it, and every pre-fill is one click.
   const roleById = new Map(professions.filter((r) => r && typeof r.role_id === "string").map((r) => [r.role_id, r]));
-  const roleCampOk = (r) => st.tool !== "agy" && (st.tool === "shared" || r.tool === st.tool);
+  // a tool only full mode starts (AGY, Grok, MCODE) has no role templates VBear scans
+  const noTemplates = () => toolFullOnly(catalog, st.tool);
+  const roleCampOk = (r) => !noTemplates() && (st.tool === "shared" || r.tool === st.tool);
   const roleListed = (r) => r && r.kind !== "cli" && roleCampOk(r);   // the tool itself is not a profession
   function roleGroupOf(r) {
     const id = r && r.department && typeof r.department.id === "string" ? r.department.id : "";
@@ -4746,7 +4782,7 @@ function openCardWizard(opts) {
     const r = roleById.get(id);
     if (!r) return "目前索引找不到這個範本，標籤先保留。";
     if (r.kind === "cli") return "這是工具本身（等於不用範本）。";
-    if (st.tool === "agy") return "AGY 沒有可選的職業，這是之前存下的標籤。";
+    if (noTemplates()) return `${CARD_TOOL_SHORT[st.tool]} 沒有可選的職業，這是之前存下的標籤。`;
     if (!roleCampOk(r)) return `這是 ${CARD_TOOL_SHORT[r.tool] || r.tool || "別的陣營"} 的範本，這張卡的陣營是 ${CARD_TOOL_SHORT[st.tool] || st.tool}。`;
     if (r.unavailable && !pk.showUnused) return `${r.unavailable}，這個範本目前用不到。`;
     return null;
@@ -4928,7 +4964,7 @@ function openCardWizard(opts) {
       if (!box._rtInitial && !modal.contains(box)) { RT.listeners.delete(draw); return; }
       box._rtInitial = false;
       const wasSearch = Boolean(searchEl) && document.activeElement === searchEl;
-      const agy = st.tool === "agy";
+      const agy = noTemplates();
       const r = roleById.get(st.profession);
       const row = r ? cardPositionRow(r.department && r.department.id) : null;
       const shownZh = professions.some((x) => roleListed(x) && roleZhName(x.role_id));
@@ -4942,7 +4978,7 @@ function openCardWizard(opts) {
           agy ? null : el("button", { type: "button", class: "btn small", "data-cw": "profession-open", "aria-expanded": String(pk.open),
             on: { click: () => { pk.open = !pk.open; pk.shown = CARD_PAGE_SIZE; draw(); focusBy("data-cw", "profession-open"); } } },
           pk.open ? "收起" : st.profession ? "更換" : "挑一個")),
-        el("small", null, agy ? AGY_NO_PROFESSIONS : "你電腦裡現成的角色範本，可以不選。出發時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
+        el("small", null, agy ? NO_PROFESSIONS(st.tool) : "你電腦裡現成的角色範本，可以不選。出發時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
         professionAutoActive() ? el("p", { class: "small cw-hint", "data-cw": "profession-auto-note" },
           `位置已依職業建議設成「${cardPositionRow(st.position) ? cardPositionRow(st.position).label : ""}」（只是推測，可改）。`) : null,
         reason ? el("div", { class: "cw-prof-bound", "data-cw": "profession-bound" }, el("span", { class: "small" }, reason),
@@ -5023,12 +5059,14 @@ function openCardWizard(opts) {
     if (!modesOffered) return null;
     const cur = launchModes.find((m) => m.id === st.launchMode) || launchModes[0];
     const oldCard = Boolean(existing) && !st.launchModeTouched && existing.launch_mode !== "full" && existing.launch_mode !== "safe";
+    const fullOnly = toolFullOnly(catalog, st.tool);   // safe mode never starts this tool: the card says so
     return el("div", { class: "cw-field", "data-cw": "launch-mode" },
       el("span", { class: "cw-label" }, "出發方式"),
       el("div", { class: "cw-choices", role: "group", "aria-label": "出發方式" }, launchModes.map((m) => el("button", { type: "button",
         class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
       el("span", null, m.label)))),
-      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : "",
+        fullOnly ? `　${FULL_ONLY_MARK}。` : ""),
       st.launchMode === "full" && catalog.full_mode_launchable !== true
         ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
           "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
@@ -5084,11 +5122,23 @@ function openCardWizard(opts) {
         "aria-pressed": String(st.tool === t), on: { click: () => setTool(t) } },
         officeSprite(speciesFor({ tool: t }), campOf({ tool: t }).key, 2),
         el("span", null, CARD_TOOL_LABEL[t] || t))));
+    // a card whose hidden tool is switched off: the tool is still shown (and selected), but it is not a choice to go back to
+    if (heldTool) toolGroup.appendChild(el("button", { type: "button", class: "cw-choice", "data-tool": heldTool, disabled: true,
+      title: toolCaps(catalog, heldTool).unavailable, "aria-pressed": String(st.tool === heldTool) },
+    officeSprite(speciesFor({ tool: heldTool }), campOf({ tool: heldTool }).key, 2),
+    el("span", null, `${CARD_TOOL_LABEL[heldTool] || heldTool}（隱藏中）`)));
+    const heldNote = st.tool === heldTool
+      ? el("p", { class: "small cw-hint", "data-cw": "tool-hidden-note" }, toolCaps(catalog, heldTool).unavailable) : null;
     const codexNote = st.tool === "codex" && catalog.codex_installed === false
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
         "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
-    const agyNote = st.tool === "agy"
-      ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, (st.launchMode === "full" && catalog.full_mode_launchable === true ? AGY_FULL_NOTE : AGY_NOT_LAUNCHED) + "。") : null;
+    // a tool only full mode starts (AGY, Grok, MCODE): the card says so, and what full mode means for it
+    const fullOnly = toolFullOnly(catalog, st.tool);
+    const agyNote = fullOnly
+      ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, (st.launchMode === "full" && catalog.full_mode_launchable === true
+        ? `${CARD_TOOL_SHORT[st.tool]} 在${FULL_ONLY_HELP}`
+        : toolCaps(catalog, st.tool).note || AGY_NOT_LAUNCHED) + "。") : null;
+    const fullOnlyMark = fullOnly ? el("p", { class: "small cw-hint", "data-cw": "full-only" }, FULL_ONLY_MARK + "。") : null;
     const sharedNote = st.tool === "shared" ? el("p", { class: "small cw-hint", "data-cw": "shared-note" }, SHARED_NOT_LAUNCHED + "。") : null;
 
     const posButton = (id, label) => el("button", { type: "button", class: "cw-choice",
@@ -5114,9 +5164,9 @@ function openCardWizard(opts) {
     const legacyNote = legacy ? el("p", { class: "small cw-hint", "data-cw": "legacy-note" }, cardLegacyText(legacy) + "。按儲存才會改寫成新的位置。") : null;
     const campWord = (row) => `建議陣營：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
       + (row.suggested_model_alias ? `（${row.suggested_model_alias}）` : "")
-      + (UNLAUNCHABLE_TOOLS.includes(row.suggested_tool)
-        ? (row.suggested_tool === "agy" && st.launchMode === "full" && catalog.full_mode_launchable === true
-          ? "。AGY 只有完整模式才能從 VBear 出發" : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
+      + (toolNoSafe(catalog, row.suggested_tool)
+        ? (toolFullOnly(catalog, row.suggested_tool) && st.launchMode === "full" && catalog.full_mode_launchable === true
+          ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有完整模式才能從 VBear 出發` : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
     const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
       el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
       el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "任務卡上建議放：") + cardPositionPlaceText(posRow)),
@@ -5151,7 +5201,7 @@ function openCardWizard(opts) {
 
     return [
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
-        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote, sharedNote),
+        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, fullOnlyMark, agyNote, heldNote, sharedNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), legacyNote, posGroup, posBox,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
       professionField(),
@@ -5188,7 +5238,13 @@ function openCardWizard(opts) {
     for (const sid of gone) st.equipped.delete(sid);
     removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
-    if (t === "agy") st.profession = "";
+    if (toolFullOnly(catalog, t)) st.profession = "";
+    // a tool only full mode starts departs in full mode: a card the person has not chosen a mode for takes it (an old card is
+    // posted with it, so the save says what the card is). Choosing safe mode afterwards is still allowed: it is a record.
+    if (modesOffered && toolFullOnly(catalog, t) && !st.launchModeTouched && st.launchMode !== "full") {
+      st.launchMode = "full";
+      if (existing) st.launchModeTouched = true;
+    }
     st.modelOther = false;   // the carried value shows as 其他 if the new tool's list lacks it
     draw();
     focusBy("data-tool", t);
@@ -6002,6 +6058,12 @@ function profileCard(p, opts = {}) {
   const legacyPos = cardLegacyPosition(p);
   const demo = isDemoCard(p, catalog);
   const launchOff = p.enabled === false;
+  // a tool only full mode starts says so on the card; a hidden tool that is switched off (MCODE) says why it cannot be used now
+  const caps = toolCaps(catalog, tool);
+  const fullOnlyNote = caps.full && !caps.safe
+    ? el("p", { class: "small rcard-fullonly", "data-pcard": "full-only" }, FULL_ONLY_MARK) : null;
+  const hiddenNote = caps.unavailable
+    ? el("p", { class: "small cw-error", "data-pcard": "tool-hidden", role: "status" }, caps.unavailable) : null;
   const name = p.name || p.id;
   const intents = p.permission_intents && typeof p.permission_intents === "object" ? p.permission_intents : {};
   let loadoutState = opts.loadout || null;
@@ -6031,12 +6093,13 @@ function profileCard(p, opts = {}) {
           positionBadge(pos),
           legacyPos ? el("span", { class: "small muted", "data-pcard": "legacy-position" }, cardLegacyText(legacyPos)) : null,
           demo ? badge("示範", "b-info", "範例資料，不是你建立的卡") : null,
+          caps.full && !caps.safe ? badge(FULL_ONLY_SHORT, "b-info", FULL_ONLY_MARK) : null,
           launchOff ? badge("停用", "b-mute", "已停用，但保留存檔") : null))),
-    slotsBox, lightBox, passLineBox,
+    fullOnlyNote, hiddenNote, slotsBox, lightBox, passLineBox,
     el("p", { class: "small muted", "data-pcard": "roster" }, "名冊，不代表正在出勤"),
     el("div", { class: "rcard-actions" },
-      handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff,
-        title: launchOff ? "這張卡已停用" : "先看這次出發會套用什麼，確認後才啟動",
+      handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff || Boolean(caps.unavailable),
+        title: launchOff ? "這張卡已停用" : caps.unavailable ? caps.unavailable : "先看這次出發會套用什麼，確認後才啟動",
         on: { click: () => handlers.launch(p) } }, "出發") : null,
       handlers.place ? el("button", { type: "button", class: "btn small", "data-pcard": "place",
         title: "把這張卡放進一張任務卡的隊伍（規劃、執行或審查位）",
@@ -6299,8 +6362,10 @@ async function viewTeam(params = {}) {
         on: { click: needCatalog(() => openStarterDeck({ catalog, profiles, onSaved: refresh })) } }, "用起手牌組開始") : null);
 
   const shown = filter ? profiles.filter((p) => p.model && p.model.tool === filter) : profiles;
+  // a camp is in the bar when the catalog offers it or a card names it (a hidden tool that is switched off shows only for its cards)
+  const barTools = new Set([...cardCatalogTools(catalog), ...profiles.map((p) => p.model && p.model.tool)]);
   const filterBar = el("div", { class: "seg", role: "group", "aria-label": "依陣營篩選" },
-    [["", "全部"], ...Object.entries(CARD_TOOL_LABEL)].map(([v, t]) => el("button", { type: "button", "data-filter": v || "all",
+    [["", "全部"], ...Object.entries(CARD_TOOL_LABEL).filter(([v]) => barTools.has(v) || v === filter)].map(([v, t]) => el("button", { type: "button", "data-filter": v || "all",
       "aria-pressed": String(filter === v), on: { click: () => { store.set("teamCardTool", v); viewTeam(); } } }, t)));
 
   // each card reads its own loadout (a read-only answer from memory), four at a time; the page does not wait for them
@@ -6608,6 +6673,11 @@ async function viewSettings() {
           el("label", { class: "switch" },
             el("input", { type: "checkbox", checked: advanced, on: { change: (e) => saveConf({ advanced_mode: e.target.checked }).then(viewSettings) } }),
             el("div", null, el("div", { class: "t" }, "進階模式"), el("div", { class: "small muted" }, "顯示檔案路徑與診斷資訊。機密值在任何模式下都不會顯示。"))),
+          el("label", { class: "switch" },
+            el("input", { type: "checkbox", checked: conf.show_mcode === true, "data-setting": "show-mcode",
+              on: { change: (e) => saveConf({ show_mcode: e.target.checked }) } }),
+            el("div", null, el("div", { class: "t" }, "顯示 MCODE"),
+              el("div", { class: "small muted" }, "打開後，建角色卡時才能選 MCODE（MiniMax 的 AI 工具，" + FULL_ONLY_MARK.replace("這個 AI 工具", "") + "）。關掉不會刪除已有的 MCODE 角色卡，只是先不能選、不能用它出發。"))),
           el("label", { class: "switch" },
             el("span", { style: "width:17px" }),
             el("div", null, el("div", { class: "t" }, "外觀"),
@@ -10647,9 +10717,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 // rule enforced on screen is the one the server already enforces for a review: it counts when the reviewer's and the
 // executor's model families are both known and different.
 
-const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", agy: "google", shared: "unknown" };
+const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", agy: "google", grok: "xai", mcode: "minimax", shared: "unknown" };
 const TEAM_FAMILY_LABEL = { anthropic: "Anthropic（Claude）", openai: "OpenAI（Codex）", google: "Google（Gemini）",
-  minimax: "MiniMax", other: "其他", unknown: "不明" };
+  xai: "xAI（Grok）", minimax: "MiniMax", other: "其他", unknown: "不明" };
 const TEAM_SLOTS = [
   { key: "planner", label: "規劃位", short: "規劃", position: "planner", fit: "CEO、PM" },
   { key: "executor", label: "執行位", short: "執行", position: "executor", fit: "全端工程師、社群媒體經理、藝術總監" },
@@ -10919,8 +10989,8 @@ function nextStepAction(flow, opts = {}) {
   const launches = !startable ? [] : holders
     .filter((r) => r && typeof r.profile_id === "string" && r.profile_id)
     .filter((r) => !profiles || profiles.some((c) => c && c.id === r.profile_id && c.enabled !== false))
-    // The safe launch does not start Antigravity: an AGY card gets no button here (the step is done in its own terminal)
-    .filter((r) => teamCardTool(r) !== "agy")
+    // The safe launch does not start Antigravity, Grok or MCODE: such a card gets no button here (the step is done in its own terminal)
+    .filter((r) => !toolFullOnly(null, teamCardTool(r)))
     .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
   const recordWords = NEXT_STEP_RECORD[step.key];
   return { step: step.key, ask: NEXT_STEP_ASK[step.key], turn: ns.turn, manual: !auto, launches, recordWords,
@@ -11229,7 +11299,7 @@ function teamBoard(opts) {
         el("button", { type: "button", class: "btn small", "data-act": "clear", on: { click: () => clearSlot(def.key) } }, "拿下來"),
         // from a place, the launch check opens with this task card's folder already in it (design 3.6); not while there
         // are changes that only exist on this page, and not for a card that is gone
-        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && teamCardTool(entry) !== "agy"
+        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && !toolFullOnly(null, teamCardTool(entry))
           ? el("a", { class: "btn small", "data-act": "launch", title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的",
               href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1&step=${STEP_OF_SLOT[def.key]}` }, "出發") : null) : null,
       problem ? el("p", { class: "ts-problem small", "data-slot-problem": problem.code, role: "status" }, el("strong", null, "不算數："), problem.text, el("span", { class: "muted" }, `（${problem.why}）`)) : null,
@@ -13785,7 +13855,7 @@ function staffingSeats(view) { return meetingSeats(view, { bubble: staffingBubbl
 // What VBear says of an item it kept but did not tick in advance (vbear/staffing.py FLAGS; a test keeps them equal).
 const STAFFING_FLAG_TEXT = {
   disabled: "這張卡停用中，要先啟用",
-  cannot_start: "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY，或共用卡）",
+  cannot_start: "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY、Grok、MCODE，或共用卡）",
   slot_fit: "這張卡的職位和這個位置不太合",
   same_card: "同一張卡不能審查自己",
   reviewer_family_unknown: "審查位的陣營是「共用」或不明，審查結果不算數",

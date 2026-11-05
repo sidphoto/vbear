@@ -15,6 +15,8 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+from . import ai_tools
+
 APP_NAME = "vbear"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7788
@@ -203,6 +205,8 @@ DEFAULT_CONFIG = {
     "project_roots": ["~/projects"],
     "recent_folders": [],  # folders used by task cards and launches, newest first, at most 10
     "onboarding_dismissed": False,  # the lobby's "first game" card was put away
+    # one switch per hidden AI tool ("show_mcode"): off until the person turns it on in the settings
+    **{ai_tools.show_key(i): False for i in ai_tools.hidden_ids()},
     "sources": [asdict(s) for s in default_sources()],
 }
 

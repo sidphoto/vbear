@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 
+from . import ai_tools
 from .numbers import finite_real
 
 SESSION_VALUES = ("present", "exited")
@@ -183,7 +184,7 @@ def arbitrate(info: dict, now: float | None = None) -> dict:
             if value != "unknown":
                 activity, decided_by = value, RUNG_CLAUDE_STREAM
             reason = note
-    elif info.get("launch_mode") == "full" and engine in ("claude", "codex", "agy"):
+    elif info.get("launch_mode") == "full" and engine in ai_tools.full_launch_ids():
         # A full-mode terminal (P34-3) is the person's own tool, run with their own settings: nothing about its title
         # or its output was checked against this tool and version, so VBear does not read a state from it.
         reason = "完整模式出發：VBear 沒有為這個終端驗證任何狀態訊號，所以不判斷它在忙還是在等你"

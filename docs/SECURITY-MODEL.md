@@ -180,8 +180,9 @@ Other safeguards:
   itself first on your `PATH` already runs as you, so this is not treated as a boundary.
 - **Where VBear looks for the CLIs.** Besides the `PATH` it was started with, VBear looks for `claude` and `codex` in
   Homebrew's `/opt/homebrew/bin`, `/usr/local/bin`, the system folders, and `.local/bin` under your home directory
-  (where Claude Code's own installer puts it), in that order, after your own `PATH`. These folders are writable by
-  you (and, for Homebrew, by your admin group), the same trust as your `PATH`. VBear scans no other folder, reads no
+  (where Claude Code's own installer puts it), in that order, after your own `PATH`. For Grok and MCODE (full mode only)
+  it also looks in their own install folders, `~/.grok/bin` and `~/.minimax-code/bin`, after `.local/bin`.
+  These folders are writable by you (and, for Homebrew, by your admin group), the same trust as your `PATH`. VBear scans no other folder, reads no
   shell startup file and starts no login shell. Finding the file changes none of the checks above: the version, the
   verified list and the translation boundary are decided afterwards, exactly as before. The Codex review does not use
   `.local/bin`; it runs the pinned Codex build only.
@@ -197,6 +198,12 @@ Other safeguards:
   from files only (see "Which skills AGY reads"), and even a skill AGY reads is never reported as one that loads: a
   skill chosen on an AGY card is a collection. The automatic review is unchanged: it is the Codex that
   VBear starts, and an AGY card on a review place is only the record of a manual review.
+- **Grok and MCODE have no safe launch either (v0.12).** Both are full mode only, the same as AGY: in safe mode their
+  cards are refused with `tool_not_launchable` ("目前只能用完整模式"), and the card says "這個 AI 工具目前只能用完整模式". They are
+  separate model families (`xai`, `minimax`), so a review by one of them counts for another family's work. MCODE is a
+  hidden tool: it is offered, and may be started, only while the server config key `show_mcode` is true (default
+  false, written through `/api/config`). Turning it off deletes no card; a card that already names `mcode` is kept,
+  shown and explained, but cannot be created, switched to, duplicated or started (`tool_hidden`) until the switch is on.
 - **No caller-supplied launch details.** The daemon's `open_managed` takes only a launch ID. It reads
   the manifest from its own state directory and re-validates the work directory. A launch ID is single-use.
 - **Cleanup only when it is proven safe.** Files belonging to a launch are removed only after every
@@ -215,7 +222,8 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   pass lists any intent written as "deny" and says it is not kept). There is no sandbox, no `--safe-mode`, no settings
   file, no tool list, no scratch directory, no `CLAUDE_CODE_TMPDIR` and no launch manifest.
 - **The command is built on the server and is a list, never a shell string.** `claude [--model X] [--append-system-prompt
-  <text>]`, `codex [-m X]`, `agy [--model X]`, with the tool found as the first `claude`, `codex` or `agy` on the search
+  <text>]`, `codex [-m X]`, `agy [--model X]`, `grok [-m X]`, `mcode [-m X]`, with the tool found as the first `claude`,
+  `codex`, `agy`, `grok` or `mcode` on the search
   path VBear uses for the CLIs (its own `PATH`, Homebrew and `~/.local/bin`), by its absolute path. The pass shows the
   command and the path. The daemon accepts it only through its own `open_full` operation, which takes nothing but the
   tool name, that list, the folder and the terminal size, and refuses any list `agent_sessions.full_argv` could not have
@@ -226,7 +234,7 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   position's default) go in as a single `--append-system-prompt` argument: control, format and separator characters other
   than a line break or tab are removed, it is cut to 2000 characters, and a text that starts with `-` gets a sentence in
   front, so it can never be read as a flag. The pass shows the whole text that will be carried. VBear did not verify that
-  Claude Code receives it, or does what it says; it is words for the AI, as before. Codex and AGY have no such option, so
+  Claude Code receives it, or does what it says; it is words for the AI, as before. Codex, AGY, Grok and MCODE have no such option, so
   nothing is added for them: their instructions are only the paste button's (Terminals above), and VBear never presses
   Enter.
 - **You still confirm, and the confirmation is for this exact command.** The preview is one-use and five minutes. It is
@@ -401,8 +409,8 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   only when the person presses the button (`POST /api/flows/<id>/roles`). The snapshot does not decide anything: the
   family a review is judged by is still the role's own `family`, which the page fills from the card's tool and the
   server does not derive. The one cross-check is for an Antigravity (AGY) card, a tool added after flows were already
-  stored: a snapshot with tool `agy` must sit on a role of family `google`, on input and in the stored shape; the other
-  tools are accepted with any family, as before. Placing a card on a task card's team writes only `flows.json`; it starts,
+  stored: a snapshot with tool `agy` (and likewise `grok`, family `xai`, and `mcode`, family `minimax`) must sit on a
+  role of the tool's own family, on input and in the stored shape; the other tools are accepted with any family, as before. Placing a card on a task card's team writes only `flows.json`; it starts,
   sends and loads nothing.
 
 ## The home page's first game

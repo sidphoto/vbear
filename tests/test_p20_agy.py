@@ -50,17 +50,17 @@ def role(family="google", **over):
 
 class ToolRegistryTests(unittest.TestCase):
     def test_agy_is_a_known_tool_and_nothing_else_was_added(self):
-        self.assertEqual(agent_profiles.KNOWN_TOOLS, frozenset({"claude", "codex", "agy", "shared"}))
+        self.assertEqual(agent_profiles.KNOWN_TOOLS, frozenset({"claude", "codex", "agy", "grok", "mcode", "shared"}))
         self.assertEqual(set(agent_profiles.TOOL_ORDER), set(agent_profiles.KNOWN_TOOLS))
         self.assertEqual(len(agent_profiles.TOOL_ORDER), len(agent_profiles.KNOWN_TOOLS))
 
     def test_the_order_the_camps_are_offered_in(self):
-        # the three tools of before keep their places; AGY sits before the generic shared camp
-        self.assertEqual(agent_profiles.TOOL_ORDER, ("claude", "codex", "agy", "shared"))
+        # the three tools of before keep their places; AGY, Grok and MCODE sit before the generic shared camp
+        self.assertEqual(agent_profiles.TOOL_ORDER, ("claude", "codex", "agy", "grok", "mcode", "shared"))
 
     def test_the_family_of_each_tool(self):
         self.assertEqual(agent_profiles.TOOL_FAMILY, {"claude": "anthropic", "codex": "openai", "agy": "google",
-                                                       "shared": "unknown"})
+                                                       "grok": "xai", "mcode": "minimax", "shared": "unknown"})
         self.assertEqual(agent_profiles.family_of_tool("agy"), "google")
         for other in ("gemini", "AGY", "", None, 5, ["agy"], "toString"):
             self.assertEqual(agent_profiles.family_of_tool(other), "unknown", repr(other))

@@ -435,7 +435,7 @@ PROPOSAL_SCHEMA = mt._obj({
 # What VBear says of an item it kept but did not tick in advance; the codes are the record's, the words the page's.
 FLAGS = {
     "disabled": "這張卡停用中，要先啟用",
-    "cannot_start": "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY，或共用卡）",
+    "cannot_start": "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY、Grok、MCODE，或共用卡）",
     "slot_fit": "這張卡的職位和這個位置不太合",
     "same_card": "同一張卡不能審查自己",
     "reviewer_family_unknown": "審查位的陣營是「共用」或不明，審查結果不算數",
@@ -802,7 +802,7 @@ REFERENCE = (
     "職位代號：" + "、".join(f"{r['id']}＝{r['label']}" for r in ap.POSITION_TABLE) + "（reviewer 是 VBear 的審查關卡，不是公司職位）。\n"
     "位置：planner＝規劃位，放 CEO 或 PM；executor＝執行位，放全端工程師、社群媒體經理或藝術總監；"
     "reviewer1＝審查位、reviewer2＝第二位審查（可空著），放獨立審查，或另一陣營的全端工程師。\n"
-    "審查要和執行不同陣營才算數（claude＝anthropic、codex＝openai、agy＝google；shared 共用卡沒有陣營，不能當審查），"
+    "審查要和執行不同陣營才算數（claude＝anthropic、codex＝openai、agy＝google、grok＝xai、mcode＝minimax；shared 共用卡沒有陣營，不能當審查），"
     "同一張卡不能同時在執行位和審查位。停用（enabled 為 false）的卡不能發言，但可以推薦，要由董事長先啟用。"
     "can_start 是 VBear 能不能幫這張卡出發：full＝完整模式可以、safe＝安全模式要通過檢查才能、no＝不能。\n"
     "技能分類代號：" + "、".join(f"{c['id']}＝{c['label']}" for c in cats.CATEGORIES) + "、other＝其他。"

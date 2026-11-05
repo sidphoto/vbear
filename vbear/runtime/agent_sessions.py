@@ -344,7 +344,7 @@ def codex_argv(manifest: dict) -> list[str]:
 # tool list and no scratch directory, so nothing here is a limit and none of the evidence of the safe launch applies.
 # The command is a list built on the server (never a shell); the daemon checks the shape again before it opens the
 # terminal. Only Claude Code takes the card's instructions on the command line (one `--append-system-prompt`
-# argument); for Codex and AGY the instructions are what the paste button gives, and nothing is added for them.
+# argument); for Codex, AGY, Grok and MCODE the instructions are what the paste button gives, and nothing is added for them.
 FULL_ENGINES = ai_tools.full_launch_ids()
 FULL_INSTRUCTION_MAX = 2000
 # What leads an instruction that starts with a dash, so that no argument of the command can be read as a flag.
@@ -373,7 +373,7 @@ def full_argv(engine, binary, model_id, instructions) -> list[str]:
     tool's name). Raises LaunchRefused for anything that is not a plain case: an engine VBear does not start this way,
     a binary that is not an absolute path to the tool, a model id that could be taken for an option."""
     if engine not in FULL_ENGINES:
-        raise LaunchRefused("manifest_invalid", "完整模式只能出發 Claude Code、Codex 或 AGY")
+        raise LaunchRefused("manifest_invalid", "完整模式只能出發 Claude Code、Codex、AGY、Grok 或 MCODE")
     if (not isinstance(binary, str) or not binary or "\0" in binary or not os.path.isabs(binary)
             or os.path.basename(binary) != engine):
         raise LaunchRefused("invalid_binary", f"{engine} 必須是絕對路徑，檔名就是 {engine}")

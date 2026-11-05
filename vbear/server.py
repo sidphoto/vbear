@@ -111,6 +111,9 @@ CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_root
                    "chat_limits"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
+# "show_mcode": the switch of a hidden AI tool (vbear/ai_tools.py), written through /api/config like the other keys
+SHOW_TOOL_KEYS = frozenset(ai_tools.show_key(i) for i in ai_tools.hidden_ids())
+CONFIG_WRITABLE |= SHOW_TOOL_KEYS
 MAX_BODY = 64 * 1024
 # GET /api/flows/<id>/reports | reviews | reviews/<job>/draft | merge-gate (S2c-3)
 # /api/meetings/<id>[/retry-preview | /retry | /cancel | /chairman] (P34-4)
@@ -291,12 +294,17 @@ class Console:
         return {r["role_id"]: r for r in static.get("roles", [])
                 if isinstance(r.get("role_id"), str) and r["role_id"] and r.get("kind") != "cli"}
 
+    def hidden_off(self) -> tuple[str, ...]:
+        """The hidden AI tools (MCODE) the person has not switched on, read from the config as it is now."""
+        return ai_tools.hidden_off(self.store.conf)
+
     def previews(self):
         """Preview store for Profile-managed launches; native runtime only."""
         with self.lock:
             if self._previews is None:
                 self._previews = agent_launch.PreviewStore(
-                    self.runtime, allowed_root=lambda: str(self.managed_root.resolve()))
+                    self.runtime, allowed_root=lambda: str(self.managed_root.resolve()),
+                    hidden_tools=self.hidden_off)
             return self._previews
 
     def runtime_unavailable_message(self) -> str:
@@ -900,6 +908,9 @@ def make_handler(console: Console):
                         r.get("role_id") for r in console.store.static().get("roles", [])
                         if r.get("role_id")
                     }
+                    refused = self._hidden_tool_refusal(body, None)
+                    if refused:
+                        return self._error(400, refused)
                     try:
                         saved = agent_profiles.save_profile(None, body,
                                                              known_skills=known_skills,
@@ -924,6 +935,9 @@ def make_handler(console: Console):
                         return self._json({"ok": True, "deleted": target})
                     if rest.endswith("/duplicate"):
                         target = rest[:-10]
+                        refused = self._hidden_tool_refusal(None, target)
+                        if refused:
+                            return self._error(400, refused)
                         try:
                             dup = agent_profiles.duplicate_profile(
                                 target, known_skills=known_skills,
@@ -934,6 +948,9 @@ def make_handler(console: Console):
                             return self._error(404, "找不到這張角色卡")
                         return self._json({"ok": True, "profile": agent_profiles.with_revision(dup)})
                     target = rest
+                    refused = self._hidden_tool_refusal(body, target)
+                    if refused:
+                        return self._error(400, refused)
                     try:
                         saved = agent_profiles.save_profile(target, body,
                                                              known_skills=known_skills,
@@ -1353,7 +1370,8 @@ def make_handler(console: Console):
                 return None
             verifier = getattr(console, "claude_verifier", None)
             return loadout_mod.build(profile, static, console.store.live_cached(),
-                                     verifier.status() if verifier is not None else None)
+                                     verifier.status() if verifier is not None else None,
+                                     hidden_off=console.hidden_off())
 
         def _instructions(self, profile_id):
             """The text the terminal's 貼上職位指示 button pastes: the card's own instructions, else its position's
@@ -1364,6 +1382,26 @@ def make_handler(console: Console):
             got = agent_profiles.instructions_of(profile)
             return {"ok": True, "id": profile.get("id"), "name": profile.get("name"), "source": got["source"],
                     "position": got["position"], "text": got["text"]}
+
+        def _hidden_tool_refusal(self, body, existing_id) -> str | None:
+            """Why a card may not be made, changed or copied to a hidden AI tool that is switched off (None when it may).
+            A card that already names the tool keeps being editable: only a move onto the tool is refused."""
+            off = console.hidden_off()
+            if not off:
+                return None
+            if body is None:      # a copy: it names the tool the original names
+                original = agent_profiles.get_profile_readonly(existing_id)
+                tool = ((original or {}).get("model") or {}).get("tool")
+                return ai_tools.hidden_message(tool) if tool in off else None
+            model = body.get("model") if isinstance(body, dict) else None
+            tool = model.get("tool") if isinstance(model, dict) else None
+            if tool not in off:
+                return None
+            if existing_id is not None:
+                current = agent_profiles.get_profile_readonly(existing_id)
+                if ((current or {}).get("model") or {}).get("tool") == tool:
+                    return None
+            return ai_tools.hidden_message(tool)
 
         def _load_profile(self, profile_id):
             index = console.skill_index()
@@ -1873,6 +1911,8 @@ def make_handler(console: Console):
                         value = folders.clean_recent_folders(value)
                     if key == "onboarding_dismissed" and type(value) is not bool:
                         raise ValueError("onboarding_dismissed 必須是布林值")
+                    if key in SHOW_TOOL_KEYS and type(value) is not bool:
+                        raise ValueError(f"{key} 必須是布林值")
                     if key == "meeting_limits":
                         value = meetings.validate_limits(value, meetings.limits_from(conf))
                     if key == "meeting_speed":
@@ -1956,10 +1996,16 @@ def make_handler(console: Console):
 
             roles = [_profession_view(r) for r in console.store.static().get("roles", [])]
 
+            # a hidden tool (MCODE) is in neither list until the person switches it on; the second list tells the page
+            # what a card that already names one of them is to say
+            offered, unavailable = ai_tools.view_for(console.store.conf)
+            for row in unavailable:
+                row["unavailable_reason"] = ai_tools.hidden_message(row["id"])
             return {
                 "ok": True,
-                "tools": list(agent_profiles.TOOL_ORDER),
-                "tool_list": ai_tools.view(),
+                "tools": [row["id"] for row in offered],
+                "tool_list": offered,
+                "unavailable_tools": unavailable,
                 "permission_keys": list(agent_profiles.PERMISSION_KEYS),
                 "permission_values": list(agent_profiles.PERMISSION_VALUES),
                 "permission_intent_only": True,

@@ -195,7 +195,8 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual([t["id"] for t in body["tool_list"]], body["tools"])
         by = {t["id"]: t for t in body["tool_list"]}
         self.assertEqual(by["agy"], {"id": "agy", "name": "Antigravity（AGY）", "short": "AGY", "family": "google",
-                                     "generic": False, "safe_launch": False, "full_launch": True, "hidden": False})
+                                     "generic": False, "safe_launch": False, "full_launch": True, "hidden": False,
+                                     "not_launchable_message": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"})
         self.assertEqual((by["claude"]["safe_launch"], by["codex"]["safe_launch"], by["shared"]["full_launch"]),
                          (True, True, False))
         self.assertNotIn("install_command", json.dumps(body["tool_list"]))
@@ -205,9 +206,9 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertEqual(set(body["tools"]),
-                         {"claude", "codex", "agy", "shared"})
-        # the camps in the order the wizard offers them: AGY sits before the generic shared camp
-        self.assertEqual(body["tools"], ["claude", "codex", "agy", "shared"])
+                         {"claude", "codex", "agy", "grok", "shared"})   # MCODE is hidden until switched on
+        # the camps in the order the wizard offers them: AGY and Grok sit before the generic shared camp
+        self.assertEqual(body["tools"], ["claude", "codex", "agy", "grok", "shared"])
         self.assertEqual(body["permission_keys"], ["read", "write", "test", "deploy"])
         self.assertEqual(body["permission_values"],
                          ["allow", "deny", "unspecified"])

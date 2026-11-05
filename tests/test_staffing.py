@@ -112,7 +112,7 @@ class InputTests(unittest.TestCase):
         inputs = st.build_inputs(task(), team(), lib, summaries={"s-test": "檢查測試有沒有寫好"})
         by = {s["skill_id"]: s for s in inputs["skills"]}
         self.assertEqual(by["s-front"]["fits"], ["claude"])
-        self.assertEqual(by["s-test"]["fits"], ["claude", "codex", "shared"])
+        self.assertEqual(by["s-test"]["fits"], ["claude", "codex", "grok", "mcode", "shared"])
         self.assertEqual((by["s-front"]["line"], by["s-front"]["line_source"]), ("x" * 60, "原文"))
         self.assertEqual((by["s-test"]["line"], by["s-test"]["line_source"]), ("檢查測試有沒有寫好", "中文摘要"))
         self.assertEqual(by["s-law"]["categories"], ["legal"])

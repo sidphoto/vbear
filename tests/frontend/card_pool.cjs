@@ -1829,10 +1829,10 @@ async function test(name, fn) {
 
   await test("P20 the vocabulary: the camp is Antigravity（AGY）, short AGY, and it sits before the shared camp", () => {
     const label = vm.runInContext("CARD_TOOL_LABEL", pure), short = vm.runInContext("CARD_TOOL_SHORT", pure);
-    assert.deepStrictEqual(Object.keys(label), ["claude", "codex", "agy", "shared"]);
+    assert.deepStrictEqual(Object.keys(label), ["claude", "codex", "agy", "grok", "mcode", "shared"]);
     assert.strictEqual(label.agy, "Antigravity（AGY）");
     assert.strictEqual(short.agy, "AGY");
-    assert.deepStrictEqual(Object.keys(short), ["claude", "codex", "agy", "shared"]);
+    assert.deepStrictEqual(Object.keys(short), ["claude", "codex", "agy", "grok", "mcode", "shared"]);
     assert.strictEqual(vm.runInContext("TOOL.agy", pure), "Antigravity（AGY）");
   });
 
@@ -2104,7 +2104,7 @@ async function test(name, fn) {
   const writeDenyAnswer = { [WRITE_DENY_URL]: () => jsonResponse({ ok: true, can_launch: false, blockers: writeDenyBlockers }) };
 
   await test("P21 the list of tools VBear does not start is one constant on the page: shared and agy, not claude or codex", () => {
-    assert.deepStrictEqual([...vm.runInContext("UNLAUNCHABLE_TOOLS", pure)].sort(), ["agy", "shared"]);
+    assert.deepStrictEqual([...vm.runInContext("UNLAUNCHABLE_TOOLS", pure)].sort(), ["agy", "grok", "mcode", "shared"]);
   });
 
   for (const tool of ["agy", "shared"]) {
@@ -2329,7 +2329,8 @@ async function test(name, fn) {
     assert.ok(source.includes("這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）"));
     assert.ok(source.includes("AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"));
     assert.ok(!source.includes("VBear 還不知道 AGY 會讀哪些技能"), "P22: it is judged from AGY's own files now");
-    assert.ok(source.includes("VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤"));
+    assert.ok(source.includes("沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤"));
+    assert.strictEqual(vm.runInContext("NO_PROFESSIONS(\"agy\")", pure), "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。");
   });
 
   // ---- P35-4: a draft from a staffing proposal fills the wizard of a new card; the person still takes every step ----
@@ -4062,6 +4063,209 @@ async function test(name, fn) {
     assert.strictEqual((source.match(/rolePasteControl\(\{/g) || []).length, 2, "one control in each terminal implementation");
     assert.ok(!/paste-instructions[\s\S]{0,400}(inputBatcher\.push|\/input)/.test(source.slice(source.indexOf("function rolePasteControl("), source.indexOf("function rolePasteControl(") + 3500)),
       "the control goes through term.paste, not the input endpoint");
+  });
+
+  // ---- v0.12 task 2: Grok and MCODE as employees in full mode; MCODE behind a switch --------------------------------------
+  // The server's registry (tool_list) says what each tool can do; unavailable_tools holds a hidden tool that is switched off.
+  const rowGrok = { id: "grok", name: "Grok", short: "Grok", family: "xai", generic: false, safe_launch: false, full_launch: true, hidden: false,
+    not_launchable_message: "Grok 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄" };
+  const rowMcode = { id: "mcode", name: "MCODE", short: "MCODE", family: "minimax", generic: false, safe_launch: false, full_launch: true, hidden: true,
+    not_launchable_message: "MCODE 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄" };
+  const MCODE_OFF = "MCODE 目前是隱藏的：到設定打開「顯示 MCODE」後，才能選它或用它出發。已經建立的卡不會被刪除，只是先不能用。";
+  const toolRows = [
+    { id: "claude", name: "Claude Code", short: "Claude Code", family: "anthropic", generic: false, safe_launch: true, full_launch: true, hidden: false, not_launchable_message: "" },
+    { id: "codex", name: "Codex CLI", short: "Codex", family: "openai", generic: false, safe_launch: true, full_launch: true, hidden: false, not_launchable_message: "" },
+    { id: "agy", name: "Antigravity（AGY）", short: "AGY", family: "google", generic: false, safe_launch: false, full_launch: true, hidden: false,
+      not_launchable_message: AGY_NOT_LAUNCHED },
+    rowGrok,
+    { id: "shared", name: "共用（skills CLI）", short: "共用卡", family: "unknown", generic: true, safe_launch: false, full_launch: false, hidden: false,
+      not_launchable_message: "shared 不是可啟動的工具" },
+  ];
+  // MCODE off (the default): it is in unavailable_tools only. MCODE on: it is in both lists, after Grok.
+  const catalogGrok = { ...catalog, full_mode_launchable: true, launch_modes: [{ id: "full", label: "完整模式", help: "h" }, { id: "safe", label: "安全模式", help: "h" }],
+    default_launch_mode: "safe",
+    tools: toolRows.map((r) => r.id), tool_list: toolRows, unavailable_tools: [{ ...rowMcode, unavailable_reason: MCODE_OFF }] };
+  const catalogMcode = { ...catalogGrok, tools: ["claude", "codex", "agy", "grok", "mcode", "shared"],
+    tool_list: [...toolRows.slice(0, 4), rowMcode, toolRows[4]], unavailable_tools: [] };
+  const offeredTools = () => walk(dialog()).filter((n) => n.getAttribute && n.getAttribute("data-tool")).map((n) => n.getAttribute("data-tool"));
+  const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
+  const modePressed = () => byData(dialog(), "data-launch-mode", "full")[0].getAttribute("aria-pressed");
+
+  await test("v0.12 look: Grok and MCODE are aliens in their own camps (xAI, MiniMax); the labels, the families and the reviewer rule know them", () => {
+    const label = vm.runInContext("CARD_TOOL_LABEL", pure), short = vm.runInContext("CARD_TOOL_SHORT", pure);
+    assert.strictEqual(label.grok, "Grok");
+    assert.strictEqual(label.mcode, "MCODE");
+    assert.strictEqual(short.mcode, "MCODE");
+    assert.strictEqual(pure.speciesFor({ tool: "grok" }), "alien");
+    assert.strictEqual(pure.campOf({ tool: "grok" }).key, "xai");
+    assert.strictEqual(pure.campOf({ tool: "mcode" }).key, "minimax");
+    assert.strictEqual(pure.campOf({ family: "xai" }).label, "xAI");
+    assert.strictEqual(pure.teamFamily("grok"), "xai");
+    assert.strictEqual(pure.teamFamily("mcode"), "minimax");
+    const card = (id, tool) => ({ profile_id: id, model: { tool, model_id: "" }, name: id });
+    for (const [executor, reviewer, code] of [["claude", "grok", null], ["grok", "claude", null], ["grok", "mcode", null], ["mcode", "agy", null],
+      ["mcode", "codex", null], ["grok", "grok", "same_family"], ["mcode", "mcode", "same_family"]]) {
+      const got = pure.slotProblem("reviewer1", card("r", reviewer), { executor: card("e", executor) });
+      assert.strictEqual(got ? got.code : null, code, `${reviewer} reviews ${executor}`);
+    }
+    assert.strictEqual(pure.slotProblem("reviewer1", card("same", "grok"), { executor: card("same", "grok") }).code, "same_card");
+  });
+
+  await test("v0.12 toolCaps: the catalog's list is read first; a hidden tool that is off is read from unavailable_tools; an older server falls back to the page's table", () => {
+    const caps = (cat, tool) => pure.toolCaps(cat, tool);
+    assert.deepStrictEqual({ safe: caps(catalogGrok, "grok").safe, full: caps(catalogGrok, "grok").full }, { safe: false, full: true });
+    assert.strictEqual(caps(catalogGrok, "grok").note, rowGrok.not_launchable_message);
+    assert.strictEqual(caps(catalogGrok, "mcode").unavailable, MCODE_OFF);
+    assert.strictEqual(caps(catalogMcode, "mcode").unavailable, "");
+    assert.deepStrictEqual({ safe: caps(catalogGrok, "claude").safe, full: caps(catalogGrok, "claude").full }, { safe: true, full: true });
+    assert.deepStrictEqual({ safe: caps(null, "mcode").safe, full: caps(null, "mcode").full }, { safe: false, full: true }, "no catalog: the fallback table");
+    assert.ok(pure.toolFullOnly(null, "grok") && pure.toolFullOnly(null, "agy") && pure.toolFullOnly(null, "mcode"));
+    assert.ok(!pure.toolFullOnly(null, "claude") && !pure.toolFullOnly(null, "codex") && !pure.toolFullOnly(null, "shared"));
+    assert.ok(pure.toolNoSafe(null, "shared") && !pure.toolNoSafe(null, "codex"));
+    // the catalog wins over the fallback
+    assert.ok(!pure.toolFullOnly({ tool_list: [{ id: "grok", safe_launch: true, full_launch: true }] }, "grok"));
+  });
+
+  await test("v0.12 wizard step 2: Grok is a camp like the others; MCODE is not offered while it is off; choosing Grok says full mode only and posts full mode", async () => {
+    const { posts, d } = await openWizard([], catalogGrok);
+    typeName(d, "Grok 一號");
+    btnByText(d, "下一步").dispatch("click");
+    assert.deepStrictEqual(offeredTools(), ["claude", "codex", "agy", "grok", "shared"], "no MCODE");
+    assert.strictEqual(byData(dialog(), "data-cw", "full-only").length, 0, "nothing for Claude Code");
+    byData(dialog(), "data-tool", "grok")[0].dispatch("click");
+    const now = dialog();
+    assert.strictEqual(byData(now, "data-tool", "grok")[0].getAttribute("aria-pressed"), "true");
+    assert.ok(findText(byData(now, "data-cw", "full-only")[0], FULL_ONLY_MARK));
+    assert.ok(findText(byData(now, "data-cw", "agy-note")[0], "Grok 在完整模式可以從 VBear 出發"), "the full-mode sentence, with Grok's own name");
+    assert.strictEqual(modePressed(), "true", "a new card of a full-mode-only tool takes full mode although the default was safe");
+    assert.ok(findText(byData(now, "data-cw", "launch-mode-note")[0], FULL_ONLY_MARK));
+    assert.strictEqual(shadowOf(byData(now, "data-tool", "grok")[0]), shadowOf(pure.officeSprite("alien", "xai", 2)), "the alien in the xAI colours");
+    assert.ok(byData(now, "data-cw", "intent-check")[0].hasAttribute("hidden"), "no 'cannot be launched' check: there is no safe launch to ask about");
+    btnByText(now, "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].model.tool, "grok");
+    assert.strictEqual(posts[0].launch_mode, "full");
+  });
+
+  await test("v0.12 wizard: with MCODE switched on it is offered after Grok and saves as tool mcode in full mode", async () => {
+    const { posts, d } = await openWizard([], catalogMcode);
+    typeName(d, "MCODE 一號");
+    btnByText(d, "下一步").dispatch("click");
+    assert.deepStrictEqual(offeredTools(), ["claude", "codex", "agy", "grok", "mcode", "shared"]);
+    byData(dialog(), "data-tool", "mcode")[0].dispatch("click");
+    assert.ok(findText(byData(dialog(), "data-cw", "full-only")[0], FULL_ONLY_MARK));
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "MCODE 在完整模式可以從 VBear 出發"));
+    assert.strictEqual(byData(dialog(), "data-cw", "tool-hidden-note").length, 0, "switched on: nothing hidden to say");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.deepStrictEqual([posts[0].model.tool, posts[0].launch_mode], ["mcode", "full"]);
+  });
+
+  await test("v0.12 wizard: safe mode may still be chosen for a full-mode-only tool (it is a record), and a Claude Code card never gets the full-mode-only sentence", async () => {
+    const { posts, d } = await openWizard([], catalogGrok);
+    typeName(d, "Record");
+    btnByText(d, "下一步").dispatch("click");
+    byData(dialog(), "data-tool", "grok")[0].dispatch("click");
+    byData(dialog(), "data-launch-mode", "safe")[0].dispatch("click");
+    assert.strictEqual(modePressed(), "false");
+    byData(dialog(), "data-tool", "claude")[0].dispatch("click");
+    assert.strictEqual(byData(dialog(), "data-cw", "full-only").length, 0);
+    assert.ok(!findText(dialog(), FULL_ONLY_MARK));
+    byData(dialog(), "data-tool", "grok")[0].dispatch("click");
+    assert.strictEqual(modePressed(), "false", "what the person chose is kept");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.deepStrictEqual([posts[0].model.tool, posts[0].launch_mode], ["grok", "safe"]);
+  });
+
+  await test("v0.12 wizard: a Grok card has no profession templates and says so; the other tools still pick one", async () => {
+    const { d } = await openWizard([], catalogGrok);
+    typeName(d, "No templates");
+    btnByText(d, "下一步").dispatch("click");
+    byData(dialog(), "data-tool", "grok")[0].dispatch("click");
+    assert.strictEqual(profOpen(), undefined, "nothing to pick");
+    assert.ok(findText(byData(dialog(), "data-cw", "profession-field")[0], "VBear 沒有掃描 Grok 的 Agent 角色，沒有可選的職業"));
+    byData(dialog(), "data-tool", "claude")[0].dispatch("click");
+    assert.ok(profOpen(), "the other tools still pick one");
+  });
+
+  await test("v0.12 wizard: a Grok card with a write-deny intent shows no launch warning and asks the server nothing (there is no safe launch)", async () => {
+    const { d } = await openWizard([], catalogGrok, writeDenyAnswer);
+    typeName(d, "No warning");
+    btnByText(d, "下一步").dispatch("click");
+    byData(dialog(), "data-tool", "grok")[0].dispatch("click");
+    setIntent("編輯寫入", "deny");
+    await tick(4);
+    assert.ok(!findText(dialog(), "這個組合目前不能出發"));
+    assert.strictEqual(asksOfServer(), 0);
+  });
+
+  await test("v0.12 wizard: a card that already names MCODE while the switch is off keeps it, shows it as hidden and says why; saving keeps the tool", async () => {
+    const existing = mkProfile("p-m", "MCODE 舊卡", "mcode", VERIFIED, { launch_mode: "full", position: "executor" });
+    const saved = [];
+    await openPool([existing], catalogGrok, { "POST /api/agent-profiles/p-m": (url, options) => {
+      saved.push(JSON.parse(options.body));
+      return jsonResponse({ ok: true, profile: existing });
+    } });
+    byData(cardOf("p-m"), "data-pcard", "flip")[0].dispatch("click");
+    byData(cardOf("p-m"), "data-pcard", "edit")[0].dispatch("click");
+    await tick();
+    btnByText(dialog(), "下一步").dispatch("click");
+    const held = byData(dialog(), "data-tool", "mcode");
+    assert.strictEqual(held.length, 1, "the tool is on the row");
+    assert.strictEqual(held[0].getAttribute("aria-pressed"), "true", "and it is the chosen one");
+    assert.strictEqual(held[0].disabled, true, "but it cannot be gone back to");
+    assert.ok(findText(held[0], "MCODE（隱藏中）"));
+    assert.ok(findText(byData(dialog(), "data-cw", "tool-hidden-note")[0], MCODE_OFF));
+    assert.deepStrictEqual(offeredTools().filter((t) => t !== "mcode"), ["claude", "codex", "agy", "grok", "shared"]);
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.strictEqual(saved[0].model.tool, "mcode", "the tool is not changed by opening the card");
+  });
+
+  await test("v0.12 the card: Grok and MCODE cards say they are full-mode only; a hidden MCODE card says why it cannot be used and its start button is off", async () => {
+    const g = mkProfile("p-g", "Grok 一號", "grok", VERIFIED, { launch_mode: "full" });
+    const m = mkProfile("p-m", "MCODE 一號", "mcode", VERIFIED, { launch_mode: "full" });
+    const c = mkProfile("p-c", "Claude 一號", "claude", VERIFIED);
+    const hiddenLoadout = (p) => loadoutBody(p, { blockers: [{ code: "tool_hidden", message: MCODE_OFF }] });
+    await openPool([g, m, c], catalogGrok, { "GET /api/agent-profiles/p-m/loadout": () => jsonResponse(hiddenLoadout(m)) });
+    const grok = cardOf("p-g"), mcode = cardOf("p-m"), claude = cardOf("p-c");
+    assert.strictEqual(grok.getAttribute("data-camp"), "xai");
+    assert.strictEqual(mcode.getAttribute("data-camp"), "minimax");
+    assert.ok(findText(byData(grok, "data-pcard", "full-only")[0], FULL_ONLY_MARK), "the sentence on the front");
+    assert.ok(findText(faceOf(grok, "front"), "只能用完整模式"), "and the short badge beside the camp");
+    assert.ok(findText(faceOf(grok, "front"), "Grok"));
+    assert.strictEqual(shadowOf(faceOf(grok, "front")), shadowOf(pure.officeSprite("alien", "xai", 3)));
+    assert.strictEqual(byData(claude, "data-pcard", "full-only").length, 0, "Claude Code has a safe mode: nothing to say");
+    assert.strictEqual(byData(grok, "data-pcard", "tool-hidden").length, 0, "Grok is not hidden");
+    assert.strictEqual(byData(grok, "data-pcard", "launch")[0].disabled, false);
+    assert.ok(findText(byData(mcode, "data-pcard", "tool-hidden")[0], MCODE_OFF), "MCODE is off: the card says why");
+    assert.strictEqual(byData(mcode, "data-pcard", "launch")[0].disabled, true);
+    assert.ok(findText(byData(mcode, "data-pcard", "full-only")[0], FULL_ONLY_MARK), "still a full-mode-only card");
+    assert.ok(findText(byData(mcode, "data-light", "blocked")[0], MCODE_OFF), "and the light is red with the server's reason");
+  });
+
+  await test("v0.12 the pool: the camp filter has Grok; MCODE only while it is switched on or a card of it exists", async () => {
+    const bar = () => walk(main).filter((n) => n.getAttribute && n.getAttribute("data-filter")).map((n) => n.getAttribute("data-filter"));
+    await openPool([mkProfile("p-c", "Claude 一號", "claude", VERIFIED)], catalogGrok);
+    assert.deepStrictEqual(bar(), ["all", "claude", "codex", "agy", "grok", "shared"]);
+    await openPool([mkProfile("p-m", "MCODE 一號", "mcode", VERIFIED, { launch_mode: "full" })], catalogGrok);
+    assert.ok(bar().includes("mcode"), "a card of it is there: it can be found");
+    await openPool([mkProfile("p-c", "Claude 一號", "claude", VERIFIED)], catalogMcode);
+    assert.deepStrictEqual(bar(), ["all", "claude", "codex", "agy", "grok", "mcode", "shared"]);
+  });
+
+  await test("v0.12 source: no tool is told apart by its name where an ability decides (the next-step launch uses the full-mode-only table)", () => {
+    assert.ok(source.includes("!toolFullOnly(null, teamCardTool(r))") && source.includes("!toolFullOnly(null, teamCardTool(entry))"));
+    assert.ok(!source.includes('teamCardTool(r) !== "agy"') && !source.includes('teamCardTool(entry) !== "agy"'));
+    const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
+    const named = wizard.split("\n").filter((l) => /st\.tool === "agy"/.test(l));
+    assert.ok(named.length > 0 && named.every((l) => /AGY_UNREAD_MARK|agy-skills-note|skillCompatible/.test(l)),
+      "the wizard names AGY only where the skills AGY reads are decided, never for what a tool can launch");
   });
 
   console.log(`\n${passed} passed`);
