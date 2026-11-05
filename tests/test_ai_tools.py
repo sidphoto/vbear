@@ -32,7 +32,8 @@ from vbear.runtime import agent_sessions, native  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 FIELDS = ("id", "name", "short", "family", "species", "generic", "safe_launch", "safe_mode", "full_launch", "model_flag",
-          "hidden", "install_command", "login_command", "status_command", "family_enforced", "not_launchable_message")
+          "hidden", "install_command", "login_command", "status_command", "family_enforced", "not_launchable_message",
+          "login_regions", "version_pattern", "blurb")
 
 
 class RegistryTests(unittest.TestCase):
@@ -105,15 +106,56 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("MCODE", ai_tools.hidden_message("mcode"))
         self.assertIn("顯示 MCODE", ai_tools.hidden_message("mcode"))
 
-    def test_the_status_commands_the_spec_names_and_no_install_command_is_invented(self):
+    def test_the_status_commands_the_spec_names(self):
         by = {t.id: t for t in ai_tools.REGISTRY}
         self.assertEqual(by["claude"].status_command, ("claude", "auth", "status"))
         self.assertEqual(by["codex"].status_command, ("codex", "login", "status"))
         self.assertIsNone(by["agy"].status_command)
         self.assertIsNone(by["grok"].status_command)
         self.assertIsNone(by["mcode"].status_command)
+
+    def test_the_install_and_login_lines_are_the_vendors_own_ones_from_the_research_notes(self):
+        by = {t.id: t for t in ai_tools.REGISTRY}
+        self.assertEqual({i: by[i].install_command for i in ("claude", "codex", "agy", "grok", "mcode")}, {
+            "claude": "curl -fsSL https://claude.ai/install.sh | bash",
+            "codex": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "agy": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+            "grok": "curl -fsSL https://x.ai/cli/install.sh | bash",
+            "mcode": "curl -fsSL https://filecdn.minimax.chat/public/install.sh | bash"})
+        self.assertEqual({i: by[i].login_command for i in ("claude", "codex", "agy", "grok", "mcode")}, {
+            "claude": "claude auth login", "codex": "codex login", "agy": "agy", "grok": "grok login", "mcode": ""})
+        # MCODE has two regions, each a fixed line
+        self.assertEqual(by["mcode"].login_regions, (("global", "國際區", "mcode login --region global"),
+                                                      ("cn", "中國區", "mcode login --region cn")))
+        self.assertEqual((by["shared"].install_command, by["shared"].login_command), ("", ""))
+
+    def test_command_for_picks_a_line_by_tool_action_and_region_and_nothing_else(self):
+        self.assertEqual(ai_tools.command_for("claude", "install"), "curl -fsSL https://claude.ai/install.sh | bash")
+        self.assertEqual(ai_tools.command_for("grok", "login"), "grok login")
+        self.assertEqual(ai_tools.command_for("mcode", "login", "global"), "mcode login --region global")
+        self.assertEqual(ai_tools.command_for("mcode", "login", "cn"), "mcode login --region cn")
+        self.assertIsNone(ai_tools.command_for("mcode", "login"))            # a region must be chosen
+        self.assertIsNone(ai_tools.command_for("mcode", "login", "mars"))
+        self.assertIsNone(ai_tools.command_for("claude", "login", "global"))  # only MCODE has regions
+        self.assertIsNone(ai_tools.command_for("claude", "uninstall"))
+        self.assertIsNone(ai_tools.command_for("shared", "install"))
+        self.assertIsNone(ai_tools.command_for("nope", "install"))
+        self.assertIsNone(ai_tools.command_for(["claude"], "install"))
+        self.assertEqual(ai_tools.setup_ids(), ("claude", "codex", "agy", "grok", "mcode"))
+
+    def test_every_setup_tool_has_a_version_pattern_and_a_plain_sentence(self):
+        import re
+        samples = {"claude": "2.1.318 (Claude Code)", "codex": "codex-cli 0.163.0", "agy": "1.5.0",
+                   "grok": "grok 0.2.101 (5bc4b5dfadcf)", "mcode": "0.5.2"}
         for t in ai_tools.REGISTRY:
-            self.assertEqual((t.install_command, t.login_command), ("", ""), t.id)
+            if t.id in samples:
+                m = re.match(t.version_pattern, samples[t.id])
+                self.assertIsNotNone(m, t.id)
+                self.assertTrue(m.group(1).count(".") == 2, t.id)
+                self.assertGreater(len(t.blurb), 10, t.id)
+                for word in ("CLI", "argv", "PATH"):
+                    self.assertNotIn(word, t.blurb, t.id)
+        self.assertIsNone(re.match(ai_tools.REGISTRY[0].version_pattern, "not a version"))
 
     def test_the_view_is_what_the_server_may_serve_and_has_no_command(self):
         view = ai_tools.view(show_hidden=True)

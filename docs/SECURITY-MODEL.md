@@ -231,6 +231,19 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   built (another flag, a model that looks like an option, a program with another name). The environment is the plain one
   every terminal gets (`PATH`, `TERM`, `LANG`, `HOME`, your user name); no credential is added, so the tool uses the login
   it already has.
+- **The start-up page's install and login terminals are a separate, narrower door (v0.12).** `POST /api/setup/terminals` takes
+  a tool id, an action (`install` or `login`), for MCODE's login a region (`global` or `cn`), and the terminal size; any
+  other field is refused. The line that gets typed is looked up in `vbear/ai_tools.py` (the vendor's own install or login
+  line, source notes in `docs/evidence/ai-tool-install-and-login-lines.md`), never taken from the request, and the daemon's
+  `open_setup` operation is given only those same names: it opens the person's login shell in their home folder with the
+  plain environment and types the one line into it, so the person sees it and the shell runs it as if they had typed it.
+  Nothing downloaded is read or run by VBear itself. `/api/native/sessions` (any list) and `/api/native/terminals` (a plain
+  login shell) are unchanged and are not used for this. The writing routes need the same `X-VBear` header as the others.
+- **The status of an AI tool is read without reading any login.** `vbear/ai_tool_status.py` finds each tool on the search
+  path, runs `<tool> --version` and, for Claude Code and Codex only, their own status command; for the status command only the
+  exit code is used (0 is logged in) and its output goes to nowhere (not captured, not stored, not served). For AGY, Grok and
+  MCODE the person's "I have logged in" mark is the only evidence; it is kept in `setup_marks.json` as the tool id and a time.
+  No tool's own login folder is opened or listed by VBear.
 - **Only Claude Code takes the instructions on the command line.** The card's instructions (its own text, else the
   position's default) go in as a single `--append-system-prompt` argument: control, format and separator characters other
   than a line break or tab are removed, it is cut to 2000 characters, and a text that starts with `-` gets a sentence in

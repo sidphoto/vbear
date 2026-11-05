@@ -448,6 +448,29 @@ class NativeRuntime(RuntimeBase):
             raise NativeRuntimeError(str(err.get("message") or "無法開啟"))
         return r["result"]
 
+    def create_setup_session(self, tool: str, action: str, region: str | None = None, *,
+                             cols: int | None = None, rows: int | None = None) -> dict:
+        """Open the start-up page's install or login terminal for one AI tool. Only the tool, the action and (for
+        MCODE's login) the region cross to the daemon; it looks the line up itself and types it into a login shell."""
+        fields: dict = {"tool": tool, "action": action}
+        if region is not None:
+            fields["region"] = region
+        if cols is not None:
+            fields["cols"] = cols
+        if rows is not None:
+            fields["rows"] = rows
+        try:
+            r = self._rpc("open_setup", timeout=5.0, **fields)
+        except (OSError, ValueError) as exc:
+            raise NativeRuntimeUnavailable(f"VBear runtime 無法連線：{exc}") from exc
+        if not r.get("ok"):
+            err = r.get("error") or {}
+            message = str(err.get("message") or "無法開啟")
+            if "未知的指令" in message:
+                message = "VBear 的背景程式還是舊的版本，請完全關掉 VBear 再重新打開"
+            raise NativeRuntimeError(message)
+        return r["result"]
+
     def create_checked_agent_session(self, engine: str, spec: dict) -> dict:
         """Internal, version-checked Agent launch; not a Profile security gate.
 
@@ -785,7 +808,8 @@ class NativeRuntime(RuntimeBase):
                 "agent": engine,
                 "agent_status": act["display"] if act else ("exited" if s.get("exited") else "unknown"),
                 "exited": bool(s.get("exited")), "exit_code": s.get("exit_code"),
-                "cols": s.get("cols"), "rows": s.get("rows"), "kind": s.get("kind")})
+                "cols": s.get("cols"), "rows": s.get("rows"), "kind": s.get("kind"),
+                "setup": s.get("setup")})
         return snap
 
     def snapshot(self) -> dict:

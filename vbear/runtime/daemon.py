@@ -78,6 +78,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
+from .. import ai_tools
 from .. import config as cfg
 from . import agent_sessions, daemon_chat, daemon_review, daemon_stream, osc_title, pipeline_store, proctrack, quota, stream_flow
 
@@ -134,6 +135,8 @@ RPC_OPS: dict[str, frozenset] = {
     "open": frozenset({"argv", "cwd", "cols", "rows", "env", "kind"}),
     "open_managed": frozenset({"launch_id", "cols", "rows"}),
     "open_full": frozenset({"engine", "argv", "cwd", "cols", "rows"}),
+    # the start-up page's install / login terminal: a tool id and an action, never a line (the line comes from ai_tools)
+    "open_setup": frozenset({"tool", "action", "region", "cols", "rows"}),
     "list": frozenset(),
     "close": frozenset({"session_id"}),
     "attach": frozenset({"session_id", "mode", "cols", "rows"}),
@@ -263,6 +266,20 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def login_shell() -> str:
+    """The account's login shell when it is a listed, executable absolute path; /bin/zsh (the macOS default) otherwise."""
+    import pwd
+    try:
+        shell = pwd.getpwuid(os.getuid()).pw_shell
+        listed = {line.strip() for line in Path("/etc/shells").read_text().splitlines()
+                  if line.strip() and not line.startswith("#")}
+    except (KeyError, OSError):
+        return "/bin/zsh"
+    if os.path.isabs(shell) and shell in listed and os.access(shell, os.X_OK):
+        return shell
+    return "/bin/zsh"
+
+
 def extra_path(home: str | None = None) -> tuple[str, ...]:
     """The one place that says where VBear looks for the `claude` / `codex` CLIs
     beyond the PATH it was started with: Homebrew and the system dirs, then
@@ -363,6 +380,7 @@ class Session:
         self.launch_id: str | None = None
         self.engine: str | None = None      # "claude" / "codex" for a managed session
         self.kind: str | None = None        # "shell" for a user-opened login shell (label only)
+        self.setup: dict | None = None      # a start-up page terminal: {tool, action, region, command} (label only)
         self.launch_mode: str | None = None  # "full" for a full-mode terminal (P34-3); it has no launch state and no sandbox
         self.tracker: proctrack.DescendantTracker | None = None
         self.extra_groups: list[int] = []   # verified descendant groups, from the last look
@@ -466,6 +484,7 @@ class Session:
                 "attachments": len(self.attachments),
                 "control_attachment": self.control.aid if self.control else None,
                 "managed": self.launch_id, "engine": self.engine, "kind": self.kind,
+                "setup": dict(self.setup) if self.setup else None,
                 "launch_mode": self.launch_mode,
                 "cli_version": self.cli_version,
                 "activity_evidence": ({"claude_title": self.titles.snapshot()}
@@ -1217,6 +1236,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
             return self._op_open_managed(rid, req)
         if op == "open_full":
             return self._op_open_full(rid, req)
+        if op == "open_setup":
+            return self._op_open_setup(rid, req)
         if op == "close":
             return self._op_close(rid, req, conn)
         if op == "shutdown":
@@ -1494,6 +1515,43 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         except OSError as exc:
             return _err(rid, "internal", f"無法啟動：{exc}")
         sess.kind = kind
+        return _ok(rid, sess.info())
+
+    def _op_open_setup(self, rid: str, req: dict) -> dict:
+        """Open the person's login shell in their home folder and type one fixed line into it: the install or the login
+        line the AI tool list holds for (tool, action[, region]). The request carries no line, no folder and no command
+        name, so nothing a caller sends can become a command. The line is typed, not run by the daemon: the person sees
+        it in the terminal, and the shell runs it as it would if they had typed it themselves."""
+        if self._shutdown_requested:
+            return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
+        tool, action, region = req.get("tool"), req.get("action"), req.get("region")
+        line = ai_tools.command_for(tool, action, region)
+        if line is None or (region is not None and not isinstance(region, str)):
+            return _err(rid, "bad_request", "沒有這個 AI 工具的這個動作")
+        cols, rows = req.get("cols", 80), req.get("rows", 24)
+        if not (_int_in(cols, 1, 1000) and _int_in(rows, 1, 1000)):
+            return _err(rid, "bad_request", "cols/rows 必須是 1–1000 的整數")
+        env = build_env({"TERM": "xterm-256color"})
+        cwd = env["HOME"]
+        if not (os.path.isabs(cwd) and os.path.isdir(cwd)):
+            return _err(rid, "bad_request", "找不到家目錄")
+        refused = self._session_room(rid)          # terminals, streams and held leaders together
+        if refused:
+            return refused
+        argv = [login_shell(), "-l"]
+        if _resolve(argv[0], cwd, env["PATH"]) is None:
+            return _err(rid, "not_found", f"找不到可執行的指令：{argv[0]}")
+        try:
+            sess = self._spawn(argv, cwd, cols, rows, env)
+        except OSError as exc:
+            return _err(rid, "internal", f"無法啟動：{exc}")
+        sess.kind = "shell"
+        sess.setup = {"tool": tool, "action": action, "region": region, "command": line}
+        try:
+            os.write(sess.master, line.encode("utf-8") + b"\n")   # the tty holds it until the shell reads it
+        except OSError as exc:
+            sess.signal(signal.SIGHUP)
+            return _err(rid, "internal", f"無法送出那一行：{exc}")
         return _ok(rid, sess.info())
 
     def _op_open_full(self, rid: str, req: dict) -> dict:

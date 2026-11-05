@@ -39,6 +39,7 @@ from . import activity
 from . import annotations
 from . import agent_launch
 from . import ai_tools
+from . import ai_tool_status
 from . import agent_profiles
 from . import position_guide
 from . import armory
@@ -108,7 +109,7 @@ EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sen
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
                    "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits",
-                   "chat_limits"}
+                   "chat_limits", "setup_done", "setup_notice"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 # "show_mcode": the switch of a hidden AI tool (vbear/ai_tools.py), written through /api/config like the other keys
@@ -364,16 +365,7 @@ class Console:
 def login_shell() -> str:
     """The account's login shell when it is a listed, executable absolute path;
     /bin/zsh (the macOS default) otherwise."""
-    import pwd
-    try:
-        shell = pwd.getpwuid(os.getuid()).pw_shell
-        listed = {line.strip() for line in Path("/etc/shells").read_text().splitlines()
-                  if line.strip() and not line.startswith("#")}
-    except (KeyError, OSError):
-        return "/bin/zsh"
-    if os.path.isabs(shell) and shell in listed and os.access(shell, os.X_OK):
-        return shell
-    return "/bin/zsh"
+    return rt.daemon.login_shell()
 
 
 def _sourced_author_text(field) -> str:
@@ -645,6 +637,8 @@ def make_handler(console: Console):
                     return self._json({**console.store.live(force=force), "managed_root": str(console.managed_root.resolve())})
                 if path == "/api/config":
                     return self._json(self._config_view())
+                if path == "/api/setup/tools":
+                    return self._setup_tools()
                 if path == "/api/tasks":
                     return self._json({"ok": True, "tasks": self._with_pickup(tasks.list_tasks())})
                 if path == "/api/task-templates":
@@ -851,6 +845,12 @@ def make_handler(console: Console):
                     return self._native_open(self._body())
                 if path == "/api/native/terminals":
                     return self._terminal_open(self._body())
+                if path == "/api/setup/terminals":
+                    return self._setup_terminal(self._body_strict())
+                if path == "/api/setup/settle":
+                    return self._setup_settle()
+                if path.startswith("/api/setup/tools/") and path.endswith("/marker"):
+                    return self._setup_marker(unquote(path[len("/api/setup/tools/"):-len("/marker")]), self._body_strict())
                 if path == "/api/native/claude-verification":
                     return self._claude_verify_start(self._body())
                 if path == "/api/native/agent-previews":
@@ -1354,6 +1354,108 @@ def make_handler(console: Console):
                 return self._error(400, str(exc))
             console.store.live(force=True)
             return self._json({"ok": True, "session": info})
+
+        # The start-up page (v0.12): what each AI tool is, the "I have logged in" mark, the install and login terminals -----
+
+        def _setup_state(self, conf: dict) -> dict:
+            rows = ai_tool_status.report(conf)
+            return {"ok": True, "tools": rows, "any_ready": any(r["ready"] for r in rows),
+                    "setup_done": conf.get("setup_done") is True, "setup_notice": conf.get("setup_notice") is True}
+
+        def _setup_tools(self):
+            try:
+                return self._json(self._setup_state(console.store.conf))
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+
+        def _setup_settle(self):
+            """The first look at the start-up (the home page asks once while the person has not finished it): a person who
+            already has a ready AI tool when they come to this version is counted as done, with a notice to show once; the
+            others stay in the start-up. A person who already finished is not touched and no tool is asked."""
+            with console.lock:
+                if cfg.is_corrupt():
+                    return self._error(409, cfg.corrupt_message())
+                conf = cfg.load()
+            if conf.get("setup_done") is True:
+                return self._json({"ok": True, "setup_done": True, "setup_notice": conf.get("setup_notice") is True,
+                                   "upgraded": False})
+            try:
+                ready = any(r["ready"] for r in ai_tool_status.report(conf))
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+            upgraded = False
+            if ready:
+                with console.lock:
+                    conf = cfg.load()
+                    if conf.get("setup_done") is not True:
+                        conf["setup_done"] = True
+                        conf["setup_notice"] = True
+                        cfg.save(conf)
+                        console.store.set_conf(conf)
+                        upgraded = True
+                    else:
+                        conf = cfg.load()
+            return self._json({"ok": True, "setup_done": conf.get("setup_done") is True,
+                               "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
+
+        def _setup_tool_problem(self, tool_id):
+            """(status, message) when the page may not act on this tool, else None."""
+            if not isinstance(tool_id, str) or tool_id not in ai_tools.setup_ids():
+                return 404, "沒有這個 AI 工具"
+            if tool_id in ai_tools.hidden_off(console.store.conf):
+                return 400, ai_tools.hidden_message(tool_id)
+            return None
+
+        def _setup_marker(self, tool_id: str, body):
+            """「我登入好了」: a mark for a tool that has no status command. Nothing but the tool id and the time is kept."""
+            problem = self._setup_tool_problem(tool_id)
+            if problem:
+                return self._error(*problem)
+            tool = next(t for t in ai_tools.REGISTRY if t.id == tool_id)
+            if tool.status_command:
+                return self._error(400, f"{tool.name} 會自己查登入狀態，不用標記")
+            if not isinstance(body, dict) or set(body) != {"done"} or type(body["done"]) is not bool:
+                return self._error(400, "請求只能有一個 done 欄位，值是 true 或 false")
+            try:
+                at = ai_tool_status.set_mark(tool_id, body["done"])
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+            return self._json({"ok": True, "tool": tool_id, "marked": body["done"], "marked_at": at})
+
+        def _setup_terminal(self, body):
+            """Open the install or the login terminal of one AI tool. The browser names the tool and the action (and, for a
+            tool with two ways to log in, which); the line that is typed comes from vbear/ai_tools.py and is typed by the
+            runtime daemon, which is given only these names. No folder, command or environment is taken from the request."""
+            if not isinstance(body, dict):
+                return self._error(400, "請求本文必須是一個 JSON 物件")
+            extra = set(body) - {"tool", "action", "region", "cols", "rows"}
+            if extra:
+                return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
+            tool, action, region = body.get("tool"), body.get("action"), body.get("region")
+            problem = self._setup_tool_problem(tool)
+            if problem:
+                return self._error(400, problem[1])
+            if ai_tools.command_for(tool, action, region) is None or (region is not None and not isinstance(region, str)):
+                if action in ai_tools.SETUP_ACTIONS and isinstance(tool, str):
+                    t = next(x for x in ai_tools.REGISTRY if x.id == tool)
+                    if action == "login" and t.login_regions and region is None:
+                        return self._error(400, f"{t.name} 要先選登入的是哪一區")
+                return self._error(400, "沒有這個 AI 工具的這個動作")
+            dims = {}
+            for key, low in (("cols", TERM_MIN_DIM), ("rows", TERM_MIN_ROWS)):
+                if key in body:
+                    v = body[key]
+                    if type(v) is not int or not low <= v <= TERM_MAX_DIM:
+                        return self._error(400, f"{key} 必須是 {low} 到 {TERM_MAX_DIM} 的整數")
+                    dims[key] = v
+            try:
+                info = console.runtime.create_setup_session(tool, action, region, **dims)
+            except rt.native.NativeRuntimeUnavailable as exc:
+                return self._error(503, str(exc))
+            except rt.native.NativeRuntimeError as exc:
+                return self._error(400, str(exc))
+            console.store.live(force=True)
+            return self._json({"ok": True, "session": info, "command": (info.get("setup") or {}).get("command")})
 
         # Profile-managed launch (R3 S0): preview, then confirm ---------------
 
@@ -1912,6 +2014,8 @@ def make_handler(console: Console):
                         value = folders.clean_recent_folders(value)
                     if key == "onboarding_dismissed" and type(value) is not bool:
                         raise ValueError("onboarding_dismissed 必須是布林值")
+                    if key in ("setup_done", "setup_notice") and type(value) is not bool:
+                        raise ValueError(f"{key} 必須是布林值")
                     if key in SHOW_TOOL_KEYS and type(value) is not bool:
                         raise ValueError(f"{key} 必須是布林值")
                     if key == "meeting_limits":

@@ -296,6 +296,18 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   restart), `_e2e` (second console, stop during a turn, restarts, ledger); `tests/qa_s3.py` for a person or a
   browser tool.
 
+## Start-up page — `vbear/ai_tool_status.py`, `web/app.js` (`#/setup`)
+
+`ai_tool_status.report(conf)` answers, for each tool in `ai_tools.setup_ids()` (a hidden one only while its switch is on),
+whether it is installed (found on the CLI search path and `--version` read by the registry's `version_pattern`), whether it is
+logged in (the status command's exit code for Claude Code and Codex; the person's mark for AGY, Grok and MCODE), and the
+resulting `state` (`not_installed`, `not_logged_in`, `ready`). `GET /api/setup/tools` serves the rows, `POST
+/api/setup/tools/<id>/marker` sets or removes a mark, `POST /api/setup/settle` is the lobby's first look (a person who already
+has a ready tool when they come to v0.12 is counted as done, with `setup_notice` set once), and `POST /api/setup/terminals`
+opens the install or login terminal through the daemon's `open_setup` operation (see SECURITY-MODEL). The config keys
+`setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
+false; a config that does not say forces nobody.
+
 ## Profile-managed Claude launch
 
 ```

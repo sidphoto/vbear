@@ -39,26 +39,72 @@ class Tool(NamedTuple):
     status_command: Optional[tuple]          # the command that tells whether the person is logged in, if there is one
     family_enforced: bool                    # a role's family must equal `family` (flows stored before this keep loading)
     not_launchable_message: str              # why the safe launch refuses it ("" for the default sentence)
+    # The start-up page (開始設定): when a tool has more than one way to log in, each is (region id, label, fixed line) and
+    # login_command is "". version_pattern matches the first line `--version` prints, group 1 being the version; a tool
+    # whose output does not match is not counted as installed. blurb is the one plain sentence the page shows.
+    login_regions: tuple = ()
+    version_pattern: str = ""
+    blurb: str = ""
 
 
 # The order is the order the camps are offered in, with the generic "shared" camp last.
 REGISTRY: tuple[Tool, ...] = (
     Tool("claude", "Claude Code", "Claude Code", "anthropic", "bear", False, True, True, True, "--model", False,
-         "", "", ("claude", "auth", "status"), False, ""),
+         "curl -fsSL https://claude.ai/install.sh | bash", "claude auth login", ("claude", "auth", "status"), False, "",
+         version_pattern=r"^(\d+\.\d+\.\d+) \(Claude Code\)$",
+         blurb="Anthropic 做的。要有 Claude 的付費方案（Pro、Max、Team 等）或 Console 帳號，免費的 claude.ai 帳號不能用。"),
     Tool("codex", "Codex CLI", "Codex", "openai", "robot", False, True, False, True, "-m", False,
-         "", "", ("codex", "login", "status"), False, ""),
+         "curl -fsSL https://chatgpt.com/codex/install.sh | sh", "codex login", ("codex", "login", "status"), False, "",
+         version_pattern=r"^codex-cli (\d+\.\d+\.\d+)",
+         blurb="OpenAI 做的。用你的 ChatGPT 帳號登入；哪些方案可以用，官方沒有寫清楚。"),
     # Antigravity: the safe launch never starts it; full mode does (as a terminal, with the person's own settings).
     Tool("agy", "Antigravity（AGY）", "AGY", "google", "fox", False, False, False, True, "--model", False,
-         "", "", None, True, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"),
+         "curl -fsSL https://antigravity.google/cli/install.sh | bash", "agy", None, True,
+         "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄",
+         version_pattern=r"^(\d+\.\d+\.\d+)$",
+         blurb="Google 做的（Antigravity）。用個人 Google 帳號登入；公司帳號要有 Gemini Enterprise 授權。"),
     # Grok Build (xAI) and MiniMax Code: full mode only. The model flag is -m for both; the instructions are pasted. MCODE
     # is hidden: it is offered only while the person has turned on "show MCODE" (config key show_mcode).
     Tool("grok", "Grok", "Grok", "xai", "alien", False, False, False, True, "-m", False,
-         "", "", None, True, "Grok 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄"),
+         "curl -fsSL https://x.ai/cli/install.sh | bash", "grok login", None, True,
+         "Grok 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄",
+         version_pattern=r"^grok (\d+\.\d+\.\d+)",
+         blurb="xAI 做的。用 xAI 帳號登入；xAI 公告說 SuperGrok 與 X Premium Plus 的訂閱者可以用。"),
     Tool("mcode", "MCODE", "MCODE", "minimax", "alien", False, False, False, True, "-m", True,
-         "", "", None, True, "MCODE 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄"),
+         "curl -fsSL https://filecdn.minimax.chat/public/install.sh | bash", "", None, True,
+         "MCODE 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄",
+         login_regions=(("global", "國際區", "mcode login --region global"), ("cn", "中國區", "mcode login --region cn")),
+         version_pattern=r"^(\d+\.\d+\.\d+)$",
+         blurb="MiniMax 做的。用 MiniMax 帳號登入，國際區與中國區的帳號是分開的，登入時要選對。"),
     Tool("shared", "共用（skills CLI）", "共用卡", "unknown", None, True, False, False, False, None, False,
          "", "", None, False, "shared 不是可啟動的工具"),
 )
+
+
+SETUP_ACTIONS = ("install", "login")
+
+
+def setup_ids() -> tuple[str, ...]:
+    """The tools the start-up page lists: those with a recorded install line, in the order of REGISTRY."""
+    return tuple(t.id for t in REGISTRY if t.install_command and not t.generic)
+
+
+def command_for(tool_id, action, region=None) -> Optional[str]:
+    """The one fixed line the start-up page may send to a terminal for (tool, action[, region]); None for anything the
+    registry does not hold. The caller never supplies a command: it names a tool and an action, and this looks the line up."""
+    if not isinstance(tool_id, str) or action not in SETUP_ACTIONS:
+        return None
+    t = next((x for x in REGISTRY if x.id == tool_id), None)
+    if t is None or t.generic:
+        return None
+    if action == "install":
+        return (t.install_command or None) if region is None else None
+    if t.login_regions:
+        hit = next((line for rid, _label, line in t.login_regions if rid == region), None)
+        return hit
+    if region is not None:
+        return None
+    return t.login_command or None
 
 
 def ids() -> tuple[str, ...]:

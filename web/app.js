@@ -2157,6 +2157,9 @@ async function viewHome() {
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
     api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList()]);
   const L = D.live;
+  const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
+  if (token !== seq) return;
+  if (setup.redirect) { location.hash = "#/setup"; return; }
   const main = claim(token);
   const onboardingHost = el("div", { id: "h-onboarding" });
   const onboardingInput = () => ({
@@ -2204,6 +2207,7 @@ async function viewHome() {
     corruptNotice(),
     staleNotice(),
     herdrMigrationNotice(),
+    setup.notice ? setupUpgradeNotice() : null,
     runtimeNotice(),
     onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
@@ -6662,6 +6666,7 @@ async function viewSettings() {
     el("p", { class: "lede" }, "選擇要盤點的來源。主控台只讀取你選的位置，不會修改任何技能或角色檔案。"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
     translationSettings(conf, saveConf),
+    setupSettings(),
     onboardingSettings(conf, saveConf),
     el("div", { class: "grid-2" },
       el("div", { class: "panel pad" },
@@ -7977,6 +7982,7 @@ function shellPanes(panes = (D.live && D.live.panes) || []) {
 }
 
 function shellLabel(p, home = D.live && D.live.home) {
+  if (p && p.setup) { const w = setupTerminalWords(p.setup); if (w.title) return w.title; }
   const trim = (x) => (x.length > 1 ? x.replace(/\/+$/, "") : x);
   const cwd = trim((p && p.cwd) || "");
   if (!cwd || (home && cwd === trim(home))) return "~";
@@ -8143,6 +8149,7 @@ async function viewTerminal(paneId) {
 
     const notices = [];
     if (isShell) {
+      if (pane && pane.setup) notices.push(setupTerminalNotice(pane.setup));
       notices.push(notice("info", SHELL_NOTE + " 同一個終端機在另一個分頁打開時，輸入會移到那邊；這裡按「接管操作」可以拿回來。"));
     } else if (mode === "control") {
       notices.push(freshControl ? freshTerminalNotice(doRelease)
@@ -8178,6 +8185,7 @@ async function viewTerminal(paneId) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
     if (!sessionGone) actions.push(closeSessionButton(paneId, backHash));
+    if (pane && pane.setup) actions.push(el("a", { class: "btn small primary", "data-term": "back-setup", href: "#/setup" }, "回開始設定"));
     if (linkedTask) actions.push(el("a", { class: "btn small", "data-term": "back-task", href: `#/workbench?task=${encodeURIComponent(linkedTask.id)}` }, TERM_BACK_TASK_LABEL));
     actions.push(el("a", { class: "btn small", "data-term": "back", href: backHash }, isShell ? TERM_BACK_SHELL_LABEL : TERM_BACK_ROLE_LABEL));
     setKids(actionWrap, actions);
@@ -12178,6 +12186,7 @@ async function route() {
     if (a.dataset.nav === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
   syncNavMenu(top);
+  setupTick = null;
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
@@ -12192,6 +12201,7 @@ async function route() {
     else if (top === "team") await viewTeam(params);
     else if (top === "projects") await viewProjects(parts[1]);
     else if (top === "settings") await viewSettings();
+    else if (top === "setup") await viewSetup();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
     else if (top === "terminals") await viewTerminals();
     else if (top === "office") await viewOffice();
@@ -12231,6 +12241,7 @@ async function route() {
     };
   }
   if (top === "office") liveTick = officeTick;
+  if (top === "setup") liveTick = setupTick;
   if (top === "chat") liveTick = chatTick;
   if (top === "meetings") liveTick = meetingsTick;
   if (top === "staffing") liveTick = staffingTick;
@@ -12248,6 +12259,216 @@ async function route() {
     };
   }
   if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
+}
+
+// ---------- the start-up page (開始設定, v0.12) ---------------------------------------------------------------------------
+// The first page a new person sees: every AI tool VBear can borrow, with where it stands (還沒安裝 / 還沒登入 / 就緒) and the
+// button for the next step. What it shows comes from GET /api/setup/tools, which reads each tool's version and (for Claude
+// Code and Codex) its own login check; AGY, Grok and MCODE have no such check, so the person says 「我登入好了」. The buttons
+// that install or log in only name the tool and the action: the server picks the line and the runtime types it into a terminal.
+// Nothing here reads a login folder, shows a login code or keeps the output of a check.
+const SETUP_TITLE = "開始設定";
+const SETUP_STATE = {
+  not_installed: ["還沒安裝", "b-warn"],
+  not_logged_in: ["還沒登入", "b-warn"],
+  ready: ["就緒", "b-ok"],
+};
+const SETUP_LEDE = "VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。挑你有方案的準備就好，只要有一個就緒，就能開始用。";
+const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先從下面挑一個你有方案的，按「安裝」，裝好再按「登入」。";
+const SETUP_REOPEN_HINT = "安裝好之後如果這裡還是顯示「還沒安裝」，可能要重新打開 VBear，它才找得到剛裝好的程式。";
+const SETUP_ACTION_WORD = { install: "安裝", login: "登入" };
+const SETUP_LEAVE_LABEL = "開始使用";
+const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使用。";
+const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
+let setupTick = null;                 // set by the page while it is open: the quiet refresh route() runs every few seconds
+const setupOpened = new Set();        // "<tool>:install" opened from this page since VBear was opened (for the hint after it)
+
+// What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
+function setupToolView(row) {
+  const r = row && typeof row === "object" ? row : {};
+  const [label, cls] = SETUP_STATE[r.state] || ["未知", "b-mute"];
+  const buttons = [];
+  let note = "";
+  if (r.state === "not_installed") {
+    buttons.push({ key: "install", label: "安裝", kind: "install" });
+    if (r.install_problem === "version_unreadable") note = "電腦上找得到這個程式，但讀不出它的版本，所以先當作還沒安裝好。可以按「安裝」重新裝一次。";
+    else if (setupOpened.has(`${r.id}:install`)) note = SETUP_REOPEN_HINT;
+  } else if (r.state === "not_logged_in") {
+    const regions = Array.isArray(r.login_regions) ? r.login_regions : [];
+    if (regions.length) regions.forEach((g) => buttons.push({ key: `login-${g.id}`, label: `登入（${g.label}）`, kind: "login", region: g.id }));
+    else buttons.push({ key: "login", label: "登入", kind: "login" });
+    if (r.can_mark) {
+      buttons.push({ key: "mark", label: "我登入好了", kind: "mark" });
+      note = "這個 AI 工具沒辦法讓 VBear 自動查登入狀態。在瀏覽器登入完，回到這裡按「我登入好了」。";
+    } else if (r.login === "unknown") {
+      note = "查不出目前有沒有登入。可以按「重新檢查」再試一次，或按「登入」。";
+    } else {
+      note = "登入完回到這一頁，VBear 會自己更新。";
+    }
+  } else if (r.state === "ready" && r.can_mark) {
+    buttons.push({ key: "unmark", label: "其實還沒登入", kind: "unmark" });
+    note = "這是你按「我登入好了」標記的，VBear 沒辦法自己確認。";
+  }
+  return { state: r.state, label, cls, version: typeof r.version === "string" ? r.version : "", note, buttons };
+}
+
+// The plain-words explanation of a terminal opened from the start-up page (shown above the terminal, and in its tab name).
+function setupTerminalWords(setup) {
+  const s = setup && typeof setup === "object" ? setup : {};
+  const name = TOOL[s.tool] || String(s.tool || "");
+  const what = SETUP_ACTION_WORD[s.action] || "";
+  const lines = [];
+  if (s.action === "install") {
+    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
+    lines.push("畫面會跑一陣子字，跑完停下來、出現新的一行提示，就是裝好了。");
+    lines.push("裝好後回到「開始設定」，按「重新檢查」。如果還是顯示還沒安裝，可能要重新打開 VBear。");
+  } else if (s.action === "login") {
+    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push("接下來瀏覽器會跳出登入頁，在那裡登入你自己的帳號。登入的過程不會經過 VBear。");
+    lines.push("登入完回到「開始設定」。沒辦法自動查登入的 AI 工具，要在那裡按「我登入好了」。");
+  }
+  return { title: name && what ? `${name} ${what}` : "", lines };
+}
+
+function setupTerminalNotice(setup) {
+  const w = setupTerminalWords(setup);
+  return el("div", { class: "notice info", "data-setup": "terminal-note" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, el("b", null, w.title), w.lines.map((t) => el("p", { class: "small", style: "margin:4px 0 0" }, t))));
+}
+
+// The home page's gate. The server settles it: a person with no ready tool who has not finished is sent to the start-up; one
+// who already has a ready tool when they upgrade is counted as done and told once. A config that cannot be read, or one that
+// does not say (no setup_done), forces nothing.
+function setupGateWanted(configRes) {
+  return !!(configRes && configRes.config && typeof configRes.config === "object" && configRes.config.setup_done === false);
+}
+// No question to the server: the notice, if the config says one is waiting, is shown and put away at once.
+function setupGateQuiet(configRes) {
+  const conf = configRes && configRes.config;
+  if (!conf || typeof conf !== "object") return { redirect: false, notice: false };
+  const notice = conf.setup_notice === true;
+  if (notice) { conf.setup_notice = false; api.post("/api/config", { setup_notice: false }).catch(() => {}); }
+  return { redirect: false, notice };
+}
+async function setupGate(configRes) {
+  if (!setupGateWanted(configRes)) return setupGateQuiet(configRes);
+  try {
+    const r = await api.post("/api/setup/settle", {});
+    if (r.setup_done !== true) return { redirect: true, notice: false };
+    configRes.config.setup_done = true;
+    configRes.config.setup_notice = r.setup_notice === true;
+  } catch (_) {
+    return { redirect: false, notice: false };
+  }
+  return setupGateQuiet(configRes);
+}
+
+function setupUpgradeNotice() {
+  return el("div", { class: "notice info", "data-setup": "upgrade-notice" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, SETUP_UPGRADE_NOTICE, " ", el("a", { href: "#/setup" }, "看看開始設定")));
+}
+
+// The settings page's way back to the start-up page.
+function setupSettings() {
+  return el("section", { class: "panel pad", "data-settings": "setup" },
+    el("h2", { style: "margin-bottom:6px" }, SETUP_TITLE),
+    el("p", { class: "small muted" }, "看每個 AI 工具裝好了沒、登入了沒，也能在那裡補裝其他的。"),
+    el("a", { class: "btn", href: "#/setup", "data-setup": "open" }, "回到開始設定"));
+}
+
+function setupToolKey(rows) {
+  return JSON.stringify((rows || []).map((r) => [r.id, r.state, r.version, r.login, r.marked_at, r.install_problem]));
+}
+
+async function openSetupTerminal(toolId, action, region) {
+  const body = { tool: toolId, action };
+  if (region) body.region = region;
+  const r = await api.post("/api/setup/terminals", body);
+  if (action === "install") setupOpened.add(`${toolId}:install`);
+  location.hash = `#/term/${encodeURIComponent(r.session.session_id)}`;
+}
+
+async function viewSetup() {
+  const token = seq;
+  let data;
+  try { data = await api.get("/api/setup/tools"); }
+  catch (e) {
+    const main = claim(token);
+    if (token === seq) setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + e.message));
+    return;
+  }
+  const main = claim(token);
+  if (token !== seq) return;
+  let shown = data;
+  let busy = false;
+  const host = el("div", { "data-setup": "page" });
+  const refresh = async (quiet) => {
+    try {
+      const next = await api.get("/api/setup/tools");
+      if (token !== seq) return;
+      const changed = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
+      shown = next;
+      if (changed || !quiet) draw();
+      if (!quiet) toast("已重新檢查");
+    } catch (e) { if (!quiet) toast("重新檢查失敗：" + e.message); }
+  };
+  const run = async (btn, fn) => {
+    if (busy) return;
+    busy = true; btn.disabled = true;
+    try { await fn(); }
+    catch (e) { toast(e.message); }
+    finally { busy = false; btn.disabled = false; }
+  };
+  const toolCard = (row) => {
+    const v = setupToolView(row);
+    const buttons = v.buttons.map((b) => {
+      const btn = el("button", { class: `btn small${b.kind === "install" || b.kind === "login" ? " primary" : ""}`, type: "button",
+        "data-setup-act": b.key }, b.label);
+      btn.addEventListener("click", () => run(btn, async () => {
+        if (b.kind === "install" || b.kind === "login") await openSetupTerminal(row.id, b.kind, b.region);
+        else {
+          await api.post(`/api/setup/tools/${encodeURIComponent(row.id)}/marker`, { done: b.kind === "mark" });
+          await refresh(true);
+          draw();
+        }
+      }));
+      return btn;
+    });
+    return el("li", { class: "setup-tool", "data-tool": row.id, "data-state": v.state },
+      el("div", { class: "setup-head" },
+        el("h2", null, row.name || row.id),
+        badge(v.label, v.cls),
+        v.version ? el("span", { class: "small muted mono" }, `版本 ${v.version}`) : null),
+      el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
+      v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
+      buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
+      // the place for the 「試一下」 button (a later task)
+      el("div", { "data-setup-slot": "try" }));
+  };
+  const draw = () => {
+    const rows = Array.isArray(shown.tools) ? shown.tools : [];
+    const anyReady = rows.some((r) => r && r.ready === true);
+    const canLeave = anyReady || shown.setup_done === true;
+    const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
+    leave.addEventListener("click", () => run(leave, async () => {
+      if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
+      location.hash = "#/";
+    }));
+    const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
+    recheck.addEventListener("click", () => run(recheck, () => refresh(false)));
+    setKids(host,
+      anyReady ? null : notice("info", SETUP_NONE_READY),
+      el("ul", { class: "setup-list" }, rows.map(toolCard)),
+      // the place for the choice of the daily limit (a later task)
+      el("div", { "data-setup-slot": "daily-limit" }),
+      el("section", { class: "section setup-foot" },
+        el("div", { class: "row" }, leave, recheck),
+        canLeave ? el("p", { class: "small muted" }, "之後隨時可以從左邊的「開始設定」回到這一頁，加其他 AI 工具。")
+          : el("p", { class: "small muted", "data-setup": "leave-note" }, SETUP_LEAVE_BLOCKED)));
+  };
+  setKids(main, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), host);
+  draw();
+  setupTick = () => (document.hidden || busy ? Promise.resolve() : refresh(true));
 }
 
 // ---------- chat with role cards (P36-2) -----------------------------------------------------------------------------------
@@ -14995,6 +15216,15 @@ if (typeof module !== "undefined" && module.exports) {
     onboardingState,
     onboardingSection,
     onboardingSettings,
+    SETUP_STATE,
+    SETUP_UPGRADE_NOTICE,
+    SETUP_REOPEN_HINT,
+    setupToolView,
+    setupTerminalWords,
+    setupGate,
+    setupToolKey,
+    setupOpened,
+    viewSetup,
     questNext,
     boardTeamKey,
     ONBOARD_STEPS,
