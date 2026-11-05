@@ -1010,6 +1010,52 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.strictEqual(btnByText(d, "產生預覽").disabled, true);
   });
 
+  // v0.12: the pass decides from the tool list, not from the id "agy": Grok and MCODE are tools without a safe launch too
+  const toolListCatalog = { ...catalog, tool_list: [
+    { id: "claude", name: "Claude Code", short: "Claude Code", generic: false, safe_launch: true, safe_mode: true, full_launch: true, not_launchable_message: "" },
+    { id: "agy", name: "Antigravity（AGY）", short: "AGY", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄" },
+    { id: "grok", name: "Grok", short: "Grok", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "Grok 目前只能用完整模式，VBear 不用安全模式啟動它" },
+    { id: "shared", name: "共用", short: "共用卡", generic: true, safe_launch: false, safe_mode: false, full_launch: false, not_launchable_message: "shared 不是可啟動的工具" },
+  ] };
+
+  await test("v0.12 pass: a Grok card in the safe launch gets the same refusal as AGY, with the tool list's own sentence", async () => {
+    const ctx = freshContext(baseHandlers([mkProfile("p-1", "Safe Grok", "grok", { read: "allow", write: "allow", test: "allow", deploy: "deny" })], toolListCatalog));
+    evalAgentBuilderSlice(ctx);
+    const d = await openPass(ctx);
+    const notice = byData(d, "data-pass", "agy-not-launchable")[0];
+    assert.ok(notice, "the refusal is on the pass");
+    assert.ok(findText(notice, "Grok 目前只能用完整模式，VBear 不用安全模式啟動它"));
+    assert.ok(!findText(notice, "AGY"), "it does not talk about another tool");
+    assert.strictEqual(btnByText(d, "產生預覽").disabled, true);
+  });
+
+  await test("v0.12 pass: a full-mode Grok card names Grok beside the program, as a full AGY card names AGY", async () => {
+    for (const [tool, name] of [["grok", "Grok"], ["agy", "AGY"]]) {
+      const pv = fullPass({ cli: { binary: `/Users/u/bin/${tool}`, version: null }, command: [`/Users/u/bin/${tool}`],
+        instructions: { delivery: "paste", source: "default", position: "legal", text: "你是法務", where: "貼上" } });
+      const ctx = freshContext(baseHandlers([fullCard(tool)], toolListCatalog, { "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: pv }) }));
+      evalAgentBuilderSlice(ctx);
+      const d = await openPass(ctx);
+      assert.ok(!byData(d, "data-pass", "agy-not-launchable").length, `${tool}: full mode is not refused`);
+      field(d).value = WORKDIR;
+      btnByText(d, "產生預覽").dispatch("click");
+      await tick(6);
+      assert.ok(findText(d, `${name} · /Users/u/bin/${tool}`), `${tool}: the program is named ${name}`);
+      btnByText(d, "取消").dispatch("click");
+      await tick(2);
+    }
+  });
+
+  await test("v0.12 pass: a shared card has no tool name beside the program", async () => {
+    const ctx = freshContext({});
+    evalAgentBuilderSlice(ctx);
+    assert.strictEqual(ctx.toolShortName(toolListCatalog, "shared"), "");
+    assert.strictEqual(ctx.toolShortName(toolListCatalog, "grok"), "Grok");
+    assert.strictEqual(ctx.toolShortName(null, "mcode"), "MCODE", "no list: the page's own table");
+    assert.strictEqual(ctx.toolShortName(null, "shared"), "");
+    assert.strictEqual(ctx.toolShortName(null, "nope"), "");
+  });
+
   await test("P34-3 pass: a full card the server cannot start shows the server's reason, and no front", async () => {
     const blocked = fullPass({ launchable: false, preview_id: null, cli: null, settings_digest: null, command: null, instructions: null,
       reasons: [{ code: "cli_not_found", message: "找不到 agy：它不在 VBear 找指令的路徑上" }] });

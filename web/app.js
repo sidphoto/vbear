@@ -4513,6 +4513,13 @@ function toolFullOnly(catalog, tool) { const c = toolCaps(catalog, tool); return
 // A tool the safe launch's code refuses (AGY, Grok, MCODE) but full mode starts: the card has no safe launch to describe.
 function toolNoSafeLaunch(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safe; }
 function toolNoSafe(catalog, tool) { return !toolCaps(catalog, tool).safe; }
+// The short name of a tool as the tool list writes it ("" for a generic card, which is no program, and for an unknown id).
+function toolShortName(catalog, tool) {
+  const rows = catalog && Array.isArray(catalog.tool_list) ? catalog.tool_list.filter((r) => r && typeof r === "object") : [];
+  const row = rows.find((r) => r.id === tool);
+  if (row) return row.generic === true || typeof row.short !== "string" ? "" : row.short;
+  return tool !== "shared" && cardHas(CARD_TOOL_SHORT, tool) ? CARD_TOOL_SHORT[tool] : "";
+}
 
 function cardAvatar(p, scale = 3) {
   const tool = p && p.model && typeof p.model.tool === "string" ? p.model.tool : "";
@@ -9923,11 +9930,15 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     // A card whose mode is exactly "full" departs with the person's own settings and no limit from VBear (P34-3); any
     // other value is the safe launch, as before.
     const isFull = p.launch_mode === "full";
-    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : tool === "agy" ? "AGY" : "";
-    // VBear has no safe launch for Antigravity: the pass says so first and offers no preview and no start, so
-    // there is no limit and no shield on it to read. In full mode an AGY card goes like any other.
-    const isAgy = tool === "agy" && !isFull;
-    if (isAgy) previewBtn.disabled = true;
+    // the tool's name on the pass comes from the tool list (a generic card has none), not from a test of one tool's id
+    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : toolShortName(agentBuilderCatalog, tool);
+    // VBear has no safe launch for a tool the list marks as full mode only without a safe launch (Antigravity, Grok, MCODE):
+    // the pass says so first and offers no preview and no start, so there is no limit and no shield on it to read. In
+    // full mode such a card goes like any other.
+    const toolCap = toolCaps(agentBuilderCatalog, tool);
+    const noSafeStart = toolCap.full && !toolCap.safe && !isFull;
+    const noSafeNote = toolCap.note || AGY_NOT_LAUNCHED;
+    if (noSafeStart) previewBtn.disabled = true;
     function needsAck(pv) { return Boolean(isClaude && !isFull && pv && pv.cli && pv.cli.verified === false); }
     // a preview that can start in full mode: the person must have ticked 我了解 (the server refuses without it as well)
     function needsFullAck(pv) { return Boolean(pv && pv.launchable && pv.launch_mode === "full"); }
@@ -9936,7 +9947,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     function whyOff() {
       if (busy) return "";
       // the notice at the top of the pass already says it, once; here only where to read it
-      if (isAgy) return "現在不能出發：見上方「這張角色卡目前無法啟動」。";
+      if (noSafeStart) return "現在不能出發：見上方「這張角色卡目前無法啟動」。";
       if (!current) {
         if (lastPreview && !lastPreview.launchable) {
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
@@ -9978,16 +9989,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
         el("h2", { id: titleId }, `出發通行證：${p.name || p.id}`),
-        isAgy ? el("div", { class: "notice warn", "data-pass": "agy-not-launchable" },
+        noSafeStart ? el("div", { class: "notice warn", "data-pass": "agy-not-launchable" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-          el("div", null, el("strong", null, "這張角色卡目前無法啟動"), el("p", { class: "small" }, AGY_NOT_LAUNCHED)))
+          el("div", null, el("strong", null, "這張角色卡目前無法啟動"), el("p", { class: "small" }, noSafeNote)))
         : el("p", { class: "small muted" }, isFull
           ? "出發前先看這張通行證：這次會執行的指令，和 VBear 沒有限制的地方。確認後才會啟動。"
           : "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動角色。"),
-        isAgy ? null : el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
-        isAgy ? null : el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
-        isAgy ? null : workdirRange,
-        isAgy || isFull ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
+        noSafeStart ? null : el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
+        noSafeStart ? null : el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
+        noSafeStart ? null : workdirRange,
+        noSafeStart || isFull ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
           el("span", null, PASS_COMMIT_ACK, el("span", { class: "small muted" }, " 不勾選就無法啟動。"))),
         out,
@@ -9995,7 +10006,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("div", { class: "modal-actions" }, cancelBtn, previewBtn, confirmBtn)));
     document.body.append(modalElem);
     const closeModal = withModalA11y(modalElem, () => modalElem.remove());
-    (isAgy ? cancelBtn : workdirInput).focus();
+    (noSafeStart ? cancelBtn : workdirInput).focus();
     why.textContent = whyOff();
 
     // A reason it cannot go, with the button that leads to where it is changed (PASS_FIXES). The editor closes when
@@ -10252,7 +10263,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
 
     async function doPreview() {
-      if (busy || isAgy) return;
+      if (busy || noSafeStart) return;
       busy = true;
       previewBtn.disabled = true;
       invalidate("正在產生預覽…");
@@ -10287,7 +10298,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     if (launchOpts.autoPreview !== false && workdirInput.value.trim() && (isFull || commitBox.checked)) doPreview();
 
     async function doLaunch() {
-      if (busy || !current || isAgy) return;
+      if (busy || !current || noSafeStart) return;
       if (needsFullAck(current) && !fullAckOk()) return;   // the button is off too; this holds if a click gets through anyway
       busy = true;
       confirmBtn.disabled = true;

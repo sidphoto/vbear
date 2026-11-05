@@ -293,6 +293,37 @@ test("the terminal of the start-up page is named after the tool and the action, 
   assert.strictEqual(app.setupTerminalWords(null).title, "");
 });
 
+test("a start-up terminal is listed and tabbed under the tool and the action, a plain one as before", () => {
+  const setup = { tool: "grok", action: "login", region: null, command: "grok login" };
+  assert.strictEqual(app.shellLabel({ pane_id: "n-0123456789ab", kind: "shell", cwd: "/home/u", setup }, "/home/u"), "Grok 登入");
+  assert.strictEqual(app.shellLabel({ pane_id: "n-0123456789ab", kind: "shell", cwd: "/home/u/app", setup: null }, "/home/u"), "app");
+  assert.strictEqual(app.shellLabel({ pane_id: "n-0123456789ab", kind: "shell", cwd: "/home/u" }, "/home/u"), "~");
+  const panes = [{ kind: "shell", exited: false, setup }, { kind: "shell", exited: false }, { kind: "shell", exited: true, setup }];
+  assert.strictEqual(app.shellPanes(panes).length, 2, "it is a shell terminal like the others, so it can be closed and listed");
+});
+
+test("the terminal page of a start-up terminal says in plain words what is happening and leads back to the start-up page", async () => {
+  setPage();
+  const inner = global.fetch;
+  const setup = { tool: "claude", action: "install", region: null, command: "curl -fsSL https://claude.ai/install.sh | bash" };
+  global.fetch = async (url, opts) => {
+    if (String(url).split("?")[0] === "/api/live") {
+      return jsonResponse({ runtime: { available: true, problems: [] }, sessions: [], attention: [], projects: [], usage: { sessions: [] }, home: "/home/u",
+        panes: [{ pane_id: "n-0123456789ab", terminal_id: "n-0123456789ab", kind: "shell", cwd: "/home/u", exited: false, setup }] });
+    }
+    return inner(url, opts);
+  };
+  try {
+    const main = await open("#/term/n-0123456789ab");
+    const t = text(main);
+    assert(t.includes("Claude Code 安裝"), "named after the tool and the action");
+    assert(t.includes("官方安裝指令") && t.includes("你不用打任何字"), "what happens, in plain words");
+    const back = byAttr(main, "data-term", "back-setup")[0];
+    assert(back && attr(back, "href") === "#/setup" && text(back) === "回開始設定");
+    assert(byAttr(main, "data-setup", "terminal-note").length === 1);
+  } finally { global.fetch = inner; }
+});
+
 test("source: built with el(), no innerHTML, no emoji, no outside resource, and none of the words a first-time person cannot read", () => {
   assert(BLOCK.length > 4000);
   assert(!/innerHTML|insertAdjacentHTML/.test(BLOCK));
