@@ -155,10 +155,14 @@ RETIRED_POSITIONS: dict[str, dict[str, Any]] = {
 
 # How a card is to be started (P34-2). "full" is the tool as the person runs it by hand, with no limit from VBear;
 # "safe" is the verified, sandboxed launch every card had before. A card without the key is "safe": an old card is not
-# loosened by an upgrade, and only the word "full" reads as full. A new card is offered "full" (the wizard reads this
-# from the catalog); nothing writes it for a card the person did not set.
+# loosened by an upgrade, and only the word "full" reads as full. A new card starts "safe" where its tool has a safe
+# mode (ADR 0002; the wizard reads this from the catalog) and "full" where the tool has only full mode; nothing writes
+# the mode for a card the person did not set.
 LAUNCH_MODES: tuple[str, ...] = position_guide.LAUNCH_MODES
-DEFAULT_LAUNCH_MODE_FOR_NEW = "full"
+DEFAULT_LAUNCH_MODE_FOR_NEW = "safe"
+# The tools VBear can start in safe mode (a verified, sandboxed launch). Codex has a managed path in the code but it is
+# refused (codex_interactive_flags_unsupported), so today only Claude Code has a safe mode that can actually start.
+SAFE_MODE_TOOLS: tuple[str, ...] = ("claude",)
 
 
 def effective_launch_mode(profile) -> str:

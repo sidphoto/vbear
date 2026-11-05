@@ -904,10 +904,54 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.ok(!byData(d, "data-pass-line", "write").length && !byData(d, "data-pass-line", "network").length, "no shield lines: nothing was limited");
     assert.ok(!findText(d, "盾牌圖例") && !findText(d, "暫存區"), "no legend and no scratch folder");
     assert.ok(findText(byData(d, "data-pass", "mode")[0], "完整模式"));
-    assert.strictEqual(btnByText(d, "確認啟動").disabled, false, "no acknowledgement box stands in the way");
+    // ADR 0002: the person says in plain words what a full launch can do and ticks 我了解 before the button works
+    const warn = byData(d, "data-pass", "full-ack")[0];
+    assert.ok(warn && findText(warn, "這個員工可以動你電腦上的任何檔案"), "the plain warning stands beside the box");
+    const ack = byData(d, "data-pass", "full-ack-box")[0];
+    assert.ok(ack && ack.getAttribute("type") === "checkbox" && !ack.checked, "the box starts unticked");
+    assert.ok(findText(warn, "我了解"));
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true, "without 我了解 the button cannot be pressed");
+    assert.ok(findText(d, "還沒有勾選「我了解」"), "the reason is said beside the button");
+    btnByText(d, "確認啟動").dispatch("click");
+    await tick(3);
+    assert.strictEqual(launches.length, 0, "a click on the disabled button launches nothing");
+    ack.checked = true; ack.dispatch("change");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+    ack.checked = false; ack.dispatch("change");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true, "unticking takes it away again");
+    ack.checked = true; ack.dispatch("change");
     btnByText(d, "確認啟動").dispatch("click");
     await tick(6);
-    assert.deepStrictEqual(launches, [{ preview_id: "p-" + "f".repeat(32), expected_settings_digest: "e".repeat(64), user_confirmed: true }]);
+    assert.deepStrictEqual(launches, [{ preview_id: "p-" + "f".repeat(32), expected_settings_digest: "e".repeat(64), user_confirmed: true,
+      accept_full_mode: true }]);
+  });
+
+  await test("ADR 0002 pass: a new preview of a full card starts with the box unticked again", async () => {
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"),
+      "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: fullPass() }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    let ack = byData(d, "data-pass", "full-ack-box")[0];
+    ack.checked = true; ack.dispatch("change");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    ack = byData(d, "data-pass", "full-ack-box")[0];
+    assert.ok(!ack.checked, "the earlier tick does not carry over to the next preview");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true);
+  });
+
+  await test("ADR 0002 pass: a preview that cannot launch shows no box, and a safe launch never sends accept_full_mode", async () => {
+    const blocked = fullPass({ launchable: false, preview_id: null, cli: null, settings_digest: null, command: null, instructions: null,
+      reasons: [{ code: "cli_not_found", message: "找不到 claude" }] });
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: blocked }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    assert.ok(!byData(d, "data-pass", "full-ack").length, "nothing to acknowledge when nothing can start");
   });
 
   await test("P34-3 pass: a full card with a folder already filled in is previewed when the pass opens, without a commit sentence; the confirm still needs a click", async () => {
@@ -926,8 +970,11 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.strictEqual(previews.length, 1, "the folder of the task card is previewed on its own");
     assert.deepStrictEqual(previews[0], { profile_id: "p-1", workdir: WORKDIR, commit: false });
     const confirm = btnByText(d, "確認啟動");
-    assert.strictEqual(confirm.disabled, false);
+    assert.strictEqual(confirm.disabled, true, "the full card still waits for 我了解");
     assert.ok(!focusLog.includes(confirm), "the focus was never given to 確認啟動");
+    const ack = byData(d, "data-pass", "full-ack-box")[0];
+    ack.checked = true; ack.dispatch("change");
+    assert.strictEqual(confirm.disabled, false);
     assert.strictEqual(launches.length, 0, "nothing launched until the click");
     confirm.dispatch("click");
     await tick(6);
@@ -950,7 +997,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
       assert.ok(findText(front, "貼上職位指示"), tool);
       assert.ok(!byData(front, "data-pass", "instruction-text").length, "nothing is said to be carried");
       assert.strictEqual((byData(front, "data-pass", "command")[0].textContent || "").trim(), `/Users/u/bin/${tool}`);
-      assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+      assert.strictEqual(btnByText(d, "確認啟動").disabled, true, `${tool}: the box 我了解 comes first`);
       btnByText(d, "取消").dispatch("click");
       await tick(2);
     }

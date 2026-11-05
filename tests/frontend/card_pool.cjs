@@ -3690,7 +3690,7 @@ async function test(name, fn) {
   const catalog342 = { ...catalog, tools: ["claude", "codex", "agy", "shared"],
     launch_modes: [{ id: "full", label: "完整模式", help: "像在終端機自己用：可以上網，VBear 不加限制。" },
       { id: "safe", label: "安全模式", help: "有沙盒、不能上網，是 VBear 已驗證的出發方式。" }],
-    default_launch_mode: "full", max_instructions: 2000,
+    default_launch_mode: "safe", safe_mode_tools: ["claude"], full_mode_tools: ["claude", "codex", "agy"], max_instructions: 2000,
     instructions_where: "這份指示不會自動交給工具；開了終端、接管之後按「貼上職位指示」才會貼進去，由你按 Enter 送出。",
     position_guide: {
       legal: { prompt: LEGAL_PROMPT, skill_categories: ["security", "legal"], suggested_folder: "法務報告", views: views() },
@@ -3728,26 +3728,82 @@ async function test(name, fn) {
   const boundaryRows = () => byData(dialog(), "data-cw", "boundary-row");
   const kindsOf = () => boundaryRows().map((n) => `${n.getAttribute("data-boundary")}:${n.getAttribute("data-kind")}`);
 
-  await test("P34-2 launch mode: a new card is offered full mode, the person can switch, and the choice is posted; the words say what each mode is", async () => {
+  await test("P34-2 launch mode: a new Claude Code card starts in safe mode, the person can switch, and the choice is posted; the words say what each mode is", async () => {
     const { posts } = await wizard342();
     const box = byData(dialog(), "data-cw", "launch-mode")[0];
     assert.ok(box, "the launch mode field is on step 2");
-    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true", "a new card starts on the catalog's default");
-    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "false");
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true", "a tool with a safe mode starts in it (ADR 0002)");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "false");
     assert.ok(findText(box, "完整模式") && findText(box, "安全模式"));
-    assert.ok(findText(byData(box, "data-cw", "launch-mode-note")[0], "VBear 不加限制"), "the note under it is the mode's own help");
-    modeBtn("safe").dispatch("click");
-    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true");
-    assert.ok(findText(byData(dialog(), "data-cw", "launch-mode-note")[0], "有沙盒"));
+    assert.ok(findText(byData(box, "data-cw", "launch-mode-note")[0], "有沙盒"), "the note under it is the mode's own help");
+    modeBtn("full").dispatch("click");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true");
+    assert.ok(findText(byData(dialog(), "data-cw", "launch-mode-note")[0], "VBear 不加限制"));
     btnByText(dialog(), "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
-    assert.strictEqual(posts[0].launch_mode, "safe");
+    assert.strictEqual(posts[0].launch_mode, "full");
     const again = await wizard342();
     btnByText(dialog(), "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
     await tick();
-    assert.strictEqual(again.posts[0].launch_mode, "full", "left alone, a new card is posted as full");
+    assert.strictEqual(again.posts[0].launch_mode, "safe", "left alone, a new Claude Code card is posted as safe");
+  });
+
+  await test("ADR 0002 launch mode: a tool with only full mode starts in full and says so; switching the tool moves the start until the person chooses", async () => {
+    const { posts } = await wizard342();
+    const toolBtn = (t) => byData(dialog(), "data-tool", t)[0];
+    assert.ok(!byData(dialog(), "data-cw", "full-only-note").length, "Claude Code has a safe mode: nothing to say");
+    for (const t of ["codex", "agy"]) {
+      toolBtn(t).dispatch("click");
+      assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true", `${t} has only full mode`);
+      assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "false");
+      const note = byData(dialog(), "data-cw", "full-only-note")[0];
+      assert.ok(note && findText(note, "只能用完整模式"), `${t}: the card says its tool has no safe mode`);
+    }
+    toolBtn("claude").dispatch("click");
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true", "back on a tool with a safe mode");
+    assert.ok(!byData(dialog(), "data-cw", "full-only-note").length);
+    toolBtn("shared").dispatch("click");
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true", "a tool in neither list starts safe");
+    toolBtn("codex").dispatch("click");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].model.tool, "codex");
+    assert.strictEqual(posts[0].launch_mode, "full", "the post carries the start the tool got");
+  });
+
+  await test("ADR 0002 launch mode: once the person chooses a mode, changing the tool does not take the choice back", async () => {
+    const { posts } = await wizard342();
+    const toolBtn = (t) => byData(dialog(), "data-tool", t)[0];
+    modeBtn("full").dispatch("click");
+    toolBtn("codex").dispatch("click");
+    toolBtn("claude").dispatch("click");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true", "the person's own choice stays");
+    btnByText(dialog(), "下一步").dispatch("click");
+    btnByText(dialog(), "建立").dispatch("click");
+    await tick();
+    assert.strictEqual(posts[0].launch_mode, "full");
+  });
+
+  await test("ADR 0002 launch mode: an existing card keeps its mode when its tool is changed, and posts none unless the person chose", async () => {
+    const saved = { out: [], handler: {} };
+    saved.handler = { "POST /api/agent-profiles/p-1": (_u, o) => { const b = JSON.parse(o.body); saved.out.push(b);
+      return jsonResponse({ ok: true, profile: mkProfile("p-1", "Has", b.model.tool, VERIFIED, {}) }); } };
+    await editCard342(mkProfile("p-1", "Has", "claude", VERIFIED, { launch_mode: "full" }), { ...saved.handler });
+    byData(dialog(), "data-tool", "codex")[0].dispatch("click");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true");
+    byData(dialog(), "data-tool", "claude")[0].dispatch("click");
+    assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true", "a stored full card is not made safe by the tool buttons");
+    const bare = { out: [], handler: {} };
+    bare.handler = { "POST /api/agent-profiles/p-2": (_u, o) => { const b = JSON.parse(o.body); bare.out.push(b);
+      return jsonResponse({ ok: true, profile: mkProfile("p-2", "Old", "codex", VERIFIED, {}) }); } };
+    await editCard342(mkProfile("p-2", "Old", "codex", VERIFIED, {}), { ...bare.handler });
+    assert.strictEqual(modeBtn("safe").getAttribute("aria-pressed"), "true", "an old card with no mode reads as safe, as before");
+    btnByText(dialog(), "儲存修改").dispatch("click");
+    await tick();
+    assert.ok(!("launch_mode" in bare.out[0]), "an untouched old card is not given a mode");
   });
 
   await test("P34-2 launch mode: an older server (no launch_modes in the catalog) shows no mode and posts no mode key", async () => {

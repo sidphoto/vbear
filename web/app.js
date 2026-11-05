@@ -4536,6 +4536,21 @@ function openCardWizard(opts) {
   const launchModes = Array.isArray(catalog.launch_modes)
     ? catalog.launch_modes.filter((m) => m && (m.id === "full" || m.id === "safe") && typeof m.label === "string") : [];
   const modesOffered = launchModes.length > 0;
+  // ADR 0002: a new card starts safe where its tool has a safe mode and full where it has only full mode. The server says
+  // which tools are which; a server that does not (an older one) leaves the catalog's single default to decide.
+  const safeModeTools = Array.isArray(catalog.safe_mode_tools) ? catalog.safe_mode_tools.filter((t) => typeof t === "string") : null;
+  const fullModeTools = Array.isArray(catalog.full_mode_tools) ? catalog.full_mode_tools.filter((t) => typeof t === "string") : null;
+  const hasMode = (id) => launchModes.some((m) => m.id === id);
+  const startModeFor = (tool) => {
+    if (!modesOffered) return "safe";
+    if (safeModeTools && fullModeTools) {
+      if (safeModeTools.includes(tool) && hasMode("safe")) return "safe";
+      if (fullModeTools.includes(tool) && hasMode("full")) return "full";
+      return hasMode("safe") ? "safe" : launchModes[0].id;
+    }
+    return hasMode(catalog.default_launch_mode) ? catalog.default_launch_mode : "safe";
+  };
+  const fullModeOnly = (tool) => Boolean(safeModeTools && fullModeTools && !safeModeTools.includes(tool) && fullModeTools.includes(tool));
   const maxInstr = Number(catalog.max_instructions) > 0 ? Number(catalog.max_instructions) : 0;
   const storedInstr = existing && typeof existing.instructions === "string" && existing.instructions.trim() ? existing.instructions : null;
   const startPosition = existing ? cardPosition(existing) : null;
@@ -4560,8 +4575,7 @@ function openCardWizard(opts) {
     positionTouched: false,   // a position button was pressed: only then does a stored value this page cannot show give way
     // P34-2. A card with no stored mode is a safe one (an old card is not loosened by opening it); a new card starts on the
     // catalog's default. The mode is posted for a new card, and for an old one only when the person chose.
-    launchMode: !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe")
-      : (launchModes.some((m) => m.id === catalog.default_launch_mode) ? catalog.default_launch_mode : "safe"),
+    launchMode: "safe",   // set just below, once the tool is known
     launchModeTouched: false,
     // the text in the instructions box; custom is when it differs from the position's default, stored when the card has
     // its own text on disk, changed when the person typed or restored it (an untouched box posts nothing)
@@ -4587,6 +4601,7 @@ function openCardWizard(opts) {
     busy: false,
   };
   if (!OFFICE_SPECIES.includes(st.species)) st.species = "";
+  st.launchMode = !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe") : startModeFor(st.tool);
   let draftDropped = 0;
   if (draft) {
     const wanted = Array.isArray(draft.skillIds) ? [...new Set(draft.skillIds.filter((x) => typeof x === "string"))] : [];
@@ -5029,6 +5044,8 @@ function openCardWizard(opts) {
         class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
       el("span", null, m.label)))),
       el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      fullModeOnly(st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only-note" },
+        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用完整模式，沒有安全模式的保護；出發時要先勾選「我了解」。`) : null,
       st.launchMode === "full" && catalog.full_mode_launchable !== true
         ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
           "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
@@ -5189,6 +5206,8 @@ function openCardWizard(opts) {
     removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
     if (t === "agy") st.profession = "";
+    // a new card's start follows its tool until the person picks a mode; a card that exists keeps its own
+    if (isNew && !st.launchModeTouched) st.launchMode = startModeFor(t);
     st.modelOther = false;   // the carried value shows as 其他 if the new tool's list lacks it
     draw();
     focusBy("data-tool", t);
@@ -9799,6 +9818,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     let current = null;   // the preview the confirm button refers to
     let busy = false;
     let ackBox = null;    // "I know this Claude Code version is unverified" (only for such previews)
+    let fullAckBox = null;   // "我了解" for a full-mode preview (ADR 0002): the button stays off until it is ticked
     const liveHome = D.live && typeof D.live.home === "string" ? D.live.home : "";
     const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
       placeholder: `資料夾的絕對路徑，例如 ${liveHome || "/Users/you"}/projects/demo`, autocomplete: "off" });
@@ -9837,6 +9857,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const isAgy = tool === "agy" && !isFull;
     if (isAgy) previewBtn.disabled = true;
     function needsAck(pv) { return Boolean(isClaude && !isFull && pv && pv.cli && pv.cli.verified === false); }
+    // a preview that can start in full mode: the person must have ticked 我了解 (the server refuses without it as well)
+    function needsFullAck(pv) { return Boolean(pv && pv.launchable && pv.launch_mode === "full"); }
+    const fullAckOk = () => Boolean(fullAckBox && fullAckBox.checked);
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
@@ -9853,10 +9876,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       if (needsAck(current) && !(ackBox && ackBox.checked)) {
         return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
       }
+      if (needsFullAck(current) && !fullAckOk()) return "現在不能出發：還沒有勾選「我了解」。";
       return "";
     }
     function syncConfirm() {
-      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked));
+      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked))
+        || (needsFullAck(current) && !fullAckOk());
       why.textContent = whyOff();
     }
 
@@ -9864,6 +9889,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       current = null;
       lastPreview = null;
       ackBox = null;
+      fullAckBox = null;
       confirmBtn.disabled = true;
       setKids(out, message ? el("p", { class: "small muted" }, message) : null);
       why.textContent = busy ? "" : whyOff();
@@ -9929,6 +9955,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     function renderPreview(pv) {
       const kids = [];
+      fullAckBox = null;
       if (!pv.launchable) {
         kids.push(el("div", { class: "notice warn", "data-pass": "blocked" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
@@ -9939,6 +9966,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         if (pv.launch_mode === "full") {
           // P34-3: nothing is prepared and nothing is limited, so there is no scratch folder, no version check and no shield
           kids.push(passFullFront(pv));
+          kids.push(fullAckNotice());
           kids.push(el("dl", { class: "kv small" },
             el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " · " : ""}${pv.cli ? pv.cli.binary : ""}`),
             el("dt", null, "版本驗證"), el("dd", null, "不適用：這是你自己的工具，VBear 沒有執行它、沒有檢查版本"),
@@ -10123,6 +10151,18 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           progress));
     }
 
+    // ADR 0002: what a full launch can do, in the words of an ordinary person, and the box that must be ticked first
+    function fullAckNotice() {
+      fullAckBox = el("input", { type: "checkbox", id: "agent-launch-full-ack", "data-pass": "full-ack-box", on: { change: syncConfirm } });
+      return el("div", { class: "notice warn", "data-pass": "full-ack" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+        el("div", { class: "small" },
+          el("strong", null, "這個員工可以動你電腦上的任何檔案"),
+          el("p", { style: "margin:4px 0" }, "完整模式沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能出發。"),
+          el("label", { class: "row", for: "agent-launch-full-ack", style: "gap:8px; align-items:flex-start" },
+            fullAckBox, el("span", null, "我了解"))));
+    }
+
     function unverifiedBox(pv) {
       ackBox = el("input", { type: "checkbox", id: "agent-launch-unverified", on: { change: syncConfirm } });
       const { verifyBtn, progress } = verifyControl(pv);
@@ -10176,6 +10216,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     async function doLaunch() {
       if (busy || !current || isAgy) return;
+      if (needsFullAck(current) && !fullAckOk()) return;   // the button is off too; this holds if a click gets through anyway
       busy = true;
       confirmBtn.disabled = true;
       const pv = current;
@@ -10183,7 +10224,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       try {
         const res = await api.post("/api/native/agent-launches", {
           preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true,
-          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}) });
+          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}),
+          ...(needsFullAck(pv) ? { accept_full_mode: fullAckOk() } : {}) });
         toast("已啟動（由角色卡啟動，VBear 管理）");
         const sid = res.launch.session.session_id;
         // this tab started it: the terminal may take the keyboard once it is open (see grantFreshTerminal)

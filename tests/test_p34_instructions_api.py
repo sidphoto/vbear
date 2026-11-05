@@ -91,7 +91,7 @@ class CatalogTests(P342ApiCase):
         self.assertEqual(sorted(legal["views"]), ["agy", "claude", "codex", "shared"])
         self.assertEqual(legal["views"]["claude"]["full"]["launch_mode"], "full")
         self.assertEqual([m["id"] for m in cat["launch_modes"]], ["full", "safe"])
-        self.assertEqual(cat["default_launch_mode"], "full")
+        self.assertEqual(cat["default_launch_mode"], "safe")
         self.assertIs(cat["full_mode_launchable"], True)
         self.assertEqual(cat["max_instructions"], 2000)
         self.assertIn("貼上職位指示", cat["instructions_where"])

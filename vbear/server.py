@@ -1430,7 +1430,7 @@ def make_handler(console: Console):
             """Confirm a preview and start it. Anything that changed since the
             preview answers 409 and needs a new preview."""
             extra = set(body) - {"preview_id", "expected_settings_digest", "user_confirmed", "cols", "rows",
-                                 "accept_unverified_cli"}
+                                 "accept_unverified_cli", "accept_full_mode"}
             if extra:
                 return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
             cols, rows = self._term_dims(body)
@@ -1438,7 +1438,8 @@ def make_handler(console: Console):
                 result = console.previews().consume(
                     body.get("preview_id"), body.get("expected_settings_digest"),
                     body.get("user_confirmed"), self._load_profile, cols=cols, rows=rows,
-                    accept_unverified_cli=body.get("accept_unverified_cli"))
+                    accept_unverified_cli=body.get("accept_unverified_cli"),
+                    accept_full_mode=body.get("accept_full_mode"))
             except agent_launch.PreviewError as exc:
                 return self._json({"error": str(exc), "code": exc.code}, exc.status)
             console.remember_folder(console.take_preview_folder(body.get("preview_id")))
@@ -1991,7 +1992,11 @@ def make_handler(console: Console):
                 "position_guide": position_guide.catalog_view(),
                 "launch_modes": [{"id": m, "label": position_guide.MODE_LABELS[m], "help": position_guide.MODE_HELP[m]}
                                  for m in agent_profiles.LAUNCH_MODES],
+                # ADR 0002: a new card starts safe where its tool has a safe mode, full where it has only full. The page
+                # reads the two lists to pick the start for the tool chosen; a tool in neither starts safe.
                 "default_launch_mode": agent_profiles.DEFAULT_LAUNCH_MODE_FOR_NEW,
+                "safe_mode_tools": list(agent_profiles.SAFE_MODE_TOOLS),
+                "full_mode_tools": list(agent_launch.agent_sessions.FULL_ENGINES),
                 "full_mode_launchable": agent_launch.FULL_MODE_LAUNCHABLE,
                 "max_instructions": agent_profiles.MAX_INSTRUCTIONS,
                 "instructions_where": position_guide.INSTRUCTIONS_WHERE,

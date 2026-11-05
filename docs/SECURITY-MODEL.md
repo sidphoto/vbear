@@ -214,6 +214,7 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   permission prompts. The position's boundaries read as reminders only; a card's permission intents are not applied (the
   pass lists any intent written as "deny" and says it is not kept). There is no sandbox, no `--safe-mode`, no settings
   file, no tool list, no scratch directory, no `CLAUDE_CODE_TMPDIR` and no launch manifest.
+- **A full launch needs the person's "I understand" as well as the confirmation (ADR 0002).** The pass says "這個員工可以動你電腦上的任何檔案" and the confirm button stays off until the person ticks 我了解. The server does not rely on that: a confirmation of a full-mode preview without `accept_full_mode: true` is refused with 409 `full_mode_not_acknowledged` and a plain sentence, before the preview is used up (the same preview can be confirmed once the box is ticked), and `user_confirmed` is still required. A safe launch does not take the field.
 - **The command is built on the server and is a list, never a shell string.** `claude [--model X] [--append-system-prompt
   <text>]`, `codex [-m X]`, `agy [--model X]`, with the tool found as the first `claude`, `codex` or `agy` on the search
   path VBear uses for the CLIs (its own `PATH`, Homebrew and `~/.local/bin`), by its absolute path. The pass shows the
@@ -309,8 +310,9 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   and only reminders stay. In full mode every row reads as a reminder. VBear still does not claim that skills, CLAUDE.md,
   hooks or MCP are switched off. A position's boundaries say nothing about meetings: a meeting does not use the card's launch, only its
   instructions and its model (see "Meetings" below).
-- **`launch_mode` chooses between two launches, and only the exact word `full` chooses the full one.** The wizard offers
-  `full` for a new card and `safe` on request; the server never writes the field itself, and a card without the key
+- **`launch_mode` chooses between two launches, and only the exact word `full` chooses the full one.** The wizard starts a
+  new card on `safe` where its tool has a safe mode (today Claude Code) and on `full` where the tool has only full mode
+  (the catalog lists both sets), and the person can switch; the server never writes the field itself, and a card without the key
   reads as `safe`. A missing, null or unknown value is safe, so an older card is never loosened by this build. A card in
   full mode is started by the launch described in "Full-mode launches" and by no other: it is never started as a safe
   one instead, and a safe card is never started as a full one. The loadout shows no armor for a full card (there is
