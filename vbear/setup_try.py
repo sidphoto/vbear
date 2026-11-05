@@ -4,7 +4,7 @@ What is sent, the same for every tool: ``TRY_SENTENCE``. How it is sent, for eac
 ``-p``, Codex ``exec``, AGY ``-p``, Grok ``-p``, MCODE ``exec``), in a new empty scratch folder that is removed afterwards, in
 a new process group that is ended however the call ends, with a time limit and a cap on what is read. Claude Code is asked
 for no tools and no settings of the person's (``--safe-mode``, ``--setting-sources ""``, the same words the chat uses) and for
-a small budget; Codex runs without the person's config and rules, read-only, with its shell and MCP tools off; MCODE with
+a small budget; Codex runs without the person's config and rules, read-only, with its shell tool off and no MCP servers (its user configuration is not read); MCODE with
 ``--permission off`` and one step; Grok with one turn and its web search, memory, plan and subagents off. AGY has no flag for
 fewer tools that has been checked, so it gets only the sentence (see docs/evidence).
 
@@ -67,7 +67,7 @@ def argv_for(tool_id: str, binary: str, scratch: str) -> list[str]:
         # --ask-for-approval is a top-level option of `codex` (`codex --help`); `codex exec --help` does not list it
         return [binary, "--ask-for-approval", "never", "exec", "--ignore-user-config", "--ignore-rules",
                 "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-c", 'web_search="disabled"',
-                "--disable", "shell_tool", "--disable", "mcp", "--cd", scratch, "-"]
+                "--disable", "shell_tool", "--cd", scratch, "-"]
     if tool_id == "agy":
         return [binary, "-p", TRY_SENTENCE, "--output-format", "text", "--disable-slash-commands"]
     if tool_id == "grok":

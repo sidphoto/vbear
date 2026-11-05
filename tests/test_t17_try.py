@@ -82,7 +82,7 @@ EXPECTED_ARGV = {
                '{"mcpServers":{}}', "--model", "claude-haiku-5-5", "--output-format", "json", "--max-budget-usd", "0.02",
                "--no-session-persistence"],
     "codex": ["--ask-for-approval", "never", "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
-              "--ephemeral", "--sandbox", "read-only", "-c", 'web_search="disabled"', "--disable", "shell_tool", "--disable", "mcp",
+              "--ephemeral", "--sandbox", "read-only", "-c", 'web_search="disabled"', "--disable", "shell_tool",
               "--cd", "<SCRATCH>", "-"],
     "agy": ["-p", "請只回答 OK", "--output-format", "text", "--disable-slash-commands"],
     "grok": ["-p", "請只回答 OK", "--output-format", "plain", "--max-turns", "1", "--disable-web-search", "--no-memory", "--no-plan",

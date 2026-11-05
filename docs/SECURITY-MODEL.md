@@ -252,7 +252,7 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   killed however the call ends (an unconfirmed group writes `setup-try.blocked` and no further try starts), the plain
   environment of that runner (PATH, HOME, USER, LOGNAME, LANG, TMPDIR), 60 seconds, at most 1 MiB read, one try at a time.
   Claude Code gets `--safe-mode --setting-sources "" --tools "" --strict-mcp-config`, a small budget and no session kept;
-  Codex runs without the person's config and rules, read-only, shell and MCP off; MCODE with permission off and one step; Grok
+  Codex runs without the person's config and rules (so no MCP servers), read-only, shell off; MCODE with permission off and one step; Grok
   with one turn and web search, memory, plan and subagents off. AGY has no flag for fewer tools that was checked, so it gets
   the sentence only (it may use tools; the sentence asks for none). The answer is read to see whether the tool answered and
   dropped: not stored, logged or passed on; neither is anything it prints about the account. The page gets success, not logged
@@ -1177,8 +1177,8 @@ the status reading and 「試一下」); this section is the short list of what 
   dropped. Its cost goes into `setup-try.json` (tool, times, cap, cost) and counts toward the same daily limit as the
   meetings, staffing meetings and chats (what Claude Code reports, else US$0.01; a try that started a program is booked even
   if it fails). When the day cannot take another US$0.01, or the record cannot be read, nothing starts. Claude Code gets no
-  tools and none of the person's settings; Codex runs without the person's config and rules, read-only, with shell and MCP
-  off. Codex's `--ask-for-approval` (set to `never`) is a top-level option of `codex`, so it goes before `exec` (`codex exec --help` does
+  tools and none of the person's settings; Codex runs without the person's config and rules (so no MCP servers), read-only, with its
+  shell tool off (Codex 0.163.0 has no feature named `mcp`, so none is disabled by name). Codex's `--ask-for-approval` (set to `never`) is a top-level option of `codex`, so it goes before `exec` (`codex exec --help` does
   not list it). AGY has no flag for fewer tools that was checked, so it gets only the sentence. The flags were checked against
   each tool's `--help`; no real tool was run.
 - **The daily limit the person picks only ever lowers other limits.** `POST /api/setup/daily-limit` accepts a number from
