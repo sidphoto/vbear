@@ -320,7 +320,7 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
   `agy`, `grok` or `mcode` card with its own sentence (`agent_launch.TOOL_NOT_LAUNCHABLE`), while full mode can start all five
   (`agent_sessions.FULL_ENGINES`; `mcode` is hidden until the config key `show_mcode` is true, and the catalog's `tool_list` leaves it out until then). The list of tools is written once, in `vbear/ai_tools.py`; `TOOL_ORDER`, `TOOL_FAMILY`,
   `FULL_ENGINES`, the model flags, `TOOL_NOT_LAUNCHABLE` and the catalog's `tool_list` are made from it, and
-  `tests/test_ai_tools.py` keeps the tables of `web/app.js` equal to it. Adding a tool starts with one entry there.
+  `tests/test_ai_tools.py` keeps the tables of `web/app.js` equal to it. Adding a tool starts with one entry there. Two fields tell the safe side apart: `safe_launch` (the safe launch's code accepts the tool: claude and codex) and `safe_mode` (the safe mode can really start it in this build: claude only, because Codex's managed launch is refused); `agent_profiles.SAFE_MODE_TOOLS` and the catalog's `safe_mode_tools` come from `safe_mode`, and the "only full mode" mark on a card is `full_launch` without `safe_mode`.
   They never take an argv, environment variables, settings or credentials.
 - **Cleanup.** When the session ends, the scratch directory and the per-launch files are removed only after
   every tracked process is proven dead. Otherwise the launch is kept in a `manual_review` state for you

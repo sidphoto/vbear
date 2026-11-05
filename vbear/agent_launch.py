@@ -157,6 +157,11 @@ TOOL_NOT_LAUNCHABLE = ai_tools.not_launchable_messages()
 UNLAUNCHABLE_TOOLS = tuple(TOOL_NOT_LAUNCHABLE)
 
 
+# What the server says when a full-mode launch is confirmed without the person's "I understand" (ADR 0002). The page
+# shows the same first sentence beside the box.
+FULL_MODE_ACK_REQUIRED = "這個員工可以動你電腦上的任何檔案；要先勾選「我了解」才能出發"
+
+
 def launch_blockers(profile: dict, commit, network) -> list[dict]:
     """Why this Profile and these launch inputs cannot be started as they are.
     Empty means the one verified configuration honours them."""
@@ -648,7 +653,7 @@ class PreviewStore:
 
     def consume(self, preview_id, expected_settings_digest, user_confirmed, load_profile,
                 *, cols: int | None = None, rows: int | None = None,
-                accept_unverified_cli=None) -> dict:
+                accept_unverified_cli=None, accept_full_mode=None) -> dict:
         """Confirm and launch. ``load_profile(profile_id)`` returns the current
         Profile so a change since the preview is detected."""
         if user_confirmed is not True:
@@ -667,6 +672,10 @@ class PreviewStore:
                 self._discard(self._previews.pop(preview_id))
                 raise PreviewError(410, "preview_expired", "preview 已過期；請重新 preview")
             manifest = (entry.get("prepared") or {}).get("manifest") or {}
+            if entry.get("full") and accept_full_mode is not True:
+                # ADR 0002: a full-mode launch needs the person's own "I understand" on top of user_confirmed. Checked
+                # before consuming, so the same preview can still be confirmed once the box is ticked.
+                raise PreviewError(409, "full_mode_not_acknowledged", FULL_MODE_ACK_REQUIRED)
             if manifest.get("cli_verified") is False and accept_unverified_cli is not True:
                 # Checked before consuming, so the same preview can still be confirmed.
                 raise PreviewError(409, "cli_unverified_not_acknowledged",

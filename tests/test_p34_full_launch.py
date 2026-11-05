@@ -259,7 +259,8 @@ class FullApiCase(base.P342ApiCase):
         return self.req("POST", "/api/native/agent-previews", body)
 
     def confirm(self, pv, **kw):
-        body = {"preview_id": pv["preview_id"], "expected_settings_digest": pv["settings_digest"], "user_confirmed": True, **kw}
+        body = {"preview_id": pv["preview_id"], "expected_settings_digest": pv["settings_digest"], "user_confirmed": True,
+                "accept_full_mode": True, **kw}
         return self.req("POST", "/api/native/agent-launches", body)
 
     def seen(self):
@@ -445,6 +446,37 @@ class FullLaunchTests(FullApiCase):
             self.assertEqual(st, 400, r)
         self.assertEqual(self.sessions(), [])
 
+    def test_without_the_understood_box_a_full_launch_is_refused_in_plain_words_and_nothing_starts(self):
+        pv = self.full_preview(self.save_full(position="executor"))[1]["preview"]
+        base = {"preview_id": pv["preview_id"], "expected_settings_digest": pv["settings_digest"], "user_confirmed": True}
+        for extra in ({}, {"accept_full_mode": False}, {"accept_full_mode": "yes"}, {"accept_full_mode": None}):
+            with self.subTest(extra=extra):
+                st, r = self.req("POST", "/api/native/agent-launches", {**base, **extra})
+                self.assertEqual((st, r["code"]), (409, "full_mode_not_acknowledged"), r)
+                self.assertIn("這個員工可以動你電腦上的任何檔案", r["error"])
+                self.assertIn("我了解", r["error"])
+                self.assertEqual(self.sessions(), [])
+        # the refusal did not use the preview up: the same one can still be confirmed with the box ticked
+        st, r = self.confirm(pv)
+        self.assertEqual(st, 200, r)
+        self.assertEqual(len(self.sessions()), 1)
+
+    def test_user_confirmed_is_still_checked_first_and_the_understood_box_does_not_replace_it(self):
+        pv = self.full_preview(self.save_full(position="executor"))[1]["preview"]
+        st, r = self.req("POST", "/api/native/agent-launches",
+                         {"preview_id": pv["preview_id"], "expected_settings_digest": pv["settings_digest"],
+                          "accept_full_mode": True})
+        self.assertEqual((st, r["code"]), (400, "not_confirmed"))
+        self.assertEqual(self.sessions(), [])
+
+    def test_every_full_tool_needs_the_understood_box(self):
+        for tool in ("claude", "codex", "agy"):
+            with self.subTest(tool=tool):
+                pv = self.full_preview(self.save_full(tool=tool, position="executor"))[1]["preview"]
+                st, r = self.confirm(pv, accept_full_mode=False)
+                self.assertEqual((st, r["code"]), (409, "full_mode_not_acknowledged"))
+        self.assertEqual(self.sessions(), [])
+
     def test_a_preview_is_used_once(self):
         pv = self.full_preview(self.save_full(position="executor"))[1]["preview"]
         self.assertEqual(self.confirm(pv)[0], 200)
@@ -456,7 +488,8 @@ class FullLaunchTests(FullApiCase):
         pid = self.save_full(position="executor")
         pv = self.full_preview(pid)[1]["preview"]
         st, r = self.req("POST", "/api/native/agent-launches",
-                         {"preview_id": pv["preview_id"], "expected_settings_digest": "0" * 64, "user_confirmed": True})
+                         {"preview_id": pv["preview_id"], "expected_settings_digest": "0" * 64, "user_confirmed": True,
+                          "accept_full_mode": True})
         self.assertEqual((st, r["code"]), (409, "settings_drift"))
         pv = self.full_preview(pid)[1]["preview"]
         st, r = self.req("POST", f"/api/agent-profiles/{pid}", {"instructions": "改過了"})
@@ -494,6 +527,24 @@ class FullLaunchTests(FullApiCase):
 
 
 class CatalogAndLoadoutTests(FullApiCase):
+    def test_a_new_card_starts_safe_where_the_tool_has_safe_mode_and_full_where_it_has_only_full(self):
+        _, cat = self.req("GET", "/api/agent-builder/catalog")
+        self.assertEqual(cat["default_launch_mode"], "safe")
+        self.assertEqual(cat["safe_mode_tools"], ["claude"])
+        # MCODE is hidden until the person turns it on (show_mcode), so the list leaves it out by default
+        self.assertEqual(cat["full_mode_tools"], [t for t in a.FULL_ENGINES if t != "mcode"])
+        # every tool is in at least one list, so the page can always tell which mode a new card starts in
+        for tool in cat["full_mode_tools"]:
+            self.assertTrue(tool in cat["safe_mode_tools"] or tool in cat["full_mode_tools"], tool)
+
+    def test_a_card_saved_without_a_mode_stays_without_one(self):
+        # the server does not pick a mode for a card the person did not set: an old card is not loosened
+        st, r = self.req("POST", "/api/agent-profiles", {"name": "no-mode", "model": {"tool": "codex", "model_id": ""},
+                                                          "permission_intents": GOOD, "enabled": True})
+        self.assertEqual(st, 200, r)
+        self.assertNotIn("launch_mode", r["profile"])
+        self.assertEqual(agent_profiles.effective_launch_mode(r["profile"]), "safe")
+
     def test_the_catalog_says_full_mode_can_depart(self):
         st, cat = self.req("GET", "/api/agent-builder/catalog")
         self.assertIs(cat["full_mode_launchable"], True)

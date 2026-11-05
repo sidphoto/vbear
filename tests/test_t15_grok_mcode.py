@@ -147,6 +147,19 @@ class ConfigSwitchTests(FullApiCase):
         self.assertEqual((mcode["name"], mcode["family"], mcode["full_launch"]), ("MCODE", "minimax", True))
         self.assertIn("顯示 MCODE", mcode["unavailable_reason"])
 
+    def test_the_safe_and_full_mode_lists_of_the_catalog_follow_the_switch_too(self):
+        _, _, cat = self.tool_ids()
+        self.assertEqual(cat["safe_mode_tools"], ["claude"])
+        self.assertEqual(cat["full_mode_tools"], ["claude", "codex", "agy", "grok"])
+        self.assertEqual(cat["default_launch_mode"], "safe")
+        self.set_show(True)
+        _, _, cat = self.tool_ids()
+        self.assertEqual(cat["full_mode_tools"], ["claude", "codex", "agy", "grok", "mcode"])
+        self.assertEqual(cat["safe_mode_tools"], ["claude"])
+        by = {t["id"]: t for t in cat["tool_list"]}
+        self.assertEqual({k: v["safe_mode"] for k, v in by.items()},
+                         {"claude": True, "codex": False, "agy": False, "grok": False, "mcode": False, "shared": False})
+
     def test_on_the_menu_has_mcode_after_grok(self):
         self.set_show(True)
         tools, listed, cat = self.tool_ids()
@@ -268,6 +281,28 @@ class GrokAndMcodeLaunchTests(FullApiCase):
                 self.assertNotIn("這段只能貼上", " ".join(seen["argv"]))
                 self.dm_rpc("close", session_id=session["session_id"])
 
+    def test_grok_and_mcode_need_the_understood_box_like_every_full_launch(self):
+        for tool in ("grok", "mcode"):
+            with self.subTest(tool=tool):
+                pv = self.full_preview(self.save_full(tool=tool, position="executor"))[1]["preview"]
+                for extra in ({"accept_full_mode": False}, {"accept_full_mode": "yes"}, {"accept_full_mode": None}):
+                    st, r = self.confirm(pv, **extra)
+                    self.assertEqual((st, r["code"]), (409, "full_mode_not_acknowledged"), r)
+                    self.assertIn("我了解", r["error"])
+                self.assertEqual(self.sessions(), [], "nothing started")
+                st, r = self.confirm(pv)   # the same preview, now ticked
+                self.assertEqual(st, 200, r)
+                self.dm_rpc("close", session_id=r["launch"]["session"]["session_id"])
+
+    def test_a_new_card_of_these_tools_starts_in_full_mode_and_is_marked_full_only_by_the_catalog(self):
+        _, cat = self.req("GET", "/api/agent-builder/catalog")
+        self.assertEqual(cat["default_launch_mode"], "safe")
+        for tool in ("grok", "mcode"):
+            self.assertNotIn(tool, cat["safe_mode_tools"])
+            self.assertIn(tool, cat["full_mode_tools"])
+        by = {t["id"]: t for t in cat["tool_list"]}
+        self.assertEqual([by[t]["safe_mode"] for t in ("claude", "codex", "grok", "mcode")], [True, False, False, False])
+
     def test_the_new_terminal_is_listed_as_that_agent_with_an_unknown_state(self):
         for tool in ("grok", "mcode"):
             with self.subTest(tool=tool):
@@ -311,6 +346,9 @@ class GrokAndMcodeLaunchTests(FullApiCase):
         st, cat = self.req("GET", "/api/agent-builder/catalog")
         full_only = [t["id"] for t in cat["tool_list"] if t["full_launch"] and not t["safe_launch"]]
         self.assertEqual(full_only, ["agy", "grok", "mcode"])
+        # no safe mode that can start today is a wider list: Codex has a safe launch in the code but it is refused
+        self.assertEqual([t["id"] for t in cat["tool_list"] if t["full_launch"] and not t["safe_mode"]],
+                         ["codex", "agy", "grok", "mcode"])
         for t in cat["tool_list"]:
             if t["id"] in full_only:
                 self.assertTrue(t["not_launchable_message"])

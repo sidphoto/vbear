@@ -195,10 +195,13 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual([t["id"] for t in body["tool_list"]], body["tools"])
         by = {t["id"]: t for t in body["tool_list"]}
         self.assertEqual(by["agy"], {"id": "agy", "name": "Antigravity（AGY）", "short": "AGY", "family": "google",
-                                     "generic": False, "safe_launch": False, "full_launch": True, "hidden": False,
+                                     "generic": False, "safe_launch": False, "safe_mode": False, "full_launch": True,
+                                     "hidden": False,
                                      "not_launchable_message": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"})
         self.assertEqual((by["claude"]["safe_launch"], by["codex"]["safe_launch"], by["shared"]["full_launch"]),
                          (True, True, False))
+        self.assertEqual([t for t in body["tools"] if by[t]["safe_mode"]], body["safe_mode_tools"])
+        self.assertEqual(body["safe_mode_tools"], ["claude"])
         self.assertNotIn("install_command", json.dumps(body["tool_list"]))
 
     def test_catalog_endpoint_lists_tool_and_permission_enums(self):

@@ -31,7 +31,7 @@ from vbear import agent_launch, agent_profiles, ai_tools, flows, position_guide 
 from vbear.runtime import agent_sessions, native  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-FIELDS = ("id", "name", "short", "family", "species", "generic", "safe_launch", "full_launch", "model_flag",
+FIELDS = ("id", "name", "short", "family", "species", "generic", "safe_launch", "safe_mode", "full_launch", "model_flag",
           "hidden", "install_command", "login_command", "status_command", "family_enforced", "not_launchable_message")
 
 
@@ -67,12 +67,26 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual({k for k, v in by.items() if v.generic}, {"shared"})
         self.assertEqual({k for k, v in by.items() if v.family_enforced}, {"agy", "grok", "mcode"})
 
+    def test_safe_mode_is_the_tools_whose_safe_launch_really_starts_today_and_safe_launch_is_the_older_wider_flag(self):
+        by = {t.id: t for t in ai_tools.REGISTRY}
+        # safe_launch: the safe launch's code accepts the tool (claude, codex). safe_mode: the safe mode can start it in this
+        # build (claude only: Codex's interactive managed launch is refused, codex_interactive_flags_unsupported).
+        self.assertEqual({k for k, v in by.items() if v.safe_launch}, {"claude", "codex"})
+        self.assertEqual({k for k, v in by.items() if v.safe_mode}, {"claude"})
+        self.assertEqual(ai_tools.safe_mode_ids(), ("claude",))
+        self.assertTrue(all(v.safe_launch for v in by.values() if v.safe_mode), "safe mode needs the safe launch")
+        self.assertEqual(agent_profiles.SAFE_MODE_TOOLS, ai_tools.safe_mode_ids())
+        self.assertEqual(ai_tools.full_only_ids(), ("codex", "agy", "grok", "mcode"))
+        for tool in ("grok", "mcode"):
+            self.assertFalse(by[tool].safe_mode)
+            self.assertNotIn(tool, agent_profiles.SAFE_MODE_TOOLS)
+
     def test_only_mcode_is_hidden(self):
         self.assertEqual({t.id for t in ai_tools.REGISTRY if t.hidden}, {"mcode"})
         self.assertEqual(ai_tools.hidden_ids(), ("mcode",))
 
     def test_the_two_new_tools_are_full_mode_only_and_their_file_name_is_their_id(self):
-        self.assertEqual(ai_tools.full_only_ids(), ("agy", "grok", "mcode"))
+        self.assertEqual(ai_tools.full_only_ids(), ("codex", "agy", "grok", "mcode"))
         for tool in ("grok", "mcode"):
             self.assertIn(tool, ai_tools.full_launch_ids())
             self.assertNotIn(tool, ai_tools.safe_launch_ids())
@@ -105,8 +119,8 @@ class RegistryTests(unittest.TestCase):
         view = ai_tools.view(show_hidden=True)
         self.assertEqual([v["id"] for v in view], list(ai_tools.ids()))
         for v in view:
-            self.assertEqual(set(v), {"id", "name", "short", "family", "generic", "safe_launch", "full_launch", "hidden",
-                                      "not_launchable_message"})
+            self.assertEqual(set(v), {"id", "name", "short", "family", "generic", "safe_launch", "safe_mode", "full_launch",
+                                      "hidden", "not_launchable_message"})
         json.dumps(view)
 
     def test_the_view_leaves_a_hidden_tool_out_unless_asked(self):
@@ -211,8 +225,8 @@ class PageTablesTests(unittest.TestCase):
 
 
     def test_the_tools_only_full_mode_starts_and_the_look_of_every_camp(self):
-        self.assertEqual(self.js_list("FULL_ONLY_TOOLS"), list(ai_tools.full_only_ids()))
         self.assertEqual(self.js_list("FULL_LAUNCH_TOOLS"), list(ai_tools.full_launch_ids()))
+        self.assertEqual(self.js_list("SAFE_MODE_FALLBACK"), list(ai_tools.safe_mode_ids()))
         # every family a tool implies has a camp (a shirt colour) and a label on the page
         camps = re.search(r"const OFFICE_CAMPS = \{(.*?)\n\};", self.SOURCE, re.S).group(1)
         for t in ai_tools.REGISTRY:
@@ -231,7 +245,7 @@ import json, sys
 sys.path.insert(0, sys.argv[1])
 from vbear import ai_tools
 demo = ai_tools.Tool(id="demo", name="Demo CLI", short="Demo", family="acme", species=None, generic=False,
-                     safe_launch=False, full_launch=True, model_flag="--model", hidden=False, install_command="",
+                     safe_launch=False, safe_mode=False, full_launch=True, model_flag="--model", hidden=False, install_command="",
                      login_command="", status_command=None, family_enforced=True,
                      not_launchable_message="demo says no")
 ai_tools.REGISTRY = ai_tools.REGISTRY[:-1] + (demo,) + ai_tools.REGISTRY[-1:]

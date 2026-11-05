@@ -24,7 +24,13 @@ class Tool(NamedTuple):
     family: str                              # the model family the tool implies, for the team places
     species: Optional[str]                   # the office character of its camp; None when the camp has none
     generic: bool                            # True for the "shared" camp, which is no program and no model
-    safe_launch: bool                        # the safe (sandboxed, managed) launch accepts it
+    # safe_launch and safe_mode differ. safe_launch: the safe launch's code accepts the tool at all (agent_launch.launch_blockers
+    # does not refuse it for being the wrong tool); it is true for claude and codex. safe_mode: the safe mode can really start the
+    # tool in this build, so a new card may default to it and the page may call it a safe mode; it is true for claude only,
+    # because Codex's interactive managed launch is refused (codex_interactive_flags_unsupported, ADR 0002). safe_mode implies
+    # safe_launch. Nothing about safe_launch's behaviour depends on safe_mode.
+    safe_launch: bool
+    safe_mode: bool
     full_launch: bool                        # full mode can start it
     model_flag: Optional[str]                # the command-line flag that carries a model id in full mode
     hidden: bool                             # not offered until the person turns it on in the settings
@@ -37,20 +43,20 @@ class Tool(NamedTuple):
 
 # The order is the order the camps are offered in, with the generic "shared" camp last.
 REGISTRY: tuple[Tool, ...] = (
-    Tool("claude", "Claude Code", "Claude Code", "anthropic", "bear", False, True, True, "--model", False,
+    Tool("claude", "Claude Code", "Claude Code", "anthropic", "bear", False, True, True, True, "--model", False,
          "", "", ("claude", "auth", "status"), False, ""),
-    Tool("codex", "Codex CLI", "Codex", "openai", "robot", False, True, True, "-m", False,
+    Tool("codex", "Codex CLI", "Codex", "openai", "robot", False, True, False, True, "-m", False,
          "", "", ("codex", "login", "status"), False, ""),
     # Antigravity: the safe launch never starts it; full mode does (as a terminal, with the person's own settings).
-    Tool("agy", "Antigravity（AGY）", "AGY", "google", "fox", False, False, True, "--model", False,
+    Tool("agy", "Antigravity（AGY）", "AGY", "google", "fox", False, False, False, True, "--model", False,
          "", "", None, True, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"),
     # Grok Build (xAI) and MiniMax Code: full mode only. The model flag is -m for both; the instructions are pasted. MCODE
     # is hidden: it is offered only while the person has turned on "show MCODE" (config key show_mcode).
-    Tool("grok", "Grok", "Grok", "xai", "alien", False, False, True, "-m", False,
+    Tool("grok", "Grok", "Grok", "xai", "alien", False, False, False, True, "-m", False,
          "", "", None, True, "Grok 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄"),
-    Tool("mcode", "MCODE", "MCODE", "minimax", "alien", False, False, True, "-m", True,
+    Tool("mcode", "MCODE", "MCODE", "minimax", "alien", False, False, False, True, "-m", True,
          "", "", None, True, "MCODE 目前只能用完整模式，VBear 不用安全模式啟動它，這張卡的安全模式只用來排隊伍與記錄"),
-    Tool("shared", "共用（skills CLI）", "共用卡", "unknown", None, True, False, False, None, False,
+    Tool("shared", "共用（skills CLI）", "共用卡", "unknown", None, True, False, False, False, None, False,
          "", "", None, False, "shared 不是可啟動的工具"),
 )
 
@@ -71,6 +77,11 @@ def safe_launch_ids() -> tuple[str, ...]:
     return tuple(t.id for t in REGISTRY if t.safe_launch)
 
 
+def safe_mode_ids() -> tuple[str, ...]:
+    """The tools whose safe mode can really start today (see Tool.safe_mode)."""
+    return tuple(t.id for t in REGISTRY if t.safe_mode)
+
+
 def full_launch_ids() -> tuple[str, ...]:
     return tuple(t.id for t in REGISTRY if t.full_launch)
 
@@ -84,8 +95,9 @@ def family_enforced_ids() -> tuple[str, ...]:
 
 
 def full_only_ids() -> tuple[str, ...]:
-    """The tools full mode can start and the safe mode never does (the card says "only full mode" for these)."""
-    return tuple(t.id for t in REGISTRY if t.full_launch and not t.safe_launch)
+    """The tools full mode can start and the safe mode cannot start today (the card says "only full mode" for these):
+    claude is the only tool with a safe mode (Tool.safe_mode), so Codex is among them although its safe_launch is True."""
+    return tuple(t.id for t in REGISTRY if t.full_launch and not t.safe_mode)
 
 
 def hidden_ids() -> tuple[str, ...]:
@@ -136,7 +148,7 @@ def view(show_hidden: bool = False) -> list[dict]:
 
 def _row(t: Tool) -> dict:
     return {"id": t.id, "name": t.name, "short": t.short, "family": t.family, "generic": t.generic,
-            "safe_launch": t.safe_launch, "full_launch": t.full_launch, "hidden": t.hidden,
+            "safe_launch": t.safe_launch, "safe_mode": t.safe_mode, "full_launch": t.full_launch, "hidden": t.hidden,
             "not_launchable_message": "" if t.safe_launch else (t.not_launchable_message or NOT_LAUNCHABLE_DEFAULT)}
 
 

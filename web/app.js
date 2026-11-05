@@ -4173,9 +4173,9 @@ const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來�
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
 const UNLAUNCHABLE_TOOLS = ["shared", "agy", "grok", "mcode"];
 // What the page falls back to when a catalog does not carry tool_list (an older server, a test): the tools only full mode
-// starts, and every tool full mode starts. The server's list is what is read first (toolCaps); a test keeps these equal to
-// vbear/ai_tools.py.
-const FULL_ONLY_TOOLS = ["agy", "grok", "mcode"];
+// can start in safe mode (ai_tools safe_mode: only Claude Code today), and every tool full mode starts. The server's list is
+// what is read first (toolCaps); a test keeps these equal to vbear/ai_tools.py.
+const SAFE_MODE_FALLBACK = ["claude"];
 const FULL_LAUNCH_TOOLS = ["claude", "codex", "agy", "grok", "mcode"];
 // The sentence on a card whose tool the safe mode never starts (GLOSSARY: 安全模式, 完整模式).
 const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
@@ -4496,15 +4496,18 @@ function toolCaps(catalog, tool) {
   }
   const row = rows.find((r) => r.id === tool);
   if (row) {
-    return { safe: row.safe_launch === true, full: row.full_launch === true,
+    return { safe: row.safe_launch === true, safeMode: typeof row.safe_mode === "boolean" ? row.safe_mode : SAFE_MODE_FALLBACK.includes(tool), full: row.full_launch === true,
       note: typeof row.not_launchable_message === "string" ? row.not_launchable_message : "",
       unavailable: typeof row.unavailable_reason === "string" ? row.unavailable_reason : "" };
   }
-  return { safe: !UNLAUNCHABLE_TOOLS.includes(tool), full: FULL_LAUNCH_TOOLS.includes(tool),
+  return { safe: !UNLAUNCHABLE_TOOLS.includes(tool), safeMode: SAFE_MODE_FALLBACK.includes(tool), full: FULL_LAUNCH_TOOLS.includes(tool),
     note: "", unavailable: "" };
 }
 // A tool that only full mode starts (the card says so), and one that safe mode never starts at all.
-function toolFullOnly(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safe; }
+// (safe_launch is what the safe launch's code accepts; safe_mode is what can really start in safe mode, claude only today.)
+function toolFullOnly(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safeMode; }
+// A tool the safe launch's code refuses (AGY, Grok, MCODE) but full mode starts: the card has no safe launch to describe.
+function toolNoSafeLaunch(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safe; }
 function toolNoSafe(catalog, tool) { return !toolCaps(catalog, tool).safe; }
 
 function cardAvatar(p, scale = 3) {
@@ -4566,6 +4569,20 @@ function openCardWizard(opts) {
   const launchModes = Array.isArray(catalog.launch_modes)
     ? catalog.launch_modes.filter((m) => m && (m.id === "full" || m.id === "safe") && typeof m.label === "string") : [];
   const modesOffered = launchModes.length > 0;
+  // ADR 0002: a new card starts safe where its tool has a safe mode and full where it has only full mode. The server says
+  // which tools are which; a server that does not (an older one) leaves the catalog's single default to decide.
+  const safeModeTools = Array.isArray(catalog.safe_mode_tools) ? catalog.safe_mode_tools.filter((t) => typeof t === "string") : null;
+  const fullModeTools = Array.isArray(catalog.full_mode_tools) ? catalog.full_mode_tools.filter((t) => typeof t === "string") : null;
+  const hasMode = (id) => launchModes.some((m) => m.id === id);
+  const startModeFor = (tool) => {
+    if (!modesOffered) return "safe";
+    if (safeModeTools && fullModeTools) {
+      if (safeModeTools.includes(tool) && hasMode("safe")) return "safe";
+      if (fullModeTools.includes(tool) && hasMode("full")) return "full";
+      return hasMode("safe") ? "safe" : launchModes[0].id;
+    }
+    return hasMode(catalog.default_launch_mode) ? catalog.default_launch_mode : "safe";
+  };
   const maxInstr = Number(catalog.max_instructions) > 0 ? Number(catalog.max_instructions) : 0;
   const storedInstr = existing && typeof existing.instructions === "string" && existing.instructions.trim() ? existing.instructions : null;
   const startPosition = existing ? cardPosition(existing) : null;
@@ -4594,8 +4611,7 @@ function openCardWizard(opts) {
     positionTouched: false,   // a position button was pressed: only then does a stored value this page cannot show give way
     // P34-2. A card with no stored mode is a safe one (an old card is not loosened by opening it); a new card starts on the
     // catalog's default. The mode is posted for a new card, and for an old one only when the person chose.
-    launchMode: !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe")
-      : (launchModes.some((m) => m.id === catalog.default_launch_mode) ? catalog.default_launch_mode : "safe"),
+    launchMode: "safe",   // set just below, once the tool is known
     launchModeTouched: false,
     // the text in the instructions box; custom is when it differs from the position's default, stored when the card has
     // its own text on disk, changed when the person typed or restored it (an untouched box posts nothing)
@@ -4621,6 +4637,7 @@ function openCardWizard(opts) {
     busy: false,
   };
   if (!OFFICE_SPECIES.includes(st.species)) st.species = "";
+  st.launchMode = !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe") : startModeFor(st.tool);
   let draftDropped = 0;
   if (draft) {
     const wanted = Array.isArray(draft.skillIds) ? [...new Set(draft.skillIds.filter((x) => typeof x === "string"))] : [];
@@ -4762,7 +4779,7 @@ function openCardWizard(opts) {
   // into a tool by it, and every pre-fill is one click.
   const roleById = new Map(professions.filter((r) => r && typeof r.role_id === "string").map((r) => [r.role_id, r]));
   // a tool only full mode starts (AGY, Grok, MCODE) has no role templates VBear scans
-  const noTemplates = () => toolFullOnly(catalog, st.tool);
+  const noTemplates = () => toolNoSafeLaunch(catalog, st.tool);
   const roleCampOk = (r) => !noTemplates() && (st.tool === "shared" || r.tool === st.tool);
   const roleListed = (r) => r && r.kind !== "cli" && roleCampOk(r);   // the tool itself is not a profession
   function roleGroupOf(r) {
@@ -5059,14 +5076,14 @@ function openCardWizard(opts) {
     if (!modesOffered) return null;
     const cur = launchModes.find((m) => m.id === st.launchMode) || launchModes[0];
     const oldCard = Boolean(existing) && !st.launchModeTouched && existing.launch_mode !== "full" && existing.launch_mode !== "safe";
-    const fullOnly = toolFullOnly(catalog, st.tool);   // safe mode never starts this tool: the card says so
     return el("div", { class: "cw-field", "data-cw": "launch-mode" },
       el("span", { class: "cw-label" }, "出發方式"),
       el("div", { class: "cw-choices", role: "group", "aria-label": "出發方式" }, launchModes.map((m) => el("button", { type: "button",
         class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
       el("span", null, m.label)))),
-      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : "",
-        fullOnly ? `　${FULL_ONLY_MARK}。` : ""),
+      el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      toolFullOnly(catalog, st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only-note" },
+        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用完整模式，沒有安全模式的保護；出發時要先勾選「我了解」。`) : null,
       st.launchMode === "full" && catalog.full_mode_launchable !== true
         ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
           "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
@@ -5133,12 +5150,12 @@ function openCardWizard(opts) {
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
         "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
     // a tool only full mode starts (AGY, Grok, MCODE): the card says so, and what full mode means for it
-    const fullOnly = toolFullOnly(catalog, st.tool);
-    const agyNote = fullOnly
+    const noSafeLaunch = toolNoSafeLaunch(catalog, st.tool);
+    const agyNote = noSafeLaunch
       ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, (st.launchMode === "full" && catalog.full_mode_launchable === true
         ? `${CARD_TOOL_SHORT[st.tool]} 在${FULL_ONLY_HELP}`
         : toolCaps(catalog, st.tool).note || AGY_NOT_LAUNCHED) + "。") : null;
-    const fullOnlyMark = fullOnly ? el("p", { class: "small cw-hint", "data-cw": "full-only" }, FULL_ONLY_MARK + "。") : null;
+    const fullOnlyMark = toolFullOnly(catalog, st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only" }, FULL_ONLY_MARK + "。") : null;
     const sharedNote = st.tool === "shared" ? el("p", { class: "small cw-hint", "data-cw": "shared-note" }, SHARED_NOT_LAUNCHED + "。") : null;
 
     const posButton = (id, label) => el("button", { type: "button", class: "cw-choice",
@@ -5165,7 +5182,7 @@ function openCardWizard(opts) {
     const campWord = (row) => `建議陣營：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
       + (row.suggested_model_alias ? `（${row.suggested_model_alias}）` : "")
       + (toolNoSafe(catalog, row.suggested_tool)
-        ? (toolFullOnly(catalog, row.suggested_tool) && st.launchMode === "full" && catalog.full_mode_launchable === true
+        ? (toolNoSafeLaunch(catalog, row.suggested_tool) && st.launchMode === "full" && catalog.full_mode_launchable === true
           ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有完整模式才能從 VBear 出發` : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
     const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
       el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
@@ -5238,13 +5255,9 @@ function openCardWizard(opts) {
     for (const sid of gone) st.equipped.delete(sid);
     removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
-    if (toolFullOnly(catalog, t)) st.profession = "";
-    // a tool only full mode starts departs in full mode: a card the person has not chosen a mode for takes it (an old card is
-    // posted with it, so the save says what the card is). Choosing safe mode afterwards is still allowed: it is a record.
-    if (modesOffered && toolFullOnly(catalog, t) && !st.launchModeTouched && st.launchMode !== "full") {
-      st.launchMode = "full";
-      if (existing) st.launchModeTouched = true;
-    }
+    if (toolNoSafeLaunch(catalog, t)) st.profession = "";
+    // a new card's start follows its tool until the person picks a mode; a card that exists keeps its own
+    if (isNew && !st.launchModeTouched) st.launchMode = startModeFor(t);
     st.modelOther = false;   // the carried value shows as 其他 if the new tool's list lacks it
     draw();
     focusBy("data-tool", t);
@@ -6060,7 +6073,7 @@ function profileCard(p, opts = {}) {
   const launchOff = p.enabled === false;
   // a tool only full mode starts says so on the card; a hidden tool that is switched off (MCODE) says why it cannot be used now
   const caps = toolCaps(catalog, tool);
-  const fullOnlyNote = caps.full && !caps.safe
+  const fullOnlyNote = toolFullOnly(catalog, tool)
     ? el("p", { class: "small rcard-fullonly", "data-pcard": "full-only" }, FULL_ONLY_MARK) : null;
   const hiddenNote = caps.unavailable
     ? el("p", { class: "small cw-error", "data-pcard": "tool-hidden", role: "status" }, caps.unavailable) : null;
@@ -9869,6 +9882,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     let current = null;   // the preview the confirm button refers to
     let busy = false;
     let ackBox = null;    // "I know this Claude Code version is unverified" (only for such previews)
+    let fullAckBox = null;   // "我了解" for a full-mode preview (ADR 0002): the button stays off until it is ticked
     const liveHome = D.live && typeof D.live.home === "string" ? D.live.home : "";
     const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
       placeholder: `資料夾的絕對路徑，例如 ${liveHome || "/Users/you"}/projects/demo`, autocomplete: "off" });
@@ -9907,6 +9921,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const isAgy = tool === "agy" && !isFull;
     if (isAgy) previewBtn.disabled = true;
     function needsAck(pv) { return Boolean(isClaude && !isFull && pv && pv.cli && pv.cli.verified === false); }
+    // a preview that can start in full mode: the person must have ticked 我了解 (the server refuses without it as well)
+    function needsFullAck(pv) { return Boolean(pv && pv.launchable && pv.launch_mode === "full"); }
+    const fullAckOk = () => Boolean(fullAckBox && fullAckBox.checked);
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
@@ -9923,10 +9940,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       if (needsAck(current) && !(ackBox && ackBox.checked)) {
         return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
       }
+      if (needsFullAck(current) && !fullAckOk()) return "現在不能出發：還沒有勾選「我了解」。";
       return "";
     }
     function syncConfirm() {
-      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked));
+      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked))
+        || (needsFullAck(current) && !fullAckOk());
       why.textContent = whyOff();
     }
 
@@ -9934,6 +9953,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       current = null;
       lastPreview = null;
       ackBox = null;
+      fullAckBox = null;
       confirmBtn.disabled = true;
       setKids(out, message ? el("p", { class: "small muted" }, message) : null);
       why.textContent = busy ? "" : whyOff();
@@ -9999,6 +10019,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     function renderPreview(pv) {
       const kids = [];
+      fullAckBox = null;
       if (!pv.launchable) {
         kids.push(el("div", { class: "notice warn", "data-pass": "blocked" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
@@ -10009,6 +10030,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         if (pv.launch_mode === "full") {
           // P34-3: nothing is prepared and nothing is limited, so there is no scratch folder, no version check and no shield
           kids.push(passFullFront(pv));
+          kids.push(fullAckNotice());
           kids.push(el("dl", { class: "kv small" },
             el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " · " : ""}${pv.cli ? pv.cli.binary : ""}`),
             el("dt", null, "版本驗證"), el("dd", null, "不適用：這是你自己的工具，VBear 沒有執行它、沒有檢查版本"),
@@ -10193,6 +10215,18 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           progress));
     }
 
+    // ADR 0002: what a full launch can do, in the words of an ordinary person, and the box that must be ticked first
+    function fullAckNotice() {
+      fullAckBox = el("input", { type: "checkbox", id: "agent-launch-full-ack", "data-pass": "full-ack-box", on: { change: syncConfirm } });
+      return el("div", { class: "notice warn", "data-pass": "full-ack" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+        el("div", { class: "small" },
+          el("strong", null, "這個員工可以動你電腦上的任何檔案"),
+          el("p", { style: "margin:4px 0" }, "完整模式沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能出發。"),
+          el("label", { class: "row", for: "agent-launch-full-ack", style: "gap:8px; align-items:flex-start" },
+            fullAckBox, el("span", null, "我了解"))));
+    }
+
     function unverifiedBox(pv) {
       ackBox = el("input", { type: "checkbox", id: "agent-launch-unverified", on: { change: syncConfirm } });
       const { verifyBtn, progress } = verifyControl(pv);
@@ -10246,6 +10280,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     async function doLaunch() {
       if (busy || !current || isAgy) return;
+      if (needsFullAck(current) && !fullAckOk()) return;   // the button is off too; this holds if a click gets through anyway
       busy = true;
       confirmBtn.disabled = true;
       const pv = current;
@@ -10253,7 +10288,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       try {
         const res = await api.post("/api/native/agent-launches", {
           preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true,
-          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}) });
+          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}),
+          ...(needsFullAck(pv) ? { accept_full_mode: fullAckOk() } : {}) });
         toast("已啟動（由角色卡啟動，VBear 管理）");
         const sid = res.launch.session.session_id;
         // this tab started it: the terminal may take the keyboard once it is open (see grantFreshTerminal)
@@ -10990,7 +11026,7 @@ function nextStepAction(flow, opts = {}) {
     .filter((r) => r && typeof r.profile_id === "string" && r.profile_id)
     .filter((r) => !profiles || profiles.some((c) => c && c.id === r.profile_id && c.enabled !== false))
     // The safe launch does not start Antigravity, Grok or MCODE: such a card gets no button here (the step is done in its own terminal)
-    .filter((r) => !toolFullOnly(null, teamCardTool(r)))
+    .filter((r) => !toolNoSafeLaunch(null, teamCardTool(r)))
     .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
   const recordWords = NEXT_STEP_RECORD[step.key];
   return { step: step.key, ask: NEXT_STEP_ASK[step.key], turn: ns.turn, manual: !auto, launches, recordWords,
@@ -11299,7 +11335,7 @@ function teamBoard(opts) {
         el("button", { type: "button", class: "btn small", "data-act": "clear", on: { click: () => clearSlot(def.key) } }, "拿下來"),
         // from a place, the launch check opens with this task card's folder already in it (design 3.6); not while there
         // are changes that only exist on this page, and not for a card that is gone
-        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && !toolFullOnly(null, teamCardTool(entry))
+        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && !toolNoSafeLaunch(null, teamCardTool(entry))
           ? el("a", { class: "btn small", "data-act": "launch", title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的",
               href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1&step=${STEP_OF_SLOT[def.key]}` }, "出發") : null) : null,
       problem ? el("p", { class: "ts-problem small", "data-slot-problem": problem.code, role: "status" }, el("strong", null, "不算數："), problem.text, el("span", { class: "muted" }, `（${problem.why}）`)) : null,
