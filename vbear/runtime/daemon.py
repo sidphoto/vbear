@@ -155,7 +155,7 @@ RPC_OPS: dict[str, frozenset] = {
     "flow_delete_done": frozenset({"pipeline"}),
     # chats with a role card (P36; daemon_chat)
     "chat_open": frozenset({"profile_id"}),
-    "chat_send": frozenset({"chat_id", "text", "cli", "model_id"}),
+    "chat_send": frozenset({"chat_id", "text", "cli", "model_id", "instructions"}),
     "chat_answer": frozenset({"chat_id", "card_id", "token", "decision", "value"}),
     "chat_stop": frozenset({"chat_id"}),
     "chat_close": frozenset({"chat_id"}),

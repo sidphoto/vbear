@@ -79,6 +79,36 @@ class PrepareTests(LaunchCase):
                                                     "--resume", self.sid])
         self.assertEqual(asess.load_validated(self.base, m["launch_id"])["chat_id"], "c-0123456789abcdef")
 
+    def test_a_cards_own_instructions_are_appended_to_the_system_prompt_and_nothing_else_changes(self):
+        plain = self.prepare()
+        text = "先說結論。\n不要用表情符號。"
+        m = self.prepare(append_prompt=text)
+        self.assertIsNone(asess.chat_manifest_problem(m))
+        self.assertEqual(m["append_prompt"], text)
+        argv = asess.chat_argv(m)
+        i = argv.index("--append-system-prompt")
+        self.assertEqual(argv[i + 1], text)
+        self.assertEqual(argv[i - 2:i], ["--tools", "Bash,Read,Edit,Write,Grep,Glob"])      # after the tools, before the budget
+        self.assertEqual(argv[:i] + argv[i + 2:], [a if a != plain["settings_path"] else m["settings_path"]
+                                                    for a in asess.chat_argv(plain)])
+        self.assertNotIn("--append-system-prompt", asess.chat_argv(plain))
+        self.assertNotIn("append_prompt", plain)
+        self.assertEqual(asess.load_validated(self.base, m["launch_id"])["append_prompt"], text)
+        resumed = asess.chat_argv(self.prepare(append_prompt=text, resume=True))
+        self.assertEqual(resumed[-2:], ["--resume", self.sid])
+        self.assertEqual(resumed[resumed.index("--append-system-prompt") + 1], text)
+
+    def test_instructions_that_could_not_be_a_cards_are_refused(self):
+        for bad in ("", "   \n", 5, ["x"], "a\x00b", "a\x07b", "a\u202eb", "x" * 2001):
+            with self.subTest(bad=bad if not isinstance(bad, str) else bad[:12]):
+                with self.assertRaises(asess.LaunchRefused):
+                    self.prepare(append_prompt=bad)
+        self.assertEqual(self.prepare(append_prompt="x" * 2000)["append_prompt"], "x" * 2000)
+        self.assertEqual(self.prepare(append_prompt=None).get("append_prompt"), None)
+        m = self.prepare(append_prompt="ok")
+        for bad in ("", 5, "a\x00b", "x" * 2001):
+            self.assertIsNotNone(asess.chat_manifest_problem(dict(m, append_prompt=bad)), repr(bad)[:20])
+
     def test_refused_before_anything_is_made(self):
         other = self.tmp / "elsewhere"
         other.mkdir(mode=0o700)

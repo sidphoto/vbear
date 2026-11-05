@@ -239,12 +239,16 @@ def chat_argv(manifest: dict) -> list[str]:
     problem = chat_manifest_problem(manifest)
     if problem:
         raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")
-    return [manifest["cli_binary"], "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+    argv = [manifest["cli_binary"], "-p", "--input-format", "stream-json", "--output-format", "stream-json",
             "--verbose", "--include-partial-messages", "--permission-prompts", "host",
             "--permission-prompt-tool", "stdio", "--permission-mode", "default", "--safe-mode",
-            "--settings", manifest["settings_path"], "--strict-mcp-config", "--tools", ",".join(chat_protocol.TOOLS),
-            "--max-budget-usd", f"{manifest['budget_usd']:.2f}", "--model", manifest["model_id"],
-            "--resume" if manifest["resume"] else "--session-id", manifest["claude_session_id"]]
+            "--settings", manifest["settings_path"], "--strict-mcp-config", "--tools", ",".join(chat_protocol.TOOLS)]
+    if manifest.get("append_prompt") is not None:
+        # the role card's own instructions, the one thing of the card that goes in (P36-2): added to Claude Code's
+        # system prompt, never replacing it, and never anything VBear wrote for the card's position
+        argv += ["--append-system-prompt", manifest["append_prompt"]]
+    return argv + ["--max-budget-usd", f"{manifest['budget_usd']:.2f}", "--model", manifest["model_id"],
+                   "--resume" if manifest["resume"] else "--session-id", manifest["claude_session_id"]]
 
 
 # A full Claude model id (acceptance.CLAUDE_MODEL_RE), never an alias.
@@ -467,11 +471,38 @@ def _check_chat_workdir(workdir, base: Path) -> str:
     return workdir
 
 
+MAX_APPEND_PROMPT = 2000                                  # agent_profiles.MAX_INSTRUCTIONS
+
+
+def append_prompt_problem(value) -> str | None:
+    """None when ``value`` can be a role card's instructions on a command line: text of 1 to MAX_APPEND_PROMPT
+    characters that is not blank, holds no control, format or separator character other than a line break or a tab
+    (the rule agent_profiles.clean_instructions applies when a card is saved), and is already trimmed."""
+    import unicodedata
+    if not isinstance(value, str):
+        return "指示必須是文字"
+    if not value.strip() or value != value.strip():
+        return "指示不能是空的，頭尾不能有空白"
+    if len(value) > MAX_APPEND_PROMPT:
+        return f"指示不可超過 {MAX_APPEND_PROMPT} 字"
+    if "\r" in value:
+        return "指示的換行必須是單一的換行字元"
+    for ch in value:
+        if ch not in "\n\t" and unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
+            return "指示不可含控制字元"
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "指示含有無法編碼的字元"
+    return None
+
+
 def prepare_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_version: str, cli_identity: list[int],
                         model_id: str, chat_id: str, profile_id: str, claude_session_id: str, budget_usd: float,
-                        resume: bool) -> dict:
+                        resume: bool, append_prompt: str | None = None) -> dict:
     """One process of a chat (P36): the managed launch with the chat's settings, its session id, whether it resumes
-    that session, and the most it may spend. The daemon checks the version (chat-verified, admin policy) first."""
+    that session, and the most it may spend. The daemon checks the version (chat-verified, admin policy) first.
+    ``append_prompt`` is the role card's own instructions, or None."""
     if not (isinstance(chat_id, str) and CHAT_ID_RE.match(chat_id)):
         raise LaunchRefused("bad_request", "聊天 id 格式不符")
     if not (isinstance(profile_id, str) and TASK_ID_RE.match(profile_id)):
@@ -482,6 +513,8 @@ def prepare_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_versio
         raise LaunchRefused("bad_request", "額度必須是兩位小數以內的有限正數")
     if not isinstance(resume, bool):
         raise LaunchRefused("bad_request", "resume 必須是 true 或 false")
+    if append_prompt is not None and append_prompt_problem(append_prompt):
+        raise LaunchRefused("bad_request", append_prompt_problem(append_prompt))
     if not (isinstance(model_id, str) and MODEL_ID_RE.match(model_id)):
         raise LaunchRefused("invalid_model", "model id 格式不符")
     if chat_protocol.constants_for(cli_version) is None:
@@ -490,7 +523,7 @@ def prepare_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_versio
                            allowed_root=None, model_id=model_id, cli_verified=True, engine="claude-chat",
                            extra={"chat_id": chat_id, "profile_id": profile_id,
                                   "claude_session_id": claude_session_id, "budget_usd": budget_usd,
-                                  "resume": resume})
+                                  "resume": resume, **({"append_prompt": append_prompt} if append_prompt is not None else {})})
 
 
 def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_version: str,
@@ -921,14 +954,14 @@ def chat_manifest_problem(m: dict) -> str | None:
     if not isinstance(m, dict):
         return "不是物件"
     keys = set(m)
-    if not _CHAT_REQUIRED <= keys or keys - _CHAT_REQUIRED - _STREAM_OPTIONAL:
+    if not _CHAT_REQUIRED <= keys or keys - _CHAT_REQUIRED - _STREAM_OPTIONAL - {"append_prompt"}:
         return "欄位不符"
     if m["engine"] != "claude-chat" or chat_protocol.constants_for(m["cli_version"]) is None:
         return "引擎或版本不合法"
     if m["state"] not in _CHAT_STATES or m["native_session_id"] is not None:
         return "state 不合法"
     # the fields a chat shares with a stream launch, by the stream checks (its own fields set to valid stand-ins)
-    as_stream = {k: v for k, v in m.items() if k not in ("chat_id", "profile_id", "resume")}
+    as_stream = {k: v for k, v in m.items() if k not in ("chat_id", "profile_id", "resume", "append_prompt")}
     as_stream.update(pipeline_id="flow-000000000000", task_id="chat", model_id="claude-x",
                      cli_version=next(iter(stream_protocol.VERSIONS)))
     problem = stream_manifest_problem(as_stream)
@@ -942,6 +975,7 @@ def chat_manifest_problem(m: dict) -> str | None:
                               and chat_protocol.UUID_RE.match(m["claude_session_id"]) is not None),
         ("budget_usd", _budget_ok(m["budget_usd"])),
         ("resume", isinstance(m["resume"], bool)),
+        ("append_prompt", "append_prompt" not in m or append_prompt_problem(m["append_prompt"]) is None),
         ("boundary", m["boundary"] == _CHAT_BOUNDARY),
     ]
     for name, ok in checks:

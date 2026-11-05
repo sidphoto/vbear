@@ -634,12 +634,107 @@ class GateTests(ChatCase):
 class AdminPolicyTests(ChatCase):
     policy_ok = False
 
+    def real_check_under(self, root):
+        """The real check, against a temporary root instead of this Mac's /Library."""
+        real = admin_policy.check_claude
+        p = mock.patch("vbear.runtime.daemon_chat.admin_policy.check_claude",
+                       side_effect=lambda version, home=None: real(version, root=str(root), home=home))
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_without_a_policy_list_for_the_version_nothing_starts(self):
-        """2.1.318 has no administrator-policy source list yet (admin_policy.CLAUDE_SOURCES): refused, fail closed."""
+        """A version without an administrator-policy source list is refused, fail closed."""
+        chat_id = self.open_chat()
+        with mock.patch.dict(admin_policy.CLAUDE_SOURCES):
+            del admin_policy.CLAUDE_SOURCES[cf.VERSION]
+            r = self.send(chat_id)
+        self.assertEqual(r["error"]["code"], "admin_policy")
+        self.assertIn("清單", r["error"]["message"])
+        self.assertEqual(self.fake_log(), [])
+
+    def test_2_1_318_has_a_list_and_starts_when_no_source_exists(self):
+        root = self.tmp / "root"
+        root.mkdir()
+        self.real_check_under(root)
+        self.configure([clean("ask", 4)])
+        chat_id = self.open_chat()
+        r = self.send(chat_id)
+        self.assertTrue(r["ok"], r)
+        self.wait_turn(chat_id, 1)
+
+    def test_each_source_of_2_1_318_stops_a_chat_before_the_process(self):
+        root = self.tmp / "root"
+        (root / "Library/Application Support/ClaudeCode").mkdir(parents=True)
+        self.real_check_under(root)
         chat_id = self.open_chat()
         r = self.send(chat_id)
         self.assertEqual(r["error"]["code"], "admin_policy")
+        self.assertIn("/Library/Application Support/ClaudeCode", r["error"]["message"])
+        (root / "Library/Application Support/ClaudeCode").rmdir()
+        for name in ("remote-settings.json", "policy-limits.json"):
+            cache = self.home / ".claude" / name
+            cache.parent.mkdir(exist_ok=True)
+            cache.write_text("{}")
+            r = self.send(chat_id)
+            self.assertEqual(r["error"]["code"], "admin_policy", name)
+            self.assertIn(f"~/.claude/{name}", r["error"]["message"])
+            cache.unlink()
         self.assertEqual(self.fake_log(), [])
+
+
+class InstructionsTests(ChatCase):
+    def send_with(self, chat_id, instructions, **over):
+        fields = dict(chat_id=chat_id, text="hello", cli=self.cli(), model_id=MODEL)
+        if instructions is not None or over.get("explicit"):
+            fields["instructions"] = instructions
+        return self.rpc("chat_send", **fields)
+
+    def started_argv(self):
+        return next(x for x in self.fake_log() if x["event"] == "start")["argv"]
+
+    def test_a_cards_own_instructions_are_appended_to_the_system_prompt(self):
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        text = "先說結論。\n不要用表情符號。"
+        r = self.send_with(chat_id, text)
+        self.assertTrue(r["ok"], r)
+        self.wait_turn(chat_id, 1)
+        argv = self.started_argv()
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], text)
+        started = next(x for x in self.events(chat_id)[0] if x["kind"] == "process_started")
+        self.assertIs(started["instructions"], True)
+        self.assertNotIn(text, self.raw(chat_id), "the text is the card's, it is not copied into the chat's record")
+        self.assert_nothing_of_init_kept(chat_id)
+
+    def test_no_instructions_no_flag(self):
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send_with(chat_id, None)["ok"])
+        self.wait_turn(chat_id, 1)
+        self.assertNotIn("--append-system-prompt", self.started_argv())
+        started = next(x for x in self.events(chat_id)[0] if x["kind"] == "process_started")
+        self.assertIs(started["instructions"], False)
+
+    def test_instructions_that_are_not_text_a_card_could_hold_are_refused_before_anything_starts(self):
+        chat_id = self.open_chat()
+        for bad in ("", "  ", 5, ["a"], "a\x00b", "x" * 2001):
+            r = self.send_with(chat_id, bad, explicit=True)
+            self.assertEqual(r["error"]["code"], "bad_request", repr(bad)[:20])
+        self.assertEqual(self.fake_log(), [])
+        self.assertEqual(self.kinds(chat_id), ["chat_created"])
+
+    def test_a_resumed_process_gets_them_again(self):
+        self.dm.chat_idle_timeout = 0.5
+        self.configure([clean("ask", 4), clean("ask", 4)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send_with(chat_id, "短句。")["ok"])
+        self.wait_turn(chat_id, 1)
+        self.wait_gone(chat_id)
+        self.assertTrue(self.send_with(chat_id, "短句。")["ok"])
+        self.wait_turn(chat_id, 2)
+        starts = [x for x in self.fake_log() if x["event"] == "start"]
+        self.assertEqual([a["argv"][a["argv"].index("--append-system-prompt") + 1] for a in starts], ["短句。"] * 2)
+        self.assertEqual(starts[1]["argv"][-2], "--resume")
 
 
 if __name__ == "__main__":

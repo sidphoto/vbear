@@ -133,7 +133,7 @@ KINDS = {
     "chat_created": {"profile_id": lambda v: isinstance(v, str) and bool(PROFILE_ID_RE.match(v))},
     "user_message": {"turn": _turn, "text": lambda v: isinstance(v, str) and 0 < len(v.encode("utf-8", "surrogatepass")) <= MAX_USER},
     "turn_started": {"turn": _turn, "cap_usd": _money_text},
-    "process_started": {"mode": _one_of("new", "resume"), "budget_usd": _money_text},
+    "process_started": {"mode": _one_of("new", "resume"), "budget_usd": _money_text, "instructions": _bool},
     "session_ready": {"claude_code_version": _short, "permission_mode": _short, "model": _short},
     "reply": {"turn": _turn, "text": _text(MAX_REPLY), "truncated": _bool},
     "tool_call": {"turn": _turn, "tool_use_id": _short, "tool": _short, "summary": _text(MAX_EXCERPT)},

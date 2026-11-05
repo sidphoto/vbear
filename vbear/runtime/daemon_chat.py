@@ -2,9 +2,11 @@
 StreamOps is.
 
   chat_open    {profile_id}                                 a new chat; no process
-  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id}
+  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?}
                                                             a person's message: a turn, in the chat's live process
-                                                            or a new one (``--resume`` once the session exists)
+                                                            or a new one (``--resume`` once the session exists);
+                                                            ``instructions`` is the role card's own text, appended to
+                                                            the system prompt of a new process
   chat_answer  {chat_id, card_id, token, decision, value}   a permission card, once, with its one-use token
   chat_stop    {chat_id}                                    ends the turn (at its cap) and the process
   chat_close   {chat_id}                                    ends an idle process (stdin closed); refused while busy
@@ -124,6 +126,9 @@ class ChatOps:
         if self._shutdown_requested:
             return _err(rid, "limit", "背景程序正在關閉，不接受新的訊息")
         chat_id, text, cli, model_id = req.get("chat_id"), req.get("text"), req.get("cli"), req.get("model_id")
+        instructions = req.get("instructions")
+        if instructions is not None and agent_sessions.append_prompt_problem(instructions):
+            return _err(rid, "bad_request", agent_sessions.append_prompt_problem(instructions))
         if not isinstance(text, str) or not text.strip():
             return _err(rid, "bad_request", "訊息不能是空的")
         try:
@@ -172,10 +177,10 @@ class ChatOps:
                 return _store_err(rid, exc)
             p.start_turn(n, allowance, line, now)
             return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "reused"})
-        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn)
+        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions)
 
     def _chat_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str, allowance: Decimal,
-                    per_turn: Decimal) -> dict:
+                    per_turn: Decimal, instructions: str | None = None) -> dict:
         from .daemon import build_env              # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         try:
@@ -235,7 +240,8 @@ class ChatOps:
             m = agent_sessions.prepare_chat_launch(
                 self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
                 model_id=model_id, chat_id=chat_id, profile_id=profile_id,
-                claude_session_id=chat["claude_session_id"], budget_usd=float(allowance), resume=resume)
+                claude_session_id=chat["claude_session_id"], budget_usd=float(allowance), resume=resume,
+                append_prompt=instructions)
             line = cp.user_line(text, chat["claude_session_id"])
             agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
             m = agent_sessions.load_validated(self.base, m["launch_id"])
@@ -252,7 +258,8 @@ class ChatOps:
             log.append("user_message", {"turn": n, "text": text}, now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new",
-                                           "budget_usd": cs.usd(allowance)}, now=time.time())
+                                           "budget_usd": cs.usd(allowance), "instructions": instructions is not None},
+                       now=time.time())
         except cs.ChatStoreError as exc:
             self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
             return _store_err(rid, exc)

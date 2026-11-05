@@ -224,7 +224,7 @@ class DeriveTests(StoreCase):
     def test_recovery_closes_a_turn_a_stopped_daemon_left_at_its_cap(self):
         c = self.chat()
         self.turn(c["id"], 1, cap="0.25")
-        self.add(c["id"], "process_started", mode="new", budget_usd="0.25")
+        self.add(c["id"], "process_started", mode="new", budget_usd="0.25", instructions=False)
         self.assertEqual(cs.recover(self.base, now=self.now), [c["id"]])
         recs = cs.read_events(self.base, c["id"]).records
         end = [r for r in recs if r["kind"] == "turn_ended"]
