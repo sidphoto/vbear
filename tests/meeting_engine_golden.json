@@ -2510,7 +2510,8 @@
    "includes": [
     "meetings",
     "staffing",
-    "chats"
+    "chats",
+    "setup_try"
    ],
    "lamp": "red",
    "meeting_usd": "1.5",
@@ -2722,7 +2723,8 @@
   "includes": [
    "meetings",
    "staffing",
-   "chats"
+   "chats",
+   "setup_try"
   ],
   "lamp": "red",
   "meeting_usd": "1.5",
@@ -2737,7 +2739,8 @@
   "includes": [
    "meetings",
    "staffing",
-   "chats"
+   "chats",
+   "setup_try"
   ],
   "lamp": "green",
   "meeting_usd": "1.5",
