@@ -49,6 +49,7 @@ from . import model_options
 from . import chat_service as chat_service_mod
 from . import claude_verify
 from . import config as cfg
+from . import daily_limit
 from . import flow_executor
 from . import folders
 from . import flow_review
@@ -643,6 +644,9 @@ def make_handler(console: Console):
                     if force and self.headers.get("X-VBear") != "1":
                         return self._error(403, "重新檢查需要主控台標頭")
                     return self._setup_tools(force)
+                if path == "/api/setup/daily-limit":
+                    return self._json({"ok": True, "daily_usd": float(meetings.limits_from(console.store.conf)["daily_usd"]),
+                                       "choices": list(daily_limit.CHOICES)})
                 if path == "/api/tasks":
                     return self._json({"ok": True, "tasks": self._with_pickup(tasks.list_tasks())})
                 if path == "/api/task-templates":
@@ -855,6 +859,8 @@ def make_handler(console: Console):
                     return self._setup_settle()
                 if path.startswith("/api/setup/tools/") and path.endswith("/try"):
                     return self._setup_try(unquote(path[len("/api/setup/tools/"):-len("/try")]), self._body_strict())
+                if path == "/api/setup/daily-limit":
+                    return self._setup_daily_limit(self._body_strict())
                 if path.startswith("/api/setup/tools/") and path.endswith("/marker"):
                     return self._setup_marker(unquote(path[len("/api/setup/tools/"):-len("/marker")]), self._body_strict())
                 if path == "/api/native/claude-verification":
@@ -1403,6 +1409,35 @@ def make_handler(console: Console):
                         conf = cfg.load()
             return self._json({"ok": True, "setup_done": conf.get("setup_done") is True,
                                "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
+
+        def _setup_daily_limit(self, body):
+            """The choice of the daily limit: the day is written and every other limit above it is brought down to it, in one
+            write of config.json (checked with the rules of each family first; nothing is raised, nothing is half written)."""
+            if not isinstance(body, dict) or set(body) != {"daily_usd"}:
+                return self._error(400, "請求只能有一個 daily_usd 欄位，值是數字")
+            daily = daily_limit.accepted(body["daily_usd"])
+            if daily is None:
+                return self._error(400, f"每天上限必須是 0.01 到 {meetings.LIMIT_CAPS['daily_usd']} 之間的數字")
+            with console.lock:
+                if cfg.is_corrupt():
+                    return self._error(409, cfg.corrupt_message())
+                conf = cfg.load()
+                writes, changed = daily_limit.below_the_day(conf, daily)
+                try:
+                    writes["meeting_limits"] = meetings.validate_limits(writes["meeting_limits"], meetings.limits_from(conf))
+                    if "staffing_limits" in writes:
+                        writes["staffing_limits"] = staffing.validate_limits(writes["staffing_limits"], staffing.limits_from(conf), daily)
+                    if "chat_limits" in writes:
+                        writes["chat_limits"] = chat_store.validate_limits(writes["chat_limits"], chat_store.limits_from(conf), daily)
+                except ValueError as exc:
+                    return self._error(400, str(exc))
+                conf.update(writes)
+                try:
+                    cfg.save(conf)
+                except (OSError, ValueError) as exc:
+                    return self._error(503, f"每天上限沒有存進去：{exc}")
+                console.store.set_conf(conf)
+            return self._json({"ok": True, "daily_usd": float(daily), "changed": changed})
 
         def _setup_tool_problem(self, tool_id):
             """(status, message) when the page may not act on this tool, else None."""
@@ -2055,6 +2090,11 @@ def make_handler(console: Console):
                         value = chat_store.validate_limits(value, chat_store.limits_from(conf),
                                                            meetings.limits_from(conf)["daily_usd"])
                     conf[key] = value
+                    if key == "meeting_limits":
+                        # the day written here is the day for the staffing and chat limits too: those above it come down to it
+                        # (the ones written in this same request are checked as written, below)
+                        conf.update(daily_limit.below_the_day(conf, meetings.money(value["daily_usd"]), meeting=False,
+                                                              skip={"staffing_limits", "chat_limits"} & body.keys())[0])
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):
                     for src in conf.get("sources", []):

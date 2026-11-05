@@ -58,6 +58,7 @@ function setPage(over = {}) {
       page.tools = page.tools.map((t) => (t.id === id ? (body.done ? ready(id) : installed(id)) : t));
       return jsonResponse({ ok: true });
     }
+    if (p === "/api/setup/daily-limit") return jsonResponse({ ok: true, daily_usd: 3, choices: [1, 3, 10] });
     if (p === "/api/setup/settle") return page.settle ? jsonResponse(page.settle) : jsonResponse({ ok: true, setup_done: false, setup_notice: false, upgraded: false });
     if (p === "/api/config" && method === "POST") return jsonResponse({ ok: true, config: body });
     if (p === "/api/config") return jsonResponse({ ok: true, config: page.config || {} });
@@ -129,7 +130,7 @@ test("the page lists the four tools side by side, with a sentence, a state, a ve
   assert.deepStrictEqual(acts(cs[3]), [["login", "登入"], ["mark", "我登入好了"]]);
   assert.strictEqual(byAttr(main, "data-setup-slot", "try").length, 4, "a place for 「試一下」 in every card");
   assert.strictEqual(byAttr(main, "data-setup-slot", "daily-limit").length, 1);
-  assert(!text(main.find((n) => attr(n, "data-setup-slot") === "daily-limit")), "the places are empty");
+  assert(!text(main.find((n) => attr(n, "data-setup-slot") === "try")), "the place for 「試一下」 is empty (a later task)");
 });
 
 test("MCODE is not on the page unless the server lists it, and when it does it is a fifth row with its two login buttons", async () => {
