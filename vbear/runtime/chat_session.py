@@ -9,6 +9,8 @@ close_gracefully.
     only the RPC holding its one-use token can answer, once, before it expires; an expired card is refused, by the
     answer itself as by the timer. An allow (or a changed input) is judged again when it is given: a call that
     became one VBear refuses (a folder of its path is now a link out of the work folder) is refused then.
+  * The cards waiting together fit one chat_events reply whole: each at most CARD_SHOW_MAX, all of them at most
+    CARDS_SHOW_TOTAL, as they are shown; one that does not fit is refused, never shown cut.
   * A turn ends with its result (it costs what the CLI's cumulative total says it added), or is cut off (stopped,
     timed out, the process ended, a violation): then it costs its cap. Only a turn that never reached the CLI
     costs nothing.
@@ -40,8 +42,11 @@ STDERR_MAX = 64 << 20
 EVENTS_MAX = 200_000
 WRITE_DEADLINE = 10.0
 PARTIAL_MAX = 64_000          # characters of the reply being written that are kept for the live view
-CARD_SHOW_MAX = 12 << 10      # a card's input must fit the live view whole (UTF-8 JSON), else VBear refuses it
+CARD_SHOW_MAX = 12 << 10      # one card as the live view shows it (UTF-8 JSON); a larger one is refused
+CARDS_SHOW_TOTAL = 30 << 10   # the cards waiting at once, as shown; one that would pass it is refused
 MAX_CARDS = 8                 # cards waiting at once; more are refused
+LIVE_MAX = 40 << 10           # the whole live view; the reply being written is cut (from its start) to fit
+PARTIAL_CHARS = 4000          # at most this much of the reply being written is shown
 EXPIRED = "這張權限卡片已過期，VBear 視為拒絕"
 DENIED = "使用者拒絕了這個操作"
 CANCELLED = "這回合已結束，VBear 視為拒絕"
@@ -70,6 +75,7 @@ class Card:
     turn: int
     expires: float                 # monotonic
     asked_at: float = field(default_factory=time.time)
+    shown: int = 0                 # bytes of the card in the live view, at most
 
 
 class ChatProcess(ProcessGroupEnd):
@@ -180,14 +186,15 @@ class ChatProcess(ProcessGroupEnd):
         return "working" if self.turn else "idle"
 
     def live_view(self, now: float) -> dict:
-        partial = self.partial
-        cut = len(partial) > 4000
-        return {"state": self.live_state(), "turn": self.turn.n if self.turn else None,
-                "partial": partial[-4000:], "partial_truncated": cut, "model": self.model_id,
-                "cards": [{"card_id": c.card_id, "token": c.token, "turn": c.turn, "tool": c.tool, "input": c.input,
-                           "editable": c.editable, "reason": c.reason,
-                           "expires_in": max(0.0, round(c.expires - now, 1))}
-                          for c in sorted(self.cards.values(), key=lambda c: c.asked_at)]}
+        """What a person sees now: every waiting card whole (they fit LIVE_MAX by CARDS_SHOW_TOTAL) and the end of
+        the reply being written, as much of it as fits what is left."""
+        view = {"state": self.live_state(), "turn": self.turn.n if self.turn else None, "partial": "",
+                "partial_truncated": False, "model": self.model_id,
+                "cards": [_card_view(c, now) for c in sorted(self.cards.values(), key=lambda c: c.asked_at)]}
+        text = self.partial.encode("utf-8", "replace").decode("utf-8")     # a lone surrogate is shown as "?"
+        tail = _tail_within(text[-PARTIAL_CHARS:], LIVE_MAX - _size(view))
+        view["partial"], view["partial_truncated"] = tail, len(tail) < len(text)
+        return view
 
     def send_initialize(self) -> None:
         self._queue(cp.initialize_line(self.init_id))
@@ -456,15 +463,22 @@ class ChatProcess(ProcessGroupEnd):
             j = cp.Judgement("deny", "這個請求不在任何一回合裡")
         else:
             j = cp.judge(tool, inp, self.cwd)
+        card = None
         if j.action == "ask":
+            card = Card(card_id="k-" + secrets.token_hex(8), token=secrets.token_urlsafe(24), request_id=rid,
+                        tool=name, input=inp, tool_use_id=tid, editable=j.editable, reason=j.reason,
+                        turn=self._turn_no() or 1, expires=now + self.card_ttl)
             try:
-                shown = len(json.dumps(inp, ensure_ascii=False, allow_nan=False).encode("utf-8"))
-            except (ValueError, TypeError, UnicodeEncodeError):
-                shown = CARD_SHOW_MAX + 1
-            if shown > CARD_SHOW_MAX:
+                card.shown = _size(_card_view(card, now))   # expires_in only gets shorter from here
+            except (ValueError, TypeError, UnicodeEncodeError, RecursionError):
+                card.shown = CARD_SHOW_MAX + 1
+            if card.shown > CARD_SHOW_MAX:
                 j = cp.Judgement("deny", "內容太長，無法完整顯示給你確認，VBear 直接拒絕")
             elif len(self.cards) >= MAX_CARDS:
                 j = cp.Judgement("deny", "等你回覆的卡片太多，VBear 直接拒絕")
+            elif sum(c.shown for c in self.cards.values()) + card.shown > CARDS_SHOW_TOTAL:
+                j = cp.Judgement("deny", "等你回覆的卡片內容加起來太多，無法一起完整顯示，VBear 直接拒絕；"
+                                         "請先回覆前面的卡片")
         n = self._turn_no() or 1
         summary = cp.summary(tool, inp)
         if j.action == "allow":
@@ -478,9 +492,6 @@ class ChatProcess(ProcessGroupEnd):
             self._record("denied", {"turn": n, "tool_use_id": tid, "tool": name, "summary": summary,
                                     "reason": j.reason, "by": "vbear"})
         else:
-            card = Card(card_id="k-" + secrets.token_hex(8), token=secrets.token_urlsafe(24), request_id=rid,
-                        tool=name, input=inp, tool_use_id=tid, editable=j.editable, reason=j.reason, turn=n,
-                        expires=now + self.card_ttl)
             self.cards[card.card_id] = card
             self._record("card", {"turn": n, "card_id": card.card_id, "tool": name, "input": inp,
                                   "editable": j.editable, "state": "asked", "reason": j.reason})
@@ -621,3 +632,27 @@ class ChatProcess(ProcessGroupEnd):
 
     def _outcome_extra(self) -> dict:
         return {"chat_id": self.chat_id}
+
+
+def _size(value) -> int:
+    """Bytes of a value in a daemon reply (UTF-8 JSON, as daemon.py writes it)."""
+    return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+
+
+def _card_view(c: Card, now: float) -> dict:
+    return {"card_id": c.card_id, "token": c.token, "turn": c.turn, "tool": c.tool, "input": c.input,
+            "editable": c.editable, "reason": c.reason, "expires_in": max(0.0, round(c.expires - now, 1))}
+
+
+def _tail_within(text: str, room: int) -> str:
+    """The longest end of ``text`` whose JSON string adds at most ``room`` bytes to an empty one."""
+    if _size(text) - 2 <= room:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if _size(text[mid:]) - 2 <= room:
+            hi = mid
+        else:
+            lo = mid + 1
+    return text[lo:]

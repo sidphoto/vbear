@@ -1,5 +1,5 @@
 """One chat process's own rules, without the daemon's loop (P36-1): what an answer does at the very moment a card
-expires, before any timer has run. The process is a harmless child that only reads its stdin; nothing is written to
+expires, before any timer has run, and that the live view always fits one reply. The process is a harmless child that only reads its stdin; nothing is written to
 it (the queued lines are looked at instead). Synthetic VBEAR_HOME; no CLI runs."""
 
 from __future__ import annotations
@@ -91,6 +91,22 @@ class AnswerClockTests(ProcessCase):
         [line] = self.queued()
         self.assertEqual(line["response"]["response"]["behavior"], "allow")
         self.assertEqual(self.decisions(), ["allow"])
+
+
+class LiveViewTests(ProcessCase):
+    def test_the_budgets_leave_room_in_one_reply(self):
+        from vbear.runtime import daemon as d, daemon_chat as dc
+        self.assertLessEqual(csess.CARDS_SHOW_TOTAL + (2 << 10), csess.LIVE_MAX)          # the cards and the rest
+        self.assertLessEqual(csess.LIVE_MAX + (16 << 10), dc.REPLY_BUDGET)    # records always get some room
+        self.assertLessEqual(dc.REPLY_BUDGET + (4 << 10), d.MAX_LINE)       # and the envelope fits
+
+    def test_a_reply_being_written_never_breaks_the_view(self):
+        self.p.partial = "\ud800" + "\x01" * 9000 + "end"                   # a lone surrogate, 6-byte escapes
+        view = self.p.live_view(NOW)
+        self.assertLessEqual(csess._size(view), csess.LIVE_MAX)
+        self.assertTrue(view["partial_truncated"])
+        self.assertTrue(view["partial"].endswith("end"))
+        self.assertEqual(view["cards"][0]["input"], {"command": "echo fictional"})
 
 
 if __name__ == "__main__":

@@ -1039,8 +1039,15 @@ can start until a version passes the chat check (P36-2).
 - **Who may answer a card.** Only the runtime socket's own user reaches the daemon. A card is answered through
   `chat_answer` with its one-use token. A second answer, a wrong token, an expired card (5 minutes) or a card of
   an ended turn is refused. Expiry is checked by the answer itself, not only by the daemon's timer, and an expired
-  card is answered with a refusal. A card whose input does not fit the screen whole (12 KiB) is refused by VBear, so
-  you never allow something you were not shown.
+  card is answered with a refusal.
+- **Cards are shown whole.** All the waiting cards must fit one `chat_events` reply whole, because a card cut short
+  could make you allow something you were not shown. VBear refuses a card, and records why, in each of these cases:
+  - the card, as shown, is over 12 KiB;
+  - eight cards are already waiting;
+  - with the waiting cards it would pass 30 KiB.
+
+  The reply being written is shown only as far as what is left of the live view allows (40 KiB in all), and is
+  marked as cut.
 - **Limits and time.** There is one chat process per role card and at most three in all, and each counts toward
   the daemon's session limit. A process that has not answered the initialize request within 30 seconds is ended.
   A turn over 10 minutes is ended at its cap. An idle process closes after 10 minutes by having its stdin closed,

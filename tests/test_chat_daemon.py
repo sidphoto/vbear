@@ -322,6 +322,52 @@ class CardTests(ChatCase):
     def test_an_edit_whose_folder_became_a_link_outside_is_refused_on_modify(self):
         self._swap_a_folder_for_a_link_while_the_card_waits(3, "Edit", "modify", "hello-changed")
 
+    def test_many_cards_of_wide_characters_still_fit_one_events_reply(self):
+        steps = clean("ask", 2)
+        ask = next(s["ask"] for s in steps if "ask" in s)
+        delta = copy.deepcopy(next(e for e in cf.events("ask", 0) if e.get("type") == "stream_event"
+                                   and e["event"].get("delta", {}).get("type") == "text_delta"))
+        long_reply = "說" * 500 + "\U00020000" * 4000                 # 4-byte characters (CJK Extension B)
+        delta["event"]["delta"]["text"] = long_reply
+        content = "測" * 1700 + "\U00020000" * 1150                    # about 9.7 KB of UTF-8: under a card's limit
+        asks = []
+        for i in range(6):
+            a = copy.deepcopy(ask)
+            a["request_id"] = f"req-many-{i}"
+            a["request"]["tool_use_id"] = f"toolu_many_{i}"
+            a["request"]["input"] = {"file_path": f"/WORK/n{i}.txt", "content": f"{content}{i}"}
+            asks.append(a)
+        self.configure([[steps[0], {"emit": [delta] + asks}]])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+
+        def settled():
+            _, live = self.events(chat_id)
+            return live and len(live["cards"]) + len(self.answers()) == 6 and live
+        live = self.wait(settled, "every request to be shown or refused")
+        reply = self.rpc("chat_events", chat_id=chat_id, after=0)
+        self.assertTrue(reply["ok"], reply)
+        self.assertLess(len(json.dumps(reply, ensure_ascii=False).encode("utf-8")), d.MAX_LINE)
+        self.assertLessEqual(len(json.dumps(live, ensure_ascii=False).encode("utf-8")), csess.LIVE_MAX)
+        work = cs.ensure_work_dir(self.base, "emp-1")
+        shown = {c["input"]["file_path"]: c["input"] for c in live["cards"]}
+        self.assertEqual(len(shown), 3)
+        for path, inp in shown.items():                                  # whole, as asked: never cut
+            i = int(path[-5])
+            self.assertEqual(inp, {"file_path": f"{work}/n{i}.txt", "content": f"{content}{i}"})
+        refused = [x["response"]["response"] for x in self.answers()]
+        self.assertEqual(len(refused), 3)
+        for x in refused:
+            self.assertEqual(x["behavior"], "deny")
+            self.assertIn("太多", x["message"])
+        recs = self.events(chat_id)[0]
+        self.assertEqual(len([x for x in recs if x["kind"] == "denied" and x["by"] == "vbear"]), 3)
+        self.assertTrue(live["partial_truncated"])
+        self.assertTrue(live["partial"] and long_reply.endswith(live["partial"]))
+        card = live["cards"][0]
+        r = self.rpc("chat_answer", chat_id=chat_id, card_id=card["card_id"], token=card["token"], decision="allow")
+        self.assertTrue(r["ok"], r)
+
 
 class ProtocolTests(ChatCase):
     def test_an_unknown_event_is_noted_by_its_field_names_only(self):
