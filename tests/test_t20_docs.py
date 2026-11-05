@@ -53,12 +53,11 @@ class ChangelogTests(unittest.TestCase):
     def setUpClass(cls):
         text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         cls.head = text[:text.index("## v0.11.0")]
-        cls.unreleased = flat(text[text.index("## Unreleased"):text.index("## v0.11.0")])
+        cls.unreleased = flat(text[text.index("## v0.12.0"):text.index("## v0.11.0")])
 
-    def test_unreleased_comes_first_and_says_the_version_is_not_raised(self):
-        self.assertTrue(self.head.startswith("# Changelog\n\n## Unreleased"), self.head[:60])
-        for phrase in ("v0.12.0", "not released", "not raised"):
-            self.assertIn(phrase, self.unreleased, phrase)
+    def test_the_release_comes_first(self):
+        self.assertTrue(self.head.startswith("# Changelog\n\n## v0.12.0 — the start-up page"), self.head[:60])
+        self.assertNotIn("not released", self.unreleased)
 
     def test_it_covers_the_eight_tasks(self):
         for phrase in ("`#/setup`", "`#/welcome`", "`welcome_seen`", "Open Anyway", "illustration", "Grok", "MCODE", "`show_mcode`",

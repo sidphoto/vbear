@@ -1,9 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.12.0 — the start-up page
 
-**This is v0.12.0, which is not released yet. The version number in `vbear/__init__.py` is not raised, so a build from this
-code still reports the old number.** The start-up page: a new person is taken through installing and signing in to an AI
+The start-up page: a new person is taken through installing and signing in to an AI
 tool, picking a daily limit and trying the tool once, before anything else.
 
 - **A start-up page (`#/setup`, 開始設定) and a left-menu entry.** It lists the AI tools side by side (Claude Code, Codex,
