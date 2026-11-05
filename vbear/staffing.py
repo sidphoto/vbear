@@ -419,18 +419,25 @@ STAFF_OPINION_SCHEMA = mt._obj({
     "skills": _array(mt._obj({"skill": _S, "for": _S, "why": _S})),
     "skill_gaps": _array(mt._obj({"need": _S, "category": _enum(GAP_CATEGORIES), "search_words": _array(_S)})),
     "risks": _array(_RISK)})
-PROPOSAL_SCHEMA = mt._obj({
-    "summary": _S,
-    "team": _array(mt._obj({"slot": _enum(SLOTS), "pick": _enum(PICKS), "card": _S, "new_ref": _S, "reason": _S,
-                            "skills": _array(_PICKED_SKILL)})),
-    "staff": _array(mt._obj({"position": _enum(STAFF_POSITIONS), "pick": _enum(STAFF_PICKS), "card": _S, "new_ref": _S,
-                             "reason": _S, "skills": _array(_PICKED_SKILL)})),
-    "new_cards": _array(mt._obj({"ref": _S, "position": _enum(ap.POSITIONS), "tool": _enum(ap.TOOL_ORDER),
-                                 "model_alias": _enum(NEW_CARD_ALIASES), "name": _S, "reason": _S, "skills": _array(_PICKED_SKILL)})),
-    "skill_gaps": _array(mt._obj({"for": _S, "need": _S, "category": _enum(GAP_CATEGORIES), "search_words": _array(_S), "why": _S})),
-    "risks": _array(_S),
-    "questions_for_chairman": _array(_S),
-    "opinions_used": _array(mt._obj({"from": _S, "point": _S, "adopted": {"type": "boolean"}, "why": _S}))})
+def proposal_schema(tools=None) -> dict:
+    """The CEO's proposal schema. ``tools`` is what a new card may name (ai_tools.visible_ids: a hidden tool that is switched
+    off is not offered); without it, every tool the registry has."""
+    return mt._obj({
+        "summary": _S,
+        "team": _array(mt._obj({"slot": _enum(SLOTS), "pick": _enum(PICKS), "card": _S, "new_ref": _S, "reason": _S,
+                                "skills": _array(_PICKED_SKILL)})),
+        "staff": _array(mt._obj({"position": _enum(STAFF_POSITIONS), "pick": _enum(STAFF_PICKS), "card": _S, "new_ref": _S,
+                                 "reason": _S, "skills": _array(_PICKED_SKILL)})),
+        "new_cards": _array(mt._obj({"ref": _S, "position": _enum(ap.POSITIONS), "tool": _enum(ap.TOOL_ORDER if tools is None else tools),
+                                     "model_alias": _enum(NEW_CARD_ALIASES), "name": _S, "reason": _S,
+                                     "skills": _array(_PICKED_SKILL)})),
+        "skill_gaps": _array(mt._obj({"for": _S, "need": _S, "category": _enum(GAP_CATEGORIES), "search_words": _array(_S), "why": _S})),
+        "risks": _array(_S),
+        "questions_for_chairman": _array(_S),
+        "opinions_used": _array(mt._obj({"from": _S, "point": _S, "adopted": {"type": "boolean"}, "why": _S}))})
+
+
+PROPOSAL_SCHEMA = proposal_schema()
 
 # What VBear says of an item it kept but did not tick in advance; the codes are the record's, the words the page's.
 FLAGS = {
