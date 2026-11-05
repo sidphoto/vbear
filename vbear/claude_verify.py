@@ -158,3 +158,65 @@ def record_pass(version: str, binary: str, reports: dict, title: dict | None = N
                    "report": title["report"]} if title else {"passed": False, "failed": ["not_checked"]}),
     }
     cfg.write_private(path, json.dumps({"versions": versions}, ensure_ascii=False, indent=1) + "\n")
+
+
+# ---- 「驗證聊天」 (P36-2) ---------------------------------------------------------------------------------------------
+
+CHAT_RUN_TIMEOUT = 900   # the check itself stops a session after its own limits (vbear/chat_check.py)
+
+
+class ChatVerifier:
+    """Runs ``python -m vbear.boundary_check --mode chat`` in a child process on the Claude Code a chat would use, and
+    reports how it went. The check records a pass itself, in ``<state>/claude-chat-verified.json`` (with its report);
+    this class then asks ``cli_versions`` whether the version really counts, so a pass is never taken from the child's
+    words. A real session with four small model calls on the person's own login: one verification runs at a time."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._state: dict = {"running": False}
+
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._state)
+
+    def start(self, binary: str, version: str) -> dict:
+        with self._lock:
+            if self._state.get("running"):
+                return dict(self._state)
+            self._state = {"running": True, "version": version, "binary": binary, "started_at": time.time(),
+                           "step": "chat", "result": None}
+        threading.Thread(target=self._run, args=(binary, version), daemon=True, name="vbear-chat-verify").start()
+        return self.status()
+
+    def _set(self, **kw) -> None:
+        with self._lock:
+            self._state.update(kw)
+
+    def _finish(self, result: str, message: str, **extra) -> None:
+        self._set(running=False, result=result, message=message, finished_at=time.time(), **extra)
+
+    def _run(self, binary: str, version: str) -> None:
+        try:
+            self._run_check(binary, version)
+        except Exception as exc:                          # never leave the status stuck at "running"
+            self._finish("error", f"驗證中斷：{type(exc).__name__}")
+
+    def _run_check(self, binary: str, version: str) -> None:
+        out_dir = reports_dir()
+        cfg.ensure_state_dir()
+        out_dir.mkdir(mode=0o700, exist_ok=True)
+        out = out_dir / f"claude-{version}-chat.json"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-B", "-m", "vbear.boundary_check", "--claude", binary, "--mode", "chat", "--out",
+                 str(out)],
+                cwd=PACKAGE_PARENT, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=CHAT_RUN_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return self._finish("error", f"聊天驗證無法完成：{type(exc).__name__}")
+        if proc.returncode != 0:
+            failed = _failed_checks(out)
+            why = ("、".join(failed) + " 沒有通過") if failed else "驗證沒有完成（模型可能沒有回應，或登入失效）"
+            return self._finish("failed", f"聊天驗證：{why}", report=str(out), failed=failed)
+        if version not in cli_versions.chat_verified_versions():
+            return self._finish("error", "檢查說通過了，但這個版本沒有出現在本機的已驗證清單裡，請看報告", report=str(out))
+        self._finish("passed", f"Claude Code {version} 通過聊天驗證", report=str(out))

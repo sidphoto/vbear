@@ -43,6 +43,7 @@ from . import position_guide
 from . import armory
 from . import loadout as loadout_mod
 from . import model_options
+from . import chat_service as chat_service_mod
 from . import claude_verify
 from . import config as cfg
 from . import flow_executor
@@ -116,6 +117,12 @@ MEETING_RE = re.compile(r"^/api/meetings/(m-[0-9a-f]{12})(?:/(retry-preview|retr
 MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 # /api/staffing/<id>[/retry-preview | /retry | /cancel | /chairman] (P35-2); the codes and statuses are the meetings'
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
+# /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
+CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
+CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
+CHAT_STREAM_POLL_S = 0.4      # how often a stream asks the runtime while something is happening
+CHAT_STREAM_IDLE_POLL_S = 1.5
+CHAT_STREAM_KEEPALIVE_S = 15.0
 FLOW_GET_RE = re.compile(
     r"^/api/flows/(flow-[0-9a-f]{12})/(reports|merge-gate|reviews|automation)(?:/(r-[0-9a-f]{16})/draft)?\Z")
 BODY_DEADLINE_S = 15.0  # whole body, not per read: a byte-at-a-time sender is cut off too
@@ -178,6 +185,8 @@ class Console:
         # the runner of automatic flows (S3): started by serve() only, never by constructing a Console
         self.runner = runner_mod.AutomationRunner(self.executor, self.review)
         self.claude_verifier = claude_verify.ClaudeVerifier()
+        self.chat_verifier = claude_verify.ChatVerifier()
+        self.chat_streams = 0
         self.translations = translations.TranslationManager()
         self.store.after_rescan = self.translations.after_scan
 
@@ -235,6 +244,24 @@ class Console:
 
     def staffing_runner(self):
         return self._boards()[1]
+
+    def chat_service(self):
+        """The one chat service (P36-2), built on first use. Its ledger is the meetings' runner's: the day is shared."""
+        with self.lock:
+            if not hasattr(self, "chats"):
+                self.chats = chat_service_mod.ChatService(
+                    self.runtime, verifier=getattr(self, "chat_verifier", None),
+                    ledger=lambda: self.meeting_runner().ledger(self.store.conf))
+            return self.chats
+
+    def chat_stream_slot(self, take: bool) -> bool:
+        """Take (or give back) one of the places a live chat stream may use; False when all are taken."""
+        with self.lock:
+            used = self.__dict__.setdefault("chat_streams", 0)
+            if take and used >= CHAT_STREAMS_MAX:
+                return False
+            self.chat_streams = used + 1 if take else max(0, used - 1)
+            return True
 
     def translation_manager(self):
         with self.lock:
@@ -565,6 +592,20 @@ def make_handler(console: Console):
                 if path.startswith("/api/meetings/"):
                     found = MEETING_RE.match(path)
                     return self._meeting_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path == "/api/chats":
+                    return self._chat_action(lambda: console.chat_service().list(console.store.conf))
+                if path == "/api/chat-support":
+                    return self._chat_action(lambda: {"support": console.chat_service().support()})
+                if path.startswith("/api/chats/"):
+                    found = CHAT_RE.match(path)
+                    if not found or found.group(2) not in (None, "stream"):
+                        return self._error(404, "not found")
+                    after = self._chat_after(url.query)
+                    if after is None:
+                        return self._error(400, "after 必須是非負整數")
+                    if found.group(2) == "stream":
+                        return self._chat_stream(found.group(1), after)
+                    return self._chat_action(lambda: console.chat_service().get(found.group(1), after))
                 if path in ("/api/staffing", "/api/staffing/suggest"):
                     task_id = parse_qs(url.query).get("task_id", [None])[0]
                     return self._staffing_call("list" if path == "/api/staffing" else "suggest", task_id=task_id)
@@ -743,6 +784,18 @@ def make_handler(console: Console):
                     if not found or not found.group(2):
                         return self._error(404, "not found")
                     return self._meeting_call(found.group(2), found.group(1), self._body_strict())
+                if path == "/api/chats":
+                    return self._chat_action(lambda b=self._body_strict(): console.chat_service().create(b), 201)
+                if path == "/api/chat-support/verify":
+                    return self._chat_action(lambda b=self._body_strict(): console.chat_service().verify_start(b), 202)
+                if path.startswith("/api/chats/"):
+                    found = CHAT_RE.match(path)
+                    action = found.group(2) if found else None
+                    if action not in ("messages", "answer", "stop"):
+                        return self._error(404, "not found")
+                    svc, chat_id, body = console.chat_service(), found.group(1), self._body_strict()
+                    call = {"messages": svc.send, "answer": svc.answer, "stop": svc.stop}[action]
+                    return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
                 if path == "/api/staffing/preview":
                     return self._staffing_call("preview", None, self._body_strict())
                 if path == "/api/staffing":
@@ -927,6 +980,11 @@ def make_handler(console: Console):
                 if path.startswith("/api/staffing/"):
                     found = STAFFING_RE.match(path)
                     return self._staffing_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path.startswith("/api/chats/"):
+                    found = CHAT_RE.match(path)
+                    if not found or found.group(2):
+                        return self._error(404, "not found")
+                    return self._chat_action(lambda: console.chat_service().delete(found.group(1)))
                 if path.startswith("/api/tasks/"):
                     task_id = path[len("/api/tasks/"):]
                     ok = tasks.delete_task(task_id)
@@ -1496,6 +1554,69 @@ def make_handler(console: Console):
                 return self._error(404, "not found")
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
+        def _chat_action(self, fn, status: int = 200):
+            """Run one chat action and answer {"ok": true, ...result}, or {error, code} with the status of the code
+            (vbear/chat_service.py CODE_TEXT). A body that is not one JSON object is a bad request, never an empty one."""
+            try:
+                return self._json({"ok": True, **fn()}, status)
+            except ApiError as exc:
+                return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
+            except agent_profiles.AgentProfileStorageError:
+                return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "storage"}, 503)
+
+        @staticmethod
+        def _chat_after(query: str):
+            raw = parse_qs(query).get("after", ["0"])[0]
+            return int(raw) if raw.isascii() and raw.isdigit() and len(raw) <= 9 else None
+
+        def _chat_stream(self, chat_id: str, after: int):
+            """Server-sent events for one chat: a ``data:`` line, the same JSON as GET /api/chats/<id>, whenever the
+            record grows or what is happening now changes. Like the terminal's stream it needs the X-VBear header, so
+            the page reads it with fetch(), not EventSource. The runtime has no push: this asks it a few times a
+            second while something is happening, and slower when nothing is."""
+            if self.headers.get("X-VBear") != "1":
+                return self._error(403, "forbidden")
+            svc = console.chat_service()
+            try:
+                first = svc.get(chat_id, after)
+            except ApiError as exc:
+                return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
+            if not console.chat_stream_slot(True):
+                return self._error(429, f"同時最多 {CHAT_STREAMS_MAX} 個聊天畫面可以即時更新，請關掉其他分頁")
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Security-Policy", CSP)
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.end_headers()
+                cur, last_live, last_runtime, quiet_since = after, object(), None, time.monotonic()
+                got = first
+                while True:
+                    live = got["live"]
+                    changed = bool(got["records"]) or live != last_live or got["runtime"] != last_runtime
+                    if changed:
+                        self.wfile.write(b"data: " + json.dumps({"ok": True, **got}, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                        self.wfile.flush()
+                        quiet_since = time.monotonic()
+                    elif time.monotonic() - quiet_since >= CHAT_STREAM_KEEPALIVE_S:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        quiet_since = time.monotonic()
+                    last_live, last_runtime, cur = live, got["runtime"], got["next_after"]
+                    if not got["more"]:
+                        time.sleep(CHAT_STREAM_POLL_S if live is not None else CHAT_STREAM_IDLE_POLL_S)
+                    try:
+                        got = svc.get(chat_id, cur)
+                    except ApiError as exc:               # deleted while watched, or the record broke
+                        self.wfile.write(b"data: " + json.dumps({"ok": False, "error": str(exc), "code": exc.code},
+                                                                ensure_ascii=False).encode("utf-8") + b"\n\n")
+                        self.wfile.flush()
+                        return
+            finally:
+                console.chat_stream_slot(False)
 
         def _staffing_sources(self, conf) -> staffing_runner_mod.StaffingSources:
             """Where a staffing meeting reads from: the stored cards (read without quarantining), the task cards and their
