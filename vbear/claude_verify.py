@@ -169,7 +169,7 @@ class ChatVerifier:
     """Runs ``python -m vbear.boundary_check --mode chat`` in a child process on the Claude Code a chat would use, and
     reports how it went. The check records a pass itself, in ``<state>/claude-chat-verified.json`` (with its report);
     this class then asks ``cli_versions`` whether the version really counts, so a pass is never taken from the child's
-    words. A real session with four small model calls on the person's own login: one verification runs at a time."""
+    words. A real session with about six small model calls on the person's own login: one verification runs at a time."""
 
     def __init__(self):
         self._lock = threading.Lock()

@@ -32,6 +32,13 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
 - **Terminal streaming.** `GET /api/term/<id>/stream` relays runtime output to the browser as
   server-sent events. Input goes through `POST /api/term/<id>/input` only after an explicit takeover.
 
+- **Chats.** `vbear/chat_service.py` is the console's side of a chat: it checks the card (enabled, Claude Code), asks the
+  runtime to open, send, answer, stop and delete, retries a send once the process is replaced, and turns every
+  refusal into a sentence (`explain`). `GET /api/chats/<id>/stream` relays the daemon's live view as server-sent events
+  (`X-VBear` required, at most four open); the page falls back to polling. `claude_verify.py`'s `ChatVerifier` runs
+  `vbear/chat_check.py` (through `python3 -m vbear.boundary_check --mode chat`) and trusts a version only when the
+  0600 report it names reads back as a pass. The records and the day's spend are `runtime/chat_store.py`'s, written only by the daemon.
+
 ## VBear runtime — `vbear/runtime/daemon.py`
 
 - A single daemon for each state directory, guarded by `runtimed.lock`. The console starts it on demand
@@ -341,7 +348,8 @@ writing the user's defaults. `macos/test_browser_mode.sh` exercises the Swift la
 
 Plain HTML, CSS and JavaScript with no framework. The only dependency is the bundled xterm.js 5.5.0 with
 its fit addon. A unit test pins the SHA-256 of both files, and CSP `script-src 'self'` keeps CDNs out.
-All dynamic text goes through `textContent`, and `innerHTML` is not used.
+All dynamic text goes through `textContent`, and `innerHTML` is not used. The chat pages (`#/chat`, `#/chat/<id>`) read the
+live view with `fetch` and a stream reader (the header cannot be set on `EventSource`) and poll when it cannot be had.
 
 ## Tests
 

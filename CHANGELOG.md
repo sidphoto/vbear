@@ -1,5 +1,80 @@
 # Changelog
 
+## Unreleased
+
+**This section is v0.11.0, "chatting with your role cards", and is not released yet.** `vbear/__init__.py` still says
+0.10.0 and the release tests still expect v0.10.0 at the top, so the heading stays `Unreleased` until the version is
+raised; then it becomes `## v0.11.0 — chatting with role cards`.
+
+You can now talk with a role card. Pick an enabled card whose tool is Claude Code, say something, and the card answers
+through your own Claude Code in its own work folder. When it wants to run a command, change a file or write one, a card
+asks you and nothing happens until you allow it. A chat uses your Claude usage, and no Claude Code version is allowed to
+chat until it has passed a real check on your Mac.
+
+- **A chat page (`#/chat`, `#/chat/<id>`) and a chat button on a role card.** The list shows the chats, the day's
+  lamp and spend, and the cards you may open a chat with. A card that is off or whose tool is not Claude Code is listed
+  with the reason and cannot be picked; the card's own 聊天 button is shut for it the same way. A chat is opened only
+  by 開始聊天 and costs nothing until you send a message. One chat shows the record in order (what you said, the reply,
+  each tool the card used and its result, each card and how it ended, what each turn cost), the reply while it is being
+  written, a stop button, and a delete button. The first visit opens a short explainer: what it is, what it costs, that
+  nothing runs without your yes, and which instructions go in.
+- **Permission cards.** Bash, Edit and Write always ask. Each card says what is asked and has 允許這一次, 拒絕 and
+  改內容再允許 (the command, the content or the new text is yours to change; a card with nothing to change has the other
+  two). There is no 「以後都允許」. A card can be answered once, within 5 minutes; after that it is refused for you, and the
+  record says so. When you press allow, VBear judges the call again as it will be sent: an Edit or Write that is now
+  outside the work folder is refused with the reason (`refused`). Reading inside the work folder is allowed without a
+  card.
+- **Whose instructions go in.** Only the instructions you wrote on the card, as one `--append-system-prompt` argument
+  (the flag is in Claude Code 2.1.318's `--help`). The default text of the card's position is never sent, and a card
+  with no instructions of its own sends none; each chat says in its record whether instructions went in. Claude Code
+  keeps the system prompt of a session when it is resumed (`--system-prompt-snapshot` is on by default), so editing the
+  card does not change a conversation that has begun. **This was not checked on a real machine**: neither that Claude
+  Code applies the appended text nor how it treats an edited one on resume. The chat check records whether the first
+  reply followed a made-up instruction, as an observation and not as a pass condition.
+- **Money.** A turn costs at most `chat_limits.per_turn_usd` (new top-level key of `config.json`, US$0.50 by default,
+  US$0.01 to US$5, never more than the daily limit) or what is left of the day, whichever is smaller. The chats count
+  in the same day as the meetings and the staffing meetings: `meeting_limits.daily_usd` covers all three, and the
+  lamp says so. Amounts are Claude Code's estimates, shown as such; a turn whose cost Claude Code did not report is
+  counted at its cap. On a red lamp, or with less than a cent left, no message is sent.
+- **Which Claude Code may chat.** No version is chat-verified out of the box. The page shows the detected version and
+  whether it passed; for one that did not, 驗證聊天 runs `python3 -m vbear.boundary_check --mode chat` after telling you
+  it makes about six small Haiku calls on your own login. It opens a chat with a made-up card in a temporary state
+  folder and sends six messages: a streamed text turn, a Bash card allowed with a changed command (which also tries a
+  write inside and outside the work folder), a Bash card denied, a Bash card answered with the error VBear gives a
+  request it does not know, a resumed process that must remember a code word, and a resume under the smallest budget.
+  It judges from the events VBear recorded and the files left behind: the initialize answer was accepted, every Bash
+  asked, the chosen command ran, a denied one did not, the sandbox stopped the write outside, no shared-tmp error, the
+  total is cumulative across a resume, `system/init` named no extra folder and no MCP server, nothing from the
+  initialize answer was kept, the check cleaned up. Only a pass writes `<state>/claude-chat-verified.json`; the version
+  counts only while the report it names (mode `chat`, passed, the same version, owned by you) reads back, so a record
+  without a passing report counts for nothing. It also records what a resumed session's `--max-budget-usd` counts (it
+  can tell only when the session already spent more than the smallest budget). The check's few cents go on your
+  Claude account and not into the day's ledger.
+- **Administrator policy for 2.1.318.** The version has its own list of the places Claude Code reads policy from: the
+  directory `/Library/Application Support/ClaudeCode`, the managed preferences for `com.anthropic.claudecode`,
+  `~/.claude/remote-settings.json`, and, new in this version, `~/.claude/policy-limits.json`. If any exists, or its
+  existence cannot be established, no chat starts and the page says which. The last one is stricter than the older
+  versions on purpose: nothing says what it can change. The evidence is in
+  `docs/evidence/claude-code-2.1.318-chat.md`. **If your Mac already has `~/.claude/policy-limits.json`, chats stay
+  shut.**
+- **Every refusal is said in words.** The console answers a refusal with a sentence, not a code: 這張卡片過期（5 分鐘）,
+  VBear 又檢查了一次所以拒絕 (`refused`), 員工的程序正在換新的所以你的訊息還沒送出 (`restarting`, tried again by itself
+  a few times first), 今天已經花了多少讀不出來 (`spend_unknown`), and 這個聊天的紀錄有問題 (`damaged`: it is not written
+  to, not sent to and not deleted, because deleting it would drop what it spent from the day). A test reads every code
+  the runtime can give and fails until it has a sentence.
+- **A meeting turn skipped because the day's spend is unknown** now reads 無法確認花費, with the reason underneath,
+  on a meeting and on a staffing meeting, instead of 沒有發言.
+- **Under the chats.** The console talks to the runtime daemon, which owns the chat processes and is the only writer
+  of a chat's record. `GET /api/chats/<id>/stream` is a live view as server-sent events and needs the same `X-VBear`
+  header as every write (the page reads it with `fetch`, and polls when the stream cannot be had); at most four
+  streams are open at once. Nothing of what a chat's initialize answer carries (the account, the commands, the models,
+  the extra folders) is kept or sent to the page.
+- **Going back to v0.10.0.** v0.10.0 does not know chats: it leaves `chats/`, `chat-work/`, `chat-spend/` and
+  `claude-chat-verified.json` as they are, and `chat_limits` stays in `config.json`. **v0.10.0's daily ledger does not
+  count what the chats spent**, so on a day a chat spent money here, v0.10.0 lets meetings spend the whole of
+  `meeting_limits.daily_usd` again. A meeting turn this version skipped for an unknown spend shows there as 沒有發言 with
+  代碼：spend_unknown. The explainer's "seen" mark is kept in this browser only.
+
 ## v0.10.0 — staffing meetings, shorter meetings, and adopting a team step by step
 
 The CEO card can now staff a task card: the positions say who and which skills the task needs, the CEO writes a staffing

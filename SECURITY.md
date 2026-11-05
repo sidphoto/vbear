@@ -24,14 +24,18 @@ The following are in scope:
 - escaping the managed launch boundary, or making the launch preview claim something that is not true;
 - bypassing the browser protections (CSRF, DNS rebinding, cross-site reads);
 - reading or writing files outside what the docs describe;
-- leaking secrets from skill files through the UI.
+- leaking secrets from skill files through the UI;
+- a chat that runs a tool without the permission card being answered, that keeps what the initialize answer carries (the
+  account, commands, models or extra folders), or that spends more than its turn cap without the ledger saying so.
 
 The following are **known and documented**, so they are not vulnerabilities on their own (see
 [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md)):
 - local programs calling the unauthenticated API on `127.0.0.1`;
 - reads that are not isolated;
 - `!` commands that bypass the sandbox;
-- commits that cannot be prevented.
+- commits that cannot be prevented;
+- a chat's Edit or Write checked before the write and not held after it (Claude Code writes the file itself), and Claude
+  Code's own reads, which are not isolated (see "Chats with a role card").
 
 ## Supported versions
 

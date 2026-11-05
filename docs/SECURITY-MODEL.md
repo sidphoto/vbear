@@ -974,12 +974,41 @@ the preview id, and nothing in it is carried out by VBear.
   `DELETE /api/staffing/<id>`. The no-tool check is the meetings' (`POST /api/meetings/verify`). They sit behind the same
   Host, token, Origin and `X-VBear` checks as every other route, and their bodies are as strict.
 
-## Chats with a role card (P36, in progress)
+## Chats with a role card
 
 A chat lets you talk with one role card through your authenticated local Claude Code, which can run tools for it:
-**a new outbound data path that uses your quota or money and can change files**. This part is being built. P36-1 adds
-the runtime side only: no page or route reaches it yet. No Claude Code version is chat-verified, so no chat process
-can start until a version passes the chat check (P36-2).
+**a new outbound data path that uses your quota or money and can change files**. The console's `#/chat` page and
+`/api/chats` reach the runtime's chat operations; no Claude Code version is chat-verified out of the box, so no chat
+process starts until a version passes the chat check.
+
+- **Who may open a chat.** Only an enabled role card whose tool is Claude Code. The API checks this itself and answers
+  a disabled card (`card_disabled`) or a card of another tool (`card_not_claude`) with its reason; the page's button
+  being shut is a courtesy, not the check. Opening a chat costs nothing; a message does.
+- **Whose instructions go in.** Only the instructions written on the card, as one `--append-system-prompt` argument.
+  The position's default text is not sent, and a card without instructions of its own sends none; the chat's record
+  says whether any went in. Claude Code keeps a session's system prompt when it is resumed
+  (`--system-prompt-snapshot` is on by default), so an edited card may not change a conversation that has begun.
+  Neither that Claude Code applies the appended text nor how it treats an edited one on resume has been checked on a
+  real machine; the chat check records the first as an observation and does not pass or fail on it.
+- **The chat check.** `python3 -m vbear.boundary_check --mode chat` (started by 驗證聊天 on the page, which says what it
+  costs first) runs about six small Haiku calls on your own login against an in-process daemon in a temporary state
+  folder, with a made-up card. It judges only from the events the daemon recorded and the files left behind, never from
+  what the model says: the initialize answer accepted; every Bash asked; a changed command ran as changed; a denied
+  one did not run; a write outside the work folder stopped by the sandbox; no shared-tmp error; the unknown-request
+  error answered without ending the process; a resumed process remembering what the session was told; the total
+  cumulative across a resume; `system/init` naming no extra folder and no MCP server; nothing from the initialize
+  answer kept; the check's own processes and folders cleaned up. Only a pass writes `claude-chat-verified.json`
+  (0600), and a version counts only while the report it names (mode `chat`, passed, the same version, owned by you)
+  reads back. The few cents it spends are on your Claude account and are not in the day's ledger.
+- **Administrator policy.** For 2.1.318 the places checked are the directory `/Library/Application Support/ClaudeCode`,
+  the managed preferences for `com.anthropic.claudecode`, `~/.claude/remote-settings.json` and
+  `~/.claude/policy-limits.json`. Any of them present, or not establishable, means no chat starts. Nothing says what
+  `policy-limits.json` can change, so it is refused whole (evidence: `docs/evidence/claude-code-2.1.318-chat.md`).
+- **The console is not a second authority.** The server adds no rule of its own about a tool call: it relays the
+  card, its token and your answer to the runtime and the runtime checks again when you allow. A live view
+  (`GET /api/chats/<id>/stream`, server-sent events) needs the same `X-VBear` header as a write, and at most four are
+  open at once. A refusal reaches the page as a code and a sentence; nothing the initialize answer carries is in any
+  reply or log.
 
 - **The process.** Each chat process is a managed launch with engine `claude-chat` under `sessions/`, read and checked
   like the others (an exact manifest schema, settings that must be the approved shape, the CLI's identity, the work

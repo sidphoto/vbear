@@ -1,6 +1,6 @@
 # VBear 參考資料（繁體中文）
 
-這份文件收錄原本放在 [README.zh-TW.md](../README.zh-TW.md) 的參考章節：畫面、資料從哪裡來、我的註記、技能狀態、安全、狀態目錄、結構。內容最初從 README 原樣搬來，之後隨版本補上新的頁面、檔案與模組（v0.9.0 補了角色卡池、會議、完整模式出發；v0.10.0 補了組隊會議）；英文版請看 [ARCHITECTURE](ARCHITECTURE.md) 與 [安全模型](SECURITY-MODEL.md)。
+這份文件收錄原本放在 [README.zh-TW.md](../README.zh-TW.md) 的參考章節：畫面、資料從哪裡來、我的註記、技能狀態、安全、狀態目錄、結構。內容最初從 README 原樣搬來，之後隨版本補上新的頁面、檔案與模組（v0.9.0 補了角色卡池、會議、完整模式出發；v0.10.0 補了組隊會議；v0.11.0 補了聊天）；英文版請看 [ARCHITECTURE](ARCHITECTURE.md) 與 [安全模型](SECURITY-MODEL.md)。
 
 ## 畫面
 
@@ -9,6 +9,7 @@
 | 冒險者大廳（首頁） | 任務告示板：輪到你的流程與等你回覆的 Agent、等你核准的會議與等你看的組隊提案、其他進行中的任務（最多 4 則）；用自然語言找技能、最近專案、有問題的技能 |
 | 辦公室 | 像素辦公室：工作站（流程隊伍依階段站在計畫板、實作區、審查室、合併關卡）、辦公桌（出勤中的終端與狀態）、會議室（最新一場進行中或等核准的會議，頭上的字只取自會議紀錄，代發言另外標示）與董事長桌（幾場會議等你核准、幾份「組隊提案待你看」；進行中或等你看的組隊會議也坐在會議室，標「組隊會議」）、休息室（Profile 名冊）；點角色看武器、防具、技能卡。只讀 VBear 已有的資料 |
 | 會議 | 今日花費燈號（80% 黃燈、100% 不能再開會）、會議紀錄清單、開一場會（議題、補充說明、任務卡、CEO 主席、最多 6 位發言者、「涉及」勾選）、開會前的預覽（每段指示與送出全文、模型、預留金額、是否通過無工具安全檢查）；單場會議的發言與證據列、CEO 決定、董事長桌（核准／否決）、重試、取消、寫進任務卡（只預填任務卡編輯器） |
+| 聊天 | `#/chat` 與 `#/chat/<id>`：每日花費與上限、這個 Claude Code 版本有沒有通過聊天驗證（附「驗證聊天」，先說明會花多少）、可以聊天的角色卡（停用或工具不是 Claude Code 的卡列出原因、不能選）、聊天紀錄清單；單一聊天顯示依序的紀錄（你說的、回覆、工具與結果、權限卡片及結局、每回合花費）、正在寫的回覆、權限卡片（允許這一次／拒絕／改內容再允許）、停止這一回合與刪除。角色卡上也有「聊天」按鈕 |
 | 組隊會議 | 從任務卡的「請 CEO 組隊」進入（`#/staffing?task=`）：VBear 依固定規則建議的發言者與理由、組隊會議前的預覽（每段送出全文、模型與思考強度、預留金額、清單少了多少）；單份組隊紀錄（`#/staffing/<id>`）的座位與發言、CEO 的組隊提案（代號一律換成卡與技能現在的名稱，找不到就寫「找不到」）、改成你要的樣子（草稿，只存在這個瀏覽器）、照草稿採用（啟用 → 建新卡 → 插技能 → 帶到隊伍 → 帶去開會 → 記下，每一步都要你自己按）、董事長桌、重試、取消、刪除 |
 | 終端工作台 | 統一三欄版面（左側角色、中間真實 Terminal、右側 Task Card 與 G/P/A/T 治理骨架）、專注模式、可收合側欄 |
 | 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
@@ -86,6 +87,12 @@
 - 會議：每次發言都是完全沒有工具的 Claude Code headless 呼叫（argv 沿用翻譯的 `translation_argv`），每次都即時檢查 init 只有 `StructuredOutput`、沒有 MCP，
   不符就殺掉整個 process group、結果不採用、撤銷這個版本的通過紀錄。送出前的預覽列出全文；送出的是任務卡欄位，不含資料夾路徑。會議只寫 `meetings/`，
   不寫任務卡、流程或專案資料夾；重大與否每次讀取時依固定規則 R1–R8 推導，模型只能升級。詳見 [安全模型](SECURITY-MODEL.md#meetings-tool-less-headless-speech)。
+- 聊天：和一張已啟用、工具是 Claude Code 的角色卡一對一聊天（API 層自己檢查，停用或不是 Claude Code 的卡會回原因）。runtime 的 daemon 擁有聊天程序並是唯一寫紀錄的一方；每張卡最多一個程序、全部最多三個，閒置 10 分鐘關閉、每回合最長 10 分鐘。
+  只帶這張卡自己寫的指示（一個 `--append-system-prompt`），不帶職位預設文字；VBear 還沒有在真機上確認 Claude Code 真的套用，也沒確認續接時改過的指示會不會生效。
+  Bash、Edit、Write 一律出權限卡片（允許這一次、拒絕、改內容再允許），沒有「以後都允許」；卡片 5 分鐘過期視為拒絕，按下允許時 VBear 會再檢查一次。
+  每回合上限 `chat_limits.per_turn_usd`（預設 US$0.50，0.01 到 5），和會議、組隊會議共用 `meeting_limits.daily_usd`；沒回報花費的回合按上限算。
+  Claude Code 版本要先通過 `python3 -m vbear.boundary_check --mode chat`（約 6 次 Haiku 小呼叫，用你自己的登入）才能聊天；2.1.318 另外把 `~/.claude/policy-limits.json` 當成管理員政策，存在就不能聊天。
+  詳見 [安全模型](SECURITY-MODEL.md#chats-with-a-role-card)。
 - 組隊會議：用會議的引擎和同一個 worker（會議和組隊會議不會同時跑），同樣是沒有工具的呼叫、同樣即時檢查 init，同樣只用低／中思考強度與時鐘；
   卡和技能用代號（`C1`、`S1`…）送出，不送 id，也不送任務卡的資料夾路徑。花費上限：發言者每次 `meeting_limits.per_call_usd`、CEO 每次
   `staffing_limits.proposal_call_usd`、每份 `staffing_limits.total_usd`，和會議共用每天的上限。提案只是建議：VBear 不建卡、不插技能、不排隊伍；
@@ -131,6 +138,7 @@
 `~/.vbear/`（可用 `VBEAR_HOME` 覆寫）：`config.json`（含會議上限 `meeting_limits`、組隊會議上限 `staffing_limits`、會議速度 `meeting_speed`）、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`flows.json`、`agent_profiles.json`、`server.log`、
 VBear runtime 的 `runtime.sock`／`runtimed.lock`／`runtimed.log`，以及 Profile 管理 session 的 `sessions/<launch-id>/`（session 暫存區在 `/private/tmp/sc-<隨機>/`）。
 翻譯與會議：`translations.json`、`role-translations.json`、`translation-boundaries.json`（依版本記錄通過無工具安全檢查的 Claude Code，翻譯與會議共用）、`translation-worker.lock`／`translation-worker.blocked`，
+聊天：`chats/<c-十六位十六進位>/`（`chat.json` 與 `events.jsonl`）、`chat-work/`（每張角色卡一個工作資料夾）、`chat-spend/`（刪掉的聊天留下的三天花費）與 `claude-chat-verified.json`（通過聊天驗證的版本）；`config.json` 另有 `chat_limits`。
 以及 `meetings/`（每場會議一個 `m-<12 位十六進位>.json`）、`staffing/`（每份組隊紀錄一個 `s-<12 位十六進位>.json`）與 `meeting-worker.lock`／`meeting-worker.blocked`（會議與組隊會議共用）。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
 
 ## 結構
@@ -150,6 +158,8 @@ vbear/
   translations.py                     技能與職業名稱翻譯、無工具安全檢查
   meetings.py meeting_rules.py        會議紀錄、輸出檢查、prompt、花費；重大規則表 R1–R8
   meeting_runner.py                   會議的預覽、一次一個呼叫的 worker、重試與取消
+  chat_service.py                     聊天：伺服器端的服務與拒絕說明（紀錄與花費在 runtime/chat_store.py）
+  chat_check.py claude_verify.py      聊天驗證（boundary_check --mode chat）與它的啟動、狀態
   board_engine.py                     會議的引擎：一回合一個無工具呼叫、花費、思考強度與時鐘（會議與組隊會議共用）
   skill_fit.py                        哪張技能可以插在哪張卡（和網頁同一套相容規則，讓伺服器檢查組隊提案）
   staffing.py staffing_runner.py      組隊會議：清單與代號、建議的發言者、輸出檢查、紀錄；預覽、執行、重試、董事長紀錄

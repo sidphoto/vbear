@@ -44,6 +44,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | The board's 「輪到你」 and the flow page |
 | **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A meeting is kept short: a speaker thinks at low effort and the CEO at medium, and it runs at most 15 minutes by default, the last three kept for the CEO. A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Staffing meeting** | A **staffing meeting** (組隊會議, `#/staffing`): for one task card the positions say who and which skills it needs, each once and alone, then the CEO card writes a staffing proposal (the four places, the staff to bring to a meeting, new cards to make, the skills of each card and the skills missing). You change it as a draft, then adopt it with 照草稿採用, one button per step in a fixed order (啟用, 建新卡, 插技能, 帶到隊伍, 帶去開會, 記下). VBear makes no card, inserts no skill and saves no team by itself | 請 CEO 組隊 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
+| **Chat** | A **chat** (聊天, `#/chat`): you talk one-to-one with a role card whose tool is Claude Code and which is on, through your own Claude Code, in the card's own work folder. A command, an edit or a write waits for a permission card that you allow once, refuse or change first; there is no 「allow every time」. It spends your usage, and a Claude Code version can chat only after it has passed the chat check on your Mac | 聊天; the 聊天 button on a role card |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 Role cards come in three moves: **collect** (take cards from the card pool, or the starter deck of three), **equip** (put skill cards into a card) and **play** (put the card on a task card's team place, then set out). The permission intents on a card are a team-work marker: they do not mean VBear has limited the program's real abilities. The only limits are the ones on the launch pass.
@@ -300,6 +301,15 @@ skills for each card. You change it as a draft kept in this browser. 照草稿�
 the proposal and saves only on 建立, inserting a skill shows the card's list before and after and only records it, and
 the team waits on the task card's board until you press 建立隊伍 or 儲存隊伍.
 
+**Chat with one of your role cards.**
+On the 聊天 page (`#/chat`, or the 聊天 button on a role card that is on and whose tool is Claude Code) you pick a card and talk
+with it through your own Claude Code, in a work folder of its own. Only the instructions you wrote on the card go in (as one
+`--append-system-prompt`; the position's default text does not, and VBear did not verify on a real machine that Claude Code
+applies it). When the card wants to run a command, change a file or write one, a permission card asks you: allow once,
+refuse, or change the command or the text and then allow; there is no allow-every-time. A chat spends your Claude usage,
+counted in the same day as the meetings (`chat_limits.per_turn_usd`, US$0.50 a turn by default), and a Claude Code version
+can chat only after 驗證聊天 has passed on your Mac (about six small Haiku calls). Every refusal comes with a sentence that says why.
+
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
 `127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear;
@@ -318,6 +328,8 @@ a meeting or a skill translation is sent the same way, through your own Claude C
 - **A meeting sends its texts to Anthropic through your Claude Code and spends your usage.** Its decision is only a
   record, and what is major waits for you. A staffing meeting is sent and paid for the same way; its proposal is
   advice, and VBear makes no card, inserts no skill and saves no team for you.
+- **A chat sends what you write to Anthropic through your Claude Code, spends your usage, and can change files in the card's own work folder** only after you allow each
+  command, edit or write on a permission card. VBear can read what the card reads there; Claude Code can still read anything your Mac account can.
 - **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
 - **Deleting a flow cannot be undone.**
 - **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →
