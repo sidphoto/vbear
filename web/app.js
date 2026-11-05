@@ -4163,12 +4163,12 @@ const SKILL_SHARED_TAG = "共用";
 const SKILL_CAT_OTHER = "_other";
 const PROFESSION_GROUP_OTHER = "other";   // the profession picker's group for a role whose position cannot be guessed
 const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
-// VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
+// The safe launch does not start Antigravity: in safe mode an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
 const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
 // In full mode VBear does start an AGY card (as a terminal, with the person's own settings); the safe launch never does.
 const AGY_FULL_NOTE = "AGY 在完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
-// The tools VBear never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
+// The tools the safe launch never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
 const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
 const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
@@ -4417,7 +4417,7 @@ function sortCards(profiles, catalog) {
 // Claude skill and the other way round. A shared skill fits any card except an AGY one; a shared card takes only
 // shared skills. An AGY card takes what AGY reads: the skills of its own folders and the ones the server marked
 // read_by agy (a project's .agents/skills, or a folder in ~/.gemini/config/skills.json). The shared store is not
-// AGY's unless that config lists it. Even then it is only a collection: VBear does not start AGY.
+// AGY's unless that config lists it. Even then it is only a collection: the safe launch does not start AGY.
 function skillReadByAgy(skill) {
   return Boolean(skill) && (skill.tool === "agy" || (Array.isArray(skill.read_by) && skill.read_by.includes("agy")));
 }
@@ -10919,7 +10919,7 @@ function nextStepAction(flow, opts = {}) {
   const launches = !startable ? [] : holders
     .filter((r) => r && typeof r.profile_id === "string" && r.profile_id)
     .filter((r) => !profiles || profiles.some((c) => c && c.id === r.profile_id && c.enabled !== false))
-    // VBear does not start Antigravity: an AGY card gets no button here (the step is done in its own terminal)
+    // The safe launch does not start Antigravity: an AGY card gets no button here (the step is done in its own terminal)
     .filter((r) => teamCardTool(r) !== "agy")
     .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
   const recordWords = NEXT_STEP_RECORD[step.key];

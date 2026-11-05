@@ -191,8 +191,8 @@ Other safeguards:
   owner-only. Any program running as you could edit it, as it could edit anything else you own.
 - **Fail closed** otherwise: the launch is refused if the sandbox is unavailable (`failIfUnavailable`), or if the
   profile, work directory, Claude Code binary or config changed since the preview.
-- **Antigravity (AGY) is not launched.** A role card whose tool is `agy` is a record for building teams: `launch_blockers`
-  always refuses it (`tool_not_launchable`, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), so no preview is
+- **Antigravity (AGY) has no safe launch.** In safe mode a role card whose tool is `agy` is a record for building teams: `launch_blockers`
+  refuses it (`tool_not_launchable`, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), so no preview is
   prepared, no manifest is written and the loadout shows no armor and no tool list. Which skills AGY reads is judged
   from files only (see "Which skills AGY reads"), and even a skill AGY reads is never reported as one that loads: a
   skill chosen on an AGY card is a collection. The automatic review is unchanged: it is the Codex that

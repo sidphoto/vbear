@@ -18,18 +18,20 @@ anything else is the person's paste button. What is told about a boundary is tol
                         only the reminders stay;
   full mode             VBear limits nothing, so every line is a reminder and says so in its `full_text`.
 
-This module imports nothing from the rest of VBear, so agent_profiles can use it.
+This module imports nothing from the rest of VBear but ai_tools (which imports nothing), so agent_profiles can use it.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from . import ai_tools
+
 MAX_INSTRUCTIONS = 2000
 
 ENFORCED, REMINDER, NOT_POSSIBLE, NOT_APPLICABLE = "enforced_if_launched", "reminder", "not_possible", "not_applicable"
 LAUNCH_MODES = ("full", "safe")
-TOOLS = ("claude", "codex", "agy", "shared")
+TOOLS = ai_tools.ids()
 
 # What is said under the launch mode when there is no position to speak of, and what the page offers to choose.
 MODE_LABELS = {"full": "完整模式", "safe": "安全模式"}

@@ -190,6 +190,16 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual({s["skill_id"]: s["categories"] for s in body["skills"]}, {"s-1": ["design"], "s-2": []})
         self.assertEqual(body["skill_categories"], [{"id": "design", "label": "設計與介面"}])
 
+    def test_catalog_serves_the_ai_tool_list_the_server_keeps(self):
+        _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        self.assertEqual([t["id"] for t in body["tool_list"]], body["tools"])
+        by = {t["id"]: t for t in body["tool_list"]}
+        self.assertEqual(by["agy"], {"id": "agy", "name": "Antigravity（AGY）", "short": "AGY", "family": "google",
+                                     "generic": False, "safe_launch": False, "full_launch": True, "hidden": False})
+        self.assertEqual((by["claude"]["safe_launch"], by["codex"]["safe_launch"], by["shared"]["full_launch"]),
+                         (True, True, False))
+        self.assertNotIn("install_command", json.dumps(body["tool_list"]))
+
     def test_catalog_endpoint_lists_tool_and_permission_enums(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
