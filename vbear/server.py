@@ -63,7 +63,7 @@ from . import staffing
 from . import staffing_runner as staffing_runner_mod
 from . import tasks
 from . import runtime as rt
-from .runtime import cli_versions, pipeline_store
+from .runtime import chat_store, cli_versions, pipeline_store
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import claude as claude_scan
@@ -105,7 +105,8 @@ PROFESSION_MODEL_LIMIT = 200
 EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sent, for its hover box
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
-                   "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits"}
+                   "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits",
+                   "chat_limits"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 MAX_BODY = 64 * 1024
@@ -1727,8 +1728,9 @@ def make_handler(console: Console):
                 if body.get("translation_auto") is True and (conf.get("translation_auto") is not True or requested_engine != conf.get("translation_engine")):
                     if body.get("translation_consent_engine") != requested_engine:
                         raise ValueError("請先確認引擎、資料送出與額度說明")
-                # staffing_limits last: it is checked against the day of the meeting_limits written in the same request
-                for key in sorted(CONFIG_WRITABLE & body.keys(), key=lambda k: k == "staffing_limits"):
+                # staffing_limits and chat_limits last: they are checked against the day of the meeting_limits written in the
+                # same request
+                for key in sorted(CONFIG_WRITABLE & body.keys(), key=lambda k: k in ("staffing_limits", "chat_limits")):
                     value = body[key]
                     if key == "translation_engine" and (not isinstance(value, str) or value not in translations.MODELS):
                         raise ValueError("不支援的翻譯引擎")
@@ -1755,6 +1757,9 @@ def make_handler(console: Console):
                         value = meetings.validate_speed(value, meetings.speed_from(conf))
                     if key == "staffing_limits":
                         value = staffing.validate_limits(value, staffing.limits_from(conf))
+                    if key == "chat_limits":
+                        value = chat_store.validate_limits(value, chat_store.limits_from(conf),
+                                                           meetings.limits_from(conf)["daily_usd"])
                     conf[key] = value
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):

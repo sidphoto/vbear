@@ -708,6 +708,20 @@ def limits_from(conf) -> dict[str, Decimal]:
     return {"per_turn_usd": DEFAULT_PER_TURN}
 
 
+def validate_limits(body, current: dict[str, Decimal], daily: Decimal) -> dict[str, float]:
+    """The new ``chat_limits`` of config.json from a request, or ValueError. ``daily`` is the meetings' daily limit in
+    force (``chat_limits`` has none of its own: the day is shared); a turn may not be allowed to cost more than it."""
+    if not isinstance(body, dict) or not body or set(body) - {"per_turn_usd"}:
+        raise ValueError("chat_limits 只能含 per_turn_usd")
+    raw = body["per_turn_usd"]
+    value = None if isinstance(raw, str) else mt.money(raw)
+    if value is None or not Decimal("0.01") <= value <= PER_TURN_CAP:
+        raise ValueError(f"per_turn_usd 必須是 0.01 到 {PER_TURN_CAP} 之間的數字")
+    if value > daily:
+        raise ValueError("上限必須是：每次聊天 ≤ 每天")
+    return {"per_turn_usd": float(value)}
+
+
 def _unknown(chat_id: str, why: str) -> ChatStoreError:
     return ChatStoreError(mt.SPEND_UNKNOWN, f"聊天 {chat_id} 的花費紀錄讀不完整（{why}），無法確認今天已經花了多少")
 
