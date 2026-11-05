@@ -232,9 +232,10 @@ def chat_settings(workdir: str, scratch: str, uid: int, cli_version: str) -> dic
 
 
 def chat_argv(manifest: dict) -> list[str]:
-    """P36 plan, exactly: the CLI asks VBear about every tool call on stdin (``--permission-prompt-tool stdio``),
-    the first process of a chat names its session, later ones resume it. Everything comes from the manifest that
-    chat_manifest_problem accepted."""
+    """P36 plan, exactly: the CLI asks VBear on stdin about each tool call it does not allow by itself
+    (``--permission-prompt-tool stdio``; with these settings it may still allow a read in its own folder, which
+    VBear sees only by its result), the first process of a chat names its session, later ones resume it. Everything
+    comes from the manifest that chat_manifest_problem accepted."""
     problem = chat_manifest_problem(manifest)
     if problem:
         raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")

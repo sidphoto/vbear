@@ -55,11 +55,12 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   `permission_denied` fact with the tool's name and the decision's type, filtered the same way (at most 16 facts
   per turn; the journal refuses a 17th), and does not make the turn invalid).
   *Chats* (`claude-chat`, `daemon_chat.py`, `chat_session.py`, `chat_protocol.py`, `chat_store.py`; P36) are
-  pipe-based too. Claude Code asks about every tool call on stdin, and the daemon answers it itself or holds it
-  as a permission card for the person. A chat's record is `chats/<chat_id>/` (`chat.json` and an append-only
-  `events.jsonl`), and each role card works in its own `chat-work/<hash>/` folder. There is one process per
-  role card and at most three in all. A process closes after 10 idle minutes, and the next message resumes the
-  session. The process termination steps are shared with stream sessions (`stream_session.ProcessGroupEnd`).
+  pipe-based too. Claude Code asks on stdin about each tool call it does not allow by itself, and the daemon
+  answers it itself or holds it as a permission card for the person. A chat's record is `chats/<chat_id>/`
+  (`chat.json` and an append-only `events.jsonl`), and each role card works in its own `chat-work/<hash>/`
+  folder. There is one process per role card and at most three in all. A process closes after 10 idle minutes,
+  and the next message resumes the session. The process termination steps are shared with stream sessions
+  (`stream_session.ProcessGroupEnd`).
   *Review jobs* (`daemon_review.py`, `review_*.py`) run Codex once,
   in a separate clone with a dedicated `CODEX_HOME` and a temporary `HOME`, and are judged afterwards from their
   events and rollout. Stream and review state lives in files only the daemon writes: `sessions/<launch>/`,

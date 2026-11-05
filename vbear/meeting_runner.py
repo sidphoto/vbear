@@ -127,7 +127,8 @@ class MeetingRunner(HeadlessBoard):
 
     def spend_kinds(self) -> list:
         """A meeting shares the day with the staffing meetings (staffing_runner) and the chats (P36)."""
-        return [(self.ids, self.load, self.per_call), (st.record_ids, st.load, st.per_call_of), chat_store.spend_kind()]
+        return [(self.ids, self.load, self.per_call), (st.record_ids, st.load, st.per_call_of),
+                chat_store.spend_kind(self.clock)]
 
     # -- a new meeting ---------------------------------------------------------------------------------------------
 

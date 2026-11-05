@@ -136,7 +136,7 @@ class StaffingRunner(HeadlessBoard):
     def spend_kinds(self) -> list:
         """A staffing meeting shares the day with the meetings and the chats (P36)."""
         return [(mt.meeting_ids, mt.load, mt.per_call_limit), (self.ids, self.load, self.per_call),
-                chat_store.spend_kind()]
+                chat_store.spend_kind(self.clock)]
 
     def _provider_error(self, code: str) -> mt.MeetingError:
         # the tool-less check's record, not a staffing record, is what cannot be read

@@ -372,7 +372,9 @@ class HeadlessBoard:
             for rid in ids():
                 try:
                     out.append((per_call, load(rid)))
-                except mt.MeetingError:
+                except mt.MeetingError as exc:
+                    if exc.code == mt.SPEND_UNKNOWN:
+                        raise  # a kind that cannot say what it spent (the chats): the day is unknown, never less
                     continue  # a damaged record is shown as blocked in the list; it adds nothing here
         return out
 
@@ -558,7 +560,13 @@ class HeadlessBoard:
         who = ctx.who(turn["profile_id"])
         per_call = self.per_call(rec, turn)
         room = self.room(rec)
-        day = self._day()
+        try:
+            day = self._day()
+        except mt.MeetingError as exc:
+            if exc.code != mt.SPEND_UNKNOWN:
+                raise
+            self._end(mid, seq, "skipped", mt.SPEND_UNKNOWN, evidence=None)  # never sent: the day is unknown
+            return None
         if per_call > room or day + per_call > ctx.daily_usd:
             self._end(mid, seq, "skipped", "budget", evidence=None)
             return None

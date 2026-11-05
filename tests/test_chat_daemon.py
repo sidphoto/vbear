@@ -548,6 +548,44 @@ class MoneyAndDeleteTests(ChatCase):
         self.assertEqual(self.fake_log(), [])
         self.assertEqual(self.kinds(chat_id).count("user_message"), 1)
 
+    def _the_day_stays_closed_when(self, damage, *, deleted=False):
+        """Another chat spent past the day's limit (red); once its record no longer reads whole, the day is unknown,
+        never less: still nothing is sent."""
+        (self.base / "config.json").write_text(json.dumps({"meeting_limits": {
+            "per_call_usd": 0.01, "meeting_usd": 0.01, "daily_usd": 0.01}}))
+        self.configure([clean("ask", 4)])
+        other = self.open_chat("emp-2")
+        self.spend(other, "0.02")
+        if deleted:
+            self.assertTrue(self.rpc("chat_delete", chat_id=other)["ok"])
+        chat_id = self.open_chat()
+        self.assertEqual(self.send(chat_id)["error"]["code"], "red")
+        damage(other)
+        r = self.send(chat_id)
+        self.assertEqual(r["error"]["code"], "spend_unknown", r)
+        self.assertEqual(self.fake_log(), [])
+        self.assertEqual(self.kinds(chat_id).count("user_message"), 0)
+        return other
+
+    def test_a_chat_damaged_in_the_middle_does_not_give_the_day_back(self):
+        def damage(other):
+            path = self.base / "chats" / other / "events.jsonl"
+            lines = path.read_text().splitlines(keepends=True)
+            lines[1] = lines[1][: len(lines[1]) // 2] + "\n"               # the spending lines after it stay
+            path.write_text("".join(lines))
+        other = self._the_day_stays_closed_when(damage)
+        self.assertEqual(self.rpc("chat_delete", chat_id=other)["error"]["code"], "damaged")
+        self.assertTrue((self.base / "chats" / other / "events.jsonl").exists())
+
+    def test_a_chat_missing_its_events_does_not_give_the_day_back(self):
+        self._the_day_stays_closed_when(lambda other: (self.base / "chats" / other / "events.jsonl").unlink())
+
+    def test_a_deleted_chats_damaged_spend_record_does_not_give_the_day_back(self):
+        def damage(other):
+            path = self.base / "chat-spend" / f"{other}.json"
+            path.write_text(path.read_text()[:-20])
+        self._the_day_stays_closed_when(damage, deleted=True)
+
     def test_a_turn_may_cost_at_most_what_is_left_of_the_day(self):
         (self.base / "config.json").write_text(json.dumps({"meeting_limits": {
             "per_call_usd": 0.2, "meeting_usd": 1, "daily_usd": 1}}))

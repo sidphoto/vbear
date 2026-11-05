@@ -1,7 +1,8 @@
-"""One chat process owned by the runtime daemon (P36): Claude Code in stream-json mode, asked about every tool call
-on stdin, talking with a person for a role card. The daemon's selectors loop calls on_stdout / on_stderr /
-on_writable when a pipe is ready and tick() on every pass; the RPC ops call start_turn, answer, stop and
-close_gracefully.
+"""One chat process owned by the runtime daemon (P36): Claude Code in stream-json mode, asking on stdin about each
+tool call it does not allow by itself (a read in its own folder it may allow alone: VBear sees that one only by its
+result and stops the chat when it would not have allowed it), talking with a person for a role card. The daemon's
+selectors loop calls on_stdout / on_stderr / on_writable when a pipe is ready and tick() on every pass; the RPC ops
+call start_turn, answer, stop and close_gracefully.
 
   * The first line written is the ``initialize`` request; a person's message is held until its answer passes
     (chat_protocol.ChatTracker), so a turn whose message was never written costs nothing.

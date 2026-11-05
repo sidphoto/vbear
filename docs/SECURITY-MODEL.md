@@ -873,8 +873,10 @@ preview id; nothing starts one by itself, and a decision is never carried out by
 - **Money.** Limits are in `config.json` as `meeting_limits` (US$0.20 per call, 1.50 per meeting, 3.00 per day by default;
   capped at 1, 10 and 50; validated on write, and an unusable stored value falls back to the default). The preview reserves
   calls × the per-call limit and refuses a meeting that does not fit the meeting's or the day's room; each call is checked
-  again before it is made and is skipped (`budget`) if it would pass a limit. A call costs what Claude Code reported in
-  `total_cost_usd`, or the per-call limit when it reported nothing, and the record says which (`cost_source`). The figures
+  again before it is made and is skipped (`budget`) if it would pass a limit. When the chats' part of the day cannot be
+  established, no meeting previews or starts and the next call is skipped (`spend_unknown`; see the chats' money
+  below). A call costs what Claude Code reported in `total_cost_usd`, or the per-call limit when it reported nothing,
+  and the record says which (`cost_source`). The figures
   are the CLI's estimate and a subscription plan is not billed that way. The day is the local date, and it counts the
   staffing meetings too (below); at 80% of the day's limit the ledger shows yellow, at 100% no meeting starts and no retry
   is offered.
@@ -1036,6 +1038,20 @@ can start until a version passes the chat check (P36-2).
 
   Chats count toward the same day's limit as the meetings and staffing meetings. On a red lamp, or with less than
   a cent left, no message is sent. Deleting a chat keeps what its last three days cost in `<state>/chat-spend/`.
+
+  The chats' part of the day is counted in full or not at all, never as zero or as only what reads. It is unknown
+  (`spend_unknown`) when any of these holds:
+  - a chat's events do not read whole: damaged, cut short, missing or unsafe;
+  - a deleted chat's spend record does not read whole;
+  - the chats cannot be listed.
+
+  While it is unknown, no chat message is sent. No meeting or staffing meeting previews or starts, the meetings'
+  ledger gives no figure, and a meeting already running skips its next call. There is one exception. A record whose
+  files were all written before today, by their times (the later of the modification and change times; the change
+  time cannot be set back), counts nothing today, because nothing in it can be of today. A chat whose record does not
+  read whole is not deleted through VBear, so what it spent is not lost; it needs a manual check of the state
+  folder. A deleted chat's spend record that is gone counts nothing. VBear removes one only after its turns are more
+  than three days old. A damaged meeting or staffing record still adds nothing to the day, as before (P35).
 - **Who may answer a card.** Only the runtime socket's own user reaches the daemon. A card is answered through
   `chat_answer` with its one-use token. A second answer, a wrong token, an expired card (5 minutes) or a card of
   an ended turn is refused. Expiry is checked by the answer itself, not only by the daemon's timer, and an expired

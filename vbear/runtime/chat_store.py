@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import stat
+import time
 import uuid
 from dataclasses import dataclass, field
 from decimal import ROUND_CEILING, Decimal
@@ -600,6 +601,9 @@ def delete(base, chat_id, *, now: float) -> None:
     day's limit. Refused while a turn is open. The role card's work folder is kept."""
     d = chat_dir(base, chat_id)
     ev = read_events(base, chat_id)
+    if ev.problem:              # what it spent cannot be kept whole: it stays, and the day stays unknown
+        raise ChatStoreError("damaged", f"這個聊天的紀錄讀不完整（{ev.problem}），刪掉會讓花費無法核算；"
+                                        "請人工檢查狀態目錄")
     st = derive(ev.records)
     if st.open_turn is not None or st.process_open:
         raise ChatStoreError("busy", "這個聊天還在進行，請先停止")
@@ -704,16 +708,60 @@ def limits_from(conf) -> dict[str, Decimal]:
     return {"per_turn_usd": DEFAULT_PER_TURN}
 
 
-def spend_record(base, chat_id) -> dict:
+def _unknown(chat_id: str, why: str) -> ChatStoreError:
+    return ChatStoreError(mt.SPEND_UNKNOWN, f"聊天 {chat_id} 的花費紀錄讀不完整（{why}），無法確認今天已經花了多少")
+
+
+def _written_before_the_day_of(now: float, *paths: Path) -> bool:
+    """Whether everything in these files and folders was written before the local date of ``now``, by their times
+    (the later of mtime and ctime: a file's ctime cannot be set back): then none of it can count toward that day."""
+    latest = None
+    for path in paths:
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        latest = max(latest or 0.0, st.st_mtime, st.st_ctime)
+    return latest is not None and mt.local_day(latest) < mt.local_day(now)
+
+
+def spend_record(base, chat_id, now: float) -> dict:
     """A chat, or what a deleted one left, as a record meetings.daily_spent can count: {"turns": [...]}, each turn
-    counted at its cap while it runs. A chat whose events stop reading cleanly counts what reads."""
+    counted at its cap while it runs. A record that does not read whole (damaged, cut short, missing its events or
+    unsafe) raises ChatStoreError("spend_unknown"): what it spent is unknown, never less. Only a record whose files
+    were all written before the local date of ``now`` counts nothing that day instead, since none of it can be of
+    that day. A deleted chat whose spend record is gone (pruned) counts nothing."""
+    folder = Path(base) / CHATS / chat_id
     try:
         ev = read_events(base, chat_id)
     except ChatStoreError as exc:
-        if exc.code != "not_found":
-            raise
+        if exc.code == "not_found":                 # no such chat: deleted, so what it left counts
+            return _spent_by_deleted(base, chat_id, now)
+        why = exc.message
+    else:
+        if not ev.problem:
+            return {"turns": _spend_turns(derive(ev.records))}
+        why = ev.problem
+    if os.path.lexists(Path(base) / SPEND / f"{chat_id}.json"):
+        # being deleted: delete() keeps what a chat that reads whole spent before it removes the chat's files
+        return _spent_by_deleted(base, chat_id, now)
+    if _written_before_the_day_of(now, folder, folder / EVENTS):
+        return {"turns": []}
+    raise _unknown(chat_id, why)
+
+
+def _spent_by_deleted(base, chat_id: str, now: float) -> dict:
+    path = Path(base) / SPEND / f"{chat_id}.json"
+    try:
         return {"turns": _load_spend(base, chat_id)["turns"]}
-    return {"turns": _spend_turns(derive(ev.records))}
+    except ChatStoreError as exc:
+        if not os.path.lexists(path):
+            return {"turns": []}                    # pruned, or nothing of the chat was kept
+        if _written_before_the_day_of(now, path):
+            return {"turns": []}
+        raise _unknown(chat_id, exc.message) from None
 
 
 def turn_cap(record: dict, turn: dict) -> Decimal:
@@ -721,37 +769,40 @@ def turn_cap(record: dict, turn: dict) -> Decimal:
 
 
 def spend_ids(base) -> list[str]:
+    if not os.path.lexists(base):
+        return []                                   # no state folder yet: no chat
     return sorted(set(list_ids(base)) | set(_spend_ids(base)))
 
 
 def day_spent(base, now: float) -> Decimal:
-    """What the chats' turns of today (the local date) cost, the deleted chats' included."""
-    records = []
-    for chat_id in spend_ids(base):
-        try:
-            records.append(spend_record(base, chat_id))
-        except ChatStoreError:
-            continue
+    """What the chats' turns of today (the local date of ``now``) cost, the deleted chats' included. Raises
+    ChatStoreError("spend_unknown") when that cannot be established in full: never a smaller sum."""
+    try:
+        records = [spend_record(base, chat_id, now) for chat_id in spend_ids(base)]
+    except ChatStoreError as exc:
+        if exc.code == mt.SPEND_UNKNOWN:
+            raise
+        raise ChatStoreError(mt.SPEND_UNKNOWN, f"聊天的花費讀不出來（{exc.message}），無法確認今天已經花了多少") from None
     return mt.daily_spent(records, now, turn_cap)
 
 
-def spend_kind():
+def spend_kind(clock=time.time):
     """(ids, load, per_call) for board_engine.spend_kinds: the chats count toward the same day's limit as the
-    meetings and the staffing meetings. Reads <state> as the console sees it."""
+    meetings and the staffing meetings. Reads <state> as the console sees it. What cannot be established raises
+    MeetingError("spend_unknown"), which the board engine passes on (it does not skip it as a damaged meeting):
+    the day is then unknown, and nothing new that costs money starts."""
 
     def ids():
         try:
             return spend_ids(cfg.state_dir())
         except ChatStoreError as exc:
-            if exc.code == "not_found":
-                return []
-            raise mt.MeetingError("storage", f"聊天的花費讀不出來（{exc.message}）") from None
+            raise mt.MeetingError(mt.SPEND_UNKNOWN, f"聊天的花費讀不出來（{exc.message}）") from None
 
     def load(chat_id):
         try:
-            return spend_record(cfg.state_dir(), chat_id)
+            return spend_record(cfg.state_dir(), chat_id, clock())
         except ChatStoreError as exc:
-            raise mt.MeetingError("storage", exc.message) from None
+            raise mt.MeetingError(mt.SPEND_UNKNOWN, exc.message) from None
 
     return ids, load, turn_cap
 

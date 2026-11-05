@@ -54,6 +54,8 @@ DEFAULT_LIMITS = {"per_call_usd": Decimal("0.20"), "meeting_usd": Decimal("1.50"
 LIMIT_CAPS = {"per_call_usd": Decimal("1"), "meeting_usd": Decimal("10"), "daily_usd": Decimal("50")}
 WARN_RATIO = Decimal("0.8")
 
+SPEND_UNKNOWN = "spend_unknown"   # what today cost cannot be established in full: nothing new that costs money starts
+
 ERRORS = {
     "bad_request": "會議要求不符格式",
     "not_found": "找不到這場會議",
@@ -73,6 +75,7 @@ ERRORS = {
     "not_decided": "CEO 還沒有決定，不能核准",
     "not_running": "這場會議沒有在進行",
     "changed": "角色卡或任務卡在開會之後變了，不能重試；請開新的會議",
+    SPEND_UNKNOWN: "無法確認今天已經花了多少（有花費紀錄讀不完整），先不送出新的呼叫；請人工檢查狀態目錄",
 }
 
 
@@ -629,7 +632,7 @@ def spent(meeting: dict, per_call_of: Callable[[dict, dict], Decimal] | None = N
     return sum((turn_cost(t, per_call_of(meeting, t)) for t in meeting["turns"]), Decimal(0))
 
 
-def _local_day(ts: float) -> tuple[int, int, int]:
+def local_day(ts: float) -> tuple[int, int, int]:
     t = time.localtime(ts)
     return t.tm_year, t.tm_mon, t.tm_mday
 
@@ -637,11 +640,11 @@ def _local_day(ts: float) -> tuple[int, int, int]:
 def daily_spent(meetings: list[dict], now: float, per_call_of: Callable[[dict, dict], Decimal] | None = None) -> Decimal:
     """What the turns of today (the local date) cost, over the records given; ``per_call_of`` as in spent()."""
     per_call_of = per_call_of or per_call_limit
-    today, total = _local_day(now), Decimal(0)
+    today, total = local_day(now), Decimal(0)
     for m in meetings:
         for t in m["turns"]:
             when = t.get("ended_at") or t.get("started_at")
-            if when and _local_day(when) == today:
+            if when and local_day(when) == today:
                 total += turn_cost(t, per_call_of(m, t))
     return total
 
