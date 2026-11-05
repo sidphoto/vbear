@@ -31,7 +31,7 @@ from pathlib import Path
 
 from .. import config as cfg, meetings as mt, strictjson
 from ..numbers import finite_real
-from ..scan.document import redact
+from ..scan.document import redact, redact_value
 from . import chat_protocol as cp
 
 CHATS = "chats"
@@ -145,8 +145,10 @@ KINDS = {
     "error": {"turn": _turn_or_none, "message": _text(MAX_EXCERPT)},
 }
 _MASK = {"user_message": {"text": None}, "reply": {"text": MAX_REPLY}, "tool_result": {"text": MAX_EXCERPT},
-         "tool_call": {"summary": MAX_EXCERPT}, "auto_allowed": {"summary": MAX_EXCERPT},
-         "denied": {"summary": MAX_EXCERPT}, "card_decision": {"value": MAX_EXCERPT}, "error": {"message": MAX_EXCERPT}}
+         "tool_call": {"summary": MAX_EXCERPT}, "card": {"reason": MAX_SHORT},
+         "auto_allowed": {"summary": MAX_EXCERPT, "reason": MAX_SHORT},
+         "denied": {"summary": MAX_EXCERPT, "reason": MAX_SHORT}, "card_decision": {"value": MAX_EXCERPT},
+         "error": {"message": MAX_EXCERPT}}
 _ESSENTIAL = frozenset({"turn_ended", "process_ended", "card_decision", "error"})
 
 
@@ -164,8 +166,33 @@ def _masked(kind: str, data: dict) -> dict:
                 out["truncated"] = True
         out[name] = value
     if kind == "card" and isinstance(out.get("input"), dict):
-        out["input"] = {k: (redact(v)[:MAX_EXCERPT] if isinstance(v, str) else v) for k, v in out["input"].items()}
+        # automated security review finding 2: masked by key name and value at every level (redact_value), then
+        # every string cut, so a nested structure keeps no secret and no unbounded text
+        out["input"] = _cut_value({k: redact_value(k, v) for k, v in out["input"].items()}, 1)
     return out
+
+
+CARD_DEPTH = 8                         # levels of a card's input kept; what lies deeper is not stored
+CARD_ITEMS = 64                        # keys of a mapping, items of a list kept at each level
+_TOO_DEEP = "[太深，未保存]"
+
+
+def _cut_value(value, depth: int):
+    """A stored copy of a tool's input: strings cut to MAX_EXCERPT, at most CARD_ITEMS entries per level and
+    CARD_DEPTH levels, a number that is not finite as None; anything else JSON cannot hold as its text."""
+    if isinstance(value, str):
+        return value[:MAX_EXCERPT]
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value if finite_real(value) is not None else None
+    if depth > CARD_DEPTH:
+        return _TOO_DEEP
+    if isinstance(value, dict):
+        return {str(k)[:64]: _cut_value(v, depth + 1) for k, v in list(value.items())[:CARD_ITEMS]}
+    if isinstance(value, (list, tuple)):
+        return [_cut_value(v, depth + 1) for v in list(value)[:CARD_ITEMS]]
+    return str(value)[:MAX_EXCERPT]
 
 
 def record_problem(rec) -> str | None:
@@ -437,6 +464,9 @@ class ChatLog:
         if problem:
             raise ChatStoreError("bad_record", f"拒絕寫入不符結構的聊天事件（{problem}）")
         line = _encode(rec)
+        too_big = strictjson.scan(line[:-1], EVENT_LIMITS)
+        if too_big:                                     # what is written must read back (depth, nodes, bytes)
+            raise ChatStoreError("bad_record", f"聊天事件太大或太深，不能保存（{too_big}）")
         limit = MAX_EVENTS_BYTES if kind in _ESSENTIAL else MAX_EVENTS_BYTES - min(RESERVE_BYTES, MAX_EVENTS_BYTES // 4)
         if self.size + len(line) > limit:
             raise ChatStoreError("full", "這個聊天的紀錄已經滿了，請開新的聊天")

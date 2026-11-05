@@ -131,6 +131,40 @@ class EventTests(StoreCase):
         self.assertTrue(res["truncated"])
         self.assertLessEqual(len(res["text"]), cs.MAX_EXCERPT)
 
+    def test_nested_card_input_and_reasons_are_masked_and_cut(self):
+        """Automated security review finding 2 (P36-1): a card's input is masked by key name and value at every
+        level, every string in it is cut, and the reason of a card, an auto-allow and a refusal is masked too."""
+        c = self.chat()
+        self.add(c["id"], "card", turn=1, card_id="k-0123456789abcdef", tool="Edit",
+                 input={"file_path": "/WORK/a", "edits": [{"old_string": "a", "new_string": "z" * (cs.MAX_EXCERPT + 50),
+                                                            "meta": {"api_key": "plainvalue1", "token": "plainvalue2"}}],
+                        "opts": {"nested": {"password": "hunter2hunter2"}}},
+                 editable="new_string", state="asked", reason=f"because {KEY}")
+        self.add(c["id"], "auto_allowed", turn=1, tool_use_id="toolu_2", tool="Read", summary="/WORK/a",
+                 reason=f"token={KEY}")
+        self.add(c["id"], "denied", turn=1, tool_use_id="toolu_3", tool="Write", summary="/x",
+                 reason=f"key {KEY}", by="vbear")
+        raw = (self.base / "chats" / c["id"] / "events.jsonl").read_text()
+        for secret in ("fictionalfictional", "plainvalue1", "plainvalue2", "hunter2hunter2"):
+            self.assertNotIn(secret, raw)
+        card = next(r for r in cs.read_events(self.base, c["id"]).records if r["kind"] == "card")
+        edit = card["input"]["edits"][0]
+        self.assertEqual(len(edit["new_string"]), cs.MAX_EXCERPT)
+        self.assertEqual(edit["old_string"], "a")
+        self.assertEqual(card["input"]["file_path"], "/WORK/a")
+
+    def test_what_is_written_always_reads_back(self):
+        """A card input nested deeper than the reader allows is cut short instead of making the file unreadable."""
+        c = self.chat()
+        deep = "x"
+        for _ in range(40):
+            deep = {"a": deep}
+        self.add(c["id"], "card", turn=1, card_id="k-0123456789abcdef", tool="Other", input={"d": deep},
+                 editable=None, state="asked", reason="r")
+        ev = cs.read_events(self.base, c["id"])
+        self.assertEqual(ev.problem, "")
+        self.assertEqual(len(ev.records), 2)
+
     def test_a_wrong_record_is_refused_and_nothing_is_written(self):
         c = self.chat()
         size = (self.base / "chats" / c["id"] / "events.jsonl").stat().st_size
