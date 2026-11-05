@@ -130,7 +130,9 @@ test("the page lists the four tools side by side, with a sentence, a state, a ve
   assert.deepStrictEqual(acts(cs[3]), [["login", "登入"], ["mark", "我登入好了"]]);
   assert.strictEqual(byAttr(main, "data-setup-slot", "try").length, 4, "a place for 「試一下」 in every card");
   assert.strictEqual(byAttr(main, "data-setup-slot", "daily-limit").length, 1);
-  assert(!text(main.find((n) => attr(n, "data-setup-slot") === "try")), "the place for 「試一下」 is empty (a later task)");
+  const slots = byAttr(main, "data-setup-slot", "try");
+  assert(text(slots[0]).includes("試一下"), "an installed tool has 「試一下」 in its place (task 4)");
+  assert(!text(slots[2]), "a tool that is not installed has nothing in its place");
 });
 
 test("MCODE is not on the page unless the server lists it, and when it does it is a fifth row with its two login buttons", async () => {
