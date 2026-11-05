@@ -81,8 +81,8 @@ EXPECTED_ARGV = {
     "claude": ["-p", "--safe-mode", "--setting-sources", "", "--tools", "", "--strict-mcp-config", "--mcp-config",
                '{"mcpServers":{}}', "--model", "claude-haiku-5-5", "--output-format", "json", "--max-budget-usd", "0.02",
                "--no-session-persistence"],
-    "codex": ["exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only",
-              "--ask-for-approval", "never", "-c", 'web_search="disabled"', "--disable", "shell_tool", "--disable", "mcp",
+    "codex": ["--ask-for-approval", "never", "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
+              "--ephemeral", "--sandbox", "read-only", "-c", 'web_search="disabled"', "--disable", "shell_tool", "--disable", "mcp",
               "--cd", "<SCRATCH>", "-"],
     "agy": ["-p", "請只回答 OK", "--output-format", "text", "--disable-slash-commands"],
     "grok": ["-p", "請只回答 OK", "--output-format", "plain", "--max-turns", "1", "--disable-web-search", "--no-memory", "--no-plan",
@@ -167,6 +167,13 @@ class ArgvTests(TryCase):
         for name in ("agy", "grok", "mcode"):
             self.assertEqual(got[name]["stdin"], "")
             self.assertIn(SENTENCE, got[name]["argv"])
+
+    def test_codex_gets_its_approval_option_before_exec_because_exec_has_none(self):
+        # `codex --help` lists -a/--ask-for-approval as a top-level option; `codex exec --help` does not list it
+        from vbear import setup_try
+        argv = setup_try.argv_for("codex", "/fake/codex", "/fake/scratch")
+        self.assertEqual(argv[:4], ["/fake/codex", "--ask-for-approval", "never", "exec"])
+        self.assertEqual(argv.count("--ask-for-approval"), 1)
 
     def test_the_tool_sees_a_plain_environment_and_no_folder_of_the_person(self):
         self.install_try("grok")

@@ -64,8 +64,9 @@ def argv_for(tool_id: str, binary: str, scratch: str) -> list[str]:
                 "--mcp-config", '{"mcpServers":{}}', "--model", CLAUDE_MODEL, "--output-format", "json",
                 "--max-budget-usd", CLAUDE_BUDGET, "--no-session-persistence"]
     if tool_id == "codex":
-        return [binary, "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--ephemeral",
-                "--sandbox", "read-only", "--ask-for-approval", "never", "-c", 'web_search="disabled"',
+        # --ask-for-approval is a top-level option of `codex` (`codex --help`); `codex exec --help` does not list it
+        return [binary, "--ask-for-approval", "never", "exec", "--ignore-user-config", "--ignore-rules",
+                "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-c", 'web_search="disabled"',
                 "--disable", "shell_tool", "--disable", "mcp", "--cd", scratch, "-"]
     if tool_id == "agy":
         return [binary, "-p", TRY_SENTENCE, "--output-format", "text", "--disable-slash-commands"]

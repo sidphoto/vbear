@@ -27,8 +27,8 @@ run any of these scripts itself; the five install addresses answered HTTP 200 wh
 From the research notes (flags confirmed against each tool's local `--help`; none was run for this task, the tests use stand-ins):
 Claude Code `-p` with `--safe-mode`, `--setting-sources ""`, `--tools ""`, `--max-budget-usd`, `--output-format json`,
 `--no-session-persistence` (the same words the chat and the translations use); Codex `exec` with `--ignore-user-config`,
-`--ignore-rules`, `--skip-git-repo-check`, `--ephemeral`, `--sandbox read-only`, `-` for stdin (`--ask-for-approval never`,
-`--disable shell_tool`, `--disable mcp` as the translations candidate already used); AGY `-p` with `--output-format text` and
+`--ignore-rules`, `--skip-git-repo-check`, `--ephemeral`, `--sandbox read-only`, `-` for stdin (`--ask-for-approval never` goes before `exec`: it is a top-level option of `codex` and
+`codex exec --help` does not list it; `--disable shell_tool`, `--disable mcp` as the translations candidate already used); AGY `-p` with `--output-format text` and
 `--disable-slash-commands` (no checked flag for fewer tools; `--sandbox`'s value form is not known); Grok `-p` with
 `--output-format plain`, `--max-turns 1`, `--disable-web-search`, `--no-memory`, `--no-plan`, `--no-subagents`, `--cwd`; MCODE
 `exec` with `--cwd`, `--timeout`, `--max-steps 1`, `--permission off`, `--output-format text`. Only Claude Code has a budget flag
