@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from . import agent_profiles as ap, config as cfg, meeting_rules as rules, meetings as mt, staffing as st
+from .runtime import chat_store
 from .board_engine import HeadlessBoard, Sources, _select, _sha, opinions_for_chair, participant
 # the names the server and the tests have always found here
 from .board_engine import CHECK_ERRORS, WORKER, CallFailed, CallResult, CallSpec, default_call, meeting_argv, model_for  # noqa: F401
@@ -125,8 +126,8 @@ class MeetingRunner(HeadlessBoard):
         self._record_verdict(mid)
 
     def spend_kinds(self) -> list:
-        """A meeting shares the day with the staffing meetings (staffing_runner)."""
-        return [(self.ids, self.load, self.per_call), (st.record_ids, st.load, st.per_call_of)]
+        """A meeting shares the day with the staffing meetings (staffing_runner) and the chats (P36)."""
+        return [(self.ids, self.load, self.per_call), (st.record_ids, st.load, st.per_call_of), chat_store.spend_kind()]
 
     # -- a new meeting ---------------------------------------------------------------------------------------------
 
@@ -348,11 +349,11 @@ class MeetingRunner(HeadlessBoard):
         return {"meetings": out}
 
     def ledger(self, conf) -> dict:
-        """The day's money of the meetings and the staffing meetings together (``includes`` says so)."""
+        """The day's money of the meetings, the staffing meetings and the chats together (``includes`` says so)."""
         limits = mt.limits_from(conf)
         day = self._day()
         with self.lock:
             running = self.job["meeting_id"] if self.job else None
         return {"spent_usd": mt.fmt(day), "daily_usd": mt.fmt(limits["daily_usd"]), "per_call_usd": mt.fmt(limits["per_call_usd"]),
                 "meeting_usd": mt.fmt(limits["meeting_usd"]), "lamp": mt.lamp(day, limits), "running": running,
-                "blocked": (cfg.state_dir() / f"{WORKER}.blocked").exists(), "note": COST_NOTE, "includes": ["meetings", "staffing"]}
+                "blocked": (cfg.state_dir() / f"{WORKER}.blocked").exists(), "note": COST_NOTE, "includes": ["meetings", "staffing", "chats"]}

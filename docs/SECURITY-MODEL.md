@@ -943,8 +943,8 @@ the preview id, and nothing in it is carried out by VBear.
   preview reserves every speaker's call and the CEO's, and refuses what does not fit the record's room or what is left of
   the day; every call is checked again before it is made and skipped (`budget`) if it would pass a limit. A call that
   reported no cost, or one a stopped console left running, costs the worst case of its own kind of turn. It counts in
-  the same day as the meetings: `meeting_limits.daily_usd` covers both, and the ledger says so
-  (`includes: ["meetings", "staffing"]`).
+  the same day as the meetings: `meeting_limits.daily_usd` covers both, and the chats with a role card too, and the
+  ledger says so (`includes: ["meetings", "staffing", "chats"]`).
 - **Failure, retry, restart.** As for a meeting: nothing is repeated by itself; a person retries a failed or interrupted
   turn through its own preview (twice at most, then `blocked`), and retrying a speaker asks the CEO again; a restart
   interrupts what was running and resumes nothing.

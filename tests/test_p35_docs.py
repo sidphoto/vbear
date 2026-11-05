@@ -47,7 +47,7 @@ class SecurityModelTests(unittest.TestCase):
                 # the call, the worker and the money
                 "the meetings' call", "`--effort`", "`meeting-worker.lock`", "`meeting-worker.blocked`", "never at the same time",
                 "`meeting_limits.per_call_usd`", "`staffing_limits.proposal_call_usd`", "`staffing_limits.total_usd`",
-                "the same day as the meetings", '`includes: ["meetings", "staffing"]`', "worst case",
+                "the same day as the meetings", '`includes: ["meetings", "staffing", "chats"]`', "worst case",
                 # what it is not
                 "No rule of the meetings (R1–R8)", "creates no card, inserts no skill", "主控台記錄（未驗證身分）",
                 "`<state>/staffing/s-<12 hex>.json`", "`/api/staffing/suggest?task_id=`", "`DELETE /api/staffing/<id>`"):

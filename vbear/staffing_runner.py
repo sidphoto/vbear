@@ -29,6 +29,7 @@ from typing import Callable
 from . import agent_profiles as ap, meetings as mt, staffing as st
 from .board_engine import CHAIR_POSITION, CHECK_ERRORS, HeadlessBoard, _select, _sha, participant
 from .jsonstore import StoreError
+from .runtime import chat_store
 from .meeting_runner import COST_NOTE, DISCLOSURE, PLACEHOLDER_OPINIONS, PLACEHOLDER_SPEND, _flows, _instructions_of
 
 PROPOSAL_TIMEOUT = 180.0  # the CEO's call: the whole list and every speaker's answer; also the time kept for the CEO
@@ -133,8 +134,9 @@ class StaffingRunner(HeadlessBoard):
         return PROPOSAL_TIMEOUT if kind == "proposal" else mt.CALL_TIMEOUT
 
     def spend_kinds(self) -> list:
-        """A staffing meeting shares the day with the meetings."""
-        return [(mt.meeting_ids, mt.load, mt.per_call_limit), (self.ids, self.load, self.per_call)]
+        """A staffing meeting shares the day with the meetings and the chats (P36)."""
+        return [(mt.meeting_ids, mt.load, mt.per_call_limit), (self.ids, self.load, self.per_call),
+                chat_store.spend_kind()]
 
     def _provider_error(self, code: str) -> mt.MeetingError:
         # the tool-less check's record, not a staffing record, is what cannot be read

@@ -2509,7 +2509,8 @@
    "daily_usd": "3",
    "includes": [
     "meetings",
-    "staffing"
+    "staffing",
+    "chats"
    ],
    "lamp": "red",
    "meeting_usd": "1.5",
@@ -2720,7 +2721,8 @@
   "daily_usd": "3",
   "includes": [
    "meetings",
-   "staffing"
+   "staffing",
+   "chats"
   ],
   "lamp": "red",
   "meeting_usd": "1.5",
@@ -2734,7 +2736,8 @@
   "daily_usd": "9",
   "includes": [
    "meetings",
-   "staffing"
+   "staffing",
+   "chats"
   ],
   "lamp": "green",
   "meeting_usd": "1.5",

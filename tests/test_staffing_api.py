@@ -178,7 +178,7 @@ class StaffingApiTests(unittest.TestCase):
         self.assertEqual(cfg.load()["staffing_limits"]["total_usd"], 8.0)
         self.run_one()
         status, ledger = self.call("/api/meetings/ledger")
-        self.assertEqual((ledger["spent_usd"], ledger["includes"]), ("0.03", ["meetings", "staffing"]))
+        self.assertEqual((ledger["spent_usd"], ledger["includes"]), ("0.03", ["meetings", "staffing", "chats"]))
 
     def test_the_two_runners_are_built_together(self):
         fresh = server.Console.__new__(server.Console)
