@@ -904,10 +904,54 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.ok(!byData(d, "data-pass-line", "write").length && !byData(d, "data-pass-line", "network").length, "no shield lines: nothing was limited");
     assert.ok(!findText(d, "盾牌圖例") && !findText(d, "暫存區"), "no legend and no scratch folder");
     assert.ok(findText(byData(d, "data-pass", "mode")[0], "完整模式"));
-    assert.strictEqual(btnByText(d, "確認啟動").disabled, false, "no acknowledgement box stands in the way");
+    // ADR 0002: the person says in plain words what a full launch can do and ticks 我了解 before the button works
+    const warn = byData(d, "data-pass", "full-ack")[0];
+    assert.ok(warn && findText(warn, "這個員工可以動你電腦上的任何檔案"), "the plain warning stands beside the box");
+    const ack = byData(d, "data-pass", "full-ack-box")[0];
+    assert.ok(ack && ack.getAttribute("type") === "checkbox" && !ack.checked, "the box starts unticked");
+    assert.ok(findText(warn, "我了解"));
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true, "without 我了解 the button cannot be pressed");
+    assert.ok(findText(d, "還沒有勾選「我了解」"), "the reason is said beside the button");
+    btnByText(d, "確認啟動").dispatch("click");
+    await tick(3);
+    assert.strictEqual(launches.length, 0, "a click on the disabled button launches nothing");
+    ack.checked = true; ack.dispatch("change");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+    ack.checked = false; ack.dispatch("change");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true, "unticking takes it away again");
+    ack.checked = true; ack.dispatch("change");
     btnByText(d, "確認啟動").dispatch("click");
     await tick(6);
-    assert.deepStrictEqual(launches, [{ preview_id: "p-" + "f".repeat(32), expected_settings_digest: "e".repeat(64), user_confirmed: true }]);
+    assert.deepStrictEqual(launches, [{ preview_id: "p-" + "f".repeat(32), expected_settings_digest: "e".repeat(64), user_confirmed: true,
+      accept_full_mode: true }]);
+  });
+
+  await test("ADR 0002 pass: a new preview of a full card starts with the box unticked again", async () => {
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"),
+      "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: fullPass() }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    let ack = byData(d, "data-pass", "full-ack-box")[0];
+    ack.checked = true; ack.dispatch("change");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    ack = byData(d, "data-pass", "full-ack-box")[0];
+    assert.ok(!ack.checked, "the earlier tick does not carry over to the next preview");
+    assert.strictEqual(btnByText(d, "確認啟動").disabled, true);
+  });
+
+  await test("ADR 0002 pass: a preview that cannot launch shows no box, and a safe launch never sends accept_full_mode", async () => {
+    const blocked = fullPass({ launchable: false, preview_id: null, cli: null, settings_digest: null, command: null, instructions: null,
+      reasons: [{ code: "cli_not_found", message: "找不到 claude" }] });
+    const ctx = mkPass([fullCard()], { ...loadoutFor("p-1"), "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: blocked }) });
+    const d = await openPass(ctx);
+    field(d).value = WORKDIR;
+    btnByText(d, "產生預覽").dispatch("click");
+    await tick(6);
+    assert.ok(!byData(d, "data-pass", "full-ack").length, "nothing to acknowledge when nothing can start");
   });
 
   await test("P34-3 pass: a full card with a folder already filled in is previewed when the pass opens, without a commit sentence; the confirm still needs a click", async () => {
@@ -926,8 +970,11 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     assert.strictEqual(previews.length, 1, "the folder of the task card is previewed on its own");
     assert.deepStrictEqual(previews[0], { profile_id: "p-1", workdir: WORKDIR, commit: false });
     const confirm = btnByText(d, "確認啟動");
-    assert.strictEqual(confirm.disabled, false);
+    assert.strictEqual(confirm.disabled, true, "the full card still waits for 我了解");
     assert.ok(!focusLog.includes(confirm), "the focus was never given to 確認啟動");
+    const ack = byData(d, "data-pass", "full-ack-box")[0];
+    ack.checked = true; ack.dispatch("change");
+    assert.strictEqual(confirm.disabled, false);
     assert.strictEqual(launches.length, 0, "nothing launched until the click");
     confirm.dispatch("click");
     await tick(6);
@@ -950,7 +997,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
       assert.ok(findText(front, "貼上職位指示"), tool);
       assert.ok(!byData(front, "data-pass", "instruction-text").length, "nothing is said to be carried");
       assert.strictEqual((byData(front, "data-pass", "command")[0].textContent || "").trim(), `/Users/u/bin/${tool}`);
-      assert.strictEqual(btnByText(d, "確認啟動").disabled, false);
+      assert.strictEqual(btnByText(d, "確認啟動").disabled, true, `${tool}: the box 我了解 comes first`);
       btnByText(d, "取消").dispatch("click");
       await tick(2);
     }
@@ -961,6 +1008,52 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
     const d = await openPass(ctx);
     assert.ok(byData(d, "data-pass", "agy-not-launchable").length);
     assert.strictEqual(btnByText(d, "產生預覽").disabled, true);
+  });
+
+  // v0.12: the pass decides from the tool list, not from the id "agy": Grok and MCODE are tools without a safe launch too
+  const toolListCatalog = { ...catalog, tool_list: [
+    { id: "claude", name: "Claude Code", short: "Claude Code", generic: false, safe_launch: true, safe_mode: true, full_launch: true, not_launchable_message: "" },
+    { id: "agy", name: "Antigravity（AGY）", short: "AGY", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "安全模式不會啟動 AGY，要出發請選完整模式" },
+    { id: "grok", name: "Grok", short: "Grok", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "Grok 目前只能用完整模式，VBear 不用安全模式啟動它" },
+    { id: "shared", name: "共用", short: "共用卡", generic: true, safe_launch: false, safe_mode: false, full_launch: false, not_launchable_message: "shared 不是可啟動的工具" },
+  ] };
+
+  await test("v0.12 pass: a Grok card in the safe launch gets the same refusal as AGY, with the tool list's own sentence", async () => {
+    const ctx = freshContext(baseHandlers([mkProfile("p-1", "Safe Grok", "grok", { read: "allow", write: "allow", test: "allow", deploy: "deny" })], toolListCatalog));
+    evalAgentBuilderSlice(ctx);
+    const d = await openPass(ctx);
+    const notice = byData(d, "data-pass", "agy-not-launchable")[0];
+    assert.ok(notice, "the refusal is on the pass");
+    assert.ok(findText(notice, "Grok 目前只能用完整模式，VBear 不用安全模式啟動它"));
+    assert.ok(!findText(notice, "AGY"), "it does not talk about another tool");
+    assert.strictEqual(btnByText(d, "產生預覽").disabled, true);
+  });
+
+  await test("v0.12 pass: a full-mode Grok card names Grok beside the program, as a full AGY card names AGY", async () => {
+    for (const [tool, name] of [["grok", "Grok"], ["agy", "AGY"]]) {
+      const pv = fullPass({ cli: { binary: `/Users/u/bin/${tool}`, version: null }, command: [`/Users/u/bin/${tool}`],
+        instructions: { delivery: "paste", source: "default", position: "legal", text: "你是法務", where: "貼上" } });
+      const ctx = freshContext(baseHandlers([fullCard(tool)], toolListCatalog, { "POST /api/native/agent-previews": () => jsonResponse({ ok: true, preview: pv }) }));
+      evalAgentBuilderSlice(ctx);
+      const d = await openPass(ctx);
+      assert.ok(!byData(d, "data-pass", "agy-not-launchable").length, `${tool}: full mode is not refused`);
+      field(d).value = WORKDIR;
+      btnByText(d, "產生預覽").dispatch("click");
+      await tick(6);
+      assert.ok(findText(d, `${name} · /Users/u/bin/${tool}`), `${tool}: the program is named ${name}`);
+      btnByText(d, "取消").dispatch("click");
+      await tick(2);
+    }
+  });
+
+  await test("v0.12 pass: a shared card has no tool name beside the program", async () => {
+    const ctx = freshContext({});
+    evalAgentBuilderSlice(ctx);
+    assert.strictEqual(ctx.toolShortName(toolListCatalog, "shared"), "");
+    assert.strictEqual(ctx.toolShortName(toolListCatalog, "grok"), "Grok");
+    assert.strictEqual(ctx.toolShortName(null, "mcode"), "MCODE", "no list: the page's own table");
+    assert.strictEqual(ctx.toolShortName(null, "shared"), "");
+    assert.strictEqual(ctx.toolShortName(null, "nope"), "");
   });
 
   await test("P34-3 pass: a full card the server cannot start shows the server's reason, and no front", async () => {

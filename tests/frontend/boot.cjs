@@ -235,6 +235,33 @@ async function test(name, fn) {
     assert.ok(!/innerHTML|insertAdjacentHTML/.test(part) && !/https?:\/\//.test(part) && !/\p{Extended_Pictographic}/u.test(part));
   });
 
+  await test("v0.12 settings: the 'show MCODE' switch shows the saved value and writes show_mcode to /api/config, and nothing else", async () => {
+    const posts = [];
+    let shown = false;
+    const answer = (obj) => ({ ok: true, status: 200, json: async () => obj });
+    const page = boot("#/settings", { fetchImpl: async (url, o, method) => {
+      if (url === "/api/config" && method === "POST") { posts.push(JSON.parse(o.body)); shown = JSON.parse(o.body).show_mcode; return answer({ ok: true, config: {}, rescan_needed: false }); }
+      if (url === "/api/config") return answer({ config: { show_mcode: shown, advanced_mode: false }, state_dir: "/x", runtime_socket: "" });
+      if (url === "/api/overview") return answer({ sources: [], facts: {}, problems: [], generated_at: 1, scan_seconds: 0, totals: { active: 0 } });
+      if (url === "/api/skills") return answer({ skills: [], categories: [] });
+      if (url === "/api/roles") return answer({ roles: [] });
+      if (url === "/api/translations" || url === "/api/role-translations") {
+        return answer({ entries: {}, counts: { fresh: 0, stale: 0, none: 0, orphan: 0 }, job: null, engine: "claude" });
+      }
+      return null;
+    } });
+    await tick(60);
+    const box = () => walk(page.main).find((n) => n.getAttribute && n.getAttribute("data-setting") === "show-mcode");
+    assert.ok(box(), "the switch is on the settings page");
+    assert.ok(page.main.textContent.includes("顯示 MCODE"));
+    assert.ok(page.main.textContent.includes("關掉不會刪除已有的 MCODE 角色卡"));
+    assert.ok(!box().checked, "off by default");
+    box().checked = true;
+    box().dispatch("change", { target: box() });
+    await tick(20);
+    assert.deepStrictEqual(posts, [{ show_mcode: true }]);
+  });
+
   console.log(`\n${passed} passed`);
   if (process.exitCode) process.exit(process.exitCode);
   console.log("ALL BOOT FRONTEND TESTS PASSED");

@@ -958,7 +958,7 @@ function categoryZh(label) {
   return Object.prototype.hasOwnProperty.call(CATEGORY_ZH, k) ? CATEGORY_ZH[k] : label;
 }
 
-const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）" };
+const TOOL = { claude: "Claude Code", codex: "Codex CLI", shared: "skills CLI", agy: "Antigravity（AGY）", grok: "Grok", mcode: "MCODE" };
 const ACT = {
   active:        ["可使用", "b-ok", "位於工具的載入範圍，且沒有被停用"],
   disabled:      ["已停用", "b-mute", "已安裝，但被設定關閉"],
@@ -2157,6 +2157,9 @@ async function viewHome() {
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
     api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList()]);
   const L = D.live;
+  const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
+  if (token !== seq) return;
+  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
   const main = claim(token);
   const onboardingHost = el("div", { id: "h-onboarding" });
   const onboardingInput = () => ({
@@ -2204,6 +2207,7 @@ async function viewHome() {
     corruptNotice(),
     staleNotice(),
     herdrMigrationNotice(),
+    setup.notice ? setupUpgradeNotice() : null,
     runtimeNotice(),
     onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
@@ -2579,19 +2583,21 @@ const OFFICE_LOUNGE_MAX = 24;
 const OFFICE_BOUND_FLOWS_SHOWN = 2;
 const OFFICE_SPECIES = ["bear", "fox", "robot", "alien"];
 const OFFICE_SPECIES_LABEL = { bear: "熊", fox: "狐", robot: "機械人", alien: "外星人" };
-const OFFICE_FAMILY_SPECIES = { anthropic: "bear", openai: "robot", google: "fox" };
+const OFFICE_FAMILY_SPECIES = { anthropic: "bear", openai: "robot", google: "fox", xai: "alien", minimax: "alien" };
 // agy is a card's tool (an Antigravity card is the fox of the Google camp); a live terminal is still read from the
 // runtime's own agent name (officeToolOf), and VBear does not know what the runtime would call an AGY terminal.
-const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot", agy: "fox" };
+const OFFICE_TOOL_SPECIES = { claude: "bear", codex: "robot", agy: "fox", grok: "alien", mcode: "alien" };
 // The camp is the maker of the model; its shirt colour is lighter than every species' fur (tested), so a
 // character reads the same whichever species it was given.
 const OFFICE_CAMPS = {
   anthropic: { label: "Anthropic", shirt: "#f59e0b", badge: "#fef3c7" },
   openai: { label: "OpenAI", shirt: "#14b8a6", badge: "#ccfbf1" },
   google: { label: "Google", shirt: "#38bdf8", badge: "#e0f2fe" },
+  xai: { label: "xAI", shirt: "#e5e7eb", badge: "#3f3f46" },
+  minimax: { label: "MiniMax", shirt: "#a3e635", badge: "#ecfccb" },
   other: { label: "其他", shirt: "#a855f7", badge: "#f3e8ff" },
 };
-const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai", agy: "google" };
+const OFFICE_TOOL_CAMP = { claude: "anthropic", codex: "openai", agy: "google", grok: "xai", mcode: "minimax" };
 // 16x16 supplied frames. C is the camp shirt; R is its badge.
 const OFFICE_SPRITES = {
   "bear": [
@@ -3877,6 +3883,7 @@ async function viewSkills(params) {
     el("p", { class: "lede" }, "這裡是掃描到的技能清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟「技能四態總覽」。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
+    needsClaudeSlot(token, "把技能說明翻成中文要用 Claude Code。", () => T.engine === "claude"),
     translationToolbar(),
     el("div", { class: "search" }, q),
     el("div", { class: "toolbar" },
@@ -4157,25 +4164,33 @@ const CARD_SLOT_WORD = { planner: "規劃", executor: "執行", reviewer: "審�
 const CARD_POSITION_KEY = "card.position.";
 const CARD_INTENT_KEYS = [["read", "讀取檔案"], ["write", "編輯寫入"], ["test", "執行測試"], ["deploy", "部署上線"]];
 const CARD_INTENT_LABEL = { allow: "允許", deny: "拒絕", unspecified: "還沒決定" };
-const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", shared: "共用（skills CLI）" };
-const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", shared: "共用卡" };
+const CARD_TOOL_LABEL = { claude: "Claude Code", codex: "Codex CLI", agy: "Antigravity（AGY）", grok: "Grok", mcode: "MCODE", shared: "共用（skills CLI）" };
+const CARD_TOOL_SHORT = { claude: "Claude Code", codex: "Codex", agy: "AGY", grok: "Grok", mcode: "MCODE", shared: "共用卡" };
 const SKILL_SHARED_TAG = "共用";
 const SKILL_CAT_OTHER = "_other";
 const PROFESSION_GROUP_OTHER = "other";   // the profession picker's group for a role whose position cannot be guessed
 const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
-// VBear does not start Antigravity: an AGY card is a record for building teams. Which skills AGY reads is judged by the
+// The safe launch does not start Antigravity: in safe mode an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
-const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
-// In full mode VBear does start an AGY card (as a terminal, with the person's own settings); the safe launch never does.
-const AGY_FULL_NOTE = "AGY 在完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
-// The tools VBear never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
+const AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式";
+// In full mode VBear does start an AGY, Grok or MCODE card (as a terminal, with the person's own settings); the safe launch never does.
+// The tools the safe launch never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
-const UNLAUNCHABLE_TOOLS = ["shared", "agy"];
+const UNLAUNCHABLE_TOOLS = ["shared", "agy", "grok", "mcode"];
+// What the page falls back to when a catalog does not carry tool_list (an older server, a test): the tools only full mode
+// can start in safe mode (ai_tools safe_mode: only Claude Code today), and every tool full mode starts. The server's list is
+// what is read first (toolCaps); a test keeps these equal to vbear/ai_tools.py.
+const SAFE_MODE_FALLBACK = ["claude"];
+const FULL_LAUNCH_TOOLS = ["claude", "codex", "agy", "grok", "mcode"];
+// The sentence on a card whose tool the safe mode never starts (GLOSSARY: 安全模式, 完整模式).
+const FULL_ONLY_MARK = "這個 AI 工具目前只能用完整模式";
+const FULL_ONLY_SHORT = "只能用完整模式";
+const FULL_ONLY_HELP = "完整模式可以從 VBear 出發，用你自己的設定與網路，VBear 不限制；職位指示請在開了終端、接管之後按「貼上職位指示」";
+const NO_PROFESSIONS = (tool) => `VBear 沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤。`;
 const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
 const AGY_UNREAD_MARK = "AGY 不會讀";
 const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）。AGY 的內建與外掛技能不在這裡。";
-const AGY_NO_PROFESSIONS = "VBear 沒有掃描 AGY 的 Agent 角色，沒有可選的職業標籤。";
+const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）。AGY 的內建與外掛技能不在這裡。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
 const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
@@ -4417,7 +4432,7 @@ function sortCards(profiles, catalog) {
 // Claude skill and the other way round. A shared skill fits any card except an AGY one; a shared card takes only
 // shared skills. An AGY card takes what AGY reads: the skills of its own folders and the ones the server marked
 // read_by agy (a project's .agents/skills, or a folder in ~/.gemini/config/skills.json). The shared store is not
-// AGY's unless that config lists it. Even then it is only a collection: VBear does not start AGY.
+// AGY's unless that config lists it. Even then it is only a collection: the safe launch does not start AGY.
 function skillReadByAgy(skill) {
   return Boolean(skill) && (skill.tool === "agy" || (Array.isArray(skill.read_by) && skill.read_by.includes("agy")));
 }
@@ -4474,7 +4489,37 @@ function skillPickPlan(skills, tool) {
 
 function cardCatalogTools(catalog) {
   const tools = catalog && Array.isArray(catalog.tools) ? catalog.tools.filter((t) => typeof t === "string") : [];
-  return tools.length ? tools : ["claude", "codex", "agy", "shared"];
+  return tools.length ? tools : ["claude", "codex", "agy", "grok", "shared"];
+}
+// What one AI tool can do, from the catalog's own lists (the server's registry, vbear/ai_tools.py): { safe, full, note,
+// unavailable } with unavailable the sentence for a hidden tool that is switched off (it is in unavailable_tools, not in
+// tool_list). A tool the catalog does not list (an older server) is read from the fallback tables above.
+function toolCaps(catalog, tool) {
+  const rows = [];
+  for (const key of ["tool_list", "unavailable_tools"]) {
+    if (catalog && Array.isArray(catalog[key])) rows.push(...catalog[key].filter((r) => r && typeof r === "object"));
+  }
+  const row = rows.find((r) => r.id === tool);
+  if (row) {
+    return { safe: row.safe_launch === true, safeMode: typeof row.safe_mode === "boolean" ? row.safe_mode : SAFE_MODE_FALLBACK.includes(tool), full: row.full_launch === true,
+      note: typeof row.not_launchable_message === "string" ? row.not_launchable_message : "",
+      unavailable: typeof row.unavailable_reason === "string" ? row.unavailable_reason : "" };
+  }
+  return { safe: !UNLAUNCHABLE_TOOLS.includes(tool), safeMode: SAFE_MODE_FALLBACK.includes(tool), full: FULL_LAUNCH_TOOLS.includes(tool),
+    note: "", unavailable: "" };
+}
+// A tool that only full mode starts (the card says so), and one that safe mode never starts at all.
+// (safe_launch is what the safe launch's code accepts; safe_mode is what can really start in safe mode, claude only today.)
+function toolFullOnly(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safeMode; }
+// A tool the safe launch's code refuses (AGY, Grok, MCODE) but full mode starts: the card has no safe launch to describe.
+function toolNoSafeLaunch(catalog, tool) { const c = toolCaps(catalog, tool); return c.full && !c.safe; }
+function toolNoSafe(catalog, tool) { return !toolCaps(catalog, tool).safe; }
+// The short name of a tool as the tool list writes it ("" for a generic card, which is no program, and for an unknown id).
+function toolShortName(catalog, tool) {
+  const rows = catalog && Array.isArray(catalog.tool_list) ? catalog.tool_list.filter((r) => r && typeof r === "object") : [];
+  const row = rows.find((r) => r.id === tool);
+  if (row) return row.generic === true || typeof row.short !== "string" ? "" : row.short;
+  return tool !== "shared" && cardHas(CARD_TOOL_SHORT, tool) ? CARD_TOOL_SHORT[tool] : "";
 }
 
 function cardAvatar(p, scale = 3) {
@@ -4536,6 +4581,20 @@ function openCardWizard(opts) {
   const launchModes = Array.isArray(catalog.launch_modes)
     ? catalog.launch_modes.filter((m) => m && (m.id === "full" || m.id === "safe") && typeof m.label === "string") : [];
   const modesOffered = launchModes.length > 0;
+  // ADR 0002: a new card starts safe where its tool has a safe mode and full where it has only full mode. The server says
+  // which tools are which; a server that does not (an older one) leaves the catalog's single default to decide.
+  const safeModeTools = Array.isArray(catalog.safe_mode_tools) ? catalog.safe_mode_tools.filter((t) => typeof t === "string") : null;
+  const fullModeTools = Array.isArray(catalog.full_mode_tools) ? catalog.full_mode_tools.filter((t) => typeof t === "string") : null;
+  const hasMode = (id) => launchModes.some((m) => m.id === id);
+  const startModeFor = (tool) => {
+    if (!modesOffered) return "safe";
+    if (safeModeTools && fullModeTools) {
+      if (safeModeTools.includes(tool) && hasMode("safe")) return "safe";
+      if (fullModeTools.includes(tool) && hasMode("full")) return "full";
+      return hasMode("safe") ? "safe" : launchModes[0].id;
+    }
+    return hasMode(catalog.default_launch_mode) ? catalog.default_launch_mode : "safe";
+  };
   const maxInstr = Number(catalog.max_instructions) > 0 ? Number(catalog.max_instructions) : 0;
   const storedInstr = existing && typeof existing.instructions === "string" && existing.instructions.trim() ? existing.instructions : null;
   const startPosition = existing ? cardPosition(existing) : null;
@@ -4544,12 +4603,16 @@ function openCardWizard(opts) {
   // reads it), and the person still takes every step and presses 建立; a card that exists never takes a draft.
   const draft = isNew && opts.draft && typeof opts.draft === "object" ? opts.draft : null;
   const draftTool = draft && tools.includes(draft.tool) ? draft.tool : null;
+  // A card that already names a hidden tool that is switched off (MCODE) keeps it: the tool is shown, said to be hidden, and
+  // cannot be picked again once left. toolCaps(...).unavailable is the server's sentence for it.
+  const existingTool = existing && existing.model && typeof existing.model.tool === "string" ? existing.model.tool : "";
+  const heldTool = existingTool && !tools.includes(existingTool) && toolCaps(catalog, existingTool).unavailable ? existingTool : "";
 
   const st = {
     step: Math.min(3, Math.max(1, Number(opts.start) || 1)),
     name: existing ? String(existing.name || "") : draft && typeof draft.name === "string" ? draft.name.slice(0, 200) : "",
     species: existing ? (store.get(OFFICE_SPECIES_KEY + existing.id, null) || "") : "",
-    tool: existing && existing.model && tools.includes(existing.model.tool) ? existing.model.tool
+    tool: existing && existing.model && (tools.includes(existing.model.tool) || heldTool) ? existing.model.tool
       : draftTool || (tools.includes("claude") ? "claude" : tools[0]),
     position: existing ? cardPosition(existing) : draft && CARD_POSITIONS.includes(draft.position) ? draft.position : null,
     modelId: existing && existing.model ? String(existing.model.model_id || "")
@@ -4560,8 +4623,7 @@ function openCardWizard(opts) {
     positionTouched: false,   // a position button was pressed: only then does a stored value this page cannot show give way
     // P34-2. A card with no stored mode is a safe one (an old card is not loosened by opening it); a new card starts on the
     // catalog's default. The mode is posted for a new card, and for an old one only when the person chose.
-    launchMode: !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe")
-      : (launchModes.some((m) => m.id === catalog.default_launch_mode) ? catalog.default_launch_mode : "safe"),
+    launchMode: "safe",   // set just below, once the tool is known
     launchModeTouched: false,
     // the text in the instructions box; custom is when it differs from the position's default, stored when the card has
     // its own text on disk, changed when the person typed or restored it (an untouched box posts nothing)
@@ -4587,6 +4649,7 @@ function openCardWizard(opts) {
     busy: false,
   };
   if (!OFFICE_SPECIES.includes(st.species)) st.species = "";
+  st.launchMode = !modesOffered ? "safe" : existing ? (existing.launch_mode === "full" ? "full" : "safe") : startModeFor(st.tool);
   let draftDropped = 0;
   if (draft) {
     const wanted = Array.isArray(draft.skillIds) ? [...new Set(draft.skillIds.filter((x) => typeof x === "string"))] : [];
@@ -4681,7 +4744,7 @@ function openCardWizard(opts) {
     const box = intentBox;
     if (!box) return;
     // a camp VBear does not start: nothing to say about launching, and nothing is asked
-    if (UNLAUNCHABLE_TOOLS.includes(st.tool)) { box.setAttribute("hidden", ""); setKids(box); return; }
+    if (toolNoSafe(catalog, st.tool)) { box.setAttribute("hidden", ""); setKids(box); return; }
     const key = intentKey();
     const entry = intentChecks.get(key);
     if (intentIsVerified()) { box.setAttribute("hidden", ""); setKids(box); return; }
@@ -4727,7 +4790,9 @@ function openCardWizard(opts) {
   // probably fits, the skills it names, the model it names) and to be kept as a label on the card. Nothing is loaded
   // into a tool by it, and every pre-fill is one click.
   const roleById = new Map(professions.filter((r) => r && typeof r.role_id === "string").map((r) => [r.role_id, r]));
-  const roleCampOk = (r) => st.tool !== "agy" && (st.tool === "shared" || r.tool === st.tool);
+  // a tool only full mode starts (AGY, Grok, MCODE) has no role templates VBear scans
+  const noTemplates = () => toolNoSafeLaunch(catalog, st.tool);
+  const roleCampOk = (r) => !noTemplates() && (st.tool === "shared" || r.tool === st.tool);
   const roleListed = (r) => r && r.kind !== "cli" && roleCampOk(r);   // the tool itself is not a profession
   function roleGroupOf(r) {
     const id = r && r.department && typeof r.department.id === "string" ? r.department.id : "";
@@ -4746,7 +4811,7 @@ function openCardWizard(opts) {
     const r = roleById.get(id);
     if (!r) return "目前索引找不到這個範本，標籤先保留。";
     if (r.kind === "cli") return "這是工具本身（等於不用範本）。";
-    if (st.tool === "agy") return "AGY 沒有可選的職業，這是之前存下的標籤。";
+    if (noTemplates()) return `${CARD_TOOL_SHORT[st.tool]} 沒有可選的職業，這是之前存下的標籤。`;
     if (!roleCampOk(r)) return `這是 ${CARD_TOOL_SHORT[r.tool] || r.tool || "別的陣營"} 的範本，這張卡的陣營是 ${CARD_TOOL_SHORT[st.tool] || st.tool}。`;
     if (r.unavailable && !pk.showUnused) return `${r.unavailable}，這個範本目前用不到。`;
     return null;
@@ -4928,7 +4993,7 @@ function openCardWizard(opts) {
       if (!box._rtInitial && !modal.contains(box)) { RT.listeners.delete(draw); return; }
       box._rtInitial = false;
       const wasSearch = Boolean(searchEl) && document.activeElement === searchEl;
-      const agy = st.tool === "agy";
+      const agy = noTemplates();
       const r = roleById.get(st.profession);
       const row = r ? cardPositionRow(r.department && r.department.id) : null;
       const shownZh = professions.some((x) => roleListed(x) && roleZhName(x.role_id));
@@ -4942,7 +5007,7 @@ function openCardWizard(opts) {
           agy ? null : el("button", { type: "button", class: "btn small", "data-cw": "profession-open", "aria-expanded": String(pk.open),
             on: { click: () => { pk.open = !pk.open; pk.shown = CARD_PAGE_SIZE; draw(); focusBy("data-cw", "profession-open"); } } },
           pk.open ? "收起" : st.profession ? "更換" : "挑一個")),
-        el("small", null, agy ? AGY_NO_PROFESSIONS : "你電腦裡現成的角色範本，可以不選。出發時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
+        el("small", null, agy ? NO_PROFESSIONS(st.tool) : "你電腦裡現成的角色範本，可以不選。出發時不會把範本的指示交給工具；這只是標籤，不會寫回來源。"),
         professionAutoActive() ? el("p", { class: "small cw-hint", "data-cw": "profession-auto-note" },
           `位置已依職業建議設成「${cardPositionRow(st.position) ? cardPositionRow(st.position).label : ""}」（只是推測，可改）。`) : null,
         reason ? el("div", { class: "cw-prof-bound", "data-cw": "profession-bound" }, el("span", { class: "small" }, reason),
@@ -5029,6 +5094,8 @@ function openCardWizard(opts) {
         class: "cw-choice", "data-launch-mode": m.id, "aria-pressed": String(st.launchMode === m.id), on: { click: () => setLaunchMode(m.id) } },
       el("span", null, m.label)))),
       el("p", { class: "small muted", "data-cw": "launch-mode-note" }, typeof cur.help === "string" ? cur.help : "", oldCard ? "　舊卡沒有設定，一律當安全模式。" : ""),
+      toolFullOnly(catalog, st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only-note" },
+        `${CARD_TOOL_LABEL[st.tool] || st.tool} 目前只能用完整模式，沒有安全模式的保護；出發時要先勾選「我了解」。`) : null,
       st.launchMode === "full" && catalog.full_mode_launchable !== true
         ? el("p", { class: "small cw-hint", "data-cw": "launch-mode-pending" },
           "完整模式的出發這個版本還沒開放：選了它，這張卡暫時不能出發；要現在出發請選安全模式。") : null);
@@ -5084,11 +5151,23 @@ function openCardWizard(opts) {
         "aria-pressed": String(st.tool === t), on: { click: () => setTool(t) } },
         officeSprite(speciesFor({ tool: t }), campOf({ tool: t }).key, 2),
         el("span", null, CARD_TOOL_LABEL[t] || t))));
+    // a card whose hidden tool is switched off: the tool is still shown (and selected), but it is not a choice to go back to
+    if (heldTool) toolGroup.appendChild(el("button", { type: "button", class: "cw-choice", "data-tool": heldTool, disabled: true,
+      title: toolCaps(catalog, heldTool).unavailable, "aria-pressed": String(st.tool === heldTool) },
+    officeSprite(speciesFor({ tool: heldTool }), campOf({ tool: heldTool }).key, 2),
+    el("span", null, `${CARD_TOOL_LABEL[heldTool] || heldTool}（隱藏中）`)));
+    const heldNote = st.tool === heldTool
+      ? el("p", { class: "small cw-hint", "data-cw": "tool-hidden-note" }, toolCaps(catalog, heldTool).unavailable) : null;
     const codexNote = st.tool === "codex" && catalog.codex_installed === false
       ? el("p", { class: "small cw-hint", "data-cw": "codex-missing" },
         "這台電腦找不到 Codex，沒有找到固定版本的安裝。卡可以先建立。") : null;
-    const agyNote = st.tool === "agy"
-      ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, (st.launchMode === "full" && catalog.full_mode_launchable === true ? AGY_FULL_NOTE : AGY_NOT_LAUNCHED) + "。") : null;
+    // a tool only full mode starts (AGY, Grok, MCODE): the card says so, and what full mode means for it
+    const noSafeLaunch = toolNoSafeLaunch(catalog, st.tool);
+    const agyNote = noSafeLaunch
+      ? el("p", { class: "small cw-hint", "data-cw": "agy-note" }, (st.launchMode === "full" && catalog.full_mode_launchable === true
+        ? `${CARD_TOOL_SHORT[st.tool]} 在${FULL_ONLY_HELP}`
+        : toolCaps(catalog, st.tool).note || AGY_NOT_LAUNCHED) + "。") : null;
+    const fullOnlyMark = toolFullOnly(catalog, st.tool) ? el("p", { class: "small cw-hint", "data-cw": "full-only" }, FULL_ONLY_MARK + "。") : null;
     const sharedNote = st.tool === "shared" ? el("p", { class: "small cw-hint", "data-cw": "shared-note" }, SHARED_NOT_LAUNCHED + "。") : null;
 
     const posButton = (id, label) => el("button", { type: "button", class: "cw-choice",
@@ -5114,9 +5193,9 @@ function openCardWizard(opts) {
     const legacyNote = legacy ? el("p", { class: "small cw-hint", "data-cw": "legacy-note" }, cardLegacyText(legacy) + "。按儲存才會改寫成新的位置。") : null;
     const campWord = (row) => `建議陣營：${CARD_TOOL_LABEL[row.suggested_tool] || row.suggested_tool}`
       + (row.suggested_model_alias ? `（${row.suggested_model_alias}）` : "")
-      + (UNLAUNCHABLE_TOOLS.includes(row.suggested_tool)
-        ? (row.suggested_tool === "agy" && st.launchMode === "full" && catalog.full_mode_launchable === true
-          ? "。AGY 只有完整模式才能從 VBear 出發" : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
+      + (toolNoSafe(catalog, row.suggested_tool)
+        ? (toolNoSafeLaunch(catalog, row.suggested_tool) && st.launchMode === "full" && catalog.full_mode_launchable === true
+          ? `。${CARD_TOOL_SHORT[row.suggested_tool]} 只有完整模式才能從 VBear 出發` : "。VBear 不會幫這個陣營的卡出發，只做紀錄") : "");
     const posBox = posRow ? el("div", { class: "cw-position-box", "data-cw": "position-box" },
       el("p", null, el("strong", null, `已選「${posRow.label}」：`), posRow.duty),
       el("p", { class: "small muted" }, (posRow.tier === "staff" ? "" : "任務卡上建議放：") + cardPositionPlaceText(posRow)),
@@ -5151,7 +5230,7 @@ function openCardWizard(opts) {
 
     return [
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "陣營"), el("div", { class: "cw-tools-wrap" }, toolGroup),
-        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, agyNote, sharedNote),
+        el("p", { class: "small muted" }, "陣營就是這張卡用哪個工具。"), codexNote, fullOnlyMark, agyNote, heldNote, sharedNote),
       el("div", { class: "cw-field" }, el("span", { class: "cw-label" }, "建議位置"), legacyNote, posGroup, posBox,
         el("p", { class: "small muted" }, "位置只是建議，放上任務卡時仍可以改。")),
       professionField(),
@@ -5188,7 +5267,9 @@ function openCardWizard(opts) {
     for (const sid of gone) st.equipped.delete(sid);
     removedNote = gone.length ? `換了陣營，已移除 ${gone.length} 張這個陣營不會讀的技能卡。` : "";
     // a role of Claude Code or Codex is not a role of Antigravity: the label does not stay on an AGY card
-    if (t === "agy") st.profession = "";
+    if (toolNoSafeLaunch(catalog, t)) st.profession = "";
+    // a new card's start follows its tool until the person picks a mode; a card that exists keeps its own
+    if (isNew && !st.launchModeTouched) st.launchMode = startModeFor(t);
     st.modelOther = false;   // the carried value shows as 其他 if the new tool's list lacks it
     draw();
     focusBy("data-tool", t);
@@ -6002,6 +6083,12 @@ function profileCard(p, opts = {}) {
   const legacyPos = cardLegacyPosition(p);
   const demo = isDemoCard(p, catalog);
   const launchOff = p.enabled === false;
+  // a tool only full mode starts says so on the card; a hidden tool that is switched off (MCODE) says why it cannot be used now
+  const caps = toolCaps(catalog, tool);
+  const fullOnlyNote = toolFullOnly(catalog, tool)
+    ? el("p", { class: "small rcard-fullonly", "data-pcard": "full-only" }, FULL_ONLY_MARK) : null;
+  const hiddenNote = caps.unavailable
+    ? el("p", { class: "small cw-error", "data-pcard": "tool-hidden", role: "status" }, caps.unavailable) : null;
   const name = p.name || p.id;
   const intents = p.permission_intents && typeof p.permission_intents === "object" ? p.permission_intents : {};
   let loadoutState = opts.loadout || null;
@@ -6031,12 +6118,13 @@ function profileCard(p, opts = {}) {
           positionBadge(pos),
           legacyPos ? el("span", { class: "small muted", "data-pcard": "legacy-position" }, cardLegacyText(legacyPos)) : null,
           demo ? badge("示範", "b-info", "範例資料，不是你建立的卡") : null,
+          caps.full && !caps.safe ? badge(FULL_ONLY_SHORT, "b-info", FULL_ONLY_MARK) : null,
           launchOff ? badge("停用", "b-mute", "已停用，但保留存檔") : null))),
-    slotsBox, lightBox, passLineBox,
+    fullOnlyNote, hiddenNote, slotsBox, lightBox, passLineBox,
     el("p", { class: "small muted", "data-pcard": "roster" }, "名冊，不代表正在出勤"),
     el("div", { class: "rcard-actions" },
-      handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff,
-        title: launchOff ? "這張卡已停用" : "先看這次出發會套用什麼，確認後才啟動",
+      handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff || Boolean(caps.unavailable),
+        title: launchOff ? "這張卡已停用" : caps.unavailable ? caps.unavailable : "先看這次出發會套用什麼，確認後才啟動",
         on: { click: () => handlers.launch(p) } }, "出發") : null,
       handlers.place ? el("button", { type: "button", class: "btn small", "data-pcard": "place",
         title: "把這張卡放進一張任務卡的隊伍（規劃、執行或審查位）",
@@ -6299,8 +6387,10 @@ async function viewTeam(params = {}) {
         on: { click: needCatalog(() => openStarterDeck({ catalog, profiles, onSaved: refresh })) } }, "用起手牌組開始") : null);
 
   const shown = filter ? profiles.filter((p) => p.model && p.model.tool === filter) : profiles;
+  // a camp is in the bar when the catalog offers it or a card names it (a hidden tool that is switched off shows only for its cards)
+  const barTools = new Set([...cardCatalogTools(catalog), ...profiles.map((p) => p.model && p.model.tool)]);
   const filterBar = el("div", { class: "seg", role: "group", "aria-label": "依陣營篩選" },
-    [["", "全部"], ...Object.entries(CARD_TOOL_LABEL)].map(([v, t]) => el("button", { type: "button", "data-filter": v || "all",
+    [["", "全部"], ...Object.entries(CARD_TOOL_LABEL).filter(([v]) => barTools.has(v) || v === filter)].map(([v, t]) => el("button", { type: "button", "data-filter": v || "all",
       "aria-pressed": String(filter === v), on: { click: () => { store.set("teamCardTool", v); viewTeam(); } } }, t)));
 
   // each card reads its own loadout (a read-only answer from memory), four at a time; the page does not wait for them
@@ -6584,6 +6674,7 @@ async function viewSettings() {
     el("p", { class: "lede" }, "選擇要盤點的來源。主控台只讀取你選的位置，不會修改任何技能或角色檔案。"),
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
     translationSettings(conf, saveConf),
+    setupSettings(),
     onboardingSettings(conf, saveConf),
     el("div", { class: "grid-2" },
       el("div", { class: "panel pad" },
@@ -6608,6 +6699,11 @@ async function viewSettings() {
           el("label", { class: "switch" },
             el("input", { type: "checkbox", checked: advanced, on: { change: (e) => saveConf({ advanced_mode: e.target.checked }).then(viewSettings) } }),
             el("div", null, el("div", { class: "t" }, "進階模式"), el("div", { class: "small muted" }, "顯示檔案路徑與診斷資訊。機密值在任何模式下都不會顯示。"))),
+          el("label", { class: "switch" },
+            el("input", { type: "checkbox", checked: conf.show_mcode === true, "data-setting": "show-mcode",
+              on: { change: (e) => saveConf({ show_mcode: e.target.checked }) } }),
+            el("div", null, el("div", { class: "t" }, "顯示 MCODE"),
+              el("div", { class: "small muted" }, "打開後，建角色卡時才能選 MCODE（MiniMax 的 AI 工具，" + FULL_ONLY_MARK.replace("這個 AI 工具", "") + "）。關掉不會刪除已有的 MCODE 角色卡，只是先不能選、不能用它出發。"))),
           el("label", { class: "switch" },
             el("span", { style: "width:17px" }),
             el("div", null, el("div", { class: "t" }, "外觀"),
@@ -7894,6 +7990,7 @@ function shellPanes(panes = (D.live && D.live.panes) || []) {
 }
 
 function shellLabel(p, home = D.live && D.live.home) {
+  if (p && p.setup) { const w = setupTerminalWords(p.setup); if (w.title) return w.title; }
   const trim = (x) => (x.length > 1 ? x.replace(/\/+$/, "") : x);
   const cwd = trim((p && p.cwd) || "");
   if (!cwd || (home && cwd === trim(home))) return "~";
@@ -8060,6 +8157,7 @@ async function viewTerminal(paneId) {
 
     const notices = [];
     if (isShell) {
+      if (pane && pane.setup) notices.push(setupTerminalNotice(pane.setup));
       notices.push(notice("info", SHELL_NOTE + " 同一個終端機在另一個分頁打開時，輸入會移到那邊；這裡按「接管操作」可以拿回來。"));
     } else if (mode === "control") {
       notices.push(freshControl ? freshTerminalNotice(doRelease)
@@ -8095,6 +8193,7 @@ async function viewTerminal(paneId) {
       actions.push(el("button", { class: "btn small primary", type: "button", on: { click: manualReconnect } }, "重新連線"));
     }
     if (!sessionGone) actions.push(closeSessionButton(paneId, backHash));
+    if (pane && pane.setup) actions.push(el("a", { class: "btn small primary", "data-term": "back-setup", href: "#/setup" }, "回開始設定"));
     if (linkedTask) actions.push(el("a", { class: "btn small", "data-term": "back-task", href: `#/workbench?task=${encodeURIComponent(linkedTask.id)}` }, TERM_BACK_TASK_LABEL));
     actions.push(el("a", { class: "btn small", "data-term": "back", href: backHash }, isShell ? TERM_BACK_SHELL_LABEL : TERM_BACK_ROLE_LABEL));
     setKids(actionWrap, actions);
@@ -9799,6 +9898,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     let current = null;   // the preview the confirm button refers to
     let busy = false;
     let ackBox = null;    // "I know this Claude Code version is unverified" (only for such previews)
+    let fullAckBox = null;   // "我了解" for a full-mode preview (ADR 0002): the button stays off until it is ticked
     const liveHome = D.live && typeof D.live.home === "string" ? D.live.home : "";
     const workdirInput = el("input", { type: "text", class: "input", id: "agent-launch-workdir",
       placeholder: `資料夾的絕對路徑，例如 ${liveHome || "/Users/you"}/projects/demo`, autocomplete: "off" });
@@ -9831,17 +9931,24 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     // A card whose mode is exactly "full" departs with the person's own settings and no limit from VBear (P34-3); any
     // other value is the safe launch, as before.
     const isFull = p.launch_mode === "full";
-    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : tool === "agy" ? "AGY" : "";
-    // VBear has no safe launch for Antigravity: the pass says so first and offers no preview and no start, so
-    // there is no limit and no shield on it to read. In full mode an AGY card goes like any other.
-    const isAgy = tool === "agy" && !isFull;
-    if (isAgy) previewBtn.disabled = true;
+    // the tool's name on the pass comes from the tool list (a generic card has none), not from a test of one tool's id
+    const cliName = isClaude ? "Claude Code" : isCodex ? "Codex CLI" : toolShortName(agentBuilderCatalog, tool);
+    // VBear has no safe launch for a tool the list marks as full mode only without a safe launch (Antigravity, Grok, MCODE):
+    // the pass says so first and offers no preview and no start, so there is no limit and no shield on it to read. In
+    // full mode such a card goes like any other.
+    const toolCap = toolCaps(agentBuilderCatalog, tool);
+    const noSafeStart = toolCap.full && !toolCap.safe && !isFull;
+    const noSafeNote = toolCap.note || AGY_NOT_LAUNCHED;
+    if (noSafeStart) previewBtn.disabled = true;
     function needsAck(pv) { return Boolean(isClaude && !isFull && pv && pv.cli && pv.cli.verified === false); }
+    // a preview that can start in full mode: the person must have ticked 我了解 (the server refuses without it as well)
+    function needsFullAck(pv) { return Boolean(pv && pv.launchable && pv.launch_mode === "full"); }
+    const fullAckOk = () => Boolean(fullAckBox && fullAckBox.checked);
     // Why 確認啟動 is off, in words (design 4.3): the button is never off without a reason beside it.
     function whyOff() {
       if (busy) return "";
       // the notice at the top of the pass already says it, once; here only where to read it
-      if (isAgy) return "現在不能出發：見上方「這張角色卡目前無法啟動」。";
+      if (noSafeStart) return "現在不能出發：見上方「這張角色卡目前無法啟動」。";
       if (!current) {
         if (lastPreview && !lastPreview.launchable) {
           const reasons = (lastPreview.reasons || []).map((r) => r && r.message).filter(Boolean);
@@ -9853,10 +9960,12 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       if (needsAck(current) && !(ackBox && ackBox.checked)) {
         return "現在不能出發：還沒有勾選「我知道這個版本未驗證，仍要啟動」。";
       }
+      if (needsFullAck(current) && !fullAckOk()) return "現在不能出發：還沒有勾選「我了解」。";
       return "";
     }
     function syncConfirm() {
-      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked));
+      confirmBtn.disabled = !current || (needsAck(current) && !(ackBox && ackBox.checked))
+        || (needsFullAck(current) && !fullAckOk());
       why.textContent = whyOff();
     }
 
@@ -9864,6 +9973,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       current = null;
       lastPreview = null;
       ackBox = null;
+      fullAckBox = null;
       confirmBtn.disabled = true;
       setKids(out, message ? el("p", { class: "small muted" }, message) : null);
       why.textContent = busy ? "" : whyOff();
@@ -9880,16 +9990,16 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const modalElem = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
       el("div", { class: "modal-box modal-wide" },
         el("h2", { id: titleId }, `出發通行證：${p.name || p.id}`),
-        isAgy ? el("div", { class: "notice warn", "data-pass": "agy-not-launchable" },
+        noSafeStart ? el("div", { class: "notice warn", "data-pass": "agy-not-launchable" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
-          el("div", null, el("strong", null, "這張角色卡目前無法啟動"), el("p", { class: "small" }, AGY_NOT_LAUNCHED)))
+          el("div", null, el("strong", null, "這張角色卡目前無法啟動"), el("p", { class: "small" }, noSafeNote)))
         : el("p", { class: "small muted" }, isFull
           ? "出發前先看這張通行證：這次會執行的指令，和 VBear 沒有限制的地方。確認後才會啟動。"
           : "出發前先看這張通行證：這次出發實際會套上的限制，和它擋不到的地方。確認後才會啟動角色。"),
-        isAgy ? null : el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
-        isAgy ? null : el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
-        isAgy ? null : workdirRange,
-        isAgy || isFull ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
+        noSafeStart ? null : el("label", { class: "small", for: "agent-launch-workdir" }, PASS_WORKDIR_LABEL),
+        noSafeStart ? null : el("div", { class: "row fp-paste" }, workdirInput, pickBtn),
+        noSafeStart ? null : workdirRange,
+        noSafeStart || isFull ? null : el("label", { class: "row small", for: "agent-launch-commit", style: "gap:8px; align-items:flex-start" },
           commitBox,
           el("span", null, PASS_COMMIT_ACK, el("span", { class: "small muted" }, " 不勾選就無法啟動。"))),
         out,
@@ -9897,7 +10007,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         el("div", { class: "modal-actions" }, cancelBtn, previewBtn, confirmBtn)));
     document.body.append(modalElem);
     const closeModal = withModalA11y(modalElem, () => modalElem.remove());
-    (isAgy ? cancelBtn : workdirInput).focus();
+    (noSafeStart ? cancelBtn : workdirInput).focus();
     why.textContent = whyOff();
 
     // A reason it cannot go, with the button that leads to where it is changed (PASS_FIXES). The editor closes when
@@ -9929,6 +10039,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 
     function renderPreview(pv) {
       const kids = [];
+      fullAckBox = null;
       if (!pv.launchable) {
         kids.push(el("div", { class: "notice warn", "data-pass": "blocked" },
           el("span", { class: "ico", "aria-hidden": "true" }, "!"),
@@ -9939,6 +10050,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
         if (pv.launch_mode === "full") {
           // P34-3: nothing is prepared and nothing is limited, so there is no scratch folder, no version check and no shield
           kids.push(passFullFront(pv));
+          kids.push(fullAckNotice());
           kids.push(el("dl", { class: "kv small" },
             el("dt", null, "執行程式"), el("dd", { class: "mono" }, `${cliName ? cliName + " · " : ""}${pv.cli ? pv.cli.binary : ""}`),
             el("dt", null, "版本驗證"), el("dd", null, "不適用：這是你自己的工具，VBear 沒有執行它、沒有檢查版本"),
@@ -10123,6 +10235,18 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
           progress));
     }
 
+    // ADR 0002: what a full launch can do, in the words of an ordinary person, and the box that must be ticked first
+    function fullAckNotice() {
+      fullAckBox = el("input", { type: "checkbox", id: "agent-launch-full-ack", "data-pass": "full-ack-box", on: { change: syncConfirm } });
+      return el("div", { class: "notice warn", "data-pass": "full-ack" },
+        el("span", { class: "ico", "aria-hidden": "true" }, "!"),
+        el("div", { class: "small" },
+          el("strong", null, "這個員工可以動你電腦上的任何檔案"),
+          el("p", { style: "margin:4px 0" }, "完整模式沒有任何保護：它能讀、改、刪你電腦上的檔案，也能上網。看懂之後再勾選才能出發。"),
+          el("label", { class: "row", for: "agent-launch-full-ack", style: "gap:8px; align-items:flex-start" },
+            fullAckBox, el("span", null, "我了解"))));
+    }
+
     function unverifiedBox(pv) {
       ackBox = el("input", { type: "checkbox", id: "agent-launch-unverified", on: { change: syncConfirm } });
       const { verifyBtn, progress } = verifyControl(pv);
@@ -10140,7 +10264,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     }
 
     async function doPreview() {
-      if (busy || isAgy) return;
+      if (busy || noSafeStart) return;
       busy = true;
       previewBtn.disabled = true;
       invalidate("正在產生預覽…");
@@ -10175,7 +10299,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     if (launchOpts.autoPreview !== false && workdirInput.value.trim() && (isFull || commitBox.checked)) doPreview();
 
     async function doLaunch() {
-      if (busy || !current || isAgy) return;
+      if (busy || !current || noSafeStart) return;
+      if (needsFullAck(current) && !fullAckOk()) return;   // the button is off too; this holds if a click gets through anyway
       busy = true;
       confirmBtn.disabled = true;
       const pv = current;
@@ -10183,7 +10308,8 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
       try {
         const res = await api.post("/api/native/agent-launches", {
           preview_id: pv.preview_id, expected_settings_digest: pv.settings_digest, user_confirmed: true,
-          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}) });
+          ...(needsAck(pv) ? { accept_unverified_cli: Boolean(ackBox && ackBox.checked) } : {}),
+          ...(needsFullAck(pv) ? { accept_full_mode: fullAckOk() } : {}) });
         toast("已啟動（由角色卡啟動，VBear 管理）");
         const sid = res.launch.session.session_id;
         // this tab started it: the terminal may take the keyboard once it is open (see grantFreshTerminal)
@@ -10647,9 +10773,9 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
 // rule enforced on screen is the one the server already enforces for a review: it counts when the reviewer's and the
 // executor's model families are both known and different.
 
-const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", agy: "google", shared: "unknown" };
+const TEAM_TOOL_FAMILY = { claude: "anthropic", codex: "openai", agy: "google", grok: "xai", mcode: "minimax", shared: "unknown" };
 const TEAM_FAMILY_LABEL = { anthropic: "Anthropic（Claude）", openai: "OpenAI（Codex）", google: "Google（Gemini）",
-  minimax: "MiniMax", other: "其他", unknown: "不明" };
+  xai: "xAI（Grok）", minimax: "MiniMax", other: "其他", unknown: "不明" };
 const TEAM_SLOTS = [
   { key: "planner", label: "規劃位", short: "規劃", position: "planner", fit: "CEO、PM" },
   { key: "executor", label: "執行位", short: "執行", position: "executor", fit: "全端工程師、社群媒體經理、藝術總監" },
@@ -10919,8 +11045,8 @@ function nextStepAction(flow, opts = {}) {
   const launches = !startable ? [] : holders
     .filter((r) => r && typeof r.profile_id === "string" && r.profile_id)
     .filter((r) => !profiles || profiles.some((c) => c && c.id === r.profile_id && c.enabled !== false))
-    // VBear does not start Antigravity: an AGY card gets no button here (the step is done in its own terminal)
-    .filter((r) => teamCardTool(r) !== "agy")
+    // The safe launch does not start Antigravity, Grok or MCODE: such a card gets no button here (the step is done in its own terminal)
+    .filter((r) => !toolNoSafeLaunch(null, teamCardTool(r)))
     .map((r) => ({ name: String(r.name || "未命名"), profile_id: r.profile_id }));
   const recordWords = NEXT_STEP_RECORD[step.key];
   return { step: step.key, ask: NEXT_STEP_ASK[step.key], turn: ns.turn, manual: !auto, launches, recordWords,
@@ -11229,7 +11355,7 @@ function teamBoard(opts) {
         el("button", { type: "button", class: "btn small", "data-act": "clear", on: { click: () => clearSlot(def.key) } }, "拿下來"),
         // from a place, the launch check opens with this task card's folder already in it (design 3.6); not while there
         // are changes that only exist on this page, and not for a card that is gone
-        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && teamCardTool(entry) !== "agy"
+        entry.profile_id && state.state !== "gone" && (!flow || !dirty) && !toolNoSafeLaunch(null, teamCardTool(entry))
           ? el("a", { class: "btn small", "data-act": "launch", title: "先看這次出發會套用什麼，確認後才啟動；資料夾會帶入這張任務卡的",
               href: `#/workbench?task=${encodeURIComponent(task.id)}&profile=${encodeURIComponent(entry.profile_id)}&launch=1&step=${STEP_OF_SLOT[def.key]}` }, "出發") : null) : null,
       problem ? el("p", { class: "ts-problem small", "data-slot-problem": problem.code, role: "status" }, el("strong", null, "不算數："), problem.text, el("span", { class: "muted" }, `（${problem.why}）`)) : null,
@@ -12072,6 +12198,7 @@ async function route() {
     if (a.dataset.nav === top) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
   syncNavMenu(top);
+  setupTick = null;
   clearInterval(liveTimer);
   try {
     if (top === "home") await viewHome();
@@ -12086,6 +12213,8 @@ async function route() {
     else if (top === "team") await viewTeam(params);
     else if (top === "projects") await viewProjects(parts[1]);
     else if (top === "settings") await viewSettings();
+    else if (top === "setup") await viewSetup();
+    else if (top === "welcome") await viewWelcome();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
     else if (top === "terminals") await viewTerminals();
     else if (top === "office") await viewOffice();
@@ -12125,6 +12254,7 @@ async function route() {
     };
   }
   if (top === "office") liveTick = officeTick;
+  if (top === "setup") liveTick = setupTick;
   if (top === "chat") liveTick = chatTick;
   if (top === "meetings") liveTick = meetingsTick;
   if (top === "staffing") liveTick = staffingTick;
@@ -12142,6 +12272,438 @@ async function route() {
     };
   }
   if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
+}
+
+// ---------- the Claude Code note (v0.12) ----------------------------------------------------------------------------------
+// Meetings, staffing meetings, chat and the translation of skill descriptions only work through Claude Code. On those pages
+// one shared note says so, how to get it, and a button to the start-up page. Whether Claude Code is ready comes from the
+// start-up page's own status (GET /api/setup/tools); there is no second check. The note never switches the page off. When
+// the status cannot be read, or does not list Claude Code, nothing is shown: no claim is made that has no source.
+const NEEDS_CLAUDE_TITLE = "這個功能目前需要 Claude Code";
+const NEEDS_CLAUDE_HOW = "Claude Code 是 Anthropic 的 AI 工具，要有 Claude 的付費方案才能用。到「開始設定」頁安裝並登入它，狀態變成「就緒」，這個功能就能用了。";
+const NEEDS_CLAUDE_GO = "到開始設定";
+
+// "needed" | "ready" | "unknown", from the body of GET /api/setup/tools.
+function claudeCodeNeed(res) {
+  const rows = res && typeof res === "object" && Array.isArray(res.tools) ? res.tools : [];
+  const r = rows.find((t) => t && typeof t === "object" && t.id === "claude");
+  if (!r) return "unknown";
+  if (r.state === "ready" && r.ready === true) return "ready";
+  if ((r.state === "not_installed" || r.state === "not_logged_in") && r.ready !== true) return "needed";
+  return "unknown";
+}
+
+function needsClaudeNote(what) {
+  return el("div", { class: "notice info", "data-needs-claude": "note" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null,
+      el("b", null, NEEDS_CLAUDE_TITLE),
+      what ? el("p", { class: "small", style: "margin:4px 0 0" }, what) : null,
+      el("p", { class: "small", style: "margin:4px 0 0" }, NEEDS_CLAUDE_HOW),
+      el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small primary", href: "#/setup", "data-needs-claude": "go" }, NEEDS_CLAUDE_GO))));
+}
+
+// An empty place that fills itself with the note once the status is known; the page does not wait for it. `token` is the
+// page's seq, so an answer that arrives after the person has gone elsewhere is dropped. `wanted` lets a page hold the note
+// back for a case where it does not apply (translation with another engine).
+function needsClaudeSlot(token, what, wanted) {
+  const slot = el("div", { "data-needs-claude": "slot" });
+  api.get("/api/setup/tools").then((res) => {
+    if (token !== seq || claudeCodeNeed(res) !== "needed" || (wanted && !wanted())) return;
+    setKids(slot, needsClaudeNote(what));
+  }).catch(() => {});
+  return slot;
+}
+// ---------- end of the Claude Code note ---------------------------------------------------------------------------------
+
+// ---------- the first-time page (第一次打開 VBear, v0.12) -----------------------------------------------------------------
+// Shown once, only in the app window, before the start-up page: VBear is not signed with an Apple developer account, so the Mac
+// may stop it the first time (and again after an update). The page says where to press 「強制打開」. The picture is drawn here
+// with el() as an illustration (not a screenshot, so nothing of anyone's real settings is in it) and says so. Whether this is the
+// app window is judged the way the folder chooser is: the window gives the page a native message handler (folderBridge); a
+// browser does not. That it was seen is one yes/no in the server's config (welcome_seen), written through /api/config.
+const WELCOME_TITLE = "第一次打開 VBear";
+const WELCOME_LEDE = "VBear 還沒有向 Apple 申請簽章（申請要每年付費），所以 Mac 第一次打開它時，可能會說「無法打開」或「Apple 無法驗證」。這不代表 VBear 是病毒，只是 Apple 沒有看過它；VBear 的程式碼是公開的，任何人都能檢查。";
+const WELCOME_PASSED = "你現在看得到這一頁，表示 VBear 已經打開了，這一關你已經過了。之後更新或重新安裝 VBear 時，Mac 可能再擋一次，到時候照下面的步驟做。";
+const WELCOME_STEPS = [
+  "Mac 擋下 VBear 時，先在跳出來的視窗按「完成」（或「取消」）。不要按「移到垃圾桶」。",
+  "打開「系統設定」，點左邊的「隱私權與安全性」。",
+  "往下捲到「安全性」那一區，會看到一行「已阻擋 VBear」，按它旁邊的「強制打開」。",
+  "輸入你的 Mac 密碼（或用指紋），再按「打開」。之後就不會再擋了。",
+];
+const WELCOME_DIAGRAM_LABEL = "示意圖：系統設定的「隱私權與安全性」，按鈕「強制打開」在「安全性」那一區";
+const WELCOME_DIAGRAM_NOTE = "上面是示意圖，不是你電腦的真實畫面。你的系統設定的樣子與字，會依 macOS 版本稍有不同，位置也可能不一樣；照著文字步驟找就好。";
+const WELCOME_SAVE_FAILED = "沒有存成「已看過」，下次打開 VBear 可能還會看到這一頁。";
+
+function welcomeIsApp() { return folderBridge() !== null; }
+// The home page asks this only after the start-up gate said the person is to go there.
+function welcomeWanted(configRes) {
+  const conf = configRes && configRes.config;
+  return welcomeIsApp() && !!conf && typeof conf === "object" && conf.welcome_seen === false;
+}
+
+function welcomeDiagram() {
+  const num = (n) => el("span", { class: "welcome-num", "aria-hidden": "true" }, String(n));
+  return el("div", { class: "welcome-diagram", role: "img", "aria-label": WELCOME_DIAGRAM_LABEL, "data-welcome": "diagram" },
+    el("div", { class: "welcome-titlebar", "aria-hidden": "true" }, "系統設定"),
+    el("div", { class: "welcome-window", "aria-hidden": "true" },
+      el("ul", { class: "welcome-side" },
+        el("li", null, "一般"),
+        el("li", null, "外觀"),
+        el("li", { class: "welcome-side-on" }, num(2), "隱私權與安全性"),
+        el("li", null, "電池")),
+      el("div", { class: "welcome-pane" },
+        el("div", { class: "welcome-pane-title" }, "安全性"),
+        el("p", { class: "welcome-blocked" }, "已阻擋 VBear，以保護你的 Mac。"),
+        el("span", { class: "welcome-mark", "data-welcome": "mark-button" }, num(3), "強制打開"))));
+}
+
+async function viewWelcome() {
+  const token = seq;
+  const main = claim(token);
+  if (token !== seq) return;
+  if (!welcomeIsApp()) { location.hash = "#/setup"; return; }       // a browser has no such page
+  const go = async () => {
+    let saved = true;
+    try { await api.post("/api/config", { welcome_seen: true }); }
+    catch (e) { saved = false; }
+    location.hash = "#/setup";
+    if (!saved) toast(WELCOME_SAVE_FAILED);
+  };
+  const skip = el("button", { class: "btn", type: "button", "data-welcome": "skip" }, "略過");
+  const next = el("button", { class: "btn primary", type: "button", "data-welcome": "next" }, "我知道了，開始設定");
+  let busy = false;
+  for (const b of [skip, next]) b.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true; skip.disabled = true; next.disabled = true;
+    await go();
+  });
+  setKids(main, el("h1", null, WELCOME_TITLE), el("p", { class: "lede" }, WELCOME_LEDE),
+    el("p", { class: "setup-text", "data-welcome": "passed" }, WELCOME_PASSED),
+    el("ol", { class: "welcome-steps" }, WELCOME_STEPS.map((t) => el("li", { "data-welcome": "step" }, t))),
+    welcomeDiagram(),
+    el("p", { class: "small muted setup-text", "data-welcome": "diagram-note" }, WELCOME_DIAGRAM_NOTE),
+    el("div", { class: "row welcome-foot" }, next, skip));
+}
+
+// ---------- the start-up page (開始設定, v0.12) ---------------------------------------------------------------------------
+// The first page a new person sees: every AI tool VBear can borrow, with where it stands (還沒安裝 / 還沒登入 / 就緒) and the
+// button for the next step. What it shows comes from GET /api/setup/tools, which reads each tool's version and (for Claude
+// Code and Codex) its own login check; AGY, Grok and MCODE have no such check, so the person says 「我登入好了」. The buttons
+// that install or log in only name the tool and the action: the server picks the line and the runtime types it into a terminal.
+// Nothing here reads a login folder, shows a login code or keeps the output of a check.
+const SETUP_TITLE = "開始設定";
+const SETUP_STATE = {
+  not_installed: ["還沒安裝", "b-warn"],
+  not_logged_in: ["還沒登入", "b-warn"],
+  ready: ["就緒", "b-ok"],
+};
+const SETUP_LEDE = "VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。挑你有方案的準備就好，只要有一個就緒，就能開始用。";
+const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先從下面挑一個你有方案的，按「安裝」，裝好再按「登入」。";
+const SETUP_REOPEN_HINT = "安裝好之後如果這裡還是顯示「還沒安裝」，可能要重新打開 VBear，它才找得到剛裝好的程式。";
+const SETUP_ACTION_WORD = { install: "安裝", login: "登入" };
+const SETUP_LEAVE_LABEL = "開始使用";
+const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使用。";
+const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
+// The choice of the daily limit (US$): the amounts, and one plain sentence each in terms of the default limits (a chat turn
+// costs at most US$0.5, a meeting at most US$1.5). The default is the server's, US$3.
+const SETUP_DAILY_CHOICES = [
+  { usd: 1, note: "以預設的上限算：聊天每回合最多 US$0.5，最壞約 2 回合就用完；一場會議最多 US$1。適合先試試看。" },
+  { usd: 3, note: "以預設的上限算：聊天每回合最多 US$0.5，最壞約 6 回合；一場會議最多 US$1.5，約 2 場。適合偶爾用。" },
+  { usd: 10, note: "以預設的上限算：聊天每回合最多 US$0.5，最壞約 20 回合；一場會議最多 US$1.5，約 6 場。適合每天都會用。" },
+];
+const SETUP_DAILY_DEFAULT = 3;
+const SETUP_DAILY_LIMIT_WORDS = {
+  meeting_usd: "每場會議的上限", per_call_usd: "會議每次呼叫的上限", staffing_total_usd: "每份組隊提案的上限",
+  staffing_proposal_call_usd: "組隊 CEO 每次呼叫的上限", chat_per_turn_usd: "聊天每回合的上限",
+};
+const setupUsd = (n) => `US$${n}`;
+
+// What the person is told after choosing: the day, and each limit that had to come down to it (the server only brings down).
+function setupDailyResultWords(res) {
+  const r = res && typeof res === "object" ? res : {};
+  const head = `已設定：每天最多 ${setupUsd(r.daily_usd)}。`;
+  const moved = (Array.isArray(r.changed) ? r.changed : []).filter((c) => c && SETUP_DAILY_LIMIT_WORDS[c.limit] && c.from !== c.to);
+  if (!moved.length) return head + "其他上限本來就在這個金額以下，沒有更動。";
+  return head + "為了不超過它，也把這些上限調低了："
+    + moved.map((c) => `${SETUP_DAILY_LIMIT_WORDS[c.limit]} ${setupUsd(c.from)} 改成 ${setupUsd(c.to)}`).join("；") + "。";
+}
+
+let setupTick = null;               // set by the page while it is open: the quiet refresh route() runs every few seconds
+const setupOpened = new Set();        // "<tool>:install" opened from this page since VBear was opened (for the hint after it)
+const SETUP_TRY_ESTIMATE = "大約花不到 US$0.01";
+const setupTry = new Map();           // tool id -> { phase: "confirm" | "running" | "done", success?, message? } of 「試一下」 on this page
+
+// 「試一下」 of one card: it is for a tool that is installed. The first press only shows the estimate and asks again; the second
+// sends the confirmation. The result is the one plain sentence the server wrote (it never has the tool's own words in it).
+// -> { show, note, buttons: [{ key, label, kind }], result: { text, ok } | null }
+function setupTryView(row, st) {
+  const r = row && typeof row === "object" ? row : {};
+  if (r.installed !== true) return { show: false, note: "", buttons: [], result: null };
+  const name = r.short || r.name || r.id || "這個 AI 工具";
+  const s = st && typeof st === "object" ? st : {};
+  if (s.phase === "confirm") {
+    return { show: true, buttons: [{ key: "try-confirm", label: "確認，試一下", kind: "primary" }, { key: "try-cancel", label: "取消", kind: "" }], result: null,
+      note: `再按一次「確認，試一下」才會送出：會送一句很短的話給 ${name}，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+  }
+  if (s.phase === "running") {
+    return { show: true, buttons: [], result: null, note: `正在試 ${name}……最多等一分鐘，請不要關掉這一頁。` };
+  }
+  const result = s.phase === "done" ? { text: String(s.message || ""), ok: s.success === true } : null;
+  return { show: true, buttons: [{ key: "try", label: s.phase === "done" ? "再試一次" : "試一下", kind: "" }], result,
+    note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+}
+
+// What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
+function setupToolView(row) {
+  const r = row && typeof row === "object" ? row : {};
+  const [label, cls] = SETUP_STATE[r.state] || ["未知", "b-mute"];
+  const buttons = [];
+  let note = "";
+  if (r.state === "not_installed") {
+    buttons.push({ key: "install", label: "安裝", kind: "install" });
+    if (r.install_problem === "version_unreadable") note = "電腦上找得到這個程式，但讀不出它的版本，所以先當作還沒安裝好。可以按「安裝」重新裝一次。";
+    else if (setupOpened.has(`${r.id}:install`)) note = SETUP_REOPEN_HINT;
+  } else if (r.state === "not_logged_in") {
+    const regions = Array.isArray(r.login_regions) ? r.login_regions : [];
+    if (regions.length) regions.forEach((g) => buttons.push({ key: `login-${g.id}`, label: `登入（${g.label}）`, kind: "login", region: g.id }));
+    else buttons.push({ key: "login", label: "登入", kind: "login" });
+    if (r.can_mark) {
+      buttons.push({ key: "mark", label: "我登入好了", kind: "mark" });
+      note = "這個 AI 工具沒辦法讓 VBear 自動查登入狀態。在瀏覽器登入完，回到這裡按「我登入好了」。";
+    } else if (r.login === "unknown") {
+      note = "查不出目前有沒有登入。可以按「重新檢查」再試一次，或按「登入」。";
+    } else {
+      note = "登入完回到這一頁，VBear 會自己更新。";
+    }
+  } else if (r.state === "ready" && r.can_mark) {
+    buttons.push({ key: "unmark", label: "其實還沒登入", kind: "unmark" });
+    note = "這是你按「我登入好了」標記的，VBear 沒辦法自己確認。";
+  }
+  return { state: r.state, label, cls, version: typeof r.version === "string" ? r.version : "", note, buttons };
+}
+
+// The plain-words explanation of a terminal opened from the start-up page (shown above the terminal, and in its tab name).
+function setupTerminalWords(setup) {
+  const s = setup && typeof setup === "object" ? setup : {};
+  const name = TOOL[s.tool] || String(s.tool || "");
+  const what = SETUP_ACTION_WORD[s.action] || "";
+  const lines = [];
+  if (s.action === "install") {
+    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
+    lines.push("畫面會跑一陣子字，跑完停下來、出現新的一行提示，就是裝好了。");
+    lines.push("裝好後回到「開始設定」，按「重新檢查」。如果還是顯示還沒安裝，可能要重新打開 VBear。");
+  } else if (s.action === "login") {
+    lines.push(`VBear 已經替你在這個終端機送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push("接下來瀏覽器會跳出登入頁，在那裡登入你自己的帳號。登入的過程不會經過 VBear。");
+    lines.push("登入完回到「開始設定」。沒辦法自動查登入的 AI 工具，要在那裡按「我登入好了」。");
+  }
+  return { title: name && what ? `${name} ${what}` : "", lines };
+}
+
+function setupTerminalNotice(setup) {
+  const w = setupTerminalWords(setup);
+  return el("div", { class: "notice info", "data-setup": "terminal-note" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, el("b", null, w.title), w.lines.map((t) => el("p", { class: "small", style: "margin:4px 0 0" }, t))));
+}
+
+// The home page's gate. The server settles it: a person with no ready tool who has not finished is sent to the start-up; one
+// who already has a ready tool when they upgrade is counted as done and told once. A config that cannot be read, or one that
+// does not say (no setup_done), forces nothing.
+function setupGateWanted(configRes) {
+  return !!(configRes && configRes.config && typeof configRes.config === "object" && configRes.config.setup_done === false);
+}
+// No question to the server: the notice, if the config says one is waiting, is shown and put away at once.
+function setupGateQuiet(configRes) {
+  const conf = configRes && configRes.config;
+  if (!conf || typeof conf !== "object") return { redirect: false, notice: false };
+  const notice = conf.setup_notice === true;
+  if (notice) { conf.setup_notice = false; api.post("/api/config", { setup_notice: false }).catch(() => {}); }
+  return { redirect: false, notice };
+}
+async function setupGate(configRes) {
+  if (!setupGateWanted(configRes)) return setupGateQuiet(configRes);
+  try {
+    const r = await api.post("/api/setup/settle", {});
+    if (r.setup_done !== true) return { redirect: true, notice: false };
+    configRes.config.setup_done = true;
+    configRes.config.setup_notice = r.setup_notice === true;
+  } catch (_) {
+    return { redirect: false, notice: false };
+  }
+  return setupGateQuiet(configRes);
+}
+
+function setupUpgradeNotice() {
+  return el("div", { class: "notice info", "data-setup": "upgrade-notice" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, SETUP_UPGRADE_NOTICE, " ", el("a", { href: "#/setup" }, "看看開始設定")));
+}
+
+// The settings page's way back to the start-up page.
+function setupSettings() {
+  return el("section", { class: "panel pad", "data-settings": "setup" },
+    el("h2", { style: "margin-bottom:6px" }, SETUP_TITLE),
+    el("p", { class: "small muted" }, "看每個 AI 工具裝好了沒、登入了沒，也能在那裡補裝其他的。"),
+    el("a", { class: "btn", href: "#/setup", "data-setup": "open" }, "回到開始設定"));
+}
+
+function setupToolKey(rows) {
+  return JSON.stringify((rows || []).map((r) => [r.id, r.state, r.version, r.login, r.marked_at, r.install_problem]));
+}
+
+async function openSetupTerminal(toolId, action, region) {
+  const body = { tool: toolId, action };
+  if (region) body.region = region;
+  const r = await api.post("/api/setup/terminals", body);
+  if (action === "install") setupOpened.add(`${toolId}:install`);
+  location.hash = `#/term/${encodeURIComponent(r.session.session_id)}`;
+}
+
+async function viewSetup() {
+  const token = seq;
+  let data;
+  setupTry.clear();
+  try { data = await api.get("/api/setup/tools?force=1"); }      // coming in is a fresh look; the refresh below may be a kept one
+  catch (e) {
+    const main = claim(token);
+    if (token === seq) setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + e.message));
+    return;
+  }
+  let dailyNow = null;             // the daily limit in force (a number), or null when it could not be read
+  try { const d = await api.get("/api/setup/daily-limit"); dailyNow = typeof d.daily_usd === "number" ? d.daily_usd : null; }
+  catch (e) { dailyNow = null; }
+  let dailyResult = "";            // what the last choice did, in words
+  let dailyError = "";
+  const main = claim(token);
+  if (token !== seq) return;
+  let shown = data;
+  let busy = false;
+  const host = el("div", { "data-setup": "page" });
+  const refresh = async (quiet, force) => {
+    try {
+      const next = await api.get(force ? "/api/setup/tools?force=1" : "/api/setup/tools");
+      if (token !== seq) return;
+      const changed = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
+      shown = next;
+      if (changed || !quiet) draw();
+      if (!quiet) toast("已重新檢查");
+    } catch (e) { if (!quiet) toast("重新檢查失敗：" + e.message); }
+  };
+  const run = async (btn, fn) => {
+    if (busy) return;
+    busy = true; btn.disabled = true;
+    try { await fn(); }
+    catch (e) { toast(e.message); }
+    finally { busy = false; btn.disabled = false; }
+  };
+  const toolCard = (row) => {
+    const v = setupToolView(row);
+    const buttons = v.buttons.map((b) => {
+      const btn = el("button", { class: `btn small${b.kind === "install" || b.kind === "login" ? " primary" : ""}`, type: "button",
+        "data-setup-act": b.key }, b.label);
+      btn.addEventListener("click", () => run(btn, async () => {
+        if (b.kind === "install" || b.kind === "login") await openSetupTerminal(row.id, b.kind, b.region);
+        else {
+          await api.post(`/api/setup/tools/${encodeURIComponent(row.id)}/marker`, { done: b.kind === "mark" });
+          await refresh(true);
+          draw();
+        }
+      }));
+      return btn;
+    });
+    return el("li", { class: "setup-tool", "data-tool": row.id, "data-state": v.state },
+      el("div", { class: "setup-head" },
+        el("h2", null, row.name || row.id),
+        badge(v.label, v.cls),
+        v.version ? el("span", { class: "small muted mono" }, `版本 ${v.version}`) : null),
+      el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
+      v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
+      buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
+      el("div", { "data-setup-slot": "try" }, tryBox(row)));
+  };
+  const tryBox = (row) => {
+    const v = setupTryView(row, setupTry.get(row.id));
+    if (!v.show) return null;
+    const buttons = v.buttons.map((b) => {
+      const btn = el("button", { class: `btn small${b.kind === "primary" ? " primary" : ""}`, type: "button", "data-setup-try-act": b.key }, b.label);
+      btn.addEventListener("click", () => {
+        if (b.key === "try") { setupTry.set(row.id, { phase: "confirm" }); draw(); }
+        else if (b.key === "try-cancel") { setupTry.delete(row.id); draw(); }
+        else if (!busy) tryNow(row);
+      });
+      return btn;
+    });
+    return el("div", { class: "setup-try", "data-setup": "try" },
+      v.result ? el("p", { class: `setup-text setup-try-result ${v.result.ok ? "ok" : "bad"}`, "data-setup": "try-result", "data-ok": v.result.ok ? "yes" : "no" }, v.result.text) : null,
+      el("p", { class: "small muted setup-text", "data-setup": "try-note" }, v.note),
+      buttons.length ? el("div", { class: "setup-actions" }, buttons) : null);
+  };
+  const tryNow = async (row) => {
+    busy = true;
+    setupTry.set(row.id, { phase: "running" });
+    draw();
+    try {
+      const r = await api.post(`/api/setup/tools/${encodeURIComponent(row.id)}/try`, { confirmed: true });
+      setupTry.set(row.id, { phase: "done", success: r.success === true, message: r.message || "" });
+    } catch (e) {
+      setupTry.set(row.id, { phase: "done", success: false, message: e.message });
+    } finally { busy = false; }
+    await refresh(true, true);
+    draw();
+  };
+  const choose = async (usd) => {
+    try {
+      const res = await api.post("/api/setup/daily-limit", { daily_usd: usd });
+      dailyNow = typeof res.daily_usd === "number" ? res.daily_usd : usd;
+      dailyResult = setupDailyResultWords(res);
+      dailyError = "";
+    } catch (e) {
+      dailyError = "沒有存進去：" + e.message;
+      dailyResult = "";
+    }
+    draw();
+  };
+  const dailySection = () => {
+    const picks = SETUP_DAILY_CHOICES.map((c) => {
+      const on = dailyNow === c.usd;
+      const btn = el("button", { class: `btn small${on ? " primary" : ""}`, type: "button", "data-daily-pick": String(c.usd),
+        "aria-pressed": on ? "true" : "false" }, c.usd === SETUP_DAILY_DEFAULT ? `${setupUsd(c.usd)}（預設）` : setupUsd(c.usd));
+      btn.addEventListener("click", () => run(btn, () => choose(c.usd)));
+      return el("li", { class: "setup-daily-choice", "data-daily-choice": String(c.usd), "data-selected": on ? "true" : "false" },
+        btn, el("span", { class: "small muted setup-text", "data-daily-note": "yes" }, c.note));
+    });
+    const custom = dailyNow !== null && !SETUP_DAILY_CHOICES.some((c) => c.usd === dailyNow);
+    return el("section", { class: "section setup-daily", "data-setup-slot": "daily-limit" },
+      el("h2", null, "每天最多花多少"),
+      el("p", { class: "small muted" }, "這是 VBear 所有 AI 花費（聊天、開會、組隊會議）加起來每天的上限，每天 0 點重新計算。選一個就好，之後可以在設定裡改。"),
+      el("ul", { class: "setup-daily-list" }, picks),
+      dailyNow === null ? el("p", { class: "small muted", "data-setup": "daily-unknown" }, "讀不到目前的每天上限，所以沒有標出選了哪一個。")
+        : custom ? el("p", { class: "small muted", "data-setup": "daily-custom" }, `目前的每天上限是 ${setupUsd(dailyNow)}，不是這三個之一。選一個會換成它。`) : null,
+      dailyResult ? el("p", { class: "setup-text", "data-setup": "daily-result" }, dailyResult) : null,
+      dailyError ? el("p", { class: "setup-text", "data-setup": "daily-error" }, dailyError) : null);
+  };
+  const draw = () => {
+    const rows = Array.isArray(shown.tools) ? shown.tools : [];
+    const anyReady = rows.some((r) => r && r.ready === true);
+    const canLeave = anyReady || shown.setup_done === true;
+    const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
+    leave.addEventListener("click", () => run(leave, async () => {
+      if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
+      location.hash = "#/";
+    }));
+    const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
+    recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
+    setKids(host,
+      anyReady ? null : notice("info", SETUP_NONE_READY),
+      el("ul", { class: "setup-list" }, rows.map(toolCard)),
+      dailySection(),
+      el("section", { class: "section setup-foot" },
+        el("div", { class: "row" }, leave, recheck),
+        canLeave ? el("p", { class: "small muted" }, "之後隨時可以從左邊的「開始設定」回到這一頁，加其他 AI 工具。")
+          : el("p", { class: "small muted", "data-setup": "leave-note" }, SETUP_LEAVE_BLOCKED)));
+  };
+  setKids(main, el("h1", null, SETUP_TITLE), el("p", { class: "lede" }, SETUP_LEDE), host);
+  draw();
+  setupTick = () => (document.hidden || busy ? Promise.resolve() : refresh(true));
 }
 
 // ---------- chat with role cards (P36-2) -----------------------------------------------------------------------------------
@@ -12410,6 +12972,7 @@ async function viewChat(id, params) {
   const intro = chatIntroNode();
   setKids(main, el("h1", null, "跟員工聊天"),
     el("p", { class: "lede" }, "和一位員工（角色卡）一對一聊天。員工想動手時，會先問你。"),
+    needsClaudeSlot(token, "目前聊天只能透過 Claude Code 進行。"),
     intro, supportBox, ledgerBox, formBox,
     el("section", { class: "section" }, sectionHead("聊天紀錄", "每 5 秒更新"), listBox));
   chatTick = refresh;
@@ -13268,6 +13831,7 @@ async function viewMeetings(id, params) {
   setKids(main,
     el("h1", null, "會議"),
     el("p", { class: "lede" }, "各職位發言，CEO 做決定，重大的事交給你（董事長）。決定只是紀錄，不會自己去執行。"),
+    needsClaudeSlot(token, "會議由 Claude Code 主持發言。"),
     lampBox,
     meetingMoneyWhyNode(),
     form.node,
@@ -13736,6 +14300,7 @@ async function viewStaffing(id, params) {
     draw();
     setKids(main, crumbs([["組隊會議", "#/staffing"], [task.title || taskId]]),
       el("h1", null, `請 CEO 組隊：${task.title || "（沒有名稱）"}`),
+      needsClaudeSlot(token, "組隊會議由 Claude Code 主持發言。"),
       lampBox, meetingMoneyWhyNode(), form.node,
       el("section", { class: "section" }, sectionHead("這張任務卡的組隊會議", "每 5 秒更新"), listBox));
   } else {
@@ -13746,6 +14311,7 @@ async function viewStaffing(id, params) {
     draw();
     setKids(main, el("h1", null, "組隊會議"),
       el("p", { class: "lede" }, STAFFING_WHAT),
+      needsClaudeSlot(token, "組隊會議由 Claude Code 主持發言。"),
       lampBox, meetingMoneyWhyNode(),
       el("section", { class: "section" }, sectionHead("替哪張任務卡組隊", "選好之後，VBear 會先勾好建議的人選。"),
         open.length ? pick : el("p", { class: "small muted" }, "沒有未結案的任務卡。")),
@@ -13785,7 +14351,7 @@ function staffingSeats(view) { return meetingSeats(view, { bubble: staffingBubbl
 // What VBear says of an item it kept but did not tick in advance (vbear/staffing.py FLAGS; a test keeps them equal).
 const STAFFING_FLAG_TEXT = {
   disabled: "這張卡停用中，要先啟用",
-  cannot_start: "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY，或共用卡）",
+  cannot_start: "VBear 不能幫這張卡出發（安全模式下的 Codex、AGY、Grok、MCODE，或共用卡）",
   slot_fit: "這張卡的職位和這個位置不太合",
   same_card: "同一張卡不能審查自己",
   reviewer_family_unknown: "審查位的陣營是「共用」或不明，審查結果不算數",
@@ -14889,6 +15455,21 @@ if (typeof module !== "undefined" && module.exports) {
     onboardingState,
     onboardingSection,
     onboardingSettings,
+    SETUP_STATE,
+    SETUP_UPGRADE_NOTICE,
+    SETUP_REOPEN_HINT,
+    setupToolView,
+    setupTryView,
+    setupDailyResultWords,
+    claudeCodeNeed,
+    needsClaudeNote,
+    setupTerminalWords,
+    setupGate,
+    welcomeWanted,
+    viewWelcome,
+    setupToolKey,
+    setupOpened,
+    viewSetup,
     questNext,
     boardTeamKey,
     ONBOARD_STEPS,

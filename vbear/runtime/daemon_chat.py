@@ -81,7 +81,8 @@ class ChatOps:
         cannot be established; a damaged record of a meeting adds nothing (as for the meetings themselves)."""
         if os.path.realpath(cfg.state_dir()) != os.path.realpath(self.base):
             raise ValueError("背景程序的資料夾與設定的資料夾不同，無法確認今天的花費")
-        from .. import staffing as st             # here: staffing imports the board engine, the daemon need not
+        from .. import staffing as st, try_spend    # here: staffing imports the board engine, the daemon need not
+        from ..jsonstore import StoreError
         total = cs.day_spent(self.base, now)
         records = []
         for ids, load, per_call in ((mt.meeting_ids, mt.load, mt.per_call_limit),
@@ -93,6 +94,10 @@ class ChatOps:
                     continue
         for per_call, rec in records:
             total += mt.daily_spent([rec], now, per_call)
+        try:
+            total += mt.daily_spent([try_spend.record()], now, try_spend.turn_cap)      # 「試一下」 of the start-up page
+        except StoreError as exc:
+            raise ValueError(f"試一下的花費讀不出來（{exc}）") from None
         return total
 
     def _chat_allowance(self, rid: str, now: float):

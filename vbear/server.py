@@ -38,6 +38,9 @@ from . import __version__
 from . import activity
 from . import annotations
 from . import agent_launch
+from . import ai_tools
+from . import ai_tool_status
+from . import setup_try
 from . import agent_profiles
 from . import position_guide
 from . import armory
@@ -46,6 +49,7 @@ from . import model_options
 from . import chat_service as chat_service_mod
 from . import claude_verify
 from . import config as cfg
+from . import daily_limit
 from . import flow_executor
 from . import folders
 from . import flow_review
@@ -107,9 +111,12 @@ EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sen
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
                    "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits",
-                   "chat_limits"}
+                   "chat_limits", "setup_done", "setup_notice", "welcome_seen"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
+# "show_mcode": the switch of a hidden AI tool (vbear/ai_tools.py), written through /api/config like the other keys
+SHOW_TOOL_KEYS = frozenset(ai_tools.show_key(i) for i in ai_tools.hidden_ids())
+CONFIG_WRITABLE |= SHOW_TOOL_KEYS
 MAX_BODY = 64 * 1024
 # GET /api/flows/<id>/reports | reviews | reviews/<job>/draft | merge-gate (S2c-3)
 # /api/meetings/<id>[/retry-preview | /retry | /cancel | /chairman] (P34-4)
@@ -290,12 +297,17 @@ class Console:
         return {r["role_id"]: r for r in static.get("roles", [])
                 if isinstance(r.get("role_id"), str) and r["role_id"] and r.get("kind") != "cli"}
 
+    def hidden_off(self) -> tuple[str, ...]:
+        """The hidden AI tools (MCODE) the person has not switched on, read from the config as it is now."""
+        return ai_tools.hidden_off(self.store.conf)
+
     def previews(self):
         """Preview store for Profile-managed launches; native runtime only."""
         with self.lock:
             if self._previews is None:
                 self._previews = agent_launch.PreviewStore(
-                    self.runtime, allowed_root=lambda: str(self.managed_root.resolve()))
+                    self.runtime, allowed_root=lambda: str(self.managed_root.resolve()),
+                    hidden_tools=self.hidden_off)
             return self._previews
 
     def runtime_unavailable_message(self) -> str:
@@ -355,16 +367,7 @@ class Console:
 def login_shell() -> str:
     """The account's login shell when it is a listed, executable absolute path;
     /bin/zsh (the macOS default) otherwise."""
-    import pwd
-    try:
-        shell = pwd.getpwuid(os.getuid()).pw_shell
-        listed = {line.strip() for line in Path("/etc/shells").read_text().splitlines()
-                  if line.strip() and not line.startswith("#")}
-    except (KeyError, OSError):
-        return "/bin/zsh"
-    if os.path.isabs(shell) and shell in listed and os.access(shell, os.X_OK):
-        return shell
-    return "/bin/zsh"
+    return rt.daemon.login_shell()
 
 
 def _sourced_author_text(field) -> str:
@@ -636,6 +639,14 @@ def make_handler(console: Console):
                     return self._json({**console.store.live(force=force), "managed_root": str(console.managed_root.resolve())})
                 if path == "/api/config":
                     return self._json(self._config_view())
+                if path == "/api/setup/tools":
+                    force = parse_qs(url.query).get("force", ["0"])[0] == "1"
+                    if force and self.headers.get("X-VBear") != "1":
+                        return self._error(403, "重新檢查需要主控台標頭")
+                    return self._setup_tools(force)
+                if path == "/api/setup/daily-limit":
+                    return self._json({"ok": True, "daily_usd": float(meetings.limits_from(console.store.conf)["daily_usd"]),
+                                       "choices": list(daily_limit.CHOICES)})
                 if path == "/api/tasks":
                     return self._json({"ok": True, "tasks": self._with_pickup(tasks.list_tasks())})
                 if path == "/api/task-templates":
@@ -842,6 +853,16 @@ def make_handler(console: Console):
                     return self._native_open(self._body())
                 if path == "/api/native/terminals":
                     return self._terminal_open(self._body())
+                if path == "/api/setup/terminals":
+                    return self._setup_terminal(self._body_strict())
+                if path == "/api/setup/settle":
+                    return self._setup_settle()
+                if path.startswith("/api/setup/tools/") and path.endswith("/try"):
+                    return self._setup_try(unquote(path[len("/api/setup/tools/"):-len("/try")]), self._body_strict())
+                if path == "/api/setup/daily-limit":
+                    return self._setup_daily_limit(self._body_strict())
+                if path.startswith("/api/setup/tools/") and path.endswith("/marker"):
+                    return self._setup_marker(unquote(path[len("/api/setup/tools/"):-len("/marker")]), self._body_strict())
                 if path == "/api/native/claude-verification":
                     return self._claude_verify_start(self._body())
                 if path == "/api/native/agent-previews":
@@ -899,6 +920,9 @@ def make_handler(console: Console):
                         r.get("role_id") for r in console.store.static().get("roles", [])
                         if r.get("role_id")
                     }
+                    refused = self._hidden_tool_refusal(body, None)
+                    if refused:
+                        return self._error(400, refused)
                     try:
                         saved = agent_profiles.save_profile(None, body,
                                                              known_skills=known_skills,
@@ -923,6 +947,9 @@ def make_handler(console: Console):
                         return self._json({"ok": True, "deleted": target})
                     if rest.endswith("/duplicate"):
                         target = rest[:-10]
+                        refused = self._hidden_tool_refusal(None, target)
+                        if refused:
+                            return self._error(400, refused)
                         try:
                             dup = agent_profiles.duplicate_profile(
                                 target, known_skills=known_skills,
@@ -933,6 +960,9 @@ def make_handler(console: Console):
                             return self._error(404, "找不到這張角色卡")
                         return self._json({"ok": True, "profile": agent_profiles.with_revision(dup)})
                     target = rest
+                    refused = self._hidden_tool_refusal(body, target)
+                    if refused:
+                        return self._error(400, refused)
                     try:
                         saved = agent_profiles.save_profile(target, body,
                                                              known_skills=known_skills,
@@ -1337,6 +1367,158 @@ def make_handler(console: Console):
             console.store.live(force=True)
             return self._json({"ok": True, "session": info})
 
+        # The start-up page (v0.12): what each AI tool is, the "I have logged in" mark, the install and login terminals -----
+
+        def _setup_state(self, conf: dict, force: bool = False) -> dict:
+            rows = ai_tool_status.report(conf, force=force)
+            return {"ok": True, "tools": rows, "any_ready": any(r["ready"] for r in rows),
+                    "setup_done": conf.get("setup_done") is True, "setup_notice": conf.get("setup_notice") is True}
+
+        def _setup_tools(self, force=False):
+            try:
+                return self._json(self._setup_state(console.store.conf, force))
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+
+        def _setup_settle(self):
+            """The first look at the start-up (the home page asks once while the person has not finished it): a person who
+            already has a ready AI tool when they come to this version is counted as done, with a notice to show once; the
+            others stay in the start-up. A person who already finished is not touched and no tool is asked."""
+            with console.lock:
+                if cfg.is_corrupt():
+                    return self._error(409, cfg.corrupt_message())
+                conf = cfg.load()
+            if conf.get("setup_done") is True:
+                return self._json({"ok": True, "setup_done": True, "setup_notice": conf.get("setup_notice") is True,
+                                   "upgraded": False})
+            try:
+                ready = any(r["ready"] for r in ai_tool_status.report(conf))
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+            upgraded = False
+            if ready:
+                with console.lock:
+                    conf = cfg.load()
+                    if conf.get("setup_done") is not True:
+                        conf["setup_done"] = True
+                        conf["setup_notice"] = True
+                        cfg.save(conf)
+                        console.store.set_conf(conf)
+                        upgraded = True
+                    else:
+                        conf = cfg.load()
+            return self._json({"ok": True, "setup_done": conf.get("setup_done") is True,
+                               "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
+
+        def _setup_daily_limit(self, body):
+            """The choice of the daily limit: the day is written and every other limit above it is brought down to it, in one
+            write of config.json (checked with the rules of each family first; nothing is raised, nothing is half written)."""
+            if not isinstance(body, dict) or set(body) != {"daily_usd"}:
+                return self._error(400, "請求只能有一個 daily_usd 欄位，值是數字")
+            daily = daily_limit.accepted(body["daily_usd"])
+            if daily is None:
+                return self._error(400, f"每天上限必須是 0.01 到 {meetings.LIMIT_CAPS['daily_usd']} 之間的數字")
+            with console.lock:
+                if cfg.is_corrupt():
+                    return self._error(409, cfg.corrupt_message())
+                conf = cfg.load()
+                writes, changed = daily_limit.below_the_day(conf, daily)
+                try:
+                    writes["meeting_limits"] = meetings.validate_limits(writes["meeting_limits"], meetings.limits_from(conf))
+                    if "staffing_limits" in writes:
+                        writes["staffing_limits"] = staffing.validate_limits(writes["staffing_limits"], staffing.limits_from(conf), daily)
+                    if "chat_limits" in writes:
+                        writes["chat_limits"] = chat_store.validate_limits(writes["chat_limits"], chat_store.limits_from(conf), daily)
+                except ValueError as exc:
+                    return self._error(400, str(exc))
+                conf.update(writes)
+                try:
+                    cfg.save(conf)
+                except (OSError, ValueError) as exc:
+                    return self._error(503, f"每天上限沒有存進去：{exc}")
+                console.store.set_conf(conf)
+            return self._json({"ok": True, "daily_usd": float(daily), "changed": changed})
+
+        def _setup_tool_problem(self, tool_id):
+            """(status, message) when the page may not act on this tool, else None."""
+            if not isinstance(tool_id, str) or tool_id not in ai_tools.setup_ids():
+                return 404, "沒有這個 AI 工具"
+            if tool_id in ai_tools.hidden_off(console.store.conf):
+                return 400, ai_tools.hidden_message(tool_id)
+            return None
+
+        def _setup_marker(self, tool_id: str, body):
+            """「我登入好了」: a mark for a tool that has no status command. Nothing but the tool id and the time is kept."""
+            problem = self._setup_tool_problem(tool_id)
+            if problem:
+                return self._error(*problem)
+            tool = next(t for t in ai_tools.REGISTRY if t.id == tool_id)
+            if tool.status_command:
+                return self._error(400, f"{tool.name} 會自己查登入狀態，不用標記")
+            if not isinstance(body, dict) or set(body) != {"done"} or type(body["done"]) is not bool:
+                return self._error(400, "請求只能有一個 done 欄位，值是 true 或 false")
+            try:
+                at = ai_tool_status.set_mark(tool_id, body["done"])
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+            return self._json({"ok": True, "tool": tool_id, "marked": body["done"], "marked_at": at})
+
+        def _setup_try(self, tool_id: str, body):
+            """「試一下」: one fixed short sentence to one installed AI tool (vbear/setup_try.py). The body is
+            {"confirmed": true}, sent by the page only after it showed the estimate and the person pressed again; the
+            tool is named in the path and nothing else is taken from the request. Costs go on the day's limit."""
+            problem = self._setup_tool_problem(tool_id)
+            if problem:
+                return self._error(*problem)
+            if not isinstance(body, dict) or set(body) - {"confirmed"}:
+                return self._error(400, "請求只能有一個 confirmed 欄位")
+            if "confirmed" in body and type(body["confirmed"]) is not bool:
+                return self._error(400, "confirmed 必須是布林值")
+            if body.get("confirmed") is not True:
+                return self._error(409, f"試一下會送一句很短的話給這個 AI 工具，{setup_try.ESTIMATE_TEXT}，"
+                                        "並計入每天上限。請先看過預估再確認。")
+            try:
+                result = setup_try.attempt(tool_id, lambda: console.meeting_runner().ledger(console.store.conf))
+            except setup_try.TryRefused as exc:
+                return self._error(exc.status, str(exc))
+            return self._json(result)
+
+        def _setup_terminal(self, body):
+            """Open the install or the login terminal of one AI tool. The browser names the tool and the action (and, for a
+            tool with two ways to log in, which); the line that is typed comes from vbear/ai_tools.py and is typed by the
+            runtime daemon, which is given only these names. No folder, command or environment is taken from the request."""
+            if not isinstance(body, dict):
+                return self._error(400, "請求本文必須是一個 JSON 物件")
+            extra = set(body) - {"tool", "action", "region", "cols", "rows"}
+            if extra:
+                return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
+            tool, action, region = body.get("tool"), body.get("action"), body.get("region")
+            problem = self._setup_tool_problem(tool)
+            if problem:
+                return self._error(400, problem[1])
+            if ai_tools.command_for(tool, action, region) is None or (region is not None and not isinstance(region, str)):
+                if action in ai_tools.SETUP_ACTIONS and isinstance(tool, str):
+                    t = next(x for x in ai_tools.REGISTRY if x.id == tool)
+                    if action == "login" and t.login_regions and region is None:
+                        return self._error(400, f"{t.name} 要先選登入的是哪一區")
+                return self._error(400, "沒有這個 AI 工具的這個動作")
+            dims = {}
+            for key, low in (("cols", TERM_MIN_DIM), ("rows", TERM_MIN_ROWS)):
+                if key in body:
+                    v = body[key]
+                    if type(v) is not int or not low <= v <= TERM_MAX_DIM:
+                        return self._error(400, f"{key} 必須是 {low} 到 {TERM_MAX_DIM} 的整數")
+                    dims[key] = v
+            try:
+                info = console.runtime.create_setup_session(tool, action, region, **dims)
+            except rt.native.NativeRuntimeUnavailable as exc:
+                return self._error(503, str(exc))
+            except rt.native.NativeRuntimeError as exc:
+                return self._error(400, str(exc))
+            ai_tool_status.invalidate()            # the person is about to install or log in: the next look reads the tools again
+            console.store.live(force=True)
+            return self._json({"ok": True, "session": info, "command": (info.get("setup") or {}).get("command")})
+
         # Profile-managed launch (R3 S0): preview, then confirm ---------------
 
         def _loadout(self, profile_id):
@@ -1352,7 +1534,8 @@ def make_handler(console: Console):
                 return None
             verifier = getattr(console, "claude_verifier", None)
             return loadout_mod.build(profile, static, console.store.live_cached(),
-                                     verifier.status() if verifier is not None else None)
+                                     verifier.status() if verifier is not None else None,
+                                     hidden_off=console.hidden_off())
 
         def _instructions(self, profile_id):
             """The text the terminal's 貼上職位指示 button pastes: the card's own instructions, else its position's
@@ -1363,6 +1546,26 @@ def make_handler(console: Console):
             got = agent_profiles.instructions_of(profile)
             return {"ok": True, "id": profile.get("id"), "name": profile.get("name"), "source": got["source"],
                     "position": got["position"], "text": got["text"]}
+
+        def _hidden_tool_refusal(self, body, existing_id) -> str | None:
+            """Why a card may not be made, changed or copied to a hidden AI tool that is switched off (None when it may).
+            A card that already names the tool keeps being editable: only a move onto the tool is refused."""
+            off = console.hidden_off()
+            if not off:
+                return None
+            if body is None:      # a copy: it names the tool the original names
+                original = agent_profiles.get_profile_readonly(existing_id)
+                tool = ((original or {}).get("model") or {}).get("tool")
+                return ai_tools.hidden_message(tool) if tool in off else None
+            model = body.get("model") if isinstance(body, dict) else None
+            tool = model.get("tool") if isinstance(model, dict) else None
+            if tool not in off:
+                return None
+            if existing_id is not None:
+                current = agent_profiles.get_profile_readonly(existing_id)
+                if ((current or {}).get("model") or {}).get("tool") == tool:
+                    return None
+            return ai_tools.hidden_message(tool)
 
         def _load_profile(self, profile_id):
             index = console.skill_index()
@@ -1430,7 +1633,7 @@ def make_handler(console: Console):
             """Confirm a preview and start it. Anything that changed since the
             preview answers 409 and needs a new preview."""
             extra = set(body) - {"preview_id", "expected_settings_digest", "user_confirmed", "cols", "rows",
-                                 "accept_unverified_cli"}
+                                 "accept_unverified_cli", "accept_full_mode"}
             if extra:
                 return self._error(400, f"不接受的欄位：{', '.join(sorted(extra))}")
             cols, rows = self._term_dims(body)
@@ -1438,7 +1641,8 @@ def make_handler(console: Console):
                 result = console.previews().consume(
                     body.get("preview_id"), body.get("expected_settings_digest"),
                     body.get("user_confirmed"), self._load_profile, cols=cols, rows=rows,
-                    accept_unverified_cli=body.get("accept_unverified_cli"))
+                    accept_unverified_cli=body.get("accept_unverified_cli"),
+                    accept_full_mode=body.get("accept_full_mode"))
             except agent_launch.PreviewError as exc:
                 return self._json({"error": str(exc), "code": exc.code}, exc.status)
             console.remember_folder(console.take_preview_folder(body.get("preview_id")))
@@ -1872,6 +2076,10 @@ def make_handler(console: Console):
                         value = folders.clean_recent_folders(value)
                     if key == "onboarding_dismissed" and type(value) is not bool:
                         raise ValueError("onboarding_dismissed 必須是布林值")
+                    if key in ("setup_done", "setup_notice", "welcome_seen") and type(value) is not bool:
+                        raise ValueError(f"{key} 必須是布林值")
+                    if key in SHOW_TOOL_KEYS and type(value) is not bool:
+                        raise ValueError(f"{key} 必須是布林值")
                     if key == "meeting_limits":
                         value = meetings.validate_limits(value, meetings.limits_from(conf))
                     if key == "meeting_speed":
@@ -1882,6 +2090,11 @@ def make_handler(console: Console):
                         value = chat_store.validate_limits(value, chat_store.limits_from(conf),
                                                            meetings.limits_from(conf)["daily_usd"])
                     conf[key] = value
+                    if key == "meeting_limits":
+                        # the day written here is the day for the staffing and chat limits too: those above it come down to it
+                        # (the ones written in this same request are checked as written, below)
+                        conf.update(daily_limit.below_the_day(conf, meetings.money(value["daily_usd"]), meeting=False,
+                                                              skip={"staffing_limits", "chat_limits"} & body.keys())[0])
                 toggles = body.get("source_enabled")
                 if isinstance(toggles, dict):
                     for src in conf.get("sources", []):
@@ -1955,9 +2168,16 @@ def make_handler(console: Console):
 
             roles = [_profession_view(r) for r in console.store.static().get("roles", [])]
 
+            # a hidden tool (MCODE) is in neither list until the person switches it on; the second list tells the page
+            # what a card that already names one of them is to say
+            offered, unavailable = ai_tools.view_for(console.store.conf)
+            for row in unavailable:
+                row["unavailable_reason"] = ai_tools.hidden_message(row["id"])
             return {
                 "ok": True,
-                "tools": list(agent_profiles.TOOL_ORDER),
+                "tools": [row["id"] for row in offered],
+                "tool_list": offered,
+                "unavailable_tools": unavailable,
                 "permission_keys": list(agent_profiles.PERMISSION_KEYS),
                 "permission_values": list(agent_profiles.PERMISSION_VALUES),
                 "permission_intent_only": True,
@@ -1991,7 +2211,11 @@ def make_handler(console: Console):
                 "position_guide": position_guide.catalog_view(),
                 "launch_modes": [{"id": m, "label": position_guide.MODE_LABELS[m], "help": position_guide.MODE_HELP[m]}
                                  for m in agent_profiles.LAUNCH_MODES],
+                # ADR 0002: a new card starts safe where its tool has a safe mode, full where it has only full. The page
+                # reads the two lists to pick the start for the tool chosen; a tool in neither starts safe.
                 "default_launch_mode": agent_profiles.DEFAULT_LAUNCH_MODE_FOR_NEW,
+                "safe_mode_tools": list(agent_profiles.SAFE_MODE_TOOLS),
+                "full_mode_tools": [t for t in agent_launch.agent_sessions.FULL_ENGINES if t not in ai_tools.hidden_off(console.store.conf)],
                 "full_mode_launchable": agent_launch.FULL_MODE_LAUNCHABLE,
                 "max_instructions": agent_profiles.MAX_INSTRUCTIONS,
                 "instructions_where": position_guide.INSTRUCTIONS_WHERE,

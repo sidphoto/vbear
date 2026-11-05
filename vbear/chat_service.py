@@ -25,7 +25,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
-from . import admin_policy, agent_profiles, board_engine, config as cfg, daemon_client, meetings as mt
+from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, meetings as mt
 from .api_error import ApiError
 from .runtime import agent_sessions, chat_protocol as cp, chat_store as cs, cli_versions
 
@@ -37,7 +37,8 @@ RESTART_TRIES = 8                 # a message the daemon asked to be sent again 
 RESTART_PAUSE = 1.0               # this many seconds apart, before the person is asked to send it again
 DELETE_TRIES = 12
 DELETE_PAUSE = 0.5
-TOOL_LABEL = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity（AGY）", "shared": "共用（不限工具）"}
+TOOL_LABEL = {**{t.id: t.name for t in ai_tools.REGISTRY if t.id not in ("claude", "codex", "agy", "shared")},
+              "claude": "Claude Code", "codex": "Codex", "agy": "Antigravity（AGY）", "shared": "共用（不限工具）"}
 
 # What each code means to a person, and the HTTP status the console answers with. The daemon's own message follows the
 # explanation when it adds something (which card, which file). A test reads the codes the daemon, the session, the

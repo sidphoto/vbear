@@ -45,6 +45,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from . import ai_tools
 from . import config as cfg
 from . import position_guide
 
@@ -75,15 +76,16 @@ PERMISSION_VALUES: tuple[str, ...] = ("allow", "deny", "unspecified")
 # slice that adds new tools must add them here too. There is intentionally
 # no separate "model registry" file: this list IS the registry.
 #
-# "agy" is Antigravity (AGY). VBear does not launch it (agent_launch.launch_blockers refuses it) and does not know
-# which skills it reads: an AGY card is a record for building a team, and its model family is always Google.
+# The list itself is written once, in ai_tools.REGISTRY; these are made from it.
+# "agy" is Antigravity (AGY). The safe launch (agent_launch.launch_blockers) never starts it; full mode does. VBear does
+# not know which skills it reads, and its model family is always Google.
 # TOOL_ORDER is the order the camps are offered in, with the generic "shared" camp last.
-TOOL_ORDER: tuple[str, ...] = ("claude", "codex", "agy", "shared")
+TOOL_ORDER: tuple[str, ...] = ai_tools.ids()
 KNOWN_TOOLS: frozenset[str] = frozenset(TOOL_ORDER)
 
 # The model family each tool implies, for the team places (web/app.js TEAM_TOOL_FAMILY repeats it; a test keeps
 # them equal, and flows.SNAPSHOT_TOOL_FAMILY too). "shared" is no model at all, so its family is unknown.
-TOOL_FAMILY: dict[str, str] = {"claude": "anthropic", "codex": "openai", "agy": "google", "shared": "unknown"}
+TOOL_FAMILY: dict[str, str] = ai_tools.family_map()
 
 
 def family_of_tool(tool) -> str:
@@ -102,7 +104,7 @@ def family_of_tool(tool) -> str:
 # It carries no permission either: a managed launch honours one combination only (VERIFIED_INTENTS), so the suggested
 # intents are the same for every position, and what differs is told in the reminder, which a person writes into the
 # task card's goal because VBear cannot enforce it. suggested_tool and suggested_model_alias are suggestions as well;
-# the art director's tool is AGY, which VBear does not start. The page repeats this table (web/app.js
+# the art director's tool is AGY, which the safe launch does not start. The page repeats this table (web/app.js
 # CARD_POSITION_TABLE) so a card can be drawn without the catalog; a test keeps the two equal. Only generic job titles
 # go here.
 POSITION_TABLE: tuple[dict[str, Any], ...] = (
@@ -155,10 +157,15 @@ RETIRED_POSITIONS: dict[str, dict[str, Any]] = {
 
 # How a card is to be started (P34-2). "full" is the tool as the person runs it by hand, with no limit from VBear;
 # "safe" is the verified, sandboxed launch every card had before. A card without the key is "safe": an old card is not
-# loosened by an upgrade, and only the word "full" reads as full. A new card is offered "full" (the wizard reads this
-# from the catalog); nothing writes it for a card the person did not set.
+# loosened by an upgrade, and only the word "full" reads as full. A new card starts "safe" where its tool has a safe
+# mode (ADR 0002; the wizard reads this from the catalog) and "full" where the tool has only full mode; nothing writes
+# the mode for a card the person did not set.
 LAUNCH_MODES: tuple[str, ...] = position_guide.LAUNCH_MODES
-DEFAULT_LAUNCH_MODE_FOR_NEW = "full"
+DEFAULT_LAUNCH_MODE_FOR_NEW = "safe"
+# The tools VBear can start in safe mode (a verified, sandboxed launch), from the AI tool list (ai_tools.Tool.safe_mode).
+# Codex has a managed path in the code but it is refused (codex_interactive_flags_unsupported), so today only Claude Code has
+# a safe mode that can actually start.
+SAFE_MODE_TOOLS: tuple[str, ...] = ai_tools.safe_mode_ids()
 
 
 def effective_launch_mode(profile) -> str:

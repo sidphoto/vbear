@@ -180,8 +180,9 @@ Other safeguards:
   itself first on your `PATH` already runs as you, so this is not treated as a boundary.
 - **Where VBear looks for the CLIs.** Besides the `PATH` it was started with, VBear looks for `claude` and `codex` in
   Homebrew's `/opt/homebrew/bin`, `/usr/local/bin`, the system folders, and `.local/bin` under your home directory
-  (where Claude Code's own installer puts it), in that order, after your own `PATH`. These folders are writable by
-  you (and, for Homebrew, by your admin group), the same trust as your `PATH`. VBear scans no other folder, reads no
+  (where Claude Code's own installer puts it), in that order, after your own `PATH`. For Grok and MCODE (full mode only)
+  it also looks in their own install folders, `~/.grok/bin` and `~/.minimax-code/bin`, after `.local/bin`.
+  These folders are writable by you (and, for Homebrew, by your admin group), the same trust as your `PATH`. VBear scans no other folder, reads no
   shell startup file and starts no login shell. Finding the file changes none of the checks above: the version, the
   verified list and the translation boundary are decided afterwards, exactly as before. The Codex review does not use
   `.local/bin`; it runs the pinned Codex build only.
@@ -191,12 +192,18 @@ Other safeguards:
   owner-only. Any program running as you could edit it, as it could edit anything else you own.
 - **Fail closed** otherwise: the launch is refused if the sandbox is unavailable (`failIfUnavailable`), or if the
   profile, work directory, Claude Code binary or config changed since the preview.
-- **Antigravity (AGY) is not launched.** A role card whose tool is `agy` is a record for building teams: `launch_blockers`
-  always refuses it (`tool_not_launchable`, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), so no preview is
+- **Antigravity (AGY) has no safe launch.** In safe mode a role card whose tool is `agy` is a record for building teams: `launch_blockers`
+  refuses it (`tool_not_launchable`, "安全模式不會啟動 AGY，要出發請選完整模式"), so no preview is
   prepared, no manifest is written and the loadout shows no armor and no tool list. Which skills AGY reads is judged
   from files only (see "Which skills AGY reads"), and even a skill AGY reads is never reported as one that loads: a
   skill chosen on an AGY card is a collection. The automatic review is unchanged: it is the Codex that
   VBear starts, and an AGY card on a review place is only the record of a manual review.
+- **Grok and MCODE have no safe launch either (v0.12).** Both are full mode only, the same as AGY: in safe mode their
+  cards are refused with `tool_not_launchable` ("目前只能用完整模式"), and the card says "這個 AI 工具目前只能用完整模式". They are
+  separate model families (`xai`, `minimax`), so a review by one of them counts for another family's work. MCODE is a
+  hidden tool: it is offered, and may be started, only while the server config key `show_mcode` is true (default
+  false, written through `/api/config`). Turning it off deletes no card; a card that already names `mcode` is kept,
+  shown and explained, but cannot be created, switched to, duplicated or started (`tool_hidden`) until the switch is on.
 - **No caller-supplied launch details.** The daemon's `open_managed` takes only a launch ID. It reads
   the manifest from its own state directory and re-validates the work directory. A launch ID is single-use.
 - **Cleanup only when it is proven safe.** Files belonging to a launch are removed only after every
@@ -214,19 +221,50 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   permission prompts. The position's boundaries read as reminders only; a card's permission intents are not applied (the
   pass lists any intent written as "deny" and says it is not kept). There is no sandbox, no `--safe-mode`, no settings
   file, no tool list, no scratch directory, no `CLAUDE_CODE_TMPDIR` and no launch manifest.
+- **A full launch needs the person's "I understand" as well as the confirmation (ADR 0002).** The pass says "這個員工可以動你電腦上的任何檔案" and the confirm button stays off until the person ticks 我了解. The server does not rely on that: a confirmation of a full-mode preview without `accept_full_mode: true` is refused with 409 `full_mode_not_acknowledged` and a plain sentence, before the preview is used up (the same preview can be confirmed once the box is ticked), and `user_confirmed` is still required. A safe launch does not take the field.
 - **The command is built on the server and is a list, never a shell string.** `claude [--model X] [--append-system-prompt
-  <text>]`, `codex [-m X]`, `agy [--model X]`, with the tool found as the first `claude`, `codex` or `agy` on the search
+  <text>]`, `codex [-m X]`, `agy [--model X]`, `grok [-m X]`, `mcode [-m X]`, with the tool found as the first `claude`,
+  `codex`, `agy`, `grok` or `mcode` on the search
   path VBear uses for the CLIs (its own `PATH`, Homebrew and `~/.local/bin`), by its absolute path. The pass shows the
   command and the path. The daemon accepts it only through its own `open_full` operation, which takes nothing but the
   tool name, that list, the folder and the terminal size, and refuses any list `agent_sessions.full_argv` could not have
   built (another flag, a model that looks like an option, a program with another name). The environment is the plain one
   every terminal gets (`PATH`, `TERM`, `LANG`, `HOME`, your user name); no credential is added, so the tool uses the login
   it already has.
+- **The start-up page's install and login terminals are a separate, narrower door (v0.12).** `POST /api/setup/terminals` takes
+  a tool id, an action (`install` or `login`), for MCODE's login a region (`global` or `cn`), and the terminal size; any
+  other field is refused. The line that gets typed is looked up in `vbear/ai_tools.py` (the vendor's own install or login
+  line, source notes in `docs/evidence/ai-tool-install-and-login-lines.md`), never taken from the request, and the daemon's
+  `open_setup` operation is given only those same names: it opens the person's login shell in their home folder with the
+  plain environment and types the one line into it, so the person sees it and the shell runs it as if they had typed it.
+  Nothing downloaded is read or run by VBear itself. `/api/native/sessions` (any list) and `/api/native/terminals` (a plain
+  login shell) are unchanged and are not used for this. The writing routes need the same `X-VBear` header as the others.
+- **The status of an AI tool is read without reading any login.** `vbear/ai_tool_status.py` finds each tool on the search
+  path, runs `<tool> --version` and, for Claude Code and Codex only, their own status command; for the status command only the
+  exit code is used (0 is logged in) and its output goes to nowhere (not captured, not stored, not served). For AGY, Grok and
+  MCODE the person's "I have logged in" mark is the only evidence; it is kept in `setup_marks.json` as the tool id and a time.
+  No tool's own login folder is opened or listed by VBear. A look is kept in memory for 30 seconds (the page asks every 5
+  seconds); the person's recheck, a mark, a terminal and a try make the next look fresh. A kept look is the row, never output.
+- **「試一下」 sends one fixed sentence and keeps none of the answer (v0.12).** `POST /api/setup/tools/<id>/try` takes the tool
+  in the path and `{"confirmed": true}` (the page sends it only after it showed "about under US$0.01" and the person pressed
+  again); no sentence, flag, folder or environment comes from the request. `vbear/setup_try.py` starts the tool headless through
+  `headless_cli.run`: a new empty scratch folder as its working directory (removed afterwards), a new process group that is
+  killed however the call ends (an unconfirmed group writes `setup-try.blocked` and no further try starts), the plain
+  environment of that runner (PATH, HOME, USER, LOGNAME, LANG, TMPDIR), 60 seconds, at most 1 MiB read, one try at a time.
+  Claude Code gets `--safe-mode --setting-sources "" --tools "" --strict-mcp-config`, a small budget and no session kept;
+  Codex runs without the person's config and rules (so no MCP servers), read-only, shell off; MCODE with permission off and one step; Grok
+  with one turn and web search, memory, plan and subagents off. AGY has no flag for fewer tools that was checked, so it gets
+  the sentence only (it may use tools; the sentence asks for none). The answer is read to see whether the tool answered and
+  dropped: not stored, logged or passed on; neither is anything it prints about the account. The page gets success, not logged
+  in (any failed exit), timeout, not found or odd answer, in plain words. The cost goes into `setup-try.json` (tool, times,
+  cap, cost: nothing else) and counts toward the same day as the meetings, the staffing meetings and the chats: Claude Code's
+  reported cost, else US$0.01; a try that started a program is booked even when it fails. When the day cannot take another
+  US$0.01, or the record cannot be read, nothing starts.
 - **Only Claude Code takes the instructions on the command line.** The card's instructions (its own text, else the
   position's default) go in as a single `--append-system-prompt` argument: control, format and separator characters other
   than a line break or tab are removed, it is cut to 2000 characters, and a text that starts with `-` gets a sentence in
   front, so it can never be read as a flag. The pass shows the whole text that will be carried. VBear did not verify that
-  Claude Code receives it, or does what it says; it is words for the AI, as before. Codex and AGY have no such option, so
+  Claude Code receives it, or does what it says; it is words for the AI, as before. Codex, AGY, Grok and MCODE have no such option, so
   nothing is added for them: their instructions are only the paste button's (Terminals above), and VBear never presses
   Enter.
 - **You still confirm, and the confirmation is for this exact command.** The preview is one-use and five minutes. It is
@@ -309,8 +347,9 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   and only reminders stay. In full mode every row reads as a reminder. VBear still does not claim that skills, CLAUDE.md,
   hooks or MCP are switched off. A position's boundaries say nothing about meetings: a meeting does not use the card's launch, only its
   instructions and its model (see "Meetings" below).
-- **`launch_mode` chooses between two launches, and only the exact word `full` chooses the full one.** The wizard offers
-  `full` for a new card and `safe` on request; the server never writes the field itself, and a card without the key
+- **`launch_mode` chooses between two launches, and only the exact word `full` chooses the full one.** The wizard starts a
+  new card on `safe` where its tool has a safe mode (today Claude Code) and on `full` where the tool has only full mode
+  (the catalog lists both sets), and the person can switch; the server never writes the field itself, and a card without the key
   reads as `safe`. A missing, null or unknown value is safe, so an older card is never loosened by this build. A card in
   full mode is started by the launch described in "Full-mode launches" and by no other: it is never started as a safe
   one instead, and a safe card is never started as a full one. The loadout shows no armor for a full card (there is
@@ -401,8 +440,8 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   only when the person presses the button (`POST /api/flows/<id>/roles`). The snapshot does not decide anything: the
   family a review is judged by is still the role's own `family`, which the page fills from the card's tool and the
   server does not derive. The one cross-check is for an Antigravity (AGY) card, a tool added after flows were already
-  stored: a snapshot with tool `agy` must sit on a role of family `google`, on input and in the stored shape; the other
-  tools are accepted with any family, as before. Placing a card on a task card's team writes only `flows.json`; it starts,
+  stored: a snapshot with tool `agy` (and likewise `grok`, family `xai`, and `mcode`, family `minimax`) must sit on a
+  role of the tool's own family, on input and in the stored shape; the other tools are accepted with any family, as before. Placing a card on a task card's team writes only `flows.json`; it starts,
   sends and loads nothing.
 
 ## The home page's first game
@@ -1114,6 +1153,42 @@ process starts until a version passes the chat check.
   KILL, signals sent only to its own verified process group, and kept for manual review when that cannot be
   proven. A chat whose earlier process is under manual review takes no new message. At daemon start, a turn a
   previous daemon left open is closed at its cap.
+
+## The start-up page (v0.12)
+
+The start-up page (`#/setup`) installs, signs in, checks and tries AI tools for a person who may never have opened a terminal,
+so what it can make VBear run is kept narrow. The details are in "Full-mode launches" above (the install and login terminals,
+the status reading and 「試一下」); this section is the short list of what holds.
+
+- **A command that VBear sends comes only from the list in `vbear/ai_tools.py`, never from the request.** The page names a
+  tool and an action (`install` or `login`, and for MCODE a region); `POST /api/setup/terminals` refuses every other field
+  (`command`, `argv`, `cwd`, `env`), an unknown tool or action, and a hidden tool while its switch (`show_mcode`) is off. The
+  daemon's `open_setup` operation takes only those same names, looks the line up itself and types it into the person's login
+  shell, where it can be seen. VBear downloads and runs nothing by itself. Grok and MCODE are on the same list under the
+  same rule. The writing routes need the `X-VBear` header.
+- **A status command is read by its exit code only.** For Claude Code and Codex, VBear runs the tool's own status command and
+  uses only the exit code (0 means signed in; anything else, including a timeout, counts as not signed in). The output goes to nowhere:
+  it is not captured, stored, logged or served. For AGY, Grok and MCODE there is no such command, so the person's
+  「我登入好了」 mark is the only evidence, and the page says VBear cannot confirm it. The mark file `setup_marks.json` holds a
+  tool id and a time. No tool's login folder is opened or listed.
+- **A try is isolated and booked.** 「試一下」 sends one fixed sentence headless, in a new empty scratch folder (removed
+  afterwards), in a new process group that is ended however the call ends, with a 60 second limit, at most 1 MiB read, one at
+  a time, and a plain environment. Only whether the tool answered is read; the answer and anything about the account are
+  dropped. Its cost goes into `setup-try.json` (tool, times, cap, cost) and counts toward the same daily limit as the
+  meetings, staffing meetings and chats (what Claude Code reports, else US$0.01; a try that started a program is booked even
+  if it fails). When the day cannot take another US$0.01, or the record cannot be read, nothing starts. Claude Code gets no
+  tools and none of the person's settings; Codex runs without the person's config and rules (so no MCP servers), read-only, with its
+  shell tool off (Codex 0.163.0 has no feature named `mcp`, so none is disabled by name). Codex's `--ask-for-approval` (set to `never`) is a top-level option of `codex`, so it goes before `exec` (`codex exec --help` does
+  not list it). AGY has no flag for fewer tools that was checked, so it gets only the sentence. The flags were checked against
+  each tool's `--help`; no real tool was run.
+- **The daily limit the person picks only ever lowers other limits.** `POST /api/setup/daily-limit` accepts a number from
+  0.01 to 50, writes the three limit families together or not at all, and never raises one.
+- **The first-time page writes one yes/no.** `#/welcome` is shown only in the app window (judged by the native folder-chooser
+  handler the window gives the page) and writes only `welcome_seen` through `/api/config`; it runs and sends nothing else. Its
+  picture is an illustration the page draws itself, not a screenshot, so no part of the person's System Settings is shown or
+  stored.
+- **Grok and MCODE** start only in full mode, with the tick on 我了解 like the other tools; MCODE is hidden unless `show_mcode`
+  is on, and the server refuses to create or switch a card to it while it is off.
 
 ## Data handling
 

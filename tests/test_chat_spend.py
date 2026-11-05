@@ -78,7 +78,7 @@ class SharedDayTests(ChatDay):
         for runner in (self.meetings, self.staffing):
             self.assertEqual(runner._day(), Decimal("0.42"), runner)          # 0.12 spent, 0.30 running at its cap
         ledger = self.meetings.ledger({})
-        self.assertEqual((ledger["spent_usd"], ledger["includes"]), ("0.42", ["meetings", "staffing", "chats"]))
+        self.assertEqual((ledger["spent_usd"], ledger["includes"]), ("0.42", ["meetings", "staffing", "chats", "setup_try"]))
         self.assertEqual(ledger["lamp"], "green")
 
 

@@ -14,22 +14,25 @@ anything else is the person's paste button. What is told about a boundary is tol
 `resolve` turns the table into what one card is told, by its tool and its launch mode:
 
   claude, safe          the kinds as written;
-  codex, agy, shared    VBear does not launch these in safe mode, so what depended on a launch is "not_applicable" and
+  codex, agy, grok, mcode, shared
+                        VBear does not launch these in safe mode, so what depended on a launch is "not_applicable" and
                         only the reminders stay;
   full mode             VBear limits nothing, so every line is a reminder and says so in its `full_text`.
 
-This module imports nothing from the rest of VBear, so agent_profiles can use it.
+This module imports nothing from the rest of VBear but ai_tools (which imports nothing), so agent_profiles can use it.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from . import ai_tools
+
 MAX_INSTRUCTIONS = 2000
 
 ENFORCED, REMINDER, NOT_POSSIBLE, NOT_APPLICABLE = "enforced_if_launched", "reminder", "not_possible", "not_applicable"
 LAUNCH_MODES = ("full", "safe")
-TOOLS = ("claude", "codex", "agy", "shared")
+TOOLS = ai_tools.ids()
 
 # What is said under the launch mode when there is no position to speak of, and what the page offers to choose.
 MODE_LABELS = {"full": "完整模式", "safe": "安全模式"}
@@ -44,7 +47,7 @@ MODE_NOTE_NOT_LAUNCHED = "安全模式：VBear 不幫這張卡出發，以下的
 # Where the instructions go, in the words of the card's back and of the wizard. Only a full-mode launch of Claude Code
 # carries them (one `--append-system-prompt` argument); everything else is the paste button, and VBear never presses Enter.
 INSTRUCTIONS_WHERE = ("完整模式出發 Claude Code 時，這份指示會用 --append-system-prompt 當成一個引數帶進去（出發通行證會顯示全文）。"
-                      "Codex、AGY 和安全模式出發不會自動帶上：開了終端、接管之後，按「貼上職位指示」才會貼進輸入框，"
+                      "Codex、AGY、Grok、MCODE 和安全模式出發不會自動帶上：開了終端、接管之後，按「貼上職位指示」才會貼進輸入框，"
                       "由你自己按 Enter 送出；VBear 不會替你按 Enter。職業範本的指示不會交給工具。")
 INSTRUCTIONS_WHERE_ARGV = ("完整模式出發這張卡時，這份指示會用 --append-system-prompt 當成一個引數交給 Claude Code，"
                            "出發通行證會顯示全文。VBear 沒有驗證 Claude Code 實際收到、也沒有驗證它會照做。"
@@ -57,7 +60,7 @@ INSTRUCTIONS_WHERE_SAFE = ("這張卡不是完整模式出發，這份指示不�
 
 def instructions_delivery(tool, mode) -> str:
     """How a card's instructions reach the tool when VBear starts it: "argv" (full mode, Claude Code: one
-    `--append-system-prompt` argument) or "paste" (the person's paste button; full mode of Codex and AGY, and the
+    `--append-system-prompt` argument) or "paste" (the person's paste button; full mode of Codex, AGY, Grok and MCODE, and the
     safe launch). A mode that is not exactly "full" is the safe one."""
     if mode == "full":
         return "argv" if tool == "claude" else "paste"

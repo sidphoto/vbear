@@ -26,7 +26,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from . import activity, position_guide
+from . import activity, ai_tools, position_guide
 from .agent_profiles import (VERIFIED_INTENTS, effective_launch_mode, position_of,  # moved there so a team slot / the starter deck share them; same values
                              profile_digest)
 from .agent_profiles import instructions_of as agent_profiles_instructions
@@ -147,14 +147,19 @@ def intent_blockers(intents: dict) -> list[dict]:
     return launch_blockers(stand_in, True, {"enabled": False, "approved_domains": []})
 
 
-# What is said when the card's tool is one VBear does not start. An AGY card is a record for building teams: VBear
-# has no managed launch for Antigravity and says so, rather than leaving a button that looks as if it might work.
-TOOL_NOT_LAUNCHABLE = {"shared": "shared 不是可啟動的工具",
-                       "agy": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"}
+# What is said when the card's tool is one the safe launch does not start. In safe mode an AGY card is a record for
+# building teams: VBear has no managed (sandboxed) launch for Antigravity and says so, rather than leaving a button that looks as if it might work.
+# (Of the safe launch: full mode does start an AGY card.)
+TOOL_NOT_LAUNCHABLE = ai_tools.not_launchable_messages()
 # The tools of a role card that VBear never starts, whatever its permission intents say. The card wizard's step 2
 # repeats this list (UNLAUNCHABLE_TOOLS in web/app.js) to stay quiet about a launch that was never going to happen;
 # tests/test_p20_agy_page.py keeps the two equal.
 UNLAUNCHABLE_TOOLS = tuple(TOOL_NOT_LAUNCHABLE)
+
+
+# What the server says when a full-mode launch is confirmed without the person's "I understand" (ADR 0002). The page
+# shows the same first sentence beside the box.
+FULL_MODE_ACK_REQUIRED = "這個員工可以動你電腦上的任何檔案；要先勾選「我了解」才能出發"
 
 
 def launch_blockers(profile: dict, commit, network) -> list[dict]:
@@ -171,13 +176,14 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         # that the card is off or its tool is not one VBear starts this way.
         tool = (profile.get("model") or {}).get("tool")
         if tool not in agent_sessions.FULL_ENGINES:
-            block("tool_not_launchable", "shared 不是可啟動的工具" if tool == "shared" else "此 Agent 工具沒有可啟動的設定")
+            block("tool_not_launchable",
+                  TOOL_NOT_LAUNCHABLE[tool] if tool in ai_tools.generic_ids() else "此 Agent 工具沒有可啟動的設定")
         if profile.get("enabled") is False:
             block("profile_disabled", "此角色卡已停用")
         return out
     tool = (profile.get("model") or {}).get("tool")
-    if tool not in {"claude", "codex"}:
-        block("tool_not_launchable", TOOL_NOT_LAUNCHABLE.get(tool, "此 Agent 工具沒有受管啟動設定"))
+    if tool not in ai_tools.safe_launch_ids():
+        block("tool_not_launchable", TOOL_NOT_LAUNCHABLE.get(tool, ai_tools.NOT_LAUNCHABLE_DEFAULT))
     if profile.get("enabled") is False:
         block("profile_disabled", "此角色卡已停用")
     intents = profile.get("permission_intents") or {}
@@ -434,8 +440,10 @@ def _git_state(workdir):
 class PreviewStore:
     """Server-held previews: short TTL, atomic single consumption."""
 
-    def __init__(self, runtime, *, ttl: float = PREVIEW_TTL, allowed_root=None):
-        """``allowed_root`` is a path or a callable returning the current one."""
+    def __init__(self, runtime, *, ttl: float = PREVIEW_TTL, allowed_root=None, hidden_tools=None):
+        """``allowed_root`` is a path or a callable returning the current one. ``hidden_tools`` is a callable returning
+        the hidden AI tools that are switched off (a card of one cannot be started)."""
+        self._hidden_tools = hidden_tools
         self._runtime = runtime
         self._ttl = ttl
         self._allowed_root = allowed_root
@@ -473,7 +481,7 @@ class PreviewStore:
                 raise PreviewError(429, "too_many_previews", "待確認的 preview 過多，請稍後再試")
         if effective_launch_mode(profile) == "full":
             return self._create_full(profile, canonical, now)
-        blockers = launch_blockers(profile, commit, network)
+        blockers = self._hidden_blockers(profile) + launch_blockers(profile, commit, network)
         prepared = None
         engine = (profile.get("model") or {}).get("tool")
         if not blockers:
@@ -532,7 +540,7 @@ class PreviewStore:
         nothing to remove if it is not confirmed. It shows the exact command, where the tool was found, what is carried
         and what is not, and states that VBear limits nothing. The digest is of the command, the folder and the file."""
         engine = (profile.get("model") or {}).get("tool")
-        blockers = launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
+        blockers = self._hidden_blockers(profile) + launch_blockers(profile, True, {"enabled": False, "approved_domains": []})
         if not blockers:
             blockers += self._full_folder_blockers(canonical)
         found = argv = view = command = None
@@ -589,6 +597,12 @@ class PreviewStore:
             body["expires_at"] = entry["expires"]
         return body
 
+    def _hidden_blockers(self, profile: dict) -> list[dict]:
+        """A card whose tool is hidden and switched off cannot be started; it says why and nothing is prepared."""
+        tool = (profile.get("model") or {}).get("tool")
+        off = self._hidden_tools() if callable(self._hidden_tools) else ()
+        return [ai_tools.hidden_blocker(tool)] if tool in off else []
+
     def _full_folder_blockers(self, canonical: str) -> list[dict]:
         """The folders a launch may not start in are the same as for the safe one (the home directory itself, credentials,
         tool state, the state directory): a full-mode terminal starts in the folder, and the person chose it here."""
@@ -639,7 +653,7 @@ class PreviewStore:
 
     def consume(self, preview_id, expected_settings_digest, user_confirmed, load_profile,
                 *, cols: int | None = None, rows: int | None = None,
-                accept_unverified_cli=None) -> dict:
+                accept_unverified_cli=None, accept_full_mode=None) -> dict:
         """Confirm and launch. ``load_profile(profile_id)`` returns the current
         Profile so a change since the preview is detected."""
         if user_confirmed is not True:
@@ -658,6 +672,10 @@ class PreviewStore:
                 self._discard(self._previews.pop(preview_id))
                 raise PreviewError(410, "preview_expired", "preview 已過期；請重新 preview")
             manifest = (entry.get("prepared") or {}).get("manifest") or {}
+            if entry.get("full") and accept_full_mode is not True:
+                # ADR 0002: a full-mode launch needs the person's own "I understand" on top of user_confirmed. Checked
+                # before consuming, so the same preview can still be confirmed once the box is ticked.
+                raise PreviewError(409, "full_mode_not_acknowledged", FULL_MODE_ACK_REQUIRED)
             if manifest.get("cli_verified") is False and accept_unverified_cli is not True:
                 # Checked before consuming, so the same preview can still be confirmed.
                 raise PreviewError(409, "cli_unverified_not_acknowledged",

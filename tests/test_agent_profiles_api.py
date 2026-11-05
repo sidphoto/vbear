@@ -190,14 +190,28 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual({s["skill_id"]: s["categories"] for s in body["skills"]}, {"s-1": ["design"], "s-2": []})
         self.assertEqual(body["skill_categories"], [{"id": "design", "label": "設計與介面"}])
 
+    def test_catalog_serves_the_ai_tool_list_the_server_keeps(self):
+        _, body = _request("GET", self.port, "/api/agent-builder/catalog")
+        self.assertEqual([t["id"] for t in body["tool_list"]], body["tools"])
+        by = {t["id"]: t for t in body["tool_list"]}
+        self.assertEqual(by["agy"], {"id": "agy", "name": "Antigravity（AGY）", "short": "AGY", "family": "google",
+                                     "generic": False, "safe_launch": False, "safe_mode": False, "full_launch": True,
+                                     "hidden": False,
+                                     "not_launchable_message": "安全模式不會啟動 AGY，要出發請選完整模式"})
+        self.assertEqual((by["claude"]["safe_launch"], by["codex"]["safe_launch"], by["shared"]["full_launch"]),
+                         (True, True, False))
+        self.assertEqual([t for t in body["tools"] if by[t]["safe_mode"]], body["safe_mode_tools"])
+        self.assertEqual(body["safe_mode_tools"], ["claude"])
+        self.assertNotIn("install_command", json.dumps(body["tool_list"]))
+
     def test_catalog_endpoint_lists_tool_and_permission_enums(self):
         status, body = _request("GET", self.port, "/api/agent-builder/catalog")
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertEqual(set(body["tools"]),
-                         {"claude", "codex", "agy", "shared"})
-        # the camps in the order the wizard offers them: AGY sits before the generic shared camp
-        self.assertEqual(body["tools"], ["claude", "codex", "agy", "shared"])
+                         {"claude", "codex", "agy", "grok", "shared"})   # MCODE is hidden until switched on
+        # the camps in the order the wizard offers them: AGY and Grok sit before the generic shared camp
+        self.assertEqual(body["tools"], ["claude", "codex", "agy", "grok", "shared"])
         self.assertEqual(body["permission_keys"], ["read", "write", "test", "deploy"])
         self.assertEqual(body["permission_values"],
                          ["allow", "deny", "unspecified"])

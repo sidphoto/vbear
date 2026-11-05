@@ -1,4 +1,4 @@
-"""P20: Antigravity (AGY) as a fourth camp of role cards. VBear does not launch it: the card is a record for
+"""P20: Antigravity (AGY) as a fourth camp of role cards. The safe launch does not start it: in safe mode the card is a record for
 building teams. These tests lock the backend side — the tool id, its family, the refusal to launch, the flow
 snapshot, the independent-review rule and the words of the role card's back. (That the page's own tables are the
 same ones is locked in test_p20_agy_page.)
@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 GOOD = {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}
 NET_OFF = {"enabled": False, "approved_domains": []}
 REV = "ab" * 32
-AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"
+AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式"
 
 
 def profile(tool="agy", **over):
@@ -50,17 +50,17 @@ def role(family="google", **over):
 
 class ToolRegistryTests(unittest.TestCase):
     def test_agy_is_a_known_tool_and_nothing_else_was_added(self):
-        self.assertEqual(agent_profiles.KNOWN_TOOLS, frozenset({"claude", "codex", "agy", "shared"}))
+        self.assertEqual(agent_profiles.KNOWN_TOOLS, frozenset({"claude", "codex", "agy", "grok", "mcode", "shared"}))
         self.assertEqual(set(agent_profiles.TOOL_ORDER), set(agent_profiles.KNOWN_TOOLS))
         self.assertEqual(len(agent_profiles.TOOL_ORDER), len(agent_profiles.KNOWN_TOOLS))
 
     def test_the_order_the_camps_are_offered_in(self):
-        # the three tools of before keep their places; AGY sits before the generic shared camp
-        self.assertEqual(agent_profiles.TOOL_ORDER, ("claude", "codex", "agy", "shared"))
+        # the three tools of before keep their places; AGY, Grok and MCODE sit before the generic shared camp
+        self.assertEqual(agent_profiles.TOOL_ORDER, ("claude", "codex", "agy", "grok", "mcode", "shared"))
 
     def test_the_family_of_each_tool(self):
         self.assertEqual(agent_profiles.TOOL_FAMILY, {"claude": "anthropic", "codex": "openai", "agy": "google",
-                                                       "shared": "unknown"})
+                                                       "grok": "xai", "mcode": "minimax", "shared": "unknown"})
         self.assertEqual(agent_profiles.family_of_tool("agy"), "google")
         for other in ("gemini", "AGY", "", None, 5, ["agy"], "toString"):
             self.assertEqual(agent_profiles.family_of_tool(other), "unknown", repr(other))
@@ -131,7 +131,7 @@ class RoleCardOfAgyTests(unittest.TestCase):
     def test_no_armor_and_the_reason_names_agy(self):
         data = self.build()
         self.assertIs(data["armor"]["applicable"], False)
-        self.assertEqual(data["armor"]["why"], "VBear 還不會啟動 AGY，沒有防具")
+        self.assertEqual(data["armor"]["why"], "安全模式不會啟動 AGY，沒有防具")
         self.assertEqual([b["message"] for b in data["blockers"]], [AGY_NOT_LAUNCHED])
 
     def test_the_tool_list_is_unknown_and_says_so_in_agys_words(self):

@@ -227,7 +227,7 @@ class PreviewApiCase(ServerCase):
         p = r["preview"]
         self.assertFalse(p["launchable"])
         self.assertIsNone(p["preview_id"])
-        self.assertEqual([x["message"] for x in p["reasons"]], ["VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"])
+        self.assertEqual([x["message"] for x in p["reasons"]], ["安全模式不會啟動 AGY，要出發請選完整模式"])
         self.assertIsNone(p["cli"])
         text = json.dumps({"labels": p["derived_labels"], "groups": p["armor_groups"]}, ensure_ascii=False)
         self.assertNotIn("Claude", text)

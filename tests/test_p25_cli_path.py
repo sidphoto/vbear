@@ -25,6 +25,8 @@ class FakeHome(unittest.TestCase):
         self.home = Path(self.tmp.name).resolve() / "home"
         self.bin = self.home / ".local" / "bin"
         self.bin.mkdir(parents=True)
+        # the vendors' own install folders (v0.12): searched after .local/bin
+        self.vendor_bins = (str(self.home / ".grok" / "bin"), str(self.home / ".minimax-code" / "bin"))
         self.vbear_home = self.home / ".vbear"
         patcher = mock.patch.dict(os.environ, {"HOME": str(self.home), "PATH": APP_PATH,
                                                "VBEAR_HOME": str(self.vbear_home)})
@@ -39,19 +41,21 @@ class FakeHome(unittest.TestCase):
 
 
 class CentralDefinition(FakeHome):
-    def test_extra_path_ends_with_local_bin_and_keeps_system_order(self):
+    def test_extra_path_ends_with_the_home_folders_and_keeps_system_order(self):
         extra = daemon.extra_path(str(self.home))
         self.assertEqual(extra, ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
-                                 str(self.bin)))
+                                 str(self.bin), *self.vendor_bins))
 
     def test_extra_path_refuses_a_home_that_is_not_a_plain_absolute_directory_name(self):
         for bad in ("", "relative/home", "/tmp/a:b", "/tmp/a\0b"):
             with self.subTest(home=bad):
                 self.assertNotIn(".local/bin", " ".join(daemon.extra_path(bad)))
+                self.assertNotIn(".grok/bin", " ".join(daemon.extra_path(bad)))
+                self.assertNotIn(".minimax-code/bin", " ".join(daemon.extra_path(bad)))
 
     def test_build_env_appends_after_the_apps_fixed_path(self):
         env = daemon.build_env()
-        self.assertEqual(env["PATH"], APP_PATH + ":" + str(self.bin))
+        self.assertEqual(env["PATH"], ":".join([APP_PATH, str(self.bin), *self.vendor_bins]))
 
     def test_build_env_keeps_the_users_own_order_and_does_not_duplicate(self):
         mine = f"/mine/bin:{self.bin}:/usr/bin"
@@ -63,6 +67,8 @@ class CentralDefinition(FakeHome):
     def test_review_environment_does_not_gain_the_user_bin(self):
         env = review_codex.build_env("/state/codex-home", "/state/run-home")
         self.assertNotIn(str(self.bin), env["PATH"].split(":"))
+        for folder in self.vendor_bins:
+            self.assertNotIn(folder, env["PATH"].split(":"))
 
     def test_swift_launcher_path_matches_the_python_definition(self):
         text = (ROOT / "macos" / "VBear" / "main.swift").read_text(encoding="utf-8")
@@ -70,9 +76,11 @@ class CentralDefinition(FakeHome):
         self.assertIsNotNone(match, "pythonEnvironment must build PATH in a variable")
         self.assertEqual(match.group(1), APP_PATH)
         self.assertIn('path += ":" + home + "/.local/bin"', text)
+        self.assertIn('path += ":" + home + "/.grok/bin"', text)
+        self.assertIn('path += ":" + home + "/.minimax-code/bin"', text)
         self.assertIn('child["PATH"] = path', text)
         self.assertNotIn('child["PATH"] = "/opt/homebrew', text)
-        self.assertEqual(daemon.build_env()["PATH"], match.group(1) + ":" + str(self.bin))
+        self.assertEqual(daemon.build_env()["PATH"], ":".join([match.group(1), str(self.bin), *self.vendor_bins]))
 
 
 class TranslationLookup(FakeHome):

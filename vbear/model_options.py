@@ -7,7 +7,7 @@ Nothing here runs a program or opens a connection. Two sources, both already on 
   * Codex: ``~/.codex/models_cache.json``, the list Codex caches for itself. Only ``slug``, ``display_name``,
     ``visibility`` and ``priority`` of each model are looked at; nothing else in the file is kept or sent on.
 
-Agy and shared cards get no list: VBear does not start Antigravity and reads nothing under ``~/.gemini`` for this.
+Agy and shared cards get no list: VBear reads nothing under ``~/.gemini`` for this (and the safe launch never starts Antigravity).
 """
 
 from __future__ import annotations

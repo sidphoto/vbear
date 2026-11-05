@@ -1,5 +1,81 @@
 # Changelog
 
+## Unreleased
+
+**This is v0.12.0, which is not released yet. The version number in `vbear/__init__.py` is not raised, so a build from this
+code still reports the old number.** The start-up page: a new person is taken through installing and signing in to an AI
+tool, picking a daily limit and trying the tool once, before anything else.
+
+- **A start-up page (`#/setup`, 開始設定) and a left-menu entry.** It lists the AI tools side by side (Claude Code, Codex,
+  Antigravity (AGY), Grok; MCODE only while it is switched on) with where each stands: 還沒安裝, 還沒登入 or 就緒. 安裝 and 登入 open a
+  terminal inside VBear and type the tool maker's own install or login line into it; the line comes only from the list in
+  `vbear/ai_tools.py` (the page sends a tool and an action, never a command), and the person sees it and the shell runs it.
+  MCODE's login has two buttons, one per region. Claude Code and Codex are checked with their own status command and only
+  the exit code is used (0 means signed in; the output is not captured, stored or served); AGY, Grok and MCODE have no such
+  command, so the person presses 我登入好了, and the page says VBear cannot confirm it. The mark is kept in `setup_marks.json`
+  (tool id and time only). Nothing reads any tool's own login folder. The page reads the tools again every 5 seconds (a look
+  is kept for 30 seconds, and a forced recheck, a mark, a terminal or a try makes the next look fresh). The runtime daemon
+  has one new operation, `open_setup`, which takes only a tool, an action, a region and a terminal size.
+- **First time, and upgrading.** New config keys `setup_done` and `setup_notice` (both false by default, written through
+  `/api/config`, booleans only). The home page sends a person who has not finished and has no ready tool to `#/setup`;
+  someone who already has a ready tool when they upgrade is counted as done and told once. If the server cannot say, nobody
+  is forced anywhere.
+- **A first-time page (`#/welcome`, 第一次打開 VBear), app window only.** Shown once, before the start-up page, and it can be
+  skipped. It says what to do when the Mac stops an app that is not signed with an Apple Developer ID: System Settings,
+  隱私權與安全性, press 強制打開 (the same as the README's Open Anyway steps). Its picture is an illustration the page draws
+  itself, not a screenshot, so nothing from anyone's real settings is in it, and it says so. Whether it is the app window is
+  judged by the folder chooser the app window gives the page (a browser does not have it), so a browser never gets the
+  page. New config key `welcome_seen` (false by default, boolean only) is set when it is read or skipped.
+- **Grok and MCODE as employees.** Grok (xAI's Grok Build) and MCODE (MiniMax Code) can be put on role cards and started in
+  full mode (`grok [-m X]`, `mcode [-m X]`); neither has a safe mode, and the instructions go in only through 貼上職位指示.
+  MCODE is hidden: the config key `show_mcode` (false by default) is switched on by 「顯示 MCODE」 in the settings. While it is
+  off, MCODE is not offered anywhere, cannot be given to a card and is left out of the staffing proposal's tool list; a card
+  that already uses it is kept and says why it cannot be chosen. VBear now also looks for the tools in `~/.grok/bin` and
+  `~/.minimax-code/bin` after `~/.local/bin`. xAI and MiniMax are two more makers, each its own family for the independent
+  review rule.
+- **Full mode needs a tick on 我了解, and new cards start in safe mode.** A full-mode launch is refused with
+  `full_mode_not_acknowledged` (409) unless the confirmation carries `accept_full_mode: true`; the pass shows 「這個員工可以動
+  你電腦上的任何檔案」 and 確認啟動 stays off until the box is ticked. New role cards start in safe mode when their tool has
+  one (only Claude Code), otherwise in full mode with the reason; the catalog's default is `safe`. Cards that exist are not
+  changed. Codex has a safe launch in the tool list but VBear refuses it for its interactive mode, so in practice Codex runs
+  in full mode only.
+- **試一下.** Each installed tool has a button that sends one fixed short sentence headless, in a new empty scratch folder
+  and a new process group that is ended however the call ends, with a 60 second limit, and reads only whether it answered
+  (the answer and anything about the account are dropped, never stored). The page says it costs about under US$0.01 and
+  needs a second press to confirm. The result is success, not logged in, timeout, not found or an answer VBear cannot read.
+  The cost is kept in `setup-try.json` (tool, times, cap, cost) and counts in the same day as the meetings, staffing meetings
+  and chats: what Claude Code reports, else US$0.01 (a try that started a program is booked even when it fails); when the
+  day cannot take another US$0.01 nothing starts. The ledger's `includes` list gains `setup_try`.
+  Codex's try puts `--ask-for-approval never` before `exec`, because it is a top-level option of `codex` and
+  `codex exec --help` does not list it; the other flags were checked against each tool's own `--help`. None of these calls
+  was run against a real tool for this change.
+- **Choose a daily limit (每天上限) on the start-up page.** US$1, US$3 (the default) or US$10, each with a sentence on what
+  it roughly covers, written for the default per-call limits. It sets `meeting_limits.daily_usd`, shared by chats, meetings,
+  staffing meetings and tries, and only ever lowers the other limits that would otherwise be above it (the meeting, per
+  call, staffing total and chat turn limits); choosing US$10 raises none. The same rule now applies when
+  `meeting_limits` is written through `/api/config`.
+- **A note where a page needs Claude Code.** The meetings, staffing meetings, chat and skill-translation pages show
+  「這個功能目前需要 Claude Code」, how to get it and a button to the start-up page when Claude Code is not ready; when the state
+  cannot be read nothing is shown and the page works as before.
+- **The tool list is in one place (`vbear/ai_tools.py`).** The Python tables that used to repeat the tools (profiles,
+  position guide, flows, launch, runtime, the catalog's `tool_list`) are built from it, and a test keeps the page's own copy
+  equal to it.
+- **Sentences that said VBear cannot start AGY are corrected.** They now say safe mode does not start AGY and full mode does,
+  for example 「安全模式不會啟動 AGY，要出發請選完整模式」.
+- **Documents.** Both READMEs describe the start-up page, Grok and hidden MCODE, Codex as full mode only, the daily limit,
+  the 我了解 tick, safe mode for new cards, what a try costs and the first-time page. `SECURITY.md` and
+  `docs/SECURITY-MODEL.md` say that the start-up page's commands come only from the server's list, how a try is isolated
+  and booked, and that status commands are read by exit code only.
+- **Going back to v0.11.0.** v0.11.0 reads the new config keys (`setup_done`, `setup_notice`, `welcome_seen`, `show_mcode`)
+  as extra keys and leaves them in `config.json`; it leaves `setup_marks.json`, `setup-try.json` and `setup-try.blocked` as
+  they are, and it has no start-up page. **v0.11.0 does not count tries in the day's ledger**, so on a day that tries spent
+  money here it lets meetings spend the whole of `meeting_limits.daily_usd` again. Daily limits lowered by the start-up page
+  stay lowered. **Role cards that use Grok or MCODE are the one thing to fix first:** v0.11.0 does not know those tools and
+  treats `agent_profiles.json` with such a card as damaged. It moves the file aside, marks it, and stops reading and writing
+  role cards until you recover it by hand. Before going back, change those cards to another tool or delete them (switching
+  `show_mcode` off is not enough). This was read from the v0.11.0 code and was not run; flows and task cards that name a
+  Grok or MCODE card were not checked.
+
 ## v0.11.0 — chatting with role cards
 
 You can now talk with a role card. Pick an enabled card whose tool is Claude Code, say something, and the card answers

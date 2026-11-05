@@ -318,7 +318,7 @@ class HeadlessBoard:
     def remove(self, rid: str) -> None:
         raise NotImplementedError
 
-    def schema(self, kind: str) -> dict:
+    def schema(self, kind: str, ctx=None) -> dict:
         raise NotImplementedError
 
     def validate(self, kind: str, output, who: dict, ctx) -> dict:
@@ -600,7 +600,7 @@ class HeadlessBoard:
                                        prompt_sha256=sha, error_code=None, output=None)
         self._update(mid, start)
         effort = ctx.speed["chair_effort"] if final else ctx.speed["speaker_effort"]
-        spec = CallSpec(turn["kind"], ctx.binary, ctx.version, who["model_used"], self.schema(turn["kind"]), prompt, per_call, effort,
+        spec = CallSpec(turn["kind"], ctx.binary, ctx.version, who["model_used"], self.schema(turn["kind"], ctx), prompt, per_call, effort,
                         timeout=timeout)
         previous = turn["evidence"]
         output, code, stop = None, None, None

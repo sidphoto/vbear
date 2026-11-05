@@ -1715,3 +1715,42 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .chat-intro > p, .chat-intro > button { margin: 6px 12px 10px; }
 .chat-excerpt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ink-2); }
 @media (prefers-reduced-motion: reduce) { .chat-card, .chat-msg { transition: none; animation: none; } }
+
+/* the first-time page (第一次打開 VBear): an illustration drawn with boxes; colours come from the theme variables, so light and dark
+   both read; it wraps at a narrow width */
+.welcome-steps { margin: 0 0 16px; padding-left: 22px; display: grid; gap: 8px; min-width: 0; }
+.welcome-steps li { overflow-wrap: anywhere; }
+.welcome-diagram { max-width: 460px; margin: 0 0 8px; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); overflow: hidden; min-width: 0; }
+.welcome-titlebar { padding: 6px 12px; font-size: 12px; text-align: center; border-bottom: 1px solid var(--line-2); color: var(--mute); }
+.welcome-window { display: flex; gap: 0; min-width: 0; }
+.welcome-side { list-style: none; margin: 0; padding: 8px; display: grid; gap: 4px; align-content: start; flex: 0 0 38%; border-right: 1px solid var(--line-2); font-size: 13px; }
+.welcome-side li { padding: 4px 8px; border-radius: var(--radius); overflow-wrap: anywhere; }
+.welcome-side .welcome-side-on { background: var(--ok-soft); color: var(--ok); }
+.welcome-pane { flex: 1 1 auto; padding: 12px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.welcome-pane-title { font-weight: 600; }
+.welcome-blocked { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.welcome-mark { justify-self: start; padding: 4px 10px; border: 2px solid var(--ok); border-radius: var(--radius); font-size: 13px; }
+.welcome-num { display: inline-block; min-width: 18px; margin-right: 6px; text-align: center; border-radius: 9px; background: var(--ok); color: var(--panel); font-size: 12px; }
+.welcome-foot { flex-wrap: wrap; }
+@media (max-width: 520px) { .welcome-foot .btn { flex: 1 1 100%; } .welcome-side { flex-basis: 42%; } }
+/* the start-up page (開始設定): one card per AI tool; it wraps at a narrow width and follows the light and dark themes through the
+   variables above */
+.setup-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 12px; }
+.setup-tool { border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); padding: 14px; display: grid; gap: 8px; min-width: 0; }
+.setup-tool[data-state="ready"] { border-color: var(--ok); }
+.setup-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; min-width: 0; }
+.setup-head h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.setup-text { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.setup-try { display: grid; gap: 6px; min-width: 0; border-top: 1px solid var(--line-2); padding-top: 8px; }
+.setup-try-result { padding: 6px 10px; border-radius: var(--radius); }
+.setup-try-result.ok { color: var(--ok); background: var(--ok-soft); }
+.setup-try-result.bad { color: var(--bad); background: var(--bad-soft); }
+.setup-foot .row { flex-wrap: wrap; }
+@media (max-width: 520px) { .setup-actions .btn, .setup-foot .btn { flex: 1 1 100%; } }
+.setup-daily { margin: 0 0 16px; }
+.setup-daily-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+.setup-daily-choice { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-width: 0; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); padding: 10px 12px; }
+.setup-daily-choice[data-selected="true"] { border-color: var(--ok); }
+.setup-daily-choice .setup-text { flex: 1 1 220px; }
+@media (max-width: 520px) { .setup-daily-choice .btn { flex: 1 1 100%; } }

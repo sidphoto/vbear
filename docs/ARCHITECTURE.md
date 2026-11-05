@@ -296,6 +296,38 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   restart), `_e2e` (second console, stop during a turn, restarts, ledger); `tests/qa_s3.py` for a person or a
   browser tool.
 
+## Start-up page — `vbear/ai_tool_status.py`, `web/app.js` (`#/setup`)
+
+`ai_tool_status.report(conf)` answers, for each tool in `ai_tools.setup_ids()` (a hidden one only while its switch is on),
+whether it is installed (found on the CLI search path and `--version` read by the registry's `version_pattern`), whether it is
+logged in (the status command's exit code for Claude Code and Codex; the person's mark for AGY, Grok and MCODE), and the
+resulting `state` (`not_installed`, `not_logged_in`, `ready`). `GET /api/setup/tools` serves the rows, `POST
+/api/setup/tools/<id>/marker` sets or removes a mark, `POST /api/setup/settle` is the lobby's first look (a person who already
+has a ready tool when they come to v0.12 is counted as done, with `setup_notice` set once), and `POST /api/setup/terminals`
+opens the install or login terminal through the daemon's `open_setup` operation (see SECURITY-MODEL). The config keys
+`setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
+false; a config that does not say forces nobody.
+
+In the app window only, the home page sends that person to `#/welcome` (`viewWelcome` in `web/app.js`, 第一次打開 VBear) first,
+while the config key `welcome_seen` is false; reading it or skipping it writes `welcome_seen: true` through `/api/config` and goes on
+to `#/setup`. Whether this is the app window is judged by `folderBridge()`, the native folder-chooser handler that only the app's
+WKWebView gives the page (`macos/VBear/main.swift`); a browser does not have it and never gets the page. The page's picture is boxes
+drawn with `el()` and CSS (an illustration, not a screenshot).
+
+`ai_tool_status.report` keeps each tool's row in memory for `CACHE_TTL_S` (30 seconds, keyed by search path, tool and mark);
+`GET /api/setup/tools?force=1` (with `X-VBear`), a mark, an install or login terminal and a try read the tools again.
+「試一下」 is `POST /api/setup/tools/<id>/try` (`vbear/setup_try.py`): one fixed sentence, headless, in a scratch folder, with a
+time limit; the answer is judged and dropped. Its cost is kept by `vbear/try_spend.py` (`setup-try.json`) and is one more kind
+of the shared day in `meeting_runner.spend_kinds`, `staffing_runner.spend_kinds` and the daemon's chat check; the ledger lists
+it as `setup_try`.
+
+The same page asks for the daily limit (US$1, US$3 by default, or US$10): `GET /api/setup/daily-limit` gives the one in force,
+`POST /api/setup/daily-limit` (`{"daily_usd": n}`) writes it. `vbear/daily_limit.py` works out what must come down with it:
+the meetings' limit and call limit, the staffing record's total and the CEO's call, the chat turn; only ever down, never up.
+The server checks the result with each family's own rule and writes `config.json` once (all or nothing). A write of
+`meeting_limits.daily_usd` through `/api/config` brings the staffing and chat limits down the same way, but keeps refusing
+a day under the meeting or call limit that the same request or the file holds, with the plain 「每次 ≤ 每場 ≤ 每天」.
+
 ## Profile-managed Claude launch
 
 ```
@@ -315,9 +347,12 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
 ```
 
 - The preview and launch endpoints accept only `profile_id`, `workdir`, `commit`, `network` and `tool`.
-  The tools a role card may name are `agent_profiles.TOOL_ORDER` (`claude`, `codex`, `agy`, `shared`), and each implies a
-  model family (`TOOL_FAMILY`; `agy` is Google). Only `claude` and `codex` can be launched; an `agy` card is refused
-  with its own sentence (`agent_launch.TOOL_NOT_LAUNCHABLE`).
+  The tools a role card may name are `agent_profiles.TOOL_ORDER` (`claude`, `codex`, `agy`, `grok`, `mcode`, `shared`), and each implies a
+  model family (`TOOL_FAMILY`; `agy` is Google, `grok` xAI, `mcode` MiniMax). Only `claude` and `codex` can be started in safe mode; the safe launch refuses an
+  `agy`, `grok` or `mcode` card with its own sentence (`agent_launch.TOOL_NOT_LAUNCHABLE`), while full mode can start all five
+  (`agent_sessions.FULL_ENGINES`; `mcode` is hidden until the config key `show_mcode` is true, and the catalog's `tool_list` leaves it out until then). The list of tools is written once, in `vbear/ai_tools.py`; `TOOL_ORDER`, `TOOL_FAMILY`,
+  `FULL_ENGINES`, the model flags, `TOOL_NOT_LAUNCHABLE` and the catalog's `tool_list` are made from it, and
+  `tests/test_ai_tools.py` keeps the tables of `web/app.js` equal to it. Adding a tool starts with one entry there. Two fields tell the safe side apart: `safe_launch` (the safe launch's code accepts the tool: claude and codex) and `safe_mode` (the safe mode can really start it in this build: claude only, because Codex's managed launch is refused); `agent_profiles.SAFE_MODE_TOOLS` and the catalog's `safe_mode_tools` come from `safe_mode`, and the "only full mode" mark on a card is `full_launch` without `safe_mode`.
   They never take an argv, environment variables, settings or credentials.
 - **Cleanup.** When the session ends, the scratch directory and the per-launch files are removed only after
   every tracked process is proven dead. Otherwise the launch is kept in a `manual_review` state for you
