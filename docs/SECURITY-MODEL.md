@@ -193,7 +193,7 @@ Other safeguards:
 - **Fail closed** otherwise: the launch is refused if the sandbox is unavailable (`failIfUnavailable`), or if the
   profile, work directory, Claude Code binary or config changed since the preview.
 - **Antigravity (AGY) has no safe launch.** In safe mode a role card whose tool is `agy` is a record for building teams: `launch_blockers`
-  refuses it (`tool_not_launchable`, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), so no preview is
+  refuses it (`tool_not_launchable`, "安全模式不會啟動 AGY，要出發請選完整模式"), so no preview is
   prepared, no manifest is written and the loadout shows no armor and no tool list. Which skills AGY reads is judged
   from files only (see "Which skills AGY reads"), and even a skill AGY reads is never reported as one that loads: a
   skill chosen on an AGY card is a collection. The automatic review is unchanged: it is the Codex that
@@ -1153,6 +1153,42 @@ process starts until a version passes the chat check.
   KILL, signals sent only to its own verified process group, and kept for manual review when that cannot be
   proven. A chat whose earlier process is under manual review takes no new message. At daemon start, a turn a
   previous daemon left open is closed at its cap.
+
+## The start-up page (v0.12)
+
+The start-up page (`#/setup`) installs, signs in, checks and tries AI tools for a person who may never have opened a terminal,
+so what it can make VBear run is kept narrow. The details are in "Full-mode launches" above (the install and login terminals,
+the status reading and 「試一下」); this section is the short list of what holds.
+
+- **A command that VBear sends comes only from the list in `vbear/ai_tools.py`, never from the request.** The page names a
+  tool and an action (`install` or `login`, and for MCODE a region); `POST /api/setup/terminals` refuses every other field
+  (`command`, `argv`, `cwd`, `env`), an unknown tool or action, and a hidden tool while its switch (`show_mcode`) is off. The
+  daemon's `open_setup` operation takes only those same names, looks the line up itself and types it into the person's login
+  shell, where it can be seen. VBear downloads and runs nothing by itself. Grok and MCODE are on the same list under the
+  same rule. The writing routes need the `X-VBear` header.
+- **A status command is read by its exit code only.** For Claude Code and Codex, VBear runs the tool's own status command and
+  uses only the exit code (0 means signed in; anything else, including a timeout, counts as not signed in). The output goes to nowhere:
+  it is not captured, stored, logged or served. For AGY, Grok and MCODE there is no such command, so the person's
+  「我登入好了」 mark is the only evidence, and the page says VBear cannot confirm it. The mark file `setup_marks.json` holds a
+  tool id and a time. No tool's login folder is opened or listed.
+- **A try is isolated and booked.** 「試一下」 sends one fixed sentence headless, in a new empty scratch folder (removed
+  afterwards), in a new process group that is ended however the call ends, with a 60 second limit, at most 1 MiB read, one at
+  a time, and a plain environment. Only whether the tool answered is read; the answer and anything about the account are
+  dropped. Its cost goes into `setup-try.json` (tool, times, cap, cost) and counts toward the same daily limit as the
+  meetings, staffing meetings and chats (what Claude Code reports, else US$0.01; a try that started a program is booked even
+  if it fails). When the day cannot take another US$0.01, or the record cannot be read, nothing starts. Claude Code gets no
+  tools and none of the person's settings; Codex runs without the person's config and rules, read-only, with shell and MCP
+  off. Codex's `--ask-for-approval` (set to `never`) is a top-level option of `codex`, so it goes before `exec` (`codex exec --help` does
+  not list it). AGY has no flag for fewer tools that was checked, so it gets only the sentence. The flags were checked against
+  each tool's `--help`; no real tool was run.
+- **The daily limit the person picks only ever lowers other limits.** `POST /api/setup/daily-limit` accepts a number from
+  0.01 to 50, writes the three limit families together or not at all, and never raises one.
+- **The first-time page writes one yes/no.** `#/welcome` is shown only in the app window (judged by the native folder-chooser
+  handler the window gives the page) and writes only `welcome_seen` through `/api/config`; it runs and sends nothing else. Its
+  picture is an illustration the page draws itself, not a screenshot, so no part of the person's System Settings is shown or
+  stored.
+- **Grok and MCODE** start only in full mode, with the tick on 我了解 like the other tools; MCODE is hidden unless `show_mcode`
+  is on, and the server refuses to create or switch a card to it while it is off.
 
 ## Data handling
 

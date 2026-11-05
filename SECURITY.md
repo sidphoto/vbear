@@ -26,7 +26,10 @@ The following are in scope:
 - reading or writing files outside what the docs describe;
 - leaking secrets from skill files through the UI;
 - a chat that runs a tool without the permission card being answered, that keeps what the initialize answer carries (the
-  account, commands, models or extra folders), or that spends more than its turn cap without the ledger saying so.
+  account, commands, models or extra folders), or that spends more than its turn cap without the ledger saying so;
+- the start-up page sending a command that does not come only from the server's list (a tool and an action are all the page
+  may name), keeping or serving what a status command or a try printed (a status command is read by its exit code only), or
+  starting a try that is not isolated or is not booked against the daily limit.
 
 The following are **known and documented**, so they are not vulnerabilities on their own (see
 [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md)):

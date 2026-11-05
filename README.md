@@ -31,10 +31,10 @@ The game words below are only a way to read VBear's screens. Each one points at 
 |---|---|---|
 | **Character** | A **role card** (角色卡): a saved setup (name, position, instructions, launch mode, tool, skill cards, permission intents) that you can launch. Cards live in the **card pool** (角色卡池) | 角色卡池; the workbench's 「角色」 tab in the right column |
 | **Class** | A **role template** (職業) on the card, optional, chosen from the agent roles VBear found for Claude Code or Codex (VBear scans none for Antigravity, so an AGY card has none to pick). The picker lists only your card's own tool, groups the roles by the position each probably fits (a guess from its name, marked as one), is searchable, and shows each name in Chinese beside the English once you have had the names translated. Choosing one can fill in the position, the skills and the model the role names, each with one click. It is only a label: launching does not load the role's instructions into the tool | The card wizard's step 2, under the suggested position |
-| **Suggested position** | The **suggested position** (建議位置) on a role card, taken from the division of work of a one-person company and shown in two rows. Positions done on a task card: CEO (the chief executive), 全端工程師 (full-stack engineer), 社群媒體經理 (social media manager), 藝術總監 (art director). Staff: PM (project manager), 法務經理 (legal), 會計師 (accountant). The independent review is not a position of the company: it is VBear's own review gate, offered apart for the review places of a task card. You can also leave it unspecified. Once chosen, the wizard says what the position does, where on a task card it is suggested to go (the review gate suits a review place or the second review place, which must be of another maker than the executor), the camp and model it is suggested for (the art director's is AGY, which VBear does not start) and a one-line reminder. Cards saved with the positions of an earlier local build are read as the position they became and marked as old. It is a label only: every position suggests the same permission intents (a launch honours one combination today), and the reminder is for you to write into the task card's goal because VBear cannot enforce it. The position is saved on the card itself, so it is still there in another browser or on another port (one that was only remembered in the browser is written onto the card when you save it in the wizard); a staff card normally does not go on a task card and is started on its own when needed | Step 2 of the card wizard; the team places of a task card |
+| **Suggested position** | The **suggested position** (建議位置) on a role card, taken from the division of work of a one-person company and shown in two rows. Positions done on a task card: CEO (the chief executive), 全端工程師 (full-stack engineer), 社群媒體經理 (social media manager), 藝術總監 (art director). Staff: PM (project manager), 法務經理 (legal), 會計師 (accountant). The independent review is not a position of the company: it is VBear's own review gate, offered apart for the review places of a task card. You can also leave it unspecified. Once chosen, the wizard says what the position does, where on a task card it is suggested to go (the review gate suits a review place or the second review place, which must be of another maker than the executor), the camp and model it is suggested for (the art director's is AGY, which VBear starts only in full mode) and a one-line reminder. Cards saved with the positions of an earlier local build are read as the position they became and marked as old. It is a label only: every position suggests the same permission intents (a launch honours one combination today), and the reminder is for you to write into the task card's goal because VBear cannot enforce it. The position is saved on the card itself, so it is still there in another browser or on another port (one that was only remembered in the browser is written onto the card when you save it in the wizard); a staff card normally does not go on a task card and is started on its own when needed | Step 2 of the card wizard; the team places of a task card |
 | **Orders** | The **instructions** (職位指示) on a role card: words for the AI, starting from the position's default (up to 2000 characters, with 回復預設 to go back to it). A full-mode Claude Code card carries them as one `--append-system-prompt` argument, shown in full on the pass (VBear did not verify that Claude Code receives them); otherwise 貼上職位指示 pastes them into a terminal you took over and you press Enter yourself, because VBear never does. A meeting sends them with each speaker's call, and the executor's card puts them first in the plan of automatic mode. Under them the wizard lists the position's boundaries, each marked as enforced when launched, only a reminder, not possible or not applicable | Step 2 of the card wizard; the back of a card; a terminal's 貼上職位指示 |
 | **Play style** | The **launch mode** (出發方式) of a role card. 完整模式 (full mode; the default for a new card only when its tool has no safe mode, and starting it needs a tick on 我了解) starts the tool the way you would in your own terminal, with your own settings, skills, `CLAUDE.md`, MCP servers, plugins and the network, and VBear limits nothing. 安全模式 (safe mode) is the sandboxed launch with the shields of the launch pass. A card saved before v0.9.0 has no `launch_mode` and stays in safe mode | Step 2 of the card wizard; the launch pass |
-| **Faction** | The **tool** it runs on (陣營): Claude Code, Codex CLI or Antigravity (AGY). In full mode a card of any of the three is started from its role card; in safe mode only a Claude Code card is (VBear cannot sandbox Codex yet, and Antigravity has no safe launch, so such a card is then a record for building teams). An AGY card's model family is always Google. An AGY card can hold the skills AGY reads on this Mac (judged from AGY's own settings, see below), as a collection only; any other skill card is greyed with 「AGY 不會讀這張技能卡」 | The card's front |
+| **Faction** | The **tool** it runs on (陣營): Claude Code, Codex CLI, Antigravity (AGY) or Grok, and MCODE too while you have switched it on (see Supported agents). In full mode a card of any of them is started from its role card; in safe mode only a Claude Code card is (VBear cannot sandbox Codex yet, and AGY, Grok and MCODE have no safe launch, so those cards run in full mode only). An AGY card's model family is always Google. An AGY card can hold the skills AGY reads on this Mac (judged from AGY's own settings, see below), as a collection only; any other skill card is greyed with 「AGY 不會讀這張技能卡」 | The card's front |
 | **Skill cards** | The **Skills** VBear found: some installed on your Mac, some only a copy on a marketplace that is not installed yet. A card slot is dashed (收藏中: kept in the card, not loaded by a launch) or solid (生效中: only when VBear reports that it loads, which no launch does today; a full-mode launch loads whatever skills your own settings load, which VBear does not track for a card) | 技能庫, and the slots on a role card |
 | **Launch pass** | The **protection a launch actually puts on, and the weak spots it does not cover** (出發通行證). Three lines on its front, each worded by what was actually verified: where it can write, whether the network is blocked, and always that **commits cannot be blocked**. A shield is solid (enforced), dashed (only a record) or empty (not blocked); partly blocked, untested and unknown items get no shield and are written out in words. The seven permission labels sit behind 「看七項細節」. A full-mode card's pass draws no shield: it starts with 「VBear 沒有限制這張卡」 and shows the command it will run | 角色卡的「出發」 |
 | **Task card** | One **folder** on your Mac (任務卡). Bring an existing project in with 「＋ 任務卡（導入專案）」: VBear reads the folder (read-only: whether it is a git repository, branch and HEAD, project skills, how many terminals are in it) and never writes into it | 冒險者大廳, 流程, the workbench's 「任務卡」 tab |
@@ -339,14 +339,16 @@ a meeting or a skill translation is sent the same way, through your own Claude C
 
 ## Getting started: 3 steps
 
-**Before you set out:** Claude Code is installed on your Mac and you are signed in to it
-([get Claude Code](https://claude.com/product/claude-code)). VBear launches it for you, but it does not install it.
+**Before you set out:** you need a paid plan for at least one AI tool: Claude Code, Codex, Antigravity (AGY) or Grok. You
+do not have to install it first: the **start-up page** (開始設定, below) shows which ones are on your Mac and does the
+install and login for you.
 
 1. **Install.** Download `VBear-<version>-arm64.dmg` from the
    [latest release](https://github.com/sidphoto/vbear/releases/latest), open it and drag **VBear** into
    Applications. The first time, macOS refuses to open it: go to **System Settings → Privacy & Security**, scroll
    down and click **Open Anyway** next to VBear. Homebrew and running from source are in [Install](#install).
-2. **Open VBear.** The app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 辦公室, 會議, 終端機, 終端工作台, 流程,
+2. **Open VBear.** The first time, the app shows a short page, 第一次打開 VBear, with these same steps and a picture, then the
+   start-up page (see [The start-up page](#the-start-up-page-開始設定)). Once an AI tool is ready the app opens its own window on the quest board, 冒險者大廳. The menu on the left has 冒險者大廳, 辦公室, 會議, 終端機, 終端工作台, 流程,
    技能庫, 角色卡池, 專案 and 設定 (on a phone-width window it folds into one menu button that names the page you are on). VBear lists the skills and agent roles it finds on your Mac (read-only; it
    changes none of them). The top of the home page walks you through the first game in three steps.
 3. **Collect, bring in a project, and play.**
@@ -374,6 +376,42 @@ a meeting or a skill translation is sent the same way, through your own Claude C
      enforced or not proven; 「不授予」 means it is not given at all. Reading is not limited: it can read any file you can read.
    - In safe mode, tick the box that says the role will create and change files in this folder and can save commits,
      which VBear cannot block. Press **確認啟動** only if you are happy with what you see.
+
+## The start-up page (開始設定)
+
+The first time you open VBear, the page 開始設定 lists the **AI tools** VBear can borrow (Claude Code, Codex, Antigravity (AGY)
+and Grok; MCODE only if you switched it on). They are programs that run on your own Mac with your own account and plan;
+VBear has no account of its own. Pick the ones you have a plan for. One ready tool is enough to start. You can come back
+any time from 「開始設定」 in the left menu.
+
+- **Each tool shows where it stands:** 還沒安裝 (not installed), 還沒登入 (installed, not signed in) or **就緒** (ready: installed and
+  signed in). The button next to it is the next step.
+- **安裝 and 登入 open a terminal inside VBear** and type the tool maker's own install or login line into it, so you do not have
+  to type anything and you can see exactly which line ran. Signing in happens in the browser window that pops up, with your
+  own account; it never passes through VBear. The lines come only from a fixed list in VBear, never from the page.
+- **How "ready" is known.** Claude Code and Codex have their own command that says whether you are signed in; VBear asks it
+  and uses only whether it succeeded (nothing it prints is read or kept). Antigravity (AGY), Grok and MCODE have no such
+  command, so after you sign in you press **我登入好了**; VBear says plainly that it cannot confirm that one itself.
+- **試一下 (try it).** A button on each installed tool sends one short fixed sentence to it, to see that it really answers. Before
+  you confirm, the page says it costs about under US$0.01, and the cost counts toward your daily limit. Nothing the tool says
+  back is kept.
+- **Pick a daily limit (每天上限).** The page asks how much all of VBear's AI spending (chats, meetings, staffing meetings and
+  tries together) may cost per day: US$1, US$3 or US$10, with US$3 chosen to start. It starts counting again at midnight.
+  You can choose again on the same page later. This is VBear's own limit; the usage limit of a tool's paid plan (方案用量上限)
+  is a different thing that the tool itself explains.
+- **Some pages need Claude Code** (meetings, staffing meetings, chats, the skill translations). Where it is missing, the page
+  says 「這個功能目前需要 Claude Code」 and how to get it, with a button to the start-up page.
+
+**Full mode needs a tick on 我了解.** A full-mode role card runs its tool with no limits from VBear: the employee can touch any
+file on your Mac. Before it sets out, the launch pass shows that warning and 確認啟動 stays off until you tick 我了解. **New role
+cards start in safe mode** whenever their tool has one (today only Claude Code does); a card for a tool that has only full
+mode (Codex, AGY, Grok, MCODE) starts in full mode and says so. Existing cards are not changed.
+
+**The first-time page (第一次打開 VBear)** appears once, only in the app window, before the start-up page, and you can skip it.
+It explains what to do if your Mac stops VBear because the app is not signed: open System Settings, 隱私權與安全性, and press
+**強制打開**. Its picture is an **illustration** drawn by VBear itself to show where the button is, **not a screenshot** of
+anyone's real System Settings (the wording and layout on your Mac can differ a little by macOS version). Seeing it once is
+saved in VBear's own settings, not in the browser.
 
 ## Good to know before you start
 
@@ -449,8 +487,15 @@ and what you can do about each.
 | Agent | Watch and type in terminals | Full mode from a role card (VBear limits nothing) | Safe mode from a role card (launch pass and sandbox) |
 |---|---|---|---|
 | Claude Code | yes | yes: `claude [--model X] [--append-system-prompt …]`, the card's instructions as one argument | yes. Verified versions (2.1.286, 2.1.291, 2.1.292, 2.1.296, plus any you verify) get enforced labels; other releases launch only after you tick that you know they are **unverified** |
-| Codex CLI | yes | yes: `codex [-m X]`; the instructions only through 貼上職位指示 | no: the pass explains why (0.159.2's interactive mode still loads your global config) |
-| Antigravity (AGY) | only a terminal started in full mode | yes: `agy [--model X]`; the instructions only through 貼上職位指示 | no: an AGY card in safe mode is only a record for building teams (it can be placed on a task card's team), and its pass says so |
+| Codex CLI | yes | yes: `codex [-m X]`; the instructions only through 貼上職位指示 | no: Codex can be started in full mode only; the pass explains why (0.159.2's interactive mode still loads your global config) |
+| Antigravity (AGY) | only a terminal started in full mode | yes: `agy [--model X]`; the instructions only through 貼上職位指示 | no: safe mode does not start AGY, full mode does; an AGY card in safe mode is only a record for building teams (it can be placed on a task card's team), and its pass says so |
+| Grok (xAI's Grok Build) | only a terminal started in full mode | yes: `grok [-m X]`; the instructions only through 貼上職位指示 | no: **full mode only** |
+| MCODE (MiniMax Code) | only a terminal started in full mode | yes: `mcode [-m X]`; the instructions only through 貼上職位指示 | no: **full mode only** |
+
+**MCODE is a hidden option.** It is not on the start-up page or in the card wizard unless you open the settings and switch on
+「顯示 MCODE」. A card that already uses it is kept when the switch is off, and says why it cannot be used. Grok and MCODE are
+the two tools made by xAI and MiniMax; VBear treats each as its own maker when it checks that a reviewer is not the same maker
+as the executor.
 
 The executor (the Claude Code that a flow runs in the background) needs Claude Code 2.1.292 or 2.1.296; Codex review
 needs Codex 0.160.0. Other versions are refused with the reason before anything starts. A meeting needs a Claude Code
@@ -476,7 +521,8 @@ VBear. See [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
    Python is included, so there is nothing else to install.
 2. **First open:** the app is not yet signed with an Apple Developer ID, so macOS will refuse to open it the first time.
    Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to VBear. You only
-   need to do this once.
+   need to do this once. The app also explains this on its first-time page, with an illustration (not a screenshot) of where
+   the button is.
 
 Or with Homebrew:
 
