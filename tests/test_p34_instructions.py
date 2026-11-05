@@ -332,7 +332,8 @@ class LaunchModeFieldTests(unittest.TestCase):
 
     def test_the_two_modes_and_the_default_a_new_card_is_offered(self):
         self.assertEqual(agent_profiles.LAUNCH_MODES, ("full", "safe"))
-        self.assertEqual(agent_profiles.DEFAULT_LAUNCH_MODE_FOR_NEW, "full")
+        self.assertEqual(agent_profiles.DEFAULT_LAUNCH_MODE_FOR_NEW, "safe")   # ADR 0002; a full-only tool starts full on the page
+        self.assertEqual(agent_profiles.SAFE_MODE_TOOLS, ("claude",))
 
     def test_a_card_without_the_key_is_safe_and_is_not_rewritten(self):
         saved = agent_profiles.save_profile(None, _body())
