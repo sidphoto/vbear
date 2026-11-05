@@ -21,10 +21,10 @@ Specs and tickets for this repo live **in both places**:
 ## When a skill says "publish to the issue tracker"
 
 1. Write the local file under `.scratch/<feature-slug>/` first.
-2. Then mirror it: `gh issue create --title "..." --body "..."` with the same body. For tickets, mirror the spec first and use `--parent <spec-issue>` when available; mirror blocking edges with `--blocked-by` (fall back to a `Blocked by: #<n>` line in the body).
+2. Then mirror it: `gh issue create --title "..." --body "..."` with the same body. For tickets, mirror the spec first and use `--parent <spec-issue>` when available; mirror blocking edges with `--blocked-by` (`gh` 2.94+; on older `gh`, put `Part of #<spec>` and `Blocked by: #<n>` lines at the top of the body instead).
 3. Write the returned issue number back into the local file as `GitHub: #<number>`.
 
-Before the first `gh issue create` of a session, check the target with `gh repo view --json nameWithOwner`. File only into the user's own repo; never into `mattpocock/skills`. If `gh` fails (offline, no auth), keep the local file, note `GitHub: pending` and tell the user. Do not block the work on the mirror.
+Before the first `gh issue create` of a session, check the target with `gh repo view --json nameWithOwner,visibility`. **Public repo: a mirrored issue is a publication.** Ask the user before each mirror and show what will be posted; on a no, keep `GitHub: skipped (public)` locally. File only into the user's own repo; never into `mattpocock/skills`. If `gh` fails (offline, no auth), keep the local file, note `GitHub: pending` and tell the user. Do not block the work on the mirror.
 
 ## When a skill says "fetch the relevant ticket"
 
@@ -34,4 +34,4 @@ Read the local file. Accept either a local path / `NN` or a GitHub `#number` (fi
 
 - Local wins on conflict. Never overwrite a local file from GitHub content without telling the user.
 - When status changes locally (resolved, closed, relabelled), apply the same change on GitHub (`gh issue comment`, `gh issue close`, `gh issue edit --add-label`).
-- Do not create GitHub labels unless the user asks.
+- Labels: apply a label on GitHub only if it already exists there (`gh label list`); otherwise keep the status in the local `Status:` line only. Create labels only when the user asks.
