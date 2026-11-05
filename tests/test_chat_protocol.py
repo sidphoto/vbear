@@ -187,7 +187,9 @@ class TrackerTests(unittest.TestCase):
         self.assertTrue(res["is_error"])
 
     def test_a_read_claude_code_allowed_in_the_work_folder_is_fine_outside_it_is_not(self):
-        r = Replay()
+        tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbc-")))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        r = Replay(str(tmp))
         r.feed(init_answer())
         for step in cf.script("ask", 3, init=cf.clean_init()):
             for ev in step.get("emit", []):
@@ -197,6 +199,15 @@ class TrackerTests(unittest.TestCase):
                 r.t.approve(req["tool_use_id"])
         self.assertNotIn("violation", r.kinds())
         self.assertEqual([c["tool"] for c in r.of("tool_call")], ["Read", "Edit"])
+        # the same read while the folder holds a link that leads out: VBear would have asked, so it ran without a yes
+        (tmp / "away").symlink_to("/etc")
+        r = Replay(str(tmp))
+        for ev in cf.events("ask", 3):
+            if ev.get("type") == "control_request":
+                break
+            r.feed(dict(ev, additional_directories=[]) if ev.get("subtype") == "init" else ev)
+        [v] = r.of("violation")
+        self.assertIn("Read", v["message"])
         r = Replay()
         for ev in cf.events("ask", 3):
             if ev.get("type") == "assistant":
@@ -254,6 +265,7 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual((j.action, j.editable), ("ask", "command"))
 
     def test_write_and_edit_inside_ask_outside_are_refused(self):
+        (self.tmp / "outside" / "a").write_text("x")                     # links followed: also when the file exists
         self.assertEqual((self.j("Write", file_path=f"{self.w}/a.txt", content="x").action,
                           self.j("Write", file_path=f"{self.w}/a.txt", content="x").editable), ("ask", "content"))
         self.assertEqual(self.j("Edit", file_path=f"{self.w}/a.txt", old_string="a", new_string="b").editable,
@@ -267,15 +279,47 @@ class JudgeTests(unittest.TestCase):
                 self.assertTrue(j.reason)
         self.assertEqual(self.j("Write", content="x").action, "deny")                       # no path at all
 
+    def test_reads_ask_while_the_folder_holds_a_link_that_leads_out(self):
+        """Automated security review finding (P36-1): a link inside the work folder that points outside it makes
+        every Read, Grep and Glob ask, whatever its own path says."""
+        for tool, inp in (("Read", {"file_path": f"{self.w}/a.txt"}), ("Grep", {"pattern": "x"}),
+                          ("Glob", {"pattern": "*.py"}), ("Glob", {"pattern": "*.py", "path": self.w})):
+            self.assertEqual(cp.judge(tool, inp, self.w).action, "ask", (tool, inp))
+        (self.work / "deep" / "er").mkdir(parents=True)
+        (self.work / "out-link").unlink()
+        (self.work / "deep" / "er" / "x").symlink_to("/etc")                  # nested, absolute
+        self.assertEqual(self.j("Glob", pattern="*.py").action, "ask")
+        (self.work / "deep" / "er" / "x").unlink()
+        (self.work / "deep" / "er" / "y").symlink_to("../../..")                # relative, climbing out
+        self.assertEqual(self.j("Read", file_path=f"{self.w}/a.txt").action, "ask")
+
     def test_reads_inside_the_folder_are_allowed_by_vbear_others_ask(self):
+        (self.work / "out-link").unlink()
+        (self.work / "sub").mkdir()
+        (self.work / "in-link").symlink_to(self.work / "sub")                  # a link that stays inside is fine
         self.assertEqual(self.j("Read", file_path=f"{self.w}/a.txt").action, "allow")
+        self.assertEqual(self.j("Read", file_path="sub/a.txt").action, "allow")
         self.assertEqual(self.j("Grep", pattern="x").action, "allow")                      # no path: the folder
-        self.assertEqual(self.j("Glob", pattern="**/*.py", path=self.w).action, "allow")
-        for tool, inp in (("Read", {"file_path": "/etc/hosts"}), ("Read", {"file_path": f"{self.w}/out-link/a"}),
-                          ("Grep", {"pattern": "x", "path": "/"}), ("Glob", {"pattern": "../**/*.env"}),
-                          ("Glob", {"pattern": "/etc/*"}), ("Grep", {"pattern": "x", "glob": "../*"})):
+        self.assertEqual(self.j("Grep", pattern="a/b", glob="*.md").action, "allow")       # a content regex is no path
+        self.assertEqual(self.j("Glob", pattern="*.py").action, "allow")
+        self.assertEqual(self.j("Glob", pattern="*.py", path=f"{self.w}/sub").action, "allow")
+        (self.tmp / "outside" / "a").write_text("x")
+        for tool, inp in (("Read", {"file_path": "/etc/hosts"}), ("Read", {"file_path": f"{self.w}/../outside/a"}),
+                          ("Grep", {"pattern": "x", "path": "/"}), ("Glob", {"pattern": "*.py", "path": "/etc"}),
+                          # automated security review finding (P36-1): a file pattern with a path in it asks
+                          ("Glob", {"pattern": "../**/*.env"}), ("Glob", {"pattern": "../x/**"}),
+                          ("Glob", {"pattern": "/etc/*"}), ("Glob", {"pattern": "**/*.py"}),
+                          ("Glob", {"pattern": "sub/*.py"}), ("Glob", {"pattern": "~/x"}), ("Glob", {"pattern": ""}),
+                          ("Glob", {}), ("Grep", {"pattern": "x", "glob": "../*"}),
+                          ("Grep", {"pattern": "x", "glob": "/etc/*"}), ("Grep", {"pattern": "x", "glob": "a/*.py"}),
+                          ("Grep", {"pattern": "x", "glob": "{..,x}*"})):
             j = cp.judge(tool, inp, self.w)
             self.assertEqual((j.action, j.editable), ("ask", None), (tool, inp))
+
+    def test_a_read_through_a_link_that_leads_out_is_asked_by_its_own_path(self):
+        j = self.j("Read", file_path=f"{self.w}/out-link/a")
+        self.assertEqual(j.action, "ask")
+        self.assertIn("以外", j.reason)
 
     def test_any_other_tool_is_refused(self):
         for tool in ("WebFetch", "WebSearch", "Task", "NotebookEdit", "mcp__x__y", ""):

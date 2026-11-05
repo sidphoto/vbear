@@ -152,17 +152,43 @@ def _inside(path: str | None, work: str) -> bool:
     return isinstance(path, str) and (path == work or path.startswith(work.rstrip(os.sep) + os.sep))
 
 
-def _pattern_escapes(pattern) -> bool:
-    """A Glob/Grep pattern that could reach outside the folder it starts from: absolute, from the home folder, or
-    with any ``..`` in it (a brace expansion can make one out of parts)."""
-    return not isinstance(pattern, str) or pattern.startswith(("/", "~")) or ".." in pattern
+def _pattern_names_a_path(pattern) -> bool:
+    """A Glob/Grep file pattern that is more than a file name: any ``/``, ``..`` or ``~`` (an absolute pattern, one
+    that climbs out, one from a home folder, or a path a brace expansion could build from parts). Only a bare name
+    pattern such as ``*.py`` is matched by VBear's own yes."""
+    return not isinstance(pattern, str) or not pattern or any(x in pattern for x in ("/", "..", "~"))
+
+
+MAX_LINK_SCAN = 20_000                # entries of the work folder looked at for links; more reads as "may have one"
+
+
+def _outward_link(work: str) -> bool:
+    """Whether the work folder holds a symbolic link that leads outside it (or this cannot be ruled out: an error,
+    or more than MAX_LINK_SCAN entries). Links are never followed while looking."""
+    stack, seen = [work], 0
+    try:
+        while stack:
+            with os.scandir(stack.pop()) as it:
+                for entry in it:
+                    seen += 1
+                    if seen > MAX_LINK_SCAN:
+                        return True
+                    if entry.is_symlink():
+                        if not _inside(os.path.realpath(entry.path), work):
+                            return True
+                    elif entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+    except OSError:
+        return True
+    return False
 
 
 def judge(tool, tool_input, workdir: str) -> Judgement:
     """What VBear does with a permission request (P36 design): Bash, Edit and Write always ask, Edit and Write only
     inside the role card's work folder (elsewhere, or into its ``.claude``, VBear refuses with no way to allow);
-    Read, Grep and Glob are allowed by VBear inside the work folder and ask anywhere else; any other tool is
-    refused."""
+    Read, Grep and Glob are allowed by VBear only when every path, links followed, is inside the work folder, a
+    Glob/Grep file pattern is a bare name (no ``/``, ``..`` or ``~``) and the folder holds no link that leads
+    outside it; they ask otherwise. Any other tool is refused."""
     if not isinstance(tool_input, dict):
         return Judgement("deny", "工具的輸入格式不對")
     work = os.path.realpath(workdir)
@@ -187,9 +213,13 @@ def judge(tool, tool_input, workdir: str) -> Judgement:
             paths = [tool_input.get("path") if tool_input.get("path") is not None else work]
             patterns = ([tool_input.get("pattern")] if tool == "Glob" else
                         [tool_input["glob"]] if tool_input.get("glob") is not None else [])
-        if all(_inside(_resolve(p, work), work) for p in paths) and not any(_pattern_escapes(p) for p in patterns):
-            return Judgement("allow", "在員工自己的工作資料夾裡讀取")
-        return Judgement("ask", "要讀員工工作資料夾以外的地方，要你允許")
+        if not all(_inside(_resolve(p, work), work) for p in paths):
+            return Judgement("ask", "要讀員工工作資料夾以外的地方，要你允許")
+        if any(_pattern_names_a_path(p) for p in patterns):
+            return Judgement("ask", "檔名比對帶有路徑（/、.. 或 ~），可能讀到資料夾以外，要你允許")
+        if _outward_link(work):
+            return Judgement("ask", "員工的工作資料夾裡有指向資料夾以外的連結，讀取要你允許")
+        return Judgement("allow", "在員工自己的工作資料夾裡讀取")
     return Judgement("deny", "VBear 的聊天不提供這個工具")
 
 
