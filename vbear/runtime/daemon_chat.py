@@ -222,7 +222,7 @@ class ChatOps:
             return _err(rid, exc.code, str(exc))
         if cp.constants_for(version) is None:
             return _err(rid, "unsupported_version", f"Claude Code {str(version)[:32]} 沒有聊天模式的常數")
-        if version not in cli_versions.chat_verified_versions():
+        if version not in cli_versions.chat_verified_versions() and version not in self.chat_probe_versions:
             return _err(rid, "unverified", cli_versions.chat_unverified_text(version))
         env = build_env()
         policy = admin_policy.check_claude(version, home=env.get("HOME", ""))

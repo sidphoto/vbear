@@ -682,6 +682,29 @@ class AdminPolicyTests(ChatCase):
         self.assertEqual(self.fake_log(), [])
 
 
+class ProbeVersionTests(ChatCase):
+    """A version that is not on the verified list does not start, except on a daemon the chat check set up for it."""
+
+    def test_an_unverified_version_is_refused_unless_the_check_named_it(self):
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        with mock.patch.object(cli_versions, "CHAT_VERIFIED_VERSIONS", ()):
+            r = self.send(chat_id)
+            self.assertEqual(r["error"]["code"], "unverified")
+            self.assertEqual(self.fake_log(), [])
+            self.dm.chat_probe_versions = frozenset({"9.9.9"})
+            self.assertEqual(self.send(chat_id)["error"]["code"], "unverified", "another version's name is no use")
+            self.dm.chat_probe_versions = frozenset({cf.VERSION})
+            r = self.send(chat_id)
+            self.assertTrue(r["ok"], r)
+
+    def test_no_rpc_reaches_the_probe_versions(self):
+        r = self.rpc("chat_send", chat_id="c-0123456789abcdef", text="x", cli=self.cli(), model_id=MODEL,
+                     chat_probe_versions=[cf.VERSION])
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.dm.chat_probe_versions, frozenset())
+
+
 class InstructionsTests(ChatCase):
     def send_with(self, chat_id, instructions, **over):
         fields = dict(chat_id=chat_id, text="hello", cli=self.cli(), model_id=MODEL)

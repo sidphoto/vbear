@@ -36,6 +36,7 @@ account fields (booleans only; no value is printed or kept).
     python3 -m vbear.boundary_check --mode headless
     python3 -m vbear.boundary_check --mode interactive --claude ~/.local/share/claude/versions/2.1.291
     python3 -m vbear.boundary_check --mode stream --claude ~/.local/share/claude/versions/2.1.292
+    python3 -m vbear.boundary_check --mode chat --claude ~/.local/share/claude/versions/2.1.318
     (or tools/verify_claude_boundary.py with the same arguments)
 
 Exit status: 0 all checks passed, 1 a check failed, 2 the run itself failed.
@@ -334,13 +335,18 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--claude", help="Claude Code binary (default: newest in ~/.local/share/claude/versions)")
-    ap.add_argument("--mode", choices=("headless", "interactive", "stream"), default="headless")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--mode", choices=("headless", "interactive", "stream", "chat"), default="headless")
+    ap.add_argument("--model", default=None, help="model id or alias (default: Haiku 4.5 in headless, interactive and "
+                                                  "stream, the alias haiku in chat)")
     ap.add_argument("--out", help="write the JSON report here")
     args = ap.parse_args()
 
     binary = pick_claude(args.claude)
     version = claude_version(binary)
+    if args.mode == "chat":
+        from . import chat_check
+        return chat_check.run(binary, version, args.model, args.out)
+    args.model = args.model or DEFAULT_MODEL
     if args.mode == "stream":
         from . import stream_check
         return stream_check.run(binary, version, args.model, args.out)

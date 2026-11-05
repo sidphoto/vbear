@@ -580,6 +580,9 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         self.chat_card_ttl = daemon_chat.CARD_TTL
         self.chat_init_deadline = daemon_chat.INIT_DEADLINE
         self.chat_close_grace = daemon_chat.CLOSE_GRACE
+        # Versions a chat may start on without being on the verified list: only the chat check (vbear/chat_check.py)
+        # sets this, on a daemon of its own in a temporary state folder. No RPC reaches it.
+        self.chat_probe_versions: frozenset = frozenset()
 
     # ---- lifecycle ----
 
