@@ -1014,10 +1014,30 @@ can start until a version passes the chat check (P36-2).
   append-only, fixed fields per kind, fsync'd, 8 MiB). Text is masked with the scanner's redaction before it is written
   and cut to a fixed length. For a card's input this happens at every level, by key name and value. stderr is not kept.
   A file that does not read back cleanly is never written to again.
-- **Money.** A turn costs the difference between the cumulative `total_cost_usd` and the last one. When no usable
-  total comes back (the turn was stopped, timed out, or a stopped daemon left it running), the turn costs its cap.
-  While a turn runs, it counts at its cap. Chats count toward the same day's limit as the meetings and staffing
-  meetings. Deleting a chat keeps what its last three days cost in `<state>/chat-spend/`.
+- **Money.** Each turn has a cap. The cap is the per-turn limit (`chat_limits.per_turn_usd`, US$0.50 by
+  default, at most 5) or what is left of the day's limit (`meeting_limits.daily_usd`), whichever is smaller,
+  rounded down to the cent. A new process gets that cap as its `--max-budget-usd`. A live process takes the next
+  message only when what it may still spend under its own cap is no more than the new cap; that headroom is then
+  the turn's cap. Otherwise the process is closed and a new one starts. Accounting:
+  - a turn costs the difference between the cumulative `total_cost_usd` and the last one, kept exactly;
+  - when no usable total comes back (the turn was stopped, timed out or cut off by a violation, the process
+    ended, or a stopped daemon left it running), the turn costs its cap;
+  - a turn whose message never reached the CLI costs nothing;
+  - while a turn runs, it counts at its cap.
+
+  Chats count toward the same day's limit as the meetings and staffing meetings. On a red lamp, or with less than
+  a cent left, no message is sent. Deleting a chat keeps what its last three days cost in `<state>/chat-spend/`.
+- **Who may answer a card.** Only the runtime socket's own user reaches the daemon. A card is answered through
+  `chat_answer` with its one-use token. A second answer, a wrong token, an expired card (5 minutes) or a card of
+  an ended turn is refused. A card whose input does not fit the screen whole (12 KiB) is refused by VBear, so you
+  never allow something you were not shown.
+- **Limits and time.** There is one chat process per role card and at most three in all, and each counts toward
+  the daemon's session limit. A process that has not answered the initialize request within 30 seconds is ended.
+  A turn over 10 minutes is ended at its cap. An idle process closes after 10 minutes by having its stdin closed,
+  and the next message resumes the session in a new process. A process is ended like a stream session: TERM, then
+  KILL, signals sent only to its own verified process group, and kept for manual review when that cannot be
+  proven. A chat whose earlier process is under manual review takes no new message. At daemon start, a turn a
+  previous daemon left open is closed at its cap.
 
 ## Data handling
 

@@ -26,7 +26,7 @@ import secrets
 import stat
 import uuid
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
 from .. import config as cfg, meetings as mt, strictjson
@@ -56,6 +56,15 @@ SPEND_KEEP = 3 * 86400                 # a deleted chat's turns kept this long f
 DEFAULT_PER_TURN = Decimal("0.50")
 PER_TURN_CAP = Decimal("5")
 EVENT_LIMITS = strictjson.Limits(MAX_LINE, 100_000, 16, None)
+
+
+def usd(value: Decimal) -> str:
+    """A cost as stored: exact (never rounded down, unlike meetings.fmt), and only when that would pass the
+    field's 40 characters rounded up to 12 decimals."""
+    text = format(value.normalize(), "f")
+    if len(text) > 40:
+        text = format(value.quantize(Decimal("1e-12"), rounding=ROUND_CEILING).normalize(), "f")
+    return text
 
 
 class ChatStoreError(Exception):
@@ -500,7 +509,7 @@ class Turn:
 @dataclass
 class ChatState:
     turns: list = field(default_factory=list)
-    last_total: float | None = None    # the last cumulative total the CLI reported for this session
+    last_total: float | None = None    # the last usable cumulative total the CLI reported for this session
     session_ready: bool = False        # a process of this session has started once (later ones resume)
     process_open: bool = False         # a process_started without its process_ended
     last_seq: int = 0
@@ -527,7 +536,7 @@ def derive(records) -> ChatState:
         elif kind == "turn_ended" and rec["turn"] in by_turn:
             t = by_turn[rec["turn"]]
             t.cost, t.ended_at, t.reported = mt.money(rec["cost_usd"]), rec["at"], rec["reported"]
-            if rec["reported"] and rec["total_usd"] is not None:
+            if rec["total_usd"] is not None:     # the base of the next turn, also after a total that went back
                 st.last_total = float(rec["total_usd"])
         elif kind == "session_ready":
             st.session_ready = True
@@ -554,7 +563,7 @@ def recover(base, *, now: float) -> list[str]:
             if t is None and not st.process_open:
                 continue
             if t is not None:
-                log.append("turn_ended", {"turn": t.turn, "cost_usd": mt.fmt(t.cap), "reported": False,
+                log.append("turn_ended", {"turn": t.turn, "cost_usd": usd(t.cap), "reported": False,
                                           "total_usd": None, "reason": "daemon_restart", "subtype": None,
                                           "is_error": True}, now=now)
             if st.process_open:
@@ -579,10 +588,10 @@ def _spend_turns(st: ChatState) -> list[dict]:
     for t in st.turns:
         if t.cost is None:
             out.append({"state": "running", "started_at": t.started_at, "ended_at": None,
-                        "evidence": {"cost_usd": "0"}, "cap_usd": mt.fmt(t.cap)})
+                        "evidence": {"cost_usd": "0"}, "cap_usd": usd(t.cap)})
         else:
             out.append({"state": "done", "started_at": t.started_at, "ended_at": t.ended_at,
-                        "evidence": {"cost_usd": mt.fmt(t.cost)}, "cap_usd": mt.fmt(t.cap)})
+                        "evidence": {"cost_usd": usd(t.cost)}, "cap_usd": usd(t.cap)})
     return out
 
 

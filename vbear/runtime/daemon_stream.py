@@ -1006,7 +1006,8 @@ class StreamOps:
         held = len(self._held_leaders)
         if held >= MAX_HELD_LEADERS:
             return _err(rid, "limit", f"有 {held} 個無法證明已結束的程序群組，需要人工處理後才能開啟新的 session")
-        if len(self._sessions) + len(self._streams) + len(self._reviews) + held >= self.max_sessions:
+        chats = len(getattr(self, "_chats", ()))          # P36: a chat process is a session too
+        if len(self._sessions) + len(self._streams) + len(self._reviews) + chats + held >= self.max_sessions:
             return _err(rid, "limit", f"已達 session 上限（{self.max_sessions}，含 {held} 個待確認的程序群組）")
         return None
 

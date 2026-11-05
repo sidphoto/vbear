@@ -79,7 +79,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config as cfg
-from . import agent_sessions, daemon_review, daemon_stream, osc_title, pipeline_store, proctrack, quota, stream_flow
+from . import agent_sessions, daemon_chat, daemon_review, daemon_stream, osc_title, pipeline_store, proctrack, quota, stream_flow
 
 PROTOCOL_VERSION = 1
 DAEMON_VERSION = "native-r2-s4"  # s4: stream executor sessions (claude-stream)
@@ -153,6 +153,14 @@ RPC_OPS: dict[str, frozenset] = {
     "pipeline_mode_set": frozenset({"pipeline", "mode", "approval"}),
     # the console removed the flow's record: the deletion marker may go (flow_data.finish)
     "flow_delete_done": frozenset({"pipeline"}),
+    # chats with a role card (P36; daemon_chat)
+    "chat_open": frozenset({"profile_id"}),
+    "chat_send": frozenset({"chat_id", "text", "cli", "model_id"}),
+    "chat_answer": frozenset({"chat_id", "card_id", "token", "decision", "value"}),
+    "chat_stop": frozenset({"chat_id"}),
+    "chat_close": frozenset({"chat_id"}),
+    "chat_events": frozenset({"chat_id", "after"}),
+    "chat_delete": frozenset({"chat_id"}),
 }
 _ATTACHED = object()  # _dispatch result: the connection became an attachment
 
@@ -530,7 +538,7 @@ class _Conn:
         self.waiting = False
 
 
-class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
+class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatOps):
     """Single-threaded selectors loop. ``stop()`` / ``wake()`` are the only
     thread-safe entry points (they only set a flag and poke the wake pipe)."""
 
@@ -565,6 +573,13 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         self.review_admin_root = "/"              # where the administrator-settings check looks (tests inject)
         self.review_home: str | None = None       # the home the pinned Codex is installed under (None: the user's)
         self._ledger = quota.Ledger(self.base)    # design 9; rebuilt at start()
+        self._chats: dict = {}                    # chat id -> chat_session.ChatProcess (P36)
+        self.chat_max = daemon_chat.CHAT_MAX
+        self.chat_idle_timeout = daemon_chat.IDLE_TIMEOUT
+        self.chat_turn_timeout = daemon_chat.TURN_TIMEOUT
+        self.chat_card_ttl = daemon_chat.CARD_TTL
+        self.chat_init_deadline = daemon_chat.INIT_DEADLINE
+        self.chat_close_grace = daemon_chat.CLOSE_GRACE
 
     # ---- lifecycle ----
 
@@ -629,6 +644,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                           ("cleaned" if item.get("cleaned") else f"retained ({item.get('retained_reason')})"))
         except Exception as exc:
             self._log(f"managed launch recovery failed: {exc}")
+        self._recover_chats()                     # turns a previous daemon left open, each at its cap (P36)
         try:  # start records of opens that died before their journal (design v29.7)
             for item in stream_flow.recover_start_records(self.base):
                 self._log(f"flow start record ({item.get('task')}): " +
@@ -669,7 +685,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         while not self._stopping:
             busy = (self._shutdown_requested or any(s.phase for s in self._sessions.values())
                     or any(s.phase or s.writing or s.exit_info for s in self._streams.values())
-                    or any(j.run.phase or j.run.exit_info for j in self._reviews.values()))
+                    or any(j.run.phase or j.run.exit_info for j in self._reviews.values())
+                    or any(p.busy for p in self._chats.values()))
             for key, mask in self._sel.select(timeout=0.05 if busy else 0.25):
                 data = key.data
                 if isinstance(data, Session):
@@ -692,6 +709,9 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                 elif isinstance(data, tuple) and data[0] == "stream":
                     if data[1].launch_id in self._streams:
                         self._stream_ready(data[1], data[2], time.monotonic())
+                elif isinstance(data, tuple) and data[0] == "chat":
+                    if self._chats.get(data[1].chat_id) is data[1]:
+                        self._chat_ready(data[1], data[2], time.monotonic())
                 elif isinstance(data, tuple) and data[0] == "review":
                     if self._reviews.get(data[1].job_id) is data[1]:
                         self._review_ready(data[1], data[2], time.monotonic())
@@ -710,6 +730,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
     def close(self) -> None:
         """Tear everything down. Idempotent. Sessions are killed here: with
         the daemon gone nobody could manage them, and orphans are worse."""
+        self._kill_all_chats()
         self._kill_all_reviews()
         self._kill_all_streams()
         self._kill_all_sessions()
@@ -892,6 +913,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
 
     def _tick(self, now: float) -> None:
         self._stream_tick(now)
+        self._chat_tick(now)
         self._review_tick(now)
         if now >= self._next_prepared_sweep:
             self._next_prepared_sweep = now + PREPARED_SWEEP
@@ -940,7 +962,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                 s.poll()
                 self._finalize(s)
         if (self._shutdown_requested and not self._sessions and not self._streams and not self._reviews
-                and not any(c.stop_after for c in self._conns.values())):
+                and not self._chats and not any(c.stop_after for c in self._conns.values())):
             self.stop()
 
     def _finalize(self, s: Session) -> None:
@@ -1178,10 +1200,10 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
             return _err(rid, "bad_request", f"未知欄位：{', '.join(sorted(extra))}")
         if op == "hello":
             return _ok(rid, {"protocol": PROTOCOL_VERSION, "version": DAEMON_VERSION,
-                             "pid": os.getpid(), "sessions": len(self._sessions) + len(self._streams),
+                             "pid": os.getpid(), "sessions": len(self._sessions) + len(self._streams) + len(self._chats),
                              "attachments": len(self._attachments)})
         if op == "list":
-            everyone = list(self._sessions.values()) + list(self._streams.values())
+            everyone = list(self._sessions.values()) + list(self._streams.values()) + list(self._chats.values())
             return _ok(rid, {"sessions": [s.info() for s in sorted(everyone, key=lambda s: s.started)]})
         if op == "open":
             return self._op_open(rid, req)
@@ -1201,7 +1223,10 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
                       "pipeline_release": self._op_pipeline_release, "review_start": self._op_review_start,
                       "review_status": self._op_review_status, "review_cancel": self._op_review_cancel,
                       "flow_delete": self._op_flow_delete, "pipeline_mode_set": self._op_pipeline_mode_set,
-                      "flow_delete_done": self._op_flow_delete_done}
+                      "flow_delete_done": self._op_flow_delete_done, "chat_open": self._op_chat_open,
+                      "chat_send": self._op_chat_send, "chat_answer": self._op_chat_answer,
+                      "chat_stop": self._op_chat_stop, "chat_close": self._op_chat_close,
+                      "chat_events": self._op_chat_events, "chat_delete": self._op_chat_delete}
         if op in stream_ops:
             try:
                 return stream_ops[op](rid, req)
@@ -1591,6 +1616,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps):
         self._shutdown_requested = True
         for s in list(self._sessions.values()):
             self._begin_close(s)
+        for p in list(self._chats.values()):      # a chat's turn costs its cap; nothing waits for a chat
+            p.stop("背景程序關閉", time.monotonic())
         return _ok(rid, {"stopping": True, "sessions": n})
 
 

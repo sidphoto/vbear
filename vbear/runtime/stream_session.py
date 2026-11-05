@@ -174,7 +174,150 @@ def end_spawned(proc, leader_start: str | None, descendants=None) -> str | None:
     return None
 
 
-class StreamSession:
+class ProcessGroupEnd:
+    """How a managed process that VBear started with pipes is ended (design 5.8): TERM to its group, KILL after a
+    grace period, the leader seen to exit without being reaped, the group proven empty and no observed descendant
+    left outside it, and only then the leader reaped. Shared by the stream executor (StreamSession) and a chat with a
+    role card (chat_session.ChatProcess); the subclass holds the fields set in StreamSession.__init__ that these
+    methods read, and says what else closes with the process (``_close_record``) and goes into the outcome
+    (``_outcome_extra``)."""
+
+    def _close_record(self) -> None:
+        """Close what the session writes besides the pipes (the stream journal)."""
+
+    def _outcome_extra(self) -> dict:
+        return {}
+
+    def terminate(self, reason: str) -> None:
+        """TERM to the group, KILL after a grace period (design 5.8)."""
+        if self.phase is None and not self.finished:
+            self.close_reason = reason
+            self.phase, self.phase_deadline = "term", time.monotonic() + TERM_GRACE
+            self._killpg(signal.SIGTERM)
+
+    def _killpg(self, sig: int) -> None:
+        """Signals go only to this session's group, after the identity check
+        (design 2.3: never signal an unverified PID). A failed or impossible
+        check sends nothing and gives the session up to manual review."""
+        if self.finished:
+            return
+        why = leader_check(self.pid, self.pgid, self.leader_start)
+        if why:
+            self._abandon(f"不送訊號（{why}），交人工處理")
+            return
+        try:
+            os.killpg(self.pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def _abandon(self, reason: str) -> None:
+        """Stop managing without signalling or reaping: close our ends, keep
+        the launch for a person. Every I/O path checks ``finished`` first,
+        so a closed descriptor number is never read or written again."""
+        self._log(f"{self.sid}: {reason}")
+        self.writing = None
+        for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            try:
+                f.close()
+            except OSError:
+                pass
+        self._close_record()
+        self.outcome = {"launch_id": self.launch_id, "manual_review": reason, **self._outcome_extra(),
+                        "close_reason": self.close_reason or reason, "leader_held": not self.reaped}
+        self.finished = True
+
+    def _poll_exit(self, now: float) -> None:
+        if self.exit_info is not None:
+            return
+        try:
+            info = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            info = None
+            self._log(f"{self.sid}: leader is not our child any more")
+        if info is not None:
+            self.exit_info, self.exit_seen = info, now
+
+    def _returncode(self):
+        info = self.exit_info
+        if info is None:
+            return None
+        return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
+
+    def _group_members(self, ps_timeout: float | None = None):
+        """Live members of our group (not zombies), or None when unknown."""
+        try:
+            rows = proctrack.process_table(ps_timeout) if ps_timeout else proctrack.process_table()
+        except proctrack.ProcessTableUnavailable:
+            return None, None
+        live = [r for r in rows if r["pgid"] == self.pgid and "Z" not in r["stat"]]
+        return live, rows
+
+    def _advance_termination(self, now: float) -> None:
+        """``now`` is monotonic, like every deadline here."""
+        if self.finished:
+            return
+        if not self.exit_recorded:
+            if self.phase == "term" and now > self.phase_deadline:
+                self.phase, self.phase_deadline = "kill", now + KILL_GRACE
+                self._killpg(signal.SIGKILL)
+            return
+        if self.escape_deadline is not None and now < self.escape_next:
+            return                                # in the grace, between two looks at the process table
+        live, rows = (self._group_members(ESCAPE_PS_TIMEOUT) if self.escape_deadline is not None
+                      else self._group_members())
+        if live:
+            if self.phase is None:
+                self.close_reason = self.close_reason or "程序已結束，清理其餘程序"
+                self.phase, self.phase_deadline = "term", now + TERM_GRACE
+                self._killpg(signal.SIGTERM)
+            elif self.phase == "term" and now > self.phase_deadline:
+                self.phase, self.phase_deadline = "kill", now + KILL_GRACE
+                self._killpg(signal.SIGKILL)
+            elif self.phase == "kill" and now > self.phase_deadline + KILL_GIVE_UP:
+                self._finish(manual_review="程序群組在 SIGKILL 後仍有程序存活", reap=False)
+            return
+        if live is None:
+            if now > self.exit_seen + TABLE_GIVE_UP:
+                self._finish(manual_review="無法取得程序表，無法證明所有程序都已結束", reap=False)
+            return
+        escaped = [r for r in self.descendants.live(rows) if r["pgid"] != self.pgid]
+        if escaped:
+            if self.escape_deadline is None:
+                self.escape_deadline = now + ESCAPE_GRACE
+            if now < self.escape_deadline:
+                self.escape_next = now + escape_every(proctrack.SOURCE)   # nothing is signalled; not over
+                return
+            self._finish(manual_review="有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8]))
+            return
+        self._finish(manual_review=None)
+
+    def _finish(self, *, manual_review: str | None, reap: bool = True) -> None:
+        """Close our ends; the daemon then cleans up or retains the launch.
+        The leader is reaped only when its group is proven empty (``reap``;
+        design 5.8, part 2 review B-1). Otherwise it stays a zombie that the
+        daemon keeps holding (outcome leader_held), so its PID, the group
+        id, cannot be reused while a member may still live."""
+        if self.finished:
+            return
+        if reap:
+            try:
+                os.waitpid(self.pid, 0)
+                self.reaped = True
+                self.proc.returncode = self._returncode()
+            except ChildProcessError:
+                self.reaped = True                # not our child any more: nothing to hold
+        for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            try:
+                f.close()
+            except OSError:
+                pass
+        self._close_record()
+        self.outcome = {"launch_id": self.launch_id, "manual_review": manual_review, **self._outcome_extra(),
+                        "close_reason": self.close_reason, "leader_held": not self.reaped}
+        self.finished = True              # last: whoever sees finished sees the outcome
+
+
+class StreamSession(ProcessGroupEnd):
     def __init__(self, *, sid: str, launch_id: str, manifest: dict, proc, writer: stream_journal.JournalWriter,
                  tracker: sp.EventTracker, prior_responses: int, log, now: float, leader_start: str | None = None):
         self.sid = sid
@@ -289,6 +432,12 @@ class StreamSession:
                 self.finished = True
                 self.outcome = {"manual_review": "日誌無法寫入且無法安全結束程序", "leader_held": not self.reaped}
             return False
+
+    def _close_record(self) -> None:
+        self.writer.close()
+
+    def _outcome_extra(self) -> dict:
+        return {"journal_bytes": self.writer.size}
 
     def protocol_error(self, reason: str, detail: str = ""):
         self.interpreting = False
@@ -467,62 +616,6 @@ class StreamSession:
 
     # ---- timers, exit, termination ----------------------------------------------------
 
-    def terminate(self, reason: str) -> None:
-        """TERM to the group, KILL after a grace period (design 5.8)."""
-        if self.phase is None and not self.finished:
-            self.close_reason = reason
-            self.phase, self.phase_deadline = "term", time.monotonic() + TERM_GRACE
-            self._killpg(signal.SIGTERM)
-
-    def _killpg(self, sig: int) -> None:
-        """Signals go only to this session's group, after the identity check
-        (design 2.3: never signal an unverified PID). A failed or impossible
-        check sends nothing and gives the session up to manual review."""
-        if self.finished:
-            return
-        why = leader_check(self.pid, self.pgid, self.leader_start)
-        if why:
-            self._abandon(f"不送訊號（{why}），交人工處理")
-            return
-        try:
-            os.killpg(self.pgid, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
-
-    def _abandon(self, reason: str) -> None:
-        """Stop managing without signalling or reaping: close our ends, keep
-        the launch for a person. Every I/O path checks ``finished`` first,
-        so a closed descriptor number is never read or written again."""
-        self._log(f"{self.sid}: {reason}")
-        self.writing = None
-        for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
-            try:
-                f.close()
-            except OSError:
-                pass
-        self.writer.close()
-        self.outcome = {"launch_id": self.launch_id, "manual_review": reason,
-                        "journal_bytes": self.writer.size, "close_reason": self.close_reason or reason,
-                        "leader_held": not self.reaped}
-        self.finished = True
-
-    def _poll_exit(self, now: float) -> None:
-        if self.exit_info is not None:
-            return
-        try:
-            info = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-        except ChildProcessError:
-            info = None
-            self._log(f"{self.sid}: leader is not our child any more")
-        if info is not None:
-            self.exit_info, self.exit_seen = info, now
-
-    def _returncode(self):
-        info = self.exit_info
-        if info is None:
-            return None
-        return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
-
     def tick(self, now: float) -> None:
         if self.finished:
             return
@@ -564,77 +657,3 @@ class StreamSession:
         if self.js.exit is None:
             self.record("exited", {"returncode": returncode, "signal": sig,
                                    "stderr_tail": self.err_tail.decode("utf-8", "replace")[-STDERR_TAIL // 4:]})
-
-    def _group_members(self, ps_timeout: float | None = None):
-        """Live members of our group (not zombies), or None when unknown."""
-        try:
-            rows = proctrack.process_table(ps_timeout) if ps_timeout else proctrack.process_table()
-        except proctrack.ProcessTableUnavailable:
-            return None, None
-        live = [r for r in rows if r["pgid"] == self.pgid and "Z" not in r["stat"]]
-        return live, rows
-
-    def _advance_termination(self, now: float) -> None:
-        """``now`` is monotonic, like every deadline here."""
-        if self.finished:
-            return
-        if not self.exit_recorded:
-            if self.phase == "term" and now > self.phase_deadline:
-                self.phase, self.phase_deadline = "kill", now + KILL_GRACE
-                self._killpg(signal.SIGKILL)
-            return
-        if self.escape_deadline is not None and now < self.escape_next:
-            return                                # in the grace, between two looks at the process table
-        live, rows = (self._group_members(ESCAPE_PS_TIMEOUT) if self.escape_deadline is not None
-                      else self._group_members())
-        if live:
-            if self.phase is None:
-                self.close_reason = self.close_reason or "程序已結束，清理其餘程序"
-                self.phase, self.phase_deadline = "term", now + TERM_GRACE
-                self._killpg(signal.SIGTERM)
-            elif self.phase == "term" and now > self.phase_deadline:
-                self.phase, self.phase_deadline = "kill", now + KILL_GRACE
-                self._killpg(signal.SIGKILL)
-            elif self.phase == "kill" and now > self.phase_deadline + KILL_GIVE_UP:
-                self._finish(manual_review="程序群組在 SIGKILL 後仍有程序存活", reap=False)
-            return
-        if live is None:
-            if now > self.exit_seen + TABLE_GIVE_UP:
-                self._finish(manual_review="無法取得程序表，無法證明所有程序都已結束", reap=False)
-            return
-        escaped = [r for r in self.descendants.live(rows) if r["pgid"] != self.pgid]
-        if escaped:
-            if self.escape_deadline is None:
-                self.escape_deadline = now + ESCAPE_GRACE
-            if now < self.escape_deadline:
-                self.escape_next = now + escape_every(proctrack.SOURCE)   # nothing is signalled; not over
-                return
-            self._finish(manual_review="有後代離開了程序群組：" + ", ".join(str(r["pid"]) for r in escaped[:8]))
-            return
-        self._finish(manual_review=None)
-
-    def _finish(self, *, manual_review: str | None, reap: bool = True) -> None:
-        """Close our ends; the daemon then cleans up or retains the launch.
-        The leader is reaped only when its group is proven empty (``reap``;
-        design 5.8, part 2 review B-1). Otherwise it stays a zombie that the
-        daemon keeps holding (outcome leader_held), so its PID, the group
-        id, cannot be reused while a member may still live."""
-        if self.finished:
-            return
-        if reap:
-            try:
-                os.waitpid(self.pid, 0)
-                self.reaped = True
-                self.proc.returncode = self._returncode()
-            except ChildProcessError:
-                self.reaped = True                # not our child any more: nothing to hold
-        for f in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
-            try:
-                f.close()
-            except OSError:
-                pass
-        self.writer.close()
-        self.outcome = {"launch_id": self.launch_id, "manual_review": manual_review,
-                        "journal_bytes": self.writer.size, "close_reason": self.close_reason,
-                        "leader_held": not self.reaped}
-        self.finished = True              # last: whoever sees finished sees the outcome

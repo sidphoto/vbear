@@ -42,7 +42,9 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   `open`, `open_managed`, `list`, `close`, `attach`, `shutdown` (terminals); `open_stream`,
   `dispatch_prepare`, `stream_send`, `stream_status`, `stream_close`, `pipeline_hold`, `pipeline_release`
   (the managed stream executor); `review_start`, `review_status`, `review_cancel` (Codex review jobs);
-  `flow_delete` (a flow's data). Each request is validated against a per-operation field list.
+  `flow_delete` (a flow's data); `chat_open`, `chat_send`, `chat_answer`, `chat_stop`, `chat_close`,
+  `chat_events`, `chat_delete` (chats with a role card, P36). Each request is validated against a per-operation
+  field list.
 - **Three kinds of work, one daemon.** *Terminals* (`open`, `open_managed`) are PTY children. *Stream
   sessions* (`claude-stream`, `daemon_stream.py`, `stream_session.py`, `stream_journal.py`) are pipe-based, with
   no terminal and no typing: a dispatch is a sanitized line written to stdin and the answer is a stream of
@@ -52,6 +54,12 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   a tool call the permission system refused, `system/permission_denied` in 2.1.296, is journalled as a
   `permission_denied` fact with the tool's name and the decision's type, filtered the same way (at most 16 facts
   per turn; the journal refuses a 17th), and does not make the turn invalid).
+  *Chats* (`claude-chat`, `daemon_chat.py`, `chat_session.py`, `chat_protocol.py`, `chat_store.py`; P36) are
+  pipe-based too. Claude Code asks about every tool call on stdin, and the daemon answers it itself or holds it
+  as a permission card for the person. A chat's record is `chats/<chat_id>/` (`chat.json` and an append-only
+  `events.jsonl`), and each role card works in its own `chat-work/<hash>/` folder. There is one process per
+  role card and at most three in all. A process closes after 10 idle minutes, and the next message resumes the
+  session. The process termination steps are shared with stream sessions (`stream_session.ProcessGroupEnd`).
   *Review jobs* (`daemon_review.py`, `review_*.py`) run Codex once,
   in a separate clone with a dedicated `CODEX_HOME` and a temporary `HOME`, and are judged afterwards from their
   events and rollout. Stream and review state lives in files only the daemon writes: `sessions/<launch>/`,
