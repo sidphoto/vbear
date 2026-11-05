@@ -111,7 +111,7 @@ EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sen
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
                    "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits",
-                   "chat_limits", "setup_done", "setup_notice"}
+                   "chat_limits", "setup_done", "setup_notice", "welcome_seen"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 # "show_mcode": the switch of a hidden AI tool (vbear/ai_tools.py), written through /api/config like the other keys
@@ -2076,7 +2076,7 @@ def make_handler(console: Console):
                         value = folders.clean_recent_folders(value)
                     if key == "onboarding_dismissed" and type(value) is not bool:
                         raise ValueError("onboarding_dismissed 必須是布林值")
-                    if key in ("setup_done", "setup_notice") and type(value) is not bool:
+                    if key in ("setup_done", "setup_notice", "welcome_seen") and type(value) is not bool:
                         raise ValueError(f"{key} 必須是布林值")
                     if key in SHOW_TOOL_KEYS and type(value) is not bool:
                         raise ValueError(f"{key} 必須是布林值")

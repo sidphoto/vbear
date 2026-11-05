@@ -60,7 +60,7 @@ REGISTRY: tuple[Tool, ...] = (
     # Antigravity: the safe launch never starts it; full mode does (as a terminal, with the person's own settings).
     Tool("agy", "Antigravity（AGY）", "AGY", "google", "fox", False, False, False, True, "--model", False,
          "curl -fsSL https://antigravity.google/cli/install.sh | bash", "agy", None, True,
-         "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄",
+         "安全模式不會啟動 AGY，要出發請選完整模式",
          version_pattern=r"^(\d+\.\d+\.\d+)$",
          blurb="Google 做的（Antigravity）。用個人 Google 帳號登入；公司帳號要有 Gemini Enterprise 授權。"),
     # Grok Build (xAI) and MiniMax Code: full mode only. The model flag is -m for both; the instructions are pasted. MCODE

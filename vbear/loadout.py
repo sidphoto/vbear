@@ -20,21 +20,20 @@ VERSION_BASIS = ("以已驗證設定為準：這是 VBear 有實測證據的那�
 CODEX_BASIS = ("以 VBear 已記錄的 Codex 驗證證據為準；證據不全的項目是「未知」。這台 Mac 的 Codex 版本"
                "實際守到什麼程度，要等出發通行證才知道")
 ARMOR_NOT_APPLICABLE = {"shared": "shared 不是可啟動的工具，沒有防具",
-                        "agy": "VBear 還不會啟動 AGY，沒有防具",
+                        "agy": "安全模式不會啟動 AGY，沒有防具",
                         "grok": "Grok 目前只能用完整模式，安全模式沒有防具",
                         "mcode": "MCODE 目前只能用完整模式，安全模式沒有防具"}
 CODEX_NOT_LAUNCHABLE = "目前無法從 VBear 啟動這個角色（Codex 的互動模式還不能安全地受管啟動）"
 CODEX_SKILLS_NOTE = "VBear 目前不提供 Codex 角色的受管啟動，已選技能是你的挑選紀錄。"
 CODEX_SKILLS_NOTE_LAUNCHABLE = "已選技能是你的挑選紀錄；VBear 沒有驗證 Codex 角色會載入或使用它們。"
 SHARED_SKILLS_NOTE = "shared 不是可啟動的工具，已選技能是你的挑選紀錄。"
-AGY_SKILLS_NOTE = ("VBear 還不會啟動 AGY，已選技能只是你的挑選紀錄，不代表 AGY 會載入；「AGY 不會讀」是依這台電腦的 "
+AGY_SKILLS_NOTE = ("安全模式不會啟動 AGY（完整模式會，照 AGY 自己的設定），已選技能只是你的挑選紀錄，不代表 AGY 會載入；「AGY 不會讀」是依這台電腦的 "
                    "AGY 設定判斷的，AGY 的內建與外掛技能不在這裡。")
 FULL_ONLY_SKILLS_NOTE = "已選技能是你的挑選紀錄；VBear 沒有驗證這個 AI 工具會載入或使用它們。"
 TOOLS_ONLY_CLAUDE = "VBear 目前只支援用角色卡啟動 Claude Code"
 TOOLS_CODEX_NOT_RECORDED = "VBear 沒有記錄 Codex 角色的可用工具清單"
-TOOLS_AGY_NOT_RECORDED = "VBear 還不會啟動 AGY，也沒有記錄 AGY 的可用工具清單"
-ARMOR_FULL_MODE = ("完整模式：VBear 沒有限制這張卡，只剩工具自己的權限詢問，所以沒有防具可以列。"
-                   "（這個版本還不能以完整模式出發。）")
+TOOLS_AGY_NOT_RECORDED = "VBear 沒有記錄 AGY 的可用工具清單"
+ARMOR_FULL_MODE = ("完整模式：VBear 沒有限制這張卡，只剩工具自己的權限詢問，所以沒有防具可以列。")
 LAUNCH_MODE_NOT_SET = "這張卡沒有設定出發方式（舊卡沒有這個欄位），一律當安全模式；沒有改動這張卡。"
 TOOLS_SOURCE = "與 VBear 啟動 Claude Code 時傳入的 --tools／--disallowedTools 相同（同一組常數）"
 

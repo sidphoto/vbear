@@ -1819,9 +1819,9 @@ async function test(name, fn) {
     { skill_id: "s-ar", name: "codex-agy-skill", tool: "codex", read_by: ["agy"], scope: "user", activation: "active", excerpt: "codex, AGY reads it too" },
     { skill_id: "s-an", name: "agy-own-skill", tool: "agy", read_by: ["agy"], scope: "user", activation: "active", excerpt: "in AGY's folder" }] };
   const AGY_OFF = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-  const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
+  const AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式";
   const agyLoadout = (p) => loadoutBody(p, {
-    armor: { applicable: false, why: "VBear 還不會啟動 AGY，沒有防具" },
+    armor: { applicable: false, why: "安全模式不會啟動 AGY，沒有防具" },
     blockers: [{ code: "tool_not_launchable", message: AGY_NOT_LAUNCHED }],
     skills: { title: "技能卡（收藏中：VBear 啟動時不載入）", all_inactive: true, note: "x",
       items: (p.equipped_skill_ids || []).map((id) => ({ skill_id: id, state: "in_index", name: id, will_load: false, effective: false })) } });
@@ -1891,7 +1891,7 @@ async function test(name, fn) {
     assert.strictEqual(byData(now, "data-tool", "agy")[0].getAttribute("aria-pressed"), "true");
     assert.strictEqual(byData(now, "data-tool", "claude")[0].getAttribute("aria-pressed"), "false");
     const note = byData(now, "data-cw", "agy-note")[0];
-    assert.ok(note && findText(note, "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"), "says it plainly beside the choice");
+    assert.ok(note && findText(note, "安全模式不會啟動 AGY，要出發請選完整模式"), "says it plainly beside the choice");
     assert.ok(!findText(now, "找不到 Codex"));
     btnByText(now, "下一步").dispatch("click");
     btnByText(dialog(), "建立").dispatch("click");
@@ -1925,7 +1925,7 @@ async function test(name, fn) {
     btnByText(dialog(), "下一步").dispatch("click");
     const cur = dialog();
     const note = byData(cur, "data-cw", "agy-skills-note")[0];
-    assert.ok(note && findText(note, "這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）"), "the honest sentence, before any skill is picked");
+    assert.ok(note && findText(note, "這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）"), "the honest sentence, before any skill is picked");
     assert.ok(findText(note, "AGY 的內建與外掛技能不在這裡"));
     assert.ok(!findText(cur, "VBear 還不知道 AGY 會讀哪些技能"), "the old 'does not know' wording is gone");
     assert.deepStrictEqual(ids24(dialog()).sort(), ["s-an", "s-ar"], "P24: the default list is what AGY reads");
@@ -2139,7 +2139,7 @@ async function test(name, fn) {
     assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0);
     assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0);
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
-    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄。"));
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "安全模式不會啟動 AGY，要出發請選完整模式。"));
     assert.strictEqual(byData(dialog(), "data-cw", "shared-note").length, 0);
     byData(dialog(), "data-tool", "shared")[0].dispatch("click");
     assert.strictEqual(byData(dialog(), "data-cw", "agy-note").length, 0);
@@ -2325,8 +2325,8 @@ async function test(name, fn) {
   await test("P20 source: the pass and the wizard speak of AGY in the words the server uses, and no AGY string claims a load or a protection", () => {
     const wizard = source.slice(source.indexOf("function openCardWizard("), source.indexOf("// ---- footer + save"));
     assert.ok(!/AGY[^"`\n]*(會載入|已保護|受保護|安全)/.test(wizard.replace(/不代表[^"]*/g, "")));
-    assert.ok(source.includes("VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"));
-    assert.ok(source.includes("這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）"));
+    assert.ok(source.includes("安全模式不會啟動 AGY，要出發請選完整模式"));
+    assert.ok(source.includes("這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）"));
     assert.ok(source.includes("AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）"));
     assert.ok(!source.includes("VBear 還不知道 AGY 會讀哪些技能"), "P22: it is judged from AGY's own files now");
     assert.ok(source.includes("沒有掃描 ${CARD_TOOL_SHORT[tool]} 的 Agent 角色，沒有可選的職業標籤"));
@@ -2437,7 +2437,7 @@ async function test(name, fn) {
     const general = byData(d, "data-cw", "skills-note")[0].textContent;
     const agy = byData(d, "data-cw", "agy-skills-note")[0];
     assert.ok(agy && /AGY 依你電腦上的設定會讀到的技能/.test(agy.textContent) && /AGY 的內建與外掛技能不在這裡/.test(agy.textContent));
-    assert.ok(/VBear 不啟動 AGY/.test(agy.textContent));
+    assert.ok(/安全模式不啟動 AGY/.test(agy.textContent));
     assert.ok(!/只是收藏|只是記錄/.test(agy.textContent), "'only a record' is said once, in the general note");
     assert.ok(/只是記錄/.test(general));
   });
@@ -4024,10 +4024,10 @@ async function test(name, fn) {
     byData(dialog(), "data-tool", "agy")[0].dispatch("click");
     assert.strictEqual(modeBtn("full").getAttribute("aria-pressed"), "true");
     const full = byData(dialog(), "data-cw", "agy-note")[0];
-    assert.ok(findText(full, "完整模式可以從 VBear 出發") && !findText(full, "還不會啟動 AGY"));
+    assert.ok(findText(full, "完整模式可以從 VBear 出發") && !findText(full, "不會啟動 AGY"));
     assert.ok(!byData(dialog(), "data-cw", "launch-mode-pending").length, "the 'not open yet' hint is gone once the server can start it");
     modeBtn("safe").dispatch("click");
-    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "VBear 還不會啟動 AGY"));
+    assert.ok(findText(byData(dialog(), "data-cw", "agy-note")[0], "安全模式不會啟動 AGY"));
   });
 
   // ---- the paste button: instructions into the terminal's input, never Enter ----

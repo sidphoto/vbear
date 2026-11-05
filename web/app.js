@@ -2159,7 +2159,7 @@ async function viewHome() {
   const L = D.live;
   const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
-  if (setup.redirect) { location.hash = "#/setup"; return; }
+  if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
   const main = claim(token);
   const onboardingHost = el("div", { id: "h-onboarding" });
   const onboardingInput = () => ({
@@ -4172,7 +4172,7 @@ const PROFESSION_GROUP_OTHER = "other";   // the profession picker's group for a
 const SKILL_TRANSLATED_NOTE = "說明是機器翻譯，可能不準；點「看完整說明」可以對照原文";
 // The safe launch does not start Antigravity: in safe mode an AGY card is a record for building teams. Which skills AGY reads is judged by the
 // server from AGY's own files (the skills folders and ~/.gemini/config/skills.json) and arrives as read_by on a skill.
-const AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄";
+const AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式";
 // In full mode VBear does start an AGY, Grok or MCODE card (as a terminal, with the person's own settings); the safe launch never does.
 // The tools the safe launch never starts (the same list as agent_launch.UNLAUNCHABLE_TOOLS; a test keeps them equal): a card of
 // these has no launch, so the wizard does not ask whether its permission combination could be launched.
@@ -4190,7 +4190,7 @@ const NO_PROFESSIONS = (tool) => `VBear 沒有掃描 ${CARD_TOOL_SHORT[tool]} �
 const SHARED_NOT_LAUNCHED = "共用卡不能出發，權限意圖只是分工記錄";
 const AGY_UNREAD_MARK = "AGY 不會讀";
 const AGY_NOT_READ = "AGY 不會讀這張技能卡（依這台電腦的 AGY 設定）";
-const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（VBear 不啟動 AGY）。AGY 的內建與外掛技能不在這裡。";
+const AGY_SKILLS_NOTE = "這裡只列 AGY 依你電腦上的設定會讀到的技能（安全模式不啟動 AGY，完整模式會）。AGY 的內建與外掛技能不在這裡。";
 // Always beside the intents (design R3): an intent is a team marker, not a limit VBear applies.
 const CARD_INTENT_TITLE = "權限意圖（分工記號）";
 const CARD_INTENT_NOTE = "權限意圖是隊伍分工的標記，不代表 VBear 已經限制這個程式的真實能力；真正的限制，看出發通行證上的盾牌。";
@@ -12214,6 +12214,7 @@ async function route() {
     else if (top === "projects") await viewProjects(parts[1]);
     else if (top === "settings") await viewSettings();
     else if (top === "setup") await viewSetup();
+    else if (top === "welcome") await viewWelcome();
     else if (top === "term" && parts[1]) await viewTerminal(decodeURIComponent(parts[1]));
     else if (top === "terminals") await viewTerminals();
     else if (top === "office") await viewOffice();
@@ -12313,6 +12314,76 @@ function needsClaudeSlot(token, what, wanted) {
   return slot;
 }
 // ---------- end of the Claude Code note ---------------------------------------------------------------------------------
+
+// ---------- the first-time page (第一次打開 VBear, v0.12) -----------------------------------------------------------------
+// Shown once, only in the app window, before the start-up page: VBear is not signed with an Apple developer account, so the Mac
+// may stop it the first time (and again after an update). The page says where to press 「強制打開」. The picture is drawn here
+// with el() as an illustration (not a screenshot, so nothing of anyone's real settings is in it) and says so. Whether this is the
+// app window is judged the way the folder chooser is: the window gives the page a native message handler (folderBridge); a
+// browser does not. That it was seen is one yes/no in the server's config (welcome_seen), written through /api/config.
+const WELCOME_TITLE = "第一次打開 VBear";
+const WELCOME_LEDE = "VBear 還沒有向 Apple 申請簽章（申請要每年付費），所以 Mac 第一次打開它時，可能會說「無法打開」或「Apple 無法驗證」。這不代表 VBear 是病毒，只是 Apple 沒有看過它；VBear 的程式碼是公開的，任何人都能檢查。";
+const WELCOME_PASSED = "你現在看得到這一頁，表示 VBear 已經打開了，這一關你已經過了。之後更新或重新安裝 VBear 時，Mac 可能再擋一次，到時候照下面的步驟做。";
+const WELCOME_STEPS = [
+  "Mac 擋下 VBear 時，先在跳出來的視窗按「完成」（或「取消」）。不要按「移到垃圾桶」。",
+  "打開「系統設定」，點左邊的「隱私權與安全性」。",
+  "往下捲到「安全性」那一區，會看到一行「已阻擋 VBear」，按它旁邊的「強制打開」。",
+  "輸入你的 Mac 密碼（或用指紋），再按「打開」。之後就不會再擋了。",
+];
+const WELCOME_DIAGRAM_LABEL = "示意圖：系統設定的「隱私權與安全性」，按鈕「強制打開」在「安全性」那一區";
+const WELCOME_DIAGRAM_NOTE = "上面是示意圖，不是你電腦的真實畫面。你的系統設定的樣子與字，會依 macOS 版本稍有不同，位置也可能不一樣；照著文字步驟找就好。";
+const WELCOME_SAVE_FAILED = "沒有存成「已看過」，下次打開 VBear 可能還會看到這一頁。";
+
+function welcomeIsApp() { return folderBridge() !== null; }
+// The home page asks this only after the start-up gate said the person is to go there.
+function welcomeWanted(configRes) {
+  const conf = configRes && configRes.config;
+  return welcomeIsApp() && !!conf && typeof conf === "object" && conf.welcome_seen === false;
+}
+
+function welcomeDiagram() {
+  const num = (n) => el("span", { class: "welcome-num", "aria-hidden": "true" }, String(n));
+  return el("div", { class: "welcome-diagram", role: "img", "aria-label": WELCOME_DIAGRAM_LABEL, "data-welcome": "diagram" },
+    el("div", { class: "welcome-titlebar", "aria-hidden": "true" }, "系統設定"),
+    el("div", { class: "welcome-window", "aria-hidden": "true" },
+      el("ul", { class: "welcome-side" },
+        el("li", null, "一般"),
+        el("li", null, "外觀"),
+        el("li", { class: "welcome-side-on" }, num(2), "隱私權與安全性"),
+        el("li", null, "電池")),
+      el("div", { class: "welcome-pane" },
+        el("div", { class: "welcome-pane-title" }, "安全性"),
+        el("p", { class: "welcome-blocked" }, "已阻擋 VBear，以保護你的 Mac。"),
+        el("span", { class: "welcome-mark", "data-welcome": "mark-button" }, num(3), "強制打開"))));
+}
+
+async function viewWelcome() {
+  const token = seq;
+  const main = claim(token);
+  if (token !== seq) return;
+  if (!welcomeIsApp()) { location.hash = "#/setup"; return; }       // a browser has no such page
+  const go = async () => {
+    let saved = true;
+    try { await api.post("/api/config", { welcome_seen: true }); }
+    catch (e) { saved = false; }
+    location.hash = "#/setup";
+    if (!saved) toast(WELCOME_SAVE_FAILED);
+  };
+  const skip = el("button", { class: "btn", type: "button", "data-welcome": "skip" }, "略過");
+  const next = el("button", { class: "btn primary", type: "button", "data-welcome": "next" }, "我知道了，開始設定");
+  let busy = false;
+  for (const b of [skip, next]) b.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true; skip.disabled = true; next.disabled = true;
+    await go();
+  });
+  setKids(main, el("h1", null, WELCOME_TITLE), el("p", { class: "lede" }, WELCOME_LEDE),
+    el("p", { class: "setup-text", "data-welcome": "passed" }, WELCOME_PASSED),
+    el("ol", { class: "welcome-steps" }, WELCOME_STEPS.map((t) => el("li", { "data-welcome": "step" }, t))),
+    welcomeDiagram(),
+    el("p", { class: "small muted setup-text", "data-welcome": "diagram-note" }, WELCOME_DIAGRAM_NOTE),
+    el("div", { class: "row welcome-foot" }, next, skip));
+}
 
 // ---------- the start-up page (開始設定, v0.12) ---------------------------------------------------------------------------
 // The first page a new person sees: every AI tool VBear can borrow, with where it stands (還沒安裝 / 還沒登入 / 就緒) and the
@@ -15394,6 +15465,8 @@ if (typeof module !== "undefined" && module.exports) {
     needsClaudeNote,
     setupTerminalWords,
     setupGate,
+    welcomeWanted,
+    viewWelcome,
     setupToolKey,
     setupOpened,
     viewSetup,

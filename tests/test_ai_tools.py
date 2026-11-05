@@ -202,7 +202,7 @@ class OtherModulesKeepTheirValuesTests(unittest.TestCase):
         self.assertEqual(agent_sessions._FULL_MODEL_FLAG,
                          {"claude": "--model", "codex": "-m", "agy": "--model", "grok": "-m", "mcode": "-m"})
         self.assertEqual(agent_launch.TOOL_NOT_LAUNCHABLE["shared"], "shared 不是可啟動的工具")
-        self.assertEqual(agent_launch.TOOL_NOT_LAUNCHABLE["agy"], "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄")
+        self.assertEqual(agent_launch.TOOL_NOT_LAUNCHABLE["agy"], "安全模式不會啟動 AGY，要出發請選完整模式")
         self.assertEqual(set(agent_launch.TOOL_NOT_LAUNCHABLE), {"agy", "grok", "mcode", "shared"})
         self.assertEqual(set(agent_launch.UNLAUNCHABLE_TOOLS), {"agy", "grok", "mcode", "shared"})
 

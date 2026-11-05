@@ -308,6 +308,12 @@ opens the install or login terminal through the daemon's `open_setup` operation 
 `setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
 false; a config that does not say forces nobody.
 
+In the app window only, the home page sends that person to `#/welcome` (`viewWelcome` in `web/app.js`, 第一次打開 VBear) first,
+while the config key `welcome_seen` is false; reading it or skipping it writes `welcome_seen: true` through `/api/config` and goes on
+to `#/setup`. Whether this is the app window is judged by `folderBridge()`, the native folder-chooser handler that only the app's
+WKWebView gives the page (`macos/VBear/main.swift`); a browser does not have it and never gets the page. The page's picture is boxes
+drawn with `el()` and CSS (an illustration, not a screenshot).
+
 `ai_tool_status.report` keeps each tool's row in memory for `CACHE_TTL_S` (30 seconds, keyed by search path, tool and mark);
 `GET /api/setup/tools?force=1` (with `X-VBear`), a mark, an install or login terminal and a try read the tools again.
 「試一下」 is `POST /api/setup/tools/<id>/try` (`vbear/setup_try.py`): one fixed sentence, headless, in a scratch folder, with a

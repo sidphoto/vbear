@@ -1013,7 +1013,7 @@ const lineOf = (root, id) => byData(root, "data-pass-line", id)[0];
   // v0.12: the pass decides from the tool list, not from the id "agy": Grok and MCODE are tools without a safe launch too
   const toolListCatalog = { ...catalog, tool_list: [
     { id: "claude", name: "Claude Code", short: "Claude Code", generic: false, safe_launch: true, safe_mode: true, full_launch: true, not_launchable_message: "" },
-    { id: "agy", name: "Antigravity（AGY）", short: "AGY", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄" },
+    { id: "agy", name: "Antigravity（AGY）", short: "AGY", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "安全模式不會啟動 AGY，要出發請選完整模式" },
     { id: "grok", name: "Grok", short: "Grok", generic: false, safe_launch: false, safe_mode: false, full_launch: true, not_launchable_message: "Grok 目前只能用完整模式，VBear 不用安全模式啟動它" },
     { id: "shared", name: "共用", short: "共用卡", generic: true, safe_launch: false, safe_mode: false, full_launch: false, not_launchable_message: "shared 不是可啟動的工具" },
   ] };

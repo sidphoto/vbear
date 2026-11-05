@@ -197,7 +197,7 @@ class AgentBuilderAPITests(unittest.TestCase):
         self.assertEqual(by["agy"], {"id": "agy", "name": "Antigravity（AGY）", "short": "AGY", "family": "google",
                                      "generic": False, "safe_launch": False, "safe_mode": False, "full_launch": True,
                                      "hidden": False,
-                                     "not_launchable_message": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"})
+                                     "not_launchable_message": "安全模式不會啟動 AGY，要出發請選完整模式"})
         self.assertEqual((by["claude"]["safe_launch"], by["codex"]["safe_launch"], by["shared"]["full_launch"]),
                          (True, True, False))
         self.assertEqual([t for t in body["tools"] if by[t]["safe_mode"]], body["safe_mode_tools"])

@@ -207,6 +207,7 @@ DEFAULT_CONFIG = {
     "onboarding_dismissed": False,  # the lobby's "first game" card was put away
     "setup_done": False,    # the person left the start-up page with an AI tool ready (or already had one when they upgraded)
     "setup_notice": False,  # an upgrade counted the person as done: the lobby says so once, then clears this
+    "welcome_seen": False,  # the app's "first time you open VBear" page was read or skipped (it is shown once, before the start-up)
     # one switch per hidden AI tool ("show_mcode"): off until the person turns it on in the settings
     **{ai_tools.show_key(i): False for i in ai_tools.hidden_ids()},
     "sources": [asdict(s) for s in default_sources()],

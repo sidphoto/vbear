@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 GOOD = {"read": "allow", "write": "allow", "test": "allow", "deploy": "deny"}
 NET_OFF = {"enabled": False, "approved_domains": []}
 REV = "ab" * 32
-AGY_NOT_LAUNCHED = "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"
+AGY_NOT_LAUNCHED = "安全模式不會啟動 AGY，要出發請選完整模式"
 
 
 def profile(tool="agy", **over):
@@ -131,7 +131,7 @@ class RoleCardOfAgyTests(unittest.TestCase):
     def test_no_armor_and_the_reason_names_agy(self):
         data = self.build()
         self.assertIs(data["armor"]["applicable"], False)
-        self.assertEqual(data["armor"]["why"], "VBear 還不會啟動 AGY，沒有防具")
+        self.assertEqual(data["armor"]["why"], "安全模式不會啟動 AGY，沒有防具")
         self.assertEqual([b["message"] for b in data["blockers"]], [AGY_NOT_LAUNCHED])
 
     def test_the_tool_list_is_unknown_and_says_so_in_agys_words(self):
