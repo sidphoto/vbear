@@ -199,9 +199,54 @@ class PolicyTests(unittest.TestCase):
     def test_source_lists_are_the_reviewed_constants(self):
         claude = {"paths": ("Library/Application Support/ClaudeCode",), "domain": "com.anthropic.claudecode",
                   "home_paths": (".claude/remote-settings.json",)}
-        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude})
+        # 2.1.318 also names ~/.claude/policy-limits.json, a server-delivered cache (docs/evidence/claude-code-2.1.318-chat.md)
+        v318 = dict(claude, home_paths=(".claude/remote-settings.json", ".claude/policy-limits.json"))
+        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318})
         self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
                                                         "home_paths": ()}})
+
+
+class Claude2_1_318Tests(PolicyTests):
+    """Claude Code 2.1.318 (P36-2): the same system sources as 2.1.292 and 2.1.296 (checked against the binary's
+    strings on 2026-11-05), plus the second server-delivered cache the binary names."""
+
+    def claude(self):
+        return ap.check_claude("2.1.318", str(self.root), str(self.home))
+
+    def test_the_version_has_a_list(self):
+        self.assertTrue(self.claude().ok)
+        self.assertIn("2.1.318", ap.CLAUDE_SOURCES)
+
+    def test_policy_limits_cache_refuses(self):
+        cache = self.home / ".claude" / "policy-limits.json"
+        cache.parent.mkdir()
+        self.assertTrue(self.claude().ok)
+        for kind in ("file", "empty", "symlink"):
+            with self.subTest(kind=kind):
+                if kind == "file":
+                    cache.write_text("{}")
+                elif kind == "empty":
+                    cache.write_text("")
+                else:
+                    cache.symlink_to("/nonexistent")
+                r = self.claude()
+                self.assertFalse(r.ok)
+                self.assertEqual(r.found, ["~/.claude/policy-limits.json"])
+                self.assertIn("管理員", r.reason())
+                cache.unlink()
+        self.assertTrue(self.claude().ok)
+        # the older versions' lists are unchanged: they never named this file
+        cache.write_text("{}")
+        self.assertTrue(ap.check_claude("2.1.296", str(self.root), str(self.home)).ok)
+
+    def test_policy_limits_cache_cannot_be_established(self):
+        claude_dir = self.home / ".claude"
+        claude_dir.mkdir()
+        claude_dir.chmod(0o000)
+        r = self.claude()
+        self.assertFalse(r.ok)
+        self.assertTrue(any("policy-limits.json" in p for p in r.problems))
+        claude_dir.chmod(0o700)
 
 
 if __name__ == "__main__":

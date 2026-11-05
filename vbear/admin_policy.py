@@ -25,7 +25,7 @@ every per-user directory under it.
 
 Claude Code's server-managed settings are fetched from claude.ai and are no
 local file. Its cache, ``~/.claude/remote-settings.json`` (in the HOME the
-executor runs with), refuses the launch when present (design v29.3, 2.1);
+executor runs with; 2.1.318 also ``~/.claude/policy-limits.json``), refuses the launch when present (design v29.3, 2.1);
 that cannot prove the source absent (a ``-p`` run applies such settings
 without caching them), so the rest is a residual risk the user accepts per
 flow (user decision 2026-10-08, design 10).
@@ -55,7 +55,17 @@ _CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex", "home_paths": (
 # the server-managed-settings page: the cache ~/.claude/remote-settings.json) and against the strings of the 2.1.296
 # binary, which names no other source (managed-settings.d is a drop-in directory inside the checked ClaudeCode
 # directory). Method and result: docs/evidence/claude-code-2.1.296-stream.md.
-CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE}
+# 2.1.318 (P36-2): the same system sources, checked on 2026-11-05 against the strings of the installed 2.1.318 binary
+# (macOS: /Library/Application Support/ClaudeCode, with managed-settings.json, managed-settings.d and the managed
+# files; /Library/Managed Preferences/<user>/ and /Library/Managed Preferences/ with com.anthropic.claudecode.plist;
+# /etc/claude-code and C:\Program Files\ClaudeCode are the Linux and Windows places). It names one more cache
+# under the config home that a server delivers, ~/.claude/policy-limits.json (org-side policy verdicts); it is not
+# in 2.1.296's strings, and strings cannot show that it never changes how a run behaves, so its presence refuses like
+# remote-settings.json does. Vendor documentation was not read again for 2.1.318 (no network in that run); the pages
+# read on 2026-10-12 are in docs/evidence/claude-code-2.1.296-stream.md. Method and result:
+# docs/evidence/claude-code-2.1.318-chat.md.
+_CLAUDE_2_1_318 = dict(_CLAUDE, home_paths=_CLAUDE["home_paths"] + (".claude/policy-limits.json",))
+CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318}
 CODEX_SOURCES = {"0.160.0": _CODEX}
 
 
