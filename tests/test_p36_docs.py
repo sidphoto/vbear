@@ -40,6 +40,14 @@ class ChatDocsTests(unittest.TestCase):
                        "無法確認花費", "`X-VBear`", "Going back to v0.10.0", "does not know chats"):
             self.assertIn(phrase, self.changelog, phrase)
 
+    def test_the_changelog_and_the_model_say_why_no_settings_are_read_and_which_python(self):
+        for phrase in ('`--setting-sources ""`', "extra folders", "`unsupported_python`", "`os.waitid`", "3.13"):
+            self.assertIn(phrase, self.changelog, phrase)
+        for phrase in ('--setting-sources ""', "`project,local`", "`.claude/`", "`unsupported_python`", "`os.waitid`",
+                       "second layer"):
+            self.assertIn(phrase, self.model, phrase)
+        self.assertIn('--setting-sources ""', self.arch)
+
     def test_the_changelog_says_it_is_not_released(self):
         self.assertIn("not released yet", self.changelog)
 

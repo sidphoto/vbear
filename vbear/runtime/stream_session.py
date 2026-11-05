@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import time
 
 from .. import strictjson
@@ -68,6 +69,16 @@ def escape_every(source: str) -> float:
 
 
 # ---- process identity before any signal (design 2.3, 5.8; part 2 review B6) ------------
+
+def waitid_problem() -> str | None:
+    """Why this Python cannot manage a process group the way design 5.8 needs (``os.waitid`` with WNOWAIT is how an
+    exited leader is seen without being reaped; it reached macOS only in Python 3.13), or None. Checked before a
+    process is started, because a process whose exit cannot be watched cannot be ended safely either."""
+    if hasattr(os, "waitid"):
+        return None
+    return (f"這個 Python（{sys.version.split()[0]}）沒有 os.waitid，無法安全管理子程序；VBear 需要 Python 3.13 或更新的版本"
+            "（macOS 內建的 /usr/bin/python3 是 3.9，不行）")
+
 
 def leader_exited(pid: int) -> bool:
     """Whether our child ``pid`` has exited, without reaping it."""

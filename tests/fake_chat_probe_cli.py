@@ -16,6 +16,8 @@ Reads ``$HOME/fake-probe.json``; every key is optional and the default is a well
   sandbox               "open": a write outside the work folder and the scratch folder succeeds
   tmp_error             true: ends a Bash result with the shared-tmp error recorded in P36-0 fact 9
   extra_dirs            list: reported as additional_directories in system/init
+  user_extra_dirs       list: the extra folders of the person's own Claude settings, reported in system/init unless
+                        the argv has ``--setting-sources ""`` (what the real 2.1.318 does: --settings cannot remove them)
   budget_counts_previous  true: --max-budget-usd counts what earlier processes of the session spent
   init_error            true: answers initialize with an error
 Everything it is given and does goes to ``$HOME/fake-probe-log.jsonl``; the session's totals are kept in
@@ -58,6 +60,7 @@ CWD = os.path.realpath(os.getcwd())
 SCRATCH = os.path.realpath(os.environ.get("CLAUDE_CODE_TMPDIR", CWD))
 BUDGET = float(argv[argv.index("--max-budget-usd") + 1])
 APPENDED = "--append-system-prompt" in argv
+NO_USER_SETTINGS = "--setting-sources" in argv and argv[argv.index("--setting-sources") + 1] == ""
 RESUMED = flag == "--resume"
 log(event="start", argv=argv, cwd=CWD, pid=os.getpid())
 TOOLS = ["Bash", "Edit", "Glob", "Grep", "Read", "Write"]
@@ -89,7 +92,7 @@ def read():
 def init_event():
     emit({"type": "system", "subtype": "init", "cwd": CWD, "tools": TOOLS, "model": "claude-haiku-5-5",
           "permissionMode": "default", "claude_code_version": VERSION, "mcp_servers": [],
-          "additional_directories": CONF.get("extra_dirs", [])})
+          "additional_directories": CONF.get("extra_dirs", []) + ([] if NO_USER_SETTINGS else CONF.get("user_extra_dirs", []))})
 
 
 def text_reply(text, *, stream=True):

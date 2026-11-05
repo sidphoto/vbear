@@ -63,6 +63,8 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "budget": (409, "今天剩下的額度不到 US$0.01，不送出。"),
     "busy": (409, "員工還在處理上一則訊息（或這位員工正在另一個聊天裡工作），請等它回覆完，或先按停止。"),
     "limit": (429, "同時聊天的員工或背景程序的工作已經到上限，請稍後再試。"),
+    "unsupported_python": (409, "執行 VBear 背景程序的 Python 太舊（沒有 os.waitid），無法安全管理聊天程序，所以不啟動。"
+                                "請改用 Python 3.13 或更新的版本（macOS 內建的 /usr/bin/python3 是 3.9，不行）。"),
     "unverified": (409, "這個 Claude Code 版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。"),
     "unsupported_version": (409, "VBear 沒有這個 Claude Code 版本的聊天模式常數，不會啟動。"),
     "admin_policy": (409, "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天。"),

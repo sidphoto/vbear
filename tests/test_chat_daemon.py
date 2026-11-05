@@ -26,6 +26,7 @@ from vbear.runtime import chat_session as csess
 from vbear.runtime import chat_store as cs
 from vbear.runtime import cli_versions
 from vbear.runtime import daemon as d
+from vbear.runtime import stream_session
 
 REPO = str(Path(__file__).resolve().parent.parent)
 TIMEOUT = 20.0
@@ -682,6 +683,89 @@ class AdminPolicyTests(ChatCase):
         self.assertEqual(self.fake_log(), [])
 
 
+class UnexpectedErrorTests(ChatCase):
+    """P36-2 fix 1: an unexpected error while managing a chat process never leaves the process behind, and a Python that
+    cannot watch a process's exit (no os.waitid: macOS's own /usr/bin/python3 3.9) never starts one."""
+
+    def alive(self, pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def test_an_error_in_the_loop_ends_the_process_and_cleans_up(self):
+        self.configure([clean("ask", 0), clean("ask", 4)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        self.wait_card(chat_id)
+        pid = next(x for x in self.fake_log() if x["event"] == "start")["pid"]
+        real = csess.ChatProcess.tick
+        failed = []
+
+        def broken(proc, now):
+            if not failed:
+                failed.append(now)
+                raise AttributeError("module 'os' has no attribute 'waitid'")
+            return real(proc, now)
+
+        with mock.patch.object(csess.ChatProcess, "tick", broken):
+            self.wait_gone(chat_id)
+        self.assertTrue(any("AttributeError" in line for line in self.logs), self.logs[-6:])
+        self.assertFalse(self.alive(pid), "the process was ended, not left running")
+        self.assertEqual(self.dm._held_leaders, [], "and its leader was reaped, not held")
+        self.assertFalse(self.dm._chat_launches_left(chat_id), "the launch was cleaned up, not kept for a person")
+        self.assertFalse([x for x in self.logs if "manual review" in x or "人工" in x and "chat process retained" in x], self.logs)
+        end = self.wait_turn(chat_id, 1)
+        self.assertEqual((end["reason"], end["cost_usd"]), ("error", "0.5"), "the open turn costs its cap")
+        r = self.send(chat_id, "again")
+        self.assertTrue(r["ok"], r)                       # not manual_review: the chat goes on in a new process
+        self.assertEqual(r["result"]["process"], "resume")
+
+    def test_an_error_that_cannot_be_cleaned_up_still_goes_to_a_person_without_a_signal(self):
+        self.configure([clean("ask", 0)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        self.wait_card(chat_id)
+        pid = next(x for x in self.fake_log() if x["event"] == "start")["pid"]
+        real = csess.ChatProcess.tick
+        failed = []
+
+        def broken(proc, now):
+            if not failed:
+                failed.append(now)
+                raise AttributeError("boom")
+            return real(proc, now)
+
+        with mock.patch.object(csess.ChatProcess, "tick", broken), \
+                mock.patch.object(stream_session, "end_spawned", side_effect=AttributeError("no waitid")):
+            self.wait(lambda: chat_id not in self.dm._chats, "the chat to leave the loop")
+        self.assertTrue(self.alive(pid), "nothing was signalled")
+        self.assertEqual([h["pid"] for h in self.dm._held_leaders], [pid])
+        self.assertEqual(self.send(chat_id)["error"]["code"], "manual_review")
+        try:
+            os.kill(pid, signal.SIGKILL)            # it may be reaped already: it ended with its stdin closed
+        except ProcessLookupError:
+            pass
+
+    def test_a_python_without_waitid_starts_nothing(self):
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        with mock.patch.object(stream_session, "waitid_problem", return_value="這個 Python（3.9.6）沒有 os.waitid"):
+            r = self.send(chat_id)
+        self.assertEqual((r["ok"], r["error"]["code"]), (False, "unsupported_python"))
+        self.assertEqual(self.fake_log(), [], "no process was started")
+        self.assertEqual(self.dm._chats, {})
+        self.assertTrue(self.send(chat_id)["ok"], "a Python that has it is not refused")
+
+    def test_the_guard_reads_what_this_python_has(self):
+        if hasattr(os, "waitid"):
+            self.assertIsNone(stream_session.waitid_problem())
+        with mock.patch.object(stream_session, "os", mock.Mock(spec=[])):
+            self.assertIn("os.waitid", stream_session.waitid_problem())
+            self.assertIn("3.13", stream_session.waitid_problem())
+
+
 class ProbeVersionTests(ChatCase):
     """A version that is not on the verified list does not start, except on a daemon the chat check set up for it."""
 
@@ -714,6 +798,18 @@ class InstructionsTests(ChatCase):
 
     def started_argv(self):
         return next(x for x in self.fake_log() if x["event"] == "start")["argv"]
+
+    def test_no_user_project_or_local_settings_are_read(self):
+        """The real 2.1.318 still reports the extra folders of the person's own Claude settings in system/init when
+        only --settings says additionalDirectories is empty; ``--setting-sources ""`` loads none of the three."""
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        self.wait(lambda: self.fake_log(), "the process to start")
+        argv = self.started_argv()
+        i = argv.index("--setting-sources")
+        self.assertEqual(argv[i + 1], "", "the empty string, not a list of some sources")
+        self.assertEqual(argv[i - 2:i], ["--settings", argv[i - 1]])
 
     def test_a_cards_own_instructions_are_appended_to_the_system_prompt(self):
         self.configure([clean("text", 0)])

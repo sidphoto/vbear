@@ -71,8 +71,8 @@ class PrepareTests(LaunchCase):
         self.assertEqual(asess.chat_argv(m), [
             str(self.cli), "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--include-partial-messages", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
-            "--permission-mode", "default", "--safe-mode", "--settings", m["settings_path"], "--strict-mcp-config",
-            "--tools", "Bash,Read,Edit,Write,Grep,Glob", "--max-budget-usd", "0.50", "--model", "claude-haiku-5-5",
+            "--permission-mode", "default", "--safe-mode", "--settings", m["settings_path"], "--setting-sources", "",
+            "--strict-mcp-config", "--tools", "Bash,Read,Edit,Write,Grep,Glob", "--max-budget-usd", "0.50", "--model", "claude-haiku-5-5",
             "--session-id", self.sid])
         r = self.prepare(resume=True, budget_usd=0.25)
         self.assertEqual(asess.chat_argv(r)[-6:], ["--max-budget-usd", "0.25", "--model", "claude-haiku-5-5",

@@ -125,6 +125,9 @@ class ChatOps:
     def _op_chat_send(self, rid: str, req: dict) -> dict:
         if self._shutdown_requested:
             return _err(rid, "limit", "背景程序正在關閉，不接受新的訊息")
+        python_problem = stream_session.waitid_problem()
+        if python_problem:                  # nothing has been started: a process that cannot be watched is never begun
+            return _err(rid, "unsupported_python", python_problem)
         chat_id, text, cli, model_id = req.get("chat_id"), req.get("text"), req.get("cli"), req.get("model_id")
         instructions = req.get("instructions")
         if instructions is not None and agent_sessions.append_prompt_problem(instructions):
@@ -499,7 +502,8 @@ class ChatOps:
         """Never out of the loop: the chat process is given up to a person without a signal, as a stream is."""
         why = f"管理聊天程序時發生未預期的錯誤（{type(exc).__name__}）"
         for step in (lambda: self._log(f"{p.launch_id}: {why}"),
-                     lambda: p._abandon(f"{why}，交人工處理") if not p.finished else None):
+                     lambda: p._abandon(f"{why}，交人工處理") if not p.finished else None,
+                     lambda: self._end_after_crash(p, why)):
             try:
                 step()
             except Exception:
@@ -515,6 +519,28 @@ class ChatOps:
                 except Exception:
                     pass
             self._chats.pop(p.chat_id, None)
+
+    def _end_after_crash(self, p, why: str) -> None:
+        """An unexpected error must not leave a process behind. After the identity check (the same one a launch that
+        could not be set up goes through) its group is killed, the leader seen to exit, the group proven empty and the
+        leader reaped; the launch is then cleaned up as an ended one, not kept. When any of that cannot be shown (the
+        check fails, the table cannot be read, a descendant left the group, or the check itself fails) nothing more is
+        signalled and the process stays with a person, as before."""
+        outcome = p.outcome
+        if p.reaped or not isinstance(outcome, dict) or not outcome.get("leader_held"):
+            return
+        try:
+            problem = stream_session.end_spawned(p.proc, p.leader_start, p.descendants)
+        except Exception as exc:
+            self._log(f"{p.launch_id}: 無法在錯誤之後結束程序（{type(exc).__name__}），交人工處理")
+            return
+        if problem:
+            self._log(f"{p.launch_id}: 錯誤之後沒有結束程序：{problem}")
+            return
+        p.reaped = True
+        p.outcome = dict(outcome, manual_review=None, leader_held=False,
+                         close_reason=outcome.get("close_reason") or why)
+        self._log(f"{p.launch_id}: 程序已在錯誤之後結束並回收（{why}）")
 
     def _kill_all_chats(self) -> None:
         """Daemon shutdown: every open turn costs its cap; nobody could manage the processes afterwards."""

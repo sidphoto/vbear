@@ -57,6 +57,15 @@ chat until it has passed a real check on your Mac.
   versions on purpose: nothing says what it can change. The evidence is in
   `docs/evidence/claude-code-2.1.318-chat.md`. **If your Mac already has `~/.claude/policy-limits.json`, chats stay
   shut.**
+- **No settings of yours are read by a chat (`--setting-sources ""`).** Found by running the check on the real 2.1.318:
+  `system/init` still named the extra folders of your own Claude user settings, which `--settings` cannot remove, so the
+  chat was stopped and the check failed. The chat's argv now loads no user, project or local settings, so VBear's own
+  settings are the only ones; your login still works. A chat therefore does not see your own permission rules, extra
+  folders or hooks. `additionalDirectories: []` and the check of `system/init` stay as a second layer.
+- **A Python without `os.waitid` starts no chat.** macOS's own `/usr/bin/python3` (3.9) has none, and VBear needs Python
+  3.13 or newer. The check and a chat now say so (`unsupported_python`) before starting anything; before, the first turn
+  ended in an `AttributeError` and left a process for a person to look at. An unexpected error while a chat process is
+  managed now ends the process (after the identity check) and cleans up its launch instead of leaving it.
 - **Every refusal is said in words.** The console answers a refusal with a sentence, not a code: 這張卡片過期（5 分鐘）,
   VBear 又檢查了一次所以拒絕 (`refused`), 員工的程序正在換新的所以你的訊息還沒送出 (`restarting`, tried again by itself
   a few times first), 今天已經花了多少讀不出來 (`spend_unknown`), and 這個聊天的紀錄有問題 (`damaged`: it is not written

@@ -235,14 +235,22 @@ def chat_argv(manifest: dict) -> list[str]:
     """P36 plan, exactly: the CLI asks VBear on stdin about each tool call it does not allow by itself
     (``--permission-prompt-tool stdio``; with these settings it may still allow a read in its own folder, which
     VBear sees only by its result), the first process of a chat names its session, later ones resume it. Everything
-    comes from the manifest that chat_manifest_problem accepted."""
+    comes from the manifest that chat_manifest_problem accepted.
+
+    ``--setting-sources ""`` loads no user, project or local settings at all, so VBear's own ``--settings`` is the
+    only one. Recorded with the real 2.1.318: without it ``system/init`` still names the extra folders of the
+    person's own Claude settings, and ``permissions.additionalDirectories: []`` in ``--settings`` does not remove
+    them (the chat is stopped, correctly, as soon as it says so). The empty string, not ``project,local``: the
+    employee may write in its own work folder, ``.claude/`` of it included, and a settings file written there must
+    not be read by the next process."""
     problem = chat_manifest_problem(manifest)
     if problem:
         raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")
     argv = [manifest["cli_binary"], "-p", "--input-format", "stream-json", "--output-format", "stream-json",
             "--verbose", "--include-partial-messages", "--permission-prompts", "host",
             "--permission-prompt-tool", "stdio", "--permission-mode", "default", "--safe-mode",
-            "--settings", manifest["settings_path"], "--strict-mcp-config", "--tools", ",".join(chat_protocol.TOOLS)]
+            "--settings", manifest["settings_path"], "--setting-sources", "", "--strict-mcp-config",
+            "--tools", ",".join(chat_protocol.TOOLS)]
     if manifest.get("append_prompt") is not None:
         # the role card's own instructions, the one thing of the card that goes in (P36-2): added to Claude Code's
         # system prompt, never replacing it, and never anything VBear wrote for the card's position

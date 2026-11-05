@@ -36,7 +36,7 @@ from pathlib import Path
 
 from . import admin_policy, config as cfg
 from .runtime import agent_sessions, chat_protocol as cp, chat_session, chat_store as cs, cli_versions
-from .runtime import daemon as dmn
+from .runtime import daemon as dmn, stream_session
 
 CHAT_MODEL = "haiku"               # what most role cards use (board_engine.model_for gives an alias)
 PROFILE_ID = "chat-check"
@@ -359,6 +359,11 @@ def run(binary: str, version: str, model: str | None, out: str | None, *, tmp_ro
     out_path = Path(out) if out else real_state / "verifications" / f"claude-{version}-chat.json"
     if cp.constants_for(version) is None:
         report["error"] = f"Claude Code {version} 沒有聊天模式的常數，不能驗證"
+        report["passed"] = False
+        return _finish(report, out_path, 2, finish)
+    problem = stream_session.waitid_problem()
+    if problem:                                      # before anything is started: no process, no folder, no cost
+        report["error"] = problem
         report["passed"] = False
         return _finish(report, out_path, 2, finish)
     root = Path(tempfile.mkdtemp(prefix="vbc-", dir=tmp_root))

@@ -66,7 +66,9 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   answers it itself or holds it as a permission card for the person. A chat's record is `chats/<chat_id>/`
   (`chat.json` and an append-only `events.jsonl`), and each role card works in its own `chat-work/<hash>/`
   folder. There is one process per role card and at most three in all. A process closes after 10 idle minutes,
-  and the next message resumes the session. The process termination steps are shared with stream sessions
+  and the next message resumes the session. The argv carries `--setting-sources ""`, so none of the person's own
+  Claude settings are read (the real CLI reports their extra folders otherwise), and `os.waitid` (Python 3.13+ on
+  macOS) is required: without it `chat_send` answers `unsupported_python` and starts nothing. The process termination steps are shared with stream sessions
   (`stream_session.ProcessGroupEnd`).
   *Review jobs* (`daemon_review.py`, `review_*.py`) run Codex once,
   in a separate clone with a dedicated `CODEX_HOME` and a temporary `HOME`, and are judged afterwards from their

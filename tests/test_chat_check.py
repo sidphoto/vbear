@@ -188,6 +188,29 @@ class FailTests(CheckCase):
         code, report = self.check({"tmp_error": True})
         self.assert_failed(code, report, "tmp_dir_clean")
 
+    def test_the_extra_folders_of_the_persons_own_settings_do_not_reach_the_chat(self):
+        """The real 2.1.318 names them in system/init unless ``--setting-sources ""`` is in the argv: the check passes
+        because VBear's chat argv has it, and the log of the fake shows it."""
+        code, report = self.check({"user_extra_dirs": ["/fictional/user-dir-1", "/fictional/user-dir-2"]})
+        self.assertEqual((code, report["passed"], report.get("error")), (0, True, None), report)
+        self.assertTrue(report["checks"]["init_clean"]["pass"])
+        starts = [json.loads(x) for x in (self.home / "fake-probe-log.jsonl").read_text().splitlines()
+                  if json.loads(x)["event"] == "start"]
+        self.assertTrue(starts)
+        for start in starts:
+            i = start["argv"].index("--setting-sources")
+            self.assertEqual(start["argv"][i + 1], "")
+
+    def test_a_python_without_waitid_fails_before_anything_starts(self):
+        before = set(self.work.iterdir())
+        with mock.patch.object(chat_check.stream_session, "waitid_problem", return_value="這個 Python（3.9.6）沒有 os.waitid"):
+            code, report = self.check()
+        self.assertEqual((code, report["passed"]), (2, False))
+        self.assertIn("os.waitid", report["error"])
+        self.assertFalse((self.home / "fake-probe-log.jsonl").exists(), "no process was started")
+        self.assertEqual(set(self.work.iterdir()) - before, {self.work / "report.json"}, "and no temporary folder was made")
+        self.assertEqual(self.verified(), ())
+
     def test_extra_folders_in_the_init_event_fail(self):
         code, report = self.check({"extra_dirs": ["/fictional/extra"]})
         self.assert_failed(code, report, None)

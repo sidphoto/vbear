@@ -1015,10 +1015,24 @@ process starts until a version passes the chat check.
   folder), and cleaned up the same way. A terminal launch refuses a chat manifest. The argv is fixed:
   `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompts
   host --permission-prompt-tool stdio --permission-mode default --safe-mode --settings <launch>/settings.json
-  --strict-mcp-config --tools Bash,Read,Edit,Write,Grep,Glob --max-budget-usd <x> --model <id>`, then `--session-id`
+  --setting-sources "" --strict-mcp-config --tools Bash,Read,Edit,Write,Grep,Glob --max-budget-usd <x> --model <id>`, then `--session-id`
   the first time and `--resume` after that. The settings are the managed sandbox (writes only to the card's work folder
   and the launch's scratch, no network, no unsandboxed commands, Bash never allowed by the sandbox alone), plus
   `permissions.ask: ["Bash"]`, `permissions.additionalDirectories: []` and the pinned endpoint.
+- **`--setting-sources ""`: no settings of yours are read.** Recorded with the real 2.1.318: with only `--settings`, `system/init`
+  still names the extra folders of your own Claude user settings, and `permissions.additionalDirectories: []` in
+  `--settings` does not remove them (VBear stops such a chat, as below, and the chat check fails). An empty list of
+  sources loads no user, project or local settings at all, so VBear's `--settings` is the only one; your login still
+  works and a turn still succeeds. The empty string is chosen over `project,local` on purpose: the employee may write in
+  its own work folder, `.claude/` of it included, and a settings file it wrote there would be read by the next process.
+  `additionalDirectories: []` and the check of `system/init` stay as the second layer. A chat does not see your own
+  Claude settings (permission rules, extra folders, hooks, models): that is the price.
+- **The Python that runs VBear.** A chat process is managed through `os.waitid`, which reached macOS in Python 3.13
+  (macOS's own `/usr/bin/python3` is 3.9 and has none). A daemon or a check on such a Python starts nothing: `chat_send`
+  answers `unsupported_python`, and `python3 -m vbear.boundary_check --mode chat` says so and exits before it makes a
+  folder or a process. If an unexpected error still happens while a chat process is managed, the process is ended
+  (after the identity check: its group is killed, the leader seen to exit, the group proven empty, the leader reaped)
+  and its launch cleaned up; only when that cannot be shown is it left, unsignalled, with a person.
 - **The work folder.** Each role card has one folder, `<state>/chat-work/<first 24 hex digits of the SHA-256 of its
   id>/` (0700). A hash is used because the file system ignores case, so two ids that differ only in case still get two
   folders. Deleting a chat keeps the folder.
