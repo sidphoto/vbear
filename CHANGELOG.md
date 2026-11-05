@@ -1,10 +1,6 @@
 # Changelog
 
-## Unreleased
-
-**This section is v0.11.0, "chatting with your role cards", and is not released yet.** `vbear/__init__.py` still says
-0.10.0 and the release tests still expect v0.10.0 at the top, so the heading stays `Unreleased` until the version is
-raised; then it becomes `## v0.11.0 — chatting with role cards`.
+## v0.11.0 — chatting with role cards
 
 You can now talk with a role card. Pick an enabled card whose tool is Claude Code, say something, and the card answers
 through your own Claude Code in its own work folder. When it wants to run a command, change a file or write one, a card

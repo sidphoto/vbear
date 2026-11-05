@@ -22,7 +22,7 @@ class ChatDocsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        cls.changelog = flat(text[text.index("## Unreleased"):text.index("## v0.10.0")])
+        cls.changelog = flat(text[text.index("## v0.11.0"):text.index("## v0.10.0")])
         cls.en = read("README.md")
         cls.zh = read("README.zh-TW.md")
         cls.model = read("docs", "SECURITY-MODEL.md")
@@ -48,8 +48,9 @@ class ChatDocsTests(unittest.TestCase):
             self.assertIn(phrase, self.model, phrase)
         self.assertIn('--setting-sources ""', self.arch)
 
-    def test_the_changelog_says_it_is_not_released(self):
-        self.assertIn("not released yet", self.changelog)
+    def test_the_changelog_heading_is_the_release(self):
+        self.assertTrue(self.changelog.startswith("## v0.11.0 — chatting with role cards"), self.changelog[:80])
+        self.assertNotIn("not released yet", self.changelog)
 
     def test_the_readmes_say_what_a_chat_costs_and_asks(self):
         for text, words in ((self.en, ("chat_limits.per_turn_usd", "allow once", "allow-every-time", "--append-system-prompt",
