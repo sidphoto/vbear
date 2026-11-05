@@ -6041,6 +6041,9 @@ function profileCard(p, opts = {}) {
       handlers.place ? el("button", { type: "button", class: "btn small", "data-pcard": "place",
         title: "把這張卡放進一張任務卡的隊伍（規劃、執行或審查位）",
         on: { click: () => handlers.place(p) } }, "放上任務卡") : null,
+      handlers.chat ? el("button", { type: "button", class: "btn small", "data-pcard": "chat", disabled: launchOff || tool !== "claude",
+        title: launchOff ? "這張卡已停用，啟用之後才能聊天" : tool !== "claude" ? "聊天目前只支援工具是 Claude Code 的角色卡" : "和這位員工聊天（開了聊天頁才會選，送出訊息才花錢）",
+        on: { click: () => handlers.chat(p) } }, "聊天") : null,
       frontFlip));
 
   const chips = el("div", { class: "rc-chips" }, CARD_INTENT_KEYS.map(([k, zh]) => intentChip(k, zh, intents[k])));
@@ -6280,6 +6283,7 @@ async function viewTeam(params = {}) {
     remove: (p) => deleteCard(p, refresh),
     launch: (p) => { location.hash = `#/workbench?profile=${encodeURIComponent(p.id)}&launch=1`; },
     place: (p) => openPlaceDialog(p, { profiles }),
+    chat: (p) => { location.hash = `#/chat?profile=${encodeURIComponent(p.id)}`; },
     skillsChanged: refresh,
   };
   const needCatalog = (fn) => () => {
@@ -10247,6 +10251,7 @@ async function viewWorkbench(initialPaneId, initialTaskId, initialProfileId, aut
     const handlers = {
       launch: (p) => promptAgentLaunch(p),
       place: (p) => openPlaceDialog(p, { profiles: agentProfiles }),
+      chat: (p) => { location.hash = `#/chat?profile=${encodeURIComponent(p.id)}`; },
       edit: (p) => promptAgentProfileEditor(p),
       decide: (p) => (async () => {
         const catalog = await ensureCatalog();
@@ -12071,6 +12076,7 @@ async function route() {
   try {
     if (top === "home") await viewHome();
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
+    else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();
@@ -12119,6 +12125,7 @@ async function route() {
     };
   }
   if (top === "office") liveTick = officeTick;
+  if (top === "chat") liveTick = chatTick;
   if (top === "meetings") liveTick = meetingsTick;
   if (top === "staffing") liveTick = staffingTick;
   if (top === "flows" && parts[1]) {
@@ -12135,6 +12142,481 @@ async function route() {
     };
   }
   if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
+}
+
+// ---------- chat with role cards (P36-2) -----------------------------------------------------------------------------------
+// The pages of vbear/chat_service.py: the list and a new chat (#/chat), one chat (#/chat/<id>). A chat is a person talking to
+// one role card (Claude Code only), with the card's own work folder. Everything shown is the record the daemon wrote (a closed
+// table of kinds, below) and what the daemon says now (`live`: the reply being written, and the permission cards waiting). Text
+// a model wrote is set as text, like every other string here. Nothing on these pages sends a message or runs a tool by itself:
+// a message is sent by the send button, and a tool that asks is run only after the person presses 「允許這一次」 or 「改內容再允許」
+// on its card. A card can be answered once, within 5 minutes; the server checks the one-use token and judges the call again.
+
+const CHAT_PAGE_MAX = 12;           // pages of 200 records read when a chat is opened (a chat longer than that shows its end)
+const CHAT_POLL_MS = 1500;          // polling, when the live stream cannot be used
+const CHAT_INTRO_KEY = "vbear-chat-intro-seen";
+const CHAT_TURN_END = {
+  result: "", stopped: "你按了停止，這回合停下來，按上限計費", timeout: "超過 10 分鐘沒結束，已停止，按上限計費",
+  process_exit: "員工的程序自己結束了，這回合按上限計費", violation: "Claude Code 做了不符 VBear 設定的事，VBear 已停止這個程序",
+  daemon_restart: "VBear 的背景程序重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
+  not_sent: "這則訊息沒有送出，沒有花錢",
+};
+const CHAT_DECISION = {
+  allow: "你允許了這一次", deny: "你拒絕了", modify: "你改了內容再允許",
+  expired: "5 分鐘內沒有回覆，卡片過期，視為拒絕（沒有執行）", cancelled: "這回合結束了，這張卡片視為拒絕（沒有執行）",
+  refused: "你按下允許的當下，VBear 又檢查了一次，發現這個動作現在不安全，拒絕了它（沒有執行）",
+};
+const CHAT_STATE = {
+  starting: ["員工正在上線", "b-info"], idle: ["待命中", "b-ok"], working: ["回覆中", "b-info"], waiting_for_you: ["等你回覆卡片", "b-warn"],
+  closing: ["正在結束", "b-mute"], ending: ["正在結束", "b-mute"],
+};
+const CHAT_PROCESS_END = {
+  "你關閉了這個聊天": "你關閉了員工的程序", "你按了停止": "你按了停止",
+};
+const CHAT_SUPPORT_WORD = {
+  verified: ["已通過聊天驗證", "b-ok"], unverified: ["還沒通過聊天驗證", "b-warn"], unsupported: ["VBear 還不認得這個版本", "b-bad"],
+  policy: ["被管理員政策擋住", "b-bad"], unknown: ["讀不到 Claude Code 的版本", "b-warn"],
+};
+const CHAT_TOOL_TEXT = { Bash: "執行指令（Bash）", Edit: "修改檔案（Edit）", Write: "寫入檔案（Write）", Read: "讀檔（Read）", Grep: "搜尋內容（Grep）", Glob: "找檔名（Glob）" };
+const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫的內容", old_string: "原本的字串", new_string: "改成", path: "路徑", pattern: "搜尋", description: "說明" };
+const CHAT_INTRO = [
+  ["這是什麼", "和一張角色卡（員工）聊天。目前只有工具是 Claude Code、而且已啟用的角色卡可以聊天。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
+  ["會花錢", "聊天用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。"],
+  ["不會自己動手", "員工想執行指令、改檔或寫檔時，會出現一張卡片問你。你按「允許這一次」才會做；也可以拒絕，或改了內容再允許。每次都問，沒有「以後都允許」。卡片 5 分鐘沒回覆就過期，視為拒絕。"],
+  ["員工的指示", "只有你自己寫在這張角色卡上的指示會帶進聊天；VBear 替職位預設的文字不會帶。續接的對話會沿用第一次送出時的指示，之後再改卡片，已經開始的對話不一定會跟著變（這一點還沒有在真機上確認）。"],
+];
+
+// ---- small, pure helpers (tested) ----
+
+function chatMoney(v) { return typeof v === "string" && /^[0-9]+(\.[0-9]+)?$/.test(v) ? `US$${v}` : "金額不明"; }
+function chatTurnCost(rec) {
+  const money = chatMoney(rec.cost_usd);
+  if (rec.reason === "not_sent") return "這則訊息沒有送出，沒有花錢。";
+  return rec.reported === true ? `這回合花了 ${money}（Claude Code 回報的估值）。` : `這回合按上限 ${money} 計（Claude Code 沒有回報）。`;
+}
+function chatStateWord(state) { return cardHas(CHAT_STATE, state) ? CHAT_STATE[state][0] : "狀態不明"; }
+
+// What a card asks, as the person reads it: the tool, then each field of its input that is text. Fields not in the table are
+// shown under their own name; nothing is cut here (the server already kept at most 4000 characters of each).
+function chatInputRows(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
+  return Object.keys(input).map((k) => {
+    const v = input[k];
+    return [cardHas(CHAT_FIELD_TEXT, k) ? CHAT_FIELD_TEXT[k] : k, typeof v === "string" ? v : JSON.stringify(v)];
+  });
+}
+
+// One record of the chat as a line of the transcript, or null (a kind this page does not draw, which is every kind it does
+// not know). A closed table: whatever the record holds, only these shapes come out.
+function chatLine(rec) {
+  if (!rec || typeof rec !== "object" || typeof rec.kind !== "string") return null;
+  const text = (x) => (typeof x === "string" ? x : "");
+  switch (rec.kind) {
+    case "user_message":
+      return el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq) },
+        el("div", { class: "chat-who small muted" }, `你・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)));
+    case "reply":
+      return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq) },
+        el("div", { class: "chat-who small muted" }, `員工・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
+        rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null);
+    case "tool_call":
+      return el("li", { class: "chat-note", "data-chat": "tool", "data-seq": String(rec.seq) },
+        el("span", { class: "tag" }, cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : `工具 ${text(rec.tool)}`), " ", el("code", null, text(rec.summary)));
+    case "tool_result":
+      return el("li", { class: "chat-note", "data-chat": "result", "data-seq": String(rec.seq) },
+        el("span", { class: "small muted" }, rec.is_error === true ? "結果（失敗）：" : "結果："), " ",
+        el("code", null, text(rec.text)), rec.truncated === true ? el("span", { class: "small muted" }, "（只保存前面一段）") : null);
+    case "auto_allowed":
+      return el("li", { class: "chat-note small muted", "data-chat": "auto", "data-seq": String(rec.seq) },
+        `VBear 自己允許了 ${text(rec.tool)}：${text(rec.reason)}`);
+    case "denied":
+      return el("li", { class: "chat-note", "data-chat": "denied", "data-seq": String(rec.seq) },
+        badge("已拒絕", "b-bad"), " ", `${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : text(rec.tool)}：${text(rec.reason)}`,
+        rec.summary ? el("code", null, ` ${text(rec.summary)}`) : null);
+    case "card":
+      return el("li", { class: "chat-note", "data-chat": "card", "data-seq": String(rec.seq), "data-card-id": text(rec.card_id) },
+        badge("問你", "b-warn"), " ", `員工想${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : "用 " + text(rec.tool)}`);
+    case "card_decision":
+      return el("li", { class: "chat-note", "data-chat": "decision", "data-seq": String(rec.seq), "data-card-id": text(rec.card_id) },
+        cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
+        rec.decision === "modify" && typeof rec.value === "string" ? el("code", null, ` ${rec.value}`) : null);
+    case "turn_ended": {
+      const why = cardHas(CHAT_TURN_END, rec.reason) ? CHAT_TURN_END[rec.reason] : "這回合因不明原因結束";
+      return el("li", { class: "chat-cost small muted", "data-chat": "cost", "data-seq": String(rec.seq) },
+        [why, chatTurnCost(rec)].filter(Boolean).join("　"));
+    }
+    case "process_started":
+      return el("li", { class: "chat-sys small muted", "data-chat": "process", "data-seq": String(rec.seq) },
+        `${rec.mode === "resume" ? "員工接續上次的對話上線" : "員工上線"}（這次最多可花 ${chatMoney(rec.budget_usd)}）${rec.instructions === true ? "，帶著角色卡自己寫的指示" : "，沒有帶指示（角色卡上沒有自己寫的）"}`);
+    case "process_ended":
+      return el("li", { class: "chat-sys small muted", "data-chat": "process-end", "data-seq": String(rec.seq) },
+        `員工的程序結束了：${cardHas(CHAT_PROCESS_END, rec.reason) ? CHAT_PROCESS_END[rec.reason] : text(rec.reason)}`);
+    case "anomaly":
+      return el("li", { class: "chat-sys small muted", "data-chat": "anomaly", "data-seq": String(rec.seq) },
+        `Claude Code 送來一個 VBear 不認得的訊息（${text(rec.event_type)}），已略過。`);
+    case "error":
+      return el("li", { class: "chat-note", "data-chat": "error", "data-seq": String(rec.seq) }, badge("錯誤", "b-bad"), " ", text(rec.message));
+    default:
+      return null;                       // chat_created, session_ready, and anything this page does not know
+  }
+}
+
+// ---- the permission card ----
+
+// `onAnswer(card, decision, value)` -> a promise; `edit` = { text } kept by the caller across redraws.
+function chatCardNode(card, opts) {
+  const o = opts || {};
+  const tool = cardHas(CHAT_TOOL_TEXT, card.tool) ? CHAT_TOOL_TEXT[card.tool] : `工具 ${card.tool}`;
+  const rows = chatInputRows(card.input);
+  const left = Number.isFinite(card.expires_in) ? Math.max(0, Math.round(card.expires_in)) : null;
+  const busy = o.busy === true;
+  const editable = typeof card.editable === "string" && card.editable ? card.editable : null;
+  const editing = editable && o.edit && o.edit.open === true;
+  const area = editing ? el("textarea", { rows: "4", "data-chat": "edit", "aria-label": `改${cardHas(CHAT_FIELD_TEXT, editable) ? CHAT_FIELD_TEXT[editable] : editable}`,
+    on: { input: (e) => { o.edit.text = e.target.value; } } }) : null;
+  if (area) area.value = typeof o.edit.text === "string" ? o.edit.text : (card.input && typeof card.input[editable] === "string" ? card.input[editable] : "");
+  const answer = (decision, value) => { if (!busy && o.onAnswer) o.onAnswer(card, decision, value); };
+  return el("section", { class: "chat-card card", "data-chat": "live-card", "data-card-id": card.card_id, role: "group", "aria-label": `員工想${tool}，要你決定` },
+    el("div", { class: "chat-card-head" }, badge("要你決定", "b-warn"), el("strong", null, `員工想${tool}`)),
+    typeof card.reason === "string" && card.reason ? el("p", { class: "small muted" }, card.reason) : null,
+    el("dl", { class: "chat-card-rows" }, rows.map(([k, v]) => [el("dt", null, k), el("dd", null, el("pre", { class: "chat-pre" }, v))])),
+    area,
+    el("p", { class: "small muted" }, `不按的話，${left === null ? "5 分鐘後" : `約 ${left} 秒後`}會過期，視為拒絕（沒有執行）。按下允許的當下，VBear 會再檢查一次。`),
+    el("div", { class: "row chat-card-actions" },
+      editing
+        ? [el("button", { type: "button", class: "btn primary small", "data-chat": "allow-edited", disabled: busy,
+              on: { click: () => answer("modify", area.value) } }, "用改過的內容允許"),
+           el("button", { type: "button", class: "btn small", "data-chat": "cancel-edit", disabled: busy,
+              on: { click: () => { o.edit.open = false; if (o.redraw) o.redraw(); } } }, "不改了")]
+        : [el("button", { type: "button", class: "btn primary small", "data-chat": "allow", disabled: busy, on: { click: () => answer("allow", null) } }, "允許這一次"),
+           editable ? el("button", { type: "button", class: "btn small", "data-chat": "modify", disabled: busy,
+              on: { click: () => { o.edit.open = true; if (o.redraw) o.redraw(); } } }, "改內容再允許") : null],
+      el("button", { type: "button", class: "btn small", "data-chat": "deny", disabled: busy, on: { click: () => answer("deny", null) } }, "拒絕")));
+}
+
+// ---- the support notice: may this Claude Code chat, and the button that checks it ----
+
+function chatSupportNode(support, verifyUi) {
+  const s = support && typeof support === "object" ? support : null;
+  if (!s) return notice("warn", "讀不到聊天的支援狀態。");
+  const word = cardHas(CHAT_SUPPORT_WORD, s.state) ? CHAT_SUPPORT_WORD[s.state] : ["狀態不明", "b-mute"];
+  const v = verifyUi || {};
+  const status = s.verify && typeof s.verify === "object" ? s.verify : null;
+  const running = (status && status.running === true) || v.pending === true;
+  const lines = [el("p", { class: "small" }, badge(word[0], word[1]), " ", s.detected ? `Claude Code ${s.detected}` : "Claude Code：讀不到版本")];
+  if (s.state !== "verified" && typeof s.message === "string" && s.message) lines.push(el("p", { class: "small", "data-chat": "support-message" }, s.message));
+  if (s.state === "unverified") {
+    lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" },
+      "驗證會用這個 Claude Code 真的跑一段對話：約 6 次小呼叫（Haiku），用你自己的登入，會用掉一點點額度（通常不到 US$0.05），"
+      + "要幾分鐘。它會試：員工回話、每個指令都先問你、你拒絕或改內容、接續舊對話、沙盒擋住資料夾外的寫入。全部通過，才會記下這個版本。"));
+    if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
+    else if (v.confirm === true) lines.push(el("div", { class: "row" },
+      el("button", { type: "button", class: "btn primary small", "data-chat": "verify-go", on: { click: () => v.go && v.go() } }, "確認驗證（會花一點額度）"),
+      el("button", { type: "button", class: "btn small", "data-chat": "verify-cancel", on: { click: () => v.cancel && v.cancel() } }, "不驗證了")));
+    else lines.push(el("div", { class: "row" },
+      el("button", { type: "button", class: "btn small", "data-chat": "verify", on: { click: () => v.ask && v.ask() } }, "驗證聊天")));
+  }
+  if (status && status.running !== true && typeof status.message === "string" && status.message && s.state !== "verified") {
+    lines.push(el("p", { class: "small", "data-chat": "verify-result" }, status.message));
+  }
+  return el("div", { class: "chat-support card", "data-chat": "support", "data-state": String(s.state) }, lines);
+}
+
+function chatLimitsText(limits, ledger) {
+  const l = limits && typeof limits === "object" ? limits : null;
+  const spent = ledger && typeof ledger === "object" && /^[0-9.]+$/.test(String(ledger.spent_usd)) ? `今天已花 US$${ledger.spent_usd}（聊天、會議和組隊會議合計），每日上限 US$${ledger.daily_usd}。` : "讀不到今天的花費。";
+  return `${l ? `每回合最多 ${chatMoney(l.per_turn_usd)}。` : ""}${spent}${ledger && ledger.lamp === "red" ? "額度用完了（亮紅燈），今天不能再送訊息。" : ""}`;
+}
+
+// ---- the list ----
+
+function chatRow(c) {
+  if (!c.profile_id) {
+    return el("li", { class: "mt-row card", "data-chat": "row" }, el("strong", null, `無法讀取的聊天 ${c.id}`), badge("無法讀取", "b-bad"),
+      el("span", { class: "small muted" }, c.problem || "這個聊天的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
+  }
+  return el("li", { class: "mt-row card", "data-chat": "row", "data-chat-id": c.id },
+    el("a", { class: "mt-row-title", href: `#/chat/${encodeURIComponent(c.id)}` }, c.name || c.profile_id),
+    c.waiting ? badge("等你回覆卡片", "b-warn") : c.open ? badge("回覆中", "b-info") : null,
+    c.problem ? badge("紀錄有問題", "b-bad", c.problem) : null,
+    el("span", { class: "small muted" }, `${fmtTime(c.last_at)}・${c.turns} 回合・US$${c.spent_usd}（估值）`),
+    c.last_text ? el("span", { class: "small chat-excerpt" }, `${c.last_kind === "user" ? "你：" : "員工："}${c.last_text}`) : null);
+}
+
+async function viewChat(id, params) {
+  const token = seq;
+  if (id) return viewChatDetail(token, id);
+  let data;
+  try { data = await api.get("/api/chats"); }
+  catch (e) { setKids(claim(token), el("h1", null, "跟員工聊天"), notice("bad", "讀不到聊天：" + e.message)); return; }
+  const main = claim(token);
+  const verifyUi = { confirm: false, pending: false };
+  let cur = data;
+  const names = () => new Map((cur.cards || []).map((c) => [c.profile_id || c.id, c.name]));
+  const supportBox = el("div", { class: "chat-support-box" });
+  const ledgerBox = el("p", { class: "small muted", "data-chat": "ledger" });
+  const formBox = el("div", { class: "chat-form-box" });
+  const listBox = el("div", { class: "chat-list-box" });
+  const pick = typeof (params && params.profile) === "string" ? params.profile : "";
+  let chosen = pick;
+  const redrawForm = () => {
+    const cards = Array.isArray(cur.cards) ? cur.cards.filter((c) => c && typeof c.id === "string") : [];
+    const sel = el("select", { "data-chat": "card", "aria-label": "要聊天的角色卡", on: { change: (e) => { chosen = e.target.value; redrawForm(); } } },
+      el("option", { value: "" }, cards.length ? "選一張角色卡…" : "還沒有角色卡"),
+      cards.map((c) => el("option", { value: c.id, disabled: c.can_chat !== true }, `${c.name || c.id}${c.can_chat === true ? "" : "（不能聊天）"}`)));
+    sel.value = cards.some((c) => c.id === chosen) ? chosen : "";
+    const card = cards.find((c) => c.id === sel.value);
+    const ok = cur.support && cur.support.state === "verified";
+    const lamp = cur.ledger && cur.ledger.lamp === "red";
+    const go = el("button", { type: "button", class: "btn primary", "data-chat": "open", disabled: !card || card.can_chat !== true || !ok || lamp,
+      on: { click: async (e) => {
+        e.target.disabled = true;
+        try { const res = await api.post("/api/chats", { profile_id: sel.value }); location.hash = `#/chat/${encodeURIComponent(res.chat.id)}`; }
+        catch (err) { toast(err.message); e.target.disabled = false; }
+      } } }, "開始聊天");
+    setKids(formBox, el("section", { class: "section" }, sectionHead("開新聊天", "開聊天本身不花錢，送出訊息才花。"),
+      el("div", { class: "row" }, sel, go),
+      card && card.can_chat !== true ? notice("warn", card.reason || "這張角色卡不能聊天。") : null,
+      !ok ? el("p", { class: "small muted" }, "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
+      lamp ? el("p", { class: "small muted" }, "今天的額度用完了，不能開始聊天。") : null,
+      card && card.can_chat === true && card.instructions === true ? el("p", { class: "small muted" }, "這張卡有你自己寫的指示，會帶進聊天。") :
+        card && card.can_chat === true ? el("p", { class: "small muted" }, "這張卡沒有你自己寫的指示，聊天不會帶任何指示。") : null));
+  };
+  const draw = () => {
+    setKids(supportBox, chatSupportNode(cur.support, verifyUi));
+    setKids(ledgerBox, chatLimitsText(cur.limits, cur.ledger) + (cur.ledger_error ? `（${cur.ledger_error}）` : ""));
+    redrawForm();
+    const rows = Array.isArray(cur.chats) ? cur.chats : [];
+    const nm = names();
+    rows.forEach((c) => { c.name = nm.get(c.profile_id) || c.name; });
+    setKids(listBox, rows.length ? el("ul", { class: "mt-list" }, rows.map(chatRow)) : emptyState("還沒有聊過天", "選一張角色卡，按「開始聊天」。"),
+      cur.more ? el("p", { class: "small muted" }, `還有 ${cur.more} 個較舊的聊天沒有列出。`) : null,
+      Array.isArray(cur.problems) && cur.problems.length ? notice("warn", cur.problems.join("；")) : null);
+  };
+  verifyUi.ask = () => { verifyUi.confirm = true; draw(); };
+  verifyUi.cancel = () => { verifyUi.confirm = false; draw(); };
+  verifyUi.go = async () => {
+    verifyUi.pending = true; verifyUi.confirm = false; draw();
+    try { await api.post("/api/chat-support/verify", { version: cur.support && cur.support.detected || undefined }); }
+    catch (e) { verifyUi.pending = false; toast(e.message); }
+    await refresh();
+  };
+  const refresh = async () => {
+    try { cur = await api.get("/api/chats"); } catch (e) { return; }
+    if (cur.support && cur.support.verify && cur.support.verify.running !== true) verifyUi.pending = false;
+    if (token === seq) draw();
+  };
+  draw();
+  const intro = chatIntroNode();
+  setKids(main, el("h1", null, "跟員工聊天"),
+    el("p", { class: "lede" }, "和一位員工（角色卡）一對一聊天。員工想動手時，會先問你。"),
+    intro, supportBox, ledgerBox, formBox,
+    el("section", { class: "section" }, sectionHead("聊天紀錄", "每 5 秒更新"), listBox));
+  chatTick = refresh;
+  activeViewCleanup = () => { chatTick = null; };
+}
+let chatTick = null;
+
+function chatIntroSeen() {
+  try { return localStorage.getItem(CHAT_INTRO_KEY) === "1"; } catch (_) { return false; }
+}
+function chatIntroNode() {
+  const seen = chatIntroSeen();
+  const box = el("details", { class: "fold section chat-intro", "data-chat": "intro" },
+    el("summary", null, "聊天怎麼運作（第一次請先看）"),
+    CHAT_INTRO.map(([t, body]) => el("p", { class: "small" }, el("strong", null, `${t}：`), body)),
+    el("button", { type: "button", class: "btn small", "data-chat": "intro-ok",
+      on: { click: () => { try { localStorage.setItem(CHAT_INTRO_KEY, "1"); } catch (_) { /* private mode */ } box.removeAttribute("open"); } } }, "我知道了"));
+  if (!seen) box.setAttribute("open", "");
+  return box;
+}
+
+// ---- one chat ----
+
+async function chatReadAll(id) {
+  let after = 0, first = null;
+  const records = [];
+  for (let page = 0; page < CHAT_PAGE_MAX; page++) {
+    const r = await api.get(`/api/chats/${encodeURIComponent(id)}?after=${after}`);
+    if (!first) first = r;
+    records.push(...(Array.isArray(r.records) ? r.records : []));
+    after = r.next_after;
+    if (r.more !== true) return { ...r, records, first };
+  }
+  return { ...first, records, live: null, next_after: after, more: true, first };
+}
+
+async function viewChatDetail(token, id) {
+  let all;
+  try { all = await chatReadAll(id); }
+  catch (e) {
+    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這個聊天：" + e.message));
+    return;
+  }
+  const main = claim(token);
+  const info = await api.get("/api/chats").catch(() => null);
+  let view = all;                       // the last answer: card, live, runtime, problem
+  let lastSeq = 0;
+  let limits = info && info.limits, ledger = info && info.ledger;
+  let busy = false;                     // an answer or a send is on its way
+  const edits = new Map();              // card_id -> { open, text }
+  const answering = new Set();
+  const transcript = el("ul", { class: "chat-log", "data-chat": "log", "aria-live": "off" });
+  const liveBox = el("div", { class: "chat-live", "data-chat": "live", "aria-live": "polite" });
+  const headBox = el("div", { class: "chat-head" });
+  const noteBox = el("div", { class: "chat-notes" });
+  const input = el("textarea", { rows: "3", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
+  const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
+  const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
+  let noteText = "";                      // the server's last refusal, kept until the person acts again
+
+  const turnOpen = () => view.live && view.live.turn != null;
+  const gate = () => (view.card && view.card.can_chat === false ? view.card.reason || "這張角色卡現在不能聊天。" : "");
+  const draw = () => {
+    const live = view.live && typeof view.live === "object" ? view.live : null;
+    const state = live ? live.state : "idle";
+    const word = cardHas(CHAT_STATE, state) ? CHAT_STATE[state] : ["狀態不明", "b-mute"];
+    setKids(headBox, el("h1", null, view.card && view.card.name ? view.card.name : "聊天"),
+      el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
+        view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：Claude Code` : ""),
+      el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
+      el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"));
+    const notes = [];
+    if (gate()) notes.push(notice("warn", gate()));
+    if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
+    if (view.problem) notes.push(notice("bad", `這個聊天的紀錄有問題：${view.problem}。VBear 不會再往裡面寫，也不能再送訊息；已花的錢仍算在今天的額度裡。`));
+    if (view.more === true) notes.push(notice("info", "這個聊天很長，只顯示了前面一段。"));
+    setKids(noteBox, notes);
+    drawLive();
+    const blocked = !!gate() || !!view.problem || (view.runtime && view.runtime.available === false);
+    sendBtn.disabled = Boolean(busy || blocked || turnOpen());
+    stopBtn.hidden = !turnOpen();
+    setKids(sendNote, noteText || (turnOpen() ? "員工還在處理上一則訊息。" : blocked ? "現在不能送訊息。" : ""));
+  };
+  const drawLive = () => {
+    const live = view.live && typeof view.live === "object" ? view.live : null;
+    const kids = [];
+    if (live && live.partial) kids.push(el("div", { class: "chat-msg chat-them chat-partial", "data-chat": "partial" },
+      el("div", { class: "chat-who small muted" }, "員工正在寫…"), el("div", { class: "chat-text" }, live.partial),
+      live.partial_truncated === true ? el("div", { class: "small muted" }, "（只顯示最後一段，寫完後會完整出現）") : null));
+    else if (live && live.state === "working") kids.push(el("p", { class: "small muted", "data-chat": "thinking", role: "status" }, "員工正在想…"));
+    const cards = live && Array.isArray(live.cards) ? live.cards : [];
+    for (const card of cards) {
+      if (!edits.has(card.card_id)) edits.set(card.card_id, { open: false, text: undefined });
+      kids.push(chatCardNode(card, { busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answer }));
+    }
+    const active = document.activeElement;
+    const hadFocus = !!active && liveBox.contains(active) && String(active.tagName || active.tag || "").toUpperCase() === "TEXTAREA";
+    setKids(liveBox, kids);
+    if (hadFocus) { const ta = liveBox.querySelector("textarea"); if (ta && ta.focus) ta.focus(); }
+  };
+  const take = (records) => {
+    for (const r of records) {
+      if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
+      lastSeq = r.seq;
+      const line = chatLine(r);
+      if (line) transcript.append(line);
+    }
+  };
+  const apply = (data) => {
+    if (!data || typeof data !== "object") return;
+    take(Array.isArray(data.records) ? data.records : []);
+    view = { ...view, card: data.card !== undefined ? data.card : view.card, live: data.live === undefined ? view.live : data.live,
+      runtime: data.runtime || view.runtime, problem: data.problem || "", more: data.more === true && !data.live };
+    if (Array.isArray(data.records) && data.records.some((r) => r && r.kind === "turn_ended")) refreshLedger();
+    draw();
+    stick();
+  };
+  const stick = () => { /* the page stays where the person put it; the log grows below */ };
+  const refreshLedger = async () => {
+    const r = await api.get("/api/chats").catch(() => null);
+    if (r && token === seq) { limits = r.limits; ledger = r.ledger; draw(); }
+  };
+
+  async function send() {
+    const text = input.value;
+    if (busy || !text.trim()) return;
+    busy = true; noteText = ""; draw();
+    try {
+      await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
+      input.value = "";
+      await pollOnce();
+    } catch (e) {
+      noteText = e.message;
+      toast(e.message);
+    }
+    busy = false; if (token === seq) draw();
+  }
+  async function stop() {
+    try { await api.post(`/api/chats/${encodeURIComponent(id)}/stop`, {}); await pollOnce(); }
+    catch (e) { toast(e.message); }
+  }
+  async function answer(card, decision, value) {
+    answering.add(card.card_id); noteText = ""; drawLive();
+    try {
+      await api.post(`/api/chats/${encodeURIComponent(id)}/answer`, { card_id: card.card_id, token: card.token, decision, value: decision === "modify" ? value : undefined });
+      edits.delete(card.card_id);
+    } catch (e) {
+      toast(e.message);                       // the server's sentence for refused, expired, gone, bad_token…
+      noteText = e.message;
+    }
+    answering.delete(card.card_id);
+    await pollOnce();
+    draw();
+  }
+  async function pollOnce() {
+    try { apply(await api.get(`/api/chats/${encodeURIComponent(id)}?after=${lastSeq}`)); }
+    catch (e) {
+      if (e.status === 404) { setKids(noteBox, notice("bad", "這個聊天已經被刪除。")); stopStream(); }
+    }
+  }
+
+  // The live stream (fetch + reader, since the server wants the X-VBear header); polling when it cannot be had.
+  const ctl = new AbortController();
+  let pollTimer = null, streaming = false, gone = false;
+  function stopStream() { gone = true; ctl.abort(); clearInterval(pollTimer); pollTimer = null; }
+  function startPolling() {
+    if (pollTimer || gone) return;
+    pollTimer = setInterval(() => { if (!document.hidden) pollOnce(); }, CHAT_POLL_MS);
+  }
+  async function stream() {
+    try {
+      const res = await fetch(`/api/chats/${encodeURIComponent(id)}/stream?after=${lastSeq}`,
+        { headers: { Accept: "text/event-stream", "X-VBear": "1" }, signal: ctl.signal });
+      if (!res.ok || !res.body || typeof res.body.getReader !== "function") throw new Error("no stream");
+      streaming = true;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8", { stream: true });
+      const parser = createSSEParser((event) => {
+        const d = event.data;
+        if (d && d.ok === false) { setKids(noteBox, notice("bad", d.error || "這個聊天沒有了")); stopStream(); return; }
+        apply(d);
+      }, () => {});
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) parser.feed(decoder.decode(value, { stream: true }));
+      }
+    } catch (e) { /* falls through to polling */ }
+    streaming = false;
+    if (!gone && !ctl.signal.aborted) startPolling();
+  }
+
+  draw();
+  take(all.records);
+  view = { ...view, more: all.more === true };
+  draw();
+  const composer = el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn,
+    el("button", { type: "button", class: "btn small", "data-chat": "delete", on: { click: async () => {
+      if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。", "刪除"))) return;
+      try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
+      catch (e) { toast(e.message); }
+    } } }, "刪除這個聊天")), sendNote);
+  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, noteBox, transcript, liveBox, composer);
+  activeViewCleanup = () => { stopStream(); };
+  stream();
 }
 
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
@@ -14410,6 +14892,20 @@ if (typeof module !== "undefined" && module.exports) {
     questNext,
     boardTeamKey,
     ONBOARD_STEPS,
+    CHAT_TURN_END,
+    CHAT_DECISION,
+    CHAT_STATE,
+    CHAT_INTRO,
+    chatLine,
+    chatCardNode,
+    chatInputRows,
+    chatSupportNode,
+    chatTurnCost,
+    chatMoney,
+    chatStateWord,
+    chatLimitsText,
+    chatRow,
+    viewChat,
     MEETING_BUBBLES,
     MEETING_ERROR_TEXT,
     MEETING_MONEY_WHY,
