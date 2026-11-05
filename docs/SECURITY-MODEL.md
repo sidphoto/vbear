@@ -972,6 +972,53 @@ the preview id, and nothing in it is carried out by VBear.
   `DELETE /api/staffing/<id>`. The no-tool check is the meetings' (`POST /api/meetings/verify`). They sit behind the same
   Host, token, Origin and `X-VBear` checks as every other route, and their bodies are as strict.
 
+## Chats with a role card (P36, in progress)
+
+A chat lets you talk with one role card through your authenticated local Claude Code, which can run tools for it:
+**a new outbound data path that uses your quota or money and can change files**. This part is being built. P36-1 adds
+the runtime side only: no page or route reaches it yet. No Claude Code version is chat-verified, so no chat process
+can start until a version passes the chat check (P36-2).
+
+- **The process.** Each chat process is a managed launch with engine `claude-chat` under `sessions/`, read and checked
+  like the others (an exact manifest schema, settings that must be the approved shape, the CLI's identity, the work
+  folder), and cleaned up the same way. A terminal launch refuses a chat manifest. The argv is fixed:
+  `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompts
+  host --permission-prompt-tool stdio --permission-mode default --safe-mode --settings <launch>/settings.json
+  --strict-mcp-config --tools Bash,Read,Edit,Write,Grep,Glob --max-budget-usd <x> --model <id>`, then `--session-id`
+  the first time and `--resume` after that. The settings are the managed sandbox (writes only to the card's work folder
+  and the launch's scratch, no network, no unsandboxed commands, Bash never allowed by the sandbox alone), plus
+  `permissions.ask: ["Bash"]`, `permissions.additionalDirectories: []` and the pinned endpoint.
+- **The work folder.** Each role card has one folder, `<state>/chat-work/<first 24 hex digits of the SHA-256 of its
+  id>/` (0700). A hash is used because the file system ignores case, so two ids that differ only in case still get two
+  folders. Deleting a chat keeps the folder.
+- **Who decides a tool call.** Claude Code asks VBear about every tool call on stdin, and VBear answers.
+  - Bash, Edit and Write always get a card, and you allow, refuse, or change the command, content or new text and then
+    allow.
+  - An Edit or Write whose path, after links are followed, is outside the work folder, or inside its `.claude`, is
+    refused with no way to allow it.
+  - VBear allows Read, Grep and Glob by itself only when all three hold: every path, after links are followed, is
+    inside the work folder; a Glob or Grep file pattern is a bare name, with no `/`, `..` or `~`; and the folder holds no
+    link that leads outside it. Otherwise the read gets a card.
+  - Any other tool, and any other kind of control request, is refused.
+  - "Allow every time" does not exist.
+- **What stops a chat.** VBear reads only `claude_code_version` and `current_permission_mode` from the initialize
+  answer. The account, commands, models and extra folders it also carries are never stored, logged or passed on. A chat
+  is stopped in any of these cases:
+  - the initialize answer is not this version's, or not the `default` mode;
+  - `system/init` names another session, version, mode, tool list or folder, any MCP server, or any extra folder
+    (only how many is recorded);
+  - Claude Code shows a tool result for a call VBear did not allow.
+
+  An event of an unknown kind is recorded by its field names only and not shown.
+- **What is kept.** `<state>/chats/<chat_id>/` (0700) holds `chat.json` (written once) and `events.jsonl` (0600,
+  append-only, fixed fields per kind, fsync'd, 8 MiB). Text is masked with the scanner's redaction before it is written
+  and cut to a fixed length. For a card's input this happens at every level, by key name and value. stderr is not kept.
+  A file that does not read back cleanly is never written to again.
+- **Money.** A turn costs the difference between the cumulative `total_cost_usd` and the last one. When no usable
+  total comes back (the turn was stopped, timed out, or a stopped daemon left it running), the turn costs its cap.
+  While a turn runs, it counts at its cap. Chats count toward the same day's limit as the meetings and staffing
+  meetings. Deleting a chat keeps what its last three days cost in `<state>/chat-spend/`.
+
 ## Data handling
 
 - No telemetry, analytics, crash reporting or update checks. The only HTTP client in the code talks to

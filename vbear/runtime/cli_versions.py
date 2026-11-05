@@ -149,6 +149,49 @@ def stream_verified_versions() -> tuple[str, ...]:
     return built_in + tuple(v for v in sorted(local_stream_verified_versions()) if v not in built_in)
 
 
+# Claude Code versions whose chat mode (P36) passed ``boundary_check --mode chat`` on this Mac. None is built in: the
+# check is still to be written (P36-2), and until a version passes it no chat process starts.
+CHAT_VERIFIED_VERSIONS: tuple[str, ...] = ()
+LOCAL_CHAT_VERIFIED_FILE = "claude-chat-verified.json"
+
+
+def local_chat_verified_versions() -> dict:
+    """{version: record} whose chat check passed here, each backed by its report (mode "chat", passed, this
+    version), re-read every time. The same shape as the stream record."""
+    from .. import config as cfg, strictjson
+    rec = strictjson.load_owned_object(cfg.state_dir() / LOCAL_CHAT_VERIFIED_FILE, strictjson.MANIFEST)
+    versions = rec.value.get("versions") if rec.ok else None
+    if not isinstance(versions, dict):
+        return {}
+    out = {}
+    for v, r in versions.items():
+        if not (isinstance(v, str) and _VERSION_RE.match(v) and isinstance(r, dict) and r.get("passed") is True
+                and isinstance(r.get("report"), str) and isinstance(r.get("verified_at"), str)):
+            continue
+        report = strictjson.load_owned_object(r["report"], strictjson.Limits(_STREAM_REPORT_MAX, 2_000_000, 64,
+                                                                             _STREAM_REPORT_MAX))
+        data = report.value if report.ok else {}
+        if data.get("mode") == "chat" and data.get("passed") is True and data.get("claude_version") == v:
+            out[v] = r
+    return out
+
+
+def chat_verified_versions() -> tuple[str, ...]:
+    built_in = CHAT_VERIFIED_VERSIONS
+    return built_in + tuple(v for v in sorted(local_chat_verified_versions()) if v not in built_in)
+
+
+def chat_unverified_text(version: str) -> str:
+    """The one wording for "this Claude Code has no chat-mode verification"."""
+    supported = chat_verified_versions()
+    if not supported:
+        return (f"Claude Code {version} 的聊天模式還沒有通過驗證，VBear 目前沒有任何通過聊天驗證的版本。"
+                "處理方式：先執行聊天模式的驗證（會花一點額度）。")
+    listed = "、".join(sorted(supported, key=_version_key))
+    return (f"Claude Code {version} 的聊天模式還沒有通過驗證。已通過的版本：{listed}。"
+            f"處理方式：安裝其中一個版本，或先為 {version} 執行聊天模式的驗證（會花一點額度）。")
+
+
 def _version_key(version: str) -> tuple[int, ...]:
     try:
         return tuple(int(x) for x in version.split("."))

@@ -41,6 +41,7 @@ from pathlib import Path
 
 from .. import folders
 from . import proctrack
+from . import chat_protocol
 from . import stream_protocol
 
 SESSIONS_DIR = "sessions"
@@ -58,7 +59,7 @@ MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,63}\Z")
 # launch whose processes are proven gone becomes "ended": its directory (the
 # journal) is kept until the user deletes the flow (design 2.5, 9).
 _ACTIVE_STATES = ("prepared", "launching", "running")
-ENGINES = ("claude", "codex", "claude-stream")
+ENGINES = ("claude", "codex", "claude-stream", "claude-chat")
 FLOW_ID_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")       # tasks.VALID_ID_RE; never "." or ".."
 JOURNAL = "journal.jsonl"
@@ -216,6 +217,33 @@ def _budget_ok(value) -> bool:
     import math
     return (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
             and 0 < value <= 100 and round(value, 2) == value)
+
+
+def chat_settings(workdir: str, scratch: str, uid: int, cli_version: str) -> dict:
+    """P36: a chat with a role card. The managed sandbox, Bash never allowed by the sandbox alone, every Bash run
+    asked (``permissions.ask``: P36-0 fact 2), no extra folders from the account's own settings (fact 8), and the
+    pinned endpoint."""
+    consts = chat_protocol.constants_for(cli_version)
+    if consts is None:
+        raise LaunchRefused("unsupported_version", f"Claude Code {cli_version} 沒有聊天模式的常數")
+    base = claude_settings(workdir, scratch, uid)
+    base["sandbox"]["autoAllowBashIfSandboxed"] = False
+    return {**base, "permissions": {"ask": ["Bash"], "additionalDirectories": []}, "env": dict(consts.pinned_env)}
+
+
+def chat_argv(manifest: dict) -> list[str]:
+    """P36 plan, exactly: the CLI asks VBear about every tool call on stdin (``--permission-prompt-tool stdio``),
+    the first process of a chat names its session, later ones resume it. Everything comes from the manifest that
+    chat_manifest_problem accepted."""
+    problem = chat_manifest_problem(manifest)
+    if problem:
+        raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")
+    return [manifest["cli_binary"], "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--verbose", "--include-partial-messages", "--permission-prompts", "host",
+            "--permission-prompt-tool", "stdio", "--permission-mode", "default", "--safe-mode",
+            "--settings", manifest["settings_path"], "--strict-mcp-config", "--tools", ",".join(chat_protocol.TOOLS),
+            "--max-budget-usd", f"{manifest['budget_usd']:.2f}", "--model", manifest["model_id"],
+            "--resume" if manifest["resume"] else "--session-id", manifest["claude_session_id"]]
 
 
 # A full Claude model id (acceptance.CLAUDE_MODEL_RE), never an alias.
@@ -380,6 +408,9 @@ def managed_argv(manifest: dict) -> list[str]:
         return codex_argv(manifest)
     if engine == "claude-stream":
         return stream_argv(manifest)
+    if engine == "claude-chat":
+        # only the daemon's chat session starts one (chat_argv); never as a terminal session
+        raise LaunchRefused("manifest_invalid", "聊天 launch 不能當成終端機 session 啟動")
     raise LaunchRefused("manifest_invalid", "不支援的 managed Agent 引擎")
 
 
@@ -410,6 +441,55 @@ def _check_workdir(workdir: str, allowed_root: str, base: Path) -> str:
     if folders.inside(Path(canonical), protected[0]):
         raise LaunchRefused("invalid_workdir", f"工作目錄不可位於受保護的位置之內：{protected[0]}")
     return canonical
+
+
+CHAT_WORK = "chat-work"                                   # chat_store.WORK
+_CHAT_WORK_NAME = re.compile(r"^[0-9a-f]{24}\Z")
+CHAT_ID_RE = re.compile(r"^c-[0-9a-f]{16}\Z")                 # chat_store.CHAT_RE
+
+
+def _check_chat_workdir(workdir, base: Path) -> str:
+    """A chat runs in its role card's own folder, <state>/chat-work/<24 hex> (chat_store.ensure_work_dir): exactly
+    that place, a folder of ours, 0700, with no link on the way. Nothing else is accepted."""
+    if not isinstance(workdir, str) or "\0" in workdir or not os.path.isabs(workdir):
+        raise LaunchRefused("invalid_workdir", "聊天的工作資料夾必須是絕對路徑")
+    path = Path(workdir)
+    root = Path(os.path.realpath(base)) / CHAT_WORK
+    if path.parent != root or not _CHAT_WORK_NAME.match(path.name) or os.path.realpath(workdir) != workdir:
+        raise LaunchRefused("invalid_workdir", "聊天只能在員工自己的工作資料夾裡進行")
+    uid = os.getuid()
+    try:
+        _owned_dir(root, uid)
+        _owned_dir(path, uid)
+    except FileNotFoundError:
+        raise LaunchRefused("invalid_workdir", "員工的工作資料夾不存在") from None
+    return workdir
+
+
+def prepare_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_version: str, cli_identity: list[int],
+                        model_id: str, chat_id: str, profile_id: str, claude_session_id: str, budget_usd: float,
+                        resume: bool) -> dict:
+    """One process of a chat (P36): the managed launch with the chat's settings, its session id, whether it resumes
+    that session, and the most it may spend. The daemon checks the version (chat-verified, admin policy) first."""
+    if not (isinstance(chat_id, str) and CHAT_ID_RE.match(chat_id)):
+        raise LaunchRefused("bad_request", "聊天 id 格式不符")
+    if not (isinstance(profile_id, str) and TASK_ID_RE.match(profile_id)):
+        raise LaunchRefused("bad_request", "員工 id 格式不符")
+    if not (isinstance(claude_session_id, str) and chat_protocol.UUID_RE.match(claude_session_id)):
+        raise LaunchRefused("bad_request", "claude_session_id 格式不符")
+    if not _budget_ok(budget_usd):
+        raise LaunchRefused("bad_request", "額度必須是兩位小數以內的有限正數")
+    if not isinstance(resume, bool):
+        raise LaunchRefused("bad_request", "resume 必須是 true 或 false")
+    if not (isinstance(model_id, str) and MODEL_ID_RE.match(model_id)):
+        raise LaunchRefused("invalid_model", "model id 格式不符")
+    if chat_protocol.constants_for(cli_version) is None:
+        raise LaunchRefused("unsupported_version", f"Claude Code {cli_version} 沒有聊天模式的常數")
+    return _prepare_claude(base, workdir, cli_binary=cli_binary, cli_version=cli_version, cli_identity=cli_identity,
+                           allowed_root=None, model_id=model_id, cli_verified=True, engine="claude-chat",
+                           extra={"chat_id": chat_id, "profile_id": profile_id,
+                                  "claude_session_id": claude_session_id, "budget_usd": budget_usd,
+                                  "resume": resume})
 
 
 def prepare_claude_launch(base: Path, workdir: str, *, cli_binary: str, cli_version: str,
@@ -449,7 +529,11 @@ def _prepare_claude(base: Path, workdir: str, *, cli_binary: str, cli_version: s
                     extra: dict | None) -> dict:
     uid = os.getuid()
     base = Path(os.path.realpath(base))
-    canonical = _check_workdir(workdir, allowed_root or str(Path.home()), base)
+    if engine == "claude-chat":
+        canonical = _check_chat_workdir(workdir, base)
+        allowed_root = str(Path(canonical).parent)
+    else:
+        canonical = _check_workdir(workdir, allowed_root or str(Path.home()), base)
     if (not isinstance(cli_binary, str) or not os.path.isabs(cli_binary)
             or os.path.realpath(cli_binary) != cli_binary):
         raise LaunchRefused("invalid_binary", "CLI 必須是已解析的絕對路徑")
@@ -475,6 +559,7 @@ def _prepare_claude(base: Path, workdir: str, *, cli_binary: str, cli_version: s
                                 f"暫存路徑 {tmp_bytes} bytes 超過 {CLAUDE_TMP_PATH_LIMIT}，CLI 會退回共用暫存區")
         settings_path = ldir / SETTINGS
         settings = (claude_settings(canonical, str(scratch), uid) if engine == "claude"
+                    else chat_settings(canonical, str(scratch), uid, cli_version) if engine == "claude-chat"
                     else stream_settings(canonical, str(scratch), uid, cli_version))
         _write_private(settings_path, json.dumps(settings, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
         manifest = {
@@ -498,7 +583,7 @@ def _prepare_claude(base: Path, workdir: str, *, cli_binary: str, cli_version: s
             "created": time.time(),
             "leader": None,
             "observed": [],
-            "boundary": {
+            "boundary": dict(_CHAT_BOUNDARY) if engine == "claude-chat" else {
                 "write": ("enforced for Bash-tool commands (Claude sandbox; verified for this version/settings only)"
                           if cli_verified is True else
                           "configured for Bash-tool commands (Claude sandbox); not verified for this version"),
@@ -589,6 +674,14 @@ def prepare_codex_launch(base: Path, workdir: str, *, cli_binary: str, cli_versi
         os.umask(old_umask)
 
 
+_CHAT_BOUNDARY = {
+    "write": "Bash commands: Claude sandbox, the role card's work folder and scratch only; every run asked by VBear",
+    "read": "Read/Grep/Glob outside the work folder asked by VBear; what a Bash command reads is not isolated",
+    "edit_write_tools": "asked by VBear, the work folder only; elsewhere refused",
+    "network": "strict empty allowlist",
+}
+
+
 def _read_manifest(ldir: Path, uid: int) -> dict:
     """Design 2.3: read through one O_NOFOLLOW descriptor (owned by us, a
     regular file, <= 64 KiB) and parsed strictly (node and depth limits, no
@@ -607,6 +700,10 @@ def _read_manifest(ldir: Path, uid: int) -> dict:
         problem = stream_manifest_problem(data)
         if problem:
             raise LaunchRefused("manifest_invalid", f"串流 manifest 不符（{problem}）")
+    if data.get("engine") == "claude-chat":
+        problem = chat_manifest_problem(data)
+        if problem:
+            raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")
     return data
 
 
@@ -813,6 +910,45 @@ def stream_manifest_problem(m: dict) -> str | None:
     return None
 
 
+_CHAT_REQUIRED = (_STREAM_REQUIRED - {"pipeline_id", "task_id"}) | {"chat_id", "profile_id", "resume"}
+_CHAT_STATES = ("prepared", "launching", "running", "manual_review")
+
+
+def chat_manifest_problem(m: dict) -> str | None:
+    """None when ``m`` is exactly a claude-chat manifest: the stream manifest's checks for the fields both have,
+    and the chat's own (chat id, role card id, a set session id and budget, resume)."""
+    if not isinstance(m, dict):
+        return "不是物件"
+    keys = set(m)
+    if not _CHAT_REQUIRED <= keys or keys - _CHAT_REQUIRED - _STREAM_OPTIONAL:
+        return "欄位不符"
+    if m["engine"] != "claude-chat" or chat_protocol.constants_for(m["cli_version"]) is None:
+        return "引擎或版本不合法"
+    if m["state"] not in _CHAT_STATES or m["native_session_id"] is not None:
+        return "state 不合法"
+    # the fields a chat shares with a stream launch, by the stream checks (its own fields set to valid stand-ins)
+    as_stream = {k: v for k, v in m.items() if k not in ("chat_id", "profile_id", "resume")}
+    as_stream.update(pipeline_id="flow-000000000000", task_id="chat", model_id="claude-x",
+                     cli_version=next(iter(stream_protocol.VERSIONS)))
+    problem = stream_manifest_problem(as_stream)
+    if problem:
+        return problem
+    checks = [
+        ("model_id", isinstance(m["model_id"], str) and MODEL_ID_RE.match(m["model_id"]) is not None),
+        ("chat_id", isinstance(m["chat_id"], str) and CHAT_ID_RE.match(m["chat_id"]) is not None),
+        ("profile_id", isinstance(m["profile_id"], str) and TASK_ID_RE.match(m["profile_id"]) is not None),
+        ("claude_session_id", isinstance(m["claude_session_id"], str)
+                              and chat_protocol.UUID_RE.match(m["claude_session_id"]) is not None),
+        ("budget_usd", _budget_ok(m["budget_usd"])),
+        ("resume", isinstance(m["resume"], bool)),
+        ("boundary", m["boundary"] == _CHAT_BOUNDARY),
+    ]
+    for name, ok in checks:
+        if not ok:
+            return f"{name} 不合法"
+    return None
+
+
 def load_validated(base: Path, launch_id: str) -> dict:
     """Re-check everything the launch depends on. Raises ``LaunchRefused``;
     there is no partial or degraded result."""
@@ -838,7 +974,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
         sst = _owned_dir(scratch, uid)
         if sst.st_ino != m["scratch"]["inode"] or sst.st_uid != m["scratch"]["uid"]:
             raise LaunchRefused("drift", "暫存區身分已改變")
-        if (m["engine"] in ("claude", "claude-stream")
+        if (m["engine"] in ("claude", "claude-stream", "claude-chat")
                 and len(per_uid_tmp(str(scratch), uid).encode("utf-8")) > CLAUDE_TMP_PATH_LIMIT):
             raise LaunchRefused("scratch_path_too_long", "暫存路徑過長")
         workdir = m.get("canonical_workspace")
@@ -846,12 +982,18 @@ def load_validated(base: Path, launch_id: str) -> dict:
                 or not os.path.isdir(workdir)):
             raise LaunchRefused("drift", "工作目錄已改變或不存在")
         # The same rules as at preparation, against the state as it is now.
-        if _check_workdir(workdir, m.get("allowed_root") or str(Path.home()), Path(os.path.realpath(base))) != workdir:
+        if m["engine"] == "claude-chat":
+            if (_check_chat_workdir(workdir, Path(os.path.realpath(base))) != workdir
+                    or m.get("allowed_root") != str(Path(workdir).parent)):
+                raise LaunchRefused("drift", "工作目錄不再符合規則")
+        elif _check_workdir(workdir, m.get("allowed_root") or str(Path.home()), Path(os.path.realpath(base))) != workdir:
             raise LaunchRefused("drift", "工作目錄不再符合規則")
         actual_settings = json.loads(settings_path.read_text(encoding="utf-8"))
         if m["engine"] == "claude-stream":
             _check_stream_fields(m)
             expected = stream_settings(workdir, str(scratch), uid, m.get("cli_version"))
+        elif m["engine"] == "claude-chat":
+            expected = chat_settings(workdir, str(scratch), uid, m.get("cli_version"))
         elif m["engine"] == "claude":
             expected = claude_settings(workdir, str(scratch), uid)
         else:
