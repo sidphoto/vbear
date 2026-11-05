@@ -6,7 +6,9 @@ close_gracefully.
   * The first line written is the ``initialize`` request; a person's message is held until its answer passes
     (chat_protocol.ChatTracker), so a turn whose message was never written costs nothing.
   * Every permission request is judged (chat_protocol.judge): VBear answers it itself, or it becomes a card that
-    only the RPC holding its one-use token can answer, once, before it expires; an expired card is refused.
+    only the RPC holding its one-use token can answer, once, before it expires; an expired card is refused. An allow
+    (or a changed input) is judged again when it is given: a call that became one VBear refuses (a folder of its
+    path is now a link out of the work folder) is refused then.
   * A turn ends with its result (it costs what the CLI's cumulative total says it added), or is cut off (stopped,
     timed out, the process ended, a violation): then it costs its cap. Only a turn that never reached the CLI
     costs nothing.
@@ -214,17 +216,23 @@ class ChatProcess(ProcessGroupEnd):
             return "bad_request", "decision 必須是 allow、deny 或 modify"
         if decision != "modify" and value is not None:
             return "bad_request", "只有「改內容再允許」可以帶 value"
+        sent = card.input
+        if decision == "modify":
+            if card.editable is None:
+                return "bad_request", f"{card.tool} 沒有可以改的內容"
+            if not isinstance(value, str) or (card.tool == "Bash" and not value.strip()):
+                return "bad_request", "改過的內容必須是文字"
+            sent = {**card.input, card.editable: value}
+        if decision != "deny":
+            # What is allowed is judged again now, as it will be sent: a folder of its path may have become a link
+            # out of the work folder while the card waited. The CLI still writes later, so this narrows the race
+            # and does not close it.
+            again = cp.judge(card.tool, sent, self.cwd)
+            if again.action == "deny":
+                self._refuse_on_answer(card, decision, value, sent, again.reason, now)
+                return "refused", f"卡片出現之後情況變了，VBear 已拒絕：{again.reason}"
         try:
-            if decision == "allow":
-                line = cp.allow_line(card.request_id, card.input)
-            elif decision == "modify":
-                if card.editable is None:
-                    return "bad_request", f"{card.tool} 沒有可以改的內容"
-                if not isinstance(value, str) or (card.tool == "Bash" and not value.strip()):
-                    return "bad_request", "改過的內容必須是文字"
-                line = cp.allow_line(card.request_id, {**card.input, card.editable: value})
-            else:
-                line = cp.deny_line(card.request_id, DENIED)
+            line = cp.deny_line(card.request_id, DENIED) if decision == "deny" else cp.allow_line(card.request_id, sent)
         except ValueError as exc:
             return "bad_request", f"無法送出這個回覆（{exc}）"
         del self.cards[card_id]
@@ -237,6 +245,17 @@ class ChatProcess(ProcessGroupEnd):
                                        "value": value if decision == "modify" else None})
         self.last_activity = now
         return None, ""
+
+    def _refuse_on_answer(self, card: Card, decision: str, value, sent: dict, reason: str, now: float) -> None:
+        del self.cards[card.card_id]
+        self.tracker.refuse(card.tool_use_id)
+        self._queue(cp.deny_line(card.request_id, reason))
+        self._record("card_decision", {"turn": card.turn, "card_id": card.card_id, "decision": "refused",
+                                       "value": value if decision == "modify" else None})
+        self._record("denied", {"turn": card.turn, "tool_use_id": card.tool_use_id, "tool": card.tool,
+                                "summary": cp.summary(card.tool, sent),
+                                "reason": f"回覆時再檢查一次：{reason}"[:cs.MAX_SHORT], "by": "vbear"})
+        self.last_activity = now
 
     def stop(self, reason: str, now: float) -> None:
         """A person stopped the turn, the daemon is closing, or the chat must end: the turn costs its cap."""

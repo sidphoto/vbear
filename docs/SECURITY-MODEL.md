@@ -991,11 +991,20 @@ can start until a version passes the chat check (P36-2).
 - **The work folder.** Each role card has one folder, `<state>/chat-work/<first 24 hex digits of the SHA-256 of its
   id>/` (0700). A hash is used because the file system ignores case, so two ids that differ only in case still get two
   folders. Deleting a chat keeps the folder.
-- **Who decides a tool call.** Claude Code asks VBear about every tool call on stdin, and VBear answers.
+- **Who decides a tool call.** Claude Code asks VBear on stdin about every tool call it does not allow by itself,
+  and VBear answers. With VBear's settings it may still allow by itself a read in its own folder. VBear sees such a
+  read only afterwards, by its tool result, and stops the chat when it would not have allowed that read under the rule
+  below. By then the read has happened.
   - Bash, Edit and Write always get a card, and you allow, refuse, or change the command, content or new text and then
     allow.
   - An Edit or Write whose path, after links are followed, is outside the work folder, or inside its `.claude`, is
-    refused with no way to allow it.
+    refused with no way to allow it. This is checked when the card is asked and again when you allow it, with what you
+    changed. A path whose folder became a link out of the work folder while the card waited is refused then, and the
+    record says so.
+  - The second check narrows the gap between the check and the write; it does not close it. Claude Code writes the
+    file itself after VBear's answer, so a folder changed in that moment is not seen. Edit and Write are Claude Code's
+    own tools and do not run under the Bash sandbox, so the sandbox does not catch such a write either. A link in the
+    work folder can come from a command you allowed or from another program on the Mac.
   - VBear allows Read, Grep and Glob by itself only when all three hold: every path, after links are followed, is
     inside the work folder; a Glob or Grep file pattern is a bare name, with no `/`, `..` or `~`; and the folder holds no
     link that leads outside it. Otherwise the read gets a card.

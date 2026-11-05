@@ -141,7 +141,7 @@ KINDS = {
     "card": {"turn": _turn, "card_id": lambda v: isinstance(v, str) and bool(CARD_RE.match(v)), "tool": _short,
              "input": _input, "editable": _short_or_none, "state": _one_of("asked"), "reason": _text(MAX_SHORT)},
     "card_decision": {"turn": _turn, "card_id": lambda v: isinstance(v, str) and bool(CARD_RE.match(v)),
-                      "decision": _one_of("allow", "deny", "modify", "expired", "cancelled"),
+                      "decision": _one_of("allow", "deny", "modify", "expired", "cancelled", "refused"),
                       "value": lambda v: v is None or (isinstance(v, str) and len(v) <= MAX_EXCERPT)},
     "auto_allowed": {"turn": _turn, "tool_use_id": _short_or_none, "tool": _short, "summary": _text(MAX_EXCERPT),
                      "reason": _text(MAX_SHORT)},

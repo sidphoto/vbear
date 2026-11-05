@@ -280,6 +280,49 @@ class CardTests(ChatCase):
         self.assertEqual((denied["tool"], denied["by"]), ("Write", "vbear"))
 
 
+    def _swap_a_folder_for_a_link_while_the_card_waits(self, index, tool, decision, value=None):
+        """The card is asked for /WORK/sub/note.txt while ``sub`` is a folder of the work folder; before the person
+        answers, ``sub`` becomes a link to a folder outside it. VBear judges the call again on the answer."""
+        steps = clean("ask", index)
+        ask = next(s["ask"] for s in steps if "ask" in s and s["ask"]["request"]["tool_name"] == tool)
+        ask["request"]["input"]["file_path"] = "/WORK/sub/note.txt"
+        self.configure([steps])
+        work = Path(cs.ensure_work_dir(self.base, "emp-1"))
+        (work / "sub").mkdir()
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        card = self.wait_card(chat_id)
+        self.assertEqual((card["tool"], card["input"]["file_path"]), (tool, str(work / "sub" / "note.txt")))
+        (work / "sub").rmdir()
+        (work / "sub").symlink_to(outside, target_is_directory=True)
+        r = self.rpc("chat_answer", chat_id=chat_id, card_id=card["card_id"], token=card["token"], decision=decision,
+                     value=value)
+        self.assertEqual(r["error"]["code"], "refused", r)
+        self.assertIn("以外", r["error"]["message"])
+        r = self.rpc("chat_answer", chat_id=chat_id, card_id=card["card_id"], token=card["token"], decision="allow")
+        self.assertEqual(r["error"]["code"], "gone")
+        self.wait_turn(chat_id, 1)
+        answers = [x["response"]["response"] for x in self.answers()]
+        self.assertEqual(answers[-1]["behavior"], "deny")
+        self.assertIn("以外", answers[-1]["message"])
+        self.assertFalse([x for x in answers if x["behavior"] == "allow" and "sub" in x["updatedInput"]["file_path"]])
+        recs = self.events(chat_id)[0]
+        closed = next(x for x in recs if x["kind"] == "card_decision")
+        self.assertEqual((closed["card_id"], closed["decision"], closed["value"]), (card["card_id"], "refused", value))
+        denied = next(x for x in recs if x["kind"] == "denied")
+        self.assertEqual((denied["tool"], denied["by"]), (tool, "vbear"))
+        self.assertIn("以外", denied["reason"])
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_a_write_whose_folder_became_a_link_outside_is_refused_on_allow(self):
+        self._swap_a_folder_for_a_link_while_the_card_waits(2, "Write", "allow")
+
+    def test_an_edit_whose_folder_became_a_link_outside_is_refused_on_modify(self):
+        self._swap_a_folder_for_a_link_while_the_card_waits(3, "Edit", "modify", "hello-changed")
+
+
 class ProtocolTests(ChatCase):
     def test_an_unknown_event_is_noted_by_its_field_names_only(self):
         steps = [{"emit": [{"type": "brand_new_kind", "secret_field": "value-not-to-keep"}]}] + clean("ask", 4)
