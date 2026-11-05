@@ -12291,7 +12291,31 @@ const SETUP_ACTION_WORD = { install: "安裝", login: "登入" };
 const SETUP_LEAVE_LABEL = "開始使用";
 const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使用。";
 const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
-let setupTick = null;                 // set by the page while it is open: the quiet refresh route() runs every few seconds
+// The choice of the daily limit (US$): the amounts, and one plain sentence each in terms of the default limits (a chat turn
+// costs at most US$0.5, a meeting at most US$1.5). The default is the server's, US$3.
+const SETUP_DAILY_CHOICES = [
+  { usd: 1, note: "以預設的上限算：聊天每回合最多 US$0.5，最壞約 2 回合就用完；一場會議最多 US$1。適合先試試看。" },
+  { usd: 3, note: "以預設的上限算：聊天每回合最多 US$0.5，最壞約 6 回合；一場會議最多 US$1.5，約 2 場。適合偶爾用。" },
+  { usd: 10, note: "以預設的上限算：聊天每回合最多 US$0.5，最壞約 20 回合；一場會議最多 US$1.5，約 6 場。適合每天都會用。" },
+];
+const SETUP_DAILY_DEFAULT = 3;
+const SETUP_DAILY_LIMIT_WORDS = {
+  meeting_usd: "每場會議的上限", per_call_usd: "會議每次呼叫的上限", staffing_total_usd: "每份組隊提案的上限",
+  staffing_proposal_call_usd: "組隊 CEO 每次呼叫的上限", chat_per_turn_usd: "聊天每回合的上限",
+};
+const setupUsd = (n) => `US$${n}`;
+
+// What the person is told after choosing: the day, and each limit that had to come down to it (the server only brings down).
+function setupDailyResultWords(res) {
+  const r = res && typeof res === "object" ? res : {};
+  const head = `已設定：每天最多 ${setupUsd(r.daily_usd)}。`;
+  const moved = (Array.isArray(r.changed) ? r.changed : []).filter((c) => c && SETUP_DAILY_LIMIT_WORDS[c.limit] && c.from !== c.to);
+  if (!moved.length) return head + "其他上限本來就在這個金額以下，沒有更動。";
+  return head + "為了不超過它，也把這些上限調低了："
+    + moved.map((c) => `${SETUP_DAILY_LIMIT_WORDS[c.limit]} ${setupUsd(c.from)} 改成 ${setupUsd(c.to)}`).join("；") + "。";
+}
+
+let setupTick = null;               // set by the page while it is open: the quiet refresh route() runs every few seconds
 const setupOpened = new Set();        // "<tool>:install" opened from this page since VBear was opened (for the hint after it)
 
 // What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
@@ -12408,6 +12432,11 @@ async function viewSetup() {
     if (token === seq) setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + e.message));
     return;
   }
+  let dailyNow = null;             // the daily limit in force (a number), or null when it could not be read
+  try { const d = await api.get("/api/setup/daily-limit"); dailyNow = typeof d.daily_usd === "number" ? d.daily_usd : null; }
+  catch (e) { dailyNow = null; }
+  let dailyResult = "";            // what the last choice did, in words
+  let dailyError = "";
   const main = claim(token);
   if (token !== seq) return;
   let shown = data;
@@ -12456,6 +12485,37 @@ async function viewSetup() {
       // the place for the 「試一下」 button (a later task)
       el("div", { "data-setup-slot": "try" }));
   };
+  const choose = async (usd) => {
+    try {
+      const res = await api.post("/api/setup/daily-limit", { daily_usd: usd });
+      dailyNow = typeof res.daily_usd === "number" ? res.daily_usd : usd;
+      dailyResult = setupDailyResultWords(res);
+      dailyError = "";
+    } catch (e) {
+      dailyError = "沒有存進去：" + e.message;
+      dailyResult = "";
+    }
+    draw();
+  };
+  const dailySection = () => {
+    const picks = SETUP_DAILY_CHOICES.map((c) => {
+      const on = dailyNow === c.usd;
+      const btn = el("button", { class: `btn small${on ? " primary" : ""}`, type: "button", "data-daily-pick": String(c.usd),
+        "aria-pressed": on ? "true" : "false" }, c.usd === SETUP_DAILY_DEFAULT ? `${setupUsd(c.usd)}（預設）` : setupUsd(c.usd));
+      btn.addEventListener("click", () => run(btn, () => choose(c.usd)));
+      return el("li", { class: "setup-daily-choice", "data-daily-choice": String(c.usd), "data-selected": on ? "true" : "false" },
+        btn, el("span", { class: "small muted setup-text", "data-daily-note": "yes" }, c.note));
+    });
+    const custom = dailyNow !== null && !SETUP_DAILY_CHOICES.some((c) => c.usd === dailyNow);
+    return el("section", { class: "section setup-daily", "data-setup-slot": "daily-limit" },
+      el("h2", null, "每天最多花多少"),
+      el("p", { class: "small muted" }, "這是 VBear 所有 AI 花費（聊天、開會、組隊會議）加起來每天的上限，每天 0 點重新計算。選一個就好，之後可以在設定裡改。"),
+      el("ul", { class: "setup-daily-list" }, picks),
+      dailyNow === null ? el("p", { class: "small muted", "data-setup": "daily-unknown" }, "讀不到目前的每天上限，所以沒有標出選了哪一個。")
+        : custom ? el("p", { class: "small muted", "data-setup": "daily-custom" }, `目前的每天上限是 ${setupUsd(dailyNow)}，不是這三個之一。選一個會換成它。`) : null,
+      dailyResult ? el("p", { class: "setup-text", "data-setup": "daily-result" }, dailyResult) : null,
+      dailyError ? el("p", { class: "setup-text", "data-setup": "daily-error" }, dailyError) : null);
+  };
   const draw = () => {
     const rows = Array.isArray(shown.tools) ? shown.tools : [];
     const anyReady = rows.some((r) => r && r.ready === true);
@@ -12470,8 +12530,7 @@ async function viewSetup() {
     setKids(host,
       anyReady ? null : notice("info", SETUP_NONE_READY),
       el("ul", { class: "setup-list" }, rows.map(toolCard)),
-      // the place for the choice of the daily limit (a later task)
-      el("div", { "data-setup-slot": "daily-limit" }),
+      dailySection(),
       el("section", { class: "section setup-foot" },
         el("div", { class: "row" }, leave, recheck),
         canLeave ? el("p", { class: "small muted" }, "之後隨時可以從左邊的「開始設定」回到這一頁，加其他 AI 工具。")
@@ -15231,6 +15290,7 @@ if (typeof module !== "undefined" && module.exports) {
     SETUP_UPGRADE_NOTICE,
     SETUP_REOPEN_HINT,
     setupToolView,
+    setupDailyResultWords,
     setupTerminalWords,
     setupGate,
     setupToolKey,

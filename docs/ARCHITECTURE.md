@@ -308,6 +308,13 @@ opens the install or login terminal through the daemon's `open_setup` operation 
 `setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
 false; a config that does not say forces nobody.
 
+The same page asks for the daily limit (US$1, US$3 by default, or US$10): `GET /api/setup/daily-limit` gives the one in force,
+`POST /api/setup/daily-limit` (`{"daily_usd": n}`) writes it. `vbear/daily_limit.py` works out what must come down with it:
+the meetings' limit and call limit, the staffing record's total and the CEO's call, the chat turn; only ever down, never up.
+The server checks the result with each family's own rule and writes `config.json` once (all or nothing). A write of
+`meeting_limits.daily_usd` through `/api/config` brings the staffing and chat limits down the same way, but keeps refusing
+a day under the meeting or call limit that the same request or the file holds, with the plain 「每次 ≤ 每場 ≤ 每天」.
+
 ## Profile-managed Claude launch
 
 ```

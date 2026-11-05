@@ -1727,3 +1727,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .setup-foot .row { flex-wrap: wrap; }
 @media (max-width: 520px) { .setup-actions .btn, .setup-foot .btn { flex: 1 1 100%; } }
+.setup-daily { margin: 0 0 16px; }
+.setup-daily-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+.setup-daily-choice { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-width: 0; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel); padding: 10px 12px; }
+.setup-daily-choice[data-selected="true"] { border-color: var(--ok); }
+.setup-daily-choice .setup-text { flex: 1 1 220px; }
+@media (max-width: 520px) { .setup-daily-choice .btn { flex: 1 1 100%; } }
