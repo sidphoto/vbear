@@ -3883,6 +3883,7 @@ async function viewSkills(params) {
     el("p", { class: "lede" }, "這裡是掃描到的技能清單。預設只顯示目前可使用的副本；想看安裝、加入角色與使用證據，請開啟「技能四態總覽」。 ", helpTip("技能庫", "技能庫只盤點掃描到的檔案與載入位置；它不會安裝、啟動或修改任何 Skill。")),
     corruptNotice(),
     staleNotice(),
+    needsClaudeSlot(token, "把技能說明翻成中文要用 Claude Code。", () => T.engine === "claude"),
     translationToolbar(),
     el("div", { class: "search" }, q),
     el("div", { class: "toolbar" },
@@ -12272,6 +12273,47 @@ async function route() {
   if (liveTick) liveTimer = setInterval(() => { if (!document.hidden) liveTick(); }, 5000);
 }
 
+// ---------- the Claude Code note (v0.12) ----------------------------------------------------------------------------------
+// Meetings, staffing meetings, chat and the translation of skill descriptions only work through Claude Code. On those pages
+// one shared note says so, how to get it, and a button to the start-up page. Whether Claude Code is ready comes from the
+// start-up page's own status (GET /api/setup/tools); there is no second check. The note never switches the page off. When
+// the status cannot be read, or does not list Claude Code, nothing is shown: no claim is made that has no source.
+const NEEDS_CLAUDE_TITLE = "這個功能目前需要 Claude Code";
+const NEEDS_CLAUDE_HOW = "Claude Code 是 Anthropic 的 AI 工具，要有 Claude 的付費方案才能用。到「開始設定」頁安裝並登入它，狀態變成「就緒」，這個功能就能用了。";
+const NEEDS_CLAUDE_GO = "到開始設定";
+
+// "needed" | "ready" | "unknown", from the body of GET /api/setup/tools.
+function claudeCodeNeed(res) {
+  const rows = res && typeof res === "object" && Array.isArray(res.tools) ? res.tools : [];
+  const r = rows.find((t) => t && typeof t === "object" && t.id === "claude");
+  if (!r) return "unknown";
+  if (r.state === "ready" && r.ready === true) return "ready";
+  if ((r.state === "not_installed" || r.state === "not_logged_in") && r.ready !== true) return "needed";
+  return "unknown";
+}
+
+function needsClaudeNote(what) {
+  return el("div", { class: "notice info", "data-needs-claude": "note" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null,
+      el("b", null, NEEDS_CLAUDE_TITLE),
+      what ? el("p", { class: "small", style: "margin:4px 0 0" }, what) : null,
+      el("p", { class: "small", style: "margin:4px 0 0" }, NEEDS_CLAUDE_HOW),
+      el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small primary", href: "#/setup", "data-needs-claude": "go" }, NEEDS_CLAUDE_GO))));
+}
+
+// An empty place that fills itself with the note once the status is known; the page does not wait for it. `token` is the
+// page's seq, so an answer that arrives after the person has gone elsewhere is dropped. `wanted` lets a page hold the note
+// back for a case where it does not apply (translation with another engine).
+function needsClaudeSlot(token, what, wanted) {
+  const slot = el("div", { "data-needs-claude": "slot" });
+  api.get("/api/setup/tools").then((res) => {
+    if (token !== seq || claudeCodeNeed(res) !== "needed" || (wanted && !wanted())) return;
+    setKids(slot, needsClaudeNote(what));
+  }).catch(() => {});
+  return slot;
+}
+// ---------- end of the Claude Code note ---------------------------------------------------------------------------------
+
 // ---------- the start-up page (開始設定, v0.12) ---------------------------------------------------------------------------
 // The first page a new person sees: every AI tool VBear can borrow, with where it stands (還沒安裝 / 還沒登入 / 就緒) and the
 // button for the next step. What it shows comes from GET /api/setup/tools, which reads each tool's version and (for Claude
@@ -12748,6 +12790,7 @@ async function viewChat(id, params) {
   const intro = chatIntroNode();
   setKids(main, el("h1", null, "跟員工聊天"),
     el("p", { class: "lede" }, "和一位員工（角色卡）一對一聊天。員工想動手時，會先問你。"),
+    needsClaudeSlot(token, "目前聊天只能透過 Claude Code 進行。"),
     intro, supportBox, ledgerBox, formBox,
     el("section", { class: "section" }, sectionHead("聊天紀錄", "每 5 秒更新"), listBox));
   chatTick = refresh;
@@ -13606,6 +13649,7 @@ async function viewMeetings(id, params) {
   setKids(main,
     el("h1", null, "會議"),
     el("p", { class: "lede" }, "各職位發言，CEO 做決定，重大的事交給你（董事長）。決定只是紀錄，不會自己去執行。"),
+    needsClaudeSlot(token, "會議由 Claude Code 主持發言。"),
     lampBox,
     meetingMoneyWhyNode(),
     form.node,
@@ -14074,6 +14118,7 @@ async function viewStaffing(id, params) {
     draw();
     setKids(main, crumbs([["組隊會議", "#/staffing"], [task.title || taskId]]),
       el("h1", null, `請 CEO 組隊：${task.title || "（沒有名稱）"}`),
+      needsClaudeSlot(token, "組隊會議由 Claude Code 主持發言。"),
       lampBox, meetingMoneyWhyNode(), form.node,
       el("section", { class: "section" }, sectionHead("這張任務卡的組隊會議", "每 5 秒更新"), listBox));
   } else {
@@ -14084,6 +14129,7 @@ async function viewStaffing(id, params) {
     draw();
     setKids(main, el("h1", null, "組隊會議"),
       el("p", { class: "lede" }, STAFFING_WHAT),
+      needsClaudeSlot(token, "組隊會議由 Claude Code 主持發言。"),
       lampBox, meetingMoneyWhyNode(),
       el("section", { class: "section" }, sectionHead("替哪張任務卡組隊", "選好之後，VBear 會先勾好建議的人選。"),
         open.length ? pick : el("p", { class: "small muted" }, "沒有未結案的任務卡。")),
@@ -15231,6 +15277,8 @@ if (typeof module !== "undefined" && module.exports) {
     SETUP_UPGRADE_NOTICE,
     SETUP_REOPEN_HINT,
     setupToolView,
+    claudeCodeNeed,
+    needsClaudeNote,
     setupTerminalWords,
     setupGate,
     setupToolKey,

@@ -102,7 +102,7 @@ class MeetingRunner(HeadlessBoard):
     def remove(self, mid: str) -> None:
         mt.delete(mid)
 
-    def schema(self, kind: str) -> dict:
+    def schema(self, kind: str, ctx=None) -> dict:
         return mt.DECISION_SCHEMA if kind == "decision" else mt.OPINION_SCHEMA
 
     def validate(self, kind: str, output, who: dict, ctx: Context) -> dict:
