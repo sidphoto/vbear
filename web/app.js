@@ -12307,7 +12307,7 @@ function chatSupportNode(support, verifyUi) {
   if (s.state !== "verified" && typeof s.message === "string" && s.message) lines.push(el("p", { class: "small", "data-chat": "support-message" }, s.message));
   if (s.state === "unverified") {
     lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" },
-      "驗證會用這個 Claude Code 真的跑一段對話：約 6 次小呼叫（Haiku），用你自己的登入，會用掉一點點額度（通常不到 US$0.05），"
+      "驗證會用這個 Claude Code 真的跑一段對話：約 6 次小呼叫（Haiku），用你自己的登入，會用掉一點點額度（預期不到 US$0.05，實際金額以 Claude Code 回報為準），"
       + "要幾分鐘。它會試：員工回話、每個指令都先問你、你拒絕或改內容、接續舊對話、沙盒擋住資料夾外的寫入。全部通過，才會記下這個版本。"));
     if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
     else if (v.confirm === true) lines.push(el("div", { class: "row" },
