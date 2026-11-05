@@ -12293,6 +12293,28 @@ const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使�
 const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
 let setupTick = null;                 // set by the page while it is open: the quiet refresh route() runs every few seconds
 const setupOpened = new Set();        // "<tool>:install" opened from this page since VBear was opened (for the hint after it)
+const SETUP_TRY_ESTIMATE = "大約花不到 US$0.01";
+const setupTry = new Map();           // tool id -> { phase: "confirm" | "running" | "done", success?, message? } of 「試一下」 on this page
+
+// 「試一下」 of one card: it is for a tool that is installed. The first press only shows the estimate and asks again; the second
+// sends the confirmation. The result is the one plain sentence the server wrote (it never has the tool's own words in it).
+// -> { show, note, buttons: [{ key, label, kind }], result: { text, ok } | null }
+function setupTryView(row, st) {
+  const r = row && typeof row === "object" ? row : {};
+  if (r.installed !== true) return { show: false, note: "", buttons: [], result: null };
+  const name = r.short || r.name || r.id || "這個 AI 工具";
+  const s = st && typeof st === "object" ? st : {};
+  if (s.phase === "confirm") {
+    return { show: true, buttons: [{ key: "try-confirm", label: "確認，試一下", kind: "primary" }, { key: "try-cancel", label: "取消", kind: "" }], result: null,
+      note: `再按一次「確認，試一下」才會送出：會送一句很短的話給 ${name}，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+  }
+  if (s.phase === "running") {
+    return { show: true, buttons: [], result: null, note: `正在試 ${name}……最多等一分鐘，請不要關掉這一頁。` };
+  }
+  const result = s.phase === "done" ? { text: String(s.message || ""), ok: s.success === true } : null;
+  return { show: true, buttons: [{ key: "try", label: s.phase === "done" ? "再試一次" : "試一下", kind: "" }], result,
+    note: `試一下會送一句很短的話給 ${name}，確認它真的會回應，${SETUP_TRY_ESTIMATE}，並計入每天上限。` };
+}
 
 // What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
 function setupToolView(row) {
@@ -12402,7 +12424,8 @@ async function openSetupTerminal(toolId, action, region) {
 async function viewSetup() {
   const token = seq;
   let data;
-  try { data = await api.get("/api/setup/tools"); }
+  setupTry.clear();
+  try { data = await api.get("/api/setup/tools?force=1"); }      // coming in is a fresh look; the refresh below may be a kept one
   catch (e) {
     const main = claim(token);
     if (token === seq) setKids(main, el("h1", null, SETUP_TITLE), notice("bad", "讀不到 AI 工具的狀態：" + e.message));
@@ -12413,9 +12436,9 @@ async function viewSetup() {
   let shown = data;
   let busy = false;
   const host = el("div", { "data-setup": "page" });
-  const refresh = async (quiet) => {
+  const refresh = async (quiet, force) => {
     try {
-      const next = await api.get("/api/setup/tools");
+      const next = await api.get(force ? "/api/setup/tools?force=1" : "/api/setup/tools");
       if (token !== seq) return;
       const changed = setupToolKey(next.tools) !== setupToolKey(shown.tools) || next.setup_done !== shown.setup_done;
       shown = next;
@@ -12453,8 +12476,37 @@ async function viewSetup() {
       el("p", { class: "setup-text", "data-setup": "blurb" }, row.blurb || ""),
       v.note ? el("p", { class: "small muted setup-text", "data-setup": "note" }, v.note) : null,
       buttons.length ? el("div", { class: "setup-actions" }, buttons) : null,
-      // the place for the 「試一下」 button (a later task)
-      el("div", { "data-setup-slot": "try" }));
+      el("div", { "data-setup-slot": "try" }, tryBox(row)));
+  };
+  const tryBox = (row) => {
+    const v = setupTryView(row, setupTry.get(row.id));
+    if (!v.show) return null;
+    const buttons = v.buttons.map((b) => {
+      const btn = el("button", { class: `btn small${b.kind === "primary" ? " primary" : ""}`, type: "button", "data-setup-try-act": b.key }, b.label);
+      btn.addEventListener("click", () => {
+        if (b.key === "try") { setupTry.set(row.id, { phase: "confirm" }); draw(); }
+        else if (b.key === "try-cancel") { setupTry.delete(row.id); draw(); }
+        else if (!busy) tryNow(row);
+      });
+      return btn;
+    });
+    return el("div", { class: "setup-try", "data-setup": "try" },
+      v.result ? el("p", { class: `setup-text setup-try-result ${v.result.ok ? "ok" : "bad"}`, "data-setup": "try-result", "data-ok": v.result.ok ? "yes" : "no" }, v.result.text) : null,
+      el("p", { class: "small muted setup-text", "data-setup": "try-note" }, v.note),
+      buttons.length ? el("div", { class: "setup-actions" }, buttons) : null);
+  };
+  const tryNow = async (row) => {
+    busy = true;
+    setupTry.set(row.id, { phase: "running" });
+    draw();
+    try {
+      const r = await api.post(`/api/setup/tools/${encodeURIComponent(row.id)}/try`, { confirmed: true });
+      setupTry.set(row.id, { phase: "done", success: r.success === true, message: r.message || "" });
+    } catch (e) {
+      setupTry.set(row.id, { phase: "done", success: false, message: e.message });
+    } finally { busy = false; }
+    await refresh(true, true);
+    draw();
   };
   const draw = () => {
     const rows = Array.isArray(shown.tools) ? shown.tools : [];
@@ -12466,7 +12518,7 @@ async function viewSetup() {
       location.hash = "#/";
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
-    recheck.addEventListener("click", () => run(recheck, () => refresh(false)));
+    recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
     setKids(host,
       anyReady ? null : notice("info", SETUP_NONE_READY),
       el("ul", { class: "setup-list" }, rows.map(toolCard)),
@@ -15231,6 +15283,7 @@ if (typeof module !== "undefined" && module.exports) {
     SETUP_UPGRADE_NOTICE,
     SETUP_REOPEN_HINT,
     setupToolView,
+    setupTryView,
     setupTerminalWords,
     setupGate,
     setupToolKey,

@@ -1725,5 +1725,9 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .setup-head h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
 .setup-text { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .setup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.setup-try { display: grid; gap: 6px; min-width: 0; border-top: 1px solid var(--line-2); padding-top: 8px; }
+.setup-try-result { padding: 6px 10px; border-radius: var(--radius); }
+.setup-try-result.ok { color: var(--ok); background: var(--ok-soft); }
+.setup-try-result.bad { color: var(--bad); background: var(--bad-soft); }
 .setup-foot .row { flex-wrap: wrap; }
 @media (max-width: 520px) { .setup-actions .btn, .setup-foot .btn { flex: 1 1 100%; } }
