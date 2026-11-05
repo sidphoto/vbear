@@ -403,11 +403,13 @@ test("a staffing bubble comes from the record only, from a closed table of its o
   assert.strictEqual(b("opinion", "skipped", "budget"), "額度不夠沒發言");
   assert.strictEqual(b("opinion", "skipped", "time_up"), "時間到沒發言");
   assert.strictEqual(b("opinion", "skipped", "boundary_revoked"), "沒有發言");
+  assert.strictEqual(b("opinion", "skipped", "spend_unknown"), "無法確認花費");   // P36-2: not "no statement"
+  assert(table.has("無法確認花費"));
   assert.strictEqual(b("proposal", "running"), "整理意見中");
   assert.strictEqual(b("proposal", "done"), "已提案");
   assert.strictEqual(b("proposal", "skipped", "no_opinions"), "沒有發言");
   for (const kind of ["opinion", "proposal", "decision", EVIL]) for (const state of ["queued", "running", "done", "failed", "blocked", "skipped", "cancelled", "interrupted", "x", undefined]) {
-    for (const code of [null, "budget", "time_up", EVIL]) assert(table.has(b(kind, state, code)), JSON.stringify({ kind, state, code }));
+    for (const code of [null, "budget", "time_up", "spend_unknown", EVIL]) assert(table.has(b(kind, state, code)), JSON.stringify({ kind, state, code }));
   }
   assert.strictEqual(app.staffingBubble(null), "狀態不明");
   assert.strictEqual(b("decision", "done"), "狀態不明", "a meeting's kind is not a staffing one");

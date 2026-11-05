@@ -118,6 +118,9 @@ test("a bubble comes from the record only, from a closed table", () => {
     assert.strictEqual(app.meetingBubble(turn(1, "law", "opinion", "done", { output: opinion({ stance }) }), {}), label);
   }
   assert.strictEqual(app.meetingBubble(turn(1, "law", "opinion", "skipped", { error_code: "budget" }), {}), "額度不夠沒發言");
+  // P36-2: a turn skipped because the day's spend could not be established is not "no statement"
+  assert.strictEqual(app.meetingBubble(turn(1, "law", "opinion", "skipped", { error_code: "spend_unknown" }), {}), "無法確認花費");
+  assert(table.has("無法確認花費"));
   assert.strictEqual(app.meetingBubble(turn(3, "ceo", "decision", "running"), {}), "整理意見中");
   assert.strictEqual(app.meetingBubble(turn(3, "ceo", "decision", "done", { output: decision() }), { major: false, chairmanState: "not_needed" }), "已決定");
   assert.strictEqual(app.meetingBubble(turn(3, "ceo", "decision", "done", { output: decision() }), { major: true, chairmanState: "pending" }), "交董事長");
@@ -585,6 +588,11 @@ test("every code the back end ends a turn with has plain words; no cost is claim
     assert(codes.has(code), "the scan finds " + code);
   }
   assert.strictEqual(typeof app.MEETING_ERROR_TEXT, "object");
+  // the engine ends a turn with a constant (mt.SPEND_UNKNOWN), which the scan above cannot read as a string
+  assert(/_end\(mid, seq, "skipped", mt\.SPEND_UNKNOWN/.test(src("board_engine.py")), "the engine still skips with spend_unknown");
+  codes.add("spend_unknown");
+  const words = app.MEETING_ERROR_TEXT.spend_unknown;
+  assert(typeof words === "string" && words.includes("今天") && words.includes("花"), "spend_unknown is explained in its own words");
   for (const code of codes) assert(Object.prototype.hasOwnProperty.call(app.MEETING_ERROR_TEXT, code), "no words for " + code);
   setPage();
   const m = detail(meeting({ status: "incomplete", major: true, chairman: { state: "pending", at: null, note: "", label: "x" } }));

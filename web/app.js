@@ -12203,6 +12203,8 @@ const MEETING_ERROR_TEXT = {
   too_large: "要送出的內容超過大小限制，沒有送出", time_up: "會議時間到（最後 3 分鐘留給 CEO）：沒有發言，或這次呼叫被時間上限停止",
   restart: "主控台重新啟動時這一位還沒結束，已中斷，不會自動續跑", cancelled: "已取消", boundary_revoked: "這個版本的無工具檢查被撤銷，沒有送出",
   process_unconfirmed: "無法確認程序已結束，已封鎖後續的會議", busy: "已有一場會議在進行", internal: "VBear 內部錯誤，這次的結果不採用",
+  // P36-2: the day's spend could not be established (a record of a meeting, a staffing meeting or a chat does not read whole)
+  spend_unknown: "無法確認今天已經花了多少（有花費紀錄讀不完整），為了不超出每日上限，這一位沒有送出；請檢查狀態資料夾裡的紀錄",
 };
 function meetingErrorText(code) {
   if (typeof code !== "string" || !code) return "";
@@ -12214,7 +12216,11 @@ function meetingErrorText(code) {
 const MEETING_STANCE_BUBBLE = { 支持: "支持", 反對: "反對", 有條件支持: "有條件支持", 需要更多資訊: "要更多資訊" };
 // The only words a seat's bubble can say. Whatever the record holds, the bubble is one of these.
 const MEETING_BUBBLES = ["等發言", "發言中", "支持", "反對", "有條件支持", "要更多資訊", "失敗", "卡住", "額度不夠沒發言", "時間到沒發言",
-  "沒有發言", "已取消", "中斷", "整理意見中", "已決定", "交董事長", "董事長已核准", "董事長已否決", MEETING_UNKNOWN];
+  "無法確認花費", "沒有發言", "已取消", "中斷", "整理意見中", "已決定", "交董事長", "董事長已核准", "董事長已否決", MEETING_UNKNOWN];
+// What a skipped turn says, by the code it was skipped with: the three reasons that have their own words, else "沒有發言".
+function skippedBubble(code) {
+  return code === "budget" ? "額度不夠沒發言" : code === "time_up" ? "時間到沒發言" : code === "spend_unknown" ? "無法確認花費" : "沒有發言";
+}
 // ctx: { major, chairmanState } of the meeting, for the CEO's seat.
 function meetingBubble(turn, ctx) {
   const c = ctx && typeof ctx === "object" ? ctx : {};
@@ -12225,7 +12231,7 @@ function meetingBubble(turn, ctx) {
     case "running": return decision ? "整理意見中" : "發言中";
     case "failed": return "失敗";
     case "blocked": return "卡住";
-    case "skipped": return turn.error_code === "budget" ? "額度不夠沒發言" : turn.error_code === "time_up" ? "時間到沒發言" : "沒有發言";
+    case "skipped": return skippedBubble(turn.error_code);
     case "cancelled": return "已取消";
     case "interrupted": return "中斷";
     case "done": {
@@ -13275,7 +13281,7 @@ async function viewStaffing(id, params) {
 // ---- one staffing meeting: bubbles, seats, names ----
 
 // The only words a seat's bubble can say on a staffing meeting. Whatever the record holds, the bubble is one of these.
-const STAFFING_BUBBLES = ["等發言", "發言中", "已建議", "失敗", "卡住", "額度不夠沒發言", "時間到沒發言", "沒有發言", "已取消", "中斷",
+const STAFFING_BUBBLES = ["等發言", "發言中", "已建議", "失敗", "卡住", "額度不夠沒發言", "時間到沒發言", "無法確認花費", "沒有發言", "已取消", "中斷",
   "整理意見中", "已提案", MEETING_UNKNOWN];
 function staffingBubble(turn) {
   if (!turn || typeof turn !== "object" || (turn.kind !== "opinion" && turn.kind !== "proposal")) return MEETING_UNKNOWN;
@@ -13286,7 +13292,7 @@ function staffingBubble(turn) {
     case "done": return chair ? "已提案" : "已建議";
     case "failed": return "失敗";
     case "blocked": return "卡住";
-    case "skipped": return turn.error_code === "budget" ? "額度不夠沒發言" : turn.error_code === "time_up" ? "時間到沒發言" : "沒有發言";
+    case "skipped": return skippedBubble(turn.error_code);
     case "cancelled": return "已取消";
     case "interrupted": return "中斷";
     default: return MEETING_UNKNOWN;
