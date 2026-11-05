@@ -22,6 +22,18 @@ run any of these scripts itself; the five install addresses answered HTTP 200 wh
 - AGY, Grok and MCODE have no non-interactive status command (the local `--help` has none and the pages list none), so the
   person's "I have logged in" mark is the only evidence.
 
+## Headless calls of 「試一下」
+
+From the research notes (flags confirmed against each tool's local `--help`; none was run for this task, the tests use stand-ins):
+Claude Code `-p` with `--safe-mode`, `--setting-sources ""`, `--tools ""`, `--max-budget-usd`, `--output-format json`,
+`--no-session-persistence` (the same words the chat and the translations use); Codex `exec` with `--ignore-user-config`,
+`--ignore-rules`, `--skip-git-repo-check`, `--ephemeral`, `--sandbox read-only`, `-` for stdin (`--ask-for-approval never`,
+`--disable shell_tool`, `--disable mcp` as the translations candidate already used); AGY `-p` with `--output-format text` and
+`--disable-slash-commands` (no checked flag for fewer tools; `--sandbox`'s value form is not known); Grok `-p` with
+`--output-format plain`, `--max-turns 1`, `--disable-web-search`, `--no-memory`, `--no-plan`, `--no-subagents`, `--cwd`; MCODE
+`exec` with `--cwd`, `--timeout`, `--max-steps 1`, `--permission off`, `--output-format text`. Only Claude Code has a budget flag
+and reports a cost. These are to be checked once on a real machine (cost under US$0.01 each, answered, no file written).
+
 ## Version lines (what marks a tool as installed)
 
 `2.1.318 (Claude Code)`, `codex-cli 0.163.0`, `1.5.0` (AGY), `grok 0.2.101 (5bc4b5dfadcf)`, `0.5.2` (MCODE); the patterns are

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Callable
 
-from . import agent_profiles as ap, meetings as mt, staffing as st
+from . import agent_profiles as ap, meetings as mt, staffing as st, try_spend
 from .board_engine import CHAIR_POSITION, CHECK_ERRORS, HeadlessBoard, _select, _sha, participant
 from .jsonstore import StoreError
 from .runtime import chat_store
@@ -136,7 +136,7 @@ class StaffingRunner(HeadlessBoard):
     def spend_kinds(self) -> list:
         """A staffing meeting shares the day with the meetings and the chats (P36)."""
         return [(mt.meeting_ids, mt.load, mt.per_call_limit), (self.ids, self.load, self.per_call),
-                chat_store.spend_kind(self.clock)]
+                chat_store.spend_kind(self.clock), try_spend.spend_kind()]
 
     def _provider_error(self, code: str) -> mt.MeetingError:
         # the tool-less check's record, not a staffing record, is what cannot be read

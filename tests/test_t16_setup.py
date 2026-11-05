@@ -77,6 +77,9 @@ class SetupCase(ServerCase):
         # no real AI tool of this machine may be found, whatever is installed in the usual system folders
         self.syspath = mock.patch.object(d, "SYSTEM_EXTRA_PATH", ())
         self.syspath.start()
+        # the short cache of the tools' state (task 4) is off here: these tests change a stand-in and look again at once
+        self.cache_off = mock.patch.object(ai_tool_status, "CACHE_TTL_S", 0.0)
+        self.cache_off.start()
         self.typed = self.tmp / "typed.txt"
         shell = self.tmp / "fakeshell"
         shell.write_text(FAKE_SHELL % {"py": sys.executable, "out": str(self.typed)})
@@ -92,6 +95,7 @@ class SetupCase(ServerCase):
             except OSError:
                 pass
         self.shell_patch.stop()
+        self.cache_off.stop()
         self.syspath.stop()
         self.env2.stop()
         super().tearDown()

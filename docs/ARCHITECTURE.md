@@ -308,6 +308,13 @@ opens the install or login terminal through the daemon's `open_setup` operation 
 `setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
 false; a config that does not say forces nobody.
 
+`ai_tool_status.report` keeps each tool's row in memory for `CACHE_TTL_S` (30 seconds, keyed by search path, tool and mark);
+`GET /api/setup/tools?force=1` (with `X-VBear`), a mark, an install or login terminal and a try read the tools again.
+「試一下」 is `POST /api/setup/tools/<id>/try` (`vbear/setup_try.py`): one fixed sentence, headless, in a scratch folder, with a
+time limit; the answer is judged and dropped. Its cost is kept by `vbear/try_spend.py` (`setup-try.json`) and is one more kind
+of the shared day in `meeting_runner.spend_kinds`, `staffing_runner.spend_kinds` and the daemon's chat check; the ledger lists
+it as `setup_try`.
+
 ## Profile-managed Claude launch
 
 ```

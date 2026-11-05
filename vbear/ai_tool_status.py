@@ -11,6 +11,11 @@ One question, answered for every tool the page lists: ``report(conf)``.
 * Logged in, for the tools that have none (AGY, Grok, MCODE): the person's "I have logged in" mark. The mark is kept in
   the state folder as the tool id and the time, nothing else.
 
+The page asks every 5 seconds while it is open, and each look runs ``--version`` and the status commands, so a look is
+kept for ``CACHE_TTL_S`` (30 seconds) and used again. It is read again at once when the person presses 「重新檢查」
+(``force``), changes a mark, opens an install or login terminal or tries a tool (``invalidate``). A kept look is the row
+this module made (no output of a command is in it); it is kept in memory only and is for one search path, one tool and one mark.
+
 No tool's own login folder is opened, listed or read here. The commands run with the same plain environment the
 terminals get, from the root folder, with no input.
 """
@@ -21,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -31,6 +37,7 @@ from .runtime import daemon
 
 VERSION_TIMEOUT_S = 10.0
 STATUS_TIMEOUT_S = 20.0
+CACHE_TTL_S = 30.0
 VERSION_LINE_MAX = 200          # of the first line of `--version`; a longer line is not a version
 
 
@@ -41,6 +48,16 @@ def _mark_problem(key, value):
             and not isinstance(value["at"], bool)):
         return "只能記錄時間"
     return None
+
+
+_cache: dict = {}               # (search path, tool id, mark time) -> (time it was read, row)
+_cache_lock = threading.Lock()
+
+
+def invalidate() -> None:
+    """Forget every kept look: the next look reads the tools again."""
+    with _cache_lock:
+        _cache.clear()
 
 
 store = GuardedJsonStore("setup_marks.json", "AI 工具登入標記", _mark_problem)
@@ -93,6 +110,7 @@ def set_mark(tool_id, done: bool) -> Optional[float]:
         else:
             data.pop(tool_id, None)
         store.save(data)
+    invalidate()
     return data[tool_id]["at"] if done else None
 
 
@@ -125,16 +143,32 @@ def _inspect(tool: ai_tools.Tool, marked_at: Optional[float]) -> dict:
     return row
 
 
-def report(conf, marks: Optional[dict] = None) -> list[dict]:
+def report(conf, marks: Optional[dict] = None, *, force: bool = False) -> list[dict]:
     """One row per tool the start-up page lists (a hidden tool only while it is switched on), in the registry's order.
-    ``marks`` is {tool id: time}; None reads the state folder. The rows carry no command and no path."""
+    ``marks`` is {tool id: time}; None reads the state folder. ``force`` reads the tools again whatever was kept. The rows
+    carry no command and no path."""
     marks = read_marks() if marks is None else marks
     shown = set(ai_tools.visible_ids(conf))
     tools = [t for t in ai_tools.REGISTRY if t.id in ai_tools.setup_ids() and t.id in shown]
     if not tools:
         return []
-    with ThreadPoolExecutor(max_workers=len(tools)) as pool:
-        return list(pool.map(lambda t: _inspect(t, marks.get(t.id)), tools))
+    where, now = daemon.cli_search_path(), time.monotonic()
+    keys = {t.id: (where, t.id, marks.get(t.id)) for t in tools}
+    with _cache_lock:
+        kept = {} if force or CACHE_TTL_S <= 0 else {
+            t.id: _cache[keys[t.id]][1] for t in tools if keys[t.id] in _cache and now - _cache[keys[t.id]][0] < CACHE_TTL_S}
+    stale = [t for t in tools if t.id not in kept]
+    if stale:
+        with ThreadPoolExecutor(max_workers=len(stale)) as pool:
+            fresh = dict(zip((t.id for t in stale), pool.map(lambda t: _inspect(t, marks.get(t.id)), stale)))
+        with _cache_lock:
+            if CACHE_TTL_S > 0:
+                for tid, row in fresh.items():
+                    _cache[keys[tid]] = (now, row)
+                for key in [k for k, v in _cache.items() if now - v[0] >= CACHE_TTL_S]:
+                    del _cache[key]
+        kept.update(fresh)
+    return [dict(kept[t.id]) for t in tools]
 
 
-__all__ = ["report", "set_mark", "read_marks", "parse_version", "find_binary", "StoreError"]
+__all__ = ["report", "invalidate", "set_mark", "read_marks", "parse_version", "find_binary", "StoreError"]

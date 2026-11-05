@@ -243,7 +243,23 @@ safe launch; none of it is claimed here, and the pass for a full card says so fi
   path, runs `<tool> --version` and, for Claude Code and Codex only, their own status command; for the status command only the
   exit code is used (0 is logged in) and its output goes to nowhere (not captured, not stored, not served). For AGY, Grok and
   MCODE the person's "I have logged in" mark is the only evidence; it is kept in `setup_marks.json` as the tool id and a time.
-  No tool's own login folder is opened or listed by VBear.
+  No tool's own login folder is opened or listed by VBear. A look is kept in memory for 30 seconds (the page asks every 5
+  seconds); the person's recheck, a mark, a terminal and a try make the next look fresh. A kept look is the row, never output.
+- **「試一下」 sends one fixed sentence and keeps none of the answer (v0.12).** `POST /api/setup/tools/<id>/try` takes the tool
+  in the path and `{"confirmed": true}` (the page sends it only after it showed "about under US$0.01" and the person pressed
+  again); no sentence, flag, folder or environment comes from the request. `vbear/setup_try.py` starts the tool headless through
+  `headless_cli.run`: a new empty scratch folder as its working directory (removed afterwards), a new process group that is
+  killed however the call ends (an unconfirmed group writes `setup-try.blocked` and no further try starts), the plain
+  environment of that runner (PATH, HOME, USER, LOGNAME, LANG, TMPDIR), 60 seconds, at most 1 MiB read, one try at a time.
+  Claude Code gets `--safe-mode --setting-sources "" --tools "" --strict-mcp-config`, a small budget and no session kept;
+  Codex runs without the person's config and rules, read-only, shell and MCP off; MCODE with permission off and one step; Grok
+  with one turn and web search, memory, plan and subagents off. AGY has no flag for fewer tools that was checked, so it gets
+  the sentence only (it may use tools; the sentence asks for none). The answer is read to see whether the tool answered and
+  dropped: not stored, logged or passed on; neither is anything it prints about the account. The page gets success, not logged
+  in (any failed exit), timeout, not found or odd answer, in plain words. The cost goes into `setup-try.json` (tool, times,
+  cap, cost: nothing else) and counts toward the same day as the meetings, the staffing meetings and the chats: Claude Code's
+  reported cost, else US$0.01; a try that started a program is booked even when it fails. When the day cannot take another
+  US$0.01, or the record cannot be read, nothing starts.
 - **Only Claude Code takes the instructions on the command line.** The card's instructions (its own text, else the
   position's default) go in as a single `--append-system-prompt` argument: control, format and separator characters other
   than a line break or tab are removed, it is cut to 2000 characters, and a text that starts with `-` gets a sentence in

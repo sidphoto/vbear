@@ -40,6 +40,7 @@ from . import annotations
 from . import agent_launch
 from . import ai_tools
 from . import ai_tool_status
+from . import setup_try
 from . import agent_profiles
 from . import position_guide
 from . import armory
@@ -638,7 +639,10 @@ def make_handler(console: Console):
                 if path == "/api/config":
                     return self._json(self._config_view())
                 if path == "/api/setup/tools":
-                    return self._setup_tools()
+                    force = parse_qs(url.query).get("force", ["0"])[0] == "1"
+                    if force and self.headers.get("X-VBear") != "1":
+                        return self._error(403, "重新檢查需要主控台標頭")
+                    return self._setup_tools(force)
                 if path == "/api/tasks":
                     return self._json({"ok": True, "tasks": self._with_pickup(tasks.list_tasks())})
                 if path == "/api/task-templates":
@@ -849,6 +853,8 @@ def make_handler(console: Console):
                     return self._setup_terminal(self._body_strict())
                 if path == "/api/setup/settle":
                     return self._setup_settle()
+                if path.startswith("/api/setup/tools/") and path.endswith("/try"):
+                    return self._setup_try(unquote(path[len("/api/setup/tools/"):-len("/try")]), self._body_strict())
                 if path.startswith("/api/setup/tools/") and path.endswith("/marker"):
                     return self._setup_marker(unquote(path[len("/api/setup/tools/"):-len("/marker")]), self._body_strict())
                 if path == "/api/native/claude-verification":
@@ -1357,14 +1363,14 @@ def make_handler(console: Console):
 
         # The start-up page (v0.12): what each AI tool is, the "I have logged in" mark, the install and login terminals -----
 
-        def _setup_state(self, conf: dict) -> dict:
-            rows = ai_tool_status.report(conf)
+        def _setup_state(self, conf: dict, force: bool = False) -> dict:
+            rows = ai_tool_status.report(conf, force=force)
             return {"ok": True, "tools": rows, "any_ready": any(r["ready"] for r in rows),
                     "setup_done": conf.get("setup_done") is True, "setup_notice": conf.get("setup_notice") is True}
 
-        def _setup_tools(self):
+        def _setup_tools(self, force=False):
             try:
-                return self._json(self._setup_state(console.store.conf))
+                return self._json(self._setup_state(console.store.conf, force))
             except ai_tool_status.StoreError as exc:
                 return self._error(503, str(exc))
 
@@ -1422,6 +1428,26 @@ def make_handler(console: Console):
                 return self._error(503, str(exc))
             return self._json({"ok": True, "tool": tool_id, "marked": body["done"], "marked_at": at})
 
+        def _setup_try(self, tool_id: str, body):
+            """「試一下」: one fixed short sentence to one installed AI tool (vbear/setup_try.py). The body is
+            {"confirmed": true}, sent by the page only after it showed the estimate and the person pressed again; the
+            tool is named in the path and nothing else is taken from the request. Costs go on the day's limit."""
+            problem = self._setup_tool_problem(tool_id)
+            if problem:
+                return self._error(*problem)
+            if not isinstance(body, dict) or set(body) - {"confirmed"}:
+                return self._error(400, "請求只能有一個 confirmed 欄位")
+            if "confirmed" in body and type(body["confirmed"]) is not bool:
+                return self._error(400, "confirmed 必須是布林值")
+            if body.get("confirmed") is not True:
+                return self._error(409, f"試一下會送一句很短的話給這個 AI 工具，{setup_try.ESTIMATE_TEXT}，"
+                                        "並計入每天上限。請先看過預估再確認。")
+            try:
+                result = setup_try.attempt(tool_id, lambda: console.meeting_runner().ledger(console.store.conf))
+            except setup_try.TryRefused as exc:
+                return self._error(exc.status, str(exc))
+            return self._json(result)
+
         def _setup_terminal(self, body):
             """Open the install or the login terminal of one AI tool. The browser names the tool and the action (and, for a
             tool with two ways to log in, which); the line that is typed comes from vbear/ai_tools.py and is typed by the
@@ -1454,6 +1480,7 @@ def make_handler(console: Console):
                 return self._error(503, str(exc))
             except rt.native.NativeRuntimeError as exc:
                 return self._error(400, str(exc))
+            ai_tool_status.invalidate()            # the person is about to install or log in: the next look reads the tools again
             console.store.live(force=True)
             return self._json({"ok": True, "session": info, "command": (info.get("setup") or {}).get("command")})
 
