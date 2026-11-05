@@ -1,0 +1,737 @@
+"""What VBear keeps of a chat with a role card (P36). The daemon is the only writer.
+
+  <state>/chats/<chat_id>/chat.json       0600, written once: {v, id, profile_id, created_at, claude_session_id}
+  <state>/chats/<chat_id>/events.jsonl    0600, append-only: one event per line, {seq, at, kind, ...}, fsync'd
+  <state>/chat-spend/<chat_id>.json       0600: what a deleted chat cost in its last days, for the day's limit
+  <state>/chat-work/<hash of the card>/   0700: the role card's work folder (the CLI's cwd), kept when a chat goes
+
+Every event kind has a fixed set of fields (``KINDS``); a record that does not fit is refused before anything is
+written, and a file that does not read back cleanly (a cut last line, a field that does not belong, a sequence that
+skips) is reported and never appended to. The text of a message, a reply, a tool's result and a card's input goes
+through scan/document.redact before it is written and is cut to a fixed length; the live chat shows what the CLI
+printed, the record keeps the masked form.
+
+A turn costs what the CLI reported for it, or, when it reported nothing usable (stopped, timed out, a daemon that
+stopped mid-turn), the turn's cap; while it runs it counts at its cap. Those turns are what the day's limit counts,
+together with the meetings and the staffing meetings (``spend_kind``, ``day_spent``).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import secrets
+import stat
+import uuid
+from dataclasses import dataclass, field
+from decimal import Decimal
+from pathlib import Path
+
+from .. import config as cfg, meetings as mt, strictjson
+from ..numbers import finite_real
+from ..scan.document import redact
+from . import chat_protocol as cp
+
+CHATS = "chats"
+SPEND = "chat-spend"
+WORK = "chat-work"
+CHAT_JSON = "chat.json"
+EVENTS = "events.jsonl"
+CHAT_RE = re.compile(r"^c-[0-9a-f]{16}\Z")
+CARD_RE = re.compile(r"^k-[0-9a-f]{16}\Z")
+PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")      # agent_profiles.VALID_PROFILE_ID_RE
+UUID_RE = cp.UUID_RE
+
+MAX_CHATS = 200
+MAX_EVENTS_BYTES = 8 << 20             # one chat's events file
+RESERVE_BYTES = 64 << 10               # kept for the records that close a turn or a process
+MAX_LINE = 1 << 20
+MAX_USER = cp.MAX_TEXT_BYTES           # a person's message, refused above (the daemon checks first)
+MAX_REPLY = 64_000                     # characters of a reply kept
+MAX_EXCERPT = 4_000                    # characters of a tool's result, a card's field, a summary kept
+MAX_SHORT = 200
+SPEND_KEEP = 3 * 86400                 # a deleted chat's turns kept this long for the day's limit
+DEFAULT_PER_TURN = Decimal("0.50")
+PER_TURN_CAP = Decimal("5")
+EVENT_LIMITS = strictjson.Limits(MAX_LINE, 100_000, 16, None)
+
+
+class ChatStoreError(Exception):
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.code = code
+        self.message = message or code
+
+
+# ---- the fields of each event ------------------------------------------------------------------------------------
+
+def _turn(v):
+    return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1_000_000
+
+
+def _short(v):
+    return isinstance(v, str) and 0 < len(v) <= MAX_SHORT
+
+
+def _short_or_none(v):
+    return v is None or _short(v)
+
+
+def _money_text(v):
+    return isinstance(v, str) and mt.money(v) is not None
+
+
+def _bool(v):
+    return isinstance(v, bool)
+
+
+def _text(limit):
+    return lambda v: isinstance(v, str) and len(v) <= limit
+
+
+def _total(v):
+    return v is None or (finite_real(v) is not None and v >= 0)
+
+
+def _one_of(*values):
+    return lambda v: v in values
+
+
+def _fields(v):
+    return isinstance(v, list) and len(v) <= 64 and all(isinstance(x, str) and len(x) <= 64 for x in v)
+
+
+def _input(v):
+    return isinstance(v, dict) and len(v) <= 64 and all(isinstance(k, str) and len(k) <= 64 for k in v)
+
+
+def _returncode(v):
+    return v is None or (isinstance(v, int) and not isinstance(v, bool) and -255 <= v <= 255)
+
+
+def _turn_or_none(v):
+    return v is None or _turn(v)
+
+
+_REASONS = ("result", "stopped", "timeout", "process_exit", "violation", "daemon_restart", "error", "not_sent")
+
+# kind -> {field: check}; ``_MASK`` names the text fields that are masked and cut, ``_ESSENTIAL`` the kinds that may
+# use the reserve at the end of a full file (so that a turn can always be closed at its cost).
+KINDS = {
+    "chat_created": {"profile_id": lambda v: isinstance(v, str) and bool(PROFILE_ID_RE.match(v))},
+    "user_message": {"turn": _turn, "text": lambda v: isinstance(v, str) and 0 < len(v.encode("utf-8", "surrogatepass")) <= MAX_USER},
+    "turn_started": {"turn": _turn, "cap_usd": _money_text},
+    "process_started": {"mode": _one_of("new", "resume"), "budget_usd": _money_text},
+    "session_ready": {"claude_code_version": _short, "permission_mode": _short, "model": _short},
+    "reply": {"turn": _turn, "text": _text(MAX_REPLY), "truncated": _bool},
+    "tool_call": {"turn": _turn, "tool_use_id": _short, "tool": _short, "summary": _text(MAX_EXCERPT)},
+    "tool_result": {"turn": _turn, "tool_use_id": _short, "tool": _short, "is_error": _bool,
+                    "text": _text(MAX_EXCERPT), "truncated": _bool, "source": _short},
+    "card": {"turn": _turn, "card_id": lambda v: isinstance(v, str) and bool(CARD_RE.match(v)), "tool": _short,
+             "input": _input, "editable": _short_or_none, "state": _one_of("asked"), "reason": _text(MAX_SHORT)},
+    "card_decision": {"turn": _turn, "card_id": lambda v: isinstance(v, str) and bool(CARD_RE.match(v)),
+                      "decision": _one_of("allow", "deny", "modify", "expired", "cancelled"),
+                      "value": lambda v: v is None or (isinstance(v, str) and len(v) <= MAX_EXCERPT)},
+    "auto_allowed": {"turn": _turn, "tool_use_id": _short_or_none, "tool": _short, "summary": _text(MAX_EXCERPT),
+                     "reason": _text(MAX_SHORT)},
+    "denied": {"turn": _turn, "tool_use_id": _short_or_none, "tool": _short, "summary": _text(MAX_EXCERPT),
+               "reason": _text(MAX_SHORT), "by": _one_of("vbear", "cli")},
+    "turn_ended": {"turn": _turn, "cost_usd": _money_text, "reported": _bool, "total_usd": _total,
+                   "reason": _one_of(*_REASONS), "subtype": _short_or_none, "is_error": _bool},
+    "process_ended": {"reason": _short, "returncode": _returncode},
+    "anomaly": {"event_type": _short, "fields": _fields},
+    "error": {"turn": _turn_or_none, "message": _text(MAX_EXCERPT)},
+}
+_MASK = {"user_message": {"text": None}, "reply": {"text": MAX_REPLY}, "tool_result": {"text": MAX_EXCERPT},
+         "tool_call": {"summary": MAX_EXCERPT}, "auto_allowed": {"summary": MAX_EXCERPT},
+         "denied": {"summary": MAX_EXCERPT}, "card_decision": {"value": MAX_EXCERPT}, "error": {"message": MAX_EXCERPT}}
+_ESSENTIAL = frozenset({"turn_ended", "process_ended", "card_decision", "error"})
+
+
+def _masked(kind: str, data: dict) -> dict:
+    """``data`` with its text fields masked and cut (setting ``truncated`` where the kind has it)."""
+    out = dict(data)
+    for name, limit in _MASK.get(kind, {}).items():
+        value = out.get(name)
+        if not isinstance(value, str):
+            continue
+        value = redact(value)
+        if limit is not None and len(value) > limit:
+            value = value[:limit]
+            if "truncated" in KINDS[kind]:
+                out["truncated"] = True
+        out[name] = value
+    if kind == "card" and isinstance(out.get("input"), dict):
+        out["input"] = {k: (redact(v)[:MAX_EXCERPT] if isinstance(v, str) else v) for k, v in out["input"].items()}
+    return out
+
+
+def record_problem(rec) -> str | None:
+    """Why one stored event does not fit (None when it does)."""
+    if not isinstance(rec, dict):
+        return "不是物件"
+    kind = rec.get("kind")
+    spec = KINDS.get(kind) if isinstance(kind, str) else None
+    if spec is None:
+        return "未知的事件種類"
+    seq, at = rec.get("seq"), rec.get("at")
+    if not (isinstance(seq, int) and not isinstance(seq, bool) and seq >= 1):
+        return "seq 不對"
+    if finite_real(at) is None or at < 0:
+        return "時間不對"
+    if set(rec) != set(spec) | {"seq", "at", "kind"}:
+        return f"{kind} 的欄位不符"
+    for name, check in spec.items():
+        if not check(rec[name]):
+            return f"{kind}.{name} 不符"
+    return None
+
+
+# ---- paths -------------------------------------------------------------------------------------------------------
+
+def _uid() -> int:
+    return os.getuid()
+
+
+def _check_id(chat_id) -> str:
+    if not isinstance(chat_id, str) or not CHAT_RE.match(chat_id):
+        raise ChatStoreError("bad_request", "chat_id 不符格式")
+    return chat_id
+
+
+def _private_dir(path: Path, *, create: bool) -> Path:
+    """``path`` as a folder of ours, 0700, that is not a link (created when asked and missing)."""
+    if create:
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise ChatStoreError("storage", f"無法建立資料夾：{path.name}（{exc.strerror}）") from None
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        raise ChatStoreError("not_found", "找不到這個聊天") from None
+    except OSError as exc:
+        raise ChatStoreError("storage", f"無法讀取資料夾：{path.name}（{exc.strerror}）") from None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != _uid() or st.st_mode & 0o077:
+        raise ChatStoreError("unsafe_path", f"不是本人擁有的 0700 一般資料夾：{path.name}")
+    return path
+
+
+def _root(base) -> Path:
+    base = Path(base)
+    if not base.is_dir():
+        raise ChatStoreError("storage", "找不到 VBear 的資料夾")
+    return base
+
+
+def chats_dir(base, *, create: bool = False) -> Path:
+    return _private_dir(_root(base) / CHATS, create=create)
+
+
+def chat_dir(base, chat_id) -> Path:
+    return _private_dir(chats_dir(base) / _check_id(chat_id), create=False)
+
+
+def _open_file(directory: Path, name: str, flags: int) -> int:
+    """A 0600 regular file of ours in ``directory``, opened without following a link."""
+    try:
+        fd = os.open(directory / name, flags | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise ChatStoreError("damaged", f"聊天紀錄缺少 {name}") from None
+    except OSError as exc:
+        raise ChatStoreError("unsafe_path", f"無法開啟 {name}（{exc.strerror}）") from None
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != _uid() or st.st_mode & 0o077:
+        os.close(fd)
+        raise ChatStoreError("unsafe_path", f"{name} 不是本人擁有的 0600 一般檔案")
+    return fd
+
+
+def _create_file(path: Path, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        _write_all(fd, data)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        os.unlink(path)
+        raise
+    os.close(fd)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError(5, "寫入沒有進展")
+        view = view[n:]
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _encode(rec: dict) -> bytes:
+    try:
+        return json.dumps(rec, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+    except (UnicodeEncodeError, ValueError, TypeError):
+        raise ChatStoreError("bad_record", "內容無法存成 JSON（含有無法編碼的字元）") from None
+
+
+# ---- a chat --------------------------------------------------------------------------------------------------------
+
+_CHAT_FIELDS = {"v", "id", "profile_id", "created_at", "claude_session_id"}
+
+
+def _chat_problem(rec, chat_id: str) -> str | None:
+    if not isinstance(rec, dict) or set(rec) != _CHAT_FIELDS:
+        return "欄位不符"
+    if rec["v"] != 1 or rec["id"] != chat_id:
+        return "版本或編號不符"
+    if not (isinstance(rec["profile_id"], str) and PROFILE_ID_RE.match(rec["profile_id"])):
+        return "員工編號不符"
+    if finite_real(rec["created_at"]) is None:
+        return "建立時間不符"
+    if not (isinstance(rec["claude_session_id"], str) and UUID_RE.match(rec["claude_session_id"])):
+        return "對話編號不符"
+    return None
+
+
+def list_ids(base) -> list[str]:
+    try:
+        root = chats_dir(base)
+    except ChatStoreError as exc:
+        if exc.code == "not_found":
+            return []
+        raise
+    try:
+        names = os.listdir(root)
+    except OSError as exc:
+        raise ChatStoreError("storage", f"無法列出聊天（{exc.strerror}）") from None
+    return sorted(n for n in names if CHAT_RE.match(n))
+
+
+def create(base, profile_id, *, now: float) -> dict:
+    """A new chat with ``profile_id``: its folder, chat.json and the first event. No process is started."""
+    if not isinstance(profile_id, str) or not PROFILE_ID_RE.match(profile_id):
+        raise ChatStoreError("bad_request", "profile_id 不符格式")
+    root = chats_dir(base, create=True)
+    if len(list_ids(base)) >= MAX_CHATS:
+        raise ChatStoreError("too_many", f"聊天最多 {MAX_CHATS} 個，請先刪掉不用的")
+    chat_id = "c-" + secrets.token_hex(8)
+    rec = {"v": 1, "id": chat_id, "profile_id": profile_id, "created_at": now, "claude_session_id": str(uuid.uuid4())}
+    d = root / chat_id
+    try:
+        os.mkdir(d, 0o700)
+        _create_file(d / CHAT_JSON, _encode(rec))
+        first = {"seq": 1, "at": now, "kind": "chat_created", "profile_id": profile_id}
+        _create_file(d / EVENTS, _encode(first))
+        _fsync_dir(d)
+        _fsync_dir(root)
+    except FileExistsError:
+        raise ChatStoreError("storage", "聊天編號重複，請再試一次") from None
+    except OSError as exc:
+        raise ChatStoreError("storage", f"無法建立聊天紀錄（{exc.strerror}）") from None
+    return rec
+
+
+def load(base, chat_id) -> dict:
+    d = chat_dir(base, chat_id)
+    fd = _open_file(d, CHAT_JSON, os.O_RDONLY)
+    try:
+        raw = strictjson.read_fd(fd, strictjson.MANIFEST.unit_bytes)
+    except Exception:
+        raise ChatStoreError("damaged", "聊天紀錄讀不出來") from None
+    finally:
+        os.close(fd)
+    parsed = strictjson.loads_object(raw, strictjson.MANIFEST)
+    problem = "不是正確的 JSON" if not parsed.ok else _chat_problem(parsed.value, chat_id)
+    if problem:
+        raise ChatStoreError("damaged", f"聊天紀錄不符結構（{problem}）")
+    return parsed.value
+
+
+@dataclass
+class Events:
+    records: list
+    problem: str = ""                  # why the file stops reading cleanly here ("" when it does not)
+    last_seq: int = 0                  # of the last good record in the file
+    size: int = 0
+
+
+def _read_fd(fd: int, after: int = 0, limit: int | None = None) -> Events:
+    out = Events([])
+    expect = 1
+    for parsed in strictjson.iter_json_lines(fd, EVENT_LIMITS):
+        if not parsed.ok:
+            out.problem = parsed.problem or "有一行不是正確的 JSON"
+            break
+        rec = parsed.value
+        problem = record_problem(rec)
+        if problem is None and rec["seq"] != expect:
+            problem = "seq 不連續"
+        if problem is None and expect == 1 and rec["kind"] != "chat_created":
+            problem = "第一筆不是 chat_created"
+        if problem:
+            out.problem = f"第 {expect} 筆：{problem}"
+            break
+        expect += 1
+        out.last_seq = rec["seq"]
+        if rec["seq"] > after and (limit is None or len(out.records) < limit):
+            out.records.append(rec)
+    if not out.problem and out.last_seq == 0:
+        out.problem = "沒有任何事件"
+    out.size = os.fstat(fd).st_size
+    return out
+
+
+def read_events(base, chat_id, after: int = 0, limit: int | None = None) -> Events:
+    """The events with seq > ``after`` (at most ``limit``), up to the first that does not read cleanly."""
+    fd = _open_file(chat_dir(base, chat_id), EVENTS, os.O_RDONLY)
+    try:
+        return _read_fd(fd, after, limit)
+    finally:
+        os.close(fd)
+
+
+class ChatLog:
+    """The events file of one chat, open for appending. Refused when it does not read back cleanly."""
+
+    def __init__(self, base, chat_id):
+        self.chat_id = _check_id(chat_id)
+        self.fd = _open_file(chat_dir(base, chat_id), EVENTS, os.O_RDWR | os.O_APPEND)
+        try:
+            ev = _read_fd(self.fd)
+        except BaseException:
+            os.close(self.fd)
+            raise
+        if ev.problem:
+            os.close(self.fd)
+            self.fd = -1
+            raise ChatStoreError("damaged", f"聊天紀錄有問題，不能再寫入（{ev.problem}）")
+        self.seq = ev.last_seq
+        self.size = ev.size
+
+    def room(self) -> int:
+        """Bytes left before the file is full for anything but the records that close a turn."""
+        return MAX_EVENTS_BYTES - RESERVE_BYTES - self.size
+
+    def append(self, kind: str, data: dict, *, now: float) -> dict:
+        if self.fd < 0:
+            raise ChatStoreError("storage", "聊天紀錄已關閉")
+        if kind not in KINDS:
+            raise ChatStoreError("bad_record", f"未知的事件種類：{kind}")
+        if kind == "user_message" and not KINDS[kind]["text"](data.get("text")):
+            raise ChatStoreError("bad_record", "訊息是空的或太長")
+        rec = {"seq": self.seq + 1, "at": now, "kind": kind, **_masked(kind, data)}
+        problem = record_problem(rec)
+        if problem:
+            raise ChatStoreError("bad_record", f"拒絕寫入不符結構的聊天事件（{problem}）")
+        line = _encode(rec)
+        limit = MAX_EVENTS_BYTES if kind in _ESSENTIAL else MAX_EVENTS_BYTES - min(RESERVE_BYTES, MAX_EVENTS_BYTES // 4)
+        if self.size + len(line) > limit:
+            raise ChatStoreError("full", "這個聊天的紀錄已經滿了，請開新的聊天")
+        try:
+            _write_all(self.fd, line)
+            os.fsync(self.fd)
+        except OSError as exc:
+            raise ChatStoreError("storage", f"無法寫入聊天紀錄（{exc.strerror}）") from None
+        self.seq += 1
+        self.size += len(line)
+        return rec
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+
+# ---- what the events say ------------------------------------------------------------------------------------------
+
+@dataclass
+class Turn:
+    turn: int
+    cap: Decimal
+    started_at: float
+    cost: Decimal | None = None        # None while the turn is open
+    ended_at: float | None = None
+    reported: bool = False
+
+
+@dataclass
+class ChatState:
+    turns: list = field(default_factory=list)
+    last_total: float | None = None    # the last cumulative total the CLI reported for this session
+    session_ready: bool = False        # a process of this session has started once (later ones resume)
+    process_open: bool = False         # a process_started without its process_ended
+    last_seq: int = 0
+
+    @property
+    def next_turn(self) -> int:
+        return (self.turns[-1].turn + 1) if self.turns else 1
+
+    @property
+    def open_turn(self) -> Turn | None:
+        return next((t for t in self.turns if t.cost is None), None)
+
+
+def derive(records) -> ChatState:
+    st = ChatState()
+    by_turn = {}
+    for rec in records:
+        kind = rec["kind"]
+        st.last_seq = rec["seq"]
+        if kind == "turn_started":
+            t = Turn(rec["turn"], mt.money(rec["cap_usd"]), rec["at"])
+            by_turn[t.turn] = t
+            st.turns.append(t)
+        elif kind == "turn_ended" and rec["turn"] in by_turn:
+            t = by_turn[rec["turn"]]
+            t.cost, t.ended_at, t.reported = mt.money(rec["cost_usd"]), rec["at"], rec["reported"]
+            if rec["reported"] and rec["total_usd"] is not None:
+                st.last_total = float(rec["total_usd"])
+        elif kind == "session_ready":
+            st.session_ready = True
+        elif kind == "process_started":
+            st.process_open = True
+        elif kind == "process_ended":
+            st.process_open = False
+    return st
+
+
+def recover(base, *, now: float) -> list[str]:
+    """After the daemon starts: close every turn and process a stopped daemon left open, each turn at its cap (the
+    CLI's own report of it is lost). Returns the chats it changed; a chat that does not read cleanly is left as it
+    is (and refuses new messages)."""
+    changed = []
+    for chat_id in list_ids(base):
+        try:
+            log = ChatLog(base, chat_id)
+        except ChatStoreError:
+            continue
+        try:
+            st = derive(read_events(base, chat_id).records)
+            t = st.open_turn
+            if t is None and not st.process_open:
+                continue
+            if t is not None:
+                log.append("turn_ended", {"turn": t.turn, "cost_usd": mt.fmt(t.cap), "reported": False,
+                                          "total_usd": None, "reason": "daemon_restart", "subtype": None,
+                                          "is_error": True}, now=now)
+            if st.process_open:
+                log.append("process_ended", {"reason": "daemon_restart", "returncode": None}, now=now)
+            changed.append(chat_id)
+        except ChatStoreError:
+            continue
+        finally:
+            log.close()
+    return changed
+
+
+# ---- deleting a chat ---------------------------------------------------------------------------------------------
+
+def spend_dir(base, *, create: bool = False) -> Path:
+    return _private_dir(_root(base) / SPEND, create=create)
+
+
+def _spend_turns(st: ChatState) -> list[dict]:
+    """The turns in the shape meetings.daily_spent counts (a running turn at its cap)."""
+    out = []
+    for t in st.turns:
+        if t.cost is None:
+            out.append({"state": "running", "started_at": t.started_at, "ended_at": None,
+                        "evidence": {"cost_usd": "0"}, "cap_usd": mt.fmt(t.cap)})
+        else:
+            out.append({"state": "done", "started_at": t.started_at, "ended_at": t.ended_at,
+                        "evidence": {"cost_usd": mt.fmt(t.cost)}, "cap_usd": mt.fmt(t.cap)})
+    return out
+
+
+def delete(base, chat_id, *, now: float) -> None:
+    """Remove a chat's record; what its recent turns cost stays in chat-spend/ until it no longer counts toward any
+    day's limit. Refused while a turn is open. The role card's work folder is kept."""
+    d = chat_dir(base, chat_id)
+    ev = read_events(base, chat_id)
+    st = derive(ev.records)
+    if st.open_turn is not None or st.process_open:
+        raise ChatStoreError("busy", "這個聊天還在進行，請先停止")
+    names = set(os.listdir(d))
+    if names - {CHAT_JSON, EVENTS}:
+        raise ChatStoreError("damaged", "聊天資料夾裡有不認得的檔案，請人工檢查後再刪")
+    keep = [t for t in _spend_turns(st) if (t["ended_at"] or t["started_at"]) >= now - SPEND_KEEP]
+    if keep:
+        sd = spend_dir(base, create=True)
+        tomb = {"v": 1, "id": chat_id, "deleted_at": now, "turns": keep}
+        try:
+            _create_file(sd / f"{chat_id}.json", _encode(tomb))
+            _fsync_dir(sd)
+        except FileExistsError:
+            raise ChatStoreError("storage", "這個聊天已經刪過") from None
+        except OSError as exc:
+            raise ChatStoreError("storage", f"無法保存刪除聊天的花費（{exc.strerror}）") from None
+    try:
+        for name in (EVENTS, CHAT_JSON):
+            if name in names:
+                os.unlink(d / name)
+        os.rmdir(d)
+        _fsync_dir(d.parent)
+    except OSError as exc:
+        raise ChatStoreError("storage", f"無法刪除聊天紀錄（{exc.strerror}）") from None
+    _prune_spend(base, now)
+
+
+def _prune_spend(base, now: float) -> None:
+    try:
+        sd = spend_dir(base)
+        names = os.listdir(sd)
+    except (ChatStoreError, OSError):
+        return
+    for name in names:
+        chat_id = name[:-5] if name.endswith(".json") else ""
+        if not CHAT_RE.match(chat_id):
+            continue
+        try:
+            rec = _load_spend(base, chat_id)
+        except ChatStoreError:
+            continue
+        if all((t["ended_at"] or t["started_at"]) < now - SPEND_KEEP for t in rec["turns"]):
+            try:
+                os.unlink(sd / name)
+            except OSError:
+                pass
+
+
+def _spend_problem(rec, chat_id: str) -> str | None:
+    if not isinstance(rec, dict) or set(rec) != {"v", "id", "deleted_at", "turns"} or rec["v"] != 1 \
+            or rec["id"] != chat_id or not isinstance(rec["turns"], list) or len(rec["turns"]) > 100_000:
+        return "結構不符"
+    for t in rec["turns"]:
+        if not (isinstance(t, dict) and set(t) == {"state", "started_at", "ended_at", "evidence", "cap_usd"}
+                and t["state"] in ("running", "done") and finite_real(t["started_at"]) is not None
+                and (t["ended_at"] is None or finite_real(t["ended_at"]) is not None)
+                and isinstance(t["evidence"], dict) and _money_text(t["evidence"].get("cost_usd"))
+                and _money_text(t["cap_usd"])):
+            return "回合不符"
+    return None
+
+
+def _load_spend(base, chat_id: str) -> dict:
+    sd = spend_dir(base)
+    fd = _open_file(sd, f"{chat_id}.json", os.O_RDONLY)
+    try:
+        raw = strictjson.read_fd(fd, 32 << 20)
+    except Exception:
+        raise ChatStoreError("damaged", "刪除聊天的花費紀錄讀不出來") from None
+    finally:
+        os.close(fd)
+    parsed = strictjson.loads_object(raw, strictjson.Limits(32 << 20, 2_000_000, 8, 32 << 20))
+    if not parsed.ok or _spend_problem(parsed.value, chat_id):
+        raise ChatStoreError("damaged", "刪除聊天的花費紀錄不符結構")
+    return parsed.value
+
+
+def _spend_ids(base) -> list[str]:
+    try:
+        names = os.listdir(spend_dir(base))
+    except ChatStoreError as exc:
+        if exc.code == "not_found":
+            return []
+        raise
+    except OSError as exc:
+        raise ChatStoreError("storage", f"無法列出刪除聊天的花費（{exc.strerror}）") from None
+    return sorted(n[:-5] for n in names if n.endswith(".json") and CHAT_RE.match(n[:-5]))
+
+
+# ---- the day's spending ------------------------------------------------------------------------------------------
+
+def limits_from(conf) -> dict[str, Decimal]:
+    """``chat_limits.per_turn_usd`` from config when it is a number above zero and at most PER_TURN_CAP, else the
+    default."""
+    stored = conf.get("chat_limits") if isinstance(conf, dict) else None
+    value = stored.get("per_turn_usd") if isinstance(stored, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        amount = mt.money(value)
+        if amount is not None and Decimal("0.01") <= amount <= PER_TURN_CAP:
+            return {"per_turn_usd": amount}
+    return {"per_turn_usd": DEFAULT_PER_TURN}
+
+
+def spend_record(base, chat_id) -> dict:
+    """A chat, or what a deleted one left, as a record meetings.daily_spent can count: {"turns": [...]}, each turn
+    counted at its cap while it runs. A chat whose events stop reading cleanly counts what reads."""
+    try:
+        ev = read_events(base, chat_id)
+    except ChatStoreError as exc:
+        if exc.code != "not_found":
+            raise
+        return {"turns": _load_spend(base, chat_id)["turns"]}
+    return {"turns": _spend_turns(derive(ev.records))}
+
+
+def turn_cap(record: dict, turn: dict) -> Decimal:
+    return mt.money(turn.get("cap_usd")) or Decimal(0)
+
+
+def spend_ids(base) -> list[str]:
+    return sorted(set(list_ids(base)) | set(_spend_ids(base)))
+
+
+def day_spent(base, now: float) -> Decimal:
+    """What the chats' turns of today (the local date) cost, the deleted chats' included."""
+    records = []
+    for chat_id in spend_ids(base):
+        try:
+            records.append(spend_record(base, chat_id))
+        except ChatStoreError:
+            continue
+    return mt.daily_spent(records, now, turn_cap)
+
+
+def spend_kind():
+    """(ids, load, per_call) for board_engine.spend_kinds: the chats count toward the same day's limit as the
+    meetings and the staffing meetings. Reads <state> as the console sees it."""
+
+    def ids():
+        try:
+            return spend_ids(cfg.state_dir())
+        except ChatStoreError as exc:
+            if exc.code == "not_found":
+                return []
+            raise mt.MeetingError("storage", f"聊天的花費讀不出來（{exc.message}）") from None
+
+    def load(chat_id):
+        try:
+            return spend_record(cfg.state_dir(), chat_id)
+        except ChatStoreError as exc:
+            raise mt.MeetingError("storage", exc.message) from None
+
+    return ids, load, turn_cap
+
+
+# ---- the role card's work folder ---------------------------------------------------------------------------------
+
+def work_dir_name(profile_id: str) -> str:
+    """A role card's folder name: a hash, so that ids that differ only in case (one folder on a case-blind file
+    system) stay apart."""
+    return hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:24]
+
+
+def ensure_work_dir(base, profile_id) -> str:
+    """The role card's own work folder, created 0700 when missing, as a path with no link in it."""
+    if not isinstance(profile_id, str) or not PROFILE_ID_RE.match(profile_id):
+        raise ChatStoreError("bad_request", "profile_id 不符格式")
+    root = Path(os.path.realpath(_root(base)))
+    parent = _private_dir(root / WORK, create=True)
+    path = _private_dir(parent / work_dir_name(profile_id), create=True)
+    if os.path.realpath(path) != str(path):
+        raise ChatStoreError("unsafe_path", "工作資料夾的路徑含連結")
+    return str(path)
