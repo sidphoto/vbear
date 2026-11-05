@@ -48,8 +48,8 @@ class RowTests(unittest.TestCase):
         self.assertFalse(skill_fit.skill_usable({"tool": "codex", "activation": "active"}, "claude"))  # not compatible
 
     def test_the_tools_a_skill_fits(self):
-        self.assertEqual(skill_fit.fits({"tool": "shared", "activation": "unknown"}), ["claude", "codex", "shared"])
-        self.assertEqual(skill_fit.fits({"tool": "shared", "activation": "unknown", "read_by": ["agy"]}), ["claude", "codex", "agy", "shared"])
+        self.assertEqual(skill_fit.fits({"tool": "shared", "activation": "unknown"}), ["claude", "codex", "grok", "mcode", "shared"])
+        self.assertEqual(skill_fit.fits({"tool": "shared", "activation": "unknown", "read_by": ["agy"]}), ["claude", "codex", "agy", "grok", "mcode", "shared"])
         self.assertEqual(skill_fit.fits({"tool": "codex", "activation": "active"}), ["codex"])
         self.assertEqual(skill_fit.fits({"tool": "codex", "activation": "disabled"}), [])
 

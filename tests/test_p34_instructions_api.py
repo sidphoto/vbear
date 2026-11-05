@@ -88,7 +88,7 @@ class CatalogTests(P342ApiCase):
         self.assertEqual(legal["prompt"], position_guide.GUIDE["legal"]["prompt"])
         self.assertEqual(legal["skill_categories"], ["security", "legal"])
         self.assertEqual(legal["suggested_folder"], "法務報告")
-        self.assertEqual(sorted(legal["views"]), ["agy", "claude", "codex", "shared"])
+        self.assertEqual(sorted(legal["views"]), ["agy", "claude", "codex", "grok", "mcode", "shared"])
         self.assertEqual(legal["views"]["claude"]["full"]["launch_mode"], "full")
         self.assertEqual([m["id"] for m in cat["launch_modes"]], ["full", "safe"])
         self.assertEqual(cat["default_launch_mode"], "safe")
