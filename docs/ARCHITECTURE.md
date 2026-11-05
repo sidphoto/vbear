@@ -316,8 +316,11 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
 
 - The preview and launch endpoints accept only `profile_id`, `workdir`, `commit`, `network` and `tool`.
   The tools a role card may name are `agent_profiles.TOOL_ORDER` (`claude`, `codex`, `agy`, `shared`), and each implies a
-  model family (`TOOL_FAMILY`; `agy` is Google). Only `claude` and `codex` can be launched; an `agy` card is refused
-  with its own sentence (`agent_launch.TOOL_NOT_LAUNCHABLE`).
+  model family (`TOOL_FAMILY`; `agy` is Google). Only `claude` and `codex` can be started in safe mode; the safe launch refuses an `agy` card
+  with its own sentence (`agent_launch.TOOL_NOT_LAUNCHABLE`), while full mode can start `claude`, `codex` and `agy`
+  (`agent_sessions.FULL_ENGINES`). The list of tools is written once, in `vbear/ai_tools.py`; `TOOL_ORDER`, `TOOL_FAMILY`,
+  `FULL_ENGINES`, the model flags, `TOOL_NOT_LAUNCHABLE` and the catalog's `tool_list` are made from it, and
+  `tests/test_ai_tools.py` keeps the tables of `web/app.js` equal to it. Adding a tool starts with one entry there.
   They never take an argv, environment variables, settings or credentials.
 - **Cleanup.** When the session ends, the scratch directory and the per-launch files are removed only after
   every tracked process is proven dead. Otherwise the launch is kept in a `manual_review` state for you

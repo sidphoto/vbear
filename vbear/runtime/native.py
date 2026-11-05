@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 from .. import activity as _activity
+from .. import ai_tools as _ai_tools
 from .. import config as cfg
 from . import daemon as _d
 from . import cli_versions as _cli_versions
@@ -107,15 +108,16 @@ def _agent_engine(info: dict) -> str | None:
     """Which Agent CLI a daemon session runs: the managed launch's engine, a full-mode terminal's, or
     the command name for a plain session started as ``claude`` / ``codex``."""
     engine = info.get("engine")
-    if engine in ("claude", "codex"):
+    safe = _ai_tools.safe_launch_ids()
+    if engine in safe:
         return engine
-    if engine == "agy" and info.get("launch_mode") == "full":
+    if engine in _ai_tools.full_launch_ids() and info.get("launch_mode") == "full":
         return engine
     if engine == "claude-stream":
         return "claude"
     argv = info.get("argv") or []
     name = Path(argv[0]).name if argv else ""
-    return name if name in ("claude", "codex") else None
+    return name if name in safe else None
 
 
 def _line(obj: dict) -> bytes:

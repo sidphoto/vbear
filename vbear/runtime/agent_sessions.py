@@ -39,7 +39,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .. import folders
+from .. import ai_tools, folders
 from . import proctrack
 from . import chat_protocol
 from . import stream_protocol
@@ -345,11 +345,11 @@ def codex_argv(manifest: dict) -> list[str]:
 # The command is a list built on the server (never a shell); the daemon checks the shape again before it opens the
 # terminal. Only Claude Code takes the card's instructions on the command line (one `--append-system-prompt`
 # argument); for Codex and AGY the instructions are what the paste button gives, and nothing is added for them.
-FULL_ENGINES = ("claude", "codex", "agy")
+FULL_ENGINES = ai_tools.full_launch_ids()
 FULL_INSTRUCTION_MAX = 2000
 # What leads an instruction that starts with a dash, so that no argument of the command can be read as a flag.
 FULL_INSTRUCTION_LEAD = "職位指示："
-_FULL_MODEL_FLAG = {"claude": "--model", "codex": "-m", "agy": "--model"}
+_FULL_MODEL_FLAG = ai_tools.model_flags()
 
 
 def full_instruction_arg(text) -> str | None:

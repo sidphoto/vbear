@@ -26,7 +26,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from . import activity, position_guide
+from . import activity, ai_tools, position_guide
 from .agent_profiles import (VERIFIED_INTENTS, effective_launch_mode, position_of,  # moved there so a team slot / the starter deck share them; same values
                              profile_digest)
 from .agent_profiles import instructions_of as agent_profiles_instructions
@@ -147,10 +147,10 @@ def intent_blockers(intents: dict) -> list[dict]:
     return launch_blockers(stand_in, True, {"enabled": False, "approved_domains": []})
 
 
-# What is said when the card's tool is one VBear does not start. An AGY card is a record for building teams: VBear
-# has no managed launch for Antigravity and says so, rather than leaving a button that looks as if it might work.
-TOOL_NOT_LAUNCHABLE = {"shared": "shared 不是可啟動的工具",
-                       "agy": "VBear 還不會啟動 AGY，這張卡目前只用來排隊伍與記錄"}
+# What is said when the card's tool is one the safe launch does not start. In safe mode an AGY card is a record for
+# building teams: VBear has no managed (sandboxed) launch for Antigravity and says so, rather than leaving a button that looks as if it might work.
+# (Of the safe launch: full mode does start an AGY card.)
+TOOL_NOT_LAUNCHABLE = ai_tools.not_launchable_messages()
 # The tools of a role card that VBear never starts, whatever its permission intents say. The card wizard's step 2
 # repeats this list (UNLAUNCHABLE_TOOLS in web/app.js) to stay quiet about a launch that was never going to happen;
 # tests/test_p20_agy_page.py keeps the two equal.
@@ -176,13 +176,14 @@ def launch_blockers(profile: dict, commit, network) -> list[dict]:
         # that the card is off or its tool is not one VBear starts this way.
         tool = (profile.get("model") or {}).get("tool")
         if tool not in agent_sessions.FULL_ENGINES:
-            block("tool_not_launchable", "shared 不是可啟動的工具" if tool == "shared" else "此 Agent 工具沒有可啟動的設定")
+            block("tool_not_launchable",
+                  TOOL_NOT_LAUNCHABLE[tool] if tool in ai_tools.generic_ids() else "此 Agent 工具沒有可啟動的設定")
         if profile.get("enabled") is False:
             block("profile_disabled", "此角色卡已停用")
         return out
     tool = (profile.get("model") or {}).get("tool")
-    if tool not in {"claude", "codex"}:
-        block("tool_not_launchable", TOOL_NOT_LAUNCHABLE.get(tool, "此 Agent 工具沒有受管啟動設定"))
+    if tool not in ai_tools.safe_launch_ids():
+        block("tool_not_launchable", TOOL_NOT_LAUNCHABLE.get(tool, ai_tools.NOT_LAUNCHABLE_DEFAULT))
     if profile.get("enabled") is False:
         block("profile_disabled", "此角色卡已停用")
     intents = profile.get("permission_intents") or {}

@@ -1,4 +1,4 @@
-"""P20: Antigravity (AGY) as a fourth camp of role cards. VBear does not launch it: the card is a record for
+"""P20: Antigravity (AGY) as a fourth camp of role cards. The safe launch does not start it: in safe mode the card is a record for
 building teams. These tests lock the backend side — the tool id, its family, the refusal to launch, the flow
 snapshot, the independent-review rule and the words of the role card's back. (That the page's own tables are the
 same ones is locked in test_p20_agy_page.)

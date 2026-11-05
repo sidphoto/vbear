@@ -38,6 +38,7 @@ from . import __version__
 from . import activity
 from . import annotations
 from . import agent_launch
+from . import ai_tools
 from . import agent_profiles
 from . import position_guide
 from . import armory
@@ -1959,6 +1960,7 @@ def make_handler(console: Console):
             return {
                 "ok": True,
                 "tools": list(agent_profiles.TOOL_ORDER),
+                "tool_list": ai_tools.view(),
                 "permission_keys": list(agent_profiles.PERMISSION_KEYS),
                 "permission_values": list(agent_profiles.PERMISSION_VALUES),
                 "permission_intent_only": True,

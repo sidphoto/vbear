@@ -36,7 +36,7 @@ from typing import Any, Callable
 
 from pathlib import Path
 
-from . import acceptance, git_head, strictjson
+from . import acceptance, ai_tools, git_head, strictjson
 from .activity import CLOCK_SKEW_S, MAX_EPOCH_S
 from .jsonstore import GuardedJsonStore, StoreError
 from .numbers import finite_real
@@ -108,12 +108,12 @@ LIVE_STALE_S = 30.0
 # agent_profiles' (a test keeps them equal); the revision is agent_profiles.profile_digest, a sha256 hex string.
 PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 SNAPSHOT_KEYS = frozenset({"name", "tool", "model_id", "revision"})
-SNAPSHOT_TOOLS = ("claude", "codex", "agy", "shared")
-# The family each tool implies (agent_profiles.TOOL_FAMILY, repeated because this module must not import it; a test
-# keeps them equal). Only an AGY card's family is enforced: the other tools were accepted with any family before this
-# table existed, and flows already stored must keep loading. A card of the new tool is always Google.
-SNAPSHOT_TOOL_FAMILY = {"claude": "anthropic", "codex": "openai", "agy": "google", "shared": "unknown"}
-FAMILY_FIXED_TOOLS = ("agy",)
+SNAPSHOT_TOOLS = ai_tools.ids()
+# The family each tool implies (the same table as agent_profiles.TOOL_FAMILY, both made from ai_tools; this module must
+# not import agent_profiles). Only an AGY card's family is enforced: the other tools were accepted with any family before
+# this table existed, and flows already stored must keep loading. A card of the new tool is always Google.
+SNAPSHOT_TOOL_FAMILY = ai_tools.family_map()
+FAMILY_FIXED_TOOLS = ai_tools.family_enforced_ids()
 MAX_SNAPSHOT_NAME = 200
 MAX_SNAPSHOT_MODEL_ID = 200
 ROLE_CARD_KEYS = frozenset({"profile_id", "profile_snapshot"})
