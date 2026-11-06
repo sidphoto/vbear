@@ -78,6 +78,8 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "manifest_invalid": (409, "聊天程序的啟動資料不符規定，不啟動。"),
     "unsupported_sandbox": (409, "這台 Mac 的沙盒不能用在聊天，不啟動。"),
     "commit_not_enforceable": (409, "這個設定在這個版本不能確實執行，不啟動。"),
+    "not_logged_in": (409, "聊天用的 Codex 還沒有登入（或查不出有沒有登入）。請到「開始設定」按「讓聊天用的 Codex 登入」。"),
+    "codex_home": (409, "聊天用的 Codex 資料夾不能用（裡面有不是 VBear 放的設定檔、太大，或路徑不安全），VBear 不使用它。"),
     "manual_review": (409, "這個聊天之前的程序還沒確認已經結束，需要人工檢查 VBear 的狀態資料夾，之後才能再送訊息。"),
     "too_many": (409, "聊天已經太多，請先刪掉不用的。"),
     "full": (409, "這個聊天的紀錄已經滿了，請另開一個聊天。"),

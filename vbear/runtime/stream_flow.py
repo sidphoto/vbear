@@ -157,7 +157,7 @@ def flow_sessions(base, pipeline_id: str, *, started: bool) -> list[dict]:
                 # would make the flow's totals silently low (Codex S2a-2 p1 #3).
                 raise FlowRefused("count_unavailable",
                                   f"launch {name} 的日誌不見了（狀態 {str(m.get('state'))[:32]}），無法核算流程用量")
-        elif engine == "claude-chat":     # a chat with a role card (_read_manifest checked its schema)
+        elif engine in ("claude-chat", "codex-chat"):     # a chat with a role card (_read_manifest checked its schema)
             if "pipeline_id" in m or _journal_present(root, name):
                 raise FlowRefused("count_unavailable",
                                   f"launch {name} 標示為聊天，但帶有流程欄位或串流日誌，無法核算流程用量")

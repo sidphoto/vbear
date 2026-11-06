@@ -113,7 +113,7 @@ const dataOf = (key, value) => (n) => n.getAttribute && n.getAttribute(key) === 
 test("every kind of record the daemon writes has a line, or is left out on purpose; nothing else is drawn", () => {
   const kinds = [...src("chat_store.py").matchAll(/^    "([a-z_]+)": \{/gm)].map((m) => m[1]).filter((k) => !["text"].includes(k));
   assert(kinds.length >= 15, "the scan finds the kinds: " + kinds.join());
-  const left = new Set(["chat_created", "session_ready", "turn_started"]);   // nothing a person needs to read: their message and the cost line say it
+  const left = new Set(["chat_created", "session_ready", "turn_started", "session_bound", "usage", "plan_usage", "card_edit_sent"]);   // nothing a person needs to read: their message and the cost line say it (the last four are a Codex chat's; its page is P38-5)
   const samples = {
     user_message: { turn: 1, text: "hi" }, reply: { turn: 1, text: "yo", truncated: false }, tool_call: { turn: 1, tool_use_id: "t", tool: "Bash", summary: "ls" },
     tool_result: { turn: 1, tool_use_id: "t", tool: "Bash", is_error: false, text: "a", truncated: false, source: "user_temporary" },

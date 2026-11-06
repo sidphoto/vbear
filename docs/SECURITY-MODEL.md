@@ -1154,6 +1154,65 @@ process starts until a version passes the chat check.
   proven. A chat whose earlier process is under manual review takes no new message. At daemon start, a turn a
   previous daemon left open is closed at its cap.
 
+## Chats with a Codex role card (engine `codex-chat`, v0.13)
+
+The runtime's side of a chat with a role card whose AI tool is Codex (the console's side, the verification step and the
+page come later in the same release; ADR 0005 in the run's folder gives the reasons). It is the same kind of new
+outbound data path as a Claude chat, on **your ChatGPT plan**, and it can change files in the card's work folder. No Codex
+version is chat-verified out of the box: no process starts until one passes `--mode codex-chat`.
+
+- **The process.** One `codex app-server --listen stdio://` per role card, at most three chats in all with the Claude
+  ones, each a managed launch with engine `codex-chat` under `sessions/` (an exact manifest schema, a settings file that
+  must equal what the version's table in `codex_chat_protocol.VERSIONS` says, the CLI's identity, the card's work
+  folder, the chat folder in the manifest). A terminal launch refuses it. The argv is that table and nothing else: `-c`
+  settings (file credentials store, web search off, no update check, no notify, no history, no bundled skills, no
+  project docs, no network and no `/tmp` in the sandbox) and `--disable` for twenty features (apps, plugins, hooks,
+  browser, computer use, memories, multi-agent, worktrees and the rest). The binary is the pinned one under
+  `~/.codex/packages/standalone/releases/`, never one found on `PATH`.
+- **The environment is exactly seven variables:** `PATH`, `USER`, `LOGNAME`, `LANG`, `CODEX_HOME`
+  (`<state>/codex-chat-home`), `HOME` (an empty folder in the launch's scratch) and
+  `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1`. `codex app-server` has no way to ignore the person's own
+  `~/.codex`, so the chat logs in to a Codex home of its own; the person's settings, `AGENTS.md`, rules and MCP servers
+  are not read. Before a process starts: the chat folder is the person's own 0700 plain folder with no link on its path
+  and none of `config.toml`, `rules/`, `AGENTS.md` (VBear writes none of them: finding one means another program did),
+  within 512 MiB; `codex login status` (exit code only) says logged in; the work folder holds no `.codex`; no
+  administrator policy; the version is on the `codex-chat-verified.json` list. Anything else, and the chat is refused
+  with the reason.
+- **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
+  reviewer `user`, the legacy `workspace-write` sandbox (writes only in the work folder, no `/tmp`, no network). A
+  command is a card with its whole text; a request that needs the network, or is not a command, is declined. A file
+  change is judged first: a path outside the work folder (links followed), or under `.codex`, `.agents` or `.git` at any
+  depth, is declined with no card; the rest is a card with each file's path, kind and diff. An allow is `accept` and is
+  judged again when it is given. VBear never writes `acceptForSession`, an execpolicy or network amendment or `cancel`
+  to a request (`decision_line` cannot write them), so there is no "allow from now on". Cards are VBear's, as for Claude:
+  one-use token, five minutes, at most eight, 12 KiB each and 30 KiB together, shown whole or declined.
+- **A changed command is not "allow, changed".** Codex has no such answer. VBear declines the request and sends
+  `turn/steer` telling Codex to run exactly the person's text instead; Codex then asks again, with the changed text, in
+  a card of its own that the person must allow. When the steer is refused (the turn is over) the text is sent as the
+  next message, a new turn, within the day's limit. The text sent is in the chat's record (`card_edit_sent`).
+- **What stops a chat.** Anything in the answers that says VBear's settings are not in force: a policy other than
+  `untrusted`, a reviewer other than the person, a sandbox that is not field for field the one asked for, an instruction
+  file loaded, any MCP server, remote control not disabled, another thread, a changed setting, an item kind outside
+  command, file change, message, reasoning and plan, or a command or file change completed without VBear's yes. The
+  turn costs its cap and the process is ended. An item that started and never completed (a command the sandbox
+  stopped) is not a violation. A server request VBear does not know is answered with an error and noted by its method
+  name only.
+- **Money.** Codex reports tokens, not money. A turn costs its tokens at VBear's own rate (US$1.00 per million, rounded
+  up to the cent, at least US$0.01; an accounting rule, not a price), counted from the thread's total, so a resumed
+  thread's repeated first total is not counted twice. Each report is compared with the turn's cap (the per-turn limit or
+  what is left of the day, whichever is less) and the turn is interrupted when it is reached. A turn cut off any other
+  way costs its cap, or its estimate when that is more; a turn that never reached Codex costs nothing. Two reports can
+  be a model call apart, so a turn can pass its cap by about one call. The estimate is not a bill.
+- **What is kept.** Replies, commands, file changes, tokens and the plan's use as numbers (percent, window length,
+  reset time, whether a limit was reached). Never kept or logged: the Codex home and user agent from `initialize`, the
+  plan's kind, credits, installation id, host name, MCP server names, instruction file paths. Codex keeps its own copy
+  of a conversation in `codex-chat-home/sessions`; deleting a chat does not delete it.
+- **Not checked yet.** That the real Codex returns exactly the sandbox shape asked for, that `turn/steer` is accepted
+  with `experimentalApi: false`, and what happens in a long conversation (an item kind outside the list stops the
+  chat) are for `--mode codex-chat` on a real machine. Reading is not isolated: a command the person allows can read
+  the whole machine, as a Claude chat's Bash can. `untrusted` is documented as retired and `codex app-server` as
+  experimental: every Codex version must pass the check first.
+
 ## The start-up page (v0.12)
 
 The start-up page (`#/setup`) installs, signs in, checks and tries AI tools for a person who may never have opened a terminal,

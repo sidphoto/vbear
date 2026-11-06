@@ -42,6 +42,7 @@ from pathlib import Path
 from .. import ai_tools, folders
 from . import proctrack
 from . import chat_protocol
+from . import codex_chat_protocol
 from . import stream_protocol
 
 SESSIONS_DIR = "sessions"
@@ -59,7 +60,7 @@ MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,63}\Z")
 # launch whose processes are proven gone becomes "ended": its directory (the
 # journal) is kept until the user deletes the flow (design 2.5, 9).
 _ACTIVE_STATES = ("prepared", "launching", "running")
-ENGINES = ("claude", "codex", "claude-stream", "claude-chat")
+ENGINES = ("claude", "codex", "claude-stream", "claude-chat", "codex-chat")
 FLOW_ID_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")       # tasks.VALID_ID_RE; never "." or ".."
 JOURNAL = "journal.jsonl"
@@ -424,6 +425,8 @@ def managed_argv(manifest: dict) -> list[str]:
     if engine == "claude-chat":
         # only the daemon's chat session starts one (chat_argv); never as a terminal session
         raise LaunchRefused("manifest_invalid", "聊天 launch 不能當成終端機 session 啟動")
+    if engine == "codex-chat":
+        raise LaunchRefused("manifest_invalid", "Codex 聊天 launch 不能當成終端機 session 啟動")
     raise LaunchRefused("manifest_invalid", "不支援的 managed Agent 引擎")
 
 
@@ -746,6 +749,10 @@ def _read_manifest(ldir: Path, uid: int) -> dict:
         problem = chat_manifest_problem(data)
         if problem:
             raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")
+    if data.get("engine") == "codex-chat":
+        problem = codex_chat_manifest_problem(data)
+        if problem:
+            raise LaunchRefused("manifest_invalid", f"Codex 聊天 manifest 不符（{problem}）")
     return data
 
 
@@ -992,6 +999,186 @@ def chat_manifest_problem(m: dict) -> str | None:
     return None
 
 
+# ---- a Codex chat (P38-3): engine "codex-chat" ---------------------------------------------------------------------
+# One ``codex app-server`` process of a chat with a role card. Its version table, argv and environment come from
+# codex_chat_protocol; there is no per-launch settings content (Codex reads its settings from its own CODEX_HOME,
+# ``<state>/codex-chat-home``, which holds none of the person's), so settings.json records what VBear asks for and is
+# compared with what the version's table says on every load. The scratch folder is the process's empty HOME.
+
+CODEX_CHAT_HOME = "codex-chat-home"                       # codex_chat_env.CHAT_HOME_NAME
+_CODEX_CHAT_BOUNDARY = {
+    "write": "commands and file changes: Codex's legacy workspace-write sandbox, the role card's work folder only "
+             "(no /tmp, no network); every command and every file change asked by VBear",
+    "read": "not isolated: a command the person allows can read the whole machine",
+    "network": "disabled in the sandbox; a request that needs the network is refused",
+    "settings": "Codex reads only its own chat folder (codex-chat-home); the person's own Codex settings are not read",
+}
+_CODEX_CHAT_OWN = frozenset({"chat_id", "profile_id", "resume", "thread_id", "codex_home"})
+
+
+def codex_chat_settings(cli_version: str) -> dict:
+    consts = codex_chat_protocol.constants_for(cli_version)
+    if consts is None:
+        raise LaunchRefused("unsupported_version", f"Codex {cli_version} 沒有聊天模式的常數")
+    return {"engine": "codex-chat", "approval_policy": "untrusted", "approvals_reviewer": "user",
+            "sandbox": dict(codex_chat_protocol.SANDBOX_POLICY, writableRoots=[]), "config": list(consts.config),
+            "disabled_features": list(consts.disabled_features)}
+
+
+def codex_chat_argv(manifest: dict) -> list[str]:
+    """The binary and ``app-server --listen stdio://`` with the version's ``-c`` settings and ``--disable`` features,
+    exactly (codex_chat_protocol.argv_for). Everything comes from the manifest that codex_chat_manifest_problem
+    accepted; nothing can be added."""
+    problem = codex_chat_manifest_problem(manifest)
+    if problem:
+        raise LaunchRefused("manifest_invalid", f"Codex 聊天 manifest 不符（{problem}）")
+    consts = codex_chat_protocol.constants_for(manifest["cli_version"])
+    return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts)]
+
+
+def codex_chat_env(manifest: dict, source_env: dict) -> dict:
+    """Exactly the seven variables the version's table names: PATH, USER, LOGNAME and LANG from ``source_env`` (the
+    daemon's), CODEX_HOME (the chat folder in the manifest), HOME (an empty folder of the launch's scratch, made here)
+    and the one that keeps the app-server from enabling remote control. Nothing else is passed on."""
+    consts = codex_chat_protocol.constants_for(manifest.get("cli_version"))
+    if consts is None:
+        raise LaunchRefused("unsupported_version", "沒有這個 Codex 版本的聊天模式常數")
+    env = {}
+    for key in ("PATH", "USER", "LOGNAME", "LANG"):
+        value = source_env.get(key)
+        if not (isinstance(value, str) and value and "\0" not in value):
+            raise LaunchRefused("bad_request", f"環境變數 {key} 缺少或是空值，不啟動 Codex 聊天")
+        env[key] = value
+    home = Path(manifest["scratch"]["path"]) / "home"
+    try:
+        os.mkdir(home, 0o700)
+    except FileExistsError:
+        pass
+    _owned_dir(home, os.getuid())
+    env["CODEX_HOME"] = manifest["codex_home"]
+    env["HOME"] = str(home)
+    name, value = consts.remote_control_env
+    env[name] = value
+    if set(env) != set(consts.env_keys):
+        raise LaunchRefused("manifest_invalid", "Codex 聊天的環境變數不是固定的七個")
+    return env
+
+
+def prepare_codex_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_version: str, cli_identity: list[int],
+                              model_id: str | None, chat_id: str, profile_id: str, resume: bool,
+                              thread_id: str | None, codex_home: str) -> dict:
+    """One process of a Codex chat: the managed launch with its recorded settings, whether it resumes the chat's
+    thread (and which), and the folder Codex keeps its login and conversations in. The daemon checks the version
+    (chat-verified, administrator policy), the login and the folder first. No process is started."""
+    if not (isinstance(chat_id, str) and CHAT_ID_RE.match(chat_id)):
+        raise LaunchRefused("bad_request", "聊天 id 格式不符")
+    if not (isinstance(profile_id, str) and TASK_ID_RE.match(profile_id)):
+        raise LaunchRefused("bad_request", "員工 id 格式不符")
+    if not isinstance(resume, bool):
+        raise LaunchRefused("bad_request", "resume 必須是 true 或 false")
+    if resume != (thread_id is not None):
+        raise LaunchRefused("bad_request", "只有接續舊對話時才有 thread id，而且一定要有")
+    if thread_id is not None and not (isinstance(thread_id, str) and codex_chat_protocol.sp.UUID_RE.match(thread_id)):
+        raise LaunchRefused("bad_request", "thread id 格式不符")
+    if model_id is not None and not (isinstance(model_id, str) and MODEL_ID_RE.match(model_id)):
+        raise LaunchRefused("invalid_model", "model id 格式不符")
+    if codex_chat_protocol.constants_for(cli_version) is None:
+        raise LaunchRefused("unsupported_version", f"Codex {cli_version} 沒有聊天模式的常數")
+    if (not isinstance(cli_binary, str) or not os.path.isabs(cli_binary)
+            or os.path.realpath(cli_binary) != cli_binary):
+        raise LaunchRefused("invalid_binary", "CLI 必須是已解析的絕對路徑")
+    uid = os.getuid()
+    base = Path(os.path.realpath(base))
+    if codex_home != str(base / CODEX_CHAT_HOME):
+        raise LaunchRefused("bad_request", "聊天用的 Codex 資料夾必須是 VBear 狀態資料夾裡的 codex-chat-home")
+    canonical = _check_chat_workdir(workdir, base)
+    root = base / SESSIONS_DIR
+    old_umask = os.umask(0o077)
+    ldir = scratch = None
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        _owned_dir(root, uid)
+        launch_id = "l-" + secrets.token_hex(8)
+        os.mkdir(root / launch_id, 0o700)  # fails if it already exists
+        ldir = root / launch_id
+        lst = _owned_dir(ldir, uid)
+        scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=SCRATCH_PARENT))
+        if os.path.realpath(scratch) != str(scratch):
+            raise LaunchRefused("unsafe_path", "暫存區路徑含 symlink")
+        sst = _owned_dir(scratch, uid)
+        settings_path = ldir / SETTINGS
+        _write_private(settings_path, json.dumps(codex_chat_settings(cli_version), ensure_ascii=False, sort_keys=True,
+                                                 indent=2) + "\n")
+        manifest = {
+            "manifest_version": MANIFEST_VERSION,
+            "launch_id": launch_id,
+            "native_session_id": None,
+            "engine": "codex-chat",
+            "cli_binary": cli_binary,
+            "cli_version": cli_version,
+            "cli_identity": list(cli_identity),
+            "model_id": model_id,
+            "settings_path": str(settings_path),
+            "settings_sha256": _sha256(settings_path),
+            "canonical_workspace": canonical,
+            "allowed_root": str(Path(canonical).parent),
+            "launch_dir": {"path": str(ldir), "inode": lst.st_ino, "uid": lst.st_uid},
+            "scratch": {"path": str(scratch), "inode": sst.st_ino, "uid": sst.st_uid},
+            "state": "prepared",
+            "created": time.time(),
+            "leader": None,
+            "observed": [],
+            "boundary": dict(_CODEX_CHAT_BOUNDARY),
+            "chat_id": chat_id,
+            "profile_id": profile_id,
+            "resume": resume,
+            "thread_id": thread_id,
+            "codex_home": codex_home,
+        }
+        _write_private(ldir / MANIFEST, json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        return manifest
+    except BaseException:
+        for p in (scratch, ldir):
+            if p is not None:
+                shutil.rmtree(p, ignore_errors=True)
+        raise
+    finally:
+        os.umask(old_umask)
+
+
+def codex_chat_manifest_problem(m: dict) -> str | None:
+    """None when ``m`` is exactly a codex-chat manifest: the fields a Codex terminal launch has (by the same checks),
+    and the chat's own (chat id, role card id, resume with its thread id, the chat folder)."""
+    if not isinstance(m, dict):
+        return "不是物件"
+    if m.get("engine") != "codex-chat" or codex_chat_protocol.constants_for(m.get("cli_version")) is None:
+        return "引擎或版本不合法"
+    common = {k: v for k, v in m.items() if k not in _CODEX_CHAT_OWN and k != "boundary"}
+    common["engine"] = "codex"
+    common["boundary"] = {"write": "-"}
+    problem = managed_manifest_problem(common)
+    if problem:
+        return problem
+    if m.get("native_session_id") is not None:
+        return "native_session_id 不合法"
+    if not _CODEX_CHAT_OWN <= set(m):
+        return "欄位不符"
+    checks = [
+        ("chat_id", isinstance(m["chat_id"], str) and CHAT_ID_RE.match(m["chat_id"]) is not None),
+        ("profile_id", isinstance(m["profile_id"], str) and TASK_ID_RE.match(m["profile_id"]) is not None),
+        ("resume", isinstance(m["resume"], bool)),
+        ("thread_id", (m["thread_id"] is None and m["resume"] is False)
+                      or (isinstance(m["thread_id"], str) and codex_chat_protocol.sp.UUID_RE.match(m["thread_id"])
+                          is not None and m["resume"] is True)),
+        ("codex_home", _abs_path(m["codex_home"]) and os.path.basename(m["codex_home"]) == CODEX_CHAT_HOME),
+        ("boundary", m["boundary"] == _CODEX_CHAT_BOUNDARY),
+    ]
+    for name, ok in checks:
+        if not ok:
+            return f"{name} 不合法"
+    return None
+
+
 def load_validated(base: Path, launch_id: str) -> dict:
     """Re-check everything the launch depends on. Raises ``LaunchRefused``;
     there is no partial or degraded result."""
@@ -1025,7 +1212,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
                 or not os.path.isdir(workdir)):
             raise LaunchRefused("drift", "工作目錄已改變或不存在")
         # The same rules as at preparation, against the state as it is now.
-        if m["engine"] == "claude-chat":
+        if m["engine"] in ("claude-chat", "codex-chat"):
             if (_check_chat_workdir(workdir, Path(os.path.realpath(base))) != workdir
                     or m.get("allowed_root") != str(Path(workdir).parent)):
                 raise LaunchRefused("drift", "工作目錄不再符合規則")
@@ -1037,6 +1224,10 @@ def load_validated(base: Path, launch_id: str) -> dict:
             expected = stream_settings(workdir, str(scratch), uid, m.get("cli_version"))
         elif m["engine"] == "claude-chat":
             expected = chat_settings(workdir, str(scratch), uid, m.get("cli_version"))
+        elif m["engine"] == "codex-chat":
+            expected = codex_chat_settings(m.get("cli_version"))
+            if m.get("codex_home") != str(Path(os.path.realpath(base)) / CODEX_CHAT_HOME):
+                raise LaunchRefused("drift", "聊天用的 Codex 資料夾不是 VBear 的那一個")
         elif m["engine"] == "claude":
             expected = claude_settings(workdir, str(scratch), uid)
         else:

@@ -12741,6 +12741,7 @@ const CHAT_TURN_END = {
   process_exit: "員工的程序自己結束了，這回合按上限計費", violation: "Claude Code 做了不符 VBear 設定的事，VBear 已停止這個程序",
   daemon_restart: "VBear 的背景程序重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
   not_sent: "這則訊息沒有送出，沒有花錢",
+  limit: "用量到了這回合的上限，已請員工停下來，按估算的用量計費",
 };
 const CHAT_DECISION = {
   allow: "你允許了這一次", deny: "你拒絕了", modify: "你改了內容再允許",

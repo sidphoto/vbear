@@ -91,9 +91,9 @@ class ChatProcess(ProcessGroupEnd):
         self.launch_id = manifest["launch_id"]
         self.cli_version = manifest["cli_version"]
         self.model_id = manifest["model_id"]
-        self.session_id = manifest["claude_session_id"]
+        self.session_id = manifest.get("claude_session_id")
         self.cwd = manifest["canonical_workspace"]
-        self.budget = mt.money(manifest["budget_usd"]) or Decimal(0)
+        self.budget = mt.money(manifest.get("budget_usd")) or Decimal(0)
         self.proc = proc
         self.pid = self.pgid = proc.pid
         self.leader_start = leader_start
@@ -108,8 +108,7 @@ class ChatProcess(ProcessGroupEnd):
         self.card_ttl, self.init_deadline, self.turn_timeout = card_ttl, init_deadline, turn_timeout
         self.idle_timeout, self.close_grace, self.close_below = idle_timeout, close_grace, close_below
         self.init_id = "init-" + secrets.token_hex(6)
-        self.tracker = cp.ChatTracker(cp.constants_for(self.cli_version), session_id=self.session_id,
-                                      workdir=self.cwd, init_request_id=self.init_id)
+        self.tracker = self._new_tracker()
         self.started = time.time()
         self.spawned = now
         self.state = "starting"                  # starting | idle | closing
@@ -146,6 +145,14 @@ class ChatProcess(ProcessGroupEnd):
         self.descendants = proctrack.DescendantTracker(self.pid)
         self.next_observe = now
         self.registered: set[str] = set()
+
+    def _new_tracker(self):
+        """What reads the CLI's output (a Codex chat reads another protocol: codex_chat_session)."""
+        return cp.ChatTracker(cp.constants_for(self.cli_version), session_id=self.session_id, workdir=self.cwd,
+                              init_request_id=self.init_id)
+
+    def _read_facts(self, value) -> list:
+        return self.tracker.on_event(value)
 
     # ---- what the daemon asks ----------------------------------------------------------------------------------
 
@@ -397,7 +404,7 @@ class ChatProcess(ProcessGroupEnd):
             self._record("anomaly", {"event_type": "bad_json", "fields": []})
             return
         self.last_activity = now
-        for kind, data in self.tracker.on_event(parsed.value):
+        for kind, data in self._read_facts(parsed.value):
             try:
                 self._on_fact(kind, data, now)
             except Exception as exc:              # never out of the loop: the chat ends instead

@@ -159,8 +159,8 @@ RPC_OPS: dict[str, frozenset] = {
     # the console removed the flow's record: the deletion marker may go (flow_data.finish)
     "flow_delete_done": frozenset({"pipeline"}),
     # chats with a role card (P36; daemon_chat)
-    "chat_open": frozenset({"profile_id"}),
-    "chat_send": frozenset({"chat_id", "text", "cli", "model_id", "instructions"}),
+    "chat_open": frozenset({"profile_id", "engine"}),
+    "chat_send": frozenset({"chat_id", "text", "cli", "model_id", "instructions", "engine"}),
     "chat_answer": frozenset({"chat_id", "card_id", "token", "decision", "value"}),
     "chat_stop": frozenset({"chat_id"}),
     "chat_close": frozenset({"chat_id"}),
@@ -605,6 +605,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         # Versions a chat may start on without being on the verified list: only the chat check (vbear/chat_check.py)
         # sets this, on a daemon of its own in a temporary state folder. No RPC reaches it.
         self.chat_probe_versions: frozenset = frozenset()
+        self.codex_chat_probe_versions: frozenset = frozenset()       # the same for a Codex chat (codex_chat_check)
 
     # ---- lifecycle ----
 

@@ -1,12 +1,17 @@
 """The runtime daemon's chats with role cards (P36-1): the RPC ops and the loop hooks. A mixin of Daemon, as
 StreamOps is.
 
-  chat_open    {profile_id}                                 a new chat; no process
-  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?}
+  chat_open    {profile_id, engine?}                        a new chat (engine claude-chat, or codex-chat for a role
+                                                            card whose AI tool is Codex); no process
+  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?, engine?}
                                                             a person's message: a turn, in the chat's live process
-                                                            or a new one (``--resume`` once the session exists);
-                                                            ``instructions`` is the role card's own text, appended to
-                                                            the system prompt of a new process
+                                                            or a new one (``--resume`` once the session exists, a
+                                                            Codex chat's ``thread/resume``); ``instructions`` is the
+                                                            role card's own text, appended to the system prompt of a
+                                                            new Claude process (a Codex chat's developer
+                                                            instructions); ``engine``, when given, must be the
+                                                            chat's; a Codex chat's ``model_id`` may be None (Codex's
+                                                            own default)
   chat_answer  {chat_id, card_id, token, decision, value}   a permission card, once, with its one-use token
   chat_stop    {chat_id}                                    ends the turn (at its cap) and the process
   chat_close   {chat_id}                                    ends an idle process (stdin closed); refused while busy
@@ -32,6 +37,7 @@ from pathlib import Path
 
 from .. import admin_policy, config as cfg, meetings as mt
 from . import agent_sessions, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, proctrack
+from . import codex_chat_env, codex_chat_protocol as ccp, codex_chat_session
 from . import stream_session
 
 CHAT_MAX = 3
@@ -121,11 +127,13 @@ class ChatOps:
 
     def _op_chat_open(self, rid: str, req: dict) -> dict:
         try:
-            chat = cs.create(self.base, req.get("profile_id"), now=time.time())
+            chat = cs.create(self.base, req.get("profile_id"), now=time.time(),
+                             engine=req.get("engine", "claude-chat"))
             cs.ensure_work_dir(self.base, chat["profile_id"])
         except cs.ChatStoreError as exc:
             return _store_err(rid, exc)
-        return _ok(rid, {"chat_id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"]})
+        return _ok(rid, {"chat_id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
+                         "engine": chat["engine"]})
 
     def _op_chat_send(self, rid: str, req: dict) -> dict:
         if self._shutdown_requested:
@@ -145,7 +153,7 @@ class ChatOps:
             return _err(rid, "bad_request", "訊息含有無法編碼的字元")
         if size > cp.MAX_TEXT_BYTES:
             return _err(rid, "bad_request", f"訊息超過 {cp.MAX_TEXT_BYTES // 1024} KiB")
-        if not (isinstance(model_id, str) and agent_sessions.MODEL_ID_RE.match(model_id)):
+        if model_id is not None and not (isinstance(model_id, str) and agent_sessions.MODEL_ID_RE.match(model_id)):
             return _err(rid, "bad_request", "model_id 格式不符")
         if not (isinstance(cli, dict) and set(cli) == {"binary", "version", "identity"}):
             return _err(rid, "bad_request", "cli 必須是 {binary, version, identity}")
@@ -153,6 +161,12 @@ class ChatOps:
             chat = cs.load(self.base, chat_id)
         except cs.ChatStoreError as exc:
             return _store_err(rid, exc)
+        if req.get("engine") not in (None, chat["engine"]):
+            return _err(rid, "bad_request", "這個聊天的引擎和送來的不同")
+        if chat["engine"] == "codex-chat":
+            return self._codex_send(rid, chat, text, cli, model_id, instructions)
+        if model_id is None:
+            return _err(rid, "bad_request", "model_id 格式不符")
         now = time.monotonic()
         p = self._chats.get(chat_id)
         if p is not None:
@@ -191,43 +205,9 @@ class ChatOps:
                     per_turn: Decimal, instructions: str | None = None) -> dict:
         from .daemon import build_env              # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
-        try:
-            events = cs.read_events(self.base, chat_id)
-        except cs.ChatStoreError as exc:
-            return _store_err(rid, exc)
-        if events.problem:
-            return _err(rid, "damaged", f"聊天紀錄有問題，不能再送訊息（{events.problem}）")
-        state = cs.derive(events.records)
-        if state.open_turn is not None or state.process_open:
-            return _err(rid, "busy", "這個聊天還有沒結束的回合或程序")
-        same = [x for x in self._chats.values() if x.profile_id == profile_id]
-        if same:
-            if same[0].idle:
-                same[0].close_gracefully("同一位員工要開另一個聊天", time.monotonic())
-                return _err(rid, "restarting", "這位員工在另一個聊天裡的程序正在關閉，請稍後再送一次")
-            return _err(rid, "busy", "這位員工正在另一個聊天裡工作，一次只能一個")
-        if len(self._chats) >= self.chat_max:
-            idle = sorted((x for x in self._chats.values() if x.idle), key=lambda x: x.last_activity)
-            if idle:
-                idle[0].close_gracefully("同時聊天的員工太多，關閉最久沒用的", time.monotonic())
-                return _err(rid, "restarting", "同時聊天的員工已達上限，正在關閉最久沒用的，請稍後再送一次")
-            return _err(rid, "limit", f"同時最多 {self.chat_max} 位員工在聊天")
-        room = self._session_room(rid)
-        if room:
-            return room
-        pending = self._chat_launches_left(chat_id)
-        if pending:
-            return _err(rid, "manual_review", f"這個聊天之前的程序還沒確認結束（{pending}），需要人工處理")
-        binary, version, identity = cli["binary"], cli["version"], cli["identity"]
-        try:
-            if not (isinstance(binary, str) and os.path.isabs(binary) and os.path.realpath(binary) == binary):
-                raise agent_sessions.LaunchRefused("invalid_binary", "CLI 必須是已解析的絕對路徑")
-            if not (isinstance(identity, list) and identity == agent_sessions.binary_identity(binary)):
-                raise agent_sessions.LaunchRefused("drift", "CLI 檔案在版本檢查後已改變")
-        except OSError:
-            return _err(rid, "drift", "CLI 檔案已消失或不可執行")
-        except agent_sessions.LaunchRefused as exc:
-            return _err(rid, exc.code, str(exc))
+        state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
+        if refused:
+            return refused
         if cp.constants_for(version) is None:
             return _err(rid, "unsupported_version", f"Claude Code {str(version)[:32]} 沒有聊天模式的常數")
         if version not in cli_versions.chat_verified_versions() and version not in self.chat_probe_versions:
@@ -309,6 +289,197 @@ class ChatOps:
             return self._chat_abort_spawned(rid, log, n, m, proc, p, leader_start, f"{type(exc).__name__}: {exc}")
         return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "resume" if resume else "new"})
 
+    # ---- a Codex chat -------------------------------------------------------------------------------------------
+
+    def _codex_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
+                    instructions: str | None) -> dict:
+        """A person's message in a Codex chat (P38-3): a turn in the chat's live ``codex app-server`` (its thread goes
+        on), or in a new one (``thread/start`` the first time, ``thread/resume`` after). Money is as for a Claude chat: the
+        turn's cap is the per-turn limit or what is left of the day, whichever is less."""
+        chat_id = chat["id"]
+        now = time.monotonic()
+        p = self._chats.get(chat_id)
+        if p is not None:
+            if p.state == "closing" or p.phase is not None or p.exit_info is not None or p.finished:
+                return _err(rid, "restarting", "這個聊天的程序正在結束，請稍後再送一次")
+            if p.turn is not None or p.state == "starting":
+                return _err(rid, "busy", "員工還在回覆上一則訊息")
+        allowance, per_turn, refused = self._chat_allowance(rid, time.time())
+        if refused:
+            return refused
+        if p is None:
+            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions)
+        if p.model_id != model_id or p.cli_version != cli.get("version"):
+            p.close_gracefully("模型或版本不同，要換新的程序", now)
+            return _err(rid, "restarting", "員工要換新的程序（模型或版本不同），請稍後再送一次")
+        try:
+            n = p.next_turn
+            p.log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            p.log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
+        except cs.ChatStoreError as exc:
+            p.stop("聊天紀錄無法寫入", now)
+            return _store_err(rid, exc)
+        p.start_turn(n, allowance, text, now)
+        return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "reused"})
+
+    def _codex_followup(self, p, text: str) -> str | None:
+        """A card the person changed whose steer Codex refused (its turn was over): the changed text is the next message,
+        a new turn of the live process. None when it was sent, else why it was not (said in the chat's record)."""
+        if self._chats.get(p.chat_id) is not p or p.state != "idle" or p.turn is not None:
+            return "員工的程序已經不能收新的訊息"
+        allowance, _per_turn, refused = self._chat_allowance("followup", time.time())
+        if refused:
+            return refused["error"]["message"]
+        now = time.monotonic()
+        try:
+            n = p.next_turn
+            p.log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            p.log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
+        except cs.ChatStoreError as exc:
+            return exc.message
+        p.start_turn(n, allowance, text, now)
+        return None
+
+    def _codex_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None, allowance: Decimal,
+                     instructions: str | None) -> dict:
+        from .daemon import DAEMON_VERSION, build_env      # here: daemon imports this module
+        chat_id, profile_id = chat["id"], chat["profile_id"]
+        state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
+        if refused:
+            return refused
+        if ccp.constants_for(version) is None:
+            return _err(rid, "unsupported_version", f"Codex {str(version)[:32]} 沒有聊天模式的常數")
+        if version not in cli_versions.codex_chat_verified_versions() and version not in self.codex_chat_probe_versions:
+            return _err(rid, "unverified", cli_versions.codex_chat_unverified_text(version))
+        policy = admin_policy.check_codex(version)
+        if not policy.ok:
+            return _err(rid, "admin_policy", policy.reason())
+        folder, why = codex_chat_env.home_state(self.base)
+        if folder == "missing":
+            return _err(rid, "not_logged_in", "聊天用的 Codex 還沒有登入")
+        if folder != "ok":
+            return _err(rid, "codex_home", why)
+        chat_home = str(codex_chat_env.chat_home_path(self.base))
+        if codex_chat_env.login_state(binary, chat_home) != "logged_in":
+            return _err(rid, "not_logged_in", "聊天用的 Codex 沒有登入，或查不出有沒有登入")
+        try:
+            workdir = cs.ensure_work_dir(self.base, profile_id)
+            log = cs.ChatLog(self.base, chat_id)
+        except cs.ChatStoreError as exc:
+            return _store_err(rid, exc)
+        if os.path.lexists(os.path.join(workdir, ".codex")):
+            log.close()
+            return _err(rid, "invalid_workdir", "員工的工作資料夾裡有 .codex，VBear 不讓 Codex 在那裡聊天")
+        thread_id = state.thread_id
+        resume = thread_id is not None
+        n = state.next_turn
+        m = None
+        try:
+            m = agent_sessions.prepare_codex_chat_launch(
+                self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
+                model_id=model_id, chat_id=chat_id, profile_id=profile_id, resume=resume, thread_id=thread_id,
+                codex_home=chat_home)
+            agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
+            m = agent_sessions.load_validated(self.base, m["launch_id"])
+            argv = agent_sessions.codex_chat_argv(m)
+            env = agent_sessions.codex_chat_env(m, build_env(user_bin=False))
+        except (agent_sessions.LaunchRefused, OSError, ValueError) as exc:
+            log.close()
+            if m is not None:
+                agent_sessions.cleanup_launch(self.base, m["launch_id"], proven_dead=True)
+            return _err(rid, getattr(exc, "code", "refused"), str(exc))
+        launch_id = m["launch_id"]
+        try:
+            log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
+            log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
+                                           "instructions": instructions is not None}, now=time.time())
+        except cs.ChatStoreError as exc:
+            self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
+            return _store_err(rid, exc)
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    cwd=workdir, env=env, start_new_session=True, close_fds=True)
+        except OSError as exc:
+            self._chat_not_started(log, n, launch_id, f"無法啟動：{exc}"[:200])
+            return _err(rid, "internal", f"無法啟動 Codex：{exc}")
+        p = leader_start = None
+        try:
+            leader_start = stream_session.capture_leader(proc.pid)
+            if leader_start is None:
+                raise RuntimeError("無法取得 leader 的開始時間，這個程序無法安全地管理")
+            sid = "n-" + secrets.token_hex(6)
+            while sid in self._sessions or any(x.sid == sid for x in list(self._streams.values())
+                                               + list(self._chats.values())):
+                sid = "n-" + secrets.token_hex(6)
+            p = codex_chat_session.CodexChatProcess(
+                sid=sid, chat_id=chat_id, profile_id=profile_id, manifest=m, proc=proc, log=log, next_turn=n,
+                now=time.monotonic(), leader_start=leader_start, logger=self._log, watch=self._watch_chat,
+                unwatch=self._unwatch_chat, card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
+                turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
+                close_grace=self.chat_close_grace, close_below=Decimal(0), instructions=instructions,
+                thread_id=thread_id, last_tokens=state.last_tokens, followup=self._codex_followup,
+                client_version=DAEMON_VERSION)
+            self._chats[chat_id] = p
+            self._watch_chat(p, "stdout")
+            self._watch_chat(p, "stderr")
+            try:
+                p.descendants.observe(proctrack.process_table())
+            except proctrack.ProcessTableUnavailable as exc:
+                self._log(f"{sid}: process table unavailable at launch: {exc}")
+            agent_sessions.update_manifest(self.base, launch_id, state="running", leader={
+                "pid": proc.pid, "start": leader_start, "source": proctrack.SOURCE}, observed=p.descendants.export())
+            p.send_initialize()
+            p.start_turn(n, allowance, text, time.monotonic())
+        except Exception as exc:
+            return self._chat_abort_spawned(rid, log, n, m, proc, p, leader_start, f"{type(exc).__name__}: {exc}")
+        return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "resume" if resume else "new"})
+
+    def _chat_precheck(self, rid: str, chat: dict, cli: dict):
+        """What a new process of either engine needs first: (the chat's state, binary, version, identity, None), or
+        (.., an error answer). The record reads whole and has no open turn or process, the role card has no other chat
+        running, there is room for another process, no earlier launch of the chat waits for a person, and the CLI is
+        the file that was checked."""
+        chat_id, profile_id = chat["id"], chat["profile_id"]
+        try:
+            events = cs.read_events(self.base, chat_id)
+        except cs.ChatStoreError as exc:
+            return None, None, None, None, _store_err(rid, exc)
+        if events.problem:
+            return None, None, None, None, _err(rid, "damaged", f"聊天紀錄有問題，不能再送訊息（{events.problem}）")
+        state = cs.derive(events.records)
+        if state.open_turn is not None or state.process_open:
+            return None, None, None, None, _err(rid, "busy", "這個聊天還有沒結束的回合或程序")
+        same = [x for x in self._chats.values() if x.profile_id == profile_id]
+        if same:
+            if same[0].idle:
+                same[0].close_gracefully("同一位員工要開另一個聊天", time.monotonic())
+                return None, None, None, None, _err(rid, "restarting", "這位員工在另一個聊天裡的程序正在關閉，請稍後再送一次")
+            return None, None, None, None, _err(rid, "busy", "這位員工正在另一個聊天裡工作，一次只能一個")
+        if len(self._chats) >= self.chat_max:
+            idle = sorted((x for x in self._chats.values() if x.idle), key=lambda x: x.last_activity)
+            if idle:
+                idle[0].close_gracefully("同時聊天的員工太多，關閉最久沒用的", time.monotonic())
+                return None, None, None, None, _err(rid, "restarting", "同時聊天的員工已達上限，正在關閉最久沒用的，請稍後再送一次")
+            return None, None, None, None, _err(rid, "limit", f"同時最多 {self.chat_max} 位員工在聊天")
+        room = self._session_room(rid)
+        if room:
+            return None, None, None, None, room
+        pending = self._chat_launches_left(chat_id)
+        if pending:
+            return None, None, None, None, _err(rid, "manual_review", f"這個聊天之前的程序還沒確認結束（{pending}），需要人工處理")
+        binary, version, identity = cli["binary"], cli["version"], cli["identity"]
+        try:
+            if not (isinstance(binary, str) and os.path.isabs(binary) and os.path.realpath(binary) == binary):
+                raise agent_sessions.LaunchRefused("invalid_binary", "CLI 必須是已解析的絕對路徑")
+            if not (isinstance(identity, list) and identity == agent_sessions.binary_identity(binary)):
+                raise agent_sessions.LaunchRefused("drift", "CLI 檔案在版本檢查後已改變")
+        except OSError:
+            return None, None, None, None, _err(rid, "drift", "CLI 檔案已消失或不可執行")
+        except agent_sessions.LaunchRefused as exc:
+            return None, None, None, None, _err(rid, exc.code, str(exc))
+        return state, binary, version, identity, None
+
     def _chat_not_started(self, log: cs.ChatLog, n: int, launch_id: str, why: str) -> None:
         """No process was started for this turn: it costs nothing, and the launch goes."""
         for kind, data in (("turn_ended", {"turn": n, "cost_usd": "0", "reported": False, "total_usd": None,
@@ -370,7 +541,8 @@ class ChatOps:
                 m = agent_sessions._read_manifest(agent_sessions.launch_dir(self.base, name), os.getuid())
             except (OSError, agent_sessions.LaunchRefused):
                 continue                          # another launch's problem; recovery reports it
-            if m.get("engine") == "claude-chat" and m.get("chat_id") == chat_id and m.get("state") != "prepared":
+            if m.get("engine") in ("claude-chat", "codex-chat") and m.get("chat_id") == chat_id \
+                    and m.get("state") != "prepared":
                 left.append(name)
         return ", ".join(left[:4])
 

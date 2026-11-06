@@ -17,8 +17,9 @@ Configuration: the JSON file named by $FAKE_CODEX_CONFIG (else $HOME/fake-codex.
 
 ``start`` is used when VBear writes ``thread/start``, ``resume`` when it writes ``thread/resume``. ``turns`` names the
 recorded turns to play, one for each ``turn/start``, in order (default: all of them); an entry is a number or
-{"turn": n, "inject": [message, ...]}, the messages printed right after the answer to ``turn/start`` (a server request
-among them is waited for until VBear answers it). The turn counter is kept in ``<config>.state.json`` so that a
+{"turn": n, "inject": [message, ...], "hold": true}, the messages printed right after the answer to ``turn/start`` (a
+server request among them is waited for until VBear answers it); ``hold`` then stops the turn there, printing nothing
+more until VBear writes ``turn/interrupt`` (which ends it as interrupted) or closes stdin. The turn counter is kept in ``<config>.state.json`` so that a
 process that resumes the thread goes on with the next turn. Everything it is given and does goes to
 ``<config>.log.jsonl``.
 
@@ -267,6 +268,7 @@ class Fake:
         self.save(state)
         entry = entries[index]
         number, inject = (entry, []) if isinstance(entry, int) else (entry["turn"], entry.get("inject", []))
+        hold = isinstance(entry, dict) and entry.get("hold") is True
         self.rows = self.parsed.turns[number]
         start_id = self.rows[0][1]["id"]
         self.idmap[start_id] = msg["id"]
@@ -278,6 +280,8 @@ class Fake:
                     if ccf.is_response(ln) and ln["id"] == start_id:
                         for extra in inject:
                             self.inject(extra)
+                        if hold:
+                            self.wait(lambda m: False)
                 else:
                     self.expect(ln)
         except Abort:
