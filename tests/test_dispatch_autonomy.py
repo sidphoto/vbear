@@ -244,7 +244,7 @@ class WhatAPersonMayDo(Base):
         self.dispatcher._mutate(did, lambda r: r["steps"][0].update(state="ended"))
         self.assertFalse(self.dispatcher.get(did)["can"]["delete"])
 
-    def test_stop_and_continue_say_there_is_no_runner_yet(self):
+    def test_stop_and_continue_say_there_is_no_runner_when_none_is_attached(self):
         did, pid = self.confirmed()
         for call in (self.dispatcher.stop, self.dispatcher.resume):
             with self.assertRaises(dispatch.DispatchError) as cm:

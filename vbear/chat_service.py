@@ -532,6 +532,12 @@ class ChatService:
         self._chat(chat_id)
         return {"stopped": self._call("chat_stop", chat_id=chat_id)["stopped"]}
 
+    def close(self, chat_id) -> dict:
+        """Ask the daemon to end the chat's idle process (a turn must be stopped or have ended first: ``busy`` otherwise).
+        Used by the dispatch runner when a step is done, so that the place of the employee's process is free; the record stays."""
+        self._chat(chat_id)
+        return {"closed": self._call("chat_close", chat_id=chat_id)["closed"]}
+
     def delete(self, chat_id) -> dict:
         """Removes a chat. A live process is first asked to close (idle only: a turn must be stopped first); the
         daemon refuses the removal while the process still exists, so this asks a few times."""

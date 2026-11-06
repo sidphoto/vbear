@@ -15,8 +15,9 @@ A dispatch is the work the chief of staff proposed, in steps, each for one emplo
   * ``dismiss``, ``withdraw_card`` (the employee is switched off, never deleted), ``delete`` (the dispatch and the proposal
     only; employees, task cards and chats stay), ``recover_all`` and ``actions``.
 
-Sending the steps is not here (the runner of P40-4): a confirmed dispatch is ``running`` with every step ``pending``, and
-``stop`` and ``continue`` answer 409 until there is a runner. Nothing here writes ``config.json``, starts a program or a
+Sending the steps is not here (``vbear/dispatch_runner.py``, P40-4): a confirmed dispatch is ``running`` with every step
+``pending``; ``stop`` and ``resume`` (the buttons 「停止」 and 「繼續」) are carried out by the runner attached as ``control`` and
+answer 409 ``no_runner`` while there is none. Nothing here writes ``config.json``, starts a program or a
 terminal, installs a skill or answers a question in a chat; ``tests/test_autonomy_guard.py`` keeps it that way. What is said of
 the chat with the CEO never gets here: only the proposal does.
 """
@@ -34,7 +35,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
-from . import agent_profiles as ap, autonomy, chief, config as cfg, meetings as mt, model_options, position_guide, strictjson, tasks
+from . import agent_profiles as ap, autonomy, chat_service, chief, config as cfg, meetings as mt, model_options, position_guide, strictjson, tasks
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import chat_store as cs
 
@@ -66,7 +67,10 @@ ERRORS = {
     "card_changed": "有一位要派工的員工在提議之後被改過了，請重新整理再確認",
     "tool_unavailable": "有一個 AI 工具現在不能聊天了",
     "create_failed": "建立員工或任務卡沒有成功",
-    "no_runner": "還沒有 runner：停止與繼續要等下一個版本的派工執行才能用",
+    "no_runner": "還沒有 runner：停止與繼續要等派工執行起來才能用",
+    "not_active": "這份派工沒有在進行（沒有在做，也沒有暫停），不能停止",
+    "not_paused": "這份派工沒有暫停，不用按繼續",
+    "chat_unreadable": "讀不到那一步的聊天，無法確認訊息有沒有送出，所以現在不能繼續。請先到那位員工的聊天看一下",
     "turn_running": "這位員工正在做事，等這一回合結束或先按停止，再撤回",
     "already_withdrawn": "這位員工已經撤回了",
     "not_deletable": "這份派工還在進行，不能刪除",
@@ -95,19 +99,35 @@ PAUSE_TEXT = {
     "busy": "這位員工還在別的聊天裡工作，等他做完再按「繼續」。",
     "limit": "同時聊天的員工已經到上限，先關掉別的聊天，再按「繼續」。",
     "restarting": "員工的程序正在重新啟動，稍後再按「繼續」。",
-    "uncertain": "VBear 不確定剛才有沒有建好（員工、任務卡或送出的訊息）。請先到員工頁、任務頁和聊天看一下，再決定要不要按「繼續」（可能會再建一張）。",
+    "uncertain": "VBear 不確定剛才有沒有建好（員工、任務卡或送出的訊息）。請先到員工頁、任務頁和聊天看一下，再決定要不要按「繼續」（可能會再建一張，或再送一次）。",
     "interrupted": "派工在建立員工與任務卡的途中被中斷了。請到員工頁與任務頁看一下，再決定要不要按「繼續」。",
     "create_failed": "建立員工或任務卡沒有成功，什麼都沒有送出。請檢查之後再試。",
+    "runner_error": "派工執行時出了預料之外的問題，已經先暫停。請稍後按「繼續」再試一次。",
+    # a turn that did not end the normal way: what happened, then what 「繼續」 does
+    "turn_stopped": "第 {n} 步的回合被停止了（可能是在聊天裡按了停止）。",
+    "turn_timeout": "第 {n} 步等太久，逾時了。",
+    "turn_process_exit": "第 {n} 步做到一半，員工的程序結束了。",
+    "turn_violation": "第 {n} 步的員工違反了 VBear 的設定，VBear 把它停掉了。",
+    "turn_daemon_restart": "VBear 的背景程序重新啟動，第 {n} 步被中斷了。",
+    "turn_error": "第 {n} 步出了錯。",
+    "turn_not_sent": "第 {n} 步的訊息沒有送到員工那裡。",
+    "turn_limit": "第 {n} 步用到了每回合的花費上限，被停下來了。",
+    "turn_is_error": "員工回報第 {n} 步沒有成功。",
 }
+TURN_SUFFIX = "要接著做下一步，請按「繼續」（會附上這一步的回覆，並標明它可能不完整）。"
 _PAUSE_DEFAULTS = {"limit": "未知", "n": "?", "tool": "AI 工具", "when": "恢復時間未知"}
 
 
 def pause_text(reason: str, **context) -> str:
-    """The sentence for a pause. A time that has no source is 「未知」; a reason this table does not know is said as it is."""
+    """The sentence for a pause. A time that has no source is 「未知」. A reason this table does not know is the code of a chat
+    refusal when the chat service has a sentence for it (said in its words), else it is said as it is."""
     template = PAUSE_TEXT.get(reason)
     if template is None:
+        if isinstance(reason, str) and reason in chat_service.CODE_TEXT:
+            return chat_service.explain(reason)
         return f"暫停了（原因代碼「{str(reason)[:64]}」），VBear 沒有這個代碼的說明。"
-    return template.format_map({**_PAUSE_DEFAULTS, **{k: v for k, v in context.items() if v is not None}})
+    text = template.format_map({**_PAUSE_DEFAULTS, **{k: v for k, v in context.items() if v is not None}})
+    return text + TURN_SUFFIX if reason.startswith("turn_") else text
 
 
 # ---- the record ------------------------------------------------------------------------------------------------------
@@ -183,7 +203,7 @@ def _count(value, low: int, high: int) -> bool:
     return type(value) is int and low <= value <= high
 
 
-# kind -> {field: check}; the fields an event has besides seq, at, kind and by
+# kind -> {field: check}; the fields an event has besides seq, at, kind and by (a step is ``step``: ``seq`` is the event's own number)
 _EVENT_FIELDS = {
     "proposed": {},
     "confirmed": {"edited": lambda v: type(v) is bool},
@@ -192,10 +212,10 @@ _EVENT_FIELDS = {
     "card_created": {"ref": lambda v: isinstance(v, str) and bool(chief.NEW_REF_RE.match(v)), "profile_id": _profile_id_ok},
     "task_intent": {},
     "task_created": {"task_id": lambda v: isinstance(v, str) and 0 < len(v) <= 64},
-    "step_intent": {"seq": lambda v: _count(v, 1, MAX_STEPS)},
-    "step_sent": {"seq": lambda v: _count(v, 1, MAX_STEPS), "chat_id": lambda v: isinstance(v, str) and bool(chief.CHAT_ID_RE.match(v)),
+    "step_intent": {"step": lambda v: _count(v, 1, MAX_STEPS)},
+    "step_sent": {"step": lambda v: _count(v, 1, MAX_STEPS), "chat_id": lambda v: isinstance(v, str) and bool(chief.CHAT_ID_RE.match(v)),
                   "turn": lambda v: _count(v, 1, 10 ** 6)},
-    "step_ended": {"seq": lambda v: _count(v, 1, MAX_STEPS), "reason": lambda v: _text_ok(v, 64, empty=False),
+    "step_ended": {"step": lambda v: _count(v, 1, MAX_STEPS), "reason": lambda v: _text_ok(v, 64, empty=False),
                    "cost_usd": lambda v: mt.money(v) is not None},
     "paused": {"reason": lambda v: _text_ok(v, 64, empty=False)},
     "continued": {},
@@ -394,7 +414,35 @@ def _step_name(rec: dict, seq: int) -> str:
     return ""
 
 
-def describe(rec: dict, ev: dict) -> str:
+def _tool_of(rec: dict, who: str) -> str | None:
+    for c in rec["plan"]["new_cards"]:
+        if c["ref"] == who:
+            return c["tool"]
+    card = rec["cards"].get(who)
+    return card["tool"] if card else None
+
+
+def pause_context(rec: dict, ev: dict, daily_usd: Decimal | None = None) -> dict:
+    """What a pause's sentence needs, as it was when the pause was written: the step it is about (the one that ended badly for a
+    turn that did not end the normal way or a plan's limit, the one that was to go out for the rest), the AI tool of its employee,
+    the daily limit in force and the time the AI tool said it would be usable again (none is 「未知」)."""
+    before = [e for e in rec["events"] if e["seq"] < ev["seq"] and e["kind"] == "step_ended"]
+    reason = ev["reason"]
+    after_a_turn = reason.startswith("turn_") or reason == "plan_limit"
+    n = (before[-1]["step"] if after_a_turn else before[-1]["step"] + 1) if before else (None if after_a_turn else 1)
+    context: dict = {"n": n}
+    if daily_usd is not None:
+        context["limit"] = mt.fmt(daily_usd)
+    step = next((s for s in rec["steps"] if s["seq"] == n), None)
+    if step is not None:
+        context["tool"] = chat_service.tool_label(_tool_of(rec, step["who"]))
+    until = ev.get("until")
+    if until is not None:
+        context["when"] = "預計 " + time.strftime("%m/%d %H:%M", time.localtime(until)) + " 恢復（AI 工具說的）"
+    return context
+
+
+def describe(rec: dict, ev: dict, daily_usd: Decimal | None = None) -> str:
     """What an event says to the person, in words. The names are the cards' (as the person's page shows them); nothing of the
     conversation with the CEO is ever in a record, so none can be here."""
     kind = ev["kind"]
@@ -415,13 +463,13 @@ def describe(rec: dict, ev: dict) -> str:
         done = any(e["kind"] == "task_created" for e in rec["events"])
         return "建任務卡" + ("" if done else "（沒有看到結果，不確定有沒有建好）")
     if kind == "step_intent":
-        return f"準備送出第 {ev['seq']} 步給「{_step_name(rec, ev['seq'])}」"
+        return f"準備送出第 {ev['step']} 步給「{_step_name(rec, ev['step'])}」"
     if kind == "step_sent":
-        return f"送出第 {ev['seq']} 步給「{_step_name(rec, ev['seq'])}」（已經送出，收不回來）"
+        return f"送出第 {ev['step']} 步給「{_step_name(rec, ev['step'])}」（已經送出，收不回來）"
     if kind == "step_ended":
-        return f"第 {ev['seq']} 步結束（{ev['reason']}）"
+        return f"第 {ev['step']} 步結束（{ev['reason']}）"
     if kind == "paused":
-        return "暫停：" + pause_text(ev["reason"])
+        return "暫停：" + pause_text(ev["reason"], **pause_context(rec, ev, daily_usd))
     if kind == "continued":
         return "繼續派工"
     if kind == "stopped":
@@ -440,7 +488,7 @@ def can_delete(rec: dict) -> bool:
     return rec["state"] in DELETABLE_STATES or (rec["state"] == "paused" and all(s["state"] == "pending" for s in rec["steps"]))
 
 
-def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None = None) -> dict:
+def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None = None, daily_usd: Decimal | None = None) -> dict:
     """A dispatch as the API shows it: its plan with names for the codes, the steps, what the person may do, and, when the
     limits are known, the most it may cost. No word of the conversation (the record holds none)."""
     plan = copy.deepcopy(rec["plan"])
@@ -456,13 +504,18 @@ def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None
             "max_usd": mt.fmt(per_turn * steps) if per_turn is not None else None,
             "day_left_usd": mt.fmt(day_left) if day_left is not None else None}
     pause = rec["pause"]
+    pause_words = None
+    if pause is not None:
+        paused_at = next((e for e in reversed(rec["events"]) if e["kind"] == "paused"),
+                         {"seq": MAX_EVENTS + 1, "reason": pause["reason"], "until": pause["until"]})
+        pause_words = pause_text(pause["reason"], **pause_context(rec, paused_at, daily_usd))
     return {"id": rec["id"], "chief_id": rec["chief_id"], "chat_id": rec["chat_id"], "created_at": rec["created_at"], "state": state,
             "started_by": rec["started_by"], "started_by_text": BY_TEXT.get(rec["started_by"]), "summary": rec["summary"],
             "questions": list(rec["questions"]), "notes": copy.deepcopy(rec["notes"]), "team": team,
             "proposal_sha": rec["proposal_sha"], "plan": plan, "edited": rec["plan"] != rec["proposal_plan"], "steps": copy.deepcopy(rec["steps"]),
             "task_id": rec["task_id"], "created_cards": made, "cost": cost,
-            "pause": None if pause is None else {"reason": pause["reason"], "until": pause["until"], "text": pause_text(pause["reason"])},
-            "events": [{**e, "what": describe(rec, e), "by_text": BY_TEXT[e["by"]]} for e in rec["events"]],
+            "pause": None if pause is None else {"reason": pause["reason"], "until": pause["until"], "text": pause_words},
+            "events": [{**e, "what": describe(rec, e, daily_usd), "by_text": BY_TEXT[e["by"]]} for e in rec["events"]],
             "can": {"confirm": state == "proposed" and bool(plan["steps"]), "dismiss": state == "proposed",
                     "stop": state in ("running", "paused"), "continue": state == "paused", "delete": can_delete(rec),
                     "withdraw": [m["profile_id"] for m in made if not m["withdrawn"]]}}
@@ -562,6 +615,7 @@ class Dispatcher:
         self.busy = busy or (lambda chat_id: False)
         self.day_left = day_left or (lambda: None)
         self.lock = threading.Lock()
+        self.control = None                  # the runner (vbear/dispatch_runner.py): it carries out stop and resume
 
     # -- the record ------------------------------------------------------------------------------------------------
 
@@ -581,19 +635,27 @@ class Dispatcher:
     def _event(self, rec: dict, kind: str, by: str, **fields) -> None:
         rec["events"].append({"seq": len(rec["events"]) + 1, "at": self.clock(), "kind": kind, "by": by, **fields})
 
-    def _pause(self, dispatch_id: str, reason: str, by: str = "vbear") -> dict:
+    def _pause(self, dispatch_id: str, reason: str, by: str = "vbear", until: float | None = None) -> dict:
         def change(rec):
-            rec["state"], rec["pause"] = "paused", {"reason": reason, "until": None}
-            self._event(rec, "paused", by, reason=reason)
+            rec["state"], rec["pause"] = "paused", {"reason": reason, "until": until}
+            self._event(rec, "paused", by, reason=reason, **({"until": until} if until is not None else {}))
         return self._mutate(dispatch_id, change)
 
+    # what the runner uses (one transaction on a record, an event for it)
+    def mutate(self, dispatch_id: str, change: Callable[[dict], None]) -> dict:
+        return self._mutate(dispatch_id, change)
+
+    def add_event(self, rec: dict, kind: str, by: str, **fields) -> None:
+        self._event(rec, kind, by, **fields)
+
     def _view(self, rec: dict) -> dict:
-        per_turn = cs.limits_from(self.conf())["per_turn_usd"]
+        conf = self.conf()
+        per_turn = cs.limits_from(conf)["per_turn_usd"]
         try:
             left = self.day_left()
         except Exception:
             left = None
-        return view(rec, per_turn=per_turn, day_left=left)
+        return view(rec, per_turn=per_turn, day_left=left, daily_usd=mt.limits_from(conf)["daily_usd"])
 
     def _by_chief(self, chief_id: str) -> str | None:
         for did in record_ids():
@@ -794,12 +856,18 @@ class Dispatcher:
         return self.get(dispatch_id)
 
     def stop(self, dispatch_id: str) -> dict:
+        """「停止」: nothing more is sent, and a turn that is running is stopped (carried out by the runner)."""
         load(dispatch_id)
-        raise DispatchError("no_runner")
+        if self.control is None:
+            raise DispatchError("no_runner")
+        return self.control.stop_dispatch(dispatch_id)
 
     def resume(self, dispatch_id: str) -> dict:
+        """「繼續」: a paused dispatch goes on (carried out by the runner); never by itself."""
         load(dispatch_id)
-        raise DispatchError("no_runner")
+        if self.control is None:
+            raise DispatchError("no_runner")
+        return self.control.resume_dispatch(dispatch_id)
 
     def withdraw_card(self, dispatch_id: str, body) -> dict:
         """Switch off an employee VBear made for this dispatch (never deleted: the chats stay). Refused while a turn of that
@@ -883,6 +951,7 @@ class Dispatcher:
         """Every event of every dispatch, the newest first, at most ``limit``: {at, dispatch_id, seq, kind, what, by, by_text,
         can_stop, can_withdraw}. ``unreadable`` counts the dispatches that could not be read (they are not guessed at)."""
         rows, unreadable = [], 0
+        daily = mt.limits_from(self.conf())["daily_usd"]
         for did in record_ids():
             try:
                 rec = load(did)
@@ -892,7 +961,7 @@ class Dispatcher:
             withdrawn = _withdrawn(rec)
             live = rec["state"] in ("running", "paused")
             for ev in rec["events"]:
-                rows.append({"at": ev["at"], "dispatch_id": did, "seq": ev["seq"], "kind": ev["kind"], "what": describe(rec, ev),
+                rows.append({"at": ev["at"], "dispatch_id": did, "seq": ev["seq"], "kind": ev["kind"], "what": describe(rec, ev, daily),
                              "by": ev["by"], "by_text": BY_TEXT[ev["by"]],
                              "can_stop": live and ev["kind"] in ("confirmed", "step_sent"),
                              "can_withdraw": ev["kind"] == "card_created" and ev["profile_id"] not in withdrawn})
