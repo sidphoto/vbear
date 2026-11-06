@@ -2155,7 +2155,7 @@ async function viewHome() {
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
   const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList()]);
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList(), loadGroupList()]);
   const L = D.live;
   const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
@@ -2198,7 +2198,7 @@ async function viewHome() {
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   noteTasks(tasksRes && tasksRes.tasks);
-  const board = boardGroups(L, D.flows, D.meetings, D.staffing, D.dispatch);
+  const board = boardGroups(L, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
   boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
@@ -2255,7 +2255,7 @@ function waitsForYou(f) {
 // meetingsData (optional): the answer of GET /api/meetings. A meeting that waits for the chairman is on the board; a read that
 // failed is said (meetingsError); an answer that is not a list is treated as not read. staffingData (optional, P35-4): the
 // answer of GET /api/staffing, the same way: a proposal that waits for the chairman to look at it is on the board.
-function boardGroups(live, flowsData, meetingsData, staffingData, dispatchData) {
+function boardGroups(live, flowsData, meetingsData, staffingData, dispatchData, groupsData) {
   const L = live || {};
   const runtimeAvailable = !!(L.runtime && L.runtime.available);
   const sessions = Array.isArray(L.sessions) ? L.sessions : [];
@@ -2281,13 +2281,17 @@ function boardGroups(live, flowsData, meetingsData, staffingData, dispatchData) 
   // P40-5: a proposal of the chief of staff to confirm, a dispatch that is paused
   const yourTurnDispatch = dispatchNeedingYou(dispatchData);
   const dispatchError = dispatchData && typeof dispatchData === "object" && dispatchData.error ? String(dispatchData.error) : "";
+  // P41-3: a group where an employee waits for the person's answer to a card, a group whose round is paused
+  const yourTurnGroups = groupsNeedingYou(groupsData);
+  const groupsError = groupsData && typeof groupsData === "object" && groupsData.error ? String(groupsData.error) : "";
   return {
     error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError, yourTurnStaffing, staffingError, yourTurnDispatch, dispatchError,
+    yourTurnGroups, groupsError,
     inProgress: readable.slice(0, BOARD_IN_PROGRESS_MAX),
     moreInProgress: Math.max(0, readable.length - BOARD_IN_PROGRESS_MAX),
     missingFlows: missingFlows.slice(0, BOARD_MISSING_MAX), moreMissing: Math.max(0, missingFlows.length - BOARD_MISSING_MAX),
     runtimeAvailable,
-    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length && !yourTurnDispatch.length,
+    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length && !yourTurnDispatch.length && !yourTurnGroups.length,
   };
 }
 
@@ -2334,6 +2338,7 @@ function boardKey(g, ctx) {
     staffing: (g.yourTurnStaffing || []).map((x) => [x.id, staffingTurnTitle(x), x.status, x.created_at, x.spent_usd, x.high_risk === true]),
     staffingError: g.staffingError || "",
     dispatch: (g.yourTurnDispatch || []).map((x) => [x.id, x.state, x.title, x.steps, x.created_at]), dispatchError: g.dispatchError || "",
+    groups: (g.yourTurnGroups || []).map((x) => [x.id, x.name, x.state, x.waiting === true, x.last_at]), groupsError: g.groupsError || "",
     progress: g.inProgress.map(flowFields), missing: (g.missingFlows || []).map(flowFields), moreMissing: g.moreMissing || 0 });
 }
 
@@ -2464,7 +2469,8 @@ function boardSection(g, opts = {}) {
         el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。"),
         g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
         g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
-        g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null));
+        g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
+        g.groupsError ? notice("warn", `讀不到群組：${g.groupsError}`) : null));
   }
   const nTurn = g.yourTurnFlows.length;
   const nAgents = g.yourTurnSessions.length;
@@ -2472,11 +2478,14 @@ function boardSection(g, opts = {}) {
   const nStaffing = (g.yourTurnStaffing || []).length;
   const nProposed = (g.yourTurnDispatch || []).filter((r) => r.state === "proposed").length;
   const nPaused = (g.yourTurnDispatch || []).filter((r) => r.state === "paused").length;
+  const nGroupWait = (g.yourTurnGroups || []).filter((r) => r.waiting === true).length;
+  const nGroupPaused = (g.yourTurnGroups || []).length - nGroupWait;
   const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nStaffing ? `${nStaffing} 份組隊提案等你` : "",
     nProposed ? `${nProposed} 份派工提議等你` : "", nPaused ? `${nPaused} 件派工暫停` : "",
+    nGroupWait ? `${nGroupWait} 個群組等你按允許` : "", nGroupPaused ? `${nGroupPaused} 個群組暫停` : "",
     nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
   const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard),
-    ...(g.yourTurnStaffing || []).map(staffingTurnCard), ...(g.yourTurnDispatch || []).map(dispatchTurnCard), ...g.yourTurnSessions.map(sessionCard)];
+    ...(g.yourTurnStaffing || []).map(staffingTurnCard), ...(g.yourTurnDispatch || []).map(dispatchTurnCard), ...(g.yourTurnGroups || []).map(groupTurnCard), ...g.yourTurnSessions.map(sessionCard)];
   let turnBody;
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
@@ -2503,6 +2512,7 @@ function boardSection(g, opts = {}) {
       g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
       g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
       g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
+      g.groupsError ? notice("warn", `讀不到群組：${g.groupsError}`) : null,
       turnBody),
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
@@ -12335,9 +12345,10 @@ async function route() {
       await loadMeetings();
       await loadStaffingList();
       await loadDispatchList();
+      await loadGroupList();
       const box = document.getElementById("h-board");
       if (!box) return;
-      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch);
+      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch, D.groups);
       const key = boardKey(g, boardKeyContext());
       if (key === boardShownKey) return;
       boardShownKey = key;
@@ -13218,8 +13229,9 @@ function chatCardNode(card, opts) {
     on: { input: (e) => { o.edit.text = e.target.value; } } }) : null;
   if (area) area.value = typeof o.edit.text === "string" ? o.edit.text : (card.input && typeof card.input[editable] === "string" ? card.input[editable] : "");
   const answer = (decision, value) => { if (!busy && o.onAnswer) o.onAnswer(card, decision, value); };
-  return el("section", { class: "chat-card card", "data-chat": "live-card", "data-card-id": card.card_id, role: "group", "aria-label": `員工想${tool}，要你決定` },
-    el("div", { class: "chat-card-head" }, badge("要你決定", "b-warn"), el("strong", null, `員工想${tool}`)),
+  const who = typeof o.who === "string" && o.who ? o.who : "員工";      // a group page names the employee who asks
+  return el("section", { class: "chat-card card", "data-chat": "live-card", "data-card-id": card.card_id, role: "group", "aria-label": `${who}想${tool}，要你決定` },
+    el("div", { class: "chat-card-head" }, badge("要你決定", "b-warn"), el("strong", null, `${who}想${tool}`)),
     typeof card.reason === "string" && card.reason ? el("p", { class: "small muted" }, card.reason) : null,
     el("dl", { class: "chat-card-rows" }, rows.map(([k, v]) => [el("dt", null, k), el("dd", null, el("pre", { class: "chat-pre" }, v))])),
     editing && codex && card.tool === "file_change" ? el("p", { class: "small", "data-chat": "edit-note" }, CHAT_CODEX_EDIT_FILE) : null,
@@ -13648,16 +13660,22 @@ async function viewChatDetail(token, id) {
   take(all.records);
   view = { ...view, more: all.more === true };
   draw();
-  const composer = el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn,
+  // P41-3: a chat a group opened (arrived at by an old address): said so, with the way to the group, and no box to talk in; the
+  // cards that wait can still be answered here, as the person's own press
+  const inGroup = all.group && typeof all.group === "object" && typeof all.group.id === "string" && GROUP_ID_RE.test(all.group.id) ? all.group : null;
+  const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
+    `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
+    el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn,
     el("button", { type: "button", class: "btn small", "data-chat": "delete", on: { click: async () => {
       if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。"
         + (isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
       try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
       catch (e) { toast(e.message); }
     } } }, "刪除這個聊天")), sendNote, openingNote);
-  const isCeo = !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
+  const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
-  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, chief ? chief.node : null, noteBox, transcript, liveBox, composer);
+  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, noteBox, transcript, liveBox, composer);
   activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); };
   stream();
   if (opening) input.focus();
@@ -13668,8 +13686,11 @@ async function viewChatDetail(token, id) {
 // members one after the other in the order shown, and each one's reply is data for the next. The list (#/chat) shows groups with
 // the one-to-one chats; a new group is made in a dialog (nothing starts, nothing is spent); one group is #/chat/group/<id>. Everything
 // shown is what the server says (the log's items, the round, the money, which buttons are real now); a model's text is set as text.
-// Nothing here answers an employee's permission card, writes a setting or a limit, or starts anything: the only thing the group page
-// sends is the person's own words (POST /api/groups/<id>/messages), by the send button.
+// P41-3: the group page is whole: who the words go to (大家 or the @ buttons), the line about the most it can cost, the card of the
+// employee who is answering (the same card as in a one-to-one chat, answered by the person's own press, one card at a time), stop,
+// 繼續 and 不用了 on a pause, the name, who is in the group, delete. Nothing here answers a card by itself, allows more than one card,
+// writes a setting or a limit, or starts anything: what the page sends is the person's own words (by the send button), the press
+// on a button of the group (stop, continue, drop, name, people, delete) and the press on a button of a card (groupAnswerCard).
 
 const GROUP_ID_RE = /^g-[0-9a-f]{12}$/;
 const GROUP_MIN = 2;
@@ -13681,8 +13702,10 @@ const GROUP_SHARE_NOTE = "員工看不到彼此的檔案，只看得到群組裡
 const GROUP_MIXED_NOTE = "群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。";
 const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
   + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
-const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，VBear 會問。這個畫面還不能回覆那張卡片（下一版加上），不回覆的話 5 分鐘後視為拒絕。";
-const GROUP_STUCK_NOTE = "這一輪停在這裡。「繼續」「不用了」和「停止」的按鈕這一版還沒有（下一版加上）。";
+const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，卡片會出現在那位員工的名字下面，每一次都要你按「允許這一次」，沒有一次允許好幾張的按鈕。不按的話，5 分鐘後視為拒絕。";
+const GROUP_EDIT_LOCKED = "這一句還沒回完的時候，不能改名、加人、移除或刪除群組。";
+const GROUP_DELETE_NOTE = "會刪掉群組和群組裡每位員工的對話紀錄；已經花的錢照記。Codex 自己保存的對話副本不會被刪。";
+const GROUP_RED_NOTE = "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。";
 const GROUP_STATE = {
   idle: ["等你說話", "b-mute"], running: ["進行中", "b-info"], paused: ["暫停了", "b-warn"], readonly: ["紀錄有問題", "b-bad"],
 };
@@ -13829,6 +13852,30 @@ async function groupReadAll(id) {
   return { ...first, items, next_after: after, more: true };
 }
 
+// What the page asks of a member's own chat: only the live part (the words being written and the cards that wait). `after` this big
+// is past the end of any record, so no record is sent back, only `live`.
+const GROUP_LIVE_AFTER = 999999999;
+
+// The one place this page answers a card, and only ever called by a press of a button on the card (chatCardNode's buttons). It is the
+// chat's own route with the one-use token that card came with: the same call as in a one-to-one chat.
+async function groupAnswerCard(chatId, card, decision, value) {
+  return api.post(`/api/chats/${encodeURIComponent(chatId)}/answer`, { card_id: card.card_id, token: card.token, decision, value: decision === "modify" ? value : undefined });
+}
+
+// The names at the very start of what is typed ("@會計師 @文案小編 ..."), each exactly a member's name, in the order typed, once each.
+function groupMentions(words, names) {
+  const list = (Array.isArray(names) ? names : []).filter((n) => typeof n === "string" && n).sort((a, b) => b.length - a.length);
+  let rest = String(words || "").replace(/^\s+/, "");
+  const out = [];
+  while (rest.startsWith("@")) {
+    const hit = list.find((n) => rest.startsWith("@" + n));
+    if (!hit) break;
+    if (!out.includes(hit)) out.push(hit);
+    rest = rest.slice(1 + hit.length).replace(/^[\s,，、]+/, "");
+  }
+  return out;
+}
+
 async function viewGroup(id) {
   const token = seq;
   if (!id || !GROUP_ID_RE.test(id)) {
@@ -13842,20 +13889,87 @@ async function viewGroup(id) {
     return;
   }
   const main = claim(token);
+  const gid = encodeURIComponent(id);
   let view = all;
   let lastSeq = 0;
-  let busy = false;
-  let noteText = "";
+  let busy = false;                     // a send or a press on a button is on its way
+  let noteText = "";                    // the server's last refusal of a send
+  let actNote = "";                     // ... of 停止 / 繼續 / 不用了
+  let live = null;                      // { chatId, view }: the live part of the chat of the one who is answering
+  let polling = false;
+  const edits = new Map();              // card_id -> { open, text }
+  const answering = new Set();
+  // who the next words go to: everyone, or the ones pointed at
+  let toAll = true;
+  const toIds = new Set();
+  let autoPicked = false;               // the buttons were set by what was typed, not by a press
+  let lastMention = "";
+  // the part for changing the group (name, people, delete): drawn again only when what it shows changes, so what is typed in it stays
+  let renaming = false, peopleOpen = false, candidates = null, manageKey = "";
   const transcript = el("ul", { class: "chat-log", "data-group": "log", "aria-live": "off" });
   const headBox = el("div", { class: "group-head" });
+  const manageBox = el("div", { class: "group-manage", "data-group": "manage" });
   const statusBox = el("div", { class: "group-status", "data-group": "status", "aria-live": "polite" });
+  const liveBox = el("div", { class: "chat-live", "data-group": "live", "aria-live": "polite" });
+  const ctlBox = el("div", { class: "group-controls", "data-group": "controls" });
+  const toBox = el("div", { class: "row group-to", "data-group": "to" });
   const costBox = el("p", { class: "small muted", "data-group": "cost-line" });
   const sendNote = el("p", { class: "small muted", "data-group": "send-note" });
   const input = el("textarea", { rows: "3", "data-group": "input", "aria-label": "要對大家說的話", maxlength: String(4000),
-    placeholder: "要對大家說什麼？（Cmd/Ctrl + Enter 送出）",
-    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+    placeholder: "要對大家說什麼？（Cmd/Ctrl + Enter 送出；開頭打 @名字 可以點名）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }, input: () => typed() } });
   const sendBtn = el("button", { type: "button", class: "btn primary", "data-group": "send", on: { click: () => send() } }, "送出");
   const members = () => (Array.isArray(view.members) ? view.members : []);
+  const can = () => (view.can && typeof view.can === "object" ? view.can : {});
+  const red = () => !!view.cost && view.cost.lamp === "red";
+  const sendable = () => can().send === true && !red();
+  // the members the next words go to, in the group's order
+  const target = () => {
+    const mine = members().filter((m) => toIds.has(m.profile_id));
+    return toAll || !mine.length ? members() : mine;
+  };
+  const targetBody = () => (toAll || !members().some((m) => toIds.has(m.profile_id)) ? "all" : target().map((m) => m.profile_id));
+
+  const pickAll = () => { toAll = true; toIds.clear(); autoPicked = false; drawTo(); drawCost(); };
+  const pickOne = (pid) => {
+    autoPicked = false;
+    if (toIds.has(pid)) toIds.delete(pid); else toIds.add(pid);
+    toAll = toIds.size === 0;
+    drawTo(); drawCost();
+  };
+  // what was typed: a @名字 at the start chooses that button; the buttons the person pressed are left alone
+  const typed = () => {
+    const names = groupMentions(input.value, members().map((m) => m.name));
+    const key = names.join("\n");
+    if (key === lastMention) return;
+    lastMention = key;
+    if (names.length) {
+      toIds.clear();
+      for (const m of members()) if (names.includes(m.name)) toIds.add(m.profile_id);
+      toAll = toIds.size === 0;
+      autoPicked = !toAll;
+    } else if (autoPicked) { toAll = true; toIds.clear(); autoPicked = false; }
+    drawTo(); drawCost();
+  };
+  let toKey = "";
+  const drawTo = () => {
+    const off = !sendable();
+    const key = JSON.stringify([toAll, [...toIds], off, members().map((m) => [m.profile_id, m.name])]);
+    if (key === toKey) return;                 // the buttons are drawn again only when they change, so a press is never lost to a poll
+    toKey = key;
+    setKids(toBox,
+      el("button", { type: "button", class: `btn small${toAll ? " primary" : ""}`, "data-group": "to-all", "aria-pressed": String(toAll), disabled: off, on: { click: () => pickAll() } }, "大家"),
+      members().map((m) => {
+        const on = !toAll && toIds.has(m.profile_id);
+        return el("button", { type: "button", class: `btn small${on ? " primary" : ""}`, "data-group": "to-pick", "data-profile-id": m.profile_id,
+          "aria-pressed": String(on), disabled: off, on: { click: () => pickOne(m.profile_id) } }, `@${m.name || "未知"}`);
+      }));
+  };
+  const drawCost = () => {
+    const cost = view.cost && typeof view.cost === "object" ? view.cost : {};
+    setKids(costBox, groupCostText(target().map((m) => m.name || "未知"), cost.per_turn_usd, cost.day_left_usd).text);
+  };
+
   const draw = () => {
     const g = view.group || {};
     const cur = view.current && typeof view.current === "object" ? view.current : null;
@@ -13867,31 +13981,142 @@ async function viewGroup(id) {
         el("span", { class: "group-avatar", "aria-hidden": "true" }, String(m.name || "?").slice(0, 1)),
         el("span", null, m.name || "未知"), " ", el("span", { class: "tag" }, chatToolName(m.tool)),
         asked.has(m.profile_id) ? el("span", { class: "small muted", "data-group": "asked" }, `　${GROUP_ASKED[asked.get(m.profile_id)] || ""}`) : null))),
-      el("p", { class: "small muted", "data-group": "what" }, GROUP_WHAT),
       el("p", { class: "small muted", "data-group": "share" }, GROUP_SHARE_NOTE),
       view.cost && /^[0-9.]+$/.test(String(view.cost.group_today_usd)) ? el("p", { class: "small muted", "data-group": "spent" }, `這個群組今天花了 US$${view.cost.group_today_usd}。`) : null,
       el("p", { class: "small muted", "data-group": "card-note" }, GROUP_CARD_NOTE));
     const bits = [];
     if (g.state === "readonly") bits.push(notice("bad", `群組紀錄有問題，不能再送訊息。${g.problem ? "（" + g.problem + "）" : ""}`));
     if (view.more === true) bits.push(notice("info", "這個群組很長，只顯示了前面一段。"));
+    setKids(statusBox, bits);
+    drawLive();
+    drawControls();
+    drawManage();
+    drawTo();
+    drawCost();
+    const ok = sendable();
+    sendBtn.disabled = busy || !ok;
+    input.disabled = !ok;
+    const why = typeof can().why_not_send === "string" && can().why_not_send;
+    setKids(sendNote, noteText || (ok ? "" : red() && !why ? GROUP_RED_NOTE : why || (red() ? GROUP_RED_NOTE : "現在不能送訊息。")));
+  };
+  // who is answering, the words being written and, under that name, the card that asks the person
+  const drawLive = () => {
+    const cur = view.current && typeof view.current === "object" ? view.current : null;
+    const kids = [];
     if (cur) {
       const who = members().find((m) => m.profile_id === cur.profile_id);
-      bits.push(el("p", { class: "small", "data-group": "answering", role: "status" }, `${who && who.name ? who.name : "一位員工"}正在回答…`));
+      const name = who && who.name ? who.name : "一位員工";
+      kids.push(el("p", { class: "small", "data-group": "answering", role: "status" }, `${name}正在回答…`));
+      const lv = live && live.chatId === cur.chat_id ? live.view : null;
+      if (lv && lv.partial) kids.push(el("div", { class: "chat-msg chat-them chat-partial", "data-group": "partial" },
+        el("div", { class: "chat-who small muted" }, `${name}正在寫…`), el("div", { class: "chat-text" }, lv.partial),
+        lv.partial_truncated === true ? el("div", { class: "small muted" }, "（只顯示最後一段，寫完後會完整出現）") : null));
+      for (const card of lv && Array.isArray(lv.cards) ? lv.cards : []) {
+        if (!card || typeof card.card_id !== "string") continue;
+        if (!edits.has(card.card_id)) edits.set(card.card_id, { open: false, text: undefined });
+        kids.push(el("div", { class: "group-card", "data-group": "card-box", "data-profile-id": text0(cur.profile_id) },
+          chatCardNode(card, { who: name, busy: answering.has(card.card_id), edit: edits.get(card.card_id), redraw: drawLive, onAnswer: answerCard })));
+      }
     }
-    if (round && round.pause) {
-      bits.push(notice("warn", round.pause.text || "這一輪暫停了。"));
-      bits.push(el("p", { class: "small muted", "data-group": "stuck" }, GROUP_STUCK_NOTE));
-    }
-    setKids(statusBox, bits);
-    const cost = view.cost && typeof view.cost === "object" ? view.cost : {};
-    const c = groupCostText(members().map((m) => m.name || "未知"), cost.per_turn_usd, cost.day_left_usd);
-    setKids(costBox, c.text);
-    const can = view.can && typeof view.can === "object" ? view.can : {};
-    const sendable = can.send === true;
-    sendBtn.disabled = busy || !sendable;
-    input.disabled = !sendable;
-    setKids(sendNote, noteText || (sendable ? "" : (typeof can.why_not_send === "string" && can.why_not_send) || "現在不能送訊息。"));
+    const active = document.activeElement;
+    const hadFocus = !!active && liveBox.contains(active) && String(active.tagName || active.tag || "").toUpperCase() === "TEXTAREA";
+    setKids(liveBox, kids);
+    if (hadFocus) { const ta = liveBox.querySelector("textarea"); if (ta && ta.focus) ta.focus(); }
   };
+  const text0 = (x) => (typeof x === "string" ? x : "");
+  // 停止 while a round is on; 繼續 / 不用了 while it is paused: each only when the server says it can be done now
+  const drawControls = () => {
+    const round = view.round && typeof view.round === "object" ? view.round : null;
+    const kids = [];
+    if (round && round.pause) kids.push(notice("warn", round.pause.text || "這一句暫停了。"));
+    const act = (what, label, cls) => el("button", { type: "button", class: `btn small${cls ? " " + cls : ""}`, "data-group": what, disabled: busy, on: { click: () => groupAct(what) } }, label);
+    const buttons = [can().continue === true ? act("continue", "繼續（請剩下的人回答）", "primary") : null,
+      can().drop === true ? act("drop", "不用了") : null, can().stop === true ? act("stop", "停止") : null].filter(Boolean);
+    if (buttons.length) kids.push(el("div", { class: "row" }, buttons));
+    if (actNote) kids.push(el("p", { class: "small", "data-group": "act-note", role: "alert" }, actNote));
+    setKids(ctlBox, kids);
+  };
+  async function groupAct(what) {
+    if (busy) return;
+    busy = true; actNote = ""; draw();
+    try { await api.post(`/api/groups/${gid}/${what}`, {}); await pollOnce(); }
+    catch (e) { actNote = e.message; toast(e.message); }
+    busy = false; if (token === seq) draw();
+  }
+  async function answerCard(card, decision, value) {
+    const chatId = live && live.chatId;
+    if (!chatId) return;
+    answering.add(card.card_id); actNote = ""; drawLive();
+    try { await groupAnswerCard(chatId, card, decision, value); edits.delete(card.card_id); }
+    catch (e) { toast(e.message); actNote = e.message; }
+    answering.delete(card.card_id);
+    await pollOnce();
+    if (token === seq) draw();
+  }
+
+  // ---- changing the group: the name, who is in it, delete ----
+  function drawManage() {
+    const g = view.group || {};
+    const ok = can().edit_members === true;
+    const key = JSON.stringify([ok, can().delete === true, g.name, members().map((m) => [m.profile_id, m.name]), renaming, peopleOpen, candidates && candidates.length, !!view.round]);
+    if (key === manageKey) return;
+    manageKey = key;
+    const kids = [];
+    if (!ok) kids.push(el("p", { class: "small muted", "data-group": "edit-note" }, view.round ? GROUP_EDIT_LOCKED : "現在不能改名、加人或移除。"));
+    if (renaming && ok) {
+      const box = el("input", { type: "text", maxlength: String(GROUP_NAME_MAX), "data-group": "rename-input", "aria-label": "群組的新名字", value: g.name || "" });
+      box.value = g.name || "";
+      kids.push(el("div", { class: "row" }, box,
+        el("button", { type: "button", class: "btn small primary", "data-group": "rename-save", on: { click: () => rename(box.value) } }, "存"),
+        el("button", { type: "button", class: "btn small", "data-group": "rename-cancel", on: { click: () => { renaming = false; draw(); } } }, "不改了")));
+    }
+    const row = [];
+    if (ok && !renaming) row.push(el("button", { type: "button", class: "btn small", "data-group": "rename", on: { click: () => { renaming = true; draw(); } } }, "改名"));
+    if (ok) row.push(el("button", { type: "button", class: "btn small", "data-group": "people", "aria-expanded": String(peopleOpen), on: { click: () => openPeople() } }, "加人／移除"));
+    if (can().delete === true) row.push(el("button", { type: "button", class: "btn small", "data-group": "delete", on: { click: () => removeGroup() } }, "刪除這個群組"));
+    if (row.length) kids.push(el("div", { class: "row" }, row));
+    if (peopleOpen && ok) {
+      const list = members();
+      const picks = (candidates || []).filter((c) => c && c.can_chat === true && !list.some((m) => m.profile_id === c.id));
+      const pick = el("select", { "data-group": "add-pick", "aria-label": "要加入的員工", disabled: list.length >= GROUP_MAX || !picks.length },
+        el("option", { value: "" }, picks.length ? "選一位員工…" : "沒有可以加入的員工"),
+        picks.map((c) => el("option", { value: c.id }, `${c.name || c.id}（${chatToolName(c.tool)}）`)));
+      kids.push(el("div", { class: "group-people", "data-group": "people-box" },
+        el("ul", { class: "group-picks" }, list.map((m) => el("li", { class: "group-pick" }, `${m.name || "未知"}（${chatToolName(m.tool)}）　`,
+          el("button", { type: "button", class: "btn small", "data-group": "remove", "data-profile-id": m.profile_id, disabled: list.length <= GROUP_MIN,
+            on: { click: () => changeMembers([], [m.profile_id]) } }, "移除")))),
+        el("div", { class: "row" }, pick,
+          el("button", { type: "button", class: "btn small", "data-group": "add", disabled: list.length >= GROUP_MAX,
+            on: { click: () => { if (pick.value) changeMembers([pick.value], []); } } }, "加入")),
+        el("p", { class: "small muted", "data-group": "people-note" }, `群組至少要 ${GROUP_MIN} 位、最多 ${GROUP_MAX} 位員工。移除只是不再問他，之前的對話還在；再加回來時接著原來的對話。`)));
+    }
+    setKids(manageBox, kids);
+  }
+  async function openPeople() {
+    peopleOpen = !peopleOpen; draw();
+    if (!peopleOpen || candidates) return;
+    try { const r = await api.get("/api/chats"); candidates = Array.isArray(r.cards) ? r.cards : []; }
+    catch (e) { candidates = []; toast("讀不到可以加入的員工：" + e.message); }
+    if (token === seq) draw();
+  }
+  async function changeMembers(add, remove) {
+    try { await api.post(`/api/groups/${gid}/members`, { add, remove }); await pollOnce(); }
+    catch (e) { toast(e.message); }
+    if (token === seq) draw();
+  }
+  async function rename(name) {
+    const next = String(name || "").trim();
+    if (!next) { toast("名字不能是空的。"); return; }
+    try { await api.post(`/api/groups/${gid}/rename`, { name: next }); renaming = false; await pollOnce(); }
+    catch (e) { toast(e.message); }
+    if (token === seq) draw();
+  }
+  async function removeGroup() {
+    if (!(await confirmInPage("刪除群組", GROUP_DELETE_NOTE, "刪除"))) return;
+    try { await api.del(`/api/groups/${gid}`); stopPolling(); toast("群組已刪除"); location.hash = "#/chat"; }
+    catch (e) { toast(e.message); }
+  }
+
   const take = (items) => {
     for (const item of items) {
       if (!item || typeof item.seq !== "number" || item.seq <= lastSeq) continue;
@@ -13905,21 +14130,37 @@ async function viewGroup(id) {
     take(Array.isArray(data.items) ? data.items : []);
     if (typeof data.next_after === "number") lastSeq = Math.max(lastSeq, data.next_after);
     view = { ...view, ...data, items: undefined };
-    draw();
   };
+  // the live part of the chat of the one who is answering (nothing is asked when no one is)
+  async function readLive() {
+    const cur = view.current && typeof view.current === "object" && typeof view.current.chat_id === "string" ? view.current : null;
+    if (!cur) { live = null; return; }
+    try {
+      const r = await api.get(`/api/chats/${encodeURIComponent(cur.chat_id)}?after=${GROUP_LIVE_AFTER}`);
+      live = { chatId: cur.chat_id, view: r && r.live && typeof r.live === "object" ? r.live : null };
+    } catch (_) { live = null; }
+  }
   async function pollOnce() {
-    try { apply(await api.get(`/api/groups/${encodeURIComponent(id)}?after=${lastSeq}`)); }
-    catch (e) {
+    if (polling) return;
+    polling = true;
+    try {
+      apply(await api.get(`/api/groups/${gid}?after=${lastSeq}`));
+      await readLive();
+      if (token === seq) draw();
+    } catch (e) {
       if (e.status === 404) { setKids(statusBox, notice("bad", "這個群組已經被刪除。")); stopPolling(); }
     }
+    polling = false;
   }
   async function send() {
     const words = input.value;
-    if (busy || !words.trim()) return;
+    if (busy || !sendable() || !words.trim()) return;
     busy = true; noteText = ""; draw();
     try {
-      await api.post(`/api/groups/${encodeURIComponent(id)}/messages`, { text: words, to: "all" });
+      await api.post(`/api/groups/${gid}/messages`, { text: words, to: targetBody() });
       input.value = "";
+      toAll = true; toIds.clear(); autoPicked = false; lastMention = "";
+      busy = false;
       await pollOnce();
     } catch (e) {
       noteText = e.message;
@@ -13931,11 +14172,12 @@ async function viewGroup(id) {
   function stopPolling() { clearInterval(timer); timer = null; }
   take(all.items);
   lastSeq = Math.max(lastSeq, typeof all.next_after === "number" ? all.next_after : 0);
+  await readLive();
   draw();
-  const composer = el("div", { class: "chat-composer", "data-group": "composer" },
-    el("div", { class: "row group-to", "data-group": "to" }, el("button", { type: "button", class: "btn small primary", "data-group": "to-all", "aria-pressed": "true", disabled: true }, "大家")),
-    input, costBox, el("div", { class: "row" }, sendBtn), sendNote);
-  setKids(main, crumbs([["聊天", "#/chat"], [(view.group && view.group.name) || id]]), headBox, statusBox, transcript, composer);
+  const what = el("p", { class: "small muted group-what", "data-group": "what" }, GROUP_WHAT, " ",
+    el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往派工"));
+  const composer = el("div", { class: "chat-composer", "data-group": "composer" }, toBox, input, costBox, el("div", { class: "row" }, sendBtn), sendNote);
+  setKids(main, crumbs([["聊天", "#/chat"], [(view.group && view.group.name) || id]]), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
   timer = setInterval(() => { if (!document.hidden) pollOnce(); }, GROUP_POLL_MS);
   activeViewCleanup = () => stopPolling();
 }
@@ -14603,6 +14845,30 @@ function dispatchTurnCard(r) {
         el("div", { class: "card-sub" }, proposed ? "幕僚長提出了一份派工提議，等你看過、確認" : "這份派工暫停了，原因在派工頁；按「繼續」才會接著做")),
       el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), proposed ? "派工提議" : "派工暫停")),
     el("div", { class: "stat-line" }, el("span", null, `${r.steps} 步`)),
+    el("div", { class: "quest-go" }, "前往處理 →"));
+}
+// The groups on the lobby's 「輪到你」 (P41-3): one where an employee waits for the person's answer to a card, one that is paused. A group whose
+// record cannot be read (read-only) is not drawn here: the list shows it.
+async function loadGroupList() {
+  try { D.groups = await api.get("/api/groups"); }
+  catch (e) { D.groups = { error: e.message, groups: [] }; }
+  return D.groups;
+}
+function groupsNeedingYou(list) {
+  const rows = list && typeof list === "object" && Array.isArray(list.groups) ? list.groups : [];
+  return rows.filter((r) => r && typeof r === "object" && typeof r.id === "string" && GROUP_ID_RE.test(r.id) && r.state !== "readonly" && (r.waiting === true || r.state === "paused"))
+    .sort((a, b) => (Number(b.last_at) || 0) - (Number(a.last_at) || 0));
+}
+function groupTurnCard(r) {
+  const waiting = r.waiting === true;
+  const members = Array.isArray(r.members) ? r.members : [];
+  return el("article", { class: "card quest quest-turn", "data-quest": "group", "data-group": "board-card", "data-group-id": r.id },
+    el("div", { class: "card-top" },
+      el("div", { style: "min-width:0" },
+        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/chat/group/${encodeURIComponent(r.id)}` }, `${waiting ? "群組等你按允許" : "群組暫停"}：${r.name || "（沒有名稱）"}`)),
+        el("div", { class: "card-sub" }, waiting ? "有員工想動手，卡片在群組頁，要你按「允許這一次」或「拒絕」" : "這一句停在半路，原因在群組頁；按「繼續」或「不用了」")),
+      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), waiting ? "等你按允許" : "群組暫停")),
+    el("div", { class: "stat-line" }, el("span", null, members.map((m) => (m && m.name) || "未知").join("、"))),
     el("div", { class: "quest-go" }, "前往處理 →"));
 }
 // The note over a message of the chat that VBear sent for a dispatch (record.origin = {dispatch, step}); null for any other.
@@ -16947,6 +17213,9 @@ if (typeof module !== "undefined" && module.exports) {
     groupCostText,
     groupRow,
     groupItemNode,
+    groupMentions,
+    groupsNeedingYou,
+    groupTurnCard,
     openGroupDialog,
     viewGroup,
     viewChat,
