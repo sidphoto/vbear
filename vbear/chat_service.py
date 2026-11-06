@@ -99,6 +99,7 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "version_changed": (409, "AI 工具的版本在你預覽之後改變了，請重新整理。"),
     "verifying": (409, "聊天模式的驗證正在進行。"),
     "group_member_chat": (409, "這是群組裡的對話，請到群組裡說話。"),
+    "memory_refused": (409, "記憶裡有一條現在不能送出，請到記憶頁看看。你的訊息還沒有送出。"),
 }
 
 # Codes a person reads as "try again in a moment" rather than "something is wrong".
