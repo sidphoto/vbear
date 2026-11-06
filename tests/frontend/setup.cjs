@@ -327,6 +327,55 @@ test("the terminal page of a start-up terminal says in plain words what is happe
   } finally { global.fetch = inner; }
 });
 
+test("Codex: the chat login is its own button next to the others, only once Codex is installed and the server sends it", async () => {
+  const chat = (state, problem = "") => ({ chat_login: { state, problem } });
+  let v = app.setupToolView(row("codex", chat("unknown")));
+  assert.deepStrictEqual(v.buttons.map((b) => b.kind), ["install"], "not installed: install first, no chat login yet");
+  assert(!/聊天用的 Codex/.test(v.note));
+  v = app.setupToolView(installed("codex", chat("not_logged_in")));
+  assert.deepStrictEqual(v.buttons.map((b) => [b.key, b.kind, b.label]),
+    [["login", "login", "登入"], ["chat-login", "chat_login", "讓聊天用的 Codex 登入"]]);
+  assert(/另外登入一次聊天用的 Codex/.test(v.note) && /自己更新/.test(v.note), "both the usual note and the chat one");
+  v = app.setupToolView(ready("codex"));
+  assert.deepStrictEqual(v.buttons.map((b) => b.kind), [], "a server that sends nothing about it gets no button");
+  v = app.setupToolView({ ...ready("codex"), ...chat("not_logged_in") });
+  assert.deepStrictEqual(v.buttons.map((b) => b.kind), ["chat_login"], "the person's own Codex is ready, the chat one is not");
+  v = app.setupToolView({ ...ready("codex"), ...chat("logged_in") });
+  assert.deepStrictEqual(v.buttons.length, 0);
+  assert(/聊天用的 Codex：已登入/.test(v.note));
+  v = app.setupToolView({ ...ready("codex"), ...chat("folder_problem", "聊天用的 Codex 資料夾裡有 config.toml，不是 VBear 放的") });
+  assert.deepStrictEqual(v.buttons.length, 0, "a folder VBear will not use: no login button, the reason in words");
+  assert(/config\.toml/.test(v.note));
+  v = app.setupToolView({ ...ready("codex"), ...chat("unknown") });
+  assert.deepStrictEqual(v.buttons.map((b) => b.kind), ["chat_login"]);
+  assert(/查不出/.test(v.note));
+});
+
+test("Codex: the chat login button sends the tool and the action and nothing else; the page repaints when only that state changes", async () => {
+  setPage({ tools: [row("claude"), { ...installed("codex"), chat_login: { state: "not_logged_in", problem: "" } }, row("agy"), row("grok")] });
+  let main = await open("#/setup");
+  let cs = cards(main);
+  assert.deepStrictEqual(acts(cs[1]).map((a) => a[0]), ["login", "chat-login"]);
+  await click(byAttr(cs[1], "data-setup-act", "chat-login")[0]);
+  assert.deepStrictEqual(calls.filter((c) => c[1] === "/api/setup/terminals").map((c) => c[2]), [{ tool: "codex", action: "chat_login" }]);
+  assert.strictEqual(global.location.hash, "#/term/n-0123456789ab");
+  main = await open("#/setup");
+  const before = main.findAll((n) => attr(n, "data-tool") === "codex")[0];
+  page.tools = page.tools.map((t) => (t.id === "codex" ? { ...t, chat_login: { state: "logged_in", problem: "" } } : t));
+  await tick();
+  await settle();
+  const after = h.dom().mainEl.findAll((n) => attr(n, "data-tool") === "codex")[0];
+  assert(after && after !== before, "the row was drawn again");
+  assert.deepStrictEqual(acts(after).map((a) => a[0]), ["login"]);
+});
+
+test("the terminal of the chat login says it is apart from the person's own Codex", () => {
+  const w = app.setupTerminalWords({ tool: "codex", action: "chat_login", region: null });
+  assert.strictEqual(w.title, "Codex CLI 聊天登入");
+  assert(w.lines.some((l) => /和你自己的 Codex 分開/.test(l)) && w.lines.some((l) => /瀏覽器/.test(l)));
+  assert(w.lines.some((l) => /不用打任何字/.test(l)));
+});
+
 test("source: built with el(), no innerHTML, no emoji, no outside resource, and none of the words a first-time person cannot read", () => {
   assert(BLOCK.length > 4000);
   assert(!/innerHTML|insertAdjacentHTML/.test(BLOCK));

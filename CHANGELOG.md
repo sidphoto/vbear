@@ -1,5 +1,106 @@
 # Changelog
 
+## v0.13.0 — Codex chat
+
+A role card whose AI tool is Codex can be chatted with, as one whose tool is Claude Code already could. Every command and every
+file change is asked first, none is ever allowed from now on, and the cost is an estimate on your ChatGPT plan. A Codex
+version chats only after it has passed `python3 -m vbear.boundary_check --mode codex-chat` on your Mac. Six tasks (P38-1 to
+P38-6):
+
+- **Protocol and a stand-in Codex (P38-1).** `vbear/runtime/codex_chat_protocol.py` holds, for Codex 0.163.0, every line VBear
+  writes to `codex app-server` (it never writes `acceptForSession`, an execpolicy or network amendment, or `cancel`), the
+  notices and requests it understands, what it counts as a violation, and the estimate of money from tokens. The ten short
+  turns recorded with the real 0.163.0 are kept, scrubbed, in `tests/fixtures/codex-chat/`, and `tests/fake_codex_app_server.py`
+  replays them, so no test runs the real `codex`.
+- **A Codex login of the chat's own (P38-2).** `codex app-server` cannot be told to ignore your own `~/.codex` (your
+  `AGENTS.md` and MCP servers were read in the recorded run), so the chat uses `<state>/codex-chat-home` and you log in to it once
+  more. The start-up page's Codex row gains 讓聊天用的 Codex 登入, which types one fixed line into a terminal
+  (`CODEX_HOME=<that folder> codex login -c cli_auth_credentials_store=file`; the page sends a tool and an action, never a
+  command). The state is the exit code of `codex login status` alone. VBear refuses the folder when it holds a `config.toml`,
+  `rules/` or `AGENTS.md`, has a link on its path, or passes 512 MiB. The Codex that runs is the pinned one under
+  `~/.codex/packages/standalone/releases/`, never one from `PATH`; `codex-chat-verified.json` lists the versions that passed;
+  the administrator-policy sources of 0.163.0 are the 0.160.0 list (`/etc/codex`, the managed preferences domain
+  `com.openai.codex`). `docs/evidence/codex-0.163.0-chat.md` keeps what all this rests on.
+- **The daemon runs Codex chats (P38-3).** A new engine `codex-chat` (`runtime/codex_chat_session.py`): one `codex app-server`
+  per role card, at most three chats in all with the Claude ones, an environment of exactly seven variables, `untrusted` approval
+  with reviewer `user`, and asks for the legacy `workspace-write` sandbox (the card's folder as its only writable place, network off, no `/tmp`; an allowed command may still run outside it, see below). A command
+  is a card with its whole text; a file change is a card with each file's path, kind and diff, unless a path is outside the folder
+  or under `.codex`, `.agents` or `.git`, which is declined without a card. A changed command is not "allow, changed": VBear
+  declines it and sends `turn/steer`, and Codex asks again in a card of its own. Anything that shows VBear's settings are not
+  in force stops the chat (an extra MCP server, another thread, a command completed without a yes, a changed policy). The chat
+  record is version 2 (`chat.json` gains `engine`; version 1 files read as `claude-chat`) with the records `session_bound`,
+  `usage`, `plan_usage` and `card_edit_sent`, and a turn's end gains `estimate` and `tokens`.
+- **The version check (P38-4).** `python3 -m vbear.boundary_check --mode codex-chat` runs one real chat through VBear's own
+  Codex code in a temporary state folder, with seven messages (text; `ls -a` must make a card, and a denied `rm`; a changed
+  command; a file change; `apply_patch` outside the folder; stop; `thread/resume`), about fourteen short model calls on your ChatGPT
+  plan and at most US$0.30 by VBear's own counting, not added to the day's ledger. A pass writes `codex-chat-verified.json` and a
+  0600 report that is read back every time. The report holds no Codex home, user agent, plan kind, credits or e-mail-like text.
+- **The console and the page (P38-5).** `POST /api/chats` reads the role card's tool and fixes the chat's engine for good; a
+  card whose tool is Grok, AGY, MCODE or shared is refused with `card_tool_unsupported` (this replaces `card_not_claude`), and
+  a card whose tool changed after the chat began gets `card_tool_changed` and nothing starts. `GET /api/chat-support` keeps
+  Claude Code's keys and carries a `codex` object (not installed, not verified, administrator policy, folder refused, version
+  unreadable, not logged in, ready); `POST /api/chat-support/verify` takes `{"engine": "codex"}`
+  (`vbear/codex_verify.py`; no engine still means Claude Code). The chat page names each chat's AI tool, shows the notice of the
+  chosen card's tool, and for Codex draws the command card (command, folder, what Codex says it does), the file card (path,
+  what is done, diff, as text), 改內容再問 (VBear refuses the original and Codex asks again, so you allow once more), each
+  reply's cost as 「估計 US$0.02」 with the token count and 「不是帳單」, one line of the ChatGPT plan's use as Codex reports it
+  (and the reset time only when a limit was reached), and a deletion note saying Codex's own copy of the conversation in
+  `codex-chat-home/sessions` is not deleted. `session_ready` records the CLI's version in `cli_version` (Claude chats keep
+  `claude_code_version`; both read). The chat note on the page now says chats work with Claude Code or Codex. New sentences
+  for `card_tool_unsupported`, `card_tool_changed` and `codex_version`; `not_logged_in` and `codex_home` have theirs.
+  **Money:** Codex reports tokens, not money. A turn is estimated as tokens ÷ 1,000,000 × US$1.00, rounded up to the cent, at
+  least US$0.01 (VBear's accounting rule, not a price), and counted in the same `meeting_limits.daily_usd`; a turn cut off
+  without a count costs its cap. Two token reports can be a model call apart, so a turn can pass its cap by about one call.
+  **Reading is not limited:** the sandbox does not limit reads, so a command you allow can read the whole machine; the
+  permission profile that would stop reads made file changes fail on the recorded version.
+  Documents: `docs/SECURITY-MODEL.md` has "Chats with a Codex role card" with its residual risks, `docs/adr/0005-codex-chat-boundary.md`
+  records the decisions, and both READMEs, `docs/ARCHITECTURE.md` and `docs/REFERENCE.zh-TW.md` say what Codex chat is.
+- **A home folder that is a git repository.** Found before release: Codex took `~` for the project root, read the person's own
+  MCP servers and skills as a project's, and wrote that trust itself. A Codex chat now starts with `project_root_markers=[]` and
+  the work folder's trust set to `untrusted` (both `-c`, the second an inline table), asks `mcpServerStatus/list` with the
+  thread's `threadId`, and the version check asserts both were sent and that no `config.toml` appears; a `config.toml` already in
+  the chat folder is refused with a plain reason, never deleted (`docs/evidence/codex-0.163.0-chat.md`).
+- **An allowed command can run outside the sandbox.** Found on a real Mac, then read in the Codex source: under `untrusted`, when
+  the sandbox stops a command you allowed, Codex runs it again without the sandbox and does not ask again, and a command the model
+  asked to run outside the sandbox (`require_escalated`) does so the first time you allow it. Such a command can write anywhere
+  your account can write and can reach the network, and the card cannot tell which it will be. So a Codex command card now says,
+  above 允許這一次: 「允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。」
+  A Claude chat's card and a Codex file card are unchanged; VBear still declines a file change outside the work folder or under
+  `.codex`, `.agents`, `.git` by itself, with no card. The version check's `outside` step now requires only that `apply_patch`
+  outside the folder is declined with no card and leaves no file (`outside_patch_refused`); whether the allowed shell write got
+  out is only noted in the report and the file is removed. You chose this over the permission profile (every command asked and
+  kept in the sandbox, but `apply_patch` fails in it) and over `never` (no cards, reads unasked); VBear will move to the profile
+  when Codex fixes `apply_patch` there (`docs/adr/0005-codex-chat-boundary.md`, decision 7; `docs/evidence/codex-0.163.0-chat.md`, 5b).
+- **Packaging copies stay out of Spotlight and Launchpad (P38-6).** `macos/build.sh` keeps every `VBear.app` it leaves on disk
+  in a folder whose name ends in `.noindex` (`build/app.noindex`, `build/dmg.noindex`, `dist/app.noindex`); the DMG stays
+  `dist/VBear-<version>-arm64.dmg`. The release workflow's smoke check reads the new path. It deletes only the old copies inside
+  the repository.
+- **The first CEO (P38-8).** After all your AI tools were logged in, pressing 開始使用 left a person with an empty lobby and no
+  idea what to do (and with 「輪到 p」 and a card for a deleted task at the front of it). Now, when there is no role card you can
+  chat with, 開始使用 leads to `#/ceo`, 建立你的 CEO: a card named CEO (position CEO, safe mode, a short plain description you can
+  change) on the ready Claude Code, else the ready Codex; one press makes it and opens a chat with it, with the opening sentence
+  「你好，請先問我三個問題，了解我想做什麼。」 only put in the box (you can change it; only your own press of 送出 sends it, so
+  nothing is spent by the step). `GET /api/first-ceo` (`vbear/first_ceo.py`) tells the page whether the step is needed, which
+  tool the card takes (a tool that is only marked as logged in, such as AGY or Grok, is never chosen; with no ready tool it says
+  to go back to 開始設定) and the words to fill in; the card itself is made by the ordinary `POST /api/agent-profiles`. The
+  config key `first_ceo_id` makes the lobby offer 跟你的 CEO 聊聊 once (until pressed, put away, or you have already talked
+  with that card); while there is no card, the lobby offers 建立你的 CEO. A CEO is a plain role card: it chats and turns your idea
+  into a plan; it cannot create employees or hand out work (the chief of staff, v0.15, will). In the lobby, flows whose task card
+  is deleted or unreadable are folded away under 「其他進行中的任務」 (closed until you open it), and a role named with one or
+  two letters or digits reads 「輪到規劃者」, 「輪到執行者」, 「輪到審查者」 instead of 「輪到 p」.
+- **Not run on a real machine for this change:** the real Codex was never run by the code or its tests; whether `turn/steer` is
+  accepted without the experimental API, whether Codex ends when its stdin closes, what `turn/interrupt` answers, and that a
+  login writes nothing into the chat folder are for the first real `--mode codex-chat` (see section 7 of the evidence file).
+- **Going back to v0.12.0.** v0.12.0 does not know Codex chats or the version 2 chat file. Every chat made by v0.13.0, a Claude
+  chat included, has a `chat.json` that v0.12.0 reads as damaged: it lists the chat with a problem, cannot send to it and cannot
+  delete it, and the files stay. A Codex chat's record also holds kinds v0.12.0 does not know (`session_bound`, `usage`,
+  `plan_usage`, `card_edit_sent`), and v0.12.0 counts a record it cannot read whole as spend it does not know, so on the day such
+  a chat was written it refuses to start any meeting, staffing meeting or chat (`spend_unknown`) until you move the chat's folder
+  out of `<state>/chats/`. Chats made by v0.12.0 itself read as before in v0.13.0. Move or delete the Codex chats before going back.
+  `codex-chat-home/` and `codex-chat-verified.json` are left alone and unread, and a role card with the Codex tool reads as
+  before (v0.12.0 refuses to chat with it). v0.13.0 adds no config key. The launch records of Codex chats under `sessions/` are
+  an engine v0.12.0 does not know; how it treats them was not checked. This was read from the v0.12.0 code and was not run.
+
 ## v0.12.0 — the start-up page
 
 The start-up page: a new person is taken through installing and signing in to an AI

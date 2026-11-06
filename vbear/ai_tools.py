@@ -11,6 +11,7 @@ The functions read REGISTRY when they are called, so a test can add an entry bef
 
 from __future__ import annotations
 
+import shlex
 from typing import NamedTuple, Optional
 
 # What a person is told when a card's tool has no safe launch and nothing more specific is written for it.
@@ -81,7 +82,14 @@ REGISTRY: tuple[Tool, ...] = (
 )
 
 
-SETUP_ACTIONS = ("install", "login")
+SETUP_ACTIONS = ("install", "login", "chat_login")
+
+# The Codex that chats (v0.13, ADR 0005) logs in to its own folder, <state>/codex-chat-home, never to the person's own
+# ~/.codex: app-server always reads that folder's settings, so the chat needs another one. The line is fixed here; only the
+# folder (which the runtime daemon makes from its own state folder, never from a request) is filled in, shell-quoted.
+# The login state is read from the exit code of the status arguments below, nothing else.
+CHAT_LOGIN = {"codex": {"line": "CODEX_HOME={home} codex login -c cli_auth_credentials_store=file",
+                        "status_args": ("login", "status", "-c", "cli_auth_credentials_store=file")}}
 
 
 def setup_ids() -> tuple[str, ...]:
@@ -89,14 +97,26 @@ def setup_ids() -> tuple[str, ...]:
     return tuple(t.id for t in REGISTRY if t.install_command and not t.generic)
 
 
-def command_for(tool_id, action, region=None) -> Optional[str]:
+def _plain_folder(path) -> bool:
+    return (isinstance(path, str) and path.startswith("/") and "\0" not in path
+            and all(c.isprintable() for c in path))
+
+
+def command_for(tool_id, action, region=None, *, chat_home=None) -> Optional[str]:
     """The one fixed line the start-up page may send to a terminal for (tool, action[, region]); None for anything the
-    registry does not hold. The caller never supplies a command: it names a tool and an action, and this looks the line up."""
+    registry does not hold. The caller never supplies a command: it names a tool and an action, and this looks the line up.
+    ``chat_home`` is the folder of the chat login (action "chat_login" only): an absolute path of printable characters
+    that the daemon made itself."""
     if not isinstance(tool_id, str) or action not in SETUP_ACTIONS:
         return None
     t = next((x for x in REGISTRY if x.id == tool_id), None)
     if t is None or t.generic:
         return None
+    if action == "chat_login":
+        spec = CHAT_LOGIN.get(tool_id)
+        if spec is None or region is not None or not _plain_folder(chat_home):
+            return None
+        return spec["line"].format(home=shlex.quote(chat_home))
     if action == "install":
         return (t.install_command or None) if region is None else None
     if t.login_regions:
@@ -105,6 +125,17 @@ def command_for(tool_id, action, region=None) -> Optional[str]:
     if region is not None:
         return None
     return t.login_command or None
+
+
+def action_known(tool_id, action, region=None) -> bool:
+    """Whether (tool, action[, region]) names a line at all (a request is checked with this before any folder is made)."""
+    return command_for(tool_id, action, region, chat_home="/x") is not None
+
+
+def chat_login_status_args(tool_id) -> Optional[tuple]:
+    """The arguments after the program name that tell whether the chat login exists (only the exit code is read)."""
+    spec = CHAT_LOGIN.get(tool_id) if isinstance(tool_id, str) else None
+    return spec["status_args"] if spec else None
 
 
 def ids() -> tuple[str, ...]:

@@ -201,22 +201,34 @@ class ChatVerifier:
         except Exception as exc:                          # never leave the status stuck at "running"
             self._finish("error", f"驗證中斷：{type(exc).__name__}")
 
+    # What differs for the Codex check (vbear/codex_verify.py), which runs the same way.
+    LABEL = "Claude Code"
+
+    def _report_path(self, version: str) -> Path:
+        return reports_dir() / f"claude-{version}-chat.json"
+
+    def _argv(self, binary: str, out: Path) -> list[str]:
+        return [sys.executable, "-B", "-m", "vbear.boundary_check", "--claude", binary, "--mode", "chat", "--out", str(out)]
+
+    def _verified(self) -> tuple[str, ...]:
+        return cli_versions.chat_verified_versions()
+
     def _run_check(self, binary: str, version: str) -> None:
-        out_dir = reports_dir()
+        out = self._report_path(version)
         cfg.ensure_state_dir()
-        out_dir.mkdir(mode=0o700, exist_ok=True)
-        out = out_dir / f"claude-{version}-chat.json"
+        out.parent.mkdir(mode=0o700, exist_ok=True)
         try:
-            proc = subprocess.run(
-                [sys.executable, "-B", "-m", "vbear.boundary_check", "--claude", binary, "--mode", "chat", "--out",
-                 str(out)],
-                cwd=PACKAGE_PARENT, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=CHAT_RUN_TIMEOUT)
+            proc = subprocess.run(self._argv(binary, out), cwd=PACKAGE_PARENT, stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=CHAT_RUN_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return self._finish("error", f"聊天驗證無法完成：{type(exc).__name__}")
         if proc.returncode != 0:
             failed = _failed_checks(out)
-            why = ("、".join(failed) + " 沒有通過") if failed else "驗證沒有完成（模型可能沒有回應，或登入失效）"
+            why = ("、".join(failed) + " 沒有通過") if failed else self._unfinished(out)
             return self._finish("failed", f"聊天驗證：{why}", report=str(out), failed=failed)
-        if version not in cli_versions.chat_verified_versions():
+        if version not in self._verified():
             return self._finish("error", "檢查說通過了，但這個版本沒有出現在本機的已驗證清單裡，請看報告", report=str(out))
-        self._finish("passed", f"Claude Code {version} 通過聊天驗證", report=str(out))
+        self._finish("passed", f"{self.LABEL} {version} 通過聊天驗證", report=str(out))
+
+    def _unfinished(self, report: Path) -> str:
+        return "驗證沒有完成（模型可能沒有回應，或登入失效）"

@@ -214,13 +214,14 @@ def _link_allowed(links: str, parts: tuple) -> bool:
     """Whether a symlink in the directory ``parts`` (relative to the root) may be
     counted. "none": never (the strict default). "any": anywhere, because a
     reviewed repository can hold links (design 5.4). "codex_home": only in
-    tmp/arg0/<one directory>/, where Codex itself puts its helper links at
-    every start (design v29.10); a link anywhere else in CODEX_HOME is not
+    tmp/arg0/<one directory>/ (or tmp/arg0-macos/<one directory>/ from Codex
+    0.163.0, seen on a real machine), where Codex itself puts its helper links
+    at every start (design v29.10); a link anywhere else in CODEX_HOME is not
     something Codex made and counts as over."""
     if links == "any":
         return True
     if links == "codex_home":
-        return len(parts) == 3 and parts[0] == "tmp" and parts[1] == "arg0"
+        return len(parts) == 3 and parts[0] == "tmp" and parts[1] in ("arg0", "arg0-macos")
     return False
 
 

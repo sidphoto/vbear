@@ -252,11 +252,11 @@ class CardGateTests(ApiCase):
         self.assertEqual(os.listdir(self.base / "chats") if (self.base / "chats").exists() else [], [])
 
     def test_a_card_of_another_tool_cannot_open_a_chat_and_says_which_tool(self):
-        for tool, label in (("codex", "Codex"), ("agy", "AGY"), ("shared", "共用")):
+        for tool, label in (("grok", "Grok"), ("agy", "AGY"), ("shared", "共用")):
             with self.subTest(tool=tool):
                 other = self.card(f"{tool}員工", tool)
                 status, out = self.call("/api/chats", "POST", {"profile_id": other})
-                self.assertEqual((status, out["code"]), (409, "card_not_claude"))
+                self.assertEqual((status, out["code"]), (409, "card_tool_unsupported"))
                 self.assertIn(label, out["error"])
                 self.assertIn("Claude Code", out["error"])
 
@@ -274,19 +274,22 @@ class CardGateTests(ApiCase):
         self.assertEqual((status, out["code"]), (409, "card_disabled"))
         ap.save_profile(self.emp, {"enabled": True, "model": {"tool": "codex"}})
         status, out = self.say(chat_id)
-        self.assertEqual((status, out["code"]), (409, "card_not_claude"))
+        self.assertEqual((status, out["code"]), (409, "card_tool_changed"))
+        ap.save_profile(self.emp, {"enabled": True, "model": {"tool": "grok"}})
+        status, out = self.say(chat_id)
+        self.assertEqual((status, out["code"]), (409, "card_tool_unsupported"))
         self.assertEqual(self.fake_log(), [])
         self.assertEqual(self.kinds(chat_id), ["chat_created"])
 
     def test_the_list_marks_each_card_with_whether_it_may_chat(self):
         off = self.card("停用員工", enabled=False)
-        other = self.card("Codex 員工", "codex")
+        other = self.card("Grok 員工", "grok")
         status, lst = self.call("/api/chats")
         by = {c["id"]: c for c in lst["cards"]}
         self.assertEqual((by[self.emp]["can_chat"], by[self.emp]["reason"]), (True, None))
         self.assertEqual((by[off]["can_chat"], by[off]["code"]), (False, "card_disabled"))
-        self.assertEqual((by[other]["can_chat"], by[other]["code"]), (False, "card_not_claude"))
-        self.assertIn("Codex", by[other]["reason"])
+        self.assertEqual((by[other]["can_chat"], by[other]["code"]), (False, "card_tool_unsupported"))
+        self.assertIn("Grok", by[other]["reason"])
 
 
 class InstructionsApiTests(ApiCase):
@@ -321,6 +324,7 @@ class MeaningOfCodesTests(ApiCase):
         root = Path(server.__file__).resolve().parent / "runtime"
         found = set()
         for name, patterns in (("daemon_chat.py", [r'_err\(rid, "([a-z_]+)"']), ("chat_session.py", [r'return "([a-z_]+)", ']),
+                               ("codex_chat_session.py", [r'return "([a-z_]+)", ']),
                                ("chat_store.py", [r'ChatStoreError\("([a-z_]+)"']),
                                ("agent_sessions.py", [r'LaunchRefused\("([a-z_]+)"'])):
             text = (root / name).read_text()

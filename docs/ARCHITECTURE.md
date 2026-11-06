@@ -32,12 +32,12 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
 - **Terminal streaming.** `GET /api/term/<id>/stream` relays runtime output to the browser as
   server-sent events. Input goes through `POST /api/term/<id>/input` only after an explicit takeover.
 
-- **Chats.** `vbear/chat_service.py` is the console's side of a chat: it checks the card (enabled, Claude Code), asks the
+- **Chats.** `vbear/chat_service.py` is the console's side of a chat: it checks the card (enabled, Claude Code or Codex; the card's tool fixes the chat's engine, `claude-chat` or `codex-chat`, when it is opened, and a card whose tool changed afterwards gets `card_tool_changed`), asks the
   runtime to open, send, answer, stop and delete, retries a send once the process is replaced, and turns every
   refusal into a sentence (`explain`). `GET /api/chats/<id>/stream` relays the daemon's live view as server-sent events
   (`X-VBear` required, at most four open); the page falls back to polling. `claude_verify.py`'s `ChatVerifier` runs
   `vbear/chat_check.py` (through `python3 -m vbear.boundary_check --mode chat`) and trusts a version only when the
-  0600 report it names reads back as a pass. The records and the day's spend are `runtime/chat_store.py`'s, written only by the daemon.
+  0600 report it names reads back as a pass. The records and the day's spend are `runtime/chat_store.py`'s, written only by the daemon. A Codex chat's version check is `vbear/codex_chat_check.py` (`boundary_check --mode codex-chat`), which records `codex-chat-verified.json` the same way; `vbear/codex_verify.py`'s `CodexChatVerifier` is the console's button for it (`POST /api/chat-support/verify {"engine": "codex"}`), built on `ChatVerifier`. `GET /api/chat-support` carries Claude Code's keys and a `codex` object (`runtime/codex_chat_env.py`'s `status`). The Codex process, protocol and cards are `runtime/codex_chat_session.py`, `runtime/codex_chat_protocol.py` and the Codex branches of `daemon_chat.py`.
 
 ## VBear runtime — `vbear/runtime/daemon.py`
 
@@ -308,6 +308,13 @@ opens the install or login terminal through the daemon's `open_setup` operation 
 `setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
 false; a config that does not say forces nobody.
 
+After 開始使用, a person with no role card to chat with is led to `#/ceo` (`viewCeo` in `web/app.js`, 建立你的 CEO). `GET
+/api/first-ceo` (`vbear/first_ceo.py`, read-only) answers `needed` (no enabled card on Claude Code or Codex), the ready tool the card
+takes (Claude Code, else Codex; never a tool that has only a mark), `go: "setup"` when none is ready, and the name, instructions and
+opening sentence to fill in. The page makes the card with the ordinary `POST /api/agent-profiles` in safe mode, opens a chat
+with `POST /api/chats`, and only puts the opening sentence in the box; sending it is the person's own press. The config key
+`first_ceo_id` (written through `/api/config`) makes the lobby offer a first chat with that card once.
+
 In the app window only, the home page sends that person to `#/welcome` (`viewWelcome` in `web/app.js`, 第一次打開 VBear) first,
 while the config key `welcome_seen` is false; reading it or skipping it writes `welcome_seen: true` through `/api/config` and goes on
 to `#/setup`. Whether this is the app window is judged by `folderBridge()`, the native folder-chooser handler that only the app's
@@ -364,7 +371,10 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
 
 ## macOS app — `macos/`
 
-`macos/build.sh` builds `VBear.app`. The app is a small Swift program (`macos/VBear/main.swift`) with a WebKit window,
+`macos/build.sh` builds `VBear.app`. Every copy it leaves on disk sits in a folder whose name ends in `.noindex`
+(`build/app.noindex/`, `build/dmg.noindex/` and the finished `dist/app.noindex/VBear.app`), because macOS does not index
+such folders: build copies would otherwise appear in Spotlight and Launchpad beside the real app. The disk image is
+still `dist/VBear-<version>-arm64.dmg` (with a `.sha256`) and holds `VBear.app` and an Applications shortcut. The app is a small Swift program (`macos/VBear/main.swift`) with a WebKit window,
 plus a standalone CPython 3.13 (python-build-standalone, pinned by version and SHA-256) and a copy of `vbear/` and
 `web/`. On launch it reuses a VBear that accepts the token in `server.token`, or starts
 `python3 -B -m vbear serve --port <free port>` with a fresh token in `VBEAR_ACCESS_TOKEN`. The server removes that

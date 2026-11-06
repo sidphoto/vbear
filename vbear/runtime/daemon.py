@@ -159,8 +159,8 @@ RPC_OPS: dict[str, frozenset] = {
     # the console removed the flow's record: the deletion marker may go (flow_data.finish)
     "flow_delete_done": frozenset({"pipeline"}),
     # chats with a role card (P36; daemon_chat)
-    "chat_open": frozenset({"profile_id"}),
-    "chat_send": frozenset({"chat_id", "text", "cli", "model_id", "instructions"}),
+    "chat_open": frozenset({"profile_id", "engine"}),
+    "chat_send": frozenset({"chat_id", "text", "cli", "model_id", "instructions", "engine"}),
     "chat_answer": frozenset({"chat_id", "card_id", "token", "decision", "value"}),
     "chat_stop": frozenset({"chat_id"}),
     "chat_close": frozenset({"chat_id"}),
@@ -605,6 +605,8 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         # Versions a chat may start on without being on the verified list: only the chat check (vbear/chat_check.py)
         # sets this, on a daemon of its own in a temporary state folder. No RPC reaches it.
         self.chat_probe_versions: frozenset = frozenset()
+        self.codex_chat_probe_versions: frozenset = frozenset()       # the same for a Codex chat (codex_chat_check)
+        self.codex_chat_home: str | None = None    # only codex_chat_check: the person's own codex-chat-home (its login) for a daemon of its own
 
     # ---- lifecycle ----
 
@@ -1525,7 +1527,16 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         if self._shutdown_requested:
             return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
         tool, action, region = req.get("tool"), req.get("action"), req.get("region")
-        line = ai_tools.command_for(tool, action, region)
+        chat_home = None
+        if action == "chat_login" and ai_tools.action_known(tool, action, region):
+            # The folder is made here from the state folder, never taken from the request. An existing folder that is
+            # not ours alone (a link, open to others, someone else's settings in it) is refused, not repaired.
+            from . import codex_chat_env     # here: it imports cli_versions, which imports this module
+            try:
+                chat_home = str(codex_chat_env.ensure_chat_home(self.base))
+            except codex_chat_env.CodexRefused as exc:
+                return _err(rid, "bad_request", str(exc))
+        line = ai_tools.command_for(tool, action, region, chat_home=chat_home)
         if line is None or (region is not None and not isinstance(region, str)):
             return _err(rid, "bad_request", "沒有這個 AI 工具的這個動作")
         cols, rows = req.get("cols", 80), req.get("rows", 24)

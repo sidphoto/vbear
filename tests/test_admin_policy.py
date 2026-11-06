@@ -203,7 +203,9 @@ class PolicyTests(unittest.TestCase):
         v318 = dict(claude, home_paths=(".claude/remote-settings.json", ".claude/policy-limits.json"))
         self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318})
         self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
-                                                        "home_paths": ()}})
+                                                        "home_paths": ()},
+                                                "0.163.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
+                                                            "home_paths": ()}})
 
 
 class Claude2_1_318Tests(PolicyTests):

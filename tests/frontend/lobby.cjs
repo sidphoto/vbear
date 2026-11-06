@@ -116,6 +116,76 @@ test("a flow whose task card is gone is still a card", () => {
   assert(text(app.questCard(f, true)).includes("（任務卡已刪除或無法讀取）"));
 });
 
+test("P38-8: flows whose task card is gone or unreadable are put away, not at the front of the other tasks", () => {
+  const gone1 = flow("implementing", { task_missing: true, task_title: "" });
+  const real1 = flow("implementing");
+  const gone2 = flow("in_review", { task_missing: true, task_title: "" });
+  const real2 = flow("planning");
+  const g = group(live(), flowsOf([gone1, real1, gone2, real2]));
+  assert.deepStrictEqual(ids(g.inProgress), ids([real1, real2]), "only flows with a readable task card are in the list");
+  assert.deepStrictEqual(ids(g.missingFlows), ids([gone1, gone2]));
+  assert.strictEqual(g.moreInProgress, 0);
+  // the cut at 4 counts the readable ones only
+  const many = [gone1, ...Array.from({ length: 5 }, () => flow("implementing"))];
+  const g2 = group(live(), flowsOf(many));
+  assert.strictEqual(g2.inProgress.length, 4);
+  assert.strictEqual(g2.moreInProgress, 1);
+  assert.strictEqual(g2.missingFlows.length, 1);
+  assert.deepStrictEqual(group(live(), flowsOf([real1])).missingFlows, []);
+});
+
+test("P38-8: the board draws them folded, closed, after the other tasks, with a count and a plain sentence", () => {
+  const gone = flow("implementing", { task_missing: true, task_title: "" });
+  const real = flow("implementing", { task_title: "整理首頁文案" });
+  const sections = app.boardSection(group(live(), flowsOf([gone, real])));
+  const going = sections.find((s) => s.getAttribute("data-board") === "going");
+  const fold = going.find((n) => n.getAttribute && n.getAttribute("data-board") === "missing");
+  assert(fold, "a fold for the unreadable ones");
+  assert.strictEqual(fold.tag, "details");
+  assert.strictEqual(fold.hasAttribute("open"), false, "closed by default");
+  assert(/1/.test(text(fold.find((n) => n.tag === "summary"))) && /讀不到/.test(text(fold.find((n) => n.tag === "summary"))));
+  const open = going.findAll((n) => n.getAttribute && n.getAttribute("data-quest") === "flow");
+  assert.strictEqual(open.length, 2, "both cards exist in the page, one inside the fold");
+  const first = open[0];
+  assert(!text(first).includes("任務卡已刪除或無法讀取"), "the first card of the list is the readable one: " + text(first).slice(0, 40));
+  assert(fold.contains(open[1]) && text(open[1]).includes("任務卡已刪除或無法讀取"));
+  // nothing unreadable: no fold
+  const clean = app.boardSection(group(live(), flowsOf([real]))).find((s) => s.getAttribute("data-board") === "going");
+  assert.strictEqual(clean.find((n) => n.getAttribute && n.getAttribute("data-board") === "missing"), null);
+});
+
+test("P38-8: only unreadable flows: the list says there is nothing else going on, and the fold is still there", () => {
+  const gone = flow("implementing", { task_missing: true, task_title: "" });
+  const going = app.boardSection(group(live(), flowsOf([gone]))).find((s) => s.getAttribute("data-board") === "going");
+  assert(text(going).includes("目前沒有其他進行中的任務"));
+  assert(going.find((n) => n.getAttribute && n.getAttribute("data-board") === "missing"));
+});
+
+test("P38-8: the key changes when a flow moves into the fold", () => {
+  const f = flow("implementing");
+  const before = app.boardKey(group(live(), flowsOf([f])), { liveError: "", projects: [] });
+  const gone = { ...f, task_missing: true };
+  const after = app.boardKey(group(live(), flowsOf([gone])), { liveError: "", projects: [] });
+  assert.notStrictEqual(before, after);
+});
+
+test("P38-8: a role named with a bare code is never the whole answer to whose turn it is", () => {
+  const f = flow("planning", { roles: { planner: { name: "p", family_label: "Anthropic（Claude）" },
+    executor: { name: "e", family_label: "Anthropic（Claude）" }, reviewers: [{ name: "r", family_label: "OpenAI（Codex）" }] } });
+  const line = app.nextStepSummary(f);
+  assert(!/輪到 p[）)]/.test(line), line);
+  assert(line.includes("規劃者"), line);
+  const impl = app.nextStepSummary(flow("implementing", { roles: f.roles }));
+  assert(!/輪到 e[）)]/.test(impl) && impl.includes("執行者"), impl);
+  const rev = app.nextStepSummary(flow("in_review", { roles: f.roles }));
+  assert(!/輪到 r[）)]/.test(rev) && rev.includes("審查者"), rev);
+  // a card with a real name keeps it, as before
+  const named = app.nextStepSummary(flow("planning", { roles: { planner: { name: "工匠" }, executor: { name: "X" }, reviewers: [] } }));
+  assert(named.includes("輪到工匠"), named);
+  const ceo = app.nextStepSummary(flow("planning", { roles: { planner: { name: "CEO" }, executor: { name: "Claude Code" }, reviewers: [] } }));
+  assert(ceo.includes("輪到 CEO"), ceo);
+});
+
 test("agents that wait for you follow the live attention order; an id without a session is dropped", () => {
   const a = session("t-a"), b = session("t-b"), c = session("t-c");
   const g = group(live({ sessions: [a, b, c], attention: ["t-c", "t-gone", "t-a"] }), flowsOf([]));
@@ -147,7 +217,7 @@ test("all empty: flows loaded and empty, no agent waiting, runtime connected", (
   assert.strictEqual(g.allEmpty, true);
   assert.strictEqual(g.error, "");
   assert.deepStrictEqual(Object.keys(g).sort(),
-    ["allEmpty", "error", "inProgress", "meetingsError", "moreInProgress", "runtimeAvailable", "staffingError", "yourTurnFlows", "yourTurnMeetings",
+    ["allEmpty", "error", "inProgress", "meetingsError", "missingFlows", "moreInProgress", "moreMissing", "runtimeAvailable", "staffingError", "yourTurnFlows", "yourTurnMeetings",
       "yourTurnSessions", "yourTurnStaffing"]);   // P35-4: the staffing proposals that wait for you (tests/frontend/staffing.cjs)
 });
 

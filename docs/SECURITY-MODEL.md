@@ -1020,9 +1020,10 @@ A chat lets you talk with one role card through your authenticated local Claude 
 `/api/chats` reach the runtime's chat operations; no Claude Code version is chat-verified out of the box, so no chat
 process starts until a version passes the chat check.
 
-- **Who may open a chat.** Only an enabled role card whose tool is Claude Code. The API checks this itself and answers
-  a disabled card (`card_disabled`) or a card of another tool (`card_not_claude`) with its reason; the page's button
-  being shut is a courtesy, not the check. Opening a chat costs nothing; a message does.
+- **Who may open a chat.** Only an enabled role card whose tool is Claude Code or Codex (since v0.13 the second one
+  runs on its own engine, see "Chats with a Codex role card"). The API checks this itself and answers a disabled card
+  (`card_disabled`) or a card of another tool (`card_tool_unsupported`) with its reason; the page's button being shut is a
+  courtesy, not the check. Opening a chat costs nothing; a message does.
 - **Whose instructions go in.** Only the instructions written on the card, as one `--append-system-prompt` argument.
   The position's default text is not sent, and a card without instructions of its own sends none; the chat's record
   says whether any went in. Claude Code keeps a session's system prompt when it is resumed
@@ -1153,6 +1154,163 @@ process starts until a version passes the chat check.
   KILL, signals sent only to its own verified process group, and kept for manual review when that cannot be
   proven. A chat whose earlier process is under manual review takes no new message. At daemon start, a turn a
   previous daemon left open is closed at its cap.
+
+## Chats with a Codex role card (engine `codex-chat`, v0.13)
+
+A chat with a role card whose AI tool is Codex (ADR 0005 gives the reasons). It is the same kind of new outbound data
+path as a Claude chat, on **your ChatGPT plan**, and it can change files in the card's work folder. The console's
+`#/chat` page and `/api/chats*` reach it through the same runtime operations as a Claude chat, with an engine named.
+No Codex version is chat-verified out of the box: no process starts until one passes `--mode codex-chat`.
+
+- **The engine follows the card's tool and never changes.** `POST /api/chats` reads the role card's tool (`claude` is
+  `claude-chat`, `codex` is `codex-chat`; any other tool is refused with `card_tool_unsupported`) and the chat keeps that
+  engine for good. Every message checks the card again: a card whose tool is now the other one cannot go on in the old
+  chat (`card_tool_changed`, nothing starts), a disabled card or a tool that cannot chat is refused as before. The daemon
+  refuses a message that names an engine other than the chat's. The browser sends no binary, folder, command or model of
+  its own: the console reads the pinned Codex and the card's model, and the daemon checks the lot again.
+- **The support answer is the console's courtesy, not the check.** `GET /api/chat-support` carries Claude Code's keys and
+  a `codex` object (`state`: not installed, unverified, administrator policy, chat folder refused, version unreadable,
+  not logged in, ready; no path and no command output). A message to a Codex chat while the state is not ready is
+  refused with the state's own sentence before the daemon is asked; the daemon refuses it again by itself.
+  `POST /api/chat-support/verify {"engine": "codex"}` starts the check of the newest installed Codex in a child process
+  (`vbear/codex_verify.py`) unless the administrator policy is in the way, and counts a pass only when
+  `codex-chat-verified.json` lists the version afterwards, as for Claude Code. Any other `engine` value is a bad request.
+- **The login is the person's, on a folder of VBear's.** The start-up page's 「讓聊天用的 Codex 登入」 types one fixed line
+  into a terminal (`CODEX_HOME=<chat folder> codex login -c cli_auth_credentials_store=file`, taken from the tool list;
+  the browser sends a tool and an action only). VBear never reads or copies the person's own `~/.codex`, and never sees
+  the login.
+- **The process.** One `codex app-server --listen stdio://` per role card, at most three chats in all with the Claude
+  ones, each a managed launch with engine `codex-chat` under `sessions/` (an exact manifest schema, a settings file that
+  must equal what the version's table in `codex_chat_protocol.VERSIONS` says, the CLI's identity, the card's work
+  folder, the chat folder in the manifest). A terminal launch refuses it. The argv is that table and nothing else: `-c`
+  settings (file credentials store, web search off, no update check, no notify, no history, no bundled skills, no
+  project docs, no network and no `/tmp` in the sandbox, `project_root_markers=[]`, and the work folder's trust set to
+  `untrusted`, see the next bullet but one) and `--disable` for twenty features (apps, plugins, hooks,
+  browser, computer use, memories, multi-agent, worktrees and the rest). The binary is the pinned one under
+  `~/.codex/packages/standalone/releases/`, never one found on `PATH`.
+- **The environment is exactly seven variables:** `PATH`, `USER`, `LOGNAME`, `LANG`, `CODEX_HOME`
+  (`<state>/codex-chat-home`), `HOME` (an empty folder in the launch's scratch) and
+  `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1`. `codex app-server` has no way to ignore the person's own
+  `~/.codex`, so the chat logs in to a Codex home of its own; the person's settings, `AGENTS.md`, rules and MCP servers
+  are not read. Before a process starts: the chat folder is the person's own 0700 plain folder with no link on its path
+  and none of `config.toml`, `rules/`, `AGENTS.md` (VBear writes none of them: finding one means another program did),
+  within 512 MiB; `codex login status` (exit code only) says logged in; the work folder holds no `.codex`; no
+  administrator policy; the version is on the `codex-chat-verified.json` list. Anything else, and the chat is refused
+  with the reason.
+- **A home folder that is a git repository.** Found by hand on a real Mac, not in the first recording: when the person's
+  home folder (`~`) is a git repository (`~/.git`), Codex 0.163.0 takes `~` for the project root, because it looks for
+  `.git` upward from the work folder. A `CODEX_HOME` other than `~/.codex` means the person's own `~/.codex` is no longer
+  skipped as the settings folder, so it was read as a *project layer* of `~`; and a `thread/start` with a writable sandbox
+  made Codex write `[projects."~"] trust_level = "trusted"` into the chat folder's `config.toml`, which enabled that layer:
+  the person's own MCP servers started (five in the probe), their skills (86) and their exec policy rules were loaded. The
+  settings and the sandbox in the `thread/start` answer were as asked, and `mcpServerStatus/list` without a `threadId`
+  answers for what the process loaded at its start, before any trust existed, so it said none. VBear now sends two more
+  `-c` settings, **both of them**: `project_root_markers=[]` (the work folder is the project root; `~` and `~/.codex` are
+  not searched) and `projects={"<the work folder>"={trust_level="untrusted"}}` (the folder has a trust setting, so Codex
+  writes none, and project-level settings stay off). The second is an **inline table** because a dotted key
+  (`projects."<path>".trust_level`) is cut at the dots of a path such as `~/.vbear`, and then trust is written anyway; the
+  path is written as a TOML string (quote and backslash escaped), and a path with a control character or that is not
+  absolute refuses the launch (`invalid_workdir`). Both are in the settings file and compared on every load. The MCP
+  check now asks `mcpServerStatus/list` **with the thread's `threadId`**, after `thread/start` has answered, and any
+  server in the answer stops the chat as before. A `config.toml` in the chat folder is still refused, never deleted; the
+  refusal now says it may be an older build's trust entry and where to move it. The version check asserts that no
+  `config.toml` exists right after `thread/start` and that every process was started with both settings
+  (`project_settings_sent` in the report; no path in it). In the probe with both settings, in a home folder that is a
+  git repository: no MCP server, no start-up notice, no skill, no `config.toml`.
+- **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
+  reviewer `user`, and ask for the legacy `workspace-write` sandbox (the work folder is its only writable place, no `/tmp`, network off;
+  but see the residual risk (7): a command the person allows may run outside it). A
+  command is a card with its whole text; a request that needs the network, or is not a command, is declined. A file
+  change is judged first: a path outside the work folder (links followed), or under `.codex`, `.agents` or `.git` at any
+  depth, is declined with no card; the rest is a card with each file's path, kind and diff. An allow is `accept` and is
+  judged again when it is given. VBear never writes `acceptForSession`, an execpolicy or network amendment or `cancel`
+  to a request (`decision_line` cannot write them), so there is no "allow from now on". Cards are VBear's, as for Claude:
+  one-use token, five minutes, at most eight, 12 KiB each and 30 KiB together, shown whole or declined.
+- **A changed command is not "allow, changed".** Codex has no such answer. VBear declines the request and sends
+  `turn/steer` telling Codex to run exactly the person's text instead; Codex then asks again, with the changed text, in
+  a card of its own that the person must allow. When the steer is refused (the turn is over) the text is sent as the
+  next message, a new turn, within the day's limit. The text sent is in the chat's record (`card_edit_sent`).
+- **What stops a chat.** Anything in the answers that says VBear's settings are not in force: a policy other than
+  `untrusted`, a reviewer other than the person, a sandbox that is not field for field the one asked for, an instruction
+  file loaded, any MCP server, remote control not disabled, another thread, a changed setting, an item kind outside
+  command, file change, message, reasoning and plan, or a command or file change completed without VBear's yes. The
+  turn costs its cap and the process is ended. An item that started and never completed (a command the sandbox
+  stopped) is not a violation. A server request VBear does not know is answered with an error and noted by its method
+  name only.
+- **Money.** Codex reports tokens, not money. A turn costs its tokens at VBear's own rate (US$1.00 per million, rounded
+  up to the cent, at least US$0.01; an accounting rule, not a price), counted from the thread's total, so a resumed
+  thread's repeated first total is not counted twice. Each report is compared with the turn's cap (the per-turn limit or
+  what is left of the day, whichever is less) and the turn is interrupted when it is reached. A turn cut off any other
+  way costs its cap, or its estimate when that is more; a turn that never reached Codex costs nothing. Two reports can
+  be a model call apart, so a turn can pass its cap by about one call. The estimate is not a bill.
+- **What is kept.** Replies, commands, file changes, tokens and the plan's use as numbers (percent, window length,
+  reset time, whether a limit was reached). Never kept or logged: the Codex home and user agent from `initialize`, the
+  plan's kind, credits, installation id, host name, MCP server names, instruction file paths. Codex keeps its own copy
+  of a conversation in `codex-chat-home/sessions`; deleting a chat does not delete it.
+- **The version check.** `python3 -m vbear.boundary_check --mode codex-chat` (Python 3.13 or newer, as for `--mode chat`;
+  `--codex` names the binary, else the newest the vendor's installer left) runs one real chat through this section's code
+  in a temporary state folder inside the state folder (the chat records, work folder and the day's ledger are its own),
+  with seven messages: text; `ls -a` (a command that only reads must still make a card) and a denied `rm` (the file is
+  still there); a command changed in its card (`turn/steer` must be accepted: a refused one fails the check at the `edit`
+  step and VBear's fallback is stopped, not used) which then runs as changed; a file change with its diff; a write
+  outside the work folder (declined with no card, no file there, or the check fails; and an allowed shell write there, which is only noted, see the residual risk (7)); `turn/interrupt`;
+  and a new process with `thread/resume` that must remember the first message. It also checks the answers of
+  `thread/start` and `mcpServerStatus/list`, the token total across the resume, that `thread/delete` removes the
+  thread the check made, that the idle process ends by itself within twenty seconds of its stdin closing, and that no
+  process, folder or file in the person's chat folder is left, and that none of the account details above reached the
+  records, the log or the report. The check never allows more than it asked for: it answers a card with an allow only
+  for the one command or file it asked Codex to make. The only thing it takes from the person is the login: its
+  temporary daemon runs Codex with the person's real `<state>/codex-chat-home` as `CODEX_HOME` (the daemon's
+  `codex_chat_home`, set only by the check; the launch record still names the folder under the check's own state, and a
+  daemon of the console never sets it). It costs about fourteen model calls on the person's ChatGPT plan, no more than
+  US$0.30 by VBear's own counting (each step has a cap, and the check's day limit is US$0.30), and is not added to the
+  day's ledger. A pass writes `codex-chat-verified.json` and a 0600 report that `cli_versions` reads back every time.
+- **The page.** A card of a Codex chat shows the command whole, its folder and what Codex says it does, or each file's
+  path, what is done to it and its diff, as text in `<pre>` (never as markup). A command card says, above its buttons,
+  「允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。」 (a
+  file card and a Claude card do not). Its buttons are 「允許這一次」, 「拒絕」 and
+  「改內容再問」, whose note says VBear declines the original and Codex asks again, so the person must allow once more;
+  nothing on the page says the change was applied. There is no "allow from now on". A reply's cost reads 「估計 US$x」 with
+  the token count and says it is not a bill; the plan's use is one line from the last `plan_usage` record (percent per
+  window as Codex reports it, and the reset time only when a limit was reached). The head of the chat says reading is not
+  limited. The deletion confirmation says Codex's own copy stays in `codex-chat-home` (`sessions`) and is not deleted.
+- **Residual risks.** (1) *Reading is not limited by the sandbox.* The legacy `workspace-write` sandbox does not limit reads: a command the person
+  allows can read the whole machine, as a Claude chat's Bash can. What stands between the model and those files is the person reading each command; the permission profile that
+  denies reading the whole disk made file changes fail on the recorded version, so it is not used. (2) *The cap is checked
+  between reports.* A turn is interrupted when a token report reaches the cap, and two reports can be one model call apart
+  (about 20,000 tokens, about US$0.02 by the rule), so a turn can pass its cap by about one call; the estimate is not a bill
+  and the real cost is the person's plan use. (3) *It relies on a retired value.* `untrusted` is documented as retired
+  (the vendor's agent-approvals page) though 0.163.0's `app-server` accepts it; a version that refuses it fails the check
+  and the chat stays closed. (4) *The interface is experimental.* `codex app-server` is marked experimental and its request
+  names, decisions and notices are the recorded version's: every Codex version must pass `--mode codex-chat` first, and
+  anything unexpected stops the chat rather than being tried. (5) *Managed configuration can override the two settings.* A system (`/etc/codex/config.toml`), device-management or cloud
+  managed configuration ranks above `-c` in Codex 0.163.0, so on a managed Mac it could set the project root markers or the
+  trust back. VBear refuses a chat when a known administrator-policy source exists (`admin_policy`), and the response
+  of `thread/start` and the MCP check would show the result, but it does not read Codex's merged configuration to prove
+  the two settings took effect. (6) *Skills in the work folder.* With the two settings the work folder's own `.codex` is
+  still a (disabled) project layer, and Codex loads skills from a disabled layer's `skills/` folder and from `.agents/skills`
+  between the project root and the work folder, whatever the trust. A skill the model got into `<work folder>/.codex/skills`
+  or `<work folder>/.agents/skills` would load in the next conversation. VBear declines a file change under `.codex`,
+  `.agents` and `.git` at any depth, Codex's own sandbox makes them read-only under the project root, and a work folder that
+  already holds a `.codex` is refused; a command the person allows can still create one. The person's `HOME` for the
+  process is an empty folder, so `~/.agents/skills` is not read; that must stay so. (7) *An allowed command can run outside the sandbox.*
+  Found on a real Mac, then read in the source (`docs/evidence/codex-0.163.0-chat.md`, 5b). Under `untrusted`, when a command
+  the person allowed is stopped by the sandbox (its output says `operation not permitted` or the like), Codex runs it again
+  without the sandbox and does not ask again; and when the model asks to leave the sandbox (`require_escalated`), an allow
+  means it runs outside the sandbox the first time. A command run outside the sandbox can write anywhere the person's account
+  can write and can reach the network. The card has no field that says which it will be, and no answer means "allow but stay
+  in the sandbox", so VBear cannot tell the person on a particular card; every command card carries the warning quoted
+  above. The only setting that keeps an allowed command inside the sandbox in 0.163.0 is a permission profile with `:root`
+  set to `deny`, under which `apply_patch` fails, so no file change could be made; the person chose (2026-11-06) to release as
+  it is and say so (ADR 0005, decision 7), and to switch to the profile when Codex fixes `apply_patch` there. File changes
+  are not affected: VBear itself declines a path outside the work folder or under `.codex`, `.agents` and `.git`. What stands
+  between the model and the rest of the machine is the person reading each command, as for reading in (1). The version check
+  requires that `apply_patch` outside the work folder is declined with no card and leaves no file
+  (`outside_patch_refused`); whether the allowed shell write got out is only noted (`observations.outside`), and the check
+  removes what either wrote.
+- **Not checked yet.** What happens in a long conversation (an item kind outside the list stops the chat) and whether the
+  real Codex lets an unknown server request through are for the first real runs; the login's effect on the chat folder
+  (it must add no `config.toml`, `rules/` or `AGENTS.md`) is checked by the folder test before every start.
 
 ## The start-up page (v0.12)
 

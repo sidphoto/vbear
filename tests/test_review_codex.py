@@ -368,6 +368,30 @@ class SizeTests(Tmp):
         (helpers / "dangling").symlink_to(self.tmp / "nowhere")
         self.assertIsNotNone(rc.home_size(home))
 
+    def test_codex_0_163_puts_its_helper_links_in_tmp_arg0_macos(self):
+        # seen on the real machine (Codex 0.163.0, 2026-11-06): right after `codex login` the helper links are in
+        # tmp/arg0-macos/codex-arg0<random>/, not tmp/arg0/
+        home = self.tmp / "home163"
+        helpers = home / "tmp" / "arg0-macos" / "codex-arg08MIW7k"
+        helpers.mkdir(parents=True)
+        (home / "auth.json").write_bytes(b"x" * 10)
+        for name in ("apply_patch", "applypatch"):
+            (helpers / name).symlink_to(self.tmp / "codex")
+        names = []
+        self.assertEqual(rc.home_size(home, names), 10 + 2 * len(str(self.tmp / "codex")))
+        self.assertEqual(sorted(names), ["tmp/arg0-macos/codex-arg08MIW7k/apply_patch",
+                                         "tmp/arg0-macos/codex-arg08MIW7k/applypatch"])
+        # only directly inside one directory under it, as for tmp/arg0
+        (helpers / "deeper").mkdir()
+        (helpers / "deeper" / "link").symlink_to(self.tmp)
+        self.assertIsNone(rc.home_size(home))
+        for where in ("tmp/arg0-macos", "tmp/arg0-linux/a", "tmp/arg0-macosx/a"):
+            with self.subTest(where=where):
+                other = self.tmp / ("o-" + where.replace("/", "-"))
+                (other / where).mkdir(parents=True)
+                (other / where / "link").symlink_to(self.tmp)
+                self.assertIsNone(rc.home_size(other))
+
     def test_a_link_anywhere_else_in_codex_home_is_over(self):
         for where in (".", "log", "tmp", "tmp/arg0", "tmp/arg0/a/b", "tmp/other/a", "sessions/2026"):
             with self.subTest(where=where):

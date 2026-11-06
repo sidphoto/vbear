@@ -1,6 +1,7 @@
 """What VBear keeps of a chat with a role card (P36). The daemon is the only writer.
 
-  <state>/chats/<chat_id>/chat.json       0600, written once: {v, id, profile_id, created_at, claude_session_id}
+  <state>/chats/<chat_id>/chat.json       0600, written once: {v: 2, id, profile_id, created_at, engine[, claude_session_id]}
+                                          (a version 1 file, without ``engine``, is a Claude chat)
   <state>/chats/<chat_id>/events.jsonl    0600, append-only: one event per line, {seq, at, kind, ...}, fsync'd
   <state>/chat-spend/<chat_id>.json       0600: what a deleted chat cost in its last days, for the day's limit
   <state>/chat-work/<hash of the card>/   0700: the role card's work folder (the CLI's cwd), kept when a chat goes
@@ -49,6 +50,7 @@ MAX_CHATS = 200
 MAX_EVENTS_BYTES = 8 << 20             # one chat's events file
 RESERVE_BYTES = 64 << 10               # kept for the records that close a turn or a process
 MAX_LINE = 1 << 20
+ENGINES = ("claude-chat", "codex-chat")   # the chat's engine, set when it is created from its role card's AI tool
 MAX_USER = cp.MAX_TEXT_BYTES           # a person's message, refused above (the daemon checks first)
 MAX_REPLY = 64_000                     # characters of a reply kept
 MAX_EXCERPT = 4_000                    # characters of a tool's result, a card's field, a summary kept
@@ -125,7 +127,19 @@ def _turn_or_none(v):
     return v is None or _turn(v)
 
 
-_REASONS = ("result", "stopped", "timeout", "process_exit", "violation", "daemon_restart", "error", "not_sent")
+_REASONS = ("result", "stopped", "timeout", "process_exit", "violation", "daemon_restart", "error", "not_sent",
+            "limit")
+
+
+def _int_in(low: int, high: int):
+    return lambda v: isinstance(v, int) and not isinstance(v, bool) and low <= v <= high
+
+
+def _int_or_none(low: int, high: int):
+    return lambda v: v is None or (isinstance(v, int) and not isinstance(v, bool) and low <= v <= high)
+
+
+MAX_TOKENS = 10 ** 12
 
 # kind -> {field: check}; ``_MASK`` names the text fields that are masked and cut, ``_ESSENTIAL`` the kinds that may
 # use the reserve at the end of a full file (so that a turn can always be closed at its cost).
@@ -134,7 +148,9 @@ KINDS = {
     "user_message": {"turn": _turn, "text": lambda v: isinstance(v, str) and 0 < len(v.encode("utf-8", "surrogatepass")) <= MAX_USER},
     "turn_started": {"turn": _turn, "cap_usd": _money_text},
     "process_started": {"mode": _one_of("new", "resume"), "budget_usd": _money_text, "instructions": _bool},
-    "session_ready": {"claude_code_version": _short, "permission_mode": _short, "model": _short},
+    # the CLI's version is ``claude_code_version`` in a Claude chat and in the records of before v0.13.0, and ``cli_version``
+    # in a Codex chat (exactly one of the two; see _ALTERNATIVES)
+    "session_ready": {"permission_mode": _short, "model": _short},
     "reply": {"turn": _turn, "text": _text(MAX_REPLY), "truncated": _bool},
     "tool_call": {"turn": _turn, "tool_use_id": _short, "tool": _short, "summary": _text(MAX_EXCERPT)},
     "tool_result": {"turn": _turn, "tool_use_id": _short, "tool": _short, "is_error": _bool,
@@ -153,12 +169,26 @@ KINDS = {
     "process_ended": {"reason": _short, "returncode": _returncode},
     "anomaly": {"event_type": _short, "fields": _fields},
     "error": {"turn": _turn_or_none, "message": _text(MAX_EXCERPT)},
+    # a Codex chat (P38): the thread VBear resumes, the tokens counted so far in it, the plan's use as Codex reports it
+    # (the numbers only), and the words VBear sent in place of a card the person changed
+    "session_bound": {"thread_id": lambda v: isinstance(v, str) and bool(UUID_RE.match(v))},
+    "usage": {"turn": _turn, "total_tokens": _int_in(0, MAX_TOKENS), "delta_tokens": _int_or_none(0, MAX_TOKENS)},
+    "plan_usage": {"turn": _turn, "primary_pct": _int_or_none(0, 10_000), "primary_window_min": _int_or_none(0, 10 ** 7),
+                   "primary_resets_at": _int_or_none(0, 10 ** 12), "secondary_pct": _int_or_none(0, 10_000),
+                   "secondary_window_min": _int_or_none(0, 10 ** 7), "secondary_resets_at": _int_or_none(0, 10 ** 12),
+                   "reached": _short_or_none},
+    "card_edit_sent": {"card_id": lambda v: isinstance(v, str) and bool(CARD_RE.match(v)), "text": _text(MAX_EXCERPT)},
 }
+# Fields a kind may have besides its own, all or none of them (a Claude turn's end has neither): what a Codex chat's
+# turn end says about its cost, which Codex gives as tokens and VBear turns into money.
+_OPTIONAL = {"turn_ended": {"estimate": _bool, "tokens": _int_or_none(0, MAX_TOKENS)}}
+# Fields of which a kind has exactly one: the version of the CLI that started the session.
+_ALTERNATIVES = {"session_ready": {"claude_code_version": _short, "cli_version": _short}}
 _MASK = {"user_message": {"text": None}, "reply": {"text": MAX_REPLY}, "tool_result": {"text": MAX_EXCERPT},
          "tool_call": {"summary": MAX_EXCERPT}, "card": {"reason": MAX_SHORT},
          "auto_allowed": {"summary": MAX_EXCERPT, "reason": MAX_SHORT},
          "denied": {"summary": MAX_EXCERPT, "reason": MAX_SHORT}, "card_decision": {"value": MAX_EXCERPT},
-         "error": {"message": MAX_EXCERPT}}
+         "error": {"message": MAX_EXCERPT}, "card_edit_sent": {"text": MAX_EXCERPT}}
 _ESSENTIAL = frozenset({"turn_ended", "process_ended", "card_decision", "error"})
 
 
@@ -218,10 +248,16 @@ def record_problem(rec) -> str | None:
         return "seq 不對"
     if finite_real(at) is None or at < 0:
         return "時間不對"
-    if set(rec) != set(spec) | {"seq", "at", "kind"}:
+    optional = _OPTIONAL.get(kind, {})
+    either = _ALTERNATIVES.get(kind, {})
+    present = set(rec) - {"seq", "at", "kind"}
+    if either and len(present & set(either)) != 1:
         return f"{kind} 的欄位不符"
-    for name, check in spec.items():
-        if not check(rec[name]):
+    if (not set(spec) <= present or present - set(spec) - set(optional) - set(either)
+            or (present & set(optional)) not in (set(), set(optional))):
+        return f"{kind} 的欄位不符"
+    for name, check in {**spec, **optional, **either}.items():
+        if name in rec and not check(rec[name]):
             return f"{kind}.{name} 不符"
     return None
 
@@ -326,19 +362,32 @@ def _encode(rec: dict) -> bytes:
 
 # ---- a chat --------------------------------------------------------------------------------------------------------
 
-_CHAT_FIELDS = {"v", "id", "profile_id", "created_at", "claude_session_id"}
+_CHAT_FIELDS = {"claude-chat": {"v", "id", "profile_id", "created_at", "engine", "claude_session_id"},
+                "codex-chat": {"v", "id", "profile_id", "created_at", "engine"}}
+_CHAT_FIELDS_V1 = {"v", "id", "profile_id", "created_at", "claude_session_id"}
 
 
 def _chat_problem(rec, chat_id: str) -> str | None:
-    if not isinstance(rec, dict) or set(rec) != _CHAT_FIELDS:
+    """Why chat.json does not fit (None when it does). Version 2 names the engine and its fields follow from it; version
+    1 (before Codex chats) has no engine and is a Claude chat."""
+    if not isinstance(rec, dict):
         return "欄位不符"
-    if rec["v"] != 1 or rec["id"] != chat_id:
+    if rec.get("v") == 1 and not isinstance(rec.get("v"), bool):
+        if set(rec) != _CHAT_FIELDS_V1:
+            return "欄位不符"
+    elif rec.get("v") == 2 and not isinstance(rec.get("v"), bool):
+        if rec.get("engine") not in _CHAT_FIELDS or set(rec) != _CHAT_FIELDS[rec["engine"]]:
+            return "欄位不符"
+    else:
+        return "版本或編號不符"
+    if rec["id"] != chat_id:
         return "版本或編號不符"
     if not (isinstance(rec["profile_id"], str) and PROFILE_ID_RE.match(rec["profile_id"])):
         return "員工編號不符"
     if finite_real(rec["created_at"]) is None:
         return "建立時間不符"
-    if not (isinstance(rec["claude_session_id"], str) and UUID_RE.match(rec["claude_session_id"])):
+    if "claude_session_id" in rec and not (isinstance(rec["claude_session_id"], str)
+                                           and UUID_RE.match(rec["claude_session_id"])):
         return "對話編號不符"
     return None
 
@@ -357,15 +406,20 @@ def list_ids(base) -> list[str]:
     return sorted(n for n in names if CHAT_RE.match(n))
 
 
-def create(base, profile_id, *, now: float) -> dict:
-    """A new chat with ``profile_id``: its folder, chat.json and the first event. No process is started."""
+def create(base, profile_id, *, now: float, engine: str = "claude-chat") -> dict:
+    """A new chat with ``profile_id``: its folder, chat.json and the first event. No process is started. ``engine``
+    follows from the role card's AI tool and never changes."""
     if not isinstance(profile_id, str) or not PROFILE_ID_RE.match(profile_id):
         raise ChatStoreError("bad_request", "profile_id 不符格式")
+    if engine not in ENGINES:
+        raise ChatStoreError("bad_request", "聊天的引擎不符")
     root = chats_dir(base, create=True)
     if len(list_ids(base)) >= MAX_CHATS:
         raise ChatStoreError("too_many", f"聊天最多 {MAX_CHATS} 個，請先刪掉不用的")
     chat_id = "c-" + secrets.token_hex(8)
-    rec = {"v": 1, "id": chat_id, "profile_id": profile_id, "created_at": now, "claude_session_id": str(uuid.uuid4())}
+    rec = {"v": 2, "id": chat_id, "profile_id": profile_id, "created_at": now, "engine": engine}
+    if engine == "claude-chat":
+        rec["claude_session_id"] = str(uuid.uuid4())
     d = root / chat_id
     try:
         os.mkdir(d, 0o700)
@@ -394,6 +448,8 @@ def load(base, chat_id) -> dict:
     problem = "不是正確的 JSON" if not parsed.ok else _chat_problem(parsed.value, chat_id)
     if problem:
         raise ChatStoreError("damaged", f"聊天紀錄不符結構（{problem}）")
+    if parsed.value["v"] == 1:
+        return {**parsed.value, "engine": "claude-chat"}
     return parsed.value
 
 
@@ -512,6 +568,8 @@ class ChatState:
     turns: list = field(default_factory=list)
     last_total: float | None = None    # the last usable cumulative total the CLI reported for this session
     session_ready: bool = False        # a process of this session has started once (later ones resume)
+    thread_id: str | None = None       # a Codex chat's thread (session_bound), which a later process resumes
+    last_tokens: int | None = None     # a Codex chat's last token total of its thread (usage)
     process_open: bool = False         # a process_started without its process_ended
     last_seq: int = 0
 
@@ -541,6 +599,10 @@ def derive(records) -> ChatState:
                 st.last_total = float(rec["total_usd"])
         elif kind == "session_ready":
             st.session_ready = True
+        elif kind == "session_bound":
+            st.thread_id = rec["thread_id"]
+        elif kind == "usage":
+            st.last_tokens = rec["total_tokens"]
         elif kind == "process_started":
             st.process_open = True
         elif kind == "process_ended":

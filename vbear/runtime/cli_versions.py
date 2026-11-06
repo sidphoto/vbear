@@ -155,11 +155,11 @@ CHAT_VERIFIED_VERSIONS: tuple[str, ...] = ()
 LOCAL_CHAT_VERIFIED_FILE = "claude-chat-verified.json"
 
 
-def local_chat_verified_versions() -> dict:
-    """{version: record} whose chat check passed here, each backed by its report (mode "chat", passed, this
-    version), re-read every time. The same shape as the stream record."""
+def _local_chat_record(file_name: str, mode: str, version_key: str) -> dict:
+    """{version: record} of a chat-check record file in the state folder: each entry passed, names its report and a time,
+    and the report (read again, owned by this user) is of ``mode``, passed, and names the same version under ``version_key``."""
     from .. import config as cfg, strictjson
-    rec = strictjson.load_owned_object(cfg.state_dir() / LOCAL_CHAT_VERIFIED_FILE, strictjson.MANIFEST)
+    rec = strictjson.load_owned_object(cfg.state_dir() / file_name, strictjson.MANIFEST)
     versions = rec.value.get("versions") if rec.ok else None
     if not isinstance(versions, dict):
         return {}
@@ -171,9 +171,15 @@ def local_chat_verified_versions() -> dict:
         report = strictjson.load_owned_object(r["report"], strictjson.Limits(_STREAM_REPORT_MAX, 2_000_000, 64,
                                                                              _STREAM_REPORT_MAX))
         data = report.value if report.ok else {}
-        if data.get("mode") == "chat" and data.get("passed") is True and data.get("claude_version") == v:
+        if data.get("mode") == mode and data.get("passed") is True and data.get(version_key) == v:
             out[v] = r
     return out
+
+
+def local_chat_verified_versions() -> dict:
+    """{version: record} whose chat check passed here, each backed by its report (mode "chat", passed, this
+    version), re-read every time. The same shape as the stream record."""
+    return _local_chat_record(LOCAL_CHAT_VERIFIED_FILE, "chat", "claude_version")
 
 
 def chat_verified_versions() -> tuple[str, ...]:
@@ -190,6 +196,35 @@ def chat_unverified_text(version: str) -> str:
     listed = "、".join(sorted(supported, key=_version_key))
     return (f"Claude Code {version} 的聊天模式還沒有通過驗證。已通過的版本：{listed}。"
             f"處理方式：安裝其中一個版本，或先為 {version} 執行聊天模式的驗證（會花一點額度）。")
+
+
+# Codex versions whose chat mode (P38, ADR 0005) passed ``boundary_check --mode codex-chat`` on this Mac. None is built in:
+# a version counts only when this Mac's own record names a report that mode "codex-chat" wrote, that passed, and that names
+# the same version under ``codex_version``. Kept apart from Claude Code's chat record and from the review's list
+# (codex_constants.VERIFIED_VERSIONS): passing one says nothing about the others.
+CODEX_CHAT_VERIFIED_VERSIONS: tuple[str, ...] = ()
+LOCAL_CODEX_CHAT_VERIFIED_FILE = "codex-chat-verified.json"
+
+
+def local_codex_chat_verified_versions() -> dict:
+    """{version: record} whose Codex chat check passed here, each backed by its report, re-read every time."""
+    return _local_chat_record(LOCAL_CODEX_CHAT_VERIFIED_FILE, "codex-chat", "codex_version")
+
+
+def codex_chat_verified_versions() -> tuple[str, ...]:
+    built_in = CODEX_CHAT_VERIFIED_VERSIONS
+    return built_in + tuple(v for v in sorted(local_codex_chat_verified_versions()) if v not in built_in)
+
+
+def codex_chat_unverified_text(version: str) -> str:
+    """The one wording for "this Codex has no chat-mode verification"."""
+    supported = codex_chat_verified_versions()
+    if not supported:
+        return (f"Codex {version} 的聊天模式還沒有通過驗證，VBear 目前沒有任何通過聊天驗證的 Codex 版本。"
+                "處理方式：先執行聊天模式的驗證（會用到你的 ChatGPT 方案，約 8 到 10 次很短的對話）。")
+    listed = "、".join(sorted(supported, key=_version_key))
+    return (f"Codex {version} 的聊天模式還沒有通過驗證。已通過的版本：{listed}。"
+            f"處理方式：安裝其中一個版本，或先為 {version} 執行聊天模式的驗證（會用到你的 ChatGPT 方案）。")
 
 
 def _version_key(version: str) -> tuple[int, ...]:
