@@ -577,7 +577,7 @@ class ChiefStore(GuardedJsonStore):
         if len(json.dumps(data, ensure_ascii=False, indent=2).encode()) > MAX_FILE:
             raise StoreError("幕僚長的紀錄超過 128 KiB，拒絕寫入")
         self._make_folder()
-        cfg.write_private(self.path(), json.dumps(data, ensure_ascii=False, indent=2))
+        super().save(data)
 
 
 def folder() -> Path:

@@ -64,6 +64,7 @@ from .api_error import ApiError
 from . import risk_acceptance
 from . import role_departments
 from . import translations
+from . import chief, chief_runner as chief_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -126,6 +127,8 @@ MEETING_RE = re.compile(r"^/api/meetings/(m-[0-9a-f]{12})(?:/(retry-preview|retr
 MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 # /api/staffing/<id>[/retry-preview | /retry | /cancel | /chairman] (P35-2); the codes and statuses are the meetings'
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
+# /api/chief/<id>[/retry | /cancel] (P40-1); the codes and statuses are the meetings'
+CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -239,21 +242,30 @@ class Console:
             return kept.pop(preview_id, None) if isinstance(preview_id, str) else None
 
     def _boards(self):
-        """The one meeting runner and the one staffing runner, built together on the first use of either: each finds and
-        interrupts what a stopped console left running when it is built, which it can do only while the worker they
-        share is free, so neither is built after the other has started anything."""
+        """The one meeting runner, the one staffing runner and the one chief of staff's runner, built together on the first use
+        of any: each finds and interrupts what a stopped console left running when it is built, which it can do only while
+        the worker they share is free, so none is built after another has started anything."""
         with self.lock:
             if not hasattr(self, "meetings"):
                 self.meetings = meeting_runner_mod.MeetingRunner()
             if not hasattr(self, "staffing"):
                 self.staffing = staffing_runner_mod.StaffingRunner()
-            return self.meetings, self.staffing
+            if not hasattr(self, "chief"):
+                self.chief = chief_runner_mod.ChiefRunner()
+            return self.meetings, self.staffing, self.chief
 
     def meeting_runner(self):
         return self._boards()[0]
 
     def staffing_runner(self):
         return self._boards()[1]
+
+    def chief_runner(self):
+        return self._boards()[2]
+
+    def chief_tools(self) -> tuple:
+        """The AI tools whose chat can run now (what the chief of staff may give work to), from the chat service's support."""
+        return chief_runner_mod.usable_tools(self.chat_service().support())
 
     def chat_service(self):
         """The one chat service (P36-2), built on first use. Its ledger is the meetings' runner's: the day is shared."""
@@ -613,6 +625,13 @@ def make_handler(console: Console):
                     if found.group(2) == "stream":
                         return self._chat_stream(found.group(1), after)
                     return self._chat_action(lambda: console.chat_service().get(found.group(1), after))
+                if path in ("/api/chief", "/api/chief/preview"):
+                    if path == "/api/chief":
+                        return self._chief_call("list")
+                    return self._chief_call("preview", chat_id=parse_qs(url.query).get("chat_id", [None])[0])
+                if path.startswith("/api/chief/"):
+                    found = CHIEF_RE.match(path)
+                    return self._chief_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path in ("/api/staffing", "/api/staffing/suggest"):
                     task_id = parse_qs(url.query).get("task_id", [None])[0]
                     return self._staffing_call("list" if path == "/api/staffing" else "suggest", task_id=task_id)
@@ -813,6 +832,13 @@ def make_handler(console: Console):
                     svc, chat_id, body = console.chat_service(), found.group(1), self._body_strict()
                     call = {"messages": svc.send, "answer": svc.answer, "stop": svc.stop}[action]
                     return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
+                if path == "/api/chief":
+                    return self._chief_call("start", None, self._body_strict())
+                if path.startswith("/api/chief/"):
+                    found = CHIEF_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._chief_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/staffing/preview":
                     return self._staffing_call("preview", None, self._body_strict())
                 if path == "/api/staffing":
@@ -1914,6 +1940,52 @@ def make_handler(console: Console):
                     return self._json(runner.cancel(staffing_id))
                 if action == "chairman":
                     return self._json(runner.chairman(staffing_id, body))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
+        def _chief_sources(self, conf) -> chief_runner_mod.ChiefSources:
+            """Where the chief of staff reads from: a chat's own files (read only), the stored cards (read without
+            quarantining), and the AI tools whose chat can run now. A card store that cannot be read refuses the request."""
+            def profile(pid):
+                try:
+                    return agent_profiles.get_profile_readonly(pid)
+                except agent_profiles.AgentProfileStorageError:
+                    raise chief.ChiefError("storage", PROFILE_STORE_UNREADABLE) from None
+
+            def profiles():
+                try:
+                    return list(agent_profiles.load_all(None, None, mark_corrupt=False).values())
+                except agent_profiles.AgentProfileStorageError:
+                    raise chief.ChiefError("storage", PROFILE_STORE_UNREADABLE) from None
+            return chief_runner_mod.ChiefSources(chat=chief_runner_mod.chat_reader(), profile=profile, profiles=profiles,
+                                                 tools=console.chief_tools, conf=conf)
+
+        def _chief_call(self, action, chief_id=None, body=None, chat_id=None):
+            """The chief of staff's endpoints (P40-1). Reads and the preview run nothing; a preview reads a chat and asks which
+            Claude Code is installed, and nothing else; only a confirmed preview starts the one tool-less call."""
+            try:
+                runner = console.chief_runner()
+                if action == "list":
+                    return self._json(runner.list())
+                if action == "get":
+                    return self._json(runner.get(chief_id))
+                sources = self._chief_sources(console.store.conf)
+                if action == "preview":
+                    return self._json(runner.preview(chat_id, sources))
+                if not isinstance(body, dict):
+                    raise chief.ChiefError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "start":
+                    if set(body) - {"preview_id", "note"} or not isinstance(body.get("preview_id"), str):
+                        raise chief.ChiefError("bad_request", "只需要 preview_id，和選填的 note")
+                    rec = runner.start(body["preview_id"], {k: v for k, v in body.items() if k == "note"}, sources)
+                    return self._json({"chief_id": rec["id"], "chief": chief.view(rec)}, 202)
+                if body:
+                    raise chief.ChiefError("bad_request", "這個動作不需要內容")
+                if action == "retry":
+                    return self._json(chief.view(runner.retry(chief_id, sources)), 202)
+                if action == "cancel":
+                    return self._json(runner.cancel(chief_id))
                 return self._error(404, "not found")
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))

@@ -31,8 +31,9 @@ A kind of board gives the engine its hooks: where its records live (``store_cls`
 ``remove``), the schema, the check and the prompt of a turn, the most one turn's call may cost (``per_call``), the most a
 whole record may cost (``total_limit``), how long one call of a kind may run (``timeout``), whether the chairman has closed
 the record (``decided``), what to do when the last turn is answered (``on_final``), the error it speaks in
-(``error_cls``, a meetings.MeetingError) and every kind whose turns count toward the day's limit (``spend_kinds``: the
-meetings and the staffing meetings share one day).
+(``error_cls``, a meetings.MeetingError), whether its last turn waits for an earlier turn's answer (``final_needs_answers``,
+True; the chief of staff's board of one turn says False) and every kind whose turns count toward the day's limit
+(``spend_kinds``: the meetings, the staffing meetings, the chief of staff's proposals and the chats share one day).
 """
 from __future__ import annotations
 
