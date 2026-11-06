@@ -27,7 +27,7 @@ VERSION = "0.163.0"
 THREAD = "00000000-0000-4000-8000-0000000000aa"
 STEPS = ("stream", "ask", "edit", "patch", "outside", "interrupt", "memory")
 ALL_CHECKS = ("admin_policy", "initialize", "mcp_empty", "home_no_config_at_start", "project_settings_sent", "stream_text", "ls_asks", "edit_steer", "edit_works",
-              "deny_works", "patch_card", "outside_confined", "interrupt_works", "resume_memory", "tokens_cumulative",
+              "deny_works", "patch_card", "outside_patch_refused", "interrupt_works", "resume_memory", "tokens_cumulative",
               "thread_deleted", "idle_close", "home_clean", "no_account_data", "records_clean", "cost_within_limit",
               "cleanup")
 
@@ -269,10 +269,45 @@ class FailTests(CheckCase):
         code, report = self.check({"deny_ignored": True})
         self.assert_failed(code, report, "deny_works")
 
-    def test_a_write_outside_the_work_folder_that_gets_through_fails(self):
+    def test_an_allowed_shell_write_outside_is_only_noted_and_does_not_decide_the_result(self):
         code, report = self.check({"outside_escapes": True})
-        self.assert_failed(code, report, "outside_confined")
-        self.assertTrue(report["checks"]["outside_confined"]["files_outside"])
+        self.assertEqual((code, report["passed"], report.get("error")), (0, True, None), report)
+        self.assertTrue(report["checks"]["outside_patch_refused"]["pass"])
+        outside = report["observations"]["outside"]
+        self.assertEqual(outside["patch"], "declined_by_vbear")
+        self.assertEqual((outside["shell"], outside["shell_wrote_outside"]), ("allowed", True))
+        self.assertEqual(self.verified(), (VERSION,))
+
+    def test_an_allowed_shell_write_that_stayed_in_is_noted_too(self):
+        code, report = self.check()
+        self.assertEqual(code, 0)
+        outside = report["observations"]["outside"]
+        self.assertEqual((outside["shell"], outside["shell_wrote_outside"]), ("allowed", False))
+        self.assertEqual(outside["files_removed"], True)
+
+    def test_the_check_removes_the_files_it_caused_outside_itself_before_the_next_step(self):
+        real, seen = cc._run_steps, {}
+
+        def steps(s, work, outside, real_home, checks, obs):
+            real(s, work, outside, real_home, checks, obs)
+            seen["left"] = sorted(p.name for p in outside.iterdir())
+        with mock.patch.object(cc, "_run_steps", steps):
+            code, report = self.check({"outside_escapes": True})
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["observations"]["outside"]["shell_wrote_outside"], True)
+        self.assertEqual(seen["left"], [], "the folder outside is empty again")
+
+    def test_apply_patch_that_writes_outside_the_work_folder_fails(self):
+        code, report = self.check({"outside_patch_escapes": True})
+        self.assert_failed(code, report, "outside_patch_refused")
+        self.assertEqual(report["checks"]["outside_patch_refused"]["files_outside"], ["outside-probe.txt"])
+
+    def test_apply_patch_outside_that_gets_a_card_fails(self):
+        asks = mock.patch.object(ccp, "judge_file_change", return_value=ccp.Judgement("ask", "x"))
+        with asks:
+            code, report = self.check()
+        self.assert_failed(code, report, "outside_patch_refused")
+        self.assertEqual(report["observations"]["outside"]["patch"], "card_shown")
 
     def test_a_resumed_thread_that_forgot_fails(self):
         code, report = self.check({"forgets": True})

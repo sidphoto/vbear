@@ -13,8 +13,9 @@ day's ledger are the check's own), opens a chat with a made-up role card and sen
              changed command in the same turn; it is allowed and the file holds the changed text. A refused ``turn/steer`` fails
              the check here, with the step named; the fallback (the changed text as the next message) is stopped, not used
   patch      a file made with apply_patch: a card with the diff; allowed, the file is there
-  outside    apply_patch outside the work folder (VBear declines it without a card), then a shell write there (allowed; the
-             sandbox must stop it): no file appears outside
+  outside    apply_patch outside the work folder (VBear declines it without a card: no card, no file, or the check fails),
+             then a shell write there (allowed). Whether that write got out is only noted: Codex 0.163.0 runs an allowed
+             command again without the sandbox when the sandbox stopped it. Whatever either wrote there is removed
   interrupt  a long reply is cut with ``turn/interrupt``; the process ends when its stdin is closed
   memory     a new process with ``thread/resume``: does the thread remember the code word, and is the token total carried on
 
@@ -385,13 +386,22 @@ def _run_steps(s: CodexSession, work: Path, outside: Path, real_home: Path, chec
     cards = s.drive(n, decide_outside)
     shell = [c for c in s.command_cards(cards) if "outside-shell.txt" in _command(c)]
     auto = [x for x in s.of_turn(n, "denied") if x["tool"] == "file_change" and x["by"] == "vbear"]
-    written = [str(p.name) for p in (outside_file, outside_shell) if p.exists()]
+    patch_written = [outside_file.name] if outside_file.exists() else []
+    shell_wrote = outside_shell.exists()
+    # Codex 0.163.0 runs a command the person allowed again without the sandbox when the sandbox stopped it, so a shell
+    # write outside is only noted (docs/adr/0005, decision 6). What either write left outside is removed here.
+    for path in (outside_file, outside_shell):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
     obs["outside"] = {"patch": "card_shown" if seen["patch_card"] else "declined_by_vbear" if auto else "not_attempted",
-                      "shell": "allowed" if shell else "not_attempted"}
-    checks["outside_confined"] = check(
-        not written and not seen["patch_card"] and bool(shell), files_outside=written,
-        note="工作資料夾外：apply_patch 被 VBear 自動拒絕（沒有卡片）；允許的 shell 寫入被沙盒擋下，外面沒有檔案出現"
-             "（沒有觀察到 shell 嘗試時判失敗，因為沙盒沒被驗證到）")
+                      "shell": "allowed" if shell else "not_attempted", "shell_wrote_outside": shell_wrote,
+                      "files_removed": not (outside_file.exists() or outside_shell.exists())}
+    checks["outside_patch_refused"] = check(
+        not patch_written and not seen["patch_card"] and bool(auto), files_outside=patch_written,
+        note="工作資料夾外：apply_patch 被 VBear 自動拒絕（沒有卡片），外面沒有檔案；允許的 shell 寫外面只記在 observations.outside，"
+             "不影響結果（Codex 0.163.0 在沙盒擋下後會不問就在沙盒外重跑）；檢查寫出去的檔案已清掉")
 
     # ---- turn 6: turn/interrupt ---------------------------------------------------------------------------------
     n = s.say("interrupt", PROMPTS["interrupt"])

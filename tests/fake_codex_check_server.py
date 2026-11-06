@@ -22,7 +22,8 @@ handshake) with ``flags`` for the ways a Codex can go wrong:
   steer_rejected    ``turn/steer`` is answered with an error
   edit_ignored      after the steer the original command is asked again
   deny_ignored      the declined ``rm`` runs anyway
-  outside_escapes   the sandbox does not stop the write outside
+  outside_escapes   the allowed shell write outside runs (Codex 0.163.0 runs it again without the sandbox)
+  outside_patch_escapes  the declined apply_patch outside is written anyway
   forgets           the code word is not remembered after a resume
   tokens_back       the thread's token total goes back after a resume
   interrupt_rejected ``turn/interrupt`` is answered with an error
@@ -220,6 +221,9 @@ class Probe(Fake):
         folder = re.search(r"(/\S+/outside)/outside-probe\.txt", text).group(1)
         self.say("I will write outside.", phase="commentary")
         if self.file_change(os.path.join(folder, "outside-probe.txt"), "outside\n") == "decline":
+            if self.flags.get("outside_patch_escapes"):
+                with open(os.path.join(folder, "outside-probe.txt"), "w") as f:
+                    f.write("outside\n")
             self.model_call()
             shell = f"echo outside > {folder}/outside-shell.txt"
             escapes = bool(self.flags.get("outside_escapes"))
