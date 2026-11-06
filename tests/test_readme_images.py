@@ -218,7 +218,7 @@ class ChangelogRelease(unittest.TestCase):
         self.assertTrue(headings[1].startswith("v0.12.0"), headings[:3])
         self.assertTrue(headings[2].startswith("v0.11.0"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('__version__ = "0.12.0"', init)
+        self.assertIn('__version__ = "0.13.0"', init)
 
     def test_the_v090_section_covers_positions_professions_and_the_hover_box(self):
         section = self.text[self.text.index("## v0.9.0"):self.text.index("## v0.8.9")]
