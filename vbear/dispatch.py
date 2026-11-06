@@ -507,8 +507,10 @@ def checked_plan(body, rec: dict) -> dict:
         if not isinstance(raw, dict) or set(raw) != _NEW_CARD_KEYS:
             raise _bad("新員工的欄位不符")
         ref = raw["ref"]
-        if not isinstance(ref, str) or ref not in proposed or any(c["ref"] == ref for c in new_cards):
+        if not isinstance(ref, str) or ref not in proposed or any(c["ref"] == ref for c in new_cards) and ref not in made:
             raise _bad("新員工的代號不是提議裡的，或重複了")
+        if ref in made:
+            continue                     # the employee is made already (自己動手 item 1): it stays as it was made
         if raw["position"] not in chief.NEW_POSITIONS:
             raise _bad("新員工的職位不能是 CEO，也必須是已知的職位")
         if raw["tool"] not in rec["tools"]:
