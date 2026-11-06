@@ -83,11 +83,12 @@ class ChatOps:
         return data
 
     def _chat_day_spent(self, now: float) -> Decimal:
-        """What today cost: the chats (deleted ones included), the meetings and the staffing meetings. Raises when it
-        cannot be established; a damaged record of a meeting adds nothing (as for the meetings themselves)."""
+        """What today cost: the chats (deleted ones included), the meetings, the staffing meetings, the tries and the chief of
+        staff's proposals. Raises when it cannot be established; a damaged record of a meeting adds nothing (as for the
+        meetings themselves), but a proposal that cannot be read makes the day unknown."""
         if os.path.realpath(cfg.state_dir()) != os.path.realpath(self.base):
             raise ValueError("背景程序的資料夾與設定的資料夾不同，無法確認今天的花費")
-        from .. import staffing as st, try_spend    # here: staffing imports the board engine, the daemon need not
+        from .. import chief, staffing as st, try_spend    # here: they import the board engine, the daemon need not
         from ..jsonstore import StoreError
         total = cs.day_spent(self.base, now)
         records = []
@@ -104,6 +105,12 @@ class ChatOps:
             total += mt.daily_spent([try_spend.record()], now, try_spend.turn_cap)      # 「試一下」 of the start-up page
         except StoreError as exc:
             raise ValueError(f"試一下的花費讀不出來（{exc}）") from None
+        ids, load, per_call = chief.spend_kind()                                        # the chief of staff: unreadable is unknown
+        try:
+            for rid in ids():
+                total += mt.daily_spent([load(rid)], now, per_call)
+        except mt.MeetingError as exc:
+            raise ValueError(str(exc)) from None
         return total
 
     def _chat_allowance(self, rid: str, now: float):
