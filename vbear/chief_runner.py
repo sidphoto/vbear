@@ -171,6 +171,22 @@ class ChiefRunner(HeadlessBoard):
             except Exception:
                 pass  # the proposal is kept whatever the hook does; whoever hooks in reports its own failure
 
+    def link_dispatch(self, cid: str, dispatch_id: str) -> dict:
+        """Record the dispatch made from a kept proposal on it (what P40-3's dispatch code does in ``on_proposal``). A proposal
+        that is kept (``ready``) takes one dispatch for good: the same one again is the same, another is ``already_decided``.
+        From then on the proposal is ``decided`` and is not asked again."""
+        if not isinstance(dispatch_id, str) or not 0 < len(dispatch_id) <= 64:
+            raise chief.ChiefError("bad_request", "派工的識別碼不符")
+
+        def link(rec):
+            outcome = rec["outcome"]
+            if outcome["state"] != "ready":
+                raise chief.ChiefError("not_retryable", "這份提議還沒有好，不能接上派工")
+            if outcome["dispatch_id"] not in (None, dispatch_id):
+                raise chief.ChiefError("already_decided")
+            outcome["dispatch_id"] = dispatch_id
+        return self._update(cid, link)
+
     def spend_kinds(self) -> list:
         """The proposals share the day with the meetings, the staffing meetings, the chats and the tries."""
         return [(mt.meeting_ids, mt.load, mt.per_call_limit), (st.record_ids, st.load, st.per_call_of), chief.spend_kind(),
