@@ -6633,7 +6633,67 @@ function projectDetail(p) {
           el("td", { class: "mono small" }, s.session_id.slice(0, 8))))))) : emptyState("沒有紀錄", null)));
 }
 
+// ---------- the 「自己動手」 settings (v0.15, ADR 0003) ----------
+// The chief of staff proposes and the person confirms, unless the person ticks one of these. Only the items that work in this
+// version are listed (the server's table says which); each is off until the person has read what it does and what it costs
+// at most and pressed 「我了解，打開」. Turning one off asks nothing. Written only through POST /api/settings/autonomy, never
+// through the generic config route. The words come from the server's table (vbear/autonomy.py).
+const AUTONOMY_UNKNOWN = "目前讀不到「自己動手」的設定，現在是開還是關：未知（預設是關）。";
+const AUTONOMY_NOTE = "預設是「AI 提議、你確認」。要讓幕僚長不經確認就動手，在這裡一項一項勾；打開前會先說明。";
+
+function usdText(n) { return typeof n === "number" && isFinite(n) ? `US$${n.toFixed(2)}` : "未知"; }
+
+function autonomyDialogBody(item, limits, never) {
+  const l = limits || {};
+  return el("div", null,
+    el("p", null, item.effect),
+    el("p", null, `最多花多少：幕僚長每次最多 ${usdText(l.chief_call_usd)}；派工的每一步是員工的一個聊天回合，每回合最多 ${usdText(l.per_turn_usd)}。` +
+      `全部和聊天、會議共用每天上限（${usdText(l.daily_usd)}），到了就暫停，由你按「繼續」。`),
+    el("p", null, "每一件它做的事都會列在「AI 自己做了什麼」，可以停止或撤回；也可以回到這裡關掉。"),
+    el("p", { class: "small muted" }, "就算全部勾了，下面三件事還是不會做："),
+    el("ul", { class: "small" }, never.map((t) => el("li", null, t))));
+}
+
+function autonomySettings(data) {
+  const box = el("section", { class: "panel pad", "data-settings": "autonomy" }, el("h2", { style: "margin-bottom:6px" }, "自己動手"));
+  if (!data || !data.autonomy || !Array.isArray(data.items)) {
+    append(box, el("p", { class: "small muted", "data-autonomy": "unknown" }, AUTONOMY_UNKNOWN));
+    return box;
+  }
+  const never = Array.isArray(data.never) ? data.never : [];
+  let current = { create_cards: data.autonomy.create_cards === true, dispatch: data.autonomy.dispatch === true };
+  const inputs = {};
+  const save = async (next) => {
+    try {
+      const r = await api.post("/api/settings/autonomy", next);
+      current = { create_cards: r.autonomy.create_cards === true, dispatch: r.autonomy.dispatch === true };
+      toast("已儲存");
+    } catch (e) { toast("儲存失敗：" + e.message); }
+    for (const [key, input] of Object.entries(inputs)) input.checked = current[key];
+  };
+  const row = (item) => {
+    const input = el("input", { type: "checkbox", "data-autonomy": item.key });
+    input.checked = current[item.key];
+    inputs[item.key] = input;
+    input.addEventListener("change", async () => {
+      const wanted = input.checked;
+      input.checked = current[item.key];   // it stays as it was until the server has the new value
+      if (wanted && !(await confirmInPage(`打開「${item.title}」`, autonomyDialogBody(item, data.limits, never), "我了解，打開"))) return;
+      await save({ ...current, [item.key]: wanted });
+    });
+    return el("label", { class: "switch", "data-autonomy-item": item.key }, input,
+      el("div", null, el("div", { class: "t" }, item.title), el("div", { class: "small muted" }, item.effect)));
+  };
+  append(box, el("p", { class: "small muted" }, AUTONOMY_NOTE),
+    data.items.filter((item) => item.active === true && typeof item.key === "string").map(row),
+    el("p", { class: "small", "data-autonomy": "never" }, "就算全部勾了，也永遠不會做：", never.join("")),
+    typeof data.later_note === "string" ? el("p", { class: "small muted", "data-autonomy": "later" }, data.later_note) : null);
+  return box;
+}
+// ---------- end of the 「自己動手」 settings ----------
+
 // The lobby's 新手第一局 can be put away from the lobby (config key onboarding_dismissed); this brings it back.
+
 function onboardingSettings(conf, saveConf) {
   const dismissed = conf.onboarding_dismissed === true;
   const btn = el("button", { class: "btn small", type: "button", "data-onboard": dismissed ? "show" : "hide", on: { click: async () => {
@@ -6668,6 +6728,7 @@ async function viewSettings() {
   await refreshRoleTranslations();
   const main = claim(token);
   const c = await api.get("/api/config");
+  const autonomyData = await api.get("/api/settings/autonomy").catch(() => null);
   if (token !== seq) return;
   const conf = c.config;
   const advanced = !!conf.advanced_mode;
@@ -6690,6 +6751,7 @@ async function viewSettings() {
     c.corrupt ? corruptNotice() || notice("bad", "設定檔（config.json）無法讀取，設定暫時無法儲存。") : null,
     translationSettings(conf, saveConf),
     setupSettings(),
+    autonomySettings(autonomyData),
     onboardingSettings(conf, saveConf),
     el("div", { class: "grid-2" },
       el("div", { class: "panel pad" },

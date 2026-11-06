@@ -209,6 +209,8 @@ DEFAULT_CONFIG = {
     "setup_notice": False,  # an upgrade counted the person as done: the lobby says so once, then clears this
     "welcome_seen": False,  # the app's "first time you open VBear" page was read or skipped (it is shown once, before the start-up)
     "first_ceo_id": "",     # the card the first-CEO step made: the lobby offers a first chat with it until it is used or put away
+    # 「自己動手」 (ADR 0003): both off until the person ticks them. Written only by POST /api/settings/autonomy, never /api/config
+    "autonomy": {"create_cards": False, "dispatch": False},
     # one switch per hidden AI tool ("show_mcode"): off until the person turns it on in the settings
     **{ai_tools.show_key(i): False for i in ai_tools.hidden_ids()},
     "sources": [asdict(s) for s in default_sources()],
