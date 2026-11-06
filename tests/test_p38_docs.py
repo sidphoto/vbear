@@ -112,6 +112,40 @@ class CodexChatDocsTests(unittest.TestCase):
             self.assertIn(word, self.adr, word)
         self.assertIn("project_root_markers", self.changelog)
 
+    def test_an_allowed_command_may_run_outside_the_sandbox_is_said_in_every_place(self):
+        warning = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。"
+        self.assertIn(warning, self.app)
+        for phrase in ("允許後可能在沙盒外執行", "三個選項", "照現在發布", "`never`", "`:root`", "等 Codex 修好", "apply_patch", "連網",
+                       "寫整台電腦", "不再問", "`require_escalated`"):
+            self.assertIn(phrase, self.adr, phrase)
+        self.assertRegex(self.adr, r"7\. \*\*")
+        for phrase in ("Residual risks", "(7) *An allowed command can run outside the sandbox.*", "again without the sandbox",
+                       "`require_escalated`", "write anywhere", "reach the network", "`:root`", "is only noted", "apply_patch",
+                       "outside the sandbox", warning):
+            self.assertIn(phrase, self.section, phrase)
+        for phrase in ("5b", "orchestrator.rs", "sandbox_override_for_first_attempt", "`require_escalated`", "`:root`",
+                       "again without the sandbox", "the permission profile", "`never`", "`on-request`"):
+            self.assertIn(phrase, self.evidence, phrase)
+        for name, text in (("changelog", self.changelog), ("readme", self.en)):
+            for phrase in ("outside the sandbox", "write anywhere", "reach the network"):
+                self.assertIn(phrase, text, (name, phrase))
+        for phrase in ("沙盒外", "連網", "整台電腦"):
+            self.assertIn(phrase, self.zh, phrase)
+        self.assertIn("沙盒外", self.ref)
+        self.assertIn("is only noted", self.changelog)
+
+    def test_the_old_claim_that_the_sandbox_stops_what_the_person_allowed_is_gone(self):
+        old = ("a shell write there that the sandbox must stop", "stops writes outside the work folder and the network, not reads",
+               "Codex's sandbox stops writes outside the card's folder and the network",
+               "the sandbox stops writes outside the folder and the network, not reads", "Codex 的沙盒擋住資料夾外的寫入",
+               "writes only in the card's folder, no network, no `/tmp`)", "排除 `/tmp` 與 `$TMPDIR`，不能連網", "writes only in the work folder, no `/tmp`, no network",
+               "which the sandbox must stop", "沙盒擋住允許後")
+        for name, text in (("changelog", self.changelog), ("en", self.en), ("zh", self.zh), ("model", self.model), ("adr", self.adr),
+                           ("evidence", self.evidence), ("ref", self.ref)):
+            for phrase in old:
+                self.assertNotIn(phrase, text, (name, phrase))
+        self.assertNotIn("sandbox must stop", read("vbear", "codex_chat_check.py"))
+
     def test_nothing_public_names_a_real_person_or_machine(self):
         for text in (self.raw, self.section, self.adr, self.evidence):
             self.assertNotRegex(text, r"/Users/(?!fake-user)[A-Za-z0-9_.-]+")

@@ -79,7 +79,8 @@ Recorded in `tests/fixtures/codex-chat/` (scrubbed of the recorder's own setting
   `applyNetworkPolicyAmendment`, `decline`, `cancel` (a file change: `accept`, `acceptForSession`, `decline`, `cancel`).
   There is no "edit first". VBear sends only `accept` and `decline`.
 - The older `workspace-write` sandbox let `apply_patch` write; a permission profile that denies the whole disk made
-  `apply_patch` fail after it was allowed. The old sandbox does not block reading outside the work folder.
+  `apply_patch` fail after it was allowed. The old sandbox does not block reading outside the work folder. It does not
+  keep an *allowed* command inside it either: see 5b.
 - Token use is reported as `thread/tokenUsage/updated` (a running total for the thread, continued after `thread/resume`).
   No field carries money.
 
@@ -121,6 +122,50 @@ a made-up `HOME`, no turn sent, no login needed for `thread/start`) found why. S
   refused by the chat-folder check, and not deleted.
 - These are 0.163.0's behaviours. A new version needs the root-finding, the trust write and the key splitting looked at again
   before it is added to the table (the probe script of the task can be run again).
+
+## 5b. An allowed command can run again without the sandbox (found on a real Mac, then read in the source; no model called)
+
+On the real check the shell command the check allowed for a write outside the work folder wrote the file. A reading of the
+source (rust-v0.163.0, `codex-rs/`) and zero-cost runs (`codex sandbox`, `thread/start`; temporary `CODEX_HOME`, no turn)
+found why. Under `untrusted` this is Codex's design, not a setting of VBear's that failed to apply.
+
+- **Run again without the sandbox, no second question.** `core/src/tools/orchestrator.rs` (header: "approval, select sandbox,
+  attempt, retry with an escalated sandbox strategy on denial, no re-approval thanks to caching"). Under `untrusted` a command
+  not allowed by a rule is asked (`core/src/exec_policy.rs`); once allowed, `already_approved` is true. It first runs in the
+  sandbox (`sandbox_override_for_first_attempt`, `core/src/tools/sandboxing.rs`). If it fails and the output looks like a sandbox
+  denial (`sandboxing/src/denial.rs`: an exit code other than 0, 2, 126, 127 and `operation not permitted`, `permission
+  denied`, `read-only file system`, `sandbox`, `seccomp`, `landlock` or `failed to write file` in the output), it is run again
+  without the sandbox (`SandboxType::None`) and not asked again (`should_bypass_approval`). Only `untrusted` (and a granular
+  policy with `sandbox_approval`) reaches that retry (`wants_no_sandbox_approval`). Zero-cost check: a write to the home folder
+  inside `codex sandbox -P ':workspace'` answers `operation not permitted` with exit code 1, so it counts as a denial.
+- **A model's request to leave the sandbox.** A tool call with `sandbox_permissions` set to `require_escalated` runs, once
+  allowed, without the sandbox on the first attempt (`BypassSandboxFirstAttempt`).
+- **The card cannot say it.** `CommandExecutionRequestApprovalParams` (`app-server-protocol/src/protocol/v2/item.rs`) has no
+  field for "this will run without the sandbox"; `additionalPermissions` and `availableDecisions` are experimental and are
+  dropped with `experimentalApi: false`; `reason` is the model's own optional justification. The decisions are `accept`,
+  `acceptForSession`, `acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`, `decline`, `cancel`: none is "allow but
+  stay in the sandbox".
+- **Network.** A command run without the sandbox can reach the network (no Seatbelt; a full escalation also skips the managed
+  network proxy). Whether a retry happens depends on the error text: `curl` to a name or address failed with exit code 6 or 7 and
+  no keyword, so no retry; a `perl` socket gave `Operation not permitted`, which is a denial, so under `untrusted` it would be
+  run again without the sandbox and connect.
+- **The ways to stay inside, and why none was used.** (a) `on-request`: ordinary commands are not asked (reading too),
+  `require_escalated` is still allowed out. (b) `never`: no card at all, no way out of the sandbox, `apply_patch` inside the
+  work folder works, but reading is unlimited and unasked. (c) a granular policy: only through `config`, close to `never`.
+  (e) **the permission profile with `:root` set to `deny`** (the vendor's "file access limited to workspace" example, sent in
+  `thread/start`'s `config`; no experimental API): every command asked, no retry (`orchestrator.rs`: a policy with a denied read
+  does not retry), an escalation does not widen it (`protocol/src/permissions/target.rs`), network stays off. But
+  `apply_patch` fails in it (P38-0 fact; it runs a helper `codex --codex-run-as-fs-helper` under another Seatbelt profile that
+  lacks the temporary-folder access the ordinary one has; run by hand in the ordinary profile the same write succeeded).
+  Denying reads of a few folders only would not do: an escalation is then widened to the whole disk being writable.
+  Not confirmed with a model turn: whether the shell can write the work folder in that profile when the folder is not under
+  `/tmp`.
+- **Decision (2026-11-06, the person's):** release as it is and say it on the card and in the documents (ADR 0005, decision
+  7), then use the permission profile when Codex fixes `apply_patch` under it. The version check no longer fails on an allowed
+  shell write that got out (it notes it and removes the file); an `apply_patch` outside the work folder must still be declined
+  by VBear with no card and leave no file.
+- **Retired value.** The vendor's documentation says `approval_policy = "untrusted"` is no longer supported; 0.163.0's
+  `thread/start` still takes it as a parameter (a settings file with it is refused).
 
 ## 6. What was built from it (P38-1 to P38-5)
 

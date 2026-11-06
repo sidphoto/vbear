@@ -92,7 +92,7 @@
   Bash、Edit、Write 一律出權限卡片（允許這一次、拒絕、改內容再允許），沒有「以後都允許」；卡片 5 分鐘過期視為拒絕，按下允許時 VBear 會再檢查一次。
   每回合上限 `chat_limits.per_turn_usd`（預設 US$0.50，0.01 到 5），和會議、組隊會議共用 `meeting_limits.daily_usd`；沒回報花費的回合按上限算。
   Claude Code 版本要先通過 `python3 -m vbear.boundary_check --mode chat`（約 6 次 Haiku 小呼叫，用你自己的登入）才能聊天；2.1.318 另外把 `~/.claude/policy-limits.json` 當成管理員政策，存在就不能聊天。
-  Codex 聊天（引擎 `codex-chat`）：每個指令和每次改檔都問（連只讀檔的也問）；「改內容再問」是先拒絕、再請 Codex 照你改的重新問一次；沙盒不擋讀；花費是 VBear 依 token 數的估計（每 100 萬 token 計 US$1.00，不是帳單），算進每天上限；聊天用的 Codex 另外登入（開始設定頁），版本要先通過 `python3 -m vbear.boundary_check --mode codex-chat`（頁面上的「驗證聊天」）。
+  Codex 聊天（引擎 `codex-chat`）：每個指令和每次改檔都問（連只讀檔的也問）；「改內容再問」是先拒絕、再請 Codex 照你改的重新問一次；沙盒不擋讀，而且允許後的指令可能在沙盒外執行（能寫整台電腦、能連網；指令卡上寫明）；花費是 VBear 依 token 數的估計（每 100 萬 token 計 US$1.00，不是帳單），算進每天上限；聊天用的 Codex 另外登入（開始設定頁），版本要先通過 `python3 -m vbear.boundary_check --mode codex-chat`（頁面上的「驗證聊天」）。
   詳見 [安全模型](SECURITY-MODEL.md#chats-with-a-role-card) 與 [Codex 聊天](SECURITY-MODEL.md#chats-with-a-codex-role-card-engine-codex-chat-v013)。
 - 組隊會議：用會議的引擎和同一個 worker（會議和組隊會議不會同時跑），同樣是沒有工具的呼叫、同樣即時檢查 init，同樣只用低／中思考強度與時鐘；
   卡和技能用代號（`C1`、`S1`…）送出，不送 id，也不送任務卡的資料夾路徑。花費上限：發言者每次 `meeting_limits.per_call_usd`、CEO 每次

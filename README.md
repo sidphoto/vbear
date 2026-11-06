@@ -314,8 +314,9 @@ A **Codex** chat works the same way with these differences. The Codex that chats
 (the start-up page's 讓聊天用的 Codex 登入), because `codex app-server` cannot be told to ignore your own Codex settings;
 VBear never reads your `~/.codex`. Every command is asked, even one that only reads, and so is every file change, with its
 diff; there is no allow-every-time. 改內容再問 refuses the original and has Codex ask again with your text, so you allow once
-more. Codex's sandbox stops writes outside the card's folder and the network, **not reads**: a command you allow can read the
-whole machine. Codex reports tokens, not money: VBear estimates each turn from the token count (US$1.00 per million, at least
+more. Codex's sandbox does **not** limit reads, and a command you allow may run outside the sandbox: if the sandbox stops it,
+Codex runs it again without asking, so it can write anywhere your account can write and reach the network. The command card
+says so above 允許這一次; allow only commands you understand. File changes outside the card's folder are refused by VBear itself. Codex reports tokens, not money: VBear estimates each turn from the token count (US$1.00 per million, at least
 US$0.01), shows it as an estimate (not a bill), and counts it in the same daily limit; the plan's use as Codex reports it is
 shown on the chat. Codex keeps its own copy of the conversation in its folder under VBear's state folder, and deleting a chat does
 not delete that copy. 驗證聊天 for Codex runs about fourteen short calls on your ChatGPT plan, not billed apart.

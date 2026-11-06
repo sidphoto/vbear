@@ -1218,7 +1218,8 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   (`project_settings_sent` in the report; no path in it). In the probe with both settings, in a home folder that is a
   git repository: no MCP server, no start-up notice, no skill, no `config.toml`.
 - **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
-  reviewer `user`, the legacy `workspace-write` sandbox (writes only in the work folder, no `/tmp`, no network). A
+  reviewer `user`, and ask for the legacy `workspace-write` sandbox (the work folder is its only writable place, no `/tmp`, network off;
+  but see the residual risk (7): a command the person allows may run outside it). A
   command is a card with its whole text; a request that needs the network, or is not a command, is declined. A file
   change is judged first: a path outside the work folder (links followed), or under `.codex`, `.agents` or `.git` at any
   depth, is declined with no card; the rest is a card with each file's path, kind and diff. An allow is `accept` and is
@@ -1252,7 +1253,7 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   with seven messages: text; `ls -a` (a command that only reads must still make a card) and a denied `rm` (the file is
   still there); a command changed in its card (`turn/steer` must be accepted: a refused one fails the check at the `edit`
   step and VBear's fallback is stopped, not used) which then runs as changed; a file change with its diff; a write
-  outside the work folder (declined with no card, and a shell write there that the sandbox must stop); `turn/interrupt`;
+  outside the work folder (declined with no card, no file there, or the check fails; and an allowed shell write there, which is only noted, see the residual risk (7)); `turn/interrupt`;
   and a new process with `thread/resume` that must remember the first message. It also checks the answers of
   `thread/start` and `mcpServerStatus/list`, the token total across the resume, that `thread/delete` removes the
   thread the check made, that the idle process ends by itself within twenty seconds of its stdin closing, and that no
@@ -1265,15 +1266,16 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   US$0.30 by VBear's own counting (each step has a cap, and the check's day limit is US$0.30), and is not added to the
   day's ledger. A pass writes `codex-chat-verified.json` and a 0600 report that `cli_versions` reads back every time.
 - **The page.** A card of a Codex chat shows the command whole, its folder and what Codex says it does, or each file's
-  path, what is done to it and its diff, as text in `<pre>` (never as markup). Its buttons are 「允許這一次」, 「拒絕」 and
+  path, what is done to it and its diff, as text in `<pre>` (never as markup). A command card says, above its buttons,
+  「允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。」 (a
+  file card and a Claude card do not). Its buttons are 「允許這一次」, 「拒絕」 and
   「改內容再問」, whose note says VBear declines the original and Codex asks again, so the person must allow once more;
   nothing on the page says the change was applied. There is no "allow from now on". A reply's cost reads 「估計 US$x」 with
   the token count and says it is not a bill; the plan's use is one line from the last `plan_usage` record (percent per
   window as Codex reports it, and the reset time only when a limit was reached). The head of the chat says reading is not
   limited. The deletion confirmation says Codex's own copy stays in `codex-chat-home` (`sessions`) and is not deleted.
-- **Residual risks.** (1) *Reading is not limited by the sandbox.* The legacy `workspace-write` sandbox stops writes outside
-  the work folder and the network, not reads: a command the person allows can read the whole machine, as a Claude chat's
-  Bash can. What stands between the model and those files is the person reading each command; the permission profile that
+- **Residual risks.** (1) *Reading is not limited by the sandbox.* The legacy `workspace-write` sandbox does not limit reads: a command the person
+  allows can read the whole machine, as a Claude chat's Bash can. What stands between the model and those files is the person reading each command; the permission profile that
   denies reading the whole disk made file changes fail on the recorded version, so it is not used. (2) *The cap is checked
   between reports.* A turn is interrupted when a token report reaches the cap, and two reports can be one model call apart
   (about 20,000 tokens, about US$0.02 by the rule), so a turn can pass its cap by about one call; the estimate is not a bill
@@ -1291,7 +1293,21 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   or `<work folder>/.agents/skills` would load in the next conversation. VBear declines a file change under `.codex`,
   `.agents` and `.git` at any depth, Codex's own sandbox makes them read-only under the project root, and a work folder that
   already holds a `.codex` is refused; a command the person allows can still create one. The person's `HOME` for the
-  process is an empty folder, so `~/.agents/skills` is not read; that must stay so.
+  process is an empty folder, so `~/.agents/skills` is not read; that must stay so. (7) *An allowed command can run outside the sandbox.*
+  Found on a real Mac, then read in the source (`docs/evidence/codex-0.163.0-chat.md`, 5b). Under `untrusted`, when a command
+  the person allowed is stopped by the sandbox (its output says `operation not permitted` or the like), Codex runs it again
+  without the sandbox and does not ask again; and when the model asks to leave the sandbox (`require_escalated`), an allow
+  means it runs outside the sandbox the first time. A command run outside the sandbox can write anywhere the person's account
+  can write and can reach the network. The card has no field that says which it will be, and no answer means "allow but stay
+  in the sandbox", so VBear cannot tell the person on a particular card; every command card carries the warning quoted
+  above. The only setting that keeps an allowed command inside the sandbox in 0.163.0 is a permission profile with `:root`
+  set to `deny`, under which `apply_patch` fails, so no file change could be made; the person chose (2026-11-06) to release as
+  it is and say so (ADR 0005, decision 7), and to switch to the profile when Codex fixes `apply_patch` there. File changes
+  are not affected: VBear itself declines a path outside the work folder or under `.codex`, `.agents` and `.git`. What stands
+  between the model and the rest of the machine is the person reading each command, as for reading in (1). The version check
+  requires that `apply_patch` outside the work folder is declined with no card and leaves no file
+  (`outside_patch_refused`); whether the allowed shell write got out is only noted (`observations.outside`), and the check
+  removes what either wrote.
 - **Not checked yet.** What happens in a long conversation (an item kind outside the list stops the chat) and whether the
   real Codex lets an unknown server request through are for the first real runs; the login's effect on the chat folder
   (it must add no `config.toml`, `rules/` or `AGENTS.md`) is checked by the folder test before every start.

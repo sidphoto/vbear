@@ -23,7 +23,7 @@ P38-6):
   `com.openai.codex`). `docs/evidence/codex-0.163.0-chat.md` keeps what all this rests on.
 - **The daemon runs Codex chats (P38-3).** A new engine `codex-chat` (`runtime/codex_chat_session.py`): one `codex app-server`
   per role card, at most three chats in all with the Claude ones, an environment of exactly seven variables, `untrusted` approval
-  with reviewer `user`, the legacy `workspace-write` sandbox (writes only in the card's folder, no network, no `/tmp`). A command
+  with reviewer `user`, and asks for the legacy `workspace-write` sandbox (the card's folder as its only writable place, network off, no `/tmp`; an allowed command may still run outside it, see below). A command
   is a card with its whole text; a file change is a card with each file's path, kind and diff, unless a path is outside the folder
   or under `.codex`, `.agents` or `.git`, which is declined without a card. A changed command is not "allow, changed": VBear
   declines it and sends `turn/steer`, and Codex asks again in a card of its own. Anything that shows VBear's settings are not
@@ -32,7 +32,7 @@ P38-6):
   `usage`, `plan_usage` and `card_edit_sent`, and a turn's end gains `estimate` and `tokens`.
 - **The version check (P38-4).** `python3 -m vbear.boundary_check --mode codex-chat` runs one real chat through VBear's own
   Codex code in a temporary state folder, with seven messages (text; `ls -a` must make a card, and a denied `rm`; a changed
-  command; a file change; writes outside the folder; stop; `thread/resume`), about fourteen short model calls on your ChatGPT
+  command; a file change; `apply_patch` outside the folder; stop; `thread/resume`), about fourteen short model calls on your ChatGPT
   plan and at most US$0.30 by VBear's own counting, not added to the day's ledger. A pass writes `codex-chat-verified.json` and a
   0600 report that is read back every time. The report holds no Codex home, user agent, plan kind, credits or e-mail-like text.
 - **The console and the page (P38-5).** `POST /api/chats` reads the role card's tool and fixes the chat's engine for good; a
@@ -51,8 +51,8 @@ P38-6):
   **Money:** Codex reports tokens, not money. A turn is estimated as tokens ÷ 1,000,000 × US$1.00, rounded up to the cent, at
   least US$0.01 (VBear's accounting rule, not a price), and counted in the same `meeting_limits.daily_usd`; a turn cut off
   without a count costs its cap. Two token reports can be a model call apart, so a turn can pass its cap by about one call.
-  **Reading is not limited:** the sandbox stops writes outside the folder and the network, not reads, so a command you allow can
-  read the whole machine; the permission profile that would stop reads made file changes fail on the recorded version.
+  **Reading is not limited:** the sandbox does not limit reads, so a command you allow can read the whole machine; the
+  permission profile that would stop reads made file changes fail on the recorded version.
   Documents: `docs/SECURITY-MODEL.md` has "Chats with a Codex role card" with its residual risks, `docs/adr/0005-codex-chat-boundary.md`
   records the decisions, and both READMEs, `docs/ARCHITECTURE.md` and `docs/REFERENCE.zh-TW.md` say what Codex chat is.
 - **A home folder that is a git repository.** Found before release: Codex took `~` for the project root, read the person's own
@@ -60,6 +60,17 @@ P38-6):
   the work folder's trust set to `untrusted` (both `-c`, the second an inline table), asks `mcpServerStatus/list` with the
   thread's `threadId`, and the version check asserts both were sent and that no `config.toml` appears; a `config.toml` already in
   the chat folder is refused with a plain reason, never deleted (`docs/evidence/codex-0.163.0-chat.md`).
+- **An allowed command can run outside the sandbox.** Found on a real Mac, then read in the Codex source: under `untrusted`, when
+  the sandbox stops a command you allowed, Codex runs it again without the sandbox and does not ask again, and a command the model
+  asked to run outside the sandbox (`require_escalated`) does so the first time you allow it. Such a command can write anywhere
+  your account can write and can reach the network, and the card cannot tell which it will be. So a Codex command card now says,
+  above 允許這一次: 「允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。」
+  A Claude chat's card and a Codex file card are unchanged; VBear still declines a file change outside the work folder or under
+  `.codex`, `.agents`, `.git` by itself, with no card. The version check's `outside` step now requires only that `apply_patch`
+  outside the folder is declined with no card and leaves no file (`outside_patch_refused`); whether the allowed shell write got
+  out is only noted in the report and the file is removed. You chose this over the permission profile (every command asked and
+  kept in the sandbox, but `apply_patch` fails in it) and over `never` (no cards, reads unasked); VBear will move to the profile
+  when Codex fixes `apply_patch` there (`docs/adr/0005-codex-chat-boundary.md`, decision 7; `docs/evidence/codex-0.163.0-chat.md`, 5b).
 - **Packaging copies stay out of Spotlight and Launchpad (P38-6).** `macos/build.sh` keeps every `VBear.app` it leaves on disk
   in a folder whose name ends in `.noindex` (`build/app.noindex`, `build/dmg.noindex`, `dist/app.noindex`); the DMG stays
   `dist/VBear-<version>-arm64.dmg`. The release workflow's smoke check reads the new path. It deletes only the old copies inside
