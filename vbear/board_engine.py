@@ -287,6 +287,7 @@ class HeadlessBoard:
     ``speed`` (meetings.speed_from: the efforts and the minutes) of it."""
 
     final_kind = ""  # the kind of the last turn, the one that answers the others
+    final_needs_answers = True  # whether the last turn is asked only when an earlier turn has an answer; a board of one turn (the chief of staff) says False
     store_cls: Any = None  # the GuardedJsonStore of one record, built from its id
     room_name = ""  # how a message names what is left of one record's own limit
     error_cls: Any = mt.MeetingError  # the error raised, by code: the server reads the code; the message is the kind's own
@@ -571,7 +572,7 @@ class HeadlessBoard:
             self._end(mid, seq, "skipped", "budget", evidence=None)
             return None
         final = turn["kind"] == self.final_kind
-        if final and not any(t["state"] == "done" for t in rec["turns"] if t["kind"] != self.final_kind):
+        if final and self.final_needs_answers and not any(t["state"] == "done" for t in rec["turns"] if t["kind"] != self.final_kind):
             self._end(mid, seq, "skipped", "no_opinions", evidence=None)
             return None
         own = self.timeout(turn["kind"])
