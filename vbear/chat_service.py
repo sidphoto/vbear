@@ -439,7 +439,7 @@ class ChatService:
                     "can_chat": ok, "code": code or None, "reason": reason or None}
         return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
                          "engine": chat.get("engine")},
-                "card": card, "records": records, "live": live, "runtime": runtime, **out}
+                "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id), **out}
 
     # ---- what a person does ---------------------------------------------------------------------------------------
 

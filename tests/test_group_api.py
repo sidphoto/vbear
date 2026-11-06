@@ -319,6 +319,35 @@ class GroupApiTests(unittest.TestCase):
         self.assertEqual(self.call(f"/api/chats/{member_chat}")[0], 200, "the group page reads the live state of the member's chat")
         self.assertEqual(self.call(f"/api/chats/{solo}/messages", "POST", {"text": "一般聊天"})[0], 202)
 
+    def test_a_members_own_chat_says_which_group_it_belongs_to_and_an_ordinary_chat_says_none(self):
+        """P41-3: opened by its address, a group's chat shows 「這是群組 X 裡的對話」 and a link, so the chat view carries the group."""
+        gid, _ = self.make(name="市集準備")
+        solo = self.call("/api/chats", "POST", {"profile_id": self.writer})[1]["chat"]["id"]
+        mine = groups.load(gid)["members"][0]["chat_id"]
+        status, got = self.call(f"/api/chats/{mine}")
+        self.assertEqual(status, 200)
+        self.assertEqual(got["group"], {"id": gid, "name": "市集準備"})
+        self.assertEqual(set(got["group"]), {"id", "name"}, "nothing else about the group is told to the chat view")
+        self.assertIsNone(self.call(f"/api/chats/{solo}")[1]["group"])
+        self.assertEqual(self.call(f"/api/chats/{mine}")[1]["chat"], {"id": mine, "profile_id": self.writer, "created_at": got["chat"]["created_at"], "engine": "claude-chat"},
+                         "the chat record itself has no new field")
+
+    def test_a_card_of_a_members_chat_is_answered_by_the_chat_route_the_person_presses_and_by_nothing_of_the_groups(self):
+        """The group page draws the card under the employee's name; the answer is the chat's own route (the person's press), and the
+        group's routes have no answer."""
+        gid, _ = self.make()
+        mine = groups.load(gid)["members"][0]["chat_id"]
+        answered = []
+        self.daemon._op_chat_answer = lambda **f: answered.append(f) or {"ok": True, "result": {}}
+        body = {"card_id": "k-" + "a" * 16, "token": "t" * 32, "decision": "allow"}
+        status, got = self.call(f"/api/chats/{mine}/answer", "POST", body)
+        self.assertEqual(status, 200, got)
+        self.assertEqual([(f["chat_id"], f["decision"]) for f in answered], [(mine, "allow")])
+        status, got = self.call(f"/api/groups/{gid}/answer", "POST", body)
+        self.assertEqual(status, 404)
+        self.runner().tick()
+        self.assertEqual(len(answered), 1, "the runner answers nothing")
+
     def test_a_whole_round_leaves_config_json_as_it_was(self):
         cfg.save(cfg.load())
         before = self.config_bytes()

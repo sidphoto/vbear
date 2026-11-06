@@ -291,6 +291,22 @@ def member_chat_ids() -> set[str]:
     return out
 
 
+def group_of_chat(chat_id) -> dict | None:
+    """``{id, name}`` of the group that opened this chat (a removed member's chat too), or None. The chat view uses it to say 「這是群組
+    X 裡的對話」 and to link to the group; it tells nothing else about the group. Nothing moves (a group that does not read is None)."""
+    if not isinstance(chat_id, str):
+        return None
+    try:
+        ids = record_ids()
+    except GroupError:
+        return None
+    for gid in ids:
+        rec = _read_plain(gid)
+        if rec and any(m["chat_id"] == chat_id for m in rec["members"]):
+            return {"id": gid, "name": rec["name"]}
+    return None
+
+
 def _day_start(now: float) -> float:
     """The local midnight that starts the day ``now`` is in."""
     today = datetime.date.fromtimestamp(now)
