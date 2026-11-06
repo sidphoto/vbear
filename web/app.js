@@ -12299,6 +12299,7 @@ async function route() {
     if (top === "home") await viewHome();
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
     else if (top === "ceo") await viewCeo();
+    else if (top === "chat" && parts[1] === "group") await viewGroup(parts[2] ? decodeURIComponent(parts[2]) : null);
     else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
@@ -13325,6 +13326,10 @@ async function viewChat(id, params) {
   let data;
   try { data = await api.get("/api/chats"); }
   catch (e) { setKids(claim(token), el("h1", null, "跟員工聊天"), notice("bad", "讀不到聊天：" + e.message)); return; }
+  const readGroups = async () => {
+    try { const r = await api.get("/api/groups"); return Array.isArray(r.groups) ? r.groups : []; } catch (_) { return []; }
+  };
+  let groupRows = await readGroups();
   const main = claim(token);
   const verifyUi = { confirm: false, pending: false };
   const codexUi = { confirm: false, pending: false };
@@ -13372,8 +13377,18 @@ async function viewChat(id, params) {
         try { const res = await api.post("/api/chats", { profile_id: sel.value }); location.hash = `#/chat/${encodeURIComponent(res.chat.id)}`; }
         catch (err) { toast(err.message); e.target.disabled = false; }
       } } }, "開始聊天");
+    const usable = cards.filter((c) => c.can_chat === true).length;
+    const groupBtn = el("button", { type: "button", class: "btn", "data-group": "new", disabled: usable < GROUP_MIN,
+      title: usable < GROUP_MIN ? `要有 ${GROUP_MIN} 位以上可以聊天的員工才能開群組` : undefined,
+      on: { click: () => openGroupDialog(cards, { onCreate: async (body) => {
+        const made = await api.post("/api/groups", body);
+        const notes = Array.isArray(made.notes) ? made.notes.filter((x) => typeof x === "string" && x) : [];
+        if (notes.length) toast(notes.join(" "));
+        location.hash = `#/chat/group/${encodeURIComponent(made.group.id)}`;
+        return made;
+      } }) } }, "開新群組");
     setKids(formBox, el("section", { class: "section" }, sectionHead("開新聊天", "開聊天本身不花錢，送出訊息才花。"),
-      el("div", { class: "row" }, sel, go),
+      el("div", { class: "row" }, sel, go, groupBtn),
       card && card.can_chat !== true ? notice("warn", card.reason || "這張角色卡不能聊天。") : null,
       !ok ? el("p", { class: "small muted" }, codexCard ? "聊天用的 Codex 準備好之前（原因在上面），不能開始聊天。" : "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
       lamp ? el("p", { class: "small muted" }, "今天的額度用完了，不能開始聊天。") : null,
@@ -13387,7 +13402,11 @@ async function viewChat(id, params) {
     const rows = Array.isArray(cur.chats) ? cur.chats : [];
     const nm = names();
     rows.forEach((c) => { c.name = nm.get(c.profile_id) || c.name; });
-    setKids(listBox, rows.length ? el("ul", { class: "mt-list" }, rows.map(chatRow)) : emptyState("還沒有聊過天", "選一張角色卡，按「開始聊天」。"),
+    // groups and one-to-one chats are one list, the newest first (P41-1)
+    const lines = [...rows.map((c) => ({ at: c.last_at || c.created_at || 0, node: () => chatRow(c) })),
+      ...groupRows.filter((g) => g && typeof g.id === "string").map((g) => ({ at: g.last_at || 0, node: () => groupRow(g) }))];
+    lines.sort((a, b) => b.at - a.at);
+    setKids(listBox, lines.length ? el("ul", { class: "mt-list" }, lines.map((l) => l.node())) : emptyState("還沒有聊過天", "選一張角色卡，按「開始聊天」。"),
       cur.more ? el("p", { class: "small muted" }, `還有 ${cur.more} 個較舊的聊天沒有列出。`) : null,
       Array.isArray(cur.problems) && cur.problems.length ? notice("warn", cur.problems.join("；")) : null);
   };
@@ -13410,6 +13429,7 @@ async function viewChat(id, params) {
   };
   const refresh = async () => {
     try { cur = await api.get("/api/chats"); } catch (e) { return; }
+    groupRows = await readGroups();
     if (cur.support && cur.support.verify && cur.support.verify.running !== true) verifyUi.pending = false;
     if (cur.support && cur.support.codex && cur.support.codex.verify && cur.support.codex.verify.running !== true) codexUi.pending = false;
     if (token === seq) draw();
@@ -13641,6 +13661,283 @@ async function viewChatDetail(token, id) {
   activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); };
   stream();
   if (opening) input.focus();
+}
+
+// ---------- groups (v0.16, P41-1, ADR 0007) ----------------------------------------------------------------------------------
+// The pages of vbear/groups.py: a group is chats, one for each member, and the person talks to all of them: the words go to the
+// members one after the other in the order shown, and each one's reply is data for the next. The list (#/chat) shows groups with
+// the one-to-one chats; a new group is made in a dialog (nothing starts, nothing is spent); one group is #/chat/group/<id>. Everything
+// shown is what the server says (the log's items, the round, the money, which buttons are real now); a model's text is set as text.
+// Nothing here answers an employee's permission card, writes a setting or a limit, or starts anything: the only thing the group page
+// sends is the person's own words (POST /api/groups/<id>/messages), by the send button.
+
+const GROUP_ID_RE = /^g-[0-9a-f]{12}$/;
+const GROUP_MIN = 2;
+const GROUP_MAX = 3;
+const GROUP_NAME_MAX = 40;
+const GROUP_PAGE_MAX = 12;           // pages of 200 items read when a group is opened
+const GROUP_POLL_MS = 1500;
+const GROUP_SHARE_NOTE = "員工看不到彼此的檔案，只看得到群組裡的對話。";
+const GROUP_MIXED_NOTE = "群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。";
+const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
+  + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
+const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，VBear 會問。這個畫面還不能回覆那張卡片（下一版加上），不回覆的話 5 分鐘後視為拒絕。";
+const GROUP_STUCK_NOTE = "這一輪停在這裡。「繼續」「不用了」和「停止」的按鈕這一版還沒有（下一版加上）。";
+const GROUP_STATE = {
+  idle: ["等你說話", "b-mute"], running: ["進行中", "b-info"], paused: ["暫停了", "b-warn"], readonly: ["紀錄有問題", "b-bad"],
+};
+const GROUP_ASKED = { waiting: "還沒輪到", answering: "正在回答", done: "回答了", skipped: "這次沒有回答" };
+const GROUP_ROUND_END = { stopped: "你按了停止，這一輪結束了。", dropped: "你選了「不用了」，這一輪結束了。" };
+
+// ---- small, pure helpers (tested) ----
+
+function groupMixed(tools) { return Array.isArray(tools) && tools.includes("claude") && tools.includes("codex"); }
+function groupDefaultName(names) { return names.filter((n) => typeof n === "string" && n).join("、").slice(0, GROUP_NAME_MAX); }
+// "這句會請 N 位回答（名字…），最多 US$X，今天還剩 US$Y": the most is the number asked times the per-turn limit, rounded up; what is
+// left is rounded down; `over` when the most is more than what is left.
+function groupCostText(names, perTurn, dayLeft) {
+  const per = dispatchNum(perTurn), left = dispatchNum(dayLeft);
+  const who = `這句會請 ${names.length} 位回答（${names.join("、")}）`;
+  if (per === null) return { text: `${who}，最多花多少：未知（讀不到每回合上限）。今天還剩 ${usdDown(left)}。`, over: false };
+  const max = per * names.length;
+  const over = left !== null && max > left + 1e-9;
+  return { text: `${who}，最多 ${usdUp(max)}，今天還剩 ${usdDown(left)}。` + (over ? "可能做到一半碰到每天上限，VBear 會停下來。" : ""), over };
+}
+function groupStateBadge(state) {
+  return cardHas(GROUP_STATE, state) ? badge(GROUP_STATE[state][0], GROUP_STATE[state][1]) : badge("狀態不明", "b-mute");
+}
+function groupReplyCost(item) {
+  const money = chatMoney(item.cost_usd);
+  if (item.estimate === true) return `估計 ${money}，不是帳單`;
+  return item.tool === "codex" ? `按上限 ${money} 計` : `${money}（Claude Code 回報的估值）`;
+}
+
+// The list's line for a group.
+function groupRow(g) {
+  const members = Array.isArray(g.members) ? g.members : [];
+  return el("li", { class: "mt-row card", "data-group": "row", "data-group-id": g.id },
+    el("a", { class: "mt-row-title", href: `#/chat/group/${encodeURIComponent(g.id)}` }, g.name || g.id),
+    el("span", { class: "tag", "data-group": "tag" }, "群組"),
+    el("span", { class: "tag", "data-group": "count" }, `${members.length} 人`),
+    g.waiting ? badge("等你", "b-warn") : g.state === "paused" ? badge("暫停了", "b-warn") : g.state === "running" ? badge("進行中", "b-info") : null,
+    g.state === "readonly" ? badge("紀錄有問題", "b-bad", g.problem || undefined) : null,
+    el("span", { class: "small muted" }, `${members.map((m) => m.name || "未知").join("、")}${g.last_at ? "・" + fmtTime(g.last_at) : ""}`),
+    g.last_text ? el("span", { class: "small chat-excerpt" }, g.last_text) : null);
+}
+
+// One item of a group's log as a line of the conversation, or null (a kind this page does not draw). A closed table.
+function groupItemNode(item) {
+  if (!item || typeof item !== "object" || typeof item.kind !== "string") return null;
+  const text = (x) => (typeof x === "string" ? x : "");
+  const base = { "data-seq": String(item.seq) };
+  switch (item.kind) {
+    case "said": {
+      const names = Array.isArray(item.to_names) ? item.to_names : null;
+      return el("li", { class: "chat-msg chat-me", "data-group": "said", ...base },
+        el("div", { class: "chat-who small muted" }, `你對${names ? names.map((n) => "@" + text(n)).join(" ") : "大家"}說・${fmtTime(item.at)}`),
+        el("div", { class: "chat-text" }, text(item.text)));
+    }
+    case "reply":
+      return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), ...base },
+        el("div", { class: "chat-who small muted" }, `${text(item.name) || "未知"}（${chatToolName(item.tool)}）・${fmtTime(item.at)}`),
+        el("div", { class: "chat-text" }, item.unreadable === true ? "（讀不到這則回覆）" : text(item.text) || "（沒有文字回覆）"),
+        el("div", { class: "small muted", "data-group": "cost" }, groupReplyCost(item)),
+        item.partial === true ? el("div", { class: "small", "data-group": "partial" }, badge("沒有正常做完", "b-warn")) : null);
+    case "skipped": case "paused":
+      return el("li", { class: "chat-note small muted", "data-group": item.kind, ...base }, text(item.text));
+    case "continued":
+      return el("li", { class: "chat-note small muted", "data-group": "continued", ...base }, "你按了「繼續」。");
+    case "round_ended":
+      return cardHas(GROUP_ROUND_END, item.how) ? el("li", { class: "chat-note small muted", "data-group": "round-ended", ...base }, GROUP_ROUND_END[item.how]) : null;
+    case "member_added": case "member_removed":
+      return el("li", { class: "chat-note small muted", "data-group": item.kind, ...base }, `${text(item.name) || "一位員工"}${item.kind === "member_added" ? "加入了" : "離開了"}群組。`);
+    case "renamed":
+      return el("li", { class: "chat-note small muted", "data-group": "renamed", ...base }, `群組改名為「${text(item.name)}」。`);
+    default:
+      return null;
+  }
+}
+
+// The dialog for a new group. `cards` is GET /api/chats' list of cards; `hooks.onCreate(body)` makes it (and returns the answer).
+function openGroupDialog(cards, hooks) {
+  const titleId = "group-dialog-title";
+  const list = (Array.isArray(cards) ? cards : []).filter((c) => c && typeof c.id === "string");
+  const chosen = new Set();
+  let close = () => {};
+  let busy = false;
+  const countBox = el("p", { class: "small", "data-group": "count-note", role: "status" });
+  const mixedBox = el("div", { "data-group": "mixed-box" });
+  const errorBox = el("div", { "data-group": "error", role: "alert" });
+  const name = el("input", { type: "text", maxlength: String(GROUP_NAME_MAX), "data-group": "name", "aria-label": "群組的名字（選填）",
+    placeholder: "名字（選填，40 字內）", on: { input: () => redraw() } });
+  const create = el("button", { class: "btn primary", type: "button", "data-group": "create", disabled: true, on: { click: async () => {
+    if (busy) return;
+    busy = true; redraw(); setKids(errorBox, null);
+    const body = { profile_ids: list.filter((c) => chosen.has(c.id)).map((c) => c.id) };
+    const typed = name.value.trim();
+    if (typed) body.name = typed;
+    try { await hooks.onCreate(body); close(); }
+    catch (e) { busy = false; setKids(errorBox, notice("bad", e && e.message ? e.message : "沒有建立成功")); redraw(); }
+  } } }, "建立（不花錢）");
+  const rows = list.map((c) => {
+    const ok = c.can_chat === true;
+    const box = el("input", { type: "checkbox", "data-group": "pick", "data-profile-id": c.id, disabled: !ok, "aria-label": `${c.name || c.id}`,
+      on: { change: (e) => { if (e.target.checked) chosen.add(c.id); else chosen.delete(c.id); redraw(); } } });
+    return el("li", { class: "group-pick" }, el("label", null, box, " ", `${c.name || c.id}（${chatToolName(c.tool)}）`),
+      ok ? null : el("span", { class: "small muted" }, `　不能加入：${c.reason || "這張角色卡現在不能聊天。"}`));
+  });
+  function redraw() {
+    const picked = list.filter((c) => chosen.has(c.id));
+    for (const li of rows) {
+      const box = li.find((n) => n.tag === "input");
+      const mine = box && box.getAttribute("data-profile-id");
+      if (box) box.disabled = !(list.find((c) => c.id === mine) || {}).can_chat || busy || (!chosen.has(mine) && chosen.size >= GROUP_MAX);
+    }
+    const n = picked.length;
+    setKids(countBox, n >= GROUP_MIN && n <= GROUP_MAX ? `已選 ${n} 位。` : `已選 ${n} 位；要選 ${GROUP_MIN} 到 ${GROUP_MAX} 位。`);
+    setKids(mixedBox, groupMixed(picked.map((c) => c.tool)) ? notice("warn", GROUP_MIXED_NOTE) : null);
+    name.setAttribute("placeholder", picked.length ? `名字（選填，預設：${groupDefaultName(picked.map((c) => c.name || c.id))}）` : "名字（選填，40 字內）");
+    create.disabled = busy || n < GROUP_MIN || n > GROUP_MAX;
+  }
+  const head = el("h2", { id: titleId, tabindex: "-1" }, "開新群組");
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-group": "dialog" },
+    el("div", { class: "modal-box", style: "max-width: 560px; max-height: 88vh; overflow-y: auto;" }, head,
+      el("p", null, `選 ${GROUP_MIN} 到 ${GROUP_MAX} 位員工，一起聊天。你說話時，他們一位一位照順序回答，後面的人看得到前面的人說了什麼。`),
+      el("p", { class: "small", "data-group": "share-note" }, GROUP_SHARE_NOTE),
+      list.length ? el("ul", { class: "group-picks" }, rows) : emptyState("還沒有可以聊天的員工", "先到角色頁做一張角色卡。"),
+      countBox, mixedBox,
+      el("label", { class: "ceo-field" }, el("span", null, "群組的名字"), name),
+      errorBox,
+      el("div", { class: "modal-actions" }, el("button", { class: "btn", type: "button", on: { click: () => close() } }, "取消"), create)));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  redraw();
+  head.focus();
+  return close;
+}
+
+async function groupReadAll(id) {
+  let after = 0, first = null;
+  const items = [];
+  for (let page = 0; page < GROUP_PAGE_MAX; page++) {
+    const r = await api.get(`/api/groups/${encodeURIComponent(id)}?after=${after}`);
+    if (!first) first = r;
+    items.push(...(Array.isArray(r.items) ? r.items : []));
+    after = r.next_after;
+    if (r.more !== true) return { ...r, items };
+  }
+  return { ...first, items, next_after: after, more: true };
+}
+
+async function viewGroup(id) {
+  const token = seq;
+  if (!id || !GROUP_ID_RE.test(id)) {
+    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", "找不到這個群組。"));
+    return;
+  }
+  let all;
+  try { all = await groupReadAll(id); }
+  catch (e) {
+    setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? "找不到這個群組。" : "讀不到這個群組：" + e.message));
+    return;
+  }
+  const main = claim(token);
+  let view = all;
+  let lastSeq = 0;
+  let busy = false;
+  let noteText = "";
+  const transcript = el("ul", { class: "chat-log", "data-group": "log", "aria-live": "off" });
+  const headBox = el("div", { class: "group-head" });
+  const statusBox = el("div", { class: "group-status", "data-group": "status", "aria-live": "polite" });
+  const costBox = el("p", { class: "small muted", "data-group": "cost-line" });
+  const sendNote = el("p", { class: "small muted", "data-group": "send-note" });
+  const input = el("textarea", { rows: "3", "data-group": "input", "aria-label": "要對大家說的話", maxlength: String(4000),
+    placeholder: "要對大家說什麼？（Cmd/Ctrl + Enter 送出）",
+    on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const sendBtn = el("button", { type: "button", class: "btn primary", "data-group": "send", on: { click: () => send() } }, "送出");
+  const members = () => (Array.isArray(view.members) ? view.members : []);
+  const draw = () => {
+    const g = view.group || {};
+    const cur = view.current && typeof view.current === "object" ? view.current : null;
+    const round = view.round && typeof view.round === "object" ? view.round : null;
+    const asked = new Map((round && Array.isArray(round.asked) ? round.asked : []).map((a) => [a.profile_id, a.state]));
+    setKids(headBox, el("h1", null, g.name || "群組"),
+      el("p", { class: "small" }, groupStateBadge(g.state), " ", el("span", { class: "muted" }, "照下面的順序回答。")),
+      el("ul", { class: "group-members", "data-group": "members" }, members().map((m) => el("li", { class: "group-member", "data-group": "member", "data-profile-id": m.profile_id },
+        el("span", { class: "group-avatar", "aria-hidden": "true" }, String(m.name || "?").slice(0, 1)),
+        el("span", null, m.name || "未知"), " ", el("span", { class: "tag" }, chatToolName(m.tool)),
+        asked.has(m.profile_id) ? el("span", { class: "small muted", "data-group": "asked" }, `　${GROUP_ASKED[asked.get(m.profile_id)] || ""}`) : null))),
+      el("p", { class: "small muted", "data-group": "what" }, GROUP_WHAT),
+      el("p", { class: "small muted", "data-group": "share" }, GROUP_SHARE_NOTE),
+      view.cost && /^[0-9.]+$/.test(String(view.cost.group_today_usd)) ? el("p", { class: "small muted", "data-group": "spent" }, `這個群組今天花了 US$${view.cost.group_today_usd}。`) : null,
+      el("p", { class: "small muted", "data-group": "card-note" }, GROUP_CARD_NOTE));
+    const bits = [];
+    if (g.state === "readonly") bits.push(notice("bad", `群組紀錄有問題，不能再送訊息。${g.problem ? "（" + g.problem + "）" : ""}`));
+    if (view.more === true) bits.push(notice("info", "這個群組很長，只顯示了前面一段。"));
+    if (cur) {
+      const who = members().find((m) => m.profile_id === cur.profile_id);
+      bits.push(el("p", { class: "small", "data-group": "answering", role: "status" }, `${who && who.name ? who.name : "一位員工"}正在回答…`));
+    }
+    if (round && round.pause) {
+      bits.push(notice("warn", round.pause.text || "這一輪暫停了。"));
+      bits.push(el("p", { class: "small muted", "data-group": "stuck" }, GROUP_STUCK_NOTE));
+    }
+    setKids(statusBox, bits);
+    const cost = view.cost && typeof view.cost === "object" ? view.cost : {};
+    const c = groupCostText(members().map((m) => m.name || "未知"), cost.per_turn_usd, cost.day_left_usd);
+    setKids(costBox, c.text);
+    const can = view.can && typeof view.can === "object" ? view.can : {};
+    const sendable = can.send === true;
+    sendBtn.disabled = busy || !sendable;
+    input.disabled = !sendable;
+    setKids(sendNote, noteText || (sendable ? "" : (typeof can.why_not_send === "string" && can.why_not_send) || "現在不能送訊息。"));
+  };
+  const take = (items) => {
+    for (const item of items) {
+      if (!item || typeof item.seq !== "number" || item.seq <= lastSeq) continue;
+      lastSeq = item.seq;
+      const node = groupItemNode(item);
+      if (node) transcript.append(node);
+    }
+  };
+  const apply = (data) => {
+    if (!data || typeof data !== "object" || !data.group) return;
+    take(Array.isArray(data.items) ? data.items : []);
+    if (typeof data.next_after === "number") lastSeq = Math.max(lastSeq, data.next_after);
+    view = { ...view, ...data, items: undefined };
+    draw();
+  };
+  async function pollOnce() {
+    try { apply(await api.get(`/api/groups/${encodeURIComponent(id)}?after=${lastSeq}`)); }
+    catch (e) {
+      if (e.status === 404) { setKids(statusBox, notice("bad", "這個群組已經被刪除。")); stopPolling(); }
+    }
+  }
+  async function send() {
+    const words = input.value;
+    if (busy || !words.trim()) return;
+    busy = true; noteText = ""; draw();
+    try {
+      await api.post(`/api/groups/${encodeURIComponent(id)}/messages`, { text: words, to: "all" });
+      input.value = "";
+      await pollOnce();
+    } catch (e) {
+      noteText = e.message;
+      toast(e.message);
+    }
+    busy = false; if (token === seq) draw();
+  }
+  let timer = null;
+  function stopPolling() { clearInterval(timer); timer = null; }
+  take(all.items);
+  lastSeq = Math.max(lastSeq, typeof all.next_after === "number" ? all.next_after : 0);
+  draw();
+  const composer = el("div", { class: "chat-composer", "data-group": "composer" },
+    el("div", { class: "row group-to", "data-group": "to" }, el("button", { type: "button", class: "btn small primary", "data-group": "to-all", "aria-pressed": "true", disabled: true }, "大家")),
+    input, costBox, el("div", { class: "row" }, sendBtn), sendNote);
+  setKids(main, crumbs([["聊天", "#/chat"], [(view.group && view.group.name) || id]]), headBox, statusBox, transcript, composer);
+  timer = setInterval(() => { if (!document.hidden) pollOnce(); }, GROUP_POLL_MS);
+  activeViewCleanup = () => stopPolling();
 }
 
 // ---------- the chief of staff and the dispatch (v0.15, P40-5) -----------------------------------------------------------------
@@ -16642,6 +16939,16 @@ if (typeof module !== "undefined" && module.exports) {
     chatStateWord,
     chatLimitsText,
     chatRow,
+    GROUP_MIXED_NOTE,
+    GROUP_SHARE_NOTE,
+    GROUP_WHAT,
+    groupMixed,
+    groupDefaultName,
+    groupCostText,
+    groupRow,
+    groupItemNode,
+    openGroupDialog,
+    viewGroup,
     viewChat,
     viewCeo,
     ceoStepWanted,

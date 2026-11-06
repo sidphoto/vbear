@@ -1716,6 +1716,16 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .chat-excerpt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ink-2); }
 @media (prefers-reduced-motion: reduce) { .chat-card, .chat-msg { transition: none; animation: none; } }
 
+/* ---- groups (v0.16, P41-1) ---- */
+.group-head h1 { margin-bottom: 4px; }
+.group-members { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.group-member { display: inline-flex; align-items: center; gap: 6px; }
+.group-avatar { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); border: 1px solid var(--line-2); font-weight: 600; }
+.group-status { display: grid; gap: 8px; margin: 10px 0; }
+.group-picks { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.group-pick label { cursor: pointer; }
+.group-to { gap: 8px; }
+
 /* ---- the chief of staff and the dispatch (v0.15, P40-5) ---- */
 .chief-desk { margin: 10px 0 14px; display: grid; gap: 8px; }
 .chief-runs { display: grid; gap: 10px; }

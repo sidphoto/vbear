@@ -28,7 +28,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
-from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, meetings as mt
+from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
 from .api_error import ApiError
 from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
 
@@ -98,6 +98,7 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "codex_version": (409, "讀不到 Codex 的版本，或它印出的版本和預期不同，不能聊天。"),
     "version_changed": (409, "AI 工具的版本在你預覽之後改變了，請重新整理。"),
     "verifying": (409, "聊天模式的驗證正在進行。"),
+    "group_member_chat": (409, "這是群組裡的對話，請到群組裡說話。"),
 }
 
 # Codes a person reads as "try again in a moment" rather than "something is wrong".
@@ -367,7 +368,10 @@ class ChatService:
             ids = []
             problems.append(exc.message)
         rows = []
+        in_groups = groups.member_chat_ids()          # a chat a group opened is shown in the group, not here
         for chat_id in ids:
+            if chat_id in in_groups:
+                continue
             try:
                 chat = cs.load(base, chat_id)
             except cs.ChatStoreError as exc:
@@ -451,7 +455,19 @@ class ChatService:
         """A person's message (the browser's route): exactly ``text``, never an ``origin``."""
         if not isinstance(body, dict) or set(body) != {"text"} or not isinstance(body["text"], str):
             raise ApiError(400, "bad_request", "只需要 text。")
+        if isinstance(chat_id, str) and chat_id in groups.member_chat_ids():
+            raise api_error("group_member_chat")
         return self._send(chat_id, body["text"], None)
+
+    def send_for_group(self, chat_id, text) -> dict:
+        """A message VBear sends for a group (P41-1): the same send as a person's, so every limit, every question about a command or
+        a file and the day's money apply as they do there. The record gets no new field. Only to a chat a group opened. Not
+        reachable from the browser's routes: only the group runner calls it."""
+        if not isinstance(text, str):
+            raise ApiError(400, "bad_request", "訊息必須是文字。")
+        if not isinstance(chat_id, str) or chat_id not in groups.member_chat_ids():
+            raise ApiError(400, "bad_request", "這不是群組用的聊天。")
+        return self._send(chat_id, text, None)
 
     def send_for_dispatch(self, chat_id, text, origin) -> dict:
         """A message VBear sends for a dispatch step (P40-3): the same send as a person's, so every limit, every question
