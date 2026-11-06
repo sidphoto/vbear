@@ -50,7 +50,7 @@ from . import chat_service as chat_service_mod
 from . import claude_verify
 from . import codex_verify
 from . import config as cfg
-from . import daily_limit
+from . import autonomy, daily_limit
 from . import first_ceo
 from . import flow_executor
 from . import folders
@@ -64,6 +64,8 @@ from .api_error import ApiError
 from . import risk_acceptance
 from . import role_departments
 from . import translations
+from . import chief, chief_runner as chief_runner_mod
+from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -126,6 +128,10 @@ MEETING_RE = re.compile(r"^/api/meetings/(m-[0-9a-f]{12})(?:/(retry-preview|retr
 MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 # /api/staffing/<id>[/retry-preview | /retry | /cancel | /chairman] (P35-2); the codes and statuses are the meetings'
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
+# /api/chief/<id>[/retry | /cancel] (P40-1); the codes and statuses are the meetings'
+CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
+# /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
+DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -239,21 +245,71 @@ class Console:
             return kept.pop(preview_id, None) if isinstance(preview_id, str) else None
 
     def _boards(self):
-        """The one meeting runner and the one staffing runner, built together on the first use of either: each finds and
-        interrupts what a stopped console left running when it is built, which it can do only while the worker they
-        share is free, so neither is built after the other has started anything."""
+        """The one meeting runner, the one staffing runner and the one chief of staff's runner, built together on the first use
+        of any: each finds and interrupts what a stopped console left running when it is built, which it can do only while
+        the worker they share is free, so none is built after another has started anything."""
         with self.lock:
             if not hasattr(self, "meetings"):
                 self.meetings = meeting_runner_mod.MeetingRunner()
             if not hasattr(self, "staffing"):
                 self.staffing = staffing_runner_mod.StaffingRunner()
-            return self.meetings, self.staffing
+            if not hasattr(self, "chief"):
+                self.chief = chief_runner_mod.ChiefRunner(on_proposal=self._on_proposal)
+            return self.meetings, self.staffing, self.chief
 
     def meeting_runner(self):
         return self._boards()[0]
 
     def staffing_runner(self):
         return self._boards()[1]
+
+    def chief_runner(self):
+        return self._boards()[2]
+
+    def _on_proposal(self, chief_id: str) -> None:
+        """A kept proposal of the chief of staff becomes a dispatch (and, when the person ticked 「自己動手」, goes on)."""
+        self.dispatcher().from_proposal(chief_id)
+
+    def dispatcher(self):
+        """The one dispatcher (P40-3), built on first use; what a stopped console left half made is paused then, once."""
+        with self.lock:
+            if "_dispatcher" not in self.__dict__:
+                d = dispatch_mod.Dispatcher(conf=lambda: self.store.conf, tools=self.chief_tools,
+                                            link=lambda cid, did: self.chief_runner().link_dispatch(cid, did),
+                                            busy=self._chat_busy, day_left=self._day_left)
+                try:
+                    d.recover_all()
+                except Exception:
+                    pass                      # a record that cannot be read blocks itself; the rest goes on
+                # the runner (P40-4) sends the steps and carries out 「停止」 and 「繼續」; its thread is started by serve() only
+                d.control = self._dispatch_runner = dispatch_runner_mod.DispatchRunner(
+                    d, chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf))
+                self._dispatcher = d
+            return self._dispatcher
+
+    def dispatch_runner(self):
+        self.dispatcher()
+        return self._dispatch_runner
+
+    def _chat_busy(self, chat_id: str) -> bool:
+        """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
+        try:
+            live = self.chat_service().get(chat_id)["live"]
+        except Exception:
+            return True
+        return bool(live) and live.get("turn") is not None
+
+    def _day_left(self):
+        from decimal import Decimal
+        try:
+            ledger = self.meeting_runner().ledger(self.store.conf)
+            return max(Decimal(ledger["daily_usd"]) - Decimal(ledger["spent_usd"]), Decimal(0))
+        except Exception:
+            return None
+
+    def chief_tools(self) -> tuple:
+        """The AI tools whose chat can run now (what the chief of staff may give work to), from the chat service's support."""
+        return chief_runner_mod.usable_tools(self.chat_service().support())
 
     def chat_service(self):
         """The one chat service (P36-2), built on first use. Its ledger is the meetings' runner's: the day is shared."""
@@ -613,6 +669,20 @@ def make_handler(console: Console):
                     if found.group(2) == "stream":
                         return self._chat_stream(found.group(1), after)
                     return self._chat_action(lambda: console.chat_service().get(found.group(1), after))
+                if path in ("/api/chief", "/api/chief/preview"):
+                    if path == "/api/chief":
+                        return self._chief_call("list")
+                    return self._chief_call("preview", chat_id=parse_qs(url.query).get("chat_id", [None])[0])
+                if path.startswith("/api/chief/"):
+                    found = CHIEF_RE.match(path)
+                    return self._chief_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path == "/api/dispatch":
+                    return self._dispatch_call("list")
+                if path == "/api/actions":
+                    return self._dispatch_call("actions")
+                if path.startswith("/api/dispatch/"):
+                    found = DISPATCH_RE.match(path)
+                    return self._dispatch_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path in ("/api/staffing", "/api/staffing/suggest"):
                     task_id = parse_qs(url.query).get("task_id", [None])[0]
                     return self._staffing_call("list" if path == "/api/staffing" else "suggest", task_id=task_id)
@@ -650,6 +720,8 @@ def make_handler(console: Console):
                     return self._setup_tools(force)
                 if path == "/api/first-ceo":
                     return self._first_ceo()
+                if path == "/api/settings/autonomy":
+                    return self._autonomy_view()
                 if path == "/api/setup/daily-limit":
                     return self._json({"ok": True, "daily_usd": float(meetings.limits_from(console.store.conf)["daily_usd"]),
                                        "choices": list(daily_limit.CHOICES)})
@@ -813,6 +885,18 @@ def make_handler(console: Console):
                     svc, chat_id, body = console.chat_service(), found.group(1), self._body_strict()
                     call = {"messages": svc.send, "answer": svc.answer, "stop": svc.stop}[action]
                     return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
+                if path == "/api/chief":
+                    return self._chief_call("start", None, self._body_strict())
+                if path.startswith("/api/chief/"):
+                    found = CHIEF_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._chief_call(found.group(2), found.group(1), self._body_strict())
+                if path.startswith("/api/dispatch/"):
+                    found = DISPATCH_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._dispatch_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/staffing/preview":
                     return self._staffing_call("preview", None, self._body_strict())
                 if path == "/api/staffing":
@@ -867,6 +951,8 @@ def make_handler(console: Console):
                     return self._setup_try(unquote(path[len("/api/setup/tools/"):-len("/try")]), self._body_strict())
                 if path == "/api/setup/daily-limit":
                     return self._setup_daily_limit(self._body_strict())
+                if path == "/api/settings/autonomy":
+                    return self._autonomy_write(self._body_strict())
                 if path.startswith("/api/setup/tools/") and path.endswith("/marker"):
                     return self._setup_marker(unquote(path[len("/api/setup/tools/"):-len("/marker")]), self._body_strict())
                 if path == "/api/native/claude-verification":
@@ -1429,6 +1515,35 @@ def make_handler(console: Console):
             return self._json({"ok": True, "setup_done": conf.get("setup_done") is True,
                                "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
 
+        def _autonomy_view(self, conf=None):
+            """「自己動手」: the two ticks in force, the table of ADR 0003's five items for the page, what the chief of staff may
+            cost (for the words before an item is turned on) and the three things that stay forbidden."""
+            conf = console.store.conf if conf is None else conf
+            return self._json({"ok": True, "autonomy": autonomy.read(conf), "items": list(autonomy.ITEMS),
+                               "later_note": autonomy.LATER_NOTE, "never": list(autonomy.NEVER),
+                               "limits": {"chief_call_usd": autonomy.CHIEF_CALL_USD,
+                                          "per_turn_usd": float(chat_store.limits_from(conf)["per_turn_usd"]),
+                                          "daily_usd": float(meetings.limits_from(conf)["daily_usd"])}})
+
+        def _autonomy_write(self, body):
+            """The only way to change 「自己動手」: the person's own click in the settings (X-VBear is checked for every POST).
+            Exactly the two booleans; the rest of config.json is written back as it was read."""
+            try:
+                block = autonomy.validate(body)
+            except ValueError as exc:
+                return self._error(400, str(exc))
+            with console.lock:
+                if cfg.is_corrupt():
+                    return self._error(409, cfg.corrupt_message())
+                conf = cfg.load()
+                conf["autonomy"] = block
+                try:
+                    cfg.save(conf)
+                except (OSError, ValueError) as exc:
+                    return self._error(503, f"設定沒有存進去：{exc}")
+                console.store.set_conf(conf)
+            return self._autonomy_view(conf)
+
         def _setup_daily_limit(self, body):
             """The choice of the daily limit: the day is written and every other limit above it is brought down to it, in one
             write of config.json (checked with the rules of each family first; nothing is raised, nothing is half written)."""
@@ -1918,6 +2033,87 @@ def make_handler(console: Console):
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
 
+        def _chief_sources(self, conf) -> chief_runner_mod.ChiefSources:
+            """Where the chief of staff reads from: a chat's own files (read only), the stored cards (read without
+            quarantining), and the AI tools whose chat can run now. A card store that cannot be read refuses the request."""
+            def profile(pid):
+                try:
+                    return agent_profiles.get_profile_readonly(pid)
+                except agent_profiles.AgentProfileStorageError:
+                    raise chief.ChiefError("storage", PROFILE_STORE_UNREADABLE) from None
+
+            def profiles():
+                try:
+                    return list(agent_profiles.load_all(None, None, mark_corrupt=False).values())
+                except agent_profiles.AgentProfileStorageError:
+                    raise chief.ChiefError("storage", PROFILE_STORE_UNREADABLE) from None
+            return chief_runner_mod.ChiefSources(chat=chief_runner_mod.chat_reader(), profile=profile, profiles=profiles,
+                                                 tools=console.chief_tools, conf=conf)
+
+        def _chief_call(self, action, chief_id=None, body=None, chat_id=None):
+            """The chief of staff's endpoints (P40-1). Reads and the preview run nothing; a preview reads a chat and asks which
+            Claude Code is installed, and nothing else; only a confirmed preview starts the one tool-less call."""
+            try:
+                runner = console.chief_runner()
+                if action == "list":
+                    return self._json(runner.list())
+                if action == "get":
+                    return self._json(runner.get(chief_id))
+                sources = self._chief_sources(console.store.conf)
+                if action == "preview":
+                    return self._json(runner.preview(chat_id, sources))
+                if not isinstance(body, dict):
+                    raise chief.ChiefError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "start":
+                    if set(body) - {"preview_id", "note"} or not isinstance(body.get("preview_id"), str):
+                        raise chief.ChiefError("bad_request", "只需要 preview_id，和選填的 note")
+                    rec = runner.start(body["preview_id"], {k: v for k, v in body.items() if k == "note"}, sources)
+                    return self._json({"chief_id": rec["id"], "chief": chief.view(rec)}, 202)
+                if body:
+                    raise chief.ChiefError("bad_request", "這個動作不需要內容")
+                if action == "retry":
+                    return self._json(chief.view(runner.retry(chief_id, sources)), 202)
+                if action == "cancel":
+                    return self._json(runner.cancel(chief_id))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
+        def _dispatch_call(self, action, dispatch_id=None, body=None):
+            """The dispatch endpoints (P40-3, P40-4). Reads run nothing; confirming makes the new employees and the task card (safe
+            mode, no skill); the steps are sent by the dispatch runner, and stop and continue are carried out by it. The errors
+            are the dispatch's own, with their statuses."""
+            try:
+                dispatcher = console.dispatcher()
+                if action == "list":
+                    return self._json(dispatcher.list())
+                if action == "actions":
+                    return self._json(dispatcher.actions())
+                if action == "get":
+                    return self._json(dispatcher.get(dispatch_id))
+                if not isinstance(body, dict):
+                    raise dispatch_mod.DispatchError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "confirm":
+                    return self._json(dispatcher.confirm(dispatch_id, body))
+                if action == "withdraw-card":
+                    return self._json(dispatcher.withdraw_card(dispatch_id, body))
+                if body:
+                    raise dispatch_mod.DispatchError("bad_request", "這個動作不需要內容")
+                if action == "dismiss":
+                    return self._json(dispatcher.dismiss(dispatch_id))
+                if action == "stop":
+                    return self._json(dispatcher.stop(dispatch_id))
+                if action == "continue":
+                    return self._json(dispatcher.resume(dispatch_id))
+                if action == "delete":
+                    dispatcher.delete(dispatch_id)
+                    return self._json({"ok": True, "deleted": dispatch_id})
+                return self._error(404, "not found")
+            except dispatch_mod.DispatchError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, exc.status)
+            except agent_profiles.AgentProfileStorageError:
+                return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
+
         def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
                 manager = console.role_translation_manager() if roles else console.translation_manager()
@@ -2063,6 +2259,8 @@ def make_handler(console: Console):
             return res
 
         def _config_update(self, body: dict) -> dict:
+            if "autonomy" in body:  # not a config key: only POST /api/settings/autonomy writes it
+                raise ValueError("「自己動手」只能在設定頁的專用路徑修改")
             with console.lock:
                 if cfg.is_corrupt():
                     raise ValueError(cfg.corrupt_message())
@@ -2367,6 +2565,9 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
         pass
     if not console.runner.start():
         print(f"提示：這個主控台不執行自動流程（{console.runner.last_error}）", flush=True)
+    dispatch_runner = console.dispatch_runner()
+    if not dispatch_runner.start():
+        print(f"提示：這個主控台不執行派工（{dispatch_runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         threading.Timer(0.4, lambda: open_in_browser(port)).start()
@@ -2380,6 +2581,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
         pass
     finally:
         console.runner.stop()
+        dispatch_runner.close()
         if console._previews is not None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit

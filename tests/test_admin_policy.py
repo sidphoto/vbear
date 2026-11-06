@@ -201,7 +201,7 @@ class PolicyTests(unittest.TestCase):
                   "home_paths": (".claude/remote-settings.json",)}
         # 2.1.318 also names ~/.claude/policy-limits.json, a server-delivered cache (docs/evidence/claude-code-2.1.318-chat.md)
         v318 = dict(claude, home_paths=(".claude/remote-settings.json", ".claude/policy-limits.json"))
-        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318})
+        self.assertEqual(ap.CLAUDE_SOURCES, {"2.1.292": claude, "2.1.296": claude, "2.1.318": v318, "2.1.319": v318})
         self.assertEqual(ap.CODEX_SOURCES, {"0.160.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
                                                         "home_paths": ()},
                                                 "0.163.0": {"paths": ("etc/codex",), "domain": "com.openai.codex",
@@ -249,6 +249,18 @@ class Claude2_1_318Tests(PolicyTests):
         self.assertFalse(r.ok)
         self.assertTrue(any("policy-limits.json" in p for p in r.problems))
         claude_dir.chmod(0o700)
+
+
+class Claude2_1_319Tests(Claude2_1_318Tests):
+    """Claude Code 2.1.319 (P40-6): the strings of its binary name the same places as 2.1.318's (docs/evidence/
+    claude-code-2.1.318-chat.md), so it has the same list, the second server-delivered cache included."""
+
+    def claude(self):
+        return ap.check_claude("2.1.319", str(self.root), str(self.home))
+
+    def test_the_version_has_a_list(self):
+        self.assertTrue(self.claude().ok)
+        self.assertEqual(ap.CLAUDE_SOURCES["2.1.319"], ap.CLAUDE_SOURCES["2.1.318"])
 
 
 if __name__ == "__main__":

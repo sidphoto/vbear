@@ -2511,7 +2511,8 @@
     "meetings",
     "staffing",
     "chats",
-    "setup_try"
+    "setup_try",
+    "chief"
    ],
    "lamp": "red",
    "meeting_usd": "1.5",
@@ -2724,7 +2725,8 @@
    "meetings",
    "staffing",
    "chats",
-   "setup_try"
+   "setup_try",
+   "chief"
   ],
   "lamp": "red",
   "meeting_usd": "1.5",
@@ -2740,7 +2742,8 @@
    "meetings",
    "staffing",
    "chats",
-   "setup_try"
+   "setup_try",
+   "chief"
   ],
   "lamp": "green",
   "meeting_usd": "1.5",

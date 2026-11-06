@@ -1716,6 +1716,37 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .chat-excerpt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ink-2); }
 @media (prefers-reduced-motion: reduce) { .chat-card, .chat-msg { transition: none; animation: none; } }
 
+/* ---- the chief of staff and the dispatch (v0.15, P40-5) ---- */
+.chief-desk { margin: 10px 0 14px; display: grid; gap: 8px; }
+.chief-runs { display: grid; gap: 10px; }
+.chief-run { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.prop-card { display: grid; gap: 10px; border: 2px solid var(--quest-edge); }
+.prop-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.prop-head h2 { margin: 0; }
+.prop-body { display: grid; gap: 10px; }
+.prop-body h3 { margin: 6px 0 0; font-size: 15px; }
+.prop-summary { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prop-field { display: grid; gap: 3px; min-width: 0; }
+.prop-card input[type="text"], .prop-card textarea, .prop-card select { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; }
+.prop-card textarea { resize: vertical; }
+.prop-people { display: grid; gap: 8px; }
+.prop-person { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; display: grid; gap: 6px; background: var(--panel-2); }
+.prop-person p { margin: 0; }
+.prop-gone { opacity: 0.75; }
+.prop-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 8px; }
+.prop-steps, .disp-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.prop-step { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 6px; background: var(--panel); }
+.prop-step p { margin: 0; }
+.prop-step-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.prop-step-head select { width: auto; max-width: 100%; }
+.prop-step-actions { gap: 8px; flex-wrap: wrap; }
+.prop-cost { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.prop-mark { font-weight: 600; }
+.prop-card [hidden] { display: none !important; }
+.disp-step { display: grid; gap: 4px; }
+.disp-step p { margin: 0; }
+.chat-origin { margin-bottom: 4px; padding: 3px 8px; border-left: 3px solid var(--accent); color: var(--ink-2); overflow-wrap: anywhere; }
+
 /* the first-time page (第一次打開 VBear): an illustration drawn with boxes; colours come from the theme variables, so light and dark
    both read; it wraps at a narrow width */
 .welcome-steps { margin: 0 0 16px; padding-left: 22px; display: grid; gap: 8px; min-width: 0; }

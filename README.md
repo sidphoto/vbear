@@ -45,6 +45,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A meeting is kept short: a speaker thinks at low effort and the CEO at medium, and it runs at most 15 minutes by default, the last three kept for the CEO. A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Staffing meeting** | A **staffing meeting** (組隊會議, `#/staffing`): for one task card the positions say who and which skills it needs, each once and alone, then the CEO card writes a staffing proposal (the four places, the staff to bring to a meeting, new cards to make, the skills of each card and the skills missing). You change it as a draft, then adopt it with 照草稿採用, one button per step in a fixed order (啟用, 建新卡, 插技能, 帶到隊伍, 帶去開會, 記下). VBear makes no card, inserts no skill and saves no team by itself | 請 CEO 組隊 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Chat** | A **chat** (聊天, `#/chat`): you talk one-to-one with a role card whose tool is Claude Code or Codex and which is on, through your own Claude Code or Codex, in the card's own work folder. A command, an edit or a write waits for a permission card that you allow once, refuse or change first (with Codex, 改內容再問: VBear refuses the original and Codex asks again); there is no 「allow every time」. It spends your usage (Codex: your ChatGPT plan, counted by VBear as an estimate), and a Claude Code or Codex version can chat only after it has passed the chat check on your Mac | 聊天; the 聊天 button on a role card |
+| **Chief of staff** | The **chief of staff** (幕僚長) and the **dispatch** (派工): from the CEO's chat page it proposes who does what; after your one confirmation VBear sends the steps to your employees, one chat per step, and asks you at every command and file change as in any chat | The CEO's chat page, `#/dispatch`, and 「AI 自己做了什麼」 (`#/actions`) |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 Role cards come in three moves: **collect** (take cards from the card pool, or the starter deck of three), **equip** (put skill cards into a card) and **play** (put the card on a task card's team place, then set out). The permission intents on a card are a team-work marker: they do not mean VBear has limited the program's real abilities. The only limits are the ones on the launch pass.
@@ -321,6 +322,22 @@ US$0.01), shows it as an estimate (not a bill), and counts it in the same daily 
 shown on the chat. Codex keeps its own copy of the conversation in its folder under VBear's state folder, and deleting a chat does
 not delete that copy. 驗證聊天 for Codex runs about fourteen short calls on your ChatGPT plan, not billed apart.
 
+**Ask the chief of staff to arrange the work.**
+On the CEO's chat page, 請幕僚長安排 lets VBear's chief of staff read your recent conversation with the CEO and propose who does what.
+It is one call through your own Claude Code (the dialog says so and says what it can cost at most and what is left of today's
+limit before you press anything; if the CEO is a Codex card, the conversation still goes to Claude Code, and with Codex only the
+page says 幕僚長目前需要 Claude Code). The proposal card lists up to four steps, each for one employee, in plain words. You can edit the
+words, delete a step, swap the employee, change the name, position, tool or model of a new employee, and every change is marked
+「你改過」. 確認派工 makes the new employees (always safe mode, no skills, with the position's fixed instructions) and a task card, then sends
+the steps one after the other, each in a new chat of its own, with the previous step's reply handed on as data. 不採用 makes nothing. The
+chief of staff never changes a limit, never starts a terminal or full mode, and never installs a skill, and a dispatch **never answers
+a permission card: every command and every file change an employee wants is still asked of you.** When the daily limit or the plan's
+limit is reached, the dispatch pauses and says which step, which AI tool, and when it can go on (or 「未知」); 繼續 is yours to press and it
+skips the step that did not finish, 停止 stops it, and an employee VBear made can be taken back (switched off, not deleted). The 派工 page lists
+every dispatch, and 「AI 自己做了什麼」 (`#/actions`) lists every single thing the chief of staff and the dispatch did and who decided it: you,
+自己動手 item 1 or 2, or VBear. In the settings, 自己動手 has two items, both off by default: the chief of staff may make new employees by itself,
+and may start a clean proposal by itself. A message that was sent cannot be taken back.
+
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
 `127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear;
@@ -342,6 +359,10 @@ a meeting or a skill translation is sent the same way, through your own Claude C
 - **A chat sends what you write to Anthropic through your Claude Code, spends your usage, and can change files in the card's own work folder** only after you allow each
   command, edit or write on a permission card. VBear can read what the card reads there; Claude Code can still read anything your Mac account can.
   A Codex chat sends it to OpenAI through Codex on your ChatGPT plan the same way, and a command you allow can read anything your Mac account can.
+- **The chief of staff sends your conversation with the CEO to Anthropic and spends your usage; a dispatch then sends messages to your employees
+  after one confirmation.** A step's reply goes on to the next step as data, which is a way for a hostile text to steer the next employee, and
+  a command you allow can reach VBear's own access token and API. Every command and file change is still asked of you. See
+  [the security model](docs/SECURITY-MODEL.md#chief-of-staff-and-dispatch-v015).
 - **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
 - **Deleting a flow cannot be undone.**
 - **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →

@@ -61,9 +61,10 @@ class ChatConstants:
     cost_cumulative: bool              # result.total_cost_usd counts the whole session, resumed processes included
 
 
-VERSIONS = {
-    "2.1.318": ChatConstants(
-        version="2.1.318",
+def _recorded(version: str) -> ChatConstants:
+    """The constants recorded with the real 2.1.318 (P36-0): the one shape every chat version so far prints."""
+    return ChatConstants(
+        version=version,
         tools=frozenset(TOOLS),
         permission_mode="default",
         known=frozenset({"control_response", "control_request", "system/init", "system/status",
@@ -71,8 +72,14 @@ VERSIONS = {
                          "rate_limit_event", "result"}),
         pinned_env=dict(sp._PINNED_ENV),
         cost_cumulative=True,
-    ),
-}
+    )
+
+
+# 2.1.318: recorded with the real CLI (P36-0, tests/fixtures/chat). 2.1.319 (P40-6): its ``claude --help`` is identical to
+# 2.1.318's, byte for byte (docs/evidence/claude-code-2.1.318-chat.md), so the same flags and the same constants are assumed;
+# a real chat recording of 2.1.319 was not made. A version here is a version VBear knows how to start, not a verified one:
+# ``cli_versions.chat_verified_versions`` (boundary_check --mode chat) decides which of them may chat.
+VERSIONS = {v: _recorded(v) for v in ("2.1.318", "2.1.319")}
 STREAM_EVENTS = frozenset({"message_start", "content_block_start", "content_block_delta", "content_block_stop",
                            "message_delta", "message_stop"})
 DELTAS = frozenset({"text_delta", "thinking_delta", "signature_delta", "input_json_delta"})

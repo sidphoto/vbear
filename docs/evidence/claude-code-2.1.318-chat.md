@@ -57,3 +57,25 @@ judges it from the recorded events, not from the model's words. Its checks, and 
 [SECURITY-MODEL.md](../SECURITY-MODEL.md) ("Chats with a role card"). It was **not** run for this file: it spends model
 quota and is run by a person (the 「驗證聊天」 button, or the command above). Until it passes on a Mac, no chat starts
 there.
+
+## 2.1.319 (P40-6)
+
+Why: a Mac that Claude Code updated to 2.1.319 could not chat (VBear had constants for 2.1.318 only). What was compared, on 2026-11-07,
+without running any chat and without the network:
+
+- **`claude --help`:** the output of 2.1.318 and of 2.1.319 is identical (`diff` prints nothing; 313 lines). Every flag the chat's argv
+  uses is in it (`-p`, `--input-format`, `--output-format`, `--verbose`, `--include-partial-messages`, `--permission-prompts`,
+  `--permission-prompt-tool`, `--permission-mode`, `--safe-mode`, `--settings`, `--setting-sources`, `--strict-mcp-config`, `--tools`,
+  `--append-system-prompt`, `--max-budget-usd`, `--model`, `--resume`, `--session-id`). So `chat_protocol.VERSIONS["2.1.319"]` is the
+  same constants as 2.1.318's. A real stream recording of 2.1.319 was **not** made: the events are assumed to be the ones recorded
+  for 2.1.318 (`tests/fixtures/chat`), and the chat check judges that from a real session.
+- **Administrator sources:** the binary `2.1.319` in the `versions` directory, 321995200 bytes, SHA-256
+  `1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd`; the method above, run on both binaries side by side (the
+  2.1.318 file had the SHA-256 recorded above, so the method was run on the same file). The lists of `/Library/...` paths, of
+  `/etc/...claude...` paths and of strings around `managed-settings` are identical; `Application Support/ClaudeCode` (3),
+  `com.anthropic.claudecode` (2), `remote-settings` (11), `managed-policy` (21), `policyHelper` (62) and `policy-limits.json` (5) occur
+  as often in 2.1.319 as in 2.1.318 (`managed-settings` 148 against 149 and `managed-mcp` 25 against 26: the lines that differ are
+  program text, not paths). So `CLAUDE_SOURCES["2.1.319"]` is the 2.1.318 list, `policy-limits.json` included.
+- **Verification:** 2.1.319 is **not** in any verified list. It chats only after `python3 -m vbear.boundary_check --mode chat --claude <binary>`
+  passed on the Mac (the 「驗證聊天」 button does the same for the version a chat would run). That run is not recorded here yet:
+  `--help` identical, awaiting `boundary_check --mode chat` on a real machine.

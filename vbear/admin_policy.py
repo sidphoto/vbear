@@ -65,7 +65,10 @@ _CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex", "home_paths": (
 # read on 2026-10-12 are in docs/evidence/claude-code-2.1.296-stream.md. Method and result:
 # docs/evidence/claude-code-2.1.318-chat.md.
 _CLAUDE_2_1_318 = dict(_CLAUDE, home_paths=_CLAUDE["home_paths"] + (".claude/policy-limits.json",))
-CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318}
+# 2.1.319 (P40-6): the same list as 2.1.318. Checked on 2026-11-07 with the same method against the strings of the installed
+# 2.1.319 binary: the same /Library paths, the same /etc/claude-code place, the same managed-settings names, and
+# policy-limits.json is still the one more cache (docs/evidence/claude-code-2.1.318-chat.md, "2.1.319").
+CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318, "2.1.319": _CLAUDE_2_1_318}
 # 0.163.0 (P38-2, chat mode): the same sources as 0.160.0. The Codex chat (ADR 0005) does not pass --ignore-user-config (app-server
 # has no such flag), so the system and managed layers matter as much as for the review. The list is taken over from 0.160.0 and
 # is to be checked against the installed 0.163.0 on a real Mac when the chat check is run (docs/evidence/codex-0.163.0-chat.md).

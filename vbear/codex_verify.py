@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from . import claude_verify
-from .runtime import cli_versions, codex_chat_env
+from .runtime import chat_engines, cli_versions, codex_chat_env
 
 
 class CodexChatVerifier(claude_verify.ChatVerifier):
@@ -25,7 +25,7 @@ class CodexChatVerifier(claude_verify.ChatVerifier):
 
     def _argv(self, binary: str, out: Path) -> list[str]:
         # No --codex: the check takes the newest Codex the vendor's installer left, the one the support answer names.
-        return [sys.executable, "-B", "-m", "vbear.boundary_check", "--mode", "codex-chat", "--out", str(out)]
+        return [sys.executable, "-B", "-m", "vbear.boundary_check", "--mode", chat_engines.by_tool("codex").check_mode, "--out", str(out)]
 
     def _verified(self) -> tuple[str, ...]:
         return cli_versions.codex_chat_verified_versions()
