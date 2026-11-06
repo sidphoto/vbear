@@ -53,8 +53,10 @@ is the same as in v0.15.0:
 - **Not run on a real machine for this change:** how a real model treats the other employees' words between the markers, how a Codex
   employee behaves in a group (the temporary state of the check has no Codex chat login, so only Claude Code employees are tried), whether
   停止 really ends the turn of the employee who was writing, and a Claude plan limit (it is not told apart from another error in a chat's
-  record, so such a reply is shown as not finished normally, with no resume time). The result of `tools/qa_p41.py` on a real Mac: 待確認
-  (the coordinator runs it before the release). No code or test ran a real AI tool.
+  record, so such a reply is shown as not finished normally, with no resume time). On a real Mac with Claude Code 2.1.319 and two Haiku
+  employees, `tools/qa_p41.py` passed (48 ok, 1 warn, 0 FAIL; about US$0.11). An extra check put a command into the first
+  employee's reply: the second employee saw it only inside the markers, asked for no tool, and no file appeared. A stopped turn
+  that reports no cost is counted at the per-turn limit, as before. Codex employees in a group were not run on a real Mac. No code or test ran a real AI tool.
 - **Going back to v0.15.0.** v0.15.0 does not know groups. `<state>/groups/` and `group-runner.lock` are left alone and unread, the 群組 rows
   are gone and nothing in `config.json` has to be undone (v0.16.0 adds no key). The chat records have no new field (no `origin`), so
   v0.15.0 reads every chat a group opened, one per member and the ones of members taken out too, as an ordinary chat: it is listed, holds the
