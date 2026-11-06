@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import unittest
+from pathlib import Path
 
 from tests.test_t16_setup import CANARY, SetupCase
 from vbear import agent_profiles, first_ceo
@@ -184,6 +185,22 @@ class TheHomeNoteTests(FirstCeoCase):
 
     def test_the_default_is_nothing(self):
         self.assertEqual(self.req("GET", "/api/config")[1]["config"]["first_ceo_id"], "")
+
+
+class DocsTests(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_the_changelog_the_glossary_and_the_architecture_say_what_the_step_is(self):
+        log = (self.ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        log = log[log.index("## v0.13.0"):log.index("## v0.12.0")]
+        for phrase in ("(P38-8)", "`GET /api/first-ceo`", "`first_ceo_id`", "`#/ceo`", "safe mode", "only put in the box", "「輪到 p」"):
+            self.assertIn(phrase, log, phrase)
+        glossary = (self.ROOT / "GLOSSARY.md").read_text(encoding="utf-8")
+        self.assertIn("**CEO**：", glossary)
+        self.assertIn("幕僚長派工做好之前，CEO 只聊天", glossary)
+        arch = (self.ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        self.assertIn("/api/first-ceo", arch)
+        self.assertIn("first_ceo_id", arch)
 
 
 if __name__ == "__main__":

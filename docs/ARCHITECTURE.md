@@ -308,6 +308,13 @@ opens the install or login terminal through the daemon's `open_setup` operation 
 `setup_done` and `setup_notice` are written through `/api/config`. The page sends the lobby's person there when `setup_done` is
 false; a config that does not say forces nobody.
 
+After 開始使用, a person with no role card to chat with is led to `#/ceo` (`viewCeo` in `web/app.js`, 建立你的 CEO). `GET
+/api/first-ceo` (`vbear/first_ceo.py`, read-only) answers `needed` (no enabled card on Claude Code or Codex), the ready tool the card
+takes (Claude Code, else Codex; never a tool that has only a mark), `go: "setup"` when none is ready, and the name, instructions and
+opening sentence to fill in. The page makes the card with the ordinary `POST /api/agent-profiles` in safe mode, opens a chat
+with `POST /api/chats`, and only puts the opening sentence in the box; sending it is the person's own press. The config key
+`first_ceo_id` (written through `/api/config`) makes the lobby offer a first chat with that card once.
+
 In the app window only, the home page sends that person to `#/welcome` (`viewWelcome` in `web/app.js`, 第一次打開 VBear) first,
 while the config key `welcome_seen` is false; reading it or skipping it writes `welcome_seen: true` through `/api/config` and goes on
 to `#/setup`. Whether this is the app window is judged by `folderBridge()`, the native folder-chooser handler that only the app's
