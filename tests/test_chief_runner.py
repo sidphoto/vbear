@@ -13,8 +13,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from vbear import agent_profiles as ap, board_engine as be, chief, chief_runner as cr, config as cfg, meeting_runner as mr
-from vbear import meetings as mt, staffing_runner as sr, translations as tr, try_spend
+from vbear import board_engine as be, chief, chief_runner as cr, meeting_runner as mr
+from vbear import meetings as mt, staffing_runner as sr, translations as tr
 from vbear.runtime import chat_store as cs, daemon_chat
 
 VERSION = "2.1.296"

@@ -2,7 +2,6 @@
 of employees, the format, the three levels of checking, the prompt and the record. Nothing runs: no CLI, no network.
 All names and texts are made up."""
 import copy
-import hashlib
 import json
 import os
 import tempfile
