@@ -52,8 +52,8 @@ KIND = "chief"
 TURN_KIND = "plan"
 # The chief of staff speaks as no card: a fixed participant, the model and the effort VBear chose (not the person's).
 MODEL, EFFORT = "sonnet", "low"
-CALL_USD = Decimal("0.30")                       # the most one call may cost (and less when the day has less left)
-TOTAL_USD = CALL_USD * mt.MAX_ATTEMPTS           # the most one proposal may cost over its tries
+CHIEF_CALL_USD = Decimal("0.30")                       # the most one call may cost (and less when the day has less left)
+TOTAL_USD = CHIEF_CALL_USD * mt.MAX_ATTEMPTS           # the most one proposal may cost over its tries
 TIMEOUT = 120.0
 SPEED = {"speaker_effort": EFFORT, "chair_effort": EFFORT, "max_minutes": 5}   # the clock of one call and its retries
 
@@ -622,7 +622,7 @@ def delete(chief_id: str) -> None:
 # ---- money, status, the view --------------------------------------------------------------------------------------------------
 
 def per_call_of(rec: dict, turn: dict | None = None) -> Decimal:
-    """The most one call may cost: the record's own limit (the smaller of CALL_USD and what the day had left)."""
+    """The most one call may cost: the record's own limit (the smaller of CHIEF_CALL_USD and what the day had left)."""
     return mt.money(rec["limits"]["per_call_usd"]) or Decimal(0)
 
 

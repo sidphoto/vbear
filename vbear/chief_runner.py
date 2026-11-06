@@ -5,7 +5,7 @@ tools, the check of its init event, the one worker shared with the meetings and 
 run at the same time), the money and what a restart leaves are described there. What is the chief of staff's own:
 
   * a board of one turn (``final_needs_answers`` is False: the engine does not wait for an earlier turn's answer);
-  * VBear chose the model, the thinking and the limits (``sonnet``, low, at most CALL_USD, or what the day has left when
+  * VBear chose the model, the thinking and the limits (``sonnet``, low, at most CHIEF_CALL_USD, or what the day has left when
     that is less; 120 seconds); the person's config sets none of them and a proposal sets none;
   * only a chat with a CEO card may ask. What is read of the chat is the preview's: counts and sizes, never a word of it;
     the start reads the chat and the list again and goes on only when both are what was previewed;
@@ -103,12 +103,12 @@ def chat_reader(base=None) -> Callable[[str], tuple]:
 
 
 def cap_usd(day: Decimal, daily: Decimal) -> Decimal:
-    """The most the one call may cost: CALL_USD, or what the day has left when that is less, in whole cents downward (zero
+    """The most the one call may cost: CHIEF_CALL_USD, or what the day has left when that is less, in whole cents downward (zero
     when the day has none left)."""
     left = daily - day
     if left <= 0:
         return Decimal(0)
-    return min(chief.CALL_USD, left).quantize(CENT, rounding=ROUND_DOWN)
+    return min(chief.CHIEF_CALL_USD, left).quantize(CENT, rounding=ROUND_DOWN)
 
 
 class ChiefRunner(HeadlessBoard):
@@ -202,7 +202,7 @@ class ChiefRunner(HeadlessBoard):
         daily = mt.limits_from(sources.conf)["daily_usd"]
         return Context(chat_id=chat_id, ceo_id=ceo["id"], ceo_tool=ceo["model"]["tool"], note=note, read=read, cards=cards,
                        omitted_cards=omitted, tools=tools, inputs_sha=chief.inputs_sha(cards, omitted, tools),
-                       limits={"per_call_usd": chief.CALL_USD, "total_usd": chief.TOTAL_USD}, daily_usd=daily, version="", binary="")
+                       limits={"per_call_usd": chief.CHIEF_CALL_USD, "total_usd": chief.TOTAL_USD}, daily_usd=daily, version="", binary="")
 
     @staticmethod
     def _clean_note(body) -> str:
