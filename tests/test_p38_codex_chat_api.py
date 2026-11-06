@@ -14,7 +14,7 @@ from unittest import mock
 from tests.test_chat_api import Http
 from tests.test_p38_codex_chat_daemon import THREAD, VERSION, CodexCase
 from vbear import agent_profiles as ap, chat_service, claude_verify, config as cfg, server
-from vbear.runtime import chat_store as cs, cli_versions
+from vbear.runtime import chat_store as cs, cli_versions, memory_rules
 
 READY = {"state": "ready", "installed": True, "version": VERSION, "verified": True, "logged_in": True,
          "admin_policy_ok": True, "why": "", "verified_versions": [VERSION]}
@@ -160,7 +160,7 @@ class CodexChatThroughHttpTests(ApiCase):
         self.say(chat_id)
         self.wait_http_turn(chat_id, 1)
         begin = next(x for x in self.stdin() if x.get("method") == "thread/start")
-        self.assertEqual(begin["params"]["developerInstructions"], "先說結論，再說理由。")
+        self.assertEqual(begin["params"]["developerInstructions"], "先說結論，再說理由。\n\n" + memory_rules.block([]))   # P42-1: then the memory paragraph
 
     def test_deleting_a_codex_chat_keeps_the_copy_codex_made_in_its_own_folder(self):
         self.configure(start=[0])

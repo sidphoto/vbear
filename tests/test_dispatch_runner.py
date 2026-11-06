@@ -944,7 +944,7 @@ class NoSideEffectsTests(RunnerBase):
         self.drunner.tick()
         sent = self.daemon.sent[0]
         self.assertNotIn("acceptForSession", json.dumps(sent, ensure_ascii=False))
-        self.assertEqual({k for k in sent} - {"chat_id", "text", "turn", "cli", "model_id", "origin", "instructions"}, set())
+        self.assertEqual({k for k in sent} - {"chat_id", "text", "turn", "cli", "model_id", "origin", "instructions", "memory"}, set())
 
 
 class QuietRecordsTests(RunnerBase):

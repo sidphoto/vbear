@@ -142,7 +142,7 @@ def _used(entries) -> dict:
 def view() -> dict:
     """What GET /api/memory shows: the lines in page order (each marked ``blocked`` with the rule's code when the rules now
     refuse it), the use, and whether the file could be read. Never raises for a file that cannot be read: it says so."""
-    base = {"entries": [], "used": _used([]), "readable": True, "where_text": WHERE_TEXT, "problem": None}
+    base = {"entries": [], "used": _used([]), "readable": True, "where_text": WHERE_TEXT, "problem": None, "cards_off": []}
     try:
         if _folder(False) is None:
             return base
@@ -150,7 +150,18 @@ def view() -> dict:
     except StoreError:
         return dict(base, readable=False, problem=UNREADABLE)
     entries = [dict(e, blocked=mr.check(e["text"])["refuse"]) for e in _ordered(data["entries"])]
-    return dict(base, entries=entries, used=_used(data["entries"]))
+    return dict(base, entries=entries, used=_used(data["entries"]), cards_off=data["cards_off"])
+
+
+COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI"}
+
+
+def cards_view(cards, cards_off) -> list:
+    """The role cards as the memory page lists them: who takes memory with them, and which company it goes to. ``cards`` are
+    the chat service's cards ({id, name, tool, engine, can_chat, ...}); a card that cannot chat has no company."""
+    off = set(cards_off)
+    return [{"profile_id": c.get("id"), "name": c.get("name"), "tool": c.get("tool"), "company": COMPANY.get(c.get("engine")),
+             "can_chat": c.get("can_chat") is True, "on": c.get("id") not in off} for c in cards if isinstance(c, dict)]
 
 
 class ChatMemory(NamedTuple):

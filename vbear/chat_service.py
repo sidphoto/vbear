@@ -14,6 +14,8 @@ decides the things the console decides:
   * which Claude Code or Codex runs it (the pinned one), and whether that version may chat at all (``support``): the
     version has a chat-mode source list and a pass of the chat check, and no administrator policy is in the way; for
     Codex also the login of its own folder (vbear/runtime/codex_chat_env.py);
+  * what of the person's memory goes into the chat (P42-1): the lines of ``memory.json`` (read only, never written here)
+    unless the card has memory switched off or the file cannot be read; the daemon checks every line again;
   * what each code of the daemon means to a person (``CODE_TEXT``): every refusal the daemon can give has a
     sentence here, so the page never shows a bare code.
 
@@ -29,6 +31,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
+from . import memory as memory_store
 from .api_error import ApiError
 from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
 
@@ -201,7 +204,7 @@ class ChatService:
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
     def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
-                 ledger=None, profile=None, profiles=None, base=None):
+                 ledger=None, profile=None, profiles=None, base=None, memory=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
@@ -212,6 +215,7 @@ class ChatService:
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
         self._base = base
+        self._memory = memory or memory_store.for_card          # a function: role card id -> memory.ChatMemory (reads only)
         self.restart_tries, self.restart_pause = RESTART_TRIES, RESTART_PAUSE
         self.delete_tries, self.delete_pause = DELETE_TRIES, DELETE_PAUSE
 
@@ -492,6 +496,9 @@ class ChatService:
         instructions = self._instructions(profile)
         if instructions is not None:
             fields["instructions"] = instructions
+        given = self._memory(chat["profile_id"])
+        if given.readable and given.on:               # a card with memory off, or a file that cannot be read: not a word is sent
+            fields["memory"] = given.entries
         if origin is not None:
             fields["origin"] = origin
         for attempt in range(self.restart_tries):
