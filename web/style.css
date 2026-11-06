@@ -1703,7 +1703,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .chat-card { border: 2px solid var(--quest-edge); background: var(--panel); gap: 10px; }
 .chat-card-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .chat-card-rows { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; }
-.chat-card-rows dt { color: var(--ink-3); font-size: 12.5px; padding-top: 2px; }
+.chat-card-rows dt { color: var(--ink-3); font-size: 12.5px; padding-top: 2px; max-width: 18rem; overflow-wrap: anywhere; }
 .chat-card-rows dd { margin: 0; min-width: 0; }
 .chat-pre { margin: 0; padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 18rem; overflow: auto; }
 .chat-card textarea, .chat-composer textarea { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }

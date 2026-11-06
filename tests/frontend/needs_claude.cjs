@@ -130,6 +130,21 @@ test("skills page: the note is only for translating with Claude Code, not when t
   assert.strictEqual(notes(main).length, 0);
 });
 
+test("chat page: a Codex that has its chat login is a way to chat, so the note about Claude Code is held back; the person's own Codex alone is not", async () => {
+  const codexChat = (login) => ({ ok: true, tools: [row("claude", "not_installed"), row("codex", "ready", { chat_login: { state: login, problem: "" } })], any_ready: true, setup_done: true });
+  setServer(codexChat("logged_in"));
+  let main = await open("#/chat");
+  assert(text(main).includes("跟員工聊天"));
+  assert.strictEqual(notes(main).length, 0, "Codex can chat");
+  setServer(codexChat("not_logged_in"));
+  main = await open("#/chat");
+  assert.strictEqual(notes(main).length, 1, "its chat login is not done yet");
+  assert(text(notes(main)[0]).includes("Codex"), "and the note names Codex as the other way");
+  setServer(codexChat("logged_in"));
+  main = await open("#/meetings");
+  assert.strictEqual(notes(main).length, 1, "meetings are still Claude Code only");
+});
+
 test("the note does not turn off the page: forms and buttons keep working as before", async () => {
   setServer(statusOf(row("claude", "not_installed")));
   const main = await open("#/chat");

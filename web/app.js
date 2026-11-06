@@ -6129,8 +6129,8 @@ function profileCard(p, opts = {}) {
       handlers.place ? el("button", { type: "button", class: "btn small", "data-pcard": "place",
         title: "把這張卡放進一張任務卡的隊伍（規劃、執行或審查位）",
         on: { click: () => handlers.place(p) } }, "放上任務卡") : null,
-      handlers.chat ? el("button", { type: "button", class: "btn small", "data-pcard": "chat", disabled: launchOff || tool !== "claude",
-        title: launchOff ? "這張卡已停用，啟用之後才能聊天" : tool !== "claude" ? "聊天目前只支援工具是 Claude Code 的角色卡" : "和這位員工聊天（開了聊天頁才會選，送出訊息才花錢）",
+      handlers.chat ? el("button", { type: "button", class: "btn small", "data-pcard": "chat", disabled: launchOff || (tool !== "claude" && tool !== "codex"),
+        title: launchOff ? "這張卡已停用，啟用之後才能聊天" : tool !== "claude" && tool !== "codex" ? "聊天目前只支援工具是 Claude Code 或 Codex 的角色卡" : "和這位員工聊天（開了聊天頁才會選，送出訊息才花錢）",
         on: { click: () => handlers.chat(p) } }, "聊天") : null,
       frontFlip));
 
@@ -12305,13 +12305,20 @@ function needsClaudeNote(what) {
 // An empty place that fills itself with the note once the status is known; the page does not wait for it. `token` is the
 // page's seq, so an answer that arrives after the person has gone elsewhere is dropped. `wanted` lets a page hold the note
 // back for a case where it does not apply (translation with another engine).
-function needsClaudeSlot(token, what, wanted) {
+function needsClaudeSlot(token, what, wanted) {            // wanted(res): the start-up status, for a page that may hold the note back
   const slot = el("div", { "data-needs-claude": "slot" });
   api.get("/api/setup/tools").then((res) => {
-    if (token !== seq || claudeCodeNeed(res) !== "needed" || (wanted && !wanted())) return;
+    if (token !== seq || claudeCodeNeed(res) !== "needed" || (wanted && !wanted(res))) return;
     setKids(slot, needsClaudeNote(what));
   }).catch(() => {});
   return slot;
+}
+// True when the start-up status says the Codex that chats is ready: Codex is ready and the chat's own login is done (the
+// person's own Codex being ready is not enough, the chat uses another login folder).
+function codexChatReady(res) {
+  const rows = res && typeof res === "object" && Array.isArray(res.tools) ? res.tools : [];
+  const r = rows.find((t) => t && typeof t === "object" && t.id === "codex");
+  return !!r && r.ready === true && !!r.chat_login && typeof r.chat_login === "object" && r.chat_login.state === "logged_in";
 }
 // ---------- end of the Claude Code note ---------------------------------------------------------------------------------
 
@@ -12727,7 +12734,7 @@ async function viewSetup() {
 
 // ---------- chat with role cards (P36-2) -----------------------------------------------------------------------------------
 // The pages of vbear/chat_service.py: the list and a new chat (#/chat), one chat (#/chat/<id>). A chat is a person talking to
-// one role card (Claude Code only), with the card's own work folder. Everything shown is the record the daemon wrote (a closed
+// one role card (its AI tool is Claude Code or Codex, which decides the engine for good), with the card's own work folder. Everything shown is the record the daemon wrote (a closed
 // table of kinds, below) and what the daemon says now (`live`: the reply being written, and the permission cards waiting). Text
 // a model wrote is set as text, like every other string here. Nothing on these pages sends a message or runs a tool by itself:
 // a message is sent by the send button, and a tool that asks is run only after the person presses 「允許這一次」 or 「改內容再允許」
@@ -12738,7 +12745,7 @@ const CHAT_POLL_MS = 1500;          // polling, when the live stream cannot be u
 const CHAT_INTRO_KEY = "vbear-chat-intro-seen";
 const CHAT_TURN_END = {
   result: "", stopped: "你按了停止，這回合停下來，按上限計費", timeout: "超過 10 分鐘沒結束，已停止，按上限計費",
-  process_exit: "員工的程序自己結束了，這回合按上限計費", violation: "Claude Code 做了不符 VBear 設定的事，VBear 已停止這個程序",
+  process_exit: "員工的程序自己結束了，這回合按上限計費", violation: "員工用的 AI 工具做了不符 VBear 設定的事，VBear 已停止這個程序",
   daemon_restart: "VBear 的背景程序重新啟動，這回合中斷，按上限計費", error: "出了問題，這回合停止，按上限計費",
   not_sent: "這則訊息沒有送出，沒有花錢",
   limit: "用量到了這回合的上限，已請員工停下來，按估算的用量計費",
@@ -12748,6 +12755,8 @@ const CHAT_DECISION = {
   expired: "5 分鐘內沒有回覆，卡片過期，視為拒絕（沒有執行）", cancelled: "這回合結束了，這張卡片視為拒絕（沒有執行）",
   refused: "你按下允許的當下，VBear 又檢查了一次，發現這個動作現在不安全，拒絕了它（沒有執行）",
 };
+// A Codex chat cannot change a card's content: VBear declines it and Codex asks again (docs/adr/0005).
+const CHAT_DECISION_CODEX_MODIFY = "你拒絕了原本的，請 Codex 照你改的內容再問一次";
 const CHAT_STATE = {
   starting: ["員工正在上線", "b-info"], idle: ["待命中", "b-ok"], working: ["回覆中", "b-info"], waiting_for_you: ["等你回覆卡片", "b-warn"],
   closing: ["正在結束", "b-mute"], ending: ["正在結束", "b-mute"],
@@ -12759,13 +12768,27 @@ const CHAT_SUPPORT_WORD = {
   verified: ["已通過聊天驗證", "b-ok"], unverified: ["還沒通過聊天驗證", "b-warn"], unsupported: ["VBear 還不認得這個版本", "b-bad"],
   policy: ["被管理員政策擋住", "b-bad"], unknown: ["讀不到 Claude Code 的版本", "b-warn"],
 };
-const CHAT_TOOL_TEXT = { Bash: "執行指令（Bash）", Edit: "修改檔案（Edit）", Write: "寫入檔案（Write）", Read: "讀檔（Read）", Grep: "搜尋內容（Grep）", Glob: "找檔名（Glob）" };
+const CHAT_TOOL_TEXT = { Bash: "執行指令（Bash）", Edit: "修改檔案（Edit）", Write: "寫入檔案（Write）", Read: "讀檔（Read）", Grep: "搜尋內容（Grep）", Glob: "找檔名（Glob）",
+  command: "執行指令", file_change: "修改檔案" };       // the last two are a Codex chat's
+const CHAT_TOOL_NAME = { claude: "Claude Code", codex: "Codex", "claude-chat": "Claude Code", "codex-chat": "Codex" };
+const CHAT_CODEX_WORD = {
+  ready: ["可以聊天", "b-ok"], not_installed: ["還沒安裝 Codex", "b-warn"], unverified: ["還沒通過聊天驗證", "b-warn"], policy: ["被管理員政策擋住", "b-bad"],
+  folder: ["聊天用的 Codex 資料夾不能用", "b-bad"], version_unreadable: ["讀不到 Codex 的版本", "b-warn"], not_logged_in: ["聊天用的 Codex 還沒登入", "b-warn"],
+};
+const CHAT_CODEX_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你（連只讀檔的也問），每次改檔也問，沒有「以後都允許」。Codex 的沙盒只擋「寫」，不擋「讀」："
+  + "指令可以讀到你電腦上工作資料夾以外的檔案，所以每個指令你都要看清楚才按允許。Codex 不回報金額，每則回覆的花費是 VBear 依 token 數的估計，不是帳單，Codex 用的是你的 ChatGPT 方案。";
+const CHAT_CODEX_DELETE_NOTE = "　Codex 自己會在 VBear 狀態資料夾裡的 codex-chat-home（sessions）留一份對話副本，刪除這個聊天不會刪掉它；要清掉它，要自己到那個資料夾處理。";
+const CHAT_CODEX_ACTION = { listFiles: "列出檔案", read: "讀檔", search: "搜尋", unknown: "其他" };
+const CHAT_CHANGE_KIND = { add: "新增", update: "修改", delete: "刪除" };
 const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫的內容", old_string: "原本的字串", new_string: "改成", path: "路徑", pattern: "搜尋", description: "說明" };
 const CHAT_INTRO = [
-  ["這是什麼", "和一張角色卡（員工）聊天。目前只有工具是 Claude Code、而且已啟用的角色卡可以聊天。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
-  ["會花錢", "聊天用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。"],
+  ["這是什麼", "和一張角色卡（員工）聊天。目前工具是 Claude Code 或 Codex、而且已啟用的角色卡可以聊天；用哪個 AI 工具聊，開聊天時就決定了，之後不會換。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
+  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」。"],
   ["不會自己動手", "員工想執行指令、改檔或寫檔時，會出現一張卡片問你。你按「允許這一次」才會做；也可以拒絕，或改了內容再允許。每次都問，沒有「以後都允許」。卡片 5 分鐘沒回覆就過期，視為拒絕。"],
   ["員工的指示", "只有你自己寫在這張角色卡上的指示會帶進聊天；VBear 替職位預設的文字不會帶。續接的對話會沿用第一次送出時的指示，之後再改卡片，已經開始的對話不一定會跟著變（這一點還沒有在真機上確認）。"],
+  ["用 Codex 聊天", "Codex 員工用的是你的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單。"
+    + "聊天用的 Codex 要在「開始設定」另外登入一次（和你自己的 Codex 分開，VBear 看不到你自己的 Codex 設定）。每個指令和每次改檔都會先問你，連只讀檔的指令也問；"
+    + "Codex 的沙盒只擋「寫」，不擋「讀」，指令讀得到工作資料夾以外的檔案，所以指令要看清楚才按允許。「改內容再問」會先拒絕原本的，再請 Codex 照你改的重新問你一次，你要再按一次允許。"],
 ];
 
 // ---- small, pure helpers (tested) ----
@@ -12774,9 +12797,43 @@ function chatMoney(v) { return typeof v === "string" && /^[0-9]+(\.[0-9]+)?$/.te
 function chatTurnCost(rec) {
   const money = chatMoney(rec.cost_usd);
   if (rec.reason === "not_sent") return "這則訊息沒有送出，沒有花錢。";
+  // a Codex chat's turn end carries `estimate`: money from the token count by VBear's own rule, or the turn's limit when there was no count
+  if (rec.estimate === true) {
+    const tokens = Number.isInteger(rec.tokens) && rec.tokens >= 0 ? `約 ${rec.tokens.toLocaleString("en-US")} 個 token；` : "";
+    return `這回合估計 ${money}（${tokens}Codex 不回報金額，這是 VBear 依 token 數估算、算進每天上限的數字，不是帳單）。`;
+  }
+  if (rec.estimate === false) return `這回合按上限 ${money} 計（Codex 沒有回報用量）。`;
   return rec.reported === true ? `這回合花了 ${money}（Claude Code 回報的估值）。` : `這回合按上限 ${money} 計（Claude Code 沒有回報）。`;
 }
 function chatStateWord(state) { return cardHas(CHAT_STATE, state) ? CHAT_STATE[state][0] : "狀態不明"; }
+function chatToolName(x) { return typeof x === "string" && cardHas(CHAT_TOOL_NAME, x) ? CHAT_TOOL_NAME[x] : typeof x === "string" && x ? x : "未指定"; }
+
+// The plan's use as Codex last reported it (a `plan_usage` record: numbers only), as one line; "" when it has no number.
+function chatPlanWindow(minutes) {
+  if (!Number.isInteger(minutes) || minutes <= 0) return "目前";
+  if (minutes === 10080) return "本週";
+  if (minutes % 1440 === 0) return `${minutes / 1440} 天內`;
+  if (minutes % 60 === 0) return `${minutes / 60} 小時內`;
+  return `${minutes} 分鐘內`;
+}
+function chatPlanUsageText(rec) {
+  if (!rec || typeof rec !== "object") return "";
+  const pct = (x) => Number.isInteger(x) && x >= 0;
+  const parts = [];
+  if (pct(rec.primary_pct)) parts.push(`${chatPlanWindow(rec.primary_window_min)}已用 ${rec.primary_pct}%`);
+  if (pct(rec.secondary_pct)) parts.push(`${chatPlanWindow(rec.secondary_window_min)}已用 ${rec.secondary_pct}%`);
+  if (!parts.length) return "";
+  let out = `ChatGPT 方案：${parts.join("、")}（Codex 回報）。`;
+  if (typeof rec.reached === "string" && rec.reached) {          // what Codex called the limit is not shown, only that it was reached
+    const full = [[rec.primary_pct, rec.primary_resets_at], [rec.secondary_pct, rec.secondary_resets_at]].filter(([p, r]) => pct(p) && p >= 100 && Number.isInteger(r) && r > 0).map(([, r]) => r);
+    if (full.length) out += `碰到方案用量上限，${fmtTime(Math.max(...full))} 恢復。`;
+    else {
+      const when = [rec.primary_resets_at, rec.secondary_resets_at].filter((r) => Number.isInteger(r) && r > 0).map(fmtTime);
+      out += `碰到方案用量上限（Codex 沒有說是哪一個）${when.length ? `，兩段的恢復時間是 ${when.join("、")}` : ""}。`;
+    }
+  }
+  return out;
+}
 
 // What a card asks, as the person reads it: the tool, then each field of its input that is text. Fields not in the table are
 // shown under their own name; nothing is cut here (the server already kept at most 4000 characters of each).
@@ -12790,8 +12847,9 @@ function chatInputRows(input) {
 
 // One record of the chat as a line of the transcript, or null (a kind this page does not draw, which is every kind it does
 // not know). A closed table: whatever the record holds, only these shapes come out.
-function chatLine(rec) {
+function chatLine(rec, opts) {
   if (!rec || typeof rec !== "object" || typeof rec.kind !== "string") return null;
+  const codex = !!opts && opts.engine === "codex-chat";
   const text = (x) => (typeof x === "string" ? x : "");
   switch (rec.kind) {
     case "user_message":
@@ -12820,7 +12878,7 @@ function chatLine(rec) {
         badge("問你", "b-warn"), " ", `員工想${cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : "用 " + text(rec.tool)}`);
     case "card_decision":
       return el("li", { class: "chat-note", "data-chat": "decision", "data-seq": String(rec.seq), "data-card-id": text(rec.card_id) },
-        cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
+        codex && rec.decision === "modify" ? CHAT_DECISION_CODEX_MODIFY : cardHas(CHAT_DECISION, rec.decision) ? CHAT_DECISION[rec.decision] : "這張卡片的結果不明",
         rec.decision === "modify" && typeof rec.value === "string" ? el("code", null, ` ${rec.value}`) : null);
     case "turn_ended": {
       const why = cardHas(CHAT_TURN_END, rec.reason) ? CHAT_TURN_END[rec.reason] : "這回合因不明原因結束";
@@ -12835,7 +12893,7 @@ function chatLine(rec) {
         `員工的程序結束了：${cardHas(CHAT_PROCESS_END, rec.reason) ? CHAT_PROCESS_END[rec.reason] : text(rec.reason)}`);
     case "anomaly":
       return el("li", { class: "chat-sys small muted", "data-chat": "anomaly", "data-seq": String(rec.seq) },
-        `Claude Code 送來一個 VBear 不認得的訊息（${text(rec.event_type)}），已略過。`);
+        `員工用的 AI 工具送來一個 VBear 不認得的訊息（${text(rec.event_type)}），已略過。`);
     case "error":
       return el("li", { class: "chat-note", "data-chat": "error", "data-seq": String(rec.seq) }, badge("錯誤", "b-bad"), " ", text(rec.message));
     default:
@@ -12846,15 +12904,49 @@ function chatLine(rec) {
 // ---- the permission card ----
 
 // `onAnswer(card, decision, value)` -> a promise; `edit` = { text } kept by the caller across redraws.
+// A card of a Codex chat has the tool "command" or "file_change" (vbear/runtime/codex_chat_session.py); what it asks is in
+// card.input: a command with its folder and what Codex says it does, or the files with a diff each. Every string is set as text.
+const CHAT_ASK_AGAIN = "VBear 會先拒絕原本的，再請 Codex 照你改的重新問你一次；Codex 會再問你一次，你要再看過、再按一次允許，才會執行。";
+const CHAT_CODEX_EDIT_FILE = "寫下你要它改成什麼（要寫清楚是哪個檔案，上面列了這張卡的檔案）。";
+
+// The rows of a card: [label, text] pairs, and for a file change a diff per file.
+function chatCodexRows(card) {
+  const input = card.input && typeof card.input === "object" && !Array.isArray(card.input) ? card.input : {};
+  const str = (x) => (typeof x === "string" ? x : "");
+  const rows = [];
+  if (card.tool === "command") {
+    rows.push(["指令", str(input.command)]);
+    const cwd = str(input.cwd);
+    rows.push(["資料夾", !cwd || cwd === "." ? "員工的工作資料夾" : cwd]);
+    const acts = Array.isArray(input.actions) ? input.actions : [];
+    if (acts.length) rows.push(["Codex 說這個指令在做", acts.map((a) => {
+      const t = a && typeof a === "object" ? a.type : "";
+      return `${typeof t === "string" && cardHas(CHAT_CODEX_ACTION, t) ? CHAT_CODEX_ACTION[t] : "其他"}：${a && typeof a.command === "string" ? a.command : ""}`;
+    }).join("\n")]);
+  } else if (Array.isArray(input.changes)) {
+    for (const c of input.changes) {
+      const ch = c && typeof c === "object" ? c : {};
+      const kind = typeof ch.kind === "string" && cardHas(CHAT_CHANGE_KIND, ch.kind) ? CHAT_CHANGE_KIND[ch.kind] : "改動";
+      const move = typeof ch.move_to === "string" && ch.move_to ? `，搬到 ${ch.move_to}` : "";
+      rows.push([`${kind}檔案 ${str(ch.path)}${move}`, str(ch.diff)]);
+    }
+  }
+  if (typeof input.codex_reason === "string" && input.codex_reason) rows.push(["Codex 的說明", input.codex_reason]);
+  return rows;
+}
+
 function chatCardNode(card, opts) {
   const o = opts || {};
+  const codex = card.tool === "command" || card.tool === "file_change";
   const tool = cardHas(CHAT_TOOL_TEXT, card.tool) ? CHAT_TOOL_TEXT[card.tool] : `工具 ${card.tool}`;
-  const rows = chatInputRows(card.input);
+  const rows = codex ? chatCodexRows(card) : chatInputRows(card.input);
   const left = Number.isFinite(card.expires_in) ? Math.max(0, Math.round(card.expires_in)) : null;
   const busy = o.busy === true;
   const editable = typeof card.editable === "string" && card.editable ? card.editable : null;
   const editing = editable && o.edit && o.edit.open === true;
-  const area = editing ? el("textarea", { rows: "4", "data-chat": "edit", "aria-label": `改${cardHas(CHAT_FIELD_TEXT, editable) ? CHAT_FIELD_TEXT[editable] : editable}`,
+  const label = codex ? "改內容再問" : `改${cardHas(CHAT_FIELD_TEXT, editable) ? CHAT_FIELD_TEXT[editable] : editable}`;
+  const area = editing ? el("textarea", { rows: "4", "data-chat": "edit", "aria-label": label,
+    placeholder: codex && card.tool === "file_change" ? "例如：把 notes.txt 的內容改成 hi" : "",
     on: { input: (e) => { o.edit.text = e.target.value; } } }) : null;
   if (area) area.value = typeof o.edit.text === "string" ? o.edit.text : (card.input && typeof card.input[editable] === "string" ? card.input[editable] : "");
   const answer = (decision, value) => { if (!busy && o.onAnswer) o.onAnswer(card, decision, value); };
@@ -12862,17 +12954,19 @@ function chatCardNode(card, opts) {
     el("div", { class: "chat-card-head" }, badge("要你決定", "b-warn"), el("strong", null, `員工想${tool}`)),
     typeof card.reason === "string" && card.reason ? el("p", { class: "small muted" }, card.reason) : null,
     el("dl", { class: "chat-card-rows" }, rows.map(([k, v]) => [el("dt", null, k), el("dd", null, el("pre", { class: "chat-pre" }, v))])),
+    editing && codex && card.tool === "file_change" ? el("p", { class: "small", "data-chat": "edit-note" }, CHAT_CODEX_EDIT_FILE) : null,
     area,
+    codex && (editing || editable) ? el("p", { class: "small muted", "data-chat": "ask-again" }, CHAT_ASK_AGAIN) : null,
     el("p", { class: "small muted" }, `不按的話，${left === null ? "5 分鐘後" : `約 ${left} 秒後`}會過期，視為拒絕（沒有執行）。按下允許的當下，VBear 會再檢查一次。`),
     el("div", { class: "row chat-card-actions" },
       editing
         ? [el("button", { type: "button", class: "btn primary small", "data-chat": "allow-edited", disabled: busy,
-              on: { click: () => answer("modify", area.value) } }, "用改過的內容允許"),
+              on: { click: () => answer("modify", area.value) } }, codex ? "拒絕原本的，照這樣再問我" : "用改過的內容允許"),
            el("button", { type: "button", class: "btn small", "data-chat": "cancel-edit", disabled: busy,
               on: { click: () => { o.edit.open = false; if (o.redraw) o.redraw(); } } }, "不改了")]
         : [el("button", { type: "button", class: "btn primary small", "data-chat": "allow", disabled: busy, on: { click: () => answer("allow", null) } }, "允許這一次"),
            editable ? el("button", { type: "button", class: "btn small", "data-chat": "modify", disabled: busy,
-              on: { click: () => { o.edit.open = true; if (o.redraw) o.redraw(); } } }, "改內容再允許") : null],
+              on: { click: () => { o.edit.open = true; if (o.redraw) o.redraw(); } } }, codex ? "改內容再問" : "改內容再允許") : null],
       el("button", { type: "button", class: "btn small", "data-chat": "deny", disabled: busy, on: { click: () => answer("deny", null) } }, "拒絕")));
 }
 
@@ -12904,6 +12998,37 @@ function chatSupportNode(support, verifyUi) {
   return el("div", { class: "chat-support card", "data-chat": "support", "data-state": String(s.state) }, lines);
 }
 
+// The same notice for the Codex that chats: its state, the way out of each state that is not ready, and for a version not yet
+// checked the check that says what it costs first. `verifyUi` is the same shape as the Claude one.
+function chatCodexSupportNode(codex, verifyUi) {
+  const c = codex && typeof codex === "object" ? codex : null;
+  if (!c) return notice("warn", "讀不到聊天用的 Codex 的支援狀態。");
+  const word = typeof c.state === "string" && cardHas(CHAT_CODEX_WORD, c.state) ? CHAT_CODEX_WORD[c.state] : ["狀態不明", "b-mute"];
+  const v = verifyUi || {};
+  const status = c.verify && typeof c.verify === "object" ? c.verify : null;
+  const running = (status && status.running === true) || v.pending === true;
+  const lines = [el("p", { class: "small" }, badge(word[0], word[1]), " ", typeof c.version === "string" && c.version ? `Codex ${c.version}` : "Codex")];
+  if (c.state !== "ready" && typeof c.why === "string" && c.why) lines.push(el("p", { class: "small", "data-chat": "support-message" }, c.why));
+  const toSetup = el("a", { class: "btn small", href: "#/setup", "data-chat": "setup-go" }, "到開始設定");
+  if (c.state === "ready" && typeof c.money === "string" && c.money) lines.push(el("p", { class: "small muted", "data-chat": "money" }, c.money));
+  if (c.state === "not_installed" || c.state === "not_logged_in" || c.state === "folder") lines.push(el("div", { class: "row" }, toSetup));
+  if (c.state === "unverified") {
+    lines.push(el("p", { class: "small muted", "data-chat": "verify-cost" },
+      "驗證會用聊天用的 Codex 真的跑一段對話：約 14 次很短的呼叫，用你自己的 ChatGPT 方案，不另外收費，要幾分鐘。驗證前要先到「開始設定」按「讓聊天用的 Codex 登入」。"
+      + "它會試：員工回話、連只讀檔的指令也先問你、你拒絕或改內容再問、改檔要看 diff、資料夾外的寫入被擋住、停止、接續舊對話。全部通過，才會記下這個版本。"));
+    if (running) lines.push(el("p", { class: "small", "data-chat": "verifying", role: "status" }, "驗證進行中，通常要幾分鐘…"));
+    else if (v.confirm === true) lines.push(el("div", { class: "row" },
+      el("button", { type: "button", class: "btn primary small", "data-chat": "verify-go", on: { click: () => v.go && v.go() } }, "確認驗證（會用掉一點 ChatGPT 方案的用量）"),
+      el("button", { type: "button", class: "btn small", "data-chat": "verify-cancel", on: { click: () => v.cancel && v.cancel() } }, "不驗證了")));
+    else lines.push(el("div", { class: "row" },
+      el("button", { type: "button", class: "btn small", "data-chat": "verify", on: { click: () => v.ask && v.ask() } }, "驗證聊天"), toSetup));
+  }
+  if (status && status.running !== true && typeof status.message === "string" && status.message && c.state !== "ready") {
+    lines.push(el("p", { class: "small", "data-chat": "verify-result" }, status.message));
+  }
+  return el("div", { class: "chat-support card", "data-chat": "codex-support", "data-state": String(c.state) }, lines);
+}
+
 function chatLimitsText(limits, ledger) {
   const l = limits && typeof limits === "object" ? limits : null;
   const spent = ledger && typeof ledger === "object" && /^[0-9.]+$/.test(String(ledger.spent_usd)) ? `今天已花 US$${ledger.spent_usd}（聊天、會議和組隊會議合計），每日上限 US$${ledger.daily_usd}。` : "讀不到今天的花費。";
@@ -12919,6 +13044,7 @@ function chatRow(c) {
   }
   return el("li", { class: "mt-row card", "data-chat": "row", "data-chat-id": c.id },
     el("a", { class: "mt-row-title", href: `#/chat/${encodeURIComponent(c.id)}` }, c.name || c.profile_id),
+    el("span", { class: "tag", "data-chat": "tool" }, chatToolName(c.engine)),
     c.waiting ? badge("等你回覆卡片", "b-warn") : c.open ? badge("回覆中", "b-info") : null,
     c.problem ? badge("紀錄有問題", "b-bad", c.problem) : null,
     el("span", { class: "small muted" }, `${fmtTime(c.last_at)}・${c.turns} 回合・US$${c.spent_usd}（估值）`),
@@ -12933,6 +13059,7 @@ async function viewChat(id, params) {
   catch (e) { setKids(claim(token), el("h1", null, "跟員工聊天"), notice("bad", "讀不到聊天：" + e.message)); return; }
   const main = claim(token);
   const verifyUi = { confirm: false, pending: false };
+  const codexUi = { confirm: false, pending: false };
   let cur = data;
   const names = () => new Map((cur.cards || []).map((c) => [c.profile_id || c.id, c.name]));
   const supportBox = el("div", { class: "chat-support-box" });
@@ -12941,14 +13068,35 @@ async function viewChat(id, params) {
   const listBox = el("div", { class: "chat-list-box" });
   const pick = typeof (params && params.profile) === "string" ? params.profile : "";
   let chosen = pick;
+  const chosenCard = () => (Array.isArray(cur.cards) ? cur.cards.find((c) => c && c.id === chosen) : null) || null;
+  // The notice for the chosen card's AI tool; with no card chosen, Claude Code's (unless it is not there and Codex is) and
+  // Codex's once Codex is installed.
+  const drawSupport = () => {
+    const sup = cur.support && typeof cur.support === "object" ? cur.support : null;
+    const codex = sup && sup.codex && typeof sup.codex === "object" ? sup.codex : null;
+    const engine = chosenCard() ? chosenCard().engine : null;
+    const kids = [];
+    const claudeNode = () => chatSupportNode(sup, verifyUi);
+    const codexNode = () => chatCodexSupportNode(codex, codexUi);
+    if (engine === "codex-chat") kids.push(codexNode());
+    else if (engine === "claude-chat") kids.push(claudeNode());
+    else {
+      const codexThere = !!codex && codex.state !== "not_installed";
+      if (!(codexThere && sup && sup.state === "unknown" && !sup.detected)) kids.push(claudeNode());
+      if (codexThere) kids.push(codexNode());
+    }
+    setKids(supportBox, kids);
+  };
   const redrawForm = () => {
     const cards = Array.isArray(cur.cards) ? cur.cards.filter((c) => c && typeof c.id === "string") : [];
-    const sel = el("select", { "data-chat": "card", "aria-label": "要聊天的角色卡", on: { change: (e) => { chosen = e.target.value; redrawForm(); } } },
+    const sel = el("select", { "data-chat": "card", "aria-label": "要聊天的角色卡", on: { change: (e) => { chosen = e.target.value; drawSupport(); redrawForm(); } } },
       el("option", { value: "" }, cards.length ? "選一張角色卡…" : "還沒有角色卡"),
-      cards.map((c) => el("option", { value: c.id, disabled: c.can_chat !== true }, `${c.name || c.id}${c.can_chat === true ? "" : "（不能聊天）"}`)));
+      cards.map((c) => el("option", { value: c.id, disabled: c.can_chat !== true },
+        c.can_chat === true ? `${c.name || c.id}（${chatToolName(c.tool)}）` : `${c.name || c.id}（${c.tool ? chatToolName(c.tool) + "・" : ""}不能聊天）`)));
     sel.value = cards.some((c) => c.id === chosen) ? chosen : "";
     const card = cards.find((c) => c.id === sel.value);
-    const ok = cur.support && cur.support.state === "verified";
+    const codexCard = !!card && card.engine === "codex-chat";
+    const ok = codexCard ? !!cur.support && !!cur.support.codex && cur.support.codex.state === "ready" : !!cur.support && cur.support.state === "verified";
     const lamp = cur.ledger && cur.ledger.lamp === "red";
     const go = el("button", { type: "button", class: "btn primary", "data-chat": "open", disabled: !card || card.can_chat !== true || !ok || lamp,
       on: { click: async (e) => {
@@ -12959,13 +13107,13 @@ async function viewChat(id, params) {
     setKids(formBox, el("section", { class: "section" }, sectionHead("開新聊天", "開聊天本身不花錢，送出訊息才花。"),
       el("div", { class: "row" }, sel, go),
       card && card.can_chat !== true ? notice("warn", card.reason || "這張角色卡不能聊天。") : null,
-      !ok ? el("p", { class: "small muted" }, "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
+      !ok ? el("p", { class: "small muted" }, codexCard ? "聊天用的 Codex 準備好之前（原因在上面），不能開始聊天。" : "這個 Claude Code 版本通過聊天驗證之前，不能開始聊天。") : null,
       lamp ? el("p", { class: "small muted" }, "今天的額度用完了，不能開始聊天。") : null,
       card && card.can_chat === true && card.instructions === true ? el("p", { class: "small muted" }, "這張卡有你自己寫的指示，會帶進聊天。") :
         card && card.can_chat === true ? el("p", { class: "small muted" }, "這張卡沒有你自己寫的指示，聊天不會帶任何指示。") : null));
   };
   const draw = () => {
-    setKids(supportBox, chatSupportNode(cur.support, verifyUi));
+    drawSupport();
     setKids(ledgerBox, chatLimitsText(cur.limits, cur.ledger) + (cur.ledger_error ? `（${cur.ledger_error}）` : ""));
     redrawForm();
     const rows = Array.isArray(cur.chats) ? cur.chats : [];
@@ -12983,16 +13131,27 @@ async function viewChat(id, params) {
     catch (e) { verifyUi.pending = false; toast(e.message); }
     await refresh();
   };
+  codexUi.ask = () => { codexUi.confirm = true; draw(); };
+  codexUi.cancel = () => { codexUi.confirm = false; draw(); };
+  codexUi.go = async () => {
+    codexUi.pending = true; codexUi.confirm = false; draw();
+    const version = cur.support && cur.support.codex && cur.support.codex.version;
+    try { await api.post("/api/chat-support/verify", { engine: "codex", version: version || undefined }); }
+    catch (e) { codexUi.pending = false; toast(e.message); }
+    await refresh();
+  };
   const refresh = async () => {
     try { cur = await api.get("/api/chats"); } catch (e) { return; }
     if (cur.support && cur.support.verify && cur.support.verify.running !== true) verifyUi.pending = false;
+    if (cur.support && cur.support.codex && cur.support.codex.verify && cur.support.codex.verify.running !== true) codexUi.pending = false;
     if (token === seq) draw();
   };
   draw();
   const intro = chatIntroNode();
   setKids(main, el("h1", null, "跟員工聊天"),
     el("p", { class: "lede" }, "和一位員工（角色卡）一對一聊天。員工想動手時，會先問你。"),
-    needsClaudeSlot(token, "目前聊天只能透過 Claude Code 進行。"),
+    needsClaudeSlot(token, "聊天需要 Claude Code 或 Codex：工具是 Claude Code 的員工用 Claude Code，工具是 Codex 的員工用 Codex（Codex 要先在「開始設定」登入聊天用的那一份）。",
+      (res) => !codexChatReady(res)),
     intro, supportBox, ledgerBox, formBox,
     el("section", { class: "section" }, sectionHead("聊天紀錄", "每 5 秒更新"), listBox));
   chatTick = refresh;
@@ -13054,6 +13213,9 @@ async function viewChatDetail(token, id) {
   const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
   let noteText = "";                      // the server's last refusal, kept until the person acts again
+  let planRecord = null;                  // the last plan_usage record: what Codex last said of the ChatGPT plan's use
+  const engineOf = () => (view.chat && view.chat.engine) || (view.card && view.card.engine) || null;
+  const isCodex = () => engineOf() === "codex-chat";
 
   const turnOpen = () => view.live && view.live.turn != null;
   const gate = () => (view.card && view.card.can_chat === false ? view.card.reason || "這張角色卡現在不能聊天。" : "");
@@ -13063,9 +13225,11 @@ async function viewChatDetail(token, id) {
     const word = cardHas(CHAT_STATE, state) ? CHAT_STATE[state] : ["狀態不明", "b-mute"];
     setKids(headBox, el("h1", null, view.card && view.card.name ? view.card.name : "聊天"),
       el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
-        view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：Claude Code` : ""),
+        view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：${chatToolName(view.card.tool)}` : ""),
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
-      el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"));
+      isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
+        : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
+      isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null);
     const notes = [];
     if (gate()) notes.push(notice("warn", gate()));
     if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
@@ -13099,7 +13263,8 @@ async function viewChatDetail(token, id) {
     for (const r of records) {
       if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
       lastSeq = r.seq;
-      const line = chatLine(r);
+      if (r.kind === "plan_usage") planRecord = r;
+      const line = chatLine(r, { engine: engineOf() });
       if (line) transcript.append(line);
     }
   };
@@ -13193,7 +13358,8 @@ async function viewChatDetail(token, id) {
   draw();
   const composer = el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn,
     el("button", { type: "button", class: "btn small", "data-chat": "delete", on: { click: async () => {
-      if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。", "刪除"))) return;
+      if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。"
+        + (isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
       try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
       catch (e) { toast(e.message); }
     } } }, "刪除這個聊天")), sendNote);
@@ -15501,6 +15667,10 @@ if (typeof module !== "undefined" && module.exports) {
     chatCardNode,
     chatInputRows,
     chatSupportNode,
+    chatCodexSupportNode,
+    chatPlanUsageText,
+    chatToolName,
+    codexChatReady,
     chatTurnCost,
     chatMoney,
     chatStateWord,
