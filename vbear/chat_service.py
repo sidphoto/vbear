@@ -4,13 +4,16 @@ The daemon owns the chat processes and is the only writer of a chat's record (vb
 module asks it (``daemon_client.call``), reads the record files where only reading is needed (the list of chats), and
 decides the things the console decides:
 
-  * which role cards may chat: an enabled card whose tool is Claude Code. Checked when a chat is opened and again on
-    every message, because a card can be switched off or changed later; a card of another tool, or a disabled one, is
-    refused with the reason, never started;
+  * which role cards may chat: an enabled card whose tool is Claude Code or Codex. The tool decides the chat's engine
+    (claude-chat or codex-chat) when the chat is opened, and the engine never changes. Checked when a chat is opened and
+    again on every message, because a card can be switched off or changed later (a card whose tool changed to the other
+    one cannot go on in the old chat: ``card_tool_changed``); a card of another tool, or a disabled one, is refused with
+    the reason, never started;
   * what of the card goes into the chat: only the instructions the person wrote on the card (never the position's
     default text), passed to the daemon, which adds them to Claude Code's system prompt;
-  * which Claude Code runs it (the pinned one), and whether that version may chat at all (``support``): the version
-    has a chat-mode source list and a pass of the chat check, and no administrator policy is in the way;
+  * which Claude Code or Codex runs it (the pinned one), and whether that version may chat at all (``support``): the
+    version has a chat-mode source list and a pass of the chat check, and no administrator policy is in the way; for
+    Codex also the login of its own folder (vbear/runtime/codex_chat_env.py);
   * what each code of the daemon means to a person (``CODE_TEXT``): every refusal the daemon can give has a
     sentence here, so the page never shows a bare code.
 
@@ -37,6 +40,10 @@ RESTART_TRIES = 8                 # a message the daemon asked to be sent again 
 RESTART_PAUSE = 1.0               # this many seconds apart, before the person is asked to send it again
 DELETE_TRIES = 12
 DELETE_PAUSE = 0.5
+# The AI tools that can chat, and the engine each one's chats run on (fixed when the chat is opened).
+ENGINE_OF_TOOL = {"claude": "claude-chat", "codex": "codex-chat"}
+CODEX_MONEY = ("聊天用你自己的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）"
+               "後算進每天上限；這是 VBear 的記帳規則，不是帳單。")
 TOOL_LABEL = {**{t.id: t.name for t in ai_tools.REGISTRY if t.id not in ("claude", "codex", "agy", "shared")},
               "claude": "Claude Code", "codex": "Codex", "agy": "Antigravity（AGY）", "shared": "共用（不限工具）"}
 
@@ -48,7 +55,8 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "not_found": (404, "找不到這個聊天。"),
     "no_card": (404, "找不到這張角色卡。"),
     "card_disabled": (409, "這張角色卡已停用，啟用之後才能聊天。"),
-    "card_not_claude": (409, "聊天目前只支援工具是 Claude Code 的角色卡。"),
+    "card_tool_unsupported": (409, "聊天目前只支援工具是 Claude Code 或 Codex 的角色卡。"),
+    "card_tool_changed": (409, "這張角色卡換了 AI 工具，原來的聊天不能再用，請開新的聊天。"),
     "refused": (409, "你按下允許的當下，VBear 又檢查了一次這個動作，發現現在已經不安全，所以拒絕了它（沒有執行）。"),
     "expired": (409, "這張卡片過了 5 分鐘還沒有回覆，已過期，VBear 視為拒絕（沒有執行）。"),
     "gone": (409, "這張卡片已經回覆過、已過期，或這一回合已經結束，不能再回覆。"),
@@ -66,11 +74,11 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "limit": (429, "同時聊天的員工或背景程序的工作已經到上限，請稍後再試。"),
     "unsupported_python": (409, "執行 VBear 背景程序的 Python 太舊（沒有 os.waitid），無法安全管理聊天程序，所以不啟動。"
                                 "請改用 Python 3.13 或更新的版本（macOS 內建的 /usr/bin/python3 是 3.9，不行）。"),
-    "unverified": (409, "這個 Claude Code 版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。"),
-    "unsupported_version": (409, "VBear 沒有這個 Claude Code 版本的聊天模式常數，不會啟動。"),
+    "unverified": (409, "這個版本的聊天模式還沒有在這台 Mac 上通過驗證，不會啟動。"),
+    "unsupported_version": (409, "VBear 沒有這個版本的聊天模式常數，不會啟動。"),
     "admin_policy": (409, "這台 Mac 上有管理員政策或系統設定，可能蓋過 VBear 的設定，所以不啟動聊天。"),
-    "drift": (409, "Claude Code 的檔案或設定在檢查之後改變了，VBear 不啟動它。請重新整理後再試。"),
-    "invalid_binary": (409, "找不到可以安全啟動的 Claude Code。"),
+    "drift": (409, "AI 工具的檔案或設定在檢查之後改變了，VBear 不啟動它。請重新整理後再試。"),
+    "invalid_binary": (409, "找不到可以安全啟動的 AI 工具程式（Claude Code 或 Codex）。"),
     "invalid_model": (409, "這張角色卡的模型名稱不能用在聊天。"),
     "invalid_workdir": (409, "員工的工作資料夾不符規定，不啟動。"),
     "unsafe_path": (409, "聊天用到的資料夾或檔案不是這個使用者擁有的私人檔案（或是連結），VBear 不使用它。"),
@@ -88,7 +96,8 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "unavailable": (503, "VBear 的背景程序現在連不上。"),
     "bad_reply": (502, "背景程序的回應 VBear 看不懂。"),
     "claude_version": (409, "讀不到 Claude Code 的版本，不能聊天。"),
-    "version_changed": (409, "Claude Code 的版本在你預覽之後改變了，請重新整理。"),
+    "codex_version": (409, "讀不到 Codex 的版本，或它印出的版本和預期不同，不能聊天。"),
+    "version_changed": (409, "AI 工具的版本在你預覽之後改變了，請重新整理。"),
     "verifying": (409, "聊天模式的驗證正在進行。"),
 }
 
@@ -125,9 +134,16 @@ def card_gate(profile) -> tuple[bool, str, str]:
     if profile.get("enabled") is False:
         return False, "card_disabled", "這張角色卡已停用，啟用之後才能聊天。"
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
-    if model.get("tool") != "claude":
-        return False, "card_not_claude", f"這張角色卡的工具是 {tool_label(model.get('tool'))}，聊天目前只支援 Claude Code。"
+    if model.get("tool") not in ENGINE_OF_TOOL:
+        return False, "card_tool_unsupported", (
+            f"這張角色卡的工具是 {tool_label(model.get('tool'))}，聊天目前支援 Claude Code 與 Codex。")
     return True, "", ""
+
+
+def engine_of(profile) -> str | None:
+    """The engine a chat with this card runs on, or None when its tool cannot chat."""
+    model = profile.get("model") if isinstance(profile, dict) and isinstance(profile.get("model"), dict) else {}
+    return ENGINE_OF_TOOL.get(model.get("tool"))
 
 
 def _default_claude() -> tuple[str | None, str | None, str]:
@@ -147,7 +163,8 @@ def _excerpt(text: str) -> str:
 
 def summarize(chat: dict, events: cs.Events) -> dict:
     """The line of the chat list, from the chat's record alone: nothing here asks the daemon."""
-    out = {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"], "last_at": chat["created_at"],
+    out = {"id": chat["id"], "profile_id": chat["profile_id"], "engine": chat.get("engine"),
+           "created_at": chat["created_at"], "last_at": chat["created_at"],
            "last_kind": None, "last_text": "", "turns": 0, "spent_usd": "0", "open": False, "waiting": False,
            "problem": events.problem or None}
     if events.problem:
@@ -169,14 +186,18 @@ def summarize(chat: dict, events: cs.Events) -> dict:
 class ChatService:
     """``runtime``: anything with ``_rpc(op, timeout, **fields)`` (the console's NativeRuntime). ``claude``: a function
     returning (binary, version, why not); the pinned Claude Code by default. ``codex``: a function returning the Codex chat
-    state (codex_chat_env.status of the state folder by default). ``verifier``: claude_verify.ChatVerifier.
+    state (codex_chat_env.status of the state folder by default); ``codex_binary``: a function returning (binary, version) of
+    the pinned Codex, or None. ``verifier``: claude_verify.ChatVerifier; ``codex_verifier``: codex_verify.CodexChatVerifier.
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
-    def __init__(self, runtime, *, claude=None, codex=None, verifier=None, ledger=None, profile=None, profiles=None, base=None):
+    def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
+                 ledger=None, profile=None, profiles=None, base=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
+        self.codex_binary = codex_binary or (lambda: codex_chat_env.pinned_binary())
         self.verifier = verifier
+        self.codex_verifier = codex_verifier
         self.ledger = ledger
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
@@ -228,8 +249,10 @@ class ChatService:
         why not otherwise. Starts nothing. ``codex`` is the same question for the Codex that chats (P38-2: its own
         login folder, its pinned and verified version, the administrator policy); the other keys are Claude Code's."""
         binary, version, why = self.claude()
-        out = {"detected": version, "verified": [], "state": "unknown", "message": "", "policy": None,
-               "verify": self.verifier.status() if self.verifier else None, "codex": self.codex(),
+        codex = dict(self.codex(), engine="codex-chat", money=CODEX_MONEY,
+                     verify=self.codex_verifier.status() if self.codex_verifier else None)
+        out = {"engine": "claude-chat", "detected": version, "verified": [], "state": "unknown", "message": "", "policy": None,
+               "verify": self.verifier.status() if self.verifier else None, "codex": codex,
                "money": "聊天用你自己的 Claude 登入，會用掉你的 Claude 額度；金額是 Claude Code 回報的估值。"}
         out["verified"] = sorted(cli_versions.chat_verified_versions(), key=cli_versions._version_key)
         if version is None:
@@ -253,9 +276,13 @@ class ChatService:
 
     def verify_start(self, body) -> dict:
         """「驗證聊天」: one real session with the pinned Claude Code (a few small model calls with the person's own
-        login). Refused when the check could not pass anyway (no constants, an administrator policy)."""
-        if not isinstance(body, dict) or set(body) - {"version"}:
-            raise ApiError(400, "bad_request", "只接受 version。")
+        login), or with ``{"engine": "codex"}`` the Codex chat check (about fourteen short calls on the person's own
+        ChatGPT plan). Refused when the check could not pass anyway (no constants, an administrator policy)."""
+        if (not isinstance(body, dict) or set(body) - {"version", "engine"}
+                or body.get("engine", "claude") not in ("claude", "codex")):
+            raise ApiError(400, "bad_request", "只接受 version，和 engine（claude 或 codex）。")
+        if body.get("engine") == "codex":
+            return self._verify_codex(body.get("version"))
         if self.verifier is None:
             raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
         binary, version, why = self.claude()
@@ -273,6 +300,31 @@ class ChatService:
             return {"already_verified": True, "version": version, "status": self.verifier.status()}
         return {"status": self.verifier.start(binary, version)}
 
+    # What a state of Codex that is not ready is refused with (the word of codex_chat_env.status, and its own sentence).
+    CODEX_REFUSAL = {"not_installed": "invalid_binary", "unverified": "unverified", "policy": "admin_policy",
+                     "folder": "codex_home", "version_unreadable": "codex_version", "not_logged_in": "not_logged_in"}
+
+    def _codex_refusal(self, state: dict) -> ApiError:
+        code = self.CODEX_REFUSAL.get(state.get("state"), "invalid_binary")
+        why = state.get("why") if isinstance(state.get("why"), str) else ""
+        return ApiError(CODE_TEXT[code][0], code, why.strip() or CODE_TEXT[code][1])
+
+    def _verify_codex(self, wanted) -> dict:
+        if self.codex_verifier is None:
+            raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
+        state = self.codex()
+        version = state.get("version")
+        if state.get("verified") is True and isinstance(version, str):
+            return {"already_verified": True, "version": version, "status": self.codex_verifier.status()}
+        if state.get("state") != "unverified" or not isinstance(version, str):
+            raise self._codex_refusal(state)
+        if wanted is not None and wanted != version:
+            raise ApiError(409, "version_changed", f"目前的 Codex 是 {version}，不是 {wanted}；請重新整理後再驗證。")
+        policy = admin_policy.check_codex(version)
+        if not policy.ok:
+            raise ApiError(409, "admin_policy", policy.reason())
+        return {"status": self.codex_verifier.start("", version)}
+
     # ---- the list and one chat ----------------------------------------------------------------------------------
 
     def cards(self) -> list[dict]:
@@ -285,8 +337,8 @@ class ChatService:
             ok, code, reason = card_gate(p)
             model = p.get("model") if isinstance(p.get("model"), dict) else {}
             out.append({"id": p.get("id"), "name": p.get("name"), "position": agent_profiles.position_of(p),
-                        "tool": model.get("tool"), "enabled": p.get("enabled") is not False, "can_chat": ok,
-                        "code": code or None, "reason": reason or None,
+                        "tool": model.get("tool"), "engine": engine_of(p), "enabled": p.get("enabled") is not False,
+                        "can_chat": ok, "code": code or None, "reason": reason or None,
                         "instructions": self._instructions(p) is not None})
         return out
 
@@ -303,7 +355,7 @@ class ChatService:
             try:
                 chat = cs.load(base, chat_id)
             except cs.ChatStoreError as exc:
-                rows.append({"id": chat_id, "profile_id": None, "created_at": 0, "last_at": 0, "last_kind": None,
+                rows.append({"id": chat_id, "profile_id": None, "engine": None, "created_at": 0, "last_at": 0, "last_kind": None,
                              "last_text": "", "turns": 0, "spent_usd": "0", "open": False, "waiting": False,
                              "problem": exc.message})
                 continue
@@ -363,9 +415,10 @@ class ChatService:
             ok, code, reason = card_gate(profile)
             model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
             card = {"id": profile.get("id"), "name": profile.get("name"), "position": agent_profiles.position_of(profile),
-                    "tool": model.get("tool"), "enabled": profile.get("enabled") is not False, "can_chat": ok,
-                    "code": code or None, "reason": reason or None}
-        return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"]},
+                    "tool": model.get("tool"), "engine": engine_of(profile), "enabled": profile.get("enabled") is not False,
+                    "can_chat": ok, "code": code or None, "reason": reason or None}
+        return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
+                         "engine": chat.get("engine")},
                 "card": card, "records": records, "live": live, "runtime": runtime, **out}
 
     # ---- what a person does ---------------------------------------------------------------------------------------
@@ -373,9 +426,10 @@ class ChatService:
     def create(self, body) -> dict:
         if not isinstance(body, dict) or set(body) != {"profile_id"} or not isinstance(body["profile_id"], str):
             raise ApiError(400, "bad_request", "只需要 profile_id。")
-        self._card(body["profile_id"])
-        r = self._call("chat_open", profile_id=body["profile_id"])
-        return {"chat": {"id": r["chat_id"], "profile_id": r["profile_id"], "created_at": r["created_at"]}}
+        profile = self._card(body["profile_id"])
+        r = self._call("chat_open", profile_id=body["profile_id"], engine=engine_of(profile))
+        return {"chat": {"id": r["chat_id"], "profile_id": r["profile_id"], "created_at": r["created_at"],
+                         "engine": r.get("engine", engine_of(profile))}}
 
     def send(self, chat_id, body) -> dict:
         if not isinstance(body, dict) or set(body) != {"text"} or not isinstance(body["text"], str):
@@ -385,15 +439,13 @@ class ChatService:
             raise ApiError(400, "bad_request", "訊息不能是空的。")
         chat = self._chat(chat_id)
         profile = self._card(chat["profile_id"])
-        binary, version, why = self.claude()
-        if binary is None:
-            raise api_error("claude_version", why)
-        try:
-            identity = agent_sessions.binary_identity(binary)
-        except OSError:
-            raise api_error("drift", "Claude Code 檔案已消失或不可執行") from None
-        fields = {"chat_id": chat_id, "text": text, "cli": {"binary": binary, "version": version, "identity": identity},
-                  "model_id": board_engine.model_for(profile, agent_profiles.position_of(profile))}
+        engine = engine_of(profile)
+        if chat.get("engine", "claude-chat") != engine:
+            raise api_error("card_tool_changed")
+        if engine == "codex-chat":
+            fields = self._codex_fields(chat_id, text, profile)
+        else:
+            fields = self._claude_fields(chat_id, text, profile)
         instructions = self._instructions(profile)
         if instructions is not None:
             fields["instructions"] = instructions
@@ -409,6 +461,37 @@ class ChatService:
                 raise
             return {"turn": result["turn"], "cap_usd": result["cap_usd"], "process": result["process"]}
         raise api_error("restarting")                     # not reached
+
+    def _claude_fields(self, chat_id, text, profile) -> dict:
+        binary, version, why = self.claude()
+        if binary is None:
+            raise api_error("claude_version", why)
+        try:
+            identity = agent_sessions.binary_identity(binary)
+        except OSError:
+            raise api_error("drift", "Claude Code 檔案已消失或不可執行") from None
+        return {"chat_id": chat_id, "text": text, "cli": {"binary": binary, "version": version, "identity": identity},
+                "model_id": board_engine.model_for(profile, agent_profiles.position_of(profile))}
+
+    def _codex_fields(self, chat_id, text, profile) -> dict:
+        """What the daemon is told for a Codex chat. The service says why Codex cannot chat before it asks (the daemon
+        checks all of it again): the state of ``support`` that is not ready is the refusal, in its own words."""
+        state = self.codex()
+        if state.get("state") != "ready":
+            raise self._codex_refusal(state)
+        pinned = self.codex_binary()
+        if not pinned:
+            raise api_error("invalid_binary", "找不到用官方安裝指令裝的 Codex")
+        binary, version = pinned
+        try:
+            identity = agent_sessions.binary_identity(binary)
+        except OSError:
+            raise api_error("drift", "Codex 檔案已消失或不可執行") from None
+        model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
+        own = model.get("model_id")
+        return {"chat_id": chat_id, "text": text, "engine": "codex-chat",
+                "cli": {"binary": binary, "version": version, "identity": identity},
+                "model_id": own if isinstance(own, str) and agent_sessions.MODEL_ID_RE.match(own) else None}
 
     def answer(self, chat_id, body) -> dict:
         keys = {"card_id", "token", "decision"}

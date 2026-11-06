@@ -256,7 +256,7 @@ def _run_steps(s: CodexSession, work: Path, outside: Path, checks: dict, obs: di
     errors = [x for x in s.records if x["kind"] == "error"]
     end1 = s.turn_end(n)
     checks["initialize"] = check(
-        bool(ready) and len(ready) == len(starts) and ready[0]["claude_code_version"] == s.version
+        bool(ready) and len(ready) == len(starts) and ready[0]["cli_version"] == s.version
         and ready[0]["permission_mode"] == "untrusted" and not errors and not s.facts("violation"),
         sessions=len(ready), note="thread/start 的回應與 VBear 的設定逐項相符（核准方式、核准的人、沙盒、工作資料夾、沒有指示檔）")
     checks["mcp_empty"] = check(

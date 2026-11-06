@@ -338,7 +338,7 @@ class CodexChatProcess(chs.ChatProcess):
         self.thread_id = data["thread_id"]
         if data["model"] != "?":
             self.shown_model = data["model"]
-        self._record("session_ready", {"claude_code_version": self.cli_version, "permission_mode": "untrusted",
+        self._record("session_ready", {"cli_version": self.cli_version, "permission_mode": "untrusted",
                                        "model": data["model"]})
         if not data["resumed"]:
             self._record("session_bound", {"thread_id": data["thread_id"]})

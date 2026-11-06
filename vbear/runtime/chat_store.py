@@ -148,7 +148,9 @@ KINDS = {
     "user_message": {"turn": _turn, "text": lambda v: isinstance(v, str) and 0 < len(v.encode("utf-8", "surrogatepass")) <= MAX_USER},
     "turn_started": {"turn": _turn, "cap_usd": _money_text},
     "process_started": {"mode": _one_of("new", "resume"), "budget_usd": _money_text, "instructions": _bool},
-    "session_ready": {"claude_code_version": _short, "permission_mode": _short, "model": _short},
+    # the CLI's version is ``claude_code_version`` in a Claude chat and in the records of before v0.13.0, and ``cli_version``
+    # in a Codex chat (exactly one of the two; see _ALTERNATIVES)
+    "session_ready": {"permission_mode": _short, "model": _short},
     "reply": {"turn": _turn, "text": _text(MAX_REPLY), "truncated": _bool},
     "tool_call": {"turn": _turn, "tool_use_id": _short, "tool": _short, "summary": _text(MAX_EXCERPT)},
     "tool_result": {"turn": _turn, "tool_use_id": _short, "tool": _short, "is_error": _bool,
@@ -180,6 +182,8 @@ KINDS = {
 # Fields a kind may have besides its own, all or none of them (a Claude turn's end has neither): what a Codex chat's
 # turn end says about its cost, which Codex gives as tokens and VBear turns into money.
 _OPTIONAL = {"turn_ended": {"estimate": _bool, "tokens": _int_or_none(0, MAX_TOKENS)}}
+# Fields of which a kind has exactly one: the version of the CLI that started the session.
+_ALTERNATIVES = {"session_ready": {"claude_code_version": _short, "cli_version": _short}}
 _MASK = {"user_message": {"text": None}, "reply": {"text": MAX_REPLY}, "tool_result": {"text": MAX_EXCERPT},
          "tool_call": {"summary": MAX_EXCERPT}, "card": {"reason": MAX_SHORT},
          "auto_allowed": {"summary": MAX_EXCERPT, "reason": MAX_SHORT},
@@ -245,10 +249,14 @@ def record_problem(rec) -> str | None:
     if finite_real(at) is None or at < 0:
         return "時間不對"
     optional = _OPTIONAL.get(kind, {})
+    either = _ALTERNATIVES.get(kind, {})
     present = set(rec) - {"seq", "at", "kind"}
-    if not set(spec) <= present or present - set(spec) - set(optional) or (present & set(optional)) not in (set(), set(optional)):
+    if either and len(present & set(either)) != 1:
         return f"{kind} 的欄位不符"
-    for name, check in {**spec, **optional}.items():
+    if (not set(spec) <= present or present - set(spec) - set(optional) - set(either)
+            or (present & set(optional)) not in (set(), set(optional))):
+        return f"{kind} 的欄位不符"
+    for name, check in {**spec, **optional, **either}.items():
         if name in rec and not check(rec[name]):
             return f"{kind}.{name} 不符"
     return None

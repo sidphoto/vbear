@@ -48,6 +48,7 @@ from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
 from . import claude_verify
+from . import codex_verify
 from . import config as cfg
 from . import daily_limit
 from . import flow_executor
@@ -193,6 +194,7 @@ class Console:
         self.runner = runner_mod.AutomationRunner(self.executor, self.review)
         self.claude_verifier = claude_verify.ClaudeVerifier()
         self.chat_verifier = claude_verify.ChatVerifier()
+        self.codex_chat_verifier = codex_verify.CodexChatVerifier()
         self.chat_streams = 0
         self.translations = translations.TranslationManager()
         self.store.after_rescan = self.translations.after_scan
@@ -258,6 +260,7 @@ class Console:
             if not hasattr(self, "chats"):
                 self.chats = chat_service_mod.ChatService(
                     self.runtime, verifier=getattr(self, "chat_verifier", None),
+                    codex_verifier=getattr(self, "codex_chat_verifier", None),
                     ledger=lambda: self.meeting_runner().ledger(self.store.conf))
             return self.chats
 
