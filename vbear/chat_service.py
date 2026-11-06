@@ -561,8 +561,22 @@ class ChatService:
         self._chat(chat_id)
         return {"closed": self._call("chat_close", chat_id=chat_id)["closed"]}
 
+    def chat_engine(self, chat_id) -> str | None:
+        """The engine a chat was opened for (None when the chat cannot be read): a group asks it when someone comes back."""
+        try:
+            return self._chat(chat_id).get("engine", "claude-chat")
+        except ApiError:
+            return None
+
     def delete(self, chat_id) -> dict:
-        """Removes a chat. A live process is first asked to close (idle only: a turn must be stopped first); the
+        """Removes a chat (the browser's route). A chat a group opened is not removed from here: it goes with its group."""
+        if isinstance(chat_id, str) and chat_id in groups.member_chat_ids():
+            raise api_error("group_member_chat")
+        return self.delete_for_group(chat_id)
+
+    def delete_for_group(self, chat_id) -> dict:
+        """Removes a chat for the groups code (a group is deleted with its chats; a group that could not be made takes back the chats
+        it opened). Not reachable from the browser's routes. A live process is first asked to close (idle only: a turn must be stopped first); the
         daemon refuses the removal while the process still exists, so this asks a few times."""
         self._chat(chat_id)
         for attempt in range(self.delete_tries):

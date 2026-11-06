@@ -133,8 +133,8 @@ STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|ret
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
-# /api/groups/<id>[/messages] (P41-1)
-GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages))?\Z")
+# /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
+GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue|drop|members|rename))?\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -1141,6 +1141,11 @@ def make_handler(console: Console):
                     if not found or found.group(2):
                         return self._error(404, "not found")
                     return self._chat_action(lambda: console.chat_service().delete(found.group(1)))
+                if path.startswith("/api/groups/"):
+                    found = GROUP_RE.match(path)
+                    if not found or found.group(2):
+                        return self._error(404, "not found")
+                    return self._group_call("delete", found.group(1))
                 if path.startswith("/api/tasks/"):
                     task_id = path[len("/api/tasks/"):]
                     ok = tasks.delete_task(task_id)
@@ -2114,9 +2119,11 @@ def make_handler(console: Console):
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
 
         def _group_call(self, action, group_id=None, body=None, after=0):
-            """The group endpoints (P41-1). Reads run nothing; making a group opens a chat for each member (nothing is started, nothing
-            is spent); the person's words start a round and the group runner asks the employees. The errors are the group's own, or the
-            chat service's, with their statuses; nothing here carries what was said into a message."""
+            """The group endpoints (P41-1, P41-2). Reads run nothing; making a group, or adding a member, opens a chat (nothing is
+            started, nothing is spent); the person's words start a round and the group runner asks the employees; 「停止」, 「繼續」 and
+            「不用了」 are the person's presses and nothing else (the runner never goes on by itself); deleting a group deletes its chats.
+            The errors are the group's own, or the chat service's, with their statuses; nothing here carries what was said into a
+            message."""
             try:
                 svc = console.group_service()
                 if action == "list":
@@ -2127,6 +2134,17 @@ def make_handler(console: Console):
                     return self._json(svc.create(body))
                 if action == "messages":
                     return self._json(svc.say(group_id, body), 202)
+                if action == "members":
+                    return self._json(svc.members(group_id, body))
+                if action == "rename":
+                    return self._json(svc.rename(group_id, body))
+                if action in ("stop", "continue", "drop"):
+                    if body != {}:
+                        raise groups_mod.GroupError("bad_request", "這個動作不需要內容。")
+                    call = {"stop": svc.stop, "continue": svc.resume, "drop": svc.drop}[action]
+                    return self._json(call(group_id))
+                if action == "delete":
+                    return self._json(svc.delete(group_id))
                 return self._error(404, "not found")
             except groups_mod.GroupError as exc:
                 return self._json({"code": exc.code, "error": str(exc), **exc.extra}, exc.status)

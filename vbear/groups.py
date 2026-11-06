@@ -79,6 +79,10 @@ ERRORS = {
     "round_open": "大家回完之前不能再說話；可以按「停止」",
     "red": "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算",
     "spend_unknown": "VBear 讀不到今天花了多少，為了不超出每日上限，現在不送出",
+    "history_full": "這個群組換過太多次成員，紀錄放不下了，請開新的群組",
+    "not_active": "現在沒有進行中的一句話",
+    "busy": "員工還在回覆（或員工的程序還沒結束），請先按停止，等這一回合結束再刪除",
+    "not_paused": "現在沒有暫停",
 }
 STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 
@@ -471,9 +475,9 @@ class LogTx:
 
 
 @contextlib.contextmanager
-def log_tx(gid: str, clock: Callable[[], float] = time.time):
-    """``with log_tx(gid) as tx``: ``tx.records`` as they are on disk right now, ``tx.append(kind, **data)``. A log that does not read
-    back cleanly is ``damaged``: nothing is written to it."""
+def locked_log(gid: str):
+    """The log held exclusively: ``(fd, events)``, ``events`` as they are on disk right now (``events.problem`` says when the file
+    does not read back cleanly; the caller decides what that allows). A log deleted while this waited is ``not_found``."""
     fd = _open_log(gid, os.O_RDWR | os.O_APPEND)
     try:
         deadline = time.monotonic() + LOCK_TIMEOUT
@@ -485,12 +489,25 @@ def log_tx(gid: str, clock: Callable[[], float] = time.time):
                 if time.monotonic() >= deadline:
                     raise GroupError("storage", "群組紀錄鎖定逾時（可能有其他程序正在寫入），請稍後再試") from None
                 time.sleep(0.02)
-        events = _read_fd(fd)
+        try:
+            same = os.stat(group_folder(gid) / LOG).st_ino == os.fstat(fd).st_ino
+        except (OSError, GroupError):
+            same = False
+        if not same:
+            raise GroupError("not_found")                  # the group was deleted while this waited
+        yield fd, _read_fd(fd)
+    finally:
+        os.close(fd)               # closing the descriptor gives the lock back
+
+
+@contextlib.contextmanager
+def log_tx(gid: str, clock: Callable[[], float] = time.time):
+    """``with log_tx(gid) as tx``: ``tx.records`` as they are on disk right now, ``tx.append(kind, **data)``. A log that does not read
+    back cleanly is ``damaged``: nothing is written to it."""
+    with locked_log(gid) as (fd, events):
         if events.problem:
             raise GroupError("damaged", f"群組紀錄有問題，不能再送訊息（{events.problem}）")
         yield LogTx(fd, events, clock)
-    finally:
-        os.close(fd)               # closing the descriptor gives the lock back
 
 
 # ---- what the log says about the round that is on ----------------------------------------------------------------------------
@@ -529,9 +546,17 @@ def current_round(records: list) -> dict | None:
                         del s["intent"]
         elif kind == "continued":
             out["pause"] = None
+            for s in out["per"].values():          # the person looked at an intent that never got its result and decided to go on
+                if "intent" in s and "sent" not in s:
+                    del s["intent"]
         elif kind == "round_ended":
             out["ended"] = rec
     return out
+
+
+def stopped(rnd: dict | None) -> bool:
+    """The person pressed 「停止」 in this round (those who were not asked yet were left out as ``stopped``)."""
+    return bool(rnd) and any(s.get("skipped", {}).get("reason") == "stopped" for s in rnd["per"].values())
 
 
 def asked(rec: dict, rnd: dict) -> list[dict]:
@@ -625,11 +650,14 @@ def _cut(text: str, limit: int) -> tuple[str, int]:
     return kept, len(raw) - len(kept.encode("utf-8"))
 
 
-def conversation(records: list, pid: str, said_seq: int, names: dict, reply_of: Callable[[str, int], str]) -> list[dict]:
+def conversation(records: list, pid: str, said_seq: int, names: dict, reply_of: Callable[[str, int], str],
+                 chat_id: str | None = None) -> list[dict]:
     """What was said in the group since ``pid`` last spoke (since the start the first time), in order, without this round's own
     ``said`` (the person's words of this time are not data): the person's words (with who they were for when not for everyone) and
-    the other employees' replies. A reply that did not end the normal way is ``partial``."""
-    last = max((r["seq"] for r in records if r["kind"] == "turn_sent" and r["profile_id"] == pid), default=0)
+    the other employees' replies. A reply that did not end the normal way is ``partial``. ``chat_id``: the chat this employee has
+    now (an employee who came back with a new chat has not heard the talk before it: it counts from the start)."""
+    last = max((r["seq"] for r in records if r["kind"] == "turn_sent" and r["profile_id"] == pid
+                and (chat_id is None or r["chat_id"] == chat_id)), default=0)
     sent = {(r["round"], r["profile_id"]): r for r in records if r["kind"] == "turn_sent"}
     items: list[dict] = []
     for r in records:
@@ -742,7 +770,7 @@ class Groups:
         except BaseException:
             for chat_id in opened:
                 try:
-                    chats.delete(chat_id)
+                    chats.delete_for_group(chat_id)
                 except Exception:
                     pass                   # a chat that stays is an ordinary chat in the list; it costs nothing
             raise
@@ -796,7 +824,7 @@ class Groups:
         it ended, and the permission cards still unanswered. ApiError when the chat cannot be read."""
         with self._reading:
             chats = self._chats()
-            scan = self._scans.pop(chat_id, None) or {"after": 0, "turns": {}, "asked": {}, "decided": set(), "problem": ""}
+            scan = self._scans.pop(chat_id, None) or {"after": 0, "turns": {}, "asked": {}, "decided": set(), "users": set(), "problem": ""}
             try:
                 for _ in range(PAGES_MAX):
                     got = chats.get(chat_id, scan["after"])
@@ -804,6 +832,8 @@ class Groups:
                         kind = rec["kind"]
                         if kind in ("reply", "plan_usage", "turn_ended"):
                             scan["turns"].setdefault(rec["turn"], {})[kind] = rec
+                        elif kind == "user_message":
+                            scan["users"].add(rec["turn"])
                         elif kind == "card":
                             scan["asked"][rec["card_id"]] = rec["turn"]
                         elif kind == "card_decision":
@@ -816,6 +846,11 @@ class Groups:
                 while len(self._scans) > SCANS_KEPT:
                     self._scans.popitem(last=False)
             return scan
+
+    @staticmethod
+    def open_turns(scan: dict) -> list[int]:
+        """The turns of the chat that were sent and have not ended."""
+        return sorted(t for t in scan["users"] if "turn_ended" not in scan["turns"].get(t, {}))
 
     @staticmethod
     def waiting_for_you(scan: dict, turn: int) -> bool:
@@ -838,20 +873,26 @@ class Groups:
 
     def say(self, gid: str, body) -> dict:
         """The person's words: the start of a round. Refused while a round is on or paused, when today's lamp is red (or the ledger
-        cannot say), and when the log does not read back. This is the only place that writes ``said``."""
-        text = self._say_body(body)
-        load(gid)
+        cannot say), and when the log does not read back. ``to`` is ``"all"`` or the members named (kept in the order of the group).
+        This is the only place that writes ``said``."""
+        text, to = self._say_body(body)
+        rec = load(gid)
+        if to != "all":
+            live = [m["profile_id"] for m in active(rec)]
+            if any(pid not in live for pid in to):
+                raise _bad("點名的員工不在這個群組裡。")
+            to = [pid for pid in live if pid in to]
         self._gate()
         with log_tx(gid, self.clock) as tx:
             rnd = current_round(tx.records)
             if round_state(rnd) != "idle":
                 raise GroupError("round_open")
             n = (rnd["n"] if rnd else 0) + 1
-            tx.append("said", round=n, text=text, to="all")
+            tx.append("said", round=n, text=text, to=to)
         return {"round": n}
 
     @staticmethod
-    def _say_body(body) -> str:
+    def _say_body(body) -> tuple[str, Any]:
         if not isinstance(body, dict) or set(body) != {"text", "to"}:
             raise _bad("只接受 text 和 to。")
         text, to = body["text"], body["to"]
@@ -859,9 +900,9 @@ class Groups:
             raise _bad("要說的話不能是空的。")
         if len(text) > SAID_MAX:
             raise _bad(f"一次最多 {SAID_MAX} 個字。")
-        if to != "all":
-            raise _bad("這一版只能對大家說話（to 要是 \"all\"）。")
-        return redact(text)[:SAID_MAX]
+        if to != "all" and not _to(to):
+            raise _bad("to 要是 \"all\"，或 1 到 3 位不同的員工（profile_id 的清單）。")
+        return redact(text)[:SAID_MAX], to
 
     def _gate(self) -> None:
         try:
@@ -892,12 +933,13 @@ class Groups:
             raise _bad("這位員工不在群組裡。")
         cards = self._cards()
         names = {m["profile_id"]: (cards[m["profile_id"]]["name"] if m["profile_id"] in cards else GONE) for m in rec["members"]}
-        first = not any(r["kind"] == "turn_sent" and r["profile_id"] == pid for r in events.records)
+        chat_id = next(m["chat_id"] for m in members if m["profile_id"] == pid)
+        first = not any(r["kind"] == "turn_sent" and r["chat_id"] == chat_id for r in events.records)
 
         def reply_of(chat_id: str, turn: int) -> str:
             reply = self.scan(chat_id)["turns"].get(turn, {}).get("reply")
             return reply["text"] if reply else ""
-        items = conversation(events.records, pid, rnd["said"]["seq"], names, reply_of)
+        items = conversation(events.records, pid, rnd["said"]["seq"], names, reply_of, chat_id)
         who = [{"name": names[m["profile_id"]], "tool": TOOL_NAME.get((cards.get(m["profile_id"]) or {}).get("tool"), "未知")} for m in members]
         to = rnd["to"]
         to_text = "大家" if to == "all" else ("你" if to == [pid] else "、".join(names.get(x, GONE) for x in to))
@@ -906,6 +948,244 @@ class Groups:
             items = items[1:]
             message = build_message(group=rec["name"], members=who, me=names[pid], first=first, items=items, said=rnd["said"]["text"], to_text=to_text)
         return message
+
+    # ---- who is in the group, and what it is called ---------------------------------------------------------------------
+
+    @staticmethod
+    def _members_body(body) -> tuple[list[str], list[str]]:
+        if not isinstance(body, dict) or not body or set(body) - {"add", "remove"}:
+            raise _bad("只接受 add 和 remove（員工 profile_id 的清單）。")
+        out = []
+        for key in ("add", "remove"):
+            ids = body.get(key, [])
+            if not isinstance(ids, list) or not all(isinstance(i, str) and cs.PROFILE_ID_RE.match(i) for i in ids) or len(set(ids)) != len(ids):
+                raise _bad(f"{key} 要是不重複的員工 profile_id 清單。")
+            out.append(list(ids))
+        add, remove = out
+        if not add and not remove:
+            raise _bad("沒有要加或要移除的人。")
+        if set(add) & set(remove):
+            raise _bad("同一位不能同時加入又移除。")
+        return add, remove
+
+    def members(self, gid: str, body) -> dict:
+        """Add and remove members, between rounds, so that two or three are left. A member who comes back keeps her chat (a line of
+        the record is moved to the end, so she stands last), unless the card changed its AI tool: then she gets a new chat. Joining
+        opens a chat and starts nothing. ``{group, notes}`` like making a group."""
+        add, remove = self._members_body(body)
+        load(gid)
+        chats = self._chats()
+        cards = {c["id"]: c for c in chats.cards()}
+        for pid in add:
+            card = cards.get(pid)
+            if card is None:
+                raise _bad("找不到這張角色卡")
+            if card["can_chat"] is not True:
+                raise self._chat_error(card.get("code") or "card_disabled", card.get("reason") or "")
+        opened: list[str] = []
+        saved = False
+        try:
+            with log_tx(gid, self.clock) as tx:
+                if round_state(current_round(tx.records)) != "idle":
+                    raise GroupError("round_open", "一句話還沒回完（或暫停中）時不能改成員；等大家回完，或先按「停止」。")
+                store = GroupStore(gid)
+                try:
+                    with store.locked():
+                        rec = store.load()
+                        live = [m["profile_id"] for m in active(rec)]
+                        if any(pid not in live for pid in remove):
+                            raise _bad("要移除的人不在這個群組裡。")
+                        if any(pid in live for pid in add):
+                            raise _bad("要加入的人已經在這個群組裡。")
+                        if not MIN_MEMBERS <= len(live) - len(remove) + len(add) <= MAX_MEMBERS:
+                            raise _bad(f"群組裡要有 {MIN_MEMBERS} 到 {MAX_MEMBERS} 位員工。")
+                        now = self.clock()
+                        lines = list(rec["members"])
+                        for m in lines:
+                            if m["profile_id"] in remove:
+                                m["removed_at"] = now
+                        for pid in add:
+                            prior = next((m for m in reversed(lines) if m["profile_id"] == pid and m["removed_at"] is not None), None)
+                            if prior is not None and chats.chat_engine(prior["chat_id"]) == cards[pid]["engine"]:
+                                lines.remove(prior)
+                                chat_id = prior["chat_id"]
+                            else:
+                                if len(lines) >= MAX_HISTORY:
+                                    raise GroupError("history_full")
+                                chat_id = chats.create({"profile_id": pid})["chat"]["id"]
+                                opened.append(chat_id)
+                            lines.append({"profile_id": pid, "chat_id": chat_id, "added_at": now, "removed_at": None})
+                        rec["members"] = lines
+                        store.save(rec)
+                        saved = True
+                except StoreError as exc:
+                    raise GroupError("storage", str(exc)) from None
+                for pid in remove:
+                    tx.append("member_removed", profile_id=pid)
+                for pid in add:
+                    tx.append("member_added", profile_id=pid)
+        except BaseException:
+            if not saved:
+                for chat_id in opened:
+                    try:
+                        chats.delete_for_group(chat_id)
+                    except Exception:
+                        pass               # a chat that stays is an ordinary chat in the list; it costs nothing
+            raise
+        tools = {cards[m["profile_id"]]["tool"] for m in active(load(gid)) if m["profile_id"] in cards}
+        notes = []
+        if {"claude", "codex"} <= tools:
+            notes.append("群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。")
+        return {"group": self._row(gid, cards), "notes": notes}
+
+    def rename(self, gid: str, body) -> dict:
+        if not isinstance(body, dict) or set(body) != {"name"} or not isinstance(body["name"], str) or not _name_ok(body["name"].strip()):
+            raise _bad(f"只接受 name，1 到 {NAME_MAX} 個字，不能有換行。")
+        name = body["name"].strip()
+        load(gid)
+        with log_tx(gid, self.clock) as tx:
+            store = GroupStore(gid)
+            try:
+                with store.locked():
+                    rec = store.load()
+                    rec["name"] = name
+                    store.save(rec)
+            except StoreError as exc:
+                raise GroupError("storage", str(exc)) from None
+            tx.append("renamed", name=name)
+        return {"group": self._row(gid)}
+
+    # ---- the controls of a round: stop, go on, not needed ------------------------------------------------------------------
+
+    def find_sent(self, rec: dict, records: list, pid: str) -> int | None:
+        """The turn of the member's chat that holds the message of an intent that never got its ``turn_sent`` (the console went away
+        between the daemon and the log): the first turn of that chat after the last one the log knows. None when it is not there.
+        ApiError when the chat cannot be read."""
+        chat_id = next(m["chat_id"] for m in rec["members"] if m["profile_id"] == pid)
+        known = max((r["turn"] for r in records if r["kind"] == "turn_sent" and r["chat_id"] == chat_id), default=0)
+        return min((t for t in self.scan(chat_id)["users"] if t > known), default=None)
+
+    def _stop_chats(self, chat_ids: list[str]) -> None:
+        for chat_id in chat_ids:
+            try:
+                self._chats().stop(chat_id, {})
+            except Exception:
+                pass                       # a chat that is already quiet, or gone
+
+    def stop(self, gid: str) -> dict:
+        """「停止」: nobody who was not asked yet is asked from now on (``skipped stopped``); the employee who is writing has the turn
+        stopped, and the round ends when that turn has ended (the runner writes it). With nobody writing, or while paused, the round
+        ends at once. A message that is on its way (an intent with no result yet) is left out like the others, and the runner stops
+        the turn it started when the message lands."""
+        rec = load(gid)
+        with log_tx(gid, self.clock) as tx:
+            rnd = current_round(tx.records)
+            state = round_state(rnd)
+            if state == "idle":
+                raise GroupError("not_active")
+            n = rnd["n"]
+            flying, may_land = [], []
+            for m in asked(rec, rnd):
+                slot = rnd["per"].get(m["profile_id"], {})
+                if done_with(rnd, m["profile_id"]):
+                    continue
+                if "sent" in slot:
+                    flying.append(m["chat_id"])          # writing: its turn is stopped, and the runner writes how it ended
+                    continue
+                if "intent" in slot:
+                    may_land.append(m["chat_id"])        # a message that may be on its way: left out, stopped when it lands
+                tx.append("skipped", round=n, profile_id=m["profile_id"], reason="stopped")
+            ends_now = state == "paused" or not flying
+            if ends_now:
+                tx.append("round_ended", round=n, how="stopped")
+        self._stop_chats(flying + may_land)
+        return {"round": n, "state": "idle" if ends_now else "running"}
+
+    def drop(self, gid: str) -> dict:
+        """「不用了」: only while paused. Those who were not asked are left out (``skipped dropped``) and the round ends; a message
+        that may be on its way is stopped."""
+        rec = load(gid)
+        with log_tx(gid, self.clock) as tx:
+            rnd = current_round(tx.records)
+            if round_state(rnd) != "paused":
+                raise GroupError("not_paused")
+            n = rnd["n"]
+            in_flight = []
+            for m in asked(rec, rnd):
+                if done_with(rnd, m["profile_id"]):
+                    continue
+                slot = rnd["per"].get(m["profile_id"], {})
+                if "sent" in slot or "intent" in slot:
+                    in_flight.append(m["chat_id"])
+                tx.append("skipped", round=n, profile_id=m["profile_id"], reason="dropped")
+            tx.append("round_ended", round=n, how="dropped")
+        self._stop_chats(in_flight)
+        return {"round": n, "state": "idle"}
+
+    def resume(self, gid: str) -> dict:
+        """「繼續」: only while paused, and only the person does it (never by itself, however long it has waited). Those who were
+        asked and did not end the normal way are not asked again; the next one who was not asked is. An intent that never got its
+        result is looked up in its chat first: the message is there, it is recorded; it is not, it is asked again (the person has
+        looked and decided)."""
+        rec = load(gid)
+        with log_tx(gid, self.clock) as tx:
+            rnd = current_round(tx.records)
+            if round_state(rnd) != "paused":
+                raise GroupError("not_paused")
+            n = rnd["n"]
+            for m in asked(rec, rnd):
+                slot = rnd["per"].get(m["profile_id"], {})
+                if "intent" in slot and "sent" not in slot and not done_with(rnd, m["profile_id"]):
+                    try:
+                        turn = self.find_sent(rec, tx.records, m["profile_id"])
+                    except ApiError:
+                        raise GroupError("chat_unreadable", "讀不到員工的聊天紀錄，不能確定剛才那句有沒有送到，所以不繼續。請稍後再試。", 503) from None
+                    if turn is not None:
+                        tx.append("turn_sent", round=n, profile_id=m["profile_id"], chat_id=m["chat_id"], turn=turn)
+            tx.append("continued", round=n)
+        return {"round": n, "state": "running"}
+
+    # ---- deleting the group ----------------------------------------------------------------------------------------------
+
+    def delete(self, gid: str) -> dict:
+        """Deletes the group with the chats it opened (the chats of members who left too); what they spent still counts (a deleted
+        chat keeps its spending in the day's ledger). Only between rounds. A chat with a turn still open is ``busy``: then nothing is
+        deleted. A group whose log does not read back can be deleted too (nothing is running in it)."""
+        rec = load(gid)
+        chats = self._chats()
+        with locked_log(gid) as (_, events):
+            if not events.problem and round_state(current_round(events.records)) != "idle":
+                raise GroupError("round_open", "一句話還沒回完（或暫停中）時不能刪除群組；等大家回完，或先按「停止」。")
+            ids = [m["chat_id"] for m in rec["members"]]
+            for chat_id in ids:
+                try:
+                    if self.open_turns(self.scan(chat_id)):
+                        raise GroupError("busy")
+                except ApiError as exc:
+                    if exc.code != "not_found":
+                        raise
+            for chat_id in ids:
+                try:
+                    chats.delete_for_group(chat_id)
+                except ApiError as exc:
+                    if exc.code != "not_found":
+                        raise
+                with self._reading:
+                    self._scans.pop(chat_id, None)
+            self._remove_folder(gid)
+        return {"deleted": gid}
+
+    @staticmethod
+    def _remove_folder(gid: str) -> None:
+        path = group_folder(gid)
+        try:
+            for name in os.listdir(path):
+                if stat.S_ISDIR(os.lstat(path / name).st_mode):
+                    raise GroupError("storage", f"群組資料夾裡有不認得的資料夾：{name}")
+                os.unlink(path / name)
+            os.rmdir(path)
+        except OSError as exc:
+            raise GroupError("storage", f"無法刪除群組資料夾（{exc.strerror}）") from None
 
     # ---- the list and one group --------------------------------------------------------------------------------------------
 
@@ -982,7 +1262,8 @@ class Groups:
 
     @staticmethod
     def _can(state: str, lamp) -> dict:
-        """Which buttons are real now. Stop, continue, drop and the changes of the group are the next batch's: they are not offered."""
+        """Which buttons are real now: send between rounds (and a lamp that is not red); stop while a round is on or paused; continue
+        and drop while it is paused; the changes of the group between rounds; delete between rounds, or when the log is damaged."""
         send = state == "idle" and lamp in ("green", "yellow")
         why = None
         if state == "readonly":
@@ -993,7 +1274,8 @@ class Groups:
             why = ERRORS["red"] + "。"
         elif lamp not in ("green", "yellow"):
             why = ERRORS["spend_unknown"] + "。"
-        return {"send": send, "why_not_send": why, "stop": False, "continue": False, "drop": False, "edit_members": False, "delete": False}
+        return {"send": send, "why_not_send": why, "stop": state in ("running", "paused"), "continue": state == "paused",
+                "drop": state == "paused", "edit_members": state == "idle", "delete": state in ("idle", "readonly")}
 
     def _round_view(self, rec: dict, rnd: dict | None, name_of, daily, remaining) -> dict | None:
         if rnd is None:

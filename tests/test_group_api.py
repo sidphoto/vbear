@@ -128,9 +128,13 @@ class GroupApiTests(unittest.TestCase):
         gid, _ = self.make()
         self.assertEqual(self.call(f"/api/groups/{gid}?after=x")[0], 400)
         self.assertEqual(self.call(f"/api/groups/{gid}/messages")[0], 404, "a read of the messages route is not one")
-        for action in ("stop", "continue", "drop", "members", "rename", "unknown"):
+        for action in ("unknown", "answer", "send"):
             self.assertEqual(self.call(f"/api/groups/{gid}/{action}", "POST", {})[0], 404, action)
-        self.assertEqual(self.call(f"/api/groups/{gid}", "DELETE")[0], 404, "deleting a group is the next batch's")
+            self.assertEqual(self.call(f"/api/groups/{gid}/{action}", "DELETE")[0], 404, action)
+        for action in ("stop", "continue", "drop", "members", "rename"):
+            self.assertEqual(self.call(f"/api/groups/{gid}/{action}")[0], 404, f"reading {action} is not a route")
+            self.assertEqual(self.call(f"/api/groups/{gid}/{action}", "DELETE")[0], 404, action)
+        self.assertEqual(self.call("/api/groups/g-000000000000", "DELETE")[0], 404)
 
     # -- saying something --------------------------------------------------------------------------------------------
 
@@ -177,7 +181,7 @@ class GroupApiTests(unittest.TestCase):
 
     def test_the_body_of_saying_is_strict(self):
         gid, _ = self.make()
-        bad = [{}, {"text": "好"}, {"to": "all"}, {"text": "好", "to": "all", "round": 5}, {"text": "好", "to": [self.writer]},
+        bad = [{}, {"text": "好"}, {"to": "all"}, {"text": "好", "to": "all", "round": 5}, {"text": "好", "to": [self.writer, self.writer]},
                {"text": "好", "to": "all", "launch_mode": "full"}, {"text": "x" * 4001, "to": "all"}, {"text": 5, "to": "all"}]
         for body in bad:
             self.assertEqual(self.call(f"/api/groups/{gid}/messages", "POST", body)[0], 400, body)
@@ -199,6 +203,108 @@ class GroupApiTests(unittest.TestCase):
         self.assertEqual(len([i for i in self.call(f"/api/groups/{gid}")[1]["items"] if i["kind"] == "said"]), 1)
 
     # -- the chat routes ---------------------------------------------------------------------------------------------
+
+    # -- naming, members, the controls, deleting (P41-2) ----------------------------------------------------------------------
+
+    def test_naming_one_asks_only_that_one(self):
+        gid, _ = self.make()
+        status, got = self.call(f"/api/groups/{gid}/messages", "POST", {"text": "會計師，成本多少？", "to": [self.accountant]})
+        self.assertEqual((status, got), (202, {"round": 1}))
+        run = self.runner()
+        self.assertEqual(run.tick(), {gid: f"sent:{self.accountant}"})
+        self.assertEqual(self.daemon.sent[0]["chat_id"], self.call(f"/api/groups/{gid}")[1]["current"]["chat_id"])
+        view = self.call(f"/api/groups/{gid}")[1]
+        self.assertEqual(view["items"][0]["to_names"], ["會計師"])
+        self.assertEqual([(a["profile_id"], a["state"]) for a in view["round"]["asked"]], [(self.accountant, "answering")])
+        for bad in ([], [self.writer, self.writer], ["x"], "everyone", None):
+            self.assertEqual(self.call(f"/api/groups/{gid}/messages", "POST", {"text": "好", "to": bad})[0], 400, bad)
+
+    def test_members_come_and_go_and_the_group_is_renamed(self):
+        gid, _ = self.make(name="市集準備")
+        planner = ap.save_profile(None, {"name": "虛構CEO", "position": "planner", "model": {"tool": "claude"}})["id"]
+        status, got = self.call(f"/api/groups/{gid}/members", "POST", {"add": [planner], "remove": [self.writer]})
+        self.assertEqual(status, 200, got)
+        self.assertEqual([m["name"] for m in got["group"]["members"]], ["會計師", "虛構CEO"])
+        status, got = self.call(f"/api/groups/{gid}/members", "POST", {"add": [self.codex_hand]})
+        self.assertEqual(status, 200, got)
+        self.assertEqual(len(got["notes"]), 1)
+        status, got = self.call(f"/api/groups/{gid}/members", "POST", {"add": [self.writer]})
+        self.assertEqual((status, got["code"]), (400, "bad_request"), "four is too many")
+        self.assertEqual(self.call(f"/api/groups/{gid}/members", "POST", {"remove": [self.accountant, planner]})[0], 400)
+        self.assertEqual(self.call(f"/api/groups/{gid}/members", "POST", {})[0], 400)
+        self.assertEqual(self.call(f"/api/groups/{gid}/members", "POST", {"add": [], "extra": 1})[0], 400)
+        status, got = self.call(f"/api/groups/{gid}/rename", "POST", {"name": "週末市集"})
+        self.assertEqual((status, got["group"]["name"]), (200, "週末市集"))
+        self.assertEqual(self.call(f"/api/groups/{gid}/rename", "POST", {"name": ""})[0], 400)
+        view = self.call(f"/api/groups/{gid}")[1]
+        self.assertEqual((view["group"]["name"], [m["name"] for m in view["members"]]), ("週末市集", ["會計師", "虛構CEO", "Codex會計"]))
+        self.assertEqual([i["kind"] for i in view["items"]], ["member_removed", "member_added", "member_added", "renamed"])
+        self.call(f"/api/groups/{gid}/messages", "POST", {"text": "好", "to": "all"})
+        status, got = self.call(f"/api/groups/{gid}/members", "POST", {"remove": [planner]})
+        self.assertEqual((status, got["code"]), (409, "round_open"))
+
+    def test_stop_continue_and_drop_are_posts_with_nothing_in_them(self):
+        gid, _ = self.make()
+        self.call(f"/api/groups/{gid}/messages", "POST", {"text": "第一句", "to": "all"})
+        run = self.runner()
+        run.tick()
+        self.assertEqual(self.call(f"/api/groups/{gid}/continue", "POST", {})[1]["code"], "not_paused")
+        self.assertEqual(self.call(f"/api/groups/{gid}/drop", "POST", {})[1]["code"], "not_paused")
+        self.assertEqual(self.call(f"/api/groups/{gid}/stop", "POST", {"x": 1})[0], 400)
+        self.assertEqual(self.call(f"/api/groups/{gid}/stop", "POST", raw=b"[1]")[0], 400)
+        self.assertEqual(self.call(f"/api/groups/{gid}/stop", "POST", {}, headers={"X-VBear": None})[0], 403)
+        status, got = self.call(f"/api/groups/{gid}/stop", "POST", {})
+        self.assertEqual((status, got), (200, {"round": 1, "state": "running"}))
+        run.tick()
+        run.tick()
+        view = self.call(f"/api/groups/{gid}")[1]
+        self.assertEqual((view["group"]["state"], view["round"]["how"]), ("idle", "stopped"))
+        self.assertEqual(self.call(f"/api/groups/{gid}/stop", "POST", {})[1]["code"], "not_active")
+
+    def test_a_pause_is_left_by_the_person_only(self):
+        gid, _ = self.make()
+        self.call(f"/api/groups/{gid}/messages", "POST", {"text": "第一句", "to": "all"})
+        run = self.runner()
+        run.tick()
+        self.daemon.finish(self.call(f"/api/groups/{gid}")[1]["current"]["chat_id"], reply="好")
+        run.tick()
+        self.lamp[0] = "red"
+        self.assertEqual(run.tick(), {gid: "paused:daily_limit"})
+        view = self.call(f"/api/groups/{gid}")[1]
+        self.assertEqual(view["round"]["pause"]["reason"], "daily_limit")
+        self.assertEqual({k: view["can"][k] for k in ("stop", "continue", "drop")}, {"stop": True, "continue": True, "drop": True})
+        self.lamp[0] = "green"
+        self.assertEqual(run.tick(), {})
+        self.assertEqual(self.call(f"/api/groups/{gid}/continue", "POST", {})[0], 200)
+        self.assertEqual(run.tick(), {gid: f"sent:{self.accountant}"})
+
+    def test_deleting_a_group_deletes_its_chats_and_the_chat_route_will_not(self):
+        gid, _ = self.make()
+        chats = [m["chat_id"] for m in groups.load(gid)["members"]]
+        status, got = self.call(f"/api/chats/{chats[0]}", "DELETE")
+        self.assertEqual((status, got["code"]), (409, "group_member_chat"))
+        self.assertEqual(self.call(f"/api/groups/{gid}", "DELETE", headers={"X-VBear": None})[0], 403)
+        self.call(f"/api/groups/{gid}/messages", "POST", {"text": "第一句", "to": "all"})
+        status, got = self.call(f"/api/groups/{gid}", "DELETE")
+        self.assertEqual((status, got["code"]), (409, "round_open"))
+        self.call(f"/api/groups/{gid}/stop", "POST", {})
+        self.assertEqual(self.call(f"/api/groups/{gid}", "DELETE"), (200, {"deleted": gid}))
+        self.assertEqual(sorted(self.daemon.deleted), sorted(chats))
+        self.assertEqual(self.call("/api/groups")[1]["groups"], [])
+        self.assertEqual(self.call(f"/api/groups/{gid}")[0], 404)
+
+    def test_the_controls_leave_config_json_as_it_was(self):
+        before = self.config_bytes()
+        gid, _ = self.make()
+        self.call(f"/api/groups/{gid}/members", "POST", {"add": [self.codex_hand]})
+        self.call(f"/api/groups/{gid}/rename", "POST", {"name": "新名字"})
+        self.call(f"/api/groups/{gid}/messages", "POST", {"text": "第一句", "to": "all"})
+        self.runner().tick()
+        self.call(f"/api/groups/{gid}/stop", "POST", {})
+        self.runner().tick()
+        self.runner().tick()
+        self.call(f"/api/groups/{gid}", "DELETE")
+        self.assertEqual(self.config_bytes(), before)
 
     def test_the_chats_of_a_group_are_not_in_the_chat_list_and_cannot_be_spoken_to_from_there(self):
         gid, _ = self.make()

@@ -145,7 +145,9 @@ class SayTests(GroupBase):
         gid = self.make_group()["group"]["id"]
         bad = [{}, {"text": "好"}, {"to": "all"}, {"text": "好", "to": "all", "extra": 1}, {"text": 5, "to": "all"}, {"text": "", "to": "all"},
                {"text": "  \n ", "to": "all"}, {"text": "x" * 4001, "to": "all"}, {"text": "好", "to": "everyone"}, {"text": "好", "to": []},
-               {"text": "好", "to": [self.writer]}, {"text": "好", "to": None}, [], "text", None]
+               {"text": "好", "to": [self.writer, self.writer]}, {"text": "好", "to": [self.planner]}, {"text": "好", "to": ["x"]},
+               {"text": "好", "to": [self.writer, 5]}, {"text": "好", "to": [[self.writer]]}, {"text": "好", "to": {}},
+               {"text": "好", "to": None}, [], "text", None]
         for body in bad:
             with self.assertRaises(groups.GroupError, msg=str(body)) as ctx:
                 self.groups.say(gid, body)
@@ -271,6 +273,315 @@ class RecordTests(GroupBase):
                     {"seq": 1, "at": 1.0, "kind": "mystery"}, {"seq": 1, "at": 1.0, "kind": "continued"}, [], "x"):
             self.assertTrue(groups.log_record_problem(rec), rec)
         self.assertIsNone(groups.log_record_problem({"seq": 1, "at": 1.0, "kind": "skipped", "round": 1, "profile_id": "p", "reason": "busy", "until": None}))
+
+
+class NamedTests(GroupBase):
+    """P41-2: the person names who answers (the @ buttons): a list of members, answered in the order of the group."""
+
+    def setUp(self):
+        super().setUp()
+        self.gid = self.make_group(self.writer, self.accountant, self.planner, name="市集準備")["group"]["id"]
+
+    def test_a_list_of_members_is_the_start_of_a_round_and_is_kept_in_the_order_of_the_group(self):
+        self.assertEqual(self.say(self.gid, "會計師，成本大概多少？", to=[self.planner, self.accountant]), 1)
+        said = groups.read_log(self.gid).records[0]
+        self.assertEqual(said["to"], [self.accountant, self.planner], "the order of the group, not the order they were ticked")
+        view = self.groups.get(self.gid)
+        self.assertEqual(view["items"][0]["to_names"], ["會計師", "虛構CEO"])
+        self.assertEqual([a["profile_id"] for a in view["round"]["asked"]], [self.accountant, self.planner])
+
+    def test_a_member_who_left_cannot_be_named(self):
+        self.groups.members(self.gid, {"remove": [self.planner]})
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.say(self.gid, "好", to=[self.planner])
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(groups.read_log(self.gid).records[-1]["kind"], "member_removed")
+
+    def test_only_the_named_member_is_asked_and_the_next_message_of_the_others_carries_the_words_and_the_reply(self):
+        self.say(self.gid, "會計師，成本大概多少？", to=[self.accountant])
+        self.assertEqual(groups.next_member(groups.load(self.gid), groups.current_round(groups.read_log(self.gid).records))["profile_id"],
+                         self.accountant)
+        self.simulate_turn(self.gid, self.accountant, "大概三千")
+        self.end_round(self.gid)
+        self.say(self.gid, "大家說說各自要準備什麼")
+        message = self.groups.message_for(self.gid, self.writer)
+        self.assertIn("你現在在 VBear 的群組裡", message, "the writer was never asked: the group's words come with the first message")
+        lines = message.split("\n")
+        items = json.loads(json.loads(lines[lines.index(MARK_BEGIN) + 1]))
+        self.assertEqual(items, [{"who": "用的人", "text": "會計師，成本大概多少？", "to": ["會計師"]}, {"who": "會計師", "text": "大概三千"}])
+        self.assertTrue(message.rstrip().endswith("用的人在群組裡對大家說：\n大家說說各自要準備什麼"))
+
+    def test_the_message_to_the_named_one_says_you_and_to_two_of_three_says_their_names(self):
+        self.say(self.gid, "請你算一下", to=[self.accountant])
+        self.assertIn("用的人在群組裡對你說：", self.groups.message_for(self.gid, self.accountant))
+        self.end_round(self.gid)
+        self.say(self.gid, "你們兩位看看", to=[self.writer, self.accountant])
+        self.assertIn("用的人在群組裡對文案小編、會計師說：", self.groups.message_for(self.gid, self.writer))
+
+
+class MemberTests(GroupBase):
+    """P41-2: people join, leave and come back; the name changes. Only between rounds; always 2 to 3 in the group."""
+
+    def setUp(self):
+        super().setUp()
+        self.gid = self.make_group(self.writer, self.accountant, name="市集準備")["group"]["id"]
+
+    def live(self):
+        return [m["profile_id"] for m in groups.active(groups.load(self.gid))]
+
+    def test_adding_a_member_opens_a_chat_puts_her_last_and_says_so_in_the_log(self):
+        before = len(self.daemon.sent)
+        got = self.groups.members(self.gid, {"add": [self.planner]})
+        self.assertEqual(self.live(), [self.writer, self.accountant, self.planner])
+        self.assertEqual(len(set(self.chat_ids(self.gid).values())), 3)
+        self.assertEqual(len(self.daemon.sent), before, "joining starts nothing and costs nothing")
+        self.assertEqual([m["name"] for m in got["group"]["members"]], ["文案小編", "會計師", "虛構CEO"])
+        self.assertEqual(got["notes"], [])
+        self.assertEqual([(r["kind"], r["profile_id"]) for r in groups.read_log(self.gid).records], [("member_added", self.planner)])
+        self.assertIn(self.chat_ids(self.gid)[self.planner], groups.member_chat_ids())
+        self.assertNotIn(self.chat_ids(self.gid)[self.planner], {c["id"] for c in self.service.list({})["chats"]})
+
+    def test_a_codex_member_joining_a_claude_group_says_where_the_words_go(self):
+        got = self.groups.members(self.gid, {"add": [self.codex_hand]})
+        self.assertEqual(len(got["notes"]), 1)
+        self.assertIn("Anthropic", got["notes"][0])
+
+    def test_removing_a_member_keeps_her_chat_in_the_record_and_out_of_the_list(self):
+        self.groups.members(self.gid, {"add": [self.planner]})
+        gone_chat = self.chat_ids(self.gid)[self.accountant]
+        self.groups.members(self.gid, {"remove": [self.accountant]})
+        self.assertEqual(self.live(), [self.writer, self.planner])
+        self.assertIn(gone_chat, groups.member_chat_ids())
+        self.assertEqual(self.daemon.deleted, [])
+        self.assertEqual(groups.read_log(self.gid).records[-1]["kind"], "member_removed")
+        self.assertEqual([m["name"] for m in self.groups.get(self.gid)["members"]], ["文案小編", "虛構CEO"])
+
+    def test_one_change_can_swap_a_member_and_the_result_must_be_two_or_three(self):
+        self.groups.members(self.gid, {"add": [self.planner], "remove": [self.writer]})
+        self.assertEqual(self.live(), [self.accountant, self.planner])
+        for body in ({"remove": [self.accountant]}, {"add": [self.writer, self.codex_hand]}):
+            with self.assertRaises(groups.GroupError, msg=str(body)) as ctx:
+                self.groups.members(self.gid, body)
+            self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(self.live(), [self.accountant, self.planner])
+
+    def test_the_body_is_strict(self):
+        bad = [{}, {"add": []}, {"add": [], "remove": []}, {"add": self.planner}, {"add": [self.planner], "extra": 1},
+               {"add": [self.writer]}, {"remove": [self.planner]}, {"add": [self.planner, self.planner]},
+               {"add": [self.planner], "remove": [self.planner]}, {"add": ["x"]}, {"add": [5]}, {"remove": None}, [], "x", None]
+        for body in bad:
+            with self.assertRaises(groups.GroupError, msg=str(body)) as ctx:
+                self.groups.members(self.gid, body)
+            self.assertEqual(ctx.exception.status, 400, str(body))
+        self.assertEqual((self.live(), groups.read_log(self.gid).records), ([self.writer, self.accountant], []))
+
+    def test_an_unknown_card_or_one_that_cannot_chat_is_refused_with_its_reason(self):
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.members(self.gid, {"add": ["p-0123456789abcdef0123456789abcdef"]})
+        self.assertEqual(ctx.exception.status, 400)
+        ap.save_profile(self.planner, {"name": "虛構CEO", "position": "planner", "model": {"tool": "claude"}, "enabled": False})
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.members(self.gid, {"add": [self.planner]})
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "card_disabled"))
+        self.assertEqual(self.live(), [self.writer, self.accountant])
+
+    def test_no_change_while_a_round_is_on_or_paused(self):
+        self.say(self.gid)
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.members(self.gid, {"add": [self.planner]})
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "round_open"))
+        with groups.log_tx(self.gid) as tx:
+            tx.append("paused", round=1, reason="daily_limit", until=None)
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.members(self.gid, {"add": [self.planner]})
+        self.assertEqual(ctx.exception.code, "round_open")
+        self.end_round(self.gid, "dropped")
+        self.groups.members(self.gid, {"add": [self.planner]})
+        self.assertEqual(self.live(), [self.writer, self.accountant, self.planner])
+
+    def test_coming_back_uses_the_same_chat_and_stands_last(self):
+        self.groups.members(self.gid, {"add": [self.planner]})
+        chat = self.chat_ids(self.gid)[self.writer]
+        self.groups.members(self.gid, {"remove": [self.writer]})
+        self.groups.members(self.gid, {"add": [self.writer]})
+        self.assertEqual(self.live(), [self.accountant, self.planner, self.writer])
+        self.assertEqual(self.chat_ids(self.gid)[self.writer], chat)
+        self.assertEqual(len(groups.load(self.gid)["members"]), 3, "one line for her, not two")
+        self.assertEqual(len(self.daemon.deleted), 0)
+
+    def test_coming_back_after_the_card_changed_its_tool_gets_a_new_chat(self):
+        self.groups.members(self.gid, {"add": [self.planner]})
+        old = self.chat_ids(self.gid)[self.writer]
+        self.groups.members(self.gid, {"remove": [self.writer]})
+        ap.save_profile(self.writer, {"name": "文案小編", "position": "social", "model": {"tool": "codex"}})
+        got = self.groups.members(self.gid, {"add": [self.writer]})
+        new = self.chat_ids(self.gid)[self.writer]
+        self.assertNotEqual(new, old)
+        self.assertEqual({old, new} <= groups.member_chat_ids(), True, "the old chat is still the group's, out of the list")
+        self.assertEqual(len(got["notes"]), 1)
+
+    def test_a_member_who_joined_later_gets_the_groups_words_and_what_was_said_before(self):
+        self.say(self.gid, "我想賣手工皂")
+        self.simulate_turn(self.gid, self.writer, "先拍照")
+        self.simulate_turn(self.gid, self.accountant, "成本三千")
+        self.end_round(self.gid)
+        self.groups.members(self.gid, {"add": [self.planner]})
+        self.say(self.gid, "新同事怎麼看？", to=[self.planner])
+        message = self.groups.message_for(self.gid, self.planner)
+        self.assertIn("你現在在 VBear 的群組裡", message)
+        lines = message.split("\n")
+        items = json.loads(json.loads(lines[lines.index(MARK_BEGIN) + 1]))
+        self.assertEqual([(i["who"], i["text"]) for i in items], [("用的人", "我想賣手工皂"), ("文案小編", "先拍照"), ("會計師", "成本三千")])
+
+    def test_a_new_chat_after_a_tool_change_gets_the_groups_words_again(self):
+        self.say(self.gid, "第一句")
+        self.simulate_turn(self.gid, self.writer, "好")
+        self.simulate_turn(self.gid, self.accountant, "好的")
+        self.end_round(self.gid)
+        self.groups.members(self.gid, {"add": [self.planner], "remove": [self.writer]})
+        ap.save_profile(self.writer, {"name": "文案小編", "position": "social", "model": {"tool": "codex"}})
+        self.groups.members(self.gid, {"add": [self.writer], "remove": [self.planner]})
+        self.say(self.gid, "第二句", to=[self.writer])
+        message = self.groups.message_for(self.gid, self.writer)
+        self.assertIn("你現在在 VBear 的群組裡", message, "a new chat has not seen the groups words")
+        lines = message.split("\n")
+        items = json.loads(json.loads(lines[lines.index(MARK_BEGIN) + 1]))
+        self.assertEqual(items[0], {"who": "用的人", "text": "第一句"}, "and has not seen the talk either")
+
+    def test_too_many_comings_and_goings_ask_for_a_new_group(self):
+        for i in range(20):
+            ap.save_profile(self.planner, {"name": "虛構CEO", "position": "planner", "model": {"tool": ("codex", "claude")[i % 2]}})
+            try:
+                self.groups.members(self.gid, {"add": [self.planner]})
+            except groups.GroupError as exc:
+                self.assertEqual(exc.status, 409)
+                self.assertIn("新的群組", str(exc))
+                break
+            self.groups.members(self.gid, {"remove": [self.planner]})
+        else:
+            self.fail("the record of a group has a limit")
+        self.assertLessEqual(len(groups.load(self.gid)["members"]), groups.MAX_HISTORY)
+        self.assertEqual(self.live(), [self.writer, self.accountant])
+
+    def test_renaming(self):
+        got = self.groups.rename(self.gid, {"name": "  週末市集  "})
+        self.assertEqual(got["group"]["name"], "週末市集")
+        self.assertEqual(groups.load(self.gid)["name"], "週末市集")
+        self.assertEqual((groups.read_log(self.gid).records[-1]["kind"], groups.read_log(self.gid).records[-1]["name"]), ("renamed", "週末市集"))
+        self.say(self.gid)
+        self.groups.rename(self.gid, {"name": "改名也可以在說話時"})
+        self.assertIn("改名也可以在說話時", self.groups.message_for(self.gid, self.writer))
+        for bad in ({}, {"name": ""}, {"name": "  "}, {"name": "x" * 41}, {"name": "a\nb"}, {"name": 5}, {"name": "好", "extra": 1}, [], None):
+            with self.assertRaises(groups.GroupError, msg=str(bad)) as ctx:
+                self.groups.rename(self.gid, bad)
+            self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(groups.load(self.gid)["name"], "改名也可以在說話時")
+
+    def test_a_log_that_does_not_read_back_blocks_the_change(self):
+        with open(groups.group_folder(self.gid) / groups.LOG, "ab") as fh:
+            fh.write(b"not json\n")
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.members(self.gid, {"add": [self.planner]})
+        self.assertEqual(ctx.exception.code, "damaged")
+        with self.assertRaises(groups.GroupError):
+            self.groups.rename(self.gid, {"name": "新名字"})
+        self.assertEqual(self.live(), [self.writer, self.accountant])
+
+
+class CanTests(GroupBase):
+    def setUp(self):
+        super().setUp()
+        self.gid = self.make_group(self.writer, self.accountant, name="市集準備")["group"]["id"]
+
+    def can(self):
+        can = self.groups.get(self.gid)["can"]
+        return {k: can[k] for k in ("send", "stop", "continue", "drop", "edit_members", "delete")}
+
+    def test_a_paused_round_can_be_stopped_continued_or_dropped_and_nothing_else(self):
+        self.say(self.gid)
+        with groups.log_tx(self.gid) as tx:
+            tx.append("paused", round=1, reason="daily_limit", until=None)
+        self.assertEqual(self.can(), {"send": False, "stop": True, "continue": True, "drop": True, "edit_members": False, "delete": False})
+
+    def test_a_group_whose_log_does_not_read_back_can_only_be_deleted(self):
+        with open(groups.group_folder(self.gid) / groups.LOG, "ab") as fh:
+            fh.write(b"not json\n")
+        self.assertEqual(self.can(), {"send": False, "stop": False, "continue": False, "drop": False, "edit_members": False, "delete": True})
+
+    def test_a_red_lamp_blocks_sending_only(self):
+        self.lamp[0] = "red"
+        self.assertEqual(self.can(), {"send": False, "stop": False, "continue": False, "drop": False, "edit_members": True, "delete": True})
+
+
+class DeleteTests(GroupBase):
+    def setUp(self):
+        super().setUp()
+        self.gid = self.make_group(self.writer, self.accountant, name="市集準備")["group"]["id"]
+
+    def test_deleting_a_group_deletes_its_chats_and_the_record_and_what_it_spent_still_counts(self):
+        self.groups.members(self.gid, {"add": [self.planner], "remove": [self.accountant]})
+        chats = set(m["chat_id"] for m in groups.load(self.gid)["members"])
+        self.assertEqual(len(chats), 3)
+        self.say(self.gid)
+        self.simulate_turn(self.gid, self.writer, "好")
+        self.end_round(self.gid)
+        spent = cs.day_spent(self.groups.base(), self.now[0])
+        self.assertGreater(spent, 0)
+        self.assertEqual(self.groups.delete(self.gid), {"deleted": self.gid})
+        self.assertEqual(set(self.daemon.deleted), chats, "the chat of a member who left goes too")
+        self.assertEqual((groups.record_ids(), self.groups.list()["groups"], groups.member_chat_ids()), ([], [], set()))
+        self.assertFalse((self.groups.base() / "groups" / self.gid).exists())
+        self.assertEqual(cs.day_spent(self.groups.base(), self.now[0]), spent, "what was spent is still spent")
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.get(self.gid)
+        self.assertEqual(ctx.exception.status, 404)
+
+    def test_a_chat_of_a_group_cannot_be_deleted_from_the_chat_route_but_the_group_deletes_it(self):
+        chat_id = self.chat_ids(self.gid)[self.writer]
+        with self.assertRaises(ApiError) as ctx:
+            self.service.delete(chat_id)
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "group_member_chat"))
+        self.assertEqual(self.daemon.deleted, [])
+        self.groups.delete(self.gid)
+        self.assertIn(chat_id, self.daemon.deleted)
+        solo = self.service.create({"profile_id": self.planner})["chat"]["id"]
+        self.assertEqual(self.service.delete(solo), {"deleted": solo}, "an ordinary chat is deleted as before")
+
+    def test_not_while_a_round_is_on_or_paused(self):
+        self.say(self.gid)
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.delete(self.gid)
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "round_open"))
+        with groups.log_tx(self.gid) as tx:
+            tx.append("paused", round=1, reason="daily_limit", until=None)
+        with self.assertRaises(groups.GroupError):
+            self.groups.delete(self.gid)
+        self.assertEqual((self.daemon.deleted, groups.record_ids()), ([], [self.gid]))
+
+    def test_a_chat_that_is_still_busy_stops_everything_before_anything_is_deleted(self):
+        self.say(self.gid)
+        self.end_round(self.gid, "stopped")
+        chat = self.chat_ids(self.gid)[self.accountant]
+        self.service.send_for_group(chat, "還在回答的一句")          # a turn that is open in the second member's chat
+        with self.assertRaises(groups.GroupError) as ctx:
+            self.groups.delete(self.gid)
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (409, "busy"))
+        self.assertEqual((self.daemon.deleted, groups.record_ids()), ([], [self.gid]), "not even the first chat was deleted")
+        self.daemon.finish(chat, reply="好")
+        self.groups.delete(self.gid)
+        self.assertEqual(len(self.daemon.deleted), 2)
+
+    def test_a_chat_that_is_already_gone_does_not_stop_the_deletion(self):
+        chat = self.chat_ids(self.gid)[self.writer]
+        self.service.delete_for_group(chat)
+        self.groups.delete(self.gid)
+        self.assertEqual(groups.record_ids(), [])
+
+    def test_a_log_that_does_not_read_back_can_still_be_deleted(self):
+        with open(groups.group_folder(self.gid) / groups.LOG, "ab") as fh:
+            fh.write(b"not json\n")
+        self.groups.delete(self.gid)
+        self.assertEqual((groups.record_ids(), len(self.daemon.deleted)), ([], 2))
 
 
 class MessageTests(GroupBase):
@@ -420,8 +731,8 @@ class ViewTests(GroupBase):
         self.assertEqual((view["items"], view["round"], view["current"]), ([], None, None))
         self.assertEqual((view["cost"]["per_turn_usd"], view["cost"]["day_left_usd"], view["cost"]["lamp"]), ("0.5", "2.5", "green"))
         self.assertTrue(view["can"]["send"])
-        self.assertFalse(any(view["can"][k] for k in ("stop", "continue", "drop", "edit_members", "delete")),
-                         "the buttons that need the next batch are not offered")
+        self.assertEqual({k: view["can"][k] for k in ("stop", "continue", "drop", "edit_members", "delete")},
+                         {"stop": False, "continue": False, "drop": False, "edit_members": True, "delete": True})
 
     def test_a_round_in_progress_shows_who_is_asked_and_blocks_sending(self):
         self.say(self.gid, "我想賣手工皂")
@@ -429,6 +740,8 @@ class ViewTests(GroupBase):
         self.assertEqual((view["group"]["state"], view["round"]["n"], view["round"]["state"], view["round"]["to"]), ("running", 1, "running", "all"))
         self.assertEqual([(a["profile_id"], a["state"]) for a in view["round"]["asked"]], [(self.writer, "waiting"), (self.accountant, "waiting")])
         self.assertFalse(view["can"]["send"])
+        self.assertEqual({k: view["can"][k] for k in ("stop", "continue", "drop", "edit_members", "delete")},
+                         {"stop": True, "continue": False, "drop": False, "edit_members": False, "delete": False})
         self.assertEqual([(i["kind"], i["text"]) for i in view["items"]], [("said", "我想賣手工皂")])
         self.simulate_turn(self.gid, self.writer, "好主意")
         view = self.groups.get(self.gid)
