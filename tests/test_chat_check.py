@@ -19,6 +19,7 @@ from unittest import mock
 
 from vbear import admin_policy, boundary_check, chat_check, claude_verify, config as cfg
 from vbear.runtime import chat_protocol as cp, chat_session, cli_versions
+from tests import leftover
 
 REPO = str(Path(__file__).resolve().parent.parent)
 VERSION = "2.1.318"
@@ -32,6 +33,7 @@ class CheckCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbk-", dir="/tmp")))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(leftover.assert_clean, self.tmp)             # the check's own daemon and employee are gone
         self.state = self.tmp / "st"
         self.state.mkdir(mode=0o700)
         self.home = self.tmp / "home"

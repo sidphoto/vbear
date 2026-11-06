@@ -624,6 +624,11 @@ class StreamTests(ApiCase):
         self.assertEqual(got[-1]["code"], "not_found")
 
 
+class NoRuntimeOfItsOwnTests(ApiCase):
+    def test_the_console_in_front_of_the_case_daemon_never_starts_a_daemon_itself(self):
+        self.assertFalse(self.console.runtime.autostart)
+
+
 class WithoutTheDaemonTests(ApiCase):
     def test_the_record_is_still_readable_and_sending_says_the_runtime_is_away(self):
         self.configure([clean("ask", 4)])

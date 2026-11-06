@@ -176,6 +176,11 @@ class CodexChatThroughHttpTests(ApiCase):
         self.assertTrue(copy.exists(), "Codex's own copy is not VBear's to delete (said in the confirmation)")
 
 
+class NoRuntimeOfItsOwnTests(ApiCase):
+    def test_the_console_in_front_of_the_case_daemon_never_starts_a_daemon_itself(self):
+        self.assertFalse(self.console.runtime.autostart)
+
+
 class CardGateTests(ApiCase):
     def test_a_card_of_a_tool_that_cannot_chat_is_refused_and_says_which_and_what_can(self):
         for tool, label in (("grok", "Grok"), ("agy", "AGY"), ("shared", "共用")):
