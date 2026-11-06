@@ -324,6 +324,44 @@ builds nodes with `el()` and `textContent` only. `tests/test_autonomy_guard.py` 
 calling anything that changes a limit, starts a terminal or full mode, or installs a skill; `tools/qa_p40.py` is the coordinator's
 real-machine check through the HTTP API.
 
+## Group chats — `vbear/groups.py`, `vbear/group_runner.py`, `web/app.js` (`#/chat/group/<id>`)
+
+A group is two or three employees the person talks to together (the 聊天 page, 開新群組). It is built on chats and adds nothing to
+the runtime: `vbear/runtime/` is the same as in v0.15.0. `Groups.create` makes one chat per member with `ChatService.create` (nothing
+is started or spent) and a folder `<state>/groups/g-<12 hex>/` with `group.json` (name, members in the order of the answers, and
+each member's chat; `GuardedJsonStore`, 0600, 64 KiB) and `log.jsonl` (append-only, each line synced, 8 MiB; kinds `said`,
+`turn_intent`, `turn_sent`, `turn_ended`, `skipped`, `paused`, `continued`, `round_ended`, `member_added`, `member_removed`,
+`renamed`). An employee's reply is not stored there: the group page reads it from the member's chat by the `chat_id` and `turn` that
+`turn_sent` names (`Groups.scan`, cached per chat). A round (what one sentence of the person causes) is derived from the log on every
+pass (`current_round`, `round_state`, `next_member`), so a restart goes on by reading.
+
+The one thing that starts a round is `POST /api/groups/<id>/messages {text, to}` (`Groups.say`, which writes `said` under the log's
+`flock`); `to` is `"all"` or a list of members, kept in the group's order. `GroupRunner` (`group_runner.py`, a thread started by
+`serve()`, one pass every 2 seconds, lock file `group-runner.lock`; shaped like `DispatchRunner` and sharing no code with it) asks the
+members one at a time: it writes `turn_intent`, sends `Groups.message_for` with `ChatService.send_for_group` (the same `_send` as a
+person's, no `origin`, only to a chat a group opened), writes `turn_sent`, waits for the chat's `turn_ended` and writes `turn_ended`
+with the cost the chat recorded. `build_message` is the fixed group words the first time, then what was said since this employee last
+spoke as one JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING` (6 KiB for an item, 12 KiB in all, 30 KiB for
+the message), then the person's words outside the markers. It pauses (`daily_limit` with the next local midnight, `spend_unknown`,
+`uncertain` after a restart, `violation`, or a chat's code) or leaves one employee out (`skipped`: `plan_limit`, `busy` after three
+minutes of trying every ten seconds, the chat's code for a card or tool it will not run); `groups.PAUSE_TEXT` and `groups.SKIP_TEXT`
+turn those into words. 繼續, 不用了 and 停止 are `Groups.resume`, `drop` and `stop` (`POST /api/groups/<id>/continue|drop|stop`, body
+`{}`); the runner carries out what 停止 leaves. Members change with `POST …/members {add, remove}` (between rounds; two or three
+remain; someone who comes back keeps her chat unless the card's tool changed), the name with `POST …/rename`, and
+`DELETE /api/groups/<id>` deletes the chats (`ChatService.delete_for_group`) and then the folder. The browser's chat routes refuse a
+group's chat (`group_member_chat`) and `GET /api/chats` leaves it out; `ChatService.get` carries `group` (`{id, name}` or `null`) so
+a chat page opened by an old link can say which group it belongs to. A card that waits for the person is answered by the chat's own
+`POST /api/chats/<chat_id>/answer`; no route of a group answers.
+
+The page (`web/app.js`, `viewGroup` and the group helpers) draws the list rows among the chats, the dialog for a new group, the
+group page (the members in the order of the answers, the conversation, the @ buttons, the cost line, the words being written and an
+allow card under the employee who asks, which is `chatCardNode` itself, 停止, 繼續, 不用了, members, rename, delete) and the lobby's
+輪到你 entries; it polls `GET /api/groups/<id>?after=<seq>` and, only while someone is answering, the live part of that member's chat
+(`GET /api/chats/<chat_id>?after=999999999`). It builds nodes with `el()` and `textContent` only. `tests/test_autonomy_guard.py` scans
+`vbear/group*.py` with the chief of staff's modules and, for groups, also fails on any call of `answer`; `tests/test_group_flow.py`
+walks a group over the real HTTP routes with a fake daemon; `tools/qa_p41.py` is the coordinator's real-machine check through the HTTP
+API (it needs `--state`, refuses `~/.vbear` and ports 7788 and 7789).
+
 ## Start-up page — `vbear/ai_tool_status.py`, `web/app.js` (`#/setup`)
 
 `ai_tool_status.report(conf)` answers, for each tool in `ai_tools.setup_ids()` (a hidden one only while its switch is on),

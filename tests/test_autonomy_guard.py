@@ -1,14 +1,18 @@
-"""P40-2: the three things the chief of staff and the dispatch code never do, kept by the structure of the code (ADR 0003, 0006).
+"""P40-2, P41-1: the things the chief of staff, the dispatch code and the group code never do, kept by the structure of the code
+(ADR 0003, 0006, 0007).
 
 Never, whatever the person ticked in 「自己動手」:
   1. raise the daily limit (or any limit): no module here writes config.json;
   2. start a worker in full mode or open a terminal: no module here reaches the launch code, and every card it saves is safe mode;
-  3. install a skill from the network: no module here reaches the skill code, and every card it saves has no skill.
+  3. install a skill from the network: no module here reaches the skill code, and every card it saves has no skill;
+  4. (P41-1) answer a question of a chat for the person: no module here calls the chat service's ``answer`` (or the daemon's
+     ``chat_answer``, or names the route that does). Only the person's own press of 「允許這一次」 does, through the browser.
   (and 「自己動手」 itself is only ever turned on by the person, through POST /api/settings/autonomy)
 
-The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py`` and ``vbear/autonomy.py``
-that exists, so the chief of staff's and dispatch's later modules are held to it the day they are added. The rules are below, as a
-table; the tests at the bottom run the scan on small made-up sources to show each rule fires, so the scan cannot go quiet.
+The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py`` and
+``vbear/autonomy.py`` that exists, so the later modules of the chief of staff, of dispatch and of groups are held to it the day they
+are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
+so the scan cannot go quiet.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
-PATTERNS = ("chief*.py", "dispatch*.py", "autonomy.py")
+PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py")
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -60,7 +64,9 @@ CONFIG_MODULE = "config"
 # the cards saved here: these keys must be a safe mode / no skill, written out
 CARD_KEYS = {"launch_mode": lambda v: isinstance(v, ast.Constant) and v.value == "safe",
              "equipped_skill_ids": lambda v: isinstance(v, ast.List) and not v.elts}
-BANNED_STRINGS = ("/api/native/", "/api/settings/autonomy", "/api/config", "/api/setup/daily-limit", "acceptForSession")
+BANNED_STRINGS = ("/api/native/", "/api/settings/autonomy", "/api/config", "/api/setup/daily-limit", "acceptForSession", "/answer")
+# 4. answering a card of a chat: the chat service's method, the daemon's op, in a call, a reference, an import or a string
+ANSWER_NAMES = {"answer": "answers a question of a chat for the person", "chat_answer": "the daemon's answer to a question of a chat"}
 
 
 def scanned_files() -> list[Path]:
@@ -117,6 +123,9 @@ def scan_source(source: str, label: str = "<source>") -> list[str]:
                 why = _banned_module(name)
                 if why:
                     add(node, f"imports {name}: {why}")
+            for a in node.names:
+                if a.name in ANSWER_NAMES:
+                    add(node, f"imports {a.name}: {ANSWER_NAMES[a.name]}")
             if isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name in ("vbear.config", CONFIG_MODULE):
@@ -132,11 +141,15 @@ def scan_source(source: str, label: str = "<source>") -> list[str]:
                     if a.name in BANNED_CALLS:
                         add(node, f"imports {a.name}: {BANNED_CALLS[a.name]}")
     for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in ANSWER_NAMES:
+            add(node, f"uses .{node.attr}: {ANSWER_NAMES[node.attr]}")
         if isinstance(node, ast.Call):
             fn = node.func
             name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
             if name in BANNED_CALLS:
                 add(node, f"calls {name}: {BANNED_CALLS[name]}")
+            if isinstance(fn, ast.Name) and fn.id in ANSWER_NAMES:
+                add(node, f"calls {fn.id}: {ANSWER_NAMES[fn.id]}")
             if isinstance(fn, ast.Name) and fn.id in config_saves:
                 add(node, "calls config.save: writes config.json")
             if (isinstance(fn, ast.Attribute) and fn.attr == "save" and isinstance(fn.value, ast.Name)
@@ -158,16 +171,23 @@ def scan_source(source: str, label: str = "<source>") -> list[str]:
             for bad in BANNED_STRINGS:
                 if bad in node.value:
                     add(node, f"names {bad}")
+            if node.value in ANSWER_NAMES:
+                add(node, f"names {node.value}: {ANSWER_NAMES[node.value]}")
     return found
 
 
 class GuardOverTheRealModules(unittest.TestCase):
-    def test_the_scan_covers_the_module_that_exists_and_every_chief_and_dispatch_module(self):
+    def test_the_scan_covers_the_module_that_exists_and_every_chief_dispatch_and_group_module(self):
         names = [p.name for p in scanned_files()]
         self.assertIn("autonomy.py", names)
         for path in PACKAGE.iterdir():
-            if path.suffix == ".py" and (path.name.startswith("chief") or path.name.startswith("dispatch")):
-                self.assertIn(path.name, names, "a chief or dispatch module the scan does not cover")
+            if path.suffix == ".py" and path.name.startswith(("chief", "dispatch", "group")):
+                self.assertIn(path.name, names, "a chief, dispatch or group module the scan does not cover")
+
+    def test_the_groups_modules_are_there_to_be_scanned(self):
+        names = [p.name for p in scanned_files()]
+        self.assertIn("groups.py", names)
+        self.assertIn("group_runner.py", names)
 
     def test_no_module_breaks_a_rule(self):
         problems: list[str] = []
@@ -232,6 +252,16 @@ class ScanFiresOnEachRule(unittest.TestCase):
         self.assertCaught("def f(ap, ids):\n    ap.save_profile(equipped_skill_ids=ids)\n", "equipped_skill_ids")
         self.assertCaught("CARD = {'equipped_skill_ids': ['s-1']}\n", "equipped_skill_ids")
 
+    def test_answering_a_question_of_a_chat_for_the_person(self):
+        self.assertCaught("def f(chats, body):\n    return chats.answer('c-1', body)\n", "answer")
+        self.assertCaught("def f(svc):\n    reply = svc.answer\n    return reply\n", ".answer")
+        self.assertCaught("def f(svc):\n    return getattr(svc, 'answer')\n", "answer")
+        self.assertCaught("from .chat_service import answer\n", "answer")
+        self.assertCaught("def f(svc):\n    return svc._call('chat_answer', chat_id='c-1')\n", "chat_answer")
+        self.assertCaught("def f(svc):\n    return svc.chat_answer('c-1')\n", "chat_answer")
+        self.assertCaught("URL = '/api/chats/c-1/answer'\n", "/answer")
+        self.assertCaught("def f(answer):\n    return answer('x')\n", "answer")
+
     def test_what_is_allowed_is_clean(self):
         clean = (
             "from . import agent_profiles as ap, autonomy, config as cfg, meetings\n"
@@ -241,6 +271,10 @@ class ScanFiresOnEachRule(unittest.TestCase):
             "    limits = cfg.load()\n"
             "    on = autonomy.read(conf)\n"
             "    return ap.save_profile({'launch_mode': 'safe', 'equipped_skill_ids': []}), ap.save_profile(launch_mode='safe', equipped_skill_ids=[])\n"
+            "def g(chats, chat_id, text):\n"
+            "    got = chats.get(chat_id, 0)\n"
+            "    chats.send_for_group(chat_id, text)\n"
+            "    return got, chats.stop(chat_id, {}), chats.close(chat_id), 'The answer never came'\n"
         )
         self.assertEqual(scan_source(clean), [])
 

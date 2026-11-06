@@ -45,6 +45,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A meeting is kept short: a speaker thinks at low effort and the CEO at medium, and it runs at most 15 minutes by default, the last three kept for the CEO. A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Staffing meeting** | A **staffing meeting** (組隊會議, `#/staffing`): for one task card the positions say who and which skills it needs, each once and alone, then the CEO card writes a staffing proposal (the four places, the staff to bring to a meeting, new cards to make, the skills of each card and the skills missing). You change it as a draft, then adopt it with 照草稿採用, one button per step in a fixed order (啟用, 建新卡, 插技能, 帶到隊伍, 帶去開會, 記下). VBear makes no card, inserts no skill and saves no team by itself | 請 CEO 組隊 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Chat** | A **chat** (聊天, `#/chat`): you talk one-to-one with a role card whose tool is Claude Code or Codex and which is on, through your own Claude Code or Codex, in the card's own work folder. A command, an edit or a write waits for a permission card that you allow once, refuse or change first (with Codex, 改內容再問: VBear refuses the original and Codex asks again); there is no 「allow every time」. It spends your usage (Codex: your ChatGPT plan, counted by VBear as an estimate), and a Claude Code or Codex version can chat only after it has passed the chat check on your Mac | 聊天; the 聊天 button on a role card |
+| **Group** | A **group** (群組, `#/chat/group/<id>`): in the 聊天 page you open a group with two or three employees (Claude Code or Codex) and talk to them together like a LINE group. You say something to 「大家」 (everyone) or press the @ buttons to name some (點名); the employees asked answer one after the other, in the order of the group, and each sees what the ones before said (as data, not as instructions). Only you start an answer: what an employee writes never calls another. Each employee is a chat of its own, so every command and file change is still asked of you, and the page says before you send how many answer and the most it can cost | The 聊天 page and the group page |
 | **Chief of staff** | The **chief of staff** (幕僚長) and the **dispatch** (派工): from the CEO's chat page it proposes who does what; after your one confirmation VBear sends the steps to your employees, one chat per step, and asks you at every command and file change as in any chat | The CEO's chat page, `#/dispatch`, and 「AI 自己做了什麼」 (`#/actions`) |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
@@ -338,6 +339,21 @@ every dispatch, and 「AI 自己做了什麼」 (`#/actions`) lists every single
 自己動手 item 1 or 2, or VBear. In the settings, 自己動手 has two items, both off by default: the chief of staff may make new employees by itself,
 and may start a clean proposal by itself. A message that was sent cannot be taken back.
 
+**Talk to several employees in a group.**
+In the 聊天 page, 開新群組 makes a group of two or three employees who can chat (Claude Code or Codex) and costs nothing. In the group you say
+something to 「大家」 or press the @ buttons (or start the sentence with @name) to name some; the page says before you send how many will answer, the
+most it can cost and what is left today, and it cannot be sent on a red lamp. The employees asked answer one after the other, in the order
+shown, and each is given what was said in the group since it last spoke, marked as data and not as an instruction. Employees do not see each
+other's files, only what was said. An employee's reply never makes another employee answer, even if it says @someone: only your sentence
+starts a round, and you can press 停止 at any time. Each employee is a chat of its own, so every command and every file change is asked of
+you on a permission card under that employee's name, one at a time (there is no 「allow all」), and the per-turn limit and the daily limit
+hold. If the daily limit is reached in the middle of a round, the round pauses and says so (the limit is counted afresh at 0:00 local time tomorrow); 繼續
+asks the ones who have not answered and 不用了 ends the round, and nothing goes on by itself. In a group with both Claude Code and
+Codex employees the conversation goes to both Anthropic and OpenAI (the dialog says so), and a Codex command you allow may run outside
+its sandbox. A group is not a 會議 (written opinions, the CEO decides) and not a 派工 (steps for the chief of staff to arrange); the page says
+so at the top. Deleting a group deletes the chats it opened; what was spent stays counted. See
+[the security model](docs/SECURITY-MODEL.md#group-chats-v016).
+
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
 `127.0.0.1` only. The agents you launch talk to their own providers under your own login, as they would without VBear;
@@ -363,6 +379,10 @@ a meeting or a skill translation is sent the same way, through your own Claude C
   after one confirmation.** A step's reply goes on to the next step as data, which is a way for a hostile text to steer the next employee, and
   a command you allow can reach VBear's own access token and API. Every command and file change is still asked of you. See
   [the security model](docs/SECURITY-MODEL.md#chief-of-staff-and-dispatch-v015).
+- **A group sends what you and the employees say to every employee in it, and so to Anthropic and, with a Codex employee, to OpenAI; it spends your usage.**
+  What one employee writes is given to the next as data, which is a way for a hostile text to steer the next employee, and one sentence to
+  「大家」 can make several permission cards in a row; a command you allow can reach VBear's own access token and API. Every command and file change is still asked of you, and
+  VBear never answers a card for you. See [the security model](docs/SECURITY-MODEL.md#group-chats-v016).
 - **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
 - **Deleting a flow cannot be undone.**
 - **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →

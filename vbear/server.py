@@ -66,6 +66,7 @@ from . import role_departments
 from . import translations
 from . import chief, chief_runner as chief_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
+from . import groups as groups_mod, group_runner as group_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -132,6 +133,8 @@ STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|ret
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
+# /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
+GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue|drop|members|rename))?\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -290,6 +293,20 @@ class Console:
     def dispatch_runner(self):
         self.dispatcher()
         return self._dispatch_runner
+
+    def group_service(self):
+        """The one groups service (P41-1), built on first use. Its chats are the chat service's and its ledger the day's, shared with
+        the chats and the meetings."""
+        with self.lock:
+            if "_groups" not in self.__dict__:
+                self._groups = groups_mod.Groups(chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf),
+                                                 conf=lambda: self.store.conf)
+                self._group_runner = group_runner_mod.GroupRunner(self._groups)       # its thread is started by serve() only
+            return self._groups
+
+    def group_runner(self):
+        self.group_service()
+        return self._group_runner
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -669,6 +686,16 @@ def make_handler(console: Console):
                     if found.group(2) == "stream":
                         return self._chat_stream(found.group(1), after)
                     return self._chat_action(lambda: console.chat_service().get(found.group(1), after))
+                if path == "/api/groups":
+                    return self._group_call("list")
+                if path.startswith("/api/groups/"):
+                    found = GROUP_RE.match(path)
+                    if not found or found.group(2):
+                        return self._error(404, "not found")
+                    after = self._chat_after(url.query)
+                    if after is None:
+                        return self._error(400, "after 必須是非負整數")
+                    return self._group_call("get", found.group(1), None, after)
                 if path in ("/api/chief", "/api/chief/preview"):
                     if path == "/api/chief":
                         return self._chief_call("list")
@@ -885,6 +912,13 @@ def make_handler(console: Console):
                     svc, chat_id, body = console.chat_service(), found.group(1), self._body_strict()
                     call = {"messages": svc.send, "answer": svc.answer, "stop": svc.stop}[action]
                     return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
+                if path == "/api/groups":
+                    return self._group_call("create", None, self._body_strict())
+                if path.startswith("/api/groups/"):
+                    found = GROUP_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._group_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/chief":
                     return self._chief_call("start", None, self._body_strict())
                 if path.startswith("/api/chief/"):
@@ -1107,6 +1141,11 @@ def make_handler(console: Console):
                     if not found or found.group(2):
                         return self._error(404, "not found")
                     return self._chat_action(lambda: console.chat_service().delete(found.group(1)))
+                if path.startswith("/api/groups/"):
+                    found = GROUP_RE.match(path)
+                    if not found or found.group(2):
+                        return self._error(404, "not found")
+                    return self._group_call("delete", found.group(1))
                 if path.startswith("/api/tasks/"):
                     task_id = path[len("/api/tasks/"):]
                     ok = tasks.delete_task(task_id)
@@ -2079,6 +2118,41 @@ def make_handler(console: Console):
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
 
+        def _group_call(self, action, group_id=None, body=None, after=0):
+            """The group endpoints (P41-1, P41-2). Reads run nothing; making a group, or adding a member, opens a chat (nothing is
+            started, nothing is spent); the person's words start a round and the group runner asks the employees; 「停止」, 「繼續」 and
+            「不用了」 are the person's presses and nothing else (the runner never goes on by itself); deleting a group deletes its chats.
+            The errors are the group's own, or the chat service's, with their statuses; nothing here carries what was said into a
+            message."""
+            try:
+                svc = console.group_service()
+                if action == "list":
+                    return self._json(svc.list())
+                if action == "get":
+                    return self._json(svc.get(group_id, after))
+                if action == "create":
+                    return self._json(svc.create(body))
+                if action == "messages":
+                    return self._json(svc.say(group_id, body), 202)
+                if action == "members":
+                    return self._json(svc.members(group_id, body))
+                if action == "rename":
+                    return self._json(svc.rename(group_id, body))
+                if action in ("stop", "continue", "drop"):
+                    if body != {}:
+                        raise groups_mod.GroupError("bad_request", "這個動作不需要內容。")
+                    call = {"stop": svc.stop, "continue": svc.resume, "drop": svc.drop}[action]
+                    return self._json(call(group_id))
+                if action == "delete":
+                    return self._json(svc.delete(group_id))
+                return self._error(404, "not found")
+            except groups_mod.GroupError as exc:
+                return self._json({"code": exc.code, "error": str(exc), **exc.extra}, exc.status)
+            except ApiError as exc:
+                return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
+            except agent_profiles.AgentProfileStorageError:
+                return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
+
         def _dispatch_call(self, action, dispatch_id=None, body=None):
             """The dispatch endpoints (P40-3, P40-4). Reads run nothing; confirming makes the new employees and the task card (safe
             mode, no skill); the steps are sent by the dispatch runner, and stop and continue are carried out by it. The errors
@@ -2568,6 +2642,9 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     dispatch_runner = console.dispatch_runner()
     if not dispatch_runner.start():
         print(f"提示：這個主控台不執行派工（{dispatch_runner.last_error}）", flush=True)
+    group_runner = console.group_runner()
+    if not group_runner.start():
+        print(f"提示：這個主控台不執行群組（{group_runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         threading.Timer(0.4, lambda: open_in_browser(port)).start()
@@ -2582,6 +2659,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     finally:
         console.runner.stop()
         dispatch_runner.close()
+        group_runner.close()
         if console._previews is not None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit
