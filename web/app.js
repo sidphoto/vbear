@@ -2236,6 +2236,7 @@ async function viewHome() {
 // never re-derives it from the phase); boardKey is made of exactly what the board shows, so a 5-second refresh
 // repaints only when something visible changed.
 const BOARD_IN_PROGRESS_MAX = 4;
+const BOARD_MISSING_MAX = 20;      // of the folded flows whose task card cannot be read
 let boardShownKey = null;
 let boardFirstGame = false;   // set by the home page: the first game is still on, so the workbench button is not the main one
 
@@ -2267,14 +2268,18 @@ function boardGroups(live, flowsData, meetingsData, staffingData) {
   const open = flows.filter((f) => !(f.phase && f.phase.key === "done"));
   const yourTurnFlows = open.filter(waitsForYou);
   const rest = open.filter((f) => !waitsForYou(f));
+  // P38-8: a flow whose task card is gone or unreadable is put away (a fold under the other tasks), not listed among them
+  const missingFlows = rest.filter((f) => f.task_missing === true);
+  const readable = rest.filter((f) => f.task_missing !== true);
   const yourTurnMeetings = meetingsNeedingYou(meetingsData);
   const meetingsError = meetingsData && typeof meetingsData === "object" && meetingsData.error ? String(meetingsData.error) : "";
   const yourTurnStaffing = staffingNeedingYou(staffingData);
   const staffingError = staffingData && typeof staffingData === "object" && staffingData.error ? String(staffingData.error) : "";
   return {
     error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError, yourTurnStaffing, staffingError,
-    inProgress: rest.slice(0, BOARD_IN_PROGRESS_MAX),
-    moreInProgress: Math.max(0, rest.length - BOARD_IN_PROGRESS_MAX),
+    inProgress: readable.slice(0, BOARD_IN_PROGRESS_MAX),
+    moreInProgress: Math.max(0, readable.length - BOARD_IN_PROGRESS_MAX),
+    missingFlows: missingFlows.slice(0, BOARD_MISSING_MAX), moreMissing: Math.max(0, missingFlows.length - BOARD_MISSING_MAX),
     runtimeAvailable,
     allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length,
   };
@@ -2322,7 +2327,7 @@ function boardKey(g, ctx) {
     meetings: (g.yourTurnMeetings || []).map((m) => [m.id, m.topic, m.status, m.created_at, m.spent_usd]), meetingsError: g.meetingsError || "",
     staffing: (g.yourTurnStaffing || []).map((x) => [x.id, staffingTurnTitle(x), x.status, x.created_at, x.spent_usd, x.high_risk === true]),
     staffingError: g.staffingError || "",
-    progress: g.inProgress.map(flowFields) });
+    progress: g.inProgress.map(flowFields), missing: (g.missingFlows || []).map(flowFields), moreMissing: g.moreMissing || 0 });
 }
 
 // Inline SVG, drawn with the DOM (no innerHTML); decoration only, so it is hidden from assistive technology.
@@ -2474,6 +2479,11 @@ function boardSection(g, opts = {}) {
     ? [el("div", { class: "grid" }, g.inProgress.map((f) => questCard(f, false))),
       g.moreInProgress ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreInProgress} 則 →`) : null]
     : (g.error ? null : emptyState("目前沒有其他進行中的任務", null));
+  const missingFold = (g.missingFlows || []).length ? el("details", { class: "fold quest-missing", "data-board": "missing" },
+    el("summary", null, `有 ${(g.missingFlows.length + (g.moreMissing || 0))} 個舊任務讀不到任務卡（已收起）`),
+    el("p", { class: "small muted" }, "這些流程的任務卡已經刪除，或檔案讀不出來，所以先收起來。需要時可以點開看，或到「流程」頁處理。"),
+    el("div", { class: "grid" }, g.missingFlows.map((f) => questCard(f, false))),
+    g.moreMissing ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreMissing} 則 →`) : null) : null;
   return [
     el("section", { class: "section", "data-board": "turn" },
       sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到角色卡池頁查看`),
@@ -2484,7 +2494,8 @@ function boardSection(g, opts = {}) {
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
       flowsError(),
-      goingBody),
+      goingBody,
+      missingFold),
   ];
 }
 
@@ -10971,6 +10982,10 @@ function turnOf(who) { const s = String(who == null ? "" : who); return LATIN_ED
 function turnAfter(who) { const s = String(who == null ? "" : who); return LATIN_EDGE_END.test(s) ? s + " " : s; }
 const NEXT_PHASE_STEP = { planning: "plan", awaiting_approval: "approve", implementing: "implement", needs_fix: "implement",
   in_review: "review", review_stale: "review", awaiting_merge: "merge", review_unverified: "merge", awaiting_push: null, done: null };
+// A name of one or two letters or digits ("p", "e", "r1") is a code, not a name: the line then says the place (the planner, the
+// executor, the reviewer) instead. A name with more in it, or any Chinese, is a card's own name and stays.
+const BARE_CODE_NAME = /^[A-Za-z0-9]{1,2}$/;
+const NEXT_ROLE_WORD = { plan: "規劃者", implement: "執行者", review: "審查者" };
 const NEXT_STEP_TEXT = { plan: "規劃者提出計畫", approve: "你核准計畫", risk: "你接受風險", implement: "執行者實作",
   review: "審查者檢查", merge: "你自己合併" };
 
@@ -10980,11 +10995,14 @@ const NEXT_STEP_TEXT = { plan: "規劃者提出計畫", approve: "你核准計�
 function nextSteps(flow) {
   const f = flow && typeof flow === "object" ? flow : {};
   const roles = f.roles && typeof f.roles === "object" ? f.roles : {};
-  const roleName = (r) => (r && typeof r.name === "string" && r.name ? r.name : "未命名");
+  const roleName = (r, step) => {
+    const n = r && typeof r.name === "string" && r.name ? r.name : "";
+    return n && !BARE_CODE_NAME.test(n) ? n : NEXT_ROLE_WORD[step];     // 「輪到 p」 says nothing: say which place it is
+  };
   const auto = Boolean(f.automation && f.automation.mode === "auto");
-  const reviewers = (Array.isArray(roles.reviewers) ? roles.reviewers : []).map(roleName);
+  const reviewers = (Array.isArray(roles.reviewers) ? roles.reviewers : []).map((r) => roleName(r, "review"));
   const who = {
-    plan: roleName(roles.planner), approve: "你", risk: "你", implement: roleName(roles.executor),
+    plan: roleName(roles.planner, "plan"), approve: "你", risk: "你", implement: roleName(roles.executor, "implement"),
     review: auto ? `VBear 送審，${reviewers.join("、") || "審查者"}審查` : (reviewers.join("、") || "審查者"), merge: "你",
   };
   const turn = { ...who, review: auto ? "VBear（自動送審）" : who.review };
