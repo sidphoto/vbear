@@ -292,6 +292,10 @@ class ServeStartsTheDispatchRunnerTests(unittest.TestCase):
         (home / ".vbear").mkdir(mode=0o700)
         env = {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0", "BROWSER": "/usr/bin/true"}
         seen = {}
+        import socket
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            free_port = probe.getsockname()[1]
 
         class FakeHttpd:
             def __init__(self, *a, **k):
@@ -307,6 +311,6 @@ class ServeStartsTheDispatchRunnerTests(unittest.TestCase):
                 mock.patch.object(signal, "signal"), mock.patch.object(server, "write_access_files"), \
                 mock.patch.object(server, "remove_access_files"), mock.patch.object(Store, "static", return_value=None):
             with mock.patch("vbear.server.rt.get_runtime", return_value=mock.Mock(close_all=lambda: None)):
-                server.serve(port=7799)
+                server.serve(port=free_port)
         self.assertIn("vbear-dispatch-runner", seen["threads"])
         self.assertEqual([t.name for t in threading.enumerate() if t.name in ("vbear-dispatch-runner", "vbear-runner")], [])
