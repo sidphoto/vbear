@@ -65,7 +65,7 @@ from . import risk_acceptance
 from . import role_departments
 from . import translations
 from . import chief, chief_runner as chief_runner_mod
-from . import dispatch as dispatch_mod
+from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -281,8 +281,15 @@ class Console:
                     d.recover_all()
                 except Exception:
                     pass                      # a record that cannot be read blocks itself; the rest goes on
+                # the runner (P40-4) sends the steps and carries out 「停止」 and 「繼續」; its thread is started by serve() only
+                d.control = self._dispatch_runner = dispatch_runner_mod.DispatchRunner(
+                    d, chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf))
                 self._dispatcher = d
             return self._dispatcher
+
+    def dispatch_runner(self):
+        self.dispatcher()
+        return self._dispatch_runner
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -2073,9 +2080,9 @@ def make_handler(console: Console):
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
 
         def _dispatch_call(self, action, dispatch_id=None, body=None):
-            """The dispatch endpoints (P40-3). Reads run nothing; confirming makes the new employees and the task card (safe
-            mode, no skill) and nothing is sent: stop and continue wait for the runner. The errors are the dispatch's own, with
-            their statuses."""
+            """The dispatch endpoints (P40-3, P40-4). Reads run nothing; confirming makes the new employees and the task card (safe
+            mode, no skill); the steps are sent by the dispatch runner, and stop and continue are carried out by it. The errors
+            are the dispatch's own, with their statuses."""
             try:
                 dispatcher = console.dispatcher()
                 if action == "list":
@@ -2558,6 +2565,9 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
         pass
     if not console.runner.start():
         print(f"提示：這個主控台不執行自動流程（{console.runner.last_error}）", flush=True)
+    dispatch_runner = console.dispatch_runner()
+    if not dispatch_runner.start():
+        print(f"提示：這個主控台不執行派工（{dispatch_runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         threading.Timer(0.4, lambda: open_in_browser(port)).start()
@@ -2571,6 +2581,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
         pass
     finally:
         console.runner.stop()
+        dispatch_runner.close()
         if console._previews is not None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit

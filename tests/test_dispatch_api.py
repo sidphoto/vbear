@@ -200,15 +200,14 @@ class DispatchApiTests(unittest.TestCase):
         self.assertEqual((status, out), (200, {"ok": True, "deleted": did}))
         self.assertEqual((self.call(f"/api/dispatch/{did}")[0], self.call("/api/dispatch")[1], chief.record_ids()), (404, {"dispatch": []}, []))
 
-    def test_withdraw_card_and_the_runnerless_stop_and_continue(self):
+    def test_withdraw_card_and_stop_and_continue_over_http(self):
         did = self.propose()
         view = self.call(f"/api/dispatch/{did}")[1]
         out = self.call(f"/api/dispatch/{did}/confirm", "POST", self.body_of(view))[1]
         pid = out["created_cards"][0]["profile_id"]
-        for action in ("stop", "continue"):
-            status, got = self.call(f"/api/dispatch/{did}/{action}", "POST", {})
-            self.assertEqual((status, got["code"]), (409, "no_runner"))
-            self.assertIn("還沒有 runner", got["error"])
+        self.assertTrue(out["can"]["stop"])
+        status, got = self.call(f"/api/dispatch/{did}/continue", "POST", {})
+        self.assertEqual((status, got["code"]), (409, "not_paused"), "it is running: nothing to continue")
         self.assertEqual(self.call(f"/api/dispatch/{did}/delete", "POST", {})[1]["code"], "not_deletable")
         self.assertEqual(self.call(f"/api/dispatch/{did}/withdraw-card", "POST", {"profile_id": self.writer})[0], 400)
         status, out = self.call(f"/api/dispatch/{did}/withdraw-card", "POST", {"profile_id": pid})
@@ -216,6 +215,31 @@ class DispatchApiTests(unittest.TestCase):
         self.assertIs(ap.get_profile_readonly(pid)["enabled"], False)
         self.assertEqual(out["can"]["withdraw"], [])
         self.assertEqual(self.call(f"/api/dispatch/{did}/withdraw-card", "POST", {"profile_id": pid})[1]["code"], "already_withdrawn")
+        status, got = self.call(f"/api/dispatch/{did}/stop", "POST", {})
+        self.assertEqual((status, got["state"], got["events"][-1]["kind"], got["events"][-1]["by"]), (200, "stopped", "stopped", "you"))
+        status, got = self.call(f"/api/dispatch/{did}/stop", "POST", {})
+        self.assertEqual((status, got["code"]), (409, "not_active"))
+        self.assertEqual(self.call(f"/api/dispatch/{did}/stop", "POST", {"x": 1})[0], 400)
+        self.assertEqual(self.call("/api/dispatch/d-ffffffffffff/stop", "POST", {})[0], 404)
+        self.assertEqual(self.call(f"/api/dispatch/{did}/delete", "POST", {})[0], 200, "a stopped dispatch can be deleted")
+
+    def test_continue_over_http_lets_a_paused_dispatch_go_on(self):
+        did = self.propose()
+        self.call(f"/api/dispatch/{did}/confirm", "POST", self.body_of(self.call(f"/api/dispatch/{did}")[1]))
+        self.console.dispatcher().control.d.mutate(did, lambda r: r.update(state="paused", pause={"reason": "daily_limit", "until": time.time() + 3600}))
+        got = self.call(f"/api/dispatch/{did}")[1]
+        self.assertEqual((got["state"], got["pause"]["reason"]), ("paused", "daily_limit"))
+        self.assertIn("明天 0:00", got["pause"]["text"])
+        self.assertIn("第 1 步", got["pause"]["text"])
+        status, got = self.call(f"/api/dispatch/{did}/continue", "POST", {})
+        self.assertEqual((status, got["state"], got["pause"]), (200, "running", None))
+        self.assertEqual(got["events"][-1]["kind"], "continued")
+
+    def test_the_console_has_one_dispatch_runner_that_is_not_started_by_building_it(self):
+        runner = self.console.dispatch_runner()
+        self.assertIs(runner, self.console.dispatch_runner())
+        self.assertIs(self.console.dispatcher().control, runner)
+        self.assertIsNone(runner._thread)
 
     def test_withdraw_card_is_refused_while_the_chat_has_a_turn_running(self):
         did = self.propose()
@@ -254,3 +278,35 @@ class DispatchApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServeStartsTheDispatchRunnerTests(unittest.TestCase):
+    """``serve()`` starts the dispatch runner's thread next to the automation runner, and ends it with the console."""
+
+    def test_the_thread_is_there_while_the_console_serves_and_gone_after(self):
+        import signal
+        tmp = tempfile.TemporaryDirectory(prefix="vbds-")
+        self.addCleanup(tmp.cleanup)
+        home = Path(os.path.realpath(tmp.name)) / "h"
+        home.mkdir()
+        (home / ".vbear").mkdir(mode=0o700)
+        env = {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0", "BROWSER": "/usr/bin/true"}
+        seen = {}
+
+        class FakeHttpd:
+            def __init__(self, *a, **k):
+                pass
+
+            def serve_forever(self):
+                seen["threads"] = sorted(t.name for t in threading.enumerate() if t.name.endswith("runner"))
+                raise KeyboardInterrupt
+
+            def server_close(self):
+                pass
+        with mock.patch.dict(os.environ, env), mock.patch.object(server, "ThreadingHTTPServer", FakeHttpd), \
+                mock.patch.object(signal, "signal"), mock.patch.object(server, "write_access_files"), \
+                mock.patch.object(server, "remove_access_files"), mock.patch.object(Store, "static", return_value=None):
+            with mock.patch("vbear.server.rt.get_runtime", return_value=mock.Mock(close_all=lambda: None)):
+                server.serve(port=7799)
+        self.assertIn("vbear-dispatch-runner", seen["threads"])
+        self.assertEqual([t.name for t in threading.enumerate() if t.name in ("vbear-dispatch-runner", "vbear-runner")], [])
