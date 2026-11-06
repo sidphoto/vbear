@@ -47,9 +47,10 @@ class ListAddDeleteTests(RoutesCase):
         self.assertIn("OpenAI", out["where_text"])
         by = {c["profile_id"]: c for c in out["cards"]}
         self.assertEqual((by[self.emp]["company"], by[self.emp]["can_chat"], by[self.emp]["on"]), ("Anthropic", True, True))
-        self.assertEqual((by[codex]["company"], by[codex]["can_chat"], by[codex]["on"]), ("OpenAI", True, True))
+        self.assertEqual((by[codex]["company"], by[codex]["can_chat"], by[codex]["on"]), ("OpenAI", True, False), "Codex cards start switched off")
         self.assertEqual((by[grok]["company"], by[grok]["can_chat"]), (None, False))
         self.assertNotIn("cards_off", out)
+        self.assertNotIn("cards_on", out)
 
     def test_add_list_delete(self):
         status, out = self.add("work", "我的店叫「QA熊皂坊」")
@@ -257,7 +258,7 @@ class FieldsOfTheServiceTests(unittest.TestCase):
         self.svc = chat_service.ChatService(
             self.runtime, claude=lambda: ("/bin/echo", "2.1.318", ""), base=self.base,
             profile=lambda pid: {"id": pid, "name": "x", "enabled": True, "model": {"tool": "claude"}, "position": "pm"},
-            memory=lambda pid: self.given)
+            memory=lambda pid, engine: self.given)
         patch = mock.patch.object(chat_service.agent_sessions, "binary_identity", lambda b: [1, 2, 3])
         patch.start()
         self.addCleanup(patch.stop)
@@ -288,6 +289,64 @@ class FieldsOfTheServiceTests(unittest.TestCase):
         src = (Path(chat_service.__file__)).read_text()
         for name in ("memory_store.add", "memory_store.delete", "memory.add", "memory.delete"):
             self.assertNotIn(name, src)
+
+
+class DefaultByToolTests(unittest.TestCase):
+    """The person's choice for v0.17: a Claude Code card takes memory along from the start, a Codex card only after the person
+    switches it on (memory goes to OpenAI there). The real reader of the memory file, a service per tool, a runtime that
+    only writes the request down."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="vbd-")
+        self.addCleanup(self.tmp.cleanup)
+        home = Path(self.tmp.name) / "h"
+        home.mkdir()
+        patch = mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        ident = mock.patch.object(chat_service.agent_sessions, "binary_identity", lambda b: [1, 2, 3])
+        ident.start()
+        self.addCleanup(ident.stop)
+        self.base = cfg.state_dir()
+        self.runtime = FieldsOfTheServiceTests.Runtime()
+        self.cards = {"claude-1": "claude", "codex-1": "codex"}
+        self.svc = chat_service.ChatService(
+            self.runtime, claude=lambda: ("/bin/echo", "2.1.318", ""), codex=lambda: {"state": "ready"},
+            codex_binary=lambda: ("/bin/echo", "0.163.0"), base=self.base,
+            profile=lambda pid: {"id": pid, "name": "x", "enabled": True, "model": {"tool": self.cards[pid]}, "position": "pm"})
+        memory.add({"kind": "work", "text": "我的店叫「QA熊皂坊」（虛構）"})
+
+    def say(self, pid):
+        engine = "codex-chat" if self.cards[pid] == "codex" else "claude-chat"
+        chat = cs.create(self.base, pid, now=1.0, engine=engine)["id"]
+        self.svc.send(chat, {"text": "hi"})
+        return self.runtime.sent[-1][1]
+
+    def test_a_claude_code_card_takes_it_and_a_codex_card_does_not(self):
+        self.assertEqual(self.say("claude-1")["memory"], [{"kind": "work", "text": "我的店叫「QA熊皂坊」（虛構）"}])
+        codex = self.say("codex-1")
+        self.assertNotIn("memory", codex, "not a word goes to OpenAI until the person switches the card on")
+        self.assertNotIn("QA熊", json.dumps(codex, ensure_ascii=False))
+        self.assertEqual(codex["engine"], "codex-chat")
+
+    def test_switched_on_the_codex_card_takes_it_and_switched_off_the_claude_card_does_not(self):
+        path = self.base / "memory" / "memory.json"
+        data = json.loads(path.read_text())
+        path.write_text(json.dumps(dict(data, cards_on=["codex-1"], cards_off=["claude-1"])))
+        self.assertEqual(self.say("codex-1")["memory"], [{"kind": "work", "text": "我的店叫「QA熊皂坊」（虛構）"}])
+        self.assertNotIn("memory", self.say("claude-1"))
+
+    def test_the_memory_page_lists_each_card_with_its_start_value(self):
+        cards = [{"id": "claude-1", "name": "a", "tool": "claude", "engine": "claude-chat", "can_chat": True},
+                 {"id": "codex-1", "name": "b", "tool": "codex", "engine": "codex-chat", "can_chat": True},
+                 {"id": "grok-1", "name": "c", "tool": "grok", "engine": None, "can_chat": False}]
+        view = memory.view()
+        got = {c["profile_id"]: c for c in memory.cards_view(cards, view["cards_off"], view["cards_on"])}
+        self.assertEqual([got[k]["on"] for k in ("claude-1", "codex-1", "grok-1")], [True, False, False])
+        self.assertEqual([got[k]["company"] for k in ("claude-1", "codex-1", "grok-1")], ["Anthropic", "OpenAI", None])
+        view2 = dict(view, cards_on=["codex-1"], cards_off=["claude-1"])
+        got = {c["profile_id"]: c for c in memory.cards_view(cards, view2["cards_off"], view2["cards_on"])}
+        self.assertEqual([got[k]["on"] for k in ("claude-1", "codex-1")], [False, True])
 
 
 if __name__ == "__main__":

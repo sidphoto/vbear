@@ -3,7 +3,7 @@ employee, that each new chat process of an employee is given.
 
 ``<state>/memory/`` (owner only):
 
-  * ``memory.json`` (``GuardedJsonStore``, 0600): ``{"v": 1, "entries": [...], "cards_off": [...]}``. A line is
+  * ``memory.json`` (``GuardedJsonStore``, 0600): ``{"v": 1, "entries": [...], "cards_off": [...], "cards_on": [...]}``. A line is
     ``{id, kind, text, created_at, updated_at, source, confirmed_warning}``; at most 50 lines, 200 characters each, 4,000
     together. A file that cannot be read safely is never guessed at: the page says so, and a chat goes on without memory.
   * ``log.jsonl`` (0600, append-only, 1 MiB, then a new file and one old one kept): what was done and to which line (its id,
@@ -89,10 +89,10 @@ def _problem(key, value) -> str | None:
         if len(set(ids)) != len(ids) or sum(len(e["text"]) for e in value) > mr.MAX_TOTAL:
             return "entries"
         return None
-    if key == "cards_off":
+    if key in ("cards_off", "cards_on"):
         ok = (isinstance(value, list) and len(value) <= CARDS_OFF_MAX
               and all(isinstance(x, str) and PROFILE_RE.match(x) for x in value) and len(set(value)) == len(value))
-        return None if ok else "cards_off"
+        return None if ok else key
     return "key"
 
 
@@ -125,7 +125,21 @@ def _unreadable(exc: Exception) -> ApiError:
 def _read() -> dict:
     """The file as a dict with all three keys; StoreError when it cannot be read (a missing file is empty memory)."""
     data = store.load()
-    return {"v": SCHEMA, "entries": list(data.get("entries", [])), "cards_off": list(data.get("cards_off", []))}
+    return {"v": SCHEMA, "entries": list(data.get("entries", [])), "cards_off": list(data.get("cards_off", [])),
+            "cards_on": list(data.get("cards_on", []))}
+
+
+# Whether a role card takes memory along when the person has not said (v0.17, the person's choice): Claude Code cards do, Codex
+# cards do not (memory goes to OpenAI there, so the person switches it on). An engine not listed (cannot chat) takes none.
+DEFAULT_ON = {"claude-chat": True, "codex-chat": False}
+
+
+def card_on(profile_id, engine, cards_off, cards_on) -> bool:
+    if profile_id in cards_on:
+        return True
+    if profile_id in cards_off:
+        return False
+    return DEFAULT_ON.get(engine, False)
 
 
 def _ordered(entries) -> list:
@@ -142,7 +156,8 @@ def _used(entries) -> dict:
 def view() -> dict:
     """What GET /api/memory shows: the lines in page order (each marked ``blocked`` with the rule's code when the rules now
     refuse it), the use, and whether the file could be read. Never raises for a file that cannot be read: it says so."""
-    base = {"entries": [], "used": _used([]), "readable": True, "where_text": WHERE_TEXT, "problem": None, "cards_off": []}
+    base = {"entries": [], "used": _used([]), "readable": True, "where_text": WHERE_TEXT, "problem": None,
+            "cards_off": [], "cards_on": []}
     try:
         if _folder(False) is None:
             return base
@@ -150,18 +165,19 @@ def view() -> dict:
     except StoreError:
         return dict(base, readable=False, problem=UNREADABLE)
     entries = [dict(e, blocked=mr.check(e["text"])["refuse"]) for e in _ordered(data["entries"])]
-    return dict(base, entries=entries, used=_used(data["entries"]), cards_off=data["cards_off"])
+    return dict(base, entries=entries, used=_used(data["entries"]), cards_off=data["cards_off"],
+                cards_on=data["cards_on"])
 
 
 COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI"}
 
 
-def cards_view(cards, cards_off) -> list:
+def cards_view(cards, cards_off, cards_on) -> list:
     """The role cards as the memory page lists them: who takes memory with them, and which company it goes to. ``cards`` are
     the chat service's cards ({id, name, tool, engine, can_chat, ...}); a card that cannot chat has no company."""
-    off = set(cards_off)
     return [{"profile_id": c.get("id"), "name": c.get("name"), "tool": c.get("tool"), "company": COMPANY.get(c.get("engine")),
-             "can_chat": c.get("can_chat") is True, "on": c.get("id") not in off} for c in cards if isinstance(c, dict)]
+             "can_chat": c.get("can_chat") is True, "on": card_on(c.get("id"), c.get("engine"), cards_off, cards_on)}
+            for c in cards if isinstance(c, dict)]
 
 
 class ChatMemory(NamedTuple):
@@ -170,8 +186,9 @@ class ChatMemory(NamedTuple):
     entries: list
 
 
-def for_card(profile_id) -> ChatMemory:
-    """What a new chat process of this role card is given: ``on`` is false when the card is switched off, ``readable`` false
+def for_card(profile_id, engine) -> ChatMemory:
+    """What a new chat process of this role card is given: ``on`` is false when the card is switched off (a Codex card, if the
+    person never switched it on: ``DEFAULT_ON``), ``readable`` false
     when the file could not be read (then nothing is given, and the chat page says so). The lines are {kind, text} in page
     order. Reads only."""
     try:
@@ -180,7 +197,7 @@ def for_card(profile_id) -> ChatMemory:
         data = _read()
     except StoreError:
         return ChatMemory(False, False, [])
-    if profile_id in data["cards_off"]:
+    if not card_on(profile_id, engine, data["cards_off"], data["cards_on"]):
         return ChatMemory(True, False, [])
     return ChatMemory(True, True, [{"kind": e["kind"], "text": e["text"]} for e in _ordered(data["entries"])])
 

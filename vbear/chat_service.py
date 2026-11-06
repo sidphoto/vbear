@@ -215,7 +215,7 @@ class ChatService:
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
         self._base = base
-        self._memory = memory or memory_store.for_card          # a function: role card id -> memory.ChatMemory (reads only)
+        self._memory = memory or memory_store.for_card          # a function: (role card id, engine) -> memory.ChatMemory (reads only)
         self.restart_tries, self.restart_pause = RESTART_TRIES, RESTART_PAUSE
         self.delete_tries, self.delete_pause = DELETE_TRIES, DELETE_PAUSE
 
@@ -496,7 +496,7 @@ class ChatService:
         instructions = self._instructions(profile)
         if instructions is not None:
             fields["instructions"] = instructions
-        given = self._memory(chat["profile_id"])
+        given = self._memory(chat["profile_id"], engine)
         if given.readable and given.on:               # a card with memory off, or a file that cannot be read: not a word is sent
             fields["memory"] = given.entries
         if origin is not None:

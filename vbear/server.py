@@ -1958,12 +1958,12 @@ def make_handler(console: Console):
         def _memory_view(self) -> dict:
             """GET /api/memory: the lines, the use, who takes memory along (read only: nothing here saves a word)."""
             out = memory_mod.view()
-            off = out.pop("cards_off", [])
+            off, on = out.pop("cards_off", []), out.pop("cards_on", [])
             try:
                 cards = console.chat_service().cards()
             except ApiError:
                 cards = []                     # the page still shows the lines when the cards cannot be read
-            out["cards"] = memory_mod.cards_view(cards, off)
+            out["cards"] = memory_mod.cards_view(cards, off, on)
             return out
 
         @staticmethod

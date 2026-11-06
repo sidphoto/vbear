@@ -59,8 +59,8 @@ class AddTests(StoreCase):
         self.assertEqual(stat.S_IMODE(os.lstat(self.dir / "memory.json").st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.lstat(self.dir / "log.jsonl").st_mode), 0o600)
         data = json.loads((self.dir / "memory.json").read_text())
-        self.assertEqual(sorted(data), ["cards_off", "entries", "v"])
-        self.assertEqual((data["v"], data["cards_off"]), (1, []))
+        self.assertEqual(sorted(data), ["cards_off", "cards_on", "entries", "v"])
+        self.assertEqual((data["v"], data["cards_off"], data["cards_on"]), (1, [], []))
 
     def test_the_text_is_trimmed_and_the_page_order_is_kind_then_time(self):
         a = memory.add({"kind": "decision", "text": "  價格用新台幣  "}, now=100)["entry"]
@@ -127,12 +127,12 @@ class AddTests(StoreCase):
                 saved += 1
         self.assertEqual((raised.exception.status, raised.exception.code), (409, "memory_full"))
         self.assertTrue(10 <= saved < 30, saved)
-        self.assertLessEqual(len(mr.block(memory.for_card("emp-1").entries)), mr.MAX_BLOCK)
+        self.assertLessEqual(len(mr.block(memory.for_card("emp-1", "claude-chat").entries)), mr.MAX_BLOCK)
 
     def test_the_most_the_page_allows_always_fits(self):
         for _ in range(50):
             self.add("字" * 80)
-        entries = memory.for_card("emp-1").entries
+        entries = memory.for_card("emp-1", "claude-chat").entries
         self.assertEqual(len(entries), 50)
         self.assertEqual(mr.prepare(entries).count, 50)
 
@@ -151,12 +151,12 @@ class ForChatTests(StoreCase):
     def test_a_card_gets_the_lines_in_page_order_as_kind_and_text(self):
         memory.add({"kind": "work", "text": "我開皂坊"}, now=1)
         memory.add({"kind": "about_you", "text": "用繁體中文"}, now=2)
-        got = memory.for_card("emp-1")
+        got = memory.for_card("emp-1", "claude-chat")
         self.assertEqual((got.readable, got.on), (True, True))
         self.assertEqual(got.entries, [{"kind": "about_you", "text": "用繁體中文"}, {"kind": "work", "text": "我開皂坊"}])
 
     def test_no_file_is_an_empty_memory_that_can_be_read(self):
-        got = memory.for_card("emp-1")
+        got = memory.for_card("emp-1", "claude-chat")
         self.assertEqual((got.readable, got.on, got.entries), (True, True, []))
         self.assertFalse(self.dir.exists(), "reading makes nothing")
 
@@ -165,13 +165,53 @@ class ForChatTests(StoreCase):
         data = json.loads((self.dir / "memory.json").read_text())
         data["cards_off"] = ["emp-2"]
         (self.dir / "memory.json").write_text(json.dumps(data))
-        self.assertEqual((memory.for_card("emp-2").on, memory.for_card("emp-2").entries), (False, []))
-        self.assertEqual(memory.for_card("emp-1").on, True)
+        self.assertEqual((memory.for_card("emp-2", "claude-chat").on, memory.for_card("emp-2", "claude-chat").entries), (False, []))
+        self.assertEqual(memory.for_card("emp-1", "claude-chat").on, True)
+
+    def test_a_new_card_takes_memory_along_when_it_is_a_claude_code_card_and_not_when_it_is_a_codex_card(self):
+        """The person's choice (v0.17): Claude Code cards on by default, Codex cards off until the person switches them on."""
+        self.add()
+        self.assertEqual(memory.DEFAULT_ON, {"claude-chat": True, "codex-chat": False})
+        claude, codex = memory.for_card("emp-1", "claude-chat"), memory.for_card("emp-9", "codex-chat")
+        self.assertEqual((claude.readable, claude.on, len(claude.entries)), (True, True, 1))
+        self.assertEqual((codex.readable, codex.on, codex.entries), (True, False, []))
+        self.assertEqual(memory.for_card("emp-9", None).on, False, "an engine that cannot chat takes none")
+        self.assertEqual(memory.for_card("emp-9", "grok-chat").on, False)
+
+    def test_what_the_person_switched_wins_over_the_default(self):
+        self.add()
+        data = json.loads((self.dir / "memory.json").read_text())
+        data.update(cards_on=["emp-9"], cards_off=["emp-1"])
+        (self.dir / "memory.json").write_text(json.dumps(data))
+        self.assertEqual(memory.for_card("emp-9", "codex-chat").on, True)
+        self.assertEqual(len(memory.for_card("emp-9", "codex-chat").entries), 1)
+        self.assertEqual(memory.for_card("emp-1", "claude-chat").on, False)
+        self.assertEqual(memory.for_card("emp-2", "codex-chat").on, False)
+
+    def test_a_file_from_before_cards_on_existed_still_reads(self):
+        self.add()
+        data = json.loads((self.dir / "memory.json").read_text())
+        data.pop("cards_on", None)
+        (self.dir / "memory.json").write_text(json.dumps(data))
+        self.assertTrue(memory.for_card("emp-1", "claude-chat").readable)
+        self.assertEqual(memory.view()["cards_on"], [])
+        self.add("二")
+        self.assertIn("cards_on", json.loads((self.dir / "memory.json").read_text()))
+
+    def test_cards_on_must_be_a_list_of_card_ids(self):
+        self.add()
+        data = json.loads((self.dir / "memory.json").read_text())
+        for bad in ("emp-1", ["../x"], [5], ["emp-1", "emp-1"]):
+            (self.dir / "memory.json").write_text(json.dumps(dict(data, cards_on=bad)))
+            marker = self.dir / "memory.json.corrupted"
+            if marker.exists():
+                marker.unlink()
+            self.assertFalse(memory.for_card("emp-1", "claude-chat").readable, bad)
 
     def test_a_file_that_cannot_be_read_gives_no_lines_and_says_so(self):
         self.add()
         (self.dir / "memory.json").write_text("{not json")
-        got = memory.for_card("emp-1")
+        got = memory.for_card("emp-1", "claude-chat")
         self.assertEqual((got.readable, got.on, got.entries), (False, False, []))
         view = memory.view()
         self.assertEqual((view["readable"], view["entries"]), (False, []))
@@ -190,7 +230,7 @@ class ForChatTests(StoreCase):
                 marker = self.dir / "memory.json.corrupted"
                 if marker.exists():
                     marker.unlink()
-                self.assertFalse(memory.for_card("emp-1").readable)
+                self.assertFalse(memory.for_card("emp-1", "claude-chat").readable)
                 self.assertFalse(memory.view()["readable"])
 
     def test_a_stored_line_the_rules_now_refuse_is_marked_and_still_sent_so_the_daemon_refuses(self):
@@ -199,7 +239,7 @@ class ForChatTests(StoreCase):
         data["entries"][0]["text"] = "我的後台密碼是 hunter-two"
         (self.dir / "memory.json").write_text(json.dumps(data))
         self.assertEqual(memory.view()["entries"][0]["blocked"], "secret_password")
-        self.assertEqual(memory.for_card("emp-1").entries[0]["text"], "我的後台密碼是 hunter-two")
+        self.assertEqual(memory.for_card("emp-1", "claude-chat").entries[0]["text"], "我的後台密碼是 hunter-two")
         self.assertEqual(entry["id"], memory.view()["entries"][0]["id"])
 
 
@@ -241,7 +281,7 @@ class FolderTests(StoreCase):
         os.symlink(target, self.dir)
         refused(self, memory.add, {"kind": "work", "text": "x"}, status=503, code="memory_unreadable")
         self.assertEqual(list(target.iterdir()), [])
-        self.assertFalse(memory.for_card("emp-1").readable)
+        self.assertFalse(memory.for_card("emp-1", "claude-chat").readable)
 
 
 if __name__ == "__main__":

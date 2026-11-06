@@ -1033,8 +1033,8 @@ process starts until a version passes the chat check.
 - **A second paragraph: the person's memory (v0.17, ADR 0008).** After the card's own instructions (or alone, when the card
   has none) the same `--append-system-prompt` argument carries one fixed paragraph the daemon builds from the `memory` field
   of `chat_send`: VBear's own explanation, then the person's lines as one JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
-  `END_VBEAR_MEMORY_JSON`. The console sends the field when the role card takes memory along (every card does, by default)
-  and `<state>/memory/memory.json` can be read; a card switched off, or a file that cannot be read, sends no field and not a
+  `END_VBEAR_MEMORY_JSON`. The console sends the field when the role card takes memory along (a Claude Code card does by default; a Codex card only after the
+  person switches it on, because memory goes to OpenAI there) and `<state>/memory/memory.json` can be read; a card switched off, or a file that cannot be read, sends no field and not a
   word reaches the model. The paragraph is sent even when there are no lines, because it also tells the employee that only
   the person can save one. The field is a list of at most 50 objects with exactly `kind` (`about_you`, `work` or `decision`)
   and `text`, at most 4,000 characters in all; one more key, another kind or a longer list is `bad_request`. **The daemon
@@ -1248,7 +1248,7 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   `config.toml` exists right after `thread/start` and that every process was started with both settings
   (`project_settings_sent` in the report; no path in it). In the probe with both settings, in a home folder that is a
   git repository: no MCP server, no start-up notice, no skill, no `config.toml`.
-- **Memory (v0.17).** The same paragraph as for a Claude chat (see "Chats with a role card": the `memory` field, the daemon's
+- **Memory (v0.17), off until the person switches the card on.** The same paragraph as for a Claude chat (see "Chats with a role card": the `memory` field, the daemon's
   second check of every line, `memory_refused`) goes in `developerInstructions` of `thread/start` and `thread/resume`, after the
   card's own instructions (32 KiB is the limit there). The employee is told that memory cannot make it skip a question; the
   sandbox and `untrusted` approval policy are what keep that true, and memory is sent to OpenAI. Codex's own `--disable
