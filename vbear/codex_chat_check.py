@@ -409,9 +409,11 @@ def _run_steps(s: CodexSession, work: Path, outside: Path, checks: dict, obs: di
                                                                            s.facts("turn_completed", n)] or [None])[0],
                         "exit_seconds": round(seconds, 1), "returncode": ended["returncode"] if ended else None}
     checks["interrupt_works"] = check(
-        end7 is not None and end7["reason"] == "stopped" and bool(s.facts("interrupt_accepted")) and not refused
-        and ended is not None, interrupt_failed_code=refused[0]["code"] if refused else None,
-        note="turn/interrupt 被 Codex 接受，這回合記為已停止（花費是上限），關掉 stdin 後程序結束")
+        end7 is not None and end7["reason"] == "stopped" and not refused and ended is not None
+        and seconds <= CLOSE_DEADLINE, interrupt_failed_code=refused[0]["code"] if refused else None,
+        interrupt_answered=bool(s.facts("interrupt_accepted")),
+        note="按停止後這回合記為已停止（花費是上限），VBear 送出 turn/interrupt 並關掉 stdin，程序在期限內結束；"
+             "Codex 沒有拒絕 turn/interrupt（它常在回覆前就因 stdin 關閉而結束，所以不要求看到它的回覆）")
 
     # ---- turn 7: --resume ---------------------------------------------------------------------------------------
     before = max((x["total_tokens"] for x in s.records if x["kind"] == "usage"), default=None)
