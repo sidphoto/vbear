@@ -346,6 +346,25 @@ _TURN_STATUS = frozenset({"completed", "interrupted", "failed", "inProgress"})
 _ITEM_STATUS = frozenset({"inProgress", "completed", "failed", "declined"})
 
 
+def _sandbox_is_ours(sandbox) -> bool:
+    """Whether the sandbox Codex reports is, field for field, the one VBear asked for (SANDBOX_POLICY): the same five
+    fields and no others (0.163.0 prints exactly these for ``workspaceWrite``), the same types, the same values. A
+    missing field, an extra one (such as ``readOnlyAccess``) or ``1`` for ``True`` is not it."""
+    if not isinstance(sandbox, dict) or set(sandbox) != set(SANDBOX_POLICY):
+        return False
+    for key, want in SANDBOX_POLICY.items():
+        got = sandbox[key]
+        if isinstance(want, bool):
+            if got is not want:
+                return False
+        elif isinstance(want, list):
+            if not (isinstance(got, list) and got == want):
+                return False
+        elif not (isinstance(got, str) and got == want):
+            return False
+    return True
+
+
 class CodexTracker:
     """One ``codex app-server`` process and its one thread. ``on_message`` turns one parsed stdout line into facts,
     (kind, data) pairs:
@@ -485,8 +504,7 @@ class CodexTracker:
             problems.append("核准方式不是每個指令都問")
         if reviewer != "user":
             problems.append("核准的人不是你")
-        if not (isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite"
-                and sandbox.get("networkAccess") is False and sandbox.get("writableRoots", []) == []):
+        if not _sandbox_is_ours(sandbox):
             problems.append("沙盒不是只能寫工作資料夾、不能連網")
         if not (isinstance(cwd, str) and cwd and os.path.realpath(cwd) == self.workdir):
             problems.append("工作資料夾")

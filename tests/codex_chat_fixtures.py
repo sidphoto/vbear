@@ -154,3 +154,17 @@ def linear(name: str, *, clean_it: bool = True) -> list[tuple[str, object]]:
         if c is not None:
             out.append((d, c))
     return out
+
+
+def write_launcher(path, config_path) -> str:
+    """An executable that runs tests/fake_codex_app_server.py with ``config_path`` as its configuration, the way
+    tests/test_chat_daemon.py launches the fake Claude Code: the daemon gives the process a fixed environment, so the
+    configuration cannot be found through HOME."""
+    import os
+    import sys
+    repo = Path(__file__).resolve().parent.parent
+    body = (f"#!{sys.executable} -I\nimport os, runpy, sys\nos.environ['FAKE_CODEX_CONFIG'] = {str(config_path)!r}\n"
+            f"sys.path.insert(0, {str(repo)!r})\nrunpy.run_module('tests.fake_codex_app_server', run_name='__main__')\n")
+    Path(path).write_text(body, encoding="utf-8")
+    os.chmod(path, 0o755)
+    return str(path)
