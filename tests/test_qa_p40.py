@@ -35,9 +35,9 @@ class CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="qa40-") as tmp:
             home = Path(tmp)
             (home / ".vbear").mkdir()
-            self.assertIn("own VBear", qa.refusal(str(home / ".vbear"), 7795, home=home))
-            self.assertIn("does not exist", qa.refusal(str(home / "nope"), 7795, home=home))
-            self.assertIsNone(qa.refusal(str(home), 7795, home=home))
+            self.assertIn("own VBear", qa.refusal(str(home / ".vbear"), 50001, home=home))
+            self.assertIn("does not exist", qa.refusal(str(home / "nope"), 50001, home=home))
+            self.assertIsNone(qa.refusal(str(home), 50001, home=home))
 
     def test_the_default_port_is_not_the_persons(self):
         import re
@@ -48,13 +48,13 @@ class CommandLineTests(unittest.TestCase):
     def test_a_state_folder_without_a_matching_token_stops_with_a_line_not_a_trace(self):
         with tempfile.TemporaryDirectory(prefix="qa40-") as tmp:
             lines = []
-            self.assertEqual(qa.main(["--state", tmp, "--port", "7795"], out=lines.append), 1)
+            self.assertEqual(qa.main(["--state", tmp, "--port", str(qa.FORBIDDEN_PORTS[0] + 7)], out=lines.append), 1)
             self.assertTrue(any(l.startswith("FAIL stopped") for l in lines), lines)
-            (Path(tmp) / "server.token").write_text(json.dumps({"port": 7000, "token": "x"}))
+            (Path(tmp) / "server.token").write_text(json.dumps({"port": 1, "token": "x"}))
             with self.assertRaises(qa.Stop):
-                qa.read_token(Path(tmp), 7795)
-            (Path(tmp) / "server.token").write_text(json.dumps({"port": 7795, "token": "synthetic"}))
-            self.assertEqual(qa.read_token(Path(tmp), 7795), "synthetic")
+                qa.read_token(Path(tmp), 50001)
+            (Path(tmp) / "server.token").write_text(json.dumps({"port": 50001, "token": "synthetic"}))
+            self.assertEqual(qa.read_token(Path(tmp), 50001), "synthetic")
 
 
 class BodyTests(unittest.TestCase):

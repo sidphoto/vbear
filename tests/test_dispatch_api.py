@@ -153,7 +153,7 @@ class DispatchApiTests(unittest.TestCase):
         self.assertEqual([(a["kind"], a["by"]) for a in reversed(acts["actions"])],
                          [("proposed", "vbear"), ("confirmed", "you"), ("card_intent", "you"), ("card_created", "you"),
                           ("task_intent", "you"), ("task_created", "you")])
-        self.assertEqual(acts["actions"][0].keys(), {"at", "dispatch_id", "seq", "kind", "what", "by", "by_text", "can_stop", "can_withdraw"})
+        self.assertEqual(acts["actions"][0].keys(), {"at", "dispatch_id", "seq", "kind", "what", "by", "by_text", "can_stop", "can_withdraw", "profile_id"})
 
     def test_a_refused_confirmation_answers_400_or_409_and_changes_nothing(self):
         did = self.propose()
