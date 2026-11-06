@@ -62,18 +62,54 @@ class PrepareTests(LaunchCase):
         settings = json.loads(Path(m["settings_path"]).read_text())
         self.assertEqual(settings, {"engine": "codex-chat", "approval_policy": "untrusted", "approvals_reviewer": "user",
                                     "sandbox": ccp.SANDBOX_POLICY, "config": list(consts.config),
+                                    "project_trust": {self.work: "untrusted"},
                                     "disabled_features": list(consts.disabled_features)})
+        self.assertIn("project_root_markers=[]", settings["config"])
         self.assertEqual(stat.S_IMODE(os.lstat(m["settings_path"]).st_mode), 0o600)
         argv = asess.codex_chat_argv(m)
         self.assertEqual(argv, [str(self.cli), "app-server", "--listen", "stdio://",
                                 *[x for s in consts.config for x in ("-c", s)],
+                                "-c", 'projects={%s={trust_level="untrusted"}}' % json.dumps(self.work),
                                 *[x for f in consts.disabled_features for x in ("--disable", f)]])
+        self.assertEqual(argv[1:], ccp.argv_for(consts, self.work))
         self.assertNotIn("--strict-config", argv)
         for danger in ("--sandbox", "--yolo", "--dangerously-bypass-approvals-and-sandbox", "--full-auto",
                        "--ask-for-approval", "--remote"):
             self.assertNotIn(danger, argv)
         self.assertEqual(asess.load_validated(self.base, m["launch_id"])["chat_id"], "c-0123456789abcdef")
         self.assertEqual(m["codex_home"], str(self.chat_home))
+
+    def test_the_trust_setting_names_the_work_folder_with_its_dot_inside_one_key(self):
+        import tomllib
+        m = self.prepare()
+        self.assertIn("/.vbear/", self.work)                    # the state folder is ~/.vbear: a dot inside the path
+        argv = asess.codex_chat_argv(m)
+        value = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"][-1]
+        self.assertEqual(tomllib.loads(value), {"projects": {self.work: {"trust_level": "untrusted"}}})
+
+    def test_a_work_folder_whose_path_cannot_be_written_safely_is_refused_to_start(self):
+        m = self.prepare()
+        bad = dict(m, canonical_workspace=m["canonical_workspace"] + "\nprojects")
+        self.assertIsNotNone(asess.codex_chat_manifest_problem(bad))
+        with self.assertRaises(asess.LaunchRefused):
+            asess.codex_chat_argv(bad)
+        with self.assertRaises(asess.LaunchRefused):
+            asess.codex_chat_settings(VERSION, "/x/a\nb")
+
+    def test_settings_without_the_trust_entry_or_for_another_folder_are_refused(self):
+        for mutate in (lambda d: d.pop("project_trust"),
+                       lambda d: d.update(project_trust={"/elsewhere": "untrusted"}),
+                       lambda d: d.update(project_trust={self.work: "trusted"}),
+                       lambda d: d.update(config=[c for c in d["config"] if c != "project_root_markers=[]"])):
+            m = self.prepare()
+            settings = Path(m["settings_path"])
+            data = json.loads(settings.read_text())
+            mutate(data)
+            os.chmod(settings, 0o600)
+            settings.write_text(json.dumps(data))
+            asess.update_manifest(self.base, m["launch_id"], settings_sha256=asess._sha256(settings))
+            with self.assertRaises(asess.LaunchRefused):
+                asess.load_validated(self.base, m["launch_id"])
 
     def test_a_resumed_launch_names_its_thread(self):
         m = self.prepare(resume=True, thread_id=self.thread, model_id="gpt-6.1-sol")

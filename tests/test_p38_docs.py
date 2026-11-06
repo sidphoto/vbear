@@ -98,6 +98,20 @@ class CodexChatDocsTests(unittest.TestCase):
         for words in ("改內容再問", "讓聊天用的 Codex 登入", "估計", "ChatGPT 方案", "到開始設定", "驗證聊天", "codex-chat-home"):
             self.assertIn(words, self.app, words)
 
+    def test_the_home_folder_that_is_a_git_repository_is_in_the_security_model_the_adr_and_the_evidence(self):
+        for name, text in (("section", self.section), ("adr", self.adr), ("evidence", self.evidence)):
+            for phrase in ("project_root_markers", "untrusted", "~"):
+                self.assertIn(phrase, text, (name, phrase))
+        for phrase in ("home folder that is a git repository", "threadId", "managed configuration", "skills", "`config.toml`",
+                       "inline table"):
+            self.assertIn(phrase, self.section, phrase)
+        for phrase in ("home folder that is a git repository", "threadId", "inline table", "project_root_markers=[]",
+                       "managed", "skills"):
+            self.assertIn(phrase, self.evidence, phrase)
+        for word in ("家目錄", "git", "project_root_markers", "信任", "threadId", "行內表格", "技能"):
+            self.assertIn(word, self.adr, word)
+        self.assertIn("project_root_markers", self.changelog)
+
     def test_nothing_public_names_a_real_person_or_machine(self):
         for text in (self.raw, self.section, self.adr, self.evidence):
             self.assertNotRegex(text, r"/Users/(?!fake-user)[A-Za-z0-9_.-]+")

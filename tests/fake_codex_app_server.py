@@ -11,6 +11,8 @@ Configuration: the JSON file named by $FAKE_CODEX_CONFIG (else $HOME/fake-codex.
    "login_status": 0,                    the exit code of ``login status``
    "clean": true,                        false plays the recording as made: a person's AGENTS.md, five MCP servers,
                                          a sandbox with network access (the chat must be stopped)
+   "mcp_leak": false,                    true plays everything clean except that the thread has MCP servers, as 0.163.0
+                                         did for a home folder that is a git repository
    "thread_id": null,                    for thread/start: the thread id to print instead of the recorded one
    "start":  {"fixture": "a", "turns": [0, 1, ...]},
    "resume": {"fixture": "b-resume", "turns": [0, 1]}}
@@ -28,7 +30,10 @@ the "change what runs" path (decline, steer, a new request in the same turn). Th
 decides the item's status: another decision than the recorded one rewrites the ``item/completed`` that follows (allowed:
 completed, exit code 0, no output; declined or cancelled: declined). That rewrite is the fake's own, not a recording.
 A ``turn/interrupt`` while a turn waits ends it with ``turn/completed`` of status ``interrupted``. The ids, the thread
-id, the work folder and the Codex home in the recording are replaced with the real ones. A request the script does
+id, the work folder and the Codex home in the recording are replaced with the real ones. ``mcpServerStatus/list`` is
+answered as 0.163.0 does: without a ``threadId`` the list of what the process loaded at its start (always empty,
+before the project was trusted), with one the list of what the thread loaded (the recorded one when ``clean`` is false
+or ``mcp_leak`` is true, else empty). A request the script does
 not expect is answered with a JSON-RPC error and logged as ``unexpected``.
 """
 
@@ -146,8 +151,8 @@ class Fake:
 
     # -- printing recorded rows
 
-    def emit(self, line):
-        ln = ccf.clean(line) if self.clean else copy.deepcopy(line)
+    def emit(self, line, raw=False):
+        ln = copy.deepcopy(line) if raw or not self.clean else ccf.clean(line)
         if ln is None:
             return
         if ccf.is_request(ln):                                     # a server request: a fresh id
@@ -211,11 +216,11 @@ class Fake:
             if item.get("type") == "commandExecution":
                 item.update(exitCode=None, aggregatedOutput=None, processId=None, durationMs=None)
 
-    def group(self, g, msg):
+    def group(self, g, msg, raw_response=False):
         self.idmap[g.request["id"]] = msg["id"]
         for row in g.pre:
             self.emit(row[1])
-        self.emit(g.response)
+        self.emit(g.response, raw=raw_response)
         for row in g.post:
             self.emit(row[1])
 
@@ -332,10 +337,10 @@ class Fake:
             self.group(g, msg)
         elif method == "mcpServerStatus/list":
             g = self.parsed.handshake.get(method) if self.parsed else None
-            if g is None:
+            if g is None or not isinstance(params.get("threadId"), str):
                 self.respond(msg["id"], {"data": []})
             else:
-                self.group(g, msg)
+                self.group(g, msg, raw_response=bool(self.conf.get("mcp_leak")))
         elif method == "turn/start" and self.parsed is not None:
             self.play_turn(msg)
         elif method == "thread/delete" and "id" in msg:

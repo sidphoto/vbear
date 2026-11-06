@@ -50,7 +50,7 @@ class ConstantsTests(unittest.TestCase):
         self.assertLessEqual(recorded, known)
 
     def test_argv_names_every_setting_and_disabled_feature_and_no_other_switch(self):
-        argv = ccp.argv_for(ccp.VERSIONS["0.163.0"])
+        argv = ccp.argv_for(ccp.VERSIONS["0.163.0"], "/h/.vbear/chat-work/aaaa")
         self.assertEqual(argv[:3], ["app-server", "--listen", "stdio://"])
         configs = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"]
         disabled = [argv[i + 1] for i, a in enumerate(argv) if a == "--disable"]
@@ -59,7 +59,8 @@ class ConstantsTests(unittest.TestCase):
             "notify=[]", 'history.persistence="none"', "skills.bundled.enabled=false",
             "skills.include_instructions=false", "project_doc_max_bytes=0",
             "sandbox_workspace_write.network_access=false", "sandbox_workspace_write.exclude_slash_tmp=true",
-            "sandbox_workspace_write.exclude_tmpdir_env_var=true"])
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true", "project_root_markers=[]",
+            'projects={"/h/.vbear/chat-work/aaaa"={trust_level="untrusted"}}'])
         self.assertEqual(disabled, [
             "apps", "plugins", "remote_plugin", "hooks", "shell_snapshot", "browser_use", "browser_use_external",
             "computer_use", "image_generation", "memories", "multi_agent", "skill_mcp_dependency_install",
@@ -67,6 +68,29 @@ class ConstantsTests(unittest.TestCase):
             "workspace_dependencies", "worktrees"])
         self.assertEqual(len(argv), 3 + 2 * len(configs) + 2 * len(disabled))
         self.assertNotIn("--strict-config", argv)
+
+    def test_the_trust_setting_is_one_inline_table_that_toml_reads_back_as_the_work_folder(self):
+        import tomllib
+        c = ccp.VERSIONS["0.163.0"]
+        # a dot in the path (~/.vbear) must stay inside one key, which is why it is an inline table and not dotted keys
+        for path in ("/h/.vbear/chat-work/aaaa", '/h/we"ird/back\\slash/x', "/h/空白 資料夾/x", "/h/a=b/c.d/e",
+                     "/h/\U0001F600/x"):
+            argv = ccp.argv_for(c, path)
+            value = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"][-1]
+            self.assertTrue(value.startswith("projects={"))
+            key, _, rest = value.partition("=")
+            self.assertEqual(key, "projects")
+            self.assertEqual(tomllib.loads(value), {"projects": {path: {"trust_level": "untrusted"}}}, path)
+
+    def test_the_project_root_markers_are_empty_so_the_work_folder_is_the_project_root(self):
+        self.assertIn("project_root_markers=[]", ccp.VERSIONS["0.163.0"].config)
+
+    def test_a_work_folder_that_cannot_be_written_safely_is_refused(self):
+        c = ccp.VERSIONS["0.163.0"]
+        for bad in ("relative/x", "", None, 7, "/h/a\nb", "/h/a\rb", "/h/a\0b", "/h/a\tb", "/h/a\x7fb",
+                    "/h/a\ud800b", "/h/a\x1bb"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                ccp.argv_for(c, bad)
 
 
 class LineTests(unittest.TestCase):
@@ -110,8 +134,8 @@ class LineTests(unittest.TestCase):
                        "input": [{"type": "text", "text": "use this instead"}]}})
         self.assertEqual(parsed(ccp.turn_interrupt_line(6, THREAD, "turn-1")), {
             "method": "turn/interrupt", "id": 6, "params": {"threadId": THREAD, "turnId": "turn-1"}})
-        self.assertEqual(parsed(ccp.mcp_status_list_line(7)), {
-            "method": "mcpServerStatus/list", "id": 7, "params": {"detail": None}})
+        self.assertEqual(parsed(ccp.mcp_status_list_line(7, THREAD)), {
+            "method": "mcpServerStatus/list", "id": 7, "params": {"detail": None, "threadId": THREAD}})
         self.assertEqual(parsed(ccp.thread_delete_line(8, THREAD)), {
             "method": "thread/delete", "id": 8, "params": {"threadId": THREAD}})
 

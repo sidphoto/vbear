@@ -42,7 +42,7 @@ class Chat:
         env = {"PATH": os.environ.get("PATH", ""), "USER": "fake-user", "LOGNAME": "fake-user", "LANG": "C",
                "CODEX_HOME": str(self.home), "HOME": str(self.root / "home"),
                CONSTS.remote_control_env[0]: CONSTS.remote_control_env[1]}
-        self.p = subprocess.Popen([self.binary] + (argv or ccp.argv_for(CONSTS)), stdin=subprocess.PIPE,
+        self.p = subprocess.Popen([self.binary] + (argv or ccp.argv_for(CONSTS, str(self.work))), stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=self.work, env=env)
         self.case.addCleanup(self.kill, self.p)
         self.q: queue.Queue = queue.Queue()
@@ -177,7 +177,7 @@ class PlayTests(unittest.TestCase):
         self.assertEqual(c.finish(), 0)
         log = c.log()
         self.assertEqual(log[0]["event"], "start")
-        self.assertEqual(log[0]["argv"], ccp.argv_for(CONSTS))
+        self.assertEqual(log[0]["argv"], ccp.argv_for(CONSTS, str(c.work)))
         self.assertEqual(log[0]["cwd"], str(c.work))
         self.assertEqual(sorted(log[0]["env_keys"]), sorted(["PATH", "USER", "LOGNAME", "LANG", "CODEX_HOME", "HOME",
                                                               CONSTS.remote_control_env[0]]))
@@ -334,8 +334,37 @@ class PlayTests(unittest.TestCase):
     def test_the_mcp_list_is_empty_when_clean_and_not_when_not(self):
         c = Chat(self, config())
         c.start()
-        c.call(lambda i: ccp.mcp_status_list_line(i), "mcp_list")
+        c.call(ccp.mcp_status_list_line, "mcp_list", c.t.thread_id)
         self.assertEqual(c.pump("mcp_checked")[1], {"count": 0})
+
+    def list_mcp(self, c, **params):
+        """Writes mcpServerStatus/list with exactly ``params`` and returns what the tracker makes of the answer."""
+        c.ids += 1
+        c.t.expect(c.ids, "mcp_list")
+        c.write((json.dumps({"method": "mcpServerStatus/list", "id": c.ids, "params": params}) + "\n").encode())
+        while True:
+            msg = c.q.get(timeout=TIMEOUT)
+            self.assertIsNotNone(msg)
+            if msg.get("id") == c.ids:
+                return c.t.on_message(msg)
+
+    def test_a_fake_that_loads_mcp_servers_for_the_thread_answers_nothing_without_a_thread_id(self):
+        c = Chat(self, config(mcp_leak=True))
+        c.start()
+        self.assertEqual(self.list_mcp(c, detail=None), [("mcp_checked", {"count": 0})])      # what a check without it sees
+        out = self.list_mcp(c, detail=None, threadId=c.t.thread_id)
+        self.assertEqual([k for k, _ in out], ["violation"])
+        self.assertIn("MCP", out[0][1]["message"])
+
+    def test_vbear_asks_with_the_thread_id_so_that_fake_is_caught(self):
+        c = Chat(self, config(mcp_leak=True))
+        c.start()
+        c.call(ccp.mcp_status_list_line, "mcp_list", c.t.thread_id)
+        while True:
+            out = c.t.on_message(c.q.get(timeout=TIMEOUT))
+            if any(k == "violation" for k, _ in out):
+                break
+        self.assertTrue(c.t.stopped)
 
     def test_a_person_s_own_setup_can_be_played_back_and_is_stopped(self):
         c = Chat(self, config(clean=False))

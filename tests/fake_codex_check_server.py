@@ -30,6 +30,11 @@ handshake) with ``flags`` for the ways a Codex can go wrong:
   delete_fails      ``thread/delete`` is answered with an error
   late_exit         the process takes ``exit_delay`` seconds to end after stdin closes
   rollout           a file is made under CODEX_HOME/sessions for the thread, and removed by ``thread/delete``
+  ignores_trust     ``thread/start`` writes a trust entry into CODEX_HOME/config.toml even when the work folder has
+                    its own trust setting in the arguments
+
+Like 0.163.0 it also writes that entry (``[projects."<work folder>"] trust_level = "trusted"``) when the arguments carry
+no ``-c projects={...}`` for the work folder: a chat that was started without the setting is caught by the check.
 
 Every model call costs ``call_tokens`` (default 18000) of the thread's running total, which is kept across processes.
 Everything it is given goes to ``<config>.log.jsonl`` (tests/fake_codex_app_server.py).
@@ -283,10 +288,20 @@ class Probe(Fake):
         if method == "thread/delete" and "id" in msg and self.flags.get("delete_fails"):
             return self.respond_error(msg["id"], -32600, "cannot delete")
         super().idle(msg)
+        if method == "thread/start":
+            self.maybe_write_trust()
         if method in ("thread/start", "thread/resume") and self.flags.get("rollout"):
             self.rollout(msg["params"].get("threadId") or self.conf.get("thread_id"), make=True)
         if method == "thread/delete" and "id" in msg and self.flags.get("rollout"):
             self.rollout(msg["params"].get("threadId"), make=False)
+
+    def maybe_write_trust(self):
+        home = os.environ.get("CODEX_HOME")
+        cwd = os.path.realpath(os.getcwd())
+        given = any(a.startswith("projects={") and json.dumps(cwd, ensure_ascii=False) in a for a in sys.argv[1:])
+        if home and (self.flags.get("ignores_trust") or not given):
+            with open(os.path.join(home, "config.toml"), "w") as f:
+                f.write(f'[projects.{json.dumps(cwd, ensure_ascii=False)}]\ntrust_level = "trusted"\n')
 
     def rollout(self, thread_id, make):
         home = os.environ.get("CODEX_HOME")

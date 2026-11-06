@@ -96,7 +96,10 @@ VERSIONS = {
                 "notify=[]", 'history.persistence="none"', "skills.bundled.enabled=false",
                 "skills.include_instructions=false", "project_doc_max_bytes=0",
                 "sandbox_workspace_write.network_access=false", "sandbox_workspace_write.exclude_slash_tmp=true",
-                "sandbox_workspace_write.exclude_tmpdir_env_var=true"),
+                "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                # The work folder is the project root, so a git repository above it (a person's home folder is
+                # one) is not searched for settings, MCP servers or skills (docs/evidence/codex-0.163.0-chat.md).
+                "project_root_markers=[]"),
         disabled_features=("apps", "plugins", "remote_plugin", "hooks", "shell_snapshot", "browser_use",
                            "browser_use_external", "computer_use", "image_generation", "memories", "multi_agent",
                            "skill_mcp_dependency_install", "tool_suggest", "view_image", "in_app_browser", "goals",
@@ -118,10 +121,28 @@ def constants_for(version) -> CodexConstants | None:
     return VERSIONS.get(version) if isinstance(version, str) else None
 
 
-def argv_for(consts: CodexConstants) -> list[str]:
-    """The arguments after the binary: the stdio app-server, VBear's settings and the features it turns off."""
+def project_trust_setting(workdir) -> str:
+    """The ``-c`` value that sets the work folder's trust to "untrusted" (an inline table: a dotted key would be cut at
+    the dots of a path like ``~/.vbear``). Without any trust setting for the folder, a thread/start with a writable
+    sandbox makes Codex write "trusted" for the project root, which can be a person's home folder, into its CODEX_HOME.
+    ValueError for a path that is not an absolute path of printable characters that UTF-8 can hold: json.dumps gives a
+    valid TOML basic string for the quote and the backslash; control characters are refused rather than escaped."""
+    if not (isinstance(workdir, str) and os.path.isabs(workdir)):
+        raise ValueError("工作資料夾要是絕對路徑")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in workdir):
+        raise ValueError("工作資料夾的路徑含有控制字元")
+    try:
+        workdir.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("工作資料夾的路徑無法編碼") from exc
+    return "projects={%s={trust_level=\"untrusted\"}}" % json.dumps(workdir, ensure_ascii=False)
+
+
+def argv_for(consts: CodexConstants, workdir: str) -> list[str]:
+    """The arguments after the binary: the stdio app-server, VBear's settings, the work folder's trust setting and the
+    features it turns off. ``workdir`` is the manifest's canonical work folder (ValueError when it cannot be written)."""
     out = ["app-server", "--listen", "stdio://"]
-    for setting in consts.config:
+    for setting in (*consts.config, project_trust_setting(workdir)):
         out += ["-c", setting]
     for feature in consts.disabled_features:
         out += ["--disable", feature]
@@ -223,8 +244,12 @@ def turn_interrupt_line(request_id, thread_id: str, turn_id: str) -> bytes:
                   "params": {"threadId": _thread_id(thread_id), "turnId": turn_id}})
 
 
-def mcp_status_list_line(request_id) -> bytes:
-    return _line({"method": "mcpServerStatus/list", "id": _rid(request_id), "params": {"detail": None}})
+def mcp_status_list_line(request_id, thread_id: str) -> bytes:
+    """Asks for the MCP servers of the thread. With a ``threadId`` Codex answers for what that thread loaded; without
+    one it answers for what the process loaded at its start, before the project's trust was known, and an empty list
+    there proves nothing (docs/evidence/codex-0.163.0-chat.md)."""
+    return _line({"method": "mcpServerStatus/list", "id": _rid(request_id),
+                  "params": {"detail": None, "threadId": _thread_id(thread_id)}})
 
 
 def thread_delete_line(request_id, thread_id: str) -> bytes:

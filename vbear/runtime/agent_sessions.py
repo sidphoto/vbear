@@ -1016,13 +1016,20 @@ _CODEX_CHAT_BOUNDARY = {
 _CODEX_CHAT_OWN = frozenset({"chat_id", "profile_id", "resume", "thread_id", "codex_home"})
 
 
-def codex_chat_settings(cli_version: str) -> dict:
+def codex_chat_settings(cli_version: str, workdir: str) -> dict:
+    """What VBear asks of this Codex for a chat in ``workdir``, the role card's work folder. ``project_trust`` is the
+    one entry that depends on the folder (argv_for turns it into a ``-c projects={...}``); a path that cannot be written
+    safely refuses the launch."""
     consts = codex_chat_protocol.constants_for(cli_version)
     if consts is None:
         raise LaunchRefused("unsupported_version", f"Codex {cli_version} 沒有聊天模式的常數")
+    try:
+        codex_chat_protocol.project_trust_setting(workdir)
+    except ValueError as exc:
+        raise LaunchRefused("invalid_workdir", f"聊天的工作資料夾路徑不能交給 Codex：{exc}") from exc
     return {"engine": "codex-chat", "approval_policy": "untrusted", "approvals_reviewer": "user",
             "sandbox": dict(codex_chat_protocol.SANDBOX_POLICY, writableRoots=[]), "config": list(consts.config),
-            "disabled_features": list(consts.disabled_features)}
+            "project_trust": {workdir: "untrusted"}, "disabled_features": list(consts.disabled_features)}
 
 
 def codex_chat_argv(manifest: dict) -> list[str]:
@@ -1033,7 +1040,10 @@ def codex_chat_argv(manifest: dict) -> list[str]:
     if problem:
         raise LaunchRefused("manifest_invalid", f"Codex 聊天 manifest 不符（{problem}）")
     consts = codex_chat_protocol.constants_for(manifest["cli_version"])
-    return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts)]
+    try:
+        return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts, manifest["canonical_workspace"])]
+    except ValueError as exc:
+        raise LaunchRefused("invalid_workdir", f"聊天的工作資料夾路徑不能交給 Codex：{exc}") from exc
 
 
 def codex_chat_env(manifest: dict, source_env: dict) -> dict:
@@ -1107,7 +1117,7 @@ def prepare_codex_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_
             raise LaunchRefused("unsafe_path", "暫存區路徑含 symlink")
         sst = _owned_dir(scratch, uid)
         settings_path = ldir / SETTINGS
-        _write_private(settings_path, json.dumps(codex_chat_settings(cli_version), ensure_ascii=False, sort_keys=True,
+        _write_private(settings_path, json.dumps(codex_chat_settings(cli_version, canonical), ensure_ascii=False, sort_keys=True,
                                                  indent=2) + "\n")
         manifest = {
             "manifest_version": MANIFEST_VERSION,
@@ -1161,6 +1171,10 @@ def codex_chat_manifest_problem(m: dict) -> str | None:
         return problem
     if m.get("native_session_id") is not None:
         return "native_session_id 不合法"
+    try:
+        codex_chat_protocol.project_trust_setting(m.get("canonical_workspace"))
+    except ValueError:
+        return "canonical_workspace 的路徑不能交給 Codex"
     if not _CODEX_CHAT_OWN <= set(m):
         return "欄位不符"
     checks = [
@@ -1225,7 +1239,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
         elif m["engine"] == "claude-chat":
             expected = chat_settings(workdir, str(scratch), uid, m.get("cli_version"))
         elif m["engine"] == "codex-chat":
-            expected = codex_chat_settings(m.get("cli_version"))
+            expected = codex_chat_settings(m.get("cli_version"), workdir)
             if m.get("codex_home") != str(Path(os.path.realpath(base)) / CODEX_CHAT_HOME):
                 raise LaunchRefused("drift", "聊天用的 Codex 資料夾不是 VBear 的那一個")
         elif m["engine"] == "claude":

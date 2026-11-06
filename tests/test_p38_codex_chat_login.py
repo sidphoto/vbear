@@ -274,6 +274,22 @@ class ChatHomeTests(CodexCase):
                     (home / name).unlink()
         env.check_chat_home(self.state)                      # clean again
 
+    def test_the_config_file_refusal_says_in_plain_words_it_may_be_an_older_codex_s_trust_entry_and_where_to_move_it(self):
+        home = env.ensure_chat_home(self.state)
+        (home / "config.toml").write_text('[projects."/x"]\ntrust_level = "trusted"\n')
+        with self.assertRaises(review_codex.CodexRefused) as cm:
+            env.check_chat_home(self.state)
+        text = str(cm.exception)
+        for word in ("config.toml", "舊版", "信任", "codex-chat-home", "移走", "不會替你刪"):
+            self.assertIn(word, text)
+        self.assertEqual(env.home_state(self.state)[0], "refused")
+        self.assertTrue((home / "config.toml").exists(), "never removed by VBear")
+        (home / "config.toml").unlink()
+        (home / "rules").mkdir()
+        with self.assertRaises(review_codex.CodexRefused) as cm:
+            env.check_chat_home(self.state)
+        self.assertNotIn("舊版", str(cm.exception), "only the config file may be an older Codex's own")
+
     def test_the_files_codex_itself_writes_are_fine(self):
         home = env.ensure_chat_home(self.state)
         (home / "auth.json").write_text("{}")

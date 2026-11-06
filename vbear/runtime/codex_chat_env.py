@@ -4,7 +4,8 @@ login state and the one answer "may this Mac chat with Codex, and if not, why".
 The Codex that chats never uses the person's own ``~/.codex``: ``codex app-server`` always reads that folder's settings
 (it has no way to ignore them), so the chat logs in to ``<state>/codex-chat-home`` instead. VBear never writes a
 ``config.toml``, ``rules/`` or ``AGENTS.md`` there, so finding one means another program put it there and the chat is
-refused. This folder is not the review's ``codex-home`` (that one has its own login fingerprint and size watch; a chat's
+refused (a ``config.toml`` is most likely the trust entry an older build's Codex wrote for a person's home folder; VBear never
+deletes it, the message says where to move it). This folder is not the review's ``codex-home`` (that one has its own login fingerprint and size watch; a chat's
 saved conversations must not block a review).
 
 Every check either returns a value that was checked or says why not. No model is called: ``codex --version`` and
@@ -77,6 +78,11 @@ def check_chat_home(base, *, size: bool = True, home=None) -> Path:
             except OSError as exc:
                 raise CodexRefused("foreign_settings", f"無法確認聊天用的 Codex 資料夾裡有沒有 {name}"
                                    f"（{exc.strerror or type(exc).__name__}），所以不使用它") from exc
+            if name == "config.toml":
+                raise CodexRefused("foreign_settings", "聊天用的 Codex 資料夾裡有 config.toml，不是 VBear 放的，所以不使用它。"
+                                   "它可能是舊版（還沒有這項防護的版本）跑 Codex 時，Codex 自己寫進去的信任設定："
+                                   "把你的家目錄標成「信任」，會讓你自己的 MCP 伺服器與技能進到聊天。"
+                                   "請到 VBear 狀態資料夾（通常是 ~/.vbear）裡的 codex-chat-home，把 config.toml 移走（VBear 不會替你刪）。")
             raise CodexRefused("foreign_settings", f"聊天用的 Codex 資料夾裡有 {name}，不是 VBear 放的，"
                                "所以不使用它。請把它移走（VBear 不會替你刪）。")
     finally:

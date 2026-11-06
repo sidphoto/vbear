@@ -224,7 +224,7 @@ class TextTests(CodexCase):
         # how it was started
         start = next(x for x in self.fake_log() if x["event"] == "start")
         consts = ccp.VERSIONS[VERSION]
-        self.assertEqual(start["argv"], ccp.argv_for(consts))
+        self.assertEqual(start["argv"], ccp.argv_for(consts, self.work()))
         self.assertEqual(sorted(start["env_keys"]), sorted(consts.env_keys))
         self.assertEqual(start["cwd"], self.work())
         self.assertEqual(start["codex_home"], str(self.chat_home))
@@ -527,6 +527,22 @@ class ViolationTests(CodexCase):
         item = {"id": "inject-web", "type": "webSearch", "query": "x"}
         started = {"method": "item/started", "params": {"threadId": THREAD, "turnId": "t-inject", "item": item}}
         self.violation([started], "webSearch")
+
+    def test_mcp_servers_only_the_thread_has_stop_the_chat_before_the_message(self):
+        # 0.163.0 with a home folder that is a git repository: the list without a threadId is empty, the thread's is not
+        self.configure(start=[0], mcp_leak=True)
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        end = self.wait_turn(chat_id, 1)
+        self.assertEqual((end["reason"], end["cost_usd"]), ("not_sent", "0"))
+        error = next(x for x in self.events(chat_id)[0] if x["kind"] == "error")
+        self.assertIn("MCP", error["message"])
+        self.wait_gone(chat_id)
+        self.assertNotIn("turn/start", self.methods())
+        asked = [x for x in self.stdin() if x.get("method") == "mcpServerStatus/list"]
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(asked[0]["params"]["threadId"], THREAD)
+        self.assertNotIn("fake-mcp", self.raw(chat_id))
 
     def test_the_persons_own_settings_in_the_answer_stop_the_chat_before_the_message(self):
         self.configure(start=[0], clean=False)           # the recording as made: their AGENTS.md, five MCP servers

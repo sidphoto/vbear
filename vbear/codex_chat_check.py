@@ -234,7 +234,7 @@ def _plain(command: str, *needles: str) -> bool:
     return all(n in command for n in needles) and not SHELL_CHARS.search(command)
 
 
-def _run_steps(s: CodexSession, work: Path, outside: Path, checks: dict, obs: dict) -> None:
+def _run_steps(s: CodexSession, work: Path, outside: Path, real_home: Path, checks: dict, obs: dict) -> None:
     deny = lambda card, i: ("deny", None)           # noqa: E731
     allowed: list[str] = []                         # what the check let Codex do, for the report
 
@@ -261,8 +261,15 @@ def _run_steps(s: CodexSession, work: Path, outside: Path, checks: dict, obs: di
         sessions=len(ready), note="thread/start 的回應與 VBear 的設定逐項相符（核准方式、核准的人、沙盒、工作資料夾、沒有指示檔）")
     checks["mcp_empty"] = check(
         bool(s.facts("mcp_checked")) and not s.facts("violation"), lists=len(s.facts("mcp_checked")),
-        note="啟動後 mcpServerStatus/list 是空的，而且沒有任何 MCP 伺服器啟動的通知")
-    if not (checks["initialize"]["pass"] and checks["mcp_empty"]["pass"]) or end1 is None or end1["reason"] != "result":
+        note="啟動後 mcpServerStatus/list（帶著對話的 threadId）是空的，而且沒有任何 MCP 伺服器啟動的通知")
+    # The moment a Codex that took the home folder for the project would have written its trust entry is thread/start, which
+    # has been answered: nothing may be in the folder yet (a config.toml there is Codex's, not VBear's).
+    config_there = os.path.lexists(real_home / "config.toml")
+    checks["home_no_config_at_start"] = check(
+        not config_there, config_toml=config_there,
+        note="thread/start 之後，聊天用的 Codex 資料夾裡沒有 config.toml（Codex 沒有替任何資料夾寫入信任設定）")
+    if not (checks["initialize"]["pass"] and checks["mcp_empty"]["pass"]
+            and checks["home_no_config_at_start"]["pass"]) or end1 is None or end1["reason"] != "result":
         why = errors[0]["message"] if errors else (end1["reason"] if end1 else "沒有結束")
         raise CheckError(f"第一回合就沒有成功，後面的步驟沒有跑：{why}"[:300])
     reply1 = " ".join(x["text"] for x in s.of_turn(n, "reply"))
@@ -472,7 +479,8 @@ def _delete_and_close(s: CodexSession, real_home: Path, checks: dict, obs: dict)
         note="stdin EOF 之後程序自己結束（結束碼 0），在期限內；不是被 VBear 的 TERM／KILL 結束")
 
 
-def _final_checks(s: CodexSession, state: Path, real_state: Path, real_home: Path, checks: dict, logs: list[str]) -> None:
+def _final_checks(s: CodexSession, state: Path, real_state: Path, real_home: Path, checks: dict, obs: dict,
+                  logs: list[str]) -> None:
     folder, why = codex_chat_env.home_state(real_state, home=real_home)
     checks["home_clean"] = check(
         folder == "ok", state=folder, note="聊天用的 Codex 資料夾裡沒有多出 VBear 沒放的設定檔、規則或指示檔")
@@ -485,6 +493,16 @@ def _final_checks(s: CodexSession, state: Path, real_state: Path, real_home: Pat
             pass
     texts.append("\n".join(logs))
     found = leaks("\n".join(texts), (str(real_home),))
+    argvs = s.probe["argv"]
+    markers = bool(argvs) and all("project_root_markers=[]" in a for a in argvs)
+    trusted = bool(argvs) and all(sum(1 for x in a if x.startswith("projects={")) == 1
+                                  and all('{trust_level="untrusted"}}' in x for x in a if x.startswith("projects={"))
+                                  for a in argvs)
+    obs["project_settings"] = {"project_root_markers": "[]" if markers else "not sent",
+                               "project_trust": "untrusted" if trusted else "not sent", "processes": len(argvs)}
+    checks["project_settings_sent"] = check(
+        markers and trusted, processes=len(argvs),
+        note="每個 Codex 程序的啟動參數都帶了 project_root_markers=[] 和工作資料夾的信任設定（untrusted）；報告不記路徑")
     checks["no_account_data"] = check(
         not found, found=found, note="initialize 的回應與帳號通知的內容沒有進聊天紀錄、日誌或這份報告")
     errors = [x for x in s.records if x["kind"] == "error"]
@@ -619,7 +637,7 @@ def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Pat
     outside.mkdir(mode=0o700)
     saved_home = os.environ.get("VBEAR_HOME")
     os.environ["VBEAR_HOME"] = str(state)
-    probe = {"facts": [], "calls": deque(), "delete": None}
+    probe = {"facts": [], "calls": deque(), "delete": None, "argv": []}
     logs: list[str] = []
     originals = _patch(probe)
     dm = dmn.Daemon(state, log=logs.append)
@@ -636,7 +654,7 @@ def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Pat
         session = CodexSession(dm, state, binary, version, logs, probe)
         work = Path(cs.ensure_work_dir(state, PROFILE_ID))
         try:
-            _run_steps(session, work, outside, checks, obs)
+            _run_steps(session, work, outside, real_home, checks, obs)
         except (CheckError, dmn.UnsafePath) as exc:
             report["error"] = f"{type(exc).__name__}: {exc}"[:500] if isinstance(exc, dmn.UnsafePath) else str(exc)[:500]
         if session.chat_id:
@@ -645,7 +663,7 @@ def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Pat
                 session.poll()
             except CheckError as exc:
                 report.setdefault("error", str(exc)[:500])
-            _final_checks(session, state, real_state, real_home, checks, logs)
+            _final_checks(session, state, real_state, real_home, checks, obs, logs)
         obs["unknown_request"] = "未觀察：真的 Codex 不會因為這個檢查而送出不認得的請求；VBear 對它的處理由 daemon 的測試用假 Codex 涵蓋"
         recs = session.records if session else []
         report["turns"] = [{"turn": x["turn"], "cost_usd": x["cost_usd"], "reason": x["reason"], "tokens": x.get("tokens"),
@@ -700,9 +718,18 @@ def _patch(probe: dict) -> list:
             probe["calls"].popleft()(self, now)
         return orig_tick(self, now)
 
+    orig_argv = agent_sessions.codex_chat_argv
+
+    def argv(manifest):
+        out = orig_argv(manifest)
+        probe["argv"].append([a for a in out if a.startswith(("project_root_markers", "projects="))])
+        return out
+
     ccs.CodexChatProcess._on_fact = on_fact
     ccs.CodexChatProcess.tick = tick
-    return [(ccs.CodexChatProcess, "_on_fact", orig_fact), (ccs.CodexChatProcess, "tick", orig_tick)]
+    agent_sessions.codex_chat_argv = argv
+    return [(ccs.CodexChatProcess, "_on_fact", orig_fact), (ccs.CodexChatProcess, "tick", orig_tick),
+            (agent_sessions, "codex_chat_argv", orig_argv)]
 
 
 def _unpatch(originals: list) -> None:

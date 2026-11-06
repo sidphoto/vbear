@@ -344,7 +344,7 @@ class CodexChatProcess(chs.ChatProcess):
             self._record("session_bound", {"thread_id": data["thread_id"]})
         rid = self._rpc()
         self.tracker.expect(rid, "mcp_list")
-        self._queue(ccp.mcp_status_list_line(rid))
+        self._queue(ccp.mcp_status_list_line(rid, self.thread_id))
 
     def _on_failed(self, data: dict, now: float) -> None:
         kind = data["kind"]

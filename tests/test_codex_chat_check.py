@@ -26,7 +26,7 @@ from vbear.runtime import codex_chat_session as ccs
 VERSION = "0.163.0"
 THREAD = "00000000-0000-4000-8000-0000000000aa"
 STEPS = ("stream", "ask", "edit", "patch", "outside", "interrupt", "memory")
-ALL_CHECKS = ("admin_policy", "initialize", "mcp_empty", "stream_text", "ls_asks", "edit_steer", "edit_works",
+ALL_CHECKS = ("admin_policy", "initialize", "mcp_empty", "home_no_config_at_start", "project_settings_sent", "stream_text", "ls_asks", "edit_steer", "edit_works",
               "deny_works", "patch_card", "outside_confined", "interrupt_works", "resume_memory", "tokens_cumulative",
               "thread_deleted", "idle_close", "home_clean", "no_account_data", "records_clean", "cost_within_limit",
               "cleanup")
@@ -152,7 +152,7 @@ class PassTests(CheckCase):
         self.assertEqual(len(starts), 2, "one process for the steps up to the interrupt, one after it")
         consts = ccp.VERSIONS[VERSION]
         for start in starts:
-            self.assertEqual(start["argv"], ccp.argv_for(consts))
+            self.assertEqual(start["argv"], ccp.argv_for(consts, start["cwd"]))
             self.assertEqual(sorted(start["env_keys"]), sorted(consts.env_keys))
             self.assertEqual(start["codex_home"], str(self.chat_home))
             self.assertIn("/chat-work/", start["cwd"])
@@ -332,6 +332,34 @@ class FailTests(CheckCase):
             code, report = self.check()
         self.assert_failed(code, report, "home_clean")
 
+    def test_a_trust_entry_written_at_start_fails_at_that_step_not_only_at_the_end(self):
+        code, report = self.check({"ignores_trust": True})
+        self.assert_failed(code, report, "home_no_config_at_start")
+
+    def test_a_chat_started_without_the_project_settings_fails(self):
+        real = ccp.argv_for
+
+        def without(consts, workdir):
+            argv = real(consts, workdir)
+            drop = {i for i, a in enumerate(argv) if a == "-c" and argv[i + 1].startswith(("projects=", "project_root_markers"))}
+            return [a for i, a in enumerate(argv) if i not in drop and i - 1 not in drop]
+        with mock.patch.object(ccp, "argv_for", without):
+            code, report = self.check()
+        self.assert_failed(code, report, "home_no_config_at_start")
+
+    def test_the_report_says_both_project_settings_were_sent_without_a_path(self):
+        code, report = self.check()
+        self.assertEqual(code, 0)
+        sent = report["observations"]["project_settings"]
+        self.assertEqual(sent, {"project_root_markers": "[]", "project_trust": "untrusted", "processes": 2})
+        self.assertTrue(report["checks"]["project_settings_sent"]["pass"])
+        self.assertNotIn("chat-work", json.dumps(report))
+        for rec in self.fake_log():
+            if rec["event"] == "start":
+                self.assertIn("project_root_markers=[]", rec["argv"])
+                self.assertTrue(any(a.startswith("projects={") for a in rec["argv"]))
+        self.assertFalse((self.chat_home / "config.toml").exists())
+
     def test_a_turn_that_reaches_its_cap_fails(self):
         code, report = self.check(call_tokens=60000)       # one call costs US$0.06, more than any step's cap
         self.assert_failed(code, report)
@@ -397,7 +425,7 @@ class FailTests(CheckCase):
 
 class EarlyStopTests(CheckCase):
     def stop_after_one_turn(self, end_process):
-        def steps(s, work, outside, checks, obs):
+        def steps(s, work, outside, real_home, checks, obs):
             s.open()
             n = s.say("stream", cc.PROMPTS["stream"])
             s.drive(n, lambda card, i: ("deny", None))
