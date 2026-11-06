@@ -571,6 +571,24 @@ test("Codex: a command card shows the whole command, the folder and what it does
   noMarkup(app.chatCardNode(codexCommand({ input: { command: EVIL, cwd: EVIL, codex_reason: EVIL, actions: [{ type: EVIL, command: EVIL }] } }), { edit: { open: false }, onAnswer() {} }));
 });
 
+test("Codex: a command card says in plain words that an allowed command may run outside the sandbox; a file card and a Claude card do not", () => {
+  const WARN = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。";
+  const opts = () => ({ edit: { open: false }, onAnswer() {}, redraw() {} });
+  const cmd = app.chatCardNode(codexCommand(), opts());
+  const warn = q(cmd, "sandbox-warning");
+  assert(warn, "a Codex command card has the warning");
+  assert.strictEqual(text(warn), WARN);
+  const kids = cmd.findAll(() => true);
+  assert(kids.indexOf(warn) < kids.indexOf(q(cmd, "allow")), "the warning is above the allow button");
+  // while the person is changing the command and asking again, the warning is still there
+  const editing = app.chatCardNode(codexCommand(), { edit: { open: true, text: "echo hi" }, onAnswer() {}, redraw() {} });
+  assert(q(editing, "sandbox-warning"), "the warning stays while changing and asking again");
+  assert(!q(app.chatCardNode(codexFile(), opts()), "sandbox-warning"), "a file card is not that: VBear refuses outside files itself");
+  assert(!q(app.chatCardNode(card(), opts()), "sandbox-warning"), "a Claude card is unchanged");
+  assert(!text(app.chatCardNode(card({ tool: "Write", editable: null, input: { file_path: "/w/a", content: "x" } }), opts())).includes("沙盒外"));
+  noMarkup(cmd);
+});
+
 test("Codex: change then ask again starts from the command, says what will happen, and posts 'modify' with the text", () => {
   const calls = [];
   const edit = { open: true, text: undefined };

@@ -12908,6 +12908,10 @@ function chatLine(rec, opts) {
 // card.input: a command with its folder and what Codex says it does, or the files with a diff each. Every string is set as text.
 const CHAT_ASK_AGAIN = "VBear 會先拒絕原本的，再請 Codex 照你改的重新問你一次；Codex 會再問你一次，你要再看過、再按一次允許，才會執行。";
 const CHAT_CODEX_EDIT_FILE = "寫下你要它改成什麼（要寫清楚是哪個檔案，上面列了這張卡的檔案）。";
+// Under `untrusted` Codex 0.163.0 runs an allowed command again without the sandbox when the sandbox stopped it, and the card
+// cannot tell which it will be (docs/adr/0005, decision 6). Said on every command card; not on a file card (VBear refuses
+// the files outside the work folder itself) and not on a Claude card.
+const CHAT_CODEX_SANDBOX_WARNING = "允許後，這個指令可能在沙盒外執行：能改到工作資料夾以外的檔案，也能連網。只允許你看得懂、確定沒問題的指令。";
 
 // The rows of a card: [label, text] pairs, and for a file change a diff per file.
 function chatCodexRows(card) {
@@ -12957,6 +12961,7 @@ function chatCardNode(card, opts) {
     editing && codex && card.tool === "file_change" ? el("p", { class: "small", "data-chat": "edit-note" }, CHAT_CODEX_EDIT_FILE) : null,
     area,
     codex && (editing || editable) ? el("p", { class: "small muted", "data-chat": "ask-again" }, CHAT_ASK_AGAIN) : null,
+    card.tool === "command" ? el("p", { class: "small", "data-chat": "sandbox-warning", role: "note" }, CHAT_CODEX_SANDBOX_WARNING) : null,
     el("p", { class: "small muted" }, `不按的話，${left === null ? "5 分鐘後" : `約 ${left} 秒後`}會過期，視為拒絕（沒有執行）。按下允許的當下，VBear 會再檢查一次。`),
     el("div", { class: "row chat-card-actions" },
       editing
