@@ -2155,7 +2155,7 @@ async function viewHome() {
   // /api/flows reads live state from the cache /api/live fills, so live goes first.
   const [, , tasksRes, profilesRes, catalogRes, configRes] = await Promise.all([loadStatic(), loadLive().then(() => loadFlows()),
     api.get("/api/tasks").catch(() => null), api.get("/api/agent-profiles").catch(() => null),
-    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList()]);
+    api.get("/api/agent-builder/catalog").catch(() => null), api.get("/api/config").catch(() => null), loadMeetings(), loadStaffingList(), loadDispatchList()]);
   const L = D.live;
   const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
@@ -2198,7 +2198,7 @@ async function viewHome() {
   const examples = ["網站安全", "做簡報", "剪影片", "部署網站", "寫小說", "設計品牌"];
 
   noteTasks(tasksRes && tasksRes.tasks);
-  const board = boardGroups(L, D.flows, D.meetings, D.staffing);
+  const board = boardGroups(L, D.flows, D.meetings, D.staffing, D.dispatch);
   boardShownKey = boardKey(board, boardKeyContext());
   const recentProjects = (L.projects || []).filter((p) => p.live_session_ids.length || p.last_activity).slice(0, 6);
   const problemSkills = (D.overview.skills_with_problems || []).map((id) => D.byId.get(id)).filter(Boolean);
@@ -2255,7 +2255,7 @@ function waitsForYou(f) {
 // meetingsData (optional): the answer of GET /api/meetings. A meeting that waits for the chairman is on the board; a read that
 // failed is said (meetingsError); an answer that is not a list is treated as not read. staffingData (optional, P35-4): the
 // answer of GET /api/staffing, the same way: a proposal that waits for the chairman to look at it is on the board.
-function boardGroups(live, flowsData, meetingsData, staffingData) {
+function boardGroups(live, flowsData, meetingsData, staffingData, dispatchData) {
   const L = live || {};
   const runtimeAvailable = !!(L.runtime && L.runtime.available);
   const sessions = Array.isArray(L.sessions) ? L.sessions : [];
@@ -2278,13 +2278,16 @@ function boardGroups(live, flowsData, meetingsData, staffingData) {
   const meetingsError = meetingsData && typeof meetingsData === "object" && meetingsData.error ? String(meetingsData.error) : "";
   const yourTurnStaffing = staffingNeedingYou(staffingData);
   const staffingError = staffingData && typeof staffingData === "object" && staffingData.error ? String(staffingData.error) : "";
+  // P40-5: a proposal of the chief of staff to confirm, a dispatch that is paused
+  const yourTurnDispatch = dispatchNeedingYou(dispatchData);
+  const dispatchError = dispatchData && typeof dispatchData === "object" && dispatchData.error ? String(dispatchData.error) : "";
   return {
-    error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError, yourTurnStaffing, staffingError,
+    error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError, yourTurnStaffing, staffingError, yourTurnDispatch, dispatchError,
     inProgress: readable.slice(0, BOARD_IN_PROGRESS_MAX),
     moreInProgress: Math.max(0, readable.length - BOARD_IN_PROGRESS_MAX),
     missingFlows: missingFlows.slice(0, BOARD_MISSING_MAX), moreMissing: Math.max(0, missingFlows.length - BOARD_MISSING_MAX),
     runtimeAvailable,
-    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length,
+    allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length && !yourTurnDispatch.length,
   };
 }
 
@@ -2330,6 +2333,7 @@ function boardKey(g, ctx) {
     meetings: (g.yourTurnMeetings || []).map((m) => [m.id, m.topic, m.status, m.created_at, m.spent_usd]), meetingsError: g.meetingsError || "",
     staffing: (g.yourTurnStaffing || []).map((x) => [x.id, staffingTurnTitle(x), x.status, x.created_at, x.spent_usd, x.high_risk === true]),
     staffingError: g.staffingError || "",
+    dispatch: (g.yourTurnDispatch || []).map((x) => [x.id, x.state, x.title, x.steps, x.created_at]), dispatchError: g.dispatchError || "",
     progress: g.inProgress.map(flowFields), missing: (g.missingFlows || []).map(flowFields), moreMissing: g.moreMissing || 0 });
 }
 
@@ -2459,16 +2463,20 @@ function boardSection(g, opts = {}) {
         el("a", { class: firstGame ? "btn" : "btn primary", href: "#/workbench", "data-board": "workbench" }, "到終端工作台"),
         el("span", null, "在那裡挑角色出發；想讓多個角色合作，先按下方「＋ 任務卡（導入專案）」挑一個專案資料夾，再把角色卡放上任務卡的隊伍位置。"),
         g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
-        g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null));
+        g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
+        g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null));
   }
   const nTurn = g.yourTurnFlows.length;
   const nAgents = g.yourTurnSessions.length;
   const nMeetings = (g.yourTurnMeetings || []).length;
   const nStaffing = (g.yourTurnStaffing || []).length;
+  const nProposed = (g.yourTurnDispatch || []).filter((r) => r.state === "proposed").length;
+  const nPaused = (g.yourTurnDispatch || []).filter((r) => r.state === "paused").length;
   const counts = [nTurn ? `${nTurn} 則流程等你` : "", nMeetings ? `${nMeetings} 場會議等你` : "", nStaffing ? `${nStaffing} 份組隊提案等你` : "",
+    nProposed ? `${nProposed} 份派工提議等你` : "", nPaused ? `${nPaused} 件派工暫停` : "",
     nAgents ? `${nAgents} 個終端在等你` : ""].filter(Boolean).join("・");
   const cards = [...g.yourTurnFlows.map((f) => questCard(f, true)), ...(g.yourTurnMeetings || []).map(meetingTurnCard),
-    ...(g.yourTurnStaffing || []).map(staffingTurnCard), ...g.yourTurnSessions.map(sessionCard)];
+    ...(g.yourTurnStaffing || []).map(staffingTurnCard), ...(g.yourTurnDispatch || []).map(dispatchTurnCard), ...g.yourTurnSessions.map(sessionCard)];
   let turnBody;
   if (cards.length) turnBody = el("div", { class: "grid" }, cards);
   else if (g.error) {
@@ -2494,6 +2502,7 @@ function boardSection(g, opts = {}) {
       flowsError(),
       g.meetingsError ? notice("warn", `讀不到會議：${g.meetingsError}`) : null,
       g.staffingError ? notice("warn", `讀不到組隊會議：${g.staffingError}`) : null,
+      g.dispatchError ? notice("warn", `讀不到派工：${g.dispatchError}`) : null,
       turnBody),
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
@@ -6656,8 +6665,9 @@ function autonomyDialogBody(item, limits, never) {
 
 function autonomySettings(data) {
   const box = el("section", { class: "panel pad", "data-settings": "autonomy" }, el("h2", { style: "margin-bottom:6px" }, "自己動手"));
+  const actionsLink = () => el("p", { class: "small" }, el("a", { href: "#/actions", "data-autonomy": "actions-link" }, "看「AI 自己做了什麼」"), "：幕僚長和派工做過的每一件事，誰決定的，都列在那裡。");
   if (!data || !data.autonomy || !Array.isArray(data.items)) {
-    append(box, el("p", { class: "small muted", "data-autonomy": "unknown" }, AUTONOMY_UNKNOWN));
+    append(box, el("p", { class: "small muted", "data-autonomy": "unknown" }, AUTONOMY_UNKNOWN), actionsLink());
     return box;
   }
   const never = Array.isArray(data.never) ? data.never : [];
@@ -6687,7 +6697,8 @@ function autonomySettings(data) {
   append(box, el("p", { class: "small muted" }, AUTONOMY_NOTE),
     data.items.filter((item) => item.active === true && typeof item.key === "string").map(row),
     el("p", { class: "small", "data-autonomy": "never" }, "就算全部勾了，也永遠不會做：", never.join("")),
-    typeof data.later_note === "string" ? el("p", { class: "small muted", "data-autonomy": "later" }, data.later_note) : null);
+    typeof data.later_note === "string" ? el("p", { class: "small muted", "data-autonomy": "later" }, data.later_note) : null,
+    actionsLink());
   return box;
 }
 // ---------- end of the 「自己動手」 settings ----------
@@ -12289,6 +12300,8 @@ async function route() {
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
     else if (top === "ceo") await viewCeo();
     else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
+    else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
+    else if (top === "actions") await viewActions();
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();
@@ -12320,9 +12333,10 @@ async function route() {
       await loadFlows();
       await loadMeetings();
       await loadStaffingList();
+      await loadDispatchList();
       const box = document.getElementById("h-board");
       if (!box) return;
-      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing);
+      const g = boardGroups(D.live, D.flows, D.meetings, D.staffing, D.dispatch);
       const key = boardKey(g, boardKeyContext());
       if (key === boardShownKey) return;
       boardShownKey = key;
@@ -12341,6 +12355,8 @@ async function route() {
   if (top === "office") liveTick = officeTick;
   if (top === "setup") liveTick = setupTick;
   if (top === "chat") liveTick = chatTick;
+  if (top === "dispatch") liveTick = dispatchTick;
+  if (top === "actions") liveTick = actionsTick;
   if (top === "meetings") liveTick = meetingsTick;
   if (top === "staffing") liveTick = staffingTick;
   if (top === "flows" && parts[1]) {
@@ -13094,9 +13110,14 @@ function chatLine(rec, opts) {
   const codex = !!opts && opts.engine === "codex-chat";
   const text = (x) => (typeof x === "string" ? x : "");
   switch (rec.kind) {
-    case "user_message":
-      return el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq) },
-        el("div", { class: "chat-who small muted" }, `你・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)));
+    case "user_message": {
+      const origin = chatOriginOf(rec);          // a message VBear sent for a dispatch (P40): said over it, it is not the person's own words
+      const note = origin ? chatOriginNote(origin) : null;
+      const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq) },
+        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依派工送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)));
+      if (note) { line.originNote = note; line.origin = origin; }
+      return line;
+    }
     case "reply":
       return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq) },
         el("div", { class: "chat-who small muted" }, `員工・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
@@ -13515,7 +13536,7 @@ async function viewChatDetail(token, id) {
       lastSeq = r.seq;
       if (r.kind === "plan_usage") planRecord = r;
       const line = chatLine(r, { engine: engineOf() });
-      if (line) transcript.append(line);
+      if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
     }
   };
   const apply = (data) => {
@@ -13614,11 +13635,694 @@ async function viewChatDetail(token, id) {
       try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
       catch (e) { toast(e.message); }
     } } }, "刪除這個聊天")), sendNote, openingNote);
-  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, noteBox, transcript, liveBox, composer);
-  activeViewCleanup = () => { stopStream(); };
+  const isCeo = !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
+  const chief = isCeo ? chiefDesk(id, all.card) : null;
+  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, chief ? chief.node : null, noteBox, transcript, liveBox, composer);
+  activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); };
   stream();
   if (opening) input.focus();
 }
+
+// ---------- the chief of staff and the dispatch (v0.15, P40-5) -----------------------------------------------------------------
+// The CEO's chat page gets one button, 「請幕僚長安排」. It opens a dialog that says what is read, the most it costs and what is
+// left today, and only a press of its own button starts the one call (POST /api/chief from a preview). What comes back is a
+// proposal card: the chief of staff's words, the task, who does it and what each step sends, all of which the person may change
+// before 「確認派工」; nothing is made or sent until then (unless the person has ticked 「自己動手」, which the card does not
+// decide). The dispatch pages show each step's state; 「AI 自己做了什麼」 lists every thing the dispatch did, who decided it, and
+// the way to stop or take back. Everything shown is the server's record: a state or a reason is looked up in a closed table, a
+// value the table does not know is shown as it is and never guessed, and what a model wrote is set as text. Nothing here writes
+// the settings, the limits or the 「自己動手」 ticks, installs a skill or answers a permission card of an employee.
+
+const CHIEF_BUTTON = "請幕僚長安排";
+const CHIEF_LEDE = "想把一件事交給員工做時，按這顆：幕僚長會看你和 CEO 最近的對話，提議要找哪些員工、分幾步做。它只提議，你看過、確認了，VBear 才會動手。";
+const CHIEF_CODEX_SENDS = "這位 CEO 用的是 Codex：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
+const CHIEF_NEEDS_TITLE = "幕僚長目前需要 Claude Code";
+const CHIEF_NEEDS_WHY = "幕僚長要用 Claude Code 整理提議；只有 Codex 的話，這個功能現在還不能用。";
+const CHIEF_VERIFY_LABEL = "先做無工具安全檢查（用你的 Claude 帳號，通常不到 1 美分）";
+const CHIEF_NOTE_MAX = 200;
+const CHIEF_POLL_MS = 4000;
+const CHIEF_ERROR_TEXT = {
+  empty_plan: "幕僚長這次沒有提出可以做的步驟，也沒有要問你的事，所以這份提議作廢了。請把想做的事再跟 CEO 說清楚一點，或重試一次。",
+  invalid_output: "幕僚長回的格式不對，已經丟掉，沒有照它的話做任何事。可以重試。",
+  changed: "對話或員工在提議之後變了，不能重試；請重新請幕僚長安排。",
+};
+const CHIEF_STATUS = { running: "幕僚長在想", ready: "提議好了", failed: "沒有成功", blocked: "不能開始", cancelled: "已取消", skipped: "沒有做" };
+const DISPATCH_STATE = {
+  proposed: ["等你確認", "b-warn"], confirming: ["準備中", "b-info"], running: ["進行中", "b-info"], paused: ["暫停了", "b-warn"],
+  done: ["做完了", "b-ok"], stopped: ["已停止", "b-mute"], dismissed: ["沒有採用", "b-mute"],
+};
+const DISPATCH_BY = { you: "你確認的", auto1: "自己動手第 1 項", auto2: "自己動手第 2 項", vbear: "VBear" };
+const STEP_END_TEXT = {
+  result: "做完了", is_error: "員工回報這一步沒有成功", stopped: "這一回合被停止了", timeout: "等太久，逾時了", process_exit: "員工的程序中途結束了",
+  violation: "員工違反了 VBear 的設定，被停掉了", daemon_restart: "VBear 的背景程序重新啟動，被中斷了", error: "出了錯",
+  not_sent: "訊息沒有送到員工那裡", limit: "用到每回合的花費上限，被停下來了",
+};
+const DISPATCH_SENT_NOTE = "每一步送出後就收不回來；你隨時可以在派工頁按「停止」。員工做事時，每個指令、每個檔案修改照舊都問你。";
+const DISPATCH_HANDOFF_NOTE = "第 2 步起，VBear 會把上一步員工的回覆一起送給下一位（標成資料，不是指令）。";
+const DISPATCH_NEW_NOTE = "VBear 會建這位新員工：一律安全模式、不插任何技能，指示是這個職位的固定文字。";
+const DISPATCH_RED_NOTE = "今天的花費已經到每天上限（亮紅燈），現在不能確認派工；明天（本機 0:00 之後）再來。";
+
+// "US$1.50" from a money text, or "未知". A sum the person may be asked to pay is rounded up and what is left rounded down, so the
+// page never says less than the most or more than what is left.
+function dispatchNum(v) {
+  const s = typeof v === "number" ? String(v) : v;
+  if (typeof s !== "string" || !/^[0-9]+(\.[0-9]+)?$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+const usdUp = (n) => (n === null ? "未知" : `US$${(Math.ceil(n * 100 - 1e-9) / 100).toFixed(2)}`);
+const usdDown = (n) => (n === null ? "未知" : `US$${(Math.floor(n * 100 + 1e-9) / 100).toFixed(2)}`);
+function chiefErrorText(code) {
+  if (typeof code !== "string" || !code) return "";
+  return cardHas(CHIEF_ERROR_TEXT, code) ? `${CHIEF_ERROR_TEXT[code]}（${code}）` : meetingErrorText(code);
+}
+function dispatchStateBadge(state) {
+  return cardHas(DISPATCH_STATE, state) ? badge(DISPATCH_STATE[state][0], DISPATCH_STATE[state][1]) : badge("狀態不明", "b-mute");
+}
+function dispatchByText(by) { return cardHas(DISPATCH_BY, by) ? DISPATCH_BY[by] : "未知"; }
+// The most the dispatch may cost and what is left today, in one sentence; `over` when the most is more than what is left.
+function dispatchCostText(steps, perTurn, dayLeft) {
+  const per = dispatchNum(perTurn), left = dispatchNum(dayLeft);
+  const leftText = `今天還剩 ${usdDown(left)}`;
+  if (per === null || !Number.isInteger(steps)) return { text: `最多花多少：未知（讀不到每回合上限）。${leftText}。`, over: false };
+  const max = per * steps;
+  const over = left !== null && max > left + 1e-9;
+  return { text: `最多 ${usdUp(max)}（${steps} 步 × 每回合上限 ${usdUp(per)}），${leftText}。`
+    + (over ? "這比今天還剩的多，可能做到一半碰到每天上限，VBear 會停下來，明天 0:00 後按「繼續」。" : ""), over };
+}
+function chiefNeedsClaudeNode() {
+  return el("div", { class: "notice info", "data-chief": "needs-claude" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, el("b", null, CHIEF_NEEDS_TITLE),
+      el("p", { class: "small", style: "margin:4px 0 0" }, CHIEF_NEEDS_WHY),
+      el("p", { class: "small", style: "margin:4px 0 0" }, NEEDS_CLAUDE_HOW),
+      el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small primary", href: "#/setup", "data-chief": "setup-go" }, NEEDS_CLAUDE_GO))));
+}
+
+// The dialog before the chief of staff is asked. `pv` is GET /api/chief/preview; hooks: onStart(previewId, note), onRecheck().
+function openChiefDialog(pv, hooks) {
+  const blockers = Array.isArray(pv.blockers) ? pv.blockers.filter((b) => b && typeof b === "object") : [];
+  const cap = usdUp(dispatchNum(pv.cap_usd)), left = usdDown(dispatchNum(pv.day_left_usd));
+  const titleId = "chief-dialog-title";
+  const note = el("textarea", { rows: "3", maxlength: String(CHIEF_NOTE_MAX), "data-chief": "note", "aria-label": "給幕僚長的一句補充（選填）",
+    placeholder: "想補充什麼？（選填，200 字內）" });
+  let close = () => {};
+  const actions = [el("button", { class: "btn", type: "button", on: { click: () => close() } }, "取消")];
+  const needsCheck = blockers.some((b) => b.code === "boundary_unverified");
+  if (needsCheck) {
+    actions.push(el("button", { class: "btn", type: "button", "data-chief": "verify", on: { click: async () => {
+      close();
+      if (!(await confirmInPage("無工具安全檢查", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。幕僚長和會議用同一個檢查，一律檢查 Claude Code；檢查完會重新整理預覽，還不會請幕僚長安排。", "檢查"))) return;
+      try { const r = await api.post("/api/meetings/verify", {}); toast(`Claude Code ${r.version} 通過無工具安全檢查`); }
+      catch (e) { toast("檢查失敗：" + e.message); return; }
+      if (hooks.onRecheck) await hooks.onRecheck();
+    } } }, CHIEF_VERIFY_LABEL));
+  }
+  if (pv.ok === true && typeof pv.preview_id === "string" && pv.preview_id) {
+    const start = el("button", { class: "btn primary", type: "button", "data-chief": "start", on: { click: async () => {
+      start.disabled = true;
+      const words = note.value.trim();
+      close();
+      try { await hooks.onStart(pv.preview_id, words); } catch (e) { toast(e.message); }
+    } } }, CHIEF_BUTTON);
+    actions.push(start);
+  }
+  const head = el("h2", { id: titleId, tabindex: "-1" }, CHIEF_BUTTON);
+  const reads = Number.isInteger(pv.messages) ? `${pv.messages} 則` : "最近的幾則";
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-chief": "dialog" },
+    el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
+      blockers.map((b) => (b.code === "cli_not_found" ? chiefNeedsClaudeNode() : notice("warn", b.message || "現在不能開始"))),
+      el("p", null, `幕僚長會讀你和 CEO 最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}），`
+        + `和 ${Number.isInteger(pv.cards) ? pv.cards : "幾"} 位可以派工的員工名單（只有名字、職位、AI 工具、模型，沒有指示和技能）。工具的輸出、檔案內容、你按過的允許都不會送出。`),
+      el("p", { class: "chief-money", "data-chief": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`),
+        " 這只是幕僚長想一想的花費；員工之後真的做事，每一步另外算，提議卡上會寫最多多少。"),
+      el("p", null, `你和 CEO 的對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Claude Code"}（Anthropic）。它只提議，不會動手；你看過、確認了才會做。`),
+      pv.notice ? notice("info", pv.notice) : null,
+      typeof pv.disclosure === "string" && pv.disclosure ? el("p", { class: "small muted" }, pv.disclosure) : null,
+      typeof pv.cost_note === "string" && pv.cost_note ? el("p", { class: "small muted" }, pv.cost_note) : null,
+      el("label", { class: "ceo-field" }, el("span", null, "補充一句（選填）"), note),
+      el("div", { class: "modal-actions" }, actions)));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  head.focus();
+  return close;
+}
+
+// The proposal card of a dispatch that waits for the person (`v` is GET /api/dispatch/<id>). The person's changes live in a draft
+// on the page; what is sent is that draft. `opts`: lamp ("red" stops 「確認派工」), chief (the chief of staff's view, for what it
+// cost), onDone(view) after a confirmation, onGone(view) after 「不採用」, onRefresh() when the server says the proposal is not the
+// one that was shown. The card has `update({lamp})` for the caller that learns the lamp later.
+function proposalDraft(v) {
+  const plan = v.plan && typeof v.plan === "object" ? v.plan : {};
+  const cards = Array.isArray(plan.new_cards) ? plan.new_cards : [];
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  return { title: String(plan.title || ""), goal: String(plan.goal || ""),
+    cards: cards.map((c) => ({ ref: c.ref, name: String(c.name || ""), position: c.position, tool: c.tool, model_alias: c.model_alias || "", gone: false })),
+    steps: steps.map((s, i) => ({ who: s.who, text: String(s.text || ""), from: i })) };
+}
+function proposalCard(v, opts = {}) {
+  const orig = proposalDraft(v);
+  const draft = proposalDraft(v);
+  const made = new Set((Array.isArray(v.created_cards) ? v.created_cards : []).map((c) => c.ref));
+  const team = Array.isArray(v.team) ? v.team.filter((t) => t && typeof t.who === "string") : [];
+  const tools = Array.isArray(v.tools) && v.tools.length ? v.tools : [...new Set(draft.cards.map((c) => c.tool))];
+  const names = new Map(team.map((t) => [t.who, String(t.name || "")]));
+  let lamp = opts.lamp || null, busy = false, errorText = "";
+  const marks = [];
+  const root = el("section", { class: "panel pad prop-card", "data-dispatch": "proposal", "data-dispatch-id": v.id });
+  const body = el("div", { class: "prop-body" });
+  const editedNote = el("p", { class: "small", "data-dispatch": "edited-note" }, "你改過幕僚長的提議，確認後 VBear 照你改的做。");
+  const cardMark = el("span", { class: "badge b-info prop-mark", "data-dispatch": "edited" }, "你改過");
+  const costBox = el("p", { class: "prop-cost", "data-dispatch": "cost" });
+  const whyOff = el("p", { class: "small", "data-dispatch": "why-disabled", role: "status" });
+  const errorBox = el("div", { class: "prop-error", "data-dispatch": "error", role: "alert" });
+  // a proposal with no step (the chief of staff only has questions) has nothing to confirm
+  const confirmBtn = orig.steps.length ? el("button", { class: "btn primary", type: "button", "data-dispatch": "confirm", on: { click: () => confirmPlan() } }, "確認派工") : null;
+  const origCard = (ref) => orig.cards.find((c) => c.ref === ref);
+  const usedRefs = () => new Set(draft.steps.map((s) => s.who));
+  const liveCards = () => draft.cards.filter((c) => !c.gone);
+  const nameOf = (who) => { const c = draft.cards.find((x) => x.ref === who && !x.gone); return c ? c.name : names.get(who) || ""; };
+  const people = () => [...team.filter((t) => t.kind !== "new").map((t) => t.who), ...liveCards().map((c) => c.ref)];
+  const payload = () => ({ proposal_sha: v.proposal_sha, title: draft.title, goal: draft.goal,
+    new_cards: draft.cards.filter((c) => !c.gone && (made.has(c.ref) || usedRefs().has(c.ref)))
+      .map((c) => ({ ref: c.ref, name: c.name, position: c.position, tool: c.tool, model_alias: c.tool === "claude" ? c.model_alias : "" })),
+    steps: draft.steps.map((s) => ({ who: s.who, text: s.text })) });
+  const origPayload = () => JSON.stringify({ title: orig.title, goal: orig.goal,
+    cards: orig.cards.filter((c) => made.has(c.ref) || orig.steps.some((s) => s.who === c.ref)).map((c) => [c.ref, c.name, c.position, c.tool, c.tool === "claude" ? c.model_alias : ""]),
+    steps: orig.steps.map((s) => [s.who, s.text]) });
+  const nowPayload = () => { const p = payload(); return JSON.stringify({ title: p.title, goal: p.goal,
+    cards: p.new_cards.map((c) => [c.ref, c.name, c.position, c.tool, c.model_alias]), steps: p.steps.map((s) => [s.who, s.text]) }); };
+  const stepChanged = (i) => { const s = draft.steps[i]; const o = s.from === null ? null : orig.steps[s.from]; return !o || s.from !== i || o.who !== s.who || o.text !== s.text; };
+  const cardChanged = (c) => { const o = origCard(c.ref); return !o || o.name !== c.name || o.position !== c.position || o.tool !== c.tool || o.model_alias !== c.model_alias; };
+  const mark = (test) => { const n = el("span", { class: "badge b-info prop-mark", "data-dispatch": "edited" }, "你改過"); n.hidden = true; marks.push([n, test]); return n; };
+  const problems = () => {
+    const out = [];
+    if (!draft.title.trim()) out.push("任務名稱不能空白。");
+    if (!draft.goal.trim()) out.push("任務目標不能空白。");
+    if (!draft.steps.length) out.push("至少要有一步。");
+    const valid = new Set(people());
+    draft.steps.forEach((s, i) => { if (!valid.has(s.who)) out.push(`第 ${i + 1} 步請選一位員工。`); else if (!s.text.trim()) out.push(`第 ${i + 1} 步的內容不能空白。`); });
+    if (new Set(draft.steps.map((s) => s.who)).size > 3) out.push("一次最多找 3 位員工。");
+    for (const c of liveCards()) if (!c.name.trim() && !made.has(c.ref)) out.push("新員工的名字不能空白。");
+    return out;
+  };
+  const derive = () => {
+    const edited = nowPayload() !== origPayload();
+    for (const [n, test] of marks) n.hidden = !test();
+    editedNote.hidden = !edited;
+    cardMark.hidden = !edited;
+    const cost = dispatchCostText(draft.steps.length, v.cost && v.cost.per_turn_usd, v.cost && v.cost.day_left_usd);
+    setKids(costBox, cost.text, " ", el("span", { class: "small muted" }, DISPATCH_SENT_NOTE));
+    const bad = problems();
+    const red = lamp === "red";
+    if (confirmBtn) confirmBtn.disabled = busy || red || bad.length > 0 || !(v.can && v.can.confirm);
+    setKids(whyOff, !confirmBtn ? "" : red ? DISPATCH_RED_NOTE : bad.length ? bad[0] : "");
+  };
+  const redraw = () => { draw(); derive(); };
+
+  const newEmployee = (c) => {
+    const locked = made.has(c.ref);
+    const field = (key, label, control) => el("label", { class: "prop-field" }, el("span", { class: "small muted" }, label), control);
+    const opt = (value, label, chosen) => el("option", { value, selected: chosen }, label);
+    const name = el("input", { type: "text", maxlength: "40", value: c.name, "data-new-field": "name", "aria-label": "新員工的名字", disabled: locked,
+      on: { input: (e) => { c.name = e.target.value; derive(); } } });
+    name.value = c.name;
+    const position = el("select", { "data-new-field": "position", "aria-label": "新員工的職位", disabled: locked, on: { change: (e) => { c.position = e.target.value; derive(); } } },
+      CARD_POSITION_TABLE.filter((r) => r.id !== "planner").map((r) => opt(r.id, r.label, r.id === c.position)));
+    position.value = c.position;
+    const tool = el("select", { "data-new-field": "tool", "aria-label": "新員工的 AI 工具", disabled: locked, on: { change: (e) => { c.tool = e.target.value; if (c.tool !== "claude") c.model_alias = ""; redraw(); } } },
+      tools.map((t) => opt(t, chatToolName(t), t === c.tool)));
+    tool.value = c.tool;
+    const model = c.tool === "claude" ? el("select", { "data-new-field": "model_alias", "aria-label": "新員工的模型", disabled: locked, on: { change: (e) => { c.model_alias = e.target.value; derive(); } } },
+      [["", "依職位建議"], ["haiku", "haiku（最省）"], ["sonnet", "sonnet"], ["opus", "opus"], ["fable", "fable"]].map(([k, t]) => opt(k, t, k === c.model_alias))) : null;
+    if (model) model.value = c.model_alias;
+    return el("div", { class: "prop-person", "data-new": c.ref },
+      el("div", null, el("strong", null, c.name || "（還沒取名）"), " ", badge("新建", "b-info"), " ", mark(() => cardChanged(c))),
+      team.find((t) => t.who === c.ref) && team.find((t) => t.who === c.ref).why ? el("p", { class: "small" }, team.find((t) => t.who === c.ref).why) : null,
+      el("div", { class: "prop-fields" }, field("name", "名字", name), field("position", "職位", position), field("tool", "AI 工具", tool), model ? field("model_alias", "模型", model) : null),
+      locked ? el("p", { class: "small muted" }, "這位新員工已經建好了（自己動手第 1 項），不能再改；要停用請到派工頁撤回。")
+        : el("p", { class: "small muted" }, DISPATCH_NEW_NOTE),
+      locked ? null : el("button", { class: "btn small", type: "button", on: { click: () => { c.gone = true; redraw(); } } }, "不要這位新員工"));
+  };
+  const step = (s, i) => {
+    const valid = people();
+    const who = el("select", { "data-dispatch": "step-who", "aria-label": `第 ${i + 1} 步交給誰`, on: { change: (e) => { s.who = e.target.value; redraw(); } } },
+      valid.includes(s.who) ? null : el("option", { value: "" }, "請選一位員工"),
+      valid.map((w) => el("option", { value: w, selected: w === s.who }, nameOf(w) || w)));
+    who.value = valid.includes(s.who) ? s.who : "";
+    const area = el("textarea", { rows: "4", maxlength: "1500", "data-dispatch": "step-text", "aria-label": `第 ${i + 1} 步要送出的話`, on: { input: (e) => { s.text = e.target.value; derive(); } } });
+    area.value = s.text;
+    const move = (d) => { const j = i + d; [draft.steps[i], draft.steps[j]] = [draft.steps[j], draft.steps[i]]; redraw(); };
+    return el("li", { class: "prop-step", "data-dispatch": "step" },
+      el("div", { class: "prop-step-head" }, el("strong", null, `第 ${i + 1} 步`), " ", mark(() => stepChanged(i)), " ", el("span", { class: "small muted" }, "交給"), " ", who),
+      el("p", { class: "small muted" }, `VBear 會把下面這段話原封不動送給「${nameOf(s.who) || "（還沒選）"}」。${i > 0 ? DISPATCH_HANDOFF_NOTE : ""}`),
+      area,
+      el("div", { class: "row prop-step-actions" },
+        el("button", { class: "btn small", type: "button", disabled: i === 0, on: { click: () => move(-1) } }, "上移"),
+        el("button", { class: "btn small", type: "button", disabled: i === draft.steps.length - 1, on: { click: () => move(1) } }, "下移"),
+        el("button", { class: "btn small", type: "button", disabled: draft.steps.length <= 1, on: { click: () => { draft.steps.splice(i, 1); redraw(); } } }, "刪掉這一步")));
+  };
+  const noteText = (t) => String((t && t.text) || "").replace(/「([CN][1-9][0-9]?)」/g, (m, ref) => (names.get(ref) || nameOf(ref) ? `「${nameOf(ref) || names.get(ref)}」` : m));
+  const draw = () => {
+    marks.length = 0;                      // the marks of the parts drawn before are gone with them
+    const questions = Array.isArray(v.questions) ? v.questions : [];
+    const notes = Array.isArray(v.notes) ? v.notes : [];
+    const plan = v.plan || {};
+    const removed = orig.steps.length - draft.steps.filter((s) => s.from !== null).length;
+    const gone = draft.cards.filter((c) => c.gone);
+    setKids(body,
+      questions.length ? el("div", { class: "prop-questions", "data-dispatch": "questions" }, notice("warn", el("div", null, el("b", null, "幕僚長想先問你"),
+        el("ul", null, questions.map((q) => el("li", null, q))),
+        el("p", { class: "small", style: "margin:4px 0 0" }, "回到和 CEO 的對話把這些說清楚，再按一次「請幕僚長安排」。")))) : null,
+      v.summary ? el("p", { class: "prop-summary", "data-dispatch": "summary" }, v.summary) : null,
+      notes.length ? el("div", { "data-dispatch": "notes" }, notice("info", el("div", null, el("b", null, "VBear 拿掉或改了這些（沒有照幕僚長寫的做）"),
+        el("ul", null, notes.map((n) => el("li", null, noteText(n))))))) : null,
+      el("h3", null, "任務"),
+      el("label", { class: "prop-field" }, el("span", { class: "small muted" }, "名稱 "), mark(() => draft.title !== orig.title),
+        (() => { const i = el("input", { type: "text", maxlength: "80", "data-dispatch": "title", "aria-label": "任務名稱", on: { input: (e) => { draft.title = e.target.value; derive(); } } }); i.value = draft.title; return i; })()),
+      el("label", { class: "prop-field" }, el("span", { class: "small muted" }, "目標 "), mark(() => draft.goal !== orig.goal),
+        (() => { const a = el("textarea", { rows: "3", maxlength: "500", "data-dispatch": "goal", "aria-label": "任務目標", on: { input: (e) => { draft.goal = e.target.value; derive(); } } }); a.value = draft.goal; return a; })()),
+      Array.isArray(plan.deliverables) && plan.deliverables.length ? el("div", null, el("span", { class: "small muted" }, "要交出什麼"), el("ul", { class: "small", "data-dispatch": "deliverables" }, plan.deliverables.map((d) => el("li", null, d)))) : null,
+      draft.steps.length || draft.cards.length ? el("h3", null, "找哪些員工") : null,
+      el("div", { class: "prop-people" },
+        team.filter((t) => t.kind !== "new").map((t) => el("div", { class: "prop-person", "data-existing": t.who },
+          el("strong", null, t.name || t.who), " ", badge("現有員工", "b-mute"), t.why ? el("p", { class: "small" }, t.why) : null)),
+        liveCards().map(newEmployee),
+        gone.map((c) => el("div", { class: "prop-person prop-gone", "data-new-gone": c.ref }, el("span", null, `已拿掉新員工「${c.name}」`), " ",
+          el("button", { class: "btn small", type: "button", on: { click: () => { c.gone = false; redraw(); } } }, "放回來")))),
+      draft.steps.length ? el("h3", null, "分幾步做") : null,
+      el("ol", { class: "prop-steps" }, draft.steps.map(step)),
+      removed > 0 ? el("p", { class: "small", "data-dispatch": "removed" }, `你刪掉了 ${removed} 步。`) : null);
+  };
+  const spent = opts.chief && typeof opts.chief === "object" && dispatchNum(opts.chief.spent_usd) !== null ? opts.chief : null;
+  const confirmPlan = async () => {
+    if (busy) return;
+    busy = true; errorText = ""; setKids(errorBox, null); derive();
+    try {
+      const res = await api.post(`/api/dispatch/${encodeURIComponent(v.id)}/confirm`, payload());
+      toast("派工開始了");
+      if (opts.onDone) opts.onDone(res);
+    } catch (e) {
+      busy = false;
+      setKids(errorBox, notice("bad", e.message));
+      if (opts.onRefresh && e.status === 409) setKids(errorBox, notice("bad", el("div", null, e.message, " ", el("button", { class: "btn small", type: "button", on: { click: () => opts.onRefresh() } }, "重新整理"))));
+      derive();
+    }
+  };
+  const dismiss = async () => {
+    if (!(await confirmInPage("不採用這份提議", "不會建任何員工，也不會送任何訊息。幕僚長這一次的花費照記。", "不採用"))) return;
+    try { const res = await api.post(`/api/dispatch/${encodeURIComponent(v.id)}/dismiss`, {}); if (opts.onGone) opts.onGone(res); }
+    catch (e) { toast(e.message); }
+  };
+  draw();
+  setKids(root,
+    el("div", { class: "prop-head" }, el("h2", null, "幕僚長的提議"), " ", dispatchStateBadge("proposed"), " ", cardMark),
+    editedNote, body,
+    el("p", { class: "small muted" }, "按「確認派工」之後，VBear 會建上面的新員工（安全模式）、建一張任務卡，再照順序把每一步送給員工。"),
+    costBox, spent ? el("p", { class: "small muted", "data-dispatch": "chief-cost" },
+      `幕僚長這次花了 ${usdUp(dispatchNum(spent.spent_usd))}（${spent.cost_source === "worst_case" ? "沒有回報，以上限計" : "Claude Code 回報"}）。`) : null,
+    whyOff, errorBox,
+    el("div", { class: "row" }, confirmBtn,
+      el("button", { class: "btn", type: "button", "data-dispatch": "dismiss", disabled: !(v.can && v.can.dismiss), on: { click: dismiss } }, "不採用")));
+  derive();
+  root.update = (next) => { if (next && "lamp" in next) { lamp = next.lamp; derive(); } };
+  return root;
+}
+
+// The desk on the CEO's chat page: the button, the chief of staff's runs on this chat and the dispatches made from them. `card` is
+// the chat's card (its tool decides whether the Codex sentence is beside the button).
+function chiefDesk(chatId, chatCard) {
+  const codex = !!chatCard && chatCard.tool === "codex";
+  const runs = el("div", { class: "chief-runs", "data-chief": "runs" });
+  const button = el("button", { class: "btn primary", type: "button", "data-chief": "open", on: { click: () => openDialog() } }, CHIEF_BUTTON);
+  const box = el("section", { class: "panel pad chief-desk", "data-chief": "desk" },
+    el("div", { class: "row" }, button, el("a", { class: "btn small", href: "#/dispatch", "data-chief": "all" }, "所有派工"),
+      el("a", { class: "btn small", href: "#/actions", "data-chief": "actions" }, "AI 自己做了什麼")),
+    el("p", { class: "small" }, CHIEF_LEDE),
+    codex ? el("p", { class: "small", "data-chief": "codex-sends" }, CHIEF_CODEX_SENDS) : null,
+    runs);
+  const cards = new Map();                 // dispatch id -> { sha, node }: a card the person may be editing is kept, not rebuilt
+  let gone = false, timer = null, drawing = false;
+  const mine = (list, key) => (Array.isArray(list && list[key]) ? list[key].filter((x) => x && typeof x === "object" && !x.blocked && x.chat_id === chatId) : []);
+  async function openDialog() {
+    button.disabled = true;
+    let pv;
+    try { pv = await api.get(`/api/chief/preview?chat_id=${encodeURIComponent(chatId)}`); }
+    catch (e) { toast(e.message); button.disabled = false; return; }
+    button.disabled = false;
+    openChiefDialog(pv, {
+      onRecheck: openDialog,
+      onStart: async (previewId, note) => {
+        await api.post("/api/chief", note ? { preview_id: previewId, note } : { preview_id: previewId });
+        toast("幕僚長開始想了");
+        await refresh();
+      },
+    });
+  }
+  const chiefRun = (c, view) => {
+    const status = cardHas(CHIEF_STATUS, c.status) ? CHIEF_STATUS[c.status] : "狀態不明";
+    const spent = view && dispatchNum(view.spent_usd) !== null ? `　已花 ${usdUp(dispatchNum(view.spent_usd))}（Claude Code 回報的估值；沒回報的以上限計）` : "";
+    if (c.status === "running") {
+      return el("div", { class: "chief-run", "data-chief": "run", role: "status" }, el("strong", null, "幕僚長在想…"), el("span", { class: "small muted" }, `最多 120 秒${spent}`), " ",
+        el("button", { class: "btn small", type: "button", on: { click: async () => {
+          try { await api.post(`/api/chief/${encodeURIComponent(c.id)}/cancel`, {}); } catch (e) { toast(e.message); }
+          await refresh();
+        } } }, "取消"));
+    }
+    if (c.status === "failed" || c.status === "blocked") {
+      const code = view ? view.error_code : null;
+      const canRetry = !!view && Array.isArray(view.retryable) && view.retryable.includes(1);
+      return el("div", { class: "chief-run", "data-chief": "run" },
+        notice("bad", el("div", null, `幕僚長這次沒有成功。${chiefErrorText(code) || "沒有說明原因。"}${spent}`)),
+        canRetry ? el("button", { class: "btn small", type: "button", on: { click: async () => {
+          try { await api.post(`/api/chief/${encodeURIComponent(c.id)}/retry`, {}); } catch (e) { toast(e.message); }
+          await refresh();
+        } } }, "重試一次") : null);
+    }
+    if (c.status === "ready") return el("p", { class: "small muted", "data-chief": "run" }, "幕僚長的提議好了，正在整理成提議卡…");
+    return el("p", { class: "small muted", "data-chief": "run" }, `幕僚長這次${status}。${spent}`);
+  };
+  const dispatchLine = (r) => el("div", { class: "chief-run", "data-chief": "dispatch-line" },
+    el("a", { href: `#/dispatch/${encodeURIComponent(r.id)}` }, r.title || "（沒有名稱）"), " ", dispatchStateBadge(r.state), " ",
+    el("span", { class: "small muted" }, `${r.steps} 步${r.started_by ? "・" + dispatchByText(r.started_by) : ""}`));
+  async function refresh() {
+    if (gone || drawing) return;
+    drawing = true;
+    try {
+      const [cl, dl, ledger] = await Promise.all([api.get("/api/chief").catch(() => null), api.get("/api/dispatch").catch(() => null), api.get("/api/meetings/ledger").catch(() => null)]);
+      if (gone) return;
+      const lamp = ledger && typeof ledger === "object" ? ledger.lamp : null;
+      const dispatches = mine(dl, "dispatch").sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      const newest = dispatches.length ? dispatches[0].created_at || 0 : 0;
+      const chiefs = mine(cl, "chief").sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      const shownChiefs = chiefs.filter((c) => !c.dispatch_id && (c.status === "running" || c.status === "ready" || (c.created_at || 0) > newest)).slice(0, 2);
+      const views = new Map();
+      await Promise.all(shownChiefs.map(async (c) => { views.set(c.id, await api.get(`/api/chief/${encodeURIComponent(c.id)}`).catch(() => null)); }));
+      const nodes = [];
+      for (const c of shownChiefs) nodes.push(chiefRun(c, views.get(c.id)));
+      for (const r of dispatches.slice(0, 3)) {
+        if (r.state !== "proposed") { nodes.push(dispatchLine(r)); cards.delete(r.id); continue; }
+        let v;
+        try { v = await api.get(`/api/dispatch/${encodeURIComponent(r.id)}`); } catch (e) { nodes.push(dispatchLine(r)); continue; }
+        if (gone) return;
+        const kept = cards.get(r.id);
+        if (kept && kept.sha === v.proposal_sha) { kept.node.update({ lamp }); nodes.push(kept.node); continue; }
+        const chiefView = await api.get(`/api/chief/${encodeURIComponent(v.chief_id)}`).catch(() => null);
+        const node = proposalCard(v, { lamp, chief: chiefView, onDone: (res) => { location.hash = `#/dispatch/${encodeURIComponent(res && res.id ? res.id : v.id)}`; },
+          onGone: () => { cards.delete(r.id); refresh(); }, onRefresh: () => { cards.delete(r.id); refresh(); } });
+        cards.set(r.id, { sha: v.proposal_sha, node });
+        nodes.push(node);
+      }
+      if (dispatches.length > 3) nodes.push(el("p", { class: "small" }, el("a", { href: "#/dispatch" }, `還有 ${dispatches.length - 3} 份較舊的派工 →`)));
+      const active = document.activeElement;
+      if (active && runs.contains(active) && ["TEXTAREA", "INPUT", "SELECT"].includes(String(active.tagName || active.tag || "").toUpperCase())) {
+        for (const [, k] of cards) k.node.update({ lamp });      // the person is typing: nothing is rebuilt under their hands
+        return;
+      }
+      setKids(runs, nodes);
+    } finally { drawing = false; }
+  }
+  const stop = () => { gone = true; clearInterval(timer); };
+  timer = setInterval(() => { if (!document.hidden) refresh(); }, CHIEF_POLL_MS);
+  refresh();
+  return { node: box, refresh, stop };
+}
+
+// ---- the dispatch pages ------------------------------------------------------------------------------------------------------------
+
+let dispatchTick = null;
+let actionsTick = null;
+const DISPATCH_POLL_NOTE = "每 5 秒更新";
+
+// What a step says, as [key, word, badge class]. `waiting`: the employee's chat has a card that asks the person.
+function dispatchStepWord(step, waiting) {
+  const s = step && typeof step === "object" ? step.state : "";
+  if (s === "pending") return ["pending", "還沒開始", "b-mute"];
+  if (s === "sending") return ["sending", "正在送出", "b-info"];
+  if (s === "running") return waiting ? ["waiting", "等你按允許", "b-warn"] : ["running", "正在做", "b-info"];
+  if (s === "ended") return step.ended_reason === "result" ? ["done", "做完了", "b-ok"] : ["failed", "沒做完", "b-bad"];
+  return ["unknown", "狀態不明", "b-mute"];
+}
+function dispatchStepEndText(reason) {
+  if (typeof reason !== "string" || !reason) return "";
+  return cardHas(STEP_END_TEXT, reason) ? STEP_END_TEXT[reason] : `原因代碼：${reason}`;
+}
+// What 「繼續」 will do now, said before the person presses it: it never repeats a step that did not finish.
+function dispatchContinueNote(v) {
+  if (!v || !v.pause || !Array.isArray(v.steps)) return "";
+  const steps = v.steps;
+  const sending = steps.find((s) => s.state === "sending");
+  if (sending) return `按「繼續」之前，請先到那位員工的聊天看一下第 ${sending.seq} 步的訊息有沒有送出：VBear 會先查，查得到就接著做；查不到，會把這一步再送一次。`;
+  const bad = steps.filter((s) => s.state === "ended" && s.ended_reason !== "result").sort((a, b) => b.seq - a.seq)[0];
+  if (bad) {
+    const next = steps.find((s) => s.seq > bad.seq && s.state === "pending");
+    return next
+      ? `按「繼續」不會重做第 ${bad.seq} 步，會直接做第 ${next.seq} 步（它會收到第 ${bad.seq} 步不完整的回覆，並被告知可能不完整）。要重做第 ${bad.seq} 步，請到那位員工的聊天自己再說一次。`
+      : `第 ${bad.seq} 步是最後一步，按「繼續」不會重做它，只會把這份派工標成做完了。要重做，請到那位員工的聊天自己再說一次。`;
+  }
+  const next = steps.find((s) => s.state === "pending");
+  return next ? `按「繼續」會接著送第 ${next.seq} 步。` : "";
+}
+function dispatchStepNode(s, ctx) {
+  const waiting = !!s.chat_id && ctx.waiting.has(s.chat_id);
+  const [key, word, cls] = dispatchStepWord(s, waiting);
+  const cost = typeof s.cost_usd === "string" && dispatchNum(s.cost_usd) !== null
+    ? `花費 ${usdUp(dispatchNum(s.cost_usd))}（聊天回報的估值；沒有回報的以每回合上限計）` : "";
+  const why = key === "failed" ? dispatchStepEndText(s.ended_reason) : "";
+  return el("li", { class: "card disp-step", "data-dispatch": "step-row", "data-step-state": key },
+    el("div", { class: "card-top" }, el("strong", null, `第 ${s.seq} 步・${s.name || "（員工）"}`), badge(word, cls)),
+    why ? el("p", { class: "small", "data-dispatch": "step-why" }, why) : null,
+    cost ? el("p", { class: "small muted" }, cost) : null,
+    s.chat_id ? el("p", { class: "small" }, el("a", { href: `#/chat/${encodeURIComponent(s.chat_id)}`, "data-dispatch": "step-chat" },
+      key === "waiting" ? "員工在等你按允許，到這位員工的聊天" : "到這位員工的聊天")) : null,
+    el("details", { class: "fold" }, el("summary", null, "這一步送出的話"), el("pre", { class: "chat-pre", "data-dispatch": "step-sent" }, String(s.text || ""))));
+}
+function dispatchEventNode(e) {
+  return el("li", { class: "small", "data-dispatch": "event" }, `${fmtTime(e.at)}・${e.what || e.kind}・`, el("span", { class: "muted" }, e.by_text || dispatchByText(e.by)));
+}
+
+async function viewDispatch(id) {
+  const token = seq;
+  if (!id) return viewDispatchList(token);
+  return viewDispatchDetail(token, id);
+}
+
+function dispatchRow(r) {
+  if (r.blocked) {
+    return el("li", { class: "mt-row card", "data-dispatch": "row" }, el("strong", null, `無法讀取的派工紀錄 ${r.id}`), badge("無法讀取", "b-bad"),
+      el("span", { class: "small muted" }, r.error || "這份派工的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
+  }
+  return el("li", { class: "mt-row card", "data-dispatch": "row", "data-dispatch-id": r.id },
+    el("a", { class: "mt-row-title", href: `#/dispatch/${encodeURIComponent(r.id)}` }, r.title || "（沒有名稱）"), dispatchStateBadge(r.state),
+    el("span", { class: "small muted" }, `${fmtTime(r.created_at)}・${r.steps} 步${r.started_by ? "・" + dispatchByText(r.started_by) : ""}`));
+}
+
+async function viewDispatchList(token) {
+  let data;
+  try { data = await api.get("/api/dispatch"); }
+  catch (e) { setKids(claim(token), el("h1", null, "派工"), notice("bad", "讀不到派工：" + e.message)); return; }
+  const main = claim(token);
+  const box = el("div", { "data-dispatch": "list" });
+  const draw = (d) => {
+    const rows = d && Array.isArray(d.dispatch) ? d.dispatch.filter((r) => r && typeof r === "object") : [];
+    setKids(box, rows.length ? el("ul", { class: "mt-list" }, rows.map(dispatchRow))
+      : emptyState("還沒有派工", "在和 CEO 聊天的頁面按「請幕僚長安排」，幕僚長提議、你確認之後，派工就會出現在這裡。"));
+  };
+  draw(data);
+  dispatchTick = async () => { try { draw(await api.get("/api/dispatch")); } catch (_) { /* the next tick tries again */ } };
+  activeViewCleanup = () => { dispatchTick = null; };
+  setKids(main, el("h1", null, "派工"),
+    el("p", { class: "lede" }, "幕僚長提議、你確認之後，VBear 把一件工作分成幾步，照順序在員工的聊天裡交給他們做。這裡看每一份派工做到哪裡。"),
+    el("p", null, el("a", { class: "btn small", href: "#/actions", "data-dispatch": "actions-link" }, "AI 自己做了什麼"), " ", el("span", { class: "small muted" }, DISPATCH_POLL_NOTE)),
+    box);
+}
+
+async function viewDispatchDetail(token, id) {
+  let cur;
+  try { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); }
+  catch (e) { setKids(claim(token), crumbs([["派工", "#/dispatch"], ["找不到"]]), notice("bad", e.status === 404 ? e.message : "讀不到這份派工：" + e.message)); return; }
+  const main = claim(token);
+  const root = el("div", { "data-dispatch": "detail" });
+  let lamp = null, waiting = new Set(), proposal = null, proposalSha = "", chiefView = null, shownKey = "";
+  const reload = async () => { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); await side(); draw(true); };
+  const act = async (suffix, body, done) => {
+    try { await api.post(`/api/dispatch/${encodeURIComponent(id)}/${suffix}`, body || {}); if (done) toast(done); }
+    catch (e) { toast(e.message); }
+    try { await reload(); } catch (_) { /* the page tells on the next tick */ }
+  };
+  async function side() {
+    const [ledger, chats] = await Promise.all([api.get("/api/meetings/ledger").catch(() => null), api.get("/api/chats").catch(() => null)]);
+    lamp = ledger && typeof ledger === "object" ? ledger.lamp || null : null;
+    waiting = new Set(chats && Array.isArray(chats.chats) ? chats.chats.filter((c) => c && c.waiting === true && typeof c.id === "string").map((c) => c.id) : []);
+    if (cur.state === "proposed" && !chiefView && cur.chief_id) chiefView = await api.get(`/api/chief/${encodeURIComponent(cur.chief_id)}`).catch(() => null);
+  }
+  const keyOf = () => JSON.stringify([cur.state, cur.pause, (cur.steps || []).map((s) => [s.state, s.chat_id, s.ended_reason, s.cost_usd]), cur.created_cards, (cur.events || []).length, [...waiting], lamp, cur.cost, cur.proposal_sha]);
+  function draw(force) {
+    const key = keyOf();
+    if (!force && key === shownKey) return;
+    const active = document.activeElement;
+    if (!force && cur.state === "proposed" && active && root.contains(active)) { if (proposal) proposal.update({ lamp }); return; }
+    shownKey = key;
+    const v = cur;
+    const plan = v.plan || {};
+    const head = el("div", { class: "chat-head" }, el("h1", null, plan.title || "派工"),
+      el("p", { class: "small" }, dispatchStateBadge(v.state), v.started_by ? el("span", null, " ", dispatchByText(v.started_by)) : null, " ", el("span", { class: "muted" }, `建立於 ${fmtTime(v.created_at)}`)));
+    const crumb = crumbs([["派工", "#/dispatch"], [plan.title || id]]);
+    if (v.state === "proposed") {
+      if (!proposal || proposalSha !== v.proposal_sha) {
+        proposalSha = v.proposal_sha;
+        proposal = proposalCard(v, { lamp, chief: chiefView, onDone: () => { chiefView = null; reload(); }, onGone: () => { reload(); }, onRefresh: () => { proposal = null; reload(); } });
+      } else proposal.update({ lamp });
+      setKids(root, crumb, head, proposal);
+      return;
+    }
+    proposal = null; proposalSha = "";
+    const can = v.can && typeof v.can === "object" ? v.can : {};
+    const steps = Array.isArray(v.steps) ? v.steps : [];
+    const spent = steps.reduce((sum, s) => sum + (dispatchNum(s.cost_usd) || 0), 0);
+    const cost = dispatchCostText(steps.length, v.cost && v.cost.per_turn_usd, v.cost && v.cost.day_left_usd);
+    const made = Array.isArray(v.created_cards) ? v.created_cards : [];
+    const events = Array.isArray(v.events) ? v.events : [];
+    const buttons = [
+      can.continue ? el("button", { class: "btn primary", type: "button", "data-dispatch": "continue", on: { click: () => act("continue", {}, "繼續做了") } }, "繼續") : null,
+      can.stop ? el("button", { class: "btn", type: "button", "data-dispatch": "stop", on: { click: async () => {
+        if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act("stop", {}, "已停止");
+      } } }, "停止") : null,
+      can.delete ? el("button", { class: "btn", type: "button", "data-dispatch": "delete", on: { click: async () => {
+        if (!(await confirmInPage("刪除這份派工", "只刪派工和幕僚長這一次的紀錄；員工、任務卡和聊天都留著。刪掉後不能復原。", "刪除"))) return;
+        try { await api.post(`/api/dispatch/${encodeURIComponent(id)}/delete`, {}); toast("已刪除"); location.hash = "#/dispatch"; } catch (e) { toast(e.message); }
+      } } }, "刪除這份派工") : null,
+    ].filter(Boolean);
+    setKids(root, crumb, head,
+      v.pause ? notice("warn", el("div", { "data-dispatch": "pause" }, el("b", null, "暫停了　"), v.pause.text || "原因不明。",
+        can.continue && dispatchContinueNote(v) ? el("p", { class: "small", style: "margin:6px 0 0", "data-dispatch": "continue-note" }, dispatchContinueNote(v)) : null)) : null,
+      v.state === "done" ? notice("info", "每一步都做完了。") : null,
+      v.state === "stopped" ? notice("info", "你停止了這份派工。已經送出的訊息收不回來，沒有再送新的。") : null,
+      v.state === "dismissed" ? notice("info", "你沒有採用這份提議，什麼都沒有發生（幕僚長那一次的花費照記）。") : null,
+      buttons.length ? el("div", { class: "row" }, buttons) : null,
+      plan.goal ? el("p", { "data-dispatch": "goal" }, el("span", { class: "muted" }, "目標："), plan.goal) : null,
+      el("section", { class: "section" }, sectionHead("每一步", DISPATCH_POLL_NOTE), el("ol", { class: "disp-steps" }, steps.map((s) => dispatchStepNode(s, { waiting })))),
+      el("p", { class: "small", "data-dispatch": "money" }, `這份派工${cost.text}`, steps.some((s) => dispatchNum(s.cost_usd) !== null) ? ` 已花約 ${usdUp(spent)}（各步的估值加起來）。` : ""),
+      el("p", { class: "small muted" }, DISPATCH_SENT_NOTE),
+      made.length ? el("section", { class: "section", "data-dispatch": "made" }, sectionHead("VBear 為這份派工建的員工", "停用不是刪除，聊天紀錄都留著"),
+        el("ul", { class: "mt-list" }, made.map((c) => el("li", { class: "mt-row card", "data-dispatch": "made-row", "data-profile": c.profile_id },
+          el("strong", null, c.name || c.ref), c.withdrawn ? badge("已撤回（停用）", "b-mute") : badge("使用中", "b-ok"),
+          c.withdrawn || !(Array.isArray(can.withdraw) && can.withdraw.includes(c.profile_id)) ? null
+            : el("button", { class: "btn small", type: "button", "data-dispatch": "withdraw", on: { click: async () => {
+              if (await confirmInPage(`撤回「${c.name || c.ref}」`, "只是把這張角色卡停用，不會刪除，聊天紀錄都留著；之後可以到角色卡池再啟用。員工正在做事時不能撤回。", "撤回")) await act("withdraw-card", { profile_id: c.profile_id }, "已撤回");
+            } } }, "撤回")))))
+        : null,
+      v.task_id ? el("p", { class: "small" }, "任務卡：", el("a", { href: `#/workbench?task=${encodeURIComponent(v.task_id)}`, "data-dispatch": "task-link" }, "看這份派工建的任務卡")) : null,
+      events.length ? el("details", { class: "fold section" }, el("summary", null, `這份派工做過的事（${events.length} 筆）`),
+        el("ul", { class: "fold-body" }, events.map(dispatchEventNode)),
+        el("p", { class: "small" }, el("a", { href: "#/actions" }, "到「AI 自己做了什麼」看全部"))) : null);
+  }
+  const sideAndDraw = async () => { await side(); draw(false); };
+  await side();
+  draw(true);
+  dispatchTick = async () => {
+    try { cur = await api.get(`/api/dispatch/${encodeURIComponent(id)}`); await sideAndDraw(); }
+    catch (e) { if (e.status === 404) setKids(root, crumbs([["派工", "#/dispatch"], ["已刪除"]]), notice("info", "這份派工已經被刪除。")); }
+  };
+  activeViewCleanup = () => { dispatchTick = null; };
+  setKids(main, root);
+}
+
+// ---- 「AI 自己做了什麼」 (#/actions) ------------------------------------------------------------------------------------------------------
+
+async function viewActions() {
+  const token = seq;
+  let data;
+  try { data = await api.get("/api/actions"); }
+  catch (e) { setKids(claim(token), el("h1", null, "AI 自己做了什麼"), notice("bad", "讀不到這份清單：" + e.message)); return; }
+  const main = claim(token);
+  const box = el("div", { "data-actions": "list" });
+  const act = async (dispatchId, suffix, body, done) => {
+    try { await api.post(`/api/dispatch/${encodeURIComponent(dispatchId)}/${suffix}`, body); toast(done); }
+    catch (e) { toast(e.message); }
+    try { draw(await api.get("/api/actions")); } catch (_) { /* the next tick */ }
+  };
+  const draw = (d) => {
+    const rows = d && Array.isArray(d.actions) ? d.actions.filter((r) => r && typeof r === "object") : [];
+    const unreadable = d && Number.isInteger(d.unreadable) ? d.unreadable : 0;
+    const stopShown = new Set();
+    setKids(box,
+      unreadable ? notice("warn", `有 ${unreadable} 份派工的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
+      rows.length ? el("ul", { class: "mt-list" }, rows.map((r) => {
+        const auto = r.by === "auto1" || r.by === "auto2";
+        const stopHere = r.can_stop === true && !stopShown.has(r.dispatch_id);
+        if (stopHere) stopShown.add(r.dispatch_id);
+        return el("li", { class: "mt-row card", "data-action": "row", "data-by": String(r.by), "data-kind": String(r.kind) },
+          el("span", { class: "small muted" }, fmtTime(r.at)),
+          el("span", { "data-action": "what" }, String(r.what || r.kind)),
+          badge(r.by_text || dispatchByText(r.by), auto ? "b-warn" : "b-ok"),
+          r.kind === "step_sent" ? el("span", { class: "small muted", "data-action": "sent-note" }, r.can_stop ? "收不回來；可以按「停止」。" : "收不回來。") : null,
+          el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份派工"),
+          stopHere ? el("button", { class: "btn small", type: "button", "data-action": "stop", on: { click: async () => {
+            if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act(r.dispatch_id, "stop", {}, "已停止");
+          } } }, "停止") : null,
+          r.can_withdraw === true && typeof r.profile_id === "string" ? el("button", { class: "btn small", type: "button", "data-action": "withdraw", on: { click: async () => {
+            if (await confirmInPage("撤回這位員工", "只是把這張角色卡停用，不會刪除，聊天紀錄都留著；之後可以到角色卡池再啟用。員工正在做事時不能撤回。", "撤回")) await act(r.dispatch_id, "withdraw-card", { profile_id: r.profile_id }, "已撤回");
+          } } }, "撤回") : null);
+      })) : emptyState("AI 還沒有自己做過任何事", "幕僚長提議、你確認，或你打開「自己動手」之後，每一件事都會列在這裡。"));
+  };
+  draw(data);
+  actionsTick = async () => { try { draw(await api.get("/api/actions")); } catch (_) { /* the next tick tries again */ } };
+  activeViewCleanup = () => { actionsTick = null; };
+  setKids(main, el("h1", null, "AI 自己做了什麼"),
+    el("p", { class: "lede" }, "幕僚長和派工做過的每一件事都列在這裡：做了什麼、是誰決定的（你確認的，或「自己動手」第幾項）。可以停止進行中的派工，也可以把 VBear 建的員工撤回（停用，不會刪除）。已經送出的訊息收不回來。"),
+    el("p", null, el("a", { class: "btn small", href: "#/dispatch", "data-actions": "dispatch-link" }, "所有派工"), " ",
+      el("a", { class: "btn small", href: "#/settings", "data-actions": "settings-link" }, "到設定看「自己動手」"), " ", el("span", { class: "small muted" }, DISPATCH_POLL_NOTE)),
+    box);
+}
+
+// ---- the lobby's 「輪到你」 and a message VBear sent for a dispatch --------------------------------------------------------------------------
+
+async function loadDispatchList() {
+  try { D.dispatch = await api.get("/api/dispatch"); }
+  catch (e) { D.dispatch = { error: e.message, dispatch: [] }; }
+  return D.dispatch;
+}
+// The dispatches that wait for the person: a proposal to confirm, a dispatch that is paused. A damaged record is not drawn.
+function dispatchNeedingYou(list) {
+  const rows = list && typeof list === "object" && Array.isArray(list.dispatch) ? list.dispatch : [];
+  return rows.filter((r) => r && typeof r === "object" && !r.blocked && (r.state === "proposed" || r.state === "paused"))
+    .sort((a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0));
+}
+function dispatchTurnCard(r) {
+  const proposed = r.state === "proposed";
+  return el("article", { class: "card quest quest-turn", "data-quest": "dispatch", "data-dispatch": "board-card", "data-dispatch-id": r.id },
+    el("div", { class: "card-top" },
+      el("div", { style: "min-width:0" },
+        el("div", { class: "card-title" }, el("a", { class: "quest-link", href: `#/dispatch/${encodeURIComponent(r.id)}` }, `${proposed ? "派工提議" : "派工暫停"}：${r.title || "（沒有名稱）"}`)),
+        el("div", { class: "card-sub" }, proposed ? "幕僚長提出了一份派工提議，等你看過、確認" : "這份派工暫停了，原因在派工頁；按「繼續」才會接著做")),
+      el("span", { class: "badge b-warn quest-type" }, questIcon("turn"), proposed ? "派工提議" : "派工暫停")),
+    el("div", { class: "stat-line" }, el("span", null, `${r.steps} 步`)),
+    el("div", { class: "quest-go" }, "前往處理 →"));
+}
+// The note over a message of the chat that VBear sent for a dispatch (record.origin = {dispatch, step}); null for any other.
+const CHAT_ORIGIN_RE = /^d-[0-9a-f]{12}$/;
+function chatOriginOf(rec) {
+  const o = rec && typeof rec === "object" ? rec.origin : null;
+  return o && typeof o === "object" && typeof o.dispatch === "string" && CHAT_ORIGIN_RE.test(o.dispatch) && Number.isInteger(o.step) && o.step >= 1 && o.step <= 4 ? o : null;
+}
+function chatOriginKids(origin, info) {
+  const title = info && typeof info.title === "string" && info.title ? `「${info.title}」` : "";
+  const by = info && info.by_text ? `（${info.by_text}）` : "";
+  return [`這則是 VBear 依派工${title}送出的第 ${origin.step} 步${by}，不是你打的。 `, el("a", { href: `#/dispatch/${encodeURIComponent(origin.dispatch)}` }, "看這份派工")];
+}
+function chatOriginNote(origin, info) {
+  return el("div", { class: "chat-origin small", "data-chat": "origin", "data-dispatch-id": origin.dispatch }, chatOriginKids(origin, info));
+}
+const chatOriginCache = new Map();       // dispatch id -> a promise of its view (or null)
+function chatOriginFill(line, origin) {
+  if (!line.originNote) return;
+  if (!chatOriginCache.has(origin.dispatch)) chatOriginCache.set(origin.dispatch, api.get(`/api/dispatch/${encodeURIComponent(origin.dispatch)}`).catch(() => null));
+  chatOriginCache.get(origin.dispatch).then((v) => {
+    if (!v || typeof v !== "object" || !v.plan) { chatOriginCache.delete(origin.dispatch); return; }
+    setKids(line.originNote, chatOriginKids(origin, { title: v.plan.title, by_text: v.started_by_text }));
+  });
+}
+// ---------- end of the chief of staff and the dispatch ----------------------------------------------------------------------------
 
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
 // The pages of the meeting back end (vbear/meeting_runner.py): the list and the new meeting, one meeting with its
@@ -15779,6 +16483,7 @@ if (typeof module !== "undefined" && module.exports) {
     OFFICE_CAMPS,
     prov,
     boardGroups,
+    chiefDesk, openChiefDialog, proposalCard, dispatchStepWord, dispatchContinueNote, dispatchCostText, chiefErrorText, viewDispatch, viewActions,
     boardKey,
     boardKeyContext,
     boardSection,

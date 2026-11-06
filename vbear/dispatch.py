@@ -513,7 +513,7 @@ def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None
             "started_by": rec["started_by"], "started_by_text": BY_TEXT.get(rec["started_by"]), "summary": rec["summary"],
             "questions": list(rec["questions"]), "notes": copy.deepcopy(rec["notes"]), "team": team,
             "proposal_sha": rec["proposal_sha"], "plan": plan, "edited": rec["plan"] != rec["proposal_plan"], "steps": copy.deepcopy(rec["steps"]),
-            "task_id": rec["task_id"], "created_cards": made, "cost": cost,
+            "task_id": rec["task_id"], "created_cards": made, "tools": list(rec["tools"]), "cost": cost,
             "pause": None if pause is None else {"reason": pause["reason"], "until": pause["until"], "text": pause_words},
             "events": [{**e, "what": describe(rec, e, daily_usd), "by_text": BY_TEXT[e["by"]]} for e in rec["events"]],
             "can": {"confirm": state == "proposed" and bool(plan["steps"]), "dismiss": state == "proposed",
@@ -949,7 +949,7 @@ class Dispatcher:
 
     def actions(self, limit: int = 200) -> dict:
         """Every event of every dispatch, the newest first, at most ``limit``: {at, dispatch_id, seq, kind, what, by, by_text,
-        can_stop, can_withdraw}. ``unreadable`` counts the dispatches that could not be read (they are not guessed at)."""
+        profile_id (of a card that was made or withdrawn, else None), can_stop, can_withdraw}. ``unreadable`` counts the dispatches that could not be read (they are not guessed at)."""
         rows, unreadable = [], 0
         daily = mt.limits_from(self.conf())["daily_usd"]
         for did in record_ids():
@@ -962,7 +962,7 @@ class Dispatcher:
             live = rec["state"] in ("running", "paused")
             for ev in rec["events"]:
                 rows.append({"at": ev["at"], "dispatch_id": did, "seq": ev["seq"], "kind": ev["kind"], "what": describe(rec, ev, daily),
-                             "by": ev["by"], "by_text": BY_TEXT[ev["by"]],
+                             "by": ev["by"], "by_text": BY_TEXT[ev["by"]], "profile_id": ev.get("profile_id"),
                              "can_stop": live and ev["kind"] in ("confirmed", "step_sent"),
                              "can_withdraw": ev["kind"] == "card_created" and ev["profile_id"] not in withdrawn})
         rows.sort(key=lambda r: (r["at"], r["seq"]), reverse=True)

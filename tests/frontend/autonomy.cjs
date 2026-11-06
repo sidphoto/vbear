@@ -195,6 +195,17 @@ test("when the setting cannot be read the section says unknown and offers no tic
   assert(text(section(main)).includes("未知"), text(section(main)));
 });
 
+test("the section links to 「AI 自己做了什麼」 (#/actions), whether or not the setting could be read", async () => {
+  for (const over of [{}, { getFails: true }]) {
+    setServer(over);
+    const main = await open();
+    const link = section(main).find((n) => n.tag === "a" && attr(n, "data-autonomy") === "actions-link");
+    assert(link, JSON.stringify(over));
+    assert.strictEqual(attr(link, "href"), "#/actions");
+    assert(text(link).includes("AI 自己做了什麼"));
+  }
+});
+
 test("looking at the page writes nothing", async () => {
   setServer();
   await open();

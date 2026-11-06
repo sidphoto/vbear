@@ -217,8 +217,8 @@ test("all empty: flows loaded and empty, no agent waiting, runtime connected", (
   assert.strictEqual(g.allEmpty, true);
   assert.strictEqual(g.error, "");
   assert.deepStrictEqual(Object.keys(g).sort(),
-    ["allEmpty", "error", "inProgress", "meetingsError", "missingFlows", "moreInProgress", "moreMissing", "runtimeAvailable", "staffingError", "yourTurnFlows", "yourTurnMeetings",
-      "yourTurnSessions", "yourTurnStaffing"]);   // P35-4: the staffing proposals that wait for you (tests/frontend/staffing.cjs)
+    ["allEmpty", "dispatchError", "error", "inProgress", "meetingsError", "missingFlows", "moreInProgress", "moreMissing", "runtimeAvailable", "staffingError", "yourTurnDispatch",
+      "yourTurnFlows", "yourTurnMeetings", "yourTurnSessions", "yourTurnStaffing"]);   // P35-4: the staffing proposals that wait for you (tests/frontend/staffing.cjs); P40-5: the dispatches (tests/frontend/chief.cjs)
 });
 
 // ---- boardKey -------------------------------------------------------------------------------------------------
