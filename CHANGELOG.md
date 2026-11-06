@@ -75,6 +75,19 @@ P38-6):
   in a folder whose name ends in `.noindex` (`build/app.noindex`, `build/dmg.noindex`, `dist/app.noindex`); the DMG stays
   `dist/VBear-<version>-arm64.dmg`. The release workflow's smoke check reads the new path. It deletes only the old copies inside
   the repository.
+- **The first CEO (P38-8).** After all your AI tools were logged in, pressing 開始使用 left a person with an empty lobby and no
+  idea what to do (and with 「輪到 p」 and a card for a deleted task at the front of it). Now, when there is no role card you can
+  chat with, 開始使用 leads to `#/ceo`, 建立你的 CEO: a card named CEO (position CEO, safe mode, a short plain description you can
+  change) on the ready Claude Code, else the ready Codex; one press makes it and opens a chat with it, with the opening sentence
+  「你好，請先問我三個問題，了解我想做什麼。」 only put in the box (you can change it; only your own press of 送出 sends it, so
+  nothing is spent by the step). `GET /api/first-ceo` (`vbear/first_ceo.py`) tells the page whether the step is needed, which
+  tool the card takes (a tool that is only marked as logged in, such as AGY or Grok, is never chosen; with no ready tool it says
+  to go back to 開始設定) and the words to fill in; the card itself is made by the ordinary `POST /api/agent-profiles`. The
+  config key `first_ceo_id` makes the lobby offer 跟你的 CEO 聊聊 once (until pressed, put away, or you have already talked
+  with that card); while there is no card, the lobby offers 建立你的 CEO. A CEO is a plain role card: it chats and turns your idea
+  into a plan; it cannot create employees or hand out work (the chief of staff, v0.15, will). In the lobby, flows whose task card
+  is deleted or unreadable are folded away under 「其他進行中的任務」 (closed until you open it), and a role named with one or
+  two letters or digits reads 「輪到規劃者」, 「輪到執行者」, 「輪到審查者」 instead of 「輪到 p」.
 - **Not run on a real machine for this change:** the real Codex was never run by the code or its tests; whether `turn/steer` is
   accepted without the experimental API, whether Codex ends when its stdin closes, what `turn/interrupt` answers, and that a
   login writes nothing into the chat folder are for the first real `--mode codex-chat` (see section 7 of the evidence file).

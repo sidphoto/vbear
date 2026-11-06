@@ -51,6 +51,7 @@ from . import claude_verify
 from . import codex_verify
 from . import config as cfg
 from . import daily_limit
+from . import first_ceo
 from . import flow_executor
 from . import folders
 from . import flow_review
@@ -112,7 +113,7 @@ EXCERPT_LIMIT = 2000  # the most of a skill's description the card wizard is sen
 CONFIG_WRITABLE = {"advanced_mode", "usage_enabled", "usage_days", "project_roots", "language",
                    "herdr_migration_acknowledged", "translation_engine", "translation_auto",
                    "recent_folders", "onboarding_dismissed", "meeting_limits", "meeting_speed", "staffing_limits",
-                   "chat_limits", "setup_done", "setup_notice", "welcome_seen"}
+                   "chat_limits", "setup_done", "setup_notice", "welcome_seen", "first_ceo_id"}
 LANGUAGES = {"zh-TW"}  # the only UI language shipped
 MAX_PROJECT_ROOTS = 20
 # "show_mcode": the switch of a hidden AI tool (vbear/ai_tools.py), written through /api/config like the other keys
@@ -647,6 +648,8 @@ def make_handler(console: Console):
                     if force and self.headers.get("X-VBear") != "1":
                         return self._error(403, "重新檢查需要主控台標頭")
                     return self._setup_tools(force)
+                if path == "/api/first-ceo":
+                    return self._first_ceo()
                 if path == "/api/setup/daily-limit":
                     return self._json({"ok": True, "daily_usd": float(meetings.limits_from(console.store.conf)["daily_usd"]),
                                        "choices": list(daily_limit.CHOICES)})
@@ -1383,6 +1386,19 @@ def make_handler(console: Console):
             except ai_tool_status.StoreError as exc:
                 return self._error(503, str(exc))
 
+        def _first_ceo(self):
+            """What the first-CEO step needs (vbear/first_ceo.py): read-only, it makes no card and starts no tool."""
+            try:
+                profiles = agent_profiles.list_profiles(
+                    known_skills=set(console.skill_index().keys()),
+                    known_roles={r.get("role_id") for r in console.store.static().get("roles", []) if r.get("role_id")})
+                rows = ai_tool_status.report(console.store.conf) if first_ceo.needed(profiles) else []
+            except agent_profiles.AgentProfileStorageError:
+                return self._error(503, "角色資料無法讀取，請到角色頁處理。")
+            except ai_tool_status.StoreError as exc:
+                return self._error(503, str(exc))
+            return self._json(first_ceo.plan(profiles, rows))
+
         def _setup_settle(self):
             """The first look at the start-up (the home page asks once while the person has not finished it): a person who
             already has a ready AI tool when they come to this version is counted as done, with a notice to show once; the
@@ -2082,6 +2098,8 @@ def make_handler(console: Console):
                         raise ValueError("onboarding_dismissed 必須是布林值")
                     if key in ("setup_done", "setup_notice", "welcome_seen") and type(value) is not bool:
                         raise ValueError(f"{key} 必須是布林值")
+                    if key == "first_ceo_id" and not (value == "" or (isinstance(value, str) and agent_profiles.VALID_PROFILE_ID_RE.match(value))):
+                        raise ValueError("first_ceo_id 必須是角色卡的識別碼，或空字串")
                     if key in SHOW_TOOL_KEYS and type(value) is not bool:
                         raise ValueError(f"{key} 必須是布林值")
                     if key == "meeting_limits":

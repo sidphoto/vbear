@@ -2160,6 +2160,8 @@ async function viewHome() {
   const setup = setupGateWanted(configRes) ? await setupGate(configRes) : setupGateQuiet(configRes);
   if (token !== seq) return;
   if (setup.redirect) { location.hash = welcomeWanted(configRes) ? "#/welcome" : "#/setup"; return; }
+  const ceoDoor = await ceoLobbyDoor(await ceoPlan(), configRes, profilesRes);       // P38-8
+  if (token !== seq) return;
   const main = claim(token);
   const onboardingHost = el("div", { id: "h-onboarding" });
   const onboardingInput = () => ({
@@ -2209,6 +2211,7 @@ async function viewHome() {
     herdrMigrationNotice(),
     setup.notice ? setupUpgradeNotice() : null,
     runtimeNotice(),
+    ceoDoor,
     onboardingHost,
     el("div", { id: "h-board" }, boardSection(board)),
     taskCardsSection(tasksRes && tasksRes.tasks, { flows: D.flows && !D.flows.error ? D.flows.flows || [] : undefined,
@@ -2236,6 +2239,7 @@ async function viewHome() {
 // never re-derives it from the phase); boardKey is made of exactly what the board shows, so a 5-second refresh
 // repaints only when something visible changed.
 const BOARD_IN_PROGRESS_MAX = 4;
+const BOARD_MISSING_MAX = 20;      // of the folded flows whose task card cannot be read
 let boardShownKey = null;
 let boardFirstGame = false;   // set by the home page: the first game is still on, so the workbench button is not the main one
 
@@ -2267,14 +2271,18 @@ function boardGroups(live, flowsData, meetingsData, staffingData) {
   const open = flows.filter((f) => !(f.phase && f.phase.key === "done"));
   const yourTurnFlows = open.filter(waitsForYou);
   const rest = open.filter((f) => !waitsForYou(f));
+  // P38-8: a flow whose task card is gone or unreadable is put away (a fold under the other tasks), not listed among them
+  const missingFlows = rest.filter((f) => f.task_missing === true);
+  const readable = rest.filter((f) => f.task_missing !== true);
   const yourTurnMeetings = meetingsNeedingYou(meetingsData);
   const meetingsError = meetingsData && typeof meetingsData === "object" && meetingsData.error ? String(meetingsData.error) : "";
   const yourTurnStaffing = staffingNeedingYou(staffingData);
   const staffingError = staffingData && typeof staffingData === "object" && staffingData.error ? String(staffingData.error) : "";
   return {
     error, yourTurnFlows, yourTurnSessions, yourTurnMeetings, meetingsError, yourTurnStaffing, staffingError,
-    inProgress: rest.slice(0, BOARD_IN_PROGRESS_MAX),
-    moreInProgress: Math.max(0, rest.length - BOARD_IN_PROGRESS_MAX),
+    inProgress: readable.slice(0, BOARD_IN_PROGRESS_MAX),
+    moreInProgress: Math.max(0, readable.length - BOARD_IN_PROGRESS_MAX),
+    missingFlows: missingFlows.slice(0, BOARD_MISSING_MAX), moreMissing: Math.max(0, missingFlows.length - BOARD_MISSING_MAX),
     runtimeAvailable,
     allEmpty: !error && flows.length === 0 && yourTurnSessions.length === 0 && runtimeAvailable && !yourTurnMeetings.length && !yourTurnStaffing.length,
   };
@@ -2322,7 +2330,7 @@ function boardKey(g, ctx) {
     meetings: (g.yourTurnMeetings || []).map((m) => [m.id, m.topic, m.status, m.created_at, m.spent_usd]), meetingsError: g.meetingsError || "",
     staffing: (g.yourTurnStaffing || []).map((x) => [x.id, staffingTurnTitle(x), x.status, x.created_at, x.spent_usd, x.high_risk === true]),
     staffingError: g.staffingError || "",
-    progress: g.inProgress.map(flowFields) });
+    progress: g.inProgress.map(flowFields), missing: (g.missingFlows || []).map(flowFields), moreMissing: g.moreMissing || 0 });
 }
 
 // Inline SVG, drawn with the DOM (no innerHTML); decoration only, so it is hidden from assistive technology.
@@ -2474,6 +2482,12 @@ function boardSection(g, opts = {}) {
     ? [el("div", { class: "grid" }, g.inProgress.map((f) => questCard(f, false))),
       g.moreInProgress ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreInProgress} 則 →`) : null]
     : (g.error ? null : emptyState("目前沒有其他進行中的任務", null));
+  const missingFold = (g.missingFlows || []).length ? el("details", { class: "fold quest-missing", "data-board": "missing" },
+    el("summary", null, `有 ${(g.missingFlows.length + (g.moreMissing || 0))} 個舊任務讀不到任務卡（已收起）`),
+    el("div", { class: "fold-body" },
+      el("p", { class: "small muted" }, "這些流程的任務卡已經刪除，或檔案讀不出來，所以先收起來。需要時可以點開看，或到「流程」頁處理。"),
+      el("div", { class: "grid" }, g.missingFlows.map((f) => questCard(f, false))),
+      g.moreMissing ? el("a", { class: "btn quest-more", href: "#/flows" }, `還有 ${g.moreMissing} 則 →`) : null)) : null;
   return [
     el("section", { class: "section", "data-board": "turn" },
       sectionHead("輪到你", `${counts ? counts + "・" : ""}資料來自流程記錄與即時狀態，每 5 秒更新；「狀態未知」的 Agent 請到角色卡池頁查看`),
@@ -2484,7 +2498,8 @@ function boardSection(g, opts = {}) {
     el("section", { class: "section", "data-board": "going" },
       sectionHead("其他進行中的任務", null),
       flowsError(),
-      goingBody),
+      goingBody,
+      missingFold),
   ];
 }
 
@@ -10971,6 +10986,10 @@ function turnOf(who) { const s = String(who == null ? "" : who); return LATIN_ED
 function turnAfter(who) { const s = String(who == null ? "" : who); return LATIN_EDGE_END.test(s) ? s + " " : s; }
 const NEXT_PHASE_STEP = { planning: "plan", awaiting_approval: "approve", implementing: "implement", needs_fix: "implement",
   in_review: "review", review_stale: "review", awaiting_merge: "merge", review_unverified: "merge", awaiting_push: null, done: null };
+// A name of one or two letters or digits ("p", "e", "r1") is a code, not a name: the line then says the place (the planner, the
+// executor, the reviewer) instead. A name with more in it, or any Chinese, is a card's own name and stays.
+const BARE_CODE_NAME = /^[A-Za-z0-9]{1,2}$/;
+const NEXT_ROLE_WORD = { plan: "規劃者", implement: "執行者", review: "審查者" };
 const NEXT_STEP_TEXT = { plan: "規劃者提出計畫", approve: "你核准計畫", risk: "你接受風險", implement: "執行者實作",
   review: "審查者檢查", merge: "你自己合併" };
 
@@ -10980,11 +10999,14 @@ const NEXT_STEP_TEXT = { plan: "規劃者提出計畫", approve: "你核准計�
 function nextSteps(flow) {
   const f = flow && typeof flow === "object" ? flow : {};
   const roles = f.roles && typeof f.roles === "object" ? f.roles : {};
-  const roleName = (r) => (r && typeof r.name === "string" && r.name ? r.name : "未命名");
+  const roleName = (r, step) => {
+    const n = r && typeof r.name === "string" && r.name ? r.name : "";
+    return n && !BARE_CODE_NAME.test(n) ? n : NEXT_ROLE_WORD[step];     // 「輪到 p」 says nothing: say which place it is
+  };
   const auto = Boolean(f.automation && f.automation.mode === "auto");
-  const reviewers = (Array.isArray(roles.reviewers) ? roles.reviewers : []).map(roleName);
+  const reviewers = (Array.isArray(roles.reviewers) ? roles.reviewers : []).map((r) => roleName(r, "review"));
   const who = {
-    plan: roleName(roles.planner), approve: "你", risk: "你", implement: roleName(roles.executor),
+    plan: roleName(roles.planner, "plan"), approve: "你", risk: "你", implement: roleName(roles.executor, "implement"),
     review: auto ? `VBear 送審，${reviewers.join("、") || "審查者"}審查` : (reviewers.join("、") || "審查者"), merge: "你",
   };
   const turn = { ...who, review: auto ? "VBear（自動送審）" : who.review };
@@ -12203,6 +12225,7 @@ async function route() {
   try {
     if (top === "home") await viewHome();
     else if (top === "workbench") await viewWorkbench(parts[1] ? decodeURIComponent(parts[1]) : null, params.task, params.profile, params.launch === "1", params.step, params.meeting);
+    else if (top === "ceo") await viewCeo();
     else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
@@ -12714,7 +12737,7 @@ async function viewSetup() {
     const leave = el("button", { class: "btn primary", type: "button", "data-setup": "leave", disabled: !canLeave }, SETUP_LEAVE_LABEL);
     leave.addEventListener("click", () => run(leave, async () => {
       if (shown.setup_done !== true) await api.post("/api/config", { setup_done: true });
-      location.hash = "#/";
+      location.hash = ceoStepWanted(await ceoPlan()) ? "#/ceo" : "#/";          // P38-8: no card to chat with yet: make the first CEO
     }));
     const recheck = el("button", { class: "btn", type: "button", "data-setup": "recheck" }, "重新檢查");
     recheck.addEventListener("click", () => run(recheck, () => refresh(false, true)));
@@ -12731,6 +12754,163 @@ async function viewSetup() {
   draw();
   setupTick = () => (document.hidden || busy ? Promise.resolve() : refresh(true));
 }
+
+// ---------- the first CEO (P38-8) ---------------------------------------------------------------------------------------------
+// After 「開始使用」, a person with no role card to chat with is led to make one: a CEO. The page is #/ceo; the server's
+// GET /api/first-ceo (vbear/first_ceo.py) says whether the step is needed, which ready AI tool the card takes, and the words
+// in the boxes. The card is made with the ordinary POST /api/agent-profiles, always in safe mode (ADR 0002); a CEO is a plain
+// role card. Then a chat with it is opened, and the opening sentence is only put in the box: the person's own press of the
+// send button is the only thing that sends it, so nothing here spends money. The lobby has two doors, one to make the CEO
+// (while there is none) and one, shown once, to chat with the CEO that was made (config first_ceo_id).
+const CEO_TITLE = "建立你的 CEO";
+const CEO_LEDE = "你的 AI 工具已經準備好了。接下來先請一位 CEO：你把想做的事告訴他，他會先問你幾個簡單的問題，再幫你把想法整理成一份計畫。";
+const CEO_LIMITS = "CEO 現在能做的是和你聊天、幫你整理想法。把工作分派給其他員工的功能還沒有；之後有了，也會先問你才做。";
+const CEO_COST = "建立角色卡不花錢，也不會讓 CEO 開始做任何事。你按「送出」送出第一句話之後，才會用到你的 AI 方案。";
+const CEO_MODE = "安全模式：CEO 只能在自己的工作資料夾裡動手，要執行指令或改檔案前，都會先問你，你按允許才做。";
+const CEO_OPENING_NOTE = "上面這句開場是 VBear 先幫你填好的，可以改成你自己想說的話。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
+const CEO_NAME_MAX = 200;
+const CEO_INSTRUCTIONS_MAX = 2000;
+const ceoDrafts = new Map();          // chat id -> the opening sentence put in its box; taken (and gone) when that chat is opened
+
+function ceoTakeDraft(chatId) {
+  const t = ceoDrafts.get(chatId);
+  ceoDrafts.delete(chatId);
+  return typeof t === "string" ? t : "";
+}
+async function ceoPlan() {
+  try {
+    const r = await api.get("/api/first-ceo");
+    return r && typeof r === "object" ? r : null;
+  } catch (_) { return null; }
+}
+// The step is for a person who has no card to chat with and a ready tool to make one on; anything the server did not say
+// plainly counts as "not needed".
+function ceoStepWanted(plan) {
+  return !!plan && plan.needed === true && plan.can_create === true && typeof plan.tool === "string" && plan.tool !== "";
+}
+function ceoForget(configRes) {
+  if (configRes && configRes.config) configRes.config.first_ceo_id = "";
+  return api.post("/api/config", { first_ceo_id: "" }).catch(() => {});
+}
+
+// Opens the chat with a card the person has: an empty one that is already there, or a new one (opening a chat costs nothing).
+// The sentence goes into the box of that chat. A chat that cannot open yet (not verified, not logged in) leads to the chat
+// page with the card chosen, which says why.
+async function ceoOpenChat(profileId, opening, reuseId) {
+  let chatId = reuseId || "";
+  if (!chatId) {
+    try {
+      const r = await api.post("/api/chats", { profile_id: profileId });
+      chatId = r && r.chat && typeof r.chat.id === "string" ? r.chat.id : "";
+    } catch (e) {
+      toast("CEO 的角色卡建好了，但現在還不能開聊天：" + e.message);
+    }
+  }
+  if (!chatId) { location.hash = `#/chat?profile=${encodeURIComponent(profileId)}`; return false; }
+  if (opening) ceoDrafts.set(chatId, opening);
+  location.hash = `#/chat/${encodeURIComponent(chatId)}`;
+  return true;
+}
+
+async function viewCeo() {
+  const token = seq;
+  const plan = await ceoPlan();
+  const main = claim(token);
+  if (token !== seq) return;
+  const head = el("h1", null, CEO_TITLE);
+  if (!plan) { setKids(main, head, notice("bad", "讀不到建立 CEO 需要的資料，請稍後再試。")); return; }
+  if (plan.needed !== true) { setKids(main, head); location.hash = "#/"; return; }       // a person who has a card to chat with is not shown the step
+  if (!ceoStepWanted(plan)) {
+    setKids(main, head, notice("info", typeof plan.reason === "string" && plan.reason ? plan.reason : "目前沒有可以用的 AI 工具。"),
+      el("p", null, el("a", { class: "btn primary", href: "#/setup", "data-ceo": "setup-go" }, "到開始設定")));
+    return;
+  }
+  let busy = false;
+  const name = el("input", { type: "text", maxlength: String(CEO_NAME_MAX), value: typeof plan.name === "string" ? plan.name : "CEO",
+    "data-ceo": "name", "aria-label": "CEO 的名字", autocomplete: "off" });
+  name.value = typeof plan.name === "string" ? plan.name : "CEO";
+  const about = el("textarea", { rows: "7", maxlength: String(CEO_INSTRUCTIONS_MAX), "data-ceo": "instructions", "aria-label": "CEO 的角色說明" });
+  about.value = typeof plan.instructions === "string" ? plan.instructions : "";
+  const errorBox = el("div", { "data-ceo": "error", role: "alert" });
+  const go = el("button", { type: "button", class: "btn primary", "data-ceo": "create" }, "建立 CEO，開始聊");
+  const fail = (msg) => setKids(errorBox, msg ? notice("bad", msg) : null);
+  go.addEventListener("click", async () => {
+    if (busy) return;
+    const nm = name.value.trim();
+    if (!nm) { fail("請幫 CEO 取個名字，不能空白。"); return; }
+    busy = true; go.disabled = true; fail("");
+    try {
+      const r = await api.post("/api/agent-profiles", { name: nm, position: plan.position, instructions: about.value, launch_mode: "safe",
+        model: { tool: plan.tool, model_id: "" } });
+      const id = r && r.profile && typeof r.profile.id === "string" ? r.profile.id : "";
+      if (!id) throw new Error("建立了，但讀不到角色卡的編號");
+      await api.post("/api/config", { first_ceo_id: id }).catch(() => {});      // the lobby offers the chat once, if this one is left
+      await ceoOpenChat(id, typeof plan.opening === "string" ? plan.opening : "", "");
+    } catch (e) {
+      fail("沒有建立成功：" + e.message);
+      busy = false; go.disabled = false;
+    }
+  });
+  const toolLine = el("p", { "data-ceo": "tool" }, el("strong", null, "用哪個 AI 工具："), `${plan.tool_name || plan.tool}（已就緒）`);
+  setKids(main, head, el("p", { class: "lede" }, CEO_LEDE),
+    el("section", { class: "panel pad ceo-form", "data-ceo": "form" },
+      el("label", { class: "ceo-field" }, el("span", null, "名字"), name),
+      el("label", { class: "ceo-field" }, el("span", null, "角色說明（可以改，也可以先不動）"), about),
+      toolLine,
+      el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
+      plan.chat_note ? el("p", { class: "small", "data-ceo": "chat-note" }, plan.chat_note, " ", el("a", { href: "#/setup" }, "到開始設定")) : null,
+      el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
+      el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST),
+      errorBox,
+      el("div", { class: "row" }, go, el("a", { class: "btn", href: "#/", "data-ceo": "later" }, "先不要，回大廳"))));
+}
+
+// The lobby's two doors. -> a node, or null. plan: GET /api/first-ceo (null when it could not be read); configRes: GET
+// /api/config; profilesRes: GET /api/agent-profiles. Showing a door asks nothing that costs and opens nothing.
+async function ceoLobbyDoor(plan, configRes, profilesRes) {
+  if (ceoStepWanted(plan)) {
+    return el("section", { class: "panel pad ceo-door", "data-ceo": "create-invite" },
+      el("h2", null, "還不知道要做什麼？先請一位 CEO"),
+      el("p", { class: "small" }, "你還沒有可以聊天的角色卡。先建立一位 CEO，他會問你幾個簡單的問題，再幫你把想法整理成計畫。"),
+      el("a", { class: "btn primary", href: "#/ceo" }, "建立你的 CEO"));
+  }
+  const conf = configRes && configRes.config && typeof configRes.config === "object" ? configRes.config : null;
+  const id = conf && typeof conf.first_ceo_id === "string" ? conf.first_ceo_id : "";
+  if (!id) return null;
+  const cards = profilesRes && Array.isArray(profilesRes.profiles) ? profilesRes.profiles : null;
+  if (!cards) return null;
+  const card = cards.find((c) => c && c.id === id);
+  if (!card) { ceoForget(configRes); return null; }                     // the card is gone: nothing to offer, now or later
+  const tool = card.model && card.model.tool;
+  if (card.enabled === false || (tool !== "claude" && tool !== "codex")) return null;
+  let chats = [];
+  try { const r = await api.get("/api/chats"); chats = Array.isArray(r.chats) ? r.chats : []; } catch (_) { chats = []; }
+  const mine = chats.filter((c) => c && c.profile_id === id);
+  if (mine.some((c) => c.turns > 0)) { ceoForget(configRes); return null; }     // they already talked: the door has done its job
+  const empty = mine.find((c) => c.turns === 0 && !c.problem && typeof c.id === "string");
+  const opening = plan && typeof plan.opening === "string" ? plan.opening : "";
+  let busy = false;
+  const talk = el("button", { type: "button", class: "btn primary", "data-ceo": "chat-go" }, "聊聊看");
+  const later = el("button", { type: "button", class: "btn", "data-ceo": "chat-dismiss" }, "知道了");
+  const box = el("section", { class: "panel pad ceo-door", "data-ceo": "chat-invite" },
+    el("h2", null, "跟你的 CEO 聊聊"),
+    el("p", { class: "small" }, `${card.name || "CEO"} 已經準備好了。打開聊天，開場的話會先幫你填好，你可以改，按「送出」才會開始。`),
+    el("div", { class: "row" }, talk, later));
+  talk.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true; talk.disabled = true; later.disabled = true;
+    await ceoForget(configRes);
+    await ceoOpenChat(id, opening, empty ? empty.id : "");
+  });
+  later.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    await ceoForget(configRes);
+    box.remove();
+  });
+  return box;
+}
+// ---------- end of the first CEO ----------------------------------------------------------------------------------------------
 
 // ---------- chat with role cards (P36-2) -----------------------------------------------------------------------------------
 // The pages of vbear/chat_service.py: the list and a new chat (#/chat), one chat (#/chat/<id>). A chat is a person talking to
@@ -13214,6 +13394,9 @@ async function viewChatDetail(token, id) {
   const noteBox = el("div", { class: "chat-notes" });
   const input = el("textarea", { rows: "3", "data-chat": "input", "aria-label": "要對員工說的話", maxlength: "20000", placeholder: "要對員工說什麼？（Cmd/Ctrl + Enter 送出）",
     on: { keydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } } } });
+  const opening = ceoTakeDraft(id);        // P38-8: the first CEO's opening sentence: put in the box, sent only by the send button
+  if (opening) input.value = opening;
+  const openingNote = opening ? el("p", { class: "small", "data-ceo": "opening-note" }, CEO_OPENING_NOTE) : null;
   const sendBtn = el("button", { type: "button", class: "btn primary", "data-chat": "send", on: { click: () => send() } }, "送出");
   const stopBtn = el("button", { type: "button", class: "btn", "data-chat": "stop", on: { click: () => stop() } }, "停止這一回合");
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
@@ -13295,6 +13478,7 @@ async function viewChatDetail(token, id) {
     try {
       await api.post(`/api/chats/${encodeURIComponent(id)}/messages`, { text });
       input.value = "";
+      if (openingNote) openingNote.remove();
       await pollOnce();
     } catch (e) {
       noteText = e.message;
@@ -13367,10 +13551,11 @@ async function viewChatDetail(token, id) {
         + (isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
       try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
       catch (e) { toast(e.message); }
-    } } }, "刪除這個聊天")), sendNote);
+    } } }, "刪除這個聊天")), sendNote, openingNote);
   setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, noteBox, transcript, liveBox, composer);
   activeViewCleanup = () => { stopStream(); };
   stream();
+  if (opening) input.focus();
 }
 
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
@@ -15682,6 +15867,8 @@ if (typeof module !== "undefined" && module.exports) {
     chatLimitsText,
     chatRow,
     viewChat,
+    viewCeo,
+    ceoStepWanted,
     MEETING_BUBBLES,
     MEETING_ERROR_TEXT,
     MEETING_MONEY_WHY,
