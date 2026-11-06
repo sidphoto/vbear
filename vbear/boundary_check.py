@@ -64,11 +64,11 @@ import threading
 import time
 from pathlib import Path
 
-from .runtime import agent_sessions, daemon
+from .runtime import agent_sessions, chat_engines, daemon
 from .runtime.osc_title import TitleTracker
 from .title_check import TITLE_CHECKS, title_checks  # noqa: F401  (title_checks is part of this module's API)
 
-MODES = ("headless", "interactive", "stream", "chat", "codex-chat")
+MODES = ("headless", "interactive", "stream", *(row.check_mode for row in chat_engines.TABLE))   # a chat engine's mode is its row's
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 RUN_TIMEOUT = 240.0
 IDLE_WAIT = 30.0     # after the probe result, how long to wait for the idle title

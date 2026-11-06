@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import config as cfg
 from . import title_check
-from .runtime import cli_versions
+from .runtime import chat_engines, cli_versions
 
 MODES = ("headless", "interactive")
 RUN_TIMEOUT = 600  # per mode; the check itself stops a session after 240 s
@@ -208,7 +208,8 @@ class ChatVerifier:
         return reports_dir() / f"claude-{version}-chat.json"
 
     def _argv(self, binary: str, out: Path) -> list[str]:
-        return [sys.executable, "-B", "-m", "vbear.boundary_check", "--claude", binary, "--mode", "chat", "--out", str(out)]
+        return [sys.executable, "-B", "-m", "vbear.boundary_check", "--claude", binary, "--mode",
+                chat_engines.by_tool("claude").check_mode, "--out", str(out)]
 
     def _verified(self) -> tuple[str, ...]:
         return cli_versions.chat_verified_versions()

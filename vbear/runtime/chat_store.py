@@ -34,7 +34,7 @@ from pathlib import Path
 from .. import config as cfg, meetings as mt, strictjson
 from ..numbers import finite_real
 from ..scan.document import redact, redact_value
-from . import chat_protocol as cp
+from . import chat_engines, chat_protocol as cp
 
 CHATS = "chats"
 SPEND = "chat-spend"
@@ -50,7 +50,7 @@ MAX_CHATS = 200
 MAX_EVENTS_BYTES = 8 << 20             # one chat's events file
 RESERVE_BYTES = 64 << 10               # kept for the records that close a turn or a process
 MAX_LINE = 1 << 20
-ENGINES = ("claude-chat", "codex-chat")   # the chat's engine, set when it is created from its role card's AI tool
+# The chat's engine is set when it is created from its role card's AI tool; the engines are the rows of chat_engines.TABLE.
 MAX_USER = cp.MAX_TEXT_BYTES           # a person's message, refused above (the daemon checks first)
 MAX_REPLY = 64_000                     # characters of a reply kept
 MAX_EXCERPT = 4_000                    # characters of a tool's result, a card's field, a summary kept
@@ -362,8 +362,6 @@ def _encode(rec: dict) -> bytes:
 
 # ---- a chat --------------------------------------------------------------------------------------------------------
 
-_CHAT_FIELDS = {"claude-chat": {"v", "id", "profile_id", "created_at", "engine", "claude_session_id"},
-                "codex-chat": {"v", "id", "profile_id", "created_at", "engine"}}
 _CHAT_FIELDS_V1 = {"v", "id", "profile_id", "created_at", "claude_session_id"}
 
 
@@ -376,7 +374,8 @@ def _chat_problem(rec, chat_id: str) -> str | None:
         if set(rec) != _CHAT_FIELDS_V1:
             return "欄位不符"
     elif rec.get("v") == 2 and not isinstance(rec.get("v"), bool):
-        if rec.get("engine") not in _CHAT_FIELDS or set(rec) != _CHAT_FIELDS[rec["engine"]]:
+        row = chat_engines.by_engine(rec.get("engine"))
+        if row is None or set(rec) != row.record_fields():
             return "欄位不符"
     else:
         return "版本或編號不符"
@@ -386,9 +385,9 @@ def _chat_problem(rec, chat_id: str) -> str | None:
         return "員工編號不符"
     if finite_real(rec["created_at"]) is None:
         return "建立時間不符"
-    if "claude_session_id" in rec and not (isinstance(rec["claude_session_id"], str)
-                                           and UUID_RE.match(rec["claude_session_id"])):
-        return "對話編號不符"
+    for name in ("claude_session_id",) if rec["v"] == 1 else chat_engines.by_engine(rec["engine"]).uuid_fields:
+        if not (isinstance(rec[name], str) and UUID_RE.match(rec[name])):
+            return "對話編號不符"
     return None
 
 
@@ -411,15 +410,16 @@ def create(base, profile_id, *, now: float, engine: str = "claude-chat") -> dict
     follows from the role card's AI tool and never changes."""
     if not isinstance(profile_id, str) or not PROFILE_ID_RE.match(profile_id):
         raise ChatStoreError("bad_request", "profile_id 不符格式")
-    if engine not in ENGINES:
+    row = chat_engines.by_engine(engine)
+    if row is None:
         raise ChatStoreError("bad_request", "聊天的引擎不符")
     root = chats_dir(base, create=True)
     if len(list_ids(base)) >= MAX_CHATS:
         raise ChatStoreError("too_many", f"聊天最多 {MAX_CHATS} 個，請先刪掉不用的")
     chat_id = "c-" + secrets.token_hex(8)
     rec = {"v": 2, "id": chat_id, "profile_id": profile_id, "created_at": now, "engine": engine}
-    if engine == "claude-chat":
-        rec["claude_session_id"] = str(uuid.uuid4())
+    for name in row.uuid_fields:
+        rec[name] = str(uuid.uuid4())
     d = root / chat_id
     try:
         os.mkdir(d, 0o700)

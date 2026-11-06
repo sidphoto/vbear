@@ -36,7 +36,7 @@ from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
 from .. import admin_policy, config as cfg, meetings as mt
-from . import agent_sessions, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, proctrack
+from . import agent_sessions, chat_engines, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, proctrack
 from . import codex_chat_env, codex_chat_protocol as ccp, codex_chat_session
 from . import stream_session
 
@@ -163,8 +163,15 @@ class ChatOps:
             return _store_err(rid, exc)
         if req.get("engine") not in (None, chat["engine"]):
             return _err(rid, "bad_request", "這個聊天的引擎和送來的不同")
-        if chat["engine"] == "codex-chat":
-            return self._codex_send(rid, chat, text, cli, model_id, instructions)
+        return getattr(self, chat_engines.by_engine(chat["engine"]).daemon_send)(rid, chat, text, cli, model_id, instructions)
+
+    # ---- a Claude Code chat -------------------------------------------------------------------------------------
+
+    def _claude_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
+                     instructions: str | None) -> dict:
+        """A person's message in a Claude Code chat: a turn in the chat's live process (its limits as ``headroom``), or in
+        a new one (``--resume`` once the session exists)."""
+        chat_id = chat["id"]
         if model_id is None:
             return _err(rid, "bad_request", "model_id 格式不符")
         now = time.monotonic()
@@ -546,7 +553,7 @@ class ChatOps:
                 m = agent_sessions._read_manifest(agent_sessions.launch_dir(self.base, name), os.getuid())
             except (OSError, agent_sessions.LaunchRefused):
                 continue                          # another launch's problem; recovery reports it
-            if m.get("engine") in ("claude-chat", "codex-chat") and m.get("chat_id") == chat_id \
+            if chat_engines.is_chat_engine(m.get("engine")) and m.get("chat_id") == chat_id \
                     and m.get("state") != "prepared":
                 left.append(name)
         return ", ".join(left[:4])

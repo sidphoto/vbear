@@ -30,7 +30,7 @@ from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, meetings as mt
 from .api_error import ApiError
-from .runtime import agent_sessions, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
+from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
 EXCERPT = 80                      # characters of the last message shown in the list
@@ -40,10 +40,9 @@ RESTART_TRIES = 8                 # a message the daemon asked to be sent again 
 RESTART_PAUSE = 1.0               # this many seconds apart, before the person is asked to send it again
 DELETE_TRIES = 12
 DELETE_PAUSE = 0.5
-# The AI tools that can chat, and the engine each one's chats run on (fixed when the chat is opened).
-ENGINE_OF_TOOL = {"claude": "claude-chat", "codex": "codex-chat"}
-CODEX_MONEY = ("聊天用你自己的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）"
-               "後算進每天上限；這是 VBear 的記帳規則，不是帳單。")
+# The AI tools that can chat, and the engine each one's chats run on (fixed when the chat is opened), are the rows of
+# runtime/chat_engines.TABLE.
+CODEX_MONEY = chat_engines.CODEX_MONEY
 TOOL_LABEL = {**{t.id: t.name for t in ai_tools.REGISTRY if t.id not in ("claude", "codex", "agy", "shared")},
               "claude": "Claude Code", "codex": "Codex", "agy": "Antigravity（AGY）", "shared": "共用（不限工具）"}
 
@@ -134,7 +133,7 @@ def card_gate(profile) -> tuple[bool, str, str]:
     if profile.get("enabled") is False:
         return False, "card_disabled", "這張角色卡已停用，啟用之後才能聊天。"
     model = profile.get("model") if isinstance(profile.get("model"), dict) else {}
-    if model.get("tool") not in ENGINE_OF_TOOL:
+    if chat_engines.by_tool(model.get("tool")) is None:
         return False, "card_tool_unsupported", (
             f"這張角色卡的工具是 {tool_label(model.get('tool'))}，聊天目前支援 Claude Code 與 Codex。")
     return True, "", ""
@@ -143,7 +142,8 @@ def card_gate(profile) -> tuple[bool, str, str]:
 def engine_of(profile) -> str | None:
     """The engine a chat with this card runs on, or None when its tool cannot chat."""
     model = profile.get("model") if isinstance(profile, dict) and isinstance(profile.get("model"), dict) else {}
-    return ENGINE_OF_TOOL.get(model.get("tool"))
+    row = chat_engines.by_tool(model.get("tool"))
+    return row.engine if row else None
 
 
 def _default_claude() -> tuple[str | None, str | None, str]:
@@ -249,11 +249,12 @@ class ChatService:
         why not otherwise. Starts nothing. ``codex`` is the same question for the Codex that chats (P38-2: its own
         login folder, its pinned and verified version, the administrator policy); the other keys are Claude Code's."""
         binary, version, why = self.claude()
-        codex = dict(self.codex(), engine="codex-chat", money=CODEX_MONEY,
-                     verify=self.codex_verifier.status() if self.codex_verifier else None)
         out = {"engine": "claude-chat", "detected": version, "verified": [], "state": "unknown", "message": "", "policy": None,
-               "verify": self.verifier.status() if self.verifier else None, "codex": codex,
+               "verify": self.verifier.status() if self.verifier else None,
                "money": "聊天用你自己的 Claude 登入，會用掉你的 Claude 額度；金額是 Claude Code 回報的估值。"}
+        for row in chat_engines.TABLE:
+            if row.support_key is not None:
+                out[row.support_key] = self._engine_support(row)
         out["verified"] = sorted(cli_versions.chat_verified_versions(), key=cli_versions._version_key)
         if version is None:
             out["message"] = f"讀不到 Claude Code 的版本（{why or '原因不明'}），無法確認聊天模式是否已通過驗證。"
@@ -274,21 +275,29 @@ class ChatService:
         out.update(state="verified")
         return out
 
+    def _engine_support(self, row) -> dict:
+        """The block of ``support()`` for an engine other than Claude Code's: its own state, its money sentence and the
+        status of its verifier (the names of the three come from the engine's row)."""
+        verifier = getattr(self, row.verifier, None)
+        return dict(getattr(self, row.state)(), engine=row.engine, money=row.money,
+                    verify=verifier.status() if verifier else None)
+
     def verify_start(self, body) -> dict:
         """「驗證聊天」: one real session with the pinned Claude Code (a few small model calls with the person's own
         login), or with ``{"engine": "codex"}`` the Codex chat check (about fourteen short calls on the person's own
-        ChatGPT plan). Refused when the check could not pass anyway (no constants, an administrator policy)."""
+        ChatGPT plan). Refused when the check could not pass anyway (no constants, an administrator policy). The
+        ``engine`` is an AI tool of the engine table; its row names the method that answers."""
         if (not isinstance(body, dict) or set(body) - {"version", "engine"}
-                or body.get("engine", "claude") not in ("claude", "codex")):
+                or chat_engines.by_tool(body.get("engine", "claude")) is None):
             raise ApiError(400, "bad_request", "只接受 version，和 engine（claude 或 codex）。")
-        if body.get("engine") == "codex":
-            return self._verify_codex(body.get("version"))
+        return getattr(self, chat_engines.by_tool(body.get("engine", "claude")).verify)(body.get("version"))
+
+    def _verify_claude(self, wanted) -> dict:
         if self.verifier is None:
             raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
         binary, version, why = self.claude()
         if version is None:
             raise api_error("claude_version", why)
-        wanted = body.get("version")
         if wanted is not None and wanted != version:
             raise ApiError(409, "version_changed", f"目前的 Claude Code 是 {version}，不是 {wanted}；請重新整理後再驗證。")
         if cp.constants_for(version) is None:
@@ -442,10 +451,7 @@ class ChatService:
         engine = engine_of(profile)
         if chat.get("engine", "claude-chat") != engine:
             raise api_error("card_tool_changed")
-        if engine == "codex-chat":
-            fields = self._codex_fields(chat_id, text, profile)
-        else:
-            fields = self._claude_fields(chat_id, text, profile)
+        fields = getattr(self, chat_engines.by_engine(engine).fields)(chat_id, text, profile)
         instructions = self._instructions(profile)
         if instructions is not None:
             fields["instructions"] = instructions

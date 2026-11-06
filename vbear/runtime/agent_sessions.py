@@ -42,6 +42,7 @@ from pathlib import Path
 from .. import ai_tools, folders
 from . import proctrack
 from . import chat_protocol
+from . import chat_engines
 from . import codex_chat_protocol
 from . import stream_protocol
 
@@ -60,7 +61,13 @@ MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,63}\Z")
 # launch whose processes are proven gone becomes "ended": its directory (the
 # journal) is kept until the user deletes the flow (design 2.5, 9).
 _ACTIVE_STATES = ("prepared", "launching", "running")
-ENGINES = ("claude", "codex", "claude-stream", "claude-chat", "codex-chat")
+TERMINAL_ENGINES = ("claude", "codex", "claude-stream")      # the chat engines are the rows of chat_engines.TABLE
+
+
+def is_known_engine(engine) -> bool:
+    return engine in TERMINAL_ENGINES or chat_engines.is_chat_engine(engine)
+
+
 FLOW_ID_RE = re.compile(r"^flow-[0-9a-f]{12}\Z")
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")       # tasks.VALID_ID_RE; never "." or ".."
 JOURNAL = "journal.jsonl"
@@ -422,11 +429,10 @@ def managed_argv(manifest: dict) -> list[str]:
         return codex_argv(manifest)
     if engine == "claude-stream":
         return stream_argv(manifest)
-    if engine == "claude-chat":
-        # only the daemon's chat session starts one (chat_argv); never as a terminal session
-        raise LaunchRefused("manifest_invalid", "聊天 launch 不能當成終端機 session 啟動")
-    if engine == "codex-chat":
-        raise LaunchRefused("manifest_invalid", "Codex 聊天 launch 不能當成終端機 session 啟動")
+    row = chat_engines.by_engine(engine)
+    if row is not None:
+        # only the daemon's chat session starts one (chat_argv and its like); never as a terminal session
+        raise LaunchRefused("manifest_invalid", f"{row.noun} launch 不能當成終端機 session 啟動")
     raise LaunchRefused("manifest_invalid", "不支援的 managed Agent 引擎")
 
 
@@ -745,15 +751,20 @@ def _read_manifest(ldir: Path, uid: int) -> dict:
         problem = stream_manifest_problem(data)
         if problem:
             raise LaunchRefused("manifest_invalid", f"串流 manifest 不符（{problem}）")
-    if data.get("engine") == "claude-chat":
-        problem = chat_manifest_problem(data)
-        if problem:
-            raise LaunchRefused("manifest_invalid", f"聊天 manifest 不符（{problem}）")
-    if data.get("engine") == "codex-chat":
-        problem = codex_chat_manifest_problem(data)
-        if problem:
-            raise LaunchRefused("manifest_invalid", f"Codex 聊天 manifest 不符（{problem}）")
+    problem = chat_engine_manifest_problem(data)
+    if problem:
+        raise LaunchRefused("manifest_invalid", problem)
     return data
+
+
+def chat_engine_manifest_problem(data: dict) -> str | None:
+    """For the manifest of a chat engine (a row of chat_engines.TABLE): why it does not fit, as the sentence the launch is
+    refused with. None for a manifest of any other engine, and for a chat manifest that fits."""
+    row = chat_engines.by_engine(data.get("engine"))
+    if row is None:
+        return None
+    problem = globals()[row.manifest_problem](data)
+    return f"{row.noun} manifest 不符（{problem}）" if problem else None
 
 
 _STREAM_REQUIRED = frozenset({
@@ -1032,6 +1043,19 @@ def codex_chat_settings(cli_version: str, workdir: str) -> dict:
             "project_trust": {workdir: "untrusted"}, "disabled_features": list(consts.disabled_features)}
 
 
+def _claude_chat_settings(m: dict, workdir: str, scratch, uid: int, base: Path) -> dict:
+    """The settings a claude-chat launch must hold (chat_engines.ChatEngine.launch_settings)."""
+    return chat_settings(workdir, str(scratch), uid, m.get("cli_version"))
+
+
+def _codex_chat_settings(m: dict, workdir: str, scratch, uid: int, base: Path) -> dict:
+    """The same for a codex-chat launch, which must also name VBear's own chat folder of Codex."""
+    expected = codex_chat_settings(m.get("cli_version"), workdir)
+    if m.get("codex_home") != str(Path(os.path.realpath(base)) / CODEX_CHAT_HOME):
+        raise LaunchRefused("drift", "聊天用的 Codex 資料夾不是 VBear 的那一個")
+    return expected
+
+
 def codex_chat_argv(manifest: dict) -> list[str]:
     """The binary and ``app-server --listen stdio://`` with the version's ``-c`` settings and ``--disable`` features,
     exactly (codex_chat_protocol.argv_for). Everything comes from the manifest that codex_chat_manifest_problem
@@ -1202,7 +1226,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
         _owned_dir(sessions_root(base), uid)
         lst = _owned_dir(ldir, uid)
         m = _read_manifest(ldir, uid)
-        if m.get("launch_id") != launch_id or m.get("engine") not in ENGINES:
+        if m.get("launch_id") != launch_id or not is_known_engine(m.get("engine")):
             raise LaunchRefused("manifest_invalid", "manifest 與 launch id 不符")
         if m["launch_dir"] != {"path": str(ldir), "inode": lst.st_ino, "uid": uid}:
             raise LaunchRefused("drift", "launch 目錄身分已改變")
@@ -1226,7 +1250,7 @@ def load_validated(base: Path, launch_id: str) -> dict:
                 or not os.path.isdir(workdir)):
             raise LaunchRefused("drift", "工作目錄已改變或不存在")
         # The same rules as at preparation, against the state as it is now.
-        if m["engine"] in ("claude-chat", "codex-chat"):
+        if chat_engines.is_chat_engine(m["engine"]):
             if (_check_chat_workdir(workdir, Path(os.path.realpath(base))) != workdir
                     or m.get("allowed_root") != str(Path(workdir).parent)):
                 raise LaunchRefused("drift", "工作目錄不再符合規則")
@@ -1236,12 +1260,9 @@ def load_validated(base: Path, launch_id: str) -> dict:
         if m["engine"] == "claude-stream":
             _check_stream_fields(m)
             expected = stream_settings(workdir, str(scratch), uid, m.get("cli_version"))
-        elif m["engine"] == "claude-chat":
-            expected = chat_settings(workdir, str(scratch), uid, m.get("cli_version"))
-        elif m["engine"] == "codex-chat":
-            expected = codex_chat_settings(m.get("cli_version"), workdir)
-            if m.get("codex_home") != str(Path(os.path.realpath(base)) / CODEX_CHAT_HOME):
-                raise LaunchRefused("drift", "聊天用的 Codex 資料夾不是 VBear 的那一個")
+        elif chat_engines.is_chat_engine(m["engine"]):
+            expected = globals()[chat_engines.by_engine(m["engine"]).launch_settings](
+                m, workdir, scratch, uid, base)
         elif m["engine"] == "claude":
             expected = claude_settings(workdir, str(scratch), uid)
         else:
