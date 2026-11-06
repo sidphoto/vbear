@@ -83,6 +83,45 @@ Recorded in `tests/fixtures/codex-chat/` (scrubbed of the recorder's own setting
 - Token use is reported as `thread/tokenUsage/updated` (a running total for the thread, continued after `thread/resume`).
   No field carries money.
 
+## 5a. A home folder that is a git repository (found by hand, then probed; no model called)
+
+On a real Mac whose home folder (`~`) was a git repository, a chat loaded the person's own MCP servers although the
+recorded settings and the `thread/start` answer were as asked. A probe with the real 0.163.0 (a temporary state folder,
+a made-up `HOME`, no turn sent, no login needed for `thread/start`) found why. Source: rust-v0.163.0, `codex-rs/`.
+
+- **The project root is the nearest ancestor holding a `.git`** (`config/src/loader/mod.rs`, `discover_project_root`; the
+  default `project_root_markers` is `[".git"]`). With `~/.git`, `~` is the project root and `~/.codex/` becomes a project
+  layer. A person's own `CODEX_HOME` is `~/.codex`, which the loader skips; VBear's is `<state>/codex-chat-home`, so the skip
+  no longer applied and the person's `~/.codex/config.toml` (with its `mcp_servers`) was read as the project's.
+- **Codex writes trust by itself.** `thread/start` with a `cwd` and a writable sandbox, when the project has no trust
+  setting and a project root or git checkout is found, writes `[projects."<git root>"] trust_level = "trusted"` into
+  `CODEX_HOME/config.toml` (`app-server/src/request_processors/thread_processor.rs`, `thread_start_task`), then reloads. The
+  layer is enabled and its MCP servers start. Probe: 5 servers for the thread (4 start-up notices of `starting`, one
+  `failed`, three `ready`), 86 skills, a `config.toml` holding the trust of `~`, two `configWarning` and one `warning`.
+- **The MCP check missed it.** `mcpServerStatus/list` without a `threadId` answers for what the process loaded at its start,
+  before any trust, and said 0; with the thread's `threadId` it said 5. The `thread/start` answer (policy, reviewer, sandbox,
+  empty `instructionSources`) was the same with and without the problem.
+- **Fix, both settings.** `-c project_root_markers=[]` alone is not enough (the official way to take the current folder
+  as the root): Codex still finds the git checkout at `~` and writes trust for `~` into the chat folder (probe B), which would
+  enable the person's layers in any later start without the setting. `-c projects={"<work folder>"={trust_level="untrusted"}}`
+  alone stops the trust write and disables project config, but skills still load from a disabled layer (86 in the probe;
+  Codex's own warning says "but skills still load"). Both: no MCP server, no notice, no skill, no `config.toml` (probe D,
+  also with the state folder under a path with a dot, `~/.vbr-…`).
+- **The second setting must be an inline table.** The dotted `projects."<path>".trust_level="untrusted"` is cut at every `.`
+  of the path (`config/src/overrides.rs` splits on `.` without reading quotes), so a state folder such as `~/.vbear` breaks
+  the key; Codex printed "ignoring 1 unrecognized configuration setting" and still wrote trust (probe F). The inline table
+  `projects={"<path>"={trust_level="untrusted"}}` is read as TOML. The same two keys in `thread/start`'s `config` work for that
+  thread only, not for the process-level reads, so VBear puts them on the command line.
+- **Remaining risks, as found.** (1) *Managed configuration.* System (`/etc/codex/config.toml`), device-management and cloud
+  managed layers rank above `-c` (`merge_managed_config_for_discovery`), so a managed Mac could put the markers or trust
+  back; the file was empty on the probed Mac. VBear refuses on a known administrator-policy source and does not read the merged
+  configuration. (2) *Skills.* A disabled project layer's `skills/` folder, and `.agents/skills` between the project root and
+  the work folder, are still skill roots whatever the trust (`ext/skills/src/host_roots.rs`); the `user` layer reads
+  `$HOME/.agents/skills`, which is why the process's `HOME` is an empty folder. (3) A `config.toml` from an older build is
+  refused by the chat-folder check, and not deleted.
+- These are 0.163.0's behaviours. A new version needs the root-finding, the trust write and the key splitting looked at again
+  before it is added to the table (the probe script of the task can be run again).
+
 ## 6. What was built from it (P38-1 to P38-5)
 
 - The protocol, the tracker and the stand-in server that replays the recordings (`codex_chat_protocol.py`,

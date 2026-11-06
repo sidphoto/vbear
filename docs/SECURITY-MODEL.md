@@ -1184,7 +1184,8 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   must equal what the version's table in `codex_chat_protocol.VERSIONS` says, the CLI's identity, the card's work
   folder, the chat folder in the manifest). A terminal launch refuses it. The argv is that table and nothing else: `-c`
   settings (file credentials store, web search off, no update check, no notify, no history, no bundled skills, no
-  project docs, no network and no `/tmp` in the sandbox) and `--disable` for twenty features (apps, plugins, hooks,
+  project docs, no network and no `/tmp` in the sandbox, `project_root_markers=[]`, and the work folder's trust set to
+  `untrusted`, see the next bullet but one) and `--disable` for twenty features (apps, plugins, hooks,
   browser, computer use, memories, multi-agent, worktrees and the rest). The binary is the pinned one under
   `~/.codex/packages/standalone/releases/`, never one found on `PATH`.
 - **The environment is exactly seven variables:** `PATH`, `USER`, `LOGNAME`, `LANG`, `CODEX_HOME`
@@ -1196,6 +1197,26 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   within 512 MiB; `codex login status` (exit code only) says logged in; the work folder holds no `.codex`; no
   administrator policy; the version is on the `codex-chat-verified.json` list. Anything else, and the chat is refused
   with the reason.
+- **A home folder that is a git repository.** Found by hand on a real Mac, not in the first recording: when the person's
+  home folder (`~`) is a git repository (`~/.git`), Codex 0.163.0 takes `~` for the project root, because it looks for
+  `.git` upward from the work folder. A `CODEX_HOME` other than `~/.codex` means the person's own `~/.codex` is no longer
+  skipped as the settings folder, so it was read as a *project layer* of `~`; and a `thread/start` with a writable sandbox
+  made Codex write `[projects."~"] trust_level = "trusted"` into the chat folder's `config.toml`, which enabled that layer:
+  the person's own MCP servers started (five in the probe), their skills (86) and their exec policy rules were loaded. The
+  settings and the sandbox in the `thread/start` answer were as asked, and `mcpServerStatus/list` without a `threadId`
+  answers for what the process loaded at its start, before any trust existed, so it said none. VBear now sends two more
+  `-c` settings, **both of them**: `project_root_markers=[]` (the work folder is the project root; `~` and `~/.codex` are
+  not searched) and `projects={"<the work folder>"={trust_level="untrusted"}}` (the folder has a trust setting, so Codex
+  writes none, and project-level settings stay off). The second is an **inline table** because a dotted key
+  (`projects."<path>".trust_level`) is cut at the dots of a path such as `~/.vbear`, and then trust is written anyway; the
+  path is written as a TOML string (quote and backslash escaped), and a path with a control character or that is not
+  absolute refuses the launch (`invalid_workdir`). Both are in the settings file and compared on every load. The MCP
+  check now asks `mcpServerStatus/list` **with the thread's `threadId`**, after `thread/start` has answered, and any
+  server in the answer stops the chat as before. A `config.toml` in the chat folder is still refused, never deleted; the
+  refusal now says it may be an older build's trust entry and where to move it. The version check asserts that no
+  `config.toml` exists right after `thread/start` and that every process was started with both settings
+  (`project_settings_sent` in the report; no path in it). In the probe with both settings, in a home folder that is a
+  git repository: no MCP server, no start-up notice, no skill, no `config.toml`.
 - **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
   reviewer `user`, the legacy `workspace-write` sandbox (writes only in the work folder, no `/tmp`, no network). A
   command is a card with its whole text; a request that needs the network, or is not a command, is declined. A file
@@ -1260,7 +1281,17 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   (the vendor's agent-approvals page) though 0.163.0's `app-server` accepts it; a version that refuses it fails the check
   and the chat stays closed. (4) *The interface is experimental.* `codex app-server` is marked experimental and its request
   names, decisions and notices are the recorded version's: every Codex version must pass `--mode codex-chat` first, and
-  anything unexpected stops the chat rather than being tried.
+  anything unexpected stops the chat rather than being tried. (5) *Managed configuration can override the two settings.* A system (`/etc/codex/config.toml`), device-management or cloud
+  managed configuration ranks above `-c` in Codex 0.163.0, so on a managed Mac it could set the project root markers or the
+  trust back. VBear refuses a chat when a known administrator-policy source exists (`admin_policy`), and the response
+  of `thread/start` and the MCP check would show the result, but it does not read Codex's merged configuration to prove
+  the two settings took effect. (6) *Skills in the work folder.* With the two settings the work folder's own `.codex` is
+  still a (disabled) project layer, and Codex loads skills from a disabled layer's `skills/` folder and from `.agents/skills`
+  between the project root and the work folder, whatever the trust. A skill the model got into `<work folder>/.codex/skills`
+  or `<work folder>/.agents/skills` would load in the next conversation. VBear declines a file change under `.codex`,
+  `.agents` and `.git` at any depth, Codex's own sandbox makes them read-only under the project root, and a work folder that
+  already holds a `.codex` is refused; a command the person allows can still create one. The person's `HOME` for the
+  process is an empty folder, so `~/.agents/skills` is not read; that must stay so.
 - **Not checked yet.** What happens in a long conversation (an item kind outside the list stops the chat) and whether the
   real Codex lets an unknown server request through are for the first real runs; the login's effect on the chat folder
   (it must add no `config.toml`, `rules/` or `AGENTS.md`) is checked by the folder test before every start.

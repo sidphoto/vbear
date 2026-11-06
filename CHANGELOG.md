@@ -55,6 +55,11 @@ P38-6):
   read the whole machine; the permission profile that would stop reads made file changes fail on the recorded version.
   Documents: `docs/SECURITY-MODEL.md` has "Chats with a Codex role card" with its residual risks, `docs/adr/0005-codex-chat-boundary.md`
   records the decisions, and both READMEs, `docs/ARCHITECTURE.md` and `docs/REFERENCE.zh-TW.md` say what Codex chat is.
+- **A home folder that is a git repository.** Found before release: Codex took `~` for the project root, read the person's own
+  MCP servers and skills as a project's, and wrote that trust itself. A Codex chat now starts with `project_root_markers=[]` and
+  the work folder's trust set to `untrusted` (both `-c`, the second an inline table), asks `mcpServerStatus/list` with the
+  thread's `threadId`, and the version check asserts both were sent and that no `config.toml` appears; a `config.toml` already in
+  the chat folder is refused with a plain reason, never deleted (`docs/evidence/codex-0.163.0-chat.md`).
 - **Packaging copies stay out of Spotlight and Launchpad (P38-6).** `macos/build.sh` keeps every `VBear.app` it leaves on disk
   in a folder whose name ends in `.noindex` (`build/app.noindex`, `build/dmg.noindex`, `dist/app.noindex`); the DMG stays
   `dist/VBear-<version>-arm64.dmg`. The release workflow's smoke check reads the new path. It deletes only the old copies inside

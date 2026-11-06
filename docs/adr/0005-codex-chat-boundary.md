@@ -44,6 +44,19 @@ P38-0 用本機 Codex 0.163.0 實測（證據整理在 `docs/evidence/codex-0.16
    畫面一律寫「估計」與「不是帳單；Codex 用的是你的 ChatGPT 方案」。沒有 token 數可用（停止、逾時、程序結束）時以這回合上限計。
    VBear 每次收到 token 數就核對，到上限就中斷這回合；兩次核對之間可能多出一次模型回應，這是殘餘風險。
 
+6. **家目錄是 git 資料夾時，多送兩個 `-c`，兩個都要**（發版前真機發現，再用 0.163.0 零花費探測確認；證據在
+   `docs/evidence/codex-0.163.0-chat.md` 5a）：`~/.git` 存在時，Codex 把 `~` 當專案根，VBear 換了 `CODEX_HOME` 以後
+   `~/.codex` 不再被跳過，於是被當成專案層讀進來；`thread/start` 又會自動把 `~` 寫成 trusted 到聊天用的 `config.toml`，
+   讓使用者自己的 MCP 伺服器與技能都載入。`thread/start` 的回應（核准方式、沙盒、指示檔）完全看不出來。
+   - `project_root_markers=[]`：專案根就是工作資料夾，不往上找；單獨用時 Codex 仍會替 `~` 寫入 trust。
+   - `projects={"<工作資料夾>"={trust_level="untrusted"}}`：工作資料夾有了 trust 設定就不會自動寫入，專案層設定關閉；
+     單獨用時技能仍會從停用的專案層載入。必須是**行內表格**：點號寫法會被含點的路徑（`~/.vbear`）切壞，而且 trust 照樣被寫入。
+     路徑以 TOML 字串寫出（引號、反斜線跳脫），含控制字元或不是絕對路徑就拒絕啟動。
+   - MCP 檢查改成帶 `threadId` 的 `mcpServerStatus/list`（拿到 thread id 之後才送）；不帶時 Codex 只回程序啟動時載入的，
+     那時還沒有 trust，永遠是空的。
+   - 聊天用資料夾的 `config.toml` 維持「有就拒絕、不自動刪」，訊息改成說明它可能是舊版寫進去的信任設定、要移走的位置。
+   - 版本檢查多兩個斷言：thread/start 之後沒有 `config.toml`；每個程序的參數都帶了兩個設定（報告不記路徑）。
+
 ## 考慮過的其他選項
 
 - 用用的人自己的 `~/.codex`：不必再登入一次，但用的人的 AGENTS.md、MCP 伺服器、規則、`approval_policy` 都會進來（實測已發生），
@@ -66,5 +79,8 @@ P38-0 用本機 Codex 0.163.0 實測（證據整理在 `docs/evidence/codex-0.16
   卡換了 AI 工具，原來的聊天不能再送訊息（`card_tool_changed`），要開新的。其他工具的卡（Grok、AGY、MCODE、共用）一樣不能聊天
   （`card_tool_unsupported`），之後依序做 Grok、AGY、MCODE。
 - 聊天紀錄的 `session_ready` 用中性的欄位 `cli_version` 放 AI 工具的版本；v0.13.0 之前的 Claude 聊天紀錄用 `claude_code_version`，照舊讀得懂。
+- 家目錄是 git 資料夾的處理有兩個殘餘風險：系統、裝置管理或雲端的 managed 設定排在 `-c` 之上，可能把兩個設定蓋回去
+  （VBear 遇到已知的管理員政策來源就拒絕，但不讀 Codex 合併後的設定來證明）；停用的專案層與 `.agents/skills`
+  仍是技能來源（工作資料夾的 `.codex`、`.agents`、`.git` 由 VBear 拒絕檔案修改，Codex 沙盒也預設唯讀，但使用者允許的指令仍可能建立）。
 - 殘餘風險（寫在 `docs/SECURITY-MODEL.md`「Chats with a Codex role card」）：讀不受沙盒限制；花費上限在兩次 token 回報之間可能多一次模型呼叫；
   依賴已退役的 `untrusted`；app-server 是 experimental 介面。
