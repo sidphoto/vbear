@@ -12,6 +12,8 @@ step), which is the point of the check and is why it needs a state folder of its
     python3 tools/qa_p40.py --state "$T/s" --port 7795 --until propose    # + the chief of staff's one call (about US$0.03-0.10)
     python3 tools/qa_p40.py --state "$T/s" --port 7795 --until confirm    # + confirm, the daily-limit pause, continue
     python3 tools/qa_p40.py --state "$T/s" --port 7795 --until auto       # + both 「自己動手」 items on, one more proposal, take-back
+    python3 tools/qa_p40.py --state "$T/s" --port 7795 --until confirm --from d-0123456789ab    # carry on with the proposal an
+                                                                           # earlier run left waiting: the chief is not asked again
 
 What it needs: a console started by the coordinator on a temporary state folder (``VBEAR_HOME=<state>``, a short path) on a port
 that is not 7788 or 7789, with ``config.json`` holding ``meeting_limits.daily_usd`` (0.45), ``chat_limits.per_turn_usd`` (0.10)
@@ -34,8 +36,13 @@ The stages (each prints ``ok``, ``warn`` or ``FAIL`` lines and the script exits 
             sends step 2, which must carry step 1's reply as data and be marked in the chat record as the dispatch's.
   auto      tick both 「自己動手」 items, ask again (one more step), the proposal must start by itself and the list must say 「自己動手
             第 1 項」 and 「第 2 項」; take back the new employee (the card is switched off); untick both items.
-  final     config.json changed only in the limits and the ticks this script wrote (compared key by key), every employee a dispatch
-            made is in safe mode with no skill, and what the day's ledger says was spent.
+  final     config.json is as it was before, key by key (the three limit blocks the daily limit moves, compared by value; only the
+            ticks are skipped and checked on their own), every employee a dispatch made is in safe mode with no skill, and what the
+            day's ledger says was spent.
+
+``--from <dispatch id>`` (the id the ``propose`` stage prints when it stops) takes over that proposal for the ``propose`` and
+``confirm`` stages instead of asking the chief of staff once more (each ask is most of what a run costs). The ``auto`` stage always
+asks: the ticks only act on a proposal as it arrives.
 
 Caps: 20 minutes for the whole run, 3 minutes for any one wait. Exit code 0 only when every check passed.
 """
@@ -56,7 +63,9 @@ STAGES = ("preview", "propose", "confirm", "auto")
 WALL_CAP_S = 20 * 60
 WAIT_CAP_S = 3 * 60
 LOW_DAILY_USD = 0.01
-OWN_KEYS = {"meeting_limits", "chat_limits", "staffing_limits", "autonomy"}       # the config keys this script writes itself
+OWN_KEYS = {"autonomy"}                                                         # the config key this script writes itself and checks on its own
+LIMIT_BLOCKS = ("meeting_limits", "staffing_limits", "chat_limits")             # the blocks a lower daily limit takes down with it
+DISPATCH_ID_RE = re.compile(r"^d-[0-9a-f]{12}\Z")
 SPEND_CEILING_USD = 0.47                                                        # US$0.50, less the check of the tool-less boundary
 
 
@@ -180,6 +189,12 @@ def config_problems(before: dict, after: dict, own: set = OWN_KEYS) -> list[str]
     return out
 
 
+def handoff_probe(reply: str) -> str:
+    """The first words of a reply as they stand inside the next step's message: dispatch_runner.handoff_text puts the reply in as a
+    JSON string, so a newline or a quote in those words is escaped there."""
+    return json.dumps(reply.strip()[:40], ensure_ascii=False)[1:-1]
+
+
 def card_problems(profile: dict) -> list[str]:
     out = []
     if profile.get("launch_mode") != "safe":
@@ -271,12 +286,25 @@ class Run:
         did = view["dispatch_id"]
         self.dispatches.append(did)
         dv = self.c.ok(f"/api/dispatch/{did}")
+        self.check_proposal(dv)
+        return cid, dv
+
+    def adopt(self, did: str) -> dict:
+        """Take over a proposal an earlier run left waiting (``--from``): the same checks of the proposal, no call to the chief."""
+        dv = self.c.ok(f"/api/dispatch/{did}")
+        if dv.get("state") != "proposed":
+            raise Stop(f"that dispatch is not waiting for a confirmation (it is {dv.get('state')})")
+        self.check.ok("the proposal of an earlier run was taken over", "the chief of staff was not asked again")
+        self.dispatches.append(did)
+        self.check_proposal(dv)
+        return dv
+
+    def check_proposal(self, dv: dict) -> None:
         steps = dv["plan"]["steps"]
         self.check.expect(1 <= len(steps) <= 4 or bool(dv.get("questions")), "1 to 4 steps (or only questions)", f"{len(steps)} steps, {len(dv.get('questions', []))} questions, {len(dv.get('notes', []))} notes")
         self.check.expect(all(c["tool"] == "claude" for c in dv["plan"]["new_cards"]), "a new employee is of Claude Code only", ",".join(c["tool"] for c in dv["plan"]["new_cards"]) or "no new employee")
         self.check.expect(all(0 < len(s["text"]) <= 1500 for s in steps), "every step has words to send, 1500 characters at most")
         self.check.expect(dv["cost"]["max_usd"] is not None, "the proposal card can say the most it costs", f"US${dv['cost']['max_usd']} of US${dv['cost']['day_left_usd']} left")
-        return cid, dv
 
     def chief_evidence(self, cid: str) -> dict | None:
         try:
@@ -291,8 +319,7 @@ class Run:
             raise Stop("the proposal has fewer than 2 steps, so the pause between two steps cannot be shown; ask again")
         before = self.config_file()
         daily0 = money((before.get("meeting_limits") or {}).get("daily_usd"))
-        per0 = money((before.get("chat_limits") or {}).get("per_turn_usd"))
-        if daily0 is None or per0 is None:
+        if daily0 is None or money((before.get("chat_limits") or {}).get("per_turn_usd")) is None:
             raise Stop("config.json lacks meeting_limits.daily_usd or chat_limits.per_turn_usd (real-check step 2)")
         lamp = self.c.ok("/api/meetings/ledger").get("lamp")
         if lamp == "red":
@@ -313,15 +340,21 @@ class Run:
         self.check.expect(s1["state"] == "ended" and s1["ended_reason"] == "result", "step 1 finished", f"{s1['state']}/{s1['ended_reason']}")
         self.check.expect(s2["state"] == "pending" and s2["chat_id"] is None, "step 2 was not sent")
         self.check.expect(paused["can"]["continue"] is True, "the dispatch can be continued by the person")
-        # back to what it was: the day first, then the chat's per-turn limit that coming down took with it
-        self.c.ok("/api/setup/daily-limit", "POST", {"daily_usd": daily0})
-        self.c.ok("/api/config", "POST", {"chat_limits": {"per_turn_usd": per0}})
+        self.restore_limits(before)
         cont = self.c.ok(f"/api/dispatch/{did}/continue", "POST", {})
         self.check.expect(cont.get("state") == "running", "continue: running again")
         done = self.wait("the dispatch to finish", lambda: (lambda v: v if v["state"] in ("done", "paused", "stopped") else None)(self.c.ok(f"/api/dispatch/{did}")), cap=WAIT_CAP_S, every=2.0)
         self.check.expect(done["state"] == "done", "the dispatch is done", done["state"] + (f"/{(done.get('pause') or {}).get('reason')}" if done.get("pause") else ""))
         self.check_handoff(done, first)
         return did
+
+    def restore_limits(self, before: dict) -> None:
+        """Back to what config.json held before: the day's limit first, then every block that coming down took with it (the meeting's
+        and the staffing's limits as well as the chat's per-turn limit)."""
+        self.c.ok("/api/setup/daily-limit", "POST", {"daily_usd": money((before.get("meeting_limits") or {}).get("daily_usd"))})
+        blocks = {k: before[k] for k in LIMIT_BLOCKS if isinstance(before.get(k), dict)}
+        if blocks:
+            self.c.ok("/api/config", "POST", blocks)
 
     def user_message(self, chat_id: str) -> dict | None:
         after = 0
@@ -358,7 +391,7 @@ class Run:
         self.check.expect(message.get("origin") == {"dispatch": done["id"], "step": 2}, "step 2's message is marked as the dispatch's in the chat record")
         text = message.get("text") or ""
         reply = self.reply_of(done["steps"][0]["chat_id"])
-        probe = reply.strip()[:40]
+        probe = handoff_probe(reply)
         self.check.expect(bool(probe) and probe in text, "step 2 carries step 1's reply", "found" if probe and probe in text else "not found")
         self.check.expect("BEGIN_UNTRUSTED" in text and "資料" in text, "and marks it as data, not as an instruction")
         self.check.expect(text.startswith((done["plan"]["steps"][1]["text"])[:20]), "and begins with the words of the plan")
@@ -373,6 +406,7 @@ class Run:
             _, dv = self.propose(pv, "再請一位員工把清單翻成英文，一步就好")
             if dv["state"] == "proposed" and (dv.get("notes") or dv.get("questions")):
                 self.check.warn("the proposal had notes or questions, so 「自己動手」 item 2 correctly did not start it", f"{len(dv.get('notes', []))} notes, {len(dv.get('questions', []))} questions")
+                self.take_back(dv)               # item 1 still made the new employees: count them, and switch them off again
                 return
             self.check.expect(dv["started_by"] == "auto2" and dv["state"] in ("running", "done"), "the proposal started by itself (自己動手第 2 項)", f"{dv['state']}/{dv['started_by']}")
             self.made += [m["profile_id"] for m in dv.get("created_cards", [])]
@@ -383,22 +417,27 @@ class Run:
             self.check.expect(any(r["kind"] in ("confirmed", "step_intent") and r["by"] == "auto2" and r["by_text"] == "自己動手第 2 項" for r in mine), "the list says 自己動手第 2 項 for the start")
             fin = self.wait("the second dispatch to finish", lambda: (lambda v: v if v["state"] in ("done", "paused", "stopped") else None)(self.c.ok(f"/api/dispatch/{dv['id']}")), cap=WAIT_CAP_S, every=2.0)
             self.check.expect(fin["state"] == "done", "the second dispatch is done", fin["state"])
-            for m in fin.get("created_cards", []):
-                if m["profile_id"] not in self.made:
-                    self.made.append(m["profile_id"])
-                if m.get("withdrawn") or m["profile_id"] not in fin["can"]["withdraw"]:
-                    continue
-                self.c.ok(f"/api/dispatch/{dv['id']}/withdraw-card", "POST", {"profile_id": m["profile_id"]})
-                profile = next((p for p in self.c.ok("/api/agent-profiles").get("profiles", []) if p.get("id") == m["profile_id"]), None)
-                self.check.expect(profile is not None and profile.get("enabled") is False, "taking the new employee back switched the card off, did not delete it")
+            self.take_back(fin)
         finally:
             self.c.ok("/api/settings/autonomy", "POST", {"create_cards": False, "dispatch": False})
             self.check.ok("both 「自己動手」 items are off again")
 
+    def take_back(self, view: dict) -> None:
+        """Count the employees a dispatch made (the safe-mode check at the end looks at them) and withdraw each one that is still on:
+        the card is switched off, not deleted."""
+        for m in view.get("created_cards", []):
+            if m["profile_id"] not in self.made:
+                self.made.append(m["profile_id"])
+            if m.get("withdrawn") or m["profile_id"] not in (view.get("can") or {}).get("withdraw", []):
+                continue
+            self.c.ok(f"/api/dispatch/{view['id']}/withdraw-card", "POST", {"profile_id": m["profile_id"]})
+            profile = next((p for p in self.c.ok("/api/agent-profiles").get("profiles", []) if p.get("id") == m["profile_id"]), None)
+            self.check.expect(profile is not None and profile.get("enabled") is False, "taking the new employee back switched the card off, did not delete it")
+
     def final(self, before: dict) -> None:
         after = self.config_file()
         bad = config_problems(before, after)
-        self.check.expect(not bad, "config.json changed only in the limits and the ticks this script wrote", ",".join(bad))
+        self.check.expect(not bad, "config.json is as it was before (the limits compared by value, the ticks checked next)", ",".join(bad))
         self.check.expect((after.get("autonomy") or {}) in ({}, {"create_cards": False, "dispatch": False}), "and both ticks are off")
         profiles = {p.get("id"): p for p in self.c.ok("/api/agent-profiles").get("profiles", []) if isinstance(p, dict)}
         for pid in self.made:
@@ -419,7 +458,12 @@ def main(argv=None, out=print, console_factory=Console, clock=time.monotonic, sl
     ap.add_argument("--port", type=int, default=7795, help="the console's port (never 7788 or 7789)")
     ap.add_argument("--chat", default=None, help="the CEO chat's id (default: the newest chat of a CEO card)")
     ap.add_argument("--until", choices=STAGES, default="auto", help="the last stage to run")
+    ap.add_argument("--from", dest="from_dispatch", default=None, metavar="DISPATCH_ID",
+                    help="carry on with the proposal an earlier run left waiting (the id the propose stage prints), not a new call to the chief")
     args = ap.parse_args(argv)
+    if args.from_dispatch is not None and not DISPATCH_ID_RE.match(args.from_dispatch):
+        out("refused: --from takes a dispatch id such as d-0123456789ab")
+        return 2
     why = refusal(args.state, args.port)
     if why:
         out(f"refused: {why}")
@@ -433,14 +477,14 @@ def main(argv=None, out=print, console_factory=Console, clock=time.monotonic, sl
         chat = run.find_chat()
         pv = run.preview(chat)
         if run.reached("propose"):
-            _, dv = run.propose(pv, None)
+            dv = run.propose(pv, None)[1] if args.from_dispatch is None else run.adopt(args.from_dispatch)
             if run.reached("confirm"):
                 run.confirm_and_pause(dv)
                 if run.reached("auto"):
                     run.auto_stage(chat)
                 run.final(before)
             else:
-                out("stopped after the proposal: it is left waiting on its card, nothing was confirmed")
+                out(f"stopped after the proposal: it is left waiting on its card, nothing was confirmed; carry on with --from {dv['id']}")
     except Stop as exc:
         check.fail("stopped", str(exc))
     except (OSError, ValueError, KeyError, TypeError) as exc:

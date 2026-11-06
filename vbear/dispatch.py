@@ -51,6 +51,15 @@ STATES = ("proposed", "confirming", "running", "paused", "done", "stopped", "dis
 DELETABLE_STATES = ("proposed", "dismissed", "done", "stopped")
 BYS = ("you", "auto1", "auto2", "vbear")
 BY_TEXT = {"you": "你確認的", "auto1": "自己動手第 1 項", "auto2": "自己動手第 2 項", "vbear": "VBear"}
+# What the person pressed after the confirmation was not a confirmation (P40-6): the words for these events when ``by`` is "you".
+PRESSED_KINDS = ("card_withdrawn", "continued", "stopped", "dismissed")
+PRESSED_TEXT = "你按的"
+
+
+def by_text_of(ev: dict) -> str:
+    """Who decided an event, in words: 「你確認的」 for what the confirmation started, 「你按的」 for a withdrawal, a stop, a
+    continue and a dismissal, the 「自己動手」 item or VBear otherwise."""
+    return PRESSED_TEXT if ev["by"] == "you" and ev["kind"] in PRESSED_KINDS else BY_TEXT[ev["by"]]
 STEP_STATES = ("pending", "sending", "running", "ended")
 
 TITLE_MAX, GOAL_MAX, NAME_MAX, TEXT_MAX = 80, 500, 40, 1500
@@ -64,6 +73,7 @@ ERRORS = {
     "not_proposed": "這份派工已經不在等你確認的狀態",
     "proposal_changed": "你看到的提議和現在的不一樣，請重新整理再確認",
     "card_unavailable": "有一位要派工的員工現在不能用了（已停用或已刪除）",
+    "card_withdrawn": "有一位新員工已經撤回了，計畫裡還有步驟要交給他",
     "card_changed": "有一位要派工的員工在提議之後被改過了，請重新整理再確認",
     "tool_unavailable": "有一個 AI 工具現在不能聊天了",
     "create_failed": "建立員工或任務卡沒有成功",
@@ -515,7 +525,7 @@ def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None
             "proposal_sha": rec["proposal_sha"], "plan": plan, "edited": rec["plan"] != rec["proposal_plan"], "steps": copy.deepcopy(rec["steps"]),
             "task_id": rec["task_id"], "created_cards": made, "tools": list(rec["tools"]), "cost": cost,
             "pause": None if pause is None else {"reason": pause["reason"], "until": pause["until"], "text": pause_words},
-            "events": [{**e, "what": describe(rec, e, daily_usd), "by_text": BY_TEXT[e["by"]]} for e in rec["events"]],
+            "events": [{**e, "what": describe(rec, e, daily_usd), "by_text": by_text_of(e)} for e in rec["events"]],
             "can": {"confirm": state == "proposed" and bool(plan["steps"]), "dismiss": state == "proposed",
                     "stop": state in ("running", "paused"), "continue": state == "paused", "delete": can_delete(rec),
                     "withdraw": [m["profile_id"] for m in made if not m["withdrawn"]]}}
@@ -792,6 +802,18 @@ class Dispatcher:
                 raise DispatchError("card_changed")
             if info["tool"] not in tools:
                 raise DispatchError("tool_unavailable")
+        withdrawn = _withdrawn(rec)
+        for who in sorted({s["who"] for s in plan["steps"]} & set(rec["made"])):
+            pid = rec["made"][who]               # an employee 「自己動手第 1 項」 made while the proposal waited (P40-6)
+            if pid in withdrawn:
+                raise DispatchError("card_withdrawn", f"新員工「{_name_of(rec, who)}」已經撤回（停用）了，計畫裡還有步驟要交給他。"
+                                                      "請把那些步驟改交給別人或刪掉，再確認。")
+            try:
+                profile = ap.get_profile_readonly(pid)
+            except ap.AgentProfileStorageError:
+                raise DispatchError("storage", "角色資料無法讀取，請到角色頁處理") from None
+            if profile is None or profile.get("enabled") is False:
+                raise DispatchError("card_unavailable")
         for item in plan["new_cards"]:
             if item["ref"] not in rec["made"] and item["tool"] not in tools:
                 raise DispatchError("tool_unavailable")
@@ -962,7 +984,7 @@ class Dispatcher:
             live = rec["state"] in ("running", "paused")
             for ev in rec["events"]:
                 rows.append({"at": ev["at"], "dispatch_id": did, "seq": ev["seq"], "kind": ev["kind"], "what": describe(rec, ev, daily),
-                             "by": ev["by"], "by_text": BY_TEXT[ev["by"]], "profile_id": ev.get("profile_id"),
+                             "by": ev["by"], "by_text": by_text_of(ev), "profile_id": ev.get("profile_id"),
                              "can_stop": live and ev["kind"] in ("confirmed", "step_sent"),
                              "can_withdraw": ev["kind"] == "card_created" and ev["profile_id"] not in withdrawn})
         rows.sort(key=lambda r: (r["at"], r["seq"]), reverse=True)

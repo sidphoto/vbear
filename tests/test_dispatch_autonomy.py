@@ -264,6 +264,53 @@ class WhatAPersonMayDo(Base):
         self.assertEqual((row["state"], row["title"], row["steps"]), ("proposed", "週末市集攤位", 2))
 
 
+class WithdrawnBeforeTheConfirmation(Base):
+    """P40-6: an employee 「自己動手第 1 項」 made while the proposal waited, taken back before the person confirmed. The page
+    still offered 「確認派工」 and the dispatch only paused after it began; now the confirmation itself is refused, in words."""
+
+    def withdrawn_proposal(self):
+        self.autonomy_on(True, False)
+        did = self.propose()
+        (pid,) = dispatch.load(did)["made"].values()
+        self.dispatcher.withdraw_card(did, {"profile_id": pid})
+        return did, pid
+
+    def test_confirming_a_plan_that_still_sends_a_step_to_a_withdrawn_employee_is_refused_and_changes_nothing(self):
+        did, pid = self.withdrawn_proposal()
+        before = (dispatch.load(did)["events"], tasks.list_tasks(), self.profile_ids())
+        with self.assertRaises(dispatch.DispatchError) as cm:
+            self.dispatcher.confirm(did, self.body_of(did))
+        self.assertEqual((cm.exception.status, cm.exception.code), (409, "card_withdrawn"))
+        self.assertIn("會計師", str(cm.exception))
+        self.assertIn("撤回", str(cm.exception))
+        self.assertEqual(dispatch.load(did)["state"], "proposed")
+        self.assertEqual((dispatch.load(did)["events"], tasks.list_tasks(), self.profile_ids()), before)
+        self.assertIs(ap.get_profile_readonly(pid)["enabled"], False, "it is not switched back on")
+
+    def test_an_employee_switched_off_some_other_way_is_refused_too(self):
+        self.autonomy_on(True, False)
+        did = self.propose()
+        (pid,) = dispatch.load(did)["made"].values()
+        ap.save_profile(pid, {"enabled": False})
+        with self.assertRaises(dispatch.DispatchError) as cm:
+            self.dispatcher.confirm(did, self.body_of(did))
+        self.assertEqual((cm.exception.status, cm.exception.code), (409, "card_unavailable"))
+        self.assertEqual(dispatch.load(did)["state"], "proposed")
+
+    def test_the_person_can_hand_those_steps_to_someone_else_and_confirm(self):
+        did, pid = self.withdrawn_proposal()
+        rec = dispatch.load(did)
+        steps = [{"who": "C1", "text": s["text"]} for s in rec["proposal_plan"]["steps"]]
+        view = self.dispatcher.confirm(did, self.body_of(did, steps=steps))
+        self.assertEqual(view["state"], "running")
+        self.assertEqual({s["profile_id"] for s in dispatch.load(did)["steps"]}, {self.writer})
+
+    def test_an_employee_that_is_on_still_confirms(self):
+        self.autonomy_on(True, False)
+        did = self.propose()
+        self.assertEqual(self.dispatcher.confirm(did, self.body_of(did))["state"], "running")
+
+
 class ActionsTests(Base):
     def test_every_event_is_listed_with_who_decided_newest_first(self):
         self.autonomy_on(True, True)
@@ -283,8 +330,11 @@ class ActionsTests(Base):
                                        ("task_intent", "auto2"), ("task_created", "auto2")])
         self.assertEqual(pairs(mine), [("proposed", "vbear"), ("confirmed", "you"), ("card_intent", "you"), ("card_created", "you"),
                                        ("task_intent", "you"), ("task_created", "you"), ("card_withdrawn", "you")])
-        by_text = {r["by"]: r["by_text"] for r in rows}
+        by_text = {r["by"]: r["by_text"] for r in rows if r["kind"] != "card_withdrawn"}
         self.assertEqual(by_text, {"vbear": "VBear", "auto1": "自己動手第 1 項", "auto2": "自己動手第 2 項", "you": "你確認的"})
+        # what a person pressed afterwards was not a confirmation: P40-6 (the list said 「你確認的」 beside 「撤回了新員工」)
+        (withdrawn,) = [r for r in rows if r["kind"] == "card_withdrawn"]
+        self.assertEqual(withdrawn["by_text"], "你按的")
 
     def test_the_words_name_the_employee_and_can_stop_and_can_withdraw_say_what_is_possible(self):
         did = self.propose()

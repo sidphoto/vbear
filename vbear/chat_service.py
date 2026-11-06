@@ -147,13 +147,21 @@ def engine_of(profile) -> str | None:
 
 
 def _default_claude() -> tuple[str | None, str | None, str]:
-    """(binary, version, why not): the pinned Claude Code that would run."""
+    """(binary, version, why not): the Claude Code a chat would run (P40-6: one VBear has chat constants for, on disk;
+    else the one on PATH)."""
     from .runtime import native as rt_native
-    res = cli_versions.check_cli_version("claude", rt_native._pinned_claude_binary(), cwd=str(Path.home()),
+    res = cli_versions.check_cli_version("claude", rt_native._pinned_claude_chat_binary(), cwd=str(Path.home()),
                                          allow_unverified=True)
     if res.compatible and res.observed_version and res.binary_path:
         return res.binary_path, res.observed_version, ""
     return None, None, res.reason
+
+
+def unsupported_text(version: str) -> str:
+    """The one wording for "VBear has no chat constants for this Claude Code": which versions it has, and what to do."""
+    listed = "、".join(sorted(cp.VERSIONS, key=cli_versions._version_key))
+    return (f"VBear 沒有 Claude Code {version} 的聊天模式常數，所以不能聊天。VBear 目前能聊天的版本：{listed}。"
+            f"處理方式：安裝其中一個版本（放在 Claude Code 自己的版本資料夾裡，VBear 就會自動選用），或等 VBear 更新。")
 
 
 def _excerpt(text: str) -> str:
@@ -260,8 +268,7 @@ class ChatService:
             out["message"] = f"讀不到 Claude Code 的版本（{why or '原因不明'}），無法確認聊天模式是否已通過驗證。"
             return out
         if cp.constants_for(version) is None:
-            out.update(state="unsupported", message=f"VBear 沒有 Claude Code {version} 的聊天模式常數，所以不能聊天。"
-                                                  "處理方式：等 VBear 更新。")
+            out.update(state="unsupported", message=unsupported_text(version))
             return out
         policy = admin_policy.check_claude(version, home=os.path.expanduser("~"))
         out["policy"] = {"ok": policy.ok, "found": policy.found, "problems": policy.problems,
@@ -301,7 +308,7 @@ class ChatService:
         if wanted is not None and wanted != version:
             raise ApiError(409, "version_changed", f"目前的 Claude Code 是 {version}，不是 {wanted}；請重新整理後再驗證。")
         if cp.constants_for(version) is None:
-            raise api_error("unsupported_version", f"Claude Code {version}")
+            raise ApiError(CODE_TEXT["unsupported_version"][0], "unsupported_version", unsupported_text(version))
         policy = admin_policy.check_claude(version, home=os.path.expanduser("~"))
         if not policy.ok:
             raise ApiError(409, "admin_policy", policy.reason())

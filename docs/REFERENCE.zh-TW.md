@@ -93,7 +93,7 @@
   只帶這張卡自己寫的指示（一個 `--append-system-prompt`），不帶職位預設文字；VBear 還沒有在真機上確認 Claude Code 真的套用，也沒確認續接時改過的指示會不會生效。
   Bash、Edit、Write 一律出權限卡片（允許這一次、拒絕、改內容再允許），沒有「以後都允許」；卡片 5 分鐘過期視為拒絕，按下允許時 VBear 會再檢查一次。
   每回合上限 `chat_limits.per_turn_usd`（預設 US$0.50，0.01 到 5），和會議、組隊會議共用 `meeting_limits.daily_usd`；沒回報花費的回合按上限算。
-  Claude Code 版本要先通過 `python3 -m vbear.boundary_check --mode chat`（約 6 次 Haiku 小呼叫，用你自己的登入）才能聊天；2.1.318 另外把 `~/.claude/policy-limits.json` 當成管理員政策，存在就不能聊天。
+  Claude Code 版本要先通過 `python3 -m vbear.boundary_check --mode chat`（約 6 次 Haiku 小呼叫，用你自己的登入）才能聊天；2.1.318 與 2.1.319 另外把 `~/.claude/policy-limits.json` 當成管理員政策，存在就不能聊天。聊天會自動選 Claude Code 版本資料夾裡通過聊天驗證、其次是 VBear 有聊天常數的最新版，再其次才是 PATH 上的 `claude`；會議與幕僚長用 PATH 上的，所以三者可能是不同版本。
   Codex 聊天（引擎 `codex-chat`）：每個指令和每次改檔都問（連只讀檔的也問）；「改內容再問」是先拒絕、再請 Codex 照你改的重新問一次；沙盒不擋讀，而且允許後的指令可能在沙盒外執行（能寫整台電腦、能連網；指令卡上寫明）；花費是 VBear 依 token 數的估計（每 100 萬 token 計 US$1.00，不是帳單），算進每天上限；聊天用的 Codex 另外登入（開始設定頁），版本要先通過 `python3 -m vbear.boundary_check --mode codex-chat`（頁面上的「驗證聊天」）。
   詳見 [安全模型](SECURITY-MODEL.md#chats-with-a-role-card) 與 [Codex 聊天](SECURITY-MODEL.md#chats-with-a-codex-role-card-engine-codex-chat-v013)。
   幕僚長與派工：幕僚長把你和 CEO 的對話送到 Anthropic（透過你的 Claude Code，每次最多 US$0.30，算進每天上限）；派工只透過聊天送訊息，不回答權限卡片，每個指令和改檔仍然問你；上一步的回覆當資料交給下一步，這是惡意文字帶偏下一位員工的一條路；員工被允許的指令讀得到 VBear 的存取權杖。VBear 只保證自己的幕僚長與派工程式不改上限、不啟動終端機或完整模式、不裝技能。詳見 [幕僚長與派工](SECURITY-MODEL.md#chief-of-staff-and-dispatch-v015)。

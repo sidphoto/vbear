@@ -1040,10 +1040,11 @@ process starts until a version passes the chat check.
   answer kept; the check's own processes and folders cleaned up. Only a pass writes `claude-chat-verified.json`
   (0600), and a version counts only while the report it names (mode `chat`, passed, the same version, owned by you)
   reads back. The few cents it spends are on your Claude account and are not in the day's ledger.
-- **Administrator policy.** For 2.1.318 the places checked are the directory `/Library/Application Support/ClaudeCode`,
+- **Administrator policy.** For 2.1.318 and 2.1.319 (the same list) the places checked are the directory `/Library/Application Support/ClaudeCode`,
   the managed preferences for `com.anthropic.claudecode`, `~/.claude/remote-settings.json` and
   `~/.claude/policy-limits.json`. Any of them present, or not establishable, means no chat starts. Nothing says what
-  `policy-limits.json` can change, so it is refused whole (evidence: `docs/evidence/claude-code-2.1.318-chat.md`).
+  `policy-limits.json` can change, so it is refused whole (evidence: `docs/evidence/claude-code-2.1.318-chat.md`). A chat runs the newest version in Claude Code's `versions` folder that passed the chat
+  check, else the newest with chat constants, else PATH's `claude`; having constants is never enough to chat.
 - **The console is not a second authority.** The server adds no rule of its own about a tool call: it relays the
   card, its token and your answer to the runtime and the runtime checks again when you allow. A live view
   (`GET /api/chats/<id>/stream`, server-sent events) needs the same `X-VBear` header as a write, and at most four are

@@ -357,7 +357,8 @@ COMMON_RULES = (
 CHIEF_RULES = (
     "你是用的人的幕僚長：看他和 CEO 最近的對話，把他想做的事分成最多 4 步，每一步交給一位員工。"
     "你的提議只是建議，用的人確認後才會做。\n"
-    "輸出 JSON：summary（300 字內，給用的人看的一段話）、task（title 80 字內、goal 500 字內、deliverables 最多 5 項各 120 字內）、"
+    "輸出 JSON：summary（300 字內，給用的人看的一段話，只寫要做什麼、為什麼這樣分工；"
+    "不要寫 VBear 接下來怎麼進行，例如什麼時候建立新員工、要不要確認、什麼時候開始，那些由畫面依實際的設定說明）、task（title 80 字內、goal 500 字內、deliverables 最多 5 項各 120 字內）、"
     "team（這次要找的員工，最多 3 位，每項 who 與 why）、"
     "new_cards（現有員工都不合適時才建議新建，最多 2 位，每項 ref（N1 或 N2）、name、position、tool、"
     "model_alias（Claude Code 的員工才填，其他填空字串）、why）、"

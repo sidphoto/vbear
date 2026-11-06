@@ -4,6 +4,7 @@ is started."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
@@ -58,6 +59,15 @@ class ConstantsTests(unittest.TestCase):
         self.assertTrue(c.cost_cumulative)
         self.assertIsNone(cp.constants_for("2.1.296"))
         self.assertIsNone(cp.constants_for(None))
+
+    def test_2_1_319_has_the_same_constants_as_2_1_318(self):
+        """P40-6: the --help of 2.1.319 is identical to 2.1.318's (docs/evidence/claude-code-2.1.318-chat.md), so the chat's
+        constants are the same; only the version differs. Not yet in any verified list: that needs boundary_check --mode chat."""
+        new, old = cp.VERSIONS["2.1.319"], cp.VERSIONS["2.1.318"]
+        self.assertEqual(new.version, "2.1.319")
+        self.assertEqual(dataclasses.replace(new, version="2.1.318"), old)
+        self.assertIs(cp.constants_for("2.1.319"), new)
+        self.assertEqual(sorted(cp.VERSIONS), ["2.1.318", "2.1.319"])
 
     def test_every_recorded_event_kind_is_known(self):
         for name in ("ask", "text"):

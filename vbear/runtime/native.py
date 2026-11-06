@@ -43,6 +43,7 @@ from .. import config as cfg
 from . import daemon as _d
 from . import cli_versions as _cli_versions
 from . import agent_sessions as _agent_sessions
+from . import chat_protocol as _chat_protocol
 from .base import RuntimeBase, SessionView
 
 QUEUE_MAX = 200               # per subscriber, drop-oldest
@@ -79,6 +80,28 @@ def _pinned_claude_binary() -> str | None:
         pinned = versions / version
         if pinned.is_file():
             return str(pinned)
+    return None
+
+
+def _pinned_claude_chat_binary() -> str | None:
+    """Install path of the Claude Code a chat should run (P40-6), or None to fall back to PATH.
+
+    A chat does not need the terminal launch's boundary check but its own: VBear's chat constants for the version
+    (``chat_protocol.VERSIONS``) and, to start, a pass of ``boundary_check --mode chat``. So among the versions present in
+    Claude Code's ``versions`` folder, the newest one that has passed the chat check is taken; failing that, the newest one
+    VBear has chat constants for (the person can then verify it). Nothing else is ever chosen here: with none present the
+    answer is None and PATH's ``claude`` decides, and the chat page says in words why it cannot chat when that one has no
+    constants either. The terminal launch keeps ``_pinned_claude_binary``; the meetings and the chief of staff use PATH's own
+    ``claude`` (translations.claude_identity), so the three may run different versions."""
+    versions = Path.home() / ".local/share/claude/versions"
+    known = set(_chat_protocol.VERSIONS)
+    key = lambda v: tuple(int(x) for x in v.split("."))
+    verified = known & set(_cli_versions.chat_verified_versions())
+    for pool in (verified, known):
+        for version in sorted(pool, key=key, reverse=True):
+            pinned = versions / version
+            if pinned.is_file():
+                return str(pinned)
     return None
 
 

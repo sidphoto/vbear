@@ -13782,7 +13782,9 @@ function proposalDraft(v) {
 function proposalCard(v, opts = {}) {
   const orig = proposalDraft(v);
   const draft = proposalDraft(v);
-  const made = new Set((Array.isArray(v.created_cards) ? v.created_cards : []).map((c) => c.ref));
+  const madeCards = Array.isArray(v.created_cards) ? v.created_cards.filter((c) => c && typeof c.ref === "string") : [];
+  const made = new Set(madeCards.map((c) => c.ref));
+  const takenBack = new Map(madeCards.filter((c) => c.withdrawn === true).map((c) => [c.ref, String(c.name || c.ref)]));    // made, then withdrawn
   const team = Array.isArray(v.team) ? v.team.filter((t) => t && typeof t.who === "string") : [];
   const tools = Array.isArray(v.tools) && v.tools.length ? v.tools : [...new Set(draft.cards.map((c) => c.tool))];
   const names = new Map(team.map((t) => [t.who, String(t.name || "")]));
@@ -13820,7 +13822,11 @@ function proposalCard(v, opts = {}) {
     if (!draft.goal.trim()) out.push("任務目標不能空白。");
     if (!draft.steps.length) out.push("至少要有一步。");
     const valid = new Set(people());
-    draft.steps.forEach((s, i) => { if (!valid.has(s.who)) out.push(`第 ${i + 1} 步請選一位員工。`); else if (!s.text.trim()) out.push(`第 ${i + 1} 步的內容不能空白。`); });
+    draft.steps.forEach((s, i) => {
+      if (!valid.has(s.who)) out.push(`第 ${i + 1} 步請選一位員工。`);
+      else if (takenBack.has(s.who)) out.push(`第 ${i + 1} 步要交給「${takenBack.get(s.who)}」，但這位新員工已經撤回了；請改交給別人或刪掉這一步。`);
+      else if (!s.text.trim()) out.push(`第 ${i + 1} 步的內容不能空白。`);
+    });
     if (new Set(draft.steps.map((s) => s.who)).size > 3) out.push("一次最多找 3 位員工。");
     for (const c of liveCards()) if (!c.name.trim() && !made.has(c.ref)) out.push("新員工的名字不能空白。");
     return out;
@@ -13937,7 +13943,10 @@ function proposalCard(v, opts = {}) {
   setKids(root,
     el("div", { class: "prop-head" }, el("h2", null, "幕僚長的提議"), " ", dispatchStateBadge("proposed"), " ", cardMark),
     editedNote, body,
-    el("p", { class: "small muted" }, "按「確認派工」之後，VBear 會建上面的新員工（安全模式）、建一張任務卡，再照順序把每一步送給員工。"),
+    el("p", { class: "small muted", "data-dispatch": "what-next" }, (Array.isArray(v.plan && v.plan.new_cards) ? v.plan.new_cards : []).some((c) => !made.has(c.ref))
+      ? "按「確認派工」之後，VBear 會建上面的新員工（安全模式）、建一張任務卡，再照順序把每一步送給員工。"
+      : made.size ? "新員工已經建好了（自己動手第 1 項，安全模式）。按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"
+        : "按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"),
     costBox, spent ? el("p", { class: "small muted", "data-dispatch": "chief-cost" },
       `幕僚長這次花了 ${usdUp(dispatchNum(spent.spent_usd))}（${spent.cost_source === "worst_case" ? "沒有回報，以上限計" : "Claude Code 回報"}）。`) : null,
     whyOff, errorBox,

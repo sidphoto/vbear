@@ -447,6 +447,36 @@ test("a new employee taken out leaves their steps with no one: the card says so 
   assert.deepStrictEqual(posts("/confirm")[0].body.new_cards, [], "a new employee nobody works for is not made");
 });
 
+const MADE_N1 = (withdrawn) => ({ created_cards: [{ ref: "N1", name: "會計師", profile_id: "emp-new-1", withdrawn }] });
+
+test("an employee made by 「自己動手第 1 項」 and taken back: a step still for them will not confirm; handing it over does (P40-6)", async () => {
+  withProposal(MADE_N1(true));
+  const main = await open("#/chat/" + CHAT);
+  assert.strictEqual(button(card(main), "確認派工").disabled, true);
+  const why = text(find(card(main), "data-dispatch", "why-disabled"));
+  assert(why.includes("會計師") && why.includes("撤回") && why.includes("第 2 步"), why);
+  await pick(find(stepRows(main)[1], "data-dispatch", "step-who"), "C1");
+  assert.notStrictEqual(button(card(main), "確認派工").disabled, true);
+  assert.strictEqual(text(find(card(main), "data-dispatch", "why-disabled")), "");
+});
+
+test("an employee that is on is not in the way of confirming", async () => {
+  withProposal(MADE_N1(false));
+  const main = await open("#/chat/" + CHAT);
+  assert.notStrictEqual(button(card(main), "確認派工").disabled, true);
+});
+
+test("the card says what really happens to the new employees: made already (item 1 was on) or made on confirming", async () => {
+  withProposal();
+  let main = await open("#/chat/" + CHAT);
+  assert(text(card(main)).includes("VBear 會建上面的新員工"), text(card(main)));
+  withProposal(MADE_N1(false));
+  main = await open("#/chat/" + CHAT);
+  const t = text(card(main));
+  assert(t.includes("新員工已經建好了") && !t.includes("VBear 會建上面的新員工"), t);
+  assert(t.includes("按「確認派工」之後") && t.includes("任務卡"), t);
+});
+
 test("a new employee's choices: the position without the CEO, the tools the proposal could name, a model only for Claude Code", async () => {
   withProposal();
   const main = await open("#/chat/" + CHAT);

@@ -6,7 +6,7 @@ On the CEO's chat page, 請幕僚長安排 lets VBear's chief of staff read your
 does what. You read and change the proposal on a card, press 確認派工 once, and VBear makes the new employees and sends the steps to
 your employees, one chat per step. It never answers a permission card (every command and every file change is still asked of
 you), never changes a limit, never starts a terminal or full mode and never installs a skill, and the whole run can be stopped
-and read in 「AI 自己做了什麼」. Five tasks (P40-1 to P40-5; v0.14 was never released, so this version follows v0.13.0):
+and read in 「AI 自己做了什麼」. Six tasks (P40-1 to P40-6; v0.14 was never released, so this version follows v0.13.0):
 
 - **The chief of staff's one call (P40-1).** `vbear/chief.py` (pure: which messages are read, the list of employees as codes
   C1.., the answer's schema with `additionalProperties: false` and no field for a limit, mode, skill, URL or path, and
@@ -42,6 +42,14 @@ and read in 「AI 自己做了什麼」. Five tasks (P40-1 to P40-5; v0.14 was n
   codes; a Codex CEO card says that the conversation goes to Claude Code; a Mac with Codex only reads 「幕僚長目前需要 Claude Code」.
   `GET /api/dispatch/<id>` also carries `tools` (the AI tools a new employee may name) and the actions carry the `profile_id` of a card a
   dispatch made. `tools/qa_p40.py` is the real-machine check through the HTTP API (it needs `--state`).
+- **Fixes from the real-machine check (P40-6).** Claude Code 2.1.319 can chat: it has chat constants and an administrator-source
+  list (its `--help` is identical to 2.1.318's and its binary names the same places; evidence in `docs/evidence/claude-code-2.1.318-chat.md`),
+  but it is **not** yet verified and chats only after `boundary_check --mode chat` passes on your Mac. A chat now also picks, among
+  the versions in Claude Code's own `versions` folder, the newest that passed the chat check, else the newest VBear has constants for,
+  else PATH's; a version without constants is told in words which versions work. A new employee taken back before you confirm is
+  now refused at 確認派工 (it used to start and then pause). Smaller: 「你按的」 in the actions list beside a withdrawal, stop,
+  continue and dismissal; the chief of staff no longer writes how VBear will go about it, and the card says what really happens to
+  the new employees; `tools/qa_p40.py` got its own fixes and `--from <dispatch id>`.
 - **Documents.** `docs/SECURITY-MODEL.md` has "Chief of staff and dispatch" with its residual risks: the previous step's reply
   handed to the next step is a prompt-injection path, and an employee's allowed commands can read VBear's access token and call
   VBear's API, so VBear guarantees only that its own chief of staff and dispatch code do not do the three forbidden things.
