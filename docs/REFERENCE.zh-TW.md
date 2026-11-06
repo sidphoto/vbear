@@ -160,6 +160,7 @@ vbear/
   meeting_runner.py                   會議的預覽、一次一個呼叫的 worker、重試與取消
   chat_service.py                     聊天：伺服器端的服務與拒絕說明（紀錄與花費在 runtime/chat_store.py）
   chat_check.py claude_verify.py      聊天驗證（boundary_check --mode chat）與它的啟動、狀態
+  codex_chat_check.py                 Codex 聊天的版本閘門（boundary_check --mode codex-chat，約 14 次呼叫、總估計不超過 US$0.30）
   board_engine.py                     會議的引擎：一回合一個無工具呼叫、花費、思考強度與時鐘（會議與組隊會議共用）
   skill_fit.py                        哪張技能可以插在哪張卡（和網頁同一套相容規則，讓伺服器檢查組隊提案）
   staffing.py staffing_runner.py      組隊會議：清單與代號、建議的發言者、輸出檢查、紀錄；預覽、執行、重試、董事長紀錄

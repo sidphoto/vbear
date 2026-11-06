@@ -44,10 +44,11 @@ def chat_home_path(base) -> Path:
     return Path(os.path.realpath(os.fspath(base))) / CHAT_HOME_NAME
 
 
-def _open_checked(base):
+def _open_checked(base, home=None):
     """(path, fd): the folder opened from "/" one component at a time without following any link, and found to be this
-    user's own plain 0700 folder. The caller closes the fd. CodexRefused otherwise."""
-    path = chat_home_path(base)
+    user's own plain 0700 folder. The caller closes the fd. CodexRefused otherwise. ``home`` is another folder than
+    <state>/codex-chat-home, which only the version check gives (the person's own, for a daemon of its own: codex_chat_check)."""
+    path = Path(home) if home else chat_home_path(base)
     try:
         fd = review_store.open_dir_chain(path)
     except (OSError, ValueError) as exc:
@@ -63,10 +64,10 @@ def _open_checked(base):
     return path, fd
 
 
-def check_chat_home(base, *, size: bool = True) -> Path:
+def check_chat_home(base, *, size: bool = True, home=None) -> Path:
     """The folder is usable: ours, 0700, no link on its path, none of ``FORBIDDEN`` in it (whatever kind of entry it is,
     a link included), and within the size threshold (``size=False`` leaves the count out). CodexRefused otherwise."""
-    path, fd = _open_checked(base)
+    path, fd = _open_checked(base, home)
     try:
         for name in FORBIDDEN:
             try:
@@ -113,16 +114,16 @@ def ensure_chat_home(base) -> Path:
     return check_chat_home(base)
 
 
-def home_state(base) -> tuple[str, str]:
+def home_state(base, home=None) -> tuple[str, str]:
     """("missing" | "ok" | "refused", why): a look that makes nothing. A folder that is not there yet is not a problem."""
     try:
-        os.lstat(chat_home_path(base))
+        os.lstat(Path(home) if home else chat_home_path(base))
     except FileNotFoundError:
         return "missing", ""
     except OSError as exc:
         return "refused", f"無法確認聊天用的 Codex 資料夾（{exc.strerror or type(exc).__name__}）"
     try:
-        check_chat_home(base)
+        check_chat_home(base, home=home)
     except CodexRefused as exc:
         return "refused", str(exc)
     return "ok", ""

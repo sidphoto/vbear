@@ -1207,11 +1207,28 @@ version is chat-verified out of the box: no process starts until one passes `--m
   reset time, whether a limit was reached). Never kept or logged: the Codex home and user agent from `initialize`, the
   plan's kind, credits, installation id, host name, MCP server names, instruction file paths. Codex keeps its own copy
   of a conversation in `codex-chat-home/sessions`; deleting a chat does not delete it.
-- **Not checked yet.** That the real Codex returns exactly the sandbox shape asked for, that `turn/steer` is accepted
-  with `experimentalApi: false`, and what happens in a long conversation (an item kind outside the list stops the
-  chat) are for `--mode codex-chat` on a real machine. Reading is not isolated: a command the person allows can read
-  the whole machine, as a Claude chat's Bash can. `untrusted` is documented as retired and `codex app-server` as
-  experimental: every Codex version must pass the check first.
+- **The version check.** `python3 -m vbear.boundary_check --mode codex-chat` (Python 3.13 or newer, as for `--mode chat`;
+  `--codex` names the binary, else the newest the vendor's installer left) runs one real chat through this section's code
+  in a temporary state folder inside the state folder (the chat records, work folder and the day's ledger are its own),
+  with seven messages: text; `ls -a` (a command that only reads must still make a card) and a denied `rm` (the file is
+  still there); a command changed in its card (`turn/steer` must be accepted: a refused one fails the check at the `edit`
+  step and VBear's fallback is stopped, not used) which then runs as changed; a file change with its diff; a write
+  outside the work folder (declined with no card, and a shell write there that the sandbox must stop); `turn/interrupt`;
+  and a new process with `thread/resume` that must remember the first message. It also checks the answers of
+  `thread/start` and `mcpServerStatus/list`, the token total across the resume, that `thread/delete` removes the
+  thread the check made, that the idle process ends by itself within twenty seconds of its stdin closing, and that no
+  process, folder or file in the person's chat folder is left, and that none of the account details above reached the
+  records, the log or the report. The check never allows more than it asked for: it answers a card with an allow only
+  for the one command or file it asked Codex to make. The only thing it takes from the person is the login: its
+  temporary daemon runs Codex with the person's real `<state>/codex-chat-home` as `CODEX_HOME` (the daemon's
+  `codex_chat_home`, set only by the check; the launch record still names the folder under the check's own state, and a
+  daemon of the console never sets it). It costs about fourteen model calls on the person's ChatGPT plan, no more than
+  US$0.30 by VBear's own counting (each step has a cap, and the check's day limit is US$0.30), and is not added to the
+  day's ledger. A pass writes `codex-chat-verified.json` and a 0600 report that `cli_versions` reads back every time.
+- **Not checked yet.** What happens in a long conversation (an item kind outside the list stops the chat) and whether the
+  real Codex lets an unknown server request through are for the first real runs. Reading is not isolated: a command the
+  person allows can read the whole machine, as a Claude chat's Bash can. `untrusted` is documented as retired and
+  `codex app-server` as experimental: every Codex version must pass the check first.
 
 ## The start-up page (v0.12)
 

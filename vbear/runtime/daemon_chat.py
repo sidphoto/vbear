@@ -354,12 +354,15 @@ class ChatOps:
         policy = admin_policy.check_codex(version)
         if not policy.ok:
             return _err(rid, "admin_policy", policy.reason())
-        folder, why = codex_chat_env.home_state(self.base)
+        # The folder is <state>/codex-chat-home. Only the version check's own daemon (a temporary state folder) names the
+        # person's real one in ``codex_chat_home``: Codex gets that login, the launch record still names the nominal folder.
+        nominal = str(codex_chat_env.chat_home_path(self.base))
+        folder, why = codex_chat_env.home_state(self.base, home=self.codex_chat_home)
         if folder == "missing":
             return _err(rid, "not_logged_in", "聊天用的 Codex 還沒有登入")
         if folder != "ok":
             return _err(rid, "codex_home", why)
-        chat_home = str(codex_chat_env.chat_home_path(self.base))
+        chat_home = self.codex_chat_home or nominal
         if codex_chat_env.login_state(binary, chat_home) != "logged_in":
             return _err(rid, "not_logged_in", "聊天用的 Codex 沒有登入，或查不出有沒有登入")
         try:
@@ -378,11 +381,12 @@ class ChatOps:
             m = agent_sessions.prepare_codex_chat_launch(
                 self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
                 model_id=model_id, chat_id=chat_id, profile_id=profile_id, resume=resume, thread_id=thread_id,
-                codex_home=chat_home)
+                codex_home=nominal)
             agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
             m = agent_sessions.load_validated(self.base, m["launch_id"])
             argv = agent_sessions.codex_chat_argv(m)
             env = agent_sessions.codex_chat_env(m, build_env(user_bin=False))
+            env["CODEX_HOME"] = chat_home
         except (agent_sessions.LaunchRefused, OSError, ValueError) as exc:
             log.close()
             if m is not None:
@@ -413,7 +417,8 @@ class ChatOps:
                                                + list(self._chats.values())):
                 sid = "n-" + secrets.token_hex(6)
             p = codex_chat_session.CodexChatProcess(
-                sid=sid, chat_id=chat_id, profile_id=profile_id, manifest=m, proc=proc, log=log, next_turn=n,
+                sid=sid, chat_id=chat_id, profile_id=profile_id, manifest=dict(m, codex_home=chat_home), proc=proc, log=log,
+                next_turn=n,
                 now=time.monotonic(), leader_start=leader_start, logger=self._log, watch=self._watch_chat,
                 unwatch=self._unwatch_chat, card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,

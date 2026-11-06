@@ -606,6 +606,7 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         # sets this, on a daemon of its own in a temporary state folder. No RPC reaches it.
         self.chat_probe_versions: frozenset = frozenset()
         self.codex_chat_probe_versions: frozenset = frozenset()       # the same for a Codex chat (codex_chat_check)
+        self.codex_chat_home: str | None = None    # only codex_chat_check: the person's own codex-chat-home (its login) for a daemon of its own
 
     # ---- lifecycle ----
 

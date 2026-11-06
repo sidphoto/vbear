@@ -37,6 +37,7 @@ account fields (booleans only; no value is printed or kept).
     python3 -m vbear.boundary_check --mode interactive --claude ~/.local/share/claude/versions/2.1.291
     python3 -m vbear.boundary_check --mode stream --claude ~/.local/share/claude/versions/2.1.292
     python3 -m vbear.boundary_check --mode chat --claude ~/.local/share/claude/versions/2.1.318
+    python3 -m vbear.boundary_check --mode codex-chat [--codex <the Codex to check>]
     (or tools/verify_claude_boundary.py with the same arguments)
 
 Exit status: 0 all checks passed, 1 a check failed, 2 the run itself failed.
@@ -67,6 +68,7 @@ from .runtime import agent_sessions, daemon
 from .runtime.osc_title import TitleTracker
 from .title_check import TITLE_CHECKS, title_checks  # noqa: F401  (title_checks is part of this module's API)
 
+MODES = ("headless", "interactive", "stream", "chat", "codex-chat")
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 RUN_TIMEOUT = 240.0
 IDLE_WAIT = 30.0     # after the probe result, how long to wait for the idle title
@@ -335,12 +337,17 @@ def run_interactive(argv: list[str], env: dict, cwd: str, result: Path,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--claude", help="Claude Code binary (default: newest in ~/.local/share/claude/versions)")
-    ap.add_argument("--mode", choices=("headless", "interactive", "stream", "chat"), default="headless")
+    ap.add_argument("--codex", help="Codex binary for --mode codex-chat (default: the newest one the vendor's installer "
+                                    "left under ~/.codex/packages/standalone/releases)")
+    ap.add_argument("--mode", choices=MODES, default="headless")
     ap.add_argument("--model", default=None, help="model id or alias (default: Haiku 4.5 in headless, interactive and "
                                                   "stream, the alias haiku in chat)")
     ap.add_argument("--out", help="write the JSON report here")
     args = ap.parse_args()
 
+    if args.mode == "codex-chat":
+        from . import codex_chat_check
+        return codex_chat_check.main(args.codex, args.out)
     binary = pick_claude(args.claude)
     version = claude_version(binary)
     if args.mode == "chat":
@@ -437,7 +444,8 @@ def finish(report: dict, out: str | None, code: int) -> int:
     if out:
         Path(out).write_text(text + "\n")
     summary = {k: v["pass"] for k, v in (report.get("checks") or {}).items()}
-    print(json.dumps({"claude_version": report["claude_version"], "mode": report["mode"],
+    print(json.dumps({("codex_version" if "codex_version" in report else "claude_version"):
+                      report.get("codex_version") or report.get("claude_version"), "mode": report["mode"],
                       "passed": report.get("passed"), "error": report.get("error"),
                       "checks": summary,
                       "title": ({k: v["pass"] for k, v in report["title"]["checks"].items()}

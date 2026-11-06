@@ -37,7 +37,7 @@ browser (web/)  ──HTTP 127.0.0.1:7788──▶  console server (vbear serve)
   refusal into a sentence (`explain`). `GET /api/chats/<id>/stream` relays the daemon's live view as server-sent events
   (`X-VBear` required, at most four open); the page falls back to polling. `claude_verify.py`'s `ChatVerifier` runs
   `vbear/chat_check.py` (through `python3 -m vbear.boundary_check --mode chat`) and trusts a version only when the
-  0600 report it names reads back as a pass. The records and the day's spend are `runtime/chat_store.py`'s, written only by the daemon.
+  0600 report it names reads back as a pass. The records and the day's spend are `runtime/chat_store.py`'s, written only by the daemon. A Codex chat's version check is `vbear/codex_chat_check.py` (`boundary_check --mode codex-chat`), which records `codex-chat-verified.json` the same way.
 
 ## VBear runtime — `vbear/runtime/daemon.py`
 

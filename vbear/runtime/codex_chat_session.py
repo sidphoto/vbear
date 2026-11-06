@@ -233,6 +233,21 @@ class CodexChatProcess(chs.ChatProcess):
             return
         super().stop(reason, now)
 
+    def delete_thread(self) -> bool:
+        """Ask Codex to delete this chat's thread (``thread/delete``). No chat does this: the version check
+        (codex_chat_check) deletes the thread it made, from the loop's own thread. False when there is no thread, no turn
+        may be open and the process must be idle."""
+        if self.thread_id is None or not self.idle or self.turn is not None or not self.stdin_open:
+            return False
+        rid = self._rpc()
+        try:
+            line = ccp.thread_delete_line(rid, self.thread_id)
+        except ValueError:
+            return False
+        self.tracker.expect(rid, "thread_delete")
+        self._queue(line)
+        return True
+
     def _send_interrupt(self, now: float) -> None:
         t = self.turn
         if t is None or t.interrupt_sent or not t.written or t.turn_id is None:
