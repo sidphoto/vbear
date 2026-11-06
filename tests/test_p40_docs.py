@@ -38,7 +38,8 @@ class ChiefDocsTests(unittest.TestCase):
         cls.app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
 
     def test_the_release_heading_is_first_and_not_unreleased(self):
-        self.assertTrue(self.raw.startswith("# Changelog\n\n## v0.15.0 — the chief of staff\n"), self.raw[:60])
+        self.assertIn("\n## v0.15.0 — the chief of staff\n", self.raw)         # newer releases are put above it (v0.16.0 is the first now)
+        self.assertTrue(self.raw.startswith("# Changelog\n\n## v0.16.0 — group chat\n"), self.raw[:60])
         self.assertNotIn("Unreleased", self.changelog)
         self.assertNotIn("not released yet", self.changelog)
 

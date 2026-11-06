@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.16.0 — group chat
+
+In the 聊天 page, 開新群組 makes a group of two or three employees (Claude Code or Codex) that you talk to together, like a LINE
+group. You say something to 「大家」 or name some of them with the @ buttons (點名); the employees asked answer one after the other, in the
+order of the group, and each is given what was said since it last spoke, marked as data. Only your sentence starts an answer (an
+employee's reply never calls another, even with an @ in it), every command and every file change is still asked of you on a
+permission card under that employee's name, and nothing goes on by itself after a pause. Four tasks (P41-1 to P41-4); `vbear/runtime/`
+is the same as in v0.15.0:
+
+- **The backbone (P41-1, `6ce187e`).** `vbear/groups.py` (`<state>/groups/g-<12 hex>/`: `group.json`, 0600, 64 KiB, and
+  `log.jsonl`, append-only, each line synced, 8 MiB; a log that does not read back makes that group read-only) and
+  `vbear/group_runner.py` (a thread started by `serve()`, one pass every 2 seconds, `group-runner.lock`; shaped like the dispatch
+  runner, no code shared with it). Making a group opens one chat per member with `ChatService.create` (nothing started, nothing spent);
+  an answer is one turn of that chat, sent with the new `ChatService.send_for_group` (the same send as a person's, no `origin`, only to a
+  chat a group opened). The message is the group's fixed words the first time, then what was said since this employee last spoke as one
+  JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING` after a fixed sentence that it is data (6 KiB for an item, 12 KiB
+  in all, 30 KiB for the message), then your words outside the markers. `GET/POST /api/groups`, `GET /api/groups/<id>?after=`,
+  `POST /api/groups/<id>/messages` (202; 409 `round_open` while a round is on, 409 `red` on a red lamp). A group's chats are not in
+  `GET /api/chats` and `POST /api/chats/<id>/messages` refuses them (`group_member_chat`). `tests/test_autonomy_guard.py` scans
+  `vbear/group*.py` too and, new, fails on any call of `answer` (never answers a permission card), with small made-up sources that
+  prove each rule fires.
+- **Naming, members, and the controls of a round (P41-2, `a3a5d03`).** `to` can be a list of members (asked in the group's order,
+  not the order named). `POST /api/groups/<id>/members {add, remove}` (between rounds; two or three remain; someone who comes back
+  keeps her chat unless the card's AI tool changed), `POST …/rename`, `DELETE /api/groups/<id>` (between rounds; the chats go first, a busy
+  chat refuses everything; what was spent stays counted), `POST …/stop|continue|drop` (body `{}`). A pause with the reason
+  (`daily_limit` with 「明天 0:00」, `spend_unknown`, `uncertain` after a restart, `violation`) and a skip of one employee (`plan_limit` with the
+  time the tool named or 「未知」, `busy` after three minutes, the chat's code for a card it will not run) in plain words; after a restart a
+  turn that may or may not have been sent is looked up in its chat and never sent twice by itself. `GET /api/groups/<id>` carries
+  `round`, `current`, `cost` and `can`.
+- **The group page (P41-3, `c8af814`).** `#/chat/group/<id>`: the @ buttons (「大家」 and naming exclude each other; an @name at the
+  start of the sentence picks the button), the line 「這句會請 N 位回答，最多 US$X，今天還剩 US$Y」 (no sending on a red lamp), the words being
+  written, the allow card under the employee who asks (the chat page's own card; a Codex command card keeps its warning that the command may
+  run outside the sandbox; no 「allow all」 of any kind), 停止, 繼續（請剩下的人回答）, 不用了, rename, adding and removing, deleting (the
+  confirmation says that the chats are deleted, what was spent stays counted and Codex's own copies are not), the line that tells groups,
+  meetings and dispatches apart, the lobby's 輪到你 for a group that waits for you or is paused, the 「群組」 and 「等你」 marks in the
+  chat list, and, on the chat page of a group's chat opened by an old link, 「這是群組裡的對話」 with a link and no input. `GET /api/chats/<id>`
+  also carries `group` (`{id, name}` or `null`).
+- **Documents, the walk, and the real-machine check (P41-4).** `docs/SECURITY-MODEL.md` has "Group chats (v0.16)" with its residual
+  risks: another employee's words are the next employee's input (a prompt-injection path), 「大家」 makes more cards, with Claude Code and Codex
+  in one group the conversation goes to Anthropic and to OpenAI, and an allowed command can reach VBear's access token and API and a Codex
+  command may run outside its sandbox. `docs/adr/0007-group-chat.md`, both READMEs, `docs/ARCHITECTURE.md`, `docs/REFERENCE.zh-TW.md` and
+  `GLOSSARY.md` (群組, 點名) say what it is. `tests/test_group_flow.py` walks one group through the real HTTP routes over a fake daemon
+  (making it, everyone, naming, a fake allow card answered by the person, the daily limit and 繼續, 不用了, 停止, members, rename,
+  deleting) and reads every field the page reads; `tools/qa_p41.py` is the real-machine check through the HTTP API (it needs `--state`,
+  refuses `~/.vbear` and the ports 7788 and 7789, prints nothing a model wrote). Fixed: after a rename the path at the top of the group
+  page showed the old name until the page was opened again.
+- **Money.** Each answer is a chat turn under the chat's per-turn limit and the daily limit, counted in the day by the chats; the group has
+  no limit of its own. The page says before you send how many will answer and the most it can cost; when the daily limit is reached in
+  the middle of a round the round pauses, says the limit and that the day is counted afresh at 0:00 local time tomorrow, and only your
+  繼續 or 不用了 goes on. An employee whose plan limit is reached is left out of that sentence and the next one is asked.
+- **Not run on a real machine for this change:** how a real model treats the other employees' words between the markers, how a Codex
+  employee behaves in a group (the temporary state of the check has no Codex chat login, so only Claude Code employees are tried), whether
+  停止 really ends the turn of the employee who was writing, and a Claude plan limit (it is not told apart from another error in a chat's
+  record, so such a reply is shown as not finished normally, with no resume time). The result of `tools/qa_p41.py` on a real Mac: 待確認
+  (the coordinator runs it before the release). No code or test ran a real AI tool.
+- **Going back to v0.15.0.** v0.15.0 does not know groups. `<state>/groups/` and `group-runner.lock` are left alone and unread, the 群組 rows
+  are gone and nothing in `config.json` has to be undone (v0.16.0 adds no key). The chat records have no new field (no `origin`), so
+  v0.15.0 reads every chat a group opened, one per member and the ones of members taken out too, as an ordinary chat: it is listed, holds the
+  group's fixed words and the other employees' words (as data) inside its messages, can be sent to and deleted there, and the
+  day's ledger counts what it spent as for any chat. Do not go back while a round is on or paused: its turn goes on in the chat and nothing
+  takes the reply into the group. If you open the group again in v0.16.0, a reply whose chat you deleted in v0.15.0 reads 「讀不到這則回覆」;
+  what a later round does with a member whose chat is gone, and with turns you added to a group's chat in v0.15.0, was not run (待確認).
+  This was read from the code and was not run.
+
 ## v0.15.0 — the chief of staff
 
 On the CEO's chat page, 請幕僚長安排 lets VBear's chief of staff read your recent conversation with the CEO and propose who

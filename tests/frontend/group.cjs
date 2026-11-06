@@ -668,6 +668,17 @@ test("rename: the box starts from the name, 存 posts the new name, and it is on
   assert(text(q(main, "edit-note")).includes("不能"), "and it says why");
 });
 
+test("rename: the path at the top follows the new name the next time the page reads the group (P41-4, not only the title)", async () => {
+  setPage();
+  const main = await open("#/chat/group/" + GID);
+  const path0 = () => text(main.find((x) => x.hasClass && x.hasClass("crumbs")));
+  assert(path0().includes("市集準備"), path0());
+  page.detail = detail({ group: { id: GID, name: "週末市集", created_at: 1790000000, state: "idle", problem: null } });
+  await tick();
+  assert(path0().includes("週末市集") && !path0().includes("市集準備"), path0());
+  assert(path0().startsWith("聊天"), "the first step of the path is still the chat page");
+});
+
 test("who is in the group: remove one (never below two), add one who can chat (never above three), each as its own press", async () => {
   setPage({ detail: three() });
   let main = await open("#/chat/group/" + GID);

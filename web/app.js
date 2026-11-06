@@ -13908,6 +13908,7 @@ async function viewGroup(id) {
   let renaming = false, peopleOpen = false, candidates = null, manageKey = "";
   const transcript = el("ul", { class: "chat-log", "data-group": "log", "aria-live": "off" });
   const headBox = el("div", { class: "group-head" });
+  const crumbName = el("span", { class: "muted" }, (view.group && view.group.name) || id);     // the last step of the path: the name, as it is now
   const manageBox = el("div", { class: "group-manage", "data-group": "manage" });
   const statusBox = el("div", { class: "group-status", "data-group": "status", "aria-live": "polite" });
   const liveBox = el("div", { class: "chat-live", "data-group": "live", "aria-live": "polite" });
@@ -13972,6 +13973,7 @@ async function viewGroup(id) {
 
   const draw = () => {
     const g = view.group || {};
+    setKids(crumbName, g.name || id);
     const cur = view.current && typeof view.current === "object" ? view.current : null;
     const round = view.round && typeof view.round === "object" ? view.round : null;
     const asked = new Map((round && Array.isArray(round.asked) ? round.asked : []).map((a) => [a.profile_id, a.state]));
@@ -14177,7 +14179,7 @@ async function viewGroup(id) {
   const what = el("p", { class: "small muted group-what", "data-group": "what" }, GROUP_WHAT, " ",
     el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往派工"));
   const composer = el("div", { class: "chat-composer", "data-group": "composer" }, toBox, input, costBox, el("div", { class: "row" }, sendBtn), sendNote);
-  setKids(main, crumbs([["聊天", "#/chat"], [(view.group && view.group.name) || id]]), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
+  setKids(main, el("nav", { class: "crumbs", "aria-label": "路徑" }, el("a", { href: "#/chat" }, "聊天"), " / ", crumbName), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
   timer = setInterval(() => { if (!document.hidden) pollOnce(); }, GROUP_POLL_MS);
   activeViewCleanup = () => stopPolling();
 }
