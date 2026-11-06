@@ -3,7 +3,7 @@ StreamOps is.
 
   chat_open    {profile_id, engine?}                        a new chat (engine claude-chat, or codex-chat for a role
                                                             card whose AI tool is Codex); no process
-  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?, engine?}
+  chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?, engine?, origin?}
                                                             a person's message: a turn, in the chat's live process
                                                             or a new one (``--resume`` once the session exists, a
                                                             Codex chat's ``thread/resume``); ``instructions`` is the
@@ -11,7 +11,8 @@ StreamOps is.
                                                             new Claude process (a Codex chat's developer
                                                             instructions); ``engine``, when given, must be the
                                                             chat's; a Codex chat's ``model_id`` may be None (Codex's
-                                                            own default)
+                                                            own default); ``origin`` ({dispatch, step}) is only
+                                                            written into the record: a message VBear sent for a dispatch
   chat_answer  {chat_id, card_id, token, decision, value}   a permission card, once, with its one-use token
   chat_stop    {chat_id}                                    ends the turn (at its cap) and the process
   chat_close   {chat_id}                                    ends an idle process (stdin closed); refused while busy
@@ -57,6 +58,11 @@ def _ok(rid, result) -> dict:
 
 def _err(rid, code: str, message: str) -> dict:
     return {"v": 1, "id": rid, "ok": False, "error": {"code": code, "message": message}}
+
+
+def _said(turn: int, text: str, origin: dict | None) -> dict:
+    """The data of a ``user_message``: the turn and the words, and the origin when VBear sent them for a dispatch."""
+    return {"turn": turn, "text": text, **({"origin": origin} if origin is not None else {})}
 
 
 def _store_err(rid, exc: cs.ChatStoreError) -> dict:
@@ -150,6 +156,9 @@ class ChatOps:
             return _err(rid, "unsupported_python", python_problem)
         chat_id, text, cli, model_id = req.get("chat_id"), req.get("text"), req.get("cli"), req.get("model_id")
         instructions = req.get("instructions")
+        origin = req.get("origin")
+        if origin is not None and not cs.origin_ok(origin):
+            return _err(rid, "bad_request", "origin 格式不符")
         if instructions is not None and agent_sessions.append_prompt_problem(instructions):
             return _err(rid, "bad_request", agent_sessions.append_prompt_problem(instructions))
         if not isinstance(text, str) or not text.strip():
@@ -170,12 +179,14 @@ class ChatOps:
             return _store_err(rid, exc)
         if req.get("engine") not in (None, chat["engine"]):
             return _err(rid, "bad_request", "這個聊天的引擎和送來的不同")
-        return getattr(self, chat_engines.by_engine(chat["engine"]).daemon_send)(rid, chat, text, cli, model_id, instructions)
+        send = getattr(self, chat_engines.by_engine(chat["engine"]).daemon_send)
+        # only a message sent for a dispatch has an origin; an engine's method that does not know one is called as it was
+        return send(rid, chat, text, cli, model_id, instructions, **({"origin": origin} if origin is not None else {}))
 
     # ---- a Claude Code chat -------------------------------------------------------------------------------------
 
     def _claude_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                     instructions: str | None) -> dict:
+                     instructions: str | None, origin: dict | None = None) -> dict:
         """A person's message in a Claude Code chat: a turn in the chat's live process (its limits as ``headroom``), or in
         a new one (``--resume`` once the session exists)."""
         chat_id = chat["id"]
@@ -204,7 +215,7 @@ class ChatOps:
             try:
                 line = cp.user_line(text, p.session_id)
                 n = p.next_turn
-                p.log.append("user_message", {"turn": n, "text": text}, now=time.time())
+                p.log.append("user_message", _said(n, text, origin), now=time.time())
                 p.log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             except ValueError as exc:
                 return _err(rid, "bad_request", f"訊息無法送出（{exc}）")
@@ -213,10 +224,10 @@ class ChatOps:
                 return _store_err(rid, exc)
             p.start_turn(n, allowance, line, now)
             return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "reused"})
-        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions)
+        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions, origin)
 
     def _chat_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str, allowance: Decimal,
-                    per_turn: Decimal, instructions: str | None = None) -> dict:
+                    per_turn: Decimal, instructions: str | None = None, origin: dict | None = None) -> dict:
         from .daemon import build_env              # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -257,7 +268,7 @@ class ChatOps:
         env["DISABLE_AUTOUPDATER"] = "1"
         launch_id = m["launch_id"]
         try:
-            log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new",
                                            "budget_usd": cs.usd(allowance), "instructions": instructions is not None},
@@ -306,7 +317,7 @@ class ChatOps:
     # ---- a Codex chat -------------------------------------------------------------------------------------------
 
     def _codex_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                    instructions: str | None) -> dict:
+                    instructions: str | None, origin: dict | None = None) -> dict:
         """A person's message in a Codex chat (P38-3): a turn in the chat's live ``codex app-server`` (its thread goes
         on), or in a new one (``thread/start`` the first time, ``thread/resume`` after). Money is as for a Claude chat: the
         turn's cap is the per-turn limit or what is left of the day, whichever is less."""
@@ -322,13 +333,13 @@ class ChatOps:
         if refused:
             return refused
         if p is None:
-            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions)
+            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions, origin)
         if p.model_id != model_id or p.cli_version != cli.get("version"):
             p.close_gracefully("模型或版本不同，要換新的程序", now)
             return _err(rid, "restarting", "員工要換新的程序（模型或版本不同），請稍後再送一次")
         try:
             n = p.next_turn
-            p.log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            p.log.append("user_message", _said(n, text, origin), now=time.time())
             p.log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
         except cs.ChatStoreError as exc:
             p.stop("聊天紀錄無法寫入", now)
@@ -355,7 +366,7 @@ class ChatOps:
         return None
 
     def _codex_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None, allowance: Decimal,
-                     instructions: str | None) -> dict:
+                     instructions: str | None, origin: dict | None = None) -> dict:
         from .daemon import DAEMON_VERSION, build_env      # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -408,7 +419,7 @@ class ChatOps:
             return _err(rid, getattr(exc, "code", "refused"), str(exc))
         launch_id = m["launch_id"]
         try:
-            log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
             log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
                                            "instructions": instructions is not None}, now=time.time())

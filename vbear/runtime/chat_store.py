@@ -43,6 +43,8 @@ CHAT_JSON = "chat.json"
 EVENTS = "events.jsonl"
 CHAT_RE = re.compile(r"^c-[0-9a-f]{16}\Z")
 CARD_RE = re.compile(r"^k-[0-9a-f]{16}\Z")
+DISPATCH_RE = re.compile(r"^d-[0-9a-f]{12}\Z")
+MAX_DISPATCH_STEP = 4                  # vbear/chief.py MAX_STEPS: a dispatch has at most this many steps
 PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")      # agent_profiles.VALID_PROFILE_ID_RE
 UUID_RE = cp.UUID_RE
 
@@ -123,6 +125,12 @@ def _returncode(v):
     return v is None or (isinstance(v, int) and not isinstance(v, bool) and -255 <= v <= 255)
 
 
+def origin_ok(v) -> bool:
+    """The origin of a message VBear sent for a dispatch (P40-3): exactly the dispatch's id and the number of the step."""
+    return (isinstance(v, dict) and set(v) == {"dispatch", "step"} and isinstance(v["dispatch"], str)
+            and bool(DISPATCH_RE.match(v["dispatch"])) and type(v["step"]) is int and 1 <= v["step"] <= MAX_DISPATCH_STEP)
+
+
 def _turn_or_none(v):
     return v is None or _turn(v)
 
@@ -181,7 +189,9 @@ KINDS = {
 }
 # Fields a kind may have besides its own, all or none of them (a Claude turn's end has neither): what a Codex chat's
 # turn end says about its cost, which Codex gives as tokens and VBear turns into money.
-_OPTIONAL = {"turn_ended": {"estimate": _bool, "tokens": _int_or_none(0, MAX_TOKENS)}}
+_OPTIONAL = {"turn_ended": {"estimate": _bool, "tokens": _int_or_none(0, MAX_TOKENS)},
+             # a message VBear sent for a dispatch (P40-3) says which; one the person typed has none, and a record of before has none
+             "user_message": {"origin": origin_ok}}
 # Fields of which a kind has exactly one: the version of the CLI that started the session.
 _ALTERNATIVES = {"session_ready": {"claude_code_version": _short, "cli_version": _short}}
 _MASK = {"user_message": {"text": None}, "reply": {"text": MAX_REPLY}, "tool_result": {"text": MAX_EXCERPT},

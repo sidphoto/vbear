@@ -441,9 +441,22 @@ class ChatService:
                          "engine": r.get("engine", engine_of(profile))}}
 
     def send(self, chat_id, body) -> dict:
+        """A person's message (the browser's route): exactly ``text``, never an ``origin``."""
         if not isinstance(body, dict) or set(body) != {"text"} or not isinstance(body["text"], str):
             raise ApiError(400, "bad_request", "只需要 text。")
-        text = body["text"]
+        return self._send(chat_id, body["text"], None)
+
+    def send_for_dispatch(self, chat_id, text, origin) -> dict:
+        """A message VBear sends for a dispatch step (P40-3): the same send as a person's, so every limit, every question
+        about a command or a file and the day's money apply as they do there; the record says which dispatch and step it was
+        sent for. Not reachable from the browser's routes: only the dispatch code calls it."""
+        if not isinstance(text, str):
+            raise ApiError(400, "bad_request", "訊息必須是文字。")
+        if not cs.origin_ok(origin):
+            raise ApiError(400, "bad_request", "origin 格式不符。")
+        return self._send(chat_id, text, dict(origin))
+
+    def _send(self, chat_id, text, origin) -> dict:
         if not text.strip():
             raise ApiError(400, "bad_request", "訊息不能是空的。")
         chat = self._chat(chat_id)
@@ -455,6 +468,8 @@ class ChatService:
         instructions = self._instructions(profile)
         if instructions is not None:
             fields["instructions"] = instructions
+        if origin is not None:
+            fields["origin"] = origin
         for attempt in range(self.restart_tries):
             try:
                 result = self._call("chat_send", timeout=30.0, **fields)
