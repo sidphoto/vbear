@@ -24,7 +24,7 @@ qa = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qa)
 
 GID = "g-0123456789ab"
-PORT = 50123
+CONSOLE_AT = 50123
 TOKEN = "synthetic-token-never-printed"
 SECRET = "FAKE-REPLY-WORDS-NEVER-PRINTED"
 A, B = "emp-aaaa", "emp-bbbb"
@@ -37,7 +37,7 @@ class FakeConsole(qa.Console):
     model; the script waits by reading, so a read is the only clock it needs). ``flaws`` are the ways it misbehaves."""
 
     def __init__(self, state: Path, **flaws):
-        super().__init__(PORT, TOKEN)
+        super().__init__(CONSOLE_AT, TOKEN)
         self.state, self.flaws = Path(state), flaws
         self.cost = flaws.get("turn_cost", 0.02)
         self.daily, self.spent = 0.45, 0.0
@@ -46,7 +46,7 @@ class FakeConsole(qa.Console):
         self.config = {"setup_done": True, "meeting_limits": {"daily_usd": 0.45, "per_call_usd": 0.2}, "staffing_limits": {"total_usd": 0.45},
                        "chat_limits": {"per_turn_usd": 0.1, "daily_usd": 0.45}}
         self.write_config()
-        (self.state / "server.token").write_text(json.dumps({"port": PORT, "token": TOKEN}))
+        (self.state / "server.token").write_text(json.dumps({"port": CONSOLE_AT, "token": TOKEN}))
         self.made = False
         self.calls: list[tuple] = []
         self.sent: list[tuple] = []                  # (pid, text, round) in order
@@ -260,7 +260,7 @@ class Harness(unittest.TestCase):
         state = Path(tmp.name)
         console = fake or FakeConsole(state, **flaws)
         lines = []
-        code = qa.main(["--state", str(console.state), "--port", str(PORT), *args], out=lines.append, console_factory=lambda port, token: console, **self.time())
+        code = qa.main(["--state", str(console.state), "--port", str(CONSOLE_AT), *args], out=lines.append, console_factory=lambda port, token: console, **self.time())
         return code, lines, console
 
     def time(self):
@@ -308,18 +308,18 @@ class CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="qa41-") as tmp:
             for args in (["--group", "../x"], ["--cards", "emp-a"], ["--cards", "a,b,c"]):
                 lines = []
-                self.assertEqual(qa.main(["--state", tmp, "--port", str(PORT), *args], out=lines.append, console_factory=lambda *_: self.fail("called")), 2, args)
+                self.assertEqual(qa.main(["--state", tmp, "--port", str(CONSOLE_AT), *args], out=lines.append, console_factory=lambda *_: self.fail("called")), 2, args)
 
     def test_a_state_folder_without_a_matching_token_stops_with_a_line_not_a_trace(self):
         with tempfile.TemporaryDirectory(prefix="qa41-") as tmp:
             lines = []
-            self.assertEqual(qa.main(["--state", tmp, "--port", str(PORT)], out=lines.append), 1)
+            self.assertEqual(qa.main(["--state", tmp, "--port", str(CONSOLE_AT)], out=lines.append), 1)
             self.assertTrue(any(l.startswith("FAIL stopped") for l in lines), lines)
             (Path(tmp) / "server.token").write_text(json.dumps({"port": 1, "token": "x"}))
             with self.assertRaises(qa.Stop):
-                qa.read_token(Path(tmp), PORT)
-            (Path(tmp) / "server.token").write_text(json.dumps({"port": PORT, "token": "synthetic"}))
-            self.assertEqual(qa.read_token(Path(tmp), PORT), "synthetic")
+                qa.read_token(Path(tmp), CONSOLE_AT)
+            (Path(tmp) / "server.token").write_text(json.dumps({"port": CONSOLE_AT, "token": "synthetic"}))
+            self.assertEqual(qa.read_token(Path(tmp), CONSOLE_AT), "synthetic")
 
 
 class PureTests(unittest.TestCase):
@@ -395,7 +395,7 @@ class WholeRunTests(Harness):
         self.assertTrue(fake.made)
         self.assertTrue(any(f"--group {GID}" in l for l in lines), lines)
         lines2 = []
-        code2 = qa.main(["--state", str(fake.state), "--port", str(PORT), "--group", GID], out=lines2.append, console_factory=lambda port, token: fake, **self.time())
+        code2 = qa.main(["--state", str(fake.state), "--port", str(CONSOLE_AT), "--group", GID], out=lines2.append, console_factory=lambda port, token: fake, **self.time())
         self.assertEqual((code2, self.fails(lines2)), (0, []), lines2)
         self.assertTrue(any("taken over" in l for l in lines2), lines2)
         self.assertFalse(fake.made)
