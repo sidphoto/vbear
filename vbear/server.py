@@ -65,6 +65,7 @@ from . import risk_acceptance
 from . import role_departments
 from . import translations
 from . import chief, chief_runner as chief_runner_mod
+from . import dispatch as dispatch_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -129,6 +130,8 @@ MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
 # /api/chief/<id>[/retry | /cancel] (P40-1); the codes and statuses are the meetings'
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
+# /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
+DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -251,7 +254,7 @@ class Console:
             if not hasattr(self, "staffing"):
                 self.staffing = staffing_runner_mod.StaffingRunner()
             if not hasattr(self, "chief"):
-                self.chief = chief_runner_mod.ChiefRunner()
+                self.chief = chief_runner_mod.ChiefRunner(on_proposal=self._on_proposal)
             return self.meetings, self.staffing, self.chief
 
     def meeting_runner(self):
@@ -262,6 +265,40 @@ class Console:
 
     def chief_runner(self):
         return self._boards()[2]
+
+    def _on_proposal(self, chief_id: str) -> None:
+        """A kept proposal of the chief of staff becomes a dispatch (and, when the person ticked 「自己動手」, goes on)."""
+        self.dispatcher().from_proposal(chief_id)
+
+    def dispatcher(self):
+        """The one dispatcher (P40-3), built on first use; what a stopped console left half made is paused then, once."""
+        with self.lock:
+            if "_dispatcher" not in self.__dict__:
+                d = dispatch_mod.Dispatcher(conf=lambda: self.store.conf, tools=self.chief_tools,
+                                            link=lambda cid, did: self.chief_runner().link_dispatch(cid, did),
+                                            busy=self._chat_busy, day_left=self._day_left)
+                try:
+                    d.recover_all()
+                except Exception:
+                    pass                      # a record that cannot be read blocks itself; the rest goes on
+                self._dispatcher = d
+            return self._dispatcher
+
+    def _chat_busy(self, chat_id: str) -> bool:
+        """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
+        try:
+            live = self.chat_service().get(chat_id)["live"]
+        except Exception:
+            return True
+        return bool(live) and live.get("turn") is not None
+
+    def _day_left(self):
+        from decimal import Decimal
+        try:
+            ledger = self.meeting_runner().ledger(self.store.conf)
+            return max(Decimal(ledger["daily_usd"]) - Decimal(ledger["spent_usd"]), Decimal(0))
+        except Exception:
+            return None
 
     def chief_tools(self) -> tuple:
         """The AI tools whose chat can run now (what the chief of staff may give work to), from the chat service's support."""
@@ -632,6 +669,13 @@ def make_handler(console: Console):
                 if path.startswith("/api/chief/"):
                     found = CHIEF_RE.match(path)
                     return self._chief_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path == "/api/dispatch":
+                    return self._dispatch_call("list")
+                if path == "/api/actions":
+                    return self._dispatch_call("actions")
+                if path.startswith("/api/dispatch/"):
+                    found = DISPATCH_RE.match(path)
+                    return self._dispatch_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path in ("/api/staffing", "/api/staffing/suggest"):
                     task_id = parse_qs(url.query).get("task_id", [None])[0]
                     return self._staffing_call("list" if path == "/api/staffing" else "suggest", task_id=task_id)
@@ -841,6 +885,11 @@ def make_handler(console: Console):
                     if not found or not found.group(2):
                         return self._error(404, "not found")
                     return self._chief_call(found.group(2), found.group(1), self._body_strict())
+                if path.startswith("/api/dispatch/"):
+                    found = DISPATCH_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._dispatch_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/staffing/preview":
                     return self._staffing_call("preview", None, self._body_strict())
                 if path == "/api/staffing":
@@ -2022,6 +2071,41 @@ def make_handler(console: Console):
                 return self._error(404, "not found")
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
+        def _dispatch_call(self, action, dispatch_id=None, body=None):
+            """The dispatch endpoints (P40-3). Reads run nothing; confirming makes the new employees and the task card (safe
+            mode, no skill) and nothing is sent: stop and continue wait for the runner. The errors are the dispatch's own, with
+            their statuses."""
+            try:
+                dispatcher = console.dispatcher()
+                if action == "list":
+                    return self._json(dispatcher.list())
+                if action == "actions":
+                    return self._json(dispatcher.actions())
+                if action == "get":
+                    return self._json(dispatcher.get(dispatch_id))
+                if not isinstance(body, dict):
+                    raise dispatch_mod.DispatchError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "confirm":
+                    return self._json(dispatcher.confirm(dispatch_id, body))
+                if action == "withdraw-card":
+                    return self._json(dispatcher.withdraw_card(dispatch_id, body))
+                if body:
+                    raise dispatch_mod.DispatchError("bad_request", "這個動作不需要內容")
+                if action == "dismiss":
+                    return self._json(dispatcher.dismiss(dispatch_id))
+                if action == "stop":
+                    return self._json(dispatcher.stop(dispatch_id))
+                if action == "continue":
+                    return self._json(dispatcher.resume(dispatch_id))
+                if action == "delete":
+                    dispatcher.delete(dispatch_id)
+                    return self._json({"ok": True, "deleted": dispatch_id})
+                return self._error(404, "not found")
+            except dispatch_mod.DispatchError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, exc.status)
+            except agent_profiles.AgentProfileStorageError:
+                return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
 
         def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
