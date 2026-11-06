@@ -51,13 +51,18 @@ def _ready_tool(rows):
     return None
 
 
+def needed(profiles) -> bool:
+    """True when no card can be chatted with. Asked first, so that a person who has one costs the lobby no look at the tools."""
+    return not any(_can_chat(p) for p in profiles if isinstance(p, dict))
+
+
 def plan(profiles, tool_rows) -> dict:
-    cards = [p for p in profiles if isinstance(p, dict)]
-    needed = not any(_can_chat(p) for p in cards)
-    out = {"ok": True, "needed": needed, "can_create": False, "go": None, "reason": "", "tool": None, "tool_name": None,
+    """``tool_rows`` are ai_tool_status.report rows; they are only read when the step is needed (pass [] otherwise)."""
+    needed_now = needed(profiles)
+    out = {"ok": True, "needed": needed_now, "can_create": False, "go": None, "reason": "", "tool": None, "tool_name": None,
            "name": NAME, "position": POSITION, "launch_mode": LAUNCH_MODE, "instructions": INSTRUCTIONS, "opening": OPENING,
            "chat_ready": None, "chat_note": ""}
-    if not needed:
+    if not needed_now:
         return out
     found = _ready_tool(tool_rows)
     if found is None:

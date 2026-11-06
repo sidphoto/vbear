@@ -1392,7 +1392,7 @@ def make_handler(console: Console):
                 profiles = agent_profiles.list_profiles(
                     known_skills=set(console.skill_index().keys()),
                     known_roles={r.get("role_id") for r in console.store.static().get("roles", []) if r.get("role_id")})
-                rows = ai_tool_status.report(console.store.conf)
+                rows = ai_tool_status.report(console.store.conf) if first_ceo.needed(profiles) else []
             except agent_profiles.AgentProfileStorageError:
                 return self._error(503, "角色資料無法讀取，請到角色頁處理。")
             except ai_tool_status.StoreError as exc:

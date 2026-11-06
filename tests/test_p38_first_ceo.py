@@ -102,6 +102,13 @@ class WhenIsItNeededTests(FirstCeoCase):
         self.make_card("claude", enabled=False)
         self.assertIs(self.plan()["needed"], True)
 
+    def test_a_person_with_a_card_costs_the_lobby_no_tool_run(self):
+        # the lobby asks on every visit: when the step is not needed, no AI tool is asked about its version or login
+        self.ready("claude", "codex")
+        self.make_card("claude")
+        self.assertIs(self.plan()["needed"], False)
+        self.assertEqual(self.calls(), [])
+
     def test_a_card_that_can_chat_means_no_step_even_with_no_tool_ready(self):
         self.make_card("claude")
         r = self.plan()
