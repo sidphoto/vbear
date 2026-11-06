@@ -204,7 +204,7 @@ class DocsTests(unittest.TestCase):
             self.assertIn(phrase, log, phrase)
         glossary = (self.ROOT / "GLOSSARY.md").read_text(encoding="utf-8")
         self.assertIn("**CEO**：", glossary)
-        self.assertIn("幕僚長派工做好之前，CEO 只聊天", glossary)
+        self.assertIn("它是一張普通的角色卡，只會聊天；建員工和派工是幕僚長的事", glossary)     # v0.15: the chief of staff exists now
         arch = (self.ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
         self.assertIn("/api/first-ceo", arch)
         self.assertIn("first_ceo_id", arch)

@@ -10,6 +10,8 @@
 | 辦公室 | 像素辦公室：工作站（流程隊伍依階段站在計畫板、實作區、審查室、合併關卡）、辦公桌（出勤中的終端與狀態）、會議室（最新一場進行中或等核准的會議，頭上的字只取自會議紀錄，代發言另外標示）與董事長桌（幾場會議等你核准、幾份「組隊提案待你看」；進行中或等你看的組隊會議也坐在會議室，標「組隊會議」）、休息室（Profile 名冊）；點角色看武器、防具、技能卡。只讀 VBear 已有的資料 |
 | 會議 | 今日花費燈號（80% 黃燈、100% 不能再開會）、會議紀錄清單、開一場會（議題、補充說明、任務卡、CEO 主席、最多 6 位發言者、「涉及」勾選）、開會前的預覽（每段指示與送出全文、模型、預留金額、是否通過無工具安全檢查）；單場會議的發言與證據列、CEO 決定、董事長桌（核准／否決）、重試、取消、寫進任務卡（只預填任務卡編輯器） |
 | 聊天 | `#/chat` 與 `#/chat/<id>`：每日花費與上限、這個 Claude Code 版本有沒有通過聊天驗證（附「驗證聊天」，先說明會花多少）、可以聊天的角色卡（每張標出 AI 工具；停用或工具不是 Claude Code、Codex 的卡列出原因、不能選）、Codex 的支援狀態（沒裝、還沒驗證、聊天用的 Codex 還沒登入、管理員政策，各有對應的按鈕）、聊天紀錄清單（每個聊天標出 AI 工具）；單一聊天顯示依序的紀錄（你說的、回覆、工具與結果、權限卡片及結局、每回合花費）、正在寫的回覆、權限卡片（允許這一次／拒絕／改內容再允許；Codex 是指令卡、檔案卡附 diff，和「改內容再問」）、Codex 的估計花費與方案用量一行、停止這一回合與刪除（Codex 聊天的刪除確認會說明 Codex 自己的對話副本不會被刪）。角色卡上也有「聊天」按鈕 |
+| 派工 | `#/dispatch` 與 `#/dispatch/<id>`：每一份派工的狀態、每一步交給誰、花了多少、停止、繼續（說明會跳過沒做完的那一步）、撤回 VBear 建的員工、刪除；暫停時寫明是哪一步、哪個 AI 工具、每天上限、什麼時候恢復（不知道寫「未知」）。CEO 的聊天頁有「請幕僚長安排」（對話框先寫明內容送到 Claude Code、最多花多少、今天還剩多少）和提議卡（改字、刪步驟、換人、「你改過」、確認派工、不採用） |
+| AI 自己做了什麼 | `#/actions`：幕僚長和派工做過的每一件事，以及是誰決定的（你、自己動手第 1 項、第 2 項、VBear）；已經送出的訊息收不回來；可以停止進行中的派工、撤回 VBear 建的員工。設定頁「自己動手」那一節有連結 |
 | 組隊會議 | 從任務卡的「請 CEO 組隊」進入（`#/staffing?task=`）：VBear 依固定規則建議的發言者與理由、組隊會議前的預覽（每段送出全文、模型與思考強度、預留金額、清單少了多少）；單份組隊紀錄（`#/staffing/<id>`）的座位與發言、CEO 的組隊提案（代號一律換成卡與技能現在的名稱，找不到就寫「找不到」）、改成你要的樣子（草稿，只存在這個瀏覽器）、照草稿採用（啟用 → 建新卡 → 插技能 → 帶到隊伍 → 帶去開會 → 記下，每一步都要你自己按）、董事長桌、重試、取消、刪除 |
 | 終端工作台 | 統一三欄版面（左側角色、中間真實 Terminal、右側 Task Card 與 G/P/A/T 治理骨架）、專注模式、可收合側欄 |
 | 技能庫 | 卡片／列表、中英文搜尋、依狀態／工具／用途／範圍／我的標籤篩選；詳情含我的註記、同名比較、引用檔、原始 SKILL.md、使用紀錄 |
@@ -94,6 +96,7 @@
   Claude Code 版本要先通過 `python3 -m vbear.boundary_check --mode chat`（約 6 次 Haiku 小呼叫，用你自己的登入）才能聊天；2.1.318 另外把 `~/.claude/policy-limits.json` 當成管理員政策，存在就不能聊天。
   Codex 聊天（引擎 `codex-chat`）：每個指令和每次改檔都問（連只讀檔的也問）；「改內容再問」是先拒絕、再請 Codex 照你改的重新問一次；沙盒不擋讀，而且允許後的指令可能在沙盒外執行（能寫整台電腦、能連網；指令卡上寫明）；花費是 VBear 依 token 數的估計（每 100 萬 token 計 US$1.00，不是帳單），算進每天上限；聊天用的 Codex 另外登入（開始設定頁），版本要先通過 `python3 -m vbear.boundary_check --mode codex-chat`（頁面上的「驗證聊天」）。
   詳見 [安全模型](SECURITY-MODEL.md#chats-with-a-role-card) 與 [Codex 聊天](SECURITY-MODEL.md#chats-with-a-codex-role-card-engine-codex-chat-v013)。
+  幕僚長與派工：幕僚長把你和 CEO 的對話送到 Anthropic（透過你的 Claude Code，每次最多 US$0.30，算進每天上限）；派工只透過聊天送訊息，不回答權限卡片，每個指令和改檔仍然問你；上一步的回覆當資料交給下一步，這是惡意文字帶偏下一位員工的一條路；員工被允許的指令讀得到 VBear 的存取權杖。VBear 只保證自己的幕僚長與派工程式不改上限、不啟動終端機或完整模式、不裝技能。詳見 [幕僚長與派工](SECURITY-MODEL.md#chief-of-staff-and-dispatch-v015)。
 - 組隊會議：用會議的引擎和同一個 worker（會議和組隊會議不會同時跑），同樣是沒有工具的呼叫、同樣即時檢查 init，同樣只用低／中思考強度與時鐘；
   卡和技能用代號（`C1`、`S1`…）送出，不送 id，也不送任務卡的資料夾路徑。花費上限：發言者每次 `meeting_limits.per_call_usd`、CEO 每次
   `staffing_limits.proposal_call_usd`、每份 `staffing_limits.total_usd`，和會議共用每天的上限。提案只是建議：VBear 不建卡、不插技能、不排隊伍；
@@ -139,7 +142,7 @@
 `~/.vbear/`（可用 `VBEAR_HOME` 覆寫）：`config.json`（含會議上限 `meeting_limits`、組隊會議上限 `staffing_limits`、會議速度 `meeting_speed`）、`index.json`、`usage-cache.json`、`annotations.json`、`tasks.json`、`flows.json`、`agent_profiles.json`、`server.log`、
 VBear runtime 的 `runtime.sock`／`runtimed.lock`／`runtimed.log`，以及 Profile 管理 session 的 `sessions/<launch-id>/`（session 暫存區在 `/private/tmp/sc-<隨機>/`）。
 翻譯與會議：`translations.json`、`role-translations.json`、`translation-boundaries.json`（依版本記錄通過無工具安全檢查的 Claude Code，翻譯與會議共用）、`translation-worker.lock`／`translation-worker.blocked`，
-聊天：`chats/<c-十六位十六進位>/`（`chat.json` 與 `events.jsonl`）、`chat-work/`（每張角色卡一個工作資料夾）、`chat-spend/`（刪掉的聊天留下的三天花費）與 `claude-chat-verified.json`（通過聊天驗證的版本）；Codex 聊天另有 `codex-chat-home/`（聊天用的 Codex 登入與它自己存的對話副本，刪除聊天不會刪）與 `codex-chat-verified.json`；`config.json` 另有 `chat_limits`。
+幕僚長的提議：`chief/`；派工：`dispatch/`（`d-` 加十二位十六進位）與 `dispatch-runner.lock`。聊天：`chats/<c-十六位十六進位>/`（`chat.json` 與 `events.jsonl`）、`chat-work/`（每張角色卡一個工作資料夾）、`chat-spend/`（刪掉的聊天留下的三天花費）與 `claude-chat-verified.json`（通過聊天驗證的版本）；Codex 聊天另有 `codex-chat-home/`（聊天用的 Codex 登入與它自己存的對話副本，刪除聊天不會刪）與 `codex-chat-verified.json`；`config.json` 另有 `chat_limits`。
 以及 `meetings/`（每場會議一個 `m-<12 位十六進位>.json`）、`staffing/`（每份組隊紀錄一個 `s-<12 位十六進位>.json`）與 `meeting-worker.lock`／`meeting-worker.blocked`（會議與組隊會議共用）。索引超過 24 小時會提示過期；程式更新後舊格式索引會自動重掃。
 
 ## 結構

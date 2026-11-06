@@ -1312,6 +1312,88 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   real Codex lets an unknown server request through are for the first real runs; the login's effect on the chat folder
   (it must add no `config.toml`, `rules/` or `AGENTS.md`) is checked by the folder test before every start.
 
+## Chief of staff and dispatch (v0.15)
+
+On the CEO's chat page the person presses 請幕僚長安排; the chief of staff proposes who does what; the person confirms; VBear
+makes the new employees and sends the steps, one chat per step. ADR 0006 gives the reasons. Two things are new: **a new
+outbound data path** (the person's conversation with the CEO goes to Anthropic) and **VBear sending messages to employees on its
+own** after one confirmation. What it never does is fixed by the structure of the code, not by a prompt.
+
+- **The chief of staff is one tool-less call, not a role card.** `vbear/chief_runner.py` runs one headless Claude Code call on
+  the meetings' engine (`board_engine.HeadlessBoard`): `sonnet`, effort low, the same checks as a meeting (the init event
+  must list only `StructuredOutput` and no MCP server, or the call is killed and the check is withdrawn), a limit of
+  `min(US$0.30, what is left of the day)` and 120 seconds. Its instructions are in the code; the person cannot change them
+  and no role card can override them. A Codex-only Mac gets 「幕僚長目前需要 Claude Code」; a CEO that is a Codex card still
+  works, and the page says beside the button that the conversation goes to Claude Code.
+- **What it reads and what leaves the Mac.** The newest 20 messages (12 KiB) of the CEO's chat, only the person's messages
+  and the CEO's replies (no tool output, no allow cards), the person's optional one-line note (200 characters), and a list of
+  the employees (a code C1.., name, position, tool; no id, no instruction text, no skill). This goes to Anthropic through the
+  person's own Claude Code and plan. `GET /api/chief/preview` shows the counts and the money, never the words; the dialog
+  says what is read and where it goes before the person presses. The record keeps the counts, sizes and SHA-256 sums, not the
+  conversation or the prompt, and no log or API answer carries the conversation.
+- **Three layers on what comes back.** The answer must fit a schema with `additionalProperties: false` everywhere and no field
+  for a limit, a mode, a skill, a URL or a path: an answer with such a field is void. Then each item is checked against the
+  list the call was given: an employee that is not on it, a new employee on a tool that cannot chat or in the CEO position,
+  a bad reference, is removed and a note says so (the note holds only codes, never the model's words). A plan with no step and
+  no question left is void (`empty_plan`). One to four steps, at most 1500 characters each, at most two new employees.
+  Confirming checks the plan again, and only to be stricter.
+- **The three things that are never done, by structure.** The chief of staff and the dispatch code (`vbear/chief*.py`,
+  `vbear/dispatch*.py`, `vbear/autonomy.py`) never change a limit (the daily limit or any other), never start a terminal or a
+  full-mode launch, and never install a skill. `tests/test_autonomy_guard.py` reads their source and fails on an import of
+  the launch, skill, limit or process code, on a call that saves `config.json` or starts a process, on a `launch_mode` that is
+  not the literal `"safe"`, and on the routes `/api/native/`, `/api/settings/autonomy`, `/api/config`, `/api/setup/daily-limit`
+  and the word `acceptForSession` in the code of those modules. The test of a whole dispatch checks that `config.json` is
+  byte for byte the same afterwards. A new employee is always made in safe mode with no skill and with the fixed
+  instruction text of its position (not words the chief of staff wrote). The 自己動手 ticks are changed only by the person's
+  `POST /api/settings/autonomy` from the settings page (with `X-VBear`); a proposal or a dispatch has no way to write them.
+- **Sending goes through the chat service and nothing else.** `vbear/dispatch_runner.py` opens a new chat for each step and
+  sends with `ChatService.send_for_dispatch`; the message is marked in the chat record with `origin = {dispatch, step}`
+  and the chat page says 「VBear 依派工送出」. The runner has no way to answer an allow card: **every command and every file
+  change the employee wants is still asked of the person, as in any chat**, and the employee's work folder and the
+  limits of the chat are the card's own. A step is sent only when the day's lamp is green or yellow and the one before it
+  ended normally; the runner sends one step at a time, writes the intent before the call and the result after it, and after
+  a restart it reads the chat for the message before it decides anything (a step it cannot account for is paused as
+  uncertain and never sent twice by itself).
+- **Money.** The chief of staff's call is counted in the day (`GET /api/meetings/ledger` lists `chief` among what it includes).
+  A step is a chat turn: the chat's per-turn limit and the daily limit apply. The proposal card says the most it can cost
+  (steps × the per-turn limit) and what is left today before the person confirms; when the daily limit is reached, the
+  dispatch pauses and says so, and only the person's 「繼續」 goes on. VBear does not count down and does not continue anything by
+  itself in this version.
+- **The person can stop it and see all of it.** 「停止」 stops the running turn and sends no more; an employee VBear made can be
+  taken back (switched off, not deleted; the chat record stays). `#/actions` (「AI 自己做了什麼」, `GET /api/actions`) lists
+  every action with who decided: the person, 自己動手 item 1, item 2, or VBear. A message that was sent cannot be taken back,
+  and the list says so. 「繼續」 does not redo a step that was sent and did not end normally; it goes to the next one, and the
+  page says so beside the button.
+
+### Residual risks of the chief of staff and dispatch
+
+1. **The reply of one step is the input of the next (a prompt-injection path).** Step N+1 is sent with the last reply of step
+   N, put between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING` as an escaped JSON string (so the reply cannot
+   write the closing line), cut at 8 KiB, introduced by a fixed sentence that says it is data and not an instruction. That is
+   a request to the model, not a barrier: an employee that read something hostile (a file, a web page it was allowed to
+   fetch) can write a reply that steers the next employee. What stands in the way is that the next employee also asks the
+   person before each command and each file change; it is not stopped by VBear. The person who reads each card is the
+   defense, and the proposal card shows every step's words in advance.
+2. **An employee's allowed commands can reach VBear itself.** A command the person allows runs as the person and can read the
+   console's access token and call VBear's own API, for example to raise a limit or to change the 自己動手 ticks. VBear
+   guarantees only that **its own chief of staff and dispatch code** do not do the three forbidden things; it cannot stop a
+   command the person allowed with their own hand. This is the same risk as in any chat with a role card (see "Chats with a
+   role card") and the dispatch adds no new access to it, but it adds more such chats at once.
+3. **The conversation goes to Anthropic.** What the chief of staff reads is sent to Anthropic through the person's Claude
+   Code; the CEO's replies may hold what the person typed, including something they should not have. The page says where it
+   goes before the first press, and the dialog shows the counts. Nothing of it is kept by VBear beyond counts and sums.
+4. **A proposal is a model's opinion.** The chief of staff can propose a bad plan, a wrong employee for a step or a text that
+   asks for too much. The checks above limit what it can name (listed employees, safe-mode new ones, no limit, no skill),
+   not whether the plan is wise; the person reads and can edit it before confirming (and a proposal with any note or
+   question is never started by itself, even with 自己動手 item 2 on).
+5. **自己動手 items 1 and 2 remove the confirmation on purpose.** With item 2 on, a clean proposal (every employee already
+   exists, nothing removed, no question) starts without the person's press; the cost bound and the stop button are what
+   remain. Both items are off by default, and each asks for a plain confirmation before it is turned on.
+6. **Not checked on a real machine.** That a real Claude Code fills the schema, that a closed chat stops being busy at once,
+   that the second employee treats the handoff as data, and the real `plan_usage` of a Codex turn at its limit are for the
+   first real run (`tools/qa_p40.py`). A Claude plan limit is not told apart from any other error in a chat's record, so a
+   pause for it reads as an ordinary error with no resume time.
+
 ## The start-up page (v0.12)
 
 The start-up page (`#/setup`) installs, signs in, checks and tries AI tools for a person who may never have opened a terminal,

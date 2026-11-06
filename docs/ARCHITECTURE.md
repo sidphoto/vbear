@@ -296,6 +296,34 @@ UI ── POST …/delete {flow_id} ──▶ FlowStorage.delete ──▶ daemo
   restart), `_e2e` (second console, stop during a turn, restarts, ledger); `tests/qa_s3.py` for a person or a
   browser tool.
 
+## Chief of staff and dispatch — `vbear/chief*.py`, `vbear/dispatch*.py`, `vbear/autonomy.py`, `web/app.js` (`#/dispatch`, `#/actions`)
+
+The CEO's chat page (`#/chat/<id>` of a card in the CEO position) has 請幕僚長安排. `GET /api/chief/preview?chat_id=` answers the counts,
+the cap and what is left of the day (`vbear/chief.py`, pure functions: which messages are read, the list of employees as codes
+C1.. and the schema). `POST /api/chief` starts `ChiefRunner` (`chief_runner.py`), a board of one turn on `board_engine.HeadlessBoard`
+(the meetings' tool-less headless call, `sonnet`, US$0.30 at most, shared worker lock and shared day). Its records are
+`<state>/chief/cos-<12 hex>.json`. `chief.validate_plan` voids a badly formed answer, removes what is off the list with a note, and
+voids a plan with nothing left (`empty_plan`). A proposal that is ready calls the hook `Console._on_proposal`, which makes the
+dispatch record (`Dispatcher.from_proposal`) and links it (`ChiefRunner.link_dispatch`); the proposal can no longer be retried.
+
+A dispatch is `<state>/dispatch/d-<12 hex>.json` (`dispatch.py`; states proposed, confirming, running, paused, done, stopped, dismissed;
+append-only events, each with `by`: `you`, `auto1`, `auto2` or `vbear`; the step events name the step in the field `step`). `Dispatcher`
+confirms (the plan is checked again, only more strictly; new employees are made in safe mode with no skill; the task card), dismisses,
+stops, continues, withdraws a card the dispatch made, deletes, and lists the actions (`GET /api/actions`). `DispatchRunner`
+(`dispatch_runner.py`; a thread started by `serve()`, one pass every 2 seconds, a lock file `dispatch-runner.lock`) sends each step in a
+new chat with `ChatService.send_for_dispatch`, the message marked with `origin = {dispatch, step}` in the chat record
+(`chat_store`, `daemon_chat`), waits for the turn to end and hands its last reply on, framed as data. It pauses with a reason
+(`daily_limit`, `plan_limit`, `busy`, `uncertain`, `turn_*` and so on) that `dispatch.PAUSE_TEXT` turns into plain words with the step, the AI tool and
+the time; the person's 繼續 and 停止 go through `Dispatcher.stop` and `Dispatcher.resume`, which the runner carries out. The runner does
+not answer permission cards. `GET/POST /api/settings/autonomy` is the only way to change the two 自己動手 ticks.
+
+The page (`web/app.js`, the block between `// ---------- the chief of staff and the dispatch` and its end marker) draws the dialog, the
+proposal card (a draft held in the page: edits, the 「你改過」 marks, the cost line, the red lamp from `/api/meetings/ledger`), the
+dispatch list and page, `#/actions`, the lobby's 輪到你 entries and the note on a chat message that was sent by a dispatch. It
+builds nodes with `el()` and `textContent` only. `tests/test_autonomy_guard.py` keeps the chief and dispatch modules from importing or
+calling anything that changes a limit, starts a terminal or full mode, or installs a skill; `tools/qa_p40.py` is the coordinator's
+real-machine check through the HTTP API.
+
 ## Start-up page — `vbear/ai_tool_status.py`, `web/app.js` (`#/setup`)
 
 `ai_tool_status.report(conf)` answers, for each tool in `ai_tools.setup_ids()` (a hidden one only while its switch is on),

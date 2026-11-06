@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.15.0 — the chief of staff
+
+On the CEO's chat page, 請幕僚長安排 lets VBear's chief of staff read your recent conversation with the CEO and propose who
+does what. You read and change the proposal on a card, press 確認派工 once, and VBear makes the new employees and sends the steps to
+your employees, one chat per step. It never answers a permission card (every command and every file change is still asked of
+you), never changes a limit, never starts a terminal or full mode and never installs a skill, and the whole run can be stopped
+and read in 「AI 自己做了什麼」. Five tasks (P40-1 to P40-5; v0.14 was never released, so this version follows v0.13.0):
+
+- **The chief of staff's one call (P40-1).** `vbear/chief.py` (pure: which messages are read, the list of employees as codes
+  C1.., the answer's schema with `additionalProperties: false` and no field for a limit, mode, skill, URL or path, and
+  `validate_plan` with its three layers: a badly formed answer is void, what is off the list is removed with a note, a plan
+  with nothing left is void as `empty_plan`) and `vbear/chief_runner.py` (a board of one turn on the meetings' engine
+  `board_engine.HeadlessBoard`: tool-less, `sonnet`, effort low, `min(US$0.30, what is left of the day)`, 120 seconds, the init
+  event must list only `StructuredOutput`). `GET /api/chief/preview?chat_id=`, `POST /api/chief`, `GET /api/chief`,
+  `GET /api/chief/<id>`, `POST /api/chief/<id>/retry` and `/cancel`. Its records are `<state>/chief/` and count in the day's
+  ledger (`GET /api/meetings/ledger` lists `chief` in `includes`). The record keeps counts, sizes and SHA-256 sums, not the
+  conversation.
+- **自己動手, two items (P40-2).** `vbear/autonomy.py`, `GET/POST /api/settings/autonomy` and a section of the settings page.
+  Item 1 lets the chief of staff make new employees by itself; item 2 lets it start a clean proposal by itself. Both are off by
+  default, each asks a plain question before it is turned on, and nothing but that POST changes them. The other three items
+  of ADR 0003 come later (v0.18.0). `tests/test_autonomy_guard.py` reads the source of `vbear/chief*.py`, `vbear/dispatch*.py`
+  and `vbear/autonomy.py` and fails on an import or call that changes a limit, starts a terminal or full mode, or installs a skill.
+- **The dispatch record and its confirmation (P40-3).** `vbear/dispatch.py`, `<state>/dispatch/d-<12 hex>.json`: states
+  proposed, confirming, running, paused, done, stopped, dismissed; append-only events, each saying who decided
+  (`by`: `you`, `auto1`, `auto2`, `vbear`). Confirming checks the plan again, only more strictly, then makes the new employees (safe
+  mode, no skill, the fixed instruction text of the position) and a task card. `POST /api/dispatch/<id>/confirm|dismiss|stop|
+  continue|withdraw-card|delete`, `GET /api/dispatch`, `GET /api/dispatch/<id>`, `GET /api/actions`. A message a dispatch
+  sends is marked `origin = {dispatch, step}` in the chat record (`chat_store`, an optional field of `user_message`).
+- **The runner (P40-4).** `vbear/dispatch_runner.py`, a thread started by `serve()`: one step at a time, each in a new chat,
+  sent with `ChatService.send_for_dispatch`; a step goes out only after the one before ended normally, with that step's last
+  reply handed on between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING` (at most 8 KiB, said to be data). It pauses and
+  says why (the daily limit, a Codex plan limit, a busy chat, a step it cannot account for after a restart, a turn that ended in an error), 繼續 and 停止 are
+  the person's. 繼續 skips a step that was sent and did not end normally. The step events name the step in the field `step`.
+- **The pages (P40-5).** The CEO chat page gains 請幕僚長安排 and its dialog (what is read, where it goes, the most it can cost,
+  what is left today, a note); the proposal card (edit the words, delete a step, swap the employee, change a new employee, 「你改過」
+  marks, the most it can cost, 確認派工, 不採用); `#/dispatch` and `#/dispatch/<id>` (every step's state, 停止, 繼續 with a sentence
+  that it skips the step that did not finish, taking back an employee VBear made, deleting); `#/actions` 「AI 自己做了什麼」
+  (every action and who decided; a link from the settings page's 自己動手 section); the lobby's 輪到你 lists a proposal to confirm and
+  a dispatch that is paused; a chat message sent by a dispatch says 「VBear 依派工送出」. Plain words for `empty_plan` and the other
+  codes; a Codex CEO card says that the conversation goes to Claude Code; a Mac with Codex only reads 「幕僚長目前需要 Claude Code」.
+  `GET /api/dispatch/<id>` also carries `tools` (the AI tools a new employee may name) and the actions carry the `profile_id` of a card a
+  dispatch made. `tools/qa_p40.py` is the real-machine check through the HTTP API (it needs `--state`).
+- **Documents.** `docs/SECURITY-MODEL.md` has "Chief of staff and dispatch" with its residual risks: the previous step's reply
+  handed to the next step is a prompt-injection path, and an employee's allowed commands can read VBear's access token and call
+  VBear's API, so VBear guarantees only that its own chief of staff and dispatch code do not do the three forbidden things.
+  `docs/adr/0006-chief-of-staff-dispatch.md` records the decisions; both READMEs, `docs/ARCHITECTURE.md`,
+  `docs/REFERENCE.zh-TW.md` and `GLOSSARY.md` (派工, 提議卡, AI 自己做了什麼; 幕僚長 and CEO updated) say what it is.
+- **Money.** The chief of staff's call is counted in the day. A step is a chat turn under the chat's per-turn limit and the daily
+  limit; the proposal card says the most it can cost (steps × the per-turn limit) and what is left today before you confirm. When
+  the daily limit is reached the dispatch pauses, and 繼續 is yours; nothing counts down or goes on by itself in this version.
+- **Not run on a real machine for this change:** that a real Claude Code fills the schema, that a closed chat stops being busy at
+  once, that the second employee treats the handed-on reply as data, and the `resets_at` unit of a Codex plan limit. A Claude plan
+  limit is not told apart from another error in a chat's record, so its pause carries no resume time. No code or test ran a real AI tool.
+- **Going back to v0.13.0.** v0.13.0 does not know the dispatch. A chat message that a dispatch sent has an `origin` field that
+  v0.13.0 does not accept in a `user_message`, so v0.13.0 reads that record as damaged: it lists the chat with a problem, cannot send to
+  it and cannot delete it, and, as for the chats of v0.13.0 read by v0.12.0, it counts what it cannot read as spend it does not
+  know, so on the day such a chat was written it refuses to start any meeting, staffing meeting or chat (`spend_unknown`) until you
+  move that chat's folder out of `<state>/chats/`. Delete or move the chats of dispatched steps before going back. `<state>/chief/` and
+  `<state>/dispatch/` are left alone and unread, and v0.13.0 does not count the chief of staff's calls in the day, so
+  on a day you asked for proposals its ledger shows less than was spent. The employees and task cards a dispatch made are plain cards and stay. The
+  config key `autonomy` stays in `config.json`, unread (v0.13.0 keeps keys it does not know). This was read from the v0.13.0 code and was not run.
+
 ## v0.13.0 — Codex chat
 
 A role card whose AI tool is Codex can be chatted with, as one whose tool is Claude Code already could. Every command and every
