@@ -1754,3 +1754,14 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .setup-daily-choice[data-selected="true"] { border-color: var(--ok); }
 .setup-daily-choice .setup-text { flex: 1 1 220px; }
 @media (max-width: 520px) { .setup-daily-choice .btn { flex: 1 1 100%; } }
+
+/* ---- the first CEO (P38-8): the step after 「開始使用」 and the lobby's two doors ---- */
+.ceo-form { display: grid; gap: 12px; max-width: 46rem; }
+.ceo-form p { margin: 0; overflow-wrap: anywhere; }
+.ceo-field { display: grid; gap: 4px; min-width: 0; font-weight: 600; }
+.ceo-field input, .ceo-field textarea { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--ink); font: inherit; font-weight: 400; resize: vertical; }
+.ceo-form .row { flex-wrap: wrap; }
+.ceo-door { display: grid; gap: 8px; margin: 0 0 16px; border-color: var(--quest-edge); }
+.ceo-door h2, .ceo-door p { margin: 0; overflow-wrap: anywhere; }
+.ceo-door .row { flex-wrap: wrap; }
+@media (max-width: 520px) { .ceo-form .btn, .ceo-door .btn { flex: 1 1 100%; justify-content: center; } }
