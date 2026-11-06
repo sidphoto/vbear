@@ -50,7 +50,7 @@ from . import chat_service as chat_service_mod
 from . import claude_verify
 from . import codex_verify
 from . import config as cfg
-from . import daily_limit
+from . import autonomy, daily_limit
 from . import first_ceo
 from . import flow_executor
 from . import folders
@@ -650,6 +650,8 @@ def make_handler(console: Console):
                     return self._setup_tools(force)
                 if path == "/api/first-ceo":
                     return self._first_ceo()
+                if path == "/api/settings/autonomy":
+                    return self._autonomy_view()
                 if path == "/api/setup/daily-limit":
                     return self._json({"ok": True, "daily_usd": float(meetings.limits_from(console.store.conf)["daily_usd"]),
                                        "choices": list(daily_limit.CHOICES)})
@@ -867,6 +869,8 @@ def make_handler(console: Console):
                     return self._setup_try(unquote(path[len("/api/setup/tools/"):-len("/try")]), self._body_strict())
                 if path == "/api/setup/daily-limit":
                     return self._setup_daily_limit(self._body_strict())
+                if path == "/api/settings/autonomy":
+                    return self._autonomy_write(self._body_strict())
                 if path.startswith("/api/setup/tools/") and path.endswith("/marker"):
                     return self._setup_marker(unquote(path[len("/api/setup/tools/"):-len("/marker")]), self._body_strict())
                 if path == "/api/native/claude-verification":
@@ -1428,6 +1432,35 @@ def make_handler(console: Console):
                         conf = cfg.load()
             return self._json({"ok": True, "setup_done": conf.get("setup_done") is True,
                                "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
+
+        def _autonomy_view(self, conf=None):
+            """「自己動手」: the two ticks in force, the table of ADR 0003's five items for the page, what the chief of staff may
+            cost (for the words before an item is turned on) and the three things that stay forbidden."""
+            conf = console.store.conf if conf is None else conf
+            return self._json({"ok": True, "autonomy": autonomy.read(conf), "items": list(autonomy.ITEMS),
+                               "later_note": autonomy.LATER_NOTE, "never": list(autonomy.NEVER),
+                               "limits": {"chief_call_usd": autonomy.CHIEF_CALL_USD,
+                                          "per_turn_usd": float(chat_store.limits_from(conf)["per_turn_usd"]),
+                                          "daily_usd": float(meetings.limits_from(conf)["daily_usd"])}})
+
+        def _autonomy_write(self, body):
+            """The only way to change 「自己動手」: the person's own click in the settings (X-VBear is checked for every POST).
+            Exactly the two booleans; the rest of config.json is written back as it was read."""
+            try:
+                block = autonomy.validate(body)
+            except ValueError as exc:
+                return self._error(400, str(exc))
+            with console.lock:
+                if cfg.is_corrupt():
+                    return self._error(409, cfg.corrupt_message())
+                conf = cfg.load()
+                conf["autonomy"] = block
+                try:
+                    cfg.save(conf)
+                except (OSError, ValueError) as exc:
+                    return self._error(503, f"設定沒有存進去：{exc}")
+                console.store.set_conf(conf)
+            return self._autonomy_view(conf)
 
         def _setup_daily_limit(self, body):
             """The choice of the daily limit: the day is written and every other limit above it is brought down to it, in one
@@ -2063,6 +2096,8 @@ def make_handler(console: Console):
             return res
 
         def _config_update(self, body: dict) -> dict:
+            if "autonomy" in body:  # not a config key: only POST /api/settings/autonomy writes it
+                raise ValueError("「自己動手」只能在設定頁的專用路徑修改")
             with console.lock:
                 if cfg.is_corrupt():
                     raise ValueError(cfg.corrupt_message())
