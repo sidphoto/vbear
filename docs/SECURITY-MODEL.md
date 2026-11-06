@@ -1020,9 +1020,10 @@ A chat lets you talk with one role card through your authenticated local Claude 
 `/api/chats` reach the runtime's chat operations; no Claude Code version is chat-verified out of the box, so no chat
 process starts until a version passes the chat check.
 
-- **Who may open a chat.** Only an enabled role card whose tool is Claude Code. The API checks this itself and answers
-  a disabled card (`card_disabled`) or a card of another tool (`card_not_claude`) with its reason; the page's button
-  being shut is a courtesy, not the check. Opening a chat costs nothing; a message does.
+- **Who may open a chat.** Only an enabled role card whose tool is Claude Code or Codex (since v0.13 the second one
+  runs on its own engine, see "Chats with a Codex role card"). The API checks this itself and answers a disabled card
+  (`card_disabled`) or a card of another tool (`card_tool_unsupported`) with its reason; the page's button being shut is a
+  courtesy, not the check. Opening a chat costs nothing; a message does.
 - **Whose instructions go in.** Only the instructions written on the card, as one `--append-system-prompt` argument.
   The position's default text is not sent, and a card without instructions of its own sends none; the chat's record
   says whether any went in. Claude Code keeps a session's system prompt when it is resumed
@@ -1156,11 +1157,28 @@ process starts until a version passes the chat check.
 
 ## Chats with a Codex role card (engine `codex-chat`, v0.13)
 
-The runtime's side of a chat with a role card whose AI tool is Codex (the console's side, the verification step and the
-page come later in the same release; ADR 0005 in the run's folder gives the reasons). It is the same kind of new
-outbound data path as a Claude chat, on **your ChatGPT plan**, and it can change files in the card's work folder. No Codex
-version is chat-verified out of the box: no process starts until one passes `--mode codex-chat`.
+A chat with a role card whose AI tool is Codex (ADR 0005 gives the reasons). It is the same kind of new outbound data
+path as a Claude chat, on **your ChatGPT plan**, and it can change files in the card's work folder. The console's
+`#/chat` page and `/api/chats*` reach it through the same runtime operations as a Claude chat, with an engine named.
+No Codex version is chat-verified out of the box: no process starts until one passes `--mode codex-chat`.
 
+- **The engine follows the card's tool and never changes.** `POST /api/chats` reads the role card's tool (`claude` is
+  `claude-chat`, `codex` is `codex-chat`; any other tool is refused with `card_tool_unsupported`) and the chat keeps that
+  engine for good. Every message checks the card again: a card whose tool is now the other one cannot go on in the old
+  chat (`card_tool_changed`, nothing starts), a disabled card or a tool that cannot chat is refused as before. The daemon
+  refuses a message that names an engine other than the chat's. The browser sends no binary, folder, command or model of
+  its own: the console reads the pinned Codex and the card's model, and the daemon checks the lot again.
+- **The support answer is the console's courtesy, not the check.** `GET /api/chat-support` carries Claude Code's keys and
+  a `codex` object (`state`: not installed, unverified, administrator policy, chat folder refused, version unreadable,
+  not logged in, ready; no path and no command output). A message to a Codex chat while the state is not ready is
+  refused with the state's own sentence before the daemon is asked; the daemon refuses it again by itself.
+  `POST /api/chat-support/verify {"engine": "codex"}` starts the check of the newest installed Codex in a child process
+  (`vbear/codex_verify.py`) unless the administrator policy is in the way, and counts a pass only when
+  `codex-chat-verified.json` lists the version afterwards, as for Claude Code. Any other `engine` value is a bad request.
+- **The login is the person's, on a folder of VBear's.** The start-up page's 「讓聊天用的 Codex 登入」 types one fixed line
+  into a terminal (`CODEX_HOME=<chat folder> codex login -c cli_auth_credentials_store=file`, taken from the tool list;
+  the browser sends a tool and an action only). VBear never reads or copies the person's own `~/.codex`, and never sees
+  the login.
 - **The process.** One `codex app-server --listen stdio://` per role card, at most three chats in all with the Claude
   ones, each a managed launch with engine `codex-chat` under `sessions/` (an exact manifest schema, a settings file that
   must equal what the version's table in `codex_chat_protocol.VERSIONS` says, the CLI's identity, the card's work
@@ -1225,10 +1243,27 @@ version is chat-verified out of the box: no process starts until one passes `--m
   daemon of the console never sets it). It costs about fourteen model calls on the person's ChatGPT plan, no more than
   US$0.30 by VBear's own counting (each step has a cap, and the check's day limit is US$0.30), and is not added to the
   day's ledger. A pass writes `codex-chat-verified.json` and a 0600 report that `cli_versions` reads back every time.
+- **The page.** A card of a Codex chat shows the command whole, its folder and what Codex says it does, or each file's
+  path, what is done to it and its diff, as text in `<pre>` (never as markup). Its buttons are 「允許這一次」, 「拒絕」 and
+  「改內容再問」, whose note says VBear declines the original and Codex asks again, so the person must allow once more;
+  nothing on the page says the change was applied. There is no "allow from now on". A reply's cost reads 「估計 US$x」 with
+  the token count and says it is not a bill; the plan's use is one line from the last `plan_usage` record (percent per
+  window as Codex reports it, and the reset time only when a limit was reached). The head of the chat says reading is not
+  limited. The deletion confirmation says Codex's own copy stays in `codex-chat-home` (`sessions`) and is not deleted.
+- **Residual risks.** (1) *Reading is not limited by the sandbox.* The legacy `workspace-write` sandbox stops writes outside
+  the work folder and the network, not reads: a command the person allows can read the whole machine, as a Claude chat's
+  Bash can. What stands between the model and those files is the person reading each command; the permission profile that
+  denies reading the whole disk made file changes fail on the recorded version, so it is not used. (2) *The cap is checked
+  between reports.* A turn is interrupted when a token report reaches the cap, and two reports can be one model call apart
+  (about 20,000 tokens, about US$0.02 by the rule), so a turn can pass its cap by about one call; the estimate is not a bill
+  and the real cost is the person's plan use. (3) *It relies on a retired value.* `untrusted` is documented as retired
+  (the vendor's agent-approvals page) though 0.163.0's `app-server` accepts it; a version that refuses it fails the check
+  and the chat stays closed. (4) *The interface is experimental.* `codex app-server` is marked experimental and its request
+  names, decisions and notices are the recorded version's: every Codex version must pass `--mode codex-chat` first, and
+  anything unexpected stops the chat rather than being tried.
 - **Not checked yet.** What happens in a long conversation (an item kind outside the list stops the chat) and whether the
-  real Codex lets an unknown server request through are for the first real runs. Reading is not isolated: a command the
-  person allows can read the whole machine, as a Claude chat's Bash can. `untrusted` is documented as retired and
-  `codex app-server` as experimental: every Codex version must pass the check first.
+  real Codex lets an unknown server request through are for the first real runs; the login's effect on the chat folder
+  (it must add no `config.toml`, `rules/` or `AGENTS.md`) is checked by the folder test before every start.
 
 ## The start-up page (v0.12)
 

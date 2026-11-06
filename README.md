@@ -44,7 +44,7 @@ The game words below are only a way to read VBear's screens. Each one points at 
 | **Gates** | **Approval, merge and push gates**: where VBear stops and waits for you | The board's 「輪到你」 and the flow page |
 | **Meeting** | A **meeting** (會議, `#/meetings`): the positions talk a question over in writing, each once and without seeing the others, then the CEO card decides. You are the chairman: what is major waits for you (輪到你：董事長核准). Each speech is a Claude Code call with no tools at all, and a card of another tool is spoken for by Claude (代發言). A meeting is kept short: a speaker thinks at low effort and the CEO at medium, and it runs at most 15 minutes by default, the last three kept for the CEO. A decision is only a record | 會議; 開會討論 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
 | **Staffing meeting** | A **staffing meeting** (組隊會議, `#/staffing`): for one task card the positions say who and which skills it needs, each once and alone, then the CEO card writes a staffing proposal (the four places, the staff to bring to a meeting, new cards to make, the skills of each card and the skills missing). You change it as a draft, then adopt it with 照草稿採用, one button per step in a fixed order (啟用, 建新卡, 插技能, 帶到隊伍, 帶去開會, 記下). VBear makes no card, inserts no skill and saves no team by itself | 請 CEO 組隊 on a task card; the office's 會議室 and 董事長桌; the board's 「輪到你」 |
-| **Chat** | A **chat** (聊天, `#/chat`): you talk one-to-one with a role card whose tool is Claude Code and which is on, through your own Claude Code, in the card's own work folder. A command, an edit or a write waits for a permission card that you allow once, refuse or change first; there is no 「allow every time」. It spends your usage, and a Claude Code version can chat only after it has passed the chat check on your Mac | 聊天; the 聊天 button on a role card |
+| **Chat** | A **chat** (聊天, `#/chat`): you talk one-to-one with a role card whose tool is Claude Code or Codex and which is on, through your own Claude Code or Codex, in the card's own work folder. A command, an edit or a write waits for a permission card that you allow once, refuse or change first (with Codex, 改內容再問: VBear refuses the original and Codex asks again); there is no 「allow every time」. It spends your usage (Codex: your ChatGPT plan, counted by VBear as an estimate), and a Claude Code or Codex version can chat only after it has passed the chat check on your Mac | 聊天; the 聊天 button on a role card |
 | **Stamina** | The **limits** you set for automatic runs, like a stop-loss: reviews, dispatches, model responses, time, executor budget. When one is reached, VBear stops the flow. Some usage is only known afterwards (cost, for example), so the real figure can end up above a limit; set them low the first time | The approval screen and the executor panel's meters |
 
 Role cards come in three moves: **collect** (take cards from the card pool, or the starter deck of three), **equip** (put skill cards into a card) and **play** (put the card on a task card's team place, then set out). The permission intents on a card are a team-work marker: they do not mean VBear has limited the program's real abilities. The only limits are the ones on the launch pass.
@@ -302,13 +302,23 @@ the proposal and saves only on 建立, inserting a skill shows the card's list b
 the team waits on the task card's board until you press 建立隊伍 or 儲存隊伍.
 
 **Chat with one of your role cards.**
-On the 聊天 page (`#/chat`, or the 聊天 button on a role card that is on and whose tool is Claude Code) you pick a card and talk
-with it through your own Claude Code, in a work folder of its own. Only the instructions you wrote on the card go in (as one
+On the 聊天 page (`#/chat`, or the 聊天 button on a role card that is on and whose tool is Claude Code or Codex) you pick a card and talk
+with it through your own Claude Code or Codex (the card's tool decides, for good), in a work folder of its own. Only the instructions you wrote on the card go in (as one
 `--append-system-prompt`; the position's default text does not, and VBear did not verify on a real machine that Claude Code
 applies it). When the card wants to run a command, change a file or write one, a permission card asks you: allow once,
 refuse, or change the command or the text and then allow; there is no allow-every-time. A chat spends your Claude usage,
 counted in the same day as the meetings (`chat_limits.per_turn_usd`, US$0.50 a turn by default), and a Claude Code version
 can chat only after 驗證聊天 has passed on your Mac (about six small Haiku calls). Every refusal comes with a sentence that says why.
+
+A **Codex** chat works the same way with these differences. The Codex that chats logs in once more, to a folder of VBear's own
+(the start-up page's 讓聊天用的 Codex 登入), because `codex app-server` cannot be told to ignore your own Codex settings;
+VBear never reads your `~/.codex`. Every command is asked, even one that only reads, and so is every file change, with its
+diff; there is no allow-every-time. 改內容再問 refuses the original and has Codex ask again with your text, so you allow once
+more. Codex's sandbox stops writes outside the card's folder and the network, **not reads**: a command you allow can read the
+whole machine. Codex reports tokens, not money: VBear estimates each turn from the token count (US$1.00 per million, at least
+US$0.01), shows it as an estimate (not a bill), and counts it in the same daily limit; the plan's use as Codex reports it is
+shown on the chat. Codex keeps its own copy of the conversation in its folder under VBear's state folder, and deleting a chat does
+not delete that copy. 驗證聊天 for Codex runs about fourteen short calls on your ChatGPT plan, not billed apart.
 
 **Everything stays on your Mac.**
 No telemetry, no accounts, no cloud. VBear makes no outbound network requests and its server listens on
@@ -330,6 +340,7 @@ a meeting or a skill translation is sent the same way, through your own Claude C
   advice, and VBear makes no card, inserts no skill and saves no team for you.
 - **A chat sends what you write to Anthropic through your Claude Code, spends your usage, and can change files in the card's own work folder** only after you allow each
   command, edit or write on a permission card. VBear can read what the card reads there; Claude Code can still read anything your Mac account can.
+  A Codex chat sends it to OpenAI through Codex on your ChatGPT plan the same way, and a command you allow can read anything your Mac account can.
 - **A review PASS is another AI's opinion, not proof.** Read the changes yourself before you merge.
 - **Deleting a flow cannot be undone.**
 - **The app is not signed with an Apple Developer ID.** The first time, allow it under System Settings →
@@ -399,7 +410,7 @@ any time from 「開始設定」 in the left menu.
   tries together) may cost per day: US$1, US$3 or US$10, with US$3 chosen to start. It starts counting again at midnight.
   You can choose again on the same page later. This is VBear's own limit; the usage limit of a tool's paid plan (方案用量上限)
   is a different thing that the tool itself explains.
-- **Some pages need Claude Code** (meetings, staffing meetings, chats, the skill translations). Where it is missing, the page
+- **Some pages need Claude Code** (meetings, staffing meetings, the skill translations; chats work with Claude Code or Codex). Where it is missing, the page
   says 「這個功能目前需要 Claude Code」 and how to get it, with a button to the start-up page.
 
 **Full mode needs a tick on 我了解.** A full-mode role card runs its tool with no limits from VBear: the employee can touch any

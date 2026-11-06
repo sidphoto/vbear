@@ -60,7 +60,7 @@ class ChatDocsTests(unittest.TestCase):
                 self.assertIn(word, text, word)
 
     def test_the_security_model_says_what_is_not_verified(self):
-        for phrase in ("## Chats with a role card", "`card_disabled`", "`card_not_claude`", "`--system-prompt-snapshot`",
+        for phrase in ("## Chats with a role card", "`card_disabled`", "`card_tool_unsupported`", "`--system-prompt-snapshot`",
                        "has been checked on a real machine", "`policy-limits.json`", "`claude-chat-verified.json`",
                        "`X-VBear`"):
             self.assertIn(phrase, self.model, phrase)
@@ -78,7 +78,7 @@ class ChatDocsTests(unittest.TestCase):
 
     def test_every_code_the_runtime_can_give_has_a_sentence(self):
         from vbear import chat_service
-        for code in ("refused", "expired", "restarting", "spend_unknown", "damaged", "card_disabled", "card_not_claude"):
+        for code in ("refused", "expired", "restarting", "spend_unknown", "damaged", "card_disabled", "card_tool_unsupported"):
             self.assertIn(code, chat_service.CODE_TEXT, code)
             self.assertTrue(chat_service.CODE_TEXT[code][1].strip())
 

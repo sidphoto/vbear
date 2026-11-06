@@ -1,11 +1,12 @@
-# Codex 0.163.0, chat mode (draft)
+# Codex 0.163.0, chat mode
 
-**Status: draft, not boundary evidence.** The chat check `python3 -m vbear.boundary_check --mode codex-chat` has not
-passed for any version, so `cli_versions.CODEX_CHAT_VERIFIED_VERSIONS` is empty and no Codex chat starts. This file records
-what the design (ADR 0005) rests on. Everything below comes from the planner's notes of 2026-11-06 about the local
-`codex-cli 0.163.0`: its `--help` output, the source of rust-v0.163.0, and ten short probe turns recorded as scrubbed
-fixtures. The author of this draft did not run Codex. The coordinator completes the parts marked **to be confirmed** when the
-check is run on a real Mac.
+**Status: the evidence the design rests on; not yet boundary evidence.** The chat check
+`python3 -m vbear.boundary_check --mode codex-chat` is what lets a version chat, and its result is recorded in
+`codex-chat-verified.json` on each Mac, never here. Until a version has passed it, `cli_versions.CODEX_CHAT_VERIFIED_VERSIONS`
+is empty and no Codex chat starts. Everything below comes from notes of 2026-11-06 about the local `codex-cli 0.163.0`: its
+`--help` output, the source of rust-v0.163.0, and ten short probe turns recorded as scrubbed fixtures
+(`tests/fixtures/codex-chat/`), plus a few points confirmed by hand on a real Mac afterwards (marked **confirmed**). The code
+and its tests run only a stand-in `codex`; the real one is run only by the check and by a person.
 
 ## 1. Why the chat uses `codex app-server` and its own `CODEX_HOME`
 
@@ -39,10 +40,14 @@ During the probe the person's own settings were read: one `AGENTS.md` (`instruct
   its path has a link, when it is not the user's own 0700 folder, or when it is over 512 MiB (counted as the review's
   `codex-home` is). It is not the review's `codex-home`.
 
+**Confirmed on a real Mac (2026-11-06):** `CODEX_HOME=<empty folder> codex login status -c cli_auth_credentials_store=file`
+exits with 1 and prints no argument error, so the `-c` after `login status` is accepted by 0.163.0. A `status` alone makes a
+`tmp/` folder inside the Codex home (not a `config.toml`, `rules` or `AGENTS.md`), so the folder check must not refuse `tmp/`
+and does not. The person's Codex was the vendor's installer's (`~/.codex/packages/standalone/releases/0.163.0-<arch>-apple-darwin`),
+which is where the pinned binary is looked for.
+
 **To be confirmed on a real Mac** (待 --mode codex-chat 真機確認):
 
-- That `codex login -c cli_auth_credentials_store=file` and `codex login status -c cli_auth_credentials_store=file` accept
-  the `-c` after the subcommand in 0.163.0 (the review already passes it after `login`; `status` is not recorded).
 - That a successful login writes nothing named `config.toml`, `rules` or `AGENTS.md` into the folder. If it does, the folder
   is refused (fail closed) and the check must say so.
 - That the login output of a missing folder (the first run) is the same as an empty one.
@@ -60,11 +65,11 @@ preferences domain `com.openai.codex` (in `/Library/Managed Preferences/` and in
 comes from the vendor's documentation as read on 2026-10-08 for 0.160.0.
 
 **To be confirmed on a real Mac:** that 0.163.0 reads no other system or managed layer (the strings of the installed binary,
-as was done for Claude Code 2.1.318). Until then the list is taken over, not re-derived; the draft does not claim more.
+as was done for Claude Code 2.1.318). Until then the list is taken over, not re-derived; this file does not claim more.
 
 ## 5. What the probe turns showed (app-server, 0.163.0)
 
-Recorded in `tests/fixtures/codex-chat/` once the protocol task lands them; the notes below are the planner's.
+Recorded in `tests/fixtures/codex-chat/` (scrubbed of the recorder's own settings, host and account details).
 
 - `thread/start` with `approvalPolicy: "untrusted"` answers `approvalPolicy: "untrusted"` and `approvalsReviewer: "user"`. The
   official documentation calls `untrusted` retired, yet 0.163.0's app-server accepts it. A later version that refuses it
@@ -78,9 +83,31 @@ Recorded in `tests/fixtures/codex-chat/` once the protocol task lands them; the 
 - Token use is reported as `thread/tokenUsage/updated` (a running total for the thread, continued after `thread/resume`).
   No field carries money.
 
-## 6. What this task (P38-2) built from it
+## 6. What was built from it (P38-1 to P38-5)
 
-The login folder and its checks, the fixed `chat_login` line, the exit-code-only login state, the pinned-binary choice,
-`codex-chat-verified.json` (a version counts only with a report of mode `codex-chat` that passed and names the same version
-as `codex_version`), the `CODEX_SOURCES["0.163.0"]` entry, and the Codex part of the chat support answer. It starts no
-Codex chat; the protocol, the process and the check come in later tasks.
+- The protocol, the tracker and the stand-in server that replays the recordings (`codex_chat_protocol.py`,
+  `tests/fake_codex_app_server.py`): every line VBear writes, every notice and request it understands, what it counts as a
+  violation, the estimate of money from tokens.
+- The login folder and its checks, the fixed `chat_login` line, the exit-code-only login state, the pinned-binary choice,
+  `codex-chat-verified.json` (a version counts only with a report of mode `codex-chat` that passed and names the same
+  version as `codex_version`), the `CODEX_SOURCES["0.163.0"]` entry, and the Codex part of the chat support answer.
+- The daemon's Codex chat (`codex-chat` engine, `codex_chat_session.py`), the chat record version 2, and the check itself
+  (`codex_chat_check.py`).
+- The console's side (P38-5): the engine follows the role card's tool, `card_tool_changed`, the support answer with a
+  `codex` object, `POST /api/chat-support/verify {"engine": "codex"}`, and the page (command and file cards with diffs,
+  改內容再問, the estimate, the plan's use, the deletion note).
+
+## 7. Still to be confirmed with `--mode codex-chat` on a real Mac
+
+These are written down as unknown in the code and decided fail-closed; the check or a first real chat settles them.
+
+- That `turn/steer` is accepted when `initialize` says `experimentalApi: false` (a changed command depends on it; a refusal
+  fails the check at its `edit` step, and the fallback of sending the text as the next message is stopped, not used).
+- That Codex ends cleanly when its stdin closes (the idle close and the stop depend on it), and what `turn/interrupt` answers
+  and in which order.
+- That `thread/delete` removes Codex's own copy under `codex-chat-home/sessions` (the file name holding the thread id is an
+  assumption, recorded as an observation, not a pass condition).
+- That the real model does what the check's prompts ask (one command at a time, `apply_patch` once before a shell command).
+- That a file path outside the work folder is judged right through a link (tested with files and links the tests make, not
+  yet with a real Codex).
+- Whether a request kind VBear does not know can be made to arrive at all (recorded as "not observed", neither a pass nor a fail).

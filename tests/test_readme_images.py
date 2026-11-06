@@ -214,9 +214,9 @@ class ChangelogRelease(unittest.TestCase):
 
     def test_the_release_heading_matches_the_version(self):
         headings = [h for h in re.findall(r"^## (.+)$", self.text, re.M) if h != "Unreleased"]
-        self.assertTrue(headings[0].startswith("v0.12.0"), headings[:3])
-        self.assertTrue(headings[1].startswith("v0.11.0"), headings[:3])
-        self.assertTrue(headings[2].startswith("v0.10.0"), headings[:3])
+        self.assertTrue(headings[0].startswith("v0.13.0"), headings[:3])
+        self.assertTrue(headings[1].startswith("v0.12.0"), headings[:3])
+        self.assertTrue(headings[2].startswith("v0.11.0"), headings[:3])
         init = (ROOT / "vbear" / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('__version__ = "0.12.0"', init)
 

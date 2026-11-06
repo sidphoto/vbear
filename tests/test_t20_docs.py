@@ -52,11 +52,13 @@ class ChangelogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        cls.head = text[:text.index("## v0.11.0")]
+        cls.head = text[text.index("## v0.12.0"):text.index("## v0.11.0")]
+        cls.changelog_start = text
         cls.unreleased = flat(text[text.index("## v0.12.0"):text.index("## v0.11.0")])
 
     def test_the_release_comes_first(self):
-        self.assertTrue(self.head.startswith("# Changelog\n\n## v0.12.0 — the start-up page"), self.head[:60])
+        self.assertTrue(self.head.startswith("## v0.12.0 — the start-up page"), self.head[:60])
+        self.assertTrue(self.changelog_start.startswith("# Changelog\n\n## v0.13.0 — Codex chat"), self.changelog_start[:60])
         self.assertNotIn("not released", self.unreleased)
 
     def test_it_covers_the_eight_tasks(self):

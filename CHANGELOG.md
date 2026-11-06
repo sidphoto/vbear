@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.13.0 — Codex chat
+
+A role card whose AI tool is Codex can be chatted with, as one whose tool is Claude Code already could. Every command and every
+file change is asked first, none is ever allowed from now on, and the cost is an estimate on your ChatGPT plan. A Codex
+version chats only after it has passed `python3 -m vbear.boundary_check --mode codex-chat` on your Mac. Six tasks (P38-1 to
+P38-6):
+
+- **Protocol and a stand-in Codex (P38-1).** `vbear/runtime/codex_chat_protocol.py` holds, for Codex 0.163.0, every line VBear
+  writes to `codex app-server` (it never writes `acceptForSession`, an execpolicy or network amendment, or `cancel`), the
+  notices and requests it understands, what it counts as a violation, and the estimate of money from tokens. The ten short
+  turns recorded with the real 0.163.0 are kept, scrubbed, in `tests/fixtures/codex-chat/`, and `tests/fake_codex_app_server.py`
+  replays them, so no test runs the real `codex`.
+- **A Codex login of the chat's own (P38-2).** `codex app-server` cannot be told to ignore your own `~/.codex` (your
+  `AGENTS.md` and MCP servers were read in the recorded run), so the chat uses `<state>/codex-chat-home` and you log in to it once
+  more. The start-up page's Codex row gains 讓聊天用的 Codex 登入, which types one fixed line into a terminal
+  (`CODEX_HOME=<that folder> codex login -c cli_auth_credentials_store=file`; the page sends a tool and an action, never a
+  command). The state is the exit code of `codex login status` alone. VBear refuses the folder when it holds a `config.toml`,
+  `rules/` or `AGENTS.md`, has a link on its path, or passes 512 MiB. The Codex that runs is the pinned one under
+  `~/.codex/packages/standalone/releases/`, never one from `PATH`; `codex-chat-verified.json` lists the versions that passed;
+  the administrator-policy sources of 0.163.0 are the 0.160.0 list (`/etc/codex`, the managed preferences domain
+  `com.openai.codex`). `docs/evidence/codex-0.163.0-chat.md` keeps what all this rests on.
+- **The daemon runs Codex chats (P38-3).** A new engine `codex-chat` (`runtime/codex_chat_session.py`): one `codex app-server`
+  per role card, at most three chats in all with the Claude ones, an environment of exactly seven variables, `untrusted` approval
+  with reviewer `user`, the legacy `workspace-write` sandbox (writes only in the card's folder, no network, no `/tmp`). A command
+  is a card with its whole text; a file change is a card with each file's path, kind and diff, unless a path is outside the folder
+  or under `.codex`, `.agents` or `.git`, which is declined without a card. A changed command is not "allow, changed": VBear
+  declines it and sends `turn/steer`, and Codex asks again in a card of its own. Anything that shows VBear's settings are not
+  in force stops the chat (an extra MCP server, another thread, a command completed without a yes, a changed policy). The chat
+  record is version 2 (`chat.json` gains `engine`; version 1 files read as `claude-chat`) with the records `session_bound`,
+  `usage`, `plan_usage` and `card_edit_sent`, and a turn's end gains `estimate` and `tokens`.
+- **The version check (P38-4).** `python3 -m vbear.boundary_check --mode codex-chat` runs one real chat through VBear's own
+  Codex code in a temporary state folder, with seven messages (text; `ls -a` must make a card, and a denied `rm`; a changed
+  command; a file change; writes outside the folder; stop; `thread/resume`), about fourteen short model calls on your ChatGPT
+  plan and at most US$0.30 by VBear's own counting, not added to the day's ledger. A pass writes `codex-chat-verified.json` and a
+  0600 report that is read back every time. The report holds no Codex home, user agent, plan kind, credits or e-mail-like text.
+- **The console and the page (P38-5).** `POST /api/chats` reads the role card's tool and fixes the chat's engine for good; a
+  card whose tool is Grok, AGY, MCODE or shared is refused with `card_tool_unsupported` (this replaces `card_not_claude`), and
+  a card whose tool changed after the chat began gets `card_tool_changed` and nothing starts. `GET /api/chat-support` keeps
+  Claude Code's keys and carries a `codex` object (not installed, not verified, administrator policy, folder refused, version
+  unreadable, not logged in, ready); `POST /api/chat-support/verify` takes `{"engine": "codex"}`
+  (`vbear/codex_verify.py`; no engine still means Claude Code). The chat page names each chat's AI tool, shows the notice of the
+  chosen card's tool, and for Codex draws the command card (command, folder, what Codex says it does), the file card (path,
+  what is done, diff, as text), 改內容再問 (VBear refuses the original and Codex asks again, so you allow once more), each
+  reply's cost as 「估計 US$0.02」 with the token count and 「不是帳單」, one line of the ChatGPT plan's use as Codex reports it
+  (and the reset time only when a limit was reached), and a deletion note saying Codex's own copy of the conversation in
+  `codex-chat-home/sessions` is not deleted. `session_ready` records the CLI's version in `cli_version` (Claude chats keep
+  `claude_code_version`; both read). The chat note on the page now says chats work with Claude Code or Codex. New sentences
+  for `card_tool_unsupported`, `card_tool_changed` and `codex_version`; `not_logged_in` and `codex_home` have theirs.
+  **Money:** Codex reports tokens, not money. A turn is estimated as tokens ÷ 1,000,000 × US$1.00, rounded up to the cent, at
+  least US$0.01 (VBear's accounting rule, not a price), and counted in the same `meeting_limits.daily_usd`; a turn cut off
+  without a count costs its cap. Two token reports can be a model call apart, so a turn can pass its cap by about one call.
+  **Reading is not limited:** the sandbox stops writes outside the folder and the network, not reads, so a command you allow can
+  read the whole machine; the permission profile that would stop reads made file changes fail on the recorded version.
+  Documents: `docs/SECURITY-MODEL.md` has "Chats with a Codex role card" with its residual risks, `docs/adr/0005-codex-chat-boundary.md`
+  records the decisions, and both READMEs, `docs/ARCHITECTURE.md` and `docs/REFERENCE.zh-TW.md` say what Codex chat is.
+- **Packaging copies stay out of Spotlight and Launchpad (P38-6).** `macos/build.sh` keeps every `VBear.app` it leaves on disk
+  in a folder whose name ends in `.noindex` (`build/app.noindex`, `build/dmg.noindex`, `dist/app.noindex`); the DMG stays
+  `dist/VBear-<version>-arm64.dmg`. The release workflow's smoke check reads the new path. It deletes only the old copies inside
+  the repository.
+- **Not run on a real machine for this change:** the real Codex was never run by the code or its tests; whether `turn/steer` is
+  accepted without the experimental API, whether Codex ends when its stdin closes, what `turn/interrupt` answers, and that a
+  login writes nothing into the chat folder are for the first real `--mode codex-chat` (see section 7 of the evidence file).
+- **Going back to v0.12.0.** v0.12.0 does not know Codex chats or the version 2 chat file. Every chat made by v0.13.0, a Claude
+  chat included, has a `chat.json` that v0.12.0 reads as damaged: it lists the chat with a problem, cannot send to it and cannot
+  delete it, and the files stay. A Codex chat's record also holds kinds v0.12.0 does not know (`session_bound`, `usage`,
+  `plan_usage`, `card_edit_sent`), and v0.12.0 counts a record it cannot read whole as spend it does not know, so on the day such
+  a chat was written it refuses to start any meeting, staffing meeting or chat (`spend_unknown`) until you move the chat's folder
+  out of `<state>/chats/`. Chats made by v0.12.0 itself read as before in v0.13.0. Move or delete the Codex chats before going back.
+  `codex-chat-home/` and `codex-chat-verified.json` are left alone and unread, and a role card with the Codex tool reads as
+  before (v0.12.0 refuses to chat with it). v0.13.0 adds no config key. The launch records of Codex chats under `sessions/` are
+  an engine v0.12.0 does not know; how it treats them was not checked. This was read from the v0.12.0 code and was not run.
+
 ## v0.12.0 — the start-up page
 
 The start-up page: a new person is taken through installing and signing in to an AI
