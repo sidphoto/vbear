@@ -16,6 +16,10 @@ kept for ``CACHE_TTL_S`` (30 seconds) and used again. It is read again at once w
 (``force``), changes a mark, opens an install or login terminal or tries a tool (``invalidate``). A kept look is the row
 this module made (no output of a command is in it); it is kept in memory only and is for one search path, one tool and one mark.
 
+Codex also carries ``chat_login``: whether the Codex that chats (its own login folder in the state folder, ADR 0005) has a
+login, by the exit code of its own status command (0 logged in, anything else not, no answer unknown); a folder that VBear
+refuses to use is told in a sentence. That folder is looked at, never created here.
+
 No tool's own login folder is opened, listed or read here. The commands run with the same plain environment the
 terminals get, from the root folder, with no input.
 """
@@ -31,9 +35,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from . import ai_tools
+from . import ai_tools, config as cfg
 from .jsonstore import GuardedJsonStore, StoreError
-from .runtime import daemon
+from .runtime import codex_chat_env, daemon
 
 VERSION_TIMEOUT_S = 10.0
 STATUS_TIMEOUT_S = 20.0
@@ -114,12 +118,27 @@ def set_mark(tool_id, done: bool) -> Optional[float]:
     return data[tool_id]["at"] if done else None
 
 
+def _chat_login(binary) -> dict:
+    """{"state": "logged_in" | "not_logged_in" | "unknown" | "folder_problem", "problem": sentence}. A folder that is not
+    there yet is "not_logged_in"; one that VBear would not use (a link, open to others, someone else's settings, too big)
+    is "folder_problem" with the reason, and the status command is not run for it."""
+    base = cfg.state_dir()
+    folder, why = codex_chat_env.home_state(base)
+    if folder == "refused":
+        return {"state": "folder_problem", "problem": why}
+    if folder == "missing":
+        return {"state": "not_logged_in", "problem": ""}
+    return {"state": codex_chat_env.login_state(binary, codex_chat_env.chat_home_path(base)), "problem": ""}
+
+
 def _inspect(tool: ai_tools.Tool, marked_at: Optional[float]) -> dict:
     row = {"id": tool.id, "name": tool.name, "short": tool.short, "blurb": tool.blurb, "hidden": tool.hidden,
            "installed": False, "version": None, "install_problem": "not_found",
            "login_by": "status" if tool.status_command else "mark", "login": "unknown", "can_mark": not tool.status_command,
            "marked_at": None, "state": "not_installed", "ready": False,
            "login_regions": [{"id": rid, "label": label} for rid, label, _line in tool.login_regions]}
+    if tool.id in ai_tools.CHAT_LOGIN:
+        row["chat_login"] = {"state": "unknown", "problem": ""}
     if not tool.status_command:
         row["login"] = "marked" if marked_at is not None else "not_marked"
         row["marked_at"] = marked_at
@@ -132,6 +151,8 @@ def _inspect(tool: ai_tools.Tool, marked_at: Optional[float]) -> dict:
         row["install_problem"] = "version_unreadable"
         return row
     row.update(installed=True, version=version, install_problem="")
+    if tool.id in ai_tools.CHAT_LOGIN:
+        row["chat_login"] = _chat_login(binary)
     if tool.status_command:
         code, _ = _run([binary, *tool.status_command[1:]], STATUS_TIMEOUT_S, False)
         row["login"] = "unknown" if code is None else "logged_in" if code == 0 else "not_logged_in"

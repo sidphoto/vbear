@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, meetings as mt
 from .api_error import ApiError
-from .runtime import agent_sessions, chat_protocol as cp, chat_store as cs, cli_versions
+from .runtime import agent_sessions, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
 EXCERPT = 80                      # characters of the last message shown in the list
@@ -166,12 +166,14 @@ def summarize(chat: dict, events: cs.Events) -> dict:
 
 class ChatService:
     """``runtime``: anything with ``_rpc(op, timeout, **fields)`` (the console's NativeRuntime). ``claude``: a function
-    returning (binary, version, why not); the pinned Claude Code by default. ``verifier``: claude_verify.ChatVerifier.
+    returning (binary, version, why not); the pinned Claude Code by default. ``codex``: a function returning the Codex chat
+    state (codex_chat_env.status of the state folder by default). ``verifier``: claude_verify.ChatVerifier.
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
-    def __init__(self, runtime, *, claude=None, verifier=None, ledger=None, profile=None, profiles=None, base=None):
+    def __init__(self, runtime, *, claude=None, codex=None, verifier=None, ledger=None, profile=None, profiles=None, base=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
+        self.codex = codex or (lambda: codex_chat_env.status(self.base))
         self.verifier = verifier
         self.ledger = ledger
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
@@ -221,10 +223,11 @@ class ChatService:
 
     def support(self) -> dict:
         """What the page says before anyone types: the detected version, whether it has been verified for chats, and
-        why not otherwise. Starts nothing."""
+        why not otherwise. Starts nothing. ``codex`` is the same question for the Codex that chats (P38-2: its own
+        login folder, its pinned and verified version, the administrator policy); the other keys are Claude Code's."""
         binary, version, why = self.claude()
         out = {"detected": version, "verified": [], "state": "unknown", "message": "", "policy": None,
-               "verify": self.verifier.status() if self.verifier else None,
+               "verify": self.verifier.status() if self.verifier else None, "codex": self.codex(),
                "money": "聊天用你自己的 Claude 登入，會用掉你的 Claude 額度；金額是 Claude Code 回報的估值。"}
         out["verified"] = sorted(cli_versions.chat_verified_versions(), key=cli_versions._version_key)
         if version is None:

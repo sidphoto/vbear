@@ -12400,7 +12400,7 @@ const SETUP_STATE = {
 const SETUP_LEDE = "VBear 借用裝在你電腦上的 AI 工具，用你自己的帳號與方案。挑你有方案的準備就好，只要有一個就緒，就能開始用。";
 const SETUP_NONE_READY = "目前還沒有就緒的 AI 工具。先從下面挑一個你有方案的，按「安裝」，裝好再按「登入」。";
 const SETUP_REOPEN_HINT = "安裝好之後如果這裡還是顯示「還沒安裝」，可能要重新打開 VBear，它才找得到剛裝好的程式。";
-const SETUP_ACTION_WORD = { install: "安裝", login: "登入" };
+const SETUP_ACTION_WORD = { install: "安裝", login: "登入", chat_login: "聊天登入" };
 const SETUP_LEAVE_LABEL = "開始使用";
 const SETUP_LEAVE_BLOCKED = "要先有一個 AI 工具就緒，才能開始使用。";
 const SETUP_UPGRADE_NOTICE = "VBear 多了「開始設定」頁：可以在那裡看每個 AI 工具的狀態，也能補裝其他的。你已經有就緒的 AI 工具，不用重新設定。";
@@ -12479,6 +12479,21 @@ function setupToolView(row) {
     buttons.push({ key: "unmark", label: "其實還沒登入", kind: "unmark" });
     note = "這是你按「我登入好了」標記的，VBear 沒辦法自己確認。";
   }
+  // Codex only: the Codex that chats logs in to its own folder (not to the person's own Codex), so it has its own line,
+  // its own button and its own word. The server sends chat_login only for a tool that has one.
+  const cl = r.chat_login && typeof r.chat_login === "object" ? r.chat_login : null;
+  let chatNote = "";
+  if (cl && r.installed === true) {
+    if (cl.state === "logged_in") chatNote = "聊天用的 Codex：已登入。";
+    else if (cl.state === "folder_problem") chatNote = "聊天用的 Codex 暫時不能用：" + String(cl.problem || "資料夾有問題");
+    else {
+      buttons.push({ key: "chat-login", label: "讓聊天用的 Codex 登入", kind: "chat_login" });
+      chatNote = cl.state === "unknown"
+        ? "查不出聊天用的 Codex 有沒有登入。聊天用的 Codex 和你自己的 Codex 是分開登入的，可以按「讓聊天用的 Codex 登入」。"
+        : "要和 Codex 員工聊天，需要另外登入一次聊天用的 Codex（和你自己的 Codex 分開，VBear 看不到你自己的設定）。";
+    }
+  }
+  if (chatNote) note = note ? note + " " + chatNote : chatNote;
   return { state: r.state, label, cls, version: typeof r.version === "string" ? r.version : "", note, buttons };
 }
 
@@ -12492,6 +12507,10 @@ function setupTerminalWords(setup) {
     lines.push(`VBear 已經替你在這個終端機送出 ${name} 的官方安裝指令（就是上面那一行），你不用打任何字。`);
     lines.push("畫面會跑一陣子字，跑完停下來、出現新的一行提示，就是裝好了。");
     lines.push("裝好後回到「開始設定」，按「重新檢查」。如果還是顯示還沒安裝，可能要重新打開 VBear。");
+  } else if (s.action === "chat_login") {
+    lines.push(`VBear 已經替你在這個終端機送出聊天用的 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
+    lines.push("這是 VBear 專用的登入，和你自己的 Codex 分開；接下來瀏覽器會跳出登入頁，在那裡登入你自己的 ChatGPT 帳號。登入的過程不會經過 VBear。");
+    lines.push("登入完回到「開始設定」按「重新檢查」，這一列會顯示聊天用的 Codex 已登入。");
   } else if (s.action === "login") {
     lines.push(`VBear 已經替你在這個終端機送出 ${name} 的登入指令（就是上面那一行），你不用打任何字。`);
     lines.push("接下來瀏覽器會跳出登入頁，在那裡登入你自己的帳號。登入的過程不會經過 VBear。");
@@ -12547,7 +12566,7 @@ function setupSettings() {
 }
 
 function setupToolKey(rows) {
-  return JSON.stringify((rows || []).map((r) => [r.id, r.state, r.version, r.login, r.marked_at, r.install_problem]));
+  return JSON.stringify((rows || []).map((r) => [r.id, r.state, r.version, r.login, r.marked_at, r.install_problem, r.chat_login && r.chat_login.state]));
 }
 
 async function openSetupTerminal(toolId, action, region) {
@@ -12598,10 +12617,10 @@ async function viewSetup() {
   const toolCard = (row) => {
     const v = setupToolView(row);
     const buttons = v.buttons.map((b) => {
-      const btn = el("button", { class: `btn small${b.kind === "install" || b.kind === "login" ? " primary" : ""}`, type: "button",
+      const btn = el("button", { class: `btn small${b.kind === "install" || b.kind === "login" || b.kind === "chat_login" ? " primary" : ""}`, type: "button",
         "data-setup-act": b.key }, b.label);
       btn.addEventListener("click", () => run(btn, async () => {
-        if (b.kind === "install" || b.kind === "login") await openSetupTerminal(row.id, b.kind, b.region);
+        if (b.kind === "install" || b.kind === "login" || b.kind === "chat_login") await openSetupTerminal(row.id, b.kind, b.region);
         else {
           await api.post(`/api/setup/tools/${encodeURIComponent(row.id)}/marker`, { done: b.kind === "mark" });
           await refresh(true);

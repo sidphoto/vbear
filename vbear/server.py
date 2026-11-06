@@ -68,7 +68,7 @@ from . import staffing
 from . import staffing_runner as staffing_runner_mod
 from . import tasks
 from . import runtime as rt
-from .runtime import chat_store, cli_versions, pipeline_store
+from .runtime import chat_store, cli_versions, codex_chat_env, pipeline_store
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import claude as claude_scan
@@ -1496,7 +1496,7 @@ def make_handler(console: Console):
             problem = self._setup_tool_problem(tool)
             if problem:
                 return self._error(400, problem[1])
-            if ai_tools.command_for(tool, action, region) is None or (region is not None and not isinstance(region, str)):
+            if not ai_tools.action_known(tool, action, region) or (region is not None and not isinstance(region, str)):
                 if action in ai_tools.SETUP_ACTIONS and isinstance(tool, str):
                     t = next(x for x in ai_tools.REGISTRY if x.id == tool)
                     if action == "login" and t.login_regions and region is None:
@@ -1516,6 +1516,7 @@ def make_handler(console: Console):
             except rt.native.NativeRuntimeError as exc:
                 return self._error(400, str(exc))
             ai_tool_status.invalidate()            # the person is about to install or log in: the next look reads the tools again
+            codex_chat_env.invalidate()
             console.store.live(force=True)
             return self._json({"ok": True, "session": info, "command": (info.get("setup") or {}).get("command")})
 

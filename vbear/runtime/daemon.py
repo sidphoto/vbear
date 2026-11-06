@@ -1525,7 +1525,16 @@ class Daemon(daemon_stream.StreamOps, daemon_review.ReviewOps, daemon_chat.ChatO
         if self._shutdown_requested:
             return _err(rid, "limit", "背景程序正在關閉，不接受新的 session")
         tool, action, region = req.get("tool"), req.get("action"), req.get("region")
-        line = ai_tools.command_for(tool, action, region)
+        chat_home = None
+        if action == "chat_login" and ai_tools.action_known(tool, action, region):
+            # The folder is made here from the state folder, never taken from the request. An existing folder that is
+            # not ours alone (a link, open to others, someone else's settings in it) is refused, not repaired.
+            from . import codex_chat_env     # here: it imports cli_versions, which imports this module
+            try:
+                chat_home = str(codex_chat_env.ensure_chat_home(self.base))
+            except codex_chat_env.CodexRefused as exc:
+                return _err(rid, "bad_request", str(exc))
+        line = ai_tools.command_for(tool, action, region, chat_home=chat_home)
         if line is None or (region is not None and not isinstance(region, str)):
             return _err(rid, "bad_request", "沒有這個 AI 工具的這個動作")
         cols, rows = req.get("cols", 80), req.get("rows", 24)

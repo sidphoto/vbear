@@ -66,7 +66,10 @@ _CODEX = {"paths": ("etc/codex",), "domain": "com.openai.codex", "home_paths": (
 # docs/evidence/claude-code-2.1.318-chat.md.
 _CLAUDE_2_1_318 = dict(_CLAUDE, home_paths=_CLAUDE["home_paths"] + (".claude/policy-limits.json",))
 CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1_318}
-CODEX_SOURCES = {"0.160.0": _CODEX}
+# 0.163.0 (P38-2, chat mode): the same sources as 0.160.0. The Codex chat (ADR 0005) does not pass --ignore-user-config (app-server
+# has no such flag), so the system and managed layers matter as much as for the review. The list is taken over from 0.160.0 and
+# is to be checked against the installed 0.163.0 on a real Mac when the chat check is run (docs/evidence/codex-0.163.0-chat.md).
+CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX}
 
 
 @dataclass
