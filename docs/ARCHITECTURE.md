@@ -364,7 +364,10 @@ UI ── POST /api/native/agent-launches ──▶ re-check preview, profile an
 
 ## macOS app — `macos/`
 
-`macos/build.sh` builds `VBear.app`. The app is a small Swift program (`macos/VBear/main.swift`) with a WebKit window,
+`macos/build.sh` builds `VBear.app`. Every copy it leaves on disk sits in a folder whose name ends in `.noindex`
+(`build/app.noindex/`, `build/dmg.noindex/` and the finished `dist/app.noindex/VBear.app`), because macOS does not index
+such folders: build copies would otherwise appear in Spotlight and Launchpad beside the real app. The disk image is
+still `dist/VBear-<version>-arm64.dmg` (with a `.sha256`) and holds `VBear.app` and an Applications shortcut. The app is a small Swift program (`macos/VBear/main.swift`) with a WebKit window,
 plus a standalone CPython 3.13 (python-build-standalone, pinned by version and SHA-256) and a copy of `vbear/` and
 `web/`. On launch it reuses a VBear that accepts the token in `server.token`, or starts
 `python3 -B -m vbear serve --port <free port>` with a fresh token in `VBEAR_ACCESS_TOKEN`. The server removes that

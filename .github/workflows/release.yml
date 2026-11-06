@@ -43,7 +43,7 @@ jobs:
         run: ./macos/build.sh
       - name: Smoke-check the bundle
         run: |
-          app=dist/VBear.app
+          app=dist/app.noindex/VBear.app
           codesign --verify --deep --strict "$app"
           "$app/Contents/Resources/python/bin/python3" -B -c "import ctypes, pty, termios, fcntl, selectors, tomllib, http.server, sqlite3, ssl; print('stdlib ok')"
           if otool -L "$app/Contents/Resources/python/bin/python3" | grep -qE "/opt/homebrew|/usr/local"; then

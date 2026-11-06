@@ -1,5 +1,9 @@
 #!/bin/bash
-# Builds dist/VBear.app and dist/VBear-<version>-arm64.dmg (Apple Silicon).
+# Builds dist/app.noindex/VBear.app and dist/VBear-<version>-arm64.dmg (Apple Silicon).
+#
+# Every VBear.app this script leaves on disk sits in a folder whose name ends in ".noindex"
+# (build/app.noindex, build/dmg.noindex, dist/app.noindex). macOS does not index such folders, so these
+# build copies do not turn up in Spotlight or Launchpad next to the real app in /Applications.
 #
 # The app bundles a standalone CPython (python-build-standalone), pinned by
 # version and SHA-256, so users need no Python of their own. The result is
@@ -22,9 +26,12 @@ VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/vbear/__init__.py")"
 [ -n "$VERSION" ] || { echo "version not found in vbear/__init__.py" >&2; exit 1; }
 [ "$(uname -m)" = "arm64" ] || { echo "build on Apple Silicon (arm64)" >&2; exit 1; }
 
-APP="$BUILD/VBear.app"
+APP="$BUILD/app.noindex/VBear.app"
 RES="$APP/Contents/Resources"
 echo "==> VBear $VERSION"
+
+# Copies left by earlier versions of this script, inside this repository only. They were indexed by Spotlight.
+rm -rf "$BUILD/VBear.app" "$BUILD/dmg" "$DIST/VBear.app"
 
 # 1. Python runtime, verified before use.
 mkdir -p "$CACHE"
@@ -98,14 +105,14 @@ codesign --verify --deep --strict "$APP"
 
 # 5. Disk image with an Applications shortcut.
 mkdir -p "$DIST"
-STAGE="$BUILD/dmg"
-rm -rf "$STAGE" "$DIST/VBear.app"
-mkdir -p "$STAGE"
+STAGE="$BUILD/dmg.noindex"
+rm -rf "$STAGE" "$DIST/app.noindex"
+mkdir -p "$STAGE" "$DIST/app.noindex"
 ditto "$APP" "$STAGE/VBear.app"
 ln -s /Applications "$STAGE/Applications"
 DMG="$DIST/VBear-$VERSION-arm64.dmg"
 rm -f "$DMG"
 hdiutil create -quiet -volname "VBear $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-ditto "$APP" "$DIST/VBear.app"
+ditto "$APP" "$DIST/app.noindex/VBear.app"
 shasum -a 256 "$DMG" | tee "$DMG.sha256"
 du -sh "$APP" "$DMG"
