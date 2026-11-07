@@ -151,7 +151,36 @@ def check(text) -> dict:
     fits; the warnings are all that fit (a refused line may carry some too)."""
     if _bad_text(text):
         return {"refuse": "bad_text", "warn": []}
+    return _judge(_fold(text))
+
+
+def _bad_long_text(text, max_chars: int, multiline: bool) -> bool:
+    """``_bad_text`` for a text the caller sizes (a skill, P44-1): up to ``max_chars`` characters, a tab always allowed and a
+    line break (``\n``) when ``multiline``; any other control, format or line-separator character, and the VBear markers, are not."""
+    if not isinstance(text, str) or not text.strip() or text != text.strip() or len(text) > max_chars:
+        return True
+    allowed = ("\t", "\n") if multiline else ("\t",)
+    if any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") and ch not in allowed for ch in text):
+        return True
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
     plain = _fold(text)
+    return bool(_MARKERS.search(plain) or "server.token" in plain.lower() or "x-vbear" in plain.lower())
+
+
+def check_text(text, max_chars: int, *, multiline: bool = True) -> dict:
+    """``check`` for a longer text (P44-1, ADR 0010: the name and the words of a skill): the same rules, the same answer
+    (``{"refuse": code | None, "warn": [...]}``), but the limit is the caller's ``max_chars`` and line breaks are allowed unless
+    ``multiline`` is false. ``check`` is not changed."""
+    if _bad_long_text(text, max_chars, multiline):
+        return {"refuse": "bad_text", "warn": []}
+    return _judge(_fold(text))
+
+
+def _judge(plain: str) -> dict:
+    """The rules, over a text that already passed the shape check and was folded (``_fold``)."""
     refuse = None
     if _PASSWORD.search(plain):
         refuse = "secret_password"
