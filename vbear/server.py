@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -48,6 +49,7 @@ from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
 from . import memory as memory_mod
+from . import shared_folder
 from . import claude_verify
 from . import codex_verify
 from . import config as cfg
@@ -176,9 +178,18 @@ def _log_profile_store_problem(exc: BaseException) -> None:
         pass
 
 
+def _open_in_finder(argv: list) -> None:
+    """Open a folder in Finder: ``argv`` is ``["/usr/bin/open", <path>]`` as vbear/shared_folder.py builds it, run without a shell and
+    with a time limit. Only ``serve()`` hands this to a console (``Console.reveal_command``); a console built any other way (every
+    test's) has none and opens nothing."""
+    subprocess.run(argv, timeout=10, check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class Console:
     def __init__(self, port: int):
         self.port = port
+        # How "open in Finder" is done (P43-1): None here, so that nothing built for a test opens a window; serve() sets it.
+        self.reveal_command = None
         # Every /api/ request must carry this token (cookie or Bearer). It is
         # new for each server start and is shared only through an owner-only
         # file in the state directory. None turns the check off; only test
@@ -710,6 +721,8 @@ def make_handler(console: Console):
                     return self._group_call("get", found.group(1), None, after)
                 if path == "/api/memory":
                     return self._chat_action(self._memory_view)
+                if path == "/api/shared":
+                    return self._chat_action(self._shared_view)
                 if path == "/api/memory/export":
                     return self._chat_action(memory_mod.export)
                 if path == "/api/memory/suggest":
@@ -944,6 +957,10 @@ def make_handler(console: Console):
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
                 if path == "/api/memory/clear":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/shared/cards":
+                    return self._chat_action(lambda b=self._body_strict(): shared_folder.set_card(b, self._memory_cards()))
+                if path == "/api/shared/reveal":
+                    return self._chat_action(lambda b=self._body_strict(): self._shared_reveal(b))
                 if path == "/api/memory/cards":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.set_card(b, self._memory_cards()))
                 if path == "/api/memory/suggest/preview":
@@ -2031,6 +2048,20 @@ def make_handler(console: Console):
             out["cards"] = memory_mod.cards_view(cards, off, on)
             return out
 
+        def _shared_view(self) -> dict:
+            """GET /api/shared: where the shared folder is, how full, what is in it (names only), who may use it (read only)."""
+            try:
+                cards = self._memory_cards()
+            except ApiError:
+                cards = []                     # the page still shows the folder when the cards cannot be read
+            return shared_folder.view(cards)
+
+        def _shared_reveal(self, body) -> dict:
+            """POST /api/shared/reveal: open the shared folder in Finder. No body field: the path is the one VBear computes."""
+            if body != {}:
+                raise ApiError(400, "bad_request", "這個動作不需要內容。")
+            return shared_folder.reveal(getattr(console, "reveal_command", None))
+
         @staticmethod
         def _chat_after(query: str):
             raw = parse_qs(query).get("after", ["0"])[0]
@@ -2762,6 +2793,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     port = int(port or conf.get("port") or cfg.DEFAULT_PORT)
     handed = take_handed_token()  # first: out of the environment before anything else runs
     console = Console(port)
+    console.reveal_command = _open_in_finder
     if handed:
         console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan

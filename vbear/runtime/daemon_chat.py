@@ -13,6 +13,14 @@ StreamOps is.
                                                             chat's; a Codex chat's ``model_id`` may be None (Codex's
                                                             own default); ``origin`` ({dispatch, step}) is only
                                                             written into the record: a message VBear sent for a dispatch;
+                                                            ``shared`` (P43-1, ADR 0009), when present, is exactly ``true``: the
+                                                            employee may use the shared folder. The path is the daemon's own
+                                                            (``<state>/shared``), never the caller's; it is checked (a folder of
+                                                            ours, 0700, no link on the way), a new process also counts how
+                                                            full it is, and the process gets it as a second place the Bash
+                                                            sandbox may write, a second root of VBear's own judgement, and one
+                                                            paragraph of the system prompt. A live idle process whose
+                                                            ``shared`` differs gives way to a new one (``restarting``);
                                                             ``memory`` (P42-1) is the person's memory as a list of
                                                             {kind, text}: checked again here (memory_rules.prepare), built
                                                             into one fixed paragraph and added after the instructions,
@@ -46,7 +54,7 @@ from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
 from .. import admin_policy, config as cfg, meetings as mt
-from . import agent_sessions, chat_engines, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, memory_rules, proctrack
+from . import agent_sessions, chat_engines, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, memory_rules, proctrack, shared_rules
 from . import codex_chat_env, codex_chat_protocol as ccp, codex_chat_session
 from . import stream_session
 
@@ -59,6 +67,8 @@ CLOSE_GRACE = 5.0
 REPLY_BUDGET = 56 << 10        # bytes of records in one chat_events answer (the RPC reply limit is 64 KiB)
 EVENTS_PAGE = 500
 CENT = Decimal("0.01")
+SHARED_TEXT = {"shared_unsafe": "共用資料夾的位置不安全（可能被換成連結或權限被改過），VBear 不會用它",
+               "shared_full": "共用資料夾超過 1 GiB 或 1 萬個檔案。請在 Finder 整理，或把這位員工的共用資料夾關掉。"}
 
 
 def _ok(rid, result) -> dict:
@@ -195,17 +205,43 @@ class ChatOps:
             return _store_err(rid, exc)
         if req.get("engine") not in (None, chat["engine"]):
             return _err(rid, "bad_request", "這個聊天的引擎和送來的不同")
+        shared, refused = self._chat_shared(rid, chat, req)
+        if refused:
+            return refused
         send = getattr(self, chat_engines.by_engine(chat["engine"]).daemon_send)
         # only a message sent for a dispatch has an origin; an engine's method that does not know one is called as it was
-        extra = {**({"origin": origin} if origin is not None else {}), **({"memory": memory} if memory is not None else {})}
+        extra = {**({"origin": origin} if origin is not None else {}), **({"memory": memory} if memory is not None else {}),
+                 **({"shared": shared} if shared is not None else {})}
         return send(rid, chat, text, cli, model_id, instructions, **extra)
+
+    def _chat_shared(self, rid: str, chat: dict, req: dict):
+        """(the shared folder this message's process may use, None) or (None, an error answer). ``shared`` is absent (the folder is off)
+        or exactly ``true``: anything else is a bad request, so that "off" has one spelling. The path is the daemon's own; the folder
+        is made when it is not there and refused (``shared_unsafe``) when it is not right, and so is a paragraph that does not fit.
+        Only a Claude chat has it so far."""
+        if "shared" not in req:
+            return None, None
+        if req["shared"] is not True:
+            return None, _err(rid, "bad_request", "shared 只能是 true（不用共用資料夾就不要送這個欄位）")
+        if chat["engine"] != "claude-chat":
+            return None, _err(rid, "bad_request", "這個聊天的 AI 工具還不能用共用資料夾")
+        home = str(Path.home())
+        if shared_rules.ensure_folder(self.base, home):
+            return None, _err(rid, "shared_unsafe", SHARED_TEXT["shared_unsafe"])
+        path = shared_rules.shared_path(self.base)
+        try:
+            shared_rules.block(path)
+        except ValueError:
+            return None, _err(rid, "shared_unsafe", SHARED_TEXT["shared_unsafe"])
+        return path, None
 
     # ---- a Claude Code chat -------------------------------------------------------------------------------------
 
     def _claude_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                     instructions: str | None, origin: dict | None = None, memory=None) -> dict:
+                     instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
         """A person's message in a Claude Code chat: a turn in the chat's live process (its limits as ``headroom``), or in
-        a new one (``--resume`` once the session exists)."""
+        a new one (``--resume`` once the session exists). ``shared`` is the shared folder the employee may use now (None: off); an
+        idle process that was started with another setting gives way to a new one, the way it does for another model."""
         chat_id = chat["id"]
         if model_id is None:
             return _err(rid, "bad_request", "model_id 格式不符")
@@ -219,6 +255,9 @@ class ChatOps:
         allowance, per_turn, refused = self._chat_allowance(rid, time.time())
         if refused:
             return refused
+        if p is not None and p.shared != shared:
+            p.close_gracefully("共用資料夾的設定改了，要換新的程序", now)
+            return _err(rid, "restarting", "員工要換新的程序（共用資料夾的設定改了），請稍後再送一次")
         if p is not None:
             # A live process may still spend what its --max-budget-usd leaves. Reused only when that is no more
             # than this turn may cost (else the CLI could spend past it), and at least a cent; the turn's cap is
@@ -241,10 +280,11 @@ class ChatOps:
                 return _store_err(rid, exc)
             p.start_turn(n, allowance, line, now)
             return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "reused"})
-        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions, origin, memory)
+        return self._chat_spawn(rid, chat, text, cli, model_id, allowance, per_turn, instructions, origin, memory, shared)
 
     def _chat_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str, allowance: Decimal,
-                    per_turn: Decimal, instructions: str | None = None, origin: dict | None = None, memory=None) -> dict:
+                    per_turn: Decimal, instructions: str | None = None, origin: dict | None = None, memory=None,
+                    shared: str | None = None) -> dict:
         from .daemon import build_env              # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -258,6 +298,9 @@ class ChatOps:
         policy = admin_policy.check_claude(version, home=env.get("HOME", ""))
         if not policy.ok:
             return _err(rid, "admin_policy", policy.reason())
+        if shared is not None and shared_rules.usage(shared)["over"]:      # only when a process begins; names are never looked at
+            return _err(rid, "shared_full", SHARED_TEXT["shared_full"])
+        shared_block = shared_rules.block(shared) if shared is not None else None
         try:
             workdir = cs.ensure_work_dir(self.base, profile_id)
             log = cs.ChatLog(self.base, chat_id)
@@ -271,7 +314,7 @@ class ChatOps:
                 self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
                 model_id=model_id, chat_id=chat_id, profile_id=profile_id,
                 claude_session_id=chat["claude_session_id"], budget_usd=float(allowance), resume=resume,
-                append_prompt=memory_rules.combine(instructions, memory.block if memory else None))
+                append_prompt=memory_rules.combine(instructions, memory.block if memory else None, shared_block), shared=shared)
             line = cp.user_line(text, chat["claude_session_id"])
             agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
             m = agent_sessions.load_validated(self.base, m["launch_id"])
@@ -288,8 +331,9 @@ class ChatOps:
         env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
         launch_id = m["launch_id"]
         self._log_memory(launch_id, memory, instructions)
+        self._log_shared(launch_id, shared)
         if not resume:
-            self._keep_prompt_start(chat_id, instructions, memory)
+            self._keep_prompt_start(chat_id, instructions, memory, shared_block)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
@@ -442,6 +486,7 @@ class ChatOps:
             return _err(rid, getattr(exc, "code", "refused"), str(exc))
         launch_id = m["launch_id"]
         self._log_memory(launch_id, memory, instructions)
+        self._log_shared(launch_id, None)               # a Codex chat does not have the shared folder yet (P43-2)
         if not resume:
             self._keep_prompt_start(chat_id, instructions, memory)
         try:
@@ -492,13 +537,15 @@ class ChatOps:
             return self._chat_abort_spawned(rid, log, n, m, proc, p, leader_start, f"{type(exc).__name__}: {exc}")
         return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "resume" if resume else "new"})
 
-    def _keep_prompt_start(self, chat_id: str, instructions, memory) -> None:
+    def _keep_prompt_start(self, chat_id: str, instructions, memory, shared_block: str | None = None) -> None:
         """A NEW session (not a resumed one) is started with this system prompt, and keeps it: Claude Code 2.1.319 does not apply
         another one to a session it resumes (found on a real machine, P42-6). Keep its fingerprint, so that the page can say when
         the memory or the instructions are not what the chat works with. Not a word of either; a failure is only logged (the
-        page then says nothing about it)."""
+        page then says nothing about it). The shared folder's paragraph is part of the fingerprint only when the folder was on
+        (P43-1), so that with it off the value is the one v0.17.0 kept."""
         try:
-            cs.set_prompt_start(self.base, chat_id, memory_rules.prompt_sha(instructions, memory.block if memory else None),
+            cs.set_prompt_start(self.base, chat_id,
+                                memory_rules.prompt_sha(instructions, memory.block if memory else None, shared_block),
                                 memory is not None)
         except cs.ChatStoreError as exc:
             self._log(f"{chat_id}: the prompt a new session started with was not kept ({exc.code})")
@@ -508,6 +555,10 @@ class ChatOps:
         not sent) and whether the card has instructions of its own. Never a word of either."""
         count = "none" if memory is None else str(memory.count)
         self._log(f"{launch_id}: chat process memory entries={count} instructions={'yes' if instructions is not None else 'no'}")
+
+    def _log_shared(self, launch_id: str, shared) -> None:
+        """One line a real-machine check can read: whether the new process may use the shared folder. Only on or off: no path, no name."""
+        self._log(f"{launch_id}: chat process shared={'on' if shared else 'off'}")
 
     def _chat_precheck(self, rid: str, chat: dict, cli: dict):
         """What a new process of either engine needs first: (the chat's state, binary, version, identity, None), or

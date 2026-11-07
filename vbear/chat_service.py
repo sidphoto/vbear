@@ -16,6 +16,9 @@ decides the things the console decides:
     Codex also the login of its own folder (vbear/runtime/codex_chat_env.py);
   * what of the person's memory goes into the chat (P42-1): the lines of ``memory.json`` (read only, never written here)
     unless the card has memory switched off or the file cannot be read; the daemon checks every line again;
+  * whether the employee may use the shared folder (P43-1, ADR 0009): the person's switch for the card on the shared folder page
+    (vbear/shared_folder.py, read only, off for everyone until the person turns it on), sent as ``shared: true`` and otherwise not at
+    all; the daemon computes the path and checks the folder again;
   * what each code of the daemon means to a person (``CODE_TEXT``): every refusal the daemon can give has a
     sentence here, so the page never shows a bare code.
 
@@ -31,9 +34,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
-from . import memory as memory_store
+from . import memory as memory_store, shared_folder
 from .api_error import ApiError
 from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
+from .runtime import shared_rules
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
 EXCERPT = 80                      # characters of the last message shown in the list
@@ -103,6 +107,10 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "verifying": (409, "聊天模式的驗證正在進行。"),
     "group_member_chat": (409, "這是群組裡的對話，請到群組裡說話。"),
     "memory_refused": (409, "記憶裡有一條現在不能送出，請到記憶頁看看。你的訊息還沒有送出。"),
+    "shared_unsafe": (409, "共用資料夾的位置不安全（可能被換成連結或權限被改過），VBear 不會用它。請到共用資料夾頁看說明。你的訊息還沒有送出。"),
+    "shared_full": (409, "共用資料夾超過 1 GiB 或 1 萬個檔案。請在 Finder 整理，或把這位員工的共用資料夾關掉。你的訊息還沒有送出。"),
+    "shared_unverified": (409, "這個 AI 工具的版本還沒檢查過共用資料夾。按「檢查」（Claude Code 約 US$0.01；Codex 用你的 ChatGPT 方案），"
+                               "或先把這位員工的共用資料夾關掉。你的訊息還沒有送出。"),
 }
 
 # Codes a person reads as "try again in a moment" rather than "something is wrong".
@@ -204,7 +212,7 @@ class ChatService:
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
     def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
-                 ledger=None, profile=None, profiles=None, base=None, memory=None):
+                 ledger=None, profile=None, profiles=None, base=None, memory=None, shared=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
@@ -216,6 +224,7 @@ class ChatService:
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
         self._base = base
         self._memory = memory or memory_store.for_card          # a function: (role card id, engine) -> memory.ChatMemory (reads only)
+        self._shared = shared or shared_folder.for_card         # a function: (role card id, engine) -> bool, the shared folder's switch (reads only)
         self.restart_tries, self.restart_pause = RESTART_TRIES, RESTART_PAUSE
         self.delete_tries, self.delete_pause = DELETE_TRIES, DELETE_PAUSE
 
@@ -445,12 +454,19 @@ class ChatService:
         given = self._memory(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
         taken = given.readable and given.on           # now, not what an earlier process was given: a count, never a line
         changed, had = self._prompt_changed(chat["id"], profile, given)
+        shared = self._shared_view(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
         return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
                          "engine": chat.get("engine")},
                 "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id),
                 "memory": {"on": taken, "count": len(given.entries) if taken else 0, "readable": given.readable,
-                           "changed": changed, "started_with_memory": had}, **out}
+                           "changed": changed, "started_with_memory": had}, "shared": shared, **out}
 
+    def _shared_view(self, profile_id, engine) -> dict:
+        """What the chat page is told about the shared folder: whether this employee's switch is on, whether the folder can be used
+        now and, when it cannot, the code of the reason. Looks at the folder's kind and permissions only, never at what is in it."""
+        on = bool(self._shared(profile_id, engine))
+        code = shared_rules.folder_problem(shared_rules.shared_path(self.base), str(self.base), str(Path.home())) if on else None
+        return {"on": on, "usable": on and code is None, "code": code}
     def _prompt_changed(self, chat_id, profile, given) -> tuple[bool, bool | None]:
         """(whether the memory or the card's instructions now are not what this chat's session was started with, whether it was
         started with the memory paragraph). Claude Code 2.1.319 keeps the system prompt a session was started with, so a chat goes
@@ -460,7 +476,18 @@ class ChatService:
         if start is None or profile is None:
             return False, None
         block = memory_rules.block(given.entries) if given.readable and given.on else None
-        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block), start["memory"]
+        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block, self._shared_block(profile)), start["memory"]
+
+    def _shared_block(self, profile) -> str | None:
+        """The shared folder's paragraph a new session of this card would be started with now, or None (the switch is off, or this
+        AI tool does not have the folder). With None the fingerprint is the one v0.17.0 made."""
+        engine = engine_of(profile)
+        if not self._shared(profile.get("id"), engine):
+            return None
+        try:
+            return shared_rules.block(shared_rules.shared_path(self.base))
+        except ValueError:
+            return None
 
     # ---- what a person does ---------------------------------------------------------------------------------------
 
@@ -515,6 +542,8 @@ class ChatService:
         given = self._memory(chat["profile_id"], engine)
         if given.readable and given.on:               # a card with memory off, or a file that cannot be read: not a word is sent
             fields["memory"] = given.entries
+        if self._shared(chat["profile_id"], engine):          # off (the default), unreadable settings, an AI tool without it: the field is left out
+            fields["shared"] = True
         if origin is not None:
             fields["origin"] = origin
         for attempt in range(self.restart_tries):

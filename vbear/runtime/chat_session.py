@@ -93,6 +93,7 @@ class ChatProcess(ProcessGroupEnd):
         self.model_id = manifest["model_id"]
         self.session_id = manifest.get("claude_session_id")
         self.cwd = manifest["canonical_workspace"]
+        self.shared = manifest.get("shared")      # the shared folder this process may use (P43-1), or None: fixed for its life
         self.budget = mt.money(manifest.get("budget_usd")) or Decimal(0)
         self.proc = proc
         self.pid = self.pgid = proc.pid
@@ -149,7 +150,7 @@ class ChatProcess(ProcessGroupEnd):
     def _new_tracker(self):
         """What reads the CLI's output (a Codex chat reads another protocol: codex_chat_session)."""
         return cp.ChatTracker(cp.constants_for(self.cli_version), session_id=self.session_id, workdir=self.cwd,
-                              init_request_id=self.init_id)
+                              init_request_id=self.init_id, shared=self.shared)
 
     def _read_facts(self, value) -> list:
         return self.tracker.on_event(value)
@@ -245,7 +246,7 @@ class ChatProcess(ProcessGroupEnd):
             # What is allowed is judged again now, as it will be sent: a folder of its path may have become a link
             # out of the work folder while the card waited. The CLI still writes later, so this narrows the race
             # and does not close it.
-            again = cp.judge(card.tool, sent, self.cwd)
+            again = cp.judge(card.tool, sent, self.cwd, self.shared)
             if again.action == "deny":
                 self._refuse_on_answer(card, decision, value, sent, again.reason, now)
                 return "refused", f"卡片出現之後情況變了，VBear 已拒絕：{again.reason}"
@@ -470,7 +471,7 @@ class ChatProcess(ProcessGroupEnd):
         if self.turn is None:
             j = cp.Judgement("deny", "這個請求不在任何一回合裡")
         else:
-            j = cp.judge(tool, inp, self.cwd)
+            j = cp.judge(tool, inp, self.cwd, self.shared)
         card = None
         if j.action == "ask":
             card = Card(card_id="k-" + secrets.token_hex(8), token=secrets.token_urlsafe(24), request_id=rid,
