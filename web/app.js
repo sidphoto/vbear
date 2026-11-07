@@ -12316,6 +12316,7 @@ async function route() {
     else if (top === "chat" && parts[1] === "group") await viewGroup(parts[2] ? decodeURIComponent(parts[2]) : null);
     else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "memory") await viewMemory();
+    else if (top === "my-skills") await viewMySkills();
     else if (top === "shared") await viewShared();
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
@@ -13127,6 +13128,7 @@ function chatLine(rec, opts) {
   if (!rec || typeof rec !== "object" || typeof rec.kind !== "string") return null;
   const codex = !!opts && opts.engine === "codex-chat";
   const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
+  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成技能」 beside it
   const text = (x) => (typeof x === "string" ? x : "");
   switch (rec.kind) {
     case "user_message": {
@@ -13134,7 +13136,7 @@ function chatLine(rec, opts) {
       const note = origin ? chatOriginNote(origin) : null;
       const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq) },
         el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依派工送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)),
-        !origin && remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "you")) : null);
+        !origin && remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "you"), saveSkill ? () => saveSkill(rec, "you") : null) : null);
       if (note) { line.originNote = note; line.origin = origin; }
       return line;
     }
@@ -13142,7 +13144,7 @@ function chatLine(rec, opts) {
       return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq) },
         el("div", { class: "chat-who small muted" }, `員工・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
         rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null,
-        remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "employee")) : null);
+        remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "employee"), saveSkill ? () => saveSkill(rec, "employee") : null) : null);
     case "tool_call":
       return el("li", { class: "chat-note", "data-chat": "tool", "data-seq": String(rec.seq) },
         el("span", { class: "tag" }, cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : `工具 ${text(rec.tool)}`), " ", el("code", null, text(rec.summary)));
@@ -13583,7 +13585,7 @@ async function viewChatDetail(token, id) {
       if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
       lastSeq = r.seq;
       if (r.kind === "plan_usage") planRecord = r;
-      const line = chatLine(r, { engine: engineOf(), remember: rememberLine });
+      const line = chatLine(r, { engine: engineOf(), remember: rememberLine, saveSkill: saveSkillLine });
       if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
     }
   };
@@ -13603,6 +13605,8 @@ async function viewChatDetail(token, id) {
   // P42-3: 「記住」 opens a box with the line; only the person's press of 存 in the box saves (POST /api/memory, with where it came from)
   const rememberLine = (r, speaker) => openMemoryRemember({ text: r.text, speaker, onSaved: refreshMemory,
     source: { how: "chat", chat_id: id, turn: r.turn, speaker } });
+  // P44-1: 「存成技能」 opens a box to name the line; only the person's press of 存 saves (POST /api/my-skills, with where it came from)
+  const saveSkillLine = (r, speaker) => openSkillSave({ text: r.text, speaker, source: { how: speaker === "you" ? "said" : "reply", chat_id: id } });
   // P42-6: 「開新聊天」 in the notice about a changed memory: a new chat with this employee (the same request as the chat list's form)
   const newChatWithEmployee = (profileId) => async () => {
     const r = await api.post("/api/chats", { profile_id: profileId });
@@ -13750,7 +13754,7 @@ async function viewChatDetail(token, id) {
   const groupNote = inGroup ? el("p", { class: "small", "data-chat": "group-note" },
     `這是群組「${typeof inGroup.name === "string" ? inGroup.name : ""}」裡的對話，要說話請到群組裡。 `,
     el("a", { href: `#/chat/group/${encodeURIComponent(inGroup.id)}` }, "回到群組")) : null;
-  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn,
+  const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input),
     el("button", { type: "button", class: "btn small", "data-chat": "delete", on: { click: async () => {
       if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。"
         + (isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
@@ -14111,6 +14115,7 @@ function groupRow(g) {
 function groupItemNode(item, opts) {
   if (!item || typeof item !== "object" || typeof item.kind !== "string") return null;
   const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
+  const saveSkill = opts && typeof opts.saveSkill === "function" ? opts.saveSkill : null;   // P44-1: 「存成技能」 beside it
   const text = (x) => (typeof x === "string" ? x : "");
   const base = { "data-seq": String(item.seq) };
   switch (item.kind) {
@@ -14119,7 +14124,7 @@ function groupItemNode(item, opts) {
       return el("li", { class: "chat-msg chat-me", "data-group": "said", ...base },
         el("div", { class: "chat-who small muted" }, `你對${names ? names.map((n) => "@" + text(n)).join(" ") : "大家"}說・${fmtTime(item.at)}`),
         el("div", { class: "chat-text" }, text(item.text)),
-        remember && Number.isInteger(item.round) && text(item.text) ? memoryRememberRow(() => remember(item, "you")) : null);
+        remember && Number.isInteger(item.round) && text(item.text) ? memoryRememberRow(() => remember(item, "you"), saveSkill ? () => saveSkill(item, "you") : null) : null);
     }
     case "reply":
       return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), ...base },
@@ -14128,7 +14133,7 @@ function groupItemNode(item, opts) {
         el("div", { class: "small muted", "data-group": "cost" }, groupReplyCost(item)),
         item.partial === true ? el("div", { class: "small", "data-group": "partial" }, badge("沒有正常做完", "b-warn")) : null,
         groupSharedChanges(item),
-        remember && Number.isInteger(item.round) && item.unreadable !== true && text(item.text) ? memoryRememberRow(() => remember(item, "employee")) : null);
+        remember && Number.isInteger(item.round) && item.unreadable !== true && text(item.text) ? memoryRememberRow(() => remember(item, "employee"), saveSkill ? () => saveSkill(item, "employee") : null) : null);
     case "skipped": case "paused":
       return el("li", { class: "chat-note small muted", "data-group": item.kind, ...base }, text(item.text));
     case "continued":
@@ -14502,7 +14507,8 @@ async function viewGroup(id) {
       if (!item || typeof item.seq !== "number" || item.seq <= lastSeq) continue;
       lastSeq = item.seq;
       const node = groupItemNode(item, { remember: (it, speaker) => openMemoryRemember({ text: it.text, speaker,
-        source: { how: "group", group_id: id, turn: it.round, speaker } }) });
+        source: { how: "group", group_id: id, turn: it.round, speaker } }),
+        saveSkill: (it, speaker) => openSkillSave({ text: it.text, speaker, source: { how: speaker === "you" ? "said" : "reply", group_id: id } }) });
       if (node) transcript.append(node);
     }
   };
@@ -14558,7 +14564,7 @@ async function viewGroup(id) {
   draw();
   const what = el("p", { class: "small muted group-what", "data-group": "what" }, GROUP_WHAT, " ",
     el("a", { href: "#/meetings" }, "前往會議"), "　", el("a", { href: "#/dispatch" }, "前往派工"));
-  const composer = el("div", { class: "chat-composer", "data-group": "composer" }, toBox, input, costBox, el("div", { class: "row" }, sendBtn), sendNote);
+  const composer = el("div", { class: "chat-composer", "data-group": "composer" }, toBox, input, costBox, el("div", { class: "row" }, sendBtn, skillUseButton(input)), sendNote);
   setKids(main, el("nav", { class: "crumbs", "aria-label": "路徑" }, el("a", { href: "#/chat" }, "聊天"), " / ", crumbName), what, headBox, manageBox, statusBox, transcript, liveBox, ctlBox, composer);
   timer = setInterval(() => { if (!document.hidden) pollOnce(); }, GROUP_POLL_MS);
   activeViewCleanup = () => stopPolling();
@@ -15494,9 +15500,10 @@ function openMemoryRemember(o) {
 }
 
 // The small button beside a spoken line. It only opens the box above.
-function memoryRememberRow(onPress) {
+function memoryRememberRow(onPress, onSkill) {
   return el("div", { class: "chat-remember" },
-    el("button", { type: "button", class: "btn small", "data-memory": "remember", "aria-label": "記住這句話", on: { click: onPress } }, "記住"));
+    el("button", { type: "button", class: "btn small", "data-memory": "remember", "aria-label": "記住這句話", on: { click: onPress } }, "記住"),
+    typeof onSkill === "function" ? el("button", { type: "button", class: "btn small", "data-skill": "save-line", "aria-label": "把這句話存成技能", on: { click: onSkill } }, "存成技能") : null);
 }
 
 // A dialog that wants a word typed before its button works. Resolves true on the button, false on 取消 or Escape.
@@ -15686,6 +15693,237 @@ async function viewMemory() {
     el("p", { class: "small", "data-memory": "split" }, MEMORY_SPLIT),
     memoryAddForm(reload), listBox);
 }
+
+// ---------- my skills (P44-1, ADR 0010) -----------------------------------------------------------------------------------
+// The person's skills (#/my-skills): ways of doing a job that the person saved in VBear, a name (40) and some words (4,000, line breaks
+// kept). Only the person's own press of 「存」 saves, changes or removes one (POST /api/my-skills...); the server refuses what must not
+// be kept (passwords, keys, account names, card numbers) and asks for a second yes for what reads like an order or holds a phone number
+// or an address, and for the words of an employee. 「用技能」 beside the box of a chat or a group only puts a skill's words in the box
+// (after what is already there): nothing is sent, the person reads them, changes them and presses 送出. 「存成技能」 beside a spoken
+// line opens a box with that line to be named and saved. A skill is the person's words: it is not a skill card of an AI tool (#/skills),
+// and the page says so. Every name and text is set as text, never as markup.
+
+const SKILL_MAX_NAME = 40;
+const SKILL_MAX_TEXT = 4000;
+const SKILL_LEAD = "這裡是你存在 VBear 的做法。用的時候會變成你對員工說的話；員工照舊每個指令、每個檔案修改都會問你。";
+const SKILL_NOT_CARDS = "『技能庫』列的是 AI 工具自己的技能檔，是另一回事。";
+const SKILL_SENDS = "存的做法留在這台電腦。用的時候，它會放進輸入框，你看過、可以改，按送出才會送給員工（和你打字一樣）。不要存密碼、帳號、卡號。";
+const SKILL_EMPLOYEE_WORDS = "這段是員工寫的，存成技能後，你用它時會變成你對員工說的話。";
+const SKILL_HOW = { typed: "你寫的", said: "從你說的話存的", reply: "從員工說的話存的", suggested: "整理提議、你確認的" };
+const SKILL_NONE = "還沒有存任何技能。";
+const SKILL_UNREADABLE = "技能的檔案有問題，VBear 先不碰它：現在看不到也存不了技能，聊天照常。";
+
+function skillLen(s) { return Array.from(String(s)).length; }
+function skillCut(raw, max) {
+  const chars = Array.from(String(raw === undefined || raw === null ? "" : raw).trim());
+  return { text: chars.length > max ? chars.slice(0, max).join("").trim() : chars.join(""), cut: chars.length > max };
+}
+function skillPreview(t) {
+  const flat = String(t).replace(/\s+/g, " ").trim();
+  const chars = Array.from(flat);
+  return chars.length > 80 ? chars.slice(0, 80).join("") + "…" : flat;
+}
+
+// The form of one skill: the name, the words, 存, and the answers of the server. A refusal says why and keeps the words; a second yes
+// shows the reason and a box that must be ticked before the same words are sent again (changing the words takes the tick away). With
+// `o.needYes` (an employee's words) the box is there from the start and nothing is sent before it is ticked.
+// `o.submit(body)` does the saving (a promise; an error carries .code and .data); `o.done(result)` runs after it; `o.onCancel` adds 取消.
+function skillForm(o) {
+  const name = el("input", { type: "text", "data-skill": "name", maxlength: String(SKILL_MAX_NAME), "aria-label": "技能的名稱", placeholder: "名稱，例如：市集日報",
+    autocomplete: "off" });
+  name.value = o.name || "";
+  const text = el("textarea", { rows: o.rows || "5", "data-skill": "text", maxlength: String(SKILL_MAX_TEXT), "aria-label": "技能的內容（做法）",
+    placeholder: "寫下做法，一步一步。用的時候會變成你對員工說的話。" });
+  text.value = o.text || "";
+  const count = () => `名稱 ${skillLen(name.value)}／${SKILL_MAX_NAME} 字、內容 ${skillLen(text.value)}／${SKILL_MAX_TEXT} 字`;
+  const counter = el("span", { class: "small muted", "data-skill": "counter" }, count());
+  const problem = el("div", { "data-skill": "problem" });
+  const confirmBox = el("div", { "data-skill": "confirm-box" });
+  let confirmed = null;                                   // the checkbox, once a second yes is asked (or from the start)
+  const askYes = (words) => {
+    confirmed = el("input", { type: "checkbox", "data-skill": "confirm" });
+    setKids(confirmBox, words ? notice("warn", words) : null, el("label", { class: "small" }, confirmed, " 我確定，存起來"));
+  };
+  if (o.needYes) askYes(null);
+  const save = el("button", { type: "button", class: "btn primary", "data-skill": "save" }, o.saveLabel || "存");
+  const cancel = o.onCancel ? el("button", { type: "button", class: "btn", "data-skill": "cancel", on: { click: () => o.onCancel() } }, "取消") : null;
+  const send = async () => {
+    setKids(problem, null);
+    if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這個技能，請先勾「我確定，存起來」。")); return; }
+    save.disabled = true;
+    const body = { name: name.value, text: text.value };
+    if (confirmed) body.confirm_warning = true;
+    try {
+      const result = await o.submit(body);
+      if (o.clearOnSave) { name.value = ""; text.value = ""; counter.textContent = count(); }
+      confirmed = null; setKids(confirmBox, null);
+      await o.done(result);
+    } catch (e) {
+      if (e.code === "confirm_warning") {
+        const words = e.data && Array.isArray(e.data.warn_text) ? e.data.warn_text.join(" ") : e.message;
+        askYes(words);
+      } else {
+        if (!o.needYes) { confirmed = null; setKids(confirmBox, null); }
+        setKids(problem, notice("bad", e.message));        // the words stay so that they can be reworded
+      }
+    }
+    save.disabled = false;
+  };
+  save.addEventListener("click", send);
+  const changed = () => {
+    counter.textContent = count();
+    if (confirmed && !o.needYes) { confirmed = null; setKids(confirmBox, null); }       // changed words are read again
+  };
+  name.addEventListener("input", changed);
+  text.addEventListener("input", changed);
+  return { name, text, save, node: el("div", { class: "skill-form" }, name, text, counter, confirmBox, problem, el("div", { class: "row" }, save, cancel)) };
+}
+
+// One skill of the page. `h`: { onDelete(skill), onSaved() }. 改 swaps the row for the form; 存 sends only what changed and sends
+// nothing when nothing did.
+function skillRow(skill, h) {
+  h = h || {};
+  const row = el("li", { class: "mt-row card", "data-skill": "item", "data-skill-id": skill.id });
+  let editing = false;
+  const changed = skill.updated_at - skill.created_at > 1;
+  const paint = () => {
+    if (!editing) {
+      const src = skill.source && SKILL_HOW[skill.source.how] ? SKILL_HOW[skill.source.how] : SKILL_HOW.typed;
+      setKids(row,
+        el("strong", { "data-skill": "title" }, skill.name),
+        el("span", { class: "memory-text", "data-skill": "preview" }, skillPreview(skill.text)),
+        el("span", { class: "small muted", "data-skill": "meta" }, `${src}・${fmtTime(skill.created_at)}${changed ? `・改於 ${fmtTime(skill.updated_at)}` : ""}`),
+        el("button", { type: "button", class: "btn small", "data-skill": "edit", "aria-label": "改這個技能", on: { click: () => { editing = true; paint(); } } }, "改"),
+        el("button", { type: "button", class: "btn small", "data-skill": "delete", "aria-label": "刪這個技能", on: { click: () => h.onDelete && h.onDelete(skill) } }, "刪"));
+      return;
+    }
+    const form = skillForm({ name: skill.name, text: skill.text, onCancel: () => { editing = false; paint(); },
+      submit: async (body) => {
+        const patch = {};
+        if (body.name !== skill.name) patch.name = body.name;
+        if (body.text !== skill.text) patch.text = body.text;
+        if (!Object.keys(patch).length) return false;                        // nothing changed: nothing is sent
+        if (body.confirm_warning) patch.confirm_warning = true;
+        await api.post(`/api/my-skills/${encodeURIComponent(skill.id)}`, patch);
+        return true;
+      },
+      done: async (sent) => {
+        editing = false;
+        if (sent) { toast("已改"); if (h.onSaved) await h.onSaved(); } else paint();
+      } });
+    setKids(row, form.node);
+  };
+  paint();
+  return row;
+}
+
+async function viewMySkills() {
+  const token = seq;
+  let cur;
+  try { cur = await api.get("/api/my-skills"); }
+  catch (e) { setKids(claim(token), el("h1", null, "技能"), notice("bad", "讀不到技能：" + e.message)); return; }
+  const main = claim(token);
+  const listBox = el("div", { "data-skill": "list" });
+  const addBox = el("div", { "data-skill": "add-box" });
+  const draw = () => {
+    const skills = Array.isArray(cur.skills) ? cur.skills.filter((s) => s && typeof s.id === "string") : [];
+    const limits = cur.limits && typeof cur.limits === "object" ? cur.limits : {};
+    const count = cur.used && Number.isFinite(cur.used.count) ? cur.used.count : skills.length;
+    const form = skillForm({ clearOnSave: true, submit: (body) => api.post("/api/my-skills", body),
+      done: async () => { toast("已存成技能"); await reload(); } });
+    setKids(addBox, cur.readable === false ? null
+      : el("section", { class: "section", "data-skill": "add" }, sectionHead("新增一個技能", "名稱加上一段做法；存了以後，在任何聊天或群組按「用技能」就能放進輸入框。"), form.node));
+    setKids(listBox,
+      cur.readable === false ? notice("bad", cur.problem || SKILL_UNREADABLE) : null,
+      el("p", { class: "small", "data-skill": "used" }, `${count}／${Number.isFinite(limits.max_skills) ? limits.max_skills : 100} 個技能`),
+      skills.length ? el("ul", { class: "mt-list" }, skills.map((s) => skillRow(s, { onDelete: remove, onSaved: reload })))
+        : cur.readable === false ? null : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE));
+  };
+  async function reload() {
+    try { cur = await api.get("/api/my-skills"); } catch (e) { toast("讀不到技能：" + e.message); }
+    if (token === seq) draw();
+  }
+  async function remove(skill) {
+    if (!(await confirmInPage("刪除這個技能", "刪掉之後無法復原。已經用這個技能送出的訊息不會變。", "刪除"))) return;
+    try { await api.post(`/api/my-skills/${encodeURIComponent(skill.id)}/delete`, {}); toast("已刪除"); }
+    catch (e) { toast(e.message); }
+    await reload();
+  }
+  draw();
+  setKids(main, el("h1", null, "技能"),
+    notice("info", SKILL_LEAD),
+    el("p", { class: "small", "data-skill": "not-cards" }, SKILL_NOT_CARDS, " ", el("a", { href: "#/skills" }, "看技能庫")),
+    el("p", { class: "small muted", "data-skill": "sends" }, SKILL_SENDS),
+    addBox, listBox);
+}
+
+// 「存成技能」: the box a chat or group line opens, to be named and saved. `o`: { text, speaker: "you"|"employee", source, onSaved() }.
+// It posts only when the person presses 存 (and, for an employee's words, has ticked the box); `source` tells the server where the words
+// came from. The words are cut to 4,000 characters and the box says so.
+function openSkillSave(o) {
+  const titleId = "skill-save-title";
+  const got = skillCut(o.text, SKILL_MAX_TEXT);
+  let close = () => {};
+  const form = skillForm({ text: got.text, rows: "6", needYes: o.speaker === "employee", onCancel: () => close(),
+    submit: (body) => api.post("/api/my-skills", { ...body, source: o.source }),
+    done: async () => { close(); toast("已存成技能"); if (typeof o.onSaved === "function") await o.onSaved(); } });
+  const head = el("h2", { id: titleId, tabindex: "-1" }, "存成技能");
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "dialog" },
+    el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
+      el("p", { class: "small", "data-skill": "sends" }, SKILL_SENDS),
+      o.speaker === "employee" ? notice("warn", SKILL_EMPLOYEE_WORDS) : null,
+      got.cut ? el("p", { class: "small", "data-skill": "cut-note" }, `這段太長，只帶進前 ${SKILL_MAX_TEXT} 字；請改成你要存的樣子。`) : null,
+      form.node));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  form.name.focus();
+  return close;
+}
+
+// Put a skill's words in a box, after what is in it (a blank line between); nothing is sent. The box keeps its own limit: words that would
+// not fit are not put in, and the person is told. Returns whether they were put in.
+function skillPut(input, words) {
+  const now = String(input.value || "");
+  const joined = now.trim() ? now.replace(/\s+$/, "") + "\n\n" + words : words;
+  const max = Number(input.getAttribute("maxlength"));
+  if (Number.isFinite(max) && max > 0 && skillLen(joined) > max) { toast(`放不下：這個輸入框最多 ${max} 字。請先清掉一些，或到「技能」頁改短一點。`); return false; }
+  input.value = joined;
+  if (typeof input.dispatchEvent === "function" && typeof Event === "function") input.dispatchEvent(new Event("input", { bubbles: true }));
+  if (typeof input.focus === "function") input.focus();
+  return true;
+}
+
+// 「用技能」: a button beside the send button of a chat or a group. It lists the skills (one request for the list, nothing else) and puts
+// the one the person picks into `input`. It sends nothing.
+function skillUseButton(input) {
+  return el("button", { type: "button", class: "btn", "data-skill": "use", "aria-haspopup": "dialog", on: { click: () => openSkillPicker(input) } }, "用技能");
+}
+async function openSkillPicker(input) {
+  let data = null, failed = "";
+  try { data = await api.get("/api/my-skills"); } catch (e) { failed = e.message; }
+  const titleId = "skill-pick-title";
+  let close = () => {};
+  const skills = data && Array.isArray(data.skills) ? data.skills.filter((s) => s && typeof s.id === "string" && typeof s.text === "string") : [];
+  const pick = (skill) => { if (skillPut(input, skill.text)) close(); };
+  const body = failed ? notice("bad", "讀不到技能：" + failed)
+    : data && data.readable === false ? notice("bad", data.problem || SKILL_UNREADABLE)
+    : skills.length ? el("ul", { class: "mt-list", "data-skill": "choices" }, skills.map((s) =>
+      el("li", { class: "mt-row card", "data-skill": "choice", "data-skill-id": s.id },
+        el("strong", null, s.name),
+        el("span", { class: "memory-text small" }, skillPreview(s.text)),
+        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `用技能：${s.name}`, on: { click: () => pick(s) } }, "放進輸入框"))))
+    : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE, " ", el("a", { href: "#/my-skills", on: { click: () => close() } }, "到技能頁新增"));
+  const head = el("h2", { id: titleId, tabindex: "-1" }, "用技能");
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "picker" },
+    el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
+      el("p", { class: "small", "data-skill": "pick-note" }, "選一個技能，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
+      body,
+      el("div", { class: "modal-actions" }, el("button", { type: "button", class: "btn", "data-skill": "pick-cancel", on: { click: () => close() } }, "取消"))));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  head.focus();
+}
+// ---------- end of my skills -------------------------------------------------------------------------------------------------
 
 // ---------- the shared folder (P43-1, P43-4, ADR 0009) ----------------------------------------------------------------
 // The page of the shared folder (#/shared): where it is, what is in it (names, sizes and times: VBear never reads a file), a button
