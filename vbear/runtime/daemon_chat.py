@@ -16,7 +16,10 @@ StreamOps is.
                                                             ``memory`` (P42-1) is the person's memory as a list of
                                                             {kind, text}: checked again here (memory_rules.prepare), built
                                                             into one fixed paragraph and added after the instructions,
-                                                            so that the chat record has no field for it
+                                                            so that the chat record has no field for it; a live process
+                                                            started with other instructions or another memory paragraph
+                                                            is closed and the answer is ``restarting`` (prompt_sha), so the
+                                                            next message is the new process's
   chat_answer  {chat_id, card_id, token, decision, value}   a permission card, once, with its one-use token
   chat_stop    {chat_id}                                    ends the turn (at its cap) and the process
   chat_close   {chat_id}                                    ends an idle process (stdin closed); refused while busy

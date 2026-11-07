@@ -19,6 +19,22 @@ OTHER = [{"kind": "work", "text": "我的店改叫「QA熊肥皂」（虛構）"
 REPO = Path(__file__).resolve().parents[1]
 
 
+class PromptShaTests(unittest.TestCase):
+    def test_the_same_prompt_is_the_same_and_a_different_one_is_not(self):
+        sha = mr.prompt_sha
+        block = mr.block(ENTRIES)
+        self.assertEqual(sha("a", block), sha("a", block))
+        self.assertEqual(sha(None, None), sha("", ""), "no instructions and empty instructions are one prompt")
+        self.assertEqual(len(sha("a", None)), 64)
+        distinct = {sha(None, None), sha("a", None), sha("b", None), sha(None, block), sha("a", block), sha("a", mr.block(OTHER)),
+                    sha(None, mr.block([]))}
+        self.assertEqual(len(distinct), 7)
+        self.assertNotEqual(sha("ab", None), sha("a", "b"), "text cannot move from the card's side to the paragraph's")
+
+    def test_nothing_of_the_words_is_in_it(self):
+        self.assertNotIn("QA熊", mr.prompt_sha("QA熊皂坊", mr.block(ENTRIES)))
+
+
 class ClaudeReuseTests(tcd.ChatCase):
     def send_mem(self, chat_id, memory="absent", instructions=None):
         fields = dict(chat_id=chat_id, text="hello", cli=self.cli(), model_id=MODEL)
