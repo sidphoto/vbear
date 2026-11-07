@@ -1,5 +1,5 @@
-"""P40-2, P41-1: the things the chief of staff, the dispatch code and the group code never do, kept by the structure of the code
-(ADR 0003, 0006, 0007).
+"""P40-2, P41-1, P42-2: the things the chief of staff, the dispatch code, the group code and the memory code never do, kept by the
+structure of the code (ADR 0003, 0006, 0007, 0008).
 
 Never, whatever the person ticked in 「自己動手」:
   1. raise the daily limit (or any limit): no module here writes config.json;
@@ -7,22 +7,26 @@ Never, whatever the person ticked in 「自己動手」:
   3. install a skill from the network: no module here reaches the skill code, and every card it saves has no skill;
   4. (P41-1) answer a question of a chat for the person: no module here calls the chat service's ``answer`` (or the daemon's
      ``chat_answer``, or names the route that does). Only the person's own press of 「允許這一次」 does, through the browser.
+  5. (P42-2) save a word of memory on its own: the functions that write the memory (``add``, ``edit``, ``delete``, ``clear``,
+     ``set_card``, ``export`` of vbear/memory.py, and its store) are called from vbear/server.py's /api/memory routes and from
+     nowhere else, so that only the person's press in the browser (it carries ``X-VBear``) can change what every employee is told.
   (and 「自己動手」 itself is only ever turned on by the person, through POST /api/settings/autonomy)
 
-The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py`` and
-``vbear/autonomy.py`` that exists, so the later modules of the chief of staff, of dispatch and of groups are held to it the day they
-are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
+The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
+``vbear/memory*.py``, ``vbear/runtime/memory*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
+staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
 so the scan cannot go quiet.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
-PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py")
+PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py")
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -67,6 +71,48 @@ CARD_KEYS = {"launch_mode": lambda v: isinstance(v, ast.Constant) and v.value ==
 BANNED_STRINGS = ("/api/native/", "/api/settings/autonomy", "/api/config", "/api/setup/daily-limit", "acceptForSession", "/answer")
 # 4. answering a card of a chat: the chat service's method, the daemon's op, in a call, a reference, an import or a string
 ANSWER_NAMES = {"answer": "answers a question of a chat for the person", "chat_answer": "the daemon's answer to a question of a chat"}
+
+
+# 5. who may change the memory: the module's writers, and the only modules that may name them
+MEMORY_MODULE = "memory"
+MEMORY_WRITERS = {"add", "edit", "delete", "clear", "set_card", "export", "store"}
+MEMORY_WRITER_HOMES = {"server.py", "memory.py"}          # the routes, and the module itself
+
+
+def memory_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every place this source reaches a writer of vbear/memory.py: ``<the memory module>.add(...)`` however the module is named
+    (``from . import memory as m``, ``import vbear.memory``, ``vbear.memory.add``), ``from .memory import add``, a ``getattr`` of
+    one, and a star import of the module."""
+    tree = ast.parse(source, filename=label)
+    found: list[str] = []
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            if mod in ("", "vbear") or (node.level and mod == ""):
+                aliases |= {a.asname or a.name for a in node.names if a.name == MEMORY_MODULE}
+            if mod.split(".")[-1] == MEMORY_MODULE:
+                for a in node.names:
+                    if a.name == "*" or a.name in MEMORY_WRITERS:
+                        found.append(f"{label}:{node.lineno}: imports memory.{a.name}")
+        elif isinstance(node, ast.Import):
+            aliases |= {a.asname for a in node.names if a.name in ("vbear.memory",) and a.asname}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in MEMORY_WRITERS:
+            base = node.value
+            chain = (isinstance(base, ast.Attribute) and base.attr == MEMORY_MODULE and isinstance(base.value, ast.Name)
+                     and base.value.id == "vbear")
+            if (isinstance(base, ast.Name) and base.id in aliases) or chain:
+                found.append(f"{label}:{node.lineno}: reaches memory.{node.attr}")
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"
+              and len(node.args) >= 2 and isinstance(node.args[0], ast.Name) and node.args[0].id in aliases
+              and not (isinstance(node.args[1], ast.Constant) and node.args[1].value not in MEMORY_WRITERS)):
+            found.append(f"{label}:{node.lineno}: getattr of the memory module")
+    return found
+
+
+def package_files() -> list[Path]:
+    return sorted(p for p in PACKAGE.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def scanned_files() -> list[Path]:
@@ -189,6 +235,27 @@ class GuardOverTheRealModules(unittest.TestCase):
         self.assertIn("groups.py", names)
         self.assertIn("group_runner.py", names)
 
+
+    def test_the_memory_modules_are_scanned(self):
+        names = [p.name for p in scanned_files()]
+        self.assertIn("memory.py", names)
+        self.assertIn("memory_rules.py", names, "vbear/runtime/memory_rules.py")
+        for path in PACKAGE.rglob("*.py"):
+            if path.name.startswith("memory") and "__pycache__" not in path.parts:
+                self.assertIn(path.name, names, "a memory module the scan does not cover")
+
+    def test_only_the_memory_routes_of_the_console_write_the_memory(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in MEMORY_WRITER_HOMES:
+                problems += memory_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_every_writer_so_the_rule_is_not_empty(self):
+        calls = {m.group(1) for m in re.finditer(r"memory_mod\.(\w+)", (PACKAGE / "server.py").read_text(encoding="utf-8"))}
+        self.assertEqual(calls & (MEMORY_WRITERS - {"store"}), MEMORY_WRITERS - {"store"})
+        self.assertEqual(memory_writer_uses((PACKAGE / "server.py").read_text(encoding="utf-8"), "server.py") != [], True)
+
     def test_no_module_breaks_a_rule(self):
         problems: list[str] = []
         for path in scanned_files():
@@ -261,6 +328,45 @@ class ScanFiresOnEachRule(unittest.TestCase):
         self.assertCaught("def f(svc):\n    return svc.chat_answer('c-1')\n", "chat_answer")
         self.assertCaught("URL = '/api/chats/c-1/answer'\n", "/answer")
         self.assertCaught("def f(answer):\n    return answer('x')\n", "answer")
+
+
+    def test_writing_the_memory_from_anywhere_but_the_console_routes(self):
+        self.assertWrites("from . import memory\nmemory.add({'kind': 'work', 'text': 'x'})\n", "memory.add")
+        self.assertWrites("from . import memory as m\ndef f(b):\n    return m.edit('m-1', b)\n", "memory.edit")
+        self.assertWrites("from . import memory as memory_store\nmemory_store.delete('m-1')\n", "memory.delete")
+        self.assertWrites("from .. import memory\nmemory.clear({'confirm': 'x'})\n", "memory.clear")
+        self.assertWrites("from vbear import memory\nmemory.set_card({}, [])\n", "memory.set_card")
+        self.assertWrites("from . import memory\nmemory.export()\n", "memory.export")
+        self.assertWrites("from . import memory\nmemory.store.save({})\n", "memory.store")
+        self.assertWrites("import vbear.memory\nvbear.memory.add({})\n", "memory.add")
+        self.assertWrites("from .memory import add\n", "imports memory.add")
+        self.assertWrites("from .memory import add as save_line\n", "imports memory.add")
+        self.assertWrites("from vbear.memory import store\n", "imports memory.store")
+        self.assertWrites("from .memory import *\n", "imports memory.*")
+        self.assertWrites("from . import memory\nf = getattr(memory, 'add')\n", "getattr")
+        self.assertWrites("from . import memory\nf = getattr(memory, name)\n", "getattr")
+
+    def test_reading_the_memory_and_other_modules_with_the_same_names_are_allowed(self):
+        self.assertEqual(memory_writer_uses(
+            "from . import memory as memory_store\n"
+            "def f(profile_id, engine):\n"
+            "    got = memory_store.for_card(profile_id, engine)\n"
+            "    return got, memory_store.view(), memory_store.cards_view([], [], [])\n"), [])
+        self.assertEqual(memory_writer_uses(
+            "from . import groups, memory_suggest\n"
+            "def f(g, x):\n"
+            "    groups.add(x)\n    g.delete(x)\n    memory_suggest.add(x)\n    return x.edit(1), x.clear()\n"), [])
+        self.assertEqual(memory_writer_uses("import memory_mod\nmemory_mod.add({})\n"), [], "only the memory module, however it is named")
+
+    def test_the_memory_modules_obey_the_rules_of_the_others(self):
+        self.assertCaught("from . import config as cfg\ncfg.save({})\n", "config.save")      # the same table, now over memory*.py
+        self.assertCaught("from .runtime import daemon\n", "runtime.daemon")
+
+    def assertWrites(self, source: str, *needles: str):
+        found = " | ".join(memory_writer_uses(source))
+        self.assertTrue(found, f"nothing found in:\n{source}")
+        for needle in needles:
+            self.assertIn(needle, found)
 
     def test_what_is_allowed_is_clean(self):
         clean = (
