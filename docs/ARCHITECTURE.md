@@ -362,6 +362,48 @@ allow card under the employee who asks, which is `chatCardNode` itself, 停止, 
 walks a group over the real HTTP routes with a fake daemon; `tools/qa_p41.py` is the coordinator's real-machine check through the HTTP
 API (it needs `--state`, refuses `~/.vbear` and ports 7788 and 7789).
 
+## Memory — `vbear/memory.py`, `vbear/runtime/memory_rules.py`, `vbear/memory_suggest*.py`, `web/app.js` (`#/memory`)
+
+Memory is a few lines of the person's own (kind `about_you`, `work` or `decision`; at most 50 lines, 200 characters each, 4,000 in all)
+that every employee whose card takes memory along is told when a new chat process starts. ADR 0008 gives the reasons. The files are
+`<state>/memory/memory.json` (`GuardedJsonStore`, 0600, 64 KiB: `{v, entries, cards_off, cards_on}`; an entry has `id` `m-<10 hex>`,
+`kind`, `text`, `created_at`, `updated_at`, `source` and `confirmed_warning`), `log.jsonl` (append-only; the action and the line's id,
+kind and how it came, never a word; 1 MiB, then a new file and one old one kept) and `suggest/ms-<12 hex>.json` (the memory
+suggestions, below). `vbear/memory.py` is the console's side: `view`, `for_card` (what a chat sends: `ChatMemory(readable, on,
+entries)`; `DEFAULT_ON` says a Claude Code card is on and a Codex card is off until `cards_on` says otherwise) and the writers `add`,
+`edit`, `delete`, `clear`, `set_card` and `export`, which only `vbear/server.py`'s `/api/memory*` routes call (`MEMORY_RE`; the
+guard test `tests/test_autonomy_guard.py` fails the build otherwise, and scans `memory*.py` and `runtime/memory*.py` with the rules of
+the chief of staff, dispatch and groups). The routes are `GET|POST /api/memory`, `PATCH|DELETE /api/memory/<id>`, `POST …/clear`
+(`{confirm: "全部刪除"}`), `POST …/cards` (`{profile_id, on, confirm_company?}`) and `GET …/export` (`{filename, text}`); a save is
+`add` with `{kind, text, confirm_warning?, source?}`, where `source` is `{how: "chat"|"group"|"suggested", …}` and the place it names must exist.
+
+`vbear/runtime/memory_rules.py` is pure and shared, because the daemon does not import the console's modules: `check(text)` gives
+`{refuse, warn}` (`bad_text`, `secret_password`, `secret_key`, `secret_account`, `secret_payment`; `looks_like_order`, `personal`),
+`block(entries)` builds the one paragraph (VBear's fixed words, then the lines as a JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
+`END_VBEAR_MEMORY_JSON`), `prepare(memory)` is the daemon's closed-shape check of the `memory` field (every line checked again; one refused
+line refuses the whole message), `combine` puts the paragraph after the card's instructions and `prompt_sha` fingerprints what a
+process was given. `ChatService._send` sends the `memory` field of `chat_send` when the card takes memory along and the file reads (for
+a chat, a dispatch step or a group answer alike); the daemon appends the paragraph to Claude's `--append-system-prompt` (a chat's
+added prompt may be 8,000 characters; a full-mode launch keeps 2,000) and to Codex's `developerInstructions`, and keeps the hash with
+the process: a message whose hash differs closes the idle process and answers `restarting`, which the service's retry turns into a new
+process. The chat record has no new field; the daemon's log has `chat process memory entries=<N|none> instructions=<yes|no>`.
+`GET /api/chats/<id>` carries `memory: {on, count, readable}`.
+
+A memory suggestion (`memory_suggest.py` and `memory_suggest_runner.py`, `MemorySuggestRunner(HeadlessBoard)`, shaped like the chief
+of staff's) is one tool-less Claude Code call on the meetings' engine over the newest messages of a one-to-one chat (`chief.select_messages`):
+`POST /api/memory/suggest/preview {chat_id}` costs nothing and answers a `preview_id`, `POST /api/memory/suggest {preview_id}` starts it,
+`GET /api/memory/suggest[/<id>]` reads, `POST …/<id>/saved {indexes}` and `…/dismiss` record what the person did, `…/cancel` and `DELETE`
+end it. It never saves a line and never imports `vbear.memory`; its cost is counted in the day (`spend_kind`, the ledger's `includes`).
+
+The page (`web/app.js`, from `// ---------- memory`) draws `viewMemory` (the two lines at the top, the usage, the three groups of lines with
+`memoryRow`, `memoryAddForm`, the export through a `Blob`, 全部刪除 with a typed word, 誰帶記憶 with a switch per card and the
+question before a Codex card goes on, and the sentence about terminals), `openMemoryRemember` (the box behind each 「記住」 on the chat and
+group pages), `memoryChatLine` (the one line at the top of a chat page), `memoryCardLine` (the back of a role card) and
+`memorySuggestDesk` (the button, the preview box and the suggestion card with every line unticked). It builds nodes with `el()` and
+`textContent` only. `tests/test_memory_flow.py` walks one memory over the real routes, a real daemon and the fake Claude Code;
+`tools/qa_p42.py` is the coordinator's real-machine check through the HTTP API (it needs `--state` and `--cards`, refuses `~/.vbear` and
+ports 7788 and 7789, and prints no word of memory, of a conversation or of a model's reply).
+
 ## Start-up page — `vbear/ai_tool_status.py`, `web/app.js` (`#/setup`)
 
 `ai_tool_status.report(conf)` answers, for each tool in `ai_tools.setup_ids()` (a hidden one only while its switch is on),
