@@ -17,7 +17,8 @@ permissions:
 jobs:
   macos-app:
     runs-on: macos-latest  # Apple Silicon
-    timeout-minutes: 30
+    # the whole test suite (about 20 minutes, and CI once needed more than 20) runs here before the build
+    timeout-minutes: 50
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
