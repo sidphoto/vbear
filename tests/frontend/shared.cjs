@@ -1,6 +1,6 @@
-// P43-1: the shared folder page (#/shared): where the folder is, what is in it (names, sizes, times), the button that opens it in Finder,
-// one switch per employee (Claude Code only so far; turning one on asks first and says what goes to which company), the refusals in words, and
-// the rules of the code. The real web/app.js on a synthetic DOM and a fetch stub; it is NOT a browser test. The page sends a card id and
+// P43-1 / P43-4: the shared folder page (#/shared): where the folder is, what is in it (names, sizes, times), the button that opens it in Finder,
+// one switch per employee (Claude Code and Codex; turning one on asks first and says what goes to which company, and Codex needs the person's
+// yes to OpenAI), whether the AI tool's version has been checked, the fixed sentences, the refusals in words, and the rules of the code. The real web/app.js on a synthetic DOM and a fetch stub; it is NOT a browser test. The page sends a card id and
 // on/off or nothing at all: never a path. Every name here is made up, and a file name could hold markup.
 // Run: node tests/frontend/shared.cjs   (exit code 0 = pass)
 "use strict";
@@ -68,15 +68,34 @@ test("the page says what the folder is, that every write asks, that VBear reads 
   assert.strictEqual(text(main.find((n) => n.tag === "h1")), "共用資料夾");
   assert(text(main).includes("一位員工寫進去，另一位讀得到"));
   assert(text(main).includes("每位員工預設都是關的"));
-  assert(text(q(main, "notes")).includes("每一次都會先問你"));
-  assert(text(q(main, "notes")).includes("VBear 自己不會讀、不會刪"));
-  assert(text(q(main, "read-note")).includes("內容就會送給它的 AI 公司") && text(q(main, "read-note")).includes("Anthropic"));
   assert(text(q(main, "limit-note")).includes("1 GiB") && text(q(main, "limit-note")).includes("1 萬"));
-  assert(text(q(main, "change-note")).includes("下一則訊息"));
   assert.strictEqual(text(q(main, "where")), "~/.vbear/shared");
 });
 
-test("each employee has a switch only when its tool has the folder; Codex and a tool that cannot chat say why", async () => {
+test("the three fixed lines at the top: files are data and every write asks; files go to the AI company; do not open what you do not know in Finder", async () => {
+  setPage();
+  const main = await open();
+  const data = text(q(main, "rule-data")), company = text(q(main, "rule-company")), finder = text(q(main, "rule-finder"));
+  assert(data.includes("打開的員工可以在這裡放檔案給彼此和你") && data.includes("每一次都會先問你") && data.includes("是資料"));
+  assert(data.includes("不會照著裡面的字做事") && data.includes("VBear 自己不會讀、不會刪"));
+  assert(company.includes("Claude Code 的員工送到 Anthropic") && company.includes("Codex 的員工送到 OpenAI"));
+  assert(company.includes("不要放密碼、帳號、金鑰"));
+  assert(finder.includes("不要在 Finder 裡直接打開你不認得的檔案") && finder.includes(".command") && finder.includes(".app") && finder.includes(".sh"));
+  assert(finder.includes("先當資料看"));
+  const order = [q(main, "rule-data"), q(main, "rule-company"), q(main, "rule-finder")].map((n) => main.findAll(() => true).indexOf(n));
+  assert(order[0] < order[1] && order[1] < order[2], "in this order");
+});
+
+test("the fixed sentences under the switches: a new chat is needed, off takes effect at the next word and deletes nothing, the terminal is left alone", async () => {
+  setPage();
+  const main = await open();
+  assert(text(q(main, "new-chat-note")).includes("剛打開時，要開新的聊天，員工才會知道有共用資料夾"));
+  assert(text(q(main, "off-note")).includes("下一句話") && text(q(main, "off-note")).includes("不會刪掉任何檔案"));
+  assert(text(q(main, "full-note")).includes("終端機（完整模式）") && text(q(main, "full-note")).includes("不另外告訴它有這個資料夾"));
+  assert.strictEqual(q(main, "change-note"), null, "the old long sentence is gone");
+});
+
+test("each employee whose tool chats has a switch (off at first); only a tool that cannot chat says why it has none", async () => {
   setPage();
   const main = await open();
   const cards = qa(main, "card");
@@ -85,10 +104,25 @@ test("each employee has a switch only when its tool has the folder; Codex and a 
   assert.strictEqual(q(cards[1], "card-switch").checked, true);
   assert(text(q(cards[1], "company")).includes("讀到的檔案會送給 Anthropic"));
   assert(text(q(cards[0], "company")).includes("打開後"));
-  assert.strictEqual(q(cards[2], "card-switch"), null, "Codex has none until it is verified");
-  assert(text(q(cards[2], "unsupported")).includes("還不能用共用資料夾"));
+  assert(q(cards[2], "card-switch"), "Codex has a switch");
+  assert.strictEqual(q(cards[2], "card-switch").checked, false);
+  assert(text(q(cards[2], "company")).includes("打開後，讀到的檔案會送給 OpenAI"));
   assert.strictEqual(q(cards[3], "card-switch"), null);
   assert(text(q(cards[3], "unsupported")).includes("還不能聊天"));
+});
+
+test("a card that is on shows its AI tool's check: not checked says so with the way to it; checked says so; unknown says nothing", async () => {
+  const cards = CARDS().map((c) => (c.profile_id === "emp-1" ? { ...c, verified: true } : c.profile_id === "emp-2" ? { ...c, verified: false } : c));
+  setPage({ shared: view({ cards }) });
+  const main = await open();
+  const rows = qa(main, "card");
+  assert(text(q(rows[0], "verified")).includes("已檢查過"));
+  const need = q(rows[1], "verify-need");
+  assert(need && text(need).includes("還要檢查一次") && text(need).includes("送不出訊息"));
+  const go = need.find((n) => n.tag === "a");
+  assert.strictEqual(go.getAttribute("href"), "#/chat");
+  assert.strictEqual(q(rows[2], "verified"), null);
+  assert.strictEqual(q(rows[2], "verify-need"), null);
 });
 
 test("the files are listed by name, size and time; markup in a name stays text; links are said", async () => {
@@ -99,7 +133,7 @@ test("the files are listed by name, size and time; markup in a name stays text; 
   assert.deepStrictEqual(names, ["報價.md", EVIL, "捷徑"]);
   assert.strictEqual(main.findAll((n) => n.tag === "img" || n.tag === "script").length, 0);
   assert(text(q(main, "used")).includes("3／10,000 個項目") && text(q(main, "used")).includes("2.4 KB"));
-  assert(text(q(main, "links")).includes("1 個連結"));
+  assert(text(q(main, "links")).includes("1 個連結") && text(q(main, "links")).includes("員工讀取時會先問你"));
   assert.strictEqual(qa(main, "link").length, 1);
 });
 
@@ -111,6 +145,11 @@ test("an empty folder, a folder not made yet and a full folder are each said", a
   setPage({ shared: view({ used: { bytes: 2000000000, entries: 3, max_bytes: 1073741824, max_entries: 10000, over: true } }) });
   main = await open();
   assert(text(q(main, "used")).includes("已經超過上限"));
+  assert(q(main, "used").hasClass("shared-over"), "red");
+  setPage({ shared: view({ used: { bytes: 5, entries: 1, max_bytes: 1073741824, max_entries: 10000, over: false } }) });
+  main = await open();
+  assert(!q(main, "used").hasClass("shared-over"), "not red when under");
+  assert(!text(q(main, "used")).includes("已經超過上限"));
 });
 
 test("a folder that is not safe is said, with nothing listed and nothing offered to fix it", async () => {
@@ -163,6 +202,57 @@ test("after yes the card id and on are posted, and nothing else: never a path", 
   assert.strictEqual(q(qa(main, "card")[0], "card-switch").checked, true);
 });
 
+test("switching Codex on asks with the words about OpenAI, and after yes posts confirm_company; Claude's post has none", async () => {
+  setPage();
+  const main = await open();
+  const sw = q(qa(main, "card")[2], "card-switch");
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  const dlg = dialog();
+  assert(dlg);
+  assert(text(dlg).includes("會計師") && text(dlg).includes("Codex") && text(dlg).includes("送到 OpenAI") && text(dlg).includes("確定嗎"));
+  assert.strictEqual(posts("/api/shared/cards").length, 0);
+  page.shared = view({ cards: CARDS().map((c) => (c.profile_id === "emp-4" ? { ...c, on: true } : c)) });
+  dlg.find((n) => n.tag === "button" && n.hasClass("primary")).click();
+  await settle(80);
+  assert.deepStrictEqual(posts("/api/shared/cards").map((c) => c.body), [{ profile_id: "emp-4", on: true, confirm_company: true }]);
+  assert.strictEqual(q(qa(main, "card")[2], "card-switch").checked, true);
+});
+
+test("switching Codex on and saying no posts nothing and the switch goes back", async () => {
+  setPage();
+  const main = await open();
+  const sw = q(qa(main, "card")[2], "card-switch");
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  dialog().find((n) => n.tag === "button" && text(n) === "取消").click();
+  await settle(80);
+  assert.strictEqual(posts("/api/shared/cards").length, 0);
+  assert.strictEqual(q(qa(main, "card")[2], "card-switch").checked, false);
+});
+
+test("a server that has not opened Codex yet answers 400 and the page says so and puts the switch back", async () => {
+  setPage({ cardsStatus: 400, cardsBody: { error: "這位員工的 AI 工具還不能用共用資料夾。", code: "card_tool_unsupported" } });
+  const main = await open();
+  const sw = q(qa(main, "card")[2], "card-switch");
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
+  await settle(80);
+  assert(text(h.dom().toastEl).includes("還不能用共用資料夾"));
+  assert.strictEqual(q(qa(main, "card")[2], "card-switch").checked, false);
+});
+
+test("switching Codex off posts at once, with no confirm_company", async () => {
+  setPage({ shared: view({ cards: CARDS().map((c) => (c.profile_id === "emp-4" ? { ...c, on: true } : c)) }) });
+  const main = await open();
+  const sw = q(qa(main, "card")[2], "card-switch");
+  sw.checked = false; sw.dispatch("change");
+  await settle(80);
+  assert.strictEqual(dialog(), null);
+  assert.deepStrictEqual(posts("/api/shared/cards").map((c) => c.body), [{ profile_id: "emp-4", on: false }]);
+});
+
 test("switching off posts at once without a question", async () => {
   setPage();
   const main = await open();
@@ -197,6 +287,16 @@ test("the Finder button posts an empty body, and a failure is said", async () =>
   q(main, "reveal").click();
   await settle(80);
   assert(text(h.dom().toastEl).includes("沒能用 Finder 打開"));
+});
+
+test("the only button is 在 Finder 打開: nothing deletes, previews, cleans or opens a file", async () => {
+  setPage({ shared: view({ files: [file("報價.md", 1500), file(EVIL, 1000)] }) });
+  const main = await open();
+  const labels = main.findAll((n) => n.tag === "button").map(text);
+  assert.deepStrictEqual(labels, ["在 Finder 打開"]);
+  assert.strictEqual(main.findAll((n) => n.tag === "a" && /^(file|blob|\/api)/.test(n.getAttribute("href") || "")).length, 0, "a file name is no link");
+  const rowsHtml = text(main);
+  assert(!/刪除|預覽|清空/.test(rowsHtml.replace("不會刪掉任何檔案", "").replace("不會刪", "").replace("不會自己修或刪", "").replace("請你在 Finder 刪", "")));
 });
 
 test("the nav has the page after the memory, the route is known, and the code keeps its rules", () => {
