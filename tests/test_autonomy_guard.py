@@ -129,7 +129,8 @@ def memory_writer_uses(source: str, label: str = "<source>") -> list[str]:
 
 # 7. who may switch the shared folder on for an employee: the module's writers, and the only modules that may name them
 SHARED_MODULE = "shared_folder"
-SHARED_WRITERS = {"set_card", "store"}
+# (P43-3) the person's ticks on the new-group dialog and on a dispatch's proposal card go through these; they all end in ``set_card``
+SHARED_WRITERS = {"set_card", "store", "open_cards", "close_cards", "mark_dispatch", "open_for_dispatch"}
 SHARED_WRITER_HOMES = {"server.py", "shared_folder.py"}          # the routes, and the module itself
 
 
@@ -426,6 +427,37 @@ class ScanFiresOnEachRule(unittest.TestCase):
         self.assertSwitches("from .shared_folder import *\n", "imports shared_folder.*")
         self.assertSwitches("from . import shared_folder\nf = getattr(shared_folder, 'set_card')\n", "getattr")
         self.assertSwitches("from . import shared_folder\nf = getattr(shared_folder, name)\n", "getattr")
+
+    def test_the_ticks_of_the_group_and_dispatch_dialogs_are_the_consoles_routes_alone(self):
+        for name in ("open_cards", "close_cards", "mark_dispatch", "open_for_dispatch"):
+            self.assertSwitches(f"from . import shared_folder\nshared_folder.{name}([], [], 'group')\n", f"shared_folder.{name}")
+            self.assertSwitches(f"from .shared_folder import {name}\n", f"imports shared_folder.{name}")
+            self.assertSwitches(f"from . import shared_folder as sf\ndef f(x):\n    return sf.{name}(x)\n", f"shared_folder.{name}")
+
+    def test_the_console_calls_each_tick_function_and_the_modules_that_run_groups_and_dispatches_do_not_name_them(self):
+        server_source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        for name in ("open_cards", "close_cards", "mark_dispatch", "open_for_dispatch"):
+            self.assertIn(f"shared_folder.{name}(", server_source)
+            for module in ("groups.py", "group_runner.py", "dispatch.py", "dispatch_runner.py", "chief.py", "chief_runner.py",
+                           "shared_changes.py", "chat_service.py"):
+                self.assertNotIn(name, (PACKAGE / module).read_text(encoding="utf-8"), f"{module} names {name}")
+
+    def test_an_employee_a_dispatch_makes_is_opened_only_by_the_consoles_hook(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        hook = source[source.index("def _on_new_employee"):]
+        hook = hook[:hook.index("\n    def ", 10)]
+        self.assertIn("shared_folder.open_for_dispatch(", hook)
+        self.assertEqual(source.count("shared_folder.open_for_dispatch("), 1, "nowhere else")
+        # the dispatcher is handed the hook and calls it with two ids; it knows nothing of the folder
+        dispatch_source = (PACKAGE / "dispatch.py").read_text(encoding="utf-8")
+        self.assertIn("self.on_new_employee(", dispatch_source)
+        self.assertNotIn("shared_folder", dispatch_source)
+
+    def test_the_modules_that_hand_file_names_on_only_read_the_folders_names(self):
+        for module in ("shared_changes.py", "runtime/shared_rules.py"):
+            tree = ast.parse((PACKAGE / module).read_text(encoding="utf-8"))
+            names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            self.assertFalse(names & {"set_card", "answer", "chat_answer", "save_profile", "set_conf", "write_private", "Popen", "system"}, module)
 
     def test_reading_the_switches_and_other_modules_with_the_same_names_are_allowed(self):
         self.assertEqual(shared_writer_uses(

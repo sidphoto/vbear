@@ -148,10 +148,12 @@ def _model_shown(profile: dict, position) -> str:
     return own[:200] if isinstance(own, str) else ""
 
 
-def candidates(profiles, usable_tools) -> tuple[list[dict], int]:
+def candidates(profiles, usable_tools, shared_on=None) -> tuple[list[dict], int]:
     """(cards, omitted): the enabled cards that are not the CEO's position and whose AI tool is one of ``usable_tools``
     (the tools whose chat can run now), by name and id, the first MAX_CARDS under the codes C1.., and how many more there
-    were. A card is {alias, profile_id, revision, name, position, tool, model}."""
+    were. A card is {alias, profile_id, revision, name, position, tool, model}, and, when ``shared_on`` is given (the console passes the
+    shared folder's read-only question, ``(role card id, engine) -> bool``), ``shared``: whether the person opened the shared folder
+    for this employee. Nothing here can open it."""
     out = []
     for p in profiles:
         if not isinstance(p, dict) or not isinstance(p.get("id"), str) or p.get("enabled") is False:
@@ -161,22 +163,31 @@ def candidates(profiles, usable_tools) -> tuple[list[dict], int]:
         position = ap.position_of(p)
         if position == "planner" or tool not in usable_tools or chat_engines.by_tool(tool) is None:
             continue
-        out.append({"profile_id": p["id"], "revision": ap.profile_digest(p), "name": str(p.get("name") or "")[:NAME_MAX],
-                    "position": position or "", "tool": tool, "model": _model_shown(p, position)})
+        card = {"profile_id": p["id"], "revision": ap.profile_digest(p), "name": str(p.get("name") or "")[:NAME_MAX],
+                "position": position or "", "tool": tool, "model": _model_shown(p, position)}
+        if shared_on is not None:
+            card["shared"] = bool(shared_on(p["id"], chat_engines.by_tool(tool).engine))
+        out.append(card)
     out.sort(key=lambda c: (c["name"].casefold(), c["profile_id"]))
     omitted = max(len(out) - MAX_CARDS, 0)
     out = out[:MAX_CARDS]
     return [{"alias": f"C{i + 1}", **c} for i, c in enumerate(out)], omitted
 
 
+def _any_shared(cards: list[dict]) -> bool:
+    return any(c.get("shared") is True for c in cards)
+
+
 def model_view(cards: list[dict]) -> list[dict]:
-    """The list as the model is given it: the code, the name, the position, the tool and the model; never an id."""
-    return [{k: c[k] for k in ("alias", "name", "position", "tool", "model")} for c in cards]
+    """The list as the model is given it: the code, the name, the position, the tool and the model; never an id. When the person has
+    opened the shared folder for any of them, each one also says ``shared`` (true or false); with none open the list is what it was."""
+    keys = ("alias", "name", "position", "tool", "model") + (("shared",) if _any_shared(cards) else ())
+    return [{k: c[k] for k in keys} for c in cards]
 
 
 def inputs_sha(cards: list[dict], omitted: int, tools) -> str:
-    raw = json.dumps({"cards": [[c["alias"], c["profile_id"], c["revision"]] for c in cards], "omitted": omitted,
-                      "tools": list(tools)}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    raw = json.dumps({"cards": [[c["alias"], c["profile_id"], c["revision"]] + ([True] if c.get("shared") is True else []) for c in cards],
+                      "omitted": omitted, "tools": list(tools)}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -367,6 +378,11 @@ CHIEF_RULES = (
     "步驟照順序做，下一步的員工會收到上一步員工的回覆。\n"
     "不要叫員工安裝技能、改 VBear 的設定或上限、發布上線、花錢或刪除資料；這些要寫進 questions 交給用的人。"
     "不清楚用的人要什麼時，steps 留空陣列，把要問的寫進 questions。")
+# Added to the fixed rules only when the person has opened the shared folder for at least one employee (P43-3, ADR 0009): with none open the
+# prompt is what it was. It changes nothing in the proposal's format; the shared folder is the person's to open, never the proposal's.
+SHARED_RULES = (
+    "名單上 shared 為 true 的員工，用的人打開了共用資料夾：只有這些員工之間可以用共用資料夾交接檔案。"
+    "要交接檔案時，在那一步的字裡寫明檔名；不要叫員工打開、設定或要求共用資料夾，那是用的人決定的。")
 ROLE_LABELS = {"user": "用的人", "ceo": "CEO"}
 
 
@@ -381,7 +397,8 @@ def _text_of(messages, omitted, cards, omitted_cards, tools, note) -> str:
         "新員工可以用的 AI 工具": list(tools)}
     raw = json.dumps(mt._clean_data({k: v for k, v in data.items() if v is not None}), ensure_ascii=False, sort_keys=True)
     payload = json.dumps(raw, ensure_ascii=False)  # string escaping keeps the data from writing a delimiter line
-    parts = [COMMON_RULES, CHIEF_RULES, "BEGIN_UNTRUSTED_JSON_STRING\n" + payload + "\nEND_UNTRUSTED_JSON_STRING"]
+    parts = [COMMON_RULES, CHIEF_RULES, *([SHARED_RULES] if _any_shared(cards) else []),
+             "BEGIN_UNTRUSTED_JSON_STRING\n" + payload + "\nEND_UNTRUSTED_JSON_STRING"]
     return "\n\n".join(parts) + "\n"
 
 

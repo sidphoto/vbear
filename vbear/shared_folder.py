@@ -265,6 +265,139 @@ def set_card(body, cards, how: str = "page", now: float | None = None) -> dict:
     return {"profile_id": pid, "on": on}
 
 
+# ---- the person's ticks on the group and dispatch dialogs (P43-3, ADR 0009 point 2) ----------------------------------------------
+#
+# "Let these employees use the shared folder" on the new-group dialog and on a dispatch's proposal card is a tick of the person's, sent
+# with the request that makes the group or confirms the dispatch (the browser's routes of vbear/server.py, which carry ``X-VBear``).
+# Everything below is called from those routes and nowhere else (tests/test_autonomy_guard.py): a group, a dispatch, the chief of staff
+# or the chat service cannot reach it. Each tick opens the switch of ``set_card`` for the employees and logs it with ``how`` group or
+# dispatch. An employee a dispatch makes is opened only while the person's confirmation of that dispatch is being carried out
+# (``pending/<d-…>.json`` says "the person ticked"), and the automatic dispatch (自己動手 item 2) never writes that file.
+
+DISPATCH_ID = re.compile(r"^d-[0-9a-f]{12}\Z")
+PENDING = "pending"
+
+
+def plan_cards(profile_ids, cards, confirm_company=False, new_engines=()) -> list:
+    """Check, before anything is made or switched, that the shared folder can be opened for these employees; the ids of those who are
+    off now (the ones to switch on), in order. ``new_engines``: the engines of employees that do not exist yet (a dispatch is about to
+    make them): they are checked the same way and are not in the answer. ApiError: 404 for a card that is not there, 400 for one whose
+    AI tool cannot chat (``bad_request``) or cannot use the folder yet (``card_tool_unsupported``), 409 ``shared_confirm`` (with
+    ``warn: ["send_to_openai"]``) when a Codex employee would be switched on and ``confirm_company`` is not true, 409 ``shared_unsafe``
+    for a folder that is not right. Reads only."""
+    if not isinstance(confirm_company, bool):
+        raise ApiError(400, "bad_request", "confirm_company 必須是 true 或 false。")
+    readable, on = cards_on()
+    if not readable:
+        raise _unreadable(None)
+    by = {c.get("id"): c for c in cards if isinstance(c, dict)}
+    todo, engines = [], []
+    for pid in profile_ids:
+        if not (isinstance(pid, str) and PROFILE_ID_OK.match(pid)):
+            raise ApiError(400, "bad_request", "員工的識別碼不符格式。")
+        card = by.get(pid)
+        if card is None:
+            raise ApiError(404, "not_found", "找不到這位員工。")
+        engines.append(card.get("engine"))
+        if pid not in on and card.get("engine") in SUPPORTED_ENGINES and pid not in todo:
+            todo.append(pid)
+    for engine in engines + list(new_engines):
+        if engine not in COMPANY:
+            raise ApiError(400, "bad_request", "這位員工的 AI 工具還不能聊天，用不到共用資料夾。")
+        if engine not in SUPPORTED_ENGINES:
+            raise ApiError(400, "card_tool_unsupported", "這位員工的 AI 工具還不能用共用資料夾。")
+    opening = [by[pid].get("engine") for pid in todo] + list(new_engines)
+    if any(COMPANY.get(e) == "OpenAI" for e in opening) and not confirm_company:
+        raise ApiError(409, "shared_confirm", "Codex 員工讀到的共用資料夾檔案會送到 OpenAI，要先確認。", warn=["send_to_openai"])
+    if (todo or new_engines) and sr.folder_problem(folder(), str(cfg.state_dir()), _home()):
+        raise ApiError(409, "shared_unsafe", UNSAFE_TEXT)
+    return todo
+
+
+def open_cards(profile_ids, cards, how: str, confirm_company: bool = False) -> tuple:
+    """Switch the folder on for each id, one ``set_card`` each (logged with ``how``): ``(the ids switched on, the ApiError that
+    stopped it or None)``. The ones before a failure stay on, and the answer says which."""
+    opened = []
+    for pid in profile_ids:
+        try:
+            set_card({"profile_id": pid, "on": True, "confirm_company": bool(confirm_company)}, cards, how)
+        except ApiError as exc:
+            return opened, exc
+        opened.append(pid)
+    return opened, None
+
+
+def close_cards(profile_ids, cards, how: str) -> None:
+    """Switch the folder off again for ids ``open_cards`` just switched on (a confirmation that did not go through takes its tick back).
+    Nothing is deleted; an id that cannot be switched off is left."""
+    for pid in profile_ids:
+        try:
+            set_card({"profile_id": pid, "on": False}, cards, how)
+        except ApiError:
+            continue
+
+
+def _pending(dispatch_id: str) -> GuardedJsonStore:
+    if not isinstance(dispatch_id, str) or not DISPATCH_ID.match(dispatch_id):
+        raise ApiError(400, "bad_request", "派工的識別碼不符格式。")
+
+    def problem(key, value):
+        if key == "v":
+            return None if value == SCHEMA and isinstance(value, int) and not isinstance(value, bool) else "v"
+        if key in ("on", "confirm_company"):
+            return None if isinstance(value, bool) else key
+        return "key"
+    return GuardedJsonStore(f"{DIR}/{PENDING}/{dispatch_id}.json", "共用資料夾的派工紀錄", problem)
+
+
+def mark_dispatch(dispatch_id: str, on: bool, confirm_company: bool = False) -> None:
+    """Write down that the person ticked "open the shared folder for the employees of this dispatch" (``on``) or took the tick back,
+    in ``shared-meta/pending/<d-…>.json``. Called by the confirmation's route before it confirms, and again when it is over."""
+    store = _pending(dispatch_id)
+    try:
+        _meta(True)
+        os.makedirs(cfg.state_dir() / DIR / PENDING, mode=cfg.STATE_DIR_MODE, exist_ok=True)
+        with store.locked():
+            store.load()
+            store.save({"v": SCHEMA, "on": bool(on), "confirm_company": bool(confirm_company)})
+    except (StoreError, OSError) as exc:
+        raise _unreadable(exc) from None
+
+
+def dispatch_marked(dispatch_id: str) -> dict | None:
+    """What the person ticked for this dispatch ({on, confirm_company}), or None (never ticked, or a record that cannot be read)."""
+    try:
+        data = _pending(dispatch_id).load()
+    except (StoreError, OSError, ApiError):
+        return None
+    if data.get("v") != SCHEMA or "on" not in data:
+        return None
+    return {"on": data["on"] is True, "confirm_company": data.get("confirm_company") is True}
+
+
+def open_for_dispatch(dispatch_id: str, profile_id: str, cards) -> bool:
+    """An employee the dispatch just made: open the folder for him only if the person ticked it for this dispatch. True when it was
+    switched on. (The dispatcher calls the console's hook after each employee it makes; the hook calls this.)"""
+    mark = dispatch_marked(dispatch_id)
+    if mark is None or not mark["on"]:
+        return False
+    set_card({"profile_id": profile_id, "on": True, "confirm_company": mark["confirm_company"]}, cards, "dispatch")
+    return True
+
+
+def employees_view(people, cards) -> list:
+    """For a proposal card: ``[{who, name, on, company, usable}]`` for the employees that exist (``people``: ``[(who, name, profile_id)]``).
+    ``on``: the switch is on now; ``usable``: the employee's AI tool can use the folder; ``company``: who reads what the employee reads."""
+    readable, on = cards_on()
+    by = {c.get("id"): c for c in cards if isinstance(c, dict)}
+    out = []
+    for who, name, pid in people:
+        engine = (by.get(pid) or {}).get("engine")
+        out.append({"who": who, "name": name, "on": engine in SUPPORTED_ENGINES and readable and pid in on, "company": COMPANY.get(engine),
+                    "usable": engine in SUPPORTED_ENGINES})
+    return out
+
+
 def reveal(opener, now: float | None = None) -> dict:
     """Open the shared folder in Finder, by calling ``opener(["/usr/bin/open", <path>])`` (the console passes the function in; this
     module starts no program). 503 ``reveal_unavailable`` without one, 400 ``not_mac`` off a Mac, 409 ``shared_unsafe`` for a folder that
