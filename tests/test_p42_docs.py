@@ -33,9 +33,9 @@ class MemoryDocsTests(unittest.TestCase):
         cls.en = read("README.md")
         cls.zh = read("README.zh-TW.md")
         cls.model = read("docs", "SECURITY-MODEL.md")
-        cls.section = cls.model[cls.model.index("## Memory (v0.17)"):cls.model.index("## The start-up page (v0.12)")]
+        cls.section = cls.model[cls.model.index("## Memory (v0.17)"):cls.model.index("## Shared folder (v0.17.1)")]
         cls.arch = read("docs", "ARCHITECTURE.md")
-        cls.arch_section = cls.arch[cls.arch.index("## Memory — "):cls.arch.index("## Start-up page")]
+        cls.arch_section = cls.arch[cls.arch.index("## Memory — "):cls.arch.index("## Shared folder — ")]
         cls.ref = read("docs", "REFERENCE.zh-TW.md")
         cls.adr_raw = (ROOT / "docs" / "adr" / "0008-memory.md").read_text(encoding="utf-8")
         cls.adr = flat(cls.adr_raw)
@@ -43,7 +43,8 @@ class MemoryDocsTests(unittest.TestCase):
         cls.app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
 
     def test_the_release_heading_is_first_and_not_unreleased(self):
-        self.assertTrue(self.raw.startswith("# Changelog\n\n## v0.17.0 — memory\n"), self.raw[:60])
+        self.assertIn("\n## v0.17.0 — memory\n", self.raw)                      # (v0.17.1 is the first now)
+        self.assertLess(self.raw.index("## v0.17.1 — the shared folder"), self.raw.index("## v0.17.0 — memory"))
         self.assertNotIn("Unreleased", self.changelog)
         self.assertNotIn("not released yet", self.changelog)
 

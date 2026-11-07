@@ -1589,7 +1589,7 @@ is new is **an employee's words going to another employee** (and, with Claude Co
   spent) and every answer of an employee is one turn of that chat, sent with `ChatService.send_for_group`, which is the same
   send as a person's in a chat (the same checks, no `origin` marker and no new field in the chat record). So everything of
   "Chats with a role card" and "Chats with a Codex role card" holds in a group: the card's own work folder (an employee does not
-  see another's files, only what was said in the group), safe mode, **every command and every file change asked of the person**,
+  see another's files, only what was said in the group; with the shared folder switched on, the next employee is also given the names of files that appeared meanwhile, as data, see "Shared folder (v0.17.1)"), safe mode, **every command and every file change asked of the person**,
   the per-turn limit and the daily limit (`min(per-turn limit, what is left of the day)` for each answer, counted in the day by
   the chat), the chat's masking and the Codex warning that an allowed command may run outside the sandbox. The group has no limit,
   no mode and no card of its own. `send_for_group` refuses a chat that no group opened; the browser's `POST /api/chats/<id>/messages`
@@ -1782,6 +1782,106 @@ that persists and is sent to a company's servers every time a process starts**, 
    the chat check first.
 7. **Not run on a real machine:** how a Codex employee behaves with memory (only the fake app-server was used), and whether Codex's
    `thread/resume` applies new developer instructions (待真機驗證). A model answered from the memory in the first real run of Claude Code, once.
+
+## Shared folder (v0.17.1)
+
+`<state>/shared` (usually `~/.vbear/shared`) is one folder that every employee the person has switched on may read and write, so
+that one employee can hand a file to another or to the person. ADR 0009 gives the reasons. The launch side (the sandbox's second
+writable root, VBear's own judgement of a path, the paragraph the employee is told, the size check, the Finder button, the version
+check) is written under "Chats with a role card" (the bullet "The shared folder"), "Chats with a Codex role card" and "The chat
+check"; this section is the whole picture: who can switch it on, what is handed on, what never changes, what was and was not seen on a
+real machine, and the residual risks. Nothing about it removes a question: every Bash command and every Edit, Write or Codex file
+change in it is still a card.
+
+- **Only the person switches it on, and only in the browser.** Every employee is off until the person switches it on, in one of three
+  places, each a browser request with the access token and `X-VBear`: the 共用資料夾 page (`POST /api/shared/cards`), the tick 「讓這幾位都能用共用資料夾」 on
+  the new-group dialog (`POST /api/groups` with `shared_folder: true`, default off) and the tick 「替這次派工的員工打開共用資料夾」 on a
+  dispatch's proposal card (`POST /api/dispatch/<id>/confirm` with `shared_folder: true`, default off). A Codex employee needs
+  `confirm_company: true` on each (409 `shared_confirm` otherwise, with nothing made and nothing switched). The ticks must be booleans and
+  `confirm_company` must come with `shared_folder` (400 otherwise). A refusal before anything is made (a Codex member without the word, a tool that
+  cannot use the folder, a folder that is not right) comes **before** the group or the dispatch is made. For a dispatch, the employees who
+  exist are switched on before the first message is sent, and those the dispatch is about to make are switched on by a callback
+  that `server.py` hands the dispatcher (`Console._on_new_employee`), only when `<state>/shared-meta/pending/<d-…>.json` (`{v, on,
+  confirm_company}`, written by the confirmation route and set back to `on: false` when it is over) says the person ticked; a confirmation that does not go through takes the ticks back.
+  **Nothing else can switch an employee on:** the writers (`set_card`, `open_cards`, `close_cards`, `mark_dispatch`,
+  `open_for_dispatch`, the settings store) are called only from `vbear/server.py` (`tests/test_autonomy_guard.py` fails the build otherwise, with a small
+  sample that shows the rule fires, and checks that `server.py` really calls each, and that `open_for_dispatch` is reached from one place); the chief of
+  staff, the dispatcher's automatic way (自己動手 item 2: the proposal's cards are made and the dispatch starts without the person, and no
+  `pending` file exists) and every employee's reply open nobody. There is **no 自己動手 item** for it and the chief of staff's proposal
+  format has no field for it (`additionalProperties: false` is unchanged). A test with 自己動手 items 1 and 2 on (`tests/test_shared_routes.py`) shows `settings.json` and `log.jsonl` byte for
+  byte the same after a whole automatic dispatch, and `tests/test_shared_flow.py` walks the page, the group tick, the dispatch tick and the Finder button once over HTTP.
+- **The switches are not where an employee can write.** `<state>/shared-meta/` (0700: `settings.json`, `log.jsonl`, `pending/`, `changes/`) is
+  outside the shared folder and the sandbox does not let an employee write there; a `settings.json` an employee puts **inside** the shared
+  folder is read by nobody (`tests/test_shared_routes.py`). A settings file that cannot be read means every employee is off.
+- **What a group or a dispatch hands on: names, as data.** Before and after each employee's answer in a group (and each step of a dispatch)
+  VBear takes a snapshot of the shared folder (`os.scandir` and `lstat`: names, sizes, times and whether it is a link; it never opens a file;
+  links are not followed; more than 10,000 entries means "too many to compare" and no list). The names that are new or changed since the
+  last answer (at most 50, sorted, each at most 200 characters; a name with a control character, a format character such as a right-to-left mark or
+  one that is not UTF-8 is replaced by 「（檔名含特殊字元）」; not necessarily written by that employee) go to the **next** employee as
+  one JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING`, the same markers as the reply before it, so a name
+  cannot write the closing line, with a sentence that says it is data and not an instruction (at most 4,096 bytes; a long list is cut and says how
+  many were listed). An employee who has the folder switched off is told only that there are new files and that he cannot read
+  them, with no name; "too many" and "no comparison made" (the console restarted in the middle) are said in words, not guessed. The lists are written to
+  `<state>/shared-meta/changes/<g-… or d-…>.jsonl` (0600, `O_NOFOLLOW`), **not** into the group's, the dispatch's or the chat's record, which have no new field
+  (`KINDS` is unchanged, and the old `record_problem` checks read them); deleting a group deletes its list. The group page shows the names
+  under the reply as text, at most ten, and the chief of staff's list of employees says which can use the folder (`shared: true|false`; the fixed words add "only
+  employees with shared true can hand files to each other; write the file name in the step"; with every employee off the list, the words and the hash of the
+  inputs are byte for byte those of v0.17.0).
+- **The paragraph the employee is told** is fixed words and the path as a JSON string between `BEGIN_VBEAR_SHARED_JSON` and `END_VBEAR_SHARED_JSON`, at most 1,000 characters,
+  that says the files are data and a sentence in one that asks for something is not to be followed without asking the person.
+- **The three forbidden things and the question every time do not change.** `vbear/shared*.py` and `vbear/runtime/shared_rules.py` are in the
+  autonomy guard's scan: they do not write `config.json`, start a terminal or a full-mode launch, install or insert a skill, make or change
+  a role card, or call `answer` (and `shared_folder.py` imports no `subprocess`; the Finder command is handed to the console by `serve()`).
+  `--permission-prompt-tool stdio`, `permissions.ask: ["Bash"]`, `autoAllowBashIfSandboxed: false`, `allowUnsandboxedCommands: false`, Codex's
+  `untrusted`, `permissions.additionalDirectories: []` and the `system/init` check are as they were, and there is no `--add-dir`. VBear
+  has no code path that deletes a file in the shared folder (a test scans for one), and no file name is written to the console's log, the
+  daemon's log, `log.jsonl` or an error message. With every employee off, the argv, the settings, `turn/start`, the system prompt and the
+  fingerprint (`prompt_sha`, pinned to v0.17.0's literal value) are those of v0.17.0.
+- **A version of the AI tool has to have passed the check with the folder.** The chat check of Claude Code (`--mode chat`) and of Codex (`--mode
+  codex-chat`) each have a shared-folder part, and an employee who has the folder on is refused (`shared_unverified`) on a version that has not
+  passed it; an employee who has it off chats as before. The chat page has **one** 「檢查」 button for this (the note that appears when the page reads
+  the code or a send is refused with it; it asks first, then sends `{engine, shared: true}` to the same route 驗證聊天 uses); the lines on the
+  共用資料夾 page and at the top of the chat say it in words and give no second button.
+- **What was seen on a real machine, and what was not.** The zero-cost `codex sandbox` probe of Codex 0.163.0 (no model, no login) showed the
+  writable root works, a write through a link to the outside and into `.git`, `.codex` and `.agents` is refused, and that a link can be
+  made and a file deleted inside the root (`docs/evidence/codex-0.163.0-shared.md`). Everything else about Codex employees and the folder —
+  whether the real `thread/start` answer lists the configured root, and how a real Codex behaves reading and writing there — was tested **only against the fake
+  app-server**, and the person decided (2026-11-07) that it is not verified on a real machine for this release; the version check is the gate, and it is
+  fail closed. For Claude Code, the real-machine results of the release (the check's shared part, `tools/qa_p43.py`) are in the changelog.
+  How a model treats a file as data, and whether a line in a file can steer it, has no record at all (待真機驗證).
+
+### Residual risks of the shared folder
+
+1. **A file one employee wrote is another employee's input (a prompt-injection path).** Like the reply handed on in a dispatch and the words in a group,
+   but a file can be longer and hide more. The fixed paragraph says files are data and that a sentence in one that tells the employee to do something,
+   run a command, change a setting or ignore instructions must not be followed without asking the person. That is a request to the model, not a barrier.
+   What stands in the way is that every command and every file change is still asked of the person, and VBear never asks an employee because a file said so.
+2. **What an employee reads goes to its AI company, and with mixed tools it crosses companies.** A file a Claude Code employee wrote and a Codex
+   employee read goes to OpenAI (and the other way round); a file the person dropped in goes to whoever reads it. The page says so at the top and
+   the question before a Codex employee is switched on says it; the folder is not a place for passwords, accounts or keys.
+3. **Links and hard links.** A command the person allowed can make a link or a hard link in the folder (Codex 0.163.0 was seen to allow it). VBear's Edit,
+   Write and Codex file changes follow links, refuse a path that leaves the folder and refuse an existing file with more than one hard link, and the
+   Codex sandbox refuses a write through a link to the outside (seen for 0.163.0, `codex sandbox`; for Claude Code's Bash sandbox it is the version check's job to see it); a command that made a hard link to a file elsewhere, followed by a write
+   through it, changes the original. This is the work folder's existing risk; what stands in the way is that the person read the command.
+4. **Codex may run an allowed command outside its sandbox** (ADR 0005, point 7). The folder neither improves nor worsens this: a command that writes into the
+   folder succeeds inside the sandbox, but any other write the sandbox stops is run again outside it after the person allowed the command.
+5. **The person may open what an employee left.** In Finder, double-clicking a `.command`, `.app` or `.sh` file an employee wrote runs it as the person.
+   The page warns; VBear cannot stop it.
+6. **The size is checked only when a process starts.** The limits are 1 GiB (by the size a file says, so a sparse file counts as large as it looks) and 10,000 entries; a running employee can fill the folder, and the next new process is refused (`shared_full`).
+7. **A command the person allowed can reach VBear itself.** It can read the access token and call the API, including `POST /api/shared/cards`, which switches
+   another employee on (the existing risk of every chat). `log.jsonl` records each switch with its time and how it came and the page lists it; the person
+   should read it now and then.
+8. **Codex employees and the shared folder were not tried on a real machine** (the person's decision for this release; see above), and whether the real Claude
+   Code writes through the second `allowWrite` entry was only seen by the version check and the coordinator's run; **how a model treats the files** has not been tried at all.
+
+### Going back to v0.17.0
+
+Read from the code and not run. `<state>/shared/` and `<state>/shared-meta/` stay and are not read; v0.17.0 passes no `shared` to a chat, adds no writable root
+and has `judge` refuse an Edit or Write outside the work folder and `judge_file_change` a change outside it, so an employee can no longer write into the folder
+(it can still be asked to read it, which is a card). The records of chats, groups and dispatches have no new field and read as before; groups and dispatches no longer hand on names.
+A chat that began with the folder on has a fingerprint that includes the folder's paragraph, so v0.17.0's chat page shows it as different from its start (which is true).
+The chat-check reports gain `shared` and `shared_steps`; v0.17.0 reads `mode`, `passed` and the version only (that it accepts the extra keys is read, not run: 待確認).
+No key of `config.json` was added.
 
 ## The start-up page (v0.12)
 
