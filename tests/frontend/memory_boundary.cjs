@@ -71,7 +71,7 @@ async function open(hash) {
   return h.dom().mainEl;
 }
 const cardPosts = () => FETCH_LOG.filter((c) => c.method === "POST" && c.url.split("?")[0] === "/api/memory/cards");
-const rowOf = (main, id) => qa(main, "card").find((n) => n.getAttribute("data-profile") === id);
+const rowOf = (main, id) => qa(main, "card").find((n) => n.getAttribute("data-profile-id") === id);
 
 test("the memory page lists who takes memory along, the company it goes to, and what cannot use it", async () => {
   setPage();
@@ -84,7 +84,7 @@ test("the memory page lists who takes memory along, the company it goes to, and 
   assert.strictEqual(q(codex, "card-switch").checked, false);
   assert(text(grok).includes("這位員工的 AI 工具還不能聊天，用不到記憶"));
   assert(!q(grok, "card-switch"), "no switch for a card that cannot chat");
-  assert(text(q(main, "cards-note")).includes("在終端機（完整模式）出發時不帶記憶"));
+  assert(text(q(main, "terminal")).includes("在終端機（完整模式）出發時不帶記憶"));
 });
 
 test("switching a Claude Code card off sends exactly the card and off, and the page is read again", async () => {
@@ -172,7 +172,7 @@ test("a chat page says in one line whether this employee has the memory with the
 
 test("the new code keeps the rules of the page", () => {
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
-  const part = source.slice(source.indexOf("// ---------- memory (P42-1)"), source.indexOf("// ---------- meetings (P34-5)"));
+  const part = source.slice(source.indexOf("// ---------- memory (P42-1"), source.indexOf("// ---------- meetings (P34-5)"));
   assert(/\/api\/memory\/cards/.test(part) && /confirm_company/.test(part));
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u;
   assert(!emoji.test(part));

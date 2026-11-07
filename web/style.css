@@ -1693,6 +1693,10 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .chat-them { align-self: flex-start; }
 .chat-who { margin-bottom: 2px; }
 .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-remember { margin-top: 4px; }
+.memory-form { display: grid; gap: 6px; }
+.memory-form textarea { flex: 1 1 18rem; min-width: 0; }
+.mt-row > .memory-form { flex: 1 1 100%; }
 .chat-partial { border-style: dashed; margin-top: 8px; }
 .chat-note { padding: 4px 10px; border-left: 3px solid var(--line-2); color: var(--ink-2); font-size: 13.5px; overflow-wrap: anywhere; }
 .chat-note code, .chat-pre { font: 12.5px/1.5 var(--mono); }

@@ -890,9 +890,11 @@ const api = {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   },
-  async post(path, body) {
+  async post(path, body) { return api.send("POST", path, body); },
+  async patch(path, body) { return api.send("PATCH", path, body); },
+  async send(method, path, body) {
     const res = await fetch(path, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json", "X-VBear": "1" },
       body: JSON.stringify(body || {}),
     });
@@ -6379,10 +6381,11 @@ function readLoadouts(ids, onState, gone, limit = 4) {
 
 async function viewTeam(params = {}) {
   const token = seq;
-  const [, , profilesRes, catalogRes] = await Promise.all([loadStatic(), loadLive(),
+  const [, , profilesRes, catalogRes, memoryCards] = await Promise.all([loadStatic(), loadLive(),
     api.get("/api/agent-profiles").then((r) => ({ ok: true, profiles: (r && r.profiles) || [] }))
       .catch((e) => ({ ok: false, error: e.message, profiles: [] })),
     api.get("/api/agent-builder/catalog").then((r) => (r && r.ok ? r : null)).catch(() => null),
+    memoryCardsById(),
     ensureRoleTranslations()]);
   const main = claim(token);
   const L = D.live;
@@ -6428,7 +6431,7 @@ async function viewTeam(params = {}) {
       "aria-pressed": String(filter === v), on: { click: () => { store.set("teamCardTool", v); viewTeam(); } } }, t)));
 
   // each card reads its own loadout (a read-only answer from memory), four at a time; the page does not wait for them
-  const cards = new Map(shown.map((p) => [p.id, profileCard(p, { catalog, handlers })]));
+  const cards = new Map(shown.map((p) => [p.id, profileCard(p, { catalog, handlers, backExtra: memoryCards.has(p.id) ? memoryCardLine(memoryCards.get(p.id)) : null })]));
   readLoadouts(shown.map((p) => p.id), (id, state) => { const c = cards.get(id); if (c) c.setLoadout(state); }, () => token !== seq);
 
   const poolBody = !profilesRes.ok
@@ -13121,20 +13124,23 @@ function chatInputRows(input) {
 function chatLine(rec, opts) {
   if (!rec || typeof rec !== "object" || typeof rec.kind !== "string") return null;
   const codex = !!opts && opts.engine === "codex-chat";
+  const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
   const text = (x) => (typeof x === "string" ? x : "");
   switch (rec.kind) {
     case "user_message": {
       const origin = chatOriginOf(rec);          // a message VBear sent for a dispatch (P40): said over it, it is not the person's own words
       const note = origin ? chatOriginNote(origin) : null;
       const line = el("li", { class: "chat-msg chat-me", "data-chat": "user", "data-seq": String(rec.seq) },
-        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依派工送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)));
+        el("div", { class: "chat-who small muted" }, `${origin ? "VBear 依派工送出" : "你"}・${fmtTime(rec.at)}`), note, el("div", { class: "chat-text" }, text(rec.text)),
+        !origin && remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "you")) : null);
       if (note) { line.originNote = note; line.origin = origin; }
       return line;
     }
     case "reply":
       return el("li", { class: "chat-msg chat-them", "data-chat": "reply", "data-seq": String(rec.seq) },
         el("div", { class: "chat-who small muted" }, `員工・${fmtTime(rec.at)}`), el("div", { class: "chat-text" }, text(rec.text)),
-        rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null);
+        rec.truncated === true ? el("div", { class: "small muted" }, "（這則回覆太長，後面的部分沒有保存）") : null,
+        remember && Number.isInteger(rec.turn) && text(rec.text) ? memoryRememberRow(() => remember(rec, "employee")) : null);
     case "tool_call":
       return el("li", { class: "chat-note", "data-chat": "tool", "data-seq": String(rec.seq) },
         el("span", { class: "tag" }, cardHas(CHAT_TOOL_TEXT, rec.tool) ? CHAT_TOOL_TEXT[rec.tool] : `工具 ${text(rec.tool)}`), " ", el("code", null, text(rec.summary)));
@@ -13527,6 +13533,8 @@ async function viewChatDetail(token, id) {
   const sendNote = el("p", { class: "small muted", "data-chat": "send-note" });
   let noteText = "";                      // the server's last refusal, kept until the person acts again
   let planRecord = null;                  // the last plan_usage record: what Codex last said of the ChatGPT plan's use
+  let memState = null;                    // P42-3: { on, count, readable } of this employee's memory, or null when it cannot be had
+  const memoryBox = el("div", { "data-memory": "chat-state-box" });
   const engineOf = () => (view.chat && view.chat.engine) || (view.card && view.card.engine) || null;
   const isCodex = () => engineOf() === "codex-chat";
 
@@ -13543,7 +13551,8 @@ async function viewChatDetail(token, id) {
       chatMemoryLine(view.memory),
       isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
         : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
-      isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null);
+      isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null,
+      memoryBox);
     const notes = [];
     if (gate()) notes.push(notice("warn", gate()));
     if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
@@ -13578,21 +13587,32 @@ async function viewChatDetail(token, id) {
       if (!r || typeof r.seq !== "number" || r.seq <= lastSeq) continue;
       lastSeq = r.seq;
       if (r.kind === "plan_usage") planRecord = r;
-      const line = chatLine(r, { engine: engineOf() });
+      const line = chatLine(r, { engine: engineOf(), remember: rememberLine });
       if (line) { transcript.append(line); if (line.origin) chatOriginFill(line, line.origin); }
     }
   };
   const apply = (data) => {
     if (!data || typeof data !== "object") return;
     take(Array.isArray(data.records) ? data.records : []);
-    view = { ...view, card: data.card !== undefined ? data.card : view.card, memory: data.memory !== undefined ? data.memory : view.memory,
-      live: data.live === undefined ? view.live : data.live,
-      runtime: data.runtime || view.runtime, problem: data.problem || "", more: data.more === true && !data.live };
+    view = { ...view, card: data.card !== undefined ? data.card : view.card, live: data.live === undefined ? view.live : data.live,
+      runtime: data.runtime || view.runtime, problem: data.problem || "", more: data.more === true && !data.live,
+      memory: data.memory !== undefined ? data.memory : view.memory };
+    if (data.memory && typeof data.memory.on === "boolean") refreshMemory();
     if (Array.isArray(data.records) && data.records.some((r) => r && r.kind === "turn_ended")) refreshLedger();
     draw();
     stick();
   };
   const stick = () => { /* the page stays where the person put it; the log grows below */ };
+  // P42-3: 「記住」 opens a box with the line; only the person's press of 存 in the box saves (POST /api/memory, with where it came from)
+  const rememberLine = (r, speaker) => openMemoryRemember({ text: r.text, speaker, onSaved: refreshMemory,
+    source: { how: "chat", chat_id: id, turn: r.turn, speaker } });
+  const refreshMemory = async () => {
+    const card = (view.card && typeof view.card.id === "string" && view.card.id) || (view.chat && view.chat.profile_id) || "";
+    const state = await memoryChatState(card, view.memory);
+    if (token !== seq) return;
+    memState = state;
+    setKids(memoryBox, memoryChatLine(memState, engineOf()));
+  };
   const refreshLedger = async () => {
     const r = await api.get("/api/chats").catch(() => null);
     if (r && token === seq) { limits = r.limits; ledger = r.ledger; draw(); }
@@ -13672,6 +13692,7 @@ async function viewChatDetail(token, id) {
   take(all.records);
   view = { ...view, more: all.more === true };
   draw();
+  refreshMemory();
   // P41-3: a chat a group opened (arrived at by an old address): said so, with the way to the group, and no box to talk in; the
   // cards that wait can still be answered here, as the person's own press
   const inGroup = all.group && typeof all.group === "object" && typeof all.group.id === "string" && GROUP_ID_RE.test(all.group.id) ? all.group : null;
@@ -13761,8 +13782,9 @@ function groupRow(g) {
 }
 
 // One item of a group's log as a line of the conversation, or null (a kind this page does not draw). A closed table.
-function groupItemNode(item) {
+function groupItemNode(item, opts) {
   if (!item || typeof item !== "object" || typeof item.kind !== "string") return null;
+  const remember = opts && typeof opts.remember === "function" ? opts.remember : null;       // P42-3: 「記住」 beside a spoken line
   const text = (x) => (typeof x === "string" ? x : "");
   const base = { "data-seq": String(item.seq) };
   switch (item.kind) {
@@ -13770,14 +13792,16 @@ function groupItemNode(item) {
       const names = Array.isArray(item.to_names) ? item.to_names : null;
       return el("li", { class: "chat-msg chat-me", "data-group": "said", ...base },
         el("div", { class: "chat-who small muted" }, `你對${names ? names.map((n) => "@" + text(n)).join(" ") : "大家"}說・${fmtTime(item.at)}`),
-        el("div", { class: "chat-text" }, text(item.text)));
+        el("div", { class: "chat-text" }, text(item.text)),
+        remember && Number.isInteger(item.round) && text(item.text) ? memoryRememberRow(() => remember(item, "you")) : null);
     }
     case "reply":
       return el("li", { class: "chat-msg chat-them", "data-group": "reply", "data-profile-id": text(item.profile_id), ...base },
         el("div", { class: "chat-who small muted" }, `${text(item.name) || "未知"}（${chatToolName(item.tool)}）・${fmtTime(item.at)}`),
         el("div", { class: "chat-text" }, item.unreadable === true ? "（讀不到這則回覆）" : text(item.text) || "（沒有文字回覆）"),
         el("div", { class: "small muted", "data-group": "cost" }, groupReplyCost(item)),
-        item.partial === true ? el("div", { class: "small", "data-group": "partial" }, badge("沒有正常做完", "b-warn")) : null);
+        item.partial === true ? el("div", { class: "small", "data-group": "partial" }, badge("沒有正常做完", "b-warn")) : null,
+        remember && Number.isInteger(item.round) && item.unreadable !== true && text(item.text) ? memoryRememberRow(() => remember(item, "employee")) : null);
     case "skipped": case "paused":
       return el("li", { class: "chat-note small muted", "data-group": item.kind, ...base }, text(item.text));
     case "continued":
@@ -14135,7 +14159,8 @@ async function viewGroup(id) {
     for (const item of items) {
       if (!item || typeof item.seq !== "number" || item.seq <= lastSeq) continue;
       lastSeq = item.seq;
-      const node = groupItemNode(item);
+      const node = groupItemNode(item, { remember: (it, speaker) => openMemoryRemember({ text: it.text, speaker,
+        source: { how: "group", group_id: id, turn: it.round, speaker } }) });
       if (node) transcript.append(node);
     }
   };
@@ -14910,13 +14935,15 @@ function chatOriginFill(line, origin) {
 }
 // ---------- end of the chief of staff and the dispatch ----------------------------------------------------------------------------
 
-// ---------- memory (P42-1) ---------------------------------------------------------------------------------------------
+// ---------- memory (P42-1, P42-3) ----------------------------------------------------------------------------------------
 // The person's memory (#/memory): a few lines about them, their work and their decisions, the same for every employee. Only the
-// person's own press of 「存」 saves a line (POST /api/memory); the server refuses what must not be sent (passwords, keys, account
-// names, card numbers) and asks for a second confirmation of what reads like an order or holds a phone number or address. Every
-// string is set as text. P42-2 added the least the boundary needs: who takes memory along (a switch for each card; a Codex card is
-// switched on only after the person agreed that memory goes to OpenAI) and, in a chat, one line saying whether this employee has the
-// memory with them. Editing, clearing, exporting and the 「記住」 button are the memory page's own work (P42-3).
+// person's own press of 「存」 saves or changes a line (POST/PATCH /api/memory); the server refuses what must not be sent (passwords,
+// keys, account names, card numbers) and asks for a second confirmation of what reads like an order or holds a phone number or an
+// address. Every string is set as text. The page adds, changes and removes lines, removes all of them, hands them over as a file
+// (made in the browser, sent nowhere), and says which employees take the memory along (a Codex employee only after the person
+// has agreed that it goes to OpenAI). 「記住」 beside the lines of a chat or a group opens a box with that line, to be reworded and
+// saved by the person; an employee saying 「我記住了」 saves nothing. The chat page says in one line whether this employee takes the
+// memory along; a role card says so on its back.
 
 const MEMORY_KINDS = [["about_you", "關於你"], ["work", "你的工作"], ["decision", "決定"]];
 const MEMORY_MAX_TEXT = 200;
@@ -14924,37 +14951,75 @@ const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（
 const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
 const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
 const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。";
-const MEMORY_CARDS_NOTE = "在終端機（完整模式）出發時不帶記憶。";
 const MEMORY_NO_CHAT = "這位員工的 AI 工具還不能聊天，用不到記憶。";
 const MEMORY_OPENAI_ASK = "打開之後，這位員工開新程序時，記憶會跟著送給 OpenAI（Codex 的公司）。確定要讓這位員工帶記憶嗎？";
 const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
+const MEMORY_REMEMBER_SENDS = "存了以後，每位員工開新聊天時都會看到（在記憶頁關掉的員工除外）。記憶會跟著送給 Anthropic（Claude Code 的員工）或 OpenAI（Codex 的員工，要先在記憶頁打開）。不要存密碼、帳號、卡號。";
+const MEMORY_EMPLOYEE_WORDS = "這段是員工說的，存了以後每位員工開新聊天都會看到，請確定內容正確。";
+const MEMORY_TERMINAL = "在終端機（完整模式）出發時不帶記憶。";
+const MEMORY_CARDS_NOTE = "Claude Code 的員工預設帶記憶，記憶會送給 Anthropic。Codex 的員工預設不帶；打開後，記憶會送給 OpenAI。員工說「我記住了」不會存任何東西，只有你按「存」才算數。";
+const MEMORY_CHAT_COMPANY = { "claude-chat": "Anthropic", "codex-chat": "OpenAI" };
 
 function memoryCount(n) { return String(Number.isFinite(n) ? n : 0).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
-function memorySourceText(src) {
+function memoryLen(s) { return Array.from(String(s)).length; }
+// The words of a chat or group line as the box starts with them: line breaks become spaces (a line of memory is one line), and
+// what is past 200 characters is left off. `cut` and `joined` say what was done, so that the box can tell the person.
+function memoryBring(raw) {
+  const plain = String(raw === undefined || raw === null ? "" : raw);
+  const flat = plain.replace(/\s+/g, " ").trim();
+  const chars = Array.from(flat);
+  const cut = chars.length > MEMORY_MAX_TEXT;
+  return { text: cut ? chars.slice(0, MEMORY_MAX_TEXT).join("").trim() : flat, cut, joined: /[\r\n\u2028\u2029]/.test(plain.trim()) };
+}
+// Where a line came from, in words: the chat or group by name when the lists still have it (a name is never guessed), who spoke.
+function memorySourceText(src, names) {
   const how = src && src.how;
-  if (how === "chat") return "從聊天記住的";
-  if (how === "group") return "從群組記住的";
+  const who = src && src.speaker === "employee" ? "（員工說的）" : src && src.speaker === "you" ? "（你說的）" : "";
+  if (how === "chat") {
+    const name = names && names.chats && src && names.chats.get(src.chat_id);
+    return (name ? `從和「${name}」的聊天記住的` : "從聊天記住的") + who;
+  }
+  if (how === "group") {
+    const name = names && names.groups && src && names.groups.get(src.group_id);
+    return (name ? `從群組「${name}」記住的` : "從群組記住的") + who;
+  }
   if (how === "suggested") return "整理提議、你確認的";
   return "你寫的";
 }
-
-function memoryRow(entry, onDelete) {
-  return el("li", { class: "mt-row card", "data-memory": "entry", "data-memory-id": entry.id },
-    el("span", { class: "memory-text", "data-memory": "text" }, entry.text),
-    el("span", { class: "small muted", "data-memory": "meta" }, `${memorySourceText(entry.source)}・${fmtTime(entry.created_at)}`),
-    entry.blocked ? el("span", { class: "small", "data-memory": "blocked", role: "note" }, MEMORY_BLOCKED) : null,
-    el("button", { type: "button", class: "btn small", "data-memory": "delete", on: { click: () => onDelete(entry) } }, "刪"));
+// The names the page needs for "from the chat with X" and "from the group Y": asked only when a line has such a source, and
+// whatever cannot be read leaves that line without a name.
+async function memoryNames(entries) {
+  const out = { chats: new Map(), groups: new Map() };
+  const hows = new Set(entries.map((e) => e && e.source && e.source.how));
+  const str = (x) => (typeof x === "string" && x ? x : "");
+  await Promise.all([
+    hows.has("chat") ? api.get("/api/chats").then((r) => {
+      const byCard = new Map((Array.isArray(r.cards) ? r.cards : []).filter((c) => c && str(c.id) && str(c.name)).map((c) => [c.id, c.name]));
+      for (const c of Array.isArray(r.chats) ? r.chats : []) if (c && str(c.id) && byCard.has(c.profile_id)) out.chats.set(c.id, byCard.get(c.profile_id));
+    }).catch(() => {}) : null,
+    hows.has("group") ? api.get("/api/groups").then((r) => {
+      for (const g of Array.isArray(r.groups) ? r.groups : []) if (g && str(g.id) && str(g.name)) out.groups.set(g.id, g.name);
+    }).catch(() => {}) : null]);
+  return out;
 }
 
-function memoryAddForm(onSaved) {
+// The form for one line: the kind, the words (200), 存, and the answers of the server: a refusal says why and keeps the words;
+// a second confirmation shows the reason and a box that must be ticked before the same line is sent again (changing the words
+// takes the tick away, so the new words are asked about again). `o.submit(body)` does the saving (a promise; an error carries
+// .code and .data); `o.done(result)` runs after it; `o.onCancel` adds 取消.
+function memoryForm(o) {
   const kind = el("select", { "data-memory": "kind", "aria-label": "類別" }, MEMORY_KINDS.map(([v, t]) => el("option", { value: v }, t)));
-  const text = el("textarea", { rows: "2", "data-memory": "new-text", "aria-label": "要記住的一句話", placeholder: "例如：回答一律用繁體中文",
+  kind.value = o.kind || MEMORY_KINDS[0][0];
+  const text = el("textarea", { rows: o.rows || "2", "data-memory": "new-text", "aria-label": "要記住的一句話", placeholder: "例如：回答一律用繁體中文",
     maxlength: String(MEMORY_MAX_TEXT) });
-  const counter = el("span", { class: "small muted", "data-memory": "counter" }, `0／${MEMORY_MAX_TEXT} 字`);
+  text.value = o.text || "";
+  const count = () => `${memoryLen(text.value)}／${MEMORY_MAX_TEXT} 字`;
+  const counter = el("span", { class: "small muted", "data-memory": "counter" }, count());
   const problem = el("div", { "data-memory": "problem" });
   const confirmBox = el("div", { "data-memory": "confirm-box" });
   let confirmed = null;                                   // the checkbox once a second confirmation is asked
-  const save = el("button", { type: "button", class: "btn primary", "data-memory": "save" }, "存");
+  const save = el("button", { type: "button", class: "btn primary", "data-memory": "save" }, o.saveLabel || "存");
+  const cancel = o.onCancel ? el("button", { type: "button", class: "btn", "data-memory": "cancel", on: { click: () => o.onCancel() } }, "取消") : null;
   const send = async () => {
     setKids(problem, null);
     if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這一條，請先勾「我確定，存起來」。")); return; }
@@ -14962,61 +15027,192 @@ function memoryAddForm(onSaved) {
     const body = { kind: kind.value, text: text.value };
     if (confirmed) body.confirm_warning = true;
     try {
-      await api.post("/api/memory", body);
-      text.value = ""; counter.textContent = `0／${MEMORY_MAX_TEXT} 字`;
+      const result = await o.submit(body);
+      if (o.clearOnSave) { text.value = ""; counter.textContent = count(); }
       confirmed = null; setKids(confirmBox, null);
-      toast("已記住");
-      await onSaved();
+      await o.done(result);
     } catch (e) {
       if (e.code === "memory_confirm") {
         const words = e.data && Array.isArray(e.data.warn_text) ? e.data.warn_text : [e.message];
         confirmed = el("input", { type: "checkbox", "data-memory": "confirm" });
         setKids(confirmBox, notice("warn", words.join(" ")), el("label", { class: "small" }, confirmed, " 我確定，存起來"));
       } else {
-        confirmed = null; setKids(confirmBox, null);
-        setKids(problem, notice("bad", e.message));        // a refusal keeps what was typed so that it can be reworded
+        confirmed = null; setKids(confirmBox, null);        // a refusal keeps what was typed so that it can be reworded
+        setKids(problem, notice("bad", e.message),
+          e.code === "memory_full" && o.fullLink ? el("a", { href: "#/memory", "data-memory": "full-link" }, "到記憶頁刪掉幾條") : null);
       }
     }
     save.disabled = false;
   };
   save.addEventListener("click", send);
   text.addEventListener("input", () => {
-    counter.textContent = `${text.value.length}／${MEMORY_MAX_TEXT} 字`;
+    counter.textContent = count();
     if (confirmed) { confirmed = null; setKids(confirmBox, null); }        // a changed line is read again
   });
-  return el("section", { class: "section", "data-memory": "add" }, sectionHead("新增一條", "寫成一句話；每位員工開新聊天時都會看到。"),
-    el("div", { class: "row" }, kind, text, save), counter, confirmBox, problem);
+  return { kind, text, save, node: el("div", { class: "memory-form" }, el("div", { class: "row" }, kind, text, save, cancel), counter, confirmBox, problem) };
 }
 
-// Who takes memory along: a switch for each card whose AI tool can chat. Switching a card whose tool belongs to OpenAI on asks first and
-// sends confirm_company: true; every other switch is sent as it is. The page is read again after, so it shows what the server kept.
-function memoryCardRow(card, reload) {
-  const name = typeof card.name === "string" && card.name ? card.name : "（沒有名稱）";
-  const where = card.company ? `送到 ${card.company}` : "";
-  if (card.can_chat !== true && !card.company) {
-    return el("li", { class: "mt-row card", "data-memory": "card", "data-profile": card.profile_id },
-      el("span", null, name), el("span", { class: "small muted" }, MEMORY_NO_CHAT));
-  }
-  const box = el("input", { type: "checkbox", "data-memory": "card-switch", "aria-label": `${name}帶記憶` });
-  box.checked = card.on === true;
-  box.addEventListener("change", async () => {
-    const on = box.checked;
-    const toOpenai = on && card.company === "OpenAI";
-    if (toOpenai && !(await confirmInPage("讓 Codex 員工帶記憶", MEMORY_OPENAI_ASK, "打開"))) { box.checked = false; return; }
-    box.disabled = true;
-    try { await api.post("/api/memory/cards", toOpenai ? { profile_id: card.profile_id, on, confirm_company: true } : { profile_id: card.profile_id, on }); }
-    catch (e) { toast(e.message); }
-    await reload();
+// One line of the page. `h`: { names, onDelete(entry), onSaved() }. 改 swaps the line for the form (kind and words as they are);
+// 存 sends only what changed (PATCH), and sends nothing when nothing did.
+function memoryRow(entry, h) {
+  h = h || {};
+  const row = el("li", { class: "mt-row card", "data-memory": "entry", "data-memory-id": entry.id });
+  let editing = false;
+  const changed = entry.updated_at - entry.created_at > 1;
+  const paint = () => {
+    if (!editing) {
+      setKids(row,
+        el("span", { class: "memory-text", "data-memory": "text" }, entry.text),
+        el("span", { class: "small muted", "data-memory": "meta" },
+          `${memorySourceText(entry.source, h.names)}・${fmtTime(entry.created_at)}${changed ? `・改於 ${fmtTime(entry.updated_at)}` : ""}`),
+        entry.blocked ? el("span", { class: "small", "data-memory": "blocked", role: "note" }, MEMORY_BLOCKED) : null,
+        el("button", { type: "button", class: "btn small", "data-memory": "edit", "aria-label": "改這一條", on: { click: () => { editing = true; paint(); } } }, "改"),
+        el("button", { type: "button", class: "btn small", "data-memory": "delete", "aria-label": "刪這一條", on: { click: () => h.onDelete && h.onDelete(entry) } }, "刪"));
+      return;
+    }
+    const form = memoryForm({ kind: entry.kind, text: entry.text, saveLabel: "存", onCancel: () => { editing = false; paint(); },
+      submit: async (body) => {
+        const patch = {};
+        if (body.kind !== entry.kind) patch.kind = body.kind;
+        if (body.text !== entry.text) patch.text = body.text;
+        if (!Object.keys(patch).length) return false;                        // nothing changed: nothing is sent
+        if (body.confirm_warning) patch.confirm_warning = true;
+        await api.patch(`/api/memory/${encodeURIComponent(entry.id)}`, patch);
+        return true;
+      },
+      done: async (sent) => {
+        editing = false;
+        if (sent) { toast("已改"); if (h.onSaved) await h.onSaved(); } else paint();
+      } });
+    setKids(row, form.node);
+  };
+  paint();
+  return row;
+}
+
+function memoryAddForm(onSaved) {
+  const form = memoryForm({ clearOnSave: true, submit: (body) => api.post("/api/memory", body), done: async () => { toast("已記住"); await onSaved(); } });
+  return el("section", { class: "section", "data-memory": "add" }, sectionHead("新增一條", "寫成一句話；每位員工開新聊天時都會看到。"), form.node);
+}
+
+// 「記住」: the box a chat or group line opens. `o`: { text, speaker: "you"|"employee", source, onSaved() }. It posts only when the
+// person presses 存; `source` tells the server where the line came from.
+function openMemoryRemember(o) {
+  const titleId = "memory-remember-title";
+  const got = memoryBring(o.text);
+  let close = () => {};
+  const form = memoryForm({ text: got.text, rows: "3", fullLink: true, onCancel: () => close(),
+    submit: (body) => api.post("/api/memory", { ...body, source: o.source }),
+    done: async () => { close(); toast("已記住"); if (typeof o.onSaved === "function") await o.onSaved(); } });
+  const head = el("h2", { id: titleId, tabindex: "-1" }, "記住這句話");
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-memory": "dialog" },
+    el("div", { class: "modal-box", style: "max-width: 560px; max-height: 88vh; overflow-y: auto;" }, head,
+      el("p", { class: "small", "data-memory": "sends" }, MEMORY_REMEMBER_SENDS),
+      o.speaker === "employee" ? notice("warn", MEMORY_EMPLOYEE_WORDS) : null,
+      got.cut ? el("p", { class: "small", "data-memory": "cut-note" }, `這句話太長，只帶進前 ${MEMORY_MAX_TEXT} 字；請改成你要記住的樣子。`) : null,
+      got.joined ? el("p", { class: "small muted", "data-memory": "joined-note" }, "原本有換行的地方，已改成空格。") : null,
+      form.node));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  head.focus();
+  return close;
+}
+
+// The small button beside a spoken line. It only opens the box above.
+function memoryRememberRow(onPress) {
+  return el("div", { class: "chat-remember" },
+    el("button", { type: "button", class: "btn small", "data-memory": "remember", "aria-label": "記住這句話", on: { click: onPress } }, "記住"));
+}
+
+// A dialog that wants a word typed before its button works. Resolves true on the button, false on 取消 or Escape.
+function memoryTypedConfirm(title, message, word, goLabel) {
+  return new Promise((resolve) => {
+    const titleId = "memory-typed-title";
+    let settled = false;
+    const finish = (value) => { if (settled) return; settled = true; closeModal(); resolve(value); };
+    const go = el("button", { type: "button", class: "btn primary", "data-memory": "clear-go", disabled: true, on: { click: () => { if (typed.value === word) finish(true); } } }, goLabel);
+    const typed = el("input", { type: "text", "data-memory": "clear-typed", "aria-label": `輸入「${word}」`, autocomplete: "off" });
+    typed.addEventListener("input", () => { go.disabled = typed.value !== word; });
+    const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+      el("div", { class: "modal-box" }, el("h2", { id: titleId }, title), el("p", null, message),
+        el("label", { class: "small" }, `要刪掉，請在這裡輸入「${word}」：`, " ", typed),
+        el("div", { class: "modal-actions" }, el("button", { type: "button", class: "btn", on: { click: () => finish(false) } }, "取消"), go)));
+    document.body.append(modal);
+    const closeModal = withModalA11y(modal, () => { modal.remove(); if (!settled) { settled = true; resolve(false); } });
+    typed.focus();
   });
-  return el("li", { class: "mt-row card", "data-memory": "card", "data-profile": card.profile_id },
-    el("label", null, box, " ", name), el("span", { class: "small muted" }, `${chatToolName(card.tool)}・${where}`));
 }
 
-function memoryCardsSection(cards, reload) {
-  const rows = (Array.isArray(cards) ? cards : []).filter((c) => c && typeof c === "object" && typeof c.profile_id === "string");
-  return el("section", { class: "section", "data-memory": "cards" }, sectionHead("誰帶記憶", "開著的員工，開新程序時會帶著你的記憶。"),
-    rows.length ? el("ul", { class: "mt-list" }, rows.map((c) => memoryCardRow(c, reload))) : el("p", { class: "small muted" }, "還沒有員工。"),
-    el("p", { class: "small muted", "data-memory": "cards-note" }, MEMORY_CARDS_NOTE));
+// The file of the memory, made in this browser from what VBear answers and saved from here; nothing is sent anywhere.
+async function memoryDownload() {
+  let r;
+  try { r = await api.get("/api/memory/export"); }
+  catch (e) { toast("匯出不了：" + e.message); return; }
+  if (!r || typeof r.text !== "string") { toast("匯出不了：VBear 沒有給檔案內容。"); return; }
+  const name = typeof r.filename === "string" && /^[^/\\]{1,80}\.md$/.test(r.filename) ? r.filename : "vbear-記憶.md";
+  const url = URL.createObjectURL(new Blob([r.text], { type: "text/markdown;charset=utf-8" }));
+  const link = el("a", { href: url, download: name, hidden: true });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 100);
+  toast("已匯出 " + name);
+}
+
+// The body of POST /api/memory/cards. One place, so that it is one line to change if the server wants more with a Codex card.
+// Switching a Codex card on is sent with confirm_company: true, only after the person agreed in the box that memory goes to OpenAI.
+function memoryCardBody(card, on, agreed) {
+  return on && agreed === true ? { profile_id: card.profile_id, on, confirm_company: true } : { profile_id: card.profile_id, on };
+}
+
+function memoryCardRow(c, onSwitch) {
+  const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
+  const can = c.can_chat === true;
+  const sw = can ? el("input", { type: "checkbox", "data-memory": "card-switch", "aria-label": `${name} 帶記憶`, on: { change: () => onSwitch(c, sw.checked, sw) } }) : null;
+  if (sw) sw.checked = c.on === true;
+  return el("li", { class: "mt-row card", "data-memory": "card", "data-profile-id": c.profile_id },
+    el("strong", null, name),
+    el("span", { class: "tag" }, chatToolName(c.tool)),
+    can ? el("label", { class: "small" }, sw, c.on === true ? " 帶記憶" : " 不帶記憶") : null,
+    can ? el("span", { class: "small muted", "data-memory": "company" }, c.on === true ? `記憶會送給 ${c.company || "AI 公司"}` : c.company ? `不帶；打開後記憶會送給 ${c.company}` : "")
+      : el("span", { class: "small muted" }, "這位員工的 AI 工具還不能聊天，用不到記憶。"));
+}
+
+// One line on a role card's back: whether this employee takes the memory along. `c` is one of GET /api/memory's cards (or null).
+function memoryCardLine(c) {
+  const p = el("p", { class: "small", "data-memory": "card-line" });
+  if (!c || typeof c !== "object") return p;
+  if (c.can_chat !== true) { setKids(p, "這位員工的 AI 工具還不能聊天，用不到記憶。"); return p; }
+  setKids(p, c.on === true ? "這位員工帶記憶" : "這位員工不帶記憶", "（", el("a", { href: "#/memory" }, "到記憶頁改"), "）");
+  return p;
+}
+// GET /api/memory's cards as a map of profile id -> card, for the pages that show a line per employee (empty when it cannot be read).
+async function memoryCardsById() {
+  try {
+    const r = await api.get("/api/memory");
+    return new Map((Array.isArray(r.cards) ? r.cards : []).filter((c) => c && typeof c.profile_id === "string").map((c) => [c.profile_id, c]));
+  } catch (_) { return new Map(); }
+}
+
+// What the chat page says about this employee and the memory: { on, count, readable } from the server's own answer on the chat
+// (when it gives one) or from GET /api/memory (this card's switch and the number of lines). null when neither can be had.
+async function memoryChatState(profileId, fromServer) {
+  const s = fromServer && typeof fromServer === "object" ? fromServer : null;
+  if (s && typeof s.on === "boolean") return { on: s.on, count: Number.isFinite(s.count) ? s.count : 0, readable: s.readable !== false };
+  try {
+    const r = await api.get("/api/memory");
+    const card = (Array.isArray(r.cards) ? r.cards : []).find((c) => c && c.profile_id === profileId);
+    if (!card || typeof r.readable !== "boolean") return null;
+    return { on: card.on === true, count: r.used && Number.isFinite(r.used.count) ? r.used.count : 0, readable: r.readable };
+  } catch (_) { return null; }
+}
+function memoryChatLine(state, engine) {
+  if (!state) return null;
+  const company = MEMORY_CHAT_COMPANY[engine] || "AI 公司";
+  const link = el("a", { href: "#/memory" }, "看或改記憶");
+  if (state.readable === false) return el("p", { class: "small", "data-memory": "chat-state" }, "記憶讀不到，這次沒有帶。 ", link);
+  return el("p", { class: "small muted", "data-memory": "chat-state" },
+    state.on ? `這位員工帶著你的記憶（${memoryCount(state.count)} 條），開新聊天時會送給 ${company}。 ` : "這位員工不帶記憶。 ", link);
 }
 
 async function viewMemory() {
@@ -15024,22 +15220,32 @@ async function viewMemory() {
   let data;
   try { data = await api.get("/api/memory"); }
   catch (e) { setKids(claim(token), el("h1", null, "記憶"), notice("bad", "讀不到記憶：" + e.message)); return; }
+  const names = await memoryNames(Array.isArray(data.entries) ? data.entries : []);
   const main = claim(token);
   const listBox = el("div", { "data-memory": "list" });
   let cur = data;
   const draw = () => {
     const used = cur.used && typeof cur.used === "object" ? cur.used : { count: 0, chars: 0, max_count: 50, max_chars: 4000 };
     const entries = Array.isArray(cur.entries) ? cur.entries : [];
+    const cards = Array.isArray(cur.cards) ? cur.cards.filter((c) => c && typeof c.profile_id === "string") : [];
     const groups = MEMORY_KINDS.map(([kind, label]) => {
       const rows = entries.filter((e) => e && e.kind === kind);
       return el("section", { class: "section", "data-memory": "group", "data-kind": kind },
         sectionHead(label, null),
-        rows.length ? el("ul", { class: "mt-list" }, rows.map((e) => memoryRow(e, remove))) : el("p", { class: "small muted" }, "還沒有。"));
+        rows.length ? el("ul", { class: "mt-list" }, rows.map((e) => memoryRow(e, { names, onDelete: remove, onSaved: reload }))) : el("p", { class: "small muted" }, "還沒有。"));
     });
     setKids(listBox,
       cur.readable === false ? notice("bad", cur.problem || "記憶的檔案有問題，VBear 先不碰它。") : null,
       el("p", { class: "small", "data-memory": "used" }, `${memoryCount(used.count)}／${memoryCount(used.max_count)} 條、${memoryCount(used.chars)}／${memoryCount(used.max_chars)} 字。${MEMORY_COST}`),
-      groups, memoryCardsSection(cur.cards, reload));
+      el("div", { class: "row" },
+        el("button", { type: "button", class: "btn", "data-memory": "export", disabled: !entries.length, on: { click: () => memoryDownload() } }, "匯出成檔案"),
+        el("button", { type: "button", class: "btn", "data-memory": "clear", disabled: !entries.length, on: { click: () => clearAll(entries.length) } }, "全部刪除")),
+      groups,
+      el("section", { class: "section", "data-memory": "cards" },
+        sectionHead("誰帶記憶", "每位員工開新聊天時，帶不帶這些記憶"),
+        el("p", { class: "small", "data-memory": "cards-note" }, MEMORY_CARDS_NOTE),
+        cards.length ? el("ul", { class: "mt-list" }, cards.map((c) => memoryCardRow(c, switchCard))) : null,
+        el("p", { class: "small muted", "data-memory": "terminal" }, MEMORY_TERMINAL)));
   };
   async function reload() {
     try { cur = await api.get("/api/memory"); } catch (e) { toast("讀不到記憶：" + e.message); }
@@ -15048,6 +15254,27 @@ async function viewMemory() {
   async function remove(entry) {
     if (!(await confirmInPage("刪除這一條記憶", MEMORY_DELETE_NOTE, "刪除"))) return;
     try { await api.del(`/api/memory/${encodeURIComponent(entry.id)}`); toast("已刪除"); }
+    catch (e) { toast(e.message); }
+    await reload();
+  }
+  async function clearAll(n) {
+    if (!(await memoryTypedConfirm("刪除全部記憶", `會刪掉全部 ${memoryCount(n)} 條記憶，無法復原。${MEMORY_DELETE_NOTE}`, "全部刪除", "全部刪除"))) return;
+    try { await api.post("/api/memory/clear", { confirm: "全部刪除" }); toast("已全部刪除"); }
+    catch (e) { toast(e.message); }
+    await reload();
+  }
+  async function switchCard(c, on, box) {
+    if (box) box.disabled = true;
+    let agreed = false;
+    if (on && (c.company === "OpenAI" || c.tool === "codex")) {
+      const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
+      const used = cur.used && Number.isFinite(cur.used.count) ? cur.used.count : 0;
+      const ok = await confirmInPage(`讓「${name}」帶記憶？`,
+        `「${name}」用的是 Codex。打開後，這位員工開新聊天時，記憶會跟著送給 OpenAI（目前 ${memoryCount(used)} 條都會送）。不要寫密碼、帳號、卡號。要打開嗎？`, "打開");
+      if (!ok) { if (token === seq) draw(); return; }
+      agreed = true;
+    }
+    try { await api.post("/api/memory/cards", memoryCardBody(c, on, agreed)); toast(on ? "已打開" : "已關掉"); }
     catch (e) { toast(e.message); }
     await reload();
   }
@@ -17357,6 +17584,9 @@ if (typeof module !== "undefined" && module.exports) {
     chatLine,
     viewMemory,
     memoryRow,
+    memoryCardLine,
+    memoryBring,
+    openMemoryRemember,
     chatCardNode,
     chatInputRows,
     chatSupportNode,

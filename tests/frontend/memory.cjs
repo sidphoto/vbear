@@ -1,6 +1,7 @@
-// P42-1: the memory page (#/memory): the two lines at the top, the use, the lines in three groups with where they came from, adding
-// a line (the refusal says why and keeps what was typed; a second confirmation must be ticked before the line is sent again),
-// deleting one (asks first, and says the tools' own copies stay) and the rules of the code. The real web/app.js on a synthetic DOM and
+// P42-1 / P42-3: the memory page (#/memory): the two lines at the top, the use, the lines in three groups with where they came from and when,
+// adding a line (the refusal says why and keeps what was typed; a second confirmation must be ticked before the line is sent again),
+// changing one, deleting one (asks first, and says the tools' own copies stay), deleting all (the words must be typed), the file to
+// download, who takes the memory along (a Codex employee only after the person agrees that it goes to OpenAI) and the rules of the code. The real web/app.js on a synthetic DOM and
 // a fetch stub; it is NOT a browser test. Nothing here runs a model: the server answers with fixtures, and every line could hold markup.
 // Run: node tests/frontend/memory.cjs   (exit code 0 = pass)
 "use strict";
@@ -32,7 +33,9 @@ const view = (entries = [], over = {}) => ({ ok: true, entries, used: { count: e
 let page;
 function setPage(over = {}) {
   app.D.overview = null; app.D.skills = null; app.D.roles = null;
-  page = { memory: view(), postStatus: 201, postBody: { ok: true, entry: entry("m-0123456789", "work", "x") }, deleteStatus: 200, ...over };
+  page = { memory: view(), postStatus: 201, postBody: { ok: true, entry: entry("m-0123456789", "work", "x") }, deleteStatus: 200,
+    patchStatus: 200, patchBody: { ok: true, entry: entry("m-0000000001", "work", "x") }, chats: [], chatCards: [], groups: [], clearStatus: 200, cardsStatus: 200,
+    exportStatus: 0, exportBody: { ok: true, filename: "vbear-記憶-20261107.md", text: "# 記憶\n" }, ...over };
   setHandler((url, opts) => {
     const p = url.split("?")[0];
     const method = (opts && opts.method) || "GET";
@@ -48,7 +51,18 @@ function setPage(over = {}) {
       const status = typeof page.postStatus === "function" ? page.postStatus(JSON.parse(opts.body)) : page.postStatus;
       return jsonResponse(out, status < 400, status);
     }
+    if (p === "/api/chats" && method === "GET") return jsonResponse({ ok: true, chats: page.chats, cards: page.chatCards, limits: {}, ledger: null, support: {}, problems: [] });
+    if (p === "/api/groups" && method === "GET") return jsonResponse({ groups: page.groups, problems: [] });
+    if (p === "/api/memory/export" && method === "GET") return page.exportStatus ? jsonResponse({ error: "記憶的檔案有問題。", code: "memory_unreadable" }, false, page.exportStatus) : jsonResponse(page.exportBody);
+    if (p === "/api/memory/clear" && method === "POST") return page.clearStatus < 400 ? jsonResponse({ ok: true, cleared: 3 }) : jsonResponse({ error: "確認的字不對。", code: "bad_request" }, false, page.clearStatus);
+    if (p === "/api/memory/cards" && method === "POST") return page.cardsStatus < 400 ? jsonResponse({ ok: true }) : jsonResponse({ error: "這張卡現在不能改。", code: "not_found" }, false, page.cardsStatus);
     const m = /^\/api\/memory\/(m-[0-9a-f]{10})$/.exec(p);
+    if (m && method === "PATCH") {
+      const b = JSON.parse(opts.body);
+      const status = typeof page.patchStatus === "function" ? page.patchStatus(b) : page.patchStatus;
+      const out = typeof page.patchBody === "function" ? page.patchBody(b) : page.patchBody;
+      return jsonResponse(out, status < 400, status);
+    }
     if (m && method === "DELETE") return page.deleteStatus < 400 ? jsonResponse({ ok: true, deleted: m[1] }) : jsonResponse({ error: "找不到這一條記憶。", code: "not_found" }, false, page.deleteStatus);
     return null;
   });
@@ -217,13 +231,274 @@ test("cancelling the question deletes nothing", async () => {
   assert.strictEqual(qa(main, "entry").length, 1);
 });
 
+
+const CARDS = () => [
+  { profile_id: "emp-1", name: "文案小編", tool: "claude", company: "Anthropic", can_chat: true, on: true },
+  { profile_id: "emp-4", name: "會計師", tool: "codex", company: "OpenAI", can_chat: true, on: false },
+  { profile_id: "emp-3", name: "Grok 員工", tool: "grok", company: null, can_chat: false, on: false },
+];
+
+test("a line says which chat or group it came from by name, who spoke, and when it was changed", async () => {
+  const CH = "c-" + "a".repeat(16);
+  setPage({ chats: [{ id: CH, profile_id: "emp-1", engine: "claude-chat" }], chatCards: [{ id: "emp-1", name: "文案小編", can_chat: true }], groups: [{ id: "g-0123456789ab", name: "市集準備", members: [] }],
+    memory: view([
+      entry("m-0000000001", "work", "甲", { source: { how: "chat", chat_id: CH, turn: 2, speaker: "you" } }),
+      entry("m-0000000002", "work", "乙", { source: { how: "group", group_id: "g-0123456789ab", turn: 1, speaker: "employee" } }),
+      entry("m-0000000003", "work", "丙", { source: { how: "chat", chat_id: "c-" + "f".repeat(16), turn: 2, speaker: "employee" } }),
+      entry("m-0000000004", "work", "丁", { created_at: 1790000000, updated_at: 1790099999 })]) });
+  const main = await open();
+  const metas = qa(main, "meta").map(text);
+  assert(metas[0].startsWith("從和「文案小編」的聊天記住的（你說的）"), metas[0]);
+  assert(metas[1].startsWith("從群組「市集準備」記住的（員工說的）"), metas[1]);
+  assert(metas[2].startsWith("從聊天記住的（員工說的）"), "a chat that is gone: no name is guessed: " + metas[2]);
+  assert(metas[3].includes("改於"), "a line that was changed says so");
+  assert(!metas[0].includes("改於"));
+});
+
+test("the names are asked for only when a line came from a chat or a group", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "x")]) });
+  await open();
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/chats" || c.url === "/api/groups").length, 0);
+});
+
+test("change: 改 opens the line's own words and kind; 存 sends only what changed with PATCH; the list is read again", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "我的店叫小熊皂坊")]) });
+  const main = await open();
+  qa(main, "edit")[0].click();
+  await settle();
+  const row = qa(main, "entry")[0];
+  const box = q(row, "new-text");
+  assert.strictEqual(box.value, "我的店叫小熊皂坊");
+  assert.strictEqual(q(row, "kind").value, "work");
+  box.value = "我的店叫小熊皂坊，在週末市集";
+  box.dispatch("input");
+  page.memory = view([entry("m-0000000001", "work", "我的店叫小熊皂坊，在週末市集")]);
+  q(row, "save").click();
+  await settle(80);
+  const patches = FETCH_LOG.filter((c) => c.method === "PATCH");
+  assert.deepStrictEqual(patches.map((c) => [c.url, c.body]), [["/api/memory/m-0000000001", { text: "我的店叫小熊皂坊，在週末市集" }]]);
+  assert(text(qa(main, "entry")[0]).includes("在週末市集"));
+  assert.strictEqual(qa(main, "save").length, 1, "only the form for a new line is left");
+  assert(text(h.dom().toastEl).includes("已改"));
+});
+
+test("change the kind only sends the kind; nothing changed sends nothing", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "我的店叫小熊皂坊")]) });
+  const main = await open();
+  qa(main, "edit")[0].click();
+  await settle();
+  let row = qa(main, "entry")[0];
+  q(row, "save").click();
+  await settle(40);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "PATCH").length, 0, "nothing changed, nothing sent");
+  row = qa(main, "entry")[0];
+  assert.strictEqual(q(row, "new-text"), null, "the form closes");
+  qa(main, "edit")[0].click();
+  await settle();
+  row = qa(main, "entry")[0];
+  q(row, "kind").value = "decision";
+  q(row, "save").click();
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.method === "PATCH").map((c) => c.body), [{ kind: "decision" }]);
+});
+
+test("change that is refused shows the reason in the line and keeps the words; one that needs confirming is sent again with the tick", async () => {
+  const warn = "這看起來像電話或地址，記憶會送給 AI 公司。確定要記住嗎？";
+  setPage({ memory: view([entry("m-0000000001", "work", "我的店叫小熊皂坊")]),
+    patchStatus: (b) => (/密碼/.test(b.text || "") ? 400 : b.confirm_warning ? 200 : 409),
+    patchBody: (b) => (/密碼/.test(b.text || "") ? { error: "記憶裡不能有密碼或驗證碼，請換個說法。", code: "memory_refused", refuse: "secret_password" }
+      : b.confirm_warning ? { ok: true, entry: entry("m-0000000001", "work", b.text) } : { error: warn, code: "memory_confirm", warn: ["personal"], warn_text: [warn] }) });
+  const main = await open();
+  qa(main, "edit")[0].click();
+  await settle();
+  let row = qa(main, "entry")[0];
+  q(row, "new-text").value = "後台密碼是 hunter-two";
+  q(row, "save").click();
+  await settle(80);
+  row = qa(main, "entry")[0];
+  assert(text(q(row, "problem")).includes("記憶裡不能有密碼"));
+  assert.strictEqual(q(row, "new-text").value, "後台密碼是 hunter-two");
+  q(row, "new-text").value = "電話 0912-345-678";
+  q(row, "new-text").dispatch("input");
+  q(row, "save").click();
+  await settle(80);
+  row = qa(main, "entry")[0];
+  assert(text(q(row, "confirm-box")).includes("電話或地址"));
+  q(row, "save").click();
+  await settle(40);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "PATCH").length, 2, "not sent again without the tick");
+  q(row, "confirm").checked = true;
+  q(row, "save").click();
+  await settle(80);
+  const sent = FETCH_LOG.filter((c) => c.method === "PATCH").map((c) => c.body);
+  assert.strictEqual(sent[2].confirm_warning, true);
+});
+
+test("cancel closes the change and sends nothing", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "我的店叫小熊皂坊")]) });
+  const main = await open();
+  qa(main, "edit")[0].click();
+  await settle();
+  const row = qa(main, "entry")[0];
+  q(row, "new-text").value = "改了一半";
+  q(row, "cancel").click();
+  await settle();
+  assert.strictEqual(q(qa(main, "entry")[0], "new-text"), null);
+  assert(text(qa(main, "entry")[0]).includes("我的店叫小熊皂坊"));
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "PATCH").length, 0);
+});
+
+test("download: 匯出 reads the file from VBear and saves it from the browser itself, to no other address", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "我的店叫小熊皂坊")]),
+    exportBody: { ok: true, filename: "vbear-記憶-20261107.md", text: "# 記憶\n\n## 你的工作\n- 我的店叫小熊皂坊\n" } });
+  const main = await open();
+  const made = [], revoked = [], links = [];
+  const realBlob = global.Blob, realURL = global.URL, realCreate = global.document.createElement;
+  global.Blob = function Blob(parts, opts) { this.parts = parts; this.type = opts && opts.type; made.push(this); };
+  global.URL = { createObjectURL: (b) => { made.push("url"); return "blob:fake-1"; }, revokeObjectURL: (u) => revoked.push(u) };
+  global.document.createElement = (tag) => { const n = realCreate(tag); if (tag === "a") { links.push(n); n.click = () => { n.clicked = true; }; } return n; };
+  try {
+    qa(main, "export")[0].click();
+    await settle(80);
+    await sleep(150);
+  } finally { global.Blob = realBlob; global.URL = realURL; global.document.createElement = realCreate; }
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url.includes("export")).map((c) => c.method + " " + c.url), ["GET /api/memory/export"]);
+  const blob = made.find((x) => x !== "url");
+  assert(blob && blob.parts.join("").includes("我的店叫小熊皂坊") && /text\/markdown/.test(blob.type));
+  const a = links.find((n) => n.getAttribute("download"));
+  assert(a && a.getAttribute("download") === "vbear-記憶-20261107.md" && a.getAttribute("href") === "blob:fake-1" && a.clicked);
+  assert(revoked.includes("blob:fake-1"), "the address is let go again");
+  assert(text(h.dom().toastEl).includes("匯出"));
+});
+
+test("a download that fails says so and saves nothing", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "x")]), exportStatus: 503 });
+  const main = await open();
+  qa(main, "export")[0].click();
+  await settle(80);
+  assert(text(h.dom().toastEl).includes("匯出不了"));
+});
+
+test("delete all: asks with the tools' copies note, wants the words typed, then posts them once", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "甲"), entry("m-0000000002", "decision", "乙")]) });
+  const main = await open();
+  qa(main, "clear")[0].click();
+  await settle();
+  const dlg = dialog();
+  assert(text(dlg).includes("已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。"));
+  assert(text(dlg).includes("2 條"));
+  const go = q(dlg, "clear-go");
+  const typed = q(dlg, "clear-typed");
+  assert.strictEqual(go.disabled, true, "shut until the words are typed");
+  typed.value = "全部"; typed.dispatch("input");
+  assert.strictEqual(go.disabled, true);
+  go.click();
+  await settle(40);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/clear").length, 0);
+  typed.value = "全部刪除"; typed.dispatch("input");
+  assert.strictEqual(go.disabled, false);
+  page.memory = view([]);
+  go.click();
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/clear").map((c) => c.body), [{ confirm: "全部刪除" }]);
+  assert.strictEqual(dialog(), null);
+  assert.strictEqual(qa(main, "entry").length, 0);
+});
+
+test("delete all can be cancelled, and has no button when there is nothing to delete", async () => {
+  setPage({ memory: view([entry("m-0000000001", "work", "甲")]) });
+  let main = await open();
+  qa(main, "clear")[0].click();
+  await settle();
+  dialog().find((n) => n.tag === "button" && text(n) === "取消").click();
+  await settle();
+  assert.strictEqual(dialog(), null);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/clear").length, 0);
+  setPage({ memory: view([]) });
+  main = await open();
+  assert(qa(main, "clear").every((b) => b.disabled === true), "nothing to delete");
+});
+
+test("who takes the memory: each employee with the tool and the company, a switch, and the sentence about the terminal", async () => {
+  setPage({ memory: view([], { cards: CARDS() }) });
+  const main = await open();
+  const rows = qa(main, "card");
+  assert.strictEqual(rows.length, 3);
+  const [claude, codex, grok] = rows;
+  assert(text(claude).includes("文案小編") && text(claude).includes("Claude Code") && text(claude).includes("Anthropic"));
+  assert(text(codex).includes("會計師") && text(codex).includes("Codex") && text(codex).includes("OpenAI"));
+  assert.strictEqual(q(claude, "card-switch").checked, true);
+  assert.strictEqual(q(codex, "card-switch").checked, false, "Codex starts off");
+  assert(text(grok).includes("這位員工的 AI 工具還不能聊天，用不到記憶"));
+  assert.strictEqual(q(grok, "card-switch"), null);
+  assert(text(main).includes("在終端機（完整模式）出發時不帶記憶"));
+  assert(text(q(main, "cards-note")).includes("Codex") && text(q(main, "cards-note")).includes("OpenAI"));
+});
+
+test("switching an employee off posts at once and the page is read again", async () => {
+  setPage({ memory: view([], { cards: CARDS() }) });
+  const main = await open();
+  const sw = q(qa(main, "card")[0], "card-switch");
+  page.memory = view([], { cards: CARDS().map((c) => (c.profile_id === "emp-1" ? { ...c, on: false } : c)) });
+  sw.checked = false;
+  sw.dispatch("change");
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").map((c) => c.body), [{ profile_id: "emp-1", on: false }]);
+  assert.strictEqual(q(qa(main, "card")[0], "card-switch").checked, false);
+});
+
+test("switching a Codex employee on asks first and says it goes to OpenAI; 取消 leaves it off and posts nothing", async () => {
+  setPage({ memory: view([], { cards: CARDS() }) });
+  const main = await open();
+  const sw = q(qa(main, "card")[1], "card-switch");
+  sw.checked = true;
+  sw.dispatch("change");
+  await settle();
+  const dlg = dialog();
+  assert(dlg);
+  assert(text(dlg).includes("OpenAI") && text(dlg).includes("會計師"));
+  assert(text(dlg).includes("記憶會跟著送給 OpenAI"));
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").length, 0);
+  dlg.find((n) => n.tag === "button" && text(n) === "取消").click();
+  await settle(80);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").length, 0);
+  assert.strictEqual(q(qa(main, "card")[1], "card-switch").checked, false, "the switch goes back");
+});
+
+test("switching a Codex employee on after saying yes posts it; a refusal puts the switch back and says why", async () => {
+  setPage({ memory: view([], { cards: CARDS() }) });
+  let main = await open();
+  let sw = q(qa(main, "card")[1], "card-switch");
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  page.memory = view([], { cards: CARDS().map((c) => (c.profile_id === "emp-4" ? { ...c, on: true } : c)) });
+  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").map((c) => c.body), [{ profile_id: "emp-4", on: true, confirm_company: true }]);
+  assert.strictEqual(q(qa(main, "card")[1], "card-switch").checked, true);
+  setPage({ memory: view([], { cards: CARDS() }), cardsStatus: 404 });
+  main = await open();
+  sw = q(qa(main, "card")[0], "card-switch");
+  sw.checked = false; sw.dispatch("change");
+  await settle(80);
+  assert.strictEqual(q(qa(main, "card")[0], "card-switch").checked, true, "back to what the server says");
+  assert(text(h.dom().toastEl).includes("這張卡現在不能改"));
+});
+
+test("a page that sends no cards shows no switches and no guess", async () => {
+  setPage({ memory: { ...view([]), cards: undefined } });
+  const main = await open();
+  assert.strictEqual(qa(main, "card").length, 0);
+  assert(text(main).includes("在終端機（完整模式）出發時不帶記憶"));
+});
+
 test("the nav has the memory page after the chat, the route is known, and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   assert(html.includes('data-nav="memory"'));
   assert(html.indexOf('data-nav="chat"') < html.indexOf('data-nav="memory"') && html.indexOf('data-nav="memory"') < html.indexOf('data-nav="dispatch"'));
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
   assert(/top === "memory"\) await viewMemory\(\)/.test(source));
-  const part = source.slice(source.indexOf("// ---------- memory (P42-1)"), source.indexOf("// ---------- meetings (P34-5)"));
+  const part = source.slice(source.indexOf("// ---------- memory (P42-1"), source.indexOf("// ---------- meetings (P34-5)"));
   assert(part.length > 3000);
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u;
   assert(!emoji.test(part), "no emoji in the page");
