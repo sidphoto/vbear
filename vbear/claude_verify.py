@@ -118,6 +118,21 @@ def _failed_checks(report: Path) -> list[str]:
     return [name for name, c in checks.items() if not (isinstance(c, dict) and c.get("pass"))]
 
 
+def _shared_result(report: Path) -> tuple:
+    """(``"passed"``, ``"failed"`` or None when the report does not say, the names of the shared steps that did not pass): the shared
+    folder part of a chat check (P43-2). Judged from the report's own steps, as ``cli_versions.shared_verified`` does."""
+    try:
+        data = json.loads(report.read_text())
+    except (OSError, ValueError):
+        return None, []
+    steps = data.get("shared_steps") if isinstance(data, dict) else None
+    said = data.get("shared") if isinstance(data, dict) else None
+    if said not in ("passed", "failed") or not isinstance(steps, dict):
+        return None, []
+    failed = [n for n, c in steps.items() if not (isinstance(c, dict) and c.get("pass") is True)]
+    return ("passed" if said == "passed" and not failed else "failed"), failed
+
+
 def _title_result(report: Path) -> dict:
     """The interactive report's title check, as recorded: passed, failed check names."""
     try:
@@ -229,7 +244,11 @@ class ChatVerifier:
             return self._finish("failed", f"聊天驗證：{why}", report=str(out), failed=failed)
         if version not in self._verified():
             return self._finish("error", "檢查說通過了，但這個版本沒有出現在本機的已驗證清單裡，請看報告", report=str(out))
-        self._finish("passed", f"{self.LABEL} {version} 通過聊天驗證", report=str(out))
+        shared, shared_failed = _shared_result(out)
+        note = ("；共用資料夾也通過" if shared == "passed" else
+                "；但共用資料夾這段沒有通過（" + "、".join(shared_failed) + "），開著共用資料夾的員工還不能聊天" if shared == "failed" else "")
+        self._finish("passed", f"{self.LABEL} {version} 通過聊天驗證{note}", report=str(out),
+                     shared=shared, shared_failed=shared_failed)
 
     def _unfinished(self, report: Path) -> str:
         return "驗證沒有完成（模型可能沒有回應，或登入失效）"

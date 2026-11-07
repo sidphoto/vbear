@@ -286,6 +286,76 @@ class CommandTests(CheckCase):
         self.assertIn("chat", buf.getvalue())
 
 
+class SharedTests(CheckCase):
+    """P43-2 (ADR 0009): the shared folder part of the check, in a chat of its own. Its result is the report's ``shared``; a failure
+    there leaves ``passed`` and the record of the chat check alone."""
+
+    STEPS = ("shared_folder", "shared_on", "shared_write_asks", "shared_bash_works", "shared_link_refused", "shared_records_clean")
+
+    def assert_shared(self, report, ok, failed=()):
+        self.assertEqual(report["shared"], "passed" if ok else "failed", report["shared_steps"])
+        for name in failed:
+            self.assertFalse(report["shared_steps"][name]["pass"], (name, report["shared_steps"]))
+
+    def test_a_well_behaved_claude_code_passes_the_shared_part_and_it_is_in_the_report(self):
+        code, report = self.check()
+        self.assertEqual((code, report["passed"]), (0, True), report.get("error"))
+        self.assert_shared(report, True)
+        self.assertEqual(set(report["shared_steps"]), set(self.STEPS))
+        self.assertTrue(all(c["pass"] for c in report["shared_steps"].values()), report["shared_steps"])
+        self.assertEqual(len(report["turns"]), 6, "the main chat keeps its six turns")
+        self.assertTrue(cli_versions.shared_verified("claude-chat", VERSION))
+
+    def test_the_record_of_the_main_check_alone_does_not_make_the_shared_folder_usable(self):
+        self.assertFalse(cli_versions.shared_verified("claude-chat", VERSION))
+        code, report = self.check()
+        self.assertTrue(cli_versions.shared_verified("claude-chat", VERSION))
+        data = json.loads((self.work / "report.json").read_text())
+        data["shared"] = "failed"
+        (self.work / "report.json").write_text(json.dumps(data))
+        (self.work / "report.json").chmod(0o600)
+        self.assertEqual(self.verified(), (VERSION,), "still chat-verified")
+        self.assertFalse(cli_versions.shared_verified("claude-chat", VERSION))
+
+    def test_a_sandbox_that_does_not_let_bash_write_there_fails_only_the_shared_part(self):
+        code, report = self.check({"shared_sandbox": "closed"})
+        self.assertEqual((code, report["passed"]), (0, True), "the chat check itself passed")
+        self.assert_shared(report, False, ["shared_bash_works"])
+        self.assertEqual(self.verified(), (VERSION,))
+        self.assertFalse(cli_versions.shared_verified("claude-chat", VERSION))
+
+    def test_a_model_that_never_tries_the_write_fails_the_shared_part(self):
+        code, report = self.check({"shared_no_attempt": True})
+        self.assertEqual((code, report["passed"]), (0, True))
+        self.assert_shared(report, False, ["shared_write_asks"])
+
+    def test_a_write_through_a_link_that_vbear_would_let_through_fails_the_shared_part(self):
+        real = cp.judge
+
+        def lenient(tool, tool_input, workdir, shared=None):
+            if tool == "Write" and "vbear-check-link" in str(tool_input.get("file_path")):
+                return cp.Judgement("ask", "(a judge that lets it through)", cp.EDITABLE["Write"])
+            return real(tool, tool_input, workdir, shared)
+        with mock.patch.object(cp, "judge", lenient):
+            code, report = self.check()
+        self.assertEqual((code, report["passed"]), (0, True))
+        self.assert_shared(report, False, ["shared_link_refused"])
+
+    def test_nothing_outside_the_check_is_touched_and_nothing_is_left(self):
+        code, report = self.check()
+        self.assertEqual([p.name for p in self.work.iterdir()], ["report.json"])
+        self.assertTrue(report["checks"]["cleanup"]["pass"])
+        self.assertFalse((self.state / "shared").exists(), "the check's own folder was in its own temporary state")
+        text = json.dumps(report, ensure_ascii=False)
+        self.assertNotIn("vbear-check-write", text.replace("shared_write", ""), "no file name of the shared folder in the report")
+
+    def test_when_the_main_part_fails_the_shared_part_is_not_run_and_says_so(self):
+        code, report = self.check({"bash_asks": False})
+        self.assert_failed(code, report, "bash_asks")
+        self.assert_shared(report, False)
+        self.assertEqual(list(report["shared_steps"]), ["not_run"])
+
+
 class VerifierTests(CheckCase):
     def run_verifier(self, rc, *, report=None, record=False):
         verifier = claude_verify.ChatVerifier()
@@ -314,6 +384,22 @@ class VerifierTests(CheckCase):
         (self.state / cli_versions.LOCAL_CHAT_VERIFIED_FILE).unlink()
         status = self.run_verifier(0, report=ok, record=False)
         self.assertEqual(status["result"], "error")
+
+    def test_the_shared_part_of_a_pass_is_said_with_the_steps_that_did_not_pass(self):
+        steps = {"shared_on": {"pass": True}, "shared_bash_works": {"pass": False}}
+        for shared, steps_, word, failed in (("passed", {"shared_on": {"pass": True}}, "共用資料夾也通過", []),
+                                             ("failed", steps, "共用資料夾這段沒有通過", ["shared_bash_works"]),
+                                             ("passed", steps, "共用資料夾這段沒有通過", ["shared_bash_works"]),
+                                             (None, None, "", [])):
+            with self.subTest(shared=shared, failed=failed):
+                report = {"mode": "chat", "passed": True, "claude_version": VERSION}
+                if shared:
+                    report.update(shared=shared, shared_steps=steps_)
+                status = self.run_verifier(0, report=report, record=True)
+                self.assertEqual((status["result"], status["shared"], status["shared_failed"]),
+                                 ("passed", shared if shared == "passed" and not failed else ("failed" if shared else None), failed), status)
+                self.assertIn(word, status["message"])
+                (self.state / cli_versions.LOCAL_CHAT_VERIFIED_FILE).unlink()
 
     def test_a_failed_check_names_what_failed(self):
         report = {"mode": "chat", "passed": False, "claude_version": VERSION,
