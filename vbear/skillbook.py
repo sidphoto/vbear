@@ -314,8 +314,11 @@ def edit(skill_id, body, now: float | None = None) -> dict:
     return {"skill": changed}
 
 
-def delete(skill_id) -> dict:
-    """Remove one skill. ApiError 404 when there is no such skill."""
+def delete(skill_id, body=None) -> dict:
+    """Remove one skill. ``body`` is what the route was sent: it must be empty (``{}``); None means a call from code. ApiError 404 when
+    there is no such skill."""
+    if body is not None:
+        _body(body, set(), set())
     try:
         _folder(True)
         with store.locked():

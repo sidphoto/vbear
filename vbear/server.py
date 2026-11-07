@@ -49,6 +49,7 @@ from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
 from . import memory as memory_mod
+from . import skillbook as skillbook_mod
 from . import shared_folder
 from . import claude_verify
 from . import codex_verify
@@ -137,6 +138,8 @@ STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|ret
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
 # /api/memory[/<id>|/clear|/cards|/export] (P42-1, P42-2): the person's memory; only these routes write memory.json
 MEMORY_RE = re.compile(r"^/api/memory/(m-[0-9a-f]{10})\Z")
+# /api/my-skills[/<id>[/delete]] (P44-1, ADR 0010): the person's skills; only these routes write skills.json
+SKILL_RE = re.compile(r"^/api/my-skills/(k-[0-9a-f]{12})(?:/(delete))?\Z")
 # /api/memory/suggest[/preview | /<id>[/saved | /dismiss | /cancel]] (P42-4): memory suggestions; none of these writes memory.json
 SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismiss|cancel))?\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
@@ -735,6 +738,8 @@ def make_handler(console: Console):
                     return self._chat_action(self._shared_view)
                 if path == "/api/memory/export":
                     return self._chat_action(memory_mod.export)
+                if path == "/api/my-skills":
+                    return self._chat_action(skillbook_mod.view)
                 if path == "/api/memory/suggest":
                     return self._suggest_call("list")
                 if path.startswith("/api/memory/suggest/"):
@@ -967,6 +972,15 @@ def make_handler(console: Console):
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
                 if path == "/api/memory/clear":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/my-skills":
+                    return self._chat_action(lambda b=self._body_strict(): skillbook_mod.add(b), 201)
+                if path.startswith("/api/my-skills/"):
+                    found = SKILL_RE.match(path)
+                    if not found:
+                        return self._error(404, "not found")
+                    if found.group(2) == "delete":
+                        return self._chat_action(lambda b=self._body_strict(): skillbook_mod.delete(found.group(1), b))
+                    return self._chat_action(lambda b=self._body_strict(): skillbook_mod.edit(found.group(1), b))
                 if path == "/api/shared/cards":
                     return self._chat_action(lambda b=self._body_strict(): shared_folder.set_card(b, self._memory_cards()))
                 if path == "/api/shared/reveal":
