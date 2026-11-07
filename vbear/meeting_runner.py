@@ -351,11 +351,11 @@ class MeetingRunner(HeadlessBoard):
         return {"meetings": out}
 
     def ledger(self, conf) -> dict:
-        """The day's money of the meetings, the staffing meetings, the chats, the tries and the chief of staff together (``includes`` says so)."""
+        """The day's money of the meetings, the staffing meetings, the chats, the tries, the chief of staff and the memory suggestions together (``includes`` says so)."""
         limits = mt.limits_from(conf)
         day = self._day()
         with self.lock:
             running = self.job["meeting_id"] if self.job else None
         return {"spent_usd": mt.fmt(day), "daily_usd": mt.fmt(limits["daily_usd"]), "per_call_usd": mt.fmt(limits["per_call_usd"]),
                 "meeting_usd": mt.fmt(limits["meeting_usd"]), "lamp": mt.lamp(day, limits), "running": running,
-                "blocked": (cfg.state_dir() / f"{WORKER}.blocked").exists(), "note": COST_NOTE, "includes": ["meetings", "staffing", "chats", "setup_try", "chief"]}
+                "blocked": (cfg.state_dir() / f"{WORKER}.blocked").exists(), "note": COST_NOTE, "includes": ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"]}
