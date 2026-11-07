@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -71,6 +72,7 @@ from . import chief, chief_runner as chief_runner_mod
 from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
+from . import routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -143,6 +145,9 @@ SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismi
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
 GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue|drop|members|rename))?\Z")
+# /api/routines[/<id>[/delete | /start] | /settings | /waiting/<run id>] (P44-2): the person's routines; only these routes write them
+ROUTINE_RE = re.compile(r"^/api/routines/(r-[0-9a-f]{12})(?:/(delete|start))?\Z")
+ROUTINE_WAITING_RE = re.compile(r"^/api/routines/waiting/(rr-[0-9a-f]{12})\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -340,6 +345,15 @@ class Console:
     def group_runner(self):
         self.group_service()
         return self._group_runner
+
+    def routine_runner(self):
+        """The one routine runner (P44-2), built on first use; its thread is started by serve() only. It reads the chat service and the
+        day's ledger the way the dispatch runner does, and 「自己動手」 item 3 from the console's configuration."""
+        with self.lock:
+            if "_routine_runner" not in self.__dict__:
+                self._routine_runner = routine_runner_mod.RoutineRunner(
+                    chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf), conf=lambda: self.store.conf)
+            return self._routine_runner
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -706,7 +720,7 @@ def make_handler(console: Console):
                     found = MEETING_RE.match(path)
                     return self._meeting_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path == "/api/chats":
-                    return self._chat_action(lambda: console.chat_service().list(console.store.conf))
+                    return self._chat_action(self._chat_list)
                 if path == "/api/chat-support":
                     return self._chat_action(lambda: {"support": console.chat_service().support()})
                 if path.startswith("/api/chats/"):
@@ -718,7 +732,7 @@ def make_handler(console: Console):
                         return self._error(400, "after 必須是非負整數")
                     if found.group(2) == "stream":
                         return self._chat_stream(found.group(1), after)
-                    return self._chat_action(lambda: console.chat_service().get(found.group(1), after))
+                    return self._chat_action(lambda: self._chat_detail(found.group(1), after))
                 if path == "/api/groups":
                     return self._group_call("list")
                 if path.startswith("/api/groups/"):
@@ -751,6 +765,10 @@ def make_handler(console: Console):
                     return self._dispatch_call("list")
                 if path == "/api/actions":
                     return self._dispatch_call("actions")
+                if path == "/api/routines":
+                    return self._chat_action(self._routines_view)
+                if path == "/api/waiting":
+                    return self._chat_action(self._waiting_view)
                 if path.startswith("/api/dispatch/"):
                     found = DISPATCH_RE.match(path)
                     return self._dispatch_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
@@ -956,6 +974,8 @@ def make_handler(console: Console):
                     svc, chat_id, body = console.chat_service(), found.group(1), self._body_strict()
                     call = {"messages": svc.send, "answer": svc.answer, "stop": svc.stop}[action]
                     return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
+                if path == "/api/routines" or path.startswith("/api/routines/"):
+                    return self._routines_post(path, self._body_strict())
                 if path == "/api/groups":
                     return self._group_call("create", None, self._body_strict())
                 if path.startswith("/api/groups/"):
@@ -2043,6 +2063,93 @@ def make_handler(console: Console):
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "storage"}, 503)
 
+        # ---- routines (P44-2): the person's own presses; every write below carries X-VBear (checked for every POST) ----
+
+        def _chat_list(self) -> dict:
+            """The chat list, with the title of the chats routines opened (read from the routines' records; the chat's own record has no field)."""
+            out = console.chat_service().list(console.store.conf)
+            titles = routines_mod.chat_titles()
+            for row in out.get("chats", []):
+                if isinstance(row, dict) and row.get("id") in titles:
+                    row["routine_title"] = titles[row["id"]]
+            return out
+
+        def _chat_detail(self, chat_id, after) -> dict:
+            out = console.chat_service().get(chat_id, after)
+            title = routines_mod.chat_titles().get(chat_id)
+            if title:
+                out["routine_title"] = title
+            return out
+
+        @staticmethod
+        def _usd(value) -> str | None:
+            return None if value is None else f"{Decimal(value):.2f}"
+
+        def _routines_view(self) -> dict:
+            """GET /api/routines: every routine with its next time and its last 10 runs, the settings, today's money, and the reminders
+            that wait. Reads only; a record that cannot be read is said so and nothing is guessed."""
+            runner = console.routine_runner()
+            now = time.time()
+            routines, problem = routines_mod.read_routines()
+            runs, runs_problem = routines_mod.read_runs()
+            settings, settings_problem = routines_mod.read_settings()
+            conf = console.store.conf
+            try:
+                cards = {c["id"]: c for c in console.chat_service().cards() if isinstance(c, dict)}
+            except Exception:
+                cards = {}
+            limits = runner.limits()
+            per_turn = chat_store.limits_from(conf)["per_turn_usd"]
+            rows = []
+            for routine in routines:
+                card = cards.get(routine["profile_id"], {})
+                nxt = routine_rules.next_due(routine, now, runner.tz) if routine["enabled"] else None
+                mine = [r for r in runs if r["routine_id"] == routine["id"]][-10:][::-1]
+                rows.append({**routine, "profile_name": card.get("name"), "can_chat": card.get("can_chat") is True,
+                             "next": {"slot": nxt[0], "at": nxt[1]} if nxt else None, "per_run_usd": self._usd(per_turn),
+                             "runs": [{**r, "by_text": {"you": "你按的", "auto3": "自己動手第 3 項"}.get(r["by"])} for r in mine]})
+            return {"routines": rows, "readable": problem is None and runs_problem is None, "problem": problem or runs_problem,
+                    "settings": {"daily_usd": self._usd(limits["routine_usd"]), "daily_usd_set": settings["daily_usd"],
+                                 "default_usd": self._usd(limits["default_usd"]), "keep_awake": settings["keep_awake"],
+                                 "problem": settings_problem},
+                    "today": {"routine_spent_usd": self._usd(limits["routine_spent_usd"]), "routine_limit_usd": self._usd(limits["routine_usd"]),
+                              "day_usd": self._usd(limits["day_usd"]), "day_left_usd": self._usd(limits["left_usd"]), "lamp": limits["lamp"]},
+                    "autonomy": {"routines": autonomy.read(conf)["routines"]}, "waiting": runner.waiting_rows(),
+                    "limits": {"per_turn_usd": self._usd(per_turn), "max_routines": routine_rules.MAX_ROUTINES,
+                               "max_enabled": routine_rules.MAX_ENABLED}}
+
+        def _waiting_view(self) -> dict:
+            """GET /api/waiting: what waits for the person, for the line over every page: only counts, names, times and ids."""
+            return {"waiting": console.routine_runner().waiting_rows()}
+
+        def _routines_post(self, path, body):
+            """The routes that write routines. The employee must be a card the chat service says can chat; the text is held to the memory's
+            rules; the settings never touch config.json."""
+            runner = console.routine_runner()
+            if path == "/api/routines":
+                return self._chat_action(lambda: routines_mod.create(body, console.chat_service().cards()), 201)
+            if path == "/api/routines/settings":
+                return self._chat_action(lambda: routines_mod.set_settings(body, runner.limits()["day_usd"]))
+            found = ROUTINE_WAITING_RE.match(path)
+            if found:
+                def decide():
+                    if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in ("start", "skip"):
+                        raise ApiError(400, "bad_request", "只接受 action，值是 start 或 skip。")
+                    run = (runner.start_waiting if body["action"] == "start" else runner.skip_waiting)(found.group(1))
+                    return {"run": run}
+                return self._chat_action(decide)
+            found = ROUTINE_RE.match(path)
+            if not found:
+                return self._error(404, "not found")
+            rid, action = found.group(1), found.group(2)
+            if action in ("delete", "start"):
+                def act():
+                    if body != {}:
+                        raise ApiError(400, "bad_request", "這個動作不需要內容。")
+                    return routines_mod.delete(rid) if action == "delete" else {"run": runner.start_now(rid)}
+                return self._chat_action(act, 202 if action == "start" else 200)
+            return self._chat_action(lambda: routines_mod.edit(rid, body, console.chat_service().cards()))
+
         def _memory_cards(self) -> list:
             """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
             return console.chat_service().cards()
@@ -2427,7 +2534,7 @@ def make_handler(console: Console):
                 if action == "list":
                     return self._json(dispatcher.list())
                 if action == "actions":
-                    return self._json(dispatcher.actions())
+                    return self._json(self._with_routine_actions(dispatcher.actions()))
                 if action == "get":
                     got = dispatcher.get(dispatch_id)
                     return self._json(self._dispatch_shared(dispatch_id, got) if got["state"] == "proposed" else got)
@@ -2455,6 +2562,21 @@ def make_handler(console: Console):
                 return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
+
+        @staticmethod
+        def _with_routine_actions(got: dict, limit: int = 200) -> dict:
+            """「AI 自己做了什麼」 also lists the routines VBear began by itself (item 3): the same row shape as a dispatch's, newest first.
+            Best effort: a failure here leaves the dispatch rows as they were."""
+            try:
+                extra = console.routine_runner().actions()
+            except Exception:
+                return got
+            rows = list(got.get("actions", [])) + [
+                {"at": r["at"], "dispatch_id": None, "seq": 0, "kind": r["kind"], "what": r["what"], "by": r["by"], "by_text": r["by_text"],
+                 "profile_id": None, "can_stop": False, "can_withdraw": False, "routine_id": r["routine_id"], "chat_id": r["chat_id"]}
+                for r in extra]
+            rows.sort(key=lambda r: (r["at"], r["seq"]), reverse=True)
+            return {**got, "actions": rows[:limit]}
 
         def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
@@ -2914,6 +3036,9 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     group_runner = console.group_runner()
     if not group_runner.start():
         print(f"提示：這個主控台不執行群組（{group_runner.last_error}）", flush=True)
+    routine_runner = console.routine_runner()
+    if not routine_runner.start():
+        print(f"提示：這個主控台不執行例行工作（{routine_runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         threading.Timer(0.4, lambda: open_in_browser(port)).start()
@@ -2929,6 +3054,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
         console.runner.stop()
         dispatch_runner.close()
         group_runner.close()
+        routine_runner.close()
         if console._previews is not None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit

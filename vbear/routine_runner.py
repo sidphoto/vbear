@@ -23,7 +23,7 @@ What a pass does, in this order (the later batches add to the places marked):
    employee (``ChatService.create``), the message goes out through ``ChatService.send_for_routine`` and the run is ``running``.
    (P44-4 adds one line here: ``auto_continue.tick()``.)
 
-Item 3 is read in one place, ``_auto``: ``autonomy.read(conf())["routines"]``; a missing key, a value that is not ``True``, a config that
+Item 3 is read in one place, ``_auto``: the ``routines`` key of the autonomy block (through ``autonomy``'s reader); a missing key, a value that is not ``True``, a config that
 cannot be read: off. With it off the runner writes only ``waiting``, ``missed``, ``dismissed``, ``skipped``, ``failed`` records for slots
 and starts runs only for the person's press (``start_waiting``, ``start_now``).
 
