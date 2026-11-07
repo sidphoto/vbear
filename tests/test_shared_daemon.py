@@ -15,7 +15,7 @@ from unittest import mock
 
 from tests import test_chat_daemon as tcd
 from tests.test_chat_daemon import MODEL, clean
-from vbear.runtime import chat_store as cs, memory_rules as mr, shared_rules as sr
+from vbear.runtime import chat_store as cs, cli_versions, memory_rules as mr, shared_rules as sr
 
 V0170_EMPTY_SHA = "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"      # printed by the unchanged v0.17.0 code
 MEMORY = [{"kind": "work", "text": "我的店叫「QA熊皂坊」（虛構）"}]
@@ -24,6 +24,11 @@ MEMORY = [{"kind": "work", "text": "我的店叫「QA熊皂坊」（虛構）"}]
 class SharedCase(tcd.ChatCase):
     def setUp(self):
         super().setUp()
+        # P43-2: only a version whose chat check passed with the shared folder may use it; these tests are about the folder, not that gate
+        # (tests/test_shared_codex_daemon.py NotCheckedTests and tests/test_shared_verified.py are)
+        p = mock.patch.object(cli_versions, "shared_verified", return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
         self.shared = sr.shared_path(self.base)
         self.outside = self.tmp / "outside"
         self.outside.mkdir()
@@ -83,12 +88,23 @@ class FieldTests(SharedCase):
         self.assertEqual(self.fake_log(), [])
         self.assertFalse(os.path.lexists(self.shared))
 
-    def test_a_codex_chat_cannot_have_it_yet(self):
-        r = self.rpc("chat_open", profile_id="emp-1", engine="codex-chat")
-        self.assertTrue(r["ok"], r)
-        r = self.send_with(r["result"]["chat_id"], True, engine="codex-chat")
-        self.assertEqual(r["error"]["code"], "bad_request")
+    def test_a_version_that_has_not_passed_the_check_with_the_folder_is_refused_before_anything_is_made(self):
+        chat_id = self.open_chat()
+        with mock.patch.object(cli_versions, "shared_verified", return_value=False):
+            r = self.send_with(chat_id, True)
+        self.assertEqual(r["error"]["code"], "shared_unverified", r)
+        self.assertIn("共用資料夾", r["error"]["message"])
         self.assertEqual(self.fake_log(), [])
+        self.assertEqual(self.kinds(chat_id), ["chat_created"])
+        self.assertFalse(os.path.lexists(self.shared))
+
+    def test_the_checks_own_daemon_may_use_it_for_the_version_it_is_checking(self):
+        self.dm.chat_probe_versions = frozenset({self.cli()["version"]})
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        with mock.patch.object(cli_versions, "shared_verified", return_value=False):
+            self.assertTrue(self.send_with(chat_id, True)["ok"])
+        self.wait_turn(chat_id, 1)
 
 
 class NewProcessTests(SharedCase):

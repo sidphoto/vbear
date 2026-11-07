@@ -11,6 +11,10 @@ Configuration: the JSON file named by $FAKE_CODEX_CONFIG (else $HOME/fake-codex.
    "login_status": 0,                    the exit code of ``login status``
    "clean": true,                        false plays the recording as made: a person's AGENTS.md, five MCP servers,
                                          a sandbox with network access (the chat must be stopped)
+   "roots": "argv",                      the writable roots the thread's answer lists (P43-2): "argv" (default) the ones the
+                                         command line named with ``-c sandbox_workspace_write.writable_roots=[...]``, as a
+                                         faithful Codex does; "empty"; "extra" (one more after them); "extra_first" (one
+                                         before them); or a list of paths, printed as it is
    "mcp_leak": false,                    true plays everything clean except that the thread has MCP servers, as 0.163.0
                                          did for a home folder that is a git repository
    "thread_id": null,                    for thread/start: the thread id to print instead of the recorded one
@@ -155,6 +159,7 @@ class Fake:
         ln = copy.deepcopy(line) if raw or not self.clean else ccf.clean(line)
         if ln is None:
             return
+        self.roots(ln)
         if ccf.is_request(ln):                                     # a server request: a fresh id
             rid = self.srv_id(ln["id"])
             params = ln.get("params") if isinstance(ln.get("params"), dict) else {}
@@ -171,6 +176,28 @@ class Fake:
         for old, new in self.subs:
             ln = _replace(ln, old, new)
         self.write(ln)
+
+    def roots(self, ln):
+        """The writable roots of a thread's answer (and of the settings it later reports): what the command line asked for, unless the
+        configuration says otherwise."""
+        if not isinstance(ln, dict) or not (self.clean or "roots" in self.conf):
+            return
+        result, params = ln.get("result"), ln.get("params")
+        boxes = []
+        if isinstance(result, dict):
+            boxes.append(result.get("sandbox"))
+        if isinstance(params, dict) and isinstance(params.get("threadSettings"), dict):
+            boxes.append(params["threadSettings"].get("sandboxPolicy"))
+        mode = self.conf.get("roots", "argv")
+        asked = []
+        for i, a in enumerate(sys.argv[:-1]):
+            if a == "-c" and sys.argv[i + 1].startswith("sandbox_workspace_write.writable_roots="):
+                asked = json.loads(sys.argv[i + 1].split("=", 1)[1])
+        other = ["/Users/fake-user/elsewhere"]
+        for box in boxes:
+            if isinstance(box, dict) and box.get("type") == "workspaceWrite":
+                box["writableRoots"] = (mode if isinstance(mode, list) else [] if mode == "empty" else asked + other
+                                        if mode == "extra" else other + asked if mode == "extra_first" else asked)
 
     def count(self, ln):
         """The recording counts the whole thread, but only some of its turns are played here, in any order: the

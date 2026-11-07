@@ -18,8 +18,11 @@ StreamOps is.
                                                             (``<state>/shared``), never the caller's; it is checked (a folder of
                                                             ours, 0700, no link on the way), a new process also counts how
                                                             full it is, and the process gets it as a second place the Bash
-                                                            sandbox may write, a second root of VBear's own judgement, and one
-                                                            paragraph of the system prompt. A live idle process whose
+                                                            sandbox may write (Codex: one more writable root of its sandbox,
+                                                            P43-2), a second root of VBear's own judgement, and one
+                                                            paragraph of the system prompt (Codex: of the developer instructions).
+                                                            A version of the AI tool whose chat check did not pass with the folder
+                                                            is refused (``shared_unverified``). A live idle process whose
                                                             ``shared`` differs gives way to a new one (``restarting``);
                                                             ``memory`` (P42-1) is the person's memory as a list of
                                                             {kind, text}: checked again here (memory_rules.prepare), built
@@ -216,15 +219,19 @@ class ChatOps:
 
     def _chat_shared(self, rid: str, chat: dict, req: dict):
         """(the shared folder this message's process may use, None) or (None, an error answer). ``shared`` is absent (the folder is off)
-        or exactly ``true``: anything else is a bad request, so that "off" has one spelling. The path is the daemon's own; the folder
-        is made when it is not there and refused (``shared_unsafe``) when it is not right, and so is a paragraph that does not fit.
-        Only a Claude chat has it so far."""
+        or exactly ``true``: anything else is a bad request, so that "off" has one spelling. Only a version of the AI tool whose chat
+        check passed with the shared folder may use it (``shared_unverified``; the check's own daemon, for the version it is
+        checking, is the exception, as it is for ``unverified``). The path is the daemon's own; the folder is made when it is not
+        there and refused (``shared_unsafe``) when it is not right, and so is a paragraph that does not fit."""
         if "shared" not in req:
             return None, None
         if req["shared"] is not True:
             return None, _err(rid, "bad_request", "shared 只能是 true（不用共用資料夾就不要送這個欄位）")
-        if chat["engine"] != "claude-chat":
-            return None, _err(rid, "bad_request", "這個聊天的 AI 工具還不能用共用資料夾")
+        engine = chat["engine"]
+        version = req["cli"].get("version") if isinstance(req.get("cli"), dict) else None
+        probing = self.chat_probe_versions if engine == "claude-chat" else self.codex_chat_probe_versions
+        if not (isinstance(version, str) and (version in probing or cli_versions.shared_verified(engine, version))):
+            return None, _err(rid, "shared_unverified", cli_versions.shared_unverified_text(engine, str(version)[:32]))
         home = str(Path.home())
         if shared_rules.ensure_folder(self.base, home):
             return None, _err(rid, "shared_unsafe", SHARED_TEXT["shared_unsafe"])
@@ -384,7 +391,7 @@ class ChatOps:
     # ---- a Codex chat -------------------------------------------------------------------------------------------
 
     def _codex_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
-                    instructions: str | None, origin: dict | None = None, memory=None) -> dict:
+                    instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
         """A person's message in a Codex chat (P38-3): a turn in the chat's live ``codex app-server`` (its thread goes
         on), or in a new one (``thread/start`` the first time, ``thread/resume`` after). Money is as for a Claude chat: the
         turn's cap is the per-turn limit or what is left of the day, whichever is less."""
@@ -400,7 +407,10 @@ class ChatOps:
         if refused:
             return refused
         if p is None:
-            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions, origin, memory)
+            return self._codex_spawn(rid, chat, text, cli, model_id, allowance, instructions, origin, memory, shared)
+        if p.shared != shared:                       # the sandbox of a live process is fixed: a new one gives the new setting (P43-2)
+            p.close_gracefully("共用資料夾的設定改了，要換新的程序", now)
+            return _err(rid, "restarting", "員工要換新的程序（共用資料夾的設定改了），請稍後再送一次")
         if p.model_id != model_id or p.cli_version != cli.get("version"):
             p.close_gracefully("模型或版本不同，要換新的程序", now)
             return _err(rid, "restarting", "員工要換新的程序（模型或版本不同），請稍後再送一次")
@@ -433,7 +443,7 @@ class ChatOps:
         return None
 
     def _codex_spawn(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None, allowance: Decimal,
-                     instructions: str | None, origin: dict | None = None, memory=None) -> dict:
+                     instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
         from .daemon import DAEMON_VERSION, build_env      # here: daemon imports this module
         chat_id, profile_id = chat["id"], chat["profile_id"]
         state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
@@ -446,6 +456,9 @@ class ChatOps:
         policy = admin_policy.check_codex(version)
         if not policy.ok:
             return _err(rid, "admin_policy", policy.reason())
+        if shared is not None and shared_rules.usage(shared)["over"]:      # only when a process begins; names are never looked at
+            return _err(rid, "shared_full", SHARED_TEXT["shared_full"])
+        shared_block = shared_rules.block(shared) if shared is not None else None
         # The folder is <state>/codex-chat-home. Only the version check's own daemon (a temporary state folder) names the
         # person's real one in ``codex_chat_home``: Codex gets that login, the launch record still names the nominal folder.
         nominal = str(codex_chat_env.chat_home_path(self.base))
@@ -473,7 +486,7 @@ class ChatOps:
             m = agent_sessions.prepare_codex_chat_launch(
                 self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
                 model_id=model_id, chat_id=chat_id, profile_id=profile_id, resume=resume, thread_id=thread_id,
-                codex_home=nominal)
+                codex_home=nominal, shared=shared)
             agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
             m = agent_sessions.load_validated(self.base, m["launch_id"])
             argv = agent_sessions.codex_chat_argv(m)
@@ -486,9 +499,9 @@ class ChatOps:
             return _err(rid, getattr(exc, "code", "refused"), str(exc))
         launch_id = m["launch_id"]
         self._log_memory(launch_id, memory, instructions)
-        self._log_shared(launch_id, None)               # a Codex chat does not have the shared folder yet (P43-2)
+        self._log_shared(launch_id, shared)
         if not resume:
-            self._keep_prompt_start(chat_id, instructions, memory)
+            self._keep_prompt_start(chat_id, instructions, memory, shared_block)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
@@ -519,7 +532,7 @@ class ChatOps:
                 unwatch=self._unwatch_chat, card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace, close_below=Decimal(0),
-                instructions=memory_rules.combine(instructions, memory.block if memory else None),
+                instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block),
                 thread_id=thread_id, last_tokens=state.last_tokens, followup=self._codex_followup,
                 client_version=DAEMON_VERSION)
             self._chats[chat_id] = p
