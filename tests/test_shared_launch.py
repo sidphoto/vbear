@@ -66,7 +66,12 @@ class SettingsTests(LaunchCase):
         b = json.loads(Path(on["settings_path"]).read_text())
         self.assertEqual(b["sandbox"]["filesystem"]["allowWrite"], [self.work, on["scratch"]["path"], self.shared])
         b["sandbox"]["filesystem"]["allowWrite"] = [self.work, off["scratch"]["path"]]
-        self.assertEqual(b, a, "only allowWrite differs")
+        deny = b["sandbox"]["filesystem"]["denyWrite"]
+        self.assertEqual(deny[len(a["sandbox"]["filesystem"]["denyWrite"]):],
+                         [str(Path(self.shared) / n) for n in (".claude", ".codex", ".agents", ".git")],
+                         "an allowed Bash may not write the four folders at the top of the shared folder")
+        b["sandbox"]["filesystem"]["denyWrite"] = a["sandbox"]["filesystem"]["denyWrite"]
+        self.assertEqual(b, a, "only allowWrite and denyWrite differ")
         self.assertEqual(b["permissions"], {"ask": ["Bash"], "additionalDirectories": []})
         self.assertIs(b["sandbox"]["autoAllowBashIfSandboxed"], False)
         self.assertIs(b["sandbox"]["allowUnsandboxedCommands"], False)

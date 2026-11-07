@@ -24,9 +24,10 @@ Coordinator's steps before it (plan.md, real-machine steps 1 to 4): a short temp
 ``POST /api/config {chat_limits.per_turn_usd 0.10, setup_done true, welcome_seen true}`` (VBear's own daily limit is the hard cap of
 the money); ``POST /api/chat-support/verify {engine: claude, shared: true}`` (this release adds the ``shared`` part to the check, so it
 must be run; the report must say ``shared: passed``); and three role cards made through the API (Claude Code, ``haiku``, safe mode, no
-skill): a writer (``social``), an accountant (``accountant``) and a passer-by (``assistant``). Their ids go to ``--cards`` in that order.
+skill): a writer (``social``), an accountant (``accountant``) and a passer-by (no position). Their ids go to ``--cards`` in that order.
 
     python3 tools/qa_p43.py --state "$T/s" --port 7798 --cards <writer>,<accountant>,<passerby> --until setup   # no model, no money
+    # setup leaves the writer and the accountant on: switch both off again on the shared folder page before the full run
     python3 tools/qa_p43.py --state "$T/s" --port 7798 --cards <writer>,<accountant>,<passerby>                  # every stage
 
 What it never does: touch ``~/.vbear`` or anything under it, or the ports 7788 and 7789 (it refuses them), press the Finder button, print

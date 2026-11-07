@@ -1140,7 +1140,9 @@ process starts until a version passes the chat check.
     worded to say that every employee who has the folder open can read it; it is **refused with no way to allow it** when the path is
     outside the folder (a link out of it), is the folder itself, has a part named `.claude`, `.codex`, `.agents` or `.git` at any
     depth in any letter case, or is a regular file with more than one hard link (it would be a file of somewhere else too). The
-    check is run when the card is asked and again when the person allows it. Read, Grep and Glob are allowed by VBear only for paths
+    check is run when the card is asked and again when the person allows it. A Bash run, always a card, is under the sandbox only:
+    the sandbox's `denyWrite` names `.claude`, `.codex`, `.agents` and `.git` at the top of the shared folder, and a deeper one is
+    kept out only by the person reading the Bash card (checked on a real Mac only in that the model would not try). Read, Grep and Glob are allowed by VBear only for paths
     in the work folder or the shared folder, with the old rules in the root the path is in (a bare Glob or Grep pattern, no link that leads
     outside that root); otherwise they are a card. A write the person allowed still happens after VBear's answer, so the gap the
     work folder has (a folder turned into a link in that moment) is also there.

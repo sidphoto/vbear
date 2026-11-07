@@ -51,7 +51,8 @@ VBear 聊天的 `-c` 加上 `sandbox_workspace_write.writable_roots=["<共用資
    - Codex：開著時，程序的 `-c` 多 `sandbox_workspace_write.writable_roots=["<路徑>"]`（以 TOML 字串寫出，含控制字元就拒絕），`turn/start` 的 `sandboxPolicy.writableRoots`
      是 `[<路徑>]`，`thread/start`／`thread/resume` 的回答也要剛好是這個（不是就停）；`judge_file_change` 讓共用資料夾裡的修改變成卡片。
    - 兩邊的共同規則（VBear 自己判斷，不給允許選項）：共用資料夾裡任何深度的 `.claude`、`.codex`、`.agents`、`.git` 不能寫；路徑跟著連結走以後要在共用資料夾裡；
-     已經存在、硬連結數大於 1 的檔案不能寫（它同時是別處的檔案）。
+     已經存在、硬連結數大於 1 的檔案不能寫（它同時是別處的檔案）。這是 VBear 對 Write／Edit（Claude）和檔案修改（Codex）的判斷；
+     Claude 的 Bash（每次都要使用者按卡片）由沙盒管：共用資料夾最上層的這四個資料夾在 `denyWrite` 裡，更深的只靠使用者看卡片。
    - 開關變了，正在閒置的程序在下一則訊息前換掉（和換模型同一個 `restarting`），所以**關掉從下一句起生效**；正在回答的那一回合照舊用舊的沙盒做完。
    - 員工怎麼知道有共用資料夾：系統指示多一段 VBear 固定的說明（接在固定指示與記憶後面，路徑以 JSON 字串放在 `BEGIN_VBEAR_SHARED_JSON`／`END_VBEAR_SHARED_JSON` 之間）。
      依 P42-6，這段跟著聊天開始時的系統指示，**打開以後要開新聊天員工才知道**；聊天頁沿用 P42-6 的提示（「記憶、固定指示或共用資料夾和這個聊天開始時不同」＋開新聊天）。

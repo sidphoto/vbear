@@ -240,6 +240,10 @@ def chat_settings(workdir: str, scratch: str, uid: int, cli_version: str, shared
     base["sandbox"]["autoAllowBashIfSandboxed"] = False
     if shared is not None:
         base["sandbox"]["filesystem"]["allowWrite"].append(shared)
+        # v0.17.1 real-machine QA: VBear's own judge refuses .git/.claude/.codex/.agents for Write and Edit, but an allowed Bash card
+        # runs under this sandbox only, so the four folders at the top of the shared folder are denied to it too. Deeper ones are
+        # left to the Bash card the person reads (SECURITY-MODEL, shared folder).
+        base["sandbox"]["filesystem"]["denyWrite"].extend(os.path.join(shared, name) for name in shared_rules.PROTECTED)
     return {**base, "permissions": {"ask": ["Bash"], "additionalDirectories": []}, "env": dict(consts.pinned_env)}
 
 

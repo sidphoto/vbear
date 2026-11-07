@@ -62,7 +62,7 @@ class SharedFolderDocsTests(unittest.TestCase):
 
     def test_the_changelog_says_codex_was_not_tried_on_a_real_machine(self):
         self.assertIn("Codex employees using the shared folder were NOT tried on a real machine", self.changelog)
-        self.assertIn("On a real Mac:** 待確認", self.changelog)
+        self.assertIn("On a real Mac:** with Claude Code 2.1.319", self.changelog)
         self.assertIn("待真機驗證", self.changelog)
 
     def test_both_readmes_say_what_it_does_and_what_it_does_not(self):
