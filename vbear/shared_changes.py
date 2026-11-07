@@ -125,7 +125,7 @@ def record(owner_id, *, round=None, step=None, profile_id, names, cut, unavailab
     key, n = ("round", round) if owner_id.startswith("g-") else ("step", step)
     if type(n) is not int or n < 1:
         raise ValueError("a turn has a number")
-    line = {"at": round_at(now), key: n, "profile_id": profile_id, "names": list(names), "cut": bool(cut), "unavailable": bool(unavailable)}
+    line = {"at": _stamp(now), key: n, "profile_id": profile_id, "names": list(names), "cut": bool(cut), "unavailable": bool(unavailable)}
     if not _line_ok(line, key):
         raise ValueError("not a list of names this module keeps")
     try:
@@ -149,7 +149,7 @@ def record(owner_id, *, round=None, step=None, profile_id, names, cut, unavailab
     return True
 
 
-def round_at(now) -> float:
+def _stamp(now) -> float:
     return round(time.time() if now is None else now, 3)
 
 
