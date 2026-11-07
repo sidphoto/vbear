@@ -284,7 +284,11 @@ class ChatStatusTests(RoutesCase):
     """GET /api/chats/<id> says now whether the card takes memory along, how many lines, and whether the file could be read."""
 
     def status_of(self, chat_id):
-        return self.view(chat_id)["memory"]
+        """The state now (P42-2): on, count, readable. The other two keys (P42-6, changed and started_with_memory) are about the start
+        of the chat and are tested in tests/test_memory_api.py and tests/test_memory_flow.py."""
+        got = self.view(chat_id)["memory"]
+        self.assertEqual(set(got), {"on", "count", "readable", "changed", "started_with_memory"})
+        return {k: got[k] for k in ("on", "count", "readable")}
 
     def test_the_count_follows_the_lines_and_the_switch(self):
         chat_id = self.open_http()
