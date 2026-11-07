@@ -1109,8 +1109,8 @@ def codex_chat_argv(manifest: dict) -> list[str]:
         raise LaunchRefused("manifest_invalid", f"Codex 聊天 manifest 不符（{problem}）")
     consts = codex_chat_protocol.constants_for(manifest["cli_version"])
     try:
-        return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts, manifest["canonical_workspace"],
-                                                                      shared=manifest.get("shared"))]
+        extra = {"shared": manifest["shared"]} if manifest.get("shared") else {}      # off: the call is the one v0.17.0 made
+        return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts, manifest["canonical_workspace"], **extra)]
     except ValueError as exc:
         raise LaunchRefused("invalid_workdir", f"聊天的工作資料夾路徑不能交給 Codex：{exc}") from exc
 
