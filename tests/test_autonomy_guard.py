@@ -19,9 +19,14 @@ Never, whatever the person ticked in 「自己動手」:
      scanned modules do not import ``vbear.shared_folder`` at all. The shared folder's own modules (``shared*.py``, ``runtime/shared*.py``)
      are held to every rule above: they never write config.json, start a terminal or a program, install a skill, make or change a role
      card, or answer a question of a chat.
+  8. (P44-1, ADR 0010) save a skill of the person's on its own: the functions that write the skills (``add``, ``edit``, ``delete`` of
+     vbear/skillbook.py, and its store) are called from vbear/server.py's /api/my-skills routes and from nowhere else, and the other
+     scanned modules (the suggestions of skills, ``skillbook_suggest*.py``, included) do not import ``vbear.skillbook`` at all. The skills'
+     own modules (``skillbook*.py``) are held to every rule above, and also never reach the skill cards of the AI tools (``scan``), the
+     role cards, the chat service, a system prompt or the folders of the AI tools: a skill is only the words the person sends.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
-``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
+``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
 so the scan cannot go quiet.
 """
@@ -34,7 +39,8 @@ import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
-PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py")
+PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py",
+            "skillbook*.py")
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -59,6 +65,9 @@ BANNED_MODULES = {
     "memory": "the person's memory file (its writing functions are the browser's routes' alone)",
     # 7. the shared folder's switches: only the browser's /api/shared routes in server.py write them
     "shared_folder": "the shared folder's switches (its writing functions are the browser's routes' alone)",
+    # 8. (P44-1) the person's skills file: only the browser's /api/my-skills routes in server.py write it, and the suggestions of skills
+    # (skillbook_suggest*.py) only make a proposal, so none of the scanned modules imports it
+    "skillbook": "the person's skills file (its writing functions are the browser's routes' alone)",
     # processes and dynamic code
     "subprocess": "starting a program",
     "pty": "starting a terminal",
@@ -136,6 +145,54 @@ SHARED_WRITER_HOMES = {"server.py", "shared_folder.py"}          # the routes, a
 
 def shared_writer_uses(source: str, label: str = "<source>") -> list[str]:
     return writer_uses(source, label, SHARED_MODULE, SHARED_WRITERS)
+
+
+# 8. (P44-1) who may save a skill: the module's writers, and the only modules that may name them
+SKILLBOOK_MODULE = "skillbook"
+SKILLBOOK_WRITERS = {"add", "edit", "delete", "store"}
+SKILLBOOK_WRITER_HOMES = {"server.py", "skillbook.py"}          # the routes, and the module itself
+# what the modules of the skills (skillbook*.py) never reach, on top of the table above: the skill files and the role cards of the AI
+# tools, the chat service, and every way into a system prompt or an AI tool's own folders (a skill is only the person's words)
+SKILLBOOK_BANNED_MODULES = ("scan", "agent_profiles", "chat_service", "chat_protocol", "codex_chat_protocol", "runtime.chat_protocol",
+                            "runtime.codex_chat_protocol", "runtime.daemon_chat", "runtime.native", "agent_sessions")
+SKILLBOOK_BANNED_NAMES = ("combine", "prompt_sha", "save_profile", "create_profile", "update_profile", "delete_profile")
+SKILLBOOK_BANNED_STRINGS = ("--append-system-prompt", "developerInstructions", "append-system-prompt", ".claude", ".codex", ".agents",
+                            "codex-chat-home", "grok-chat-home", "SKILL.md", "skills.include_instructions")
+
+
+def skillbook_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, SKILLBOOK_MODULE, SKILLBOOK_WRITERS)
+
+
+def skillbook_reaches(source: str, label: str = "<source>") -> list[str]:
+    """What a module of the skills (skillbook*.py) reaches that it never may (P44-1): the modules and names above, and the folders of
+    the AI tools, outside its docstrings."""
+    tree = ast.parse(source, filename=label)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docstrings.add(id(first.value))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for name in _module_of(node):
+                for banned in SKILLBOOK_BANNED_MODULES:
+                    if name == banned or name.startswith(banned + "."):
+                        found.append(f"{label}:{node.lineno}: imports {name}")
+            for a in node.names:
+                if a.name in SKILLBOOK_BANNED_NAMES:
+                    found.append(f"{label}:{node.lineno}: imports {a.name}")
+        elif isinstance(node, ast.Attribute) and node.attr in SKILLBOOK_BANNED_NAMES:
+            found.append(f"{label}:{node.lineno}: uses .{node.attr}")
+        elif isinstance(node, ast.Name) and node.id in SKILLBOOK_BANNED_NAMES:
+            found.append(f"{label}:{node.lineno}: uses {node.id}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            for bad in SKILLBOOK_BANNED_STRINGS:
+                if bad in node.value:
+                    found.append(f"{label}:{node.lineno}: names {bad}")
+    return found
 
 
 def package_files() -> list[Path]:
@@ -311,6 +368,46 @@ class GuardOverTheRealModules(unittest.TestCase):
         names = [p.name for p in scanned_files()]
         for name in ("memory.py", "memory_suggest.py", "memory_suggest_runner.py"):
             self.assertIn(name, names)
+
+    def test_the_skillbook_modules_are_scanned(self):
+        names = [p.name for p in scanned_files()]
+        self.assertIn("skillbook.py", names)
+        for path in PACKAGE.rglob("*.py"):
+            if path.name.startswith("skillbook") and "__pycache__" not in path.parts:
+                self.assertIn(path.name, names, "a skillbook module the scan does not cover")
+
+    def test_only_the_skill_routes_of_the_console_save_a_skill(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in SKILLBOOK_WRITER_HOMES:
+                problems += skillbook_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_every_skill_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        calls = {m.group(1) for m in re.finditer(r"skillbook_mod\.(\w+)", source)}
+        self.assertEqual(calls & (SKILLBOOK_WRITERS - {"store"}), SKILLBOOK_WRITERS - {"store"})
+        self.assertNotEqual(skillbook_writer_uses(source, "server.py"), [])
+
+    def test_the_skillbook_modules_reach_no_skill_card_no_role_card_and_no_system_prompt(self):
+        problems: list[str] = []
+        for path in PACKAGE.glob("skillbook*.py"):
+            problems += skillbook_reaches(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_suggestions_of_skills_only_propose(self):
+        for path in PACKAGE.glob("skillbook_suggest*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    self.assertNotIn("skillbook", _module_of(node), f"{path.name} imports the skills file")
+
+    def test_the_chat_service_and_the_runtime_know_nothing_of_skills(self):
+        for module in ("chat_service.py", "runtime/daemon_chat.py", "runtime/chat_protocol.py", "runtime/codex_chat_protocol.py",
+                       "runtime/agent_sessions.py", "runtime/memory_rules.py"):
+            source = (PACKAGE / module).read_text(encoding="utf-8")
+            self.assertNotIn("skillbook", source, module)
+            self.assertNotIn("my-skills", source, module)
 
     def test_no_module_breaks_a_rule(self):
         problems: list[str] = []
@@ -504,6 +601,62 @@ class ScanFiresOnEachRule(unittest.TestCase):
         self.assertCaught("from vbear import memory\n", "memory")
         self.assertCaught("from vbear.memory import for_card\n", "memory")
         self.assertCaught("import vbear.memory as m\n", "memory")
+
+    def assertSkillWrites(self, source: str, *needles: str):
+        found = " | ".join(skillbook_writer_uses(source))
+        self.assertTrue(found, f"nothing found in:\n{source}")
+        for needle in needles:
+            self.assertIn(needle, found)
+
+    def test_saving_a_skill_from_anywhere_but_the_console_routes(self):
+        self.assertSkillWrites("from . import skillbook\nskillbook.add({'name': 'x', 'text': 'y'})\n", "skillbook.add")
+        self.assertSkillWrites("from . import skillbook as book\ndef f(b):\n    return book.edit('k-1', b)\n", "skillbook.edit")
+        self.assertSkillWrites("from .. import skillbook\nskillbook.delete('k-1')\n", "skillbook.delete")
+        self.assertSkillWrites("from vbear import skillbook\nskillbook.store.save({})\n", "skillbook.store")
+        self.assertSkillWrites("import vbear.skillbook\nvbear.skillbook.add({})\n", "skillbook.add")
+        self.assertSkillWrites("from .skillbook import add\n", "imports skillbook.add")
+        self.assertSkillWrites("from .skillbook import delete as drop\n", "imports skillbook.delete")
+        self.assertSkillWrites("from vbear.skillbook import store\n", "imports skillbook.store")
+        self.assertSkillWrites("from .skillbook import *\n", "imports skillbook.*")
+        self.assertSkillWrites("from . import skillbook\nf = getattr(skillbook, 'add')\n", "getattr")
+        self.assertSkillWrites("from . import skillbook\nf = getattr(skillbook, name)\n", "getattr")
+
+    def test_reading_the_skills_and_other_modules_with_the_same_names_are_allowed(self):
+        self.assertEqual(skillbook_writer_uses("from . import skillbook\ndef f():\n    return skillbook.view()\n"), [])
+        self.assertEqual(skillbook_writer_uses("from . import memory, groups\ndef f(b, g):\n    memory.add(b)\n    groups.edit(g)\n"), [],
+                         "the memory's own writers are the memory rule's business")
+        self.assertEqual(skillbook_writer_uses("import other\nother.add({})\n"), [], "only the skills module")
+
+    def test_the_other_modules_may_not_import_the_skills_module_at_all(self):
+        self.assertCaught("from . import skillbook\n", "skillbook")
+        self.assertCaught("from .skillbook import view\n", "skillbook")
+        self.assertCaught("from vbear import skillbook\n", "skillbook")
+        self.assertCaught("import vbear.skillbook as k\n", "skillbook")
+
+    def test_the_skillbook_modules_obey_the_rules_of_the_others(self):
+        self.assertCaught("from . import config as cfg\ncfg.save({})\n", "config.save")           # the same table, now over skillbook*.py
+        self.assertCaught("import subprocess\nsubprocess.run(['x'])\n", "subprocess")
+        self.assertCaught("from .runtime import daemon\n", "runtime.daemon")
+        self.assertCaught("def f(svc):\n    return svc.answer('c-1', {})\n", "answer")
+        self.assertCaught("def f(ap):\n    ap.save_profile(launch_mode='full')\n", "launch_mode")
+        self.assertCaught("from . import armory\n", "armory")
+        self.assertCaught("from . import loadout\n", "loadout")
+        self.assertCaught("from . import skill_fit\n", "skill_fit")
+
+    def test_the_skillbook_modules_never_reach_the_skill_files_the_role_cards_or_a_system_prompt(self):
+        for source, needle in (("from . import scan\n", "imports scan"), ("from .scan.document import redact\n", "imports scan.document"),
+                               ("from . import agent_profiles\n", "imports agent_profiles"), ("from .chat_service import ChatService\n", "imports chat_service"),
+                               ("from .runtime import memory_rules\nmemory_rules.combine(None, None)\n", "uses .combine"),
+                               ("from .runtime.memory_rules import prompt_sha\n", "imports prompt_sha"),
+                               ("def f(ap):\n    return ap.save_profile({})\n", "uses .save_profile"),
+                               ("def f(ap):\n    return ap.create_profile({})\n", "uses .create_profile"),
+                               ("ARG = '--append-system-prompt'\n", "append-system-prompt"), ("KEY = 'developerInstructions'\n", "developerInstructions"),
+                               ("DIR = '~/.claude/skills'\n", ".claude"), ("DIR = '~/.codex/skills'\n", ".codex"), ("DIR = '~/.agents'\n", ".agents"),
+                               ("DIR = 'codex-chat-home'\n", "codex-chat-home"), ("NAME = 'SKILL.md'\n", "SKILL.md")):
+            with self.subTest(source=source):
+                found = " | ".join(skillbook_reaches(source))
+                self.assertIn(needle, found, f"nothing found in:\n{source}")
+        self.assertEqual(skillbook_reaches('"""A docstring may say .claude and SKILL.md."""\nfrom . import config as cfg\n'), [])
 
     def test_what_is_allowed_is_clean(self):
         clean = (
