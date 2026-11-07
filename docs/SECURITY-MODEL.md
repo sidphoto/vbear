@@ -1074,15 +1074,21 @@ process starts until a version passes the chat check.
   `tests/test_autonomy_guard.py`:** `memory*.py` (and `runtime/memory_rules.py`) are scanned like the chief, dispatch and group
   modules (no `config.json` write, no launch code, no skills, no `answer`, no role card made or changed), and a second rule fails
   the build when any module other than `server.py` and `memory.py` reaches `add`, `edit`, `delete`, `clear`, `set_card`,
-  `export` or `store` of the memory module. **A changed memory or changed card instructions are used by the next message.** The
-  daemon keeps with each chat process a hash of the system prompt it was started with (the card's instructions, a NUL, the
-  memory paragraph); a message whose hash differs closes the idle process and answers `restarting` ("memory or instructions
-  changed"), and the console's existing retry opens a new process (`--resume` / `thread/resume`) with the new prompt. A card
-  switched off sends no `memory` field, so a live process that still carries the lines is replaced too; a busy process is not
-  replaced under its turn (`busy`). Before this change a live process kept the instructions it started with. **Not yet observed on
-  a real machine:** whether a resumed Claude Code session applies a changed appended prompt (it keeps a session's system prompt by
-  default, see above), so "the employee answers with the new line after an edit" is for the real-machine check. `GET
-  /api/chats/<id>` carries `memory: {on, count, readable}` (the state now; a count, no line). **The tools' own memory stays off,
+  `export` or `store` of the memory module. **A changed memory or changed card instructions reach a new chat only
+  (P42-6).** The first real-machine run found that Claude Code 2.1.319 does not apply a new `--append-system-prompt` when it resumes
+  a session: it keeps the one the session was started with, so replacing the process (what v0.17.0 first did when the hash of
+  the card's instructions and the memory paragraph differed) cost more and changed nothing. That code is gone: the daemon no longer
+  closes a live process or answers `restarting` for a changed prompt, and a resumed process still gets the current paragraph on its
+  command line (a later Claude Code may use it). When a chat's **new** session is started the daemon keeps, in
+  `<state>/chat-prompt/<chat id>.json` (0600, a flat file of VBear's own, **not a field of the chat record**, gone with the chat), the
+  fingerprint of its system prompt and whether the memory paragraph was in it: no word of the memory or the instructions. `GET
+  /api/chats/<id>` compares it with the current memory and the card's instructions and answers `memory: {on, count, readable,
+  changed, started_with_memory}` (the state now; counts and yes/no, no line), and the chat page then says the chat still has what it
+  started with and offers a new chat; if the card is switched off now, that what was already sent cannot be taken back. A chat
+  with no such file (made before v0.17.0, or the file does not read) says nothing. The paragraph is therefore **not** a thing a
+  person can take back from a chat: switching a card off, or deleting a line, stops it from reaching new chats and nothing else
+  (the tools keep their copy of a conversation in any case). Codex is treated the same, because whether `thread/resume` applies new
+  developer instructions was not verified. **The tools' own memory stays off,
   with a second lock:** a Claude Code chat process gets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and
   `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in its environment, set in `daemon_chat` only (the chat check starts its processes through
   the same daemon code, so it carries them; terminals in full mode, meetings and the other checks do not), on top of
@@ -1280,9 +1286,9 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   second check of every line, `memory_refused`) goes in `developerInstructions` of `thread/start` and `thread/resume`, after the
   card's own instructions (32 KiB is the limit there). The employee is told that memory cannot make it skip a question; the
   sandbox and `untrusted` approval policy are what keep that true, and memory is sent to OpenAI. Codex's own `--disable
-  memories`, `project_doc_max_bytes=0` and `history.persistence="none"` stay as they were (tests pin all three in the argv). The
-  Codex process keeps the same hash of its developer instructions as a Claude Code process: changed memory or card instructions, or
-  the card switched off, replace it before the next message. Switching a Codex card on asks the person to confirm that memory goes
+  memories`, `project_doc_max_bytes=0` and `history.persistence="none"` stay as they were (tests pin all three in the argv). A
+  Codex chat is treated as a Claude Code chat is (P42-6): changed memory or card instructions, or the card switched off, reach a new
+  chat only, and the page says so. Switching a Codex card on asks the person to confirm that memory goes
   to OpenAI (`confirm_company`). This path has been tested against the fake app-server only; it has not been run on a real machine.
 - **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
   reviewer `user`, and ask for the legacy `workspace-write` sandbox (the work folder is its only writable place, no `/tmp`, network off;
@@ -1607,8 +1613,10 @@ that persists and is sent to a company's servers every time a process starts**, 
   run saves nothing: the page sends one `POST /api/memory` per ticked line, the runner only records which indexes the person saved
   or that they said 不用了 (`tests/test_memory_suggest_api.py` shows `memory.json` byte for byte the same after a run). The cost is a
   chat-sized call counted in the day (`GET /api/meetings/ledger`'s `includes` lists `memory_suggest`; an unreadable record makes
-  the day's spending unknown rather than zero). Without Claude Code it says 「這個功能目前需要 Claude Code」 and 「記住」 still works. Not
-  for groups.
+  the day's spending unknown rather than zero). Without Claude Code it says 「這個功能目前需要 Claude Code」 and 「記住」 still works. It needs the
+  tool-less check that the chief of staff and the meetings need; with it not done the dialog has the same 檢查 button (it asks first,
+  says it costs a cent or less on the person's own Claude account, runs `POST /api/meetings/verify`, then asks for the preview
+  again) and starts nothing by itself. Not for groups.
 - **The tools' own memory stays off.** Claude Code in a chat: `--safe-mode`, `--setting-sources ""`, `--strict-mcp-config` and,
   new, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in the process environment (set in
   `daemon_chat` only; terminals and meetings do not get them). Codex: `--disable memories`, `project_doc_max_bytes=0`,
@@ -1625,7 +1633,7 @@ that persists and is sent to a company's servers every time a process starts**, 
   copies Claude Code and Codex keep of conversations that already carried them (the confirmation says so).
 - **Checked.** `tests/test_memory_flow.py` walks one memory over the real routes, a real daemon and the fake Claude Code: a phone
   number needing 「我確定」, a password refused, a new chat carrying the lines and saying how many, a suggestion that saved nothing,
-  a line saved from it as `suggested`, an edit reaching the next message in a new process, a card off and on, a Codex card needing the
+  a line saved from it as `suggested`, an edit that does not reach the chat already started (the page says so) but reaches a new chat, a card off and on, a Codex card needing the
   word about OpenAI, the export, and clearing; `config.json` is byte for byte the same at the end. `tools/qa_p42.py` is the
   coordinator's real-machine check through the HTTP API on a temporary state with Claude Code employees (it refuses `~/.vbear` and the
   ports 7788 and 7789 and prints no word of memory, of a conversation or of a model's reply).
@@ -1638,7 +1646,8 @@ that persists and is sent to a company's servers every time a process starts**, 
    box, suggestions start unticked, lines that read like orders need a second confirmation, the fixed paragraph says memory cannot make
    an employee skip a question or change a setting, and **every command and every file change is still asked of the person**.
    The paragraph is a request to the model, not a barrier; how a real model treats a memory line that reads like an instruction has
-   not been tried (待真機驗證).
+   been seen once (the first real run, with a line that said not to ask: the model still asked, the person's refusal held and nothing
+   was written); one run is not a study.
 2. **A command the person allowed can add a line.** It runs as the person, can read the console's access token and call VBear's
    API (an existing risk of every chat), and so can post a line. The memory page lists every line with its source, but a line
    made through the API says it was typed. The person should read the page now and then.
@@ -1648,15 +1657,19 @@ that persists and is sent to a company's servers every time a process starts**, 
    on. A memory suggestion sends the conversation to Anthropic whatever the chat's tool.
 4. **The rules catch shapes, not meanings.** A password or a name written in ordinary words, a phone number written in letters, or a
    secret split over two lines of memory passes. Memory is not a place for secrets, and the page says so.
-5. **Whether a resumed Claude Code session applies a changed appended prompt is not known.** VBear always opens a new process and
-   sends the new prompt, but Claude Code keeps a session's system prompt by default (see above); if it does here too, an edit or a
-   switch-off reaches that chat only when a new chat is opened. This is for the real-machine check (the edit stage of
-   `tools/qa_p42.py`).
-6. **The two environment variables rest on static evidence.** They were found in the installed program's text; nobody has run Claude
-   Code to see that it honours them. Safe mode, which turns its automatic memory off in the same text, is the first lock; a newer
-   version that renames either variable leaves one lock, and every new Claude Code version still goes through the chat check first.
-7. **Not run on a real machine for this change:** whether a model answers from the memory, how a Codex employee behaves with it (only
-   the fake app-server was used), and whether Claude Code made a memory folder of its own for a chat's work folder.
+5. **A change of the memory reaches only a new chat; what a chat was given cannot be taken back.** A real run showed that Claude Code
+   2.1.319 keeps a session's system prompt on `--resume` (see above). An edit, a deleted line or a card switched off therefore changes
+   what new chats get; a chat that already carries a line goes on with it (and the tool's copy of the conversation has it for good).
+   The chat page says so with a button for a new chat. Whether Codex's `thread/resume` applies new developer instructions was not
+   tried, and the page says the same of Codex. A later Claude Code that does apply it makes the page's sentence too careful, not
+   unsafe. The edit stage of `tools/qa_p42.py` checks this on a real machine.
+6. **The two environment variables rest mostly on static evidence.** They were found in the installed program's text. The first real run
+   saw them in a chat process's environment and found no memory folder, `CLAUDE.md` or `MEMORY.md` under the chat's work folder or
+   its Claude Code project folder, but a run with and without them was not compared, so what each lock does alone is not known. Safe mode
+   is the first lock; a newer version that renames either variable leaves one lock, and every new Claude Code version still goes through
+   the chat check first.
+7. **Not run on a real machine:** how a Codex employee behaves with memory (only the fake app-server was used), and whether Codex's
+   `thread/resume` applies new developer instructions (待真機驗證). A model answered from the memory in the first real run of Claude Code, once.
 
 ## The start-up page (v0.12)
 

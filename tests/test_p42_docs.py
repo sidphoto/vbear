@@ -48,14 +48,16 @@ class MemoryDocsTests(unittest.TestCase):
         self.assertNotIn("not released yet", self.changelog)
 
     def test_the_changelog_lists_the_six_tasks_and_what_they_made(self):
-        for phrase in ("(P42-0", "(P42-1", "(P42-2", "(P42-3", "(P42-4", "(P42-5)", "`tests/leftover.py`", "`VBEAR_RUNTIME_AUTOSTART=0`",
+        for phrase in ("(P42-0", "(P42-1", "(P42-2", "(P42-3", "(P42-4", "(P42-5)", "(P42-6)", "`tests/leftover.py`", "`VBEAR_RUNTIME_AUTOSTART=0`",
                        "`memory_refused`", "`memory_confirm`", "`BEGIN_VBEAR_MEMORY_JSON`", "`confirm_company: true`", "`confirm_warning: true`",
                        "`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`", "`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`", "`PATCH /api/memory/<id>`",
                        "`POST /api/memory/clear`", "`GET /api/memory/export`", "`POST /api/memory/cards", "`GET /api/chats/<id>` carries `memory",
                        "`stale_preview`", "`additionalProperties: false`", "`tests/test_memory_flow.py`", "`tools/qa_p42.py`",
                        "`tests/test_autonomy_guard.py`", "`memory_suggest`", "記住", "整理要記住的事", "誰帶記憶", "全部刪除",
                        "An employee saying 「我記住了」 saves nothing", "The shared folder", "v0.17.1",
-                       "an edited fixed instruction waited for the process to end"):
+                       "likewise used by a new chat", "does not apply a new `--append-system-prompt` when it resumes a session",
+                       "`<state>/chat-prompt/<chat id>.json`", "not a chat-record field", "`memory.changed`", "開新聊天",
+                       "the daemon no longer closes a live process"):
             self.assertIn(phrase, self.changelog, phrase)
 
     def test_the_changelog_says_what_going_back_does_and_what_is_not_known(self):
@@ -67,7 +69,7 @@ class MemoryDocsTests(unittest.TestCase):
 
     def test_the_changelog_says_what_was_not_run_on_a_real_machine(self):
         self.assertIn("Not run on a real machine", self.changelog)
-        for phrase in ("whether a model answers from the memory", "resumed Claude Code session applies a changed appended prompt",
+        for phrase in ("whether a model answers from the memory", "Codex `thread/resume` applies new developer instructions",
                        "two environment variables", "Codex employees carrying memory", "No code or test ran a real AI tool"):
             self.assertIn(phrase, self.changelog, phrase)
 

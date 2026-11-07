@@ -382,12 +382,15 @@ the chief of staff, dispatch and groups). The routes are `GET|POST /api/memory`,
 `block(entries)` builds the one paragraph (VBear's fixed words, then the lines as a JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
 `END_VBEAR_MEMORY_JSON`), `prepare(memory)` is the daemon's closed-shape check of the `memory` field (every line checked again; one refused
 line refuses the whole message), `combine` puts the paragraph after the card's instructions and `prompt_sha` fingerprints what a
-process was given. `ChatService._send` sends the `memory` field of `chat_send` when the card takes memory along and the file reads (for
+session was started with. `ChatService._send` sends the `memory` field of `chat_send` when the card takes memory along and the file reads (for
 a chat, a dispatch step or a group answer alike); the daemon appends the paragraph to Claude's `--append-system-prompt` (a chat's
-added prompt may be 8,000 characters; a full-mode launch keeps 2,000) and to Codex's `developerInstructions`, and keeps the hash with
-the process: a message whose hash differs closes the idle process and answers `restarting`, which the service's retry turns into a new
-process. The chat record has no new field; the daemon's log has `chat process memory entries=<N|none> instructions=<yes|no>`.
-`GET /api/chats/<id>` carries `memory: {on, count, readable}`.
+added prompt may be 8,000 characters; a full-mode launch keeps 2,000) and to Codex's `developerInstructions`. A live process is **not** replaced when the memory or the card's instructions change, because
+Claude Code 2.1.319 keeps the system prompt a session was started with and ignores a new one on `--resume` (found on a real machine,
+P42-6); when a chat's new session starts the daemon keeps the `prompt_sha` and whether the memory was in it in
+`<state>/chat-prompt/<chat id>.json` (`chat_store.set_prompt_start` / `prompt_start`, deleted with the chat). The chat record has no new
+field; the daemon's log has `chat process memory entries=<N|none> instructions=<yes|no>`. `GET /api/chats/<id>` carries
+`memory: {on, count, readable, changed, started_with_memory}` (`ChatService._prompt_changed` compares the fingerprint with the current
+memory and the card's instructions); the chat page says a changed chat keeps what it started with and offers 開新聊天.
 
 A memory suggestion (`memory_suggest.py` and `memory_suggest_runner.py`, `MemorySuggestRunner(HeadlessBoard)`, shaped like the chief
 of staff's) is one tool-less Claude Code call on the meetings' engine over the newest messages of a one-to-one chat (`chief.select_messages`):
