@@ -37,7 +37,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config as cfg, meetings as mt, strictjson
+from . import config as cfg, meetings as mt, shared_changes, strictjson
 from .api_error import ApiError
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import chat_store as cs
@@ -726,15 +726,19 @@ def data_block(items: list[dict]) -> str:
     return DATA_HEAD + "\n" + "".join(n + "\n" for n in notes) + f"{MARK_BEGIN}\n{literal}\n{MARK_END}"
 
 
-def build_message(*, group: str, members: list[dict], me: str, first: bool, items: list[dict], said: str, to_text: str) -> str:
+def build_message(*, group: str, members: list[dict], me: str, first: bool, items: list[dict], said: str, to_text: str,
+                  files: str = "") -> str:
     """What an employee is sent: the group's fixed words (the first time), the conversation since this employee last spoke as data,
-    and what the person says this time, outside the markers."""
+    the names of the files that appeared in the shared folder meanwhile (``files``, from ``shared_changes.paragraph``, already data
+    between the markers; "" for none), and what the person says this time, outside the markers."""
     parts = []
     if first:
         who = json.dumps({"group": group, "members": members, "you": me}, ensure_ascii=False)
         parts.append(INTRO.format(who=who))
     if items:
         parts.append(data_block(items))
+    if files:
+        parts.append(files)
     parts.append(f"用的人在群組裡對{to_text}說：\n{said}")
     return "\n\n".join(parts)
 
@@ -742,13 +746,16 @@ def build_message(*, group: str, members: list[dict], me: str, first: bool, item
 class Groups:
     """The group routes' service. ``chats``: a function returning the chat service (cards, create, delete, get, send_for_group).
     ``ledger``: a function returning the day's ledger (``lamp``, ``daily_usd``, ``spent_usd``). ``conf``: a function returning the
-    console's config (read only, for the per-turn limit)."""
+    console's config (read only, for the per-turn limit). ``shared_on``: whether an employee has the shared folder open (the console
+    passes the shared folder's read-only question; it cannot open the folder for anyone)."""
 
-    def __init__(self, *, chats: Callable[[], Any], ledger: Callable[[], dict], conf: Callable[[], dict], clock=time.time):
+    def __init__(self, *, chats: Callable[[], Any], ledger: Callable[[], dict], conf: Callable[[], dict], clock=time.time,
+                 shared_on: Callable[[str, str], bool] | None = None):
         self._chats = chats
         self.ledger = ledger
         self.conf = conf
         self.clock = clock
+        self.shared_on = shared_on or (lambda profile_id, engine: False)      # (role card id, engine) -> whether the folder is open (reads only)
         self._scans: OrderedDict[str, dict] = OrderedDict()
         self._reading = threading.RLock()        # the runner and the page's routes read the chats with the same notes
 
@@ -956,14 +963,36 @@ class Groups:
             reply = self.scan(chat_id)["turns"].get(turn, {}).get("reply")
             return reply["text"] if reply else ""
         items = conversation(events.records, pid, rnd["said"]["seq"], names, reply_of, chat_id)
+        files = self._files_paragraph(gid, events.records, pid, chat_id, rnd["said"]["seq"], cards)
         who = [{"name": names[m["profile_id"]], "tool": TOOL_NAME.get((cards.get(m["profile_id"]) or {}).get("tool"), "未知")} for m in members]
         to = rnd["to"]
         to_text = "大家" if to == "all" else ("你" if to == [pid] else "、".join(names.get(x, GONE) for x in to))
-        message = build_message(group=rec["name"], members=who, me=names[pid], first=first, items=items, said=rnd["said"]["text"], to_text=to_text)
+        message = build_message(group=rec["name"], members=who, me=names[pid], first=first, items=items, said=rnd["said"]["text"],
+                                to_text=to_text, files=files)
         while len(message.encode("utf-8")) > MESSAGE_MAX and items:
             items = items[1:]
-            message = build_message(group=rec["name"], members=who, me=names[pid], first=first, items=items, said=rnd["said"]["text"], to_text=to_text)
+            message = build_message(group=rec["name"], members=who, me=names[pid], first=first, items=items, said=rnd["said"]["text"],
+                                    to_text=to_text, files=files)
         return message
+
+    def any_shared(self, rec: dict, cards: dict | None = None) -> bool:
+        """Whether any member of the group has the shared folder open now (then the runner compares the folder around each turn)."""
+        cards = self._cards() if cards is None else cards
+        return any(self.shared_on(m["profile_id"], (cards.get(m["profile_id"]) or {}).get("engine")) for m in active(rec))
+
+    def _files_paragraph(self, gid: str, records: list, pid: str, chat_id: str, said_seq: int, cards: dict) -> str:
+        """The paragraph about the shared folder for the message of ``pid``: the names recorded for the turns of the others since he
+        last spoke (the same turns the conversation block carries), for him who has the folder open as names between the markers,
+        for him who has not as a sentence without names. "" when nothing was recorded or nothing changed."""
+        last = max((r["seq"] for r in records if r["kind"] == "turn_sent" and r["profile_id"] == pid and r["chat_id"] == chat_id), default=0)
+        turns = [(r["round"], r["profile_id"]) for r in records
+                 if r["kind"] == "turn_ended" and r["seq"] > last and r["seq"] != said_seq and r["profile_id"] != pid]
+        if not turns:
+            return ""
+        kept = shared_changes.read(gid)
+        merged = shared_changes.merged([kept.get(t) for t in turns if t in kept])
+        engine = (cards.get(pid) or {}).get("engine")
+        return shared_changes.paragraph(merged, bool(self.shared_on(pid, engine)))
 
     # ---- who is in the group, and what it is called ---------------------------------------------------------------------
 
@@ -1189,6 +1218,7 @@ class Groups:
                 with self._reading:
                     self._scans.pop(chat_id, None)
             self._remove_folder(gid)
+            shared_changes.remove(gid)               # the list of file names kept for it; nothing in the shared folder
         return {"deleted": gid}
 
     @staticmethod
@@ -1241,6 +1271,7 @@ class Groups:
         sent = {(r["round"], r["profile_id"]): r for r in events.records if r["kind"] == "turn_sent"}
         items, last_seen = [], after
         more = False
+        files = shared_changes.read(gid)               # names of the files that appeared while an employee answered (P43-3)
         for r in events.records:
             if r["seq"] <= after:
                 continue
@@ -1249,6 +1280,9 @@ class Groups:
                 break
             last_seen = r["seq"]
             item = self._item(r, name_of, tool_of, by_pid, sent, lambda: (daily, remaining))
+            line = files.get((r["round"], r["profile_id"])) if item is not None and item["kind"] == "reply" else None
+            if line is not None and (line["names"] or line["unavailable"]):
+                item["shared_changes"] = {"names": list(line["names"]), "cut": line["cut"], "unavailable": line["unavailable"]}
             if item is not None:
                 items.append(item)
         return {"group": {"id": gid, "name": rec["name"], "created_at": rec["created_at"], "state": row["state"], "problem": row["problem"]},

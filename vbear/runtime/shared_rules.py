@@ -154,6 +154,53 @@ def usage(path: str, max_entries: int | None = None, max_bytes: int | None = Non
     return {"bytes": size, "entries": entries, "links": links, "over": over}
 
 
+# ---- what changed while an employee was answering (names only) --------------------------------------------------------------
+
+MAX_NAMES = 50                           # names handed to the next employee
+NAME_MAX = 200                           # characters of one name as it is handed on
+SPECIAL = "（檔名含特殊字元）"
+
+
+def snapshot(path: str, limit: int | None = None) -> dict | None:
+    """``{relative path: (size, mtime_ns, is_link)}`` of the files and links below ``path`` (folders are not listed), from
+    ``os.scandir`` and ``lstat``: no file is opened and no link is followed. ``{}`` when the folder is not there; None when it cannot
+    be read or holds more than ``limit`` entries (a list that is only partly there would name files wrongly)."""
+    limit = MAX_ENTRIES if limit is None else limit
+    if not os.path.lexists(path):
+        return {}
+    out: dict = {}
+    seen = 0
+    try:
+        for rel, st, link in walk(path, limit):
+            seen += 1
+            if seen > limit:
+                return None
+            if link or not stat.S_ISDIR(st.st_mode):
+                out[rel] = (st.st_size, st.st_mtime_ns, link)
+    except OSError:
+        return None
+    return out
+
+
+def _shown(name: str) -> str:
+    """A file name as it is handed on: as it is, shortened to NAME_MAX characters, or SPECIAL when it holds a control character
+    (or anything that cannot be sent as text)."""
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return SPECIAL
+    if any(unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Zl", "Zp") for ch in name):
+        return SPECIAL
+    return name if len(name) <= NAME_MAX else name[:NAME_MAX - 1] + "…"
+
+
+def changes(before: dict, after: dict, limit: int = MAX_NAMES) -> tuple[list, bool]:
+    """(the names of the files that are new or whose size, time or kind changed between two snapshots, sorted; whether there were more
+    than ``limit``). A file that went away is not named. The names are safe to put in a message: see ``_shown``."""
+    names = [n for n in sorted(after) if before.get(n) != after[n]]
+    return [_shown(n) for n in names[:limit]], len(names) > limit
+
+
 # ---- what may be written ------------------------------------------------------------------------------------------------------
 
 def write_problem(where, shared) -> str | None:

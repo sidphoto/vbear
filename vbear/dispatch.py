@@ -35,7 +35,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
-from . import agent_profiles as ap, autonomy, chat_service, chief, config as cfg, meetings as mt, model_options, position_guide, strictjson, tasks
+from . import agent_profiles as ap, autonomy, chat_service, chief, config as cfg, meetings as mt, model_options, position_guide, shared_changes, strictjson, tasks
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import chat_store as cs
 
@@ -620,8 +620,11 @@ class Dispatcher:
 
     def __init__(self, *, conf: Callable[[], dict], tools: Callable[[], tuple], link: Callable[[str, str], None],
                  busy: Callable[[str], bool] | None = None, day_left: Callable[[], Decimal | None] | None = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, on_new_employee: Callable[[str, str], None] | None = None):
         self.conf, self.tools, self.link, self.clock = conf, tools, link, clock
+        # (dispatch id, role card id) after an employee of this dispatch was made: the console's own hook. What it does (the shared
+        # folder is opened for him only when the person ticked that on the confirmation) is the console's business, not this module's
+        self.on_new_employee = on_new_employee
         self.busy = busy or (lambda chat_id: False)
         self.day_left = day_left or (lambda: None)
         self.lock = threading.Lock()
@@ -834,6 +837,11 @@ class Dispatcher:
                 rec["made"][ref] = pid
                 self._event(rec, "card_created", by, ref=ref, profile_id=pid)
             self._mutate(dispatch_id, made)
+            if self.on_new_employee is not None:
+                try:
+                    self.on_new_employee(dispatch_id, saved["id"])
+                except Exception:
+                    pass                    # a hook that fails leaves the employee as made (the shared folder stays off for him)
 
     def _make_task(self, dispatch_id: str, by: str) -> None:
         rec = load(dispatch_id)
@@ -930,6 +938,7 @@ class Dispatcher:
         if not can_delete(rec):
             raise DispatchError("not_deletable")
         self._remove_file(dispatch_id)
+        shared_changes.remove(dispatch_id)           # the list of file names kept for it (shared-meta); nothing in the shared folder
         try:
             chief.delete(rec["chief_id"])
         except chief.ChiefError as exc:
