@@ -80,8 +80,12 @@ and every file change is still asked of you. The shared folder of the roadmap's 
 - **Money.** Memory costs nothing of its own, but every new chat has a longer system prompt (up to about 6,000 characters), and a chat that is resumed
   after its process ended is resumed with it, which reads the earlier conversation again; both fall in the turn's limit and the day. A suggestion costs at
   most US$0.10, counted in the day.
-- **Not run on a real machine for this change** (the coordinator's check fills this in; until then it is 待確認): whether a model answers from
-  the memory; whether the two environment variables are honoured and Claude Code made no memory folder for a chat's work folder (they rest on the
+- **On a real Mac** (Claude Code 2.1.319, two Haiku employees, `tools/qa_p42.py`: 47 ok, 1 warn, 0 FAIL; about US$0.08 over two runs): a new
+  chat answers from the memory; after the memory changed, an older chat says so, starts no new process and still answers from what it
+  started with, and a new chat of the same employee answers from the new memory; a card switched off sends no memory in a new chat; an
+  order-like line saved with 「我確定」 still left every command to an allow card; Claude Code made no memory folder or CLAUDE.md for a
+  chat's work folder; `config.json` was unchanged. **Not run on a real machine for this change:** whether a model answers from
+  the memory in every case; whether the two environment variables are honoured and Claude Code made no memory folder for a chat's work folder (they rest on the
   installed program's text, not on a run; the first real run saw both); how a model treats a line that reads like an order; whether a Codex `thread/resume`
   applies new developer instructions (not tried: the page says the same of Codex); and **Codex employees
   carrying memory, which only the fake app-server has seen**. The look of the pages (the box, the inline edit, the download in a strict CSP) was tried only on a
