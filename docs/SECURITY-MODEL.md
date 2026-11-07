@@ -1028,8 +1028,9 @@ process starts until a version passes the chat check.
   The position's default text is not sent, and a card without instructions of its own sends none; the chat's record
   says whether any went in. Claude Code keeps a session's system prompt when it is resumed
   (`--system-prompt-snapshot` is on by default), so an edited card may not change a conversation that has begun.
-  Neither that Claude Code applies the appended text nor how it treats an edited one on resume has been checked on a
-  real machine; the chat check records the first as an observation and does not pass or fail on it.
+  On a real Mac (Claude Code 2.1.319, v0.17.0) a resumed session kept the appended text it started with and did not take a
+  new one given on the command line; a new chat did take it. The chat check still records the first as an observation and
+  does not pass or fail on it.
 - **A second paragraph: the person's memory (v0.17, ADR 0008).** After the card's own instructions (or alone, when the card
   has none) the same `--append-system-prompt` argument carries one fixed paragraph the daemon builds from the `memory` field
   of `chat_send`: VBear's own explanation, then the person's lines as one JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
@@ -1599,9 +1600,11 @@ that persists and is sent to a company's servers every time a process starts**, 
   and full-mode terminals are never given memory. A card switched off sends not a word, even if there are lines.
 - **The paragraph and the process.** Described under "Chats with a role card" (second paragraph: fixed words, a JSON string
   between `BEGIN_VBEAR_MEMORY_JSON` and `END_VBEAR_MEMORY_JSON`, the daemon's second check, 8,000 characters for a chat's added prompt
-  and 2,000 for a full-mode launch; third paragraph: the hash that replaces a process when the memory, the card's instructions or the
-  card's switch changed). In short: **an edit, a deletion or a switch is used by the next message**, and nothing is changed under a
-  turn that is running.
+  and 2,000 for a full-mode launch; third paragraph: the fingerprint of what a chat started with, `<state>/chat-prompt/<chat id>.json`). In short: **an edit, a
+  deletion or a switch reaches the next new chat**, not a chat that has begun: a resumed Claude Code session keeps the prompt it
+  started with (seen on a real Mac), so VBear does not end a process to send a changed one, and the chat page of an older chat says
+  that it still has what it started with and offers 開新聊天. A card switched off sends nothing in a new chat; what an older chat
+  already sent cannot be taken back, and its page says so. Nothing is changed under a turn that is running.
 - **The memory suggestion.** On a one-to-one chat page, 整理要記住的事 shows a preview that costs nothing (what will be read: at most
   the latest 20 messages and 12 KiB; the most it can cost, US$0.10, and what is left of the day; that the conversation goes to
   Anthropic, also when the chat is with a Codex employee) and, after a press, runs **one tool-less Claude Code call** on the meetings'
