@@ -12,6 +12,9 @@ Never, whatever the person ticked in 「自己動手」:
      nowhere else, so that only the person's press in the browser (it carries ``X-VBear``) can change what every employee is told.
   (and 「自己動手」 itself is only ever turned on by the person, through POST /api/settings/autonomy)
 
+  6. (P42-4) save a line of the person's memory: the modules of the memory suggestions (``memory_suggest*.py``) and the others do not
+     import ``vbear.memory`` at all; its writing functions are the browser's routes' alone.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -47,6 +50,8 @@ BANNED_MODULES = {
     "armory": "the skill store (installs)",
     "loadout": "equipping skills",
     "skill_fit": "skill search and install",
+    # 5. the person's memory file: only the browser's /api/memory routes in server.py write it
+    "memory": "the person's memory file (its writing functions are the browser's routes' alone)",
     # processes and dynamic code
     "subprocess": "starting a program",
     "pty": "starting a terminal",
@@ -227,8 +232,8 @@ class GuardOverTheRealModules(unittest.TestCase):
         names = [p.name for p in scanned_files()]
         self.assertIn("autonomy.py", names)
         for path in PACKAGE.iterdir():
-            if path.suffix == ".py" and path.name.startswith(("chief", "dispatch", "group")):
-                self.assertIn(path.name, names, "a chief, dispatch or group module the scan does not cover")
+            if path.suffix == ".py" and path.name.startswith(("chief", "dispatch", "group", "memory")):
+                self.assertIn(path.name, names, "a chief, dispatch, group or memory module the scan does not cover")
 
     def test_the_groups_modules_are_there_to_be_scanned(self):
         names = [p.name for p in scanned_files()]
@@ -255,6 +260,11 @@ class GuardOverTheRealModules(unittest.TestCase):
         calls = {m.group(1) for m in re.finditer(r"memory_mod\.(\w+)", (PACKAGE / "server.py").read_text(encoding="utf-8"))}
         self.assertEqual(calls & (MEMORY_WRITERS - {"store"}), MEMORY_WRITERS - {"store"})
         self.assertEqual(memory_writer_uses((PACKAGE / "server.py").read_text(encoding="utf-8"), "server.py") != [], True)
+
+    def test_the_memory_modules_are_there_to_be_scanned(self):
+        names = [p.name for p in scanned_files()]
+        for name in ("memory.py", "memory_suggest.py", "memory_suggest_runner.py"):
+            self.assertIn(name, names)
 
     def test_no_module_breaks_a_rule(self):
         problems: list[str] = []
@@ -368,11 +378,20 @@ class ScanFiresOnEachRule(unittest.TestCase):
         for needle in needles:
             self.assertIn(needle, found)
 
+    def test_saving_a_line_of_memory(self):
+        self.assertCaught("from . import memory\n", "memory")
+        self.assertCaught("from .memory import add\n", "memory")
+        self.assertCaught("from vbear import memory\n", "memory")
+        self.assertCaught("from vbear.memory import for_card\n", "memory")
+        self.assertCaught("import vbear.memory as m\n", "memory")
+
     def test_what_is_allowed_is_clean(self):
         clean = (
             "from . import agent_profiles as ap, autonomy, config as cfg, meetings\n"
             "from .runtime import chat_store\n"
             "from .chat_service import ChatService\n"
+            "from .runtime import memory_rules\n"
+            "from . import memory_suggest\n"
             "def f(conf):\n"
             "    limits = cfg.load()\n"
             "    on = autonomy.read(conf)\n"

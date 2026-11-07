@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from . import agent_profiles as ap, chief, config as cfg, meeting_rules as rules, meetings as mt, staffing as st, try_spend
+from . import agent_profiles as ap, chief, config as cfg, meeting_rules as rules, meetings as mt, memory_suggest, staffing as st, try_spend
 from .runtime import chat_store
 from .board_engine import HeadlessBoard, Sources, _select, _sha, opinions_for_chair, participant
 # the names the server and the tests have always found here
@@ -129,7 +129,7 @@ class MeetingRunner(HeadlessBoard):
         """A meeting shares the day with the staffing meetings (staffing_runner), the chief of staff's proposals (chief_runner)
         and the chats (P36)."""
         return [(self.ids, self.load, self.per_call), (st.record_ids, st.load, st.per_call_of),
-                chat_store.spend_kind(self.clock), try_spend.spend_kind(), chief.spend_kind()]
+                chat_store.spend_kind(self.clock), try_spend.spend_kind(), chief.spend_kind(), memory_suggest.spend_kind()]
 
     # -- a new meeting ---------------------------------------------------------------------------------------------
 

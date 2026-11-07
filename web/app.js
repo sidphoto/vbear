@@ -13708,11 +13708,252 @@ async function viewChatDetail(token, id) {
     } } }, "刪除這個聊天")), sendNote, openingNote);
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
-  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, noteBox, transcript, liveBox, composer);
-  activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); };
+  const suggest = inGroup ? null : memorySuggestDesk(id);                   // P42-4: 「整理要記住的事」, one-to-one chats only
+  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, noteBox, transcript, liveBox, composer);
+  activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); if (suggest) suggest.stop(); };
   stream();
   if (opening) input.focus();
 }
+
+// ---------- memory suggestions (v0.17, P42-4) ---------------------------------------------------------------------------------
+// A one-to-one chat page has the button 「整理要記住的事」. It opens a dialog that says what is read, the most it costs, what is left
+// today and that the chat goes to Anthropic, and only a press of its own button starts the one call (POST /api/memory/suggest from a
+// preview). What comes back is a card of at most five lines, every one unticked: the person ticks the ones they want, may change the
+// words and the kind, and a press of 「存進記憶」 sends each ticked line to POST /api/memory, one request for each, where the server
+// checks it as it checks every line (a refused line says why, a line that reads like an order needs 「我確定」). No button saves them all at once.
+// Everything shown is the server's record, set as text; what a model wrote is never markup. Nothing here saves a line by itself,
+// writes a setting or a limit, installs a skill, makes a card or answers a card of an employee.
+
+const MSUGGEST_BUTTON = "整理要記住的事";
+const MSUGGEST_LEDE = "VBear 會讀這段聊天最近的對話（最多 20 則），提議最多 5 條值得記住的事，最多花 US$0.10；這段對話會送給 Anthropic。"
+  + "每一條都不會自己存：你勾選、可以改字，按「存進記憶」才會存。";
+const MSUGGEST_NEEDS_TITLE = "這個功能目前需要 Claude Code";
+const MSUGGEST_NEEDS_WHY = "整理要用 Claude Code；只有 Codex 的話，這個功能現在還不能用，但每句話旁的「記住」照常能用。";
+const MSUGGEST_POLL_MS = 3000;
+const MSUGGEST_ERROR_TEXT = {
+  invalid_output: "整理回的格式不對，已經丟掉，沒有存任何東西。可以再按一次「整理要記住的事」。",
+  not_traditional: "整理回的字含簡體字，已經丟掉，沒有存任何東西。可以再按一次。",
+  timeout: "等太久，逾時了。可以再按一次。",
+  budget: "額度不夠，沒有送出。",
+  time_up: "時間不夠，沒有送出。",
+  restart: "VBear 重新啟動，這次整理被中斷了。",
+  spend_unknown: "VBear 算不出今天已經花了多少，所以沒有送出。",
+  cancelled: "已取消。",
+};
+const MSUGGEST_EDITED = "改過的字，存的時候 VBear 會再檢查一次。";
+const MSUGGEST_SURE = "我確定，存起來";
+
+function memorySuggestNeedsClaude() {
+  return el("div", { class: "notice info", "data-msuggest": "needs-claude" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, el("b", null, MSUGGEST_NEEDS_TITLE),
+      el("p", { class: "small", style: "margin:4px 0 0" }, MSUGGEST_NEEDS_WHY),
+      el("p", { class: "small", style: "margin:4px 0 0" }, NEEDS_CLAUDE_HOW),
+      el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small primary", href: "#/setup", "data-msuggest": "setup-go" }, NEEDS_CLAUDE_GO))));
+}
+
+// The dialog before anything is asked. `pv` is the answer of POST /api/memory/suggest/preview; hooks: onStart(previewId).
+function openMemorySuggestDialog(pv, hooks) {
+  const blockers = Array.isArray(pv.blockers) ? pv.blockers.filter((b) => b && typeof b === "object") : [];
+  const cap = usdUp(dispatchNum(pv.cap_usd)), left = usdDown(dispatchNum(pv.day_left_usd));
+  const titleId = "msuggest-dialog-title";
+  let close = () => {};
+  const actions = [el("button", { class: "btn", type: "button", on: { click: () => close() } }, "取消")];
+  if (pv.ok === true && typeof pv.preview_id === "string" && pv.preview_id) {
+    const start = el("button", { class: "btn primary", type: "button", "data-msuggest": "start", on: { click: async () => {
+      start.disabled = true;
+      close();
+      try { await hooks.onStart(pv.preview_id); } catch (e) { toast(e.message); }
+    } } }, "開始整理");
+    actions.push(start);
+  }
+  const head = el("h2", { id: titleId, tabindex: "-1" }, MSUGGEST_BUTTON);
+  const reads = Number.isInteger(pv.messages) ? `${pv.messages} 則` : "最近的幾則";
+  const lines = Number.isInteger(pv.memory_lines) ? pv.memory_lines : 0;
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-msuggest": "dialog" },
+    el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
+      blockers.map((b) => (b.code === "cli_not_found" ? memorySuggestNeedsClaude() : notice("warn", b.message || "現在不能開始"))),
+      el("p", null, `VBear 會讀你和這位員工最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}），`
+        + `和你目前的記憶（${lines} 條，讓它不要重複提議）。工具的輸出、檔案內容、你按過的允許都不會送出。`),
+      el("p", { class: "chief-money", "data-msuggest": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`)),
+      el("p", null, `這段對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Anthropic"}。`),
+      pv.notice ? notice("info", pv.notice) : null,
+      typeof pv.save_note === "string" && pv.save_note ? el("p", { "data-msuggest": "save-note" }, pv.save_note) : null,
+      typeof pv.disclosure === "string" && pv.disclosure ? el("p", { class: "small muted" }, pv.disclosure) : null,
+      typeof pv.cost_note === "string" && pv.cost_note ? el("p", { class: "small muted" }, pv.cost_note) : null,
+      el("div", { class: "modal-actions" }, actions)));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  head.focus();
+  return close;
+}
+
+// The card of one suggestion `v` (GET /api/memory/suggest/<id>): hooks.onDismissed() once 「不用了」 went through.
+function memorySuggestCard(v, hooks) {
+  const items = Array.isArray(v.items) ? v.items.filter((i) => i && typeof i === "object") : [];
+  const note = (spent) => (dispatchNum(spent) !== null ? `這次花了 ${usdUp(dispatchNum(spent))}（Claude Code 回報的估值；沒回報的以上限計）。` : "");
+  const dismiss = el("button", { class: "btn", type: "button", "data-msuggest": "dismiss" }, "不用了");
+  const finish = async () => {
+    dismiss.disabled = true;
+    try { await api.post(`/api/memory/suggest/${encodeURIComponent(v.id)}/dismiss`, {}); }
+    catch (e) { toast(e.message); dismiss.disabled = false; return; }
+    hooks.onDismissed();
+  };
+  dismiss.addEventListener("click", finish);
+  if (!items.length) {
+    dismiss.textContent = "關閉";
+    return el("section", { class: "panel pad", "data-msuggest": "card" }, el("h3", null, "VBear 整理好了"),
+      el("p", null, "這段對話裡沒有值得記住的事。"), el("p", { class: "small muted" }, note(v.spent_usd)), dismiss);
+  }
+  const save = el("button", { class: "btn primary", type: "button", "data-msuggest": "save" }, "存進記憶");
+  const rows = items.map((it) => {
+    const row = { it, saved: it.saved === true, original: String(it.text), error: null, asked: [] };
+    row.check = el("input", { type: "checkbox", "data-msuggest": "check", "aria-label": "存這一條" });
+    row.kind = el("select", { "data-msuggest": "kind", "aria-label": "類別" }, MEMORY_KINDS.map(([val, label]) => el("option", { value: val }, label)));
+    row.kind.value = MEMORY_KINDS.some(([val]) => val === it.kind) ? it.kind : "work";
+    row.text = el("input", { type: "text", maxlength: String(MEMORY_MAX_TEXT), "data-msuggest": "text", "aria-label": "要記住的一句話" });
+    row.text.value = row.original;
+    row.confirm = el("input", { type: "checkbox", "data-msuggest": "confirm" });
+    row.notes = el("div", { "data-msuggest": "notes" });
+    row.node = el("li", { class: "card", "data-msuggest": "item", "data-index": String(it.index) },
+      el("label", { class: "small" }, row.check, " 存這一條"), row.kind, row.text, row.notes);
+    return row;
+  });
+  const changed = (r) => r.text.value !== r.original;
+  const warnWords = (r) => (changed(r) ? r.asked : (Array.isArray(r.it.warn_text) ? r.it.warn_text.filter((w) => typeof w === "string") : []));
+  const refuseWords = (r) => (!changed(r) && r.it.refuse ? (typeof r.it.refuse_text === "string" && r.it.refuse_text ? r.it.refuse_text : "這一條現在不能存。") : null);
+  const sync = () => { save.disabled = !rows.some((r) => !r.saved && r.check.checked); };
+  const paint = (r) => {
+    const refuse = r.saved ? null : refuseWords(r);
+    const warn = r.saved ? [] : warnWords(r);
+    r.check.disabled = r.saved || refuse !== null;
+    if (r.check.disabled) r.check.checked = false;
+    r.kind.disabled = r.saved;
+    r.text.disabled = r.saved;
+    setKids(r.notes,
+      typeof r.it.why === "string" && r.it.why ? el("p", { class: "small muted", "data-msuggest": "why" }, r.it.why) : null,
+      r.saved ? el("p", { class: "small", "data-msuggest": "saved" }, "已存") : null,
+      refuse ? notice("bad", refuse) : null,
+      !r.saved && changed(r) && r.it.refuse ? el("p", { class: "small", "data-msuggest": "edited" }, MSUGGEST_EDITED) : null,
+      warn.length ? notice("warn", warn.join(" ")) : null,
+      warn.length ? el("label", { class: "small" }, r.confirm, ` ${MSUGGEST_SURE}`) : null,
+      r.error ? notice("bad", r.error) : null);
+    sync();
+  };
+  for (const r of rows) {
+    r.check.addEventListener("change", sync);
+    r.text.addEventListener("input", () => { r.error = null; r.asked = []; r.confirm.checked = false; paint(r); });
+    paint(r);
+  }
+  const press = async () => {
+    save.disabled = true;
+    const done = [];
+    for (const r of rows.filter((x) => !x.saved && x.check.checked)) {
+      r.error = null;
+      const warn = warnWords(r);
+      if (warn.length && !r.confirm.checked) { r.error = `要存這一條，請先勾「${MSUGGEST_SURE}」。`; paint(r); continue; }
+      const body = { kind: r.kind.value, text: r.text.value, source: { how: "suggested", suggestion_id: v.id } };
+      if (warn.length) body.confirm_warning = true;
+      try {
+        await api.post("/api/memory", body);
+        r.saved = true;
+        r.check.checked = false;
+        done.push(r.it.index);
+      } catch (e) {
+        if (e.code === "memory_confirm") r.asked = e.data && Array.isArray(e.data.warn_text) && e.data.warn_text.length ? e.data.warn_text : [e.message];
+        else r.error = e.message;
+      }
+      paint(r);
+    }
+    if (done.length) {
+      try { await api.post(`/api/memory/suggest/${encodeURIComponent(v.id)}/saved`, { indexes: done }); }
+      catch (e) { toast(e.message); }
+      toast(`已記住 ${done.length} 條`);
+    }
+    dismiss.textContent = rows.every((r) => r.saved) ? "關閉" : "不用了";
+    sync();
+  };
+  save.addEventListener("click", press);
+  sync();
+  return el("section", { class: "panel pad", "data-msuggest": "card" }, el("h3", null, `VBear 整理了 ${items.length} 條，預設都沒勾`),
+    el("p", { class: "small" }, "只有你勾選的會存；可以改字和類別，存的時候 VBear 會再檢查一次。"),
+    el("p", { class: "small muted" }, note(v.spent_usd)),
+    el("ul", { class: "mt-list" }, rows.map((r) => r.node)), el("div", { class: "row" }, save, dismiss));
+}
+
+// The desk on a one-to-one chat page: the button, the dialog, the call that runs and the card of what came back.
+function memorySuggestDesk(chatId) {
+  const runs = el("div", { "data-msuggest": "runs" });
+  const button = el("button", { class: "btn", type: "button", "data-msuggest": "open", on: { click: () => openDialog() } }, MSUGGEST_BUTTON);
+  const box = el("section", { class: "panel pad", "data-msuggest": "desk" }, el("div", { class: "row" }, button),
+    el("p", { class: "small" }, MSUGGEST_LEDE), runs);
+  let gone = false, watching = null, mine = null, shown = null, timer = null;
+  async function openDialog() {
+    button.disabled = true;
+    let pv;
+    try { pv = await api.post("/api/memory/suggest/preview", { chat_id: chatId }); }
+    catch (e) { toast(e.message); button.disabled = false; return; }
+    button.disabled = false;
+    openMemorySuggestDialog(pv, {
+      onStart: async (previewId) => {
+        const r = await api.post("/api/memory/suggest", { preview_id: previewId });
+        mine = r.id;
+        toast("開始整理了");
+        show(r.suggestion || { id: r.id, status: "running" });
+      },
+    });
+  }
+  const failure = (v) => {
+    const code = typeof v.error_code === "string" ? v.error_code : "";
+    const words = code ? (cardHas(MSUGGEST_ERROR_TEXT, code) ? MSUGGEST_ERROR_TEXT[code] : "") : "";
+    return el("div", { class: "chief-run", "data-msuggest": "run" }, notice("bad", `這次整理沒有成功。${words}${code ? `（${code}）` : ""}`));
+  };
+  function show(v) {
+    if (gone || !v || typeof v !== "object" || typeof v.id !== "string") return;
+    if (v.status === "running") {
+      watching = v.id;
+      shown = null;
+      const cancel = el("button", { class: "btn small", type: "button", "data-msuggest": "cancel", on: { click: async () => {
+        try { await api.post(`/api/memory/suggest/${encodeURIComponent(v.id)}/cancel`, {}); } catch (e) { toast(e.message); }
+        await poll();
+      } } }, "取消");
+      setKids(runs, el("div", { class: "chief-run", "data-msuggest": "run", role: "status" }, el("strong", null, "VBear 正在整理…"),
+        el("span", { class: "small muted" }, " 最多 120 秒"), " ", cancel));
+      return;
+    }
+    watching = null;
+    if (v.status === "ready") {
+      const list = Array.isArray(v.items) ? v.items : [];
+      const left = list.some((i) => i && i.saved !== true);
+      if (v.dismissed === true || (list.length && !left) || (!list.length && v.id !== mine)) { shown = null; setKids(runs, null); return; }
+      if (shown === v.id) return;                       // a card the person may be editing is kept, not rebuilt
+      shown = v.id;
+      setKids(runs, memorySuggestCard(v, { onDismissed: () => { shown = null; setKids(runs, null); } }));
+      return;
+    }
+    shown = null;
+    setKids(runs, v.id === mine ? failure(v) : null);
+  }
+  async function poll() {
+    if (gone || !watching) return;
+    let v;
+    try { v = await api.get(`/api/memory/suggest/${encodeURIComponent(watching)}`); }
+    catch (e) { if (e.status === 404) { watching = null; setKids(runs, null); } return; }
+    show(v);
+  }
+  async function refresh() {
+    const list = await api.get("/api/memory/suggest").catch(() => null);
+    if (gone || !list || !Array.isArray(list.suggestions)) return;
+    const newest = list.suggestions.filter((s) => s && typeof s === "object" && !s.blocked && s.chat_id === chatId && s.dismissed !== true
+      && (s.status === "running" || s.status === "ready")).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+    if (!newest) return;
+    const v = await api.get(`/api/memory/suggest/${encodeURIComponent(newest.id)}`).catch(() => null);
+    if (v && !gone && !watching && shown === null) show(v);
+  }
+  timer = setInterval(() => { if (!document.hidden) poll(); }, MSUGGEST_POLL_MS);
+  refresh();
+  return { node: box, stop: () => { gone = true; clearInterval(timer); } };
+}
+// ---------- end of memory suggestions ----------
 
 // ---------- groups (v0.16, P41-1, ADR 0007) ----------------------------------------------------------------------------------
 // The pages of vbear/groups.py: a group is chats, one for each member, and the person talks to all of them: the words go to the
