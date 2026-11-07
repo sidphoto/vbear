@@ -13476,6 +13476,15 @@ function chatIntroNode() {
 
 // ---- one chat ----
 
+// One line of a chat page: whether this employee has the person's memory with them now (the server's `memory`: on, count, readable;
+// an older server sends none and the page says nothing). A count, never a line of memory.
+function chatMemoryLine(m) {
+  if (!m || typeof m !== "object") return null;
+  const word = m.readable === false ? "記憶讀不到，這次沒有帶。"
+    : m.on === true ? `這位員工帶著你的記憶（${Number.isInteger(m.count) ? m.count : 0} 條）。` : "這位員工不帶記憶。";
+  return el("p", { class: "small muted", "data-chat": "memory" }, word, " ", el("a", { href: "#/memory" }, "到記憶頁看看"));
+}
+
 async function chatReadAll(id) {
   let after = 0, first = null;
   const records = [];
@@ -13531,6 +13540,7 @@ async function viewChatDetail(token, id) {
       el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
         view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：${chatToolName(view.card.tool)}` : ""),
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
+      chatMemoryLine(view.memory),
       isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
         : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
       isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null);
@@ -13575,7 +13585,8 @@ async function viewChatDetail(token, id) {
   const apply = (data) => {
     if (!data || typeof data !== "object") return;
     take(Array.isArray(data.records) ? data.records : []);
-    view = { ...view, card: data.card !== undefined ? data.card : view.card, live: data.live === undefined ? view.live : data.live,
+    view = { ...view, card: data.card !== undefined ? data.card : view.card, memory: data.memory !== undefined ? data.memory : view.memory,
+      live: data.live === undefined ? view.live : data.live,
       runtime: data.runtime || view.runtime, problem: data.problem || "", more: data.more === true && !data.live };
     if (Array.isArray(data.records) && data.records.some((r) => r && r.kind === "turn_ended")) refreshLedger();
     draw();
@@ -14903,8 +14914,9 @@ function chatOriginFill(line, origin) {
 // The person's memory (#/memory): a few lines about them, their work and their decisions, the same for every employee. Only the
 // person's own press of 「存」 saves a line (POST /api/memory); the server refuses what must not be sent (passwords, keys, account
 // names, card numbers) and asks for a second confirmation of what reads like an order or holds a phone number or address. Every
-// string is set as text. This page does not change a line, it adds and removes them; the cards that take memory along and the
-// 「記住」 button in chats come later.
+// string is set as text. P42-2 added the least the boundary needs: who takes memory along (a switch for each card; a Codex card is
+// switched on only after the person agreed that memory goes to OpenAI) and, in a chat, one line saying whether this employee has the
+// memory with them. Editing, clearing, exporting and the 「記住」 button are the memory page's own work (P42-3).
 
 const MEMORY_KINDS = [["about_you", "關於你"], ["work", "你的工作"], ["decision", "決定"]];
 const MEMORY_MAX_TEXT = 200;
@@ -14912,6 +14924,9 @@ const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（
 const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
 const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
 const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。";
+const MEMORY_CARDS_NOTE = "在終端機（完整模式）出發時不帶記憶。";
+const MEMORY_NO_CHAT = "這位員工的 AI 工具還不能聊天，用不到記憶。";
+const MEMORY_OPENAI_ASK = "打開之後，這位員工開新程序時，記憶會跟著送給 OpenAI（Codex 的公司）。確定要讓這位員工帶記憶嗎？";
 const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
 
 function memoryCount(n) { return String(Number.isFinite(n) ? n : 0).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
@@ -14973,6 +14988,37 @@ function memoryAddForm(onSaved) {
     el("div", { class: "row" }, kind, text, save), counter, confirmBox, problem);
 }
 
+// Who takes memory along: a switch for each card whose AI tool can chat. Switching a card whose tool belongs to OpenAI on asks first and
+// sends confirm_company: true; every other switch is sent as it is. The page is read again after, so it shows what the server kept.
+function memoryCardRow(card, reload) {
+  const name = typeof card.name === "string" && card.name ? card.name : "（沒有名稱）";
+  const where = card.company ? `送到 ${card.company}` : "";
+  if (card.can_chat !== true && !card.company) {
+    return el("li", { class: "mt-row card", "data-memory": "card", "data-profile": card.profile_id },
+      el("span", null, name), el("span", { class: "small muted" }, MEMORY_NO_CHAT));
+  }
+  const box = el("input", { type: "checkbox", "data-memory": "card-switch", "aria-label": `${name}帶記憶` });
+  box.checked = card.on === true;
+  box.addEventListener("change", async () => {
+    const on = box.checked;
+    const toOpenai = on && card.company === "OpenAI";
+    if (toOpenai && !(await confirmInPage("讓 Codex 員工帶記憶", MEMORY_OPENAI_ASK, "打開"))) { box.checked = false; return; }
+    box.disabled = true;
+    try { await api.post("/api/memory/cards", toOpenai ? { profile_id: card.profile_id, on, confirm_company: true } : { profile_id: card.profile_id, on }); }
+    catch (e) { toast(e.message); }
+    await reload();
+  });
+  return el("li", { class: "mt-row card", "data-memory": "card", "data-profile": card.profile_id },
+    el("label", null, box, " ", name), el("span", { class: "small muted" }, `${chatToolName(card.tool)}・${where}`));
+}
+
+function memoryCardsSection(cards, reload) {
+  const rows = (Array.isArray(cards) ? cards : []).filter((c) => c && typeof c === "object" && typeof c.profile_id === "string");
+  return el("section", { class: "section", "data-memory": "cards" }, sectionHead("誰帶記憶", "開著的員工，開新程序時會帶著你的記憶。"),
+    rows.length ? el("ul", { class: "mt-list" }, rows.map((c) => memoryCardRow(c, reload))) : el("p", { class: "small muted" }, "還沒有員工。"),
+    el("p", { class: "small muted", "data-memory": "cards-note" }, MEMORY_CARDS_NOTE));
+}
+
 async function viewMemory() {
   const token = seq;
   let data;
@@ -14993,7 +15039,7 @@ async function viewMemory() {
     setKids(listBox,
       cur.readable === false ? notice("bad", cur.problem || "記憶的檔案有問題，VBear 先不碰它。") : null,
       el("p", { class: "small", "data-memory": "used" }, `${memoryCount(used.count)}／${memoryCount(used.max_count)} 條、${memoryCount(used.chars)}／${memoryCount(used.max_chars)} 字。${MEMORY_COST}`),
-      groups);
+      groups, memoryCardsSection(cur.cards, reload));
   };
   async function reload() {
     try { cur = await api.get("/api/memory"); } catch (e) { toast("讀不到記憶：" + e.message); }
