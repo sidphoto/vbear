@@ -13482,15 +13482,6 @@ function chatIntroNode() {
 
 // ---- one chat ----
 
-// One line of a chat page: whether this employee has the person's memory with them now (the server's `memory`: on, count, readable;
-// an older server sends none and the page says nothing). A count, never a line of memory.
-function chatMemoryLine(m) {
-  if (!m || typeof m !== "object") return null;
-  const word = m.readable === false ? "記憶讀不到，這次沒有帶。"
-    : m.on === true ? `這位員工帶著你的記憶（${Number.isInteger(m.count) ? m.count : 0} 條）。` : "這位員工不帶記憶。";
-  return el("p", { class: "small muted", "data-chat": "memory" }, word, " ", el("a", { href: "#/memory" }, "到記憶頁看看"));
-}
-
 async function chatReadAll(id) {
   let after = 0, first = null;
   const records = [];
@@ -13548,7 +13539,6 @@ async function viewChatDetail(token, id) {
       el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
         view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：${chatToolName(view.card.tool)}` : ""),
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
-      chatMemoryLine(view.memory),
       isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
         : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
       isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null,
@@ -15192,8 +15182,6 @@ const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（
 const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
 const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
 const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。";
-const MEMORY_NO_CHAT = "這位員工的 AI 工具還不能聊天，用不到記憶。";
-const MEMORY_OPENAI_ASK = "打開之後，這位員工開新程序時，記憶會跟著送給 OpenAI（Codex 的公司）。確定要讓這位員工帶記憶嗎？";
 const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
 const MEMORY_REMEMBER_SENDS = "存了以後，每位員工開新聊天時都會看到（在記憶頁關掉的員工除外）。記憶會跟著送給 Anthropic（Claude Code 的員工）或 OpenAI（Codex 的員工，要先在記憶頁打開）。不要存密碼、帳號、卡號。";
 const MEMORY_EMPLOYEE_WORDS = "這段是員工說的，存了以後每位員工開新聊天都會看到，請確定內容正確。";

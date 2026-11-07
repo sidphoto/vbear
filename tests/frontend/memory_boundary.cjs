@@ -152,22 +152,32 @@ test("a name that holds markup stays text", async () => {
   assert.strictEqual(main.findAll((n) => n.tag === "img" || n.tag === "script").length, 0);
 });
 
-test("a chat page says in one line whether this employee has the memory with them", async () => {
+test("a chat page says in one line whether this employee has the memory with them (the surviving line is P42-3's chat-state)", async () => {
   setPage({ detail: detail({ on: true, count: 3, readable: true }) });
   let main = await open("#/chat/" + CID);
-  const line = main.find((n) => n.getAttribute && n.getAttribute("data-chat") === "memory");
+  const line = main.find((n) => n.getAttribute && n.getAttribute("data-memory") === "chat-state");
   assert(line, "the line is there");
   assert(text(line).includes("這位員工帶著你的記憶（3 條）"));
   assert(line.find((n) => n.tag === "a" && n.getAttribute("href") === "#/memory"), "it leads to the memory page");
   setPage({ detail: detail({ on: false, count: 0, readable: true }) });
   main = await open("#/chat/" + CID);
-  assert(text(main.find((n) => n.getAttribute && n.getAttribute("data-chat") === "memory")).includes("這位員工不帶記憶"));
+  assert(text(main.find((n) => n.getAttribute && n.getAttribute("data-memory") === "chat-state")).includes("這位員工不帶記憶"));
   setPage({ detail: detail({ on: false, count: 0, readable: false }) });
   main = await open("#/chat/" + CID);
-  assert(text(main.find((n) => n.getAttribute && n.getAttribute("data-chat") === "memory")).includes("記憶讀不到，這次沒有帶"));
-  setPage({ detail: detail(undefined) });
+  assert(text(main.find((n) => n.getAttribute && n.getAttribute("data-memory") === "chat-state")).includes("記憶讀不到，這次沒有帶"));
+  // an older server sends no `memory`: the page asks the memory page's own answer instead (still one line, still only numbers)
+  setPage({ detail: detail(undefined), memory: view({ used: { count: 2, chars: 40, max_count: 50, max_chars: 4000 } }) });
   main = await open("#/chat/" + CID);
-  assert(!main.find((n) => n.getAttribute && n.getAttribute("data-chat") === "memory"), "an older server says nothing");
+  assert(text(main.find((n) => n.getAttribute && n.getAttribute("data-memory") === "chat-state")).includes("（2 條）"));
+});
+
+test("a chat page has exactly one line about the memory, whichever of the two pieces of the page could have written it (P42-5)", async () => {
+  setPage({ detail: detail({ on: true, count: 3, readable: true }) });
+  const main = await open("#/chat/" + CID);
+  const all = main.findAll((n) => n.tag === "p" && /帶著你的記憶|不帶記憶|記憶讀不到/.test(text(n)));
+  assert.strictEqual(all.length, 1, "one line, found " + all.length);
+  assert(text(all[0]).includes("（3 條）"));
+  assert.strictEqual(main.findAll((n) => n.getAttribute && n.getAttribute("data-chat") === "memory").length, 0, "the old second line is gone");
 });
 
 test("the new code keeps the rules of the page", () => {
