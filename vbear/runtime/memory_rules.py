@@ -196,19 +196,24 @@ def block(entries) -> str:
     return f"{HEAD}\n{BEGIN_MARK}\n{outer}\n{END_MARK}"
 
 
-def combine(instructions: str | None, memory_block: str | None) -> str | None:
-    """What a chat's system prompt gets from the card and the memory: the card's own instructions, then the block."""
-    if instructions is None:
-        return memory_block
-    return instructions if memory_block is None else f"{instructions}\n\n{memory_block}"
+def combine(instructions: str | None, memory_block: str | None, shared_block: str | None = None) -> str | None:
+    """What a chat's system prompt gets from the card, the memory and the shared folder (P43-1): the card's own instructions, then the
+    memory paragraph, then the shared folder's, each only when there is one, joined by a blank line. Without a shared paragraph this
+    is what v0.17.0 made."""
+    parts = [x for x in (instructions, memory_block, shared_block) if x is not None]
+    return "\n\n".join(parts) if parts else None
 
 
-def prompt_sha(instructions: str | None, memory_block: str | None) -> str:
-    """A fingerprint of what a chat process was given as its system prompt (the card's instructions and the memory paragraph; None
-    and "" are the same). The daemon keeps it (chat_store.set_prompt_start) when a chat's NEW session is started, and the chat page
-    compares it with the current one: Claude Code 2.1.319 keeps a session's system prompt, so a difference is shown to the person
-    and never answered with a new process (P42-6)."""
-    return hashlib.sha256(f"{instructions or ''}\0{memory_block or ''}".encode("utf-8")).hexdigest()
+def prompt_sha(instructions: str | None, memory_block: str | None, shared_block: str | None = None) -> str:
+    """A fingerprint of what a chat process was given as its system prompt (the card's instructions, the memory paragraph and, when the
+    shared folder is on, its paragraph; None and "" are the same). The daemon keeps it (chat_store.set_prompt_start) when a chat's NEW
+    session is started, and the chat page compares it with the current one: Claude Code 2.1.319 keeps a session's system prompt, so a
+    difference is shown to the person and never answered with a new process (P42-6). Without a shared paragraph the value is the one
+    v0.17.0 computed, so a chat started before the upgrade is not shown as changed (P43-1)."""
+    text = f"{instructions or ''}\0{memory_block or ''}"
+    if shared_block is not None:
+        text += f"\0{shared_block}"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def prepare(memory) -> Prepared:

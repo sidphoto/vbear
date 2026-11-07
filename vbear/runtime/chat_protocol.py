@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from ..numbers import finite_real
-from . import stream_protocol as sp
+from . import shared_rules, stream_protocol as sp
 
 UUID_RE = sp.UUID_RE
 MAX_TEXT_BYTES = 32 * 1024            # one user message (UTF-8)
@@ -47,7 +47,8 @@ _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-\[\]]{0,63}\Z")
 TOOLS = ("Bash", "Read", "Edit", "Write", "Grep", "Glob")
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
 EDITABLE = {"Bash": "command", "Write": "content", "Edit": "new_string"}     # what a person may change first
-# Inside the work folder, Claude Code's own project settings: neither Write nor Edit may go there.
+# Inside the work folder, Claude Code's own project settings: neither Write nor Edit may go there, at any depth (P43-1; before, only the
+# first level was looked at). The shared folder keeps four such names (runtime/shared_rules.PROTECTED).
 PROTECTED = (".claude",)
 
 
@@ -190,15 +191,21 @@ def _outward_link(work: str) -> bool:
     return False
 
 
-def judge(tool, tool_input, workdir: str) -> Judgement:
+def judge(tool, tool_input, workdir: str, shared: str | None = None) -> Judgement:
     """What VBear does with a permission request (P36 design): Bash, Edit and Write always ask, Edit and Write only
-    inside the role card's work folder (elsewhere, or into its ``.claude``, VBear refuses with no way to allow);
-    Read, Grep and Glob are allowed by VBear only when every path, links followed, is inside the work folder, a
+    inside the role card's work folder (elsewhere, or into a ``.claude`` at any depth of it, VBear refuses with no way to
+    allow); Read, Grep and Glob are allowed by VBear only when every path, links followed, is inside the work folder, a
     Glob/Grep file pattern is a bare name (no ``/``, ``..`` or ``~``) and the folder holds no link that leads
-    outside it; they ask otherwise. Any other tool is refused."""
+    outside it; they ask otherwise. Any other tool is refused.
+
+    ``shared`` (P43-1, ADR 0009) is the shared folder of an employee the person switched it on for, or None. It is a second root:
+    Edit and Write there always ask (a card that says other employees can read it) unless ``shared_rules.write_problem`` refuses
+    it (outside after the links, a protected name at any depth, a file with another hard link): then no card. Read, Grep and Glob
+    in it follow the work folder's rule, with the links looked for in the root the paths are in."""
     if not isinstance(tool_input, dict):
         return Judgement("deny", "工具的輸入格式不對")
     work = os.path.realpath(workdir)
+    shared = os.path.realpath(shared) if isinstance(shared, str) and shared else None
     if tool == "Bash":
         if not isinstance(tool_input.get("command"), str):
             return Judgement("deny", "Bash 沒有給要執行的指令")
@@ -207,11 +214,16 @@ def judge(tool, tool_input, workdir: str) -> Judgement:
         where = _resolve(tool_input.get("file_path"), work)
         if where is None:
             return Judgement("deny", f"{tool} 沒有給檔案路徑")
+        if shared is not None and _inside(where, shared) and not _inside(where, work):
+            problem = shared_rules.write_problem(where, shared)
+            if problem:
+                return Judgement("deny", problem)
+            return Judgement("ask", "寫入共用資料夾裡的檔案，其他打開共用資料夾的員工都讀得到，要你允許", EDITABLE[tool])
         if not _inside(where, work) or where == work:
             return Judgement("deny", "只能寫員工自己的工作資料夾裡的檔案，這個路徑在資料夾以外")
-        first = os.path.relpath(where, work).split(os.sep)[0]
-        if first.casefold() in PROTECTED:
-            return Judgement("deny", f"{first} 是 Claude Code 自己的設定資料夾，聊天裡不能寫")
+        for part in os.path.relpath(where, work).split(os.sep):
+            if part.casefold() in PROTECTED:
+                return Judgement("deny", f"{part} 是 Claude Code 自己的設定資料夾，聊天裡不能寫")
         return Judgement("ask", "寫入員工工作資料夾裡的檔案，要你允許", EDITABLE[tool])
     if tool in READ_TOOLS:
         if tool == "Read":
@@ -220,13 +232,19 @@ def judge(tool, tool_input, workdir: str) -> Judgement:
             paths = [tool_input.get("path") if tool_input.get("path") is not None else work]
             patterns = ([tool_input.get("pattern")] if tool == "Glob" else
                         [tool_input["glob"]] if tool_input.get("glob") is not None else [])
-        if not all(_inside(_resolve(p, work), work) for p in paths):
-            return Judgement("ask", "要讀員工工作資料夾以外的地方，要你允許")
+        where = [_resolve(p, work) for p in paths]
+        roots = [r for r in (work, shared) if r is not None]
+        if not all(any(_inside(w, r) for r in roots) for w in where):
+            return Judgement("ask", "要讀員工工作資料夾以外的地方，要你允許" if shared is None
+                             else "要讀員工工作資料夾和共用資料夾以外的地方，要你允許")
         if any(_pattern_names_a_path(p) for p in patterns):
             return Judgement("ask", "檔名比對帶有路徑（/、.. 或 ~），可能讀到資料夾以外，要你允許")
-        if _outward_link(work):
+        if any(_inside(w, work) for w in where) and _outward_link(work):
             return Judgement("ask", "員工的工作資料夾裡有指向資料夾以外的連結，讀取要你允許")
-        return Judgement("allow", "在員工自己的工作資料夾裡讀取")
+        if shared is not None and any(_inside(w, shared) and not _inside(w, work) for w in where) and _outward_link(shared):
+            return Judgement("ask", "共用資料夾裡有指向資料夾以外的連結，讀取要你允許")
+        return Judgement("allow", "在員工自己的工作資料夾裡讀取" if shared is None or all(_inside(w, work) for w in where)
+                         else "在員工的工作資料夾或共用資料夾裡讀取")
     return Judgement("deny", "VBear 的聊天不提供這個工具")
 
 
@@ -294,10 +312,11 @@ class ChatTracker:
 
     The session tells it which tool calls VBear allowed (``approve``) or refused (``refuse``)."""
 
-    def __init__(self, consts: ChatConstants, *, session_id: str, workdir: str, init_request_id: str):
+    def __init__(self, consts: ChatConstants, *, session_id: str, workdir: str, init_request_id: str, shared: str | None = None):
         self.c = consts
         self.session_id = session_id
         self.workdir = os.path.realpath(workdir)
+        self.shared = shared                    # the shared folder of this process (P43-1), or None
         self.init_id = init_request_id
         self.initialized = False
         self.ready = False
@@ -485,7 +504,7 @@ class ChatTracker:
             return None
         if call is None:
             return "Claude Code 回報了一個 VBear 沒看到呼叫的工具結果"
-        if call["tool"] in READ_TOOLS and judge(call["tool"], call["input"], self.workdir).action == "allow":
+        if call["tool"] in READ_TOOLS and judge(call["tool"], call["input"], self.workdir, self.shared).action == "allow":
             return None                             # a read inside the work folder, which VBear allows too
         return f"Claude Code 沒有經過 VBear 的允許就執行了 {sp.safe_name(call['tool'])}"
 
