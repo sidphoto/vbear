@@ -442,9 +442,12 @@ class ChatService:
             card = {"id": profile.get("id"), "name": profile.get("name"), "position": agent_profiles.position_of(profile),
                     "tool": model.get("tool"), "engine": engine_of(profile), "enabled": profile.get("enabled") is not False,
                     "can_chat": ok, "code": code or None, "reason": reason or None}
+        given = self._memory(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
+        taken = given.readable and given.on           # now, not what an earlier process was given: a count, never a line
         return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
                          "engine": chat.get("engine")},
-                "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id), **out}
+                "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id),
+                "memory": {"on": taken, "count": len(given.entries) if taken else 0, "readable": given.readable}, **out}
 
     # ---- what a person does ---------------------------------------------------------------------------------------
 

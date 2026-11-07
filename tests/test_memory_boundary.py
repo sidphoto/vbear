@@ -231,6 +231,44 @@ class ClearTests(RoutesCase):
         self.assertEqual(self.appended(), mr.block([]))
 
 
+class ChatStatusTests(RoutesCase):
+    """GET /api/chats/<id> says now whether the card takes memory along, how many lines, and whether the file could be read."""
+
+    def status_of(self, chat_id):
+        return self.view(chat_id)["memory"]
+
+    def test_the_count_follows_the_lines_and_the_switch(self):
+        chat_id = self.open_http()
+        self.assertEqual(self.status_of(chat_id), {"on": True, "count": 0, "readable": True})
+        self.add_all()
+        self.assertEqual(self.status_of(chat_id), {"on": True, "count": 3, "readable": True})
+        self.call("/api/memory/cards", "POST", {"profile_id": self.emp, "on": False})
+        self.assertEqual(self.status_of(chat_id), {"on": False, "count": 0, "readable": True})
+        self.call("/api/memory/cards", "POST", {"profile_id": self.emp, "on": True})
+        self.assertEqual(self.status_of(chat_id)["count"], 3)
+
+    def test_a_file_that_cannot_be_read_is_said(self):
+        chat_id = self.open_http()
+        self.add_all()
+        state_file("memory", "memory.json").write_text("{broken")
+        self.assertEqual(self.status_of(chat_id), {"on": False, "count": 0, "readable": False})
+
+    def test_a_codex_chat_starts_without_memory_until_the_person_switches_the_card_on(self):
+        codex = self.card("Codex 員工", "codex")
+        self.add_all()
+        chat_id = self.open_http(codex)
+        self.assertEqual(self.status_of(chat_id), {"on": False, "count": 0, "readable": True})
+        self.call("/api/memory/cards", "POST", {"profile_id": codex, "on": True, "confirm_company": True})
+        self.assertEqual(self.status_of(chat_id), {"on": True, "count": 3, "readable": True})
+
+    def test_the_status_holds_a_count_and_no_word_of_memory(self):
+        chat_id = self.open_http()
+        self.add_all()
+        text = json.dumps(self.view(chat_id), ensure_ascii=False)
+        for _kind, line in LINES:
+            self.assertNotIn(line, text)
+
+
 class ExportTests(RoutesCase):
     def test_a_markdown_file_with_three_headings_one_line_each_and_where_it_came_from(self):
         self.add_all()
