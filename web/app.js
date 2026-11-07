@@ -13403,6 +13403,7 @@ async function viewChat(id, params) {
       on: { click: () => openGroupDialog(cards, { onCreate: async (body) => {
         const made = await api.post("/api/groups", body);
         const notes = Array.isArray(made.notes) ? made.notes.filter((x) => typeof x === "string" && x) : [];
+        if (made.shared && made.shared.error && typeof made.shared.error.text === "string") notes.push("共用資料夾沒有全部打開：" + made.shared.error.text);
         if (notes.length) toast(notes.join(" "));
         location.hash = `#/chat/group/${encodeURIComponent(made.group.id)}`;
         return made;
@@ -13983,6 +13984,9 @@ const GROUP_PAGE_MAX = 12;           // pages of 200 items read when a group is 
 const GROUP_POLL_MS = 1500;
 const GROUP_SHARE_NOTE = "員工看不到彼此的檔案，只看得到群組裡的對話。";
 const GROUP_MIXED_NOTE = "群組裡有 Claude Code 和 Codex 的員工，群組裡的對話會同時送給 Anthropic 和 OpenAI。";
+const GROUP_SHARED_LABEL = "讓這幾位都能用共用資料夾";
+const GROUP_SHARED_ON_NOTE = "打開之後，這幾位可以在共用資料夾放檔案給彼此和你；每一次寫進去都照舊先問你。剛打開時，要開新的聊天員工才知道有這個資料夾。關掉不會刪任何檔案，要刪請到 Finder。";
+const GROUP_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
 const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
   + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
 const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，卡片會出現在那位員工的名字下面，每一次都要你按「允許這一次」，沒有一次允許好幾張的按鈕。不按的話，5 分鐘後視為拒絕。";
@@ -14018,6 +14022,25 @@ function groupReplyCost(item) {
   return item.tool === "codex" ? `按上限 ${money} 計` : `${money}（Claude Code 回報的估值）`;
 }
 
+// P43-3: under a reply, the names of the files that appeared in the shared folder while this employee was answering (`item.shared_changes`
+// from GET /api/groups/<id>: names only, as text; at most 10 shown). VBear does not know who put them there and never opens one.
+const GROUP_FILES_SHOWN = 10;
+function groupSharedChanges(item) {
+  const c = item && item.shared_changes;
+  if (!c || typeof c !== "object") return null;
+  const names = Array.isArray(c.names) ? c.names.filter((x) => typeof x === "string") : [];
+  if (!names.length) {
+    return c.unavailable === true ? el("div", { class: "small muted", "data-group": "shared-changes" }, "共用資料夾的檔案太多，這段時間沒有比對。") : null;
+  }
+  const more = names.length - GROUP_FILES_SHOWN;
+  return el("div", { class: "small muted", "data-group": "shared-changes" },
+    `這段時間共用資料夾裡新增或改過（不一定是他做的）：${names.slice(0, GROUP_FILES_SHOWN).join("、")}`,
+    more > 0 ? `，還有 ${more} 個` : "", c.cut === true ? "（檔案太多，只列了前 50 個）" : "", "　",
+    el("button", { class: "btn small", type: "button", "data-group": "shared-reveal", on: { click: async () => {
+      try { await api.post("/api/shared/reveal", {}); toast("已在 Finder 打開"); } catch (e) { toast(e.message); }
+    } } }, "在 Finder 打開"));
+}
+
 // The list's line for a group.
 function groupRow(g) {
   const members = Array.isArray(g.members) ? g.members : [];
@@ -14051,6 +14074,7 @@ function groupItemNode(item, opts) {
         el("div", { class: "chat-text" }, item.unreadable === true ? "（讀不到這則回覆）" : text(item.text) || "（沒有文字回覆）"),
         el("div", { class: "small muted", "data-group": "cost" }, groupReplyCost(item)),
         item.partial === true ? el("div", { class: "small", "data-group": "partial" }, badge("沒有正常做完", "b-warn")) : null,
+        groupSharedChanges(item),
         remember && Number.isInteger(item.round) && item.unreadable !== true && text(item.text) ? memoryRememberRow(() => remember(item, "employee")) : null);
     case "skipped": case "paused":
       return el("li", { class: "chat-note small muted", "data-group": item.kind, ...base }, text(item.text));
@@ -14079,12 +14103,19 @@ function openGroupDialog(cards, hooks) {
   const errorBox = el("div", { "data-group": "error", role: "alert" });
   const name = el("input", { type: "text", maxlength: String(GROUP_NAME_MAX), "data-group": "name", "aria-label": "群組的名字（選填）",
     placeholder: "名字（選填，40 字內）", on: { input: () => redraw() } });
+  // P43-3: the person's tick, off unless they put it there; it opens the shared folder for the members who have it off
+  const sharedBox = el("input", { type: "checkbox", "data-group": "shared", "aria-label": GROUP_SHARED_LABEL, on: { change: () => redraw() } });
+  const sharedNote = el("div", { "data-group": "shared-box" });
   const create = el("button", { class: "btn primary", type: "button", "data-group": "create", disabled: true, on: { click: async () => {
     if (busy) return;
     busy = true; redraw(); setKids(errorBox, null);
     const body = { profile_ids: list.filter((c) => chosen.has(c.id)).map((c) => c.id) };
     const typed = name.value.trim();
     if (typed) body.name = typed;
+    if (sharedBox.checked === true) {
+      body.shared_folder = true;
+      if (list.some((c) => chosen.has(c.id) && c.tool === "codex")) body.confirm_company = true;      // the line below the tick says it
+    }
     try { await hooks.onCreate(body); close(); }
     catch (e) { busy = false; setKids(errorBox, notice("bad", e && e.message ? e.message : "沒有建立成功")); redraw(); }
   } } }, "建立（不花錢）");
@@ -14105,6 +14136,10 @@ function openGroupDialog(cards, hooks) {
     const n = picked.length;
     setKids(countBox, n >= GROUP_MIN && n <= GROUP_MAX ? `已選 ${n} 位。` : `已選 ${n} 位；要選 ${GROUP_MIN} 到 ${GROUP_MAX} 位。`);
     setKids(mixedBox, groupMixed(picked.map((c) => c.tool)) ? notice("warn", GROUP_MIXED_NOTE) : null);
+    setKids(sharedNote, sharedBox.checked === true
+      ? [el("p", { class: "small", "data-group": "shared-on-note" }, GROUP_SHARED_ON_NOTE),
+        picked.some((c) => c.tool === "codex") ? el("p", { class: "small", "data-group": "shared-codex" }, GROUP_SHARED_CODEX_NOTE) : null]
+      : null);
     name.setAttribute("placeholder", picked.length ? `名字（選填，預設：${groupDefaultName(picked.map((c) => c.name || c.id))}）` : "名字（選填，40 字內）");
     create.disabled = busy || n < GROUP_MIN || n > GROUP_MAX;
   }
@@ -14116,6 +14151,8 @@ function openGroupDialog(cards, hooks) {
       list.length ? el("ul", { class: "group-picks" }, rows) : emptyState("還沒有可以聊天的員工", "先到角色頁做一張角色卡。"),
       countBox, mixedBox,
       el("label", { class: "ceo-field" }, el("span", null, "群組的名字"), name),
+      el("p", { class: "small" }, el("label", null, sharedBox, " ", GROUP_SHARED_LABEL), " ", el("span", { class: "muted" }, "（預設不勾）")),
+      sharedNote,
       errorBox,
       el("div", { class: "modal-actions" }, el("button", { class: "btn", type: "button", on: { click: () => close() } }, "取消"), create)));
   document.body.append(modal);
@@ -14599,6 +14636,11 @@ function openChiefDialog(pv, hooks) {
 // on the page; what is sent is that draft. `opts`: lamp ("red" stops 「確認派工」), chief (the chief of staff's view, for what it
 // cost), onDone(view) after a confirmation, onGone(view) after 「不採用」, onRefresh() when the server says the proposal is not the
 // one that was shown. The card has `update({lamp})` for the caller that learns the lamp later.
+// P43-3: the person's tick on the proposal card. Off unless they put it there; it opens the shared folder for the employees of this
+// dispatch who have it off now and for the ones VBear is about to make. `v.shared.people` is what the server knows of the ones that exist.
+const DISPATCH_SHARED_LABEL = "替這次派工的員工打開共用資料夾";
+const DISPATCH_SHARED_NOTE = "打開之後，這些員工可以在共用資料夾放檔案給彼此和你，下一步的員工會收到上一步期間新增或改過的檔名（只有檔名）。每一次寫進去都照舊先問你。";
+const DISPATCH_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
 function proposalDraft(v) {
   const plan = v.plan && typeof v.plan === "object" ? v.plan : {};
   const cards = Array.isArray(plan.new_cards) ? plan.new_cards : [];
@@ -14616,8 +14658,9 @@ function proposalCard(v, opts = {}) {
   const team = Array.isArray(v.team) ? v.team.filter((t) => t && typeof t.who === "string") : [];
   const tools = Array.isArray(v.tools) && v.tools.length ? v.tools : [...new Set(draft.cards.map((c) => c.tool))];
   const names = new Map(team.map((t) => [t.who, String(t.name || "")]));
-  let lamp = opts.lamp || null, busy = false, errorText = "";
+  let lamp = opts.lamp || null, busy = false, errorText = "", sharedOn = false;
   const marks = [];
+  const sharedBox = el("div", { class: "prop-shared", "data-dispatch": "shared-box" });
   const root = el("section", { class: "panel pad prop-card", "data-dispatch": "proposal", "data-dispatch-id": v.id });
   const body = el("div", { class: "prop-body" });
   const editedNote = el("p", { class: "small", "data-dispatch": "edited-note" }, "你改過幕僚長的提議，確認後 VBear 照你改的做。");
@@ -14659,7 +14702,35 @@ function proposalCard(v, opts = {}) {
     for (const c of liveCards()) if (!c.name.trim() && !made.has(c.ref)) out.push("新員工的名字不能空白。");
     return out;
   };
+  // who the tick would open: the employees of the steps who exist and have the folder off, and the new ones the steps use
+  const sharedPlan = () => {
+    const people = v.shared && Array.isArray(v.shared.people) ? v.shared.people : null;
+    if (!people) return null;
+    const used = usedRefs();
+    const off = people.filter((x) => x && used.has(x.who) && x.usable === true && x.on !== true);
+    const fresh = liveCards().filter((c) => used.has(c.ref) && !made.has(c.ref));
+    return { off, fresh, codex: off.some((x) => x.company === "OpenAI") || fresh.some((c) => c.tool === "codex") };
+  };
+  const drawShared = () => {
+    const sp = sharedPlan();
+    if (!sp || !(sp.off.length || sp.fresh.length)) { setKids(sharedBox, null); return; }
+    const box = el("input", { type: "checkbox", "data-dispatch": "shared", "aria-label": DISPATCH_SHARED_LABEL,
+      on: { change: (e) => { sharedOn = e.target.checked === true; drawShared(); } } });
+    box.checked = sharedOn;
+    const who = [...sp.off.map((x) => x.name || x.who), ...sp.fresh.map((c) => `${c.name || "新員工"}（新建）`)];
+    setKids(sharedBox,
+      el("p", { class: "small" }, el("label", null, box, " ", DISPATCH_SHARED_LABEL), " ", el("span", { class: "muted" }, "（預設不勾）")),
+      el("p", { class: "small muted", "data-dispatch": "shared-who" }, `現在沒有打開的：${who.join("、")}。`),
+      sharedOn ? el("p", { class: "small", "data-dispatch": "shared-note" }, DISPATCH_SHARED_NOTE) : null,
+      sharedOn && sp.codex ? el("p", { class: "small", "data-dispatch": "shared-codex" }, DISPATCH_SHARED_CODEX_NOTE) : null);
+  };
+  const sharedFields = () => {
+    const sp = sharedPlan();
+    if (!sharedOn || !sp || !(sp.off.length || sp.fresh.length)) return {};
+    return sp.codex ? { shared_folder: true, confirm_company: true } : { shared_folder: true };
+  };
   const derive = () => {
+    drawShared();
     const edited = nowPayload() !== origPayload();
     for (const [n, test] of marks) n.hidden = !test();
     editedNote.hidden = !edited;
@@ -14752,7 +14823,7 @@ function proposalCard(v, opts = {}) {
     if (busy) return;
     busy = true; errorText = ""; setKids(errorBox, null); derive();
     try {
-      const res = await api.post(`/api/dispatch/${encodeURIComponent(v.id)}/confirm`, payload());
+      const res = await api.post(`/api/dispatch/${encodeURIComponent(v.id)}/confirm`, { ...payload(), ...sharedFields() });
       toast("派工開始了");
       if (opts.onDone) opts.onDone(res);
     } catch (e) {
@@ -14775,7 +14846,7 @@ function proposalCard(v, opts = {}) {
       ? "按「確認派工」之後，VBear 會建上面的新員工（安全模式）、建一張任務卡，再照順序把每一步送給員工。"
       : made.size ? "新員工已經建好了（自己動手第 1 項，安全模式）。按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"
         : "按「確認派工」之後，VBear 建一張任務卡，再照順序把每一步送給員工。"),
-    costBox, spent ? el("p", { class: "small muted", "data-dispatch": "chief-cost" },
+    sharedBox, costBox, spent ? el("p", { class: "small muted", "data-dispatch": "chief-cost" },
       `幕僚長這次花了 ${usdUp(dispatchNum(spent.spent_usd))}（${spent.cost_source === "worst_case" ? "沒有回報，以上限計" : "Claude Code 回報"}）。`) : null,
     whyOff, errorBox,
     el("div", { class: "row" }, confirmBtn,
@@ -17974,6 +18045,12 @@ if (typeof module !== "undefined" && module.exports) {
     chatRow,
     GROUP_MIXED_NOTE,
     GROUP_SHARE_NOTE,
+    GROUP_SHARED_LABEL,
+    GROUP_SHARED_ON_NOTE,
+    GROUP_SHARED_CODEX_NOTE,
+    DISPATCH_SHARED_LABEL,
+    DISPATCH_SHARED_CODEX_NOTE,
+    groupSharedChanges,
     GROUP_WHAT,
     groupMixed,
     groupDefaultName,

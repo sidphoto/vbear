@@ -2363,14 +2363,14 @@ def make_handler(console: Console):
             try:
                 rec = dispatch_mod.load(dispatch_id)
                 cards = console.chat_service().cards()
-            except (dispatch_mod.DispatchError, ApiError, agent_profiles.AgentProfileStorageError):
-                return view
-            people = []
-            for t in view["team"]:
-                pid = (rec["cards"].get(t["who"]) or {}).get("profile_id") or rec["made"].get(t["who"])
-                if pid:
-                    people.append((t["who"], t["name"], pid))
-            view["shared"] = {"people": shared_folder.employees_view(people, cards)}
+                people = []
+                for t in view["team"]:
+                    pid = (rec["cards"].get(t["who"]) or {}).get("profile_id") or rec["made"].get(t["who"])
+                    if pid:
+                        people.append((t["who"], t["name"], pid))
+                view["shared"] = {"people": shared_folder.employees_view(people, cards)}
+            except Exception:
+                pass                       # the card is offered without the tick; reading a proposal never fails because of the folder
             return view
 
         def _dispatch_confirm(self, dispatcher, dispatch_id, body):
