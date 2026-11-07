@@ -251,7 +251,7 @@ class DispatchApiTests(unittest.TestCase):
         self.assertIs(ap.get_profile_readonly(pid)["enabled"], True)
 
     def test_with_both_ticks_a_whole_dispatch_goes_by_itself_and_config_json_only_holds_the_ticks(self):
-        status, out = self.call("/api/settings/autonomy", "POST", {"create_cards": True, "dispatch": True})
+        status, out = self.call("/api/settings/autonomy", "POST", {"create_cards": True, "dispatch": True, "routines": False, "auto_continue": False})
         self.assertEqual(status, 200, out)
         after_ticks = self.config_bytes()
         did = self.propose()
