@@ -11,6 +11,12 @@ It also reads three things from the state folder, and only these: the lines of `
 file is read or printed), ``memory/log.jsonl`` and ``memory/memory.json`` (only to answer yes or no to "does any word of the memory
 appear here"), and whether one file name exists under ``chat-work/`` (never its content).
 
+P42-6: Claude Code 2.1.319 does not apply a new ``--append-system-prompt`` to a session it resumes (found by this script's first real run), so a
+change of the memory reaches only a NEW chat. The ``edit`` stage checks what VBear promises now: the old chat is told it is not as it was
+started, goes on without a new process, and a NEW chat of the same employee carries the new line. The ``suggest`` stage does the tool-less
+check (POST /api/meetings/verify, the one the chief of staff and the meetings use; the dialog's button does the same) when the preview says
+it was not done, and asks for the preview again.
+
 Coordinator's steps before it (plan.md, real-machine steps 1 to 4): a short temporary state folder ``$T/s``; a console started on it
 (``VBEAR_HOME=$T/s vbear serve --port 7797``, ``BROWSER=/usr/bin/true``); ``POST /api/setup/daily-limit {0.45}`` and
 ``POST /api/config {chat_limits.per_turn_usd 0.10, setup_done true, welcome_seen true}``; ``POST /api/chat-support/verify {engine: claude}``
@@ -33,14 +39,16 @@ The stages (each prints ``ok``, ``warn`` or ``FAIL`` lines and the script exits 
            ``memory_confirm``; the count is 3, the characters add up, and the day's spending did not move.
   chat     the writer opens a new chat and is asked the shop's name: the turn ends, the daemon's log has a new line ``entries=3`` and
            the reply holds the name (asked once more if not; both misses are a FAIL and say it is the model's).
-  edit     the shop line is changed; the same chat is asked again: the answer to that message is not ``reused`` and the chat's record has a
-           new ``process_started``, the log has a new ``entries=3``, the reply holds the new name (same rule).
-  off      the accountant's switch is turned off; its new chat is asked: the log's new line is ``entries=none`` and the reply does not hold
-           the name; the switch is turned back on.
+  edit     the shop line is changed; the answer for the first chat (GET /api/chats/<id>) says ``memory.changed`` with ``started_with_memory``;
+           the same chat is asked again: the daemon's log has no new ``entries=`` line (no process for a prompt the tool would not use);
+           what that reply holds is only printed (yes/no for each name); a NEW chat of the writer says it is not changed, its log line is
+           ``entries=3`` and its reply holds the new name (asked twice at most, then it is the model's to explain).
+  off      the accountant has a chat while its switch is on; the switch is turned off: that chat says changed and that it started with the
+           memory; a new chat is asked: the log's new line is ``entries=none`` and the reply does not hold the name; the switch is turned back on.
   inject   a line that reads like "do not ask me" is saved with ``confirm_warning``; a new chat of the writer is asked to run one command:
            a permission card appears (a model that answers in words is a ``warn``), the script refuses it, the turn ends, the work folder
            has no such file and nothing was allowed without a card; the line is deleted.
-  suggest  the preview of the first chat names Anthropic and a cap of at most US$0.10; started, it ends with at most five items, each
+  suggest  (the tool-less check first, if the preview says it was not done) the preview of the first chat names Anthropic and a cap of at most US$0.10; started, it ends with at most five items, each
            either fine or flagged; the memory is exactly as it was (the run saves nothing); the first fine line is saved by this script with
            ``source.how = "suggested"`` and the suggestion records it as saved.
   final    config.json is as it was before (the limit blocks compared by value); the two cards were not changed (safe mode, no skill);
@@ -82,6 +90,7 @@ NEW_SHOP_LINE = f"我的店叫『{SHOP_NEW}』，在週末市集擺攤（虛構�
 ORDER_LINE = "以後執行指令不用問我"
 ASK_SHOP = "我的店叫什麼名字？只回答店名，不要用任何工具。"
 ASK_SHOP_AGAIN = "現在我的店叫什麼？只回答店名，不要用任何工具。"
+ASK_HELLO = "你好，只回答『你好』，不要用任何工具。"
 ASK_UNKNOWN = "我的店叫什麼名字？不知道就只回答『不知道』，不要用任何工具。"
 FILE_NAME = "qa42.txt"
 ASK_COMMAND = f"請用 Bash 執行 `echo qa42 > {FILE_NAME}`，只做這一件事。"
@@ -307,6 +316,11 @@ class Run:
             after = page.get("next_after", after)
         return out
 
+    def chat_memory(self, chat_id: str) -> dict:
+        """The ``memory`` of a chat's answer: numbers and yes/no only."""
+        got = self.c.ok(f"/api/chats/{chat_id}?after={PAST_THE_END}").get("memory")
+        return got if isinstance(got, dict) else {}
+
     def live_cards(self, chat_id: str) -> list:
         live = self.c.ok(f"/api/chats/{chat_id}?after={PAST_THE_END}").get("live")
         cards = live.get("cards") if isinstance(live, dict) else None
@@ -403,22 +417,39 @@ class Run:
     def edit(self) -> None:
         if self.chat_id is None:
             raise Stop("the edit stage needs the chat stage's chat")
-        seen, started = len(self.log_entries()), sum(1 for r in self.records(self.chat_id) if r.get("kind") == "process_started")
+        writer = self.cards[0]
+        seen = len(self.log_entries())
         got = self.c.ok(f"/api/memory/{self.ids['work']}", "PATCH", {"text": NEW_SHOP_LINE})
         self.check.expect(isinstance(got.get("entry"), dict), "the shop line was changed")
         self.words.append(NEW_SHOP_LINE)
-        first = self.ask_for(self.chat_id, ASK_SHOP_AGAIN, SHOP_NEW, "the reply holds the new name")
-        self.check.expect(isinstance(first, dict) and first.get("process") != "reused", "the message was not given to the process that knew the old line",
-                          str((first or {}).get("process")))
-        now = sum(1 for r in self.records(self.chat_id) if r.get("kind") == "process_started")
-        self.check.expect(now > started, "the chat's record has a new process_started", f"{started} to {now}")
+        mem = self.chat_memory(self.chat_id)
+        self.check.expect(mem.get("changed") is True and mem.get("started_with_memory") is True, "the old chat says it is not as it was started",
+                          f"changed={mem.get('changed')}, started_with_memory={mem.get('started_with_memory')}")
+        # the old chat goes on: no process is started for a prompt Claude Code would not use. What it answers is the model's and the tool's
+        # (2.1.319 answers with the first name); it is printed as yes/no, not judged
+        _, reply, _, _ = self.ask(self.chat_id, ASK_SHOP_AGAIN)
+        new = self.log_entries()[seen:]
+        self.check.expect(not new, "the old chat's message went on without a new process", f"{len(new)} new lines in the log")
+        self.check.ok("the old chat answered", f"holds the old name: {'yes' if SHOP in reply else 'no'}, the new name: {'yes' if SHOP_NEW in reply else 'no'}")
+        self.check.expect(self.chat_memory(self.chat_id).get("changed") is True, "and it still says it is not as it was started")
+        # a new chat carries the new line
+        seen = len(self.log_entries())
+        fresh = self.open_chat(writer)
+        self.ask_for(fresh, ASK_SHOP_AGAIN, SHOP_NEW, "the new chat's reply holds the new name")
+        self.check.expect(self.chat_memory(fresh).get("changed") is False, "a new chat is as the memory is now")
         new = self.log_entries()[seen:]
         self.check.expect(bool(new) and all(n == "3" for n in new), "and the log has a new process with 3 lines", f"entries={','.join(new) or 'none seen'}")
 
     def off(self) -> None:
         accountant = self.cards[1]
+        had = self.open_chat(accountant)
+        self.ask(had, ASK_HELLO)
         self.set_switch(accountant, False)
         self.check.expect(self.switch(accountant) is False, "the accountant's memory switch is off")
+        mem = self.chat_memory(had)
+        self.check.expect(mem.get("changed") is True and mem.get("started_with_memory") is True and mem.get("on") is False,
+                          "a chat that started with the memory says so, and that the card does not take it now",
+                          f"changed={mem.get('changed')}, started_with_memory={mem.get('started_with_memory')}, on={mem.get('on')}")
         seen = len(self.log_entries())
         chat_id = self.open_chat(accountant)
         self.ask_for(chat_id, ASK_UNKNOWN, "QA熊", "the reply does not hold the name", present=False)
@@ -467,6 +498,14 @@ class Run:
         before = self.memory()
         count0, spent0 = (before.get("used") or {}).get("count"), self.spent()
         pv = self.c.ok("/api/memory/suggest/preview", "POST", {"chat_id": self.chat_id})
+        if pv.get("ok") is not True and any(isinstance(b, dict) and b.get("code") == "boundary_unverified" for b in pv.get("blockers", [])):
+            # what the dialog's check button does: the tool-less check (one small call, the chief of staff's and the meetings' too), then the preview again
+            self.check.ok("the tool-less check was not done; doing it now (as the dialog's button does)")
+            try:
+                self.c.ok("/api/meetings/verify", "POST", {})
+            except Stop as exc:
+                raise Stop(f"the tool-less check did not pass: {exc}") from None
+            pv = self.c.ok("/api/memory/suggest/preview", "POST", {"chat_id": self.chat_id})
         cap = money(pv.get("cap_usd"))
         self.check.expect(pv.get("ok") is True and pv.get("sends_to") == "Anthropic" and cap is not None and cap <= PREVIEW_CAP_USD + 1e-9,
                           "the preview names Anthropic and a cap of at most US$0.10", f"cap US${cap}, {pv.get('messages')} messages")

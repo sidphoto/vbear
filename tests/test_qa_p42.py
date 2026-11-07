@@ -1,7 +1,8 @@
 """P42-5: tools/qa_p42.py, the coordinator's real-machine check of memory, must refuse to run without a state folder and two cards, never
 aim at the person's VBear (its folder, anything under it, ports 7788 and 7789), print none of what a model wrote, none of the memory and
 not the access token, pass over a console that behaves, and FAIL over one that does not (a refused line that was saved; no
-``entries=`` line in the daemon's log; the process reused after an edit; a card switched off that still got the lines; a suggestion that
+``entries=`` line in the daemon's log; a process started for an edit it would not use; a chat that does not say it is not as it was
+started; a new chat that does not carry the new line; a card switched off that still got the lines; a suggestion that
 saved a line; a key added to config.json; a word of a line in memory/log.jsonl; a chat id in the export; a file written after the card
 was refused; a command allowed with no card; too much spent).
 Nothing here starts a console or a model: the console is an in-memory fake that uses the real ``memory_rules.check`` to refuse and to
@@ -55,6 +56,7 @@ class FakeConsole(qa.Console):
         self.calls: list[tuple] = []
         self.answered: list[str] = []
         self.suggestion_run = False
+        self.verified = flaws.get("unverified") is not True        # the tool-less check (POST /api/meetings/verify)
 
     # -- files ---------------------------------------------------------------------------------------------------------------
 
@@ -121,10 +123,10 @@ class FakeConsole(qa.Console):
         return [e["text"] for e in self.entries]
 
     def reply_for(self, chat, text):
+        """What the chat answers from the lines its session STARTED with: Claude Code keeps a session's system prompt (P42-6)."""
         if self.flaws.get("no_model_use"):
             return "好的"
-        lines = chat["proc"]["carried"] or []
-        for line in lines:
+        for line in chat["started"] or []:
             m = re.search("『(.*?)』", line)
             if m and "店" in text:
                 return m.group(1)
@@ -135,11 +137,17 @@ class FakeConsole(qa.Console):
         chat["turn"] += 1
         turn = chat["turn"]
         carried = self.carried(pid)
-        proc = chat["proc"]
+        for other in self.chats.values():                      # one process for each card: another chat's is closed for this one
+            if other is not chat and other["pid"] == pid:
+                other["proc"] = None
         kind = "reused"
-        if proc is None or (proc["carried"] != carried and not (self.flaws.get("reuse_after_edit") and proc is not None)):
-            kind = "new" if proc is None else "resume"
+        if chat["proc"] is None or (self.flaws.get("restart_after_edit") and chat["proc"]["carried"] != carried):
+            kind = "new" if not chat["started_known"] else "resume"
             chat["proc"] = {"carried": carried}
+            if not chat["started_known"]:
+                chat["started"], chat["started_known"] = carried, True          # a resumed session keeps the prompt it started with
+            elif self.flaws.get("restart_after_edit"):
+                chat["started"] = carried
             self.daemon_log(carried)
             self.rec(chat, "process_started", turn=turn)
         self.rec(chat, "user_message", turn=turn, text=text)
@@ -151,6 +159,15 @@ class FakeConsole(qa.Console):
         else:
             self.finish(chat, self.reply_for(chat, text))
         return 202, {"ok": True, "turn": turn, "cap_usd": "0.1", "process": kind}
+
+    def memory_of(self, chat):
+        """The ``memory`` of a chat answer: the fake compares what the chat started with and what the card gives now."""
+        now = self.carried(chat["pid"])
+        changed = chat["started_known"] and chat["started"] != now
+        if self.flaws.get("never_changed"):
+            changed = False
+        return {"on": now is not None, "count": len(now or []), "readable": True, "changed": changed,
+                "started_with_memory": chat["started"] is not None if chat["started_known"] else None}
 
     def finish(self, chat, reply):
         turn = chat["turn"]
@@ -217,7 +234,7 @@ class FakeConsole(qa.Console):
             return 200, {"ok": True, "entry": {"id": entry["id"]}}
         if route == "/api/chats" and method == "POST":
             cid = "c-" + f"{len(self.chats) + 1:016x}"
-            self.chats[cid] = {"pid": body["profile_id"], "records": [], "turn": 0, "proc": None, "card": None}
+            self.chats[cid] = {"pid": body["profile_id"], "records": [], "turn": 0, "proc": None, "card": None, "started": None, "started_known": False}
             return 201, {"ok": True, "chat": {"id": cid}}
         found = CHAT_RE.match(route)
         if found:
@@ -238,8 +255,16 @@ class FakeConsole(qa.Console):
                 return 200, {"ok": True}
             recs = [r for r in chat["records"] if r["seq"] > after]
             live = {"cards": [chat["card"]]} if chat["card"] else None
-            return 200, {"records": recs, "live": live, "more": False, "next_after": len(chat["records"])}
+            return 200, {"records": recs, "live": live, "more": False, "next_after": len(chat["records"]), "memory": self.memory_of(chat)}
+        if route == "/api/meetings/verify" and method == "POST":
+            if self.flaws.get("verify_fails"):
+                return 409, {"code": "refused"}
+            self.verified = True
+            return 200, {"ok": True, "version": "2.1.318"}
         if route == "/api/memory/suggest/preview":
+            if not self.verified:
+                return 200, {"ok": False, "preview_id": None, "sends_to": "Anthropic", "cap_usd": "0.1", "messages": 4,
+                             "blockers": [{"code": "boundary_unverified", "message": "請先檢查"}]}
             return 200, {"ok": True, "preview_id": "pv-1", "sends_to": "Anthropic", "cap_usd": "0.1", "messages": 4, "blockers": []}
         if route == "/api/memory/suggest" and method == "POST":
             self.suggestion_run = True
@@ -380,8 +405,8 @@ class WholeRunTests(Harness):
         self.assertEqual(code, 0, lines)
         self.assertTrue(lines[-1].startswith("qa_p42: PASS"), lines[-1])
         for phrase in ("three lines were saved", "a password is refused", "a key is refused", "an account is refused", "a card number is refused",
-                       "needs 「我確定」", "the daemon's log has a new process with 3 lines", "the reply holds the new name",
-                       "the message was not given to the process that knew the old line",
+                       "needs 「我確定」", "the daemon's log has a new process with 3 lines", "the old chat says it is not as it was started",
+                       "went on without a new process", "a new chat is as the memory is now", "the new chat's reply holds the new name",
                        "the daemon's log says the new process was given no memory", "a permission card appeared",
                        "nothing was allowed without a card", "the preview names Anthropic", "the run saved nothing", "saved as a suggested one",
                        "config.json is as it was before", "the export has as many lines as the memory", "memory/log.jsonl holds no word of any line",
@@ -390,7 +415,7 @@ class WholeRunTests(Harness):
         self.assertEqual(fake.entries, [], "cleared at the end")
         self.assertEqual(fake.answered, ["deny"], "the only card it answered, it refused")
         self.assertEqual(fake.on, {A: True, B: True})
-        self.assertTrue(lines[[i for i, l in enumerate(lines) if "turns by stage" in l][0]].endswith("add 0, chat 1, edit 1, off 1, inject 1, suggest 0)"), lines[-3])
+        self.assertTrue(lines[[i for i, l in enumerate(lines) if "turns by stage" in l][0]].endswith("add 0, chat 1, edit 2, off 2, inject 1, suggest 0)"), lines[-3])
 
     def test_it_prints_none_of_the_memory_nothing_a_model_wrote_and_not_the_token(self):
         code, lines, fake = self.run_main()
@@ -419,6 +444,25 @@ class WholeRunTests(Harness):
         for route in routes:
             self.assertTrue(route.startswith(("/api/memory", "/api/chats", "/api/agent-profiles", "/api/meetings/ledger")), route)
         self.assertNotIn("/api/config", routes)
+        self.assertNotIn("/api/meetings/verify", routes, "the tool-less check is asked for only when the preview says it was not done")
+
+    def test_a_claude_code_that_has_not_passed_the_tool_less_check_gets_it_once_before_the_suggestion(self):
+        """P42-6 (the real run found the preview blocked by ``boundary_unverified`` with only the words 「請先檢查」): the script does the
+        check the dialog's button does (POST /api/meetings/verify, the chief of staff's and the meetings'), then asks for the preview again."""
+        code, lines, fake = self.run_main(unverified=True)
+        self.assertEqual((code, self.fails(lines)), (0, []), lines)
+        checks = [(m, r, b) for m, r, b in fake.calls if r == "/api/meetings/verify"]
+        self.assertEqual(checks, [("POST", "/api/meetings/verify", {})])
+        self.assertTrue(any("the tool-less check was not done" in l for l in lines), lines)
+        order = [r for _, r, _ in fake.calls if r in ("/api/memory/suggest/preview", "/api/meetings/verify", "/api/memory/suggest")]
+        self.assertEqual(order, ["/api/memory/suggest/preview", "/api/meetings/verify", "/api/memory/suggest/preview", "/api/memory/suggest"])
+        self.assertTrue(fake.verified)
+
+    def test_a_check_that_fails_stops_the_run_with_a_line_and_asks_for_no_suggestion(self):
+        code, lines, fake = self.run_main(unverified=True, verify_fails=True)
+        self.assertEqual(code, 1, lines)
+        self.assertTrue(any(l.startswith("FAIL") and "tool-less check" in l for l in lines), lines)
+        self.assertNotIn("/api/memory/suggest", [r for _, r, _ in fake.calls])
 
     def test_a_model_that_did_not_ask_for_the_command_is_a_warning_not_a_failure(self):
         code, lines, fake = self.run_main(no_card=True)
@@ -440,8 +484,11 @@ class FailureTests(Harness):
     def test_no_entries_line_in_the_daemons_log(self):
         self.assertFailsWith("the daemon's log has a new process with 3 lines", no_log_line=True)
 
-    def test_the_process_reused_after_an_edit(self):
-        self.assertFailsWith("the message was not given to the process that knew the old line", reuse_after_edit=True)
+    def test_a_process_started_for_an_edit_it_would_not_use(self):
+        self.assertFailsWith("went on without a new process", restart_after_edit=True)
+
+    def test_a_chat_that_does_not_say_it_is_not_as_it_was_started(self):
+        self.assertFailsWith("the old chat says it is not as it was started", never_changed=True)
 
     def test_a_card_switched_off_that_still_got_the_lines(self):
         self.assertFailsWith("the daemon's log says the new process was given no memory", off_still_sends=True)
