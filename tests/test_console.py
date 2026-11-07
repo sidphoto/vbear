@@ -2352,8 +2352,14 @@ class AuthTests(unittest.TestCase):
         for method in ("PUT", "PATCH", "OPTIONS", "DELETE", "HEAD"):
             status, _, _ = self.call("/api/config", method, headers={"X-VBear": "1"})
             self.assertEqual(status, 401, method)
-        status, _, _ = self.call("/api/config", "PATCH", headers=self.bearer())
+        status, _, _ = self.call("/api/config", "PUT", headers=self.bearer())
         self.assertEqual(status, 501)  # with the token, the method itself is still unsupported
+        # PATCH has a handler since P42-2 (a line of memory only): with the token it answers not found for any other path,
+        # and without the token or the page header it never gets that far
+        status, _, _ = self.call("/api/config", "PATCH", headers=self.bearer())
+        self.assertEqual(status, 404)
+        status, _, _ = self.call("/api/memory/m-0123456789", "PATCH", headers={"Authorization": "Bearer nope", "X-VBear": "1"}, body={"text": "x"})
+        self.assertEqual(status, 401)
 
     def test_launcher_tells_a_foreign_vbear_apart(self):
         from vbear.__main__ import vbear_status

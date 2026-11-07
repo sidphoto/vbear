@@ -4,6 +4,8 @@
                                           (a version 1 file, without ``engine``, is a Claude chat)
   <state>/chats/<chat_id>/events.jsonl    0600, append-only: one event per line, {seq, at, kind, ...}, fsync'd
   <state>/chat-spend/<chat_id>.json       0600: what a deleted chat cost in its last days, for the day's limit
+  <state>/chat-prompt/<chat_id>.json      0600: the fingerprint of the system prompt a chat's session was started with
+                                          (P42-6; VBear's own state, not a field of the record; gone with the chat)
   <state>/chat-work/<hash of the card>/   0700: the role card's work folder (the CLI's cwd), kept when a chat goes
 
 Every event kind has a fixed set of fields (``KINDS``); a record that does not fit is refused before anything is
@@ -38,6 +40,7 @@ from . import chat_engines, chat_protocol as cp
 
 CHATS = "chats"
 SPEND = "chat-spend"
+PROMPT = "chat-prompt"
 WORK = "chat-work"
 CHAT_JSON = "chat.json"
 EVENTS = "events.jsonl"
@@ -701,6 +704,7 @@ def delete(base, chat_id, *, now: float) -> None:
         _fsync_dir(d.parent)
     except OSError as exc:
         raise ChatStoreError("storage", f"無法刪除聊天紀錄（{exc.strerror}）") from None
+    _drop_prompt_start(base, chat_id)
     _prune_spend(base, now)
 
 
@@ -752,6 +756,61 @@ def _load_spend(base, chat_id: str) -> dict:
     if not parsed.ok or _spend_problem(parsed.value, chat_id):
         raise ChatStoreError("damaged", "刪除聊天的花費紀錄不符結構")
     return parsed.value
+
+
+# ---- what a chat's session was started with (P42-6) -----------------------------------------------------------------
+
+SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
+
+
+def set_prompt_start(base, chat_id, sha: str, with_memory: bool) -> None:
+    """Keep the fingerprint (memory_rules.prompt_sha) of the system prompt a chat's NEW session was started with, and whether it
+    carried the memory paragraph. Claude Code 2.1.319 keeps that prompt for the whole session (a ``--resume`` does not apply a new
+    one), so the page compares it with the current memory and instructions to say when they differ. Never a word of either."""
+    _check_id(chat_id)
+    if not (isinstance(sha, str) and SHA_RE.match(sha)) or not isinstance(with_memory, bool):
+        raise ChatStoreError("bad_request", "指紋格式不符")
+    d = _private_dir(_root(base) / PROMPT, create=True)
+    tmp = f".{chat_id}.{secrets.token_hex(4)}.tmp"
+    try:
+        _create_file(d / tmp, _encode({"v": 1, "sha": sha, "memory": with_memory}))
+        os.replace(d / tmp, d / f"{chat_id}.json")
+        _fsync_dir(d)
+    except OSError as exc:
+        try:
+            os.unlink(d / tmp)
+        except OSError:
+            pass
+        raise ChatStoreError("storage", f"無法保存聊天開始時的指紋（{exc.strerror}）") from None
+
+
+def prompt_start(base, chat_id) -> dict | None:
+    """``{"sha", "memory"}`` as ``set_prompt_start`` kept it, or None when there is none or it does not read cleanly (a chat
+    from before v0.17.0, a file of someone else's, a damaged one): the page then says nothing about it."""
+    try:
+        _check_id(chat_id)
+        fd = _open_file(_private_dir(_root(base) / PROMPT, create=False), f"{chat_id}.json", os.O_RDONLY)
+    except ChatStoreError:
+        return None
+    try:
+        raw = strictjson.read_fd(fd, 4096)
+    except Exception:
+        return None
+    finally:
+        os.close(fd)
+    parsed = strictjson.loads_object(raw, strictjson.Limits(4096, 100, 4, 4096))
+    rec = parsed.value if parsed.ok else None
+    if not (isinstance(rec, dict) and set(rec) == {"v", "sha", "memory"} and rec["v"] == 1 and isinstance(rec["memory"], bool)
+            and isinstance(rec["sha"], str) and SHA_RE.match(rec["sha"])):
+        return None
+    return {"sha": rec["sha"], "memory": rec["memory"]}
+
+
+def _drop_prompt_start(base, chat_id) -> None:
+    try:
+        os.unlink(Path(base) / PROMPT / f"{chat_id}.json")
+    except OSError:
+        pass
 
 
 def _spend_ids(base) -> list[str]:

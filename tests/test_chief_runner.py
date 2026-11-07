@@ -16,6 +16,7 @@ from unittest import mock
 from vbear import board_engine as be, chief, chief_runner as cr, meeting_runner as mr
 from vbear import meetings as mt, staffing_runner as sr, translations as tr
 from vbear.runtime import chat_store as cs, daemon_chat
+from tests import leftover
 
 VERSION = "2.1.296"
 EVIDENCE = {"cli_version": VERSION, "model_reported": "m", "tools_reported": ["StructuredOutput"], "mcp_servers_reported": [],
@@ -64,6 +65,7 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="vbc-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(os.path.realpath(self.tmp.name))
+        self.addCleanup(leftover.assert_clean, self.root)     # no runtimed, no runner's program left under the test's folder
         home = self.root / "h"
         home.mkdir()
         self.base = home / ".vbear"
@@ -537,7 +539,7 @@ class SharedDayTests(Base):
             self.assertEqual(runner._day(), Decimal("0.07"), runner)
         ledger = meetings.ledger({})
         self.assertEqual(ledger["spent_usd"], "0.07")
-        self.assertEqual(ledger["includes"], ["meetings", "staffing", "chats", "setup_try", "chief"])
+        self.assertEqual(ledger["includes"], ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"])
 
     def test_the_chat_daemon_counts_them_too(self):
         self.done_proposal("0.07")

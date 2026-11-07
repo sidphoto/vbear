@@ -7,6 +7,11 @@ Reads ``$HOME/fake-chat.json``: {"turns": [[step, ...], ...], "init": {"version"
 that request_id), {"sleep": seconds} or {"exit": code}. In every event "SESSION" becomes the session id of the argv
 and "/WORK" the folder it runs in (tests/chat_fixtures.py). The turn counter is kept in ``$HOME/fake-chat-state.json``
 so that a resumed process plays the next turn. Everything it is given and does goes to ``$HOME/fake-chat-log.jsonl``.
+
+What the real Claude Code 2.1.319 does (found on a real machine, P42-6): a session keeps the ``--append-system-prompt`` it was
+STARTED with (``--session-id``); a process that ``--resume``s it ignores the one on its own command line. The fake does the same:
+the prompt of a new session is kept in ``$HOME/fake-chat-sessions.json`` and the ``start`` record of the log says which prompt the
+process really works with (``system_prompt``), next to the argv it was given.
 """
 
 import json
@@ -19,6 +24,7 @@ HOME = os.environ["HOME"]
 CONF = json.load(open(os.path.join(HOME, "fake-chat.json")))
 LOG = os.path.join(HOME, "fake-chat-log.jsonl")
 STATE = os.path.join(HOME, "fake-chat-state.json")
+SESSIONS = os.path.join(HOME, "fake-chat-sessions.json")
 
 
 def log(**kw):
@@ -36,8 +42,22 @@ argv = sys.argv[1:]
 flag = "--session-id" if "--session-id" in argv else "--resume"
 sid = argv[argv.index(flag) + 1]
 cwd = os.path.realpath(os.getcwd())
-log(event="start", argv=argv, cwd=cwd, pid=os.getpid(),
-    env={k: os.environ.get(k) for k in ("HOME", "CLAUDE_CODE_TMPDIR", "DISABLE_AUTOUPDATER")})
+
+
+def session_prompt():
+    """The system prompt this process works with: its own ``--append-system-prompt`` for a new session (kept for the session),
+    the one the session was started with for a resumed one (the one in argv is ignored, as the real tool does)."""
+    kept = json.load(open(SESSIONS)) if os.path.exists(SESSIONS) else {}
+    if flag == "--session-id":
+        kept[sid] = argv[argv.index("--append-system-prompt") + 1] if "--append-system-prompt" in argv else None
+        with open(SESSIONS, "w") as f:
+            json.dump(kept, f)
+    return kept.get(sid)
+
+
+log(event="start", argv=argv, cwd=cwd, pid=os.getpid(), system_prompt=session_prompt(),
+    env={k: os.environ.get(k) for k in ("HOME", "CLAUDE_CODE_TMPDIR", "DISABLE_AUTOUPDATER",
+                                              "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_CLAUDE_MDS")})
 
 
 def sub(v):

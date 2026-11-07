@@ -99,14 +99,15 @@ class PrepareTests(LaunchCase):
         self.assertEqual(resumed[resumed.index("--append-system-prompt") + 1], text)
 
     def test_instructions_that_could_not_be_a_cards_are_refused(self):
-        for bad in ("", "   \n", 5, ["x"], "a\x00b", "a\x07b", "a\u202eb", "x" * 2001):
+        for bad in ("", "   \n", 5, ["x"], "a\x00b", "a\x07b", "a\u202eb", "x" * 8001):
             with self.subTest(bad=bad if not isinstance(bad, str) else bad[:12]):
                 with self.assertRaises(asess.LaunchRefused):
                     self.prepare(append_prompt=bad)
         self.assertEqual(self.prepare(append_prompt="x" * 2000)["append_prompt"], "x" * 2000)
+        self.assertEqual(self.prepare(append_prompt="x" * 8000)["append_prompt"], "x" * 8000, "P42-1: room for the memory paragraph")
         self.assertEqual(self.prepare(append_prompt=None).get("append_prompt"), None)
         m = self.prepare(append_prompt="ok")
-        for bad in ("", 5, "a\x00b", "x" * 2001):
+        for bad in ("", 5, "a\x00b", "x" * 8001):
             self.assertIsNotNone(asess.chat_manifest_problem(dict(m, append_prompt=bad)), repr(bad)[:20])
 
     def test_refused_before_anything_is_made(self):

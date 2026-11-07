@@ -14,6 +14,8 @@ decides the things the console decides:
   * which Claude Code or Codex runs it (the pinned one), and whether that version may chat at all (``support``): the
     version has a chat-mode source list and a pass of the chat check, and no administrator policy is in the way; for
     Codex also the login of its own folder (vbear/runtime/codex_chat_env.py);
+  * what of the person's memory goes into the chat (P42-1): the lines of ``memory.json`` (read only, never written here)
+    unless the card has memory switched off or the file cannot be read; the daemon checks every line again;
   * what each code of the daemon means to a person (``CODE_TEXT``): every refusal the daemon can give has a
     sentence here, so the page never shows a bare code.
 
@@ -29,8 +31,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
+from . import memory as memory_store
 from .api_error import ApiError
-from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
+from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
 EXCERPT = 80                      # characters of the last message shown in the list
@@ -99,6 +102,7 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "version_changed": (409, "AI 工具的版本在你預覽之後改變了，請重新整理。"),
     "verifying": (409, "聊天模式的驗證正在進行。"),
     "group_member_chat": (409, "這是群組裡的對話，請到群組裡說話。"),
+    "memory_refused": (409, "記憶裡有一條現在不能送出，請到記憶頁看看。你的訊息還沒有送出。"),
 }
 
 # Codes a person reads as "try again in a moment" rather than "something is wrong".
@@ -200,7 +204,7 @@ class ChatService:
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
     def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
-                 ledger=None, profile=None, profiles=None, base=None):
+                 ledger=None, profile=None, profiles=None, base=None, memory=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
@@ -211,6 +215,7 @@ class ChatService:
         self._profile = profile or (lambda pid: agent_profiles.get_profile_readonly(pid))
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
         self._base = base
+        self._memory = memory or memory_store.for_card          # a function: (role card id, engine) -> memory.ChatMemory (reads only)
         self.restart_tries, self.restart_pause = RESTART_TRIES, RESTART_PAUSE
         self.delete_tries, self.delete_pause = DELETE_TRIES, DELETE_PAUSE
 
@@ -437,9 +442,25 @@ class ChatService:
             card = {"id": profile.get("id"), "name": profile.get("name"), "position": agent_profiles.position_of(profile),
                     "tool": model.get("tool"), "engine": engine_of(profile), "enabled": profile.get("enabled") is not False,
                     "can_chat": ok, "code": code or None, "reason": reason or None}
+        given = self._memory(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
+        taken = given.readable and given.on           # now, not what an earlier process was given: a count, never a line
+        changed, had = self._prompt_changed(chat["id"], profile, given)
         return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
                          "engine": chat.get("engine")},
-                "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id), **out}
+                "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id),
+                "memory": {"on": taken, "count": len(given.entries) if taken else 0, "readable": given.readable,
+                           "changed": changed, "started_with_memory": had}, **out}
+
+    def _prompt_changed(self, chat_id, profile, given) -> tuple[bool, bool | None]:
+        """(whether the memory or the card's instructions now are not what this chat's session was started with, whether it was
+        started with the memory paragraph). Claude Code 2.1.319 keeps the system prompt a session was started with, so a chat goes
+        on with the old one (P42-6); the page says so and offers a new chat. (False, None) when the start is not known (a chat from
+        before v0.17.0, a file that does not read) or the card is gone. Compares fingerprints; reads no word of the memory aloud."""
+        start = cs.prompt_start(self.base, chat_id)
+        if start is None or profile is None:
+            return False, None
+        block = memory_rules.block(given.entries) if given.readable and given.on else None
+        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block), start["memory"]
 
     # ---- what a person does ---------------------------------------------------------------------------------------
 
@@ -491,6 +512,9 @@ class ChatService:
         instructions = self._instructions(profile)
         if instructions is not None:
             fields["instructions"] = instructions
+        given = self._memory(chat["profile_id"], engine)
+        if given.readable and given.on:               # a card with memory off, or a file that cannot be read: not a word is sent
+            fields["memory"] = given.entries
         if origin is not None:
             fields["origin"] = origin
         for attempt in range(self.restart_tries):

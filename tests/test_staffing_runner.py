@@ -460,7 +460,7 @@ class MoneyTests(Base):
         meetings = mr.MeetingRunner(provider=lambda e: ("x", VERSION), call=lambda s, c: None)
         self.runners.append(meetings)
         ledger = meetings.ledger({})
-        self.assertEqual((ledger["spent_usd"], ledger["includes"]), ("0.03", ["meetings", "staffing", "chats", "setup_try", "chief"]))
+        self.assertEqual((ledger["spent_usd"], ledger["includes"]), ("0.03", ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"]))
         self.assertEqual([r["id"] for r in meetings.spend_records()], [m["id"]])
         self.assertEqual(self.runners[0]._day(), Decimal("0.03"))
 

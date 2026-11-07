@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import codex_chat_fixtures as ccf
+from tests import leftover
 from vbear import admin_policy
 from vbear.runtime import agent_sessions as a
 from vbear.runtime import chat_store as cs
@@ -38,13 +39,15 @@ class CodexCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbx-", dir="/tmp")))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(leftover.assert_clean, self.tmp)            # runs after the daemon is stopped and before the folder goes
         self.base = self.tmp / "st"
         self.base.mkdir(mode=0o700)
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.chat_home = self.base / "codex-chat-home"
         self.chat_home.mkdir(mode=0o700)
-        env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.base), "HOME": str(self.home)})
+        env = mock.patch.dict(os.environ, {"VBEAR_HOME": str(self.base), "HOME": str(self.home),
+                                          "VBEAR_RUNTIME_AUTOSTART": "0"})   # see tests/test_chat_daemon.py ChatCase
         env.start()
         self.addCleanup(env.stop)
         v = mock.patch.object(cli_versions, "CODEX_CHAT_VERIFIED_VERSIONS", (VERSION,))

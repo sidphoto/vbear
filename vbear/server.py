@@ -47,6 +47,7 @@ from . import armory
 from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
+from . import memory as memory_mod
 from . import claude_verify
 from . import codex_verify
 from . import config as cfg
@@ -65,6 +66,7 @@ from . import risk_acceptance
 from . import role_departments
 from . import translations
 from . import chief, chief_runner as chief_runner_mod
+from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
 from . import meeting_runner as meeting_runner_mod
@@ -131,6 +133,10 @@ MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
 # /api/chief/<id>[/retry | /cancel] (P40-1); the codes and statuses are the meetings'
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
+# /api/memory[/<id>|/clear|/cards|/export] (P42-1, P42-2): the person's memory; only these routes write memory.json
+MEMORY_RE = re.compile(r"^/api/memory/(m-[0-9a-f]{10})\Z")
+# /api/memory/suggest[/preview | /<id>[/saved | /dismiss | /cancel]] (P42-4): memory suggestions; none of these writes memory.json
+SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismiss|cancel))?\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
@@ -248,7 +254,7 @@ class Console:
             return kept.pop(preview_id, None) if isinstance(preview_id, str) else None
 
     def _boards(self):
-        """The one meeting runner, the one staffing runner and the one chief of staff's runner, built together on the first use
+        """The one meeting runner, the one staffing runner, the one chief of staff's runner and the one memory-suggestion runner (P42-4), built together on the first use
         of any: each finds and interrupts what a stopped console left running when it is built, which it can do only while
         the worker they share is free, so none is built after another has started anything."""
         with self.lock:
@@ -258,6 +264,8 @@ class Console:
                 self.staffing = staffing_runner_mod.StaffingRunner()
             if not hasattr(self, "chief"):
                 self.chief = chief_runner_mod.ChiefRunner(on_proposal=self._on_proposal)
+            if not hasattr(self, "memory_suggest"):
+                self.memory_suggest = memory_suggest_runner_mod.MemorySuggestRunner()
             return self.meetings, self.staffing, self.chief
 
     def meeting_runner(self):
@@ -268,6 +276,10 @@ class Console:
 
     def chief_runner(self):
         return self._boards()[2]
+
+    def memory_suggest_runner(self):
+        self._boards()
+        return self.memory_suggest
 
     def _on_proposal(self, chief_id: str) -> None:
         """A kept proposal of the chief of staff becomes a dispatch (and, when the person ticked 「自己動手」, goes on)."""
@@ -696,6 +708,15 @@ def make_handler(console: Console):
                     if after is None:
                         return self._error(400, "after 必須是非負整數")
                     return self._group_call("get", found.group(1), None, after)
+                if path == "/api/memory":
+                    return self._chat_action(self._memory_view)
+                if path == "/api/memory/export":
+                    return self._chat_action(memory_mod.export)
+                if path == "/api/memory/suggest":
+                    return self._suggest_call("list")
+                if path.startswith("/api/memory/suggest/"):
+                    found = SUGGEST_RE.match(path)
+                    return self._suggest_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path in ("/api/chief", "/api/chief/preview"):
                     if path == "/api/chief":
                         return self._chief_call("list")
@@ -919,6 +940,21 @@ def make_handler(console: Console):
                     if not found or not found.group(2):
                         return self._error(404, "not found")
                     return self._group_call(found.group(2), found.group(1), self._body_strict())
+                if path == "/api/memory":
+                    return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
+                if path == "/api/memory/clear":
+                    return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/memory/cards":
+                    return self._chat_action(lambda b=self._body_strict(): memory_mod.set_card(b, self._memory_cards()))
+                if path == "/api/memory/suggest/preview":
+                    return self._suggest_call("preview", None, self._body_strict())
+                if path == "/api/memory/suggest":
+                    return self._suggest_call("start", None, self._body_strict())
+                if path.startswith("/api/memory/suggest/"):
+                    found = SUGGEST_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._suggest_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/chief":
                     return self._chief_call("start", None, self._body_strict())
                 if path.startswith("/api/chief/"):
@@ -1119,6 +1155,35 @@ def make_handler(console: Console):
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
 
+        def do_PATCH(self):
+            """Only a line of memory can be changed this way (PATCH /api/memory/<id>); every other path is not found."""
+            if not self._host_ok():
+                return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+            if not self._write_ok():
+                return self._error(403, "forbidden")
+            if not self._authed():
+                return self._auth_error()
+            try:
+                length = self._read_content_length()
+            except ValueError as exc:
+                self.close_connection = True
+                return self._error(400, str(exc))
+            if length > MAX_BODY:
+                self.close_connection = True
+                return self._error(413, "請求內容過大")
+            path = urlparse(self.path).path
+            try:
+                found = MEMORY_RE.match(path) if path.startswith("/api/memory/") else None
+                if not found:
+                    return self._error(404, "not found")
+                return self._chat_action(lambda b=self._body_strict(): memory_mod.edit(found.group(1), b))
+            except TimeoutError:
+                raise
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as exc:
+                return self._error(500, f"內部錯誤：{type(exc).__name__}")
+
         def do_DELETE(self):
             if not self._host_ok():
                 return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
@@ -1141,6 +1206,14 @@ def make_handler(console: Console):
                     if not found or found.group(2):
                         return self._error(404, "not found")
                     return self._chat_action(lambda: console.chat_service().delete(found.group(1)))
+                if path.startswith("/api/memory/suggest/"):
+                    found = SUGGEST_RE.match(path)
+                    return self._suggest_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path.startswith("/api/memory/"):
+                    found = MEMORY_RE.match(path)
+                    if not found:
+                        return self._error(404, "not found")
+                    return self._chat_action(lambda: memory_mod.delete(found.group(1)))
                 if path.startswith("/api/groups/"):
                     found = GROUP_RE.match(path)
                     if not found or found.group(2):
@@ -1943,6 +2016,21 @@ def make_handler(console: Console):
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "storage"}, 503)
 
+        def _memory_cards(self) -> list:
+            """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
+            return console.chat_service().cards()
+
+        def _memory_view(self) -> dict:
+            """GET /api/memory: the lines, the use, who takes memory along (read only: nothing here saves a word)."""
+            out = memory_mod.view()
+            off, on = out.pop("cards_off", []), out.pop("cards_on", [])
+            try:
+                cards = self._memory_cards()
+            except ApiError:
+                cards = []                     # the page still shows the lines when the cards cannot be read
+            out["cards"] = memory_mod.cards_view(cards, off, on)
+            return out
+
         @staticmethod
         def _chat_after(query: str):
             raw = parse_qs(query).get("after", ["0"])[0]
@@ -2114,6 +2202,53 @@ def make_handler(console: Console):
                     return self._json(chief.view(runner.retry(chief_id, sources)), 202)
                 if action == "cancel":
                     return self._json(runner.cancel(chief_id))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
+        def _suggest_sources(self, conf) -> memory_suggest_runner_mod.SuggestSources:
+            """Where a memory suggestion reads from (P42-4): a chat's own files (read only), whether a group opened the chat, and the
+            texts of the memory the person already has (read only; None when memory cannot be read). Nothing here writes memory."""
+            def memory():
+                got = memory_mod.view()
+                return [e["text"] for e in got["entries"]] if got["readable"] else None
+            return memory_suggest_runner_mod.SuggestSources(chat=memory_suggest_runner_mod.chat_reader(), memory=memory, conf=conf,
+                                                            in_group=lambda chat_id: chat_id in groups_mod.member_chat_ids())
+
+        def _suggest_call(self, action, suggest_id=None, body=None):
+            """The memory-suggestion endpoints (P42-4). Reads and the preview run nothing; only a confirmed preview starts the one
+            tool-less call. What the person does with an answer (`saved`, `dismiss`) is written on the suggestion's record, and the
+            lines themselves are saved by the browser's own POST /api/memory, one line at a time: nothing here writes memory."""
+            try:
+                runner = console.memory_suggest_runner()
+                if action == "list":
+                    return self._json(runner.list())
+                if action == "get":
+                    return self._json(runner.get(suggest_id))
+                if action == "delete":
+                    runner.delete(suggest_id)
+                    return self._json({"ok": True, "deleted": suggest_id})
+                if not isinstance(body, dict):
+                    raise memory_suggest.SuggestError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "preview":
+                    if set(body) != {"chat_id"}:
+                        raise memory_suggest.SuggestError("bad_request", "只需要 chat_id")
+                    return self._json(runner.preview(body["chat_id"], self._suggest_sources(console.store.conf)))
+                if action == "start":
+                    if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
+                        raise memory_suggest.SuggestError("bad_request", "只需要 preview_id")
+                    rec = runner.start(body["preview_id"], self._suggest_sources(console.store.conf))
+                    return self._json({"id": rec["id"], "suggestion": memory_suggest.view(rec)}, 202)
+                if action == "saved":
+                    if set(body) != {"indexes"}:
+                        raise memory_suggest.SuggestError("bad_request", "只需要 indexes")
+                    return self._json(memory_suggest.view(runner.mark_saved(suggest_id, body["indexes"])))
+                if body:
+                    raise memory_suggest.SuggestError("bad_request", "這個動作不需要內容")
+                if action == "dismiss":
+                    return self._json(memory_suggest.view(runner.dismiss(suggest_id)))
+                if action == "cancel":
+                    return self._json(runner.cancel(suggest_id))
                 return self._error(404, "not found")
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))

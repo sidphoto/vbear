@@ -489,10 +489,14 @@ def _check_chat_workdir(workdir, base: Path) -> str:
 
 
 MAX_APPEND_PROMPT = 2000                                  # agent_profiles.MAX_INSTRUCTIONS
+# What a chat process may be given as its added system prompt (P42-1): the role card's own instructions (at most
+# MAX_APPEND_PROMPT) and the memory paragraph (runtime/memory_rules.MAX_BLOCK). Only a chat's manifest has this room;
+# the added prompt of a full-mode launch stays at MAX_APPEND_PROMPT.
+MAX_CHAT_APPEND_PROMPT = 8000
 
 
-def append_prompt_problem(value) -> str | None:
-    """None when ``value`` can be a role card's instructions on a command line: text of 1 to MAX_APPEND_PROMPT
+def append_prompt_problem(value, limit: int = MAX_APPEND_PROMPT) -> str | None:
+    """None when ``value`` can be a role card's instructions on a command line: text of 1 to ``limit`` (MAX_APPEND_PROMPT)
     characters that is not blank, holds no control, format or separator character other than a line break or a tab
     (the rule agent_profiles.clean_instructions applies when a card is saved), and is already trimmed."""
     import unicodedata
@@ -500,8 +504,8 @@ def append_prompt_problem(value) -> str | None:
         return "指示必須是文字"
     if not value.strip() or value != value.strip():
         return "指示不能是空的，頭尾不能有空白"
-    if len(value) > MAX_APPEND_PROMPT:
-        return f"指示不可超過 {MAX_APPEND_PROMPT} 字"
+    if len(value) > limit:
+        return f"指示不可超過 {limit} 字"
     if "\r" in value:
         return "指示的換行必須是單一的換行字元"
     for ch in value:
@@ -514,12 +518,17 @@ def append_prompt_problem(value) -> str | None:
     return None
 
 
+def chat_append_prompt_problem(value) -> str | None:
+    """``append_prompt_problem`` with the room of a chat: the card's instructions and the memory paragraph."""
+    return append_prompt_problem(value, MAX_CHAT_APPEND_PROMPT)
+
+
 def prepare_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_version: str, cli_identity: list[int],
                         model_id: str, chat_id: str, profile_id: str, claude_session_id: str, budget_usd: float,
                         resume: bool, append_prompt: str | None = None) -> dict:
     """One process of a chat (P36): the managed launch with the chat's settings, its session id, whether it resumes
     that session, and the most it may spend. The daemon checks the version (chat-verified, admin policy) first.
-    ``append_prompt`` is the role card's own instructions, or None."""
+    ``append_prompt`` is the role card's own instructions and the memory paragraph (either may be missing), or None."""
     if not (isinstance(chat_id, str) and CHAT_ID_RE.match(chat_id)):
         raise LaunchRefused("bad_request", "聊天 id 格式不符")
     if not (isinstance(profile_id, str) and TASK_ID_RE.match(profile_id)):
@@ -530,8 +539,8 @@ def prepare_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_versio
         raise LaunchRefused("bad_request", "額度必須是兩位小數以內的有限正數")
     if not isinstance(resume, bool):
         raise LaunchRefused("bad_request", "resume 必須是 true 或 false")
-    if append_prompt is not None and append_prompt_problem(append_prompt):
-        raise LaunchRefused("bad_request", append_prompt_problem(append_prompt))
+    if append_prompt is not None and chat_append_prompt_problem(append_prompt):
+        raise LaunchRefused("bad_request", chat_append_prompt_problem(append_prompt))
     if not (isinstance(model_id, str) and MODEL_ID_RE.match(model_id)):
         raise LaunchRefused("invalid_model", "model id 格式不符")
     if chat_protocol.constants_for(cli_version) is None:
@@ -1001,7 +1010,7 @@ def chat_manifest_problem(m: dict) -> str | None:
                               and chat_protocol.UUID_RE.match(m["claude_session_id"]) is not None),
         ("budget_usd", _budget_ok(m["budget_usd"])),
         ("resume", isinstance(m["resume"], bool)),
-        ("append_prompt", "append_prompt" not in m or append_prompt_problem(m["append_prompt"]) is None),
+        ("append_prompt", "append_prompt" not in m or chat_append_prompt_problem(m["append_prompt"]) is None),
         ("boundary", m["boundary"] == _CHAT_BOUNDARY),
     ]
     for name, ok in checks:

@@ -14,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tests import chat_fixtures as cf
+from tests import leftover
 from vbear.runtime import chat_protocol as cp
 
 SID = "0f1e2d3c-4b5a-4968-8776-655443322110"
@@ -199,6 +200,7 @@ class TrackerTests(unittest.TestCase):
     def test_a_read_claude_code_allowed_in_the_work_folder_is_fine_outside_it_is_not(self):
         tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbc-")))
         self.addCleanup(shutil.rmtree, tmp, True)
+        self.addCleanup(leftover.assert_clean, tmp)
         r = Replay(str(tmp))
         r.feed(init_answer())
         for step in cf.script("ask", 3, init=cf.clean_init()):
@@ -261,6 +263,7 @@ class JudgeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="vbc-")))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(leftover.assert_clean, self.tmp)
         self.work = self.tmp / "work"
         self.work.mkdir()
         (self.tmp / "outside").mkdir()

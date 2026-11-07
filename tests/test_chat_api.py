@@ -20,7 +20,7 @@ from tests import chat_fixtures as cf
 from tests.test_chat_daemon import MODEL, SECRETS_OF_INIT, ChatCase, clean
 from vbear import agent_profiles as ap, chat_service, config as cfg, server
 from vbear.index import Store
-from vbear.runtime import chat_store as cs
+from vbear.runtime import chat_store as cs, memory_rules as mr
 
 
 class Http:
@@ -303,7 +303,8 @@ class InstructionsApiTests(ApiCase):
         self.assertEqual(self.say(chat_id)[0], 202)
         self.wait_http_turn(chat_id, 1)
         argv = self.argv()
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], "先說結論，再說理由。")
+        # P42-1: the card's own words, then VBear's memory paragraph (an empty memory here), and nothing of the position's
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], "先說結論，再說理由。\n\n" + mr.block([]))
 
     def test_a_position_default_is_not_sent_as_the_cards_own(self):
         # a PM card without instructions of its own: instructions_of() offers the position's text as the default
@@ -312,7 +313,8 @@ class InstructionsApiTests(ApiCase):
         chat_id = self.open_http()
         self.assertEqual(self.say(chat_id)[0], 202)
         self.wait_http_turn(chat_id, 1)
-        self.assertNotIn("--append-system-prompt", self.argv())
+        argv = self.argv()
+        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], mr.block([]), "P42-1: only the memory paragraph, no card text")
         self.assertNotIn(ap.instructions_of(ap.get_profile(self.emp))["default"], json.dumps(self.fake_log()))
 
 
@@ -465,7 +467,7 @@ class ListAndSupportTests(ApiCase):
         status, lst = self.call("/api/chats")
         self.assertEqual(status, 200)
         self.assertEqual(lst["limits"], {"per_turn_usd": "0.25", "daily_usd": "3"})
-        self.assertEqual((lst["ledger"]["lamp"], lst["ledger"]["includes"]), ("green", ["meetings", "staffing", "chats", "setup_try", "chief"]))
+        self.assertEqual((lst["ledger"]["lamp"], lst["ledger"]["includes"]), ("green", ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"]))
         self.assertIsNone(lst["ledger_error"])
         self.assertEqual(lst["chats"], [])
         self.assertEqual(lst["support"]["detected"], cf.VERSION)
@@ -622,6 +624,11 @@ class StreamTests(ApiCase):
             self.assertEqual(self.call(f"/api/chats/{chat_id}", "DELETE")[0], 200)
             got = self.events(resp, lambda g: any(e.get("ok") is False for e in g))
         self.assertEqual(got[-1]["code"], "not_found")
+
+
+class NoRuntimeOfItsOwnTests(ApiCase):
+    def test_the_console_in_front_of_the_case_daemon_never_starts_a_daemon_itself(self):
+        self.assertFalse(self.console.runtime.autostart)
 
 
 class WithoutTheDaemonTests(ApiCase):

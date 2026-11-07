@@ -1028,8 +1028,73 @@ process starts until a version passes the chat check.
   The position's default text is not sent, and a card without instructions of its own sends none; the chat's record
   says whether any went in. Claude Code keeps a session's system prompt when it is resumed
   (`--system-prompt-snapshot` is on by default), so an edited card may not change a conversation that has begun.
-  Neither that Claude Code applies the appended text nor how it treats an edited one on resume has been checked on a
-  real machine; the chat check records the first as an observation and does not pass or fail on it.
+  How it treats an edited one on resume has been checked on a real machine (Claude Code 2.1.319, v0.17.0): a resumed session
+  kept the appended text it started with and did not take a new one given on the command line; a new chat did take it. The chat check still records the first as an observation and
+  does not pass or fail on it.
+- **A second paragraph: the person's memory (v0.17, ADR 0008).** After the card's own instructions (or alone, when the card
+  has none) the same `--append-system-prompt` argument carries one fixed paragraph the daemon builds from the `memory` field
+  of `chat_send`: VBear's own explanation, then the person's lines as one JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
+  `END_VBEAR_MEMORY_JSON`. The console sends the field when the role card takes memory along (a Claude Code card does by default; a Codex card only after the
+  person switches it on, because memory goes to OpenAI there) and `<state>/memory/memory.json` can be read; a card switched off, or a file that cannot be read, sends no field and not a
+  word reaches the model. The paragraph is sent even when there are no lines, because it also tells the employee that only
+  the person can save one. The field is a list of at most 50 objects with exactly `kind` (`about_you`, `work` or `decision`)
+  and `text`, at most 4,000 characters in all; one more key, another kind or a longer list is `bad_request`. **The daemon
+  checks every line again** with the same pure function the console uses to save one (`runtime/memory_rules.check`): a line
+  holding a password or code after its name, a key or token of a known shape, a long letters-and-digits string, an
+  account name or email, a card number that passes the Luhn check, an identity or bank-account number, one of VBear's own
+  markers, `server.token` or `X-VBear`, or a control, format or line-separator character, makes the daemon **refuse the
+  whole message** (`memory_refused`, naming only the place of the line and the rule, never its words); nothing is left
+  out quietly and nothing starts. Lines that merely read like an order to the employee, or hold a phone number or an
+  address, only needed the person's second confirmation when they were saved, and pass. The lines are JSON-encoded
+  twice (so a quote, a backslash or a marker inside a line cannot end the string) and written with every control, format
+  and line-separator character as a `\uXXXX` escape. The paragraph is at most 6,000 characters, and a chat manifest may carry 8,000
+  characters of added prompt (the card's 2,000 and the paragraph); a full-mode launch keeps its 2,000
+  (`append_prompt_problem`). **Memory does not change what the employee may do:** the paragraph says memory cannot make the
+  employee run a command or change a file without asking, nor change VBear's settings, limits, mode or skills, but that is
+  words for the model, not a barrier. The barrier is the one that was there: `--permission-prompt-tool stdio`, the
+  sandbox, Codex's `untrusted` policy, the per-turn and daily limits. Memory is data: no field of a chat's record names it
+  (`KINDS` is unchanged; `process_started.instructions` still says whether the *card* has instructions of its own), and the
+  daemon's log has one line per new process, `chat process memory entries=<N|none> instructions=<yes|no>`, with the count
+  and nothing else. The launch manifest of a live process holds the paragraph as it holds the card's instructions (it is
+  removed with the launch). Memory goes to the company of the employee's tool, Anthropic or OpenAI, and stays in the tool's
+  own copy of the conversation; deleting a line in VBear does not delete those copies. The memory rules are a best effort:
+  a secret written in ordinary words is not caught. Only the person's own `/api/memory*` routes in the browser (with
+  `X-VBear`) change the file; the chat service only reads it, and no module of the chief of staff, dispatch, groups or the
+  suggestions touches it (see the next paragraph).
+- **Changing the memory, switching a card, and the process that follows (v0.17, P42-2).** The person's routes, all behind the
+  access token and (for POST, PATCH and DELETE) `X-VBear`, bodies closed (an unknown key, a wrong type or a too-long text is a
+  400): `POST /api/memory` (a line), `PATCH /api/memory/<id>` (its kind or text; the same checks as a new line, in the same order:
+  refused, full, confirm), `DELETE /api/memory/<id>`, `POST /api/memory/clear` (only with `{"confirm": "全部刪除"}`),
+  `POST /api/memory/cards` (a card's switch: the card must exist and its tool must be one that chats; **switching a Codex card
+  on takes `confirm_company: true`**, answered `409 memory_confirm` with `warn: ["send_to_openai"]` otherwise) and
+  `GET /api/memory/export` (Markdown, no chat, group or line id; it adds a line to the log). A line made from words in a chat or a
+  group carries `source` (`{how: "chat", chat_id, turn, speaker}`, `{how: "group", group_id, turn, speaker}` or `{how:
+  "suggested", suggestion_id}`; the closed shape, and the chat, group or suggestion file must exist, else 400); no `source` means
+  typed. A source is a label the page shows, not a permission: it changes nothing about what is sent. `log.jsonl` has the action,
+  the line's id, kind and how it came (or a card's id, or a count) and never a word of a line. **Who can write is kept by
+  `tests/test_autonomy_guard.py`:** `memory*.py` (and `runtime/memory_rules.py`) are scanned like the chief, dispatch and group
+  modules (no `config.json` write, no launch code, no skills, no `answer`, no role card made or changed), and a second rule fails
+  the build when any module other than `server.py` and `memory.py` reaches `add`, `edit`, `delete`, `clear`, `set_card`,
+  `export` or `store` of the memory module. **A changed memory or changed card instructions reach a new chat only
+  (P42-6).** The first real-machine run found that Claude Code 2.1.319 does not apply a new `--append-system-prompt` when it resumes
+  a session: it keeps the one the session was started with, so replacing the process (what v0.17.0 first did when the hash of
+  the card's instructions and the memory paragraph differed) cost more and changed nothing. That code is gone: the daemon no longer
+  closes a live process or answers `restarting` for a changed prompt, and a resumed process still gets the current paragraph on its
+  command line (a later Claude Code may use it). When a chat's **new** session is started the daemon keeps, in
+  `<state>/chat-prompt/<chat id>.json` (0600, a flat file of VBear's own, **not a field of the chat record**, gone with the chat), the
+  fingerprint of its system prompt and whether the memory paragraph was in it: no word of the memory or the instructions. `GET
+  /api/chats/<id>` compares it with the current memory and the card's instructions and answers `memory: {on, count, readable,
+  changed, started_with_memory}` (the state now; counts and yes/no, no line), and the chat page then says the chat still has what it
+  started with and offers a new chat; if the card is switched off now, that what was already sent cannot be taken back. A chat
+  with no such file (made before v0.17.0, or the file does not read) says nothing. The paragraph is therefore **not** a thing a
+  person can take back from a chat: switching a card off, or deleting a line, stops it from reaching new chats and nothing else
+  (the tools keep their copy of a conversation in any case). Codex is treated the same, because whether `thread/resume` applies new
+  developer instructions was not verified. **The tools' own memory stays off,
+  with a second lock:** a Claude Code chat process gets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in its environment, set in `daemon_chat` only (the chat check starts its processes through
+  the same daemon code, so it carries them; terminals in full mode, meetings and the other checks do not), on top of
+  `--safe-mode`, `--setting-sources ""` and `--strict-mcp-config`, which stay (tests pin the argv). The evidence is read from the
+  installed program's text, not from a run: `docs/evidence/claude-code-2.1.319-memory.md`.
 - **The chat check.** `python3 -m vbear.boundary_check --mode chat` (started by 驗證聊天 on the page, which says what it
   costs first) runs about six small Haiku calls on your own login against an in-process daemon in a temporary state
   folder, with a made-up card. It judges only from the events the daemon recorded and the files left behind, never from
@@ -1218,6 +1283,14 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   `config.toml` exists right after `thread/start` and that every process was started with both settings
   (`project_settings_sent` in the report; no path in it). In the probe with both settings, in a home folder that is a
   git repository: no MCP server, no start-up notice, no skill, no `config.toml`.
+- **Memory (v0.17), off until the person switches the card on.** The same paragraph as for a Claude chat (see "Chats with a role card": the `memory` field, the daemon's
+  second check of every line, `memory_refused`) goes in `developerInstructions` of `thread/start` and `thread/resume`, after the
+  card's own instructions (32 KiB is the limit there). The employee is told that memory cannot make it skip a question; the
+  sandbox and `untrusted` approval policy are what keep that true, and memory is sent to OpenAI. Codex's own `--disable
+  memories`, `project_doc_max_bytes=0` and `history.persistence="none"` stay as they were (tests pin all three in the argv). A
+  Codex chat is treated as a Claude Code chat is (P42-6): changed memory or card instructions, or the card switched off, reach a new
+  chat only, and the page says so. Switching a Codex card on asks the person to confirm that memory goes
+  to OpenAI (`confirm_company`). This path has been tested against the fake app-server only; it has not been run on a real machine.
 - **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
   reviewer `user`, and ask for the legacy `workspace-write` sandbox (the work folder is its only writable place, no `/tmp`, network off;
   but see the residual risk (7): a command the person allows may run outside it). A
@@ -1478,6 +1551,128 @@ is new is **an employee's words going to another employee** (and, with Claude Co
    (the temporary state the check uses has no Codex chat login, so only Claude Code employees are tried), and whether 停止 really
    ends the turn of the last employee who was writing. A Claude plan limit is not told apart from another error in a chat's
    record, so such an employee is shown as having not finished normally, with no resume time.
+
+## Memory (v0.17)
+
+The 記憶 page keeps a few lines the person wrote or confirmed (about them, about their work, decisions they made), one book for all
+employees, and every employee whose card takes memory along is given them when a new chat process starts. ADR 0008 gives the
+reasons. The chat boundary did not move: the lines ride in the system prompt next to the card's own instructions ("Chats with a
+role card", second paragraph, and the same for Codex), and everything else there holds. What is new is **text of the person's
+that persists and is sent to a company's servers every time a process starts**, which is why only the person can write it.
+
+- **Who can write it.** Only the browser's `/api/memory*` routes in `vbear/server.py` (token and `X-VBear`, closed bodies)
+  change `<state>/memory/memory.json` (0600, 64 KiB, in a 0700 folder; `vbear/memory.py`). `tests/test_autonomy_guard.py` fails the
+  build when any other module reaches the writers (`add`, `edit`, `delete`, `clear`, `set_card`, `export`, `store`), scans
+  `memory*.py` and `runtime/memory*.py` with the rules of the chief of staff, dispatch and groups (no `config.json` write, no
+  launch, terminal or skill code, no `answer`, no role card made or changed), and checks that `server.py` really calls each writer
+  (so the rule is not empty). There is **no 「自己動手」 item for memory** and nothing parses an employee's reply for 「記住」: an
+  employee that says it has remembered something has saved nothing, and the fixed paragraph tells it to ask the person to press
+  「記住」. A line reaches the file in three ways, each the person's own press: typed on the page, 「記住」 beside a sentence of a chat or
+  group (a box opens with the sentence cut to 200 characters; an employee's sentence is marked as the employee's), and 「存進記憶」 on
+  a ticked memory suggestion (below). `source` (`typed`, `chat`, `group`, `suggested`) is a label for the page; the chat, group or
+  suggestion must exist, and it changes nothing about what is sent. The save of a `suggested` line asks whether the suggestion is a
+  plain file of ours, owned by the person (not a link, not a folder), and does not read it with `memory_suggest.exists`: that one
+  reads the record whole and moves a damaged one aside, which a save of a line must not do (`tests/test_memory_flow.py`).
+- **What may be saved: one function, run twice.** `runtime/memory_rules.check(text)` is run by the console when a line is saved
+  and again by the daemon on every line before it builds the paragraph (it lives under `runtime/` because the daemon does not
+  import the console's modules). Text is read after NFKC and with zero-width characters removed.
+  **Refused** (never saved, never sent; 400 `memory_refused` with the reason in plain words): an empty line, more than 200
+  characters, a control, format or line-separator character (a line break too: one line is one sentence), a VBear marker
+  (`BEGIN_…`/`END_…`), `server.token` or `X-VBear` (`bad_text`); a password, code, PIN, OTP, recovery code, seed phrase or private
+  key followed by `:`, `=`, 是, 為 or `is` and a value (`secret_password`); a key or token of a known shape (`sk-`, `sk-ant-`, GitHub,
+  Slack, AWS, Google, GitLab, a private-key header, a JWT, `Bearer` with a long value, a URL with a password or `token=`) or any
+  24-character-or-longer run with both letters and digits (`secret_key`); an email address, or an account or user name followed by a
+  value (`secret_account`); a 13-to-19 digit number that passes the Luhn check, a Taiwan identity-number shape, or a bank-account
+  word followed by eight or more digits (`secret_payment`). **Needs 「我確定」** (409 `memory_confirm`, saved when `confirm_warning:
+  true` comes with it, and still passes the daemon): words that read like an order to the employee — 不用問, 直接執行, 允許, 權限,
+  上限, 完整模式, 自己動手, 安裝技能, 忽略以上, `ignore previous`, `system prompt`, `sudo`, `rm -`, `curl`, `wget`, `chmod`
+  (`looks_like_order`; the page says memory never makes an employee skip a question) — and a phone number or an address (`personal`:
+  the person chose a second confirmation, not a refusal, because the line goes to an AI company). Every rule has a positive and a
+  negative case in `tests/test_memory_rules.py`; the keys in them are built at run time. The check is a best effort and is
+  **not a barrier**: a secret written in ordinary words passes. If a line the rules now refuse is found in the file, the daemon
+  refuses the whole message (`memory_refused`, "check the memory page"), it never leaves the line out quietly.
+- **Limits.** 50 lines, 200 characters each, 4,000 in all, and the paragraph at most 6,000 characters once encoded (a line with many
+  quotes can make 409 `memory_full` earlier); at most 200 card switches in the file. A file that cannot be read is reported on the
+  page (記憶的檔案有問題), VBear does not overwrite it, and chats go on **without** memory (not with half of it) and say so.
+- **Which employees.** Per card, from `GET /api/memory`'s `cards` (`on`): a Claude Code card takes memory along by default (to Anthropic),
+  a Codex card does not until the person switches it on (to OpenAI), and switching it on takes a question on the page and
+  `confirm_company: true` in the body. A card that cannot chat has no switch. The meetings, staffing meetings, the chief of staff
+  and full-mode terminals are never given memory. A card switched off sends not a word, even if there are lines.
+- **The paragraph and the process.** Described under "Chats with a role card" (second paragraph: fixed words, a JSON string
+  between `BEGIN_VBEAR_MEMORY_JSON` and `END_VBEAR_MEMORY_JSON`, the daemon's second check, 8,000 characters for a chat's added prompt
+  and 2,000 for a full-mode launch; third paragraph: the fingerprint of what a chat started with, `<state>/chat-prompt/<chat id>.json`). In short: **an edit, a
+  deletion or a switch reaches the next new chat**, not a chat that has begun: a resumed Claude Code session keeps the prompt it
+  started with (seen on a real Mac), so VBear does not end a process to send a changed one, and the chat page of an older chat says
+  that it still has what it started with and offers 開新聊天. A card switched off sends nothing in a new chat; what an older chat
+  already sent cannot be taken back, and its page says so. Nothing is changed under a turn that is running.
+- **The memory suggestion.** On a one-to-one chat page, 整理要記住的事 shows a preview that costs nothing (what will be read: at most
+  the latest 20 messages and 12 KiB; the most it can cost, US$0.10, and what is left of the day; that the conversation goes to
+  Anthropic, also when the chat is with a Codex employee) and, after a press, runs **one tool-less Claude Code call** on the meetings'
+  engine (`vbear/memory_suggest.py`, `memory_suggest_runner.py`, shaped like the chief of staff's: sonnet, effort low, no retry; the
+  conversation and the lines already kept go in as one escaped JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and
+  `END_UNTRUSTED_JSON_STRING`, with secrets masked first). The answer must be `{items: [{kind, text, why}]}` of at most five, with
+  `additionalProperties: false`; anything else voids the whole answer. Each item is run through `check`; a refused one is shown with
+  its reason and cannot be ticked, one that needs 「我確定」 says so, and **every line starts unticked, with no 「save all」**. The
+  run saves nothing: the page sends one `POST /api/memory` per ticked line, the runner only records which indexes the person saved
+  or that they said 不用了 (`tests/test_memory_suggest_api.py` shows `memory.json` byte for byte the same after a run). The cost is a
+  chat-sized call counted in the day (`GET /api/meetings/ledger`'s `includes` lists `memory_suggest`; an unreadable record makes
+  the day's spending unknown rather than zero). Without Claude Code it says 「這個功能目前需要 Claude Code」 and 「記住」 still works. It needs the
+  tool-less check that the chief of staff and the meetings need; with it not done the dialog has the same 檢查 button (it asks first,
+  says it costs a cent or less on the person's own Claude account, runs `POST /api/meetings/verify`, then asks for the preview
+  again) and starts nothing by itself. Not for groups.
+- **The tools' own memory stays off.** Claude Code in a chat: `--safe-mode`, `--setting-sources ""`, `--strict-mcp-config` and,
+  new, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in the process environment (set in
+  `daemon_chat` only; terminals and meetings do not get them). Codex: `--disable memories`, `project_doc_max_bytes=0`,
+  `history.persistence="none"`, `skills.include_instructions=false`, its own `CODEX_HOME`. Tests pin each one. The Claude Code facts
+  are read from the installed program's text, not from a run (`docs/evidence/claude-code-2.1.319-memory.md`).
+- **Records.** `<state>/memory/`: `memory.json`, `log.jsonl` (0600, append-only, 1 MiB then a new file keeping one old one: the
+  action, the line's id, kind and how it came, a card's id or a count; **never a word of a line**) and `suggest/ms-<12 hex>.json`
+  (0600, at most 200: how much was read, hashes, the proposed lines and which the person saved; not the conversation). The words of
+  a line are in `memory.json`, in a suggestion's record, in the launch manifest of a live process (removed with it), and in the
+  tool's own copy of a conversation. They are not in the console's log, the daemon's log (only a count per process), an error
+  message, a chat's record (`KINDS` did not change; `process_started.instructions` still means the *card's* instructions) or the
+  group's log. Export (`GET /api/memory/export`) is a Markdown file the browser saves; it has the lines, where they came from and
+  dates, never a chat, group or line id. Delete and 全部刪除 (the word must be typed) remove lines from VBear; they do not remove the
+  copies Claude Code and Codex keep of conversations that already carried them (the confirmation says so).
+- **Checked.** `tests/test_memory_flow.py` walks one memory over the real routes, a real daemon and the fake Claude Code: a phone
+  number needing 「我確定」, a password refused, a new chat carrying the lines and saying how many, a suggestion that saved nothing,
+  a line saved from it as `suggested`, an edit that does not reach the chat already started (the page says so) but reaches a new chat, a card off and on, a Codex card needing the
+  word about OpenAI, the export, and clearing; `config.json` is byte for byte the same at the end. `tools/qa_p42.py` is the
+  coordinator's real-machine check through the HTTP API on a temporary state with Claude Code employees (it refuses `~/.vbear` and the
+  ports 7788 and 7789 and prints no word of memory, of a conversation or of a model's reply).
+
+### Residual risks of memory
+
+1. **Memory is a persistent prompt-injection path.** Only the person can save a line, but the person can save words an employee
+   said (an employee may have read a page or a file that was hostile and repeated it), and from then on every new process of every
+   employee that takes memory along is given the line. What stands in the way: an employee's sentence is marked as the employee's in the
+   box, suggestions start unticked, lines that read like orders need a second confirmation, the fixed paragraph says memory cannot make
+   an employee skip a question or change a setting, and **every command and every file change is still asked of the person**.
+   The paragraph is a request to the model, not a barrier; how a real model treats a memory line that reads like an instruction has
+   been seen once (the first real run, with a line that said not to ask: the model still asked, the person's refusal held and nothing
+   was written); one run is not a study.
+2. **A command the person allowed can add a line.** It runs as the person, can read the console's access token and call VBear's
+   API (an existing risk of every chat), and so can post a line. The memory page lists every line with its source, but a line
+   made through the API says it was typed. The person should read the page now and then.
+3. **Memory goes to Anthropic and to OpenAI.** Every new process of a Claude Code employee carries the lines to Anthropic, and every
+   one of a Codex employee that was switched on carries them to OpenAI, through the person's own login; the tools keep them in their copy
+   of the conversation. The page says so at the top, in the box that saves a line and in the question before a Codex card is switched
+   on. A memory suggestion sends the conversation to Anthropic whatever the chat's tool.
+4. **The rules catch shapes, not meanings.** A password or a name written in ordinary words, a phone number written in letters, or a
+   secret split over two lines of memory passes. Memory is not a place for secrets, and the page says so.
+5. **A change of the memory reaches only a new chat; what a chat was given cannot be taken back.** A real run showed that Claude Code
+   2.1.319 keeps a session's system prompt on `--resume` (see above). An edit, a deleted line or a card switched off therefore changes
+   what new chats get; a chat that already carries a line goes on with it (and the tool's copy of the conversation has it for good).
+   The chat page says so with a button for a new chat. Whether Codex's `thread/resume` applies new developer instructions was not
+   tried, and the page says the same of Codex. A later Claude Code that does apply it makes the page's sentence too careful, not
+   unsafe. The edit stage of `tools/qa_p42.py` checks this on a real machine.
+6. **The two environment variables rest mostly on static evidence.** They were found in the installed program's text. The first real run
+   saw them in a chat process's environment and found no memory folder, `CLAUDE.md` or `MEMORY.md` under the chat's work folder or
+   its Claude Code project folder, but a run with and without them was not compared, so what each lock does alone is not known. Safe mode
+   is the first lock; a newer version that renames either variable leaves one lock, and every new Claude Code version still goes through
+   the chat check first.
+7. **Not run on a real machine:** how a Codex employee behaves with memory (only the fake app-server was used), and whether Codex's
+   `thread/resume` applies new developer instructions (待真機驗證). A model answered from the memory in the first real run of Claude Code, once.
 
 ## The start-up page (v0.12)
 
