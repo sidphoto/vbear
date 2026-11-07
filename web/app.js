@@ -12315,6 +12315,7 @@ async function route() {
     else if (top === "chat" && parts[1] === "group") await viewGroup(parts[2] ? decodeURIComponent(parts[2]) : null);
     else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "memory") await viewMemory();
+    else if (top === "shared") await viewShared();
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
@@ -15553,6 +15554,109 @@ async function viewMemory() {
     memoryAddForm(reload), listBox);
 }
 
+// ---------- the shared folder (P43-1, ADR 0009) -----------------------------------------------------------------------
+// The page of the shared folder (#/shared): where it is, what is in it (names, sizes and times: VBear never reads a file), a button
+// that opens it in Finder, and one switch per employee. The folder's path is VBear's own and is only ever shown; the page sends a card
+// id and on/off, never a path. A file name is set as text. An employee is off until the person switches it on; every file an
+// employee writes in the folder still comes to the person as a card. Only the Claude Code employees have it so far.
+const SHARED_WHAT = "共用資料夾是放在 VBear 狀態資料夾裡的一個資料夾，讓你打開的員工可以互相交檔案：一位員工寫進去，另一位讀得到。"
+  + "你也可以自己把檔案放進去或拿出來。每位員工預設都是關的。";
+const SHARED_WRITE_NOTE = "員工在裡面新增或修改檔案，每一次都會先問你（卡片），和其他檔案一樣。VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。";
+const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
+const SHARED_LIMIT_NOTE = "上限 1 GiB、1 萬個檔案（含資料夾）；超過時，開新聊天會被擋下，請到 Finder 整理。";
+const SHARED_TOOL_NOTE = "這位員工的 AI 工具還不能用共用資料夾。";
+const SHARED_CHANGE_NOTE = "改了開關，進行中的聊天會在下一則訊息換成新的程序：能不能寫入資料夾，從下一則訊息起就照新的開關；員工知不知道有這個資料夾，要看聊天是什麼時候開始的（舊聊天不會被告知）。";
+const SHARED_PROBLEM = {
+  shared_unsafe: "共用資料夾的位置不安全（可能被換成連結，或權限被改過）。VBear 不會用它，也不會自己修或刪：請到 Finder 看一下那個資料夾。",
+};
+function sharedBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(2)} GB`;
+}
+function sharedCardRow(c, onSwitch) {
+  const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
+  const can = c.can_chat === true;
+  const supported = can && c.company === "Anthropic";
+  const sw = supported ? el("input", { type: "checkbox", "data-shared": "card-switch", "aria-label": `${name} 用共用資料夾`, on: { change: () => onSwitch(c, sw.checked, sw) } }) : null;
+  if (sw) sw.checked = c.on === true;
+  return el("li", { class: "mt-row card", "data-shared": "card", "data-profile-id": c.profile_id },
+    el("strong", null, name),
+    el("span", { class: "tag" }, chatToolName(c.tool)),
+    supported ? el("label", { class: "small" }, sw, c.on === true ? " 可以用共用資料夾" : " 不用共用資料夾") : null,
+    supported ? el("span", { class: "small muted", "data-shared": "company" }, c.on === true ? `讀到的檔案會送給 ${c.company}` : `打開後，讀到的檔案會送給 ${c.company}`)
+      : el("span", { class: "small muted", "data-shared": "unsupported" }, can ? SHARED_TOOL_NOTE : "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"));
+}
+function sharedFileRow(f) {
+  const name = typeof f.name === "string" ? f.name : "";
+  return el("li", { class: "mt-row", "data-shared": "file" },
+    el("span", { "data-shared": "file-name" }, name),
+    f.link === true ? el("span", { class: "tag", "data-shared": "link" }, "連結（VBear 不會跟著走）") : null,
+    el("span", { class: "small muted" }, `${sharedBytes(f.size)}，${fmtTime(f.mtime)}`));
+}
+async function viewShared() {
+  const token = seq;
+  let cur;
+  try { cur = await api.get("/api/shared"); }
+  catch (e) { setKids(claim(token), el("h1", null, "共用資料夾"), notice("bad", "讀不到共用資料夾：" + e.message)); return; }
+  const main = claim(token);
+  const box = el("div", { "data-shared": "body" });
+  const draw = () => {
+    const used = cur.used && typeof cur.used === "object" ? cur.used : { bytes: 0, entries: 0, max_bytes: 1073741824, max_entries: 10000, over: false };
+    const cards = Array.isArray(cur.cards) ? cur.cards.filter((c) => c && typeof c.profile_id === "string") : [];
+    const files = Array.isArray(cur.files) ? cur.files.filter((f) => f && typeof f === "object") : [];
+    const problem = typeof cur.problem === "string" ? cur.problem : null;
+    setKids(box,
+      cur.readable === false ? notice("bad", "共用資料夾的開關檔案有問題，VBear 先不碰它：在修好之前，所有員工都當成不能用。請檢查狀態資料夾裡的 shared-meta。") : null,
+      problem ? notice("bad", SHARED_PROBLEM[problem] || SHARED_PROBLEM.shared_unsafe) : null,
+      el("section", { class: "section", "data-shared": "folder" },
+        sectionHead("資料夾", null),
+        el("p", { "data-shared": "where" }, typeof cur.where_text === "string" ? cur.where_text : ""),
+        cur.exists === true || problem ? null : el("p", { class: "small muted" }, "還沒有這個資料夾。第一次打開一位員工，或按下面的按鈕，VBear 才會建立。"),
+        el("div", { class: "row" },
+          el("button", { type: "button", class: "btn", "data-shared": "reveal", on: { click: reveal } }, "在 Finder 打開")),
+        problem ? null : el("p", { class: "small", "data-shared": "used" },
+          `${memoryCount(used.entries)}／${memoryCount(used.max_entries)} 個項目、${sharedBytes(used.bytes)}／${sharedBytes(used.max_bytes)}。${used.over === true ? "已經超過上限。" : ""}`),
+        Number.isFinite(cur.links) && cur.links > 0 ? el("p", { class: "small", "data-shared": "links" }, `裡面有 ${memoryCount(cur.links)} 個連結。VBear 不會跟著連結走；請確認它們是你放的。`) : null),
+      el("section", { class: "section", "data-shared": "cards" },
+        sectionHead("誰能用", "每位員工的開關"),
+        cards.length ? el("ul", { class: "mt-list" }, cards.map((c) => sharedCardRow(c, switchCard))) : el("p", { class: "small muted" }, "還沒有可以聊天的員工。"),
+        el("p", { class: "small", "data-shared": "change-note" }, SHARED_CHANGE_NOTE)),
+      problem ? null : el("section", { class: "section", "data-shared": "files" },
+        sectionHead("裡面的檔案", "只列檔名、大小和時間（最新的在前）；VBear 不讀內容"),
+        files.length ? el("ul", { class: "mt-list" }, files.map(sharedFileRow)) : el("p", { class: "small muted", "data-shared": "empty" }, "還沒有檔案。")));
+  };
+  async function reload() {
+    try { cur = await api.get("/api/shared"); } catch (e) { toast("讀不到共用資料夾：" + e.message); }
+    if (token === seq) draw();
+  }
+  async function reveal() {
+    try { await api.post("/api/shared/reveal", {}); toast("已在 Finder 打開"); }
+    catch (e) { toast(e.message); }
+    await reload();
+  }
+  async function switchCard(c, on, sw) {
+    if (sw) sw.disabled = true;
+    if (on) {
+      const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
+      const ok = await confirmInPage(`讓「${name}」用共用資料夾？`, SHARED_READ_NOTE + SHARED_WRITE_NOTE, "打開");
+      if (!ok) { if (token === seq) draw(); return; }
+    }
+    try { await api.post("/api/shared/cards", { profile_id: c.profile_id, on }); toast(on ? "已打開" : "已關掉"); }
+    catch (e) { toast(e.message); }
+    await reload();
+  }
+  draw();
+  setKids(main, el("h1", null, "共用資料夾"),
+    notice("info", SHARED_WHAT),
+    el("p", { class: "small", "data-shared": "notes" }, SHARED_WRITE_NOTE),
+    el("p", { class: "small", "data-shared": "read-note" }, SHARED_READ_NOTE),
+    el("p", { class: "small", "data-shared": "limit-note" }, SHARED_LIMIT_NOTE),
+    box);
+}
+
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
 // The pages of the meeting back end (vbear/meeting_runner.py): the list and the new meeting, one meeting with its
 // evidence and the chairman's desk, the meeting room of the office, the home page's "your turn", the entry on a task
@@ -17851,6 +17955,7 @@ if (typeof module !== "undefined" && module.exports) {
     CHAT_INTRO,
     chatLine,
     viewMemory,
+    viewShared,
     memoryRow,
     memoryCardLine,
     memoryBring,

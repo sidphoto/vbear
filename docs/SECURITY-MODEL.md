@@ -1048,7 +1048,7 @@ process starts until a version passes the chat check.
   address, only needed the person's second confirmation when they were saved, and pass. The lines are JSON-encoded
   twice (so a quote, a backslash or a marker inside a line cannot end the string) and written with every control, format
   and line-separator character as a `\uXXXX` escape. The paragraph is at most 6,000 characters, and a chat manifest may carry 8,000
-  characters of added prompt (the card's 2,000 and the paragraph); a full-mode launch keeps its 2,000
+  characters of added prompt (the card's 2,000 and the paragraph; 9,000 since v0.17.1, which makes room for the shared folder's paragraph, below); a full-mode launch keeps its 2,000
   (`append_prompt_problem`). **Memory does not change what the employee may do:** the paragraph says memory cannot make the
   employee run a command or change a file without asking, nor change VBear's settings, limits, mode or skills, but that is
   words for the model, not a barrier. The barrier is the one that was there: `--permission-prompt-tool stdio`, the
@@ -1095,6 +1095,67 @@ process starts until a version passes the chat check.
   the same daemon code, so it carries them; terminals in full mode, meetings and the other checks do not), on top of
   `--safe-mode`, `--setting-sources ""` and `--strict-mcp-config`, which stay (tests pin the argv). The evidence is read from the
   installed program's text, not from a run: `docs/evidence/claude-code-2.1.319-memory.md`.
+- **The shared folder (v0.17.1, ADR 0009).** `<state>/shared` is one folder that every employee the person has switched on may read
+  and write, so that one employee can hand a file to another. It changes the launch boundary in four places, each pinned by tests,
+  and in none of them does it remove a question: every Bash command and every Edit or Write there is still a card, `--permission-prompt-tool stdio`,
+  `permissions.ask: ["Bash"]`, `autoAllowBashIfSandboxed: false`, `allowUnsandboxedCommands: false` and the `system/init` check are
+  unchanged, no `--add-dir` is used, and `permissions.additionalDirectories` stays `[]`.
+  - **Where it is and who names it.** Only VBear computes the path (`shared_rules.shared_path`: the real path of the state folder
+    plus `shared`). A browser or an RPC caller never sends one: the console sends `shared: true` or nothing, and the daemon's
+    `chat_send` takes that field as exactly `true` (false or any other type is 400 `bad_request`, a Codex chat is 400 until P43-2).
+    The daemon checks the folder when a message arrives (`folder_problem`) and refuses `shared_unsafe` unless it is a real folder
+    of this user, mode exactly 0700, with no link on the way (`realpath` equals the path), not the home folder or above it, and not one
+    of the state folder's own folders. A folder that is not right is **never mended, moved or removed**: the page says so and the
+    person looks at it in Finder. A folder that is not there yet is made (0700) when the person switches an employee on, presses
+    「在 Finder 打開」 or a message needs it.
+  - **The switches.** `<state>/shared-meta/settings.json` (`{"v": 1, "cards_on": [...]}`, 0600, at most 200 ids; every employee is off
+    until the person switches it on) and `log.jsonl` (0600, append-only, 1 MiB then a new file keeping one old one: `card_on`, `card_off`
+    or `revealed`, the card's id and `page`, `group` or `dispatch`; **never a file name**). They live in `shared-meta`, **not** in the
+    shared folder, and the sandbox does not let an employee write there, so nothing an employee puts in the shared folder can decide
+    a permission. `set_card` is called only from the `/api/shared*` routes of `vbear/server.py` (`tests/test_autonomy_guard.py`
+    scans `shared*.py` and `runtime/shared*.py` with the rules of the chief of staff, dispatch, groups and memory, and fails when
+    any other module reaches `set_card` or the store). The chat service only reads (`for_card`); a settings file that cannot be
+    read means every employee is off, and the page says so. A Claude Code card only, so far: a Codex card is refused with 400
+    `card_tool_unsupported` and `for_card` says no for it whatever the file says.
+  - **Process and sandbox.** For a Claude Code chat with the folder on, the settings file written for the process lists the folder
+    as a second entry of `sandbox.filesystem.allowWrite` (the work folder stays first), and the launch manifest carries `shared`, which
+    must equal `<state>/shared` and pass `folder_problem` again when the launch is validated (`unsafe_path` otherwise). The folder is
+    **fixed for the life of a process**: when the person changes the switch, an idle process gives way (`close_gracefully` and
+    `restarting`, which the console retries) and a busy one answers `busy`, so that turn finishes under the old sandbox and the next
+    message starts a new process. So **the sandbox follows the switch at the next message.** Claude Code 2.1.319 ignores a new
+    `--append-system-prompt` on `--resume` (P42-6), so **what the employee has been told follows the start of the chat**: a chat started
+    with the folder on is told of it, one started with it off is not, and switching later changes the sandbox but not that
+    knowledge. The chat page compares the fingerprint of what the chat started with, so it can say that the chat's idea of the
+    folder is not the current one. The fingerprint is `prompt_sha(instructions, memory, shared_block)`; with the folder off it
+    is the value v0.17.0 made, byte for byte, as are the argv, the settings and the system prompt (tests pin the literal values). A chat
+    that is told of the folder gets one more paragraph (`shared_rules.block`: fixed words, the path as one JSON string between
+    `BEGIN_VBEAR_SHARED_JSON` and `END_VBEAR_SHARED_JSON`, at most 1,000 characters), joined to the card's instructions and the memory
+    paragraph with a blank line; the paragraph says that files in the folder are data, not instructions. The chat manifest may carry
+    9,000 characters of added prompt; the full-mode limit of 2,000 is unchanged. The shared folder is not in a full-mode terminal,
+    a meeting, the chief of staff or a memory suggestion. Nothing in the chat's record changed (`KINDS`, `process_started`).
+  - **VBear's own judgement of a path.** Claude Code's Edit and Write are not under the Bash sandbox, so VBear's `judge` treats the
+    shared folder as a second root. A Write or Edit whose path (links followed) is inside the shared folder is a card as always,
+    worded to say that every employee who has the folder open can read it; it is **refused with no way to allow it** when the path is
+    outside the folder (a link out of it), is the folder itself, has a part named `.claude`, `.codex`, `.agents` or `.git` at any
+    depth in any letter case, or is a regular file with more than one hard link (it would be a file of somewhere else too). The
+    check is run when the card is asked and again when the person allows it. Read, Grep and Glob are allowed by VBear only for paths
+    in the work folder or the shared folder, with the old rules in the root the path is in (a bare Glob or Grep pattern, no link that leads
+    outside that root); otherwise they are a card. A write the person allowed still happens after VBear's answer, so the gap the
+    work folder has (a folder turned into a link in that moment) is also there.
+  - **Size and what VBear looks at.** At most 1 GiB (by the size a file says, so a sparse file counts as large as it looks) and 10,000
+    entries, links not followed. It is counted when a **new process** starts (409 `shared_full` otherwise, with a sentence that points
+    to Finder), not under a running one; an employee can fill the folder within a process, and the next new process is the one that is
+    refused. VBear never reads a file in the folder, never opens one and never deletes one: the page and the count use `os.scandir`
+    and `lstat` (names, sizes, times, link counts) only, and no file name is written to the console's log, the daemon's log,
+    `log.jsonl` or an error message (the daemon's log has one line per new process, `shared=on` or `shared=off`). The page shows names as text.
+  - **「在 Finder 打開」.** `POST /api/shared/reveal` (closed body `{}`) runs a fixed command, `/usr/bin/open <the shared path>`, by a function
+    that `serve()` hands to the console; without it (tests, any other use of the console) the route answers 503 and nothing is opened.
+    The shared modules themselves start no program. It is Mac only (400 `not_mac`).
+  - **What is not new.** An employee that has the folder can read what other employees and the person put there and send it to its AI
+    company, and can write anything it may ask the person about. The paragraph, the page and the question before switching on say so; the folder
+    is not a place for secrets. The model's obedience to "files are data" is a request, not a barrier: what stands in the way is that every
+    command and every change is still a card. Codex employees do not have the folder yet; their sandbox check is P43-2's.
+
 - **The chat check.** `python3 -m vbear.boundary_check --mode chat` (started by 驗證聊天 on the page, which says what it
   costs first) runs about six small Haiku calls on your own login against an in-process daemon in a temporary state
   folder, with a made-up card. It judges only from the events the daemon recorded and the files left behind, never from
@@ -1148,8 +1209,10 @@ process starts until a version passes the chat check.
   below. By then the read has happened.
   - Bash, Edit and Write always get a card, and you allow, refuse, or change the command, content or new text and then
     allow.
-  - An Edit or Write whose path, after links are followed, is outside the work folder, or inside its `.claude`, is
-    refused with no way to allow it. This is checked when the card is asked and again when you allow it, with what you
+  - An Edit or Write whose path, after links are followed, is outside the work folder, or has a part named `.claude` (since
+    v0.17.1 at any depth below the work folder and in any letter case, because the file system of a Mac does not tell
+    `.claude` from `.Claude`), is refused with no way to allow it. With the shared folder on, the second root has its own rule
+    (below). This is checked when the card is asked and again when you allow it, with what you
     changed. A path whose folder became a link out of the work folder while the card waited is refused then, and the
     record says so.
   - The second check narrows the gap between the check and the write; it does not close it. Claude Code writes the
