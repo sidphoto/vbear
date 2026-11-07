@@ -291,6 +291,67 @@ class FieldsOfTheServiceTests(unittest.TestCase):
             self.assertNotIn(name, src)
 
 
+class ChatChangedTests(unittest.TestCase):
+    """P42-6: what the chat answer says when the memory or the card's instructions are not what the chat's session was started with
+    (Claude Code keeps a session's system prompt: the chat goes on with the old one, and the page offers a new chat). Compares
+    fingerprints of what the daemon kept (chat_store.set_prompt_start) with the current ones; with no daemon to ask (the record is
+    read from its files) the answer is still given."""
+
+    LINES = [{"kind": "work", "text": "一"}]
+
+    class Down:
+        def _rpc(self, op, timeout=2.0, **fields):
+            raise OSError("no daemon in this test")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="vbc-")
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.chat = cs.create(self.base, "emp-1", now=1.0)["id"]
+        self.given = memory.ChatMemory(True, True, self.LINES)
+        self.instructions = None
+        self.svc = chat_service.ChatService(
+            self.Down(), claude=lambda: ("/bin/echo", "2.1.318", ""), base=self.base,
+            profile=lambda pid: {"id": pid, "name": "x", "enabled": True, "model": {"tool": "claude"}, "position": "pm",
+                                 **({"instructions": self.instructions} if self.instructions else {})},
+            memory=lambda pid, engine: self.given)
+
+    def started(self, instructions=None, block="absent"):
+        block = mr.block(self.LINES) if block == "absent" else block
+        cs.set_prompt_start(self.base, self.chat, mr.prompt_sha(instructions, block), block is not None)
+
+    def memory(self):
+        return self.svc.get(self.chat)["memory"]
+
+    def test_a_chat_with_no_known_start_says_nothing_has_changed(self):
+        self.assertEqual(self.memory(), {"on": True, "count": 1, "readable": True, "changed": False, "started_with_memory": None})
+
+    def test_the_same_memory_is_not_a_change(self):
+        self.started()
+        self.assertEqual((self.memory()["changed"], self.memory()["started_with_memory"]), (False, True))
+
+    def test_another_line_another_card_setting_or_other_instructions_are_a_change(self):
+        self.started()
+        self.given = memory.ChatMemory(True, True, [{"kind": "work", "text": "二"}])
+        self.assertTrue(self.memory()["changed"])
+        self.given = memory.ChatMemory(True, False, [])
+        self.assertEqual((self.memory()["changed"], self.memory()["started_with_memory"], self.memory()["on"]), (True, True, False))
+        self.given = memory.ChatMemory(True, True, self.LINES)
+        self.assertFalse(self.memory()["changed"])
+        self.instructions = "先說結論。"
+        self.assertTrue(self.memory()["changed"])
+
+    def test_a_chat_started_without_memory_is_changed_when_the_card_takes_it_now(self):
+        self.started(block=None)
+        self.assertEqual((self.memory()["changed"], self.memory()["started_with_memory"]), (True, False))
+        self.given = memory.ChatMemory(True, False, [])
+        self.assertEqual(self.memory()["changed"], False)
+
+    def test_the_answer_holds_no_word_of_the_memory(self):
+        self.started()
+        self.assertNotIn("一", json.dumps(self.memory(), ensure_ascii=False).replace("count", ""))
+
+
 class DefaultByToolTests(unittest.TestCase):
     """The person's choice for v0.17: a Claude Code card takes memory along from the start, a Codex card only after the person
     switches it on (memory goes to OpenAI there). The real reader of the memory file, a service per tool, a runtime that

@@ -33,7 +33,7 @@ from pathlib import Path
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
 from . import memory as memory_store
 from .api_error import ApiError
-from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env
+from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
 EXCERPT = 80                      # characters of the last message shown in the list
@@ -444,10 +444,23 @@ class ChatService:
                     "can_chat": ok, "code": code or None, "reason": reason or None}
         given = self._memory(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
         taken = given.readable and given.on           # now, not what an earlier process was given: a count, never a line
+        changed, had = self._prompt_changed(chat["id"], profile, given)
         return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
                          "engine": chat.get("engine")},
                 "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id),
-                "memory": {"on": taken, "count": len(given.entries) if taken else 0, "readable": given.readable}, **out}
+                "memory": {"on": taken, "count": len(given.entries) if taken else 0, "readable": given.readable,
+                           "changed": changed, "started_with_memory": had}, **out}
+
+    def _prompt_changed(self, chat_id, profile, given) -> tuple[bool, bool | None]:
+        """(whether the memory or the card's instructions now are not what this chat's session was started with, whether it was
+        started with the memory paragraph). Claude Code 2.1.319 keeps the system prompt a session was started with, so a chat goes
+        on with the old one (P42-6); the page says so and offers a new chat. (False, None) when the start is not known (a chat from
+        before v0.17.0, a file that does not read) or the card is gone. Compares fingerprints; reads no word of the memory aloud."""
+        start = cs.prompt_start(self.base, chat_id)
+        if start is None or profile is None:
+            return False, None
+        block = memory_rules.block(given.entries) if given.readable and given.on else None
+        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block), start["memory"]
 
     # ---- what a person does ---------------------------------------------------------------------------------------
 

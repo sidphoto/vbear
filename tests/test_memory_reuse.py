@@ -51,17 +51,18 @@ class ClaudeReuseTests(tcd.ChatCase):
         argv = self.starts()[index]["argv"]
         return argv[argv.index("--append-system-prompt") + 1] if "--append-system-prompt" in argv else None
 
-    def replaced(self, chat_id, turn, **second):
-        """The first message started a process with ENTRIES and 'old'; the second one, with ``second``, must be told to wait for a
-        new process, and the third (after the old one is gone) is the new process, resumed, for turn ``turn``."""
-        r = self.send_mem(chat_id, **second)
-        self.assertEqual(r["error"]["code"], "restarting", r)
-        self.assertIn("記憶或固定指示", r["error"]["message"])
-        self.wait_gone(chat_id)
+    def system_prompts(self):
+        return [x["system_prompt"] for x in self.starts()]
+
+    def kept(self, chat_id, turn, **second):
+        """P42-6: the first message started a process with ENTRIES and 'old'. Claude Code 2.1.319 does not apply a new
+        ``--append-system-prompt`` to a session it resumes (found on a real machine), so a message with other memory or other
+        instructions goes to the SAME live process: no ``restarting``, no new process (it would only cost more)."""
         r = self.send_mem(chat_id, **second)
         self.assertTrue(r["ok"], r)
-        self.assertEqual((r["result"]["turn"], r["result"]["process"]), (turn, "resume"))
+        self.assertEqual((r["result"]["turn"], r["result"]["process"]), (turn, "reused"))
         self.wait_turn(chat_id, turn)
+        self.assertEqual(len(self.starts()), 1, "no new process was started for a prompt it would not use")
 
     def test_nothing_changed_the_process_is_reused(self):
         self.configure([clean("text", 0), clean("text", 1)])
@@ -73,63 +74,84 @@ class ClaudeReuseTests(tcd.ChatCase):
         self.wait_turn(chat_id, 2)
         self.assertEqual(len(self.starts()), 1)
 
-    def test_a_changed_line_means_a_new_process_that_carries_the_new_one(self):
+    def test_a_changed_line_does_not_start_a_new_process(self):
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, ENTRIES, "old")["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2, memory=OTHER, instructions="old")
-        self.assertEqual([self.appended(0), self.appended(1)], ["old\n\n" + mr.block(ENTRIES), "old\n\n" + mr.block(OTHER)])
-        self.assertEqual(self.starts()[1]["argv"][-2], "--resume")
+        self.kept(chat_id, 2, memory=OTHER, instructions="old")
+        self.assertEqual(self.system_prompts(), ["old\n\n" + mr.block(ENTRIES)])
 
-    def test_changed_instructions_of_the_card_mean_a_new_process_too(self):
+    def test_changed_instructions_of_the_card_do_not_start_a_new_process_either(self):
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, ENTRIES, "old")["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2, memory=ENTRIES, instructions="new")
-        self.assertEqual(self.appended(1), "new\n\n" + mr.block(ENTRIES))
+        self.kept(chat_id, 2, memory=ENTRIES, instructions="new")
+        self.assertEqual(self.system_prompts(), ["old\n\n" + mr.block(ENTRIES)])
 
     def test_instructions_without_any_memory_follow_the_same_rule(self):
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, instructions="old")["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2, instructions="new")
-        self.assertEqual([self.appended(0), self.appended(1)], ["old", "new"])
+        self.kept(chat_id, 2, instructions="new")
+        self.assertEqual(self.system_prompts(), ["old"])
 
-    def test_a_card_just_switched_off_does_not_keep_its_old_process_with_the_old_memory(self):
-        """The service sends no ``memory`` field for a switched-off card: the live process that still carries the lines is replaced."""
+    def test_a_card_just_switched_off_keeps_its_process_and_what_was_already_sent_cannot_be_taken_back(self):
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, ENTRIES)["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2)
-        self.assertEqual(self.appended(0), mr.block(ENTRIES))
-        self.assertIsNone(self.appended(1), "not a word of it, not even the explanation")
-        self.assertNotIn(ENTRIES[1]["text"], json.dumps(self.starts()[1], ensure_ascii=False))
+        self.kept(chat_id, 2)
+        self.assertEqual(self.system_prompts(), [mr.block(ENTRIES)])
 
-    def test_a_card_just_switched_on_gets_a_new_process_with_the_lines(self):
+    def test_a_card_just_switched_on_keeps_its_process_too(self):
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id)["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2, memory=ENTRIES)
-        self.assertEqual((self.appended(0), self.appended(1)), (None, mr.block(ENTRIES)))
+        self.kept(chat_id, 2, memory=ENTRIES)
+        self.assertEqual(self.system_prompts(), [None])
 
-    def test_an_empty_list_and_no_field_are_not_the_same_prompt(self):
+    def test_an_empty_list_and_no_field_do_not_start_a_new_process_either(self):
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, [])["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2)
+        self.kept(chat_id, 2)
+
+    def test_a_resumed_process_is_sent_the_new_prompt_but_the_session_keeps_the_old_one(self):
+        """The fake Claude Code does as the real 2.1.319 does: the session keeps the system prompt it was started with. The new
+        paragraph is on the resumed process's command line (a future version may use it) and is not what the process works
+        with; a NEW chat (a new session) works with the new one. The page tells the person (P42-6)."""
+        self.dm.chat_idle_timeout = 0.5
+        self.configure([clean("text", 0), clean("text", 1), clean("text", 2)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send_mem(chat_id, ENTRIES)["ok"])
+        self.wait_turn(chat_id, 1)
+        self.wait_gone(chat_id)
+        self.assertTrue(self.send_mem(chat_id, OTHER)["ok"])
+        self.wait_turn(chat_id, 2)
+        starts = self.starts()
+        self.assertEqual(starts[1]["argv"][-2], "--resume")
+        self.assertEqual(self.appended(1), mr.block(OTHER), "what VBear sends is the current memory")
+        self.assertEqual(self.system_prompts(), [mr.block(ENTRIES), mr.block(ENTRIES)], "what the resumed session works with is the first")
+        self.wait_gone(chat_id)
+        other_chat = self.open_chat("emp-2")
+        self.assertTrue(self.send_mem(other_chat, OTHER)["ok"])
+        self.wait_turn(other_chat, 1)
+        self.assertEqual(self.system_prompts()[-1], mr.block(OTHER), "a new chat gets the new memory")
 
     def test_the_log_and_the_record_say_how_many_and_never_what(self):
+        self.dm.chat_idle_timeout = 0.5
         self.configure([clean("text", 0), clean("text", 1)])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, ENTRIES, "old")["ok"])
         self.wait_turn(chat_id, 1)
-        self.replaced(chat_id, 2, memory=OTHER, instructions="old")
+        self.wait_gone(chat_id)
+        self.assertTrue(self.send_mem(chat_id, OTHER, "old")["ok"])
+        self.wait_turn(chat_id, 2)
         lines = [x for x in self.logs if "chat process memory" in x]
         self.assertEqual([re.search(r"entries=(\S+) instructions=(\S+)$", x).groups() for x in lines], [("3", "yes"), ("1", "yes")])
         blob = self.raw(chat_id) + "\n".join(self.logs)
@@ -144,6 +166,62 @@ class ClaudeReuseTests(tcd.ChatCase):
         self.wait_card(chat_id)
         self.assertEqual(self.send_mem(chat_id, OTHER)["error"]["code"], "busy")
         self.assertEqual(len(self.starts()), 1)
+
+
+    def started_with(self, chat_id):
+        return cs.prompt_start(self.base, chat_id)
+
+    def test_what_a_new_session_was_started_with_is_kept_in_a_file_of_its_own_and_never_changed_by_later_messages(self):
+        """P42-6: the page needs to know what the chat's session started with, to say when the memory or the instructions are not
+        what the chat works with. The fingerprint is VBear's own state (chat-prompt/<chat id>.json), not a field of the record."""
+        self.dm.chat_idle_timeout = 0.5
+        self.configure([clean("text", 0), clean("text", 1), clean("text", 2)])
+        chat_id = self.open_chat()
+        self.assertIsNone(self.started_with(chat_id), "nothing before the first message")
+        self.assertTrue(self.send_mem(chat_id, ENTRIES, "old")["ok"])
+        self.wait_turn(chat_id, 1)
+        first = self.started_with(chat_id)
+        self.assertEqual(first, {"sha": mr.prompt_sha("old", mr.block(ENTRIES)), "memory": True})
+        self.kept(chat_id, 2, memory=OTHER, instructions="new")
+        self.assertEqual(self.started_with(chat_id), first, "a live process keeps what it was started with")
+        self.wait_gone(chat_id)
+        self.assertTrue(self.send_mem(chat_id, OTHER, "new")["ok"])
+        self.wait_turn(chat_id, 3)
+        self.assertEqual(self.started_with(chat_id), first, "a resumed session keeps the prompt it was started with, so does this")
+        path = self.base / "chat-prompt" / f"{chat_id}.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        for text in [e["text"] for e in ENTRIES + OTHER]:
+            self.assertNotIn(text, path.read_text())
+            self.assertNotIn(text, "\n".join(self.logs))
+        self.assertEqual(set(cs.KINDS["process_started"]), {"mode", "budget_usd", "instructions"}, "the record has no new field")
+
+    def test_a_chat_started_without_memory_says_so(self):
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send_mem(chat_id)["ok"])
+        self.wait_turn(chat_id, 1)
+        self.assertEqual(self.started_with(chat_id), {"sha": mr.prompt_sha(None, None), "memory": False})
+
+    def test_deleting_the_chat_deletes_the_fingerprint_and_an_unreadable_one_is_no_fingerprint(self):
+        self.dm.chat_idle_timeout = 0.5
+        self.configure([clean("text", 0)])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send_mem(chat_id, ENTRIES)["ok"])
+        self.wait_turn(chat_id, 1)
+        self.wait_gone(chat_id)
+        path = self.base / "chat-prompt" / f"{chat_id}.json"
+        self.assertTrue(path.exists())
+        path.write_text("{nope")
+        path.chmod(0o600)
+        self.assertIsNone(self.started_with(chat_id))
+        path.write_text('{"v":1,"sha":"x","memory":true}')
+        self.assertIsNone(self.started_with(chat_id), "a sha that is not 64 hex digits")
+        path.write_text(json.dumps({"v": 1, "sha": "a" * 64, "memory": True}))
+        self.assertEqual(self.started_with(chat_id), {"sha": "a" * 64, "memory": True})
+        r = self.rpc("chat_delete", chat_id=chat_id)
+        self.assertTrue(r["ok"], r)
+        self.assertFalse(path.exists())
+        self.assertIsNone(self.started_with(chat_id))
 
 
 class ClaudeEnvironmentTests(tcd.ChatCase):
@@ -199,35 +277,43 @@ class CodexReuseTests(tcx.CodexCase):
         self.wait_turn(chat_id, 2)
         self.assertEqual(len([x for x in self.fake_log() if x["event"] == "start"]), 1)
 
-    def test_a_changed_line_or_changed_instructions_mean_a_new_process(self):
-        self.configure(start=[0], resume=[0, 0])
+    def test_a_changed_line_or_changed_instructions_do_not_start_a_new_process(self):
+        """P42-6: whether Codex's ``thread/resume`` applies new developer instructions is not verified, so (as for Claude Code)
+        a message with other memory goes to the live process and no process is started for it."""
+        self.configure(start=[0, 0])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, ENTRIES, "old")["ok"])
         self.wait_turn(chat_id, 1)
-        r = self.send_mem(chat_id, OTHER, "old")
-        self.assertEqual(r["error"]["code"], "restarting", r)
-        self.assertIn("記憶或固定指示", r["error"]["message"])
-        self.wait_gone(chat_id)
-        r = self.send_mem(chat_id, OTHER, "old")
-        self.assertTrue(r["ok"], r)
-        self.wait_turn(chat_id, 2)
-        r = self.send_mem(chat_id, OTHER, "new")
-        self.assertEqual(r["error"]["code"], "restarting", r)
-        self.wait_gone(chat_id)
-        self.assertTrue(self.send_mem(chat_id, OTHER, "new")["ok"])
-        self.wait_turn(chat_id, 3)
-        self.assertEqual(self.developers(), ["old\n\n" + mr.block(ENTRIES), "old\n\n" + mr.block(OTHER), "new\n\n" + mr.block(OTHER)])
+        for n, (memory, instructions) in enumerate(((OTHER, "old"), (OTHER, "new")), 2):
+            r = self.send_mem(chat_id, memory, instructions)
+            self.assertTrue(r["ok"], r)
+            self.assertEqual((r["result"]["turn"], r["result"]["process"]), (n, "reused"))
+            self.wait_turn(chat_id, n)
+        self.assertEqual(len([x for x in self.fake_log() if x["event"] == "start"]), 1)
+        self.assertEqual(self.developers(), ["old\n\n" + mr.block(ENTRIES)])
 
-    def test_a_card_switched_off_replaces_the_process_that_has_the_lines(self):
-        self.configure(start=[0], resume=[0])
+    def test_a_card_switched_off_keeps_the_process_that_has_the_lines(self):
+        self.configure(start=[0, 0])
         chat_id = self.open_chat()
         self.assertTrue(self.send_mem(chat_id, ENTRIES)["ok"])
         self.wait_turn(chat_id, 1)
-        self.assertEqual(self.send_mem(chat_id)["error"]["code"], "restarting")
-        self.wait_gone(chat_id)
-        self.assertTrue(self.send_mem(chat_id)["ok"])
+        r = self.send_mem(chat_id)
+        self.assertEqual((r["result"]["turn"], r["result"]["process"]), (2, "reused"))
         self.wait_turn(chat_id, 2)
-        self.assertEqual(self.developers(), [mr.block(ENTRIES), None])
+        self.assertEqual(self.developers(), [mr.block(ENTRIES)])
+
+    def test_what_a_new_thread_was_started_with_is_kept_and_a_resumed_one_does_not_change_it(self):
+        self.dm.chat_idle_timeout = 0.5
+        self.configure(start=[0], resume=[0])
+        chat_id = self.open_chat()
+        self.assertTrue(self.send_mem(chat_id, ENTRIES, "old")["ok"])
+        self.wait_turn(chat_id, 1)
+        first = cs.prompt_start(self.base, chat_id)
+        self.assertEqual(first, {"sha": mr.prompt_sha("old", mr.block(ENTRIES)), "memory": True})
+        self.wait_gone(chat_id)
+        self.assertTrue(self.send_mem(chat_id, OTHER, "new")["ok"])
+        self.wait_turn(chat_id, 2)
+        self.assertEqual(cs.prompt_start(self.base, chat_id), first)
 
     def test_the_codex_settings_that_keep_its_own_memory_off(self):
         self.configure(start=[0])

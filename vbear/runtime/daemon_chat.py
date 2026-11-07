@@ -16,10 +16,12 @@ StreamOps is.
                                                             ``memory`` (P42-1) is the person's memory as a list of
                                                             {kind, text}: checked again here (memory_rules.prepare), built
                                                             into one fixed paragraph and added after the instructions,
-                                                            so that the chat record has no field for it; a live process
-                                                            started with other instructions or another memory paragraph
-                                                            is closed and the answer is ``restarting`` (prompt_sha), so the
-                                                            next message is the new process's
+                                                            so that the chat record has no field for it. Claude Code
+                                                            2.1.319 keeps the system prompt a session was STARTED with
+                                                            (``--resume`` does not apply a new one), so a message with other
+                                                            instructions or memory goes to the live process as it is and no
+                                                            process is started for it (P42-6); what a new session started
+                                                            with is kept in chat-prompt/ (chat_store.prompt_start)
   chat_answer  {chat_id, card_id, token, decision, value}   a permission card, once, with its one-use token
   chat_stop    {chat_id}                                    ends the turn (at its cap) and the process
   chat_close   {chat_id}                                    ends an idle process (stdin closed); refused while busy
@@ -57,7 +59,6 @@ CLOSE_GRACE = 5.0
 REPLY_BUDGET = 56 << 10        # bytes of records in one chat_events answer (the RPC reply limit is 64 KiB)
 EVENTS_PAGE = 500
 CENT = Decimal("0.01")
-RESTART_PROMPT = "員工要換新的程序（記憶或固定指示改了），請稍後再送一次"
 
 
 def _ok(rid, result) -> dict:
@@ -218,7 +219,6 @@ class ChatOps:
         allowance, per_turn, refused = self._chat_allowance(rid, time.time())
         if refused:
             return refused
-        sha = memory_rules.prompt_sha(instructions, memory.block if memory else None)
         if p is not None:
             # A live process may still spend what its --max-budget-usd leaves. Reused only when that is no more
             # than this turn may cost (else the CLI could spend past it), and at least a cent; the turn's cap is
@@ -228,9 +228,6 @@ class ChatOps:
                     or headroom < CENT):
                 p.close_gracefully("模型、版本或額度不同，要換新的程序", now)
                 return _err(rid, "restarting", "員工要換新的程序（模型、版本或額度不同），請稍後再送一次")
-            if p.prompt_sha != sha:                 # the card's instructions or the memory changed: the next message uses the new
-                p.close_gracefully("固定指示或記憶改了，要換新的程序", now)
-                return _err(rid, "restarting", RESTART_PROMPT)
             allowance = headroom
             try:
                 line = cp.user_line(text, p.session_id)
@@ -291,6 +288,8 @@ class ChatOps:
         env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
         launch_id = m["launch_id"]
         self._log_memory(launch_id, memory, instructions)
+        if not resume:
+            self._keep_prompt_start(chat_id, instructions, memory)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
@@ -322,8 +321,7 @@ class ChatOps:
                 card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace,
-                close_below=(per_turn / 2).quantize(CENT),
-                prompt_sha=memory_rules.prompt_sha(instructions, memory.block if memory else None))
+                close_below=(per_turn / 2).quantize(CENT))
             self._chats[chat_id] = p
             self._watch_chat(p, "stdout")
             self._watch_chat(p, "stderr")
@@ -362,9 +360,6 @@ class ChatOps:
         if p.model_id != model_id or p.cli_version != cli.get("version"):
             p.close_gracefully("模型或版本不同，要換新的程序", now)
             return _err(rid, "restarting", "員工要換新的程序（模型或版本不同），請稍後再送一次")
-        if p.prompt_sha != memory_rules.prompt_sha(instructions, memory.block if memory else None):
-            p.close_gracefully("固定指示或記憶改了，要換新的程序", now)
-            return _err(rid, "restarting", RESTART_PROMPT)
         try:
             n = p.next_turn
             p.log.append("user_message", _said(n, text, origin), now=time.time())
@@ -447,6 +442,8 @@ class ChatOps:
             return _err(rid, getattr(exc, "code", "refused"), str(exc))
         launch_id = m["launch_id"]
         self._log_memory(launch_id, memory, instructions)
+        if not resume:
+            self._keep_prompt_start(chat_id, instructions, memory)
         try:
             log.append("user_message", _said(n, text, origin), now=time.time())
             log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
@@ -478,7 +475,6 @@ class ChatOps:
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace, close_below=Decimal(0),
                 instructions=memory_rules.combine(instructions, memory.block if memory else None),
-                prompt_sha=memory_rules.prompt_sha(instructions, memory.block if memory else None),
                 thread_id=thread_id, last_tokens=state.last_tokens, followup=self._codex_followup,
                 client_version=DAEMON_VERSION)
             self._chats[chat_id] = p
@@ -495,6 +491,17 @@ class ChatOps:
         except Exception as exc:
             return self._chat_abort_spawned(rid, log, n, m, proc, p, leader_start, f"{type(exc).__name__}: {exc}")
         return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "resume" if resume else "new"})
+
+    def _keep_prompt_start(self, chat_id: str, instructions, memory) -> None:
+        """A NEW session (not a resumed one) is started with this system prompt, and keeps it: Claude Code 2.1.319 does not apply
+        another one to a session it resumes (found on a real machine, P42-6). Keep its fingerprint, so that the page can say when
+        the memory or the instructions are not what the chat works with. Not a word of either; a failure is only logged (the
+        page then says nothing about it)."""
+        try:
+            cs.set_prompt_start(self.base, chat_id, memory_rules.prompt_sha(instructions, memory.block if memory else None),
+                                memory is not None)
+        except cs.ChatStoreError as exc:
+            self._log(f"{chat_id}: the prompt a new session started with was not kept ({exc.code})")
 
     def _log_memory(self, launch_id: str, memory, instructions) -> None:
         """One line a real-machine check can read: how many lines of memory the new process was given (none: the field was

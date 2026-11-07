@@ -67,7 +67,7 @@ class WalkTests(RoutesCase):
         # room for the day, so that a process is replaced only for the memory and never for what is left of the day's money
         self.assertEqual(self.call("/api/config", "POST", {"meeting_limits": {"daily_usd": 10}})[0], 200)
         config_before = state_bytes("config.json")
-        self.configure([clean("text", 0) for _ in range(5)])   # every turn is the same recorded plain answer
+        self.configure([clean("text", 0) for _ in range(8)])   # every turn is the same recorded plain answer
 
         # a line, typed: a phone number asks for 「我確定」 first, a password is refused and left nowhere
         status, out = self.add("work", SHOP)
@@ -86,8 +86,10 @@ class WalkTests(RoutesCase):
 
         # a new chat carries the memory, and the chat says how many lines
         chat_id = self.open_http()
-        self.assertEqual(self.view(chat_id)["memory"], {"on": True, "count": 2, "readable": True})
+        self.assertEqual(self.view(chat_id)["memory"], {"on": True, "count": 2, "readable": True, "changed": False, "started_with_memory": None},
+                         "nothing is known of the start before the first message")
         self.turn(chat_id, 1)
+        self.assertEqual(self.view(chat_id)["memory"], {"on": True, "count": 2, "readable": True, "changed": False, "started_with_memory": True})
         first = self.starts()[0]["argv"]
         carried = first[first.index("--append-system-prompt") + 1]
         self.assertIn(SHOP, carried)
@@ -122,32 +124,50 @@ class WalkTests(RoutesCase):
         self.assertEqual((status, out["entry"]["source"]["how"]), (201, "chat"), out)
         self.assertEqual(self.view(chat_id)["memory"]["count"], 4)
 
-        # a change reaches the very next message of the same chat: a new process, resumed, with the new line
+        # P42-6: Claude Code does not apply a new system prompt to a session it goes on with, so a change does NOT reach the chat that
+        # was already started: its next message goes to the same process, the page says the chat still has what it started with, and
+        # only a NEW chat carries the new line
         shop_id = next(e["id"] for e in self.memory()["entries"] if e["text"] == SHOP)
         status, out = self.call(f"/api/memory/{shop_id}", "PATCH", {"text": SHOP_NEW})
         self.assertEqual(status, 200, out)
+        self.assertTrue(self.view(chat_id)["memory"]["changed"], "the chat is told it still has what it started with")
         self.turn(chat_id, 3)
-        starts = self.starts()
-        self.assertEqual(len(starts), 2)
-        second = starts[1]["argv"]
+        self.assertEqual(len(self.starts()), 1, "no process is started for a prompt Claude Code would not use")
+        fresh = self.open_http()
+        self.assertEqual(self.view(fresh)["memory"]["changed"], False)
+        self.turn(fresh, 1)                     # the employee has one process: the older chat's is closed for it, and the page of that chat goes on
+        self.assertEqual(len(self.starts()), 2)
+        second = self.starts()[1]["argv"]
         carried = second[second.index("--append-system-prompt") + 1]
         self.assertIn(SHOP_NEW, carried)
         self.assertNotIn(SHOP + "\"", carried)
-        self.assertIn("--resume", second)
-        self.assertEqual(self.entries_log(), ["2", "4"])
+        self.assertNotIn("--resume", second)
+        self.assertEqual(self.starts()[1]["system_prompt"], carried, "a new chat works with the new memory")
+        self.assertNotIn(SHOP_NEW, self.starts()[0]["system_prompt"], "and the first one with the old")
 
-        # a card off: the next message is a new process that carries not a word; on again: the memory comes back
+        # a card off: a chat that has the memory says so (what was sent cannot be taken back). The older chat goes on in a resumed process
+        # that is sent no memory at all, and still works with the memory it started with
         self.assertEqual(self.call("/api/memory/cards", "POST", {"profile_id": self.emp, "on": False})[0], 200)
-        self.assertEqual(self.view(chat_id)["memory"], {"on": False, "count": 0, "readable": True})
+        view = self.view(fresh)["memory"]
+        self.assertEqual((view["on"], view["count"], view["readable"], view["changed"], view["started_with_memory"]), (False, 0, True, True, True))
         self.turn(chat_id, 4)
-        third = self.starts()[2]["argv"]
-        self.assertNotIn("--append-system-prompt", third)
-        self.assertEqual(self.entries_log()[-1], "none")
+        third = self.starts()[2]
+        self.assertIn("--resume", third["argv"])
+        self.assertNotIn("--append-system-prompt", third["argv"])
+        self.assertIn(SHOP, third["system_prompt"], "the session keeps what it was started with")
+        # a chat started now carries not a word; on again: it says that it started without, and a new one has the memory
+        third_chat = self.open_http()
+        self.turn(third_chat, 1)
+        self.assertNotIn("--append-system-prompt", self.starts()[3]["argv"])
+        self.assertIsNone(self.starts()[3]["system_prompt"])
+        self.assertEqual(self.view(third_chat)["memory"]["started_with_memory"], False)
         self.assertEqual(self.call("/api/memory/cards", "POST", {"profile_id": self.emp, "on": True})[0], 200)
-        self.turn(chat_id, 5)
-        fourth = self.starts()[3]["argv"]
+        self.assertTrue(self.view(third_chat)["memory"]["changed"])
+        fourth_chat = self.open_http()
+        self.turn(fourth_chat, 1)
+        fourth = self.starts()[4]["argv"]
         self.assertIn(PRICE, fourth[fourth.index("--append-system-prompt") + 1])
-        self.assertEqual(self.entries_log()[-1], "4")
+        self.assertEqual(self.entries_log(), ["2", "4", "none", "none", "4"])
 
         # a Codex card goes on only with the word about OpenAI
         codex = self.card("Codex 員工", "codex")

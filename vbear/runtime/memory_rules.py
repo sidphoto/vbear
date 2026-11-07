@@ -205,7 +205,9 @@ def combine(instructions: str | None, memory_block: str | None) -> str | None:
 
 def prompt_sha(instructions: str | None, memory_block: str | None) -> str:
     """A fingerprint of what a chat process was given as its system prompt (the card's instructions and the memory paragraph; None
-    and "" are the same). The daemon keeps it with the process: a message whose fingerprint differs gets a new process."""
+    and "" are the same). The daemon keeps it (chat_store.set_prompt_start) when a chat's NEW session is started, and the chat page
+    compares it with the current one: Claude Code 2.1.319 keeps a session's system prompt, so a difference is shown to the person
+    and never answered with a new process (P42-6)."""
     return hashlib.sha256(f"{instructions or ''}\0{memory_block or ''}".encode("utf-8")).hexdigest()
 
 
