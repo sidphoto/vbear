@@ -317,7 +317,8 @@ class ChatService:
         if (not isinstance(body, dict) or set(body) - {"version", "engine", "shared"}
                 or chat_engines.by_tool(body.get("engine", "claude")) is None or not isinstance(body.get("shared", False), bool)):
             raise ApiError(400, "bad_request", "只接受 version、engine（claude 或 codex），和 shared（true 或 false）。")
-        return getattr(self, chat_engines.by_tool(body.get("engine", "claude")).verify)(body.get("version"), shared=body.get("shared", False))
+        verify = getattr(self, chat_engines.by_tool(body.get("engine", "claude")).verify)
+        return verify(body.get("version"), **({"shared": True} if body.get("shared") else {}))      # without shared the call is the one it was
 
     def _verify_claude(self, wanted, shared: bool = False) -> dict:
         if self.verifier is None:
@@ -504,9 +505,10 @@ class ChatService:
         version = self._tool_version(engine)
         return None if version is None else bool(self._shared_verified(engine, version))
 
-    def shared_checked(self) -> dict:
-        """{engine: True | False | None} for the engines that have the shared folder: what the shared folder page shows beside each employee."""
-        return {engine: self._shared_checked(engine) for engine in shared_folder.SUPPORTED_ENGINES}
+    def shared_checked(self, engines) -> dict:
+        """{engine: True | False | None} for the engines named (the ones that have the shared folder; the server names them): what the
+        shared folder page shows beside each employee. The chat service only reads the shared switches, so it does not know the list."""
+        return {engine: self._shared_checked(engine) for engine in engines}
     def _prompt_changed(self, chat_id, profile, given) -> tuple[bool, bool | None]:
         """(whether the memory or the card's instructions now are not what this chat's session was started with, whether it was
         started with the memory paragraph). Claude Code 2.1.319 keeps the system prompt a session was started with, so a chat goes

@@ -2055,7 +2055,7 @@ def make_handler(console: Console):
             except ApiError:
                 cards = []                     # the page still shows the folder when the cards cannot be read
             try:
-                checked = console.chat_service().shared_checked()
+                checked = console.chat_service().shared_checked(shared_folder.SUPPORTED_ENGINES)
             except ApiError:
                 checked = {}                   # unknown for every employee
             return shared_folder.view(cards, checked)
