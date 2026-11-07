@@ -257,11 +257,11 @@ class CodexMemoryTests(tcx.CodexCase):
 class BoundaryTests(unittest.TestCase):
     def test_the_full_mode_limit_is_still_two_thousand_and_a_chat_has_eight_thousand(self):
         self.assertEqual(a.MAX_APPEND_PROMPT, 2000)
-        self.assertEqual(a.MAX_CHAT_APPEND_PROMPT, 8000)
+        self.assertEqual(a.MAX_CHAT_APPEND_PROMPT, 9000)      # v0.17.1 (P43-1): room for the shared folder's paragraph
         self.assertIsNone(a.append_prompt_problem("x" * 2000))
         self.assertIn("2000", a.append_prompt_problem("x" * 2001))
-        self.assertIsNone(a.chat_append_prompt_problem("x" * 8000))
-        self.assertIn("8000", a.chat_append_prompt_problem("x" * 8001))
+        self.assertIsNone(a.chat_append_prompt_problem("x" * 9000))
+        self.assertIn("9000", a.chat_append_prompt_problem("x" * 9001))
         self.assertIsNotNone(a.chat_append_prompt_problem("a\x00b"))
         self.assertIsNotNone(a.chat_append_prompt_problem(" x"))
 
