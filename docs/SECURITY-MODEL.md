@@ -1056,10 +1056,38 @@ process starts until a version passes the chat check.
   daemon's log has one line per new process, `chat process memory entries=<N|none> instructions=<yes|no>`, with the count
   and nothing else. The launch manifest of a live process holds the paragraph as it holds the card's instructions (it is
   removed with the launch). Memory goes to the company of the employee's tool, Anthropic or OpenAI, and stays in the tool's
-  own copy of the conversation; deleting a line in VBear does not delete those copies. A process that is already running is
-  not given a changed memory (the next new process is). The memory rules are a best effort: a secret written in ordinary
-  words is not caught. Only the person's own `POST /api/memory` in the browser (with `X-VBear`) saves a line; the chat
-  service only reads the file, and no module of the chief of staff, dispatch or groups touches it.
+  own copy of the conversation; deleting a line in VBear does not delete those copies. The memory rules are a best effort:
+  a secret written in ordinary words is not caught. Only the person's own `/api/memory*` routes in the browser (with
+  `X-VBear`) change the file; the chat service only reads it, and no module of the chief of staff, dispatch, groups or the
+  suggestions touches it (see the next paragraph).
+- **Changing the memory, switching a card, and the process that follows (v0.17, P42-2).** The person's routes, all behind the
+  access token and (for POST, PATCH and DELETE) `X-VBear`, bodies closed (an unknown key, a wrong type or a too-long text is a
+  400): `POST /api/memory` (a line), `PATCH /api/memory/<id>` (its kind or text; the same checks as a new line, in the same order:
+  refused, full, confirm), `DELETE /api/memory/<id>`, `POST /api/memory/clear` (only with `{"confirm": "全部刪除"}`),
+  `POST /api/memory/cards` (a card's switch: the card must exist and its tool must be one that chats; **switching a Codex card
+  on takes `confirm_company: true`**, answered `409 memory_confirm` with `warn: ["send_to_openai"]` otherwise) and
+  `GET /api/memory/export` (Markdown, no chat, group or line id; it adds a line to the log). A line made from words in a chat or a
+  group carries `source` (`{how: "chat", chat_id, turn, speaker}`, `{how: "group", group_id, turn, speaker}` or `{how:
+  "suggested", suggestion_id}`; the closed shape, and the chat, group or suggestion file must exist, else 400); no `source` means
+  typed. A source is a label the page shows, not a permission: it changes nothing about what is sent. `log.jsonl` has the action,
+  the line's id, kind and how it came (or a card's id, or a count) and never a word of a line. **Who can write is kept by
+  `tests/test_autonomy_guard.py`:** `memory*.py` (and `runtime/memory_rules.py`) are scanned like the chief, dispatch and group
+  modules (no `config.json` write, no launch code, no skills, no `answer`, no role card made or changed), and a second rule fails
+  the build when any module other than `server.py` and `memory.py` reaches `add`, `edit`, `delete`, `clear`, `set_card`,
+  `export` or `store` of the memory module. **A changed memory or changed card instructions are used by the next message.** The
+  daemon keeps with each chat process a hash of the system prompt it was started with (the card's instructions, a NUL, the
+  memory paragraph); a message whose hash differs closes the idle process and answers `restarting` ("memory or instructions
+  changed"), and the console's existing retry opens a new process (`--resume` / `thread/resume`) with the new prompt. A card
+  switched off sends no `memory` field, so a live process that still carries the lines is replaced too; a busy process is not
+  replaced under its turn (`busy`). Before this change a live process kept the instructions it started with. **Not yet observed on
+  a real machine:** whether a resumed Claude Code session applies a changed appended prompt (it keeps a session's system prompt by
+  default, see above), so "the employee answers with the new line after an edit" is for the real-machine check. `GET
+  /api/chats/<id>` carries `memory: {on, count, readable}` (the state now; a count, no line). **The tools' own memory stays off,
+  with a second lock:** a Claude Code chat process gets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in its environment, set in `daemon_chat` only (the chat check starts its processes through
+  the same daemon code, so it carries them; terminals in full mode, meetings and the other checks do not), on top of
+  `--safe-mode`, `--setting-sources ""` and `--strict-mcp-config`, which stay (tests pin the argv). The evidence is read from the
+  installed program's text, not from a run: `docs/evidence/claude-code-2.1.319-memory.md`.
 - **The chat check.** `python3 -m vbear.boundary_check --mode chat` (started by 驗證聊天 on the page, which says what it
   costs first) runs about six small Haiku calls on your own login against an in-process daemon in a temporary state
   folder, with a made-up card. It judges only from the events the daemon recorded and the files left behind, never from
@@ -1252,8 +1280,10 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   second check of every line, `memory_refused`) goes in `developerInstructions` of `thread/start` and `thread/resume`, after the
   card's own instructions (32 KiB is the limit there). The employee is told that memory cannot make it skip a question; the
   sandbox and `untrusted` approval policy are what keep that true, and memory is sent to OpenAI. Codex's own `--disable
-  memories`, `project_doc_max_bytes=0` and `history.persistence="none"` stay as they were. This path has been tested against the
-  fake app-server only; it has not been run on a real machine.
+  memories`, `project_doc_max_bytes=0` and `history.persistence="none"` stay as they were (tests pin all three in the argv). The
+  Codex process keeps the same hash of its developer instructions as a Claude Code process: changed memory or card instructions, or
+  the card switched off, replace it before the next message. Switching a Codex card on asks the person to confirm that memory goes
+  to OpenAI (`confirm_company`). This path has been tested against the fake app-server only; it has not been run on a real machine.
 - **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
   reviewer `user`, and ask for the legacy `workspace-write` sandbox (the work folder is its only writable place, no `/tmp`, network off;
   but see the residual risk (7): a command the person allows may run outside it). A
