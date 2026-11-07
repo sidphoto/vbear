@@ -37,7 +37,8 @@ flag = "--session-id" if "--session-id" in argv else "--resume"
 sid = argv[argv.index(flag) + 1]
 cwd = os.path.realpath(os.getcwd())
 log(event="start", argv=argv, cwd=cwd, pid=os.getpid(),
-    env={k: os.environ.get(k) for k in ("HOME", "CLAUDE_CODE_TMPDIR", "DISABLE_AUTOUPDATER")})
+    env={k: os.environ.get(k) for k in ("HOME", "CLAUDE_CODE_TMPDIR", "DISABLE_AUTOUPDATER",
+                                              "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_CLAUDE_MDS")})
 
 
 def sub(v):

@@ -54,6 +54,7 @@ CLOSE_GRACE = 5.0
 REPLY_BUDGET = 56 << 10        # bytes of records in one chat_events answer (the RPC reply limit is 64 KiB)
 EVENTS_PAGE = 500
 CENT = Decimal("0.01")
+RESTART_PROMPT = "員工要換新的程序（記憶或固定指示改了），請稍後再送一次"
 
 
 def _ok(rid, result) -> dict:
@@ -213,6 +214,7 @@ class ChatOps:
         allowance, per_turn, refused = self._chat_allowance(rid, time.time())
         if refused:
             return refused
+        sha = memory_rules.prompt_sha(instructions, memory.block if memory else None)
         if p is not None:
             # A live process may still spend what its --max-budget-usd leaves. Reused only when that is no more
             # than this turn may cost (else the CLI could spend past it), and at least a cent; the turn's cap is
@@ -222,6 +224,9 @@ class ChatOps:
                     or headroom < CENT):
                 p.close_gracefully("模型、版本或額度不同，要換新的程序", now)
                 return _err(rid, "restarting", "員工要換新的程序（模型、版本或額度不同），請稍後再送一次")
+            if p.prompt_sha != sha:                 # the card's instructions or the memory changed: the next message uses the new
+                p.close_gracefully("固定指示或記憶改了，要換新的程序", now)
+                return _err(rid, "restarting", RESTART_PROMPT)
             allowance = headroom
             try:
                 line = cp.user_line(text, p.session_id)
@@ -277,6 +282,9 @@ class ChatOps:
             return _err(rid, getattr(exc, "code", "refused"), str(exc))
         env["CLAUDE_CODE_TMPDIR"] = m["scratch"]["path"]
         env["DISABLE_AUTOUPDATER"] = "1"
+        # The tool's own memory and project instruction files stay off (--safe-mode does it; these two are the second lock, P42-2)
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
         launch_id = m["launch_id"]
         self._log_memory(launch_id, memory, instructions)
         try:
@@ -310,7 +318,8 @@ class ChatOps:
                 card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace,
-                close_below=(per_turn / 2).quantize(CENT))
+                close_below=(per_turn / 2).quantize(CENT),
+                prompt_sha=memory_rules.prompt_sha(instructions, memory.block if memory else None))
             self._chats[chat_id] = p
             self._watch_chat(p, "stdout")
             self._watch_chat(p, "stderr")
@@ -349,6 +358,9 @@ class ChatOps:
         if p.model_id != model_id or p.cli_version != cli.get("version"):
             p.close_gracefully("模型或版本不同，要換新的程序", now)
             return _err(rid, "restarting", "員工要換新的程序（模型或版本不同），請稍後再送一次")
+        if p.prompt_sha != memory_rules.prompt_sha(instructions, memory.block if memory else None):
+            p.close_gracefully("固定指示或記憶改了，要換新的程序", now)
+            return _err(rid, "restarting", RESTART_PROMPT)
         try:
             n = p.next_turn
             p.log.append("user_message", _said(n, text, origin), now=time.time())
@@ -462,6 +474,7 @@ class ChatOps:
                 turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
                 close_grace=self.chat_close_grace, close_below=Decimal(0),
                 instructions=memory_rules.combine(instructions, memory.block if memory else None),
+                prompt_sha=memory_rules.prompt_sha(instructions, memory.block if memory else None),
                 thread_id=thread_id, last_tokens=state.last_tokens, followup=self._codex_followup,
                 client_version=DAEMON_VERSION)
             self._chats[chat_id] = p

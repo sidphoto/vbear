@@ -19,6 +19,7 @@ and VBear never reads it as an instruction.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
@@ -200,6 +201,12 @@ def combine(instructions: str | None, memory_block: str | None) -> str | None:
     if instructions is None:
         return memory_block
     return instructions if memory_block is None else f"{instructions}\n\n{memory_block}"
+
+
+def prompt_sha(instructions: str | None, memory_block: str | None) -> str:
+    """A fingerprint of what a chat process was given as its system prompt (the card's instructions and the memory paragraph; None
+    and "" are the same). The daemon keeps it with the process: a message whose fingerprint differs gets a new process."""
+    return hashlib.sha256(f"{instructions or ''}\0{memory_block or ''}".encode("utf-8")).hexdigest()
 
 
 def prepare(memory) -> Prepared:

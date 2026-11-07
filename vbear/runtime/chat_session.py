@@ -83,8 +83,9 @@ class ChatProcess(ProcessGroupEnd):
     def __init__(self, *, sid: str, chat_id: str, profile_id: str, manifest: dict, proc, log: cs.ChatLog,
                  last_total: float | None, next_turn: int, now: float, leader_start: str | None, logger,
                  watch, unwatch, card_ttl: float, init_deadline: float, turn_timeout: float, idle_timeout: float,
-                 close_grace: float, close_below: Decimal):
+                 close_grace: float, close_below: Decimal, prompt_sha: str | None = None):
         self.sid = sid
+        self.prompt_sha = prompt_sha            # memory_rules.prompt_sha of the system prompt it was started with
         self.chat_id = chat_id
         self.profile_id = profile_id
         self.manifest = manifest
