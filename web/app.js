@@ -6672,6 +6672,7 @@ function autonomyDialogBody(item, limits, never) {
     el("p", null, item.effect),
     el("p", null, `最多花多少：幕僚長每次最多 ${usdText(l.chief_call_usd)}；派工的每一步是員工的一個聊天回合，每回合最多 ${usdText(l.per_turn_usd)}。` +
       `全部和聊天、會議共用每天上限（${usdText(l.daily_usd)}），到了就暫停，由你按「繼續」。`),
+    item.key === "routines" ? el("p", null, "例行工作每天最多花多少，另外在「例行工作」頁設定，預設是每天上限的一半，不會超過每天上限。") : null,
     el("p", null, "每一件它做的事都會列在「AI 自己做了什麼」，可以停止或撤回；也可以回到這裡關掉。"),
     el("p", { class: "small muted" }, "就算全部勾了，下面三件事還是不會做："),
     el("ul", { class: "small" }, never.map((t) => el("li", null, t))));
@@ -6685,12 +6686,14 @@ function autonomySettings(data) {
     return box;
   }
   const never = Array.isArray(data.never) ? data.never : [];
-  let current = { create_cards: data.autonomy.create_cards === true, dispatch: data.autonomy.dispatch === true };
+  const AUTONOMY_KEYS = ["create_cards", "dispatch", "routines", "auto_continue"];
+  const readBlock = (a) => Object.fromEntries(AUTONOMY_KEYS.map((k) => [k, !!a && a[k] === true]));
+  let current = readBlock(data.autonomy);
   const inputs = {};
   const save = async (next) => {
     try {
       const r = await api.post("/api/settings/autonomy", next);
-      current = { create_cards: r.autonomy.create_cards === true, dispatch: r.autonomy.dispatch === true };
+      current = readBlock(r.autonomy);
       toast("已儲存");
     } catch (e) { toast("儲存失敗：" + e.message); }
     for (const [key, input] of Object.entries(inputs)) input.checked = current[key];
@@ -12252,6 +12255,192 @@ function taskCardsSection(tasksList, opts = {}) {
       : emptyState("還沒有任務卡", "按「＋ 任務卡（導入專案）」，挑一個你電腦上現有的專案資料夾。"));
 }
 
+// ---------- routines (v0.18, P44-2) ----------
+// 例行工作: the person asks an employee to do one thing at set times. At the time VBear reminds the person (the line over every
+// page and the reminders here), or, when 「自己動手」 item 3 is ticked in the settings, starts it. Every write goes through
+// /api/routines*; the page never sends a message itself. Names and texts are set with textContent only (el() children).
+const ROUTINE_DAYS = ["一", "二", "三", "四", "五", "六", "日"];
+const ROUTINE_STATE = {
+  waiting: ["等你決定", "b-warn"], starting: ["準備開始", "b-info"], running: ["進行中", "b-info"], done: ["完成", "b-ok"],
+  failed: ["沒做成", "b-bad"], skipped: ["跳過", "b-info"], missed: ["錯過了", "b-warn"], dismissed: ["已收起", "b-info"],
+  uncertain: ["不確定有沒有送出", "b-warn"],
+};
+const ROUTINE_REASON = {
+  daily_limit: "今天的額度用完了", routine_limit: "例行工作今天的額度用完了", spend_unknown: "讀不到今天的花費，所以沒有開始",
+  busy: "員工一直在忙，等了 12 分鐘", you: "你選擇跳過", unanswered: "沒有人處理，時間過了", late: "時間到的時候 VBear 沒有開著",
+  deleted: "這件例行工作已刪除", disabled: "這件例行工作已關掉", not_found: "訊息沒有送出去，VBear 不會自己再送一次",
+  is_error: "這回合出了錯", runner_error: "VBear 這邊出了問題", damaged: "聊天紀錄有問題",
+};
+const ROUTINE_POLL_NOTE = "這一頁每 5 秒更新一次。";
+let routinesTick = null;
+
+function routineScheduleText(r) {
+  const days = Array.isArray(r.days) ? r.days.map((d) => ROUTINE_DAYS[d]).filter(Boolean) : [];
+  return `每週${days.join("、")}　${(Array.isArray(r.times) ? r.times : []).join("、")}`;
+}
+function routineRunText(run) {
+  const st = ROUTINE_STATE[run.state] || [String(run.state), "b-info"];
+  return run.reason ? `${st[0]}：${ROUTINE_REASON[run.reason] || run.reason}` : st[0];
+}
+
+// The line over every page: what waits for the person. Quiet when nothing waits or the server cannot say.
+function waitingBarText(rows) {
+  const list = Array.isArray(rows) ? rows.filter((r) => r && typeof r === "object" && r.kind === "routine_due") : [];
+  if (!list.length) return null;
+  const first = list[0];
+  const time = typeof first.slot === "string" ? first.slot.slice(11, 16) : "";
+  return `等你決定：例行工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "");
+}
+async function refreshWaitingBar() {
+  const bar = document.getElementById("waiting-bar");
+  if (!bar) return;
+  let rows = [];
+  try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
+  const text = waitingBarText(rows);
+  if (!text) { bar.hidden = true; setKids(bar); return; }
+  bar.hidden = false;
+  setKids(bar, el("span", { "data-waiting": "text" }, text), " ", el("a", { href: "#/routines", "data-waiting": "link" }, "去處理"));
+}
+
+async function viewRoutines() {
+  const token = seq;
+  let data;
+  try { data = await api.get("/api/routines"); }
+  catch (e) { setKids(claim(token), el("h1", null, "例行工作"), notice("bad", "讀不到例行工作：" + e.message)); return; }
+  const main = claim(token);
+  const box = el("div", { "data-routines": "box" });
+  const formBox = el("div", { "data-routines": "form-box" });
+  let cur = data;
+  let formOpen = false;
+  const closeForm = () => { formOpen = false; setKids(formBox); };
+  const reload = async () => { try { draw(await api.get("/api/routines")); } catch (e) { toast(e.message); } refreshWaitingBar(); };
+  const act = async (fn, done) => {
+    try { await fn(); if (done) toast(done); } catch (e) { toast(e.message); }
+    await reload();
+  };
+  const usd = (v) => (v == null ? "未知" : `US$${v}`);
+
+  const form = (routine) => {
+    const isNew = !routine;
+    const cards = (cur.cards || []).filter((c) => c.can_chat === true || (routine && c.id === routine.profile_id));
+    const name = el("input", { type: "text", maxlength: "40", "data-routine-field": "name" });
+    const who = el("select", { "data-routine-field": "profile" }, cards.map((c) => el("option", { value: c.id }, c.name || c.id)));
+    const text = el("textarea", { rows: "5", maxlength: "4000", "data-routine-field": "text" });
+    const days = ROUTINE_DAYS.map((d, i) => { const cb = el("input", { type: "checkbox", "data-routine-day": String(i) }); return [i, cb, el("label", { class: "small" }, cb, ` 週${d}　`)]; });
+    const times = [0, 1, 2].map((i) => el("input", { type: "time", "data-routine-time": String(i) }));
+    const enabled = el("input", { type: "checkbox", "data-routine-field": "enabled" });
+    name.value = routine ? routine.name : "";
+    text.value = routine ? routine.text : "";
+    who.value = routine ? routine.profile_id : (cards[0] ? cards[0].id : "");
+    days.forEach(([i, cb]) => { cb.checked = routine ? routine.days.includes(i) : i < 5; });
+    times.forEach((t, i) => { t.value = routine && routine.times[i] ? routine.times[i] : (i === 0 ? "08:00" : ""); });
+    enabled.checked = routine ? routine.enabled === true : false;
+    const body = () => ({ name: name.value.trim(), profile_id: who.value, text: text.value, days: days.filter(([, cb]) => cb.checked).map(([i]) => i),
+      times: times.map((t) => t.value).filter(Boolean), enabled: enabled.checked });
+    const send = async (confirmed) => {
+      const b = body();
+      if (confirmed) b.confirm_warning = true;
+      try {
+        await api.post(isNew ? "/api/routines" : `/api/routines/${encodeURIComponent(routine.id)}`, b);
+        toast(isNew ? "已新增" : "已儲存");
+        closeForm();
+        await reload();
+      } catch (e) {
+        if (e.code === "routine_confirm") {
+          const warn = e.data && Array.isArray(e.data.warn_text) ? e.data.warn_text.join(" ") : e.message;
+          if (await confirmInPage("再確認一次", warn, "我了解，照這樣存")) await send(true);
+        } else toast(e.message);
+      }
+    };
+    const dlg = el("section", { class: "panel pad", "data-routines": "form" },
+      el("h2", null, isNew ? "新增例行工作" : "編輯例行工作"),
+      el("label", { class: "cw-field" }, el("span", null, "名稱"), name),
+      el("label", { class: "cw-field" }, el("span", null, "請哪位員工"), who),
+      el("label", { class: "cw-field" }, el("span", null, "請他做什麼（每次都送這段話）"), text),
+      el("div", { class: "cw-field" }, el("span", null, "星期"), el("div", null, days.map((d) => d[2]))),
+      el("div", { class: "cw-field" }, el("span", null, "時間（最多三個，兩個時間至少差 1 小時）"), el("div", null, times)),
+      el("label", { class: "switch" }, enabled, el("div", null, el("div", { class: "t" }, "開啟"), el("div", { class: "small muted" }, "關著的不會提醒也不會開始。"))),
+      el("div", { class: "row" },
+        el("button", { class: "btn primary", type: "button", "data-routine-action": "save", on: { click: () => send(false) } }, "儲存"), " ",
+        el("button", { class: "btn", type: "button", "data-routine-action": "cancel", on: { click: closeForm } }, "取消")));
+    formOpen = true;
+    setKids(formBox, dlg);
+    name.focus();
+  };
+
+  const waitingPanel = (rows) => rows.length ? el("section", { class: "panel pad", "data-routines": "waiting" },
+    el("h2", null, "等你決定"),
+    rows.map((w) => el("div", { class: "mt-row", "data-routine-waiting": w.run_id },
+      el("strong", null, w.name), el("span", { class: "small muted" }, `${w.slot.slice(11, 16)} 到時間了，還沒開始，也還沒花錢。`),
+      el("button", { class: "btn small primary", type: "button", "data-routine-action": "wait-start", on: { click: () => act(() => api.post(`/api/routines/waiting/${encodeURIComponent(w.run_id)}`, { action: "start" }), "已開始") } }, "現在開始"),
+      el("button", { class: "btn small", type: "button", "data-routine-action": "wait-skip", on: { click: () => act(() => api.post(`/api/routines/waiting/${encodeURIComponent(w.run_id)}`, { action: "skip" }), "這次跳過了") } }, "這次跳過")))) : null;
+
+  const moneyPanel = (d) => {
+    const input = el("input", { type: "number", step: "0.05", min: "0.05", "data-routine-field": "daily" });
+    input.value = d.settings.daily_usd == null ? "" : d.settings.daily_usd;
+    return el("section", { class: "panel pad", "data-routines": "money" },
+      el("h2", null, "花費"),
+      el("p", { class: "small", "data-routines": "money-line" },
+        `今天例行工作花了 ${usd(d.today.routine_spent_usd)}，上限 ${usd(d.today.routine_limit_usd)}（預設是每天上限 ${usd(d.today.day_usd)} 的一半；不會超過每天上限）。` +
+        `每一次最多 ${usd(d.limits.per_turn_usd)}。例行工作和聊天、會議共用每天上限，到了就不再開始。`),
+      el("div", { class: "row" }, el("label", { class: "small" }, "例行工作每天上限（美元）　", input), " ",
+        el("button", { class: "btn small", type: "button", "data-routine-action": "limit-save", on: { click: () => act(() => api.post("/api/routines/settings", { daily_usd: Number(input.value) }), "已儲存") } }, "儲存"), " ",
+        el("button", { class: "btn small", type: "button", "data-routine-action": "limit-default", on: { click: () => act(() => api.post("/api/routines/settings", { daily_usd: null }), "改回預設") } }, "改回預設")),
+      el("p", { class: "small muted", "data-routines": "auto-line" },
+        d.autonomy.routines === true ? "「自己動手」第 3 項是打開的：到時間 VBear 會自己開始。" : "「自己動手」第 3 項沒有打開：到時間只提醒你，由你按「現在開始」。", " ",
+        el("a", { href: "#/settings" }, "到設定看")));
+  };
+
+  const routineCard = (r) => el("article", { class: "card", "data-routine": "card", "data-routine-id": r.id },
+    el("div", { class: "row" }, el("strong", { class: "card-title" }, r.name), " ",
+      r.enabled ? badge("開啟", "b-ok") : badge("關著", "b-info"), " ",
+      r.can_chat ? null : badge("這位員工現在不能聊天", "b-bad")),
+    el("p", { class: "small", "data-routine": "who" }, `${r.profile_name || "（找不到這位員工）"}　${routineScheduleText(r)}`),
+    el("p", { class: "small muted", "data-routine": "next" }, r.next ? `下一次：${fmtTime(r.next.at)}　每次最多 ${usd(r.per_run_usd)}` : "沒有下一次（關著）"),
+    el("p", { class: "small", "data-routine": "text" }, r.text),
+    el("div", { class: "row" },
+      el("button", { class: "btn small", type: "button", "data-routine-action": "toggle", on: { click: async () => {
+        const turnOn = r.enabled !== true;
+        if (turnOn && cur.autonomy.routines === true && !(await confirmInPage(`開啟「${r.name}」`, `「自己動手」第 3 項是打開的：到時間 VBear 會自己開始，每次最多花 ${usd(r.per_run_usd)}。`, "我了解，開啟"))) return;
+        await act(() => api.post(`/api/routines/${encodeURIComponent(r.id)}`, { enabled: turnOn }), turnOn ? "已開啟" : "已關掉");
+      } } }, r.enabled ? "關掉" : "開啟"), " ",
+      el("button", { class: "btn small", type: "button", "data-routine-action": "start", on: { click: async () => {
+        if (await confirmInPage(`現在開始「${r.name}」`, `會馬上開一個新聊天，請 ${r.profile_name || "這位員工"} 做這件事，最多花 ${usd(r.per_run_usd)}。`, "現在開始")) await act(() => api.post(`/api/routines/${encodeURIComponent(r.id)}/start`, {}), "已開始");
+      } } }, "現在開始"), " ",
+      el("button", { class: "btn small", type: "button", "data-routine-action": "edit", on: { click: () => form(r) } }, "編輯"), " ",
+      el("button", { class: "btn small", type: "button", "data-routine-action": "delete", on: { click: async () => {
+        if (await confirmInPage(`刪除「${r.name}」`, "刪掉之後不會再提醒也不會再開始；做過的聊天都留著。", "刪除")) await act(() => api.post(`/api/routines/${encodeURIComponent(r.id)}/delete`, {}), "已刪除");
+      } } }, "刪除")),
+    r.runs.length ? el("ul", { class: "small", "data-routine": "runs" }, r.runs.map((run) => {
+      const st = ROUTINE_STATE[run.state] || [String(run.state), "b-info"];
+      return el("li", { "data-routine-run": run.state },
+        `${run.slot.replace("T", " ")}　`, badge(st[0], st[1]), ` ${run.reason ? (ROUTINE_REASON[run.reason] || run.reason) : ""}`,
+        run.by_text ? `　${run.by_text}` : "", run.cost_usd != null ? `　US$${run.cost_usd}` : "", "　",
+        run.chat_id ? el("a", { href: `#/chat/${encodeURIComponent(run.chat_id)}` }, "看這個聊天") : null);
+    })) : el("p", { class: "small muted" }, "還沒有做過。"));
+
+  const draw = (d) => {
+    cur = d;
+    setKids(box,
+      d.readable === false ? notice("warn", `例行工作的檔案讀不出來，先不會做事（檔案還在，沒有被刪掉）。${d.problem || ""}`) : null,
+      waitingPanel(d.waiting || []),
+      moneyPanel(d),
+      el("p", null, el("button", { class: "btn primary", type: "button", "data-routine-action": "new", on: { click: () => form(null) } }, "新增例行工作"), " ",
+        el("span", { class: "small muted" }, ROUTINE_POLL_NOTE)),
+      d.routines.length ? d.routines.map(routineCard) : emptyState("還沒有例行工作", "按「新增例行工作」，挑一位員工、寫下要他做的事、選時間。"));
+  };
+  draw(data);
+  routinesTick = async () => {
+    if (formOpen) return;   // a form is open: do not redraw under the person's hands
+    try { draw(await api.get("/api/routines")); } catch (_) { /* the next tick tries again */ }
+  };
+  activeViewCleanup = () => { routinesTick = null; };
+  setKids(main, el("h1", null, "例行工作"),
+    el("p", { class: "lede" }, "請員工在固定的時間做同一件事。到時間時，VBear 提醒你，由你決定要不要開始；要讓它自己開始，到設定打開「自己動手」第 3 項。員工要跑指令、改檔案時，照舊每次問你。"),
+    formBox, box);
+}
+// ---------- end of routines ----------
+
 // ---------- router ---------------------------------------------------------
 
 // The phone menu (design card-play 3.9, #11): at 720px and narrower the nav folds behind one button that names the page
@@ -12319,6 +12508,7 @@ async function route() {
     else if (top === "shared") await viewShared();
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
+    else if (top === "routines") await viewRoutines();
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();
@@ -12340,6 +12530,7 @@ async function route() {
     setKids($main(), e.status === 401 ? authRequiredView() : notice("bad", "載入失敗：" + e.message));
   }
   if (authLostShown) return;   // the login page is up: nothing here should keep asking the server every few seconds
+  refreshWaitingBar();
   // Live pages refresh their data quietly; they re-render only when nothing
   // is focused inside main, so typing and scrolling are never interrupted.
   // Home refreshes only its attention block, so the search box keeps focus.
@@ -12375,6 +12566,7 @@ async function route() {
   if (top === "chat") liveTick = chatTick;
   if (top === "dispatch") liveTick = dispatchTick;
   if (top === "actions") liveTick = actionsTick;
+  if (top === "routines") liveTick = routinesTick;
   if (top === "meetings") liveTick = meetingsTick;
   if (top === "staffing") liveTick = staffingTick;
   if (top === "flows" && parts[1]) {
@@ -13333,7 +13525,7 @@ function chatRow(c) {
       el("span", { class: "small muted" }, c.problem || "這個聊天的紀錄讀不出來，已留在清單裡，沒有被刪掉。"));
   }
   return el("li", { class: "mt-row card", "data-chat": "row", "data-chat-id": c.id },
-    el("a", { class: "mt-row-title", href: `#/chat/${encodeURIComponent(c.id)}` }, c.name || c.profile_id),
+    el("a", { class: "mt-row-title", href: `#/chat/${encodeURIComponent(c.id)}`, "data-chat": typeof c.routine_title === "string" ? "routine-title" : null }, typeof c.routine_title === "string" ? c.routine_title : (c.name || c.profile_id)),
     el("span", { class: "tag", "data-chat": "tool" }, chatToolName(c.engine)),
     c.waiting ? badge("等你回覆卡片", "b-warn") : c.open ? badge("回覆中", "b-info") : null,
     c.problem ? badge("紀錄有問題", "b-bad", c.problem) : null,
@@ -13540,7 +13732,7 @@ async function viewChatDetail(token, id) {
     const live = view.live && typeof view.live === "object" ? view.live : null;
     const state = live ? live.state : "idle";
     const word = cardHas(CHAT_STATE, state) ? CHAT_STATE[state] : ["狀態不明", "b-mute"];
-    setKids(headBox, el("h1", null, view.card && view.card.name ? view.card.name : "聊天"),
+    setKids(headBox, el("h1", null, typeof view.routine_title === "string" ? view.routine_title : (view.card && view.card.name ? view.card.name : "聊天")),
       el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
         view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：${chatToolName(view.card.tool)}` : ""),
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
@@ -15212,7 +15404,8 @@ async function viewActions() {
     setKids(box,
       unreadable ? notice("warn", `有 ${unreadable} 份派工的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
       rows.length ? el("ul", { class: "mt-list" }, rows.map((r) => {
-        const auto = r.by === "auto1" || r.by === "auto2";
+        const auto = r.by === "auto1" || r.by === "auto2" || r.by === "auto3";
+        const routineRow = r.kind === "routine_started";
         const stopHere = r.can_stop === true && !stopShown.has(r.dispatch_id);
         if (stopHere) stopShown.add(r.dispatch_id);
         return el("li", { class: "mt-row card", "data-action": "row", "data-by": String(r.by), "data-kind": String(r.kind) },
@@ -15220,7 +15413,9 @@ async function viewActions() {
           el("span", { "data-action": "what" }, String(r.what || r.kind)),
           badge(r.by_text || dispatchByText(r.by), auto ? "b-warn" : "b-ok"),
           r.kind === "step_sent" ? el("span", { class: "small muted", "data-action": "sent-note" }, r.can_stop ? "收不回來；可以按「停止」。" : "收不回來。") : null,
-          el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份派工"),
+          routineRow
+            ? (typeof r.chat_id === "string" && r.chat_id ? el("a", { class: "small", href: `#/chat/${encodeURIComponent(r.chat_id)}`, "data-action": "routine-chat" }, "看這個聊天") : null)
+            : el("a", { class: "small", href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` }, "看這份派工"),
           stopHere ? el("button", { class: "btn small", type: "button", "data-action": "stop", on: { click: async () => {
             if (await confirmInPage("停止這份派工", "停止後，VBear 不會再送任何一步；正在做的那一回合會被停下來。已經送出的訊息收不回來。", "停止")) await act(r.dispatch_id, "stop", {}, "已停止");
           } } }, "停止") : null,
@@ -17858,6 +18053,7 @@ async function viewStaffingDetail(token, id) {
 
 setTheme(store.get("theme", "auto"));
 setInterval(() => { if (!document.hidden && !authLostShown && !authPending) { refreshTranslations(); pollRoleTranslations(); } }, 2500);
+setInterval(() => { if (!document.hidden && !authLostShown && !authPending) refreshWaitingBar(); }, 30000);
 // Coming back to this tab: refresh at once instead of waiting.
 document.addEventListener("visibilitychange", () => { if (!document.hidden && liveTick && !authPending) liveTick(); });
 // The skip link moves focus only; it must not become a route ("#main" is not a page).

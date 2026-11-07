@@ -1675,7 +1675,7 @@ def make_handler(console: Console):
                                "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
 
         def _autonomy_view(self, conf=None):
-            """「自己動手」: the two ticks in force, the table of ADR 0003's five items for the page, what the chief of staff may
+            """「自己動手」: the ticks in force, the table of ADR 0003's five items for the page, what the chief of staff may
             cost (for the words before an item is turned on) and the three things that stay forbidden."""
             conf = console.store.conf if conf is None else conf
             return self._json({"ok": True, "autonomy": autonomy.read(conf), "items": list(autonomy.ITEMS),
@@ -1686,7 +1686,7 @@ def make_handler(console: Console):
 
         def _autonomy_write(self, body):
             """The only way to change 「自己動手」: the person's own click in the settings (X-VBear is checked for every POST).
-            Exactly the two booleans; the rest of config.json is written back as it was read."""
+            Exactly the four booleans; the rest of config.json is written back as it was read."""
             try:
                 block = autonomy.validate(body)
             except ValueError as exc:
@@ -2109,6 +2109,8 @@ def make_handler(console: Console):
                              "next": {"slot": nxt[0], "at": nxt[1]} if nxt else None, "per_run_usd": self._usd(per_turn),
                              "runs": [{**r, "by_text": {"you": "你按的", "auto3": "自己動手第 3 項"}.get(r["by"])} for r in mine]})
             return {"routines": rows, "readable": problem is None and runs_problem is None, "problem": problem or runs_problem,
+                    "cards": [{"id": c.get("id"), "name": c.get("name"), "can_chat": c.get("can_chat") is True, "reason": c.get("reason")}
+                              for c in cards.values()],
                     "settings": {"daily_usd": self._usd(limits["routine_usd"]), "daily_usd_set": settings["daily_usd"],
                                  "default_usd": self._usd(limits["default_usd"]), "keep_awake": settings["keep_awake"],
                                  "problem": settings_problem},
