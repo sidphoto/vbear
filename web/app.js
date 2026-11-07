@@ -6381,11 +6381,12 @@ function readLoadouts(ids, onState, gone, limit = 4) {
 
 async function viewTeam(params = {}) {
   const token = seq;
-  const [, , profilesRes, catalogRes, memoryCards] = await Promise.all([loadStatic(), loadLive(),
+  const [, , profilesRes, catalogRes, memoryCards, sharedCards] = await Promise.all([loadStatic(), loadLive(),
     api.get("/api/agent-profiles").then((r) => ({ ok: true, profiles: (r && r.profiles) || [] }))
       .catch((e) => ({ ok: false, error: e.message, profiles: [] })),
     api.get("/api/agent-builder/catalog").then((r) => (r && r.ok ? r : null)).catch(() => null),
     memoryCardsById(),
+    sharedCardsById(),
     ensureRoleTranslations()]);
   const main = claim(token);
   const L = D.live;
@@ -6431,7 +6432,7 @@ async function viewTeam(params = {}) {
       "aria-pressed": String(filter === v), on: { click: () => { store.set("teamCardTool", v); viewTeam(); } } }, t)));
 
   // each card reads its own loadout (a read-only answer from memory), four at a time; the page does not wait for them
-  const cards = new Map(shown.map((p) => [p.id, profileCard(p, { catalog, handlers, backExtra: memoryCards.has(p.id) ? memoryCardLine(memoryCards.get(p.id)) : null })]));
+  const cards = new Map(shown.map((p) => [p.id, profileCard(p, { catalog, handlers, backExtra: cardBackLines(memoryCards.get(p.id), sharedCards.get(p.id)) })]));
   readLoadouts(shown.map((p) => p.id), (id, state) => { const c = cards.get(id); if (c) c.setLoadout(state); }, () => token !== seq);
 
   const poolBody = !profilesRes.ok
@@ -13528,6 +13529,8 @@ async function viewChatDetail(token, id) {
   let planRecord = null;                  // the last plan_usage record: what Codex last said of the ChatGPT plan's use
   let memState = null;                    // P42-3: { on, count, readable } of this employee's memory, or null when it cannot be had
   const memoryBox = el("div", { "data-memory": "chat-state-box" });
+  const sharedBox = el("div", { "data-shared": "chat-state-box" });       // P43-4: whether this employee may use the shared folder
+  let sharedUnverified = false, sharedChecking = false;                    // a send was refused with shared_unverified / the check was started
   const engineOf = () => (view.chat && view.chat.engine) || (view.card && view.card.engine) || null;
   const isCodex = () => engineOf() === "codex-chat";
 
@@ -13544,7 +13547,7 @@ async function viewChatDetail(token, id) {
       isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
         : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
       isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null,
-      memoryBox);
+      memoryBox, sharedBox);
     const notes = [];
     if (gate()) notes.push(notice("warn", gate()));
     if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
@@ -13588,8 +13591,9 @@ async function viewChatDetail(token, id) {
     take(Array.isArray(data.records) ? data.records : []);
     view = { ...view, card: data.card !== undefined ? data.card : view.card, live: data.live === undefined ? view.live : data.live,
       runtime: data.runtime || view.runtime, problem: data.problem || "", more: data.more === true && !data.live,
-      memory: data.memory !== undefined ? data.memory : view.memory };
+      memory: data.memory !== undefined ? data.memory : view.memory, shared: data.shared !== undefined ? data.shared : view.shared };
     if (data.memory && typeof data.memory.on === "boolean") refreshMemory();
+    else if (data.shared !== undefined) drawShared();
     if (Array.isArray(data.records) && data.records.some((r) => r && r.kind === "turn_ended")) refreshLedger();
     draw();
     stick();
@@ -13609,7 +13613,19 @@ async function viewChatDetail(token, id) {
     if (token !== seq) return;
     memState = state;
     const grouped = !!(view.group || all.group);       // a chat a group opened: a new chat would not be in the group
-    setKids(memoryBox, memoryChatLine(memState, engineOf()), memoryChangedNote(memState, grouped || !card ? null : newChatWithEmployee(card)));
+    setKids(memoryBox, memoryChatLine(memState, engineOf()), memoryChangedNote(memState, grouped || !card ? null : newChatWithEmployee(card), view.shared));
+    drawShared();
+  };
+  // P43-4: the one line about the shared folder; the check button only after a yes in the box, and only for the version it is missing for
+  const drawShared = () => {
+    setKids(sharedBox, sharedChatLine(view.shared, engineOf(), { unverified: sharedUnverified, checking: sharedChecking, check: checkShared }));
+  };
+  const checkShared = async (engine) => {
+    try {
+      if (!(await sharedStartCheck(engine))) return;
+      sharedChecking = true; drawShared();
+      toast("已開始檢查，要幾分鐘。檢查完再送訊息。");
+    } catch (e) { toast(e.message); }
   };
   const refreshLedger = async () => {
     const r = await api.get("/api/chats").catch(() => null);
@@ -13628,6 +13644,7 @@ async function viewChatDetail(token, id) {
     } catch (e) {
       noteText = e.message;
       toast(e.message);
+      if (e.code === "shared_unverified") { sharedUnverified = true; drawShared(); }
     }
     busy = false; if (token === seq) draw();
   }
@@ -14211,6 +14228,7 @@ async function viewGroup(id) {
     setKids(claim(token), crumbs([["聊天", "#/chat"], ["找不到"]]), notice("bad", e.status === 404 ? "找不到這個群組。" : "讀不到這個群組：" + e.message));
     return;
   }
+  let sharedOf = await sharedCardsById();     // P43-4: which members may use the shared folder (empty when it cannot be read: no marks)
   const main = claim(token);
   const gid = encodeURIComponent(id);
   let view = all;
@@ -14305,6 +14323,7 @@ async function viewGroup(id) {
       el("ul", { class: "group-members", "data-group": "members" }, members().map((m) => el("li", { class: "group-member", "data-group": "member", "data-profile-id": m.profile_id },
         el("span", { class: "group-avatar", "aria-hidden": "true" }, String(m.name || "?").slice(0, 1)),
         el("span", null, m.name || "未知"), " ", el("span", { class: "tag" }, chatToolName(m.tool)),
+        sharedOf.has(m.profile_id) && sharedOf.get(m.profile_id).on === true ? el("span", { class: "tag", "data-shared": "member-mark", title: "這位員工能用共用資料夾" }, "共用資料夾") : null,
         asked.has(m.profile_id) ? el("span", { class: "small muted", "data-group": "asked" }, `　${GROUP_ASKED[asked.get(m.profile_id)] || ""}`) : null))),
       el("p", { class: "small muted", "data-group": "share" }, GROUP_SHARE_NOTE),
       view.cost && /^[0-9.]+$/.test(String(view.cost.group_today_usd)) ? el("p", { class: "small muted", "data-group": "spent" }, `這個群組今天花了 US$${view.cost.group_today_usd}。`) : null,
@@ -14425,7 +14444,7 @@ async function viewGroup(id) {
     if (token === seq) draw();
   }
   async function changeMembers(add, remove) {
-    try { await api.post(`/api/groups/${gid}/members`, { add, remove }); await pollOnce(); }
+    try { await api.post(`/api/groups/${gid}/members`, { add, remove }); sharedOf = await sharedCardsById(); await pollOnce(); }
     catch (e) { toast(e.message); }
     if (token === seq) draw();
   }
@@ -14491,6 +14510,7 @@ async function viewGroup(id) {
     } catch (e) {
       noteText = e.message;
       toast(e.message);
+      if (e.code === "shared_unverified") { sharedUnverified = true; drawShared(); }
     }
     busy = false; if (token === seq) draw();
   }
@@ -15542,15 +15562,21 @@ function memoryChatLine(state, engine) {
 // nothing for the next message. A card switched off cannot take back what the chat was already given: said.
 const MEMORY_CHANGED_TEXT = "你改過記憶（或這位員工的固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。";
 const MEMORY_CHANGED_SENT = "這個聊天開始時已經帶著記憶，已送出的內容收不回來。";
-function memoryChangedNote(state, onNewChat) {
+// P43-4: the server's fingerprint now counts the shared folder's paragraph too, so a server that tells about the shared folder
+// (`shared` on the chat) says so here as well; one that does not keeps the words above.
+const MEMORY_CHANGED_SHARED = "你改過記憶、這位員工的固定指示或共用資料夾，這個聊天還是用開始時的內容。要用新的，請開新聊天。";
+const MEMORY_CHANGED_SHARED_MORE = "共用資料夾的開關是另一回事：能不能寫進共用資料夾，從下一句話起就照現在的開關；員工知不知道有這個資料夾，要看聊天是什麼時候開始的。";
+function memoryChangedNote(state, onNewChat, shared) {
   if (!state || state.readable === false || state.changed !== true || !onNewChat) return null;
+  const withShared = !!shared && typeof shared === "object" && typeof shared.on === "boolean";
   const button = el("button", { type: "button", class: "btn small primary", "data-memory": "new-chat" }, "開新聊天");
   button.addEventListener("click", async () => {
     button.disabled = true;
     try { await onNewChat(); } catch (e) { toast(e.message); button.disabled = false; }
   });
   return el("div", { class: "notice info", "data-memory": "chat-changed" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
-    el("div", null, el("p", { class: "small", style: "margin:0" }, MEMORY_CHANGED_TEXT),
+    el("div", null, el("p", { class: "small", style: "margin:0" }, withShared ? MEMORY_CHANGED_SHARED : MEMORY_CHANGED_TEXT),
+      withShared ? el("p", { class: "small", style: "margin:4px 0 0", "data-shared": "changed-shared" }, MEMORY_CHANGED_SHARED_MORE) : null,
       state.startedWithMemory && !state.on ? el("p", { class: "small", style: "margin:4px 0 0" }, MEMORY_CHANGED_SENT) : null,
       el("p", { style: "margin:8px 0 0" }, button)));
 }
@@ -15625,20 +15651,35 @@ async function viewMemory() {
     memoryAddForm(reload), listBox);
 }
 
-// ---------- the shared folder (P43-1, ADR 0009) -----------------------------------------------------------------------
+// ---------- the shared folder (P43-1, P43-4, ADR 0009) ----------------------------------------------------------------
 // The page of the shared folder (#/shared): where it is, what is in it (names, sizes and times: VBear never reads a file), a button
 // that opens it in Finder, and one switch per employee. The folder's path is VBear's own and is only ever shown; the page sends a card
-// id and on/off, never a path. A file name is set as text. An employee is off until the person switches it on; every file an
-// employee writes in the folder still comes to the person as a card. Only the Claude Code employees have it so far.
+// id and on/off (and, for a Codex employee, the person's yes to OpenAI), never a path. A file name is set as text. An employee is off
+// until the person switches it on; every file an employee writes in the folder still comes to the person as a card. The page has no
+// button that deletes, previews or cleans: VBear does not touch what is in the folder. Also here: the one line on a role card, the line
+// on a chat page (with the check of the AI tool's version when it is missing) and the mark on a group's member.
 const SHARED_WHAT = "共用資料夾是放在 VBear 狀態資料夾裡的一個資料夾，讓你打開的員工可以互相交檔案：一位員工寫進去，另一位讀得到。"
   + "你也可以自己把檔案放進去或拿出來。每位員工預設都是關的。";
+const SHARED_RULES = [
+  ["rule-data", "打開的員工可以在這裡放檔案給彼此和你。員工寫進來時，照舊每一次都會先問你；裡面的檔案是資料，員工不會照著裡面的字做事。"
+    + "VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。"],
+  ["rule-company", "員工讀到的檔案會送到它的 AI 公司：Claude Code 的員工送到 Anthropic，Codex 的員工送到 OpenAI。不要放密碼、帳號、金鑰。"],
+  ["rule-finder", "不要在 Finder 裡直接打開你不認得的檔案，特別是 .command、.app、.sh（點兩下就可能執行）。員工放進來的檔案，先當資料看。"],
+];
+const SHARED_AFTER = [
+  ["new-chat-note", "剛打開時，要開新的聊天，員工才會知道有共用資料夾（舊的聊天不會被告知）。"],
+  ["off-note", "關掉後，從員工的下一句話起就寫不進去了，也不會刪掉任何檔案；要刪檔案，請你在 Finder 刪。"],
+  ["full-note", "在終端機（完整模式）出發的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
+];
 const SHARED_WRITE_NOTE = "員工在裡面新增或修改檔案，每一次都會先問你（卡片），和其他檔案一樣。VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。";
 const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
 const SHARED_LIMIT_NOTE = "上限 1 GiB、1 萬個檔案（含資料夾）；超過時，開新聊天會被擋下，請到 Finder 整理。";
 const SHARED_TOOL_NOTE = "這位員工的 AI 工具還不能用共用資料夾。";
-const SHARED_CHANGE_NOTE = "改了開關，進行中的聊天會在下一則訊息換成新的程序：能不能寫入資料夾，從下一則訊息起就照新的開關；員工知不知道有這個資料夾，要看聊天是什麼時候開始的（舊聊天不會被告知）。";
+const SHARED_NOT_CHECKED = "這個 AI 工具的版本還要檢查一次共用資料夾，沒檢查過的話，打開的員工送不出訊息。";
+const SHARED_COMPANY = { Anthropic: "Anthropic", OpenAI: "OpenAI" };
 const SHARED_PROBLEM = {
   shared_unsafe: "共用資料夾的位置不安全（可能被換成連結，或權限被改過）。VBear 不會用它，也不會自己修或刪：請到 Finder 看一下那個資料夾。",
+  shared_full: "共用資料夾超過 1 GiB 或 1 萬個檔案。請在 Finder 整理，或把這位員工的共用資料夾關掉。",
 };
 function sharedBytes(n) {
   if (!Number.isFinite(n) || n < 0) return "—";
@@ -15647,10 +15688,14 @@ function sharedBytes(n) {
   if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
   return `${(n / 1073741824).toFixed(2)} GB`;
 }
+// Whether the server has the shared folder for this card's AI tool: the card chats and its company is one of the two that do.
+function sharedCardSupported(c) {
+  return !!c && c.can_chat === true && typeof c.company === "string" && cardHas(SHARED_COMPANY, c.company);
+}
 function sharedCardRow(c, onSwitch) {
   const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
   const can = c.can_chat === true;
-  const supported = can && c.company === "Anthropic";
+  const supported = sharedCardSupported(c);
   const sw = supported ? el("input", { type: "checkbox", "data-shared": "card-switch", "aria-label": `${name} 用共用資料夾`, on: { change: () => onSwitch(c, sw.checked, sw) } }) : null;
   if (sw) sw.checked = c.on === true;
   return el("li", { class: "mt-row card", "data-shared": "card", "data-profile-id": c.profile_id },
@@ -15658,7 +15703,10 @@ function sharedCardRow(c, onSwitch) {
     el("span", { class: "tag" }, chatToolName(c.tool)),
     supported ? el("label", { class: "small" }, sw, c.on === true ? " 可以用共用資料夾" : " 不用共用資料夾") : null,
     supported ? el("span", { class: "small muted", "data-shared": "company" }, c.on === true ? `讀到的檔案會送給 ${c.company}` : `打開後，讀到的檔案會送給 ${c.company}`)
-      : el("span", { class: "small muted", "data-shared": "unsupported" }, can ? SHARED_TOOL_NOTE : "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"));
+      : el("span", { class: "small muted", "data-shared": "unsupported" }, can ? SHARED_TOOL_NOTE : "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"),
+    supported && c.verified === true ? el("span", { class: "small muted", "data-shared": "verified" }, "版本已檢查過") : null,
+    supported && c.verified === false
+      ? el("span", { class: "small", "data-shared": "verify-need" }, `還要檢查一次：${SHARED_NOT_CHECKED}`, " ", el("a", { href: "#/chat" }, "到聊天頁檢查")) : null);
 }
 function sharedFileRow(f) {
   const name = typeof f.name === "string" ? f.name : "";
@@ -15666,6 +15714,10 @@ function sharedFileRow(f) {
     el("span", { "data-shared": "file-name" }, name),
     f.link === true ? el("span", { class: "tag", "data-shared": "link" }, "連結（VBear 不會跟著走）") : null,
     el("span", { class: "small muted" }, `${sharedBytes(f.size)}，${fmtTime(f.mtime)}`));
+}
+// The body of POST /api/shared/cards. A Codex card switched on carries the person's yes to OpenAI; nothing else is ever sent.
+function sharedCardBody(card, on, agreed) {
+  return on && agreed === true ? { profile_id: card.profile_id, on, confirm_company: true } : { profile_id: card.profile_id, on };
 }
 async function viewShared() {
   const token = seq;
@@ -15688,13 +15740,13 @@ async function viewShared() {
         cur.exists === true || problem ? null : el("p", { class: "small muted" }, "還沒有這個資料夾。第一次打開一位員工，或按下面的按鈕，VBear 才會建立。"),
         el("div", { class: "row" },
           el("button", { type: "button", class: "btn", "data-shared": "reveal", on: { click: reveal } }, "在 Finder 打開")),
-        problem ? null : el("p", { class: "small", "data-shared": "used" },
-          `${memoryCount(used.entries)}／${memoryCount(used.max_entries)} 個項目、${sharedBytes(used.bytes)}／${sharedBytes(used.max_bytes)}。${used.over === true ? "已經超過上限。" : ""}`),
-        Number.isFinite(cur.links) && cur.links > 0 ? el("p", { class: "small", "data-shared": "links" }, `裡面有 ${memoryCount(cur.links)} 個連結。VBear 不會跟著連結走；請確認它們是你放的。`) : null),
+        problem ? null : el("p", { class: used.over === true ? "small shared-over" : "small", "data-shared": "used" },
+          `${memoryCount(used.entries)}／${memoryCount(used.max_entries)} 個項目、${sharedBytes(used.bytes)}／${sharedBytes(used.max_bytes)}。${used.over === true ? "已經超過上限，開新聊天會被擋下。" : ""}`),
+        Number.isFinite(cur.links) && cur.links > 0 ? el("p", { class: "small", "data-shared": "links" }, `裡面有 ${memoryCount(cur.links)} 個連結，員工讀取時會先問你。VBear 不會跟著連結走；請確認它們是你放的。`) : null),
       el("section", { class: "section", "data-shared": "cards" },
         sectionHead("誰能用", "每位員工的開關"),
         cards.length ? el("ul", { class: "mt-list" }, cards.map((c) => sharedCardRow(c, switchCard))) : el("p", { class: "small muted" }, "還沒有可以聊天的員工。"),
-        el("p", { class: "small", "data-shared": "change-note" }, SHARED_CHANGE_NOTE)),
+        SHARED_AFTER.map(([key, line]) => el("p", { class: "small", "data-shared": key }, line))),
       problem ? null : el("section", { class: "section", "data-shared": "files" },
         sectionHead("裡面的檔案", "只列檔名、大小和時間（最新的在前）；VBear 不讀內容"),
         files.length ? el("ul", { class: "mt-list" }, files.map(sharedFileRow)) : el("p", { class: "small muted", "data-shared": "empty" }, "還沒有檔案。")));
@@ -15710,22 +15762,86 @@ async function viewShared() {
   }
   async function switchCard(c, on, sw) {
     if (sw) sw.disabled = true;
+    let agreed = false;
     if (on) {
       const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
-      const ok = await confirmInPage(`讓「${name}」用共用資料夾？`, SHARED_READ_NOTE + SHARED_WRITE_NOTE, "打開");
+      const openai = c.company === "OpenAI" || c.tool === "codex";
+      const ok = await confirmInPage(`讓「${name}」用共用資料夾？`,
+        (openai ? `「${name}」用的是 Codex。打開後，它讀到的共用資料夾檔案會送到 OpenAI。確定嗎？` : "") + SHARED_READ_NOTE + SHARED_WRITE_NOTE, "打開");
       if (!ok) { if (token === seq) draw(); return; }
+      agreed = openai;
     }
-    try { await api.post("/api/shared/cards", { profile_id: c.profile_id, on }); toast(on ? "已打開" : "已關掉"); }
+    try { await api.post("/api/shared/cards", sharedCardBody(c, on, agreed)); toast(on ? "已打開" : "已關掉"); }
     catch (e) { toast(e.message); }
     await reload();
   }
   draw();
   setKids(main, el("h1", null, "共用資料夾"),
     notice("info", SHARED_WHAT),
-    el("p", { class: "small", "data-shared": "notes" }, SHARED_WRITE_NOTE),
-    el("p", { class: "small", "data-shared": "read-note" }, SHARED_READ_NOTE),
+    SHARED_RULES.map(([key, line]) => el("p", { class: "small", "data-shared": key }, line)),
     el("p", { class: "small", "data-shared": "limit-note" }, SHARED_LIMIT_NOTE),
     box);
+}
+
+// GET /api/shared's cards as a map of profile id -> card, for the pages that show a line per employee (empty when it cannot be read).
+async function sharedCardsById() {
+  try {
+    const r = await api.get("/api/shared");
+    return new Map((Array.isArray(r.cards) ? r.cards : []).filter((c) => c && typeof c.profile_id === "string").map((c) => [c.profile_id, c]));
+  } catch (_) { return new Map(); }
+}
+// One line on a role card's back: whether this employee may use the shared folder. `c` is one of GET /api/shared's cards (or null).
+function sharedCardLine(c) {
+  const p = el("p", { class: "small", "data-shared": "card-line" });
+  if (!c || typeof c !== "object") return p;
+  if (c.can_chat !== true) { setKids(p, "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"); return p; }
+  if (!sharedCardSupported(c)) { setKids(p, SHARED_TOOL_NOTE); return p; }
+  setKids(p, c.on === true ? "這位員工能用共用資料夾" : "這位員工不能用共用資料夾", "（", el("a", { href: "#/shared" }, "到共用資料夾頁改"), "）");
+  return p;
+}
+// The back of a role card: the memory line and the shared folder line, whichever the server told (null when neither).
+function cardBackLines(memoryCard, sharedCard) {
+  const kids = [memoryCard ? memoryCardLine(memoryCard) : null, sharedCard ? sharedCardLine(sharedCard) : null].filter(Boolean);
+  return kids.length ? el("div", { class: "card-back-lines" }, kids) : null;
+}
+
+// What the chat page says about this employee and the shared folder. `shared` is the server's `shared` on the chat ({on, usable, code}).
+// null for a server that does not send it. An employee that is off says so; one that is on says what is in the way, if anything; the code
+// shared_unverified (the AI tool's version has not been checked for the folder) brings the check, which only starts after the person
+// agreed in the box and runs on the person's own login. Nothing here is a promise about the next word beyond what the switch does.
+const SHARED_CODE_TEXT = {
+  shared_unsafe: SHARED_PROBLEM.shared_unsafe,
+  shared_full: SHARED_PROBLEM.shared_full,
+  shared_unverified: SHARED_NOT_CHECKED,
+};
+const SHARED_CHECK_COST = { "claude-chat": "會用你自己的 Claude 登入做一次小檢查，約 US$0.01，要幾分鐘。",
+  "codex-chat": "會用你的 ChatGPT 方案做一次小檢查，不另外收費，要幾分鐘。" };
+function sharedChatLine(shared, engine, hooks) {
+  if (!shared || typeof shared !== "object" || typeof shared.on !== "boolean") return null;
+  const h = hooks || {};
+  if (!shared.on) return el("p", { class: "small muted", "data-shared": "chat-line" }, "這位員工不能用共用資料夾（", el("a", { href: "#/shared" }, "到共用資料夾頁改"), "）。");
+  const kids = [el("p", { class: "small", "data-shared": "chat-line" }, "這位員工能用共用資料夾（", el("a", { href: "#/shared" }, "到共用資料夾頁看"), "）。裡面的檔案是資料；員工寫進去，每一次都會問你。")];
+  const code = typeof shared.code === "string" && shared.code ? shared.code : (h.unverified === true ? "shared_unverified" : "");
+  if (code) kids.push(el("p", { class: "small", "data-shared": "chat-problem", role: "status" }, SHARED_CODE_TEXT[code] || "現在不能用共用資料夾。"));
+  if (code === "shared_unverified" && typeof h.check === "function") {
+    if (h.checking === true) {
+      kids.push(el("p", { class: "small", "data-shared": "checking", role: "status" }, "檢查已經開始，要幾分鐘。做完這一行會自己消失；沒消失的話，重新整理這一頁再按「檢查」。",
+        " ", el("a", { href: "#/chat" }, "到聊天頁看進度")));
+    } else {
+      const button = el("button", { type: "button", class: "btn small", "data-shared": "check" }, "檢查");
+      button.addEventListener("click", () => h.check(engine));
+      kids.push(el("p", { class: "small muted", "data-shared": "check-cost" }, SHARED_CHECK_COST[engine] || "會做一次小檢查。"), el("p", null, button));
+    }
+  }
+  return el("div", { "data-shared": "chat-box" }, kids);
+}
+// The check of an AI tool's version for the shared folder: the same route as the chat list's 「驗證聊天」, asked only after a yes.
+async function sharedStartCheck(engine) {
+  const codex = engine === "codex-chat";
+  const ok = await confirmInPage("檢查共用資料夾", `${SHARED_CHECK_COST[engine] || ""}會真的跑一段對話，試員工寫進共用資料夾時會不會先問你、經由連結寫到外面會不會被擋下。要檢查嗎？`, "檢查");
+  if (!ok) return false;
+  await api.post("/api/chat-support/verify", { engine: codex ? "codex" : "claude" });
+  return true;
 }
 
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
@@ -18029,6 +18145,7 @@ if (typeof module !== "undefined" && module.exports) {
     viewShared,
     memoryRow,
     memoryCardLine,
+    sharedCardLine,
     memoryBring,
     openMemoryRemember,
     chatCardNode,

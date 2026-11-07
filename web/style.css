@@ -1468,6 +1468,7 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .mt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .mt-row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .mt-row-title { font-weight: 650; color: var(--ink); word-break: break-word; }
+.shared-over { color: var(--bad); font-weight: 650; }
 .mt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .mt-card-head { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
 .mt-card-head > .mt-bubble { margin-left: auto; }
