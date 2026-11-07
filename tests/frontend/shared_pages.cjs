@@ -250,8 +250,33 @@ test("the new code has no markup setting, no emoji, no outside address, no conso
   }
   const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
   assert(!/@import|url\(\s*["']?https?:/.test(css), "no outside address in the style sheet");
-  const check = part.slice(part.indexOf("async function sharedStartCheck"));
-  assert(/api\.post\("\/api\/chat-support\/verify", \{ engine: /.test(check), "the check sends an engine and nothing else");
+  // P43-5: the merge kept one check for a version not checked with the folder (the chat page's note, data-chat="shared-check"). The second
+  // one the shared-folder line used to carry (sharedStartCheck and a `check` hook) was taken out, so no code is left that nobody calls.
+  assert(!/sharedStartCheck/.test(source), "no second check function");
+  assert(!/data-shared": "check"/.test(source), "the shared-folder line has no check button of its own");
+  const asks = source.match(/api\.post\("\/api\/chat-support\/verify"[^)]*\)/g) || [];
+  const mine = asks.filter((a) => /shared: true/.test(a));
+  assert.strictEqual(mine.length, 1, "exactly one place asks for the check with the folder: " + asks.join(" | "));
+  assert(/\{ engine: codex \? "codex" : "claude", shared: true \}/.test(mine[0]), "it sends an engine and shared: true and nothing else");
+});
+
+test("a chat that needs the check shows exactly one note and one button, whether the server said so or a send was refused", async () => {
+  const buttons = (main) => main.findAll((n) => n.tag === "button" && (attr(n, "data-chat") === "shared-check" || attr(n, "data-shared") === "check"));
+  setPage({ detail: chatDetail({ shared: sh({ usable: false, code: "shared_unverified" }) }) });
+  let main = await open("#/chat/" + CID);
+  assert.strictEqual(buttons(main).length, 1, "the server's code");
+  assert.strictEqual(qa(main, "shared-unverified").length, 0, "(a data-shared line, not the chat note)");
+  assert(main.find((n) => attr(n, "data-chat") === "shared-unverified"), "it is P43-2's note");
+  const line = q(main, "chat-problem");
+  assert(line && text(line).includes("還要檢查一次共用資料夾"), "the shared-folder line says it in words, without a button");
+  setPage({ sendStatus: 409, sendBody: { error: "還沒檢查。", code: "shared_unverified" } });
+  main = await open("#/chat/" + CID);
+  const input = main.find((n) => n.tag === "textarea" && attr(n, "data-chat") === "input");
+  input.value = "你好";
+  main.find((n) => n.tag === "button" && attr(n, "data-chat") === "send").click();
+  await settle(80);
+  assert.strictEqual(buttons(main).length, 1, "a refused send");
+  assert.strictEqual(main.findAll((n) => attr(n, "data-chat") === "shared-unverified").length, 1, "and one note");
 });
 
 (async () => {

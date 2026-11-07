@@ -13658,10 +13658,10 @@ async function viewChatDetail(token, id) {
     setKids(memoryBox, memoryChatLine(memState, engineOf()), memoryChangedNote(memState, grouped || !card ? null : newChatWithEmployee(card), view.shared));
     drawShared();
   };
-  // P43-4: the one line about the shared folder; the check button only after a yes in the box, and only for the version it is missing for
+  // P43-4: the one line about the shared folder
   const drawShared = () => {
     // the 「檢查」 for a version not checked with the folder is P43-2's note (sharedCheckNode), shown once, so this line offers none
-    setKids(sharedBox, sharedChatLine(view.shared, engineOf(), { unverified: sharedUnverified, checking: sharedChecking }));
+    setKids(sharedBox, sharedChatLine(view.shared, engineOf(), { unverified: sharedUnverified }));
   };
   const refreshLedger = async () => {
     const r = await api.get("/api/chats").catch(() => null);
@@ -15843,15 +15843,14 @@ function cardBackLines(memoryCard, sharedCard) {
 
 // What the chat page says about this employee and the shared folder. `shared` is the server's `shared` on the chat ({on, usable, code}).
 // null for a server that does not send it. An employee that is off says so; one that is on says what is in the way, if anything; the code
-// shared_unverified (the AI tool's version has not been checked for the folder) brings the check, which only starts after the person
-// agreed in the box and runs on the person's own login. Nothing here is a promise about the next word beyond what the switch does.
+// shared_unverified (the AI tool's version has not been checked for the folder) is said in words here; the 「檢查」 button for it is the
+// chat page's one note (P43-2, data-chat="shared-check"), so this line offers none. Nothing here is a promise about the next word beyond what
+// the switch does.
 const SHARED_CODE_TEXT = {
   shared_unsafe: SHARED_PROBLEM.shared_unsafe,
   shared_full: SHARED_PROBLEM.shared_full,
   shared_unverified: SHARED_NOT_CHECKED,
 };
-const SHARED_CHECK_COST = { "claude-chat": "會用你自己的 Claude 登入做一次小檢查，約 US$0.01，要幾分鐘。",
-  "codex-chat": "會用你的 ChatGPT 方案做一次小檢查，不另外收費，要幾分鐘。" };
 function sharedChatLine(shared, engine, hooks) {
   if (!shared || typeof shared !== "object" || typeof shared.on !== "boolean") return null;
   const h = hooks || {};
@@ -15859,25 +15858,7 @@ function sharedChatLine(shared, engine, hooks) {
   const kids = [el("p", { class: "small", "data-shared": "chat-line" }, "這位員工能用共用資料夾（", el("a", { href: "#/shared" }, "到共用資料夾頁看"), "）。裡面的檔案是資料；員工寫進去，每一次都會問你。")];
   const code = typeof shared.code === "string" && shared.code ? shared.code : (h.unverified === true ? "shared_unverified" : "");
   if (code) kids.push(el("p", { class: "small", "data-shared": "chat-problem", role: "status" }, SHARED_CODE_TEXT[code] || "現在不能用共用資料夾。"));
-  if (code === "shared_unverified" && typeof h.check === "function") {
-    if (h.checking === true) {
-      kids.push(el("p", { class: "small", "data-shared": "checking", role: "status" }, "檢查已經開始，要幾分鐘。做完這一行會自己消失；沒消失的話，重新整理這一頁再按「檢查」。",
-        " ", el("a", { href: "#/chat" }, "到聊天頁看進度")));
-    } else {
-      const button = el("button", { type: "button", class: "btn small", "data-shared": "check" }, "檢查");
-      button.addEventListener("click", () => h.check(engine));
-      kids.push(el("p", { class: "small muted", "data-shared": "check-cost" }, SHARED_CHECK_COST[engine] || "會做一次小檢查。"), el("p", null, button));
-    }
-  }
   return el("div", { "data-shared": "chat-box" }, kids);
-}
-// The check of an AI tool's version for the shared folder: the same route as the chat list's 「驗證聊天」, asked only after a yes.
-async function sharedStartCheck(engine) {
-  const codex = engine === "codex-chat";
-  const ok = await confirmInPage("檢查共用資料夾", `${SHARED_CHECK_COST[engine] || ""}會真的跑一段對話，試員工寫進共用資料夾時會不會先問你、經由連結寫到外面會不會被擋下。要檢查嗎？`, "檢查");
-  if (!ok) return false;
-  await api.post("/api/chat-support/verify", { engine: codex ? "codex" : "claude", shared: true });
-  return true;
 }
 
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
