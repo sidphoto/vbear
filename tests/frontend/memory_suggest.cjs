@@ -62,7 +62,7 @@ const row = (v, over = {}) => ({ id: v.id, created_at: v.created_at, chat_id: v.
 
 let S;        // what the stub serves
 function serve(over = {}) {
-  S = { detail: detail(), list: [], views: {}, preview: preview(), previewFail: null, startFail: null, post: {}, memory: null, saved: [], ...over };
+  S = { verifyFail: null, detail: detail(), list: [], views: {}, preview: preview(), previewFail: null, startFail: null, post: {}, memory: null, saved: [], ...over };
   FETCH_LOG.length = 0;
   setHandler((url, opts = {}) => {
     const p = url.split("?")[0];
@@ -93,6 +93,7 @@ function serve(over = {}) {
       return jsonResponse(view({ status: "cancelled", state: "cancelled", items: [] }));
     }
     if (p === "/api/memory" && method === "POST") return S.memory ? S.memory(body) : jsonResponse({ ok: true, entry: { id: "m-0123456789", ...body } }, true, 201);
+    if (p === "/api/meetings/verify" && method === "POST") return S.verifyFail ? jsonResponse({ error: S.verifyFail, code: "refused" }, false, 409) : jsonResponse({ ok: true, version: "2.1.318" });
     if (p === "/api/tasks") return jsonResponse({ tasks: [] });
     if (p === "/api/agent-profiles") return jsonResponse({ profiles: [] });
     if (p === "/api/agent-builder/catalog") return jsonResponse({ ok: false });
@@ -199,6 +200,55 @@ test("no Claude Code: it says the feature needs it, links to the setup and has n
   assert(text(d).includes("這個功能目前需要 Claude Code"));
   assert(find(d, "data-msuggest", "needs-claude"));
   assert.strictEqual(find(d, "data-msuggest", "start"), null);
+});
+
+const modal = () => h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop"));        // any dialog, also the page's own question
+const UNVERIFIED = { code: "boundary_unverified", message: "這個 Claude Code 版本還沒通過無工具安全檢查，請先檢查" };
+
+test("a Claude Code that has not passed the tool-less check: a check button (the chief of staff's and the meetings'), said what it costs, then the preview again", async () => {
+  serve({ preview: preview({ ok: false, preview_id: null, blockers: [UNVERIFIED] }) });
+  const main = await open("#/chat/" + CHAT);
+  await click(find(main, "data-msuggest", "open"));
+  const verify = find(dialog(), "data-msuggest", "verify");
+  assert(verify, "a check button, not only the words 「請先檢查」");
+  assert(text(verify).includes("不到 1 美分"), text(verify));
+  assert.strictEqual(find(dialog(), "data-msuggest", "start"), null, "nothing to start before the check");
+  S.preview = preview();                           // after the check the preview is fine
+  await click(verify);
+  const confirm = modal();
+  assert(text(confirm).includes("無工具安全檢查") && text(confirm).includes("Claude") && text(confirm).includes("幕僚長和會議用同一個檢查"), text(confirm));
+  assert.strictEqual(posts("/api/meetings/verify").length, 0, "asked first");
+  await click(button(confirm, "檢查"));
+  assert.strictEqual(posts("/api/meetings/verify").length, 1);
+  assert.deepStrictEqual(FETCH_LOG.find((c) => c.url.split("?")[0] === "/api/meetings/verify").body, {});
+  assert(text(h.dom().toastEl).includes("通過無工具安全檢查"), text(h.dom().toastEl));
+  assert(find(dialog(), "data-msuggest", "start"), "the preview was asked again and can start now");
+  assert.strictEqual(find(dialog(), "data-msuggest", "verify"), null);
+  assert.strictEqual(posts("/api/memory/suggest").length, 0, "the check does not start the suggestion");
+});
+
+test("the check asks first: cancelling sends nothing; a check that fails is said and the preview is not asked again", async () => {
+  serve({ preview: preview({ ok: false, preview_id: null, blockers: [UNVERIFIED] }) });
+  const main = await open("#/chat/" + CHAT);
+  await click(find(main, "data-msuggest", "open"));
+  await click(find(dialog(), "data-msuggest", "verify"));
+  await click(button(modal(), "取消"));
+  assert.strictEqual(posts("/api/meetings/verify").length, 0);
+  S.verifyFail = "Claude Code 沒有通過檢查";
+  await click(find(main, "data-msuggest", "open"));
+  await click(find(dialog(), "data-msuggest", "verify"));
+  const asked = posts("/api/memory/suggest/preview").length;
+  await click(button(modal(), "檢查"));
+  assert.strictEqual(posts("/api/meetings/verify").length, 1);
+  assert(text(h.dom().toastEl).includes("檢查失敗") && text(h.dom().toastEl).includes("沒有通過檢查"), text(h.dom().toastEl));
+  assert.strictEqual(posts("/api/memory/suggest/preview").length, asked, "no new preview after a check that failed");
+});
+
+test("another blocker has no check button", async () => {
+  serve({ preview: preview({ ok: false, preview_id: null, blockers: [{ code: "budget", message: "額度不夠" }] }) });
+  const main = await open("#/chat/" + CHAT);
+  await click(find(main, "data-msuggest", "open"));
+  assert.strictEqual(find(dialog(), "data-msuggest", "verify"), null);
 });
 
 test("a red light: the reason is shown and there is nothing to press", async () => {

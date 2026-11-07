@@ -13596,12 +13596,18 @@ async function viewChatDetail(token, id) {
   // P42-3: 「記住」 opens a box with the line; only the person's press of 存 in the box saves (POST /api/memory, with where it came from)
   const rememberLine = (r, speaker) => openMemoryRemember({ text: r.text, speaker, onSaved: refreshMemory,
     source: { how: "chat", chat_id: id, turn: r.turn, speaker } });
+  // P42-6: 「開新聊天」 in the notice about a changed memory: a new chat with this employee (the same request as the chat list's form)
+  const newChatWithEmployee = (profileId) => async () => {
+    const r = await api.post("/api/chats", { profile_id: profileId });
+    location.hash = `#/chat/${encodeURIComponent(r.chat.id)}`;
+  };
   const refreshMemory = async () => {
     const card = (view.card && typeof view.card.id === "string" && view.card.id) || (view.chat && view.chat.profile_id) || "";
     const state = await memoryChatState(card, view.memory);
     if (token !== seq) return;
     memState = state;
-    setKids(memoryBox, memoryChatLine(memState, engineOf()));
+    const grouped = !!(view.group || all.group);       // a chat a group opened: a new chat would not be in the group
+    setKids(memoryBox, memoryChatLine(memState, engineOf()), memoryChangedNote(memState, grouped || !card ? null : newChatWithEmployee(card)));
   };
   const refreshLedger = async () => {
     const r = await api.get("/api/chats").catch(() => null);
@@ -13748,6 +13754,17 @@ function openMemorySuggestDialog(pv, hooks) {
   const titleId = "msuggest-dialog-title";
   let close = () => {};
   const actions = [el("button", { class: "btn", type: "button", on: { click: () => close() } }, "取消")];
+  // The tool-less check is one for the chief of staff, the meetings and this: when it has not been done, the button is here (the
+  // same route as theirs, POST /api/meetings/verify), not only the words 「請先檢查」; the preview is asked again after it.
+  if (blockers.some((b) => b.code === "boundary_unverified")) {
+    actions.push(el("button", { class: "btn", type: "button", "data-msuggest": "verify", on: { click: async () => {
+      close();
+      if (!(await confirmInPage("無工具安全檢查", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。幕僚長和會議用同一個檢查，一律檢查 Claude Code；檢查完會重新整理預覽，還不會開始整理。", "檢查"))) return;
+      try { const r = await api.post("/api/meetings/verify", {}); toast(`Claude Code ${r.version} 通過無工具安全檢查`); }
+      catch (e) { toast("檢查失敗：" + e.message); return; }
+      if (hooks.onRecheck) await hooks.onRecheck();
+    } } }, CHIEF_VERIFY_LABEL));
+  }
   if (pv.ok === true && typeof pv.preview_id === "string" && pv.preview_id) {
     const start = el("button", { class: "btn primary", type: "button", "data-msuggest": "start", on: { click: async () => {
       start.disabled = true;
@@ -13884,6 +13901,7 @@ function memorySuggestDesk(chatId) {
     catch (e) { toast(e.message); button.disabled = false; return; }
     button.disabled = false;
     openMemorySuggestDialog(pv, {
+      onRecheck: openDialog,
       onStart: async (previewId) => {
         const r = await api.post("/api/memory/suggest", { preview_id: previewId });
         mine = r.id;
@@ -15427,7 +15445,10 @@ async function memoryCardsById() {
 // (when it gives one) or from GET /api/memory (this card's switch and the number of lines). null when neither can be had.
 async function memoryChatState(profileId, fromServer) {
   const s = fromServer && typeof fromServer === "object" ? fromServer : null;
-  if (s && typeof s.on === "boolean") return { on: s.on, count: Number.isFinite(s.count) ? s.count : 0, readable: s.readable !== false };
+  if (s && typeof s.on === "boolean") {
+    return { on: s.on, count: Number.isFinite(s.count) ? s.count : 0, readable: s.readable !== false,
+      changed: s.changed === true, startedWithMemory: s.started_with_memory === true };      // P42-6: not as the chat's session was started
+  }
   try {
     const r = await api.get("/api/memory");
     const card = (Array.isArray(r.cards) ? r.cards : []).find((c) => c && c.profile_id === profileId);
@@ -15442,6 +15463,24 @@ function memoryChatLine(state, engine) {
   if (state.readable === false) return el("p", { class: "small", "data-memory": "chat-state" }, "記憶讀不到，這次沒有帶。 ", link);
   return el("p", { class: "small muted", "data-memory": "chat-state" },
     state.on ? `這位員工帶著你的記憶（${memoryCount(state.count)} 條），開新聊天時會送給 ${company}。 ` : "這位員工不帶記憶。 ", link);
+}
+// P42-6: Claude Code keeps the system prompt a chat's session was started with (found on a real machine), so a memory or an instruction
+// changed after that reaches only a NEW chat. When the server says the chat is not as it was started, the page says so and offers a
+// new chat with the same employee (`onNewChat`; null for a chat a group opened: a new chat would not be in the group). It promises
+// nothing for the next message. A card switched off cannot take back what the chat was already given: said.
+const MEMORY_CHANGED_TEXT = "你改過記憶（或這位員工的固定指示），這個聊天還是用開始時的內容。要用新的，請開新聊天。";
+const MEMORY_CHANGED_SENT = "這個聊天開始時已經帶著記憶，已送出的內容收不回來。";
+function memoryChangedNote(state, onNewChat) {
+  if (!state || state.readable === false || state.changed !== true || !onNewChat) return null;
+  const button = el("button", { type: "button", class: "btn small primary", "data-memory": "new-chat" }, "開新聊天");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try { await onNewChat(); } catch (e) { toast(e.message); button.disabled = false; }
+  });
+  return el("div", { class: "notice info", "data-memory": "chat-changed" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, el("p", { class: "small", style: "margin:0" }, MEMORY_CHANGED_TEXT),
+      state.startedWithMemory && !state.on ? el("p", { class: "small", style: "margin:4px 0 0" }, MEMORY_CHANGED_SENT) : null,
+      el("p", { style: "margin:8px 0 0" }, button)));
 }
 
 async function viewMemory() {
