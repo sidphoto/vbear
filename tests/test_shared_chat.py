@@ -9,11 +9,12 @@ import json
 import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests import test_chat_api as tca
 from tests.test_chat_daemon import clean
 from vbear import chat_service, config as cfg
-from vbear.runtime import chat_store as cs, memory_rules as mr, shared_rules as sr
+from vbear.runtime import chat_store as cs, cli_versions, memory_rules as mr, shared_rules as sr
 
 # printed by the unchanged v0.17.0 code for a Claude card with memory on and no lines (the explanation and an empty list), no card instructions
 V0170_SHA = "ae3d0c1d1e94a1527fb26b296e17da327dac31a8af4ac45976d995fbc0166c33"
@@ -22,6 +23,10 @@ V0170_SHA = "ae3d0c1d1e94a1527fb26b296e17da327dac31a8af4ac45976d995fbc0166c33"
 class ChatSharedCase(tca.ApiCase):
     def setUp(self):
         super().setUp()
+        # P43-2: the gate for a version that has not passed the chat check with the folder has its own tests (tests/test_shared_codex_chat.py)
+        p = mock.patch.object(cli_versions, "shared_verified", return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
         self.svc.restart_tries = 200
         self.shared = sr.shared_path(cfg.state_dir())
 
@@ -91,11 +96,12 @@ class FromTheSwitchTests(ChatSharedCase):
         self.assertEqual(self.appended(), mr.block([]))
 
     def test_a_card_of_an_ai_tool_the_folder_is_not_open_to_is_not_sent_it_even_if_the_file_says_so(self):
-        codex = self.card("Codex 員工", "codex")
+        grok = self.card("Grok 員工", "grok")
         meta = cfg.state_dir() / "shared-meta"
         meta.mkdir(mode=0o700)
-        (meta / "settings.json").write_text(json.dumps({"v": 1, "cards_on": [codex]}))
-        self.assertFalse(self.svc._shared(codex, "codex-chat"))
+        (meta / "settings.json").write_text(json.dumps({"v": 1, "cards_on": [grok]}))
+        self.assertFalse(self.svc._shared(grok, "grok-chat"))
+        self.assertFalse(self.svc._shared(grok, None))
         self.assertFalse(self.svc._shared(self.emp, "claude-chat"), "a card nobody switched on")
 
     def test_a_card_that_is_switched_off_later_gets_a_new_process_without_the_sandbox(self):
@@ -132,7 +138,6 @@ class FromTheSwitchTests(ChatSharedCase):
         self.switch(self.emp)
         for i in range(4):
             (Path(self.shared) / f"f{i}.md").write_text("x")
-        from unittest import mock
         chat_id = self.open_http()
         with mock.patch.object(sr, "MAX_ENTRIES", 3):
             status, out = self.say(chat_id)
