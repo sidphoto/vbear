@@ -1028,8 +1028,8 @@ process starts until a version passes the chat check.
   The position's default text is not sent, and a card without instructions of its own sends none; the chat's record
   says whether any went in. Claude Code keeps a session's system prompt when it is resumed
   (`--system-prompt-snapshot` is on by default), so an edited card may not change a conversation that has begun.
-  On a real Mac (Claude Code 2.1.319, v0.17.0) a resumed session kept the appended text it started with and did not take a
-  new one given on the command line; a new chat did take it. The chat check still records the first as an observation and
+  How it treats an edited one on resume has been checked on a real machine (Claude Code 2.1.319, v0.17.0): a resumed session
+  kept the appended text it started with and did not take a new one given on the command line; a new chat did take it. The chat check still records the first as an observation and
   does not pass or fail on it.
 - **A second paragraph: the person's memory (v0.17, ADR 0008).** After the card's own instructions (or alone, when the card
   has none) the same `--append-system-prompt` argument carries one fixed paragraph the daemon builds from the `memory` field
