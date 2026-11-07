@@ -20,6 +20,12 @@ Reads ``$HOME/fake-probe.json``; every key is optional and the default is a well
                         the argv has ``--setting-sources ""`` (what the real 2.1.318 does: --settings cannot remove them)
   budget_counts_previous  true: --max-budget-usd counts what earlier processes of the session spent
   init_error            true: answers initialize with an error
+  shared_sandbox        "closed": a Bash write into the shared folder (a further place --settings lets the sandbox write) is
+                        blocked as if the CLI had ignored the setting (P43-2)
+  shared_no_attempt     true: does not try the Write the shared step asks for (the model said no)
+The shared-folder steps are tagged ``[vbear-check:shared_write|shared_bash|shared_link]`` and name the path to use: a Write asks
+VBear, and writes the file only when VBear says yes; a Bash ``echo ok > <path>`` asks, and writes only inside the places the sandbox
+of ``--settings`` names.
 Everything it is given and does goes to ``$HOME/fake-probe-log.jsonl``; the session's totals are kept in
 ``$HOME/fake-probe-state.json``."""
 
@@ -123,6 +129,20 @@ def result(subtype="success", is_error=False, add=True):
           "permission_denials": []})
 
 
+def sandbox_roots():
+    """The places ``--settings`` lets the sandbox write: the work folder, the scratch folder and, with the shared folder on, it."""
+    roots = [CWD, SCRATCH]
+    if "--settings" in argv:
+        try:
+            allow = json.load(open(argv[argv.index("--settings") + 1]))["sandbox"]["filesystem"]["allowWrite"]
+        except (OSError, ValueError, KeyError):
+            allow = []
+        roots += [os.path.realpath(x) for x in allow if os.path.realpath(x) not in roots]
+    if CONF.get("shared_sandbox") == "closed":
+        roots = roots[:2]
+    return roots
+
+
 def run_bash(command):
     """A tiny shell: echo and touch, with a sandbox that only lets touch write in the work and scratch folders."""
     out, err, code = [], [], 0
@@ -130,7 +150,16 @@ def run_bash(command):
         words = shlex.split(part)
         if not words:
             continue
-        if words[0] == "echo":
+        if words[0] == "echo" and len(words) >= 3 and words[-2] == ">":
+            target = os.path.realpath(os.path.join(CWD, words[-1]))
+            if any(target == root or target.startswith(root + os.sep) for root in sandbox_roots()):
+                with open(target, "w") as f:
+                    f.write(" ".join(words[1:-2]) + "\n")
+                code = 0
+            else:
+                err.append(f"{words[-1]}: Operation not permitted")
+                code = 1
+        elif words[0] == "echo":
             out.append(" ".join(words[1:]))
             code = 0
         elif words[0] == "touch":
@@ -190,6 +219,35 @@ def tool_result(tid, text, is_error, source, decision):
     return text
 
 
+def shared_turn(tag, text, tid):
+    """The shared-folder steps: the path to use is the one word of the message that begins with a slash."""
+    path = next((w for w in text.replace(">", " ").split() if w.startswith("/")), "")
+    if tag == "shared_bash":
+        shown = tool_turn(f"echo ok > {path}", tid)
+        return text_reply("The tool said: " + shown.replace("\n", " "), stream=False)
+    if CONF.get("shared_no_attempt"):
+        return text_reply("I will not do that.", stream=False)
+    emit({"type": "assistant", "message": {"id": "msg_fakecall" + tid, "type": "message", "role": "assistant",
+                                           "content": [{"type": "tool_use", "id": tid, "name": "Write",
+                                                        "input": {"file_path": path, "content": "ok"}}]}})
+    rid = "00000000-0000-4000-8000-" + tid[-12:].rjust(12, "0")
+    emit({"type": "control_request", "request_id": rid, "request": {
+        "subtype": "can_use_tool", "tool_name": "Write", "display_name": "Write",
+        "input": {"file_path": path, "content": "ok"}, "description": "check", "tool_use_id": tid}})
+    while True:
+        msg = read()
+        if msg.get("type") == "control_response" and msg.get("response", {}).get("request_id") == rid:
+            break
+    body = msg["response"].get("response", {})
+    if body.get("behavior") == "allow":
+        with open(body["updatedInput"]["file_path"], "w") as f:
+            f.write("ok\n")
+        tool_result(tid, "File created", False, "user_temporary", "accept")
+        return text_reply("Done.", stream=False)
+    tool_result(tid, "The user doesn't want to proceed: " + str(body.get("message")), True, "user_reject", "reject")
+    text_reply("The tool was refused.", stream=False)
+
+
 def turn(text):
     global started
     tag = re.search(r"\[vbear-check:(\w+)\]", text)
@@ -208,6 +266,8 @@ def turn(text):
     elif tag == "memory":
         code = state["code"] if CONF.get("remember", True) else None
         text_reply(code or "I do not know")
+    elif tag in ("shared_write", "shared_bash", "shared_link"):
+        shared_turn(tag, text, "toolu_" + tag + "0001")
     elif tag in ("modify", "deny", "error"):
         command = {"modify": "echo original", "deny": "touch denied-probe.txt", "error": "touch error-probe.txt"}[tag]
         shown = tool_turn(command, "toolu_" + tag + "0001")

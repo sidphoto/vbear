@@ -153,11 +153,13 @@ def stream_verified_versions() -> tuple[str, ...]:
 # check is still to be written (P36-2), and until a version passes it no chat process starts.
 CHAT_VERIFIED_VERSIONS: tuple[str, ...] = ()
 LOCAL_CHAT_VERIFIED_FILE = "claude-chat-verified.json"
+SHARED_PASSED = "passed"          # what a chat-check report says of its shared-folder part when it went well (P43-2)
 
 
-def _local_chat_record(file_name: str, mode: str, version_key: str) -> dict:
+def _local_chat_record(file_name: str, mode: str, version_key: str, shared: bool = False) -> dict:
     """{version: record} of a chat-check record file in the state folder: each entry passed, names its report and a time,
-    and the report (read again, owned by this user) is of ``mode``, passed, and names the same version under ``version_key``."""
+    and the report (read again, owned by this user) is of ``mode``, passed, and names the same version under ``version_key``.
+    ``shared`` (P43-2) also wants the report to say ``"shared": "passed"`` (the part of the check made with the shared folder)."""
     from .. import config as cfg, strictjson
     rec = strictjson.load_owned_object(cfg.state_dir() / file_name, strictjson.MANIFEST)
     versions = rec.value.get("versions") if rec.ok else None
@@ -172,6 +174,8 @@ def _local_chat_record(file_name: str, mode: str, version_key: str) -> dict:
                                                                              _STREAM_REPORT_MAX))
         data = report.value if report.ok else {}
         if data.get("mode") == mode and data.get("passed") is True and data.get(version_key) == v:
+            if shared and data.get("shared") != SHARED_PASSED:
+                continue
             out[v] = r
     return out
 
@@ -185,6 +189,12 @@ def local_chat_verified_versions() -> dict:
 def chat_verified_versions() -> tuple[str, ...]:
     built_in = CHAT_VERIFIED_VERSIONS
     return built_in + tuple(v for v in sorted(local_chat_verified_versions()) if v not in built_in)
+
+
+def chat_shared_verified_versions() -> tuple[str, ...]:
+    """Claude Code versions whose chat check passed here AND whose report says the shared-folder part passed too (P43-2). A report
+    from before v0.17.1 does not say so: a version it verified is still good for chats, and unchecked for the shared folder."""
+    return tuple(sorted(_local_chat_record(LOCAL_CHAT_VERIFIED_FILE, "chat", "claude_version", shared=True), key=_version_key))
 
 
 def chat_unverified_text(version: str) -> str:
@@ -216,6 +226,12 @@ def codex_chat_verified_versions() -> tuple[str, ...]:
     return built_in + tuple(v for v in sorted(local_codex_chat_verified_versions()) if v not in built_in)
 
 
+def codex_chat_shared_verified_versions() -> tuple[str, ...]:
+    """The same for Codex: the chat check and its shared-folder part (P43-2)."""
+    return tuple(sorted(_local_chat_record(LOCAL_CODEX_CHAT_VERIFIED_FILE, "codex-chat", "codex_version", shared=True),
+                        key=_version_key))
+
+
 def codex_chat_unverified_text(version: str) -> str:
     """The one wording for "this Codex has no chat-mode verification"."""
     supported = codex_chat_verified_versions()
@@ -225,6 +241,31 @@ def codex_chat_unverified_text(version: str) -> str:
     listed = "、".join(sorted(supported, key=_version_key))
     return (f"Codex {version} 的聊天模式還沒有通過驗證。已通過的版本：{listed}。"
             f"處理方式：安裝其中一個版本，或先為 {version} 執行聊天模式的驗證（會用到你的 ChatGPT 方案）。")
+
+
+def shared_verified(engine, version) -> bool:
+    """Whether this version of the AI tool a chat ``engine`` ("claude-chat", "codex-chat") runs has passed the chat check with the
+    shared folder (P43-2). Anything else, a bad name or no report included, is no."""
+    if not (isinstance(version, str) and _VERSION_RE.match(version)):
+        return False
+    if engine == "claude-chat":
+        return version in chat_shared_verified_versions()
+    if engine == "codex-chat":
+        return version in codex_chat_shared_verified_versions()
+    return False
+
+
+def shared_unverified_text(engine: str, version: str) -> str:
+    """The one wording for "this version has not passed the check with the shared folder": which tool and version, which versions
+    have, and what to do (the check costs Claude Code a few cents; Codex uses the person's ChatGPT plan)."""
+    codex = engine == "codex-chat"
+    name = "Codex" if codex else "Claude Code"
+    supported = codex_chat_shared_verified_versions() if codex else chat_shared_verified_versions()
+    head = f"{name} {version} 還沒有通過含共用資料夾的檢查。"
+    if supported:
+        head += "已通過的版本：" + "、".join(sorted(supported, key=_version_key)) + "。"
+    cost = "會用到你的 ChatGPT 方案，約十幾次很短的對話" if codex else "約 US$0.01"
+    return head + f"處理方式：按聊天頁的「檢查」（{cost}），或先把這位員工的共用資料夾關掉。"
 
 
 def _version_key(version: str) -> tuple[int, ...]:

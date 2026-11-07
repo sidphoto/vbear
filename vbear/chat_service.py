@@ -16,6 +16,9 @@ decides the things the console decides:
     Codex also the login of its own folder (vbear/runtime/codex_chat_env.py);
   * what of the person's memory goes into the chat (P42-1): the lines of ``memory.json`` (read only, never written here)
     unless the card has memory switched off or the file cannot be read; the daemon checks every line again;
+  * whether the employee may use the shared folder (P43-1, ADR 0009): the person's switch for the card on the shared folder page
+    (vbear/shared_folder.py, read only, off for everyone until the person turns it on), sent as ``shared: true`` and otherwise not at
+    all; the daemon computes the path and checks the folder again;
   * what each code of the daemon means to a person (``CODE_TEXT``): every refusal the daemon can give has a
     sentence here, so the page never shows a bare code.
 
@@ -31,9 +34,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
-from . import memory as memory_store
+from . import memory as memory_store, shared_folder
 from .api_error import ApiError
 from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
+from .runtime import shared_rules
 
 LIST_MAX = 100                    # chats named in the list, newest first; the rest are counted
 EXCERPT = 80                      # characters of the last message shown in the list
@@ -103,7 +107,13 @@ CODE_TEXT: dict[str, tuple[int, str]] = {
     "verifying": (409, "聊天模式的驗證正在進行。"),
     "group_member_chat": (409, "這是群組裡的對話，請到群組裡說話。"),
     "memory_refused": (409, "記憶裡有一條現在不能送出，請到記憶頁看看。你的訊息還沒有送出。"),
+    "shared_unsafe": (409, "共用資料夾的位置不安全（可能被換成連結或權限被改過），VBear 不會用它。請到共用資料夾頁看說明。你的訊息還沒有送出。"),
+    "shared_full": (409, "共用資料夾超過 1 GiB 或 1 萬個檔案。請在 Finder 整理，或把這位員工的共用資料夾關掉。你的訊息還沒有送出。"),
+    "shared_unverified": (409, "這個 AI 工具的版本還沒檢查過共用資料夾。按「檢查」（Claude Code 約 US$0.01；Codex 用你的 ChatGPT 方案），"
+                               "或先把這位員工的共用資料夾關掉。你的訊息還沒有送出。"),
 }
+
+VERSION_TTL = 20.0                # seconds a looked-up version of an AI tool is kept for the pages that ask often (P43-2)
 
 # Codes a person reads as "try again in a moment" rather than "something is wrong".
 TRANSIENT = frozenset({"restarting", "busy"})
@@ -204,7 +214,7 @@ class ChatService:
     ``ledger``: a function returning the day's ledger (the meetings' runner, whose day the chats share)."""
 
     def __init__(self, runtime, *, claude=None, codex=None, codex_binary=None, verifier=None, codex_verifier=None,
-                 ledger=None, profile=None, profiles=None, base=None, memory=None):
+                 ledger=None, profile=None, profiles=None, base=None, memory=None, shared=None, shared_verified=None):
         self.runtime = runtime
         self.claude = claude or _default_claude
         self.codex = codex or (lambda: codex_chat_env.status(self.base))
@@ -216,6 +226,10 @@ class ChatService:
         self._profiles = profiles or (lambda: list(agent_profiles.load_all(None, None, mark_corrupt=False).values()))
         self._base = base
         self._memory = memory or memory_store.for_card          # a function: (role card id, engine) -> memory.ChatMemory (reads only)
+        self._shared = shared or shared_folder.for_card         # a function: (role card id, engine) -> bool, the shared folder's switch (reads only)
+        self._shared_verified = shared_verified or (lambda engine, version: cli_versions.shared_verified(engine, version))    # (engine, version) -> bool: passed the chat check with the folder
+        self._versions: dict = {}                      # engine -> (when, version or None): the AI tool's version, looked up once in a while
+        self.version_ttl = VERSION_TTL
         self.restart_tries, self.restart_pause = RESTART_TRIES, RESTART_PAUSE
         self.delete_tries, self.delete_pause = DELETE_TRIES, DELETE_PAUSE
 
@@ -300,12 +314,13 @@ class ChatService:
         login), or with ``{"engine": "codex"}`` the Codex chat check (about fourteen short calls on the person's own
         ChatGPT plan). Refused when the check could not pass anyway (no constants, an administrator policy). The
         ``engine`` is an AI tool of the engine table; its row names the method that answers."""
-        if (not isinstance(body, dict) or set(body) - {"version", "engine"}
-                or chat_engines.by_tool(body.get("engine", "claude")) is None):
-            raise ApiError(400, "bad_request", "只接受 version，和 engine（claude 或 codex）。")
-        return getattr(self, chat_engines.by_tool(body.get("engine", "claude")).verify)(body.get("version"))
+        if (not isinstance(body, dict) or set(body) - {"version", "engine", "shared"}
+                or chat_engines.by_tool(body.get("engine", "claude")) is None or not isinstance(body.get("shared", False), bool)):
+            raise ApiError(400, "bad_request", "只接受 version、engine（claude 或 codex），和 shared（true 或 false）。")
+        verify = getattr(self, chat_engines.by_tool(body.get("engine", "claude")).verify)
+        return verify(body.get("version"), **({"shared": True} if body.get("shared") else {}))      # without shared the call is the one it was
 
-    def _verify_claude(self, wanted) -> dict:
+    def _verify_claude(self, wanted, shared: bool = False) -> dict:
         if self.verifier is None:
             raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
         binary, version, why = self.claude()
@@ -318,7 +333,7 @@ class ChatService:
         policy = admin_policy.check_claude(version, home=os.path.expanduser("~"))
         if not policy.ok:
             raise ApiError(409, "admin_policy", policy.reason())
-        if version in cli_versions.chat_verified_versions():
+        if version in cli_versions.chat_verified_versions() and (not shared or cli_versions.shared_verified("claude-chat", version)):
             return {"already_verified": True, "version": version, "status": self.verifier.status()}
         return {"status": self.verifier.start(binary, version)}
 
@@ -331,14 +346,19 @@ class ChatService:
         why = state.get("why") if isinstance(state.get("why"), str) else ""
         return ApiError(CODE_TEXT[code][0], code, why.strip() or CODE_TEXT[code][1])
 
-    def _verify_codex(self, wanted) -> dict:
+    def _verify_codex(self, wanted, shared: bool = False) -> dict:
+        """``shared`` (P43-2): the person asks for the check because the version lacks the part made with the shared folder, so a
+        version that passed the chat check before is checked again unless it has passed with the folder too."""
         if self.codex_verifier is None:
             raise ApiError(503, "unavailable", "這個主控台沒有驗證功能。")
         state = self.codex()
         version = state.get("version")
         if state.get("verified") is True and isinstance(version, str):
-            return {"already_verified": True, "version": version, "status": self.codex_verifier.status()}
-        if state.get("state") != "unverified" or not isinstance(version, str):
+            if not shared or cli_versions.shared_verified("codex-chat", version):
+                return {"already_verified": True, "version": version, "status": self.codex_verifier.status()}
+            if state.get("state") != "ready":
+                raise self._codex_refusal(state)
+        elif state.get("state") != "unverified" or not isinstance(version, str):
             raise self._codex_refusal(state)
         if wanted is not None and wanted != version:
             raise ApiError(409, "version_changed", f"目前的 Codex 是 {version}，不是 {wanted}；請重新整理後再驗證。")
@@ -445,12 +465,50 @@ class ChatService:
         given = self._memory(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
         taken = given.readable and given.on           # now, not what an earlier process was given: a count, never a line
         changed, had = self._prompt_changed(chat["id"], profile, given)
+        shared = self._shared_view(chat["profile_id"], engine_of(profile) or chat.get("engine") or "claude-chat")
         return {"chat": {"id": chat["id"], "profile_id": chat["profile_id"], "created_at": chat["created_at"],
                          "engine": chat.get("engine")},
                 "card": card, "records": records, "live": live, "runtime": runtime, "group": groups.group_of_chat(chat_id),
                 "memory": {"on": taken, "count": len(given.entries) if taken else 0, "readable": given.readable,
-                           "changed": changed, "started_with_memory": had}, **out}
+                           "changed": changed, "started_with_memory": had}, "shared": shared, **out}
 
+    def _shared_view(self, profile_id, engine) -> dict:
+        """What the chat page is told about the shared folder: whether this employee's switch is on, whether the folder can be used
+        now and, when it cannot, the code of the reason. Looks at the folder's kind and permissions only, never at what is in it."""
+        on = bool(self._shared(profile_id, engine))
+        code = shared_rules.folder_problem(shared_rules.shared_path(self.base), str(self.base), str(Path.home())) if on else None
+        if on and code is None and self._shared_checked(engine) is False:
+            code = "shared_unverified"                 # the version has not passed the chat check with the folder (P43-2)
+        return {"on": on, "usable": on and code is None, "code": code}
+
+    def _tool_version(self, engine) -> str | None:
+        """The version of the AI tool a chat of ``engine`` would run, or None when it cannot be read. Kept for VERSION_TTL seconds:
+        the chat page and the shared folder page ask often, and Claude Code's version is read by running it."""
+        now = time.monotonic()
+        kept = self._versions.get(engine)
+        if kept is not None and now - kept[0] < self.version_ttl:
+            return kept[1]
+        try:
+            if engine == "claude-chat":
+                version = self.claude()[1]
+            else:
+                pinned = self.codex_binary() if engine == "codex-chat" else None
+                version = pinned[1] if pinned else None
+        except Exception:                              # a page that only wants to say "unchecked" is not broken by an unreadable tool
+            version = None
+        version = version if isinstance(version, str) else None
+        self._versions[engine] = (now, version)
+        return version
+
+    def _shared_checked(self, engine) -> bool | None:
+        """Whether the AI tool of ``engine`` passed the chat check with the shared folder: True or False, None when its version cannot be read."""
+        version = self._tool_version(engine)
+        return None if version is None else bool(self._shared_verified(engine, version))
+
+    def shared_checked(self, engines) -> dict:
+        """{engine: True | False | None} for the engines named (the ones that have the shared folder; the server names them): what the
+        shared folder page shows beside each employee. The chat service only reads the shared switches, so it does not know the list."""
+        return {engine: self._shared_checked(engine) for engine in engines}
     def _prompt_changed(self, chat_id, profile, given) -> tuple[bool, bool | None]:
         """(whether the memory or the card's instructions now are not what this chat's session was started with, whether it was
         started with the memory paragraph). Claude Code 2.1.319 keeps the system prompt a session was started with, so a chat goes
@@ -460,7 +518,18 @@ class ChatService:
         if start is None or profile is None:
             return False, None
         block = memory_rules.block(given.entries) if given.readable and given.on else None
-        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block), start["memory"]
+        return start["sha"] != memory_rules.prompt_sha(self._instructions(profile), block, self._shared_block(profile)), start["memory"]
+
+    def _shared_block(self, profile) -> str | None:
+        """The shared folder's paragraph a new session of this card would be started with now, or None (the switch is off, or this
+        AI tool does not have the folder). With None the fingerprint is the one v0.17.0 made."""
+        engine = engine_of(profile)
+        if not self._shared(profile.get("id"), engine):
+            return None
+        try:
+            return shared_rules.block(shared_rules.shared_path(self.base))
+        except ValueError:
+            return None
 
     # ---- what a person does ---------------------------------------------------------------------------------------
 
@@ -515,6 +584,12 @@ class ChatService:
         given = self._memory(chat["profile_id"], engine)
         if given.readable and given.on:               # a card with memory off, or a file that cannot be read: not a word is sent
             fields["memory"] = given.entries
+        if self._shared(chat["profile_id"], engine):          # off (the default), unreadable settings, an AI tool without it: the field is left out
+            if not self._shared_verified(engine, fields["cli"]["version"]):      # the daemon asks again; this is the sentence for a person
+                raise ApiError(CODE_TEXT["shared_unverified"][0], "shared_unverified",
+                               cli_versions.shared_unverified_text(engine, str(fields["cli"]["version"])[:32]) + "你的訊息還沒有送出。",
+                               engine=engine)
+            fields["shared"] = True
         if origin is not None:
             fields["origin"] = origin
         for attempt in range(self.restart_tries):

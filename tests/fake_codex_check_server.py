@@ -13,6 +13,9 @@ message, ``[vbear-check:<step>]``, the way a well-behaved Codex would, with real
              (allowed, the sandbox stops it: item/started only, as recorded)
   interrupt  streams a reply that does not end until ``turn/interrupt``
   memory     answers the code word
+  shared_patch  a fileChange (add <path of the message>) is asked; allowed it is written (P43-2: the file is in the shared folder)
+  shared_shell  ``echo shared-ok > <path>`` is asked; allowed it runs
+  shared_link   a fileChange through a link that leads outside (VBear declines it itself)
   (none)     "ok"
 
 Configuration is the JSON file of tests/fake_codex_app_server.py (``start`` and ``resume`` name the recordings for the
@@ -31,6 +34,8 @@ handshake) with ``flags`` for the ways a Codex can go wrong:
   delete_fails      ``thread/delete`` is answered with an error
   late_exit         the process takes ``exit_delay`` seconds to end after stdin closes
   rollout           a file is made under CODEX_HOME/sessions for the thread, and removed by ``thread/delete``
+  shared_patch_unasked  the shared_patch file is written without a request
+  shared_link_escapes   the declined fileChange through the link is written anyway
   ignores_trust     ``thread/start`` writes a trust entry into CODEX_HOME/config.toml even when the work folder has
                     its own trust setting in the arguments
 
@@ -232,6 +237,43 @@ class Probe(Fake):
         self.say("It was refused.")
         self.model_call()
 
+    @staticmethod
+    def path_of(text):
+        return re.search(r"(/\S+)", text.split("]", 1)[1]).group(1)
+
+    def step_shared_patch(self, text):
+        path = self.path_of(text)
+        self.say("I will use apply_patch.", phase="commentary")
+        if self.flags.get("shared_patch_unasked"):
+            iid = self.item_id()
+            base = {"type": "fileChange", "id": iid, "changes": [{"path": path, "kind": {"type": "add"}, "diff": "shared-ok\n"}]}
+            self.item("fileChange", "item/started", dict(base, status="inProgress"))
+            with open(path, "w") as f:
+                f.write("shared-ok\n")
+            self.item("fileChange", "item/completed", dict(base, status="completed"))
+        else:
+            self.file_change(path, "shared-ok\n")
+        self.model_call()
+        self.say("Done.")
+        self.model_call()
+
+    def step_shared_shell(self, text):
+        self.say("I will write the file.", phase="commentary")
+        self.command(f"echo shared-ok > {self.path_of(text)}", kind="unknown")
+        self.model_call()
+        self.say("Done.")
+        self.model_call()
+
+    def step_shared_link(self, text):
+        path = self.path_of(text)
+        self.say("I will use apply_patch.", phase="commentary")
+        if self.file_change(path, "link-ok\n") == "decline" and self.flags.get("shared_link_escapes"):
+            with open(path, "w") as f:
+                f.write("link-ok\n")
+        self.model_call()
+        self.say("It was refused.")
+        self.model_call()
+
     def step_interrupt(self, text):
         iid = self.item_id()
         base = {"type": "agentMessage", "id": iid, "phase": "final_answer", "memoryCitation": None, "delivery": None,
@@ -293,6 +335,11 @@ class Probe(Fake):
             return self.respond_error(msg["id"], -32600, "cannot delete")
         super().idle(msg)
         if method == "thread/start":
+            state = self.state()                       # a new thread begins at zero (the check makes a second one: the shared folder part)
+            state.pop("tokens", None)
+            state.pop("went_back", None)
+            self.save(state)
+            self.tokens = None
             self.maybe_write_trust()
         if method in ("thread/start", "thread/resume") and self.flags.get("rollout"):
             self.rollout(msg["params"].get("threadId") or self.conf.get("thread_id"), make=True)

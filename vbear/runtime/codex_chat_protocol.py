@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
 
-from . import chat_protocol as cp
+from . import chat_protocol as cp, shared_rules
 from . import stream_protocol as sp
 
 MAX_TEXT_BYTES = cp.MAX_TEXT_BYTES              # one user message (UTF-8)
@@ -121,28 +121,61 @@ def constants_for(version) -> CodexConstants | None:
     return VERSIONS.get(version) if isinstance(version, str) else None
 
 
+def _toml_path(path, what: str) -> str:
+    """``path`` as the JSON string that is also a valid TOML basic string (the quote and the backslash are escaped by json.dumps;
+    control characters are refused rather than escaped). ValueError for a path that is not an absolute path of printable
+    characters that UTF-8 can hold."""
+    if not (isinstance(path, str) and os.path.isabs(path)):
+        raise ValueError(f"{what}要是絕對路徑")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in path):
+        raise ValueError(f"{what}的路徑含有控制字元")
+    try:
+        path.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{what}的路徑無法編碼") from exc
+    return json.dumps(path, ensure_ascii=False)
+
+
 def project_trust_setting(workdir) -> str:
     """The ``-c`` value that sets the work folder's trust to "untrusted" (an inline table: a dotted key would be cut at
     the dots of a path like ``~/.vbear``). Without any trust setting for the folder, a thread/start with a writable
     sandbox makes Codex write "trusted" for the project root, which can be a person's home folder, into its CODEX_HOME.
     ValueError for a path that is not an absolute path of printable characters that UTF-8 can hold: json.dumps gives a
     valid TOML basic string for the quote and the backslash; control characters are refused rather than escaped."""
-    if not (isinstance(workdir, str) and os.path.isabs(workdir)):
-        raise ValueError("工作資料夾要是絕對路徑")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in workdir):
-        raise ValueError("工作資料夾的路徑含有控制字元")
-    try:
-        workdir.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError("工作資料夾的路徑無法編碼") from exc
-    return "projects={%s={trust_level=\"untrusted\"}}" % json.dumps(workdir, ensure_ascii=False)
+    return "projects={%s={trust_level=\"untrusted\"}}" % _toml_path(workdir, "工作資料夾")
 
 
-def argv_for(consts: CodexConstants, workdir: str) -> list[str]:
-    """The arguments after the binary: the stdio app-server, VBear's settings, the work folder's trust setting and the
-    features it turns off. ``workdir`` is the manifest's canonical work folder (ValueError when it cannot be written)."""
+def shared_root_setting(path) -> str:
+    """The ``-c`` value that makes the shared folder (P43-2, ADR 0009) the sandbox's one more writable root: an array of one
+    string, written the way the work folder's trust setting is, with the same refusals (ValueError). Codex 0.163.0's own
+    sandbox then lets a command write there and nowhere else outside the work folder, and keeps ``.git``, ``.codex`` and
+    ``.agents`` read-only (docs/evidence/codex-0.163.0-shared.md)."""
+    return "sandbox_workspace_write.writable_roots=[%s]" % _toml_path(path, "共用資料夾")
+
+
+def roots_of(value) -> list[str]:
+    """The writable roots of a chat process as a list: none (off) or the one shared folder. ValueError for anything else, so that a
+    process can never be given a root VBear did not compute."""
+    if value is None:
+        return []
+    if not (isinstance(value, (list, tuple)) and len(value) <= 1):
+        raise ValueError("可寫的資料夾只能是共用資料夾一個")
+    out = []
+    for path in value:
+        _toml_path(path, "共用資料夾")
+        out.append(path)
+    return out
+
+
+def argv_for(consts: CodexConstants, workdir: str, shared: str | None = None) -> list[str]:
+    """The arguments after the binary: the stdio app-server, VBear's settings, the work folder's trust setting, the shared
+    folder's writable root when the employee has it (P43-2; nothing is added without it, so the list is the one of v0.17.0)
+    and the features it turns off. ``workdir`` is the manifest's canonical work folder (ValueError when it cannot be written)."""
     out = ["app-server", "--listen", "stdio://"]
-    for setting in (*consts.config, project_trust_setting(workdir)):
+    settings = [*consts.config, project_trust_setting(workdir)]
+    if shared is not None:
+        settings.append(shared_root_setting(shared))
+    for setting in settings:
         out += ["-c", setting]
     for feature in consts.disabled_features:
         out += ["--disable", feature]
@@ -219,9 +252,11 @@ def thread_resume_line(request_id, thread_id: str, *, cwd: str, model: str | Non
     return _line({"method": "thread/resume", "id": _rid(request_id), "params": params})
 
 
-def turn_start_line(request_id, thread_id: str, text: str, *, effort: str | None = None) -> bytes:
+def turn_start_line(request_id, thread_id: str, text: str, *, effort: str | None = None,
+                    writable_roots=None) -> bytes:
+    """``writable_roots`` (P43-2) is the shared folder in a list, or None: the sandbox of the turn names it, or names none."""
     params = {"threadId": _thread_id(thread_id), "input": [{"type": "text", "text": _text(text)}],
-              "approvalPolicy": "untrusted", "sandboxPolicy": dict(SANDBOX_POLICY, writableRoots=[])}
+              "approvalPolicy": "untrusted", "sandboxPolicy": dict(SANDBOX_POLICY, writableRoots=roots_of(writable_roots))}
     if effort is not None:
         if not (isinstance(effort, str) and _EFFORT_RE.match(effort)):
             raise ValueError("effort 的值不對")
@@ -303,14 +338,21 @@ def _change_paths(change) -> list | None:
     return paths
 
 
-def judge_file_change(changes, workdir: str, max_bytes: int = MAX_CARD_BYTES) -> Judgement:
+def judge_file_change(changes, workdir: str, max_bytes: int = MAX_CARD_BYTES, shared: str | None = None) -> Judgement:
     """What VBear does with a file-change request (P38 design): every path, links followed, must be inside the role
     card's work folder and under none of Codex's own ``.codex``, ``.agents`` or ``.git`` (at any depth); the card must
-    fit ``max_bytes``. Anything else, or a shape it does not know, is refused with no way to allow; the rest is asked."""
+    fit ``max_bytes``. Anything else, or a shape it does not know, is refused with no way to allow; the rest is asked.
+
+    ``shared`` (P43-2, ADR 0009) is the shared folder of an employee the person switched it on for, or None. It is a second
+    root: a path that is in it after the links are followed is asked about (a card that says other employees can read it) unless
+    ``shared_rules.write_problem`` refuses it (a protected name at any depth, a file with another hard link, the folder itself):
+    then there is no card. A path in neither root is refused as before."""
     if not isinstance(changes, list) or not changes:
         return Judgement("deny", "看不到這次要修改的內容")
     work = os.path.realpath(workdir)
+    root = os.path.realpath(shared) if isinstance(shared, str) and os.path.isabs(shared) else None
     size = 0
+    in_shared = False
     for change in changes:
         paths = _change_paths(change)
         if paths is None:
@@ -320,13 +362,22 @@ def judge_file_change(changes, workdir: str, max_bytes: int = MAX_CARD_BYTES) ->
             where = cp._resolve(path, work)
             if where is None:
                 return Judgement("deny", "檔案路徑的格式不對")
+            if root is not None and cp._inside(where, root) and not cp._inside(where, work):
+                problem = shared_rules.write_problem(where, root)
+                if problem:
+                    return Judgement("deny", problem)
+                in_shared = True
+                continue
             if not cp._inside(where, work) or where == work:
-                return Judgement("deny", "只能改員工自己的工作資料夾裡的檔案，這個路徑在資料夾以外")
+                return Judgement("deny", "只能改員工自己的工作資料夾裡的檔案，這個路徑在資料夾以外"
+                                 if root is None else "只能改員工自己的工作資料夾或共用資料夾裡的檔案，這個路徑在資料夾以外")
             for part in os.path.relpath(where, work).split(os.sep):
                 if part.casefold() in _PROTECTED:
                     return Judgement("deny", f"{part} 是 Codex 或版本控制自己的資料夾，聊天裡不能改")
     if size > max_bytes:
         return Judgement("deny", "這次修改的內容太大，一張卡放不下")
+    if in_shared:
+        return Judgement("ask", "修改共用資料夾裡的檔案，其他打開共用資料夾的員工都讀得到，要你允許")
     return Judgement("ask", "修改員工工作資料夾裡的檔案，要你允許")
 
 
@@ -371,19 +422,22 @@ _TURN_STATUS = frozenset({"completed", "interrupted", "failed", "inProgress"})
 _ITEM_STATUS = frozenset({"inProgress", "completed", "failed", "declined"})
 
 
-def _sandbox_is_ours(sandbox) -> bool:
+def _sandbox_is_ours(sandbox, roots=()) -> bool:
     """Whether the sandbox Codex reports is, field for field, the one VBear asked for (SANDBOX_POLICY): the same five
     fields and no others (0.163.0 prints exactly these for ``workspaceWrite``), the same types, the same values. A
-    missing field, an extra one (such as ``readOnlyAccess``) or ``1`` for ``True`` is not it."""
+    missing field, an extra one (such as ``readOnlyAccess``) or ``1`` for ``True`` is not it. ``roots`` are the writable
+    roots VBear asked for (none, or the shared folder, P43-2): the answer must list exactly those, in that order."""
     if not isinstance(sandbox, dict) or set(sandbox) != set(SANDBOX_POLICY):
         return False
     for key, want in SANDBOX_POLICY.items():
         got = sandbox[key]
+        if key == "writableRoots":
+            want = list(roots)
         if isinstance(want, bool):
             if got is not want:
                 return False
         elif isinstance(want, list):
-            if not (isinstance(got, list) and got == want):
+            if not (isinstance(got, list) and got == want and all(isinstance(x, str) for x in got)):
                 return False
         elif not (isinstance(got, str) and got == want):
             return False
@@ -427,9 +481,10 @@ class CodexTracker:
     servers or ``instructionSources`` is ever put in a fact: only that they were as expected, or how many."""
 
     def __init__(self, consts: CodexConstants, *, workdir: str, codex_home: str, thread_id: str | None = None,
-                 resumed: bool = False, last_total: int | None = None):
+                 resumed: bool = False, last_total: int | None = None, writable_roots=None):
         self.c = consts
         self.workdir = os.path.realpath(workdir)
+        self.writable_roots = roots_of(writable_roots)       # the shared folder (P43-2) or none: what the thread's answer must list
         self.codex_home = os.path.realpath(codex_home)
         self.thread_id = _thread_id(thread_id) if thread_id is not None else None
         self.resumed = resumed
@@ -529,8 +584,8 @@ class CodexTracker:
             problems.append("核准方式不是每個指令都問")
         if reviewer != "user":
             problems.append("核准的人不是你")
-        if not _sandbox_is_ours(sandbox):
-            problems.append("沙盒不是只能寫工作資料夾、不能連網")
+        if not _sandbox_is_ours(sandbox, self.writable_roots):
+            problems.append("沙盒不是只能寫工作資料夾" + ("和共用資料夾" if self.writable_roots else "") + "、不能連網")
         if not (isinstance(cwd, str) and cwd and os.path.realpath(cwd) == self.workdir):
             problems.append("工作資料夾")
         return problems
@@ -836,7 +891,7 @@ class CodexTracker:
             return self._ask(rid, iid, data, "deny", "請求沒有指出是哪一項修改")
         if params.get("grantRoot") is not None:
             return self._ask(rid, iid, data, "deny", "這個請求要整個資料夾的寫入權限，聊天不給")
-        verdict = judge_file_change(changes, self.workdir)
+        verdict = judge_file_change(changes, self.workdir, shared=self.writable_roots[0] if self.writable_roots else None)
         if verdict.action == "ask" and rec is not None:
             rec["asked"] = _change_keys(changes)
         return self._ask(rid, iid, data, verdict.action, verdict.reason)

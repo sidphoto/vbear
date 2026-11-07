@@ -537,6 +537,133 @@ class CommandTests(CheckCase):
             self.assertIn(mode, boundary_check.MODES)
 
 
+class SharedTests(CheckCase):
+    """P43-2 (ADR 0009): the shared folder part of the check, in a second chat. Its result is the report's ``shared``; a failure
+    there leaves ``passed`` and the record of the chat check alone."""
+
+    def check(self, flags=None, **conf):
+        if flags is not None or conf:
+            self.fake(flags, **conf)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cc.run(str(self.binary), VERSION, str(self.out / "report.json"), shared=True)
+        return code, json.loads((self.out / "report.json").read_text())
+
+    def assert_shared(self, report, ok, failed=()):
+        self.assertEqual(report["shared"], "passed" if ok else "failed", report["shared_steps"])
+        for name in failed:
+            self.assertFalse(report["shared_steps"][name]["pass"], (name, report["shared_steps"]))
+
+    def test_a_well_behaved_codex_passes_the_shared_part_and_it_is_in_the_report(self):
+        code, report = self.check()
+        self.assertEqual((code, report["passed"], report.get("error")), (0, True, None), report)
+        self.assert_shared(report, True)
+        self.assertEqual(set(report["shared_steps"]), set(cc.SHARED_STEPS))
+        self.assertTrue(all(c["pass"] for c in report["shared_steps"].values()), report["shared_steps"])
+        self.assertEqual(len(report["turns"]), len(STEPS), "the main chat keeps its seven turns")
+        self.assertEqual(report["observations"]["shared"], {"patch": "card_shown", "shell": "card_shown", "link": "declined_by_vbear"})
+        self.assertTrue(cli_versions.shared_verified("codex-chat", VERSION))
+
+    def test_the_shared_process_has_the_folder_as_its_one_more_root_and_the_main_chat_does_not(self):
+        code, report = self.check()
+        self.assertEqual(code, 0)
+        starts = [x for x in self.fake_log() if x["event"] == "start"]
+        self.assertEqual(len(starts), 3, "two for the main chat, one for the shared one")
+        consts = ccp.VERSIONS[VERSION]
+        for start in starts[:2]:
+            self.assertEqual(start["argv"], ccp.argv_for(consts, start["cwd"]), "the main chat is what it was")
+        shared = starts[2]["argv"]
+        roots = [a for a in shared if a.startswith("sandbox_workspace_write.writable_roots=")]
+        self.assertEqual(len(roots), 1)
+        self.assertEqual(shared, ccp.argv_for(consts, starts[2]["cwd"], shared=json.loads(roots[0].split("=", 1)[1])[0]))
+        self.assertNotIn("--add-dir", shared)
+
+    def test_nothing_is_left_behind_and_nothing_of_the_persons_is_touched(self):
+        code, report = self.check({"rollout": True})
+        self.assertEqual(code, 0, report.get("error"))
+        self.assertTrue(report["checks"]["cleanup"]["pass"])
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["codex-chat-home", "codex-chat-verified.json"])
+        self.assertEqual(list((self.chat_home / "sessions").glob("*.jsonl")), [], "both threads were deleted")
+        self.assertEqual(report["observations"]["shared_thread_file"], {"before": 1, "after": 0})
+        text = json.dumps(report, ensure_ascii=False)
+        self.assertNotIn("vbear-check-patch", text)
+        self.assertNotIn("vbear-check-shell", text)
+        for rec in self.fake_log():
+            if rec["event"] == "start":
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(rec["pid"], 0)
+
+    def test_the_spend_stays_within_both_limits(self):
+        code, report = self.check()
+        main = sum(Decimal(t["cost_usd"]) for t in report["turns"])
+        self.assertLessEqual(main, cc.TOTAL_USD)
+        self.assertLessEqual(max(cc.SHARED_CAP_USD.values()), cc.SHARED_TOTAL_USD)
+        self.assertLessEqual(sum(cc.SHARED_CAP_USD.values()), cc.SHARED_TOTAL_USD + Decimal("0.02"))
+
+    def test_a_thread_answer_that_does_not_name_the_folder_fails_the_shared_part_only(self):
+        for roots in ("empty", "extra", "extra_first"):
+            with self.subTest(roots=roots):
+                code, report = self.check(roots=roots) if roots != "empty" else self.check(roots="empty")
+                if roots == "empty":
+                    self.assertEqual((code, report["passed"]), (0, True), "the main chat has no root: an empty answer is right")
+                self.assert_shared(report, False)
+                self.assertFalse(cli_versions.shared_verified("codex-chat", VERSION))
+
+    def test_a_patch_in_the_folder_that_is_written_without_a_card_fails_the_shared_part(self):
+        code, report = self.check({"shared_patch_unasked": True})
+        self.assertEqual((code, report["passed"]), (0, True))
+        self.assert_shared(report, False, ["shared_patch_card"])
+
+    def test_a_patch_through_a_link_that_gets_written_fails_the_shared_part(self):
+        code, report = self.check({"shared_link_escapes": True})
+        self.assertEqual((code, report["passed"]), (0, True))
+        self.assert_shared(report, False, ["shared_link_refused"])
+
+    def test_a_link_patch_that_vbear_would_ask_about_fails_the_shared_part(self):
+        real = ccp.judge_file_change
+
+        def lenient(changes, workdir, *a, **kw):
+            if any("vbear-check-link" in str(c.get("path")) for c in changes):
+                return ccp.Judgement("ask", "x")
+            return real(changes, workdir, *a, **kw)
+        with mock.patch.object(ccp, "judge_file_change", lenient):
+            code, report = self.check()
+        self.assertEqual((code, report["passed"]), (0, True))
+        self.assert_shared(report, False, ["shared_link_refused"])
+
+    def test_the_old_report_without_the_shared_part_still_counts_as_chat_verified_but_not_for_the_folder(self):
+        code, report = self.check()
+        data = json.loads((self.out / "report.json").read_text())
+        for key in ("shared", "shared_steps"):
+            data.pop(key)
+        (self.out / "report.json").write_text(json.dumps(data))
+        (self.out / "report.json").chmod(0o600)
+        self.assertEqual(self.verified(), (VERSION,))
+        self.assertFalse(cli_versions.shared_verified("codex-chat", VERSION))
+
+    def test_without_asking_for_it_the_report_says_it_was_not_run_and_no_process_was_made_for_it(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cc.run(str(self.binary), VERSION, str(self.out / "report.json"))
+        report = json.loads((self.out / "report.json").read_text())
+        self.assertEqual((code, report["passed"], report["shared"]), (0, True, "failed"))
+        self.assertEqual(list(report["shared_steps"]), ["not_run"])
+        self.assertEqual(len([x for x in self.fake_log() if x["event"] == "start"]), 2)
+
+    def test_the_command_line_check_does_it(self):
+        out = self.out / "cli-report.json"
+        argv = ["boundary_check", "--mode", "codex-chat", "--codex", str(self.binary), "--out", str(out)]
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(boundary_check.main(), 0)
+        self.assertEqual(json.loads(out.read_text())["shared"], "passed")
+
+    def test_when_the_main_part_fails_the_shared_part_is_not_run(self):
+        code, report = self.check({"deny_ignored": True})
+        self.assert_failed(code, report, "deny_works")
+        self.assert_shared(report, False)
+        self.assertEqual(list(report["shared_steps"]), ["not_run"])
+
+
 class DaemonHookTests(CheckCase):
     def test_a_daemon_without_the_hook_still_wants_its_own_chat_folder(self):
         from vbear.runtime import daemon as d

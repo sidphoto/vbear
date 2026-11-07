@@ -46,6 +46,7 @@ class ChiefSources:
     profiles: Callable[[], list]
     tools: Callable[[], tuple]
     conf: dict = field(default_factory=dict)
+    shared: Callable[[str, str], bool] | None = None      # (role card id, engine) -> whether the person opened the shared folder for the employee
 
 
 @dataclass
@@ -214,7 +215,7 @@ class ChiefRunner(HeadlessBoard):
         ceo = self._ceo(chat, sources)
         read = chief.select_messages(records)
         tools = tuple(sources.tools())
-        cards, omitted = chief.candidates(sources.profiles(), tools)
+        cards, omitted = chief.candidates(sources.profiles(), tools, sources.shared)
         daily = mt.limits_from(sources.conf)["daily_usd"]
         return Context(chat_id=chat_id, ceo_id=ceo["id"], ceo_tool=ceo["model"]["tool"], note=note, read=read, cards=cards,
                        omitted_cards=omitted, tools=tools, inputs_sha=chief.inputs_sha(cards, omitted, tools),

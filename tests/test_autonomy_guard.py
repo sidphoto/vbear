@@ -1,5 +1,5 @@
-"""P40-2, P41-1, P42-2: the things the chief of staff, the dispatch code, the group code and the memory code never do, kept by the
-structure of the code (ADR 0003, 0006, 0007, 0008).
+"""P40-2, P41-1, P42-2, P43-1: the things the chief of staff, the dispatch code, the group code, the memory code and the shared folder's
+code never do, kept by the structure of the code (ADR 0003, 0006, 0007, 0008, 0009).
 
 Never, whatever the person ticked in 「自己動手」:
   1. raise the daily limit (or any limit): no module here writes config.json;
@@ -14,9 +14,14 @@ Never, whatever the person ticked in 「自己動手」:
 
   6. (P42-4) save a line of the person's memory: the modules of the memory suggestions (``memory_suggest*.py``) and the others do not
      import ``vbear.memory`` at all; its writing functions are the browser's routes' alone.
+  7. (P43-1) open the shared folder to an employee on its own: the function that switches an employee on (``set_card`` of
+     vbear/shared_folder.py, and its store) is called from vbear/server.py's /api/shared routes and from nowhere else, and the other
+     scanned modules do not import ``vbear.shared_folder`` at all. The shared folder's own modules (``shared*.py``, ``runtime/shared*.py``)
+     are held to every rule above: they never write config.json, start a terminal or a program, install a skill, make or change a role
+     card, or answer a question of a chat.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
-``vbear/memory*.py``, ``vbear/runtime/memory*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
+``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
 so the scan cannot go quiet.
 """
@@ -29,7 +34,7 @@ import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
-PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py")
+PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py")
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -52,6 +57,8 @@ BANNED_MODULES = {
     "skill_fit": "skill search and install",
     # 5. the person's memory file: only the browser's /api/memory routes in server.py write it
     "memory": "the person's memory file (its writing functions are the browser's routes' alone)",
+    # 7. the shared folder's switches: only the browser's /api/shared routes in server.py write them
+    "shared_folder": "the shared folder's switches (its writing functions are the browser's routes' alone)",
     # processes and dynamic code
     "subprocess": "starting a program",
     "pty": "starting a terminal",
@@ -84,8 +91,8 @@ MEMORY_WRITERS = {"add", "edit", "delete", "clear", "set_card", "export", "store
 MEMORY_WRITER_HOMES = {"server.py", "memory.py"}          # the routes, and the module itself
 
 
-def memory_writer_uses(source: str, label: str = "<source>") -> list[str]:
-    """Every place this source reaches a writer of vbear/memory.py: ``<the memory module>.add(...)`` however the module is named
+def writer_uses(source: str, label: str, module: str, writers) -> list[str]:
+    """Every place this source reaches one of ``writers`` of vbear/<module>.py: ``<the module>.add(...)`` however the module is named
     (``from . import memory as m``, ``import vbear.memory``, ``vbear.memory.add``), ``from .memory import add``, a ``getattr`` of
     one, and a star import of the module."""
     tree = ast.parse(source, filename=label)
@@ -95,25 +102,40 @@ def memory_writer_uses(source: str, label: str = "<source>") -> list[str]:
         if isinstance(node, ast.ImportFrom):
             mod = node.module or ""
             if mod in ("", "vbear") or (node.level and mod == ""):
-                aliases |= {a.asname or a.name for a in node.names if a.name == MEMORY_MODULE}
-            if mod.split(".")[-1] == MEMORY_MODULE:
+                aliases |= {a.asname or a.name for a in node.names if a.name == module}
+            if mod.split(".")[-1] == module:
                 for a in node.names:
-                    if a.name == "*" or a.name in MEMORY_WRITERS:
-                        found.append(f"{label}:{node.lineno}: imports memory.{a.name}")
+                    if a.name == "*" or a.name in writers:
+                        found.append(f"{label}:{node.lineno}: imports {module}.{a.name}")
         elif isinstance(node, ast.Import):
-            aliases |= {a.asname for a in node.names if a.name in ("vbear.memory",) and a.asname}
+            aliases |= {a.asname for a in node.names if a.name in (f"vbear.{module}",) and a.asname}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr in MEMORY_WRITERS:
+        if isinstance(node, ast.Attribute) and node.attr in writers:
             base = node.value
-            chain = (isinstance(base, ast.Attribute) and base.attr == MEMORY_MODULE and isinstance(base.value, ast.Name)
+            chain = (isinstance(base, ast.Attribute) and base.attr == module and isinstance(base.value, ast.Name)
                      and base.value.id == "vbear")
             if (isinstance(base, ast.Name) and base.id in aliases) or chain:
-                found.append(f"{label}:{node.lineno}: reaches memory.{node.attr}")
+                found.append(f"{label}:{node.lineno}: reaches {module}.{node.attr}")
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"
               and len(node.args) >= 2 and isinstance(node.args[0], ast.Name) and node.args[0].id in aliases
-              and not (isinstance(node.args[1], ast.Constant) and node.args[1].value not in MEMORY_WRITERS)):
-            found.append(f"{label}:{node.lineno}: getattr of the memory module")
+              and not (isinstance(node.args[1], ast.Constant) and node.args[1].value not in writers)):
+            found.append(f"{label}:{node.lineno}: getattr of the {module} module")
     return found
+
+
+def memory_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, MEMORY_MODULE, MEMORY_WRITERS)
+
+
+# 7. who may switch the shared folder on for an employee: the module's writers, and the only modules that may name them
+SHARED_MODULE = "shared_folder"
+# (P43-3) the person's ticks on the new-group dialog and on a dispatch's proposal card go through these; they all end in ``set_card``
+SHARED_WRITERS = {"set_card", "store", "open_cards", "close_cards", "mark_dispatch", "open_for_dispatch"}
+SHARED_WRITER_HOMES = {"server.py", "shared_folder.py"}          # the routes, and the module itself
+
+
+def shared_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, SHARED_MODULE, SHARED_WRITERS)
 
 
 def package_files() -> list[Path]:
@@ -256,6 +278,30 @@ class GuardOverTheRealModules(unittest.TestCase):
                 problems += memory_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
         self.assertEqual(problems, [], "\n".join(problems))
 
+    def test_the_shared_folder_modules_are_scanned(self):
+        names = [p.name for p in scanned_files()]
+        self.assertIn("shared_folder.py", names)
+        self.assertIn("shared_rules.py", names, "vbear/runtime/shared_rules.py")
+        for path in PACKAGE.rglob("*.py"):
+            if path.name.startswith("shared_") and "__pycache__" not in path.parts:
+                self.assertIn(path.name, names, "a shared folder module the scan does not cover")
+
+    def test_only_the_shared_routes_of_the_console_switch_an_employee_on(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in SHARED_WRITER_HOMES:
+                problems += shared_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_the_writer_so_the_shared_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        self.assertIn("shared_folder.set_card(", source)
+        self.assertNotEqual(shared_writer_uses(source, "server.py"), [])
+
+    def test_the_chat_service_only_reads_the_shared_switches(self):
+        calls = {m.group(1) for m in re.finditer(r"shared_folder\.(\w+)", (PACKAGE / "chat_service.py").read_text(encoding="utf-8"))}
+        self.assertEqual(calls - {"py"}, {"for_card"})
+
     def test_the_console_does_call_every_writer_so_the_rule_is_not_empty(self):
         calls = {m.group(1) for m in re.finditer(r"memory_mod\.(\w+)", (PACKAGE / "server.py").read_text(encoding="utf-8"))}
         self.assertEqual(calls & (MEMORY_WRITERS - {"store"}), MEMORY_WRITERS - {"store"})
@@ -367,6 +413,80 @@ class ScanFiresOnEachRule(unittest.TestCase):
             "def f(g, x):\n"
             "    groups.add(x)\n    g.delete(x)\n    memory_suggest.add(x)\n    return x.edit(1), x.clear()\n"), [])
         self.assertEqual(memory_writer_uses("import memory_mod\nmemory_mod.add({})\n"), [], "only the memory module, however it is named")
+
+    def test_switching_an_employee_on_from_anywhere_but_the_console_routes(self):
+        self.assertSwitches("from . import shared_folder\nshared_folder.set_card({}, [])\n", "shared_folder.set_card")
+        self.assertSwitches("from . import shared_folder as sf\ndef f(b, cards):\n    return sf.set_card(b, cards, 'group')\n", "shared_folder.set_card")
+        self.assertSwitches("from .. import shared_folder\nshared_folder.set_card({}, [])\n", "shared_folder.set_card")
+        self.assertSwitches("from vbear import shared_folder\nshared_folder.set_card({}, [])\n", "shared_folder.set_card")
+        self.assertSwitches("from . import shared_folder\nshared_folder.store.save({})\n", "shared_folder.store")
+        self.assertSwitches("import vbear.shared_folder\nvbear.shared_folder.set_card({}, [])\n", "shared_folder.set_card")
+        self.assertSwitches("from .shared_folder import set_card\n", "imports shared_folder.set_card")
+        self.assertSwitches("from .shared_folder import set_card as open_it\n", "imports shared_folder.set_card")
+        self.assertSwitches("from vbear.shared_folder import store\n", "imports shared_folder.store")
+        self.assertSwitches("from .shared_folder import *\n", "imports shared_folder.*")
+        self.assertSwitches("from . import shared_folder\nf = getattr(shared_folder, 'set_card')\n", "getattr")
+        self.assertSwitches("from . import shared_folder\nf = getattr(shared_folder, name)\n", "getattr")
+
+    def test_the_ticks_of_the_group_and_dispatch_dialogs_are_the_consoles_routes_alone(self):
+        for name in ("open_cards", "close_cards", "mark_dispatch", "open_for_dispatch"):
+            self.assertSwitches(f"from . import shared_folder\nshared_folder.{name}([], [], 'group')\n", f"shared_folder.{name}")
+            self.assertSwitches(f"from .shared_folder import {name}\n", f"imports shared_folder.{name}")
+            self.assertSwitches(f"from . import shared_folder as sf\ndef f(x):\n    return sf.{name}(x)\n", f"shared_folder.{name}")
+
+    def test_the_console_calls_each_tick_function_and_the_modules_that_run_groups_and_dispatches_do_not_name_them(self):
+        server_source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        for name in ("open_cards", "close_cards", "mark_dispatch", "open_for_dispatch"):
+            self.assertIn(f"shared_folder.{name}(", server_source)
+            for module in ("groups.py", "group_runner.py", "dispatch.py", "dispatch_runner.py", "chief.py", "chief_runner.py",
+                           "shared_changes.py", "chat_service.py"):
+                self.assertNotIn(name, (PACKAGE / module).read_text(encoding="utf-8"), f"{module} names {name}")
+
+    def test_an_employee_a_dispatch_makes_is_opened_only_by_the_consoles_hook(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        hook = source[source.index("def _on_new_employee"):]
+        hook = hook[:hook.index("\n    def ", 10)]
+        self.assertIn("shared_folder.open_for_dispatch(", hook)
+        self.assertEqual(source.count("shared_folder.open_for_dispatch("), 1, "nowhere else")
+        # the dispatcher is handed the hook and calls it with two ids; it knows nothing of the folder
+        dispatch_source = (PACKAGE / "dispatch.py").read_text(encoding="utf-8")
+        self.assertIn("self.on_new_employee(", dispatch_source)
+        self.assertNotIn("shared_folder", dispatch_source)
+
+    def test_the_modules_that_hand_file_names_on_only_read_the_folders_names(self):
+        for module in ("shared_changes.py", "runtime/shared_rules.py"):
+            tree = ast.parse((PACKAGE / module).read_text(encoding="utf-8"))
+            names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            self.assertFalse(names & {"set_card", "answer", "chat_answer", "save_profile", "set_conf", "write_private", "Popen", "system"}, module)
+
+    def test_reading_the_switches_and_other_modules_with_the_same_names_are_allowed(self):
+        self.assertEqual(shared_writer_uses(
+            "from . import shared_folder\n"
+            "def f(profile_id, engine):\n"
+            "    return shared_folder.for_card(profile_id, engine), shared_folder.view([]), shared_folder.reveal(None)\n"), [])
+        self.assertEqual(shared_writer_uses("from . import memory\ndef f(b, c):\n    return memory.set_card(b, c)\n"), [],
+                         "the memory's own set_card is the memory rule's business")
+        self.assertEqual(shared_writer_uses("import other\nother.set_card({}, [])\n"), [], "only the shared folder module")
+
+    def assertSwitches(self, source: str, *needles: str):
+        found = " | ".join(shared_writer_uses(source))
+        self.assertTrue(found, f"nothing found in:\n{source}")
+        for needle in needles:
+            self.assertIn(needle, found)
+
+    def test_the_other_modules_may_not_import_the_shared_folder_module_at_all(self):
+        self.assertCaught("from . import shared_folder\n", "shared_folder")
+        self.assertCaught("from .shared_folder import for_card\n", "shared_folder")
+        self.assertCaught("from vbear import shared_folder\n", "shared_folder")
+        self.assertCaught("import vbear.shared_folder as sf\n", "shared_folder")
+
+    def test_the_shared_folder_modules_obey_the_rules_of_the_others(self):
+        self.assertCaught("from . import config as cfg\ncfg.save({})\n", "config.save")           # the same table, now over shared*.py
+        self.assertCaught("from .runtime import daemon\n", "runtime.daemon")
+        self.assertCaught("import subprocess\nsubprocess.run(['/usr/bin/open', '/x'])\n", "subprocess")
+        self.assertCaught("def f(svc):\n    return svc.answer('c-1', {})\n", "answer")
+        self.assertCaught("def f(ap):\n    ap.save_profile(launch_mode='full')\n", "launch_mode")
+        self.assertCaught("from . import armory\n", "armory")
 
     def test_the_memory_modules_obey_the_rules_of_the_others(self):
         self.assertCaught("from . import config as cfg\ncfg.save({})\n", "config.save")      # the same table, now over memory*.py

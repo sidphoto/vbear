@@ -407,6 +407,55 @@ group pages), `memoryChatLine` (the one line at the top of a chat page), `memory
 `tools/qa_p42.py` is the coordinator's real-machine check through the HTTP API (it needs `--state` and `--cards`, refuses `~/.vbear` and
 ports 7788 and 7789, and prints no word of memory, of a conversation or of a model's reply).
 
+## Shared folder — `vbear/shared_folder.py`, `vbear/shared_changes.py`, `vbear/runtime/shared_rules.py`, `web/app.js` (`#/shared`)
+
+The shared folder is one folder, `<state>/shared` (0700; usually `~/.vbear/shared`), that every employee the person has switched on may read and
+write, so one employee can hand a file to another or to the person. ADR 0009 gives the reasons. Two folders matter: `shared/` is the one employees can
+write; `<state>/shared-meta/` is VBear's own and employees cannot (`settings.json`: `{v, cards_on: [profile id…]}`, `GuardedJsonStore`, 0600, at most 200
+ids, every employee off by default and a file that cannot be read means all off; `log.jsonl`: `card_on`, `card_off` or `revealed` with the card's id and
+`page`, `group` or `dispatch`, never a file name, 1 MiB then one old file; `changes/<g-…|d-…>.jsonl`, the names a group answer or a dispatch step left, below;
+`pending/<d-…>.json`, `{v, on, confirm_company}`, whether the person ticked on this dispatch's confirmation).
+
+`vbear/runtime/shared_rules.py` is pure and shared by the console and the daemon (the daemon does not import the console's modules): `shared_path(state)` (the
+only place a path is computed; nothing from a browser or an RPC caller is ever a path), `folder_problem` (`shared_unsafe`: a link on the way, not mode 0700, not
+the user's, the home folder or above it, inside one of VBear's own folders), `ensure_folder` (makes, never mends), `walk`/`usage` (`os.scandir` and `lstat`, links
+not followed; 1 GiB or 10,000 entries is `over`), `snapshot`/`changes` (the comparison behind the hand-over; 50 names of 200 characters at most; `None` when there
+are too many), `write_problem` (`.claude`, `.codex`, `.agents`, `.git` at any depth, the folder itself, a path out of the folder, a file with more than one hard link)
+and `block` (the one paragraph the employee is told: fixed words, the path as a JSON string between `BEGIN_VBEAR_SHARED_JSON` and `END_VBEAR_SHARED_JSON`, 1,000
+characters at most). `memory_rules.combine` and `prompt_sha` take it as a third part; without it they give v0.17.0's values byte for byte.
+
+`vbear/shared_folder.py` is the console's side: `for_card` (read only; what `ChatService` asks), `view`/`listing` (the page: at most 200 files, newest first, names, sizes,
+times and "link", never a content), and the writers `set_card`, `open_cards`, `close_cards`, `mark_dispatch` and `open_for_dispatch`, `reveal`, which only `vbear/server.py`
+calls (`tests/test_autonomy_guard.py` fails the build otherwise and scans `shared*.py` and `runtime/shared*.py` with the rules of the chief of staff, dispatch, groups and
+memory; `tests/test_shared_static.py` shows the modules never open, read, delete or run anything). The routes (token, `X-VBear` on a POST, closed bodies): `GET /api/shared`,
+`POST /api/shared/cards {profile_id, on, confirm_company?}` (a Codex card needs `confirm_company: true`: 409 `shared_confirm`), `POST /api/shared/reveal {}` (Finder; the
+command is a function `serve()` hands the console, `/usr/bin/open <path>` with no shell, 503 without it and 400 `not_mac`), the tick `shared_folder`/`confirm_company` of
+`POST /api/groups` and `POST /api/dispatch/<id>/confirm` (checked **before** anything is made; for a dispatch the callback `Console._on_new_employee` opens an employee
+the dispatch makes only when `pending/<d-…>.json` says `on`), and `GET /api/chats/<id>`'s `shared: {on, usable, code}`.
+
+A chat with the folder on: `ChatService._send` sends `shared: true` (never a path; `false` or any other type is 400 in the daemon); the daemon computes the path, runs
+`folder_problem` and `usage` (409 `shared_unsafe`, `shared_full`), checks that the version of the AI tool passed the chat check with the folder (`cli_versions.shared_verified`:
+the report says `shared: passed`; else 409 `shared_unverified`, asked by the console first), and **replaces an idle process whose folder differs** (`close_gracefully` and
+`restarting`, the same road as a change of model; a busy one answers `busy`). Claude Code: `chat_settings(shared=…)` adds the folder to `sandbox.filesystem.allowWrite`, the
+manifest carries `shared` and is validated again, and `chat_protocol.judge(…, shared=…)` makes the folder a second root. Codex: `argv_for(…, shared=…)` adds
+`-c sandbox_workspace_write.writable_roots=[…]`, `turn_start_line` sends `writableRoots`, `CodexTracker` expects the `thread/start`, `thread/resume` and settings answers to list exactly that
+root, and `judge_file_change` applies `write_problem`. The paragraph is joined to the instructions and memory (the chat manifest may carry 9,000 characters; a full-mode launch keeps 2,000);
+the daemon's log has one line per new process, `chat process shared=<on|off>`. Nothing is added to the chat's record (`KINDS`) or to the `chat-prompt` file's format.
+
+The hand-over (`vbear/shared_changes.py`): `GroupRunner` and `DispatchRunner` take a `snapshot` before an employee answers and after, and `record` the new or changed names in `changes/`;
+the next employee's message gets `paragraph(...)`: the names as one JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING` (at most 4,096 bytes), or, for an
+employee who has the folder off, a sentence that there are new files he cannot read, or a sentence that none could be compared. `Groups.get` adds `shared_changes` to a reply
+item only when there is something; `chief.py` adds `shared` to each employee of the list only when somebody has the folder on (with everyone off, the list, the fixed words and the hash of the
+inputs are v0.17.0's). The two chat checks (`chat_check.py`, `codex_chat_check.py`) each have a shared part, and the report gains `shared` and `shared_steps`.
+
+The page (`web/app.js`, from `// ---------- the shared folder`) draws `viewShared` (three fixed sentences, place and the Finder button, usage, the switches with the question before a Codex card goes on, the
+files), `sharedCardLine` (the back of a role card), `sharedChatLine` (the line at the top of a chat), the tick in `openGroupDialog`, the tick in `proposalCard` and `groupSharedChanges` (the names under a
+reply). The chat page has one 「檢查」 button for a version not checked with the folder (the note `sharedCheckNode`, `data-chat="shared-check"`, which posts `{engine, shared: true}` to
+`/api/chat-support/verify`); nothing else on the pages posts that. Everything is `el()` and `textContent`: a file name that looks like markup is shown as it is.
+`tests/test_shared_flow.py` walks the page, a group with the tick, a dispatch with the tick, the hand-over, switching off and the Finder button (a fake) over HTTP; `tools/qa_p43.py` is
+the coordinator's real-machine check through the HTTP API on a temporary state (it refuses `~/.vbear` and the ports 7788 and 7789, never presses the Finder button, prints no word of a model's
+and runs `codex sandbox` with VBear's own settings, which needs no login and calls no model).
+
 ## Start-up page — `vbear/ai_tool_status.py`, `web/app.js` (`#/setup`)
 
 `ai_tool_status.report(conf)` answers, for each tool in `ai_tools.setup_ids()` (a hidden one only while its switch is on),

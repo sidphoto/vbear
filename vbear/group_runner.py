@@ -35,7 +35,8 @@ import os
 import threading
 import time
 
-from . import config as cfg, groups
+from . import config as cfg, groups, shared_changes
+from .runtime import shared_rules
 from .api_error import ApiError
 
 TICK_S = 2.0
@@ -83,6 +84,7 @@ class GroupRunner:
         self._misses: dict[str, int] = {}
         self._retry: dict[str, dict] = {}        # group id -> {n, pid, first, next} while an employee is busy or the room is full
         self._quiet: dict[str, tuple] = {}       # group id -> the log's stamp when it had nothing for the runner to do
+        self._folder: dict[tuple, dict | None] = {}   # (group id, round, profile id) -> the shared folder's names before the turn
 
     # ---- lifecycle ----------------------------------------------------------------------------------------------------
 
@@ -297,6 +299,7 @@ class GroupRunner:
             return ""
         if not retrying:
             self._tx(gid, n, intent)
+        self._look_before(gid, n, pid)
         try:
             result = chats.send_for_group(chat_id, text)
         except ApiError as exc:
@@ -381,6 +384,7 @@ class GroupRunner:
         ended = scan["turns"].get(sent["turn"], {}).get("turn_ended")
         if ended is None:
             return self._pause(gid, n, "damaged") if scan["problem"] else f"waiting:{pid}"
+        self._look_after(gid, n, pid)
         normal = ended["reason"] == "result" and not ended["is_error"]
         reason = "result" if normal else ("is_error" if ended["reason"] == "result" else ended["reason"])
         usage = scan["turns"].get(sent["turn"], {}).get("plan_usage")
@@ -399,3 +403,43 @@ class GroupRunner:
                 return f"skipped:{pid}"
             return f"ended:{pid}"
         return self._tx(gid, n, change)
+
+    # ---- the shared folder around a turn (P43-3, ADR 0009 point 4) -------------------------------------------------------
+
+    def _shared_open(self, gid: str) -> bool:
+        """Whether any member has the shared folder open (then the folder's names are compared around each turn)."""
+        try:
+            return self.g.any_shared(groups.load(gid))
+        except Exception:
+            return False
+
+    def _look_before(self, gid: str, n: int, pid: str) -> None:
+        """Just before a message goes out: the names in the shared folder, kept in memory. Only names, sizes and times are read.
+        A failure here never stops the turn."""
+        key = (gid, n, pid)
+        try:
+            if self._shared_open(gid):
+                self._folder[key] = shared_changes.take()
+            else:
+                self._folder.pop(key, None)
+        except Exception:
+            self._folder.pop(key, None)
+
+    def _look_after(self, gid: str, n: int, pid: str) -> None:
+        """The turn has ended: the names that are new or changed since the look before are kept for the next employee's message
+        (``shared_changes``). A look that was lost (a restart) or that could not be made is kept as such: nothing is guessed."""
+        key = (gid, n, pid)
+        try:
+            if not self._shared_open(gid):
+                self._folder.pop(key, None)
+                return
+            before = self._folder.pop(key, None)
+            after = shared_changes.take()
+            if before is None or after is None:
+                names, cut, missed = [], False, True
+            else:
+                names, cut = shared_rules.changes(before, after)
+                missed = False
+            shared_changes.record(gid, round=n, profile_id=pid, names=names, cut=cut, unavailable=missed, now=self.clock())
+        except Exception:
+            self._folder.pop(key, None)

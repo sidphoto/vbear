@@ -875,6 +875,107 @@ test("a role card has a chat button only a Claude Code or Codex card that is on 
   assert.strictEqual(without.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat"), null);
 });
 
+// ---- P43-2: the shared folder's check button ---------------------------------------------------------------------------
+
+async function withQuickTimers(fn) {
+  const real = global.setTimeout;
+  global.setTimeout = (f, ms, ...a) => real(f, ms > 100 ? 0 : ms, ...a);       // the page waits seconds between looks; the test does not
+  try { return await fn(); } finally { global.setTimeout = real; }
+}
+const unchecked = { on: true, usable: false, code: "shared_unverified" };
+const press = async (key) => { q(h.dom().mainEl, key).click(); await settle(); };
+const confirmDialog = async () => { dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click(); await settle(); };
+
+test("shared_unverified: the chat says so with a check button; with the folder usable, off or unsaid there is neither", async () => {
+  for (const shared of [undefined, { on: false, usable: false, code: null }, { on: true, usable: true, code: null }, { on: true, usable: false, code: "shared_unsafe" }]) {
+    setPage({ detail: detail({ shared }) });
+    const main = await open(`#/chat/${CID}`);
+    assert(!q(main, "shared-check"), JSON.stringify(shared));
+    assert(!q(main, "shared-unverified"));
+  }
+  setPage({ detail: detail({ shared: unchecked }) });
+  const main = await open(`#/chat/${CID}`);
+  assert(q(main, "shared-unverified"));
+  assert(text(q(main, "shared-unverified")).includes("Claude Code") && text(q(main, "shared-unverified")).includes("共用資料夾"));
+  assert.strictEqual(text(q(main, "shared-check")), "檢查");
+  assert.strictEqual(q(main, "shared-check").getAttribute("type"), "button");
+  noMarkup(main);
+});
+
+test("shared_unverified: pressing the button asks first, with what it costs, and a no sends nothing", async () => {
+  setPage({ detail: detail({ shared: unchecked }) });
+  await open(`#/chat/${CID}`);
+  await press("shared-check");
+  assert(dialog());
+  assert(text(dialog()).includes("US$0.01"));
+  dialog().find((n) => n.tag === "button" && !n.hasClass("primary")).click();
+  await settle();
+  assert.strictEqual(posts("/api/chat-support/verify").length, 0);
+  assert(q(h.dom().mainEl, "shared-check") && !q(h.dom().mainEl, "shared-check").getAttribute("disabled"));
+});
+
+test("shared_unverified: the check is asked for with shared:true, the button waits, and the note goes when the chat says it passed", async () => {
+  setPage({ detail: detail({ shared: unchecked }) });
+  await open(`#/chat/${CID}`);
+  await withQuickTimers(async () => {
+    await press("shared-check");
+    page.list = listing({ support: support({ verify: { running: false, result: "passed", message: "x" } }) });
+    page.detail = detail({ shared: { on: true, usable: true, code: null } });
+    await confirmDialog();
+    await sleep(30); await settle();
+  });
+  assert.deepStrictEqual(posts("/api/chat-support/verify").map((c) => c.body), [{ engine: "claude", shared: true }]);
+  assert(!q(h.dom().mainEl, "shared-unverified"), "the note is gone");
+});
+
+test("shared_unverified: a check that did not pass says why and the button is there again", async () => {
+  setPage({ detail: detail({ shared: unchecked }) });
+  await open(`#/chat/${CID}`);
+  await withQuickTimers(async () => {
+    await press("shared-check");
+    page.list = listing({ support: support({ verify: { running: false, result: "failed", message: `shared_bash_works 沒有通過 ${EVIL}` } }) });
+    await confirmDialog();
+    await sleep(30); await settle();
+  });
+  const msg = q(h.dom().mainEl, "shared-check-msg");
+  assert(msg && text(msg).includes("shared_bash_works"));
+  noMarkup(h.dom().mainEl);
+  assert(q(h.dom().mainEl, "shared-check") && !q(h.dom().mainEl, "shared-check").getAttribute("disabled"));
+});
+
+test("shared_unverified: a refused request shows the server's sentence and is not waited for", async () => {
+  setPage({ detail: detail({ shared: unchecked }), verifyStatus: 409, verifyBody: { error: "這台 Mac 上有管理員政策。", code: "admin_policy" } });
+  await open(`#/chat/${CID}`);
+  await press("shared-check");
+  await confirmDialog();
+  assert(text(q(h.dom().mainEl, "shared-check-msg")).includes("管理員政策"));
+});
+
+test("shared_unverified: for a Codex chat the check is Codex's, and the cost is the ChatGPT plan", async () => {
+  setPage({ detail: codexDetail({ shared: unchecked }) });
+  await open(`#/chat/${CODEX_CID}`);
+  assert(text(q(h.dom().mainEl, "shared-unverified")).includes("Codex"));
+  await press("shared-check");
+  assert(text(dialog()).includes("ChatGPT"));
+  await withQuickTimers(async () => {
+    page.list = listing({ support: support({ codex: codexSupport({ verify: { running: false, result: "passed" } }) }) });
+    page.detail = codexDetail({ shared: { on: true, usable: true, code: null } });
+    await confirmDialog();
+    await sleep(30); await settle();
+  });
+  assert.deepStrictEqual(posts("/api/chat-support/verify").map((c) => c.body), [{ engine: "codex", shared: true }]);
+  assert(!q(h.dom().mainEl, "shared-unverified"));
+});
+
+test("shared_unverified: a version that already passed is not waited for", async () => {
+  setPage({ detail: detail({ shared: unchecked }), verifyBody: { ok: true, already_verified: true, version: "2.1.318", status: { running: false } } });
+  await open(`#/chat/${CID}`);
+  page.detail = detail({ shared: { on: true, usable: true, code: null } });
+  await press("shared-check");
+  await confirmDialog();
+  assert(!q(h.dom().mainEl, "shared-unverified"));
+});
+
 test("the nav has the chat between the meetings and the terminals, and the code keeps its rules", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   assert(html.includes('data-nav="chat"'));

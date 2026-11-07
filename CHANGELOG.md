@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.17.1 — the shared folder
+
+The 共用資料夾 page shows one folder, `~/.vbear/shared`, that the employees you switch on can read and write, so one employee can hand a file to another (a
+writer drafts, an accountant checks) or to you, and 「在 Finder 打開」 opens it so you can drop your own files in. **Every employee is off until you switch them on**: on that page,
+with the tick 「讓這幾位都能用共用資料夾」 when you make a group, or with 「替這次派工的員工打開共用資料夾」 when you confirm a dispatch; switching a Codex employee on asks first, because what it reads goes to OpenAI. Nothing else
+can: not an employee, not the chief of staff, not an automatic dispatch. An employee that has the folder is told that its files are data, and **every command and every file change, including a write
+into the folder, is still a permission card**. VBear never reads or deletes a file in it and writes no file name to a log. A group and a dispatch hand the next employee the *names* of the files that appeared
+meanwhile, as data. Five tasks (P43-1 to P43-5), built on v0.17.0 with P42-6:
+
+- **The backbone: a Claude Code employee writes, another reads (P43-1, `3b84f29`…`fb9fc2a`).** `vbear/runtime/shared_rules.py` (the path VBear alone computes, `folder_problem`/`shared_unsafe`, `usage`,
+  `write_problem`, the paragraph between `BEGIN_VBEAR_SHARED_JSON` and `END_VBEAR_SHARED_JSON`), `vbear/shared_folder.py` (`<state>/shared-meta/settings.json` and `log.jsonl`, outside the folder employees write
+  in; every card off by default), `GET /api/shared`, `POST /api/shared/cards`, `POST /api/shared/reveal` (Finder through a command `serve()` hands the console; tests use a fake that records the argv).
+  `chat_send` takes `shared: true` only (the daemon computes the path; `false` or another type is 400). Claude Code: the folder is a second `sandbox.filesystem.allowWrite` entry, VBear's `judge`
+  makes it a second root (a Write or Edit inside is a card; outside it, through a link, in `.claude`/`.codex`/`.agents`/`.git` at any depth or onto a file with more than one hard link it is refused with no card;
+  the work folder's `.claude` rule is now any depth too), an idle process whose folder differs is replaced (`restarting`, so **switching off takes hold at the next message**), the system prompt gets one
+  more paragraph (so **an employee knows of the folder only if the chat began after it was switched on**), `prompt_sha` is v0.17.0's value byte for byte with the folder off, a chat's added prompt may be 9,000 characters (full mode keeps 2,000),
+  1 GiB or 10,000 entries is `shared_full` (checked when a process starts). The 共用資料夾 page and its place in the nav. `--add-dir`, `additionalDirectories: []`, `--permission-prompt-tool stdio` and the `system/init` check
+  are untouched. `tests/test_autonomy_guard.py` scans `shared*.py` and `runtime/shared*.py` and fails the build when any module but `server.py` reaches `set_card` or the store.
+- **Codex and the version check (P43-2, `a6196af`…`90f0453`, `1bd2222`).** Codex gets the folder as `-c sandbox_workspace_write.writable_roots=[…]`, `turn/start`'s `writableRoots`, a `thread/start`
+  answer that must list exactly that root (anything else stops the chat), and `judge_file_change` with the same rules; switching a Codex card on needs `confirm_company: true` (409 `shared_confirm`).
+  Both chat checks (`--mode chat`, `--mode codex-chat`) gain a shared-folder part and the report gains `shared: passed|failed` and `shared_steps`; an employee who has the folder on is refused with
+  `shared_unverified` on a version that has not passed it (the console says it first, the daemon again), and an employee who has it off chats as before. `docs/evidence/codex-0.163.0-shared.md` quotes the one
+  zero-cost `codex sandbox` probe (the root works; a write through a link to the outside and into `.git`/`.codex`/`.agents` is refused; a link can be made and a file deleted inside it).
+- **The hand-over of names, and the ticks (P43-3, `1982171`…`5058ff8`).** `shared_rules.snapshot`/`changes` and `vbear/shared_changes.py`: before and after each employee's answer (each dispatch step) the
+  folder is listed with `os.scandir` and `lstat`; the new or changed names (at most 50, each at most 200 characters, a name with a control or format character is replaced by 「（檔名含特殊字元）」)
+  go to the next employee as one JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING` (an employee who has the folder off is told only that there are new files). The lists are in
+  `<state>/shared-meta/changes/` and in no group, dispatch or chat record (no new field; v0.17.0's checks read them). `POST /api/groups` and `POST /api/dispatch/<id>/confirm` take `shared_folder` and
+  `confirm_company` (a refusal comes before anything is made; the dispatch's new employees are opened by a callback only when `pending/<d-…>.json` says the person ticked; a confirmation that fails takes the tick back);
+  the chief of staff's list of employees says which can use the folder (with everyone off it is v0.17.0's byte for byte; the proposal format is unchanged); the group page shows the names under a reply.
+- **The page in full (P43-4, `2d5ad39`).** Usage, links and the over-limit line, the file list (names as text, no preview, no delete), the question before a Codex card goes on, the fixed sentences (including that a
+  full-mode terminal is not told), a line on the role card and at the top of a chat, a mark on a group's member, and the P42-6 notice about a changed chat now names the folder.
+  **Merge decision (P43-5):** the chat page had two 「檢查」 offers for a version not checked with the folder (P43-2's note and a button in P43-4's line); only P43-2's note
+  (`data-chat="shared-check"`) is kept, it also appears when a send is refused with `shared_unverified`, and the unused second check (`sharedStartCheck` and its hook) is deleted; the tests say exactly one
+  place asks for the check with `shared: true`.
+- **Documents, the walk, the real-machine check, CI (P43-5).** `docs/adr/0009-shared-folder.md` is final (the person decided on 2026-11-07: off by default; `<state>/shared` with 「在 Finder 打開」; Codex not verified on a real machine),
+  `docs/SECURITY-MODEL.md` has "Shared folder (v0.17.1)" with its residual risks and what going back does, and both READMEs, `docs/ARCHITECTURE.md`, `docs/REFERENCE.zh-TW.md` and `GLOSSARY.md` (共用資料夾, 群組, 派工) say what it is.
+  `tests/test_shared_flow.py` walks the whole thing once over HTTP: two employees switched on (the Codex one only with `confirm_company`), a group made with the tick, a file named to the second member and shown on the page,
+  the second switched off and told only that there are files, a dispatch confirmed with the tick, and the Finder button (a fake) asking for the one folder; `config.json` is byte for byte the same and no
+  file name is in `shared-meta`'s logs. `tools/qa_p43.py` is the real-machine check through the HTTP API (stages `setup`, `write`, `read`, `off`, `link`, `inject`, `group`, `full` and the zero-cost
+  `codex-sandbox`; it needs `--state` and `--cards`, refuses `~/.vbear` and the ports 7788 and 7789, never presses the Finder button and prints nothing a model wrote); `tests/test_qa_p43.py` runs it against a fake console and a fake `codex`.
+  **CI:** the Python 3.14 job was cut at its 20-minute limit in v0.17.0 (the backend had passed; the frontend tests were killed); `ci.yml`'s `timeout-minutes` is 35, and `release.yml`'s job, which runs the same tests and then the build, is 50 (was 30).
+- **Money.** The folder itself costs nothing; a chat that has it gets one more paragraph of system prompt (at most 1,000 characters). The chat check's shared part is about three more Haiku calls for Claude Code (a few cents on your own login, not in the day's ledger) and
+  a few more short calls on your ChatGPT plan for Codex. Comparing names costs nothing.
+- **On a real Mac:** with Claude Code 2.1.319 and Haiku on 2026-11-08, the chat check passed with its shared part (six steps), and `tools/qa_p43.py` ran every stage: 57 ok, 0 warn, 0 FAIL, about US$0.025 in all. A write to the folder asked on a card and another employee read it; an employee switched off could not write (Write refused by VBear, Bash stopped by the sandbox); a write through a link out of the folder and a write to `.git` were refused; an instruction planted in a file was treated as data; the next group member was handed the file name; a folder over 1 GiB refused a new chat at no cost; `config.json` was byte-identical before and after. The zero-cost `codex sandbox` part ran with no sign-in. Not seen: whether a Bash card the person allows can write `.git` deeper than the top of the folder (the model would not try; the sandbox denies only the top four folders, added after this run). **Codex employees using the shared folder were NOT tried on a real machine** (your decision): they were tested
+  only against the fake app-server and by the zero-cost `codex sandbox` probe above; in particular whether a real `thread/start` answer lists the configured root is unknown, and the design stops the chat if it does not, so the worst case
+  is a Codex version that cannot pass the check with the folder. When you switch a Codex employee on, press 「檢查」 once (it uses your ChatGPT plan). How a real model treats a file as data, and whether a sentence in a file can steer it,
+  has no record (待真機驗證).
+- **Going back to v0.17.0.** This was read from the code and was not run (what could not be read is marked 待確認). v0.17.0 does not know the folder: `<state>/shared/` and `<state>/shared-meta/` stay and are not read, no employee is told of it,
+  no writable root or `allowWrite` entry is added, and VBear's `judge`/`judge_file_change` refuse a write outside the work folder, so an employee can no longer write there (it can still be asked to read it, which is a card). Chat, group and dispatch
+  records have no new field and read as before; groups and dispatches no longer hand on names; `config.json` has no new key. A chat that began with the folder on has a `chat-prompt` fingerprint that includes the folder's paragraph, so v0.17.0's
+  chat page says it differs from its start (which is true). The chat-check reports have two more keys (`shared`, `shared_steps`); v0.17.0 reads `mode`, `passed` and the version, and that it accepts the extra keys is read from the code, not run (待確認).
+  Nothing in the folder is deleted. A v0.17.1 process still running when you go back (待確認 how it ends).
+
 ## v0.17.0 — memory
 
 The 記憶 page keeps a few lines you wrote or confirmed (about you, your work, decisions you made), one book for every employee, and each

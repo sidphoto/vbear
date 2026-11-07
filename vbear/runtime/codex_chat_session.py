@@ -76,7 +76,8 @@ class CodexChatProcess(chs.ChatProcess):
     def _new_tracker(self):
         return ccp.CodexTracker(ccp.constants_for(self.cli_version), workdir=self.cwd,
                                 codex_home=self.manifest["codex_home"], thread_id=self._resume_thread,
-                                resumed=self._resume_thread is not None, last_total=self._start_tokens)
+                                resumed=self._resume_thread is not None, last_total=self._start_tokens,
+                                writable_roots=[self.shared] if self.shared else None)
 
     def _read_facts(self, value) -> list:
         return self.tracker.on_message(value)
@@ -122,7 +123,7 @@ class CodexChatProcess(chs.ChatProcess):
             return
         rid = self._rpc()
         try:
-            line = ccp.turn_start_line(rid, self.tracker.thread_id, t.text)
+            line = ccp.turn_start_line(rid, self.tracker.thread_id, t.text, writable_roots=[self.shared] if self.shared else None)
         except ValueError as exc:
             self._record("error", {"turn": t.n, "message": f"這則訊息無法送給 Codex（{exc}）"})
             self._end_turn("not_sent", now=t.started)
@@ -159,7 +160,7 @@ class CodexChatProcess(chs.ChatProcess):
         if decision == "allow" and card.tool == TOOL_FILE:
             # What is allowed is judged again now: a folder of its path may have become a link out of the work folder
             # while the card waited. Codex still writes later, so this narrows the race and does not close it.
-            again = ccp.judge_file_change(card.changes, self.cwd)
+            again = ccp.judge_file_change(card.changes, self.cwd, shared=self.shared)
             if again.action != "ask":
                 self._refuse_on_answer(card, decision, value, again.reason, now)
                 return "refused", f"卡片出現之後情況變了，VBear 已拒絕：{again.reason}"

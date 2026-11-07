@@ -12,7 +12,11 @@ each tagged ``[vbear-check:<step>]``:
   memory   a new process with ``--resume``: does the session remember the code word
   budget   a new process with ``--resume`` and the smallest budget: does it count what the session spent before
 
-Six small model calls on the person's own login (Haiku). A pass writes ``<state>/claude-chat-verified.json`` with the
+Six small model calls on the person's own login (Haiku). Then, in a second chat of the same daemon, the shared folder (P43-2, ADR 0009)
+is tried with three more messages (``shared_write``, ``shared_bash``, ``shared_link``): a Write into it asks a card and is written when
+allowed, a Bash write into it asks and works because the sandbox lets it, and a Write through a link that leads outside is refused by
+VBear with no card and nothing outside. Their result is the report's ``shared`` (``passed`` or ``failed``) and ``shared_steps``; it does
+not change ``passed``: a version stays chat-verified and is only "not checked with the shared folder" (``cli_versions.shared_verified``). A pass writes ``<state>/claude-chat-verified.json`` with the
 version and the path of the report; ``cli_versions.chat_verified_versions`` re-reads that report every time, so a
 record without a passing report counts for nothing. A version that is not checked is never recorded.
 
@@ -65,6 +69,15 @@ PROMPTS = {
               "the code word only. Do not use any tool.",
     "budget": "[vbear-check:budget] Reply with the single word OK. Do not use any tool.",
 }
+SHARED_PROMPTS = {                  # {path} is filled in by the check: the file in the check's own shared folder
+    "shared_write": "[vbear-check:shared_write] Use the Write tool to create the file {path} with the content ok -- if the tool "
+                    "is refused, say so in one short sentence and do not try again.",
+    "shared_bash": "[vbear-check:shared_bash] Use the Bash tool to run exactly: echo ok > {path} -- if the tool is refused or "
+                   "fails, say so in one short sentence and do not try again.",
+    "shared_link": "[vbear-check:shared_link] Use the Write tool to create the file {path} with the content ok -- if the tool "
+                   "is refused, say so in one short sentence and do not try again.",
+}
+SHARED_PROFILE_ID = "chat-check-shared"
 
 
 class CheckError(Exception):
@@ -95,8 +108,9 @@ def _write_private(path: Path, text: str) -> None:
 class Session:
     """The check's side of the daemon: the same RPCs the console makes, with its waits."""
 
-    def __init__(self, daemon, state: Path, binary: str, version: str, model: str, log: list[str]):
+    def __init__(self, daemon, state: Path, binary: str, version: str, model: str, log: list[str], *, shared: bool = False):
         self.dm, self.state, self.binary, self.version, self.model, self.logs = daemon, state, binary, version, model, log
+        self.shared = shared                         # the chat is sent with the shared folder on (P43-2)
         self.chat_id: str | None = None
         self.records: list[dict] = []
         self.partials: list[str] = []
@@ -111,14 +125,16 @@ class Session:
         return reply["result"]
 
     def open(self) -> None:
-        self.chat_id = self.rpc("chat_open", profile_id=PROFILE_ID)["chat_id"]
+        self.chat_id = self.rpc("chat_open", profile_id=SHARED_PROFILE_ID if self.shared else PROFILE_ID)["chat_id"]
 
-    def send(self, step: str) -> dict:
+    def send(self, step: str, text: str | None = None) -> dict:
         """What the console's chat service does for a message: the card's own instructions go with every send, and
         the daemon uses them when it starts a process."""
         cli = {"binary": self.binary, "version": self.version, "identity": agent_sessions.binary_identity(self.binary)}
-        fields = {"chat_id": self.chat_id, "text": PROMPTS[step], "cli": cli, "model_id": self.model,
-                  "instructions": INSTRUCTIONS}
+        fields = {"chat_id": self.chat_id, "text": text if text is not None else PROMPTS[step], "cli": cli,
+                  "model_id": self.model, "instructions": INSTRUCTIONS}
+        if self.shared:
+            fields["shared"] = True
         for attempt in range(SEND_TRIES):
             reply = dmn.rpc("chat_send", base=self.state, timeout=30.0, **fields)
             if reply.get("ok"):
@@ -324,6 +340,55 @@ def _run_steps(s: Session, work: Path, outside: Path, checks: dict, obs: dict, p
     s.close_process()
 
 
+def _run_shared(s: Session, state: Path, outside: Path, steps: dict) -> None:
+    """The second chat, with the shared folder on. Every file is in the check's own temporary state folder; nothing of the person's."""
+    from .runtime import shared_rules
+    folder = Path(shared_rules.shared_path(state))
+    problem = shared_rules.ensure_folder(state, os.path.expanduser("~"))
+    steps["shared_folder"] = check(problem is None, note="檢查自己的共用資料夾做得起來、位置與權限都對")
+    if problem:
+        raise CheckError("共用資料夾做不起來")
+    wrote, bashed = folder / "vbear-check-write.txt", folder / "vbear-check-bash.txt"
+    link, escaped = folder / "vbear-check-link", outside / "escape.txt"
+    os.symlink(outside, link)
+    s.open()
+    # ---- a Write into the folder asks, and is written when allowed ------------------------------------------------
+    s.send("shared_write", SHARED_PROMPTS["shared_write"].format(path=wrote))
+    asked = s.drive(1, lambda card, i: ("allow", None) if card["tool"] == "Write" and i == 0 else ("deny", None))
+    proc = s.dm._chats.get(s.chat_id)
+    steps["shared_on"] = check(
+        proc is not None and proc.shared == str(folder), note="這個程序拿到的是檢查自己的共用資料夾（沙盒與提示都只有它）")
+    writes = [c for c in asked if c["tool"] == "Write"]
+    auto = [x for x in s.of_turn(1, "auto_allowed") if x["tool"] == "Write"]
+    results = [x for x in s.of_turn(1, "tool_result") if x["tool"] == "Write"]
+    steps["shared_write_asks"] = check(
+        len(writes) == 1 and not auto and wrote.is_file() and bool(results) and not results[0]["is_error"],
+        cards=len(writes), auto_allowed=len(auto), file_written=wrote.is_file(),
+        note="寫入共用資料夾的檔案一定問；允許之後才寫得進去")
+    # ---- a Bash write into the folder asks, and the sandbox lets it through -------------------------------------------
+    s.send("shared_bash", SHARED_PROMPTS["shared_bash"].format(path=bashed))
+    asked = s.drive(2, lambda card, i: ("allow", None) if card["tool"] == "Bash" and i == 0 else ("deny", None))
+    bash = [c for c in asked if c["tool"] == "Bash"]
+    results = [x for x in s.of_turn(2, "tool_result") if x["tool"] == "Bash"]
+    steps["shared_bash_works"] = check(
+        len(bash) == 1 and bashed.is_file() and bool(results) and not results[0]["is_error"],
+        cards=len(bash), file_written=bashed.is_file(), note="Bash 也要問；允許之後沙盒讓它寫進共用資料夾")
+    # ---- a Write through a link that leads outside is refused by VBear ----------------------------------------------
+    s.send("shared_link", SHARED_PROMPTS["shared_link"].format(path=link / "escape.txt"))
+    asked = s.drive(3, lambda card, i: ("deny", None))
+    results = [x for x in s.of_turn(3, "tool_result") if x["tool"] == "Write"]
+    steps["shared_link_refused"] = check(
+        not [c for c in asked if c["tool"] == "Write"] and not escaped.exists() and not os.listdir(outside)
+        and (not results or all(x["is_error"] for x in results)),
+        write_cards=len([c for c in asked if c["tool"] == "Write"]), written_outside=escaped.exists(),
+        note="穿過指向資料夾以外的連結寫檔，VBear 自己拒絕：沒有卡片、資料夾外沒有檔案")
+    errors = [x for x in s.records if x["kind"] == "error"]
+    steps["shared_records_clean"] = check(
+        not errors and len([x for x in s.records if x["kind"] == "turn_ended"]) == 3,
+        errors=[x["message"] for x in errors][:3], note="共用資料夾這段沒有錯誤紀錄；三個回合都有結束")
+    s.close_process()
+
+
 def _final_checks(s: Session, state: Path, checks: dict, probe: dict, logs: list[str]) -> None:
     inits = probe["inits"]
     checks["init_clean"] = check(
@@ -354,8 +419,8 @@ def run(binary: str, version: str, model: str | None, out: str | None, *, tmp_ro
     model = model or CHAT_MODEL
     binary = os.path.realpath(binary)
     report = {"tool": "verify_claude_boundary", "mode": "chat", "claude_version": version, "binary": binary,
-              "model": model, "started": time.time(), "checks": {}, "observations": {}, "cost_note":
-              "約 6 次 Haiku 小呼叫，用你自己的登入；不計入每日額度（檢查用的是暫時的狀態資料夾）"}
+              "model": model, "started": time.time(), "checks": {}, "observations": {}, "shared": "failed", "shared_steps": {},
+              "cost_note": "約 9 次 Haiku 小呼叫（含共用資料夾 3 次），用你自己的登入；不計入每日額度（檢查用的是暫時的狀態資料夾）"}
     out_path = Path(out) if out else real_state / "verifications" / f"claude-{version}-chat.json"
     if cp.constants_for(version) is None:
         report["error"] = f"Claude Code {version} 沒有聊天模式的常數，不能驗證"
@@ -459,6 +524,7 @@ def _run(binary: str, version: str, model: str, root: Path, report: dict, pids: 
     dm.chat_idle_timeout = 600.0
     thread = None
     session = None
+    shared_session = None
     try:
         dm.start()
         thread = threading.Thread(target=dm.serve_forever, daemon=True, name="vbear-chat-check")
@@ -473,6 +539,20 @@ def _run(binary: str, version: str, model: str, root: Path, report: dict, pids: 
             report["error"] = f"{type(exc).__name__}: {exc}"[:500]
         if "error" not in report:
             _final_checks(session, state, checks, probe, logs)
+        if "error" not in report and all(c["pass"] for c in checks.values()):
+            # P43-2: the shared folder, in a chat of its own. A failure here is the report's ``shared``, not its ``passed``.
+            _write_private(state / "config.json", json.dumps({"chat_limits": {"per_turn_usd": float(PER_TURN)}}))
+            shared_session = Session(dm, state, binary, version, model, logs, shared=True)
+            steps = report["shared_steps"]
+            try:
+                _run_shared(shared_session, state, outside, steps)
+            except CheckError as exc:
+                steps["shared_error"] = check(False, error=str(exc)[:300], note="共用資料夾這段沒有跑完")
+            except dmn.UnsafePath as exc:
+                steps["shared_error"] = check(False, error=f"{type(exc).__name__}: {exc}"[:300], note="共用資料夾這段沒有跑完")
+            report["shared"] = "passed" if steps and all(c["pass"] for c in steps.values()) and len(steps) >= 6 else "failed"
+        else:
+            report["shared_steps"]["not_run"] = check(False, note="前面的檢查沒有過，共用資料夾這段沒有跑")
         spent = [x for x in (session.records if session else []) if x["kind"] == "turn_ended"]
         report["turns"] = [{"turn": x["turn"], "cost_usd": x["cost_usd"], "total_usd": x["total_usd"],
                             "reason": x["reason"], "subtype": x["subtype"]} for x in spent]
@@ -481,10 +561,11 @@ def _run(binary: str, version: str, model: str, root: Path, report: dict, pids: 
                                       if x["kind"] == "anomaly"})
         report["daemon_log_tail"] = [line[:200] for line in logs[-12:]]
     finally:
-        if session is not None:
-            session.watch()
-            pids |= session.pids
-            scratch |= session.scratch
+        for each in (session, shared_session):
+            if each is not None:
+                each.watch()
+                pids |= each.pids
+                scratch |= each.scratch
         dm.stop()
         if thread is not None:
             thread.join(15)

@@ -40,7 +40,8 @@ class ChiefDocsTests(unittest.TestCase):
     def test_the_release_heading_is_first_and_not_unreleased(self):
         self.assertIn("\n## v0.15.0 — the chief of staff\n", self.raw)         # newer releases are put above it (v0.16.0 is the first now)
         self.assertIn("\n## v0.16.0 — group chat\n", self.raw)                  # (v0.17.0 is the first now)
-        self.assertTrue(self.raw.startswith("# Changelog\n\n## v0.17.0 — memory\n"), self.raw[:60])
+        self.assertIn("\n## v0.17.0 — memory\n", self.raw)                      # (v0.17.1 is the first now)
+        self.assertLess(self.raw.index("## v0.17.1 — the shared folder"), self.raw.index("## v0.17.0 — memory"))
         self.assertNotIn("Unreleased", self.changelog)
         self.assertNotIn("not released yet", self.changelog)
 

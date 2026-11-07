@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -48,6 +49,7 @@ from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
 from . import memory as memory_mod
+from . import shared_folder
 from . import claude_verify
 from . import codex_verify
 from . import config as cfg
@@ -75,7 +77,7 @@ from . import staffing
 from . import staffing_runner as staffing_runner_mod
 from . import tasks
 from . import runtime as rt
-from .runtime import chat_store, cli_versions, codex_chat_env, pipeline_store
+from .runtime import chat_engines, chat_store, cli_versions, codex_chat_env, pipeline_store
 from .index import HOME, STALE_AFTER_S, Store
 from .model import ACT_ACTIVE
 from .scan import claude as claude_scan
@@ -176,9 +178,18 @@ def _log_profile_store_problem(exc: BaseException) -> None:
         pass
 
 
+def _open_in_finder(argv: list) -> None:
+    """Open a folder in Finder: ``argv`` is ``["/usr/bin/open", <path>]`` as vbear/shared_folder.py builds it, run without a shell and
+    with a time limit. Only ``serve()`` hands this to a console (``Console.reveal_command``); a console built any other way (every
+    test's) has none and opens nothing."""
+    subprocess.run(argv, timeout=10, check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class Console:
     def __init__(self, port: int):
         self.port = port
+        # How "open in Finder" is done (P43-1): None here, so that nothing built for a test opens a window; serve() sets it.
+        self.reveal_command = None
         # Every /api/ request must carry this token (cookie or Bearer). It is
         # new for each server start and is shared only through an owner-only
         # file in the state directory. None turns the check off; only test
@@ -291,14 +302,15 @@ class Console:
             if "_dispatcher" not in self.__dict__:
                 d = dispatch_mod.Dispatcher(conf=lambda: self.store.conf, tools=self.chief_tools,
                                             link=lambda cid, did: self.chief_runner().link_dispatch(cid, did),
-                                            busy=self._chat_busy, day_left=self._day_left)
+                                            busy=self._chat_busy, day_left=self._day_left, on_new_employee=self._on_new_employee)
                 try:
                     d.recover_all()
                 except Exception:
                     pass                      # a record that cannot be read blocks itself; the rest goes on
                 # the runner (P40-4) sends the steps and carries out 「停止」 and 「繼續」; its thread is started by serve() only
                 d.control = self._dispatch_runner = dispatch_runner_mod.DispatchRunner(
-                    d, chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf))
+                    d, chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf),
+                    shared_on=shared_folder.for_card)
                 self._dispatcher = d
             return self._dispatcher
 
@@ -306,13 +318,22 @@ class Console:
         self.dispatcher()
         return self._dispatch_runner
 
+    def _on_new_employee(self, dispatch_id: str, profile_id: str) -> None:
+        """The dispatcher made an employee: open the shared folder for him only when the person ticked that on the confirmation of this
+        dispatch (P43-3: ``pending/<d-…>.json``, written by the confirmation's route). An automatic dispatch has no such file, so it opens
+        nobody. Any failure leaves him off."""
+        try:
+            shared_folder.open_for_dispatch(dispatch_id, profile_id, self.chat_service().cards())
+        except Exception:
+            pass
+
     def group_service(self):
         """The one groups service (P41-1), built on first use. Its chats are the chat service's and its ledger the day's, shared with
         the chats and the meetings."""
         with self.lock:
             if "_groups" not in self.__dict__:
                 self._groups = groups_mod.Groups(chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf),
-                                                 conf=lambda: self.store.conf)
+                                                 conf=lambda: self.store.conf, shared_on=shared_folder.for_card)
                 self._group_runner = group_runner_mod.GroupRunner(self._groups)       # its thread is started by serve() only
             return self._groups
 
@@ -710,6 +731,8 @@ def make_handler(console: Console):
                     return self._group_call("get", found.group(1), None, after)
                 if path == "/api/memory":
                     return self._chat_action(self._memory_view)
+                if path == "/api/shared":
+                    return self._chat_action(self._shared_view)
                 if path == "/api/memory/export":
                     return self._chat_action(memory_mod.export)
                 if path == "/api/memory/suggest":
@@ -944,6 +967,10 @@ def make_handler(console: Console):
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
                 if path == "/api/memory/clear":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/shared/cards":
+                    return self._chat_action(lambda b=self._body_strict(): shared_folder.set_card(b, self._memory_cards()))
+                if path == "/api/shared/reveal":
+                    return self._chat_action(lambda b=self._body_strict(): self._shared_reveal(b))
                 if path == "/api/memory/cards":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.set_card(b, self._memory_cards()))
                 if path == "/api/memory/suggest/preview":
@@ -2031,6 +2058,24 @@ def make_handler(console: Console):
             out["cards"] = memory_mod.cards_view(cards, off, on)
             return out
 
+        def _shared_view(self) -> dict:
+            """GET /api/shared: where the shared folder is, how full, what is in it (names only), who may use it (read only)."""
+            try:
+                cards = self._memory_cards()
+            except ApiError:
+                cards = []                     # the page still shows the folder when the cards cannot be read
+            try:
+                checked = console.chat_service().shared_checked(shared_folder.SUPPORTED_ENGINES)
+            except ApiError:
+                checked = {}                   # unknown for every employee
+            return shared_folder.view(cards, checked)
+
+        def _shared_reveal(self, body) -> dict:
+            """POST /api/shared/reveal: open the shared folder in Finder. No body field: the path is the one VBear computes."""
+            if body != {}:
+                raise ApiError(400, "bad_request", "這個動作不需要內容。")
+            return shared_folder.reveal(getattr(console, "reveal_command", None))
+
         @staticmethod
         def _chat_after(query: str):
             raw = parse_qs(query).get("after", ["0"])[0]
@@ -2175,7 +2220,7 @@ def make_handler(console: Console):
                 except agent_profiles.AgentProfileStorageError:
                     raise chief.ChiefError("storage", PROFILE_STORE_UNREADABLE) from None
             return chief_runner_mod.ChiefSources(chat=chief_runner_mod.chat_reader(), profile=profile, profiles=profiles,
-                                                 tools=console.chief_tools, conf=conf)
+                                                 tools=console.chief_tools, conf=conf, shared=shared_folder.for_card)
 
         def _chief_call(self, action, chief_id=None, body=None, chat_id=None):
             """The chief of staff's endpoints (P40-1). Reads and the preview run nothing; a preview reads a chat and asks which
@@ -2266,7 +2311,7 @@ def make_handler(console: Console):
                 if action == "get":
                     return self._json(svc.get(group_id, after))
                 if action == "create":
-                    return self._json(svc.create(body))
+                    return self._json(self._group_create(svc, body))
                 if action == "messages":
                     return self._json(svc.say(group_id, body), 202)
                 if action == "members":
@@ -2288,6 +2333,91 @@ def make_handler(console: Console):
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
 
+        def _shared_ticks(self, body, error):
+            """The two fields the new-group dialog and the dispatch card add for the shared folder (P43-3): ``(rest of the body,
+            shared_folder, confirm_company)``. Both are the person's ticks, booleans; ``confirm_company`` only goes with
+            ``shared_folder: true``. ``error(text)`` raises the caller's own 400."""
+            if not isinstance(body, dict) or not ({"shared_folder", "confirm_company"} & set(body)):
+                return body, False, False
+            flag, confirm = body.get("shared_folder", False), body.get("confirm_company", False)
+            if not isinstance(flag, bool) or not isinstance(confirm, bool) or (confirm and not flag):
+                raise error("shared_folder 與 confirm_company 必須是 true 或 false，而且 confirm_company 要和 shared_folder 一起用。")
+            return {k: v for k, v in body.items() if k not in ("shared_folder", "confirm_company")}, flag, confirm
+
+        def _group_create(self, svc, body):
+            """POST /api/groups. With ``shared_folder: true`` (the person's tick on the dialog, default off) the shared folder is also
+            opened for the members who have it off, after the group is made; a refusal (a Codex member without ``confirm_company``, a
+            folder that is not right) comes before anything is made. Without the tick the request is what it always was."""
+            rest, flag, confirm = self._shared_ticks(body, lambda text: groups_mod.GroupError("bad_request", text))
+            if not flag:
+                return svc.create(rest)
+            ids, _name = groups_mod.Groups._create_body(rest)
+            cards = console.chat_service().cards()
+            todo = shared_folder.plan_cards(ids, cards, confirm)
+            made = svc.create(rest)
+            opened, stopped = shared_folder.open_cards(todo, cards, "group", confirm)
+            made["shared"] = {"opened": opened}
+            if stopped is not None:
+                made["shared"]["error"] = {"code": stopped.code, "text": str(stopped)}
+            return made
+
+        def _dispatch_shared(self, dispatch_id, view):
+            """A proposal's view with ``shared``: for each employee who exists (the ones on the list and the ones 自己動手 made), whether
+            the shared folder is on for him and which company reads what he reads, so the card can offer the person's tick. Reads only."""
+            try:
+                rec = dispatch_mod.load(dispatch_id)
+                cards = console.chat_service().cards()
+                people = []
+                for t in view["team"]:
+                    pid = (rec["cards"].get(t["who"]) or {}).get("profile_id") or rec["made"].get(t["who"])
+                    if pid:
+                        people.append((t["who"], t["name"], pid))
+                view["shared"] = {"people": shared_folder.employees_view(people, cards)}
+            except Exception:
+                pass                       # the card is offered without the tick; reading a proposal never fails because of the folder
+            return view
+
+        def _dispatch_confirm(self, dispatcher, dispatch_id, body):
+            """POST /api/dispatch/<id>/confirm. With ``shared_folder: true`` (the person's tick on the proposal card, default off) the
+            shared folder is opened for the employees of the plan: those who exist and have it off now (before the dispatch starts, so
+            the first message already has it), and those the dispatch is about to make (opened by ``_on_new_employee`` while this
+            confirmation is carried out, because ``pending/<d-…>.json`` says the person ticked). A confirmation that does not go through
+            takes the tick back. Without the tick the request is what it always was."""
+            rest, flag, confirm = self._shared_ticks(body, lambda text: dispatch_mod.DispatchError("bad_request", text))
+            if not flag:
+                marked = shared_folder.dispatch_marked(dispatch_id)
+                if marked and marked["on"]:
+                    shared_folder.mark_dispatch(dispatch_id, False)       # an earlier tick that was not carried out is not this request's
+                return dispatcher.confirm(dispatch_id, rest)
+            rec = dispatch_mod.load(dispatch_id)
+            plan = dispatch_mod.checked_plan(rest, rec)
+            cards = console.chat_service().cards()
+            used = {s["who"] for s in plan["steps"]}
+            existing = [(rec["cards"].get(who) or {}).get("profile_id") or rec["made"].get(who) for who in sorted(used)]
+            existing = [pid for pid in existing if pid]
+            fresh = [c for c in plan["new_cards"] if c["ref"] in used and c["ref"] not in rec["made"]]
+            engines = []
+            for c in fresh:
+                row = chat_engines.by_tool(c["tool"])
+                engines.append(row.engine if row is not None else None)
+            todo = shared_folder.plan_cards(existing, cards, confirm, engines)
+            if fresh:
+                shared_folder.mark_dispatch(dispatch_id, True, confirm)
+            try:
+                opened, stopped = shared_folder.open_cards(todo, cards, "dispatch", confirm)
+                try:
+                    if stopped is not None:
+                        raise stopped
+                    out = dispatcher.confirm(dispatch_id, rest)
+                except BaseException:
+                    shared_folder.close_cards(opened, cards, "dispatch")
+                    raise
+            finally:
+                if fresh:
+                    shared_folder.mark_dispatch(dispatch_id, False)
+            out["shared"] = {"opened": opened}
+            return out
+
         def _dispatch_call(self, action, dispatch_id=None, body=None):
             """The dispatch endpoints (P40-3, P40-4). Reads run nothing; confirming makes the new employees and the task card (safe
             mode, no skill); the steps are sent by the dispatch runner, and stop and continue are carried out by it. The errors
@@ -2299,11 +2429,12 @@ def make_handler(console: Console):
                 if action == "actions":
                     return self._json(dispatcher.actions())
                 if action == "get":
-                    return self._json(dispatcher.get(dispatch_id))
+                    got = dispatcher.get(dispatch_id)
+                    return self._json(self._dispatch_shared(dispatch_id, got) if got["state"] == "proposed" else got)
                 if not isinstance(body, dict):
                     raise dispatch_mod.DispatchError("bad_request", "請求內容必須是一個 JSON 物件")
                 if action == "confirm":
-                    return self._json(dispatcher.confirm(dispatch_id, body))
+                    return self._json(self._dispatch_confirm(dispatcher, dispatch_id, body))
                 if action == "withdraw-card":
                     return self._json(dispatcher.withdraw_card(dispatch_id, body))
                 if body:
@@ -2320,6 +2451,8 @@ def make_handler(console: Console):
                 return self._error(404, "not found")
             except dispatch_mod.DispatchError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, exc.status)
+            except ApiError as exc:                  # the shared folder's refusals (P43-3): 409 shared_confirm, shared_unsafe, ...
+                return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
 
@@ -2762,6 +2895,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     port = int(port or conf.get("port") or cfg.DEFAULT_PORT)
     handed = take_handed_token()  # first: out of the environment before anything else runs
     console = Console(port)
+    console.reveal_command = _open_in_finder
     if handed:
         console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan
