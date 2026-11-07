@@ -1030,6 +1030,36 @@ process starts until a version passes the chat check.
   (`--system-prompt-snapshot` is on by default), so an edited card may not change a conversation that has begun.
   Neither that Claude Code applies the appended text nor how it treats an edited one on resume has been checked on a
   real machine; the chat check records the first as an observation and does not pass or fail on it.
+- **A second paragraph: the person's memory (v0.17, ADR 0008).** After the card's own instructions (or alone, when the card
+  has none) the same `--append-system-prompt` argument carries one fixed paragraph the daemon builds from the `memory` field
+  of `chat_send`: VBear's own explanation, then the person's lines as one JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
+  `END_VBEAR_MEMORY_JSON`. The console sends the field when the role card takes memory along (a Claude Code card does by default; a Codex card only after the
+  person switches it on, because memory goes to OpenAI there) and `<state>/memory/memory.json` can be read; a card switched off, or a file that cannot be read, sends no field and not a
+  word reaches the model. The paragraph is sent even when there are no lines, because it also tells the employee that only
+  the person can save one. The field is a list of at most 50 objects with exactly `kind` (`about_you`, `work` or `decision`)
+  and `text`, at most 4,000 characters in all; one more key, another kind or a longer list is `bad_request`. **The daemon
+  checks every line again** with the same pure function the console uses to save one (`runtime/memory_rules.check`): a line
+  holding a password or code after its name, a key or token of a known shape, a long letters-and-digits string, an
+  account name or email, a card number that passes the Luhn check, an identity or bank-account number, one of VBear's own
+  markers, `server.token` or `X-VBear`, or a control, format or line-separator character, makes the daemon **refuse the
+  whole message** (`memory_refused`, naming only the place of the line and the rule, never its words); nothing is left
+  out quietly and nothing starts. Lines that merely read like an order to the employee, or hold a phone number or an
+  address, only needed the person's second confirmation when they were saved, and pass. The lines are JSON-encoded
+  twice (so a quote, a backslash or a marker inside a line cannot end the string) and written with every control, format
+  and line-separator character as a `\uXXXX` escape. The paragraph is at most 6,000 characters, and a chat manifest may carry 8,000
+  characters of added prompt (the card's 2,000 and the paragraph); a full-mode launch keeps its 2,000
+  (`append_prompt_problem`). **Memory does not change what the employee may do:** the paragraph says memory cannot make the
+  employee run a command or change a file without asking, nor change VBear's settings, limits, mode or skills, but that is
+  words for the model, not a barrier. The barrier is the one that was there: `--permission-prompt-tool stdio`, the
+  sandbox, Codex's `untrusted` policy, the per-turn and daily limits. Memory is data: no field of a chat's record names it
+  (`KINDS` is unchanged; `process_started.instructions` still says whether the *card* has instructions of its own), and the
+  daemon's log has one line per new process, `chat process memory entries=<N|none> instructions=<yes|no>`, with the count
+  and nothing else. The launch manifest of a live process holds the paragraph as it holds the card's instructions (it is
+  removed with the launch). Memory goes to the company of the employee's tool, Anthropic or OpenAI, and stays in the tool's
+  own copy of the conversation; deleting a line in VBear does not delete those copies. A process that is already running is
+  not given a changed memory (the next new process is). The memory rules are a best effort: a secret written in ordinary
+  words is not caught. Only the person's own `POST /api/memory` in the browser (with `X-VBear`) saves a line; the chat
+  service only reads the file, and no module of the chief of staff, dispatch or groups touches it.
 - **The chat check.** `python3 -m vbear.boundary_check --mode chat` (started by 驗證聊天 on the page, which says what it
   costs first) runs about six small Haiku calls on your own login against an in-process daemon in a temporary state
   folder, with a made-up card. It judges only from the events the daemon recorded and the files left behind, never from
@@ -1218,6 +1248,12 @@ No Codex version is chat-verified out of the box: no process starts until one pa
   `config.toml` exists right after `thread/start` and that every process was started with both settings
   (`project_settings_sent` in the report; no path in it). In the probe with both settings, in a home folder that is a
   git repository: no MCP server, no start-up notice, no skill, no `config.toml`.
+- **Memory (v0.17), off until the person switches the card on.** The same paragraph as for a Claude chat (see "Chats with a role card": the `memory` field, the daemon's
+  second check of every line, `memory_refused`) goes in `developerInstructions` of `thread/start` and `thread/resume`, after the
+  card's own instructions (32 KiB is the limit there). The employee is told that memory cannot make it skip a question; the
+  sandbox and `untrusted` approval policy are what keep that true, and memory is sent to OpenAI. Codex's own `--disable
+  memories`, `project_doc_max_bytes=0` and `history.persistence="none"` stay as they were. This path has been tested against the
+  fake app-server only; it has not been run on a real machine.
 - **Every command and file change is asked.** `thread/start` and every `turn/start` say `approvalPolicy: "untrusted"`,
   reviewer `user`, and ask for the legacy `workspace-write` sandbox (the work folder is its only writable place, no `/tmp`, network off;
   but see the residual risk (7): a command the person allows may run outside it). A

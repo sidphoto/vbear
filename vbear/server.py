@@ -47,6 +47,7 @@ from . import armory
 from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
+from . import memory as memory_mod
 from . import claude_verify
 from . import codex_verify
 from . import config as cfg
@@ -131,6 +132,8 @@ MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
 # /api/chief/<id>[/retry | /cancel] (P40-1); the codes and statuses are the meetings'
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
+# /api/memory[/<id>] (P42-1): the person's memory; only these routes write memory.json
+MEMORY_RE = re.compile(r"^/api/memory/(m-[0-9a-f]{10})\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
@@ -696,6 +699,8 @@ def make_handler(console: Console):
                     if after is None:
                         return self._error(400, "after 必須是非負整數")
                     return self._group_call("get", found.group(1), None, after)
+                if path == "/api/memory":
+                    return self._chat_action(self._memory_view)
                 if path in ("/api/chief", "/api/chief/preview"):
                     if path == "/api/chief":
                         return self._chief_call("list")
@@ -919,6 +924,8 @@ def make_handler(console: Console):
                     if not found or not found.group(2):
                         return self._error(404, "not found")
                     return self._group_call(found.group(2), found.group(1), self._body_strict())
+                if path == "/api/memory":
+                    return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
                 if path == "/api/chief":
                     return self._chief_call("start", None, self._body_strict())
                 if path.startswith("/api/chief/"):
@@ -1141,6 +1148,11 @@ def make_handler(console: Console):
                     if not found or found.group(2):
                         return self._error(404, "not found")
                     return self._chat_action(lambda: console.chat_service().delete(found.group(1)))
+                if path.startswith("/api/memory/"):
+                    found = MEMORY_RE.match(path)
+                    if not found:
+                        return self._error(404, "not found")
+                    return self._chat_action(lambda: memory_mod.delete(found.group(1)))
                 if path.startswith("/api/groups/"):
                     found = GROUP_RE.match(path)
                     if not found or found.group(2):
@@ -1942,6 +1954,17 @@ def make_handler(console: Console):
                 return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "storage"}, 503)
+
+        def _memory_view(self) -> dict:
+            """GET /api/memory: the lines, the use, who takes memory along (read only: nothing here saves a word)."""
+            out = memory_mod.view()
+            off, on = out.pop("cards_off", []), out.pop("cards_on", [])
+            try:
+                cards = console.chat_service().cards()
+            except ApiError:
+                cards = []                     # the page still shows the lines when the cards cannot be read
+            out["cards"] = memory_mod.cards_view(cards, off, on)
+            return out
 
         @staticmethod
         def _chat_after(query: str):

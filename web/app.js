@@ -12311,6 +12311,7 @@ async function route() {
     else if (top === "ceo") await viewCeo();
     else if (top === "chat" && parts[1] === "group") await viewGroup(parts[2] ? decodeURIComponent(parts[2]) : null);
     else if (top === "chat") await viewChat(parts[1] ? decodeURIComponent(parts[1]) : null, params);
+    else if (top === "memory") await viewMemory();
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
@@ -14898,6 +14899,119 @@ function chatOriginFill(line, origin) {
 }
 // ---------- end of the chief of staff and the dispatch ----------------------------------------------------------------------------
 
+// ---------- memory (P42-1) ---------------------------------------------------------------------------------------------
+// The person's memory (#/memory): a few lines about them, their work and their decisions, the same for every employee. Only the
+// person's own press of 「存」 saves a line (POST /api/memory); the server refuses what must not be sent (passwords, keys, account
+// names, card numbers) and asks for a second confirmation of what reads like an order or holds a phone number or address. Every
+// string is set as text. This page does not change a line, it adds and removes them; the cards that take memory along and the
+// 「記住」 button in chats come later.
+
+const MEMORY_KINDS = [["about_you", "關於你"], ["work", "你的工作"], ["decision", "決定"]];
+const MEMORY_MAX_TEXT = 200;
+const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）或 OpenAI（Codex 的員工）。不要寫密碼、帳號、卡號；VBear 看到像這樣的內容會擋下。";
+const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
+const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
+const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。";
+const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
+
+function memoryCount(n) { return String(Number.isFinite(n) ? n : 0).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+function memorySourceText(src) {
+  const how = src && src.how;
+  if (how === "chat") return "從聊天記住的";
+  if (how === "group") return "從群組記住的";
+  if (how === "suggested") return "整理提議、你確認的";
+  return "你寫的";
+}
+
+function memoryRow(entry, onDelete) {
+  return el("li", { class: "mt-row card", "data-memory": "entry", "data-memory-id": entry.id },
+    el("span", { class: "memory-text", "data-memory": "text" }, entry.text),
+    el("span", { class: "small muted", "data-memory": "meta" }, `${memorySourceText(entry.source)}・${fmtTime(entry.created_at)}`),
+    entry.blocked ? el("span", { class: "small", "data-memory": "blocked", role: "note" }, MEMORY_BLOCKED) : null,
+    el("button", { type: "button", class: "btn small", "data-memory": "delete", on: { click: () => onDelete(entry) } }, "刪"));
+}
+
+function memoryAddForm(onSaved) {
+  const kind = el("select", { "data-memory": "kind", "aria-label": "類別" }, MEMORY_KINDS.map(([v, t]) => el("option", { value: v }, t)));
+  const text = el("textarea", { rows: "2", "data-memory": "new-text", "aria-label": "要記住的一句話", placeholder: "例如：回答一律用繁體中文",
+    maxlength: String(MEMORY_MAX_TEXT) });
+  const counter = el("span", { class: "small muted", "data-memory": "counter" }, `0／${MEMORY_MAX_TEXT} 字`);
+  const problem = el("div", { "data-memory": "problem" });
+  const confirmBox = el("div", { "data-memory": "confirm-box" });
+  let confirmed = null;                                   // the checkbox once a second confirmation is asked
+  const save = el("button", { type: "button", class: "btn primary", "data-memory": "save" }, "存");
+  const send = async () => {
+    setKids(problem, null);
+    if (confirmed && !confirmed.checked) { setKids(problem, notice("warn", "要存這一條，請先勾「我確定，存起來」。")); return; }
+    save.disabled = true;
+    const body = { kind: kind.value, text: text.value };
+    if (confirmed) body.confirm_warning = true;
+    try {
+      await api.post("/api/memory", body);
+      text.value = ""; counter.textContent = `0／${MEMORY_MAX_TEXT} 字`;
+      confirmed = null; setKids(confirmBox, null);
+      toast("已記住");
+      await onSaved();
+    } catch (e) {
+      if (e.code === "memory_confirm") {
+        const words = e.data && Array.isArray(e.data.warn_text) ? e.data.warn_text : [e.message];
+        confirmed = el("input", { type: "checkbox", "data-memory": "confirm" });
+        setKids(confirmBox, notice("warn", words.join(" ")), el("label", { class: "small" }, confirmed, " 我確定，存起來"));
+      } else {
+        confirmed = null; setKids(confirmBox, null);
+        setKids(problem, notice("bad", e.message));        // a refusal keeps what was typed so that it can be reworded
+      }
+    }
+    save.disabled = false;
+  };
+  save.addEventListener("click", send);
+  text.addEventListener("input", () => {
+    counter.textContent = `${text.value.length}／${MEMORY_MAX_TEXT} 字`;
+    if (confirmed) { confirmed = null; setKids(confirmBox, null); }        // a changed line is read again
+  });
+  return el("section", { class: "section", "data-memory": "add" }, sectionHead("新增一條", "寫成一句話；每位員工開新聊天時都會看到。"),
+    el("div", { class: "row" }, kind, text, save), counter, confirmBox, problem);
+}
+
+async function viewMemory() {
+  const token = seq;
+  let data;
+  try { data = await api.get("/api/memory"); }
+  catch (e) { setKids(claim(token), el("h1", null, "記憶"), notice("bad", "讀不到記憶：" + e.message)); return; }
+  const main = claim(token);
+  const listBox = el("div", { "data-memory": "list" });
+  let cur = data;
+  const draw = () => {
+    const used = cur.used && typeof cur.used === "object" ? cur.used : { count: 0, chars: 0, max_count: 50, max_chars: 4000 };
+    const entries = Array.isArray(cur.entries) ? cur.entries : [];
+    const groups = MEMORY_KINDS.map(([kind, label]) => {
+      const rows = entries.filter((e) => e && e.kind === kind);
+      return el("section", { class: "section", "data-memory": "group", "data-kind": kind },
+        sectionHead(label, null),
+        rows.length ? el("ul", { class: "mt-list" }, rows.map((e) => memoryRow(e, remove))) : el("p", { class: "small muted" }, "還沒有。"));
+    });
+    setKids(listBox,
+      cur.readable === false ? notice("bad", cur.problem || "記憶的檔案有問題，VBear 先不碰它。") : null,
+      el("p", { class: "small", "data-memory": "used" }, `${memoryCount(used.count)}／${memoryCount(used.max_count)} 條、${memoryCount(used.chars)}／${memoryCount(used.max_chars)} 字。${MEMORY_COST}`),
+      groups);
+  };
+  async function reload() {
+    try { cur = await api.get("/api/memory"); } catch (e) { toast("讀不到記憶：" + e.message); }
+    if (token === seq) draw();
+  }
+  async function remove(entry) {
+    if (!(await confirmInPage("刪除這一條記憶", MEMORY_DELETE_NOTE, "刪除"))) return;
+    try { await api.del(`/api/memory/${encodeURIComponent(entry.id)}`); toast("已刪除"); }
+    catch (e) { toast(e.message); }
+    await reload();
+  }
+  draw();
+  setKids(main, el("h1", null, "記憶"),
+    notice("info", (typeof cur.where_text === "string" && cur.where_text) || MEMORY_WHERE),
+    el("p", { class: "small", "data-memory": "split" }, MEMORY_SPLIT),
+    memoryAddForm(reload), listBox);
+}
+
 // ---------- meetings (P34-5) -----------------------------------------------------------------------------------------
 // The pages of the meeting back end (vbear/meeting_runner.py): the list and the new meeting, one meeting with its
 // evidence and the chairman's desk, the meeting room of the office, the home page's "your turn", the entry on a task
@@ -17195,6 +17309,8 @@ if (typeof module !== "undefined" && module.exports) {
     CHAT_STATE,
     CHAT_INTRO,
     chatLine,
+    viewMemory,
+    memoryRow,
     chatCardNode,
     chatInputRows,
     chatSupportNode,
