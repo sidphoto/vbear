@@ -53,7 +53,7 @@ class ViewTests(SharedCase):
         self.assertFalse(self.shared.exists(), "looking makes no folder")
         self.assertFalse(self.meta.exists(), "looking makes no record")
         by = {c["profile_id"]: c for c in out["cards"]}
-        self.assertEqual({k: by[self.emp][k] for k in ("company", "can_chat", "on", "verified")}, {"company": "Anthropic", "can_chat": True, "on": False, "verified": None})
+        self.assertEqual({k: by[self.emp][k] for k in ("company", "can_chat", "on", "verified")}, {"company": "Anthropic", "can_chat": True, "on": False, "verified": False})   # P43-2: the fake Claude Code has no report that it passed with the folder
         self.assertEqual((by[codex]["company"], by[codex]["can_chat"], by[codex]["on"]), ("OpenAI", True, False))
         self.assertEqual((by[grok]["company"], by[grok]["can_chat"], by[grok]["on"]), (None, False, False))
         self.assertEqual(by[self.emp]["name"], "虛構員工")
@@ -191,14 +191,6 @@ class SwitchTests(SharedCase):
     def test_the_default_is_off_for_everyone_so_off_is_not_kept_as_a_state(self):
         self.switch(self.emp, False)
         self.assertEqual(json.loads((self.meta / "settings.json").read_text())["cards_on"], [])
-
-    def test_a_codex_card_is_refused_for_now(self):
-        codex = self.card("Codex 員工", "codex")
-        for body in ({"on": True}, {"on": False}, {"on": True, "confirm_company": True}):
-            status, out = self.call("/api/shared/cards", "POST", {"profile_id": codex, **body})
-            self.assertEqual((status, out["code"]), (400, "card_tool_unsupported"), body)
-        self.assertFalse(self.meta.exists(), "nothing was written")
-        self.assertFalse(self.shared.exists())
 
     def test_a_card_whose_tool_cannot_chat_and_one_that_is_not_there(self):
         grok = self.card("Grok 員工", "grok")

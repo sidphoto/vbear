@@ -45,9 +45,10 @@ FILES_MAX = 200                                # files named on the page
 PROFILE_ID_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 HOW = ("page", "group", "dispatch")
 COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI"}
-# The engines whose employees can use the shared folder now. P43-2 adds codex-chat; until then a Codex card is refused with
+# The engines whose employees can use the shared folder (P43-2 added codex-chat). An engine that is not here is refused with
 # ``card_tool_unsupported`` and ``for_card`` says no for it, whatever the file says.
-SUPPORTED_ENGINES = ("claude-chat",)
+SUPPORTED_ENGINES = ("claude-chat", "codex-chat")
+CONFIRM_TEXT = "這位員工讀到的共用資料夾檔案會送到 OpenAI（Codex 的公司）。不要放密碼、帳號、金鑰。確定要打開嗎？"
 FINDER = "/usr/bin/open"
 IS_MAC = sys.platform == "darwin"
 UNREADABLE = ("共用資料夾的設定有問題，VBear 先不碰它：在你修好之前，所有員工都當成不能用共用資料夾。請檢查狀態資料夾裡的 "
@@ -171,16 +172,19 @@ def listing(path: str) -> dict:
                      "max_entries": sr.MAX_ENTRIES, "over": over}, "links": links, "files": files}
 
 
-def cards_view(cards, on) -> list:
-    """The role cards as the page lists them: who may use the folder, and which company reads what they read. ``verified`` is
-    None: whether this AI tool's version has passed the check with the shared folder is P43-2's to say."""
+def cards_view(cards, on, checked=None) -> list:
+    """The role cards as the page lists them: who may use the folder, and which company reads what they read. ``verified`` says
+    whether the version of the card's AI tool has passed the chat check with the shared folder: ``checked`` maps an engine to
+    True, False or None (the version could not be read); an engine it does not name is None."""
+    checked = checked if isinstance(checked, dict) else {}
     return [{"profile_id": c.get("id"), "name": c.get("name"), "tool": c.get("tool"), "company": COMPANY.get(c.get("engine")),
              "can_chat": c.get("can_chat") is True,
-             "on": c.get("engine") in SUPPORTED_ENGINES and c.get("id") in on, "verified": None}
+             "on": c.get("engine") in SUPPORTED_ENGINES and c.get("id") in on,
+             "verified": checked.get(c.get("engine")) if c.get("engine") in SUPPORTED_ENGINES else None}
             for c in cards if isinstance(c, dict)]
 
 
-def view(cards) -> dict:
+def view(cards, checked=None) -> dict:
     """What GET /api/shared shows. Never raises for settings that cannot be read, or for a folder that is not right: it says so."""
     out = {"where_text": where_text(), "exists": False, "problem": None,
            "used": {"bytes": 0, "entries": 0, "max_bytes": sr.MAX_BYTES, "max_entries": sr.MAX_ENTRIES, "over": False},
@@ -188,7 +192,7 @@ def view(cards) -> dict:
     path = folder()
     readable, on = cards_on()
     out["readable"] = readable
-    out["cards"] = cards_view(cards, on)
+    out["cards"] = cards_view(cards, on, checked)
     out["exists"] = os.path.lexists(path)
     if out["exists"]:
         problem = sr.folder_problem(path, str(cfg.state_dir()), _home())
@@ -229,8 +233,9 @@ def _body(body, allowed: set, required: set) -> dict:
 def set_card(body, cards, how: str = "page", now: float | None = None) -> dict:
     """Switch the shared folder on or off for one role card: ``{profile_id, on, confirm_company?}``. ``cards`` are the chat service's cards
     (``{id, engine, ...}``): the card must be there and its AI tool one that chats. Only the browser's routes call this (the
-    browser's ``X-VBear`` is checked for every POST). A card of an AI tool the folder is not open to yet (Codex, until P43-2) is
-    refused with 400 ``card_tool_unsupported``. Switching on makes the folder when it is not there and refuses (409 ``shared_unsafe``) one that is
+    browser's ``X-VBear`` is checked for every POST). A card of an AI tool the folder is not open to is
+    refused with 400 ``card_tool_unsupported``. Switching a Codex card on takes ``confirm_company: true`` (what it reads goes to
+    OpenAI): 409 ``shared_confirm`` with ``warn: ["send_to_openai"]`` without it. Switching on makes the folder when it is not there and refuses (409 ``shared_unsafe``) one that is
     not right, without mending it; switching off always works and deletes nothing. ``how`` is page, group or dispatch."""
     body = _body(body, {"profile_id", "on", "confirm_company"}, {"profile_id", "on"})
     pid, on = body["profile_id"], body["on"]
@@ -246,6 +251,8 @@ def set_card(body, cards, how: str = "page", now: float | None = None) -> dict:
         raise ApiError(400, "bad_request", "這位員工的 AI 工具還不能聊天，用不到共用資料夾。")
     if engine not in SUPPORTED_ENGINES:
         raise ApiError(400, "card_tool_unsupported", "這位員工的 AI 工具還不能用共用資料夾。")
+    if on and COMPANY[engine] == "OpenAI" and body.get("confirm_company") is not True:
+        raise ApiError(409, "shared_confirm", CONFIRM_TEXT, warn=["send_to_openai"], warn_text=[CONFIRM_TEXT])
     if on and sr.ensure_folder(str(cfg.state_dir()), _home()):
         raise ApiError(409, "shared_unsafe", UNSAFE_TEXT)
     try:

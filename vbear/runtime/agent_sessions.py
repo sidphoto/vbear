@@ -1057,12 +1057,15 @@ _CODEX_CHAT_BOUNDARY = {
     "settings": "Codex reads only its own chat folder (codex-chat-home); the person's own Codex settings are not read",
 }
 _CODEX_CHAT_OWN = frozenset({"chat_id", "profile_id", "resume", "thread_id", "codex_home"})
+_CODEX_CHAT_OPTIONAL = frozenset({"shared"})                # the shared folder (P43-2), present only when the employee has it
 
 
-def codex_chat_settings(cli_version: str, workdir: str) -> dict:
+def codex_chat_settings(cli_version: str, workdir: str, shared: str | None = None) -> dict:
     """What VBear asks of this Codex for a chat in ``workdir``, the role card's work folder. ``project_trust`` is the
     one entry that depends on the folder (argv_for turns it into a ``-c projects={...}``); a path that cannot be written
-    safely refuses the launch."""
+    safely refuses the launch. ``shared`` (P43-2, ADR 0009) is the shared folder of an employee the person switched it on for:
+    the sandbox's one more writable root (argv_for turns it into a ``-c sandbox_workspace_write.writable_roots=[...]``) and a
+    key of its own; without it the settings are the ones v0.17.0 wrote."""
     consts = codex_chat_protocol.constants_for(cli_version)
     if consts is None:
         raise LaunchRefused("unsupported_version", f"Codex {cli_version} 沒有聊天模式的常數")
@@ -1070,9 +1073,18 @@ def codex_chat_settings(cli_version: str, workdir: str) -> dict:
         codex_chat_protocol.project_trust_setting(workdir)
     except ValueError as exc:
         raise LaunchRefused("invalid_workdir", f"聊天的工作資料夾路徑不能交給 Codex：{exc}") from exc
-    return {"engine": "codex-chat", "approval_policy": "untrusted", "approvals_reviewer": "user",
-            "sandbox": dict(codex_chat_protocol.SANDBOX_POLICY, writableRoots=[]), "config": list(consts.config),
-            "project_trust": {workdir: "untrusted"}, "disabled_features": list(consts.disabled_features)}
+    if shared is not None:
+        try:
+            codex_chat_protocol.shared_root_setting(shared)
+        except ValueError as exc:
+            raise LaunchRefused("unsafe_path", f"共用資料夾路徑不能交給 Codex：{exc}") from exc
+    out = {"engine": "codex-chat", "approval_policy": "untrusted", "approvals_reviewer": "user",
+           "sandbox": dict(codex_chat_protocol.SANDBOX_POLICY, writableRoots=[] if shared is None else [shared]),
+           "config": list(consts.config), "project_trust": {workdir: "untrusted"},
+           "disabled_features": list(consts.disabled_features)}
+    if shared is not None:
+        out["shared"] = shared
+    return out
 
 
 def _claude_chat_settings(m: dict, workdir: str, scratch, uid: int, base: Path) -> dict:
@@ -1082,7 +1094,7 @@ def _claude_chat_settings(m: dict, workdir: str, scratch, uid: int, base: Path) 
 
 def _codex_chat_settings(m: dict, workdir: str, scratch, uid: int, base: Path) -> dict:
     """The same for a codex-chat launch, which must also name VBear's own chat folder of Codex."""
-    expected = codex_chat_settings(m.get("cli_version"), workdir)
+    expected = codex_chat_settings(m.get("cli_version"), workdir, shared=m.get("shared"))
     if m.get("codex_home") != str(Path(os.path.realpath(base)) / CODEX_CHAT_HOME):
         raise LaunchRefused("drift", "聊天用的 Codex 資料夾不是 VBear 的那一個")
     return expected
@@ -1097,7 +1109,8 @@ def codex_chat_argv(manifest: dict) -> list[str]:
         raise LaunchRefused("manifest_invalid", f"Codex 聊天 manifest 不符（{problem}）")
     consts = codex_chat_protocol.constants_for(manifest["cli_version"])
     try:
-        return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts, manifest["canonical_workspace"])]
+        extra = {"shared": manifest["shared"]} if manifest.get("shared") else {}      # off: the call is the one v0.17.0 made
+        return [manifest["cli_binary"], *codex_chat_protocol.argv_for(consts, manifest["canonical_workspace"], **extra)]
     except ValueError as exc:
         raise LaunchRefused("invalid_workdir", f"聊天的工作資料夾路徑不能交給 Codex：{exc}") from exc
 
@@ -1132,10 +1145,12 @@ def codex_chat_env(manifest: dict, source_env: dict) -> dict:
 
 def prepare_codex_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_version: str, cli_identity: list[int],
                               model_id: str | None, chat_id: str, profile_id: str, resume: bool,
-                              thread_id: str | None, codex_home: str) -> dict:
+                              thread_id: str | None, codex_home: str, shared: str | None = None) -> dict:
     """One process of a Codex chat: the managed launch with its recorded settings, whether it resumes the chat's
     thread (and which), and the folder Codex keeps its login and conversations in. The daemon checks the version
-    (chat-verified, administrator policy), the login and the folder first. No process is started."""
+    (chat-verified, administrator policy), the login and the folder first. No process is started. ``shared`` (P43-2) is the
+    shared folder, which must be the one VBear computes for this state folder and safe to use; None when the employee has
+    it switched off."""
     if not (isinstance(chat_id, str) and CHAT_ID_RE.match(chat_id)):
         raise LaunchRefused("bad_request", "聊天 id 格式不符")
     if not (isinstance(profile_id, str) and TASK_ID_RE.match(profile_id)):
@@ -1158,6 +1173,8 @@ def prepare_codex_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_
     if codex_home != str(base / CODEX_CHAT_HOME):
         raise LaunchRefused("bad_request", "聊天用的 Codex 資料夾必須是 VBear 狀態資料夾裡的 codex-chat-home")
     canonical = _check_chat_workdir(workdir, base)
+    if shared is not None:
+        _check_shared(shared, base)
     root = base / SESSIONS_DIR
     old_umask = os.umask(0o077)
     ldir = scratch = None
@@ -1173,7 +1190,7 @@ def prepare_codex_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_
             raise LaunchRefused("unsafe_path", "暫存區路徑含 symlink")
         sst = _owned_dir(scratch, uid)
         settings_path = ldir / SETTINGS
-        _write_private(settings_path, json.dumps(codex_chat_settings(cli_version, canonical), ensure_ascii=False, sort_keys=True,
+        _write_private(settings_path, json.dumps(codex_chat_settings(cli_version, canonical, shared=shared), ensure_ascii=False, sort_keys=True,
                                                  indent=2) + "\n")
         manifest = {
             "manifest_version": MANIFEST_VERSION,
@@ -1200,6 +1217,7 @@ def prepare_codex_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_
             "resume": resume,
             "thread_id": thread_id,
             "codex_home": codex_home,
+            **({"shared": shared} if shared is not None else {}),
         }
         _write_private(ldir / MANIFEST, json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
         return manifest
@@ -1219,7 +1237,7 @@ def codex_chat_manifest_problem(m: dict) -> str | None:
         return "不是物件"
     if m.get("engine") != "codex-chat" or codex_chat_protocol.constants_for(m.get("cli_version")) is None:
         return "引擎或版本不合法"
-    common = {k: v for k, v in m.items() if k not in _CODEX_CHAT_OWN and k != "boundary"}
+    common = {k: v for k, v in m.items() if k not in _CODEX_CHAT_OWN and k not in _CODEX_CHAT_OPTIONAL and k != "boundary"}
     common["engine"] = "codex"
     common["boundary"] = {"write": "-"}
     problem = managed_manifest_problem(common)
@@ -1241,6 +1259,8 @@ def codex_chat_manifest_problem(m: dict) -> str | None:
                       or (isinstance(m["thread_id"], str) and codex_chat_protocol.sp.UUID_RE.match(m["thread_id"])
                           is not None and m["resume"] is True)),
         ("codex_home", _abs_path(m["codex_home"]) and os.path.basename(m["codex_home"]) == CODEX_CHAT_HOME),
+        ("shared", "shared" not in m or (isinstance(m["shared"], str) and isinstance(m["allowed_root"], str)
+                                         and m["shared"] == os.path.join(os.path.dirname(m["allowed_root"]), shared_rules.DIRNAME))),
         ("boundary", m["boundary"] == _CODEX_CHAT_BOUNDARY),
     ]
     for name, ok in checks:

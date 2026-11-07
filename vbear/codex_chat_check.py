@@ -19,6 +19,15 @@ day's ledger are the check's own), opens a chat with a made-up role card and sen
   interrupt  a long reply is cut with ``turn/interrupt``; the process ends when its stdin is closed
   memory     a new process with ``thread/resume``: does the thread remember the code word, and is the token total carried on
 
+Then, in a second chat of the same daemon, the shared folder (P43-2, ADR 0009) is tried with three more messages (SHARED_PROMPTS):
+the process must hold the folder as its one more writable root and the thread's answer must list exactly it (VBear's tracker refuses
+any other, so a Codex that ignored the setting is a violation), a file made there with apply_patch is a card with the diff and is
+there when allowed, a shell write there is a card and is there when allowed, and an apply_patch through a link that leads outside is
+declined by VBear without a card, with nothing outside. Their result is the report's ``shared`` (``passed`` or ``failed``) and
+``shared_steps``; it does not change ``passed``. Whether the sandbox itself lets a shell write into the folder is not decided by
+the shell step (an allowed command that the sandbox stops runs again outside it, see ``outside``); it is the thread's answer
+that shows what the sandbox was given. Real-machine behavior of the answer is waiting to be observed (docs/evidence/codex-0.163.0-shared.md).
+
 Afterwards the check deletes its own thread with ``thread/delete``, closes the idle process (stdin EOF: it must end by itself
 within CLOSE_DEADLINE), and looks for what was left behind (processes, folders, files in the person's chat folder).
 
@@ -26,7 +35,7 @@ Money: Codex reports tokens. Every turn has a cap in VBear's own counting (``cod
 million tokens, rounded up to the cent, at least one cent), STEP_CAP_USD; a turn that reaches it is interrupted and fails
 the check. The day's limit of the check's own temporary state is TOTAL_USD (US$0.30): the caps are never raised past what is
 left of it, so the whole run cannot be counted for more. It is spent from the person's own ChatGPT plan, not added to the
-day's ledger of the real state. About 14 model calls.
+day's ledger of the real state. About 14 model calls, and 8 more for the shared folder part (its own limit, SHARED_TOTAL_USD).
 
 A pass writes ``<state>/codex-chat-verified.json`` with the version and the path of the report; ``cli_versions`` re-reads that
 report every time, so a record without a passing report counts for nothing. A version that is not checked is never
@@ -59,6 +68,11 @@ INSTRUCTIONS = "Begin every reply with the word PINEAPPLE."
 TOTAL_USD = Decimal("0.30")
 STEP_CAP_USD = {"stream": Decimal("0.03"), "ask": Decimal("0.08"), "edit": Decimal("0.07"), "patch": Decimal("0.05"),
                 "outside": Decimal("0.07"), "interrupt": Decimal("0.01"), "memory": Decimal("0.03")}
+SHARED_TOTAL_USD = Decimal("0.15")
+SHARED_CAP_USD = {"shared_patch": Decimal("0.05"), "shared_shell": Decimal("0.05"), "shared_link": Decimal("0.05")}
+SHARED_PROFILE_ID = "codex-chat-check-shared"
+SHARED_STEPS = ("shared_folder", "shared_root", "shared_patch_card", "shared_shell_card", "shared_link_refused",
+                "shared_records_clean", "thread_deleted", "idle_close", "shared_home_clean")
 CLOSE_DEADLINE = 20.0              # seconds an idle process may take to end after its stdin is closed
 CLOSE_SLACK = 10.0                 # how long the check waits past it to see what became of the process
 STEP_TIMEOUT = 150.0
@@ -92,6 +106,18 @@ PROMPTS = {
                  "commentary. Do not run any command.",
     "memory": "[vbear-check:memory] What was the code word I gave you at the start of this conversation? Reply with "
               "the code word only. Do not run any command.",
+}
+
+
+SHARED_PROMPTS = {                  # {path} is a file in the check's own shared folder
+    "shared_patch": "[vbear-check:shared_patch] Use your file editing tool (apply_patch), not the shell, to create the file "
+                    "{path} containing the single line: shared-ok -- then tell me in one short sentence whether it worked. "
+                    "Do not try anything else.",
+    "shared_shell": "[vbear-check:shared_shell] Run exactly this shell command: echo shared-ok > {path} -- then tell me in "
+                    "one short sentence whether it worked. Do not try anything else.",
+    "shared_link": "[vbear-check:shared_link] Use your file editing tool (apply_patch) to create the file {path} containing "
+                   "the single line: link-ok -- if that is refused, say so in one short sentence and stop. Do not try "
+                   "anything else.",
 }
 
 
@@ -132,12 +158,15 @@ def _thread_files(home: Path, thread_id: str | None) -> int:
 class CodexSession(chat_check.Session):
     """The check's side of the daemon: the same RPCs the console makes, with its waits."""
 
-    def __init__(self, daemon, state: Path, binary: str, version: str, log: list[str], probe: dict):
-        super().__init__(daemon, state, binary, version, "", log)
+    def __init__(self, daemon, state: Path, binary: str, version: str, log: list[str], probe: dict, *, shared: bool = False):
+        super().__init__(daemon, state, binary, version, "", log, shared=shared)
         self.probe = probe
+        self.total = SHARED_TOTAL_USD if shared else TOTAL_USD
+        self.caps = SHARED_CAP_USD if shared else STEP_CAP_USD
 
     def open(self) -> None:
-        self.chat_id = self.rpc("chat_open", profile_id=PROFILE_ID, engine="codex-chat")["chat_id"]
+        self.chat_id = self.rpc("chat_open", profile_id=SHARED_PROFILE_ID if self.shared else PROFILE_ID,
+                                engine="codex-chat")["chat_id"]
 
     # -- money
 
@@ -147,14 +176,17 @@ class CodexSession(chat_check.Session):
     def say(self, step: str, text: str) -> int:
         """Send ``text`` as the step's message under its cap (never past what is left of TOTAL_USD); the turn number."""
         self.poll()
-        left = TOTAL_USD - self.spent()
-        cap = min(STEP_CAP_USD[step], left).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        left = self.total - self.spent()
+        cap = min(self.caps[step], left).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         if cap < Decimal("0.01"):
-            raise CheckError(f"總花費上限 US${TOTAL_USD} 用完了，{step} 步驟沒有送出")
+            raise CheckError(f"總花費上限 US${self.total} 用完了，{step} 步驟沒有送出")
         chat_check._write_private(self.state / "config.json", json.dumps({
-            "chat_limits": {"per_turn_usd": float(cap)}, "meeting_limits": {"daily_usd": float(TOTAL_USD)}}))
+            "chat_limits": {"per_turn_usd": float(cap)},
+            "meeting_limits": {"daily_usd": float(TOTAL_USD + SHARED_TOTAL_USD)}}))     # the day's limit holds both parts
         cli = {"binary": self.binary, "version": self.version, "identity": agent_sessions.binary_identity(self.binary)}
         fields = {"chat_id": self.chat_id, "text": text, "cli": cli, "model_id": None, "instructions": INSTRUCTIONS}
+        if self.shared:
+            fields["shared"] = True
         for attempt in range(SEND_TRIES):
             reply = dmn.rpc("chat_send", base=self.state, timeout=30.0, **fields)
             if reply.get("ok"):
@@ -453,6 +485,92 @@ def _run_steps(s: CodexSession, work: Path, outside: Path, real_home: Path, chec
         note="token 總數跨 resume 累計；resume 之後重送的那一則不重複計")
 
 
+def _run_shared(s: CodexSession, state: Path, outside: Path, real_state: Path, real_home: Path, steps: dict, obs: dict) -> None:
+    """The second chat, with the shared folder on. Every file is in the check's own temporary state folder; nothing of the person's."""
+    from .runtime import shared_rules
+    folder = Path(shared_rules.shared_path(state))
+    problem = shared_rules.ensure_folder(state, os.path.expanduser("~"))
+    steps["shared_folder"] = check(problem is None, note="檢查自己的共用資料夾做得起來、位置與權限都對")
+    if problem:
+        raise CheckError("共用資料夾做不起來")
+    patched, shelled = folder / "vbear-check-patch.txt", folder / "vbear-check-shell.txt"
+    link, escaped = folder / "vbear-check-link", outside / "escape.txt"
+    os.symlink(outside, link)
+    root_arg = ccp.shared_root_setting(str(folder))
+    deny = lambda card, i: ("deny", None)           # noqa: E731
+    # ---- apply_patch in the folder: a card with the diff, written when allowed --------------------------------------
+    s.open()
+
+    def patch_ok(card):
+        ch = card["input"].get("changes") if isinstance(card.get("input"), dict) else None
+        return (card["tool"] == "file_change" and isinstance(ch, list) and len(ch) == 1
+                and ch[0].get("path") in (str(patched), patched.name) and ch[0].get("kind") == "add")
+    n = s.say("shared_patch", SHARED_PROMPTS["shared_patch"].format(path=patched))
+    cards = s.drive(n, lambda card, i: ("allow", None) if patch_ok(card) else ("deny", None))
+    ready = [x for x in s.records if x["kind"] == "session_ready"]
+    live = s.dm._chats.get(s.chat_id)
+    asked_root = bool(s.probe["argv"]) and all(root_arg in a for a in s.probe["argv"])
+    steps["shared_root"] = check(
+        bool(ready) and not s.facts("violation") and live is not None and live.shared == str(folder) and asked_root,
+        sessions=len(ready), root_sent=asked_root,
+        note="這個程序的啟動參數只多一個可寫的位置（檢查自己的共用資料夾），thread/start 的回應逐項相符：可寫的位置剛好就是它")
+    files = [c for c in cards if c["tool"] == "file_change"]
+    diff = (files[0]["input"]["changes"][0].get("diff") if files and patch_ok(files[0]) else None) or ""
+    text = patched.read_text(encoding="utf-8") if patched.is_file() else None
+    done = [x for x in s.of_turn(n, "tool_result") if x["tool"] == "file_change"]
+    steps["shared_patch_card"] = check(
+        len(files) == 1 and "shared-ok" in diff and text is not None and "shared-ok" in text and bool(done) and not done[0]["is_error"],
+        cards=len(files), file_written=text is not None, note="共用資料夾裡的檔案修改出卡片、卡片有 diff；允許後檔案寫出來了")
+    # ---- a shell write in the folder: a card, written when allowed --------------------------------------------------------
+    n = s.say("shared_shell", SHARED_PROMPTS["shared_shell"].format(path=shelled))
+
+    def shell_ok(card):
+        return card["tool"] == "command" and str(shelled) in _command(card) and _plain(_command(card), "shared-ok")
+    cards = s.drive(n, lambda card, i: ("allow", None) if shell_ok(card) else ("deny", None))
+    cmds = [c for c in s.command_cards(cards) if shell_ok(c)]
+    results = [x for x in s.of_turn(n, "tool_result") if x["tool"] == "command"]
+    steps["shared_shell_card"] = check(
+        len(cmds) == 1 and shelled.is_file() and bool(results) and not results[0]["is_error"],
+        cards=len(cmds), file_written=shelled.is_file(),
+        note="在共用資料夾裡用 shell 寫檔也要先出卡片；允許後檔案寫出來了（沙盒本身放不放行，看 thread/start 的回應，不看這一項）")
+    # ---- apply_patch through a link that leads outside: declined by VBear -----------------------------------------------
+    n = s.say("shared_link", SHARED_PROMPTS["shared_link"].format(path=link / "escape.txt"))
+    cards = s.drive(n, deny)
+    auto = [x for x in s.of_turn(n, "denied") if x["tool"] == "file_change" and x["by"] == "vbear"]
+    shown = [c for c in cards if c["tool"] == "file_change"]
+    steps["shared_link_refused"] = check(
+        not shown and bool(auto) and not escaped.exists() and not os.listdir(outside),
+        cards=len(shown), declined_by_vbear=len(auto), written_outside=escaped.exists(),
+        note="穿過指向資料夾以外的連結修改檔案，VBear 自己拒絕：沒有卡片、資料夾外沒有檔案")
+    obs["shared"] = {"patch": "card_shown" if files else "not_attempted", "shell": "card_shown" if cmds else "not_attempted",
+                     "link": "declined_by_vbear" if auto else "card_shown" if shown else "not_attempted"}
+    for path in (escaped,):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    errors = [x for x in s.records if x["kind"] == "error"]
+    ended = [x for x in s.records if x["kind"] == "turn_ended"]
+    steps["shared_records_clean"] = check(
+        not errors and len(ended) == 3 and not s.facts("violation") and all(x["reason"] != "limit" for x in ended),
+        errors=[x["message"] for x in errors][:3], note="共用資料夾這段沒有錯誤紀錄；三個回合都有結束，沒有碰到自己的上限")
+    # the thread it made is deleted and its process closed, as for the main chat; what it wrote about itself is not kept
+    kept = {}
+    _delete_and_close(s, real_home, steps, kept)
+    obs["shared_thread_file"] = kept.get("thread_file")
+    home, _why = codex_chat_env.home_state(real_state, home=real_home)
+    chat_dir = state / "chats" / (s.chat_id or "")
+    texts = []
+    for name in ("chat.json", "events.jsonl"):
+        try:
+            texts.append((chat_dir / name).read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    found = leaks("\n".join(texts), (str(real_home),))
+    steps["shared_home_clean"] = check(
+        home == "ok" and not found, state=home, found=found, note="共用資料夾這段之後，聊天用的 Codex 資料夾仍然乾淨，帳號資料沒有進聊天紀錄")
+
+
 def _delete_and_close(s: CodexSession, real_home: Path, checks: dict, obs: dict) -> None:
     """The thread the check made is deleted by the live process; then the idle process is closed. With no idle process
     (the run stopped early) nothing can delete it without a model call: the report says the copy was left."""
@@ -527,16 +645,18 @@ def _final_checks(s: CodexSession, state: Path, real_state: Path, real_home: Pat
         total_limit_usd=str(TOTAL_USD), note="依 VBear 的估算，總花費沒超過上限，也沒有任何回合碰到自己的上限")
 
 
-def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = None) -> int:
-    """Check ``binary`` (which says it is ``version``). Returns the exit code: 0 passed, 1 failed, 2 could not run."""
+def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = None, shared: bool = False) -> int:
+    """Check ``binary`` (which says it is ``version``). Returns the exit code: 0 passed, 1 failed, 2 could not run. ``shared``: also
+    try the shared folder in a second chat (what ``boundary_check --mode codex-chat`` does); without it the report says it was not run."""
     from .boundary_check import finish
     real_state = Path(os.path.realpath(cfg.state_dir()))   # before VBEAR_HOME points at the check's own folder
     real_home = codex_chat_env.chat_home_path(real_state)
     binary = os.path.realpath(binary)
     report = {"tool": "verify_codex_chat_boundary", "mode": "codex-chat", "codex_version": version, "binary": binary,
-              "started": time.time(), "checks": {}, "observations": {}, "cost_note": (
-                  f"約 14 次模型呼叫，花在你自己的 ChatGPT 方案；依 VBear 的估算規則總共不超過 US${TOTAL_USD}，"
-                  "每一步有自己的上限；不計入每日額度（檢查用的是暫時的狀態資料夾）")}
+              "started": time.time(), "checks": {}, "observations": {},
+              "shared": "failed", "shared_steps": {}, "cost_note": (
+                  f"約 14 次模型呼叫（共用資料夾另外約 8 次），花在你自己的 ChatGPT 方案；依 VBear 的估算規則主要部分不超過 "
+                  f"US${TOTAL_USD}、共用資料夾部分不超過 US${SHARED_TOTAL_USD}，每一步有自己的上限；不計入每日額度（檢查用的是暫時的狀態資料夾）")}
     out_path = Path(out) if out else real_state / "verifications" / f"codex-{version}-chat.json"
     if ccp.constants_for(version) is None:
         report["error"] = f"Codex {version} 沒有聊天模式的常數，不能驗證"
@@ -565,7 +685,7 @@ def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = No
     pids: set[int] = set()
     scratch: set[str] = set()
     try:
-        code = _run(binary, version, root, real_state, real_home, report, pids, scratch)
+        code = _run(binary, version, root, real_state, real_home, report, pids, scratch, shared)
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"[:500]
     finally:
@@ -619,7 +739,7 @@ def main(codex: str | None, out: str | None) -> int:
     if version is None:
         report["error"] = f"讀不出 Codex 的版本（{why}）"
         return finish(report, out, 2)
-    return run(binary, version, out)
+    return run(binary, version, out, shared=True)
 
 
 def _stop(report: dict, out_path: Path, code: int, finish) -> int:
@@ -639,7 +759,7 @@ def _finish(report: dict, out_path: Path, code: int, finish, record=None) -> int
 
 
 def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Path, report: dict, pids: set,
-         scratch: set) -> int:
+         scratch: set, shared: bool = False) -> int:
     state = root / "st"
     state.mkdir(mode=0o700)
     checks, obs = report["checks"], report["observations"]
@@ -657,6 +777,7 @@ def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Pat
     dm.chat_close_grace = CLOSE_DEADLINE
     thread = None
     session = None
+    shared_session = None
     try:
         dm.start()
         thread = threading.Thread(target=dm.serve_forever, daemon=True, name="vbear-codex-chat-check")
@@ -674,6 +795,25 @@ def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Pat
             except CheckError as exc:
                 report.setdefault("error", str(exc)[:500])
             _final_checks(session, state, real_state, real_home, checks, obs, logs)
+        if shared and "error" not in report and all(c["pass"] for c in checks.values()):
+            # P43-2: the shared folder, in a chat of its own. A failure here is the report's ``shared``, not its ``passed``.
+            probe["facts"], probe["argv"] = [], []
+            shared_session = CodexSession(dm, state, binary, version, logs, probe, shared=True)
+            steps = report["shared_steps"]
+            try:
+                _run_shared(shared_session, state, outside, real_state, real_home, steps, obs)
+            except (CheckError, dmn.UnsafePath) as exc:
+                steps["shared_error"] = check(False, error=f"{type(exc).__name__}: {exc}"[:300], note="共用資料夾這段沒有跑完")
+                if shared_session.chat_id:
+                    try:
+                        _delete_and_close(shared_session, real_home, steps, {})
+                    except CheckError:
+                        pass
+            report["shared"] = "passed" if all(c["pass"] for c in steps.values()) and set(SHARED_STEPS) <= set(steps) else "failed"
+            shared_session.poll() if shared_session.chat_id else None
+        else:
+            report["shared_steps"]["not_run"] = check(False, note=(
+                "前面的檢查沒有過，共用資料夾這段沒有跑" if shared else "這次沒有要求檢查共用資料夾"))
         obs["unknown_request"] = "未觀察：真的 Codex 不會因為這個檢查而送出不認得的請求；VBear 對它的處理由 daemon 的測試用假 Codex 涵蓋"
         recs = session.records if session else []
         report["turns"] = [{"turn": x["turn"], "cost_usd": x["cost_usd"], "reason": x["reason"], "tokens": x.get("tokens"),
@@ -683,10 +823,11 @@ def _run(binary: str, version: str, root: Path, real_state: Path, real_home: Pat
         report["anomalies"] = sorted({x["event_type"] for x in recs if x["kind"] == "anomaly"})
         report["daemon_log_tail"] = [line[:200] for line in logs[-12:]]
     finally:
-        if session is not None:
-            session.watch()
-            pids |= session.pids
-            scratch |= session.scratch
+        for each in (session, shared_session):
+            if each is not None:
+                each.watch()
+                pids |= each.pids
+                scratch |= each.scratch
         dm.stop()
         if thread is not None:
             thread.join(15)
@@ -732,7 +873,7 @@ def _patch(probe: dict) -> list:
 
     def argv(manifest):
         out = orig_argv(manifest)
-        probe["argv"].append([a for a in out if a.startswith(("project_root_markers", "projects="))])
+        probe["argv"].append([a for a in out if a.startswith(("project_root_markers", "projects=", "sandbox_workspace_write.writable_roots="))])
         return out
 
     ccs.CodexChatProcess._on_fact = on_fact

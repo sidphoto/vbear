@@ -2064,7 +2064,11 @@ def make_handler(console: Console):
                 cards = self._memory_cards()
             except ApiError:
                 cards = []                     # the page still shows the folder when the cards cannot be read
-            return shared_folder.view(cards)
+            try:
+                checked = console.chat_service().shared_checked(shared_folder.SUPPORTED_ENGINES)
+            except ApiError:
+                checked = {}                   # unknown for every employee
+            return shared_folder.view(cards, checked)
 
         def _shared_reveal(self, body) -> dict:
             """POST /api/shared/reveal: open the shared folder in Finder. No body field: the path is the one VBear computes."""

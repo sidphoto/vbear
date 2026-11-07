@@ -13530,7 +13530,7 @@ async function viewChatDetail(token, id) {
   let memState = null;                    // P42-3: { on, count, readable } of this employee's memory, or null when it cannot be had
   const memoryBox = el("div", { "data-memory": "chat-state-box" });
   const sharedBox = el("div", { "data-shared": "chat-state-box" });       // P43-4: whether this employee may use the shared folder
-  let sharedUnverified = false, sharedChecking = false;                    // a send was refused with shared_unverified / the check was started
+  let sharedUnverified = false;                                             // a send was refused with shared_unverified (the check itself: P43-2's note below)
   const engineOf = () => (view.chat && view.chat.engine) || (view.card && view.card.engine) || null;
   const isCodex = () => engineOf() === "codex-chat";
 
@@ -13551,6 +13551,7 @@ async function viewChatDetail(token, id) {
     const notes = [];
     if (gate()) notes.push(notice("warn", gate()));
     if (view.runtime && view.runtime.available === false) notes.push(notice("warn", `${view.runtime.message || "VBear 的背景程序連不上"}　紀錄還看得到，但現在不能送訊息。`));
+    if ((view.shared && view.shared.code === "shared_unverified") || sharedUnverified) notes.push(sharedCheckNode());       // P43-2 (also after a send was refused so)
     if (view.problem) notes.push(notice("bad", `這個聊天的紀錄有問題：${view.problem}。VBear 不會再往裡面寫，也不能再送訊息；已花的錢仍算在今天的額度裡。`));
     if (view.more === true) notes.push(notice("info", "這個聊天很長，只顯示了前面一段。"));
     setKids(noteBox, notes);
@@ -13607,6 +13608,47 @@ async function viewChatDetail(token, id) {
     const r = await api.post("/api/chats", { profile_id: profileId });
     location.hash = `#/chat/${encodeURIComponent(r.chat.id)}`;
   };
+  // P43-2: this version of the AI tool has not passed the chat check with the shared folder, so a message to an employee that has the
+  // folder switched on is refused (shared_unverified). 「檢查」 asks first (it costs something), then runs the same check the chat list
+  // runs, with shared: true (the check is also run for a version that passed without the folder); the answer is read from the chat itself.
+  let sharedChecking = false, sharedCheckMsg = "";
+  const sharedCheckNode = () => el("div", { "data-chat": "shared-unverified" },
+    notice("warn", `這位員工打開了共用資料夾，但${isCodex() ? "Codex" : "Claude Code"} 的這個版本還沒有通過含共用資料夾的檢查，現在不能送訊息。按「檢查」跑一次（要花一點錢），或到「共用資料夾」頁把這位員工關掉。`),
+    el("div", { class: "row" },
+      el("button", { type: "button", class: "btn small", "data-chat": "shared-check", disabled: sharedChecking, on: { click: () => startSharedCheck() } },
+        sharedChecking ? "檢查中…" : "檢查"),
+      sharedCheckMsg ? el("span", { class: "small", "data-chat": "shared-check-msg", role: "status" }, sharedCheckMsg) : null));
+  async function startSharedCheck() {
+    if (sharedChecking) return;
+    const codex = isCodex();
+    const ok = await confirmInPage("檢查共用資料夾？",
+      codex ? "會用你的 ChatGPT 方案跑一次 Codex 的檢查（約十幾次很短的對話），全部在暫時的資料夾裡做，不碰你的檔案。"
+        : "會用你自己的 Claude Code 登入跑一次檢查（約 US$0.01），全部在暫時的資料夾裡做，不碰你的檔案。", "開始檢查");
+    if (!ok) return;
+    sharedChecking = true; sharedCheckMsg = ""; draw();
+    let started;
+    try { started = await api.post("/api/chat-support/verify", { engine: codex ? "codex" : "claude", shared: true }); }
+    catch (e) { sharedChecking = false; sharedCheckMsg = e.message; toast(e.message); draw(); return; }
+    if (started && started.already_verified === true) { sharedChecking = false; await pollOnce(); draw(); return; }
+    watchSharedCheck(codex);
+  }
+  async function watchSharedCheck(codex) {
+    for (let i = 0; i < 400 && token === seq && !gone; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const info = await api.get("/api/chats").catch(() => null);
+      const sup = info && info.support;
+      const st = sup && (codex ? sup.codex && sup.codex.verify : sup.verify);
+      if (st && st.running === false) {
+        sharedChecking = false;
+        sharedCheckMsg = typeof st.message === "string" && st.result !== "passed" ? st.message : "";
+        await pollOnce();
+        if (token === seq) draw();
+        return;
+      }
+    }
+    sharedChecking = false;
+    if (token === seq) draw();
+  }
   const refreshMemory = async () => {
     const card = (view.card && typeof view.card.id === "string" && view.card.id) || (view.chat && view.chat.profile_id) || "";
     const state = await memoryChatState(card, view.memory);
@@ -13618,14 +13660,8 @@ async function viewChatDetail(token, id) {
   };
   // P43-4: the one line about the shared folder; the check button only after a yes in the box, and only for the version it is missing for
   const drawShared = () => {
-    setKids(sharedBox, sharedChatLine(view.shared, engineOf(), { unverified: sharedUnverified, checking: sharedChecking, check: checkShared }));
-  };
-  const checkShared = async (engine) => {
-    try {
-      if (!(await sharedStartCheck(engine))) return;
-      sharedChecking = true; drawShared();
-      toast("已開始檢查，要幾分鐘。檢查完再送訊息。");
-    } catch (e) { toast(e.message); }
+    // the 「檢查」 for a version not checked with the folder is P43-2's note (sharedCheckNode), shown once, so this line offers none
+    setKids(sharedBox, sharedChatLine(view.shared, engineOf(), { unverified: sharedUnverified, checking: sharedChecking }));
   };
   const refreshLedger = async () => {
     const r = await api.get("/api/chats").catch(() => null);
@@ -15840,7 +15876,7 @@ async function sharedStartCheck(engine) {
   const codex = engine === "codex-chat";
   const ok = await confirmInPage("檢查共用資料夾", `${SHARED_CHECK_COST[engine] || ""}會真的跑一段對話，試員工寫進共用資料夾時會不會先問你、經由連結寫到外面會不會被擋下。要檢查嗎？`, "檢查");
   if (!ok) return false;
-  await api.post("/api/chat-support/verify", { engine: codex ? "codex" : "claude" });
+  await api.post("/api/chat-support/verify", { engine: codex ? "codex" : "claude", shared: true });
   return true;
 }
 

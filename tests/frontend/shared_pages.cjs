@@ -165,62 +165,18 @@ test("an unsafe folder and a full folder are said in the server's words, with no
   assert.strictEqual(q(main, "check"), null);
 });
 
-test("a version not checked for the shared folder says so and has 檢查; a no in the box posts nothing; a yes posts the claude check and nothing else", async () => {
-  setPage({ detail: chatDetail({ shared: sh({ usable: false, code: "shared_unverified" }) }) });
-  const main = await open("#/chat/" + CID);
-  assert(text(q(main, "chat-problem")).includes("還要檢查一次共用資料夾"));
-  assert(text(q(main, "check-cost")).includes("US$0.01"));
-  assert.strictEqual(text(q(main, "check")), "檢查");
-  q(main, "check").click();
-  await settle();
-  assert(dialog() && text(dialog()).includes("檢查共用資料夾"));
-  assert.strictEqual(posts("/api/chat-support/verify").length, 0, "nothing before the yes");
-  dialog().find((n) => n.tag === "button" && text(n) === "取消").click();
-  await settle(60);
-  assert.strictEqual(posts("/api/chat-support/verify").length, 0);
-  q(main, "check").click();
-  await settle();
-  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
-  await settle(80);
-  assert.deepStrictEqual(posts("/api/chat-support/verify").map((c) => c.body), [{ engine: "claude" }]);
-  assert(text(h.dom().toastEl).includes("開始檢查"));
-  assert.strictEqual(q(main, "check"), null, "no second press while it runs");
-  assert(text(q(main, "checking")).includes("檢查已經開始"));
-});
-
-test("for a Codex employee the check is the codex one and the words are about the ChatGPT plan", async () => {
-  setPage({ detail: chatDetail({ chat: { id: CID, profile_id: P4, created_at: 1790000000, engine: "codex-chat" },
-    card: { id: P4, name: "Codex 員工", position: "pm", tool: "codex", engine: "codex-chat", enabled: true, can_chat: true, code: null, reason: null },
-    shared: sh({ usable: false, code: "shared_unverified" }) }) });
-  const main = await open("#/chat/" + CID);
-  assert(text(q(main, "check-cost")).includes("ChatGPT 方案"));
-  q(main, "check").click();
-  await settle();
-  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
-  await settle(80);
-  assert.deepStrictEqual(posts("/api/chat-support/verify").map((c) => c.body), [{ engine: "codex" }]);
-});
-
-test("a check that cannot start says the server's words and the button comes back", async () => {
-  setPage({ detail: chatDetail({ shared: sh({ usable: false, code: "shared_unverified" }) }), verifyStatus: 503 });
-  const main = await open("#/chat/" + CID);
-  q(main, "check").click();
-  await settle();
-  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
-  await settle(80);
-  assert(text(h.dom().toastEl).includes("沒能開始檢查"));
-  assert(q(main, "check") && q(main, "check").disabled !== true);
-});
+// The 「檢查」 for a version not checked with the shared folder is P43-2's single note on the chat page; tests/frontend/chat.cjs covers it.
 
 test("a send that is refused with shared_unverified brings the same words and the check button", async () => {
   setPage({ sendStatus: 409, sendBody: { error: "這個 AI 工具的版本還沒檢查過共用資料夾。按「檢查」。你的訊息還沒有送出。", code: "shared_unverified" } });
   const main = await open("#/chat/" + CID);
-  assert.strictEqual(q(main, "check"), null);
+  const chk = () => main.find((x) => x.getAttribute && x.getAttribute("data-chat") === "shared-check");
+  assert.strictEqual(chk(), null);
   const input = main.find((n) => n.tag === "textarea" && attr(n, "data-chat") === "input");
   input.value = "你好";
   main.find((n) => n.tag === "button" && attr(n, "data-chat") === "send").click();
   await settle(80);
-  assert(q(main, "check"), "the button is there");
+  assert(chk(), "the button is there (P43-2's note)");
   assert(text(q(main, "chat-problem")).includes("還要檢查一次共用資料夾"));
 });
 
