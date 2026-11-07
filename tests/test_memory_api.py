@@ -91,7 +91,7 @@ class ListAddDeleteTests(RoutesCase):
 
     def test_other_paths_are_not_found(self):
         for path, method in (("/api/memory/x", "DELETE"), ("/api/memory/m-123", "DELETE"), ("/api/memory/m-0123456789/x", "DELETE"),
-                             ("/api/memory/m-0123456789", "GET"), ("/api/memory/clear", "POST")):
+                             ("/api/memory/m-0123456789", "GET"), ("/api/memory/nothing", "POST")):  # clear is a route since P42-2
             with self.subTest(path=path):
                 self.assertEqual(self.call(path, method, {} if method == "POST" else None)[0], 404)
 

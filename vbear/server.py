@@ -132,7 +132,7 @@ MEETING_STATUS = {"bad_request": 400, "not_found": 404, "storage": 503}
 STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|retry|cancel|chairman))?\Z")
 # /api/chief/<id>[/retry | /cancel] (P40-1); the codes and statuses are the meetings'
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
-# /api/memory[/<id>] (P42-1): the person's memory; only these routes write memory.json
+# /api/memory[/<id>|/clear|/cards|/export] (P42-1, P42-2): the person's memory; only these routes write memory.json
 MEMORY_RE = re.compile(r"^/api/memory/(m-[0-9a-f]{10})\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
@@ -701,6 +701,8 @@ def make_handler(console: Console):
                     return self._group_call("get", found.group(1), None, after)
                 if path == "/api/memory":
                     return self._chat_action(self._memory_view)
+                if path == "/api/memory/export":
+                    return self._chat_action(memory_mod.export)
                 if path in ("/api/chief", "/api/chief/preview"):
                     if path == "/api/chief":
                         return self._chief_call("list")
@@ -926,6 +928,10 @@ def make_handler(console: Console):
                     return self._group_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/memory":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
+                if path == "/api/memory/clear":
+                    return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/memory/cards":
+                    return self._chat_action(lambda b=self._body_strict(): memory_mod.set_card(b, self._memory_cards()))
                 if path == "/api/chief":
                     return self._chief_call("start", None, self._body_strict())
                 if path.startswith("/api/chief/"):
@@ -1123,6 +1129,35 @@ def make_handler(console: Console):
                 return self._error(503, str(exc))
             except flows.StoreError as exc:
                 return self._error(503, str(exc))
+            except Exception as exc:
+                return self._error(500, f"內部錯誤：{type(exc).__name__}")
+
+        def do_PATCH(self):
+            """Only a line of memory can be changed this way (PATCH /api/memory/<id>); every other path is not found."""
+            if not self._host_ok():
+                return self._error(HTTPStatus.MISDIRECTED_REQUEST, "invalid host")
+            if not self._write_ok():
+                return self._error(403, "forbidden")
+            if not self._authed():
+                return self._auth_error()
+            try:
+                length = self._read_content_length()
+            except ValueError as exc:
+                self.close_connection = True
+                return self._error(400, str(exc))
+            if length > MAX_BODY:
+                self.close_connection = True
+                return self._error(413, "請求內容過大")
+            path = urlparse(self.path).path
+            try:
+                found = MEMORY_RE.match(path) if path.startswith("/api/memory/") else None
+                if not found:
+                    return self._error(404, "not found")
+                return self._chat_action(lambda b=self._body_strict(): memory_mod.edit(found.group(1), b))
+            except TimeoutError:
+                raise
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             except Exception as exc:
                 return self._error(500, f"內部錯誤：{type(exc).__name__}")
 
@@ -1955,12 +1990,16 @@ def make_handler(console: Console):
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "storage"}, 503)
 
+        def _memory_cards(self) -> list:
+            """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
+            return console.chat_service().cards()
+
         def _memory_view(self) -> dict:
             """GET /api/memory: the lines, the use, who takes memory along (read only: nothing here saves a word)."""
             out = memory_mod.view()
             off, on = out.pop("cards_off", []), out.pop("cards_on", [])
             try:
-                cards = console.chat_service().cards()
+                cards = self._memory_cards()
             except ApiError:
                 cards = []                     # the page still shows the lines when the cards cannot be read
             out["cards"] = memory_mod.cards_view(cards, off, on)
