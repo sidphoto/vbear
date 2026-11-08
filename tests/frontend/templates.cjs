@@ -1,7 +1,8 @@
 // P45-1: the 團隊範本 page (#/templates): four fixed lines, one block for each template with three rows of tick boxes, 全選 and 全不選, ticking across
 // templates, the line at the bottom, the preview (the AI tool, the fixed words, who a routine goes to, same names, the limits, a second yes), and the entry
 // in the nav and in the card pool. The real web/app.js on a synthetic DOM, fetch answered by the test; every name and text here is made up and the page
-// shows them as text only. Nothing is applied in this batch: the only POST is the preview.
+// shows them as text only. P45-2 adds the press of 套用 (one post, the answer in the same dialog, a stop in the middle told as one), the 套用紀錄 and
+// the dialog of 復原這次套用 (the list first, then 刪掉這些).
 // Run: node tests/frontend/templates.cjs   (exit code 0 = pass)
 "use strict";
 
@@ -74,7 +75,8 @@ function previewOf(body, over = {}) {
   return pv;
 }
 function setServer(over = {}) {
-  state = { builtin: [shop, studio], mine: [], tools: TOOLS_READY, counts: { cards: 2, skills: 1, routines: 0 }, problems: [], mine_readable: true, preview: null, previewFails: null, ...over };
+  state = { builtin: [shop, studio], mine: [], tools: TOOLS_READY, counts: { cards: 2, skills: 1, routines: 0 }, problems: [], mine_readable: true, preview: null, previewFails: null,
+    applies: [], apply: null, undoPreview: null, undo: null, ...over };
   calls = [];
   setHandler((url, opts = {}) => {
     const p = url.split("?")[0];
@@ -89,14 +91,37 @@ function setServer(over = {}) {
     if (p === "/api/waiting") return jsonResponse({ waiting: [] });
     if (p === "/api/templates" && method === "GET") {
       return jsonResponse({ ok: true, builtin: state.builtin, mine: state.mine, mine_readable: state.mine_readable, problem: state.mine_readable ? null : "你存的團隊範本的檔案有問題",
-        problems: state.problems, applies: [], counts: state.counts, current: { cards: [], skills: [], routines: [] }, limits: {}, tools: state.tools });
+        problems: state.problems, applies: state.applies, counts: state.counts, current: { cards: [], skills: [], routines: [] }, limits: {}, tools: state.tools });
     }
     if (p === "/api/templates/preview" && method === "POST") {
       if (state.previewFails) return jsonResponse({ error: state.previewFails, code: "bad_request" }, false, 400);
       return jsonResponse({ ok: true, preview: state.preview ? state.preview(body) : previewOf(body) });
     }
+    if (p === "/api/templates/apply" && method === "POST") {
+      return state.apply ? state.apply(body) : jsonResponse({ ok: true, apply: appliedOf(body) }, true, 201);
+    }
+    const undoRoute = p.match(/^\/api\/templates\/applies\/(ta-[0-9a-f]{12})\/(undo-preview|undo)$/);
+    if (undoRoute && method === "POST") {
+      if (undoRoute[2] === "undo-preview") return jsonResponse({ ok: true, ...(state.undoPreview ? state.undoPreview(undoRoute[1]) : undoPreviewOf(undoRoute[1])) });
+      return state.undo ? state.undo(body) : jsonResponse({ ok: true, deleted: [], kept: [], gone: [] });
+    }
     return null;
   });
+}
+const A1 = "ta-0123456789ab";
+function appliedOf(body) {
+  const items = [];
+  body.cards.forEach((c, i) => items.push({ kind: "card", id: `prof-${String(i).padStart(12, "a")}`, from: c.from, state: "made", why: null, name: c.name || "新員工" }));
+  body.skills.forEach((x, i) => items.push({ kind: "skill", id: `k-${String(i).padStart(12, "1")}`, from: x.from, state: "made", why: null, name: "新技能" }));
+  body.routines.forEach((x, i) => items.push({ kind: "routine", id: `r-${String(i).padStart(12, "2")}`, from: x.from, state: "made", why: null, name: "新例行工作" }));
+  const n = (k) => items.filter((i) => i.kind === k).length;
+  return { id: A1, at: 1760000000, tool: body.tool, state: "done", undone_at: null, counts: { cards: n("card"), skills: n("skill"), routines: n("routine") },
+    left: { cards: n("card"), skills: n("skill"), routines: n("routine") }, items };
+}
+function undoPreviewOf(id) {
+  return { apply: id, delete: [{ kind: "routine", id: "r-111111111111", name: "整理昨天的花費" }, { kind: "skill", id: "k-111111111111", name: "寫商品介紹" }, { kind: "card", id: "prof-aaaaaaaaaaaa", name: "會計" }],
+    keep: [{ kind: "card", id: "prof-bbbbbbbbbbbb", name: "商品文案", why: "chatted", text: "你跟他聊過天" }], gone: [{ kind: "skill", id: "k-222222222222", name: null }], unsure: 0,
+    notes: [{ code: "terminal", text: "如果你在終端機用過這些員工，VBear 看不出來；確定再刪。" }, { code: "skills", text: "VBear 不記錄技能有沒有被用過，只看有沒有改過。" }] };
 }
 async function open(hash = "#/templates") {
   const realSetInterval = global.setInterval;
@@ -354,19 +379,218 @@ test("words that need a second yes are listed with the sentence, and the box 我
   assert(!allBy(d, "class", "notice bad").length);
 });
 
-test("the apply button is there and cannot be pressed yet: the next batch adds it", async () => {
+const closeDialogs = () => h.dom().bodyEl.children.slice().forEach((n) => { if (n.hasClass && n.hasClass("modal-backdrop")) n.remove(); });
+const applyRow = (id = A1, over = {}) => ({ id, at: 1760000000, tool: "claude", state: "done", undone_at: null, counts: { cards: 2, skills: 1, routines: 1 }, left: { cards: 2, skills: 1, routines: 1 },
+  items: [{ kind: "card", id: "prof-aaaaaaaaaaaa", from: { template: "shop", key: "accounting" }, state: "made", why: null, name: "會計" },
+    { kind: "card", id: "prof-bbbbbbbbbbbb", from: { template: "shop", key: "copy" }, state: "made", why: null, name: "商品文案" },
+    { kind: "skill", id: "k-111111111111", from: { template: "shop", key: "product" }, state: "made", why: null, name: "寫商品介紹" },
+    { kind: "routine", id: "r-111111111111", from: { template: "shop", key: "spend" }, state: "made", why: null, name: "整理昨天的花費" }], ...over });
+
+test("the apply button waits for a preview with nothing in the way, and one press posts the same body once and says what was made in the same dialog", async () => {
+  setServer();
+  const main = await open();
+  await tick(main, "cards", "shop", "accounting");
+  await tick(main, "skills", "shop", "product");
+  await tick(main, "routines", "shop", "spend");
+  await click(action(main, "preview"));
+  let d = dialog();
+  const apply = action(d, "apply");
+  assert(apply && text(apply) === "套用" && apply.disabled !== true, "a preview with no problem can be applied");
+  assert.strictEqual(by(d, "data-templates", "apply-later"), null, "the sentence of the first batch is gone");
+  const previewBody = posts()[0][2];
+  await click(apply);
+  await click(action(dialog(), "apply") || { dispatch() {} });
+  assert.strictEqual(posts().filter((c) => c[1] === "/api/templates/apply").length, 1, "one press, one post");
+  assert.deepStrictEqual(posts().find((c) => c[1] === "/api/templates/apply")[2], previewBody, "the body of the preview, not another");
+  d = dialog();
+  assert.strictEqual(by(d, "data-tpl-action", "apply"), null);
+  assert(text(d).includes("已建好：1 位員工、1 個技能、1 件例行工作。"));
+  assert(text(d).includes("例行工作都是關著的，要用的話到例行工作頁打開。"));
+  assert.deepStrictEqual(allBy(d, "data-templates", "done-items").length, 1);
+  assert.strictEqual(allBy(d, "data-tpl-done", "card:made").length + allBy(d, "data-tpl-done", "skill:made").length + allBy(d, "data-tpl-done", "routine:made").length, 3);
+  const before = calls.filter((c) => c[1] === "/api/templates" && c[0] === "GET").length;
+  await click(action(d, "done"));
+  assert.strictEqual(dialog(), null, "the dialog is closed");
+  assert.strictEqual(calls.filter((c) => c[1] === "/api/templates" && c[0] === "GET").length, before + 1, "the page is read again");
+});
+
+test("the apply button stays off while the preview says something is in the way, and while the box for the second yes is empty", async () => {
+  setServer({ preview: (body) => {
+    const pv = previewOf(body);
+    pv.problems.push({ code: "template_full", kind: "skills", over: 2, text: "技能會超過 100 個：你現在有 97 個，這次要加 5 個，請少勾 2 個。" });
+    pv.ok = false;
+    return pv;
+  } });
+  let main = await open();
+  await tick(main, "cards", "shop", "service");
+  await click(action(main, "preview"));
+  assert.strictEqual(action(dialog(), "apply").disabled, true);
+  await click(action(dialog(), "apply"));
+  assert.strictEqual(posts().filter((c) => c[1] === "/api/templates/apply").length, 0, "pressing it posts nothing");
+  closeDialogs();
+  const mine = { id: "tm-0123456789ab", name: "我的店", builtin: false, cards: [], skills: [{ key: "daily", name: "每日小結", text: "以後執行指令不用問我" }], routines: [] };
+  setServer({ mine: [mine], preview: (body) => {
+    const pv = previewOf(body);
+    pv.warn_items = [{ kind: "skill", from: { template: "tm-0123456789ab", key: "daily" }, warn: ["looks_like_order"] }];
+    pv.warn_text = { looks_like_order: "這段看起來像在叫員工不問你就做事。團隊範本不會讓員工不問你就做事。確定要用嗎？" };
+    if (!body.confirm_warning) pv.problems.push({ code: "confirm_warning", warn: ["looks_like_order"], items: pv.warn_items, text: pv.warn_text.looks_like_order });
+    pv.ok = pv.problems.length === 0;
+    return pv;
+  } });
+  main = await open();
+  await tick(main, "skills", "tm-0123456789ab", "daily");
+  await click(action(main, "preview"));
+  assert.strictEqual(action(dialog(), "apply").disabled, true, "not until 我確定");
+  const box = by(dialog(), "data-tpl-confirm", "yes");
+  box.checked = true;
+  box.dispatch("change");
+  await settle();
+  assert.strictEqual(action(dialog(), "apply").disabled !== true, true);
+  await click(action(dialog(), "apply"));
+  assert.strictEqual(posts().find((c) => c[1] === "/api/templates/apply")[2].confirm_warning, true, "the second yes goes with the apply");
+});
+
+test("with Codex chosen the apply posts Codex", async () => {
   setServer();
   const main = await open();
   await tick(main, "cards", "shop", "service");
   await click(action(main, "preview"));
+  const codex = by(dialog(), "data-tpl-tool", "codex");
+  codex.checked = true;
+  codex.dispatch("change");
+  await settle();
+  await click(action(dialog(), "apply"));
+  assert.strictEqual(posts().find((c) => c[1] === "/api/templates/apply")[2].tool, "codex");
+});
+
+test("an apply that stopped in the middle is said as that, with what was made and what stopped it, and never as done", async () => {
+  const stopped = { ...appliedOf({ tool: "claude", cards: [{ from: { template: "shop", key: "copy" } }], skills: [{ from: { template: "shop", key: "reply" } }, { from: { template: "shop", key: "product" } }], routines: [] }),
+    state: "partial" };
+  stopped.items[2] = { ...stopped.items[2], state: "failed", why: "skill_full", name: null };
+  stopped.counts = { cards: 1, skills: 1, routines: 0 };
+  setServer({ apply: () => jsonResponse({ error: "建到一半停下了：已建好 1 位員工、1 個技能、0 件例行工作；可以按「復原這次套用」。", code: "template_partial", apply: stopped }, false, 409) });
+  const main = await open();
+  await tick(main, "cards", "shop", "copy");
+  await tick(main, "skills", "shop", "reply");
+  await tick(main, "skills", "shop", "product");
+  await click(action(main, "preview"));
+  await click(action(dialog(), "apply"));
   const d = dialog();
-  const apply = action(d, "apply");
-  assert(apply && text(apply) === "套用" && apply.disabled === true);
-  assert.strictEqual(text(by(d, "data-templates", "apply-later")), "下一批加入");
-  await click(apply);
-  assert.strictEqual(posts().length, 1, "pressing it posts nothing");
-  await click(action(d, "cancel"));
+  assert(text(d).includes("建到一半停下了：已建好 1 位員工、1 個技能、0 件例行工作；可以按「復原這次套用」。"));
+  assert(!text(d).includes("已建好：1 位員工"), "not told as done");
+  assert.deepStrictEqual(allBy(d, "data-templates", "done-items")[0].findAll((n) => n.tag === "li").map(text), ["員工：新員工　已建好", "技能：新技能　已建好", "技能：寫商品介紹　停在這裡"]);
+  assert(action(d, "done"));
+});
+
+test("an apply the server refuses stays in the preview with the reason, and nothing is told as made", async () => {
+  setServer({ apply: () => jsonResponse({ error: "技能會超過 100 個：你現在有 97 個，這次要加 5 個，請少勾 2 個。", code: "template_full" }, false, 409) });
+  const main = await open();
+  await tick(main, "cards", "shop", "service");
+  await click(action(main, "preview"));
+  await click(action(dialog(), "apply"));
+  const d = dialog();
+  assert(text(d).includes("技能會超過 100 個"));
+  assert(action(d, "apply") && action(d, "apply").disabled !== true, "it can be tried again");
+  assert.strictEqual(by(d, "data-templates", "done-items"), null);
+});
+
+test("the record of the applies: one row for each with the count, the tool, the state and the template each thing came from, and 復原這次套用 only while something is left", async () => {
+  const hostile = applyRow("ta-aaaaaaaaaaaa", { items: [{ kind: "card", id: "prof-aaaaaaaaaaaa", from: { template: "shop", key: "accounting" }, state: "made", why: null, name: "<img src=x onerror=alert(1)>" },
+    { kind: "skill", id: "k-111111111111", from: { template: "tm-0123456789ab", key: "gone" }, state: "made", why: null, name: null },
+    { kind: "routine", id: "r-111111111111", from: { template: "shop", key: "spend" }, state: "deleted", why: null, name: null }] });
+  const all = applyRow("ta-bbbbbbbbbbbb", { state: "partial", left: { cards: 0, skills: 0, routines: 0 }, undone_at: 1760000100, tool: "codex" });
+  const cut = applyRow("ta-cccccccccccc", { state: "interrupted" });
+  setServer({ applies: [hostile, all, cut] });
+  const main = await open();
+  const section = by(main, "data-templates", "applies");
+  assert.strictEqual(text(section.find((n) => n.tag === "h2")), "套用紀錄");
+  assert.strictEqual(text(by(section, "data-templates", "applies-limit")), "只能復原最近 50 次套用；更早的東西照樣留著，要刪請到各自的頁面。");
+  const rows = allBy(section, "data-tpl-apply-status", "done").concat(allBy(section, "data-tpl-apply-status", "partial"), allBy(section, "data-tpl-apply-status", "interrupted"));
+  assert.strictEqual(rows.length, 3);
+  const r1 = allBy(section, "data-tpl-apply", "ta-aaaaaaaaaaaa").find((n) => n.tag === "li");
+  assert(text(r1).includes("建了 2 位員工、1 個技能、1 件例行工作") && text(r1).includes("Claude Code") && text(r1).includes("完成"));
+  assert(text(r1).includes("<img src=x onerror=alert(1)>") && text(r1).includes("來自：小店") && text(r1).includes("來自：（團隊範本已刪除）") && text(r1).includes("（已刪掉）"));
+  assert.strictEqual(section.findAll((n) => n.tag === "img").length, 0, "a name is text");
+  assert(action(r1, "undo"), "something is left, so it can be undone");
+  const r2 = allBy(section, "data-tpl-apply", "ta-bbbbbbbbbbbb").find((n) => n.tag === "li");
+  assert.strictEqual(action(r2, "undo"), null, "nothing left, nothing to undo");
+  assert(text(r2).includes("建到一半停下了") && text(r2).includes("Codex") && by(r2, "data-tpl-apply-undone", "yes"));
+  const r3 = allBy(section, "data-tpl-apply", "ta-cccccccccccc").find((n) => n.tag === "li");
+  assert.strictEqual(text(by(r3, "data-tpl-apply-note", "interrupted")), "這次套用中斷了，最後一個技能或例行工作可能已經建好但沒記到，復原不會刪它；請到技能頁、例行工作頁看看。");
+});
+
+test("with no apply yet the record says so, and nothing can be undone", async () => {
+  setServer();
+  const main = await open();
+  assert.strictEqual(text(by(main, "data-templates", "applies-none")), "還沒有套用過。");
+  assert.strictEqual(action(main, "undo"), null);
+});
+
+test("復原這次套用 first posts for the list and shows it: what goes, what stays and why, what is gone, and the two notes word for word; nothing is deleted yet", async () => {
+  setServer({ applies: [applyRow()] });
+  const main = await open();
+  await click(action(main, "undo"));
+  assert.deepStrictEqual(posts(), [["POST", `/api/templates/applies/${A1}/undo-preview`, {}]]);
+  const d = dialog();
+  assert.strictEqual(text(d.find((n) => n.tag === "h2")), "復原這次套用");
+  assert.deepStrictEqual(allBy(d, "data-templates", "undo-delete")[0].findAll((n) => n.tag === "li").map(text), ["例行工作：整理昨天的花費", "技能：寫商品介紹", "員工：會計"]);
+  assert.deepStrictEqual(allBy(d, "data-templates", "undo-keep")[0].findAll((n) => n.tag === "li").map(text), ["員工：商品文案　你跟他聊過天"]);
+  assert.deepStrictEqual(allBy(d, "data-templates", "undo-gone")[0].findAll((n) => n.tag === "li").map(text), ["技能：（沒有名字）　你自己刪掉了"]);
+  assert.deepStrictEqual(allBy(d, "data-tpl-undo-note", "terminal").concat(allBy(d, "data-tpl-undo-note", "skills")).map(text),
+    ["如果你在終端機用過這些員工，VBear 看不出來；確定再刪。", "VBear 不記錄技能有沒有被用過，只看有沒有改過。"]);
+  const confirm = action(d, "undo-confirm");
+  assert(text(confirm) === "刪掉這些" && confirm.disabled !== true);
+  assert(action(d, "undo-cancel"));
+});
+
+test("刪掉這些 posts exactly the ids of the list, once, then says what was deleted and what stayed; 完成 reads the page again", async () => {
+  setServer({ applies: [applyRow()], undo: () => jsonResponse({ ok: true, deleted: [{ kind: "routine", id: "r-111111111111", name: "整理昨天的花費" }, { kind: "skill", id: "k-111111111111", name: "寫商品介紹" }, { kind: "card", id: "prof-aaaaaaaaaaaa", name: "會計" }],
+    kept: [{ kind: "card", id: "prof-bbbbbbbbbbbb", name: "商品文案", why: "chatted", text: "你跟他聊過天" }], gone: [] }) });
+  const main = await open();
+  await click(action(main, "undo"));
+  const press = action(dialog(), "undo-confirm");
+  await click(press);
+  await click(action(dialog(), "undo-confirm") || { dispatch() {} });
+  const undos = posts().filter((c) => c[1] === `/api/templates/applies/${A1}/undo`);
+  assert.deepStrictEqual(undos.map((c) => c[2]), [{ delete: ["r-111111111111", "k-111111111111", "prof-aaaaaaaaaaaa"] }], "only what the list said, once");
+  const d = dialog();
+  assert.strictEqual(text(by(d, "data-templates", "undo-summary")), "已刪掉 3 項；留著 1 項。");
+  assert.deepStrictEqual(allBy(d, "data-templates", "undo-kept")[0].findAll((n) => n.tag === "li").map(text), ["員工：商品文案　你跟他聊過天"]);
+  const before = calls.filter((c) => c[1] === "/api/templates" && c[0] === "GET").length;
+  await click(action(d, "undo-done"));
   assert.strictEqual(dialog(), null);
+  assert.strictEqual(calls.filter((c) => c[1] === "/api/templates" && c[0] === "GET").length, before + 1);
+});
+
+test("cancelling the list deletes nothing; a list with nothing to delete cannot be pressed; an error is said", async () => {
+  setServer({ applies: [applyRow()] });
+  let main = await open();
+  await click(action(main, "undo"));
+  await click(action(dialog(), "undo-cancel"));
+  assert.strictEqual(dialog(), null);
+  assert.strictEqual(posts().filter((c) => c[1].endsWith("/undo")).length, 0);
+  setServer({ applies: [applyRow()], undoPreview: (id) => ({ ...undoPreviewOf(id), delete: [], notes: [] }) });
+  main = await open();
+  await click(action(main, "undo"));
+  assert.strictEqual(action(dialog(), "undo-confirm").disabled, true);
+  assert.strictEqual(text(by(dialog(), "data-templates", "undo-nothing")), "沒有可以刪的。");
+  closeDialogs();
+  setServer({ applies: [applyRow()], undo: () => jsonResponse({ error: "技能的檔案有問題", code: "skills_unreadable" }, false, 503) });
+  main = await open();
+  await click(action(main, "undo"));
+  await click(action(dialog(), "undo-confirm"));
+  assert(text(dialog()).includes("技能的檔案有問題"));
+  assert(action(dialog(), "undo-confirm"), "the list is still there");
+});
+
+test("names in the list of the undo are text", async () => {
+  setServer({ applies: [applyRow()], undoPreview: (id) => ({ ...undoPreviewOf(id), delete: [{ kind: "card", id: "prof-aaaaaaaaaaaa", name: "<script>alert(1)</script>" }],
+    keep: [{ kind: "skill", id: "k-111111111111", name: "<img src=x onerror=alert(2)>", why: "changed", text: "你改過" }] }) });
+  const main = await open();
+  await click(action(main, "undo"));
+  const d = dialog();
+  assert(text(d).includes("<script>alert(1)</script>") && text(d).includes("<img src=x onerror=alert(2)>"));
+  assert.strictEqual(d.findAll((n) => ["script", "img"].includes(n.tag)).length, 0);
 });
 
 test("a request the server refuses is said in the dialog, and a read that fails is said on the page", async () => {
@@ -440,11 +664,12 @@ test("source: built with el(), no innerHTML, no emoji, no outside resource, only
   assert(!/\p{Extended_Pictographic}/u.test(BLOCK));
   assert(!/api\/config|api\/settings|api\/native|api\/chats/.test(BLOCK), "never writes the configuration, starts a chat or a terminal");
   const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]);
-  assert.deepStrictEqual(urls.sort(), ["/api/templates", "/api/templates/preview"]);
+  assert.deepStrictEqual(urls.sort(), ["/api/templates", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo", "/api/templates/applies/${encodeURIComponent(apply.id)}/undo-preview",
+    "/api/templates/apply", "/api/templates/preview"], "the routes of the page: the list, the preview, the apply, and the two of 復原這次套用");
   const strings = Array.from(BLOCK.matchAll(/"([^"\n]*[一-鿿][^"\n]*)"|`([^`\n]*[一-鿿][^`\n]*)`/g)).map((m) => m[1] || m[2]).join("\n").replace(/\$\{[^}]*\}/g, "");
   const bare = strings.replace(/團隊範本|角色範本|任務範本/g, "");
   assert(!/範本/.test(bare), "no 範本 on its own on the screen");
-  assert(!/模板|套組|還原|復原(?!這次套用)|template|preset|undo/i.test(strings), "GLOSSARY words");
+  assert(!/模板|套組|還原|復原(?!這次套用|不會刪它|最近 50 次套用)|template|preset|undo/i.test(strings), "GLOSSARY words");
   assert(!/launch_mode|equipped_skill_ids|enabled/.test(BLOCK), "the page never says full mode, a skill card or switched on");
 });
 
