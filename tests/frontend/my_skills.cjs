@@ -85,6 +85,7 @@ function setPage(over = {}) {
     if (m && !m[2] && method === "GET") return jsonResponse(page.detail);
     m = /^\/api\/groups\/(g-[0-9a-f]{12})$/.exec(p);
     if (m && method === "GET") return jsonResponse(page.group);
+    if (page.suggest) { const got = page.suggest(p, method, opts && opts.body ? JSON.parse(opts.body) : null); if (got) return got; }
     return null;
   });
   FETCH_LOG.length = 0;
@@ -461,6 +462,192 @@ test("a reply that could not be read, and one with no words, have no 存成技�
   setPage({ group: groupDetail([groupReply("", { unreadable: true }), groupReply("")]) });
   const main = await open("#/chat/group/" + GID);
   assert.strictEqual(saveButtons(main).length, 0);
+});
+
+// ---- 整理成技能 (P44-5) -----------------------------------------------------------------------------------------
+
+const SID = "ks-0123456789ab";
+const kq = (n, key) => n.find((x) => x.getAttribute && x.getAttribute("data-ksuggest") === key);
+const kqa = (n, key) => n.findAll((x) => x.getAttribute && x.getAttribute("data-ksuggest") === key);
+const kdialog = () => h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("data-ksuggest") === "dialog");
+const sdialog = () => h.dom().bodyEl.find((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("data-skill") === "dialog");
+const kpreview = (over = {}) => ({ preview_id: "pv-" + "0".repeat(16), ok: true, blockers: [], chat_id: CID, messages: 6, omitted_messages: 0, bytes: 900,
+  cap_usd: "0.1", day_left_usd: "2.71", today: { spent_usd: "0.29", daily_usd: "3", lamp: "green" }, sends_to: "Anthropic", engine: "claude-chat",
+  notice: null, save_note: "整理只是提議：不會自己存。它會放進「存成技能」的視窗，你看過、可以改，按「存」才會存。", cli: { version: "2.1.318", verified: true },
+  disclosure: "開始後，你和這位員工最近的對話（最多 20 則、12 KiB）會用你的 Claude 帳號送到 Anthropic（由本機的 Claude Code 送出）。",
+  cost_note: "金額是 Claude Code 回報的估值。", ...over });
+const kitem = (over = {}) => ({ index: 0, name: "市集日報", text: STEPS, note: "根據你前面說的步驟", refuse: null, refuse_text: null, warn: [], warn_text: [], saved: false, ...over });
+const kview = (over = {}) => ({ id: SID, created_at: 1790000100, chat_id: CID, engine: "claude-chat", status: "ready", state: "done", error_code: null, attempts: 1,
+  spent_usd: "0.02", cost_source: "cli", limits: { per_call_usd: "0.1", total_usd: "0.1" }, read: { count: 6 }, sends_to: "Anthropic", items: [kitem()],
+  saved: false, dismissed: false, outcome: "ready", ...over });
+let K;
+function suggestPage(over = {}) {
+  K = { preview: kpreview(), view: kview(), list: [], saved: 0, ...over };
+  setPage({ detail: chatDetail([rec("user_message", { turn: 1, text: "每天早上整理銷售" })]),
+    postStatus: 201, postBody: (b) => ({ ok: true, skill: skill("k-0123456789ab", b.name, b.text, { source: b.source }) }),
+    suggest: (p, method, body) => {
+      if (p === "/api/my-skills/suggest/preview" && method === "POST") return jsonResponse(K.preview);
+      if (p === "/api/my-skills/suggest" && method === "GET") return jsonResponse({ suggestions: K.list });
+      if (p === "/api/my-skills/suggest" && method === "POST") return jsonResponse({ id: SID, suggestion: kview({ status: "running", state: "running", items: [], outcome: "pending" }) }, true, 202);
+      const m = /^\/api\/my-skills\/suggest\/(ks-[0-9a-f]{12})(?:\/(saved|dismiss|cancel))?$/.exec(p);
+      if (m && !m[2] && method === "GET") return jsonResponse(K.view);
+      if (m && m[2] === "saved") { K.saved += 1; return jsonResponse(kview({ saved: true, items: [kitem({ saved: true })] })); }
+      if (m && m[2] === "dismiss") return jsonResponse(kview({ dismissed: true }));
+      if (m && m[2] === "cancel") return jsonResponse(kview({ status: "cancelled", state: "cancelled", items: [] }));
+      return null;
+    } });
+}
+async function kopen() {
+  const real = global.setInterval;
+  const ticks = [];
+  global.setInterval = (fn) => { ticks.push(fn); return ticks.length; };
+  global.location.hash = "#/chat/" + CID;
+  try { await app.route(); await settle(); } finally { global.setInterval = real; }
+  page.ticks = ticks;
+  return h.dom().mainEl;
+}
+const ktick = async () => { for (const fn of page.ticks) await fn(); await settle(); };
+async function kstarted() {
+  const main = await kopen();
+  kq(main, "open").click();
+  await settle(80);
+  kq(kdialog(), "start").click();
+  await settle(80);
+  return main;
+}
+async function kready(over = {}) {
+  suggestPage(over);
+  const main = await kstarted();
+  await ktick();
+  return main;
+}
+const skillWrites = () => FETCH_LOG.filter((c) => c.method === "POST" && /^\/api\/my-skills(\/k-[0-9a-f]{12}(\/delete)?)?$/.test(c.url.split("?")[0]));
+const ksuggestCalls = () => FETCH_LOG.filter((c) => c.url.startsWith("/api/my-skills/suggest")).map((c) => `${c.method} ${c.url.split("?")[0]}`);
+
+test("a one-to-one chat has 整理成技能; opening it asks nothing, a group's chat has none", async () => {
+  suggestPage();
+  const main = await kopen();
+  const btn = kq(main, "open");
+  assert.strictEqual(text(btn), "整理成技能");
+  assert(text(kq(main, "desk")).includes("Anthropic"));
+  assert(text(kq(main, "desk")).includes("US$0.10"));
+  assert.deepStrictEqual(ksuggestCalls().filter((c) => c.startsWith("POST")), []);
+  setPage({ detail: chatDetail([], { group: { id: GID, name: "市集準備" } }) });
+  assert(!kq(await kopen(), "open"));
+});
+
+test("the preview says what is read, the most it costs, what is left and that it goes to Anthropic; nothing is started by opening it", async () => {
+  suggestPage();
+  const main = await kopen();
+  kq(main, "open").click();
+  await settle(80);
+  const d = kdialog();
+  const t = text(d);
+  for (const word of ["6 則", "US$0.10", "US$2.71", "Anthropic", "不會自己存", "最多 20 則"]) assert(t.includes(word), word);
+  assert(t.includes("你的記憶和其他技能，都不會送出"), "neither the memory nor the other skills are sent");
+  assert.deepStrictEqual(ksuggestCalls(), ["GET /api/my-skills/suggest", "POST /api/my-skills/suggest/preview"]);
+  const pv = FETCH_LOG.find((c) => c.url === "/api/my-skills/suggest/preview");
+  assert.deepStrictEqual(pv.body, { chat_id: CID });
+  assert(kq(d, "start"));
+});
+
+test("a Codex chat's notice is shown, and without Claude Code the dialog says it is needed and has no start button", async () => {
+  suggestPage({ preview: kpreview({ engine: "codex-chat", notice: "這是和 Codex 員工的對話，也會送給 Anthropic（Claude Code）整理。" }) });
+  let main = await kopen();
+  kq(main, "open").click();
+  await settle(80);
+  assert(text(kdialog()).includes("Codex 員工"));
+  suggestPage({ preview: kpreview({ ok: false, preview_id: null, blockers: [{ code: "cli_not_found", message: "這個功能目前需要 Claude Code" }] }) });
+  main = await kopen();
+  kq(main, "open").click();
+  await settle(80);
+  const d = h.dom().bodyEl.findAll((n) => n.hasClass && n.hasClass("modal-backdrop") && n.getAttribute("data-ksuggest") === "dialog").pop();
+  assert(text(d).includes("這個功能目前需要 Claude Code"));
+  assert(text(d).includes("存成技能"), "the per-line 存成技能 still works");
+  assert(!kq(d, "start"));
+});
+
+test("starting posts the preview id; the result is a card with the name, the words and the note as text, and nothing is saved yet", async () => {
+  const main = await kready({ view: kview({ items: [kitem({ name: EVIL, text: EVIL + "\n第二步", note: EVIL })] }) });
+  assert.deepStrictEqual(FETCH_LOG.find((c) => c.method === "POST" && c.url === "/api/my-skills/suggest").body, { preview_id: "pv-" + "0".repeat(16) });
+  const card = kq(main, "card");
+  assert(card);
+  assert.strictEqual(text(kq(card, "name")), EVIL);
+  assert.strictEqual(text(kq(card, "text")), EVIL + "\n第二步");
+  assert(text(kq(card, "note")).includes(EVIL));
+  assert(text(card).includes("預設沒存"));
+  assert.strictEqual(card.findAll((n) => n.tag === "img").length, 0, "markup stays text");
+  assert.deepStrictEqual(skillWrites(), [], "no skill is saved by the suggestion");
+});
+
+test("放進存成技能 opens the box with the name and the words filled in; it posts only on 存, with how suggested and the id, then marks it saved", async () => {
+  const main = await kready();
+  kq(main, "use").click();
+  await settle(40);
+  const box = sdialog();
+  assert(box);
+  assert.strictEqual(q(box, "name").value, "市集日報");
+  assert.strictEqual(q(box, "text").value, STEPS);
+  assert.deepStrictEqual(skillWrites(), [], "opening the box saves nothing");
+  q(box, "name").value = "市集日報（我改的）";
+  q(box, "save").click();
+  await settle(120);
+  assert.deepStrictEqual(skillWrites().map((c) => [c.url, c.body]),
+    [["/api/my-skills", { name: "市集日報（我改的）", text: STEPS, source: { how: "suggested", suggestion_id: SID } }]]);
+  assert.strictEqual(K.saved, 1, "the suggestion is marked saved");
+  assert(!sdialog(), "the box closes");
+  assert.strictEqual(kq(main, "card"), null, "a saved suggestion's card goes away");
+});
+
+test("a refused proposal says why; the box still opens so the words can be changed, and the server's refusal stays in the box", async () => {
+  const main = await kready({ view: kview({ items: [kitem({ refuse: "secret_key", refuse_text: "這看起來像金鑰或登入用的代碼，技能裡不能有。" })] }) });
+  assert(text(kq(main, "card")).includes("這看起來像金鑰或登入用的代碼，技能裡不能有。"));
+  kq(main, "use").click();
+  await settle(40);
+  assert(sdialog());
+});
+
+test("a proposal that reads like an order carries the server's warning on the card", async () => {
+  const main = await kready({ view: kview({ items: [kitem({ warn: ["looks_like_order"], warn_text: ["這段看起來像在叫員工不問你就做事。"] })] }) });
+  assert(text(kq(main, "card")).includes("這段看起來像在叫員工不問你就做事。"));
+});
+
+test("nothing worth keeping says so and can be closed; 不用了 posts an empty dismiss and the card goes away", async () => {
+  const main = await kready({ view: kview({ items: [] }) });
+  assert(text(kq(main, "card")).includes("沒有值得存成技能"));
+  kq(main, "dismiss").click();
+  await settle(40);
+  assert(ksuggestCalls().includes(`POST /api/my-skills/suggest/${SID}/dismiss`));
+  assert.deepStrictEqual(FETCH_LOG.find((c) => c.url.endsWith("/dismiss")).body, {});
+  assert.strictEqual(kq(main, "card"), null);
+});
+
+test("a failed run says so with its code and nothing to save; a running one has 取消", async () => {
+  suggestPage({ view: kview({ status: "failed", state: "failed", error_code: "invalid_output", items: [], outcome: "pending" }) });
+  const main = await kstarted();
+  assert(kq(main, "run"), "running at first");
+  assert(kq(main, "cancel"));
+  await ktick();
+  assert(text(kq(main, "run")).includes("這次整理沒有成功"));
+  assert(text(kq(main, "run")).includes("invalid_output"));
+  assert.strictEqual(kq(main, "card"), null);
+});
+
+test("the code of the suggestions keeps its rules: no markup written, no emoji, no outside address, no native dialog, nothing kept, no send, nothing saved by itself", () => {
+  const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  const part = source.slice(source.indexOf("// ---------- skill suggestions (v0.18, P44-5"), source.indexOf("// ---------- end of skill suggestions"));
+  assert(part.length > 3000, "the block is there");
+  assert(!/\p{Extended_Pictographic}/u.test(part), "no emoji");
+  assert(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(part));
+  assert(!/https?:\/\//.test(part));
+  assert(!/\b(confirm|alert|prompt)\s*\(/.test(part.replace(/confirmInPage/g, "")));
+  assert(!/localStorage|sessionStorage|document\.cookie/.test(part));
+  assert(!/console\.(log|info|warn|error)/.test(part));
+  assert(!/\/api\/(chats|groups|config|settings|native|agent-profiles|memory)|\/messages|\/answer|api\.(patch|del)\(/.test(part));
+  // the only route of the skills the block names is the suggestions' own; saving goes through openSkillSave (the person's press of 存)
+  assert(!/["'`]\/api\/my-skills["'`]/.test(part), "the block never posts to the skills route itself");
+  assert(/openSkillSave\(/.test(part));
+  assert(!/\.click\(\)|\.submit\(\)/.test(part));
 });
 
 // ---- the rules of the code --------------------------------------------------------------------------------------

@@ -30,6 +30,11 @@ const ROUTINE = {
 };
 const WAITING = { kind: "routine_due", run_id: "rr-aaaaaaaaaaaa", routine_id: ROUTINE.id, name: "市集日報", slot: "2026-11-09T08:00", due_at: 1794000000 };
 
+const STEPS = "第一步：整理昨天的銷售。\n第二步：寫成一段話。";
+const SKILLS = { ok: true, readable: true, problem: null, used: { count: 2 }, limits: { max_skills: 100, max_name: 40, max_text: 4000 },
+  skills: [{ id: "k-0123456789ab", name: "市集日報", text: STEPS, source: { how: "typed" }, created_at: 1790000000, updated_at: 1790000000 },
+    { id: "k-0123456789ac", name: "<b>粗體</b>", text: "請寫一段話", source: { how: "typed" }, created_at: 1790000001, updated_at: 1790000001 }] };
+
 let state;
 let calls;
 function view() {
@@ -42,7 +47,7 @@ function view() {
   };
 }
 function setServer(over = {}) {
-  state = { routines: [{ ...ROUTINE }], waiting: [], readable: true, auto: false, post: null, getFails: false, ...over };
+  state = { routines: [{ ...ROUTINE }], waiting: [], readable: true, auto: false, post: null, getFails: false, book: SKILLS, ...over };
   calls = [];
   setHandler((url, opts = {}) => {
     const p = url.split("?")[0];
@@ -56,6 +61,7 @@ function setServer(over = {}) {
     if (p === "/api/config") return jsonResponse({ config: { advanced_mode: false }, state_dir: "/x", runtime_socket: "" });
     if (p === "/api/routines" && method === "GET") return state.getFails ? jsonResponse({ error: "壞了" }, false, 500) : jsonResponse(view());
     if (p === "/api/waiting") return jsonResponse({ waiting: state.waiting });
+    if (p === "/api/my-skills" && method === "GET") return state.book ? jsonResponse(state.book) : jsonResponse({ error: "讀不到", code: "unavailable" }, false, 503);
     if (method === "POST" && p.startsWith("/api/routines")) return state.post ? state.post(p, body) : jsonResponse({ ok: true });
     return null;
   });
@@ -174,6 +180,94 @@ test("the new-routine form lists only employees who can chat and posts exactly t
   assert.strictEqual(call[1], "/api/routines");
   assert.deepStrictEqual(Object.keys(call[2]).sort(), ["days", "enabled", "name", "profile_id", "text", "times"]);
   assert.deepStrictEqual([call[2].name, call[2].profile_id, call[2].days, call[2].times, call[2].enabled], ["晨間整理", "p-writer", [0, 1, 2, 3, 4], ["08:00"], false]);
+});
+
+test("the form has 從技能帶入; opening it reads the skills and posts nothing, and the picker lists names as text", async () => {
+  setServer({ routines: [] });
+  const main = await open();
+  await click(act(main, "new"));
+  const form = by(main, "data-routines", "form");
+  assert(text(form).includes("之後改技能不會改這個例行工作"));
+  await click(act(form, "from-skill"));
+  const pick = h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker");
+  assert(pick, "a picker");
+  assert(text(pick).includes("從技能帶入"));
+  assert(text(pick).includes("市集日報") && text(pick).includes("<b>粗體</b>"), "names as text");
+  assert.strictEqual(pick.findAll((n) => n.tag === "b").length, 0, "markup stays text");
+  assert.deepStrictEqual(calls.filter((c) => c[0] === "GET" && c[1] === "/api/my-skills").length, 1);
+  assert.deepStrictEqual(posts(), []);
+});
+
+test("picking a skill copies its words into the text box (and fills nothing else); the routine then posts the six fields with that text", async () => {
+  setServer({ routines: [] });
+  const main = await open();
+  await click(act(main, "new"));
+  const form = by(main, "data-routines", "form");
+  await click(act(form, "from-skill"));
+  const pick = h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker");
+  assert(!text(pick).includes("已經有字"), "an empty box has nothing to replace");
+  await click(pick.findAll((n) => attr(n, "data-skill") === "pick")[0]);
+  const box = by(form, "data-routine-field", "text");
+  assert.strictEqual(box.value, STEPS);
+  assert.strictEqual(by(form, "data-routine-field", "name").value, "");
+  assert(!h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker"), "the picker closes");
+  assert.deepStrictEqual(posts(), [], "picking saves nothing");
+  by(form, "data-routine-field", "name").value = "晨間整理";
+  await click(act(form, "save"));
+  const [call] = posts();
+  assert.deepStrictEqual(Object.keys(call[2]).sort(), ["days", "enabled", "name", "profile_id", "text", "times"], "no link to the skill is sent");
+  assert.strictEqual(call[2].text, STEPS);
+});
+
+test("what the skill says later does not reach the form: the words were copied once, and the box can be edited afterwards", async () => {
+  setServer({ routines: [] });
+  const main = await open();
+  await click(act(main, "new"));
+  const form = by(main, "data-routines", "form");
+  await click(act(form, "from-skill"));
+  await click(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "pick")[0]);
+  state.book = { ...SKILLS, skills: [{ ...SKILLS.skills[0], text: "技能後來改了", updated_at: 1790009999 }] };
+  const box = by(form, "data-routine-field", "text");
+  assert.strictEqual(box.value, STEPS);
+  box.value = STEPS + "\n第三步：貼到粉專。";
+  box.dispatch("input");
+  await click(act(form, "from-skill"));
+  assert(!h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker" && text(n).includes("<b>粗體</b>")), "the picker reads the book as it is now");
+  assert.strictEqual(box.value, STEPS + "\n第三步：貼到粉專。", "opening the picker changes nothing in the box");
+});
+
+test("a box that already has words is told it will be replaced; cancel leaves it as it was", async () => {
+  setServer();
+  const main = await open();
+  await click(act(by(main, "data-routine", "card"), "edit"));
+  const form = by(main, "data-routines", "form");
+  const box = by(form, "data-routine-field", "text");
+  assert.strictEqual(box.value, ROUTINE.text);
+  await click(act(form, "from-skill"));
+  const pick = h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker");
+  assert(text(pick).includes("這個欄位已經有字，帶入會取代它。"));
+  await click(pick.find((n) => attr(n, "data-skill") === "pick-cancel"));
+  assert.strictEqual(box.value, ROUTINE.text);
+  await click(act(form, "from-skill"));
+  await click(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "pick")[0]);
+  assert.strictEqual(box.value, STEPS, "replaced, not appended");
+  assert.deepStrictEqual(posts(), []);
+});
+
+test("no skills, or a book that cannot be read, is said in the picker; the form keeps working", async () => {
+  setServer({ routines: [], book: { ...SKILLS, skills: [], used: { count: 0 } } });
+  let main = await open();
+  await click(act(main, "new"));
+  await click(act(by(main, "data-routines", "form"), "from-skill"));
+  assert(text(h.dom().bodyEl.find((n) => attr(n, "data-skill") === "picker")).includes("還沒有存任何技能"));
+  setServer({ routines: [], book: null });
+  main = await open();
+  await click(act(main, "new"));
+  const form = by(main, "data-routines", "form");
+  await click(act(form, "from-skill"));
+  assert(text(h.dom().bodyEl.findAll((n) => attr(n, "data-skill") === "picker").pop()).includes("讀不到技能"));
+  by(form, "data-routine-field", "text").value = "照樣能自己寫";
+  assert.strictEqual(by(form, "data-routine-field", "text").value, "照樣能自己寫");
 });
 
 test("the second yes: a routine_confirm answer opens a dialog and a yes sends it again with confirm_warning", async () => {
