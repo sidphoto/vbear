@@ -73,7 +73,7 @@ from . import chief, chief_runner as chief_runner_mod
 from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
-from . import routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
+from . import keep_awake as keep_awake_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -198,6 +198,9 @@ class Console:
         self.port = port
         # How "open in Finder" is done (P43-1): None here, so that nothing built for a test opens a window; serve() sets it.
         self.reveal_command = None
+        # How the Mac is kept from sleeping while employees work (P44-3): None here, so that nothing built for a test starts a program;
+        # serve() sets it. It is given the fixed argv of vbear/keep_awake.py and nothing else.
+        self.keep_awake_command = None
         # Every /api/ request must carry this token (cookie or Bearer). It is
         # new for each server start and is shared only through an owner-only
         # file in the state directory. None turns the check off; only test
@@ -355,8 +358,14 @@ class Console:
         with self.lock:
             if "_routine_runner" not in self.__dict__:
                 self._routine_runner = routine_runner_mod.RoutineRunner(
-                    chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf), conf=lambda: self.store.conf)
+                    chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf), conf=lambda: self.store.conf,
+                    keep_awake=keep_awake_mod.KeepAwake(launch=self._keep_awake_launch), also_working=keep_awake_mod.dispatch_running)
             return self._routine_runner
+
+    def _keep_awake_launch(self, command):
+        """Start what ``keep_awake_command`` starts, or nothing when the console has none (see ``serve()``)."""
+        start = self.keep_awake_command
+        return start(command) if start is not None else None
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -3034,6 +3043,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     handed = take_handed_token()  # first: out of the environment before anything else runs
     console = Console(port)
     console.reveal_command = _open_in_finder
+    console.keep_awake_command = keep_awake_mod.launch
     if handed:
         console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan
