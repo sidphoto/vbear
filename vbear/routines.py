@@ -12,6 +12,8 @@
     ids, times, states, counts and money, **never** a name or a word of a routine. ``new_run`` is the one place a run is born, and it
     refuses a (routine, slot) that already has one: that is what keeps a slot from being done twice, whatever the clock does.
   * ``log.jsonl`` (0600, append only): what the person did to the routines, with ids only.
+  * ``heartbeat.json`` (0600, P44-3): ``{"v": 1, "at": seconds}``, the instant VBear last looked, written by the runner about once a minute.
+    It is how a start, or a look after a sleep, tells that VBear was not looking in between; no name and no word of a routine.
 
 Who writes: routines, settings and the two logs are changed by the person's own press in the browser (the ``/api/routines*`` routes of
 vbear/server.py carry ``X-VBear``); the functions that do it (``create``, ``edit``, ``set_enabled``, ``delete``, ``set_settings``, ``store``)
@@ -293,11 +295,14 @@ def delete(routine_id) -> dict:
 
 
 def set_settings(body, daily_limit) -> dict:
-    """The routines' settings the person may change here: ``{"daily_usd": number | null}`` (null: back to the default), a number from one
-    cent to the day's limit ``daily_limit`` (a Decimal)."""
-    if not isinstance(body, dict) or set(body) != {"daily_usd"}:
-        raise ApiError(400, "bad_request", "只接受 daily_usd。")
-    value = body["daily_usd"]
+    """The routines' settings the person may change here: ``daily_usd`` (a number from one cent to the day's limit ``daily_limit``, a
+    Decimal; null: back to the default) and ``keep_awake`` (true or false: whether the Mac is kept from sleeping while employees work,
+    P44-3). At least one of them, nothing else; the one not sent stays as it is."""
+    if not isinstance(body, dict) or not body or set(body) - {"daily_usd", "keep_awake"}:
+        raise ApiError(400, "bad_request", "只接受 daily_usd 與 keep_awake，至少一個。")
+    if "keep_awake" in body and not isinstance(body["keep_awake"], bool):
+        raise ApiError(400, "bad_request", "keep_awake 必須是 true 或 false。")
+    value = body.get("daily_usd")
     if value is not None:
         try:
             value = rr.check_daily_usd(value, Decimal(daily_limit))
@@ -307,7 +312,8 @@ def set_settings(body, daily_limit) -> dict:
         _folder(True)
         with settings_store.locked():
             data = settings_store.load()
-            merged = {"v": SCHEMA, "daily_usd": value, "keep_awake": data.get("keep_awake", False)}
+            merged = {"v": SCHEMA, "daily_usd": value if "daily_usd" in body else data.get("daily_usd"),
+                      "keep_awake": body["keep_awake"] if "keep_awake" in body else data.get("keep_awake", False)}
             settings_store.save(merged)
             _log("settings", None, None)
     except (StoreError, OSError) as exc:
@@ -441,6 +447,43 @@ def record_run(rec: dict) -> dict:
         raise ValueError("a run record of another shape")
     _append(_folder(True), rec)
     return rec
+
+
+# ---- the heartbeat (P44-3) ----------------------------------------------------------------------------------------------------------
+
+HEARTBEAT = "heartbeat.json"
+
+
+def write_heartbeat(now: float) -> None:
+    """``heartbeat.json`` (0600) = ``{"v": 1, "at": <the instant VBear last looked>}``, replaced whole. It holds nothing else: it is how a
+    later start tells that VBear was not looking in between. Written by the runner."""
+    folder = _folder(True)
+    tmp = folder / (HEARTBEAT + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, cfg.STATE_FILE_MODE)
+    try:
+        os.fchmod(fd, cfg.STATE_FILE_MODE)
+        os.write(fd, json.dumps({"v": SCHEMA, "at": round(float(now), 3)}).encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, folder / HEARTBEAT)
+
+
+def read_heartbeat() -> float | None:
+    """The instant of the last heartbeat, or None: no file (a fresh upgrade), a link, or anything that is not exactly what was written.
+    None means nothing is counted as missed."""
+    try:
+        folder = _folder(False)
+        if folder is None:
+            return None
+        fd = os.open(folder / HEARTBEAT, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            data = json.loads(fh.read(4096).decode("utf-8"))
+    except (OSError, ValueError, StoreError):
+        return None
+    if not isinstance(data, dict) or set(data) != {"v", "at"} or data["v"] != SCHEMA or isinstance(data["v"], bool):
+        return None
+    return float(data["at"]) if _num(data["at"]) else None
 
 
 def new_run(routine_id: str, slot: str, *, state: str, why: str, by: str | None = None, reason: str | None = None,

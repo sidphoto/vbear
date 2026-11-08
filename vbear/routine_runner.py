@@ -15,13 +15,22 @@ What a pass does, in this order (the later batches add to the places marked):
 
 1. ``_look``: for every routine that is on, the slots that became due since the last look (a slot is **on time** for 2 minutes after
    its time): with item 3 off, a reminder (``waiting``: nothing is sent, nothing costs); with item 3 on, the run is queued (``starting``,
-   ``by: auto3``). A slot that is older than that is recorded ``missed`` and not listed. (P44-3 puts the heartbeat and the wake-up list
-   here: it changes what is done with a late slot, not the rest.) Reminders nobody pressed are put away (``missed``) at the routine's next
-   time or after 12 hours; those of a routine that was switched off or deleted are ``dismissed``.
+   ``by: auto3``). Reminders nobody pressed are put away (``missed``) at the routine's next time or after 12 hours; those of a routine
+   that was switched off or deleted are ``dismissed``.
+   **Waking up (P44-3, ``_away_since`` and ``_wake``)**: the runner writes a heartbeat file about once a minute (``_beat``). Two looks more
+   than 90 seconds apart, or a first look whose heartbeat file is older than that, mean the Mac slept or VBear was closed; the slots in
+   between are *missed*. Of the missed slots of a routine only the latest is offered (``waiting``, ``why: catch_up``; the earlier ones are
+   recorded ``missed``, so no slot is done twice); a routine whose own time is due right now does not also catch up. With item 3 on, VBear
+   queues the offered runs itself when the latest missed slot is under 12 hours old, three routines at most per wake-up, the earliest
+   first; the rest wait for the person (``catch_up`` and ``dismiss_missed``). A listed one is put away at the routine's next time or after
+   24 hours. No heartbeat file: nothing counts as missed.
 2. ``_drive``: one run at a time. The run that is going (``running``, or ``starting`` with a chat) is looked after; when none is going, the
    oldest queued run begins: the day's lamp and the routines' daily limit are looked at, a new one-person chat is opened with the
    employee (``ChatService.create``), the message goes out through ``ChatService.send_for_routine`` and the run is ``running``.
    (P44-4: the pass then calls ``self.auto_continue.tick()`` once, the dispatches that stopped for a limit; see ``_continue``.)
+   Last, ``_beat`` and ``_hold_awake``: the heartbeat, and the word to
+   ``KeepAwake`` (vbear/keep_awake.py, handed in by the console) whether a run is going or a dispatch is running; this module starts
+   no program.
 
 Item 3 is read in one place, ``_auto``: the ``routines`` key of the autonomy block (through ``autonomy``'s reader); a missing key, a value that is not ``True``, a config that
 cannot be read: off. With it off the runner writes only ``waiting``, ``missed``, ``dismissed``, ``skipped``, ``failed`` records for slots
@@ -68,8 +77,11 @@ class RoutineRunner:
     returning the day's ledger (``lamp`` and the spend); one that cannot answer starts nothing. ``conf``: a function returning the
     console's configuration (read for item 3 and for the day's limit only). ``tz``: a ``zoneinfo`` zone, or None for the machine's own."""
 
-    def __init__(self, *, chats, ledger, conf, clock=time.time, tz=None, tick_s: float = TICK_S, auto_continue=None):
+    def __init__(self, *, chats, ledger, conf, clock=time.time, tz=None, tick_s: float = TICK_S, auto_continue=None, keep_awake=None,
+                 also_working=None):
         self._chats = chats
+        self.keep_awake = keep_awake                       # P44-3: told once a pass whether anyone works (vbear/keep_awake.py); None: nothing
+        self.also_working = also_working                   # P44-3: a function, True while a dispatch is running
         self.ledger = ledger
         self.conf = conf
         self.clock = clock
@@ -82,6 +94,7 @@ class RoutineRunner:
         self._stopping = threading.Event()
         self._poke = threading.Event()
         self._seen: float | None = None                    # the instant of the last look at the slots
+        self._beaten: float | None = None                  # the instant of the last heartbeat written
         self._reserved: dict[str, str] = {}                # run id -> a chat opened for it that the employee's refusal left empty
         self._wait: dict[str, dict] = {}                   # run id -> {"first", "next"} while an employee is busy or the room is full
         self._misses: dict[str, int] = {}
@@ -126,6 +139,8 @@ class RoutineRunner:
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(5)
+        if self.keep_awake is not None:
+            self.keep_awake.close()
         self.release()
 
     def poke(self) -> None:
@@ -222,10 +237,13 @@ class RoutineRunner:
             return out
         self.last_error = None
         auto = self._auto()
-        out.update(self._look(now, routines, runs, auto))
+        away = self._away_since(now)
+        out.update(self._look(now, routines, runs, auto, away))
         out.update(self._drive(now, routines))
         self._continue()
         self._seen = now
+        self._beat(now)
+        self._hold_awake(now)
         self._drain_closing()
         return {k: v for k, v in out.items() if v}
 
@@ -239,29 +257,119 @@ class RoutineRunner:
         except Exception:
             self.last_error = "continue_failed"
 
+    # ---- the heartbeat and the sleep (P44-3) --------------------------------------------------------------------------------------
+
+    def _away_since(self, now: float) -> float | None:
+        """The instant VBear last looked, when it has not looked since: the wall clock jumped more than ``WAKE_GAP_S`` (the Mac slept) or,
+        for the first pass of a console, the heartbeat file is older than that (VBear was closed). None when it did look, when the clock
+        was set back, and when there is no readable heartbeat (a fresh upgrade: nothing is counted as missed)."""
+        last = self._seen if self._seen is not None else rt.read_heartbeat()
+        if last is None or last > now:
+            return None
+        return last if now - last > rr.WAKE_GAP_S else None
+
+    def _hold_awake(self, now: float) -> None:
+        """Tell the keep-awake machine whether anyone works: a routine's run that is going, or a dispatch that is running. The person's
+        switch (``settings.json``) is read every pass; off, nothing is kept awake. A fault here never stops a pass."""
+        if self.keep_awake is None:
+            return
+        try:
+            on = rt.read_settings()[0]["keep_awake"] is True
+            working = False
+            if on:
+                runs = rt.read_runs()[0]
+                working = any(r["state"] == "running" or (r["state"] == "starting" and r["chat_id"]) for r in runs)
+                working = working or (self.also_working is not None and bool(self.also_working()))
+            self.keep_awake.update(working, now, on=on)
+        except Exception as exc:
+            self.last_error = f"keep_awake:{type(exc).__name__}"
+
+    def _beat(self, now: float) -> None:
+        """The heartbeat file, once a minute (and at once after a long gap, so that a sleep is counted once)."""
+        if self._beaten is not None and self._beaten <= now < self._beaten + rr.BEAT_S:
+            return
+        try:
+            rt.write_heartbeat(now)
+            self._beaten = now
+        except Exception as exc:
+            self.last_error = f"heartbeat:{type(exc).__name__}"
+
     # ---- looking at the slots ----------------------------------------------------------------------------------------------------
 
-    def _look(self, now: float, routines: list, runs: list, auto: bool) -> dict:
+    def _look(self, now: float, routines: list, runs: list, auto: bool, away: float | None = None) -> dict:
+        """The slots that became due since the last look. A slot is on time for ``ON_TIME_S``; the rest of what VBear did not see (``away``:
+        the Mac slept or VBear was closed) is the wake-up's: see ``_wake``."""
         out: dict = {}
         taken = {(r["routine_id"], r["slot"]) for r in runs}
         floor = min(self._seen, now) if self._seen is not None else now - rr.ON_TIME_S
+        late: dict = {}
         for routine in routines:
             if not routine["enabled"]:
                 continue
-            since = max(routine["enabled_at"] or 0.0, floor)
+            since = max(routine["enabled_at"] or 0.0, floor if away is None else min(away, floor), now - rr.LOOK_BACK_S)
+            on_time = False
             for slot, due in rr.slots_between(routine, since, now, self.tz):
                 if (routine["id"], slot) in taken:
                     continue
                 if now - due >= rr.ON_TIME_S:
-                    made = rt.new_run(routine["id"], slot, state="missed", why="on_time", reason="late", now=now)
-                elif auto:                                    # item 3: the run begins by itself (read once, above)
+                    if away is None:                          # cannot happen while VBear looks every few seconds; kept as it was
+                        made = rt.new_run(routine["id"], slot, state="missed", why="on_time", reason="late", now=now)
+                        if made is not None:
+                            out[made["run_id"]] = made["state"]
+                    else:
+                        late.setdefault(routine["id"], []).append(slot)
+                    continue
+                on_time = True
+                if auto:                                      # item 3: the run begins by itself (read once, above)
                     made = rt.new_run(routine["id"], slot, state="starting", why="on_time", by="auto3", now=now)
                 else:
                     made = rt.new_run(routine["id"], slot, state="waiting", why="on_time", now=now)
                 if made is not None:
                     out[made["run_id"]] = made["state"]
+            if routine["id"] in late and on_time:             # the routine's own time is now: it is not a catch-up
+                for slot in late.pop(routine["id"]):
+                    made = rt.new_run(routine["id"], slot, state="missed", why="catch_up", reason="superseded", now=now)
+                    if made is not None:
+                        out[made["run_id"]] = made["state"]
+        out.update(self._wake(now, routines, late, auto))
         out.update(self._put_away(now, routines))
         return out
+
+    def _wake(self, now: float, routines: list, late: dict, auto: bool) -> dict:
+        """What VBear did not see: of the late slots of a routine only the latest is offered (listed, ``waiting`` with ``why: catch_up``,
+        the count of the slots in its reason); the earlier ones are recorded ``missed`` so that no slot is ever done twice. With item 3 on,
+        the latest one younger than 12 hours is queued by VBear itself, at most three routines per wake-up, the earliest times first (the
+        runs go one at a time); the rest stay listed for the person. Nothing is sent here: queued runs begin in ``_drive``, where the
+        day's lamp and the routines' limit are looked at again."""
+        out: dict = {}
+        offered: list = []
+        for routine in routines:
+            slots = late.get(routine["id"])
+            if not slots:
+                continue
+            for slot in slots[:-1]:
+                made = rt.new_run(routine["id"], slot, state="missed", why="catch_up", reason="older", now=now)
+                if made is not None:
+                    out[made["run_id"]] = made["state"]
+            made = rt.new_run(routine["id"], slots[-1], state="waiting", why="catch_up", reason=f"{rr.ASLEEP}{len(slots)}", now=now)
+            if made is not None:
+                out[made["run_id"]] = made["state"]
+                offered.append((rr.slot_due(slots[-1], self.tz) or 0.0, made["run_id"], routine["profile_id"]))
+        if auto:
+            chat_ok = self._employees_who_chat()
+            young = [(due, run_id, pid) for due, run_id, pid in sorted(offered) if now - due < rr.CATCH_UP_AUTO_S and pid in chat_ok]
+            for due, run_id, _ in young[:rr.CATCH_UP_AUTO_MAX]:
+                got = rt.update_run(run_id, ("waiting",), now=now, state="starting", by="auto3")
+                if got is not None:
+                    out[run_id] = got["state"]
+        return out
+
+    def _employees_who_chat(self) -> set:
+        """The ids of the role cards the chat service says can chat now; empty when it cannot say (then nothing is caught up by itself)."""
+        try:
+            return {c["id"] for c in self._chats().cards() if isinstance(c, dict) and c.get("can_chat") is True}
+        except Exception:
+            return set()
 
     def _put_away(self, now: float, routines: list) -> dict:
         """The reminders nobody pressed: a routine that is gone or off, the routine's next time, or 12 hours."""
@@ -276,7 +384,8 @@ class RoutineRunner:
             else:
                 due = rr.slot_due(run["slot"], self.tz) or run["at"]
                 nxt = rr.next_due(routine, due, self.tz)
-                if (nxt is not None and now >= nxt[1]) or now - run["at"] >= rr.WAITING_FOR_S:
+                limit = rr.CATCH_UP_LISTED_S if run["why"] == "catch_up" else rr.WAITING_FOR_S
+                if (nxt is not None and now >= nxt[1]) or now - run["at"] >= limit:
                     got = rt.update_run(run["run_id"], ("waiting",), now=now, state="missed", reason="unanswered")
                 else:
                     continue
@@ -485,6 +594,37 @@ class RoutineRunner:
             raise ApiError(409, "routine_gone", "這個提醒已經處理過，或已經收起來了。")
         return got
 
+    def _listed(self, routine_id: str) -> dict | None:
+        """The run that offers a routine's latest missed time (``waiting``, ``why: catch_up``), or None."""
+        return next((r for r in rt.read_runs()[0] if r["routine_id"] == routine_id and r["state"] == "waiting" and r["why"] == "catch_up"), None)
+
+    def _known(self, routine_id: str) -> None:
+        routines, problem = rt.read_routines()
+        if problem:
+            raise ApiError(503, "routines_unreadable", rt.UNREADABLE)
+        if not any(r["id"] == routine_id for r in routines):
+            raise ApiError(404, "not_found", "找不到這件例行工作。")
+
+    def catch_up(self, routine_id: str) -> dict:
+        """「補做」: the latest missed time of the routine is done once, as the person's own decision (``by: you``, whatever its age), at the
+        next pass (at once: ``poke``). ApiError 404 for a routine that is not there, 409 when nothing of it is listed any more."""
+        self._known(routine_id)
+        listed = self._listed(routine_id)
+        got = rt.update_run(listed["run_id"], ("waiting",), now=self.clock(), state="starting", by="you") if listed else None
+        if got is None:
+            raise ApiError(409, "routine_gone", "這件例行工作錯過的時間已經處理過，或已經收起來了。")
+        self.poke()
+        return got
+
+    def dismiss_missed(self, routine_id: str) -> dict:
+        """「不用了」: nothing is sent; the missed time is put away."""
+        self._known(routine_id)
+        listed = self._listed(routine_id)
+        got = rt.update_run(listed["run_id"], ("waiting",), now=self.clock(), state="dismissed", by="you", reason="you") if listed else None
+        if got is None:
+            raise ApiError(409, "routine_gone", "這件例行工作錯過的時間已經處理過，或已經收起來了。")
+        return got
+
     def start_now(self, routine_id: str) -> dict:
         """「現在開始」 on a routine, whenever the person wants (also for one that is off): a run for this minute, ``why: now``. 404 for a
         routine that is not there; 409 when this minute already has a run of the routine."""
@@ -512,11 +652,19 @@ class RoutineRunner:
             return []
         by_id = {r["id"]: r for r in routines}
         rows = []
+        now = self.clock()
         for run in runs:
             routine = by_id.get(run["routine_id"])
-            if run["state"] == "waiting" and routine is not None and routine["enabled"]:
-                rows.append({"kind": "routine_due", "run_id": run["run_id"], "routine_id": routine["id"], "name": routine["name"],
-                             "slot": run["slot"], "due_at": rr.slot_due(run["slot"], self.tz)})
+            if run["state"] != "waiting" or routine is None or not routine["enabled"]:
+                continue
+            due = rr.slot_due(run["slot"], self.tz)
+            row = {"run_id": run["run_id"], "routine_id": routine["id"], "name": routine["name"], "slot": run["slot"], "due_at": due}
+            if run["why"] == "catch_up":
+                count = (run["reason"] or "")[len(rr.ASLEEP):] if (run["reason"] or "").startswith(rr.ASLEEP) else ""
+                rows.append({"kind": "routine_missed", **row, "count": int(count) if count.isdigit() else 1,
+                             "too_old": due is None or now - due >= rr.CATCH_UP_AUTO_S})
+            else:
+                rows.append({"kind": "routine_due", **row})
         return sorted(rows, key=lambda row: (row["due_at"] or 0.0, row["run_id"]))
 
     def actions(self) -> list:

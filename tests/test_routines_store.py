@@ -163,7 +163,7 @@ class SettingsTests(Base):
 
     def test_a_limit_above_the_day_or_a_stranger_key_is_refused_and_nothing_changes(self):
         rt.set_settings({"daily_usd": 0.5}, Decimal("3"))
-        for bad in ({"daily_usd": 3.5}, {"daily_usd": 0}, {"daily_usd": "1"}, {"daily_usd": 1, "other": 2}, {}, {"keep_awake": True}):
+        for bad in ({"daily_usd": 3.5}, {"daily_usd": 0}, {"daily_usd": "1"}, {"daily_usd": 1, "other": 2}, {}, {"keep_awake": "yes"}, {"keep_awake": 1}):
             status, code = self.code(rt.set_settings, bad, Decimal("3"))
             self.assertEqual((status, code), (400, "bad_request"), bad)
         self.assertEqual(rt.read_settings()[0]["daily_usd"], 0.5)

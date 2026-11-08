@@ -369,6 +369,87 @@ test("「AI 自己做了什麼」 lists a routine VBear started, links to its ch
   assert(!row.find((n) => n.tag === "a" && String(attr(n, "href")).includes("#/dispatch/")), "no dispatch link for a routine row");
 });
 
+// ---- P44-3: waking up -----------------------------------------------------------------------------------------------------
+const MISSED = { kind: "routine_missed", run_id: "rr-cccccccccccc", routine_id: ROUTINE.id, name: "市集日報", slot: "2026-11-11T08:00", due_at: 1794100000, count: 3, too_old: false };
+
+test("what a sleep missed is one row with the count, the latest time and the two buttons; it says it is not sent by itself while item 3 is off", async () => {
+  setServer({ waiting: [MISSED] });
+  const main = await open();
+  const row = by(main, "data-routine-missed", ROUTINE.id);
+  assert(row, "a missed row");
+  const t = text(row);
+  for (const s of ["市集日報", "錯過 3 次", "最近一次 11/11 08:00", "Mac 睡著或 VBear 關著", "只做最近一次", "US$0.50", "沒有打開「自己動手」第 3 項"]) assert(t.includes(s), s);
+  assert(button(row, "補做") && button(row, "不用了"));
+});
+
+test("with item 3 on the row does not say it will not run; over 12 hours it says the person decides", async () => {
+  setServer({ waiting: [MISSED], auto: true });
+  let t = text(by(await open(), "data-routine-missed", ROUTINE.id));
+  assert(!t.includes("不會自己補做"), t);
+  setServer({ waiting: [{ ...MISSED, too_old: true }], auto: true });
+  t = text(by(await open(), "data-routine-missed", ROUTINE.id));
+  assert(t.includes("已經超過 12 小時，不會自己補做，由你決定"), t);
+});
+
+test("補做 and 不用了 post the routine's id with run or dismiss, and nothing else", async () => {
+  setServer({ waiting: [MISSED] });
+  let main = await open();
+  await click(act(by(main, "data-routine-missed", ROUTINE.id), "missed-run"));
+  main = await open();
+  await click(act(by(main, "data-routine-missed", ROUTINE.id), "missed-dismiss"));
+  assert.deepStrictEqual(posts().map((c) => [c[1], c[2]]), [
+    [`/api/routines/missed/${ROUTINE.id}`, { action: "run" }], [`/api/routines/missed/${ROUTINE.id}`, { action: "dismiss" }]]);
+});
+
+test("a reminder and a missed row sit together; the line over every page counts the lost ones apart", async () => {
+  const bar = global.document.createElement("div");
+  bar.setAttribute("id", "waiting-bar");
+  setServer({ waiting: [WAITING, MISSED, { ...MISSED, routine_id: "r-ba9876543210", name: "第二件" }] });
+  const main = await open("#/routines");
+  assert(by(main, "data-routine-waiting", WAITING.run_id) && by(main, "data-routine-missed", ROUTINE.id) && by(main, "data-routine-missed", "r-ba9876543210"));
+  assert.strictEqual(text(bar), "等你決定：例行工作「市集日報」08:00到時間了；VBear 剛才沒在看，錯過了 2 件例行工作 去處理");
+  setServer({ waiting: [MISSED] });
+  await open("#/routines");
+  assert.strictEqual(text(bar), "等你決定：VBear 剛才沒在看，錯過了 1 件例行工作 去處理");
+  assert(!text(bar).includes("請整理"));
+});
+
+test("the page says VBear must be open and the Mac awake, and the switch for keeping the Mac awake posts only keep_awake", async () => {
+  setServer();
+  const main = await open();
+  assert(text(by(main, "data-routines", "awake-line")).includes("VBear 的視窗要開著、Mac 要醒著，例行工作才會做"));
+  const panel = by(main, "data-routines", "awake");
+  const box = by(panel, "data-routine-field", "keep-awake");
+  assert(box && box.checked === false, "off by default");
+  for (const s of ["有工作在跑時不讓 Mac 睡著", "闔上筆電蓋子還是會睡", "不會為了到時間把 Mac 叫醒", "預設是關的"]) assert(text(panel).includes(s), s);
+  box.checked = true;
+  box.dispatch("change");
+  await settle();
+  assert.deepStrictEqual(posts().map((c) => [c[1], c[2]]), [["/api/routines/settings", { keep_awake: true }]]);
+});
+
+test("the switch shows what the server says", async () => {
+  setServer();
+  const real = view;
+  setHandler((url, opts = {}) => {
+    const p = url.split("?")[0];
+    if (p === "/api/routines" && !(opts && opts.method && opts.method !== "GET")) { const v = real(); v.settings.keep_awake = true; return jsonResponse(v); }
+    return null;
+  });
+  const main = await open();
+  assert.strictEqual(by(by(main, "data-routines", "awake"), "data-routine-field", "keep-awake").checked, true);
+});
+
+test("a run that was a missed time is told in words: how many were lost, or that only the latest is done", async () => {
+  setServer({ routines: [{ ...ROUTINE, runs: [
+    { run_id: "rr-1", routine_id: ROUTINE.id, slot: "2026-11-11T08:00", state: "waiting", by: null, by_text: null, why: "catch_up", chat_id: null, turn: null, cost_usd: null, reason: "asleep_3", started_at: null, at: 1 },
+    { run_id: "rr-2", routine_id: ROUTINE.id, slot: "2026-11-10T08:00", state: "missed", by: null, by_text: null, why: "catch_up", chat_id: null, turn: null, cost_usd: null, reason: "older", started_at: null, at: 1 },
+    { run_id: "rr-3", routine_id: ROUTINE.id, slot: "2026-11-09T08:00", state: "missed", by: null, by_text: null, why: "catch_up", chat_id: null, turn: null, cost_usd: null, reason: "superseded", started_at: null, at: 1 }] }] });
+  const t = text(by(await open(), "data-routine", "runs"));
+  for (const s of ["VBear 沒在看，錯過 3 次", "只補最近一次", "之後的時間已經到了"]) assert(t.includes(s), s);
+  assert(!t.includes("asleep_") && !t.includes("superseded"), t);
+});
+
 test("the nav has the page, the bar sits over main, and the CSS can hide it", () => {
   assert(/<a href="#\/routines" data-nav="routines">/.test(HTML));
   assert(/id="waiting-bar"[^>]*hidden/.test(HTML));

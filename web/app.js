@@ -12271,6 +12271,7 @@ const ROUTINE_REASON = {
   busy: "員工一直在忙，等了 12 分鐘", you: "你選擇跳過", unanswered: "沒有人處理，時間過了", late: "時間到的時候 VBear 沒有開著",
   deleted: "這件例行工作已刪除", disabled: "這件例行工作已關掉", not_found: "訊息沒有送出去，VBear 不會自己再送一次",
   is_error: "這回合出了錯", runner_error: "VBear 這邊出了問題", damaged: "聊天紀錄有問題",
+  older: "VBear 沒在看的時候錯過，只補最近一次", superseded: "VBear 沒在看的時候錯過，之後的時間已經到了",
 };
 const ROUTINE_POLL_NOTE = "這一頁每 5 秒更新一次。";
 let routinesTick = null;
@@ -12279,18 +12280,30 @@ function routineScheduleText(r) {
   const days = Array.isArray(r.days) ? r.days.map((d) => ROUTINE_DAYS[d]).filter(Boolean) : [];
   return `每週${days.join("、")}　${(Array.isArray(r.times) ? r.times : []).join("、")}`;
 }
+function routineReasonText(reason) {
+  const asleep = /^asleep_(\d+)$/.exec(String(reason || ""));
+  if (asleep) return `VBear 沒在看，錯過 ${asleep[1]} 次`;
+  return ROUTINE_REASON[reason] || reason;
+}
 function routineRunText(run) {
   const st = ROUTINE_STATE[run.state] || [String(run.state), "b-info"];
-  return run.reason ? `${st[0]}：${ROUTINE_REASON[run.reason] || run.reason}` : st[0];
+  return run.reason ? `${st[0]}：${routineReasonText(run.reason)}` : st[0];
+}
+function routineMissedWhen(w) {
+  return typeof w.slot === "string" ? w.slot.slice(5, 10).replace("-", "/") + " " + w.slot.slice(11, 16) : "";
 }
 
 // The line over every page: what waits for the person. Quiet when nothing waits or the server cannot say.
 function waitingBarText(rows) {
-  const list = Array.isArray(rows) ? rows.filter((r) => r && typeof r === "object" && r.kind === "routine_due") : [];
-  if (!list.length) return null;
+  const all = Array.isArray(rows) ? rows.filter((r) => r && typeof r === "object") : [];
+  const list = all.filter((r) => r.kind === "routine_due");
+  const missed = all.filter((r) => r.kind === "routine_missed");       // P44-3: what a sleeping Mac or a closed VBear missed
+  if (!list.length && !missed.length) return null;
+  const lost = missed.length ? `VBear 剛才沒在看，錯過了 ${missed.length} 件例行工作` : "";
+  if (!list.length) return `等你決定：${lost}`;
   const first = list[0];
   const time = typeof first.slot === "string" ? first.slot.slice(11, 16) : "";
-  return `等你決定：例行工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "");
+  return `等你決定：例行工作「${first.name}」${time}到時間了` + (list.length > 1 ? `，另外還有 ${list.length - 1} 件` : "") + (lost ? `；${lost}` : "");
 }
 async function refreshWaitingBar() {
   const bar = document.getElementById("waiting-bar");
@@ -12377,9 +12390,18 @@ async function viewRoutines() {
     name.focus();
   };
 
+  const missedRow = (w) => el("div", { class: "mt-row", "data-routine-missed": w.routine_id },
+    el("strong", null, w.name),
+    el("span", { class: "small muted", "data-routine-missed-line": "text" },
+      `錯過 ${w.count} 次（最近一次 ${routineMissedWhen(w)}）。VBear 剛才沒在看（Mac 睡著或 VBear 關著）。補做只做最近一次，最多花 ${usd(cur.limits.per_turn_usd)}。` +
+      (w.too_old ? "已經超過 12 小時，不會自己補做，由你決定。" : (cur.autonomy.routines === true ? "" : "沒有打開「自己動手」第 3 項，所以不會自己補做。"))),
+    el("button", { class: "btn small primary", type: "button", "data-routine-action": "missed-run", on: { click: () => act(() => api.post(`/api/routines/missed/${encodeURIComponent(w.routine_id)}`, { action: "run" }), "已開始補做") } }, "補做"),
+    el("button", { class: "btn small", type: "button", "data-routine-action": "missed-dismiss", on: { click: () => act(() => api.post(`/api/routines/missed/${encodeURIComponent(w.routine_id)}`, { action: "dismiss" }), "不補做了") } }, "不用了"));
+
   const waitingPanel = (rows) => rows.length ? el("section", { class: "panel pad", "data-routines": "waiting" },
     el("h2", null, "等你決定"),
-    rows.map((w) => el("div", { class: "mt-row", "data-routine-waiting": w.run_id },
+    rows.filter((w) => w.kind === "routine_missed").map(missedRow),
+    rows.filter((w) => w.kind !== "routine_missed").map((w) => el("div", { class: "mt-row", "data-routine-waiting": w.run_id },
       el("strong", null, w.name), el("span", { class: "small muted" }, `${w.slot.slice(11, 16)} 到時間了，還沒開始，也還沒花錢。`),
       el("button", { class: "btn small primary", type: "button", "data-routine-action": "wait-start", on: { click: () => act(() => api.post(`/api/routines/waiting/${encodeURIComponent(w.run_id)}`, { action: "start" }), "已開始") } }, "現在開始"),
       el("button", { class: "btn small", type: "button", "data-routine-action": "wait-skip", on: { click: () => act(() => api.post(`/api/routines/waiting/${encodeURIComponent(w.run_id)}`, { action: "skip" }), "這次跳過了") } }, "這次跳過")))) : null;
@@ -12398,6 +12420,19 @@ async function viewRoutines() {
       el("p", { class: "small muted", "data-routines": "auto-line" },
         d.autonomy.routines === true ? "「自己動手」第 3 項是打開的：到時間 VBear 會自己開始。" : "「自己動手」第 3 項沒有打開：到時間只提醒你，由你按「現在開始」。", " ",
         el("a", { href: "#/settings" }, "到設定看")));
+  };
+
+  // P44-3: 有工作在跑時不讓 Mac 睡著 (off unless the person switches it on)
+  const awakePanel = (d) => {
+    const box = el("input", { type: "checkbox", "data-routine-field": "keep-awake",
+      on: { change: () => act(() => api.post("/api/routines/settings", { keep_awake: box.checked }), box.checked ? "已打開" : "已關掉") } });
+    box.checked = d.settings.keep_awake === true;
+    return el("section", { class: "panel pad", "data-routines": "awake" },
+      el("h2", null, "讓 Mac 保持清醒"),
+      el("label", { class: "switch" }, box, el("div", null,
+        el("div", { class: "t" }, "有工作在跑時不讓 Mac 睡著"),
+        el("div", { class: "small muted", "data-routines": "awake-note" },
+          "只在員工做事時（例行工作或派工在進行）不讓 Mac 因為閒置而睡著；闔上筆電蓋子還是會睡，也不會為了到時間把 Mac 叫醒。預設是關的。"))));
   };
 
   const routineCard = (r) => el("article", { class: "card", "data-routine": "card", "data-routine-id": r.id },
@@ -12423,7 +12458,7 @@ async function viewRoutines() {
     r.runs.length ? el("ul", { class: "small", "data-routine": "runs" }, r.runs.map((run) => {
       const st = ROUTINE_STATE[run.state] || [String(run.state), "b-info"];
       return el("li", { "data-routine-run": run.state },
-        `${run.slot.replace("T", " ")}　`, badge(st[0], st[1]), ` ${run.reason ? (ROUTINE_REASON[run.reason] || run.reason) : ""}`,
+        `${run.slot.replace("T", " ")}　`, badge(st[0], st[1]), ` ${run.reason ? routineReasonText(run.reason) : ""}`,
         run.by_text ? `　${run.by_text}` : "", run.cost_usd != null ? `　US$${run.cost_usd}` : "", "　",
         run.chat_id ? el("a", { href: `#/chat/${encodeURIComponent(run.chat_id)}` }, "看這個聊天") : null);
     })) : el("p", { class: "small muted" }, "還沒有做過。"));
@@ -12434,6 +12469,7 @@ async function viewRoutines() {
       d.readable === false ? notice("warn", `例行工作的檔案讀不出來，先不會做事（檔案還在，沒有被刪掉）。${d.problem || ""}`) : null,
       waitingPanel(d.waiting || []),
       moneyPanel(d),
+      awakePanel(d),
       el("p", null, el("button", { class: "btn primary", type: "button", "data-routine-action": "new", on: { click: () => form(null) } }, "新增例行工作"), " ",
         el("span", { class: "small muted" }, ROUTINE_POLL_NOTE)),
       d.routines.length ? d.routines.map(routineCard) : emptyState("還沒有例行工作", "按「新增例行工作」，挑一位員工、寫下要他做的事、選時間。"));
@@ -12446,6 +12482,7 @@ async function viewRoutines() {
   activeViewCleanup = () => { routinesTick = null; };
   setKids(main, el("h1", null, "例行工作"),
     el("p", { class: "lede" }, "請員工在固定的時間做同一件事。到時間時，VBear 提醒你，由你決定要不要開始；要讓它自己開始，到設定打開「自己動手」第 3 項。員工要跑指令、改檔案時，照舊每次問你。"),
+    el("p", { class: "small muted", "data-routines": "awake-line" }, "VBear 的視窗要開著、Mac 要醒著，例行工作才會做。Mac 睡著或 VBear 關著時錯過的，醒來後會列在「等你決定」，每件只補最近的一次。"),
     formBox, box);
 }
 // ---------- end of routines ----------

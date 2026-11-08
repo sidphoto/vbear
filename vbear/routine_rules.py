@@ -38,6 +38,13 @@ ON_TIME_S = 120.0                     # a slot is "on time" for this long after 
 WAITING_FOR_S = 12 * 3600.0           # a reminder nobody pressed is put away after this long (or at the routine's next time)
 BUSY_RETRY_S = 30.0                   # an employee who is busy (or a room that is full) is asked again this often ...
 BUSY_FOR_S = 12 * 60.0                # ... for this long, then the run is skipped
+WAKE_GAP_S = 90.0                     # two looks further apart than this: the Mac slept, or VBear was closed (P44-3)
+BEAT_S = 60.0                         # the heartbeat file is written this often
+LOOK_BACK_S = 7 * 86400.0             # a wake-up counts the missed times of at most this many days back
+CATCH_UP_AUTO_S = 12 * 3600.0         # item 3 catches up by itself only when the latest missed time is younger than this ...
+CATCH_UP_AUTO_MAX = 3                 # ... and only this many routines per wake-up
+CATCH_UP_LISTED_S = 24 * 3600.0       # a missed time nobody answered is put away after this long (or at the routine's next time)
+ASLEEP = "asleep_"                    # the reason of a listed missed time is ``asleep_<count>``
 PER_RUN_NOTE = "到時間時 VBear 會提醒你，你按「現在開始」才會做。"
 
 MARK_BEGIN, MARK_END = "BEGIN_UNTRUSTED_JSON_STRING", "END_UNTRUSTED_JSON_STRING"

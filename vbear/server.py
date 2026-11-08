@@ -74,7 +74,7 @@ from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
 from . import skillbook_suggest, skillbook_suggest_runner as skill_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
-from . import auto_continue as auto_continue_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
+from . import auto_continue as auto_continue_mod, keep_awake as keep_awake_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -151,9 +151,10 @@ SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismi
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
 GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue|drop|members|rename))?\Z")
-# /api/routines[/<id>[/delete | /start] | /settings | /waiting/<run id>] (P44-2): the person's routines; only these routes write them
+# /api/routines[/<id>[/delete | /start] | /settings | /waiting/<run id> | /missed/<id>] (P44-2, P44-3): the person's routines; only these routes write them
 ROUTINE_RE = re.compile(r"^/api/routines/(r-[0-9a-f]{12})(?:/(delete|start))?\Z")
 ROUTINE_WAITING_RE = re.compile(r"^/api/routines/waiting/(rr-[0-9a-f]{12})\Z")
+ROUTINE_MISSED_RE = re.compile(r"^/api/routines/missed/(r-[0-9a-f]{12})\Z")       # P44-3: 補做 / 不用了 on what a sleep missed
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -201,6 +202,9 @@ class Console:
         self.port = port
         # How "open in Finder" is done (P43-1): None here, so that nothing built for a test opens a window; serve() sets it.
         self.reveal_command = None
+        # How the Mac is kept from sleeping while employees work (P44-3): None here, so that nothing built for a test starts a program;
+        # serve() sets it. It is given the fixed argv of vbear/keep_awake.py and nothing else.
+        self.keep_awake_command = None
         # Every /api/ request must carry this token (cookie or Bearer). It is
         # new for each server start and is shared only through an owner-only
         # file in the state directory. None turns the check off; only test
@@ -371,8 +375,14 @@ class Console:
                     resume=lambda did, seq: self.dispatch_runner().resume_dispatch(did, by="vbear", expect_pause_seq=seq),
                     usage=lambda did: self.dispatch_runner().plan_usage_of(did))
                 self._routine_runner = routine_runner_mod.RoutineRunner(
-                    chats=self.chat_service, ledger=ledger, conf=lambda: self.store.conf, auto_continue=auto)
+                    chats=self.chat_service, ledger=ledger, conf=lambda: self.store.conf, auto_continue=auto,
+                    keep_awake=keep_awake_mod.KeepAwake(launch=self._keep_awake_launch), also_working=keep_awake_mod.dispatch_running)
             return self._routine_runner
+
+    def _keep_awake_launch(self, command):
+        """Start what ``keep_awake_command`` starts, or nothing when the console has none (see ``serve()``)."""
+        start = self.keep_awake_command
+        return start(command) if start is not None else None
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -2191,6 +2201,13 @@ def make_handler(console: Console):
                     run = (runner.start_waiting if body["action"] == "start" else runner.skip_waiting)(found.group(1))
                     return {"run": run}
                 return self._chat_action(decide)
+            found = ROUTINE_MISSED_RE.match(path)
+            if found:
+                def catch_up():
+                    if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in ("run", "dismiss"):
+                        raise ApiError(400, "bad_request", "只接受 action，值是 run 或 dismiss。")
+                    return {"run": (runner.catch_up if body["action"] == "run" else runner.dismiss_missed)(found.group(1))}
+                return self._chat_action(catch_up)
             found = ROUTINE_RE.match(path)
             if not found:
                 return self._error(404, "not found")
@@ -3121,6 +3138,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     handed = take_handed_token()  # first: out of the environment before anything else runs
     console = Console(port)
     console.reveal_command = _open_in_finder
+    console.keep_awake_command = keep_awake_mod.launch
     if handed:
         console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan

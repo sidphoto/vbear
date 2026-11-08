@@ -95,14 +95,15 @@ class OnTimeWithItemThreeOffTests(RoutineBase):
         self.tick_after(15)
         self.assertEqual(sorted((r["state"], r["reason"]) for r in self.runs()), [("dismissed", "deleted"), ("dismissed", "disabled")])
 
-    def test_a_slot_that_was_missed_while_nobody_looked_is_recorded_and_not_listed(self):
+    def test_a_slot_that_was_missed_while_nobody_looked_is_listed_as_a_wake_up_not_sent(self):
+        # P44-3: the interim "recorded and not listed" is now the wake-up's list (tests/test_routine_wake.py has the rules)
         self.routine()
         self.tick_to(7, 59, 0)
         self.go_to(at(2026, 11, 9, 8, 30, 0))                    # the machine was away for half an hour, with VBear running
         self.tick()
         (run,) = self.runs()
-        self.assertEqual((run["state"], run["reason"]), ("missed", "late"))
-        self.assertEqual(self.runner.waiting_rows(), [], "P44-3 lists the missed ones; here they are only recorded")
+        self.assertEqual((run["state"], run["why"], run["reason"]), ("waiting", "catch_up", "asleep_1"))
+        self.assertEqual([r["kind"] for r in self.runner.waiting_rows()], ["routine_missed"])
         self.assertEqual(self.sent(), [])
 
     def test_the_routine_before_it_was_switched_on_has_no_slots(self):
