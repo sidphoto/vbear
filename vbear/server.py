@@ -76,7 +76,8 @@ from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
 from . import auto_continue as auto_continue_mod, keep_awake as keep_awake_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
-from . import templates as templates_mod
+from . import templates as templates_mod, templates_apply as templates_apply_mod
+from .jsonstore import StoreError as JsonStoreError
 from . import meetings
 from . import staffing
 from . import staffing_runner as staffing_runner_mod
@@ -156,6 +157,9 @@ GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue
 ROUTINE_RE = re.compile(r"^/api/routines/(r-[0-9a-f]{12})(?:/(delete|start))?\Z")
 ROUTINE_WAITING_RE = re.compile(r"^/api/routines/waiting/(rr-[0-9a-f]{12})\Z")
 ROUTINE_MISSED_RE = re.compile(r"^/api/routines/missed/(r-[0-9a-f]{12})\Z")       # P44-3: 補做 / 不用了 on what a sleep missed
+# /api/templates/applies/<id>/undo-preview | undo (P45-2): 復原這次套用; the other routes of the team templates are named in _templates_post
+TEMPLATE_APPLY_RE = re.compile(r"^/api/templates/applies/(ta-[0-9a-f]{12})/(undo-preview|undo)\Z")
+TEMPLATE_WRITE_LOCK = threading.Lock()      # one apply or undo at a time (they read the limits and the files before they write)
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -390,9 +394,46 @@ class Console:
         then there is none and nothing to read. A file that cannot be read gives ``([], False, a sentence)``: the built-in four still work."""
         return [], True, None
 
+    def template_names(self) -> dict:
+        """``{(kind, id): name}`` of the employees, skills and routines the person has now, read from the person's own files (the record of the
+        applies keeps no name). A file that cannot be read gives no names of its kind."""
+        names: dict = {}
+        try:
+            for pid, card in agent_profiles.load_all(mark_corrupt=False).items():
+                names[("card", pid)] = card.get("name")
+        except agent_profiles.AgentProfileStorageError:
+            pass
+        view = skillbook_mod.view()
+        if view["readable"] is True:
+            names.update({("skill", s["id"]): s["name"] for s in view["skills"]})
+        rows, problem = routines_mod.read_routines()
+        if not problem:
+            names.update({("routine", r["id"]): r["name"] for r in rows})
+        return names
+
     def template_applies(self) -> list:
-        """The record of the applies, newest first, as the page shows it. P45-2 reads ``<state>/templates/applies.json`` here; until then none."""
-        return []
+        """The record of the applies, newest first, as the page shows it (P45-2): each with the name every thing made has now (null when it is
+        gone). A record that cannot be read gives none (``template_applies_problem`` says so)."""
+        try:
+            rows = templates_apply_mod.read_applies()
+        except JsonStoreError:
+            return []
+        names = self.template_names()
+        return [templates_apply_mod.public(a, names) for a in rows]
+
+    def template_applies_problem(self) -> str | None:
+        try:
+            templates_apply_mod.read_applies()
+        except JsonStoreError:
+            return templates_apply_mod.UNREADABLE
+        return None
+
+    def recover_template_applies(self) -> int:
+        """At the start, before the routes are served: close the applies a console that stopped left open (see ``templates_apply.recover``)."""
+        def digest_of(profile_id):
+            card = agent_profiles.get_profile_readonly(profile_id)
+            return templates_apply_mod.fingerprint("card", card) if card else None
+        return templates_apply_mod.recover(digest_of)
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -1191,19 +1232,8 @@ def make_handler(console: Console):
                         return self._error(400, str(exc))
                 if path == "/api/agent-profiles":
                     body = self._body()
-                    index = console.skill_index()
-                    known_skills = set(index.keys())
-                    known_roles = {
-                        r.get("role_id") for r in console.store.static().get("roles", [])
-                        if r.get("role_id")
-                    }
-                    refused = self._hidden_tool_refusal(body, None)
-                    if refused:
-                        return self._error(400, refused)
                     try:
-                        saved = agent_profiles.save_profile(None, body,
-                                                             known_skills=known_skills,
-                                                             known_roles=known_roles)
+                        saved = self._save_card(None, body)
                     except ValueError as exc:
                         return self._error(400, str(exc))
                     return self._json({"ok": True, "profile": agent_profiles.with_revision(saved)})
@@ -1237,13 +1267,8 @@ def make_handler(console: Console):
                             return self._error(404, "找不到這張角色卡")
                         return self._json({"ok": True, "profile": agent_profiles.with_revision(dup)})
                     target = rest
-                    refused = self._hidden_tool_refusal(body, target)
-                    if refused:
-                        return self._error(400, refused)
                     try:
-                        saved = agent_profiles.save_profile(target, body,
-                                                             known_skills=known_skills,
-                                                             known_roles=known_roles)
+                        saved = self._save_card(target, body)
                     except ValueError as exc:
                         return self._error(400, str(exc))
                     return self._json({"ok": True, "profile": agent_profiles.with_revision(saved)})
@@ -1912,6 +1937,17 @@ def make_handler(console: Console):
             return {"ok": True, "id": profile.get("id"), "name": profile.get("name"), "source": got["source"],
                     "position": got["position"], "text": got["text"]}
 
+        def _save_card(self, target, body):
+            """Make a role card (``target`` None: a new id) or save one: the one stretch of code that ``POST /api/agent-profiles[/<id>]`` and the
+            apply of a team template (P45-2) share, so that the template meets the same checks as the person's own press (the hidden AI tools, the
+            skills and roles that are known, ``save_profile``'s own rules). ValueError (zh) with the reason when it is refused."""
+            known_skills = set(console.skill_index().keys())
+            known_roles = {r.get("role_id") for r in console.store.static().get("roles", []) if r.get("role_id")}
+            refused = self._hidden_tool_refusal(body, target)
+            if refused:
+                raise ValueError(refused)
+            return agent_profiles.save_profile(target, body, known_skills=known_skills, known_roles=known_roles)
+
         def _hidden_tool_refusal(self, body, existing_id) -> str | None:
             """Why a card may not be made, changed or copied to a hidden AI tool that is switched off (None when it may).
             A card that already names the tool keeps being editable: only a move onto the tool is refused."""
@@ -2263,6 +2299,9 @@ def make_handler(console: Console):
             """GET /api/templates: the four built-in team templates and the person's own, what the person has now (names and ids only), the
             limits, the applies, and the state of the two AI tools from the start-up page's own source (read, never forced, never asked again)."""
             current, problems = self._templates_current(lenient=True)
+            applies_problem = console.template_applies_problem()
+            if applies_problem:
+                problems.append(applies_problem)
             mine, mine_readable, mine_problem = console.template_mine()
             try:
                 rows = ai_tool_status.report(console.store.conf)
@@ -2303,8 +2342,250 @@ def make_handler(console: Console):
             """The routes under /api/templates that are presses of the person (X-VBear is checked for every POST). The preview only plans."""
             if path == "/api/templates/preview":
                 return self._chat_action(lambda: {"preview": templates_mod.public(self._templates_plan(body))})
-            # P45-2 adds: /apply and /applies/<id>/undo-preview | undo.  P45-3 adds: /mine, /mine/<id>, /mine/<id>/delete.
+            if path == "/api/templates/apply":
+                return self._chat_action(lambda: self._templates_apply(body), 201)
+            found = TEMPLATE_APPLY_RE.match(path)
+            if found:
+                if found.group(2) == "undo-preview":
+                    return self._chat_action(lambda: self._templates_undo_preview(found.group(1), body))
+                return self._chat_action(lambda: self._templates_undo(found.group(1), body))
+            # P45-3 adds: /mine, /mine/<id>, /mine/<id>/delete.
             return self._error(404, "not found")
+
+        # ---- the apply of team templates and 復原這次套用 (P45-2): the one place that makes and deletes what a team template is made of ----
+        # Everything is made and deleted by the write functions of the person's own presses (_save_card, skillbook.add, routines.create; and
+        # routines.delete, skillbook.delete, agent_profiles.delete_profile); templates_apply only keeps the record and the rules.
+
+        def _templates_refuse(self, planned) -> None:
+            """The problems of a plan that stop an apply: ApiError 409 for the limits, 400 for what the person can fix, 409 for the second yes."""
+            problems = planned["problems"]
+            if not problems:
+                return
+            full = [p for p in problems if p["code"] == "template_full"]
+            if full:
+                raise ApiError(409, "template_full", full[0]["text"], problems=[{"code": p["code"], "kind": p.get("kind"), "over": p.get("over")} for p in full])
+            fixable = [p for p in problems if p["code"] != "confirm_warning"]
+            if fixable:
+                raise ApiError(400, "bad_request", fixable[0]["text"])
+            first = problems[0]
+            raise ApiError(409, "confirm_warning", first["text"], warn=first["warn"], warn_text=first["warn_text"])
+
+        def _new_card_id(self) -> str:
+            while True:
+                pid = "prof-" + secrets.token_hex(6)
+                if agent_profiles.get_profile_readonly(pid) is None:
+                    return pid
+
+        @staticmethod
+        def _why_code(exc: Exception) -> str:
+            """The code of what stopped one step, for the record: the code of an ApiError, else a fixed word. Never a word of the error."""
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and templates_apply_mod.WHY_RE.match(code):
+                return code
+            if isinstance(exc, ValueError):
+                return "card_refused"
+            if isinstance(exc, agent_profiles.AgentProfileStorageError):
+                return "storage"
+            return "error"
+
+        def _templates_apply(self, body) -> dict:
+            """POST /api/templates/apply: check everything, then make the employees, the skills and the routines one by one with the ordinary write
+            functions, and write down what was made. Uses no AI, no chat, no daemon and nothing that costs; switches nothing on. ``{"apply"}``
+            or ApiError: 400/503 (nothing was made), 409 template_full / confirm_warning (nothing was made), 409 template_partial (it stopped; the
+            ones made are in ``apply``)."""
+            with TEMPLATE_WRITE_LOCK:
+                planned = self._templates_plan(body)                  # reads every file: one that cannot be read is a 503 here, before anything is made
+                self._templates_refuse(planned)
+                try:
+                    templates_apply_mod.read_applies()
+                except JsonStoreError:
+                    raise ApiError(503, "applies_unreadable", templates_apply_mod.UNREADABLE) from None
+                for card in planned["cards"]:
+                    refused = self._hidden_tool_refusal(card["body"], None)
+                    if refused:
+                        raise ApiError(400, "bad_request", refused)
+                second_yes = body.get("confirm_warning") is True and bool(planned["warn_items"])
+                try:
+                    return self._templates_make(planned, second_yes)
+                except JsonStoreError:
+                    raise ApiError(503, "applies_unreadable", templates_apply_mod.UNREADABLE) from None
+
+        def _templates_make(self, planned, second_yes: bool) -> dict:
+            apply_id = templates_apply_mod.begin_apply(planned["tool"])
+            made = {}                                                  # (template, key) of an employee -> his new id
+            failed = []
+
+            def note(kind, ref, ident, state, why, fp, index=None):
+                item = {"kind": kind, "id": ident, "from": ref, "state": state, "why": why, "fp": fp, "at": time.time()}
+                return templates_apply_mod.record_item(apply_id, item, index)
+
+            def step(kind, ref, make, ident=None):
+                """One thing: written down first (``intent``), made by the ordinary function, written down again. False when it stopped."""
+                index = note(kind, ref, ident, "intent", None, None)
+                try:
+                    got = make()
+                except Exception as exc:
+                    note(kind, ref, ident, "failed", self._why_code(exc), None, index)
+                    return None
+                note(kind, ref, got["id"], "made", None, got["fp"], index)
+                return got["id"]
+
+            ok = True
+            for card in planned["cards"]:
+                if not ok:
+                    break
+                pid = self._new_card_id()
+
+                def make_card(card=card, pid=pid):
+                    self._save_card(pid, card["body"])
+                    stored = agent_profiles.get_profile_readonly(pid)
+                    if stored is None:
+                        raise ValueError("card")
+                    return {"id": pid, "fp": templates_apply_mod.fingerprint("card", stored)}
+                got = step("card", card["from"], make_card, pid)
+                if got is None:
+                    ok = False
+                else:
+                    made[(card["from"]["template"], card["from"]["key"])] = got
+            for skill in planned["skills"]:
+                if not ok:
+                    break
+                body = dict(skill["body"], **({"confirm_warning": True} if second_yes else {}))
+
+                def make_skill(body=body):
+                    record = skillbook_mod.add(body)["skill"]
+                    return {"id": record["id"], "fp": templates_apply_mod.fingerprint("skill", record)}
+                ok = step("skill", skill["from"], make_skill) is not None
+            cards_now = None
+            for item in planned["routines"]:
+                if not ok:
+                    break
+                who = item["assignee"]
+                profile_id = made.get((who["card"]["template"], who["card"]["key"])) if who["kind"] == "card" else who["profile_id"]
+
+                def make_routine(item=item, profile_id=profile_id):
+                    nonlocal cards_now
+                    if profile_id is None:
+                        raise ApiError(400, "routine_card", "no employee")
+                    if cards_now is None:
+                        cards_now = console.chat_service().cards()          # read after the employees are made: they can be given a routine
+                    body = dict(templates_mod.routine_body(item["routine"], profile_id), **({"confirm_warning": True} if second_yes else {}))
+                    record = routines_mod.create(body, cards_now)["routine"]
+                    return {"id": record["id"], "fp": templates_apply_mod.fingerprint("routine", record)}
+                ok = step("routine", item["from"], make_routine) is not None
+            templates_apply_mod.end_apply(apply_id, "done" if ok else "partial")
+            row = next(a for a in templates_apply_mod.read_applies() if a["id"] == apply_id)
+            shown = templates_apply_mod.public(row, console.template_names())
+            if ok:
+                return {"apply": shown}
+            c = shown["counts"]
+            raise ApiError(409, "template_partial",
+                           f"建到一半停下了：已建好 {c['cards']} 位員工、{c['skills']} 個技能、{c['routines']} 件例行工作；可以按「復原這次套用」。", apply=shown)
+
+        # -- 復原這次套用 --
+
+        def _templates_facts(self, apply) -> tuple:
+            """What the undo needs to know now, read from the person's own files: ``(facts, names)`` for ``templates_apply.undo_plan``. A file that
+            cannot be read is None in the facts (then what depends on it stays)."""
+            names: dict = {}
+            cards = skills = routine_facts = run_ids = None
+            try:
+                cards = {}
+                for pid, card in agent_profiles.load_all(mark_corrupt=False).items():
+                    cards[pid] = templates_apply_mod.fingerprint("card", card)
+                    names[("card", pid)] = card.get("name")
+            except agent_profiles.AgentProfileStorageError:
+                cards = None
+            view = skillbook_mod.view()
+            if view["readable"] is True:
+                skills = {s["id"]: templates_apply_mod.fingerprint("skill", s) for s in view["skills"]}
+                names.update({("skill", s["id"]): s["name"] for s in view["skills"]})
+            rows, problem = routines_mod.read_routines()
+            if not problem:
+                routine_facts = {r["id"]: {"fp": templates_apply_mod.fingerprint("routine", r), "profile_id": r.get("profile_id")} for r in rows}
+                names.update({("routine", r["id"]): r["name"] for r in rows})
+            runs, problem = routines_mod.read_runs()
+            if not problem:
+                run_ids = {r["routine_id"] for r in runs}
+            made_cards = [i["id"] for i in apply["items"] if i["kind"] == "card" and i["state"] == "made" and i["id"]]
+            mentions = templates_apply_mod.card_mentions(cfg.state_dir(), made_cards)
+            return {"cards": cards, "skills": skills, "routines": routine_facts, "run_ids": run_ids, "mentions": mentions}, names
+
+        def _templates_undo_find(self, apply_id):
+            try:
+                rows = templates_apply_mod.read_applies()
+            except JsonStoreError:
+                raise ApiError(503, "applies_unreadable", templates_apply_mod.UNREADABLE) from None
+            apply = next((a for a in rows if a["id"] == apply_id), None)
+            if apply is None:
+                raise ApiError(404, "not_found", "找不到這次套用的紀錄（只能復原最近 50 次套用）。")
+            if apply["state"] == "applying":
+                raise ApiError(409, "apply_open", "這次套用還沒結束，等它結束再復原。")
+            return apply
+
+        def _templates_undo_shown(self, apply, plan, names) -> dict:
+            def named(entry):
+                out = dict(entry, name=names.get((entry["kind"], entry["id"])))
+                if "why" in entry:
+                    out["text"] = templates_apply_mod.KEPT_TEXT[(entry["kind"], entry["why"])]
+                return out
+            notes = []
+            if any(d["kind"] == "card" for d in plan["delete"]):
+                notes.append({"code": "terminal", "text": templates_apply_mod.TERMINAL_NOTE})
+            if any(e["kind"] == "skill" for part in ("delete", "keep") for e in plan[part]):
+                notes.append({"code": "skills", "text": templates_apply_mod.SKILL_NOTE})
+            if plan["unsure"]:
+                notes.append({"code": "interrupted", "text": templates_apply_mod.INTERRUPTED_NOTE})
+            return {"apply": apply["id"], "delete": [named(d) for d in plan["delete"]], "keep": [named(k) for k in plan["keep"]],
+                    "gone": [named(g) for g in plan["gone"]], "unsure": plan["unsure"], "notes": notes}
+
+        def _templates_undo_preview(self, apply_id, body) -> dict:
+            """POST /api/templates/applies/<id>/undo-preview: what 復原這次套用 would delete, keep and find gone, now. Writes nothing."""
+            if body != {}:
+                raise ApiError(400, "bad_request", "這個動作不需要內容。")
+            apply = self._templates_undo_find(apply_id)
+            facts, names = self._templates_facts(apply)
+            return self._templates_undo_shown(apply, templates_apply_mod.undo_plan(apply, facts), names)
+
+        def _templates_undo(self, apply_id, body) -> dict:
+            """POST /api/templates/applies/<id>/undo ``{delete: [id, ...]}``: work the list out again and delete the ones that are in the person's
+            list and can still be deleted: routines first, then skills, then employees, each with the ordinary delete function, each written
+            down as it goes. ``{deleted, kept, gone}``."""
+            ids = body.get("delete") if isinstance(body, dict) and set(body) == {"delete"} else None
+            if not (isinstance(ids, list) and all(isinstance(i, str) for i in ids) and len(set(ids)) == len(ids) and len(ids) <= templates_apply_mod.MAX_ITEMS):
+                raise ApiError(400, "bad_request", "只接受 delete：要刪的項目 id 的清單。")
+            with TEMPLATE_WRITE_LOCK:
+                apply = self._templates_undo_find(apply_id)
+                if not set(ids) <= {i["id"] for i in apply["items"] if i["id"]}:
+                    raise ApiError(400, "bad_request", "清單裡有不是這次套用建的東西，什麼都沒刪。")
+                facts, names = self._templates_facts(apply)
+                plan = templates_apply_mod.undo_plan(apply, facts)
+                deleted = []
+                deleters = {"routine": routines_mod.delete, "skill": skillbook_mod.delete, "card": agent_profiles.delete_profile}
+                try:
+                    for entry in [d for d in plan["delete"] if d["id"] in ids]:
+                        try:
+                            found = deleters[entry["kind"]](entry["id"])
+                        except ApiError as exc:
+                            if exc.status != 404:
+                                raise
+                            found = False
+                        if found is False:
+                            plan["gone"].append(entry)
+                            continue
+                        try:
+                            templates_apply_mod.record_undo(apply_id, [entry["id"]], log=False)
+                        except JsonStoreError:
+                            raise ApiError(503, "applies_unreadable", templates_apply_mod.UNREADABLE) from None
+                        deleted.append(entry)
+                finally:
+                    if deleted:
+                        try:
+                            templates_apply_mod.log_undo(apply_id, [d["kind"] for d in deleted])
+                        except JsonStoreError:
+                            pass
+            shown = self._templates_undo_shown(apply, dict(plan, delete=deleted), names)
+            return {"deleted": shown["delete"], "kept": shown["keep"], "gone": shown["gone"]}
 
         def _memory_cards(self) -> list:
             """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
@@ -3233,6 +3514,10 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     write_access_files(port, console.auth_token)
     try:
         console.storage.finish_orphans()          # a deletion that stopped after its record went is finished
+    except Exception:
+        pass
+    try:
+        console.recover_template_applies()        # an apply of team templates that stopped in the middle is closed (P45-2)
     except Exception:
         pass
     if not console.runner.start():
