@@ -1885,6 +1885,38 @@ A chat that began with the folder on has a fingerprint that includes the folder'
 The chat-check reports gain `shared` and `shared_steps`; v0.17.0 reads `mode`, `passed` and the version only (that it accepts the extra keys is read, not run: 待確認).
 No key of `config.json` was added.
 
+## Waking up and keeping the Mac awake (v0.18, P44-3)
+
+Part of "Skills and routines (v0.18)" (ADR 0010 point 6; the rest of that section is written with the release). A routine only runs while
+VBear is open and the Mac is awake: VBear installs nothing that runs when it is closed (no LaunchAgent, no login item, no crontab) and
+schedules no `pmset` wake-up. This section covers the two things P44-3 added.
+
+- **Missed times are only a list, unless item 3 is ticked.** The runner writes `<state>/routines/heartbeat.json` (`{"v": 1, "at": <seconds>}`,
+  0600, replaced whole, never followed through a link, no name and no word of a routine) about once a minute. When two looks are more than
+  90 seconds apart (the Mac slept) or, at a console's start, the file is older than that (VBear was closed), the times that passed in
+  between are *missed*: counted from the later of the routine's `enabled_at` and the last heartbeat, at most 7 days back. No heartbeat file
+  (a fresh upgrade) or one that cannot be read counts nothing. Every routine offers only its **latest** missed time (a run in the state
+  `waiting`, `why: catch_up`); the earlier ones are recorded `missed` so that no time is ever done twice. Nothing is sent by this: the
+  person presses 補做 (`POST /api/routines/missed/<id>`, `X-VBear`; the run is `by: you`) or 不用了. Only with 「自己動手」 item 3 (read in the
+  one place the runner reads it) does VBear queue the run itself: the latest missed time must be younger than 12 hours, at most three
+  routines per wake-up (the earliest first), and the runs go one at a time. They begin through the same checks as any run: the day's lamp,
+  the routines' own daily limit, a card that can chat. A run those stop is `skipped` with its reason and is not tried again. A listed
+  row is put away (`missed`) at the routine's next time or after 24 hours; a routine whose own time is due when the Mac wakes is
+  just its ordinary reminder or run and does not also catch up.
+- **`caffeinate` is the one program VBear starts that is not an AI tool**, and only when the person has switched on 「有工作在跑時不讓 Mac
+  睡著」 (`keep_awake` in `<state>/routines/settings.json`, default off, changed only by `POST /api/routines/settings`, never in
+  `config.json`). While a routine's run is going or a dispatch is running, `vbear/keep_awake.py` runs
+  `["/usr/bin/caffeinate", "-i", "-w", "<the console's pid>"]`: a constant, no shell, no input or output, nothing taken from a record, a
+  request or a setting. `-i` only stops *idle* sleep (a closed lid still sleeps), `-w` ends it when the console ends, and it is ended by
+  VBear 30 seconds after the last work or at once when the switch is turned off. `serve()` alone hands the launch to a console
+  (`Console.keep_awake_command`); a console built any other way has none and starts nothing. A guard test (rule 12 of
+  tests/test_autonomy_guard.py) keeps it so: no other file of `vbear/` names the program, its argv is one constant list, `routine*.py`,
+  `skillbook*.py` and `auto_continue.py` start no program, and only `server.py` imports the module.
+- **Residual risks.** The wall clock is the only evidence of a sleep: a clock that is set forward by hand looks like one (the missed times
+  are then offered, or with item 3 queued once, within the limits above). A user who switches `keep_awake` on keeps an idle Mac awake
+  while a long dispatch runs, which costs battery. `caffeinate` is the macOS system tool; whether a real Mac sleeps despite it, and a real
+  sleep and wake (not a stopped VBear, whose detection is the same), were **not tried on a real machine by this task** (待真機驗證).
+
 ## The start-up page (v0.12)
 
 The start-up page (`#/setup`) installs, signs in, checks and tries AI tools for a person who may never have opened a terminal,

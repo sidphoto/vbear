@@ -12,6 +12,8 @@
     ids, times, states, counts and money, **never** a name or a word of a routine. ``new_run`` is the one place a run is born, and it
     refuses a (routine, slot) that already has one: that is what keeps a slot from being done twice, whatever the clock does.
   * ``log.jsonl`` (0600, append only): what the person did to the routines, with ids only.
+  * ``heartbeat.json`` (0600, P44-3): ``{"v": 1, "at": seconds}``, the instant VBear last looked, written by the runner about once a minute.
+    It is how a start, or a look after a sleep, tells that VBear was not looking in between; no name and no word of a routine.
 
 Who writes: routines, settings and the two logs are changed by the person's own press in the browser (the ``/api/routines*`` routes of
 vbear/server.py carry ``X-VBear``); the functions that do it (``create``, ``edit``, ``set_enabled``, ``delete``, ``set_settings``, ``store``)

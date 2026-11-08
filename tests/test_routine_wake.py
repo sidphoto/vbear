@@ -267,6 +267,26 @@ class CatchUpByItselfTests(WakeBase):
         self.assertEqual(len(self.sent()), 3, "the list is the person's")
         self.assertEqual(sorted(r["name"] for r in self.listed()), ["第4件", "第5件"])
 
+    def test_a_missed_time_that_is_too_old_does_not_take_one_of_the_three_places(self):
+        self.routine(days=[1], times=["09:00"], name="太舊的")                      # Tuesday only: its latest time is 27 hours old on Wednesday noon
+        for i in range(3):
+            self.routine(days=[0, 1, 2, 3, 4, 5, 6], name=f"新的{i + 1}", times=["08:00"])
+        self.tick()
+        self.sleep_until(at(2026, 11, 11, 12, 0, 0))
+        names = {r["id"]: r["name"] for r in rt.read_routines()[0]}
+        started = sorted(names[r["routine_id"]] for r in self.runs() if r["by"] == "auto3")
+        self.assertEqual(started, ["新的1", "新的2", "新的3"])
+        self.assertEqual([r["name"] for r in self.listed()], ["太舊的"])
+
+    def test_an_employee_who_cannot_chat_any_more_leaves_it_in_the_list_and_nothing_fails(self):
+        from vbear import agent_profiles as ap
+        self.routine(days=[0, 1, 2, 3, 4, 5, 6])
+        self.tick()
+        ap.save_profile(self.writer, {"name": "文案小編", "position": "social", "model": {"tool": "claude"}, "enabled": False})
+        self.sleep_until(at(2026, 11, 11, 12, 0, 0))
+        self.assertEqual((len(self.listed()), self.sent()), (1, []))
+        self.assertNotIn("failed", self.states())
+
     def test_a_routine_that_was_switched_off_while_the_mac_slept_is_not_done(self):
         self.routine(days=[0, 1, 2, 3, 4, 5, 6])
         self.tick()

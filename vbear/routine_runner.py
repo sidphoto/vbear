@@ -15,13 +15,21 @@ What a pass does, in this order (the later batches add to the places marked):
 
 1. ``_look``: for every routine that is on, the slots that became due since the last look (a slot is **on time** for 2 minutes after
    its time): with item 3 off, a reminder (``waiting``: nothing is sent, nothing costs); with item 3 on, the run is queued (``starting``,
-   ``by: auto3``). A slot that is older than that is recorded ``missed`` and not listed. (P44-3 puts the heartbeat and the wake-up list
-   here: it changes what is done with a late slot, not the rest.) Reminders nobody pressed are put away (``missed``) at the routine's next
-   time or after 12 hours; those of a routine that was switched off or deleted are ``dismissed``.
+   ``by: auto3``). Reminders nobody pressed are put away (``missed``) at the routine's next time or after 12 hours; those of a routine
+   that was switched off or deleted are ``dismissed``.
+   **Waking up (P44-3, ``_away_since`` and ``_wake``)**: the runner writes a heartbeat file about once a minute (``_beat``). Two looks more
+   than 90 seconds apart, or a first look whose heartbeat file is older than that, mean the Mac slept or VBear was closed; the slots in
+   between are *missed*. Of the missed slots of a routine only the latest is offered (``waiting``, ``why: catch_up``; the earlier ones are
+   recorded ``missed``, so no slot is done twice); a routine whose own time is due right now does not also catch up. With item 3 on, VBear
+   queues the offered runs itself when the latest missed slot is under 12 hours old, three routines at most per wake-up, the earliest
+   first; the rest wait for the person (``catch_up`` and ``dismiss_missed``). A listed one is put away at the routine's next time or after
+   24 hours. No heartbeat file: nothing counts as missed.
 2. ``_drive``: one run at a time. The run that is going (``running``, or ``starting`` with a chat) is looked after; when none is going, the
    oldest queued run begins: the day's lamp and the routines' daily limit are looked at, a new one-person chat is opened with the
    employee (``ChatService.create``), the message goes out through ``ChatService.send_for_routine`` and the run is ``running``.
-   (P44-4 adds one line here: ``auto_continue.tick()``.)
+   (P44-4 adds one line here: ``auto_continue.tick()``.) Last, ``_beat`` and ``_hold_awake``: the heartbeat, and the word to
+   ``KeepAwake`` (vbear/keep_awake.py, handed in by the console) whether a run is going or a dispatch is running; this module starts
+   no program.
 
 Item 3 is read in one place, ``_auto``: the ``routines`` key of the autonomy block (through ``autonomy``'s reader); a missing key, a value that is not ``True``, a config that
 cannot be read: off. With it off the runner writes only ``waiting``, ``missed``, ``dismissed``, ``skipped``, ``failed`` records for slots
@@ -331,14 +339,22 @@ class RoutineRunner:
             made = rt.new_run(routine["id"], slots[-1], state="waiting", why="catch_up", reason=f"{rr.ASLEEP}{len(slots)}", now=now)
             if made is not None:
                 out[made["run_id"]] = made["state"]
-                offered.append((rr.slot_due(slots[-1], self.tz) or 0.0, made["run_id"]))
+                offered.append((rr.slot_due(slots[-1], self.tz) or 0.0, made["run_id"], routine["profile_id"]))
         if auto:
-            for due, run_id in sorted(offered)[:rr.CATCH_UP_AUTO_MAX]:
-                if now - due < rr.CATCH_UP_AUTO_S:
-                    got = rt.update_run(run_id, ("waiting",), now=now, state="starting", by="auto3")
-                    if got is not None:
-                        out[run_id] = got["state"]
+            chat_ok = self._employees_who_chat()
+            young = [(due, run_id, pid) for due, run_id, pid in sorted(offered) if now - due < rr.CATCH_UP_AUTO_S and pid in chat_ok]
+            for due, run_id, _ in young[:rr.CATCH_UP_AUTO_MAX]:
+                got = rt.update_run(run_id, ("waiting",), now=now, state="starting", by="auto3")
+                if got is not None:
+                    out[run_id] = got["state"]
         return out
+
+    def _employees_who_chat(self) -> set:
+        """The ids of the role cards the chat service says can chat now; empty when it cannot say (then nothing is caught up by itself)."""
+        try:
+            return {c["id"] for c in self._chats().cards() if isinstance(c, dict) and c.get("can_chat") is True}
+        except Exception:
+            return set()
 
     def _put_away(self, now: float, routines: list) -> dict:
         """The reminders nobody pressed: a routine that is gone or off, the routine's next time, or 12 hours."""
