@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from tests.routine_fixtures import RoutineBase, at
+from tests.test_routines_api import RoutinesApiBase
 from vbear import config as cfg, routine_rules as rr, routines as rt
 from vbear.api_error import ApiError
 
@@ -428,6 +429,80 @@ class WhatTheWakeNeverDoesTests(WakeBase):
                 text = path.read_text(encoding="utf-8")
                 self.assertNotIn("獨一無二", text, name)
         self.assertFalse((cfg.state_dir() / "config.json").exists())
+
+
+class ApiTests(RoutinesApiBase):
+    """The routes: the list the pages read, the person's 補做 and 不用了, and the setting of keeping the Mac awake."""
+
+    def asleep(self, item3=False):
+        if item3:
+            self.set_item3(True)
+        made = self.make(days=[0, 1, 2, 3, 4, 5, 6])
+        self.go(7, 59, 0)
+        self.now[0] = at(2026, 11, 11, 12, 0, 0)
+        self.runner.tick()
+        return made
+
+    def test_the_waiting_line_and_the_page_list_the_missed_times_with_a_count_and_no_content(self):
+        made = self.asleep()
+        status, out = self.call("/api/waiting")
+        self.assertEqual(status, 200)
+        (row,) = out["waiting"]
+        self.assertEqual((row["kind"], row["routine_id"], row["name"], row["count"], row["slot"], row["too_old"]),
+                         ("routine_missed", made["id"], "市集日報", 3, "2026-11-11T08:00", False))
+        self.assertNotIn("text", row)
+        self.assertEqual(self.call("/api/routines")[1]["waiting"], out["waiting"])
+
+    def test_catch_up_is_one_run_by_you_and_a_second_press_is_409(self):
+        made = self.asleep()
+        status, out = self.call(f"/api/routines/missed/{made['id']}", "POST", {"action": "run"})
+        self.assertEqual((status, out["run"]["state"], out["run"]["by"], out["run"]["why"]), (200, "starting", "you", "catch_up"))
+        self.runner.tick()
+        self.assertEqual(len(self.daemon.sent), 1)
+        status, out = self.call(f"/api/routines/missed/{made['id']}", "POST", {"action": "run"})
+        self.assertEqual((status, out["code"]), (409, "routine_gone"))
+        self.assertEqual(self.call("/api/waiting")[1]["waiting"], [])
+
+    def test_not_needed_sends_nothing(self):
+        made = self.asleep()
+        status, out = self.call(f"/api/routines/missed/{made['id']}", "POST", {"action": "dismiss"})
+        self.assertEqual((status, out["run"]["state"]), (200, "dismissed"))
+        self.runner.tick()
+        self.assertEqual(self.daemon.sent, [])
+
+    def test_a_bad_request_is_a_400_and_a_stranger_is_a_404(self):
+        made = self.asleep()
+        for body in ({}, {"action": "start"}, {"action": "run", "x": 1}, {"action": 1}, [], {"action": None}):
+            self.assertEqual(self.call(f"/api/routines/missed/{made['id']}", "POST", body)[0], 400, body)
+        self.assertEqual(self.call("/api/routines/missed/r-000000000000", "POST", {"action": "run"})[0], 404)
+        self.assertEqual(self.call("/api/routines/missed/nope", "POST", {"action": "run"})[0], 404)
+        self.assertEqual(len(self.call("/api/waiting")[1]["waiting"]), 1, "nothing was changed")
+        self.assertEqual(self.daemon.sent, [])
+
+    def test_the_routes_need_the_browsers_header_and_a_get_is_not_one(self):
+        made = self.asleep()
+        status, _ = self.call(f"/api/routines/missed/{made['id']}", "POST", {"action": "run"}, headers={"X-VBear": None})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.call(f"/api/routines/missed/{made['id']}")[0], 404)
+        self.assertEqual(len(self.call("/api/waiting")[1]["waiting"]), 1)
+
+    def test_by_itself_with_item_3_the_list_is_empty_and_the_page_says_who_decided(self):
+        self.asleep(item3=True)
+        self.assertEqual(self.call("/api/waiting")[1]["waiting"], [])
+        (action,) = [a for a in self.call("/api/actions")[1]["actions"] if a["kind"] == "routine_started"]
+        self.assertEqual((action["by_text"], action["what"]), ("自己動手第 3 項", "例行工作「市集日報」補做了一次"))
+
+    def test_the_setting_is_taken_beside_the_limit_and_never_written_to_the_config(self):
+        path = cfg.state_dir() / "config.json"
+        before = path.read_bytes() if path.exists() else None
+        status, out = self.call("/api/routines/settings", "POST", {"keep_awake": True})
+        self.assertEqual((status, out["settings"]), (200, {"daily_usd": None, "keep_awake": True}))
+        self.assertTrue(self.call("/api/routines")[1]["settings"]["keep_awake"])
+        self.assertEqual(self.call("/api/routines/settings", "POST", {"daily_usd": 0.75})[0], 200)
+        self.assertTrue(self.call("/api/routines")[1]["settings"]["keep_awake"], "the limit's save left it alone")
+        self.assertEqual(self.call("/api/routines/settings", "POST", {"keep_awake": "yes"})[0], 400)
+        self.assertEqual(self.call("/api/routines/settings", "POST", {"keep_awake": False})[0], 200)
+        self.assertEqual(path.read_bytes() if path.exists() else None, before)
 
 
 if __name__ == "__main__":

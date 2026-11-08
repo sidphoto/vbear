@@ -148,9 +148,10 @@ SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismi
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
 GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue|drop|members|rename))?\Z")
-# /api/routines[/<id>[/delete | /start] | /settings | /waiting/<run id>] (P44-2): the person's routines; only these routes write them
+# /api/routines[/<id>[/delete | /start] | /settings | /waiting/<run id> | /missed/<id>] (P44-2, P44-3): the person's routines; only these routes write them
 ROUTINE_RE = re.compile(r"^/api/routines/(r-[0-9a-f]{12})(?:/(delete|start))?\Z")
 ROUTINE_WAITING_RE = re.compile(r"^/api/routines/waiting/(rr-[0-9a-f]{12})\Z")
+ROUTINE_MISSED_RE = re.compile(r"^/api/routines/missed/(r-[0-9a-f]{12})\Z")       # P44-3: 補做 / 不用了 on what a sleep missed
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -2163,6 +2164,13 @@ def make_handler(console: Console):
                     run = (runner.start_waiting if body["action"] == "start" else runner.skip_waiting)(found.group(1))
                     return {"run": run}
                 return self._chat_action(decide)
+            found = ROUTINE_MISSED_RE.match(path)
+            if found:
+                def catch_up():
+                    if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in ("run", "dismiss"):
+                        raise ApiError(400, "bad_request", "只接受 action，值是 run 或 dismiss。")
+                    return {"run": (runner.catch_up if body["action"] == "run" else runner.dismiss_missed)(found.group(1))}
+                return self._chat_action(catch_up)
             found = ROUTINE_RE.match(path)
             if not found:
                 return self._error(404, "not found")

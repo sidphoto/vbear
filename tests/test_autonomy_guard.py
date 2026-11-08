@@ -34,6 +34,11 @@ Never, whatever the person ticked in 「自己動手」:
   9. (P44-2) a routine starts by itself only for 「自己動手」 item 3: vbear/routine_runner.py reads it with ``autonomy.read(...)["routines"]``
      in one place and never names ``autonomy`` as a key itself (the behaviour is tested in tests/test_routine_runner.py).
 
+  12. (P44-3) the only program VBear starts that is not an AI tool is the one of vbear/keep_awake.py: ``routine*.py``, ``skillbook*.py`` and
+     ``auto_continue.py`` stay under the ``subprocess`` / ``pty`` ban above (and start nothing by ``os.popen``, ``os.spawn*``, ``os.exec*``);
+     no file of ``vbear/`` but keep_awake.py names the program; its argv is one constant list (the program, ``-i``, ``-w``, the console's own
+     pid), passed without a shell; vbear/server.py is the only module that imports it and only ``serve()`` hands it to a console.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -208,7 +213,7 @@ def skillbook_reaches(source: str, label: str = "<source>") -> list[str]:
 ROUTINES_MODULE = "routines"
 ROUTINE_WRITERS = {"create", "edit", "set_enabled", "delete", "set_settings", "store", "settings_store"}
 ROUTINE_WRITER_HOMES = {"server.py", "routines.py"}                   # the routes, and the module itself
-ROUTINE_RUN_WRITERS = {"record_run", "new_run", "update_run", "run_store"}
+ROUTINE_RUN_WRITERS = {"record_run", "new_run", "update_run", "run_store", "write_heartbeat"}
 ROUTINE_RUN_HOMES = {"routines.py", "routine_runner.py", "server.py"}  # the module, the runner, and the routes of the person's decision
 ROUTINE_ONLY_NAMES = {"send_for_routine": {"chat_service.py", "routine_runner.py"}}
 
@@ -863,6 +868,147 @@ class RoutineRules(unittest.TestCase):
         found = " | ".join(scan_source(source))
         self.assertTrue(found, source)
         self.assertIn(needle, found)
+
+
+# 12. (P44-3) the one program: the name, where it may be, and the other ways to start a program
+PROGRAM_NAME = "caffeinate"
+PROGRAM_HOME = "keep_awake.py"
+START_NAMES = {"popen", "system", "startfile", "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
+               "spawnv", "spawnve", "spawnvp", "spawnvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "posix_spawn", "posix_spawnp", "fork", "forkpty"}
+NO_PROGRAM_PATTERNS = ("routine*.py", "skillbook*.py", "auto_continue.py")
+
+
+def program_mentions(source: str, label: str = "<source>") -> list[str]:
+    """Every line that names the program, in code, comment or docstring."""
+    return [f"{label}:{n}: names {PROGRAM_NAME}" for n, line in enumerate(source.splitlines(), 1) if PROGRAM_NAME in line.lower()]
+
+
+def start_calls(source: str, label: str = "<source>") -> list[str]:
+    """Every way of starting a program that is not ``subprocess`` (which the table above bans by import): os.popen/os.spawn*/os.exec*/..."""
+    found = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        name = None
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+        elif isinstance(node, ast.ImportFrom) and (node.module or "") in ("os", "posix"):
+            name = next((a.name for a in node.names if a.name.lower() in START_NAMES), None)
+        if name and name.lower() in START_NAMES:
+            found.append(f"{label}:{node.lineno}: starts a program with {name}")
+    return found
+
+
+def argv_problems(source: str) -> list[str]:
+    """What is wrong with the argv of keep_awake.py: it must be exactly one list ["/usr/bin/caffeinate", "-i", "-w", str(os.getpid())], and
+    the program may be started only with a call of ``argv()`` and without ``shell``."""
+    tree = ast.parse(source)
+    docstrings = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+                  and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    problems = []
+    named = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings
+             and PROGRAM_NAME in n.value]
+    lists = [n for n in ast.walk(tree) if isinstance(n, ast.List) and n.elts and isinstance(n.elts[0], ast.Constant) and PROGRAM_NAME in str(n.elts[0].value)]
+    if len(named) != 1 or len(lists) != 1:
+        return ["the program must be named once, as the first word of one list"]
+    elts = lists[0].elts
+    words = [e.value if isinstance(e, ast.Constant) else ast.dump(e) for e in elts]
+    expected = ["/usr/bin/caffeinate", "-i", "-w", ast.dump(ast.parse("str(os.getpid())", mode="eval").body)]
+    if words != expected:
+        problems.append(f"the argv is not the fixed one: {words}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "Popen":
+                first = node.args[0] if node.args else None
+                if not (isinstance(first, ast.Call) and isinstance(first.func, ast.Name) and first.func.id == "argv" and not first.args):
+                    problems.append("Popen is not given argv()")
+                if any(kw.arg in ("shell", "executable", "env", "cwd") for kw in node.keywords):
+                    problems.append("Popen is given a keyword that changes what runs")
+    return problems
+
+
+class KeepAwakeRules(unittest.TestCase):
+    """P44-3, rule 12."""
+
+    def test_no_file_of_the_package_but_the_one_names_the_program(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name != PROGRAM_HOME:
+                problems += program_mentions(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertNotEqual(program_mentions((PACKAGE / PROGRAM_HOME).read_text(encoding="utf-8")), [], "the rule is not empty")
+
+    def test_the_argv_is_one_constant_list_started_without_a_shell(self):
+        self.assertEqual(argv_problems((PACKAGE / PROGRAM_HOME).read_text(encoding="utf-8")), [])
+
+    def test_the_modules_of_routines_skills_and_continuation_start_no_program(self):
+        problems: list[str] = []
+        files = {p.name: p for pattern in NO_PROGRAM_PATTERNS for p in PACKAGE.glob(pattern)}
+        self.assertTrue({"routine_runner.py", "routines.py", "routine_rules.py", "skillbook.py"} <= set(files))
+        for name, path in sorted(files.items()):
+            source = path.read_text(encoding="utf-8")
+            problems += start_calls(source, name)
+            problems += scan_source(source, name)
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and any(n.split(".")[0] in ("subprocess", "pty", "keep_awake") for n in _module_of(node)):
+                    problems.append(f"{name}:{node.lineno}: imports a way to start a program")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_only_the_console_imports_the_module_and_only_serve_hands_it_over(self):
+        for path in package_files():
+            if path.name in (PROGRAM_HOME, "server.py"):
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    self.assertNotIn("keep_awake", [n.split(".")[-1] for n in _module_of(node)], f"{path.name} imports keep_awake")
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        launches = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "launch" and isinstance(n.value, ast.Name) and n.value.id == "keep_awake_mod"]
+        self.assertEqual(len(launches), 1)
+        serve = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "serve")
+        self.assertTrue(any(n is launches[0] for n in ast.walk(serve)), "only serve() hands the launch to a console")
+        assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Attribute) and t.attr == "keep_awake_command" for t in n.targets)]
+        self.assertEqual(len(assigns), 2, "the empty default in Console and the one in serve()")
+
+    def test_the_runner_only_tells_the_machine_whether_anyone_works(self):
+        source = (PACKAGE / "routine_runner.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "keep_awake"}
+        self.assertEqual(calls, {"update", "close"})
+
+    # ---- the made-up sources: each part of the rule fires ------------------------------------------------------------------
+
+    def test_naming_the_program_elsewhere(self):
+        self.assertTrue(program_mentions("ARGV = ['/usr/bin/caffeinate', '-i']\n"))
+        self.assertTrue(program_mentions("# runs Caffeinate when it is time\n"))
+        self.assertTrue(program_mentions('"""keeps the Mac up with CAFFEINATE"""\n'))
+        self.assertEqual(program_mentions("KEEP = 'keep_awake'\n"), [])
+
+    def test_other_ways_to_start_a_program(self):
+        for source in ("import os\nos.popen('x')\n", "import os\nos.system('x')\n", "import os\nos.execv('/bin/x', ['x'])\n",
+                       "import os\nos.spawnl(0, '/bin/x', 'x')\n", "import os\nos.posix_spawn('/bin/x', ['x'], {})\n",
+                       "from os import popen\n", "import os\nos.fork()\n"):
+            self.assertTrue(start_calls(source), source)
+        self.assertEqual(start_calls("import os\nos.getpid()\nos.path.join('a', 'b')\n"), [])
+
+    def test_an_argv_that_is_not_the_fixed_one(self):
+        good = ("import os, subprocess\n"
+                "def argv():\n    return ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())]\n"
+                "def launch(c):\n    return subprocess.Popen(argv(), stdin=subprocess.DEVNULL)\n")
+        self.assertEqual(argv_problems(good), [])
+        bad = {
+            "another flag": good.replace("'-i'", "'-d'"),
+            "an extra word": good.replace("str(os.getpid())]", "str(os.getpid()), 'x']"),
+            "a word from a variable": good.replace("'-i'", "WORD"),
+            "a shell": good.replace("stdin=subprocess.DEVNULL", "shell=True"),
+            "not argv()": good.replace("Popen(argv()", "Popen(c"),
+            "an env": good.replace("stdin=subprocess.DEVNULL", "env={}"),
+            "named twice": good + "OTHER = ['/usr/bin/caffeinate', '-i']\n",
+        }
+        for why, source in bad.items():
+            self.assertTrue(argv_problems(source), why)
 
 
 if __name__ == "__main__":
