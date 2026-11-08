@@ -26,7 +26,7 @@ qa = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qa)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
-PORT = 50144
+CONSOLE_AT = 50144
 TOKEN = "synthetic-token-never-printed"
 W, A = "emp-writer", "emp-account"
 MODEL_WORDS = "MODEL-WORDS-never-printed"
@@ -44,7 +44,7 @@ class World:
 
     def __init__(self, state: Path, start: float, **flaws):
         self.state, self.flaws, self.now = Path(state).resolve(), flaws, [start]
-        (self.state / "server.token").write_text(json.dumps({"port": PORT, "token": TOKEN}))
+        (self.state / "server.token").write_text(json.dumps({"port": CONSOLE_AT, "token": TOKEN}))
         self.config = {"setup_done": True, "meeting_limits": {"per_call_usd": 0.05, "meeting_usd": 0.25, "daily_usd": 0.25},
                        "staffing_limits": {"proposal_call_usd": 0.1, "total_usd": 0.25}, "chat_limits": {"per_turn_usd": 0.05}}
         self.write_config()
@@ -387,7 +387,7 @@ class World:
 
 class FakeConsole(qa.Console):
     def __init__(self, world):
-        super().__init__(PORT, TOKEN)
+        super().__init__(CONSOLE_AT, TOKEN)
         self.world = world
 
     def call(self, path, method="GET", body=None):
@@ -411,7 +411,7 @@ class Base(unittest.TestCase):
     def run_main(self, *args, world=None, cards=(W, A), start=None):
         w = world or self.w
         out = io.StringIO()
-        argv = ["--state", str(self.state), "--port", str(PORT), "--cards", ",".join(cards), *args]
+        argv = ["--state", str(self.state), "--port", str(CONSOLE_AT), "--cards", ",".join(cards), *args]
         with contextlib.redirect_stdout(out):
             code = qa.main(argv, out=lambda s: print(s), console_factory=lambda port, token: FakeConsole(w), clock=w.clock, sleep=w.sleep,
                            runner=w.runner, tz=TAIPEI, home=self.home)
@@ -443,9 +443,9 @@ class Refusals(Base):
         own = self.home / ".vbear" / "x"
         own.mkdir(parents=True)
         for folder in (self.home / ".vbear", own):
-            self.assertIn("own VBear", qa.refusal(str(folder), PORT, self.home))
-        self.assertIn("does not exist", qa.refusal(str(self.base / "nope"), PORT, self.home))
-        self.assertIsNone(qa.refusal(str(self.state), PORT, self.home))
+            self.assertIn("own VBear", qa.refusal(str(folder), CONSOLE_AT, self.home))
+        self.assertIn("does not exist", qa.refusal(str(self.base / "nope"), CONSOLE_AT, self.home))
+        self.assertIsNone(qa.refusal(str(self.state), CONSOLE_AT, self.home))
         self.assertEqual(self.run_main(cards=(W,))[0], 2)
         self.assertEqual(self.run_main(cards=(W, W))[0], 2)
         self.assertEqual(self.run_main("--from", "final", "--until", "setup")[0], 2)
