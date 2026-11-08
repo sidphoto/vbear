@@ -35,7 +35,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
-from . import agent_profiles as ap, autonomy, chat_service, chief, config as cfg, meetings as mt, model_options, position_guide, shared_changes, strictjson, tasks
+from . import agent_profiles as ap, autonomy, chat_service, chief, config as cfg, countdown, meetings as mt, model_options, position_guide, shared_changes, strictjson, tasks
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import chat_store as cs
 
@@ -80,6 +80,7 @@ ERRORS = {
     "no_runner": "還沒有 runner：停止與繼續要等派工執行起來才能用",
     "not_active": "這份派工沒有在進行（沒有在做，也沒有暫停），不能停止",
     "not_paused": "這份派工沒有暫停，不用按繼續",
+    "needs_look": "有一步不確定有沒有送出，要你看過之後自己按「繼續」",
     "chat_unreadable": "讀不到那一步的聊天，無法確認訊息有沒有送出，所以現在不能繼續。請先到那位員工的聊天看一下",
     "turn_running": "這位員工正在做事，等這一回合結束或先按停止，再撤回",
     "already_withdrawn": "這位員工已經撤回了",
@@ -498,9 +499,11 @@ def can_delete(rec: dict) -> bool:
     return rec["state"] in DELETABLE_STATES or (rec["state"] == "paused" and all(s["state"] == "pending" for s in rec["steps"]))
 
 
-def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None = None, daily_usd: Decimal | None = None) -> dict:
+def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None = None, daily_usd: Decimal | None = None,
+         now: float | None = None) -> dict:
     """A dispatch as the API shows it: its plan with names for the codes, the steps, what the person may do, and, when the
-    limits are known, the most it may cost. No word of the conversation (the record holds none)."""
+    limits are known, the most it may cost. A pause for the day's money or the AI tool's plan also carries its ``countdown`` (P44-4: words
+    only; ``now`` is the clock of the console). No word of the conversation (the record holds none)."""
     plan = copy.deepcopy(rec["plan"])
     for item in plan["steps"]:
         item["name"] = _name_of(rec, item["who"])
@@ -524,7 +527,8 @@ def view(rec: dict, *, per_turn: Decimal | None = None, day_left: Decimal | None
             "questions": list(rec["questions"]), "notes": copy.deepcopy(rec["notes"]), "team": team,
             "proposal_sha": rec["proposal_sha"], "plan": plan, "edited": rec["plan"] != rec["proposal_plan"], "steps": copy.deepcopy(rec["steps"]),
             "task_id": rec["task_id"], "created_cards": made, "tools": list(rec["tools"]), "cost": cost,
-            "pause": None if pause is None else {"reason": pause["reason"], "until": pause["until"], "text": pause_words},
+            "pause": None if pause is None else {"reason": pause["reason"], "until": pause["until"], "text": pause_words,
+                                                 "countdown": countdown.words(pause["reason"], pause["until"], time.time() if now is None else now)},
             "events": [{**e, "what": describe(rec, e, daily_usd), "by_text": by_text_of(e)} for e in rec["events"]],
             "can": {"confirm": state == "proposed" and bool(plan["steps"]), "dismiss": state == "proposed",
                     "stop": state in ("running", "paused"), "continue": state == "paused", "delete": can_delete(rec),
@@ -668,7 +672,7 @@ class Dispatcher:
             left = self.day_left()
         except Exception:
             left = None
-        return view(rec, per_turn=per_turn, day_left=left, daily_usd=mt.limits_from(conf)["daily_usd"])
+        return view(rec, per_turn=per_turn, day_left=left, daily_usd=mt.limits_from(conf)["daily_usd"], now=self.clock())
 
     def _by_chief(self, chief_id: str) -> str | None:
         for did in record_ids():

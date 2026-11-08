@@ -37,7 +37,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config as cfg, meetings as mt, shared_changes, strictjson
+from . import config as cfg, countdown, meetings as mt, shared_changes, strictjson
 from .api_error import ApiError
 from .jsonstore import GuardedJsonStore, StoreError
 from .runtime import chat_store as cs
@@ -1338,7 +1338,8 @@ class Groups:
             out["asked"].append({"profile_id": m["profile_id"], "state": state})
         if rnd["pause"] is not None and rnd["ended"] is None:
             p = rnd["pause"]
-            out["pause"] = {"reason": p["reason"], "until": p["until"], "text": pause_text(p["reason"], limit=daily, left=remaining)}
+            out["pause"] = {"reason": p["reason"], "until": p["until"], "text": pause_text(p["reason"], limit=daily, left=remaining),
+                            "countdown": countdown.words(p["reason"], p["until"], self.clock())}
         return out
 
     def _item(self, r: dict, name_of, tool_of, by_pid: dict, sent: dict, pause_context) -> dict | None:

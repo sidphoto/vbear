@@ -21,7 +21,7 @@ What a pass does, in this order (the later batches add to the places marked):
 2. ``_drive``: one run at a time. The run that is going (``running``, or ``starting`` with a chat) is looked after; when none is going, the
    oldest queued run begins: the day's lamp and the routines' daily limit are looked at, a new one-person chat is opened with the
    employee (``ChatService.create``), the message goes out through ``ChatService.send_for_routine`` and the run is ``running``.
-   (P44-4 adds one line here: ``auto_continue.tick()``.)
+   (P44-4: the pass then calls ``self.auto_continue.tick()`` once, the dispatches that stopped for a limit; see ``_continue``.)
 
 Item 3 is read in one place, ``_auto``: the ``routines`` key of the autonomy block (through ``autonomy``'s reader); a missing key, a value that is not ``True``, a config that
 cannot be read: off. With it off the runner writes only ``waiting``, ``missed``, ``dismissed``, ``skipped``, ``failed`` records for slots
@@ -68,13 +68,14 @@ class RoutineRunner:
     returning the day's ledger (``lamp`` and the spend); one that cannot answer starts nothing. ``conf``: a function returning the
     console's configuration (read for item 3 and for the day's limit only). ``tz``: a ``zoneinfo`` zone, or None for the machine's own."""
 
-    def __init__(self, *, chats, ledger, conf, clock=time.time, tz=None, tick_s: float = TICK_S):
+    def __init__(self, *, chats, ledger, conf, clock=time.time, tz=None, tick_s: float = TICK_S, auto_continue=None):
         self._chats = chats
         self.ledger = ledger
         self.conf = conf
         self.clock = clock
         self.tz = tz
         self.tick_s = tick_s
+        self.auto_continue = auto_continue                 # P44-4: what the pass calls after the routines' own work (None: nothing)
         self.last_error: str | None = None
         self._lock_fd: int | None = None
         self._thread: threading.Thread | None = None
@@ -222,9 +223,20 @@ class RoutineRunner:
         auto = self._auto()
         out.update(self._look(now, routines, runs, auto))
         out.update(self._drive(now, routines))
+        self._continue()
         self._seen = now
         self._drain_closing()
         return {k: v for k, v in out.items() if v}
+
+    def _continue(self) -> None:
+        """P44-4, the one line this runner has for 「倒數接續」: the dispatches that stopped for a limit (``auto_continue.tick()``). Its trouble is
+        its own: a code in ``last_error``, never the routines' work undone."""
+        if self.auto_continue is None:
+            return
+        try:
+            self.auto_continue.tick()
+        except Exception:
+            self.last_error = "continue_failed"
 
     # ---- looking at the slots ----------------------------------------------------------------------------------------------------
 

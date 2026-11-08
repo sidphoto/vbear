@@ -399,14 +399,21 @@ class DispatchRunner:
             self._stop_chat(chat_id)
         return self.d.get(did)
 
-    def resume_dispatch(self, did: str) -> dict:
-        """「繼續」: a paused dispatch goes on, as the person's decision (never by itself, however long it has waited). A step that
-        was not sent yet is sent; one that was sent and did not end the normal way is left, and the next one goes out with that
-        step's reply (said to be incomplete); one whose message may or may not have gone is looked up in its chat first: it is
-        there, it is recorded; it is not, it is sent again (the person has looked and decided)."""
+    def resume_dispatch(self, did: str, by: str = "you", *, expect_pause_seq: int | None = None) -> dict:
+        """「繼續」: a paused dispatch goes on. As the person's decision (``by="you"``, the default: never by itself, however long it has
+        waited), or as VBear's (``by="vbear"``: 「自己動手」 item 5, only ``auto_continue`` asks for it, for a limit that is over; the event
+        says ``vbear``, a value v0.17.1 reads). ``expect_pause_seq``: the ``paused`` event the caller looked at; a dispatch that has paused again
+        since is not that pause (``not_paused``). A step that was not sent yet is sent; one that was sent and did not end the normal way is
+        left, and the next one goes out with that step's reply (said to be incomplete); one whose message may or may not have gone is looked
+        up in its chat first: it is there, it is recorded; it is not, it is sent again (the person has looked and decided). VBear does not
+        decide that for the person: ``by="vbear"`` on such a step is refused (``needs_look``)."""
+        if by not in ("you", "vbear"):
+            raise dispatch.DispatchError("bad_request", "「繼續」只能是你按的，或是自己動手第 5 項。")
         rec = dispatch.load(did)
-        if rec["state"] != "paused":
+        if rec["state"] != "paused" or not self._is_pause(rec, expect_pause_seq):
             raise dispatch.DispatchError("not_paused")
+        if by == "vbear" and any(s["state"] == "sending" for s in rec["steps"]):
+            raise dispatch.DispatchError("needs_look")
         cur = self._current(rec)
         found = None
         if cur is not None and cur["state"] == "sending" and cur["chat_id"]:
@@ -416,10 +423,10 @@ class DispatchRunner:
                 raise dispatch.DispatchError("chat_unreadable") from None
 
         def change(r):
-            if r["state"] != "paused":
+            if r["state"] != "paused" or not self._is_pause(r, expect_pause_seq):
                 raise dispatch.DispatchError("not_paused")
             now_cur = self._current(r)
-            self.d.add_event(r, "continued", "you")
+            self.d.add_event(r, "continued", by)
             r["pause"] = None
             if now_cur is None:
                 r["state"] = "done"
@@ -437,6 +444,23 @@ class DispatchRunner:
         self._wait.pop(did, None)
         self._misses.pop(did, None)
         return self.d.get(did)
+
+    @staticmethod
+    def _is_pause(rec: dict, seq: int | None) -> bool:
+        """Whether the dispatch is in the pause whose ``paused`` event is number ``seq`` (any pause when ``seq`` is None)."""
+        if seq is None:
+            return True
+        last = next((e["seq"] for e in reversed(rec["events"]) if e["kind"] == "paused"), None)
+        return last == seq
+
+    def plan_usage_of(self, did: str) -> dict | None:
+        """The AI tool's last plan report of the last step that has a turn (read only), or None when there is none. ApiError when the chat
+        cannot be read. ``auto_continue`` asks this before it goes on after a plan's limit."""
+        rec = dispatch.load(did)
+        step = next((s for s in reversed(rec["steps"]) if s["chat_id"] and s["turn"] is not None), None)
+        if step is None:
+            return None
+        return self._scan(step["chat_id"])["turns"].get(step["turn"], {}).get("plan_usage")
 
     # ---- sending a step ---------------------------------------------------------------------------------------------------
 
