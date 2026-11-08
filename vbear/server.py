@@ -73,7 +73,7 @@ from . import chief, chief_runner as chief_runner_mod
 from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
-from . import routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
+from . import auto_continue as auto_continue_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -354,8 +354,15 @@ class Console:
         day's ledger the way the dispatch runner does, and 「自己動手」 item 3 from the console's configuration."""
         with self.lock:
             if "_routine_runner" not in self.__dict__:
+                # P44-4: the pass of the routine runner also asks 「自己動手」 item 5's module whether a dispatch that stopped for a limit may go
+                # on; its press is the dispatch runner's, as VBear (the dispatch runner is looked for when the press is made, not here)
+                ledger = lambda: self.meeting_runner().ledger(self.store.conf)
+                auto = auto_continue_mod.AutoContinue(
+                    conf=lambda: self.store.conf, ledger=ledger,
+                    resume=lambda did, seq: self.dispatch_runner().resume_dispatch(did, by="vbear", expect_pause_seq=seq),
+                    usage=lambda did: self.dispatch_runner().plan_usage_of(did))
                 self._routine_runner = routine_runner_mod.RoutineRunner(
-                    chats=self.chat_service, ledger=lambda: self.meeting_runner().ledger(self.store.conf), conf=lambda: self.store.conf)
+                    chats=self.chat_service, ledger=ledger, conf=lambda: self.store.conf, auto_continue=auto)
             return self._routine_runner
 
     def _chat_busy(self, chat_id: str) -> bool:
@@ -2136,7 +2143,11 @@ def make_handler(console: Console):
 
         def _waiting_view(self) -> dict:
             """GET /api/waiting: what waits for the person, for the line over every page: only counts, names, times and ids."""
-            return {"waiting": console.routine_runner().waiting_rows()}
+            runner = console.routine_runner()
+            rows = runner.waiting_rows()
+            if runner.auto_continue is not None:                  # P44-4: the dispatches and groups that wait for a limit to be over
+                rows = rows + runner.auto_continue.waiting_rows()
+            return {"waiting": rows}
 
         def _routines_post(self, path, body):
             """The routes that write routines. The employee must be a card the chat service says can chat; the text is held to the memory's
@@ -2584,9 +2595,17 @@ def make_handler(console: Console):
             """「AI 自己做了什麼」 also lists the routines VBear began by itself (item 3): the same row shape as a dispatch's, newest first.
             Best effort: a failure here leaves the dispatch rows as they were."""
             try:
-                extra = console.routine_runner().actions()
+                runner = console.routine_runner()
+                extra = runner.actions()
             except Exception:
                 return got
+            try:                                                 # P44-4: the presses that were item 5's (the dispatch's own record says "vbear")
+                taken = runner.auto_continue.taken() if runner.auto_continue is not None else set()
+            except Exception:
+                taken = set()
+            for r in got.get("actions", []):
+                if r.get("kind") == "continued" and (r.get("dispatch_id"), r.get("seq")) in taken:
+                    r.update(by="auto5", by_text="自己動手第 5 項", what="恢復時間到了，VBear 自己按了「繼續」")
             rows = list(got.get("actions", [])) + [
                 {"at": r["at"], "dispatch_id": None, "seq": 0, "kind": r["kind"], "what": r["what"], "by": r["by"], "by_text": r["by_text"],
                  "profile_id": None, "can_stop": False, "can_withdraw": False, "routine_id": r["routine_id"], "chat_id": r["chat_id"]}

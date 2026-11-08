@@ -125,12 +125,12 @@ class AutoContinue:
     # ---- the log ----------------------------------------------------------------------------------------------------------------
 
     @staticmethod
-    def _folder(create: bool):
+    def _folder(make: bool):
         path = cfg.state_dir() / "routines"
         try:
             st = os.lstat(path)
         except FileNotFoundError:
-            if not create:
+            if not make:
                 return None
             cfg.ensure_state_dir()
             path.mkdir(mode=cfg.STATE_DIR_MODE, exist_ok=True)

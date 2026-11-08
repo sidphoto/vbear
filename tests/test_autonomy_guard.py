@@ -34,6 +34,11 @@ Never, whatever the person ticked in 「自己動手」:
   9. (P44-2) a routine starts by itself only for 「自己動手」 item 3: vbear/routine_runner.py reads it with ``autonomy.read(...)["routines"]``
      in one place and never names ``autonomy`` as a key itself (the behaviour is tested in tests/test_routine_runner.py).
 
+  11. (P44-4) a dispatch goes on by itself only for 「自己動手」 item 5: vbear/auto_continue.py reads it with ``autonomy.read(...)["auto_continue"]``
+     in one place; only vbear/server.py imports ``auto_continue`` (the groups' modules do not: a group never goes on by itself), the only
+     call that presses 「繼續」 as ``by="vbear"`` is the console's wiring, and the module reaches no chat (it is handed one function). The
+     behaviour (item 5 off: ``resume`` is called 0 times) is tested in tests/test_auto_continue.py.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -50,6 +55,8 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
 PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py",
             "skillbook*.py", "routine*.py")
+
+PATTERNS = PATTERNS + ("auto_continue.py",)    # (P44-4) item 5's module is held to every rule below
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -863,6 +870,109 @@ class RoutineRules(unittest.TestCase):
         found = " | ".join(scan_source(source))
         self.assertTrue(found, source)
         self.assertIn(needle, found)
+
+
+class AutoContinueRules(unittest.TestCase):
+    """P44-4, rule 11: a dispatch goes on by itself only for item 5; a group never does."""
+
+    MODULE = "auto_continue"
+
+    @staticmethod
+    def imports_module(source: str, name: str = "auto_continue") -> list[str]:
+        tree = ast.parse(source)
+        return [f"line {node.lineno}" for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                and any(n == name or n.startswith(name + ".") for n in _module_of(node))]
+
+    @staticmethod
+    def vbear_presses(source: str, label: str = "<source>") -> list[str]:
+        """Every call of ``resume_dispatch`` that says ``by="vbear"``, and every call that gives ``by`` something this scan cannot read."""
+        found = []
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+                if name != "resume_dispatch":
+                    continue
+                for kw in node.keywords:
+                    if kw.arg == "by" and not (isinstance(kw.value, ast.Constant) and kw.value.value == "you"):
+                        found.append(f"{label}:{node.lineno}: resume_dispatch by something that is not the person")
+                if len(node.args) >= 2:
+                    found.append(f"{label}:{node.lineno}: resume_dispatch with a positional by")
+        return found
+
+    def test_the_module_is_scanned_by_the_table(self):
+        self.assertIn("auto_continue.py", [p.name for p in scanned_files()])
+
+    def test_only_the_console_imports_it_and_no_group_module_does(self):
+        problems = []
+        for path in package_files():
+            if path.name in ("server.py", "auto_continue.py"):
+                continue
+            problems += [f"{path.name}:{hit}" for hit in self.imports_module(path.read_text(encoding="utf-8"))]
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertNotEqual(self.imports_module((PACKAGE / "server.py").read_text(encoding="utf-8")), [], "the console does wire it")
+        for path in PACKAGE.glob("group*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("auto_continue", text, f"{path.name} names item 5's module")
+            self.assertNotIn("resume_dispatch", text, f"{path.name} presses a dispatch's 繼續")
+
+    def test_item_5_is_read_in_one_place(self):
+        source = (PACKAGE / "auto_continue.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reads = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "read"
+                 and isinstance(n.func.value, ast.Name) and n.func.value.id == "autonomy"]
+        self.assertEqual(len(reads), 1)
+        self.assertIn('["auto_continue"]', source)
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+                      and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+        strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+        self.assertNotIn("autonomy", strings, "the block is read through autonomy.read and no other way")
+
+    def test_only_the_console_presses_continue_as_vbear(self):
+        problems = []
+        for path in package_files():
+            if path.name == "server.py":
+                continue
+            problems += self.vbear_presses(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+        wiring = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        self.assertIn('resume_dispatch(did, by="vbear"', wiring, "the console hands the press to item 5's module")
+
+    def test_the_module_reaches_no_chat_no_card_and_no_config(self):
+        tree = ast.parse((PACKAGE / "auto_continue.py").read_text(encoding="utf-8"))
+        names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        for banned in ("send", "send_for_dispatch", "send_for_group", "send_for_routine", "answer", "chat_answer",
+                       "save_profile", "create_profile", "set_conf", "write_private", "config_path", "Popen", "system", "subprocess", "resume_dispatch"):
+            self.assertNotIn(banned, names, banned)
+        self.assertFalse([m for m in _module_of_all(tree) if m.split(".")[0] in ("chat_service", "routines", "routine_runner", "skillbook", "agent_profiles")])
+
+    def test_importing_it_from_a_group_module_is_caught(self):
+        for source in ("from . import auto_continue\n", "from .auto_continue import AutoContinue\n", "import vbear.auto_continue as a\n",
+                       "from vbear import auto_continue\n"):
+            self.assertTrue(self.imports_module(source), source)
+        self.assertEqual(self.imports_module("from . import dispatch, countdown\n"), [])
+
+    def test_pressing_continue_as_vbear_from_anywhere_else_is_caught(self):
+        for source in ('def f(r, d):\n    return r.resume_dispatch(d, by="vbear")\n', 'def f(r, d, b):\n    return r.resume_dispatch(d, by=b)\n',
+                       'def f(r, d):\n    return r.resume_dispatch(d, "vbear")\n'):
+            self.assertTrue(self.vbear_presses(source), source)
+        self.assertEqual(self.vbear_presses('def f(r, d):\n    return r.resume_dispatch(d)\n'), [])
+        self.assertEqual(self.vbear_presses('def f(r, d):\n    return r.resume_dispatch(d, by="you")\n'), [])
+
+    def test_the_module_obeys_the_rules_of_the_others(self):
+        for source, needle in (("from . import config as cfg\ncfg.save({})\n", "config.save"), ("import subprocess\n", "subprocess"),
+                               ("from .runtime import daemon\n", "runtime.daemon"), ("def f(s):\n    return s.answer('c', {})\n", "answer"),
+                               ("def f(c):\n    c['autonomy'] = {'auto_continue': True}\n", "autonomy"),
+                               ("URL = '/api/settings/autonomy'\n", "autonomy"), ("from . import agent_launch\n", "agent_launch")):
+            found = " | ".join(scan_source(source))
+            self.assertIn(needle, found, source)
+
+
+def _module_of_all(tree) -> list[str]:
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            out += _module_of(node)
+    return out
 
 
 if __name__ == "__main__":
