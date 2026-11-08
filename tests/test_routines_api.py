@@ -297,7 +297,7 @@ class SettingsTests(RoutinesApiBase):
         self.assertEqual(self.call("/api/routines")[1]["settings"]["daily_usd"], "1.50")
 
     def test_above_the_days_limit_or_another_key_is_a_400(self):
-        for body in ({"daily_usd": 3.5}, {"daily_usd": 0}, {"daily_usd": "1"}, {"keep_awake": True}, {"daily_usd": 1, "x": 1}, {}):
+        for body in ({"daily_usd": 3.5}, {"daily_usd": 0}, {"daily_usd": "1"}, {"keep_awake": "yes"}, {"keep_awake": 1}, {"daily_usd": 1, "x": 1}, {}):
             self.assertEqual(self.call("/api/routines/settings", "POST", body)[0], 400, body)
         self.assertFalse((cfg.state_dir() / "routines" / "settings.json").exists())
 
