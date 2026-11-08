@@ -1111,6 +1111,65 @@ class TemplateRules(unittest.TestCase):
         self.assertEqual(string_uses('"""The route /api/templates is the console\'s."""\nX = 1\n', "/api/templates"), [])
 
 
+# 13e. (P45-3) who may save, rename or delete the person's own team templates: the module's writers, and the only modules that may name them
+TEMPLATE_MINE_MODULE = "templates_mine"
+TEMPLATE_MINE_WRITERS = {"save_mine", "rename_mine", "delete_mine", "mine_store"}
+TEMPLATE_MINE_HOMES = {"server.py", "templates_mine.py"}          # the routes, and the module itself
+
+
+def template_mine_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, TEMPLATE_MINE_MODULE, TEMPLATE_MINE_WRITERS)
+
+
+class TemplateMineRules(unittest.TestCase):
+    """P45-3, rule 13e: only the browser's /api/templates/mine routes of the console save, rename or delete a team template of the person's own.
+    What the saved copy holds (and what it never holds), and that nothing is written in the other places, is in tests/test_templates_mine.py and
+    tests/test_templates_mine_api.py; the module being under rules 1 to 13c is TemplateRules."""
+
+    def test_the_module_is_scanned_and_named_in_the_table(self):
+        self.assertIn("templates_mine.py", [p.name for p in scanned_files()])
+        self.assertIn(TEMPLATE_MINE_MODULE, TEMPLATE_MODULES)
+
+    def test_only_the_console_and_the_module_itself_name_a_writer(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in TEMPLATE_MINE_HOMES:
+                problems += template_mine_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_every_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        calls = {m.group(1) for m in re.finditer(r"templates_mine_mod\.(\w+)", source)}
+        self.assertEqual(calls & (TEMPLATE_MINE_WRITERS - {"mine_store"}), TEMPLATE_MINE_WRITERS - {"mine_store"})
+        self.assertNotEqual(template_mine_writer_uses(source, "server.py"), [])
+
+    def test_the_module_writes_no_card_no_skill_no_routine_and_no_config(self):
+        tree = ast.parse((PACKAGE / "templates_mine.py").read_text(encoding="utf-8"))
+        names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        for banned in ("save_profile", "delete_profile", "duplicate_profile", "set_enabled", "send", "send_for_routine", "answer", "set_conf",
+                       "write_private", "Popen", "urlopen", "connect"):
+            self.assertNotIn(banned, names, banned)
+        modules = _module_of_all(tree)
+        for banned in ("skillbook", "routines", "memory", "shared_folder", "chat_service", "urllib", "http", "socket", "subprocess", "shutil", "zipfile"):
+            self.assertFalse([m for m in modules if m.split(".")[0] == banned], banned)
+
+    def test_the_module_has_no_export_import_upload_or_download(self):
+        tree = ast.parse((PACKAGE / "templates_mine.py").read_text(encoding="utf-8"))
+        defined = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        self.assertEqual({n for n in defined if re.search(r"export|import|upload|download|send|fetch", n)}, set())
+
+    # the made-up sources: each part fires
+    def test_naming_a_writer_from_another_module_is_caught(self):
+        for source in ("from . import templates_mine\ndef f(b):\n    return templates_mine.save_mine(b)\n",
+                       "from . import templates_mine as m\ndef f(t):\n    return m.delete_mine(t, {})\n",
+                       "from .templates_mine import rename_mine\n", "from vbear.templates_mine import mine_store\n",
+                       "from . import templates_mine as m\nx = m.mine_store\n", "from .templates_mine import *\n",
+                       "from . import templates_mine as m\nf = getattr(m, 'save_mine')\n"):
+            self.assertTrue(template_mine_writer_uses(source), source)
+        self.assertEqual(template_mine_writer_uses("from . import templates_mine as m\nx = m.read_mine()\n"), [], "reading is not writing")
+        self.assertEqual(template_mine_writer_uses("from . import templates as t\nx = t.plan\n"), [])
+
+
 class AutoContinueRules(unittest.TestCase):
     """P44-4, rule 11: a dispatch goes on by itself only for item 5; a group never does."""
 
