@@ -56,11 +56,12 @@ The stages (each prints ``ok``, ``warn`` or ``FAIL`` lines and the script exits 
                  ``by: you`` that ends with a result; 不用了 on E opens no chat.
   wake2-prepare  item 3 on; routine F at three minutes from now; the script says when to stop the console.
   wake2-check    F is caught up once by itself (``why: catch_up``, item 3 in the action list) within 90 seconds, and still once two minutes later.
-  countdown      (no money) item 5 on; a group of the two cards is sent one sentence and, before the first employee is asked, the daily limit is
-                 brought down to what is spent: the round stops with ``daily_limit`` until the next local midnight, the group page has the
-                 countdown, nothing was spent; the limits are put back; a minute later the group is still stopped (a group never goes on by
-                 itself); 「不用了」; the group is deleted; item 5 off. (If the first employee was asked before the limit came down, that is a ``warn``
-                 and the stage ends: it cost one turn at most.)
+  countdown      item 5 on; a group of the two cards is sent one sentence; while the first employee answers (one short turn, a few cents) the
+                 daily limit is brought down to what is spent: the round stops with ``daily_limit`` until the next local midnight, the second
+                 employee is not asked, the group page has the countdown and the line over every page has the group's wait; the limits are put
+                 back (the daily limit by its route, the other families by ``/api/config`` from what was read first); a minute later the group
+                 is still stopped (a group never goes on by itself); 「不用了」; the group is deleted; item 5 off. (A lamp that is not open, or
+                 nothing spent yet, is a ``warn`` and the stage ends.)
   final          ``config.json`` is as ``setup`` left it (key by key; ``autonomy`` has four ``false``); the cards were not changed; the routines
                  and the skills this script made are deleted; no ``caffeinate`` is a child of the console; the two logs hold no name or word; the
                  day's spending and the turns of each stage are printed; over US$0.25 is a FAIL.
