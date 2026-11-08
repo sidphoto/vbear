@@ -76,6 +76,7 @@ from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
 from . import auto_continue as auto_continue_mod, keep_awake as keep_awake_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
+from . import templates as templates_mod
 from . import meetings
 from . import staffing
 from . import staffing_runner as staffing_runner_mod
@@ -383,6 +384,15 @@ class Console:
         """Start what ``keep_awake_command`` starts, or nothing when the console has none (see ``serve()``)."""
         start = self.keep_awake_command
         return start(command) if start is not None else None
+
+    def template_mine(self):
+        """The person's own team templates as ``(templates, readable, problem)``. P45-3 reads ``<state>/templates/mine.json`` here; until
+        then there is none and nothing to read. A file that cannot be read gives ``([], False, a sentence)``: the built-in four still work."""
+        return [], True, None
+
+    def template_applies(self) -> list:
+        """The record of the applies, newest first, as the page shows it. P45-2 reads ``<state>/templates/applies.json`` here; until then none."""
+        return []
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -803,6 +813,8 @@ def make_handler(console: Console):
                     return self._dispatch_call("actions")
                 if path == "/api/routines":
                     return self._chat_action(self._routines_view)
+                if path == "/api/templates":
+                    return self._chat_action(self._templates_view)
                 if path == "/api/waiting":
                     return self._chat_action(self._waiting_view)
                 if path.startswith("/api/dispatch/"):
@@ -1012,6 +1024,8 @@ def make_handler(console: Console):
                     return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
                 if path == "/api/routines" or path.startswith("/api/routines/"):
                     return self._routines_post(path, self._body_strict())
+                if path.startswith("/api/templates/"):
+                    return self._templates_post(path, self._body_strict())
                 if path == "/api/groups":
                     return self._group_call("create", None, self._body_strict())
                 if path.startswith("/api/groups/"):
@@ -2219,6 +2233,78 @@ def make_handler(console: Console):
                     return routines_mod.delete(rid) if action == "delete" else {"run": runner.start_now(rid)}
                 return self._chat_action(act, 202 if action == "start" else 200)
             return self._chat_action(lambda: routines_mod.edit(rid, body, console.chat_service().cards()))
+
+        # ---- team templates (P45-1, ADR 0011): the list and the preview read and plan; nothing here writes a file ----
+
+        def _templates_current(self, *, lenient: bool):
+            """What the person has now, for the counts and the plan: ``(current, problems)``. ``lenient`` (the list): a file that cannot be read is
+            a sentence in ``problems`` and the page still shows; otherwise (the preview, and later the apply) it is a 503 and nothing is planned."""
+            problems: list = []
+            cards: list = []
+            try:
+                cards = console.chat_service().cards()
+            except ApiError as exc:
+                if not lenient:
+                    raise
+                problems.append(str(exc))
+            skills = skillbook_mod.view()
+            if skills["readable"] is not True:
+                if not lenient:
+                    raise ApiError(503, "skills_unreadable", skillbook_mod.UNREADABLE)
+                problems.append(skillbook_mod.UNREADABLE)
+            routine_list, routine_problem = routines_mod.read_routines()
+            if routine_problem:
+                if not lenient:
+                    raise ApiError(503, "routines_unreadable", routine_problem)
+                problems.append(routine_problem)
+            return {"cards": cards, "skills": skills["skills"], "routines": routine_list}, problems
+
+        def _templates_view(self) -> dict:
+            """GET /api/templates: the four built-in team templates and the person's own, what the person has now (names and ids only), the
+            limits, the applies, and the state of the two AI tools from the start-up page's own source (read, never forced, never asked again)."""
+            current, problems = self._templates_current(lenient=True)
+            mine, mine_readable, mine_problem = console.template_mine()
+            try:
+                rows = ai_tool_status.report(console.store.conf)
+            except ai_tool_status.StoreError:
+                rows = []
+            cards = current["cards"]
+            return {
+                **templates_mod.catalog(mine if mine_readable else []),
+                "mine_readable": mine_readable is True, "problem": mine_problem, "problems": problems,
+                "applies": console.template_applies(),
+                "counts": {"cards": len(cards), "skills": len(current["skills"]), "routines": len(current["routines"])},
+                "current": {"cards": [{"id": c.get("id"), "name": c.get("name"), "position": c.get("position"), "tool": c.get("tool"),
+                                       "can_chat": c.get("can_chat") is True} for c in cards],
+                            "skills": [{"id": k.get("id"), "name": k.get("name")} for k in current["skills"]],
+                            "routines": [{"id": r.get("id"), "name": r.get("name")} for r in current["routines"]]},
+                "limits": {"max_cards": templates_mod.MAX_CARDS, "max_skills": templates_mod.MAX_SKILLS, "max_routines": templates_mod.MAX_ROUTINES,
+                           "per_apply": dict(templates_mod.MAX_PER_APPLY), "per_template": dict(templates_mod.MAX_PER_TEMPLATE),
+                           "max_mine": templates_mod.MAX_MINE, "max_name": templates_mod.NAME_MAX},
+                "tools": templates_mod.tools_view(rows),
+            }
+
+        def _templates_plan(self, body) -> dict:
+            """The plan of a request (the preview, and later the apply): ApiError 503 for a file that cannot be read, 400 for a request that is
+            not well-formed. Nothing is written."""
+            current, _ = self._templates_current(lenient=False)
+            mine, mine_readable, _ = console.template_mine()
+            try:
+                templates = templates_mod.index(mine if mine_readable else [])
+            except ValueError as exc:
+                raise ApiError(503, "templates_unreadable", str(exc)) from None
+            current = {"cards": current["cards"], "skills": len(current["skills"]), "routines": len(current["routines"])}
+            try:
+                return templates_mod.plan(body, templates=templates, current=current)
+            except ValueError as exc:
+                raise ApiError(400, "bad_request", str(exc)) from None
+
+        def _templates_post(self, path, body):
+            """The routes under /api/templates that are presses of the person (X-VBear is checked for every POST). The preview only plans."""
+            if path == "/api/templates/preview":
+                return self._chat_action(lambda: {"preview": templates_mod.public(self._templates_plan(body))})
+            # P45-2 adds: /apply and /applies/<id>/undo-preview | undo.  P45-3 adds: /mine, /mine/<id>, /mine/<id>/delete.
+            return self._error(404, "not found")
 
         def _memory_cards(self) -> list:
             """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
