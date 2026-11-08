@@ -34,10 +34,10 @@ class SkillsAndRoutinesDocsTests(unittest.TestCase):
         cls.en = read("README.md")
         cls.zh = read("README.zh-TW.md")
         cls.model = read("docs", "SECURITY-MODEL.md")
-        cls.section = cls.model[cls.model.index("## Skills and routines (v0.18)"):cls.model.index("## The start-up page (v0.12)")]
+        cls.section = cls.model[cls.model.index("## Skills and routines (v0.18)"):cls.model.index("## Team templates (v0.19)")]
         cls.chief = cls.model[cls.model.index("## Chief of staff and dispatch (v0.15)"):cls.model.index("## Group chats (v0.16)")]
         cls.arch = read("docs", "ARCHITECTURE.md")
-        cls.arch_section = cls.arch[cls.arch.index("## Skills and routines — "):cls.arch.index("## Start-up page")]
+        cls.arch_section = cls.arch[cls.arch.index("## Skills and routines — "):cls.arch.index("## Team templates — ")]
         cls.ref = read("docs", "REFERENCE.zh-TW.md")
         cls.adr_raw = (ROOT / "docs" / "adr" / "0010-skills-and-routines.md").read_text(encoding="utf-8")
         cls.adr = flat(cls.adr_raw)
@@ -48,7 +48,8 @@ class SkillsAndRoutinesDocsTests(unittest.TestCase):
     # -- the changelog ---------------------------------------------------------------------------------------------------------
 
     def test_the_release_heading_is_first_and_not_unreleased(self):
-        self.assertTrue(self.raw.startswith("# Changelog\n\n## v0.18.0 — skills and routines\n"), self.raw[:70])
+        self.assertIn("\n## v0.18.0 — skills and routines\n", self.raw)                      # (v0.19.0 is the first now)
+        self.assertLess(self.raw.index("## v0.19.0 — team templates"), self.raw.index("## v0.18.0 — skills and routines"))
         self.assertNotIn("Unreleased", self.changelog)
         self.assertNotIn("not released yet", self.changelog)
 

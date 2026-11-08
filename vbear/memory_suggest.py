@@ -326,7 +326,7 @@ class SuggestStore(GuardedJsonStore):
                 return None
             raise OSError("記憶提議的紀錄拒絕讀取") from exc
         try:
-            if st.st_nlink != 1:
+            if st.st_nlink > 1:                       # (0 is a file replaced since it was opened: whole and old, not a second name)
                 raise OSError("記憶提議的紀錄有多個連結")
             return strictjson.read_fd(fd, MAX_FILE).decode("utf-8")
         except strictjson.ReadRefused as exc:

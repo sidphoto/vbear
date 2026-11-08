@@ -1822,3 +1822,21 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .ceo-door h2, .ceo-door p { margin: 0; overflow-wrap: anywhere; }
 .ceo-door .row { flex-wrap: wrap; }
 @media (max-width: 520px) { .ceo-form .btn, .ceo-door .btn { flex: 1 1 100%; justify-content: center; } }
+
+/* ---- team templates (P45-1): the blocks, the tick boxes, the line at the bottom and the preview ---- */
+.tpl-lines { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
+.tpl-block { display: grid; gap: 8px; margin: 0 0 14px; min-width: 0; }
+.tpl-block h2, .tpl-block h3, .tpl-block p { margin: 0; overflow-wrap: anywhere; }
+.tpl-block h3 { font-size: 14px; color: var(--ink-2); }
+.tpl-group { display: grid; gap: 4px; min-width: 0; }
+.tpl-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+.tpl-item { min-width: 0; overflow-wrap: anywhere; }
+.tpl-pick { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.tpl-more { margin: 2px 0 0 24px; }
+.tpl-text { white-space: pre-wrap; margin: 4px 0 0; overflow-wrap: anywhere; }
+.tpl-foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; background: var(--panel); z-index: 2; }
+.tpl-tool { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 0 0 8px; }
+.tpl-tool p { flex: 1 1 100%; margin: 0; }
+.tpl-fixed { margin: 8px 0; padding-left: 18px; display: grid; gap: 4px; }
+.tpl-warn { display: grid; gap: 6px; margin: 8px 0; }
+@media (max-width: 520px) { .tpl-foot .btn { flex: 1 1 100%; justify-content: center; } }

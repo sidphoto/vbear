@@ -43,6 +43,12 @@ Never, whatever the person ticked in 「自己動手」:
      no file of ``vbear/`` but keep_awake.py names the program; its argv is one constant list (the program, ``-i``, ``-w``, the console's own
      pid), passed without a shell; vbear/server.py is the only module that imports it and only ``serve()`` hands it to a console.
 
+  13. (P45, ADR 0011) a team template is applied and saved by the person alone, and applying switches nothing on: the template modules
+     (``template*.py``) are held to every rule above; the other scanned modules do not import them; they import no chat, no meeting, no
+     network and no ``scan``, call no card-writing function, and every ``enabled`` they write is the plain ``False``; the routes of the
+     templates are named in vbear/server.py and nowhere else in the package. (13d, 13e: the write functions of the applies and of the
+     person's own templates, added by P45-2 and P45-3; the behaviour is tested in tests/test_templates_apply.py.)
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -61,6 +67,7 @@ PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py
             "skillbook*.py", "routine*.py")
 
 PATTERNS = PATTERNS + ("auto_continue.py",)    # (P44-4) item 5's module is held to every rule below
+PATTERNS = PATTERNS + ("template*.py",)        # (P45-1, rule 13a) the team template modules are held to every rule below
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -109,7 +116,8 @@ CONFIG_MODULE = "config"
 # the cards saved here: these keys must be a safe mode / no skill, written out
 CARD_KEYS = {"launch_mode": lambda v: isinstance(v, ast.Constant) and v.value == "safe",
              "equipped_skill_ids": lambda v: isinstance(v, ast.List) and not v.elts}
-BANNED_STRINGS = ("/api/native/", "/api/settings/autonomy", "/api/config", "/api/setup/daily-limit", "acceptForSession", "/answer")
+BANNED_STRINGS = ("/api/native/", "/api/settings/autonomy", "/api/config", "/api/setup/daily-limit", "acceptForSession", "/answer",
+                  "/api/templates")        # (13c) no scanned module names the routes of the team templates
 # 4. answering a card of a chat: the chat service's method, the daemon's op, in a call, a reference, an import or a string
 ANSWER_NAMES = {"answer": "answers a question of a chat for the person", "chat_answer": "the daemon's answer to a question of a chat"}
 
@@ -942,6 +950,355 @@ class RoutineRules(unittest.TestCase):
         found = " | ".join(scan_source(source))
         self.assertTrue(found, source)
         self.assertIn(needle, found)
+
+
+# 13. (P45, ADR 0011) the team templates: who may import them, what they may import, and the one thing they may never write as true
+TEMPLATE_MODULES = ("templates", "templates_builtin", "templates_apply", "templates_mine")
+TEMPLATE_BANNED_IMPORTS = ("chat_service", "meeting_runner", "board_engine", "headless_cli", "auto_continue", "keep_awake", "scan",
+                           "urllib", "http", "socket", "chief", "chief_runner", "dispatch", "dispatch_runner", "groups", "group_runner")
+
+
+def imports_of(source: str, names, label: str = "<source>") -> list[str]:
+    """Every import in ``source`` of one of ``names`` (a module or anything under it, ``vbear.`` and relative forms alike)."""
+    tree = ast.parse(source, filename=label)
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for module in _module_of(node):
+                if any(module == n or module.startswith(n + ".") for n in names):
+                    found.append(f"{label}:{node.lineno}: imports {module}")
+    return found
+
+
+def enabled_not_false(source: str, label: str = "<source>") -> list[str]:
+    """Every place a source gives ``enabled`` a value that is not the plain ``False``: a dict key, a keyword, or a subscript assignment."""
+    is_false = lambda v: isinstance(v, ast.Constant) and v.value is False
+    tree = ast.parse(source, filename=label)
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == "enabled" and not is_false(value):
+                    found.append(f"{label}:{node.lineno}: enabled is not False")
+        elif isinstance(node, ast.keyword) and node.arg == "enabled" and not is_false(node.value):
+            found.append(f"{label}:{node.value.lineno}: enabled is not False")
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant) and target.slice.value == "enabled"
+                        and not is_false(node.value)):
+                    found.append(f"{label}:{node.lineno}: enabled is not False")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("update", "setdefault"):
+            for arg in node.args:
+                if isinstance(arg, ast.Dict):
+                    for key, value in zip(arg.keys, arg.values):
+                        if isinstance(key, ast.Constant) and key.value == "enabled" and not is_false(value):
+                            found.append(f"{label}:{node.lineno}: enabled is not False")
+    return found
+
+
+def string_uses(source: str, needle: str, label: str = "<source>") -> list[str]:
+    """Every string constant of the code (not a docstring) that holds ``needle``."""
+    tree = ast.parse(source, filename=label)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docstrings.add(id(first.value))
+    return [f"{label}:{n.lineno}: names {needle}" for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings and needle in n.value]
+
+
+class TemplateRules(unittest.TestCase):
+    """P45-1, rules 13a to 13c over the real modules, and the small made-up sources that show the scan fires. 13d and 13e (the write
+    functions of the applies and of the person's own templates) are added with those write functions."""
+
+    def template_files(self):
+        return sorted(PACKAGE.glob("template*.py"))
+
+    # 13a: scanned like the others
+    def test_every_template_module_is_scanned(self):
+        names = [p.name for p in scanned_files()]
+        self.assertIn("templates.py", names)
+        self.assertIn("templates_builtin.py", names)
+        for path in PACKAGE.rglob("template*.py"):
+            self.assertIn(path.name, names, "a team template module the scan does not cover")
+        self.assertEqual({p.name for p in self.template_files()} - {m + ".py" for m in TEMPLATE_MODULES}, set(), "a module the table does not name")
+
+    def test_the_template_modules_obey_the_rules_of_the_others(self):
+        for source, needle in (("from . import skillbook\n", "skillbook"), ("from . import memory\n", "memory"), ("from . import shared_folder\n", "shared_folder"),
+                               ("from . import config as cfg\ncfg.save({})\n", "config.save"), ("import subprocess\n", "subprocess"),
+                               ("from . import agent_launch\n", "agent_launch"), ("from . import server\n", "server"), ("from . import armory\n", "armory"),
+                               ("from . import loadout\n", "loadout"), ("from . import skill_fit\n", "skill_fit"), ("from . import daily_limit\n", "daily_limit"),
+                               ("CARD = {'launch_mode': 'full'}\n", "launch_mode"), ("CARD = {'equipped_skill_ids': ['s-1']}\n", "equipped_skill_ids"),
+                               ("def f(s):\n    return s.answer('c', {})\n", "answer"), ("URL = '/api/config'\n", "/api/config"),
+                               ("def f(c):\n    c['autonomy'] = {}\n", "autonomy"), ("URL = '/api/templates/preview'\n", "/api/templates")):
+            found = " | ".join(scan_source(source))
+            self.assertIn(needle, found, source)
+
+    # 13b: nobody else imports them; they import nothing that talks, and call no card writer
+    def test_the_other_scanned_modules_do_not_import_the_template_modules(self):
+        problems: list[str] = []
+        for path in scanned_files():
+            if path.name.startswith("template"):
+                continue
+            problems += imports_of(path.read_text(encoding="utf-8"), TEMPLATE_MODULES, path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertNotEqual(imports_of((PACKAGE / "server.py").read_text(encoding="utf-8"), TEMPLATE_MODULES, "server.py"), [],
+                            "the console does import them, so the rule is not empty")
+
+    def test_the_template_modules_import_no_chat_no_meeting_no_network_and_no_scan(self):
+        problems: list[str] = []
+        for path in self.template_files():
+            problems += imports_of(path.read_text(encoding="utf-8"), TEMPLATE_BANNED_IMPORTS, path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_template_modules_call_no_card_writer(self):
+        problems: list[str] = []
+        for path in self.template_files():
+            problems += card_writer_calls(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    # 13c: nothing is switched on, and the routes are the console's alone
+    def test_every_enabled_a_template_module_writes_is_false(self):
+        problems: list[str] = []
+        for path in self.template_files():
+            problems += enabled_not_false(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertEqual(enabled_not_false((PACKAGE / "templates.py").read_text(encoding="utf-8")), [])
+        self.assertIn('"enabled": False', (PACKAGE / "templates.py").read_text(encoding="utf-8"), "the routine's body does say it, so the rule is not empty")
+
+    def test_the_routes_of_the_templates_are_named_in_the_console_and_nowhere_else_of_the_package(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name != "server.py":
+                problems += string_uses(path.read_text(encoding="utf-8"), "/api/templates", path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertNotEqual(string_uses((PACKAGE / "server.py").read_text(encoding="utf-8"), "/api/templates", "server.py"), [])
+
+    # the made-up sources: each part fires
+    def test_importing_the_template_modules_from_another_module_is_caught(self):
+        for source in ("from . import templates\n", "from .templates import plan\n", "from . import templates_builtin as tb\n",
+                       "import vbear.templates_apply\n", "from vbear import templates_mine\n", "from vbear.templates import card_body\n"):
+            self.assertTrue(imports_of(source, TEMPLATE_MODULES), source)
+        self.assertEqual(imports_of("from . import template_text, groups\n", TEMPLATE_MODULES), [], "other names that start the same")
+
+    def test_a_template_module_importing_a_chat_a_meeting_a_network_or_a_scan_is_caught(self):
+        for source in ("from . import chat_service\n", "from .chat_service import ChatService\n", "from . import meeting_runner\n",
+                       "from . import board_engine\n", "from . import headless_cli\n", "from . import auto_continue\n", "from . import keep_awake\n",
+                       "from .scan import claude\n", "from . import scan\n", "import urllib.request\n", "from urllib import parse\n",
+                       "import http.client\n", "import socket\n", "from . import chief\n", "from .dispatch import Dispatcher\n", "from . import groups\n",
+                       "from . import group_runner\n", "from . import dispatch_runner\n", "from . import chief_runner\n"):
+            self.assertTrue(imports_of(source, TEMPLATE_BANNED_IMPORTS), source)
+        self.assertEqual(imports_of("from . import agent_profiles, model_options\nfrom .runtime import memory_rules\n", TEMPLATE_BANNED_IMPORTS), [])
+
+    def test_a_template_module_calling_a_card_writer_is_caught(self):
+        for source in ("def f(ap):\n    return ap.save_profile(None, {})\n", "from .agent_profiles import delete_profile\n",
+                       "def f(ap):\n    return ap.duplicate_profile('x')\n"):
+            self.assertTrue(card_writer_calls(source), source)
+
+    def test_an_enabled_that_is_not_false_is_caught(self):
+        for source in ("X = {'enabled': True}\n", "def f(on):\n    return {'enabled': on}\n", "def f(r):\n    return dict(r, enabled=True)\n",
+                       "def f(r):\n    r['enabled'] = True\n", "def f(r, on):\n    r['enabled'] = on\n", "def f(r):\n    r.update({'enabled': True})\n",
+                       "def f(r):\n    return {**r, 'enabled': not r['enabled']}\n", "X = dict(enabled=1)\n"):
+            self.assertTrue(enabled_not_false(source), source)
+        for source in ("X = {'enabled': False}\n", "def f(r):\n    r['enabled'] = False\n", "X = dict(enabled=False)\n", "X = {'enabled_at': None}\n"):
+            self.assertEqual(enabled_not_false(source), [], source)
+
+    def test_naming_the_templates_route_outside_a_docstring_is_caught(self):
+        self.assertTrue(string_uses("URL = '/api/templates/preview'\n", "/api/templates"))
+        self.assertTrue(string_uses("def f():\n    return '/api/templates'\n", "/api/templates"))
+        self.assertEqual(string_uses('"""The route /api/templates is the console\'s."""\nX = 1\n', "/api/templates"), [])
+
+
+# 13d. (P45-2) who may write the record of the applies of the team templates, and the one thing that was NOT made an exception: the write
+# functions of the cards, the skills and the routines. The apply and the undo are made by the console (server.py) with the ordinary write functions
+# of the person's own presses; vbear/templates_apply.py is the notebook and the rule book, so it needs no exception to rule 13b, and none was made.
+TEMPLATE_APPLY_MODULE = "templates_apply"
+TEMPLATE_APPLY_WRITERS = {"begin_apply", "record_item", "end_apply", "record_undo", "log_undo", "recover", "applies_store"}
+TEMPLATE_APPLY_HOMES = {"server.py", "templates_apply.py"}          # the routes, and the module itself
+TEMPLATE_APPLY_FUNCTIONS = ("_templates_apply", "_templates_make", "_templates_undo", "_templates_undo_preview", "_templates_facts",
+                            "_templates_undo_find", "_templates_undo_shown", "_templates_refuse", "_save_card")
+# what the apply and the undo of the console never name: a switch, a chat, a launch, the configuration, the ledger, a program
+TEMPLATE_APPLY_NEVER = {"memory_mod", "shared_folder", "autonomy", "set_card", "open_cards", "close_cards", "on_new_employee", "send", "send_for_routine",
+                        "answer", "chat_answer", "set_conf", "write_private", "config_path", "meeting_runner", "runtime", "subprocess", "Popen", "dispatcher",
+                        "dispatch_runner", "group_service", "group_runner", "routine_runner", "chief_tools", "launch", "keep_awake_command"}
+
+
+def template_apply_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, TEMPLATE_APPLY_MODULE, TEMPLATE_APPLY_WRITERS)
+
+
+def functions_named(source: str, names) -> list:
+    return [n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
+
+
+class TemplateApplyRules(unittest.TestCase):
+    """P45-2, rule 13d. The behaviour (safe mode, no skill card, switched off, config and memory unchanged, no AI) is proved in
+    tests/test_templates_apply_api.py and tests/test_templates_undo.py, over the real stores."""
+
+    def test_only_the_console_and_the_module_itself_name_the_writers_of_the_record(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in TEMPLATE_APPLY_HOMES:
+                problems += template_apply_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_each_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        used = {m.group(1) for m in re.finditer(r"templates_apply_mod\.(\w+)", source)}
+        self.assertGreaterEqual(used, {"begin_apply", "record_item", "end_apply", "record_undo", "log_undo", "recover"})
+        self.assertNotEqual(template_apply_writer_uses(source, "server.py"), [])
+
+    def test_changing_the_record_from_anywhere_else_is_caught(self):
+        for name in sorted(TEMPLATE_APPLY_WRITERS):
+            self.assertTrue(template_apply_writer_uses(f"from . import templates_apply\ntemplates_apply.{name}()\n"), name)
+            self.assertTrue(template_apply_writer_uses(f"from . import templates_apply as ta\ndef f(x):\n    return ta.{name}(x)\n"), name)
+            self.assertTrue(template_apply_writer_uses(f"from .templates_apply import {name}\n"), name)
+        self.assertTrue(template_apply_writer_uses("import vbear.templates_apply\nvbear.templates_apply.begin_apply('claude')\n"))
+        self.assertTrue(template_apply_writer_uses("from .templates_apply import *\n"))
+        self.assertTrue(template_apply_writer_uses("from . import templates_apply\nf = getattr(templates_apply, name)\n"))
+        self.assertTrue(template_apply_writer_uses("from . import templates_apply\ntemplates_apply.applies_store.save({})\n"))
+
+    def test_reading_the_record_and_asking_the_rules_is_allowed(self):
+        source = ("from . import templates_apply\ndef f(a, facts):\n    return (templates_apply.read_applies(), templates_apply.public(a, {}),\n"
+                  "            templates_apply.undo_plan(a, facts), templates_apply.fingerprint('card', {}), templates_apply.card_mentions('/x', []))\n")
+        self.assertEqual(template_apply_writer_uses(source), [])
+
+    # -- no exception to 13b was made: nothing of the template modules may call a write function of the cards, the skills, the routines --
+    def test_the_notebook_has_no_exception_it_calls_no_write_function_of_anything_it_keeps_a_record_of(self):
+        path = PACKAGE / "templates_apply.py"
+        source = path.read_text(encoding="utf-8")
+        self.assertEqual(card_writer_calls(source, path.name), [])
+        self.assertEqual(skillbook_writer_uses(source, path.name), [])
+        self.assertEqual(routine_writer_uses(source, path.name), [])
+        self.assertEqual(memory_writer_uses(source, path.name), [])
+        self.assertEqual(shared_writer_uses(source, path.name), [])
+        self.assertEqual(imports_of(source, ("skillbook", "routines", "routine_rules", "routine_runner", "memory", "shared_folder", "agent_launch",
+                                             "groups", "dispatch", "chief", "autonomy", "daily_limit", "server")), [])
+        self.assertEqual(scan_source(source, path.name), [], "the notebook meets every rule of the others")
+
+    def test_no_home_of_a_write_function_names_a_template_module_and_the_lists_of_writers_are_whole(self):
+        for homes in (MEMORY_WRITER_HOMES, SHARED_WRITER_HOMES, SKILLBOOK_WRITER_HOMES, ROUTINE_WRITER_HOMES, ROUTINE_RUN_HOMES):
+            self.assertFalse({h for h in homes if h.startswith("template")}, homes)
+        self.assertEqual(CARD_WRITERS, {"save_profile", "create_profile", "delete_profile", "duplicate_profile", "set_profile_enabled"})
+        self.assertEqual(SKILLBOOK_WRITERS, {"add", "edit", "delete", "store"})
+        self.assertEqual(ROUTINE_WRITERS, {"create", "edit", "set_enabled", "delete", "set_settings", "store", "settings_store"})
+        self.assertGreaterEqual(set(TEMPLATE_BANNED_IMPORTS), {"chat_service", "meeting_runner", "board_engine", "headless_cli", "auto_continue", "keep_awake", "scan",
+                                                               "urllib", "http", "socket"})
+
+    def test_the_same_calls_in_a_template_module_or_any_other_module_are_still_caught(self):
+        for label in ("templates_apply.py", "templates.py", "templates_mine.py", "groups.py", "chief.py", "dispatch.py", "routine_runner.py", "memory.py"):
+            self.assertTrue(card_writer_calls("def f(ap):\n    return ap.save_profile(None, {})\n", label), label)
+            self.assertTrue(card_writer_calls("def f(ap):\n    return ap.delete_profile('x')\n", label), label)
+            self.assertTrue(skillbook_writer_uses("from . import skillbook\nskillbook.add({})\n", label), label)
+            self.assertTrue(skillbook_writer_uses("from . import skillbook\nskillbook.delete('k')\n", label), label)
+            self.assertTrue(routine_writer_uses("from . import routines\nroutines.create({}, [])\n", label), label)
+            self.assertTrue(routine_writer_uses("from . import routines\nroutines.delete('r')\n", label), label)
+        for label in ("templates_apply.py", "groups.py"):
+            self.assertTrue(imports_of("from . import skillbook\n", ("skillbook",), label))
+            self.assertIn("skillbook", " | ".join(scan_source("from . import skillbook\n", label)))
+
+    # -- the apply and the undo of the console switch nothing on and start nothing --
+    def test_the_apply_and_the_undo_name_no_switch_no_chat_no_launch_no_configuration_and_no_ledger(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        found = functions_named(source, TEMPLATE_APPLY_FUNCTIONS)
+        self.assertEqual({f.name for f in found}, set(TEMPLATE_APPLY_FUNCTIONS), "the functions the rule is about are there")
+        problems = []
+        for fn in found:
+            for node in ast.walk(fn):
+                name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+                if name in TEMPLATE_APPLY_NEVER:
+                    problems.append(f"{fn.name}:{node.lineno}: names {name}")
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Call):
+                    call = node.value.func
+                    if isinstance(call, ast.Attribute) and call.attr == "chat_service" and node.attr != "cards":
+                        problems.append(f"{fn.name}:{node.lineno}: asks the chat service for {node.attr}")
+                if isinstance(node, ast.Attribute) and node.attr in ("save", "set_conf") and isinstance(node.value, ast.Name) and node.value.id in ("cfg", "config"):
+                    problems.append(f"{fn.name}:{node.lineno}: writes the configuration")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_each_ordinary_write_function_is_called_in_the_console_by_the_apply_and_by_the_undo(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+
+        def attrs(name):
+            (fn,) = functions_named(source, (name,))
+            return {(n.value.id, n.attr) for n in ast.walk(fn) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
+        self.assertIn(("agent_profiles", "save_profile"), attrs("_save_card"))
+        self.assertIn(("skillbook_mod", "add"), attrs("_templates_make"))
+        self.assertIn(("routines_mod", "create"), attrs("_templates_make"))
+        self.assertIn(("self", "_save_card"), attrs("_templates_make"))
+        undo = attrs("_templates_undo")
+        self.assertTrue({("routines_mod", "delete"), ("skillbook_mod", "delete"), ("agent_profiles", "delete_profile")} <= undo)
+        for name in TEMPLATE_APPLY_FUNCTIONS:
+            self.assertFalse({a for a in attrs(name) if a[1] in ("edit", "set_enabled", "duplicate_profile", "create_profile", "set_profile_enabled")
+                              and a[0] in ("routines_mod", "skillbook_mod", "agent_profiles")}, name)
+
+    def test_a_routine_is_made_only_with_the_template_modules_body_which_says_false(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        for fn in functions_named(source, TEMPLATE_APPLY_FUNCTIONS):
+            self.assertEqual(enabled_not_false(ast.unparse(fn), fn.name), [], fn.name)
+            self.assertNotIn("launch_mode", ast.unparse(fn))
+            self.assertNotIn("equipped_skill_ids", ast.unparse(fn))
+
+
+# 13e. (P45-3) who may save, rename or delete the person's own team templates: the module's writers, and the only modules that may name them
+TEMPLATE_MINE_MODULE = "templates_mine"
+TEMPLATE_MINE_WRITERS = {"save_mine", "rename_mine", "delete_mine", "mine_store"}
+TEMPLATE_MINE_HOMES = {"server.py", "templates_mine.py"}          # the routes, and the module itself
+
+
+def template_mine_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, TEMPLATE_MINE_MODULE, TEMPLATE_MINE_WRITERS)
+
+
+class TemplateMineRules(unittest.TestCase):
+    """P45-3, rule 13e: only the browser's /api/templates/mine routes of the console save, rename or delete a team template of the person's own.
+    What the saved copy holds (and what it never holds), and that nothing is written in the other places, is in tests/test_templates_mine.py and
+    tests/test_templates_mine_api.py; the module being under rules 1 to 13c is TemplateRules."""
+
+    def test_the_module_is_scanned_and_named_in_the_table(self):
+        self.assertIn("templates_mine.py", [p.name for p in scanned_files()])
+        self.assertIn(TEMPLATE_MINE_MODULE, TEMPLATE_MODULES)
+
+    def test_only_the_console_and_the_module_itself_name_a_writer(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in TEMPLATE_MINE_HOMES:
+                problems += template_mine_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_every_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        calls = {m.group(1) for m in re.finditer(r"templates_mine_mod\.(\w+)", source)}
+        self.assertEqual(calls & (TEMPLATE_MINE_WRITERS - {"mine_store"}), TEMPLATE_MINE_WRITERS - {"mine_store"})
+        self.assertNotEqual(template_mine_writer_uses(source, "server.py"), [])
+
+    def test_the_module_writes_no_card_no_skill_no_routine_and_no_config(self):
+        tree = ast.parse((PACKAGE / "templates_mine.py").read_text(encoding="utf-8"))
+        names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        for banned in ("save_profile", "delete_profile", "duplicate_profile", "set_enabled", "send", "send_for_routine", "answer", "set_conf",
+                       "write_private", "Popen", "urlopen", "connect"):
+            self.assertNotIn(banned, names, banned)
+        modules = _module_of_all(tree)
+        for banned in ("skillbook", "routines", "memory", "shared_folder", "chat_service", "urllib", "http", "socket", "subprocess", "shutil", "zipfile"):
+            self.assertFalse([m for m in modules if m.split(".")[0] == banned], banned)
+
+    def test_the_module_has_no_export_import_upload_or_download(self):
+        tree = ast.parse((PACKAGE / "templates_mine.py").read_text(encoding="utf-8"))
+        defined = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        self.assertEqual({n for n in defined if re.search(r"export|import|upload|download|send|fetch", n)}, set())
+
+    # the made-up sources: each part fires
+    def test_naming_a_writer_from_another_module_is_caught(self):
+        for source in ("from . import templates_mine\ndef f(b):\n    return templates_mine.save_mine(b)\n",
+                       "from . import templates_mine as m\ndef f(t):\n    return m.delete_mine(t, {})\n",
+                       "from .templates_mine import rename_mine\n", "from vbear.templates_mine import mine_store\n",
+                       "from . import templates_mine as m\nx = m.mine_store\n", "from .templates_mine import *\n",
+                       "from . import templates_mine as m\nf = getattr(m, 'save_mine')\n"):
+            self.assertTrue(template_mine_writer_uses(source), source)
+        self.assertEqual(template_mine_writer_uses("from . import templates_mine as m\nx = m.read_mine()\n"), [], "reading is not writing")
+        self.assertEqual(template_mine_writer_uses("from . import templates as t\nx = t.plan\n"), [])
 
 
 class AutoContinueRules(unittest.TestCase):

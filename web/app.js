@@ -6422,7 +6422,9 @@ async function viewTeam(params = {}) {
       on: { click: needCatalog(() => openCardWizard({ catalog, profiles, existing: null, onSaved: refresh })) } }, "＋ 新角色卡"),
     !hasOwnCard && profilesRes.ok
       ? el("button", { type: "button", class: "btn", "data-pool": "starter",
-        on: { click: needCatalog(() => openStarterDeck({ catalog, profiles, onSaved: refresh })) } }, "用起手牌組開始") : null);
+        on: { click: needCatalog(() => openStarterDeck({ catalog, profiles, onSaved: refresh })) } }, "用起手牌組開始") : null,
+    !hasOwnCard && profilesRes.ok
+      ? el("a", { class: "btn", href: "#/templates", "data-pool": "team-templates" }, "用團隊範本開始") : null);
 
   const shown = filter ? profiles.filter((p) => p.model && p.model.tool === filter) : profiles;
   // a camp is in the bar when the catalog offers it or a card names it (a hidden tool that is switched off shows only for its cards)
@@ -12556,6 +12558,7 @@ async function route() {
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
     else if (top === "routines") await viewRoutines();
+    else if (top === "templates") await viewTemplates();
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();
@@ -18601,6 +18604,608 @@ async function bootstrap() {
   route();
 }
 bootstrap();
+
+// ---------- team templates (v0.19, P45-1) ----------
+// 團隊範本 (ADR 0011): a set of ready-made employees, skills and routines. The person ticks the ones they want (from one template or several),
+// looks at the preview, and presses 套用 (P45-2). This block reads GET /api/templates and asks POST /api/templates/preview, which only plans;
+// the page itself writes nothing: 套用, 復原這次套用 (P45-2) and 存成團隊範本, 改名, 刪除 (P45-3) are presses of the person that the server
+// answers, and nothing here makes a card, a skill or a routine by itself. Names and texts are set with textContent only (el() children).
+const TPL_LINES = [
+  "團隊範本是一組現成的員工、技能和例行工作。勾你要的，按「預覽並套用」看清楚再套用。",
+  "套用不用 AI、不花錢。員工一律用安全模式，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；例行工作建好是關著的。",
+  "每次套用都可以「復原這次套用」：只刪這次建的、你沒改過也沒用過的，改過或用過的會留著並告訴你。團隊範本不會改或刪你原本就有的東西。",
+  "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
+];
+const TPL_CEO_LINE = "要用幕僚長派工，還需要一位 CEO（到角色卡池建）。";
+const TPL_PREVIEW_LINES = {
+  safe: "員工一律用安全模式：跑指令、改檔案照舊每次都問你。團隊範本不會建出完整模式的員工。",
+  memory: "記憶照你平常的設定（Claude Code 的員工帶記憶，Codex 的員工不帶，因為記憶會送到 OpenAI）；共用資料夾都關著。要改，到記憶頁或共用資料夾頁一位一位打開。",
+  off: "例行工作建好是關著的，要你自己到例行工作頁打開。",
+  free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。",
+  codex: "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  notReady: "這個 AI 工具還沒準備好：員工會建好，但要先到開始設定登入才能聊天。",
+};
+const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex" };
+const TPL_KINDS = [["cards", "員工"], ["skills", "技能"], ["routines", "例行工作"]];
+const TPL_ONE = { card: "員工", skill: "技能", routine: "例行工作" };
+const TPL_STATE_TEXT = { done: "完成", partial: "建到一半停下了", interrupted: "中斷了", applying: "進行中" };
+const TPL_INTERRUPTED = "這次套用中斷了，最後一個技能或例行工作可能已經建好但沒記到，復原不會刪它；請到技能頁、例行工作頁看看。";
+const TPL_APPLIES_LIMIT = "只能復原最近 50 次套用；更早的東西照樣留著，要刪請到各自的頁面。";
+const TPL_APPLIED_LINE = "例行工作都是關著的，要用的話到例行工作頁打開。不滿意的話，到頁面下面的套用紀錄按「復原這次套用」。";
+
+function tplId(ref) { return `${ref.template}/${ref.key}`; }
+function tplSelection() { return { cards: new Map(), skills: new Map(), routines: new Map() }; }
+function tplCounts(sel) { return { cards: sel.cards.size, skills: sel.skills.size, routines: sel.routines.size }; }
+function tplCountText(sel) {
+  const c = tplCounts(sel);
+  return `已勾：${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`;
+}
+// The request of the preview and (P45-2) of the apply: the same body. `name` and `to` are sent only when the person changed them.
+function tplRequestBody(sel, opts) {
+  const from = (r) => ({ template: r.from.template, key: r.from.key });
+  const body = {
+    tool: opts.tool,
+    cards: Array.from(sel.cards.values()).map((c) => (c.name === undefined ? { from: from(c) } : { from: from(c), name: c.name })),
+    skills: Array.from(sel.skills.values()).map((s) => ({ from: from(s) })),
+    routines: Array.from(sel.routines.values()).map((r) => (r.to === undefined ? { from: from(r) } : { from: from(r), to: r.to })),
+  };
+  if (opts.confirm === true) body.confirm_warning = true;
+  return body;
+}
+// Tick or untick one item. A routine that was handed to a card that is no longer ticked goes back to the template's own choice.
+function tplSetPick(sel, kind, ref, on) {
+  const id = tplId(ref);
+  if (on) { if (!sel[kind].has(id)) sel[kind].set(id, { from: { template: ref.template, key: ref.key } }); return; }
+  sel[kind].delete(id);
+  if (kind === "cards") sel.routines.forEach((r) => { if (r.to && r.to.card && tplId(r.to.card) === id) delete r.to; });
+}
+function tplScheduleText(r) {
+  const days = r.days.length === 7 ? "每天" : `每週${r.days.map((d) => ROUTINE_DAYS[d]).join("、")}`;
+  return `${days}　${r.times.join("、")}`;
+}
+function tplModelText(card) { return card.claude_model ? `建議模型 ${card.claude_model}` : ""; }
+
+// One team template as a block: its name, what it is for, and three rows of tick boxes. `ctx.sel` is the selection of the page; `ctx.boxes` collects
+// the boxes so that one call of `ctx.sync()` can redraw their state and the line at the bottom.
+function templatesBlock(template, ctx) {
+  const sel = ctx.sel;
+  const cardName = (key) => (template.cards.find((c) => c.key === key) || {}).name;
+  const line = (kind, item) => {
+    const ref = { template: template.id, key: item.key };
+    const box = el("input", { type: "checkbox", "data-tpl-pick": kind, "data-tpl-template": template.id, "data-tpl-key": item.key,
+      "aria-label": `勾選${item.name}`,
+      on: { change: (e) => { tplSetPick(sel, kind, ref, e.target.checked); ctx.sync(); } } });
+    box.checked = sel[kind].has(tplId(ref));
+    ctx.boxes.push({ box, kind, id: tplId(ref) });
+    const facts = kind === "cards"
+      ? [el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定"), " ", el("span", { class: "small muted" }, tplModelText(item))]
+      : kind === "routines"
+        ? [el("span", { class: "small muted" }, `${tplScheduleText(item)}　交給：${item.who ? cardName(item.who) || "（這個團隊範本裡沒有）" : "套用時再選"}`)]
+        : [];
+    const words = kind === "cards" ? (item.instructions || "（沒有固定指示）") : item.text;
+    return el("li", { class: "tpl-item", "data-tpl-item": kind, "data-tpl-key": item.key },
+      el("label", { class: "tpl-pick" }, box, " ", el("strong", null, item.name), " ", facts),
+      el("details", { class: "tpl-more" }, el("summary", { class: "small" }, "看全文"), el("p", { class: "small tpl-text", "data-tpl-text": kind }, words)));
+  };
+  const all = (on) => {
+    TPL_KINDS.forEach(([kind]) => template[kind].forEach((item) => tplSetPick(sel, kind, { template: template.id, key: item.key }, on)));
+    ctx.sync();
+  };
+  return el("section", { class: "panel pad tpl-block", "data-templates": "block", "data-template-id": template.id },
+    el("h2", null, template.name, " ", template.builtin ? el("span", { class: "tag" }, "VBear 內建") : el("span", { class: "tag mine" }, "你存的")),
+    template.about ? el("p", { class: "small muted", "data-templates": "about" }, template.about) : null,
+    el("div", { class: "row" },
+      el("button", { class: "btn small", type: "button", "data-tpl-action": "all", on: { click: () => all(true) } }, "全選"), " ",
+      el("button", { class: "btn small", type: "button", "data-tpl-action": "none", on: { click: () => all(false) } }, "全不選"), " ",
+      templatesBlockActions(template, ctx)),
+    TPL_KINDS.map(([kind, word]) => (template[kind].length
+      ? el("div", { class: "tpl-group", "data-templates": kind }, el("h3", null, word), el("ul", { class: "tpl-list" }, template[kind].map((item) => line(kind, item))))
+      : null)));
+}
+
+// ---- the person's own team templates (P45-3): 存成團隊範本, 你現在的, 改名, 刪除 ----
+// Saving posts to /api/templates/mine with what is ticked in the blocks and what is ticked in 「你現在的」; the server keeps a copy.
+const TPL_SAVE_LINES = [
+  "存的是現在這一刻的複本：之後你改了原本的員工、技能或例行工作，這個團隊範本不會跟著變。",
+  "員工只存名字、職位、你寫在卡上的固定指示和 Claude 的模型。不存 AI 工具、技能卡、記憶、共用資料夾和聊天紀錄；完整模式的員工存下來也不帶出發模式，套用時一律是安全模式。",
+  "例行工作存名稱、內容、星期和時間，還有交給誰（那位員工也一起存才有，沒有的話套用時再選）；存下來沒有開關，套用時一律是關著的。技能存名稱和內容。",
+  "存之前每段字都會用和記憶、技能同一組規則檢查：有金鑰、密碼這類字不能存，像是叫員工不問你就做事的字要你多確認一次。",
+  "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
+];
+const TPL_NOW_LINE = "這一區只給「存成團隊範本」用：這些已經在你這裡了，套用時不會再建一次。";
+const TPL_NOW_KEY = { cards: "profile_id", skills: "skill_id", routines: "routine_id" };
+
+// What the person ticked in 「你現在的」, as ids; and the listeners that redraw the buttons whenever the page's boxes change.
+function tplNowState(ctx) {
+  if (!ctx.now) {
+    ctx.now = { cards: new Set(), skills: new Set(), routines: new Set(), listeners: [] };
+    const base = ctx.sync;
+    ctx.sync = () => { base(); ctx.now.listeners.forEach((f) => f()); };
+  }
+  return ctx.now;
+}
+function tplSaveItems(ctx) {
+  const all = (ctx.data.builtin || []).concat(ctx.data.mine || []);
+  const now = tplNowState(ctx);
+  const out = {};
+  TPL_KINDS.forEach(([kind]) => {
+    const rows = [];
+    ctx.sel[kind].forEach((r) => {
+      const template = all.find((x) => x.id === r.from.template);
+      const item = template ? (template[kind] || []).find((x) => x.key === r.from.key) : null;
+      rows.push({ body: { from: { template: r.from.template, key: r.from.key } }, name: item ? item.name : r.from.key });
+    });
+    const have = (ctx.data.current && ctx.data.current[kind]) || [];
+    now[kind].forEach((id) => {
+      const item = have.find((x) => x.id === id);
+      rows.push({ body: { [TPL_NOW_KEY[kind]]: id }, name: item ? item.name : id });
+    });
+    out[kind] = rows;
+  });
+  return out;
+}
+function tplSaveCount(ctx) {
+  const items = tplSaveItems(ctx);
+  return { cards: items.cards.length, skills: items.skills.length, routines: items.routines.length };
+}
+function tplCanSave(ctx) {
+  const c = tplSaveCount(ctx);
+  return ctx.data.mine_readable !== false && c.cards + c.skills + c.routines > 0;
+}
+function tplReloadHere(ctx) { if (typeof location !== "undefined" && location.hash === "#/templates") ctx.reload(); }
+
+// The buttons of a block of the person's own: 改名 and 刪除. A built-in block has none.
+function templatesBlockActions(template, ctx) {
+  if (template.builtin) return null;
+  return el("span", { "data-templates": "mine-actions" },
+    el("button", { class: "btn small", type: "button", "data-tpl-action": "rename", "data-tpl-target": template.id, on: { click: () => openTemplatesRename(template, ctx) } }, "改名"), " ",
+    el("button", { class: "btn small", type: "button", "data-tpl-action": "delete", "data-tpl-target": template.id, on: { click: async () => {
+      if (!(await confirmInPage(`刪除「${template.name}」`, "只刪這個團隊範本。用它建過的員工、技能、例行工作，和它是從哪裡存來的，都不會動。", "刪除"))) return;
+      try { await api.post(`/api/templates/mine/${encodeURIComponent(template.id)}/delete`, {}); toast("已刪除"); tplReloadHere(ctx); }
+      catch (e) { toast("刪不了：" + e.message); }
+    } } }, "刪除"));
+}
+
+// 「你現在的」: the employees, skills and routines the person has now. Only for saving: they can not be ticked for applying.
+function templatesMineSection(ctx) {
+  const now = tplNowState(ctx);
+  const have = ctx.data.current || { cards: [], skills: [], routines: [] };
+  const line = (kind, item) => {
+    const box = el("input", { type: "checkbox", "data-tpl-now": kind, "data-tpl-id": item.id, "aria-label": `勾選${item.name}（存成團隊範本用）`,
+      on: { change: (e) => { if (e.target.checked) now[kind].add(item.id); else now[kind].delete(item.id); ctx.sync(); } } });
+    box.checked = now[kind].has(item.id);
+    return el("li", { class: "tpl-item", "data-tpl-now-item": kind },
+      el("label", { class: "tpl-pick" }, box, " ", el("strong", null, item.name), " ",
+        kind === "cards" ? el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定") : null));
+  };
+  const empty = TPL_KINDS.every(([kind]) => (have[kind] || []).length === 0);
+  const count = el("span", { class: "small", "data-templates": "now-count" });
+  const button = el("button", { class: "btn small", type: "button", "data-tpl-action": "save-now", on: { click: () => openTemplatesSave(ctx) } }, "存成團隊範本");
+  const redraw = () => {
+    count.textContent = `你現在的，已勾：${now.cards.size} 位員工、${now.skills.size} 個技能、${now.routines.size} 件例行工作`;
+    button.disabled = !tplCanSave(ctx);
+  };
+  now.listeners.push(redraw);
+  redraw();
+  return el("section", { class: "panel pad tpl-block", "data-templates": "now" },
+    el("h2", null, "你現在的"),
+    el("p", { class: "small muted", "data-templates": "now-line" }, TPL_NOW_LINE),
+    empty ? el("p", { class: "small muted", "data-templates": "now-empty" }, "你現在還沒有員工、技能或例行工作。") : null,
+    TPL_KINDS.map(([kind, word]) => ((have[kind] || []).length
+      ? el("div", { class: "tpl-group", "data-templates": `now-${kind}` }, el("h3", null, word), el("ul", { class: "tpl-list" }, have[kind].map((item) => line(kind, item))))
+      : null)),
+    el("div", { class: "row" }, count, " ", button));
+}
+
+// The dialog shared by the two ways in. Posts what is ticked; on 409 shows what needs a second yes; on success keeps the dialog open
+// to say what was saved and what was left out, and reloads the page behind it.
+function openTemplatesSave(ctx) {
+  const items = tplSaveItems(ctx);
+  const limits = ctx.data.limits || {};
+  const per = limits.per_template || { cards: 12, skills: 24, routines: 12 };
+  const state = { confirm: false, error: "", warn: null, done: null, busy: false };
+  const titleId = "tpl-save-title";
+  const input = el("input", { type: "text", maxlength: String(limits.max_name || 40), "data-tpl-save": "name", "aria-label": "團隊範本的名稱", placeholder: "取一個名字" });
+  const bodyBox = el("div", { "data-templates": "save-body" });
+  const foot = el("div", { class: "modal-actions", "data-templates": "save-foot" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "save" },
+    el("div", { class: "modal-box", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
+      el("h2", { id: titleId, tabindex: "-1" }, "存成團隊範本"), bodyBox, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  const request = (confirm) => {
+    const body = { name: input.value.trim() };
+    TPL_KINDS.forEach(([kind]) => { if (items[kind].length) body[kind] = items[kind].map((r) => r.body); });
+    if (confirm) body.confirm_warning = true;
+    return body;
+  };
+  const whereOf = (kind, index) => {                         // the item a refusal or a warning points at, by its place in the request (the server holds no name)
+    if (kind === "template") return "團隊範本的名稱";
+    const row = items[kind] && items[kind][index];
+    return row ? `${(TPL_KINDS.find(([k]) => k === kind) || [])[1]}：${row.name}` : "";
+  };
+  const save = async () => {
+    state.busy = true; state.error = ""; draw();
+    try {
+      state.done = await api.post("/api/templates/mine", request(state.confirm));
+      state.warn = null;
+      tplReloadHere(ctx);
+    } catch (e) {
+      state.done = null;
+      if (e.code === "confirm_warning" && e.data) {
+        state.warn = { text: (e.data.warn_text || [e.message]).join(" "), where: (e.data.items || []).map((w) => whereOf(w.kind, w.index)).filter(Boolean).join("、") };
+        state.confirm = false; state.error = "";
+      } else { state.warn = null; state.error = e.message; state.where = e.data && e.data.kind !== undefined ? whereOf(e.data.kind, e.data.index) : ""; }
+    }
+    state.busy = false; draw();
+  };
+  const list = (kind, word) => (items[kind].length
+    ? el("div", { "data-templates": `save-${kind}` }, el("h3", null, word),
+      el("ul", { class: "tpl-list" }, items[kind].map((r) => el("li", { "data-tpl-save-item": kind }, r.name)))) : null);
+  const draw = () => {
+    if (state.done) {
+      const t = state.done.template;
+      setKids(bodyBox,
+        notice("info", `已存成團隊範本「${t.name}」：${t.cards.length} 位員工、${t.skills.length} 個技能、${t.routines.length} 件例行工作。`),
+        (state.done.notes || []).map((n) => el("p", { class: "small", "data-tpl-save-note": n.code }, n.text)),
+        el("p", { class: "small muted" }, "要用的時候，在上面「你存的團隊範本」勾選，按「預覽並套用」。"));
+      setKids(foot, el("button", { class: "btn primary", type: "button", "data-tpl-action": "save-close", on: { click: () => close() } }, "關閉"));
+      return;
+    }
+    const kids = [
+      el("label", { class: "small" }, "名稱（1 到 40 個字）　", input),
+      el("p", { class: "small", "data-templates": "save-summary" },
+        `這次會存：${items.cards.length} 位員工、${items.skills.length} 個技能、${items.routines.length} 件例行工作。` +
+        `最多存 ${limits.max_mine || 20} 個團隊範本，一個最多 ${per.cards} 位員工、${per.skills} 個技能、${per.routines} 件例行工作。`),
+      list("cards", "員工"), list("skills", "技能"), list("routines", "例行工作")];
+    if (state.error) kids.push(notice("bad", state.error + (state.where ? `（${state.where}）` : "")));
+    if (state.warn) {
+      const box = el("input", { type: "checkbox", "data-tpl-save": "confirm", on: { change: (e) => { state.confirm = e.target.checked; draw(); } } });
+      box.checked = state.confirm === true;
+      kids.push(el("div", { class: "tpl-warn", "data-templates": "save-warn" }, notice("warn", state.warn.text), state.warn.where ? el("p", { class: "small" }, state.warn.where) : null,
+        el("label", null, box, " 我確定")));
+    }
+    kids.push(el("ul", { class: "small tpl-fixed", "data-templates": "save-fixed" }, TPL_SAVE_LINES.map((l) => el("li", null, l))));
+    setKids(bodyBox, kids);
+    const go = el("button", { class: "btn primary", type: "button", "data-tpl-action": "save-go", on: { click: save } }, "存成團隊範本");
+    go.disabled = state.busy || (state.warn !== null && state.confirm !== true);
+    setKids(foot, el("button", { class: "btn", type: "button", "data-tpl-action": "cancel", on: { click: () => close() } }, "取消"), go);
+  };
+  draw();
+  input.focus();
+  return { close, state };
+}
+
+// 改名: the name is the only thing of a saved team template that can change (to change what is in it, save a new one).
+function openTemplatesRename(template, ctx) {
+  const state = { confirm: false, error: "", warn: null, busy: false };
+  const titleId = "tpl-rename-title";
+  const input = el("input", { type: "text", maxlength: "40", value: template.name, "data-tpl-rename": "name", "aria-label": "新的名稱" });
+  input.value = template.name;
+  const bodyBox = el("div", { "data-templates": "rename-body" });
+  const foot = el("div", { class: "modal-actions" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "rename" },
+    el("div", { class: "modal-box" }, el("h2", { id: titleId, tabindex: "-1" }, "改團隊範本的名稱"), bodyBox, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  const rename = async () => {
+    state.busy = true; state.error = ""; draw();
+    try {
+      await api.post(`/api/templates/mine/${encodeURIComponent(template.id)}`, state.confirm ? { name: input.value.trim(), confirm_warning: true } : { name: input.value.trim() });
+      close(); tplReloadHere(ctx); return;
+    } catch (e) {
+      if (e.code === "confirm_warning" && e.data) { state.warn = (e.data.warn_text || [e.message]).join(" "); state.confirm = false; }
+      else { state.warn = null; state.error = e.message; }
+    }
+    state.busy = false; draw();
+  };
+  const draw = () => {
+    const kids = [el("label", { class: "small" }, "新的名稱　", input), el("p", { class: "small muted" }, "只改名稱，裡面的員工、技能和例行工作不變。")];
+    if (state.error) kids.push(notice("bad", state.error));
+    if (state.warn) {
+      const box = el("input", { type: "checkbox", "data-tpl-rename": "confirm", on: { change: (e) => { state.confirm = e.target.checked; draw(); } } });
+      box.checked = state.confirm === true;
+      kids.push(el("div", { class: "tpl-warn" }, notice("warn", state.warn), el("label", null, box, " 我確定")));
+    }
+    setKids(bodyBox, kids);
+    const go = el("button", { class: "btn primary", type: "button", "data-tpl-action": "rename-go", on: { click: rename } }, "改名");
+    go.disabled = state.busy || (state.warn !== null && state.confirm !== true);
+    setKids(foot, el("button", { class: "btn", type: "button", "data-tpl-action": "cancel", on: { click: () => close() } }, "取消"), go);
+  };
+  draw();
+  input.focus();
+  return { close, state };
+}
+
+// 套用紀錄 (P45-2): the last 50 applies, each with the button 復原這次套用 while something of it is still there.
+function tplTemplateName(ctx, id) {
+  const all = (ctx.data.builtin || []).concat(ctx.data.mine || []);
+  const found = all.find((t) => t.id === id);
+  return found ? found.name : "（團隊範本已刪除）";
+}
+function tplCountLine(c) { return `${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`; }
+function templatesAppliesSection(ctx) {
+  const applies = Array.isArray(ctx.data.applies) ? ctx.data.applies : [];
+  const row = (a) => {
+    const left = a.left.cards + a.left.skills + a.left.routines;
+    const done = a.counts.cards + a.counts.skills + a.counts.routines;
+    const items = a.items.filter((i) => i.state === "made" || i.state === "deleted").map((i) =>
+      el("li", { "data-tpl-apply-item": i.kind, "data-tpl-apply-state": i.state },
+        `${TPL_ONE[i.kind]}：${i.state === "deleted" ? "（已刪掉）" : i.name || "（已經不在了）"}　`,
+        el("span", { class: "small muted" }, `來自：${tplTemplateName(ctx, i.from.template)}`)));
+    const undo = el("button", { class: "btn small", type: "button", "data-tpl-action": "undo", "data-tpl-apply": a.id,
+      on: { click: () => openTemplatesUndo(ctx, a) } }, "復原這次套用");
+    return el("li", { class: "tpl-apply", "data-tpl-apply": a.id, "data-tpl-apply-status": a.state },
+      el("div", { class: "row" },
+        el("strong", null, fmtTime(a.at)), "　", el("span", { class: "tag" }, TPL_TOOL_LABEL[a.tool] || a.tool), "　",
+        el("span", { "data-tpl-apply-count": "yes" }, `建了 ${tplCountLine(a.counts)}`), "　",
+        el("span", { class: "small" }, TPL_STATE_TEXT[a.state] || a.state),
+        done > 0 && left === 0 ? el("span", { class: "small muted", "data-tpl-apply-undone": "yes" }, "　已復原這次套用") : null, " ",
+        a.state !== "applying" && left > 0 ? undo : null),
+      a.state === "interrupted" ? el("p", { class: "small muted", "data-tpl-apply-note": "interrupted" }, TPL_INTERRUPTED) : null,
+      items.length ? el("details", { class: "tpl-more" }, el("summary", { class: "small" }, "看這次建了什麼"), el("ul", { class: "tpl-list" }, items)) : null);
+  };
+  return el("section", { class: "panel pad tpl-applies", "data-templates": "applies" },
+    el("h2", null, "套用紀錄"),
+    el("p", { class: "small muted", "data-templates": "applies-limit" }, TPL_APPLIES_LIMIT),
+    applies.length ? el("ul", { class: "tpl-list", "data-templates": "applies-list" }, applies.map(row))
+      : el("p", { class: "small muted", "data-templates": "applies-none" }, "還沒有套用過。"));
+}
+
+// 復原這次套用: first the list (what will be deleted, what stays and why, what is gone), then 刪掉這些. Names and reasons are shown as text.
+function openTemplatesUndo(ctx, apply) {
+  const state = { preview: null, error: "", busy: false, result: null };
+  const titleId = "tpl-undo-title";
+  const bodyBox = el("div", { "data-templates": "undo-body" });
+  const foot = el("div", { class: "modal-actions", "data-templates": "undo-foot" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "undo" },
+    el("div", { class: "modal-box", style: "max-width: 680px; max-height: 88vh; overflow-y: auto;" },
+      el("h2", { id: titleId, tabindex: "-1" }, "復原這次套用"), bodyBox, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  const named = (x) => `${TPL_ONE[x.kind]}：${x.name || "（沒有名字）"}`;
+  const list = (key, rows, text) => (rows.length
+    ? el("div", null, el("ul", { class: "tpl-list", "data-templates": key }, rows.map((x) =>
+      el("li", { "data-tpl-undo": key, "data-tpl-undo-kind": x.kind }, text(x)))))
+    : null);
+  const draw = () => {
+    const p = state.preview;
+    const kids = [];
+    if (state.error) kids.push(notice("bad", state.error));
+    if (state.result) {
+      const r = state.result;
+      kids.push(el("p", { "data-templates": "undo-summary" }, `已刪掉 ${r.deleted.length} 項；留著 ${r.kept.length} 項。`),
+        r.deleted.length ? el("div", null, el("h3", null, "已刪掉"), list("undo-deleted", r.deleted, named)) : null,
+        r.kept.length ? el("div", null, el("h3", null, "留著"), list("undo-kept", r.kept, (x) => `${named(x)}　${x.text}`)) : null);
+      setKids(bodyBox, kids);
+      setKids(foot, el("button", { class: "btn primary", type: "button", "data-tpl-action": "undo-done", on: { click: () => { close(); ctx.reload(); } } }, "完成"));
+      return;
+    }
+    if (p) {
+      kids.push(
+        p.delete.length ? el("div", null, el("h3", null, "會刪掉"), list("undo-delete", p.delete, named)) : el("p", { "data-templates": "undo-nothing" }, "沒有可以刪的。"),
+        p.keep.length ? el("div", null, el("h3", null, "會留著"), list("undo-keep", p.keep, (x) => `${named(x)}　${x.text}`)) : null,
+        p.gone.length ? el("div", null, el("h3", null, "已經不在了"), list("undo-gone", p.gone, (x) => `${named(x)}　你自己刪掉了`)) : null,
+        p.notes.length ? el("ul", { class: "small tpl-fixed", "data-templates": "undo-notes" }, p.notes.map((n) => el("li", { "data-tpl-undo-note": n.code }, n.text))) : null);
+    } else if (!state.error) kids.push(el("p", { class: "small muted" }, "整理中…"));
+    setKids(bodyBox, kids);
+    setKids(foot,
+      el("button", { class: "btn", type: "button", "data-tpl-action": "undo-cancel", on: { click: () => close() } }, "取消"),
+      el("button", { class: "btn primary", type: "button", "data-tpl-action": "undo-confirm", disabled: !p || p.delete.length === 0 || state.busy,
+        on: { click: () => press() } }, "刪掉這些"));
+  };
+  const press = async () => {
+    if (state.busy || !state.preview) return;
+    state.busy = true; state.error = "";
+    draw();
+    try { state.result = await api.post(`/api/templates/applies/${encodeURIComponent(apply.id)}/undo`, { delete: state.preview.delete.map((d) => d.id) }); }
+    catch (e) { state.error = e.message; }
+    state.busy = false;
+    draw();
+  };
+  draw();
+  api.post(`/api/templates/applies/${encodeURIComponent(apply.id)}/undo-preview`, {})
+    .then((res) => { state.preview = res; draw(); })
+    .catch((e) => { state.error = e.message; draw(); });
+  return { close, state };
+}
+
+// The button 存成團隊範本 beside 預覽並套用: for what is ticked in the blocks and in 「你現在的」.
+function templatesSaveAction(ctx) {
+  const now = tplNowState(ctx);
+  const button = el("button", { class: "btn", type: "button", "data-tpl-action": "save", on: { click: () => openTemplatesSave(ctx) } }, "存成團隊範本");
+  const redraw = () => { button.disabled = !tplCanSave(ctx); };
+  now.listeners.push(redraw);
+  redraw();
+  return button;
+}
+
+// The 套用 button of the preview (P45-2). `box`: { ctx, state, preview, body(), close, redraw }; it can be pressed only when `preview.ok` says nothing stops the
+// apply. One press posts the same body as the preview; the answer (made, or stopped in the middle) is shown in the same dialog.
+function templatesApplyAction(box) {
+  const { state, preview } = box;
+  const can = Boolean(preview) && preview.ok === true && !state.busy && !state.applying;
+  return el("span", { "data-templates": "apply-slot" },
+    el("button", { class: "btn primary", type: "button", disabled: !can, "data-tpl-action": "apply", on: { click: () => templatesApplyPress(box) } },
+      state.applying ? "套用中…" : "套用"));
+}
+async function templatesApplyPress(box) {
+  const { state } = box;
+  if (state.applying || state.done || !state.preview || state.preview.ok !== true) return;
+  state.applying = true; state.error = "";
+  box.redraw();
+  try {
+    const res = await api.post("/api/templates/apply", box.body());
+    state.done = { partial: false, apply: res.apply, text: `已建好：${tplCountLine(res.apply.counts)}。${TPL_APPLIED_LINE}` };
+  } catch (e) {
+    if (e.code === "template_partial" && e.data && e.data.apply) state.done = { partial: true, apply: e.data.apply, text: e.message };
+    else state.error = e.message;
+  }
+  state.applying = false;
+  box.redraw();
+}
+
+function openTemplatesPreview(ctx) {
+  const data = ctx.data;
+  const state = { tool: data.tools && data.tools.default === "codex" ? "codex" : "claude", confirm: false, preview: null, error: "", busy: false, applying: false, done: null };
+  const titleId = "tpl-preview-title";
+  const bodyBox = el("div", { "data-templates": "preview-body" });
+  const foot = el("div", { class: "modal-actions", "data-templates": "preview-foot" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "preview" },
+    el("div", { class: "modal-box", style: "max-width: 720px; max-height: 88vh; overflow-y: auto;" },
+      el("h2", { id: titleId, tabindex: "-1" }, "預覽這次套用"), bodyBox, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  let asked = 0;
+  const ask = async () => {
+    if (state.applying || state.done) return;
+    const mine = ++asked;
+    state.busy = true;
+    draw();
+    try {
+      const res = await api.post("/api/templates/preview", tplRequestBody(ctx.sel, state));
+      if (mine !== asked) return;
+      state.preview = res.preview; state.error = "";
+    } catch (e) {
+      if (mine !== asked) return;
+      state.preview = null; state.error = e.message;
+    }
+    state.busy = false;
+    draw();
+  };
+  const toolRow = () => {
+    const tools = data.tools || {};
+    const radio = (tool) => {
+      const input = el("input", { type: "radio", name: "tpl-tool", value: tool, "data-tpl-tool": tool, disabled: state.applying,
+        on: { change: () => { state.tool = tool; ask(); } } });
+      input.checked = state.tool === tool;
+      return el("label", { class: "tpl-radio" }, input, " ", TPL_TOOL_LABEL[tool]);
+    };
+    const chosen = tools[state.tool];
+    return el("div", { class: "tpl-tool", "data-templates": "tool" },
+      el("span", { "data-templates": "tool-label" }, "這次的員工都用："), " ", radio("claude"), "　", radio("codex"),
+      chosen && chosen.ready === false
+        ? el("p", { class: "small", "data-templates": "tool-not-ready" }, TPL_PREVIEW_LINES.notReady, chosen.why ? ` ${chosen.why}` : "") : null);
+  };
+  const cardLine = (c) => {
+    const input = el("input", { type: "text", maxlength: "40", value: c.name, "data-tpl-name": tplId(c.from), "aria-label": `員工的名字：${c.default_name}`,
+      on: { change: (e) => { const entry = ctx.sel.cards.get(tplId(c.from)); if (entry) { entry.name = e.target.value; ask(); } } } });
+    input.value = c.name;
+    return el("li", { "data-tpl-preview": "card" }, input, " ",
+      el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || "未指定"), " ",
+      el("span", { class: "small muted" }, `${TPL_TOOL_LABEL[state.preview.tool]}${c.model_id ? `　${c.model_id}` : "　工具自己的預設模型"}`),
+      c.instructions_head ? el("p", { class: "small tpl-text", "data-tpl-preview": "head" }, c.instructions_head + (c.instructions_cut ? "…" : "")) : null,
+      c.same_in_batch ? el("p", { class: "small muted", "data-tpl-preview": "same-batch" }, `這次有不只一位叫「${c.name}」，只是提醒。`) : null,
+      c.same_existing ? el("p", { class: "small muted", "data-tpl-preview": "same-existing" }, `你已經有一位叫「${c.name}」，只是提醒。`) : null);
+  };
+  const assigneeValue = (a) => (a.kind === "card" ? `card:${tplId(a.card)}` : a.kind === "existing" ? `existing:${a.profile_id}` : "");
+  const routineLine = (r) => {
+    const choices = state.preview.choices;
+    const pick = el("select", { "data-tpl-to": tplId(r.from), "aria-label": `例行工作「${r.name}」交給誰`,
+      on: { change: (e) => {
+        const entry = ctx.sel.routines.get(tplId(r.from));
+        const v = String(e.target.value || "");
+        if (!entry) return;
+        if (v.startsWith("card:")) { const [template, key] = v.slice(5).split("/"); entry.to = { card: { template, key } }; }
+        else if (v.startsWith("existing:")) entry.to = { profile_id: v.slice(9) };
+        else delete entry.to;
+        ask();
+      } } },
+      el("option", { value: "" }, r.assignee.kind ? "（照團隊範本的安排）" : "（還沒選）"),
+      choices.cards.map((c) => el("option", { value: `card:${tplId(c)}` }, `這次勾的員工：${c.name}`)),
+      choices.existing.map((c) => el("option", { value: `existing:${c.profile_id}` }, `你現在的員工：${c.name}`)));
+    pick.value = assigneeValue(r.assignee);
+    return el("li", { "data-tpl-preview": "routine" }, el("strong", null, r.name), "　", el("span", { class: "small muted" }, tplScheduleText(r)), "　交給 ", pick,
+      r.assignee.name ? el("span", { class: "small", "data-tpl-preview": "to-name" }, ` ${r.assignee.name}`) : null);
+  };
+  const afterLine = (after) =>
+    `套用後：員工 ${after.cards.after}/${after.cards.max}、技能 ${after.skills.after}/${after.skills.max}、例行工作 ${after.routines.after}/${after.routines.max}`;
+  const itemName = (kind, from) => {
+    const template = (data.builtin || []).concat(data.mine || []).find((t) => t.id === from.template);
+    const item = template ? (template[kind === "card" ? "cards" : kind === "skill" ? "skills" : "routines"] || []).find((x) => x.key === from.key) : null;
+    return item ? item.name : from.key;
+  };
+  const warnBox = (p) => {
+    const box = el("input", { type: "checkbox", "data-tpl-confirm": "yes", on: { change: (e) => { state.confirm = e.target.checked; ask(); } } });
+    box.checked = state.confirm === true;
+    return el("div", { class: "tpl-warn", "data-templates": "warn" },
+      notice("warn", Object.values(p.warn_text || {}).join(" ")),
+      el("ul", { class: "small" }, p.warn_items.map((w) => el("li", { "data-tpl-warn": w.kind },
+        `${w.kind === "card" ? "員工" : w.kind === "skill" ? "技能" : "例行工作"}：${itemName(w.kind, w.from)}`))),
+      el("label", null, box, " 我確定"));
+  };
+  const doneItem = (item) => {
+    const word = item.state === "failed" ? "停在這裡" : item.state === "made" ? "已建好" : "";
+    return el("li", { "data-tpl-done": `${item.kind}:${item.state}` }, `${TPL_ONE[item.kind]}：${item.name || itemName(item.kind, item.from)}`, word ? `　${word}` : "");
+  };
+  const draw = () => {
+    const p = state.preview;
+    if (state.done) {
+      setKids(bodyBox, notice(state.done.partial ? "bad" : "info", state.done.text),
+        el("ul", { class: "tpl-list", "data-templates": "done-items" }, state.done.apply.items.map(doneItem)));
+      setKids(foot, el("button", { class: "btn primary", type: "button", "data-tpl-action": "done", on: { click: () => { close(); ctx.reload(); } } }, "完成"));
+      return;
+    }
+    const kids = [toolRow()];
+    if (state.error) kids.push(notice("bad", state.error));
+    if (p) {
+      kids.push(
+        el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個技能、${p.routines.length} 件例行工作。`),
+        p.cards.length ? el("div", null, el("h3", null, "員工"), el("ul", { class: "tpl-list", "data-templates": "preview-cards" }, p.cards.map(cardLine))) : null,
+        p.skills.length ? el("div", null, el("h3", null, "技能"), el("ul", { class: "tpl-list", "data-templates": "preview-skills" },
+          p.skills.map((s) => el("li", { "data-tpl-preview": "skill" }, s.name)))) : null,
+        p.routines.length ? el("div", null, el("h3", null, "例行工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
+        el("p", { class: "small", "data-templates": "after" }, afterLine(p.after)),
+        p.problems.filter((x) => x.code !== "confirm_warning").map((x) => notice("bad", x.text)),
+        p.warn_items.length ? warnBox(p) : null,
+        p.notes.map((n) => el("p", { class: "small muted", "data-tpl-preview": "note" }, n.text)));
+    } else if (!state.error) kids.push(el("p", { class: "small muted" }, "整理中…"));
+    const lines = [TPL_PREVIEW_LINES.safe, TPL_PREVIEW_LINES.memory, TPL_PREVIEW_LINES.off, TPL_PREVIEW_LINES.free];
+    if (state.tool === "codex") lines.push(TPL_PREVIEW_LINES.codex);
+    kids.push(el("ul", { class: "small tpl-fixed", "data-templates": "fixed" }, lines.map((l) => el("li", null, l))));
+    setKids(bodyBox, kids);
+    setKids(foot,
+      el("button", { class: "btn", type: "button", "data-tpl-action": "cancel", disabled: state.applying, on: { click: () => close() } }, "取消"),
+      templatesApplyAction({ ctx, state, preview: state.preview, body: () => tplRequestBody(ctx.sel, state), close, redraw: draw }));
+  };
+  draw();
+  ask();
+  return { close, state };
+}
+
+async function viewTemplates() {
+  const token = seq;
+  let data;
+  try { data = await api.get("/api/templates"); }
+  catch (e) { setKids(claim(token), el("h1", null, "團隊範本"), notice("bad", "讀不到團隊範本：" + e.message)); return; }
+  const main = claim(token);
+  const ctx = { data, sel: tplSelection(), boxes: [], reload: () => viewTemplates() };
+  const count = el("span", { "data-templates": "count" });
+  const preview = el("button", { class: "btn primary", type: "button", "data-tpl-action": "preview", on: { click: () => openTemplatesPreview(ctx) } }, "預覽並套用");
+  ctx.sync = () => {
+    ctx.boxes.forEach((b) => { b.box.checked = ctx.sel[b.kind].has(b.id); });
+    count.textContent = tplCountText(ctx.sel);
+    const c = tplCounts(ctx.sel);
+    preview.disabled = c.cards + c.skills + c.routines === 0;
+  };
+  const problems = Array.isArray(data.problems) ? data.problems : [];
+  const blocks = (data.builtin || []).map((t) => templatesBlock(t, ctx));
+  const own = Array.isArray(data.mine) ? data.mine : [];
+  setKids(main, el("h1", null, "團隊範本"),
+    el("ul", { class: "lede tpl-lines", "data-templates": "lines" }, TPL_LINES.map((l) => el("li", null, l))),
+    el("p", { class: "small muted", "data-templates": "ceo-line" }, TPL_CEO_LINE),
+    problems.map((p) => notice("warn", `${p}　這個檔案讀不出來之前，不能套用。`)),
+    data.mine_readable === false ? notice("warn", data.problem || "你存的團隊範本的檔案讀不出來；VBear 內建的照常可以用。") : null,
+    blocks,
+    own.length ? el("h2", { "data-templates": "mine-title" }, "你存的團隊範本") : null,
+    own.map((t) => templatesBlock(t, ctx)),
+    templatesMineSection(ctx),
+    templatesAppliesSection(ctx),
+    el("div", { class: "panel pad tpl-foot", "data-templates": "foot" }, count, " ", preview, " ",
+      el("span", { "data-templates": "foot-actions" }, templatesSaveAction(ctx))));
+  ctx.sync();
+}
+// ---------- end of team templates ----------
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
