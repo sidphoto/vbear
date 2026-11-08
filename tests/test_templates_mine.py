@@ -221,6 +221,16 @@ class SavingWhatThePersonHas(Home):
             self.assertNotIn(word, raw)
         self.assertEqual(stat.S_IMODE(os.lstat(self.state / "templates" / "log.jsonl").st_mode), 0o600)
 
+    def test_a_full_log_becomes_log_jsonl_1_and_a_new_one_starts(self):
+        folder = self.state / "templates"
+        folder.mkdir(mode=0o700)
+        (folder / "log.jsonl").write_text("x" * tm.LOG_MAX, encoding="utf-8")
+        s = self.skill()
+        t = self.save({"name": "換檔", "skills": [{"skill_id": s["id"]}]})["template"]
+        self.assertEqual((folder / "log.jsonl.1").stat().st_size, tm.LOG_MAX)
+        lines = (folder / "log.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(x)["id"] for x in lines], [t["id"]])
+
     def test_a_card_name_over_forty_characters_is_a_400_that_asks_for_a_shorter_one(self):
         a = self.card("長" * 41)
         err = self.assertApi(400, "bad_request", self.save, {"name": "太長", "cards": [{"profile_id": a["id"]}]})

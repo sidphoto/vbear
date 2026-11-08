@@ -433,14 +433,15 @@ test("the card pool offers 用團隊範本開始 beside 用起手牌組開始 wh
   assert(by(main, "data-pool", "starter"), "the starter deck is still there");
 });
 
-test("source: built with el(), no innerHTML, no emoji, no outside resource, only the two templates routes, and the screen words are the glossary's", () => {
+test("source: built with el(), no innerHTML, no emoji, no outside resource, only the templates routes (the list, the preview, and the person's own: P45-3), and the screen words are the glossary's", () => {
   assert(BLOCK.length > 4000, "the block is marked in app.js");
   assert(!/innerHTML|insertAdjacentHTML|outerHTML/.test(BLOCK));
   assert(!/https?:\/\//.test(BLOCK));
   assert(!/\p{Extended_Pictographic}/u.test(BLOCK));
   assert(!/api\/config|api\/settings|api\/native|api\/chats/.test(BLOCK), "never writes the configuration, starts a chat or a terminal");
   const urls = Array.from(BLOCK.matchAll(/api\.(?:post|get)\(\s*[`"]([^`"]+)/g)).map((m) => m[1]);
-  assert.deepStrictEqual(urls.sort(), ["/api/templates", "/api/templates/preview"]);
+  assert.deepStrictEqual(urls.sort(), ["/api/templates", "/api/templates/mine", "/api/templates/mine/${encodeURIComponent(template.id)}",
+    "/api/templates/mine/${encodeURIComponent(template.id)}/delete", "/api/templates/preview"]);
   const strings = Array.from(BLOCK.matchAll(/"([^"\n]*[一-鿿][^"\n]*)"|`([^`\n]*[一-鿿][^`\n]*)`/g)).map((m) => m[1] || m[2]).join("\n").replace(/\$\{[^}]*\}/g, "");
   const bare = strings.replace(/團隊範本|角色範本|任務範本/g, "");
   assert(!/範本/.test(bare), "no 範本 on its own on the screen");
