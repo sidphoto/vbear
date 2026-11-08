@@ -741,6 +741,74 @@ class ScanFiresOnEachRule(unittest.TestCase):
         self.assertEqual(scan_source(clean), [])
 
 
+# 8b. (P44-5) the suggestions of skills only propose: they do not name the skills' file or its routes, and the console's functions that serve
+# them never touch the skills module (the person's own press of 「存」 in the browser is what calls POST /api/my-skills)
+SKILL_SUGGEST_BANNED_STRINGS = ("skills.json", "/api/my-skills", "skillbook_mod")
+SKILL_SUGGEST_SERVERS = ("_skill_suggest_call", "_skill_suggest_sources")
+
+
+def skill_suggest_names(source: str, label: str = "<source>") -> list[str]:
+    """What a module of the suggestions of skills names that it never may: the skills' file, the skills' routes, the console's alias of the
+    skills module (docstrings and comments are not code, so they may talk about them)."""
+    tree = ast.parse(source, filename=label)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docstrings.add(id(first.value))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            found += [f"{label}:{node.lineno}: names {bad}" for bad in SKILL_SUGGEST_BANNED_STRINGS if bad in node.value]
+        elif isinstance(node, ast.Name) and node.id in ("skillbook", "skillbook_mod"):
+            found.append(f"{label}:{node.lineno}: uses {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in ("skillbook", "skillbook_mod"):
+            found.append(f"{label}:{node.lineno}: uses .{node.attr}")
+    return found
+
+
+def console_functions_touching_skills(source: str, names=SKILL_SUGGEST_SERVERS) -> list[str]:
+    """The functions of the console named ``names`` that touch the skills module (``skillbook_mod``, ``skillbook``)."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source, filename="server.py")):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Name) and sub.id in ("skillbook_mod", "skillbook")) or (
+                        isinstance(sub, ast.Attribute) and sub.attr in ("skillbook_mod", "skillbook")):
+                    found.append(f"{node.name}:{sub.lineno}: touches the skills module")
+    return found
+
+
+class SkillSuggestRules(unittest.TestCase):
+    def test_the_suggestion_modules_exist_and_are_scanned_by_every_rule(self):
+        names = {p.name for p in PACKAGE.glob("skillbook_suggest*.py")}
+        self.assertEqual(names, {"skillbook_suggest.py", "skillbook_suggest_runner.py"})
+        scanned = {p.name for p in scanned_files()}
+        self.assertLessEqual(names, scanned)
+
+    def test_they_name_neither_the_skills_file_nor_its_routes(self):
+        problems: list[str] = []
+        for path in PACKAGE.glob("skillbook_suggest*.py"):
+            problems += skill_suggest_names(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_consoles_suggestion_functions_never_touch_the_skills_module(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        self.assertEqual(console_functions_touching_skills(source), [])
+        defined = {n.name for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)}
+        self.assertTrue(set(SKILL_SUGGEST_SERVERS) <= defined, "the functions this rule is about are not there any more")
+
+    def test_the_rule_fires_on_small_made_up_sources(self):
+        self.assertIn("skills.json", " ".join(skill_suggest_names("PATH = 'skillbook/skills.json'\n")))
+        self.assertIn("/api/my-skills", " ".join(skill_suggest_names("URL = '/api/my-skills'\n")))
+        self.assertIn("skillbook_mod", " ".join(skill_suggest_names("def f(c):\n    return skillbook_mod.add(c)\n")))
+        self.assertEqual(skill_suggest_names('"""talks of skills.json"""\nX = 1\n'), [])
+        self.assertNotEqual(console_functions_touching_skills("def _skill_suggest_call(self):\n    return skillbook_mod.add({})\n"), [])
+        self.assertEqual(console_functions_touching_skills("def other(self):\n    return skillbook_mod.add({})\n"), [])
+        self.assertEqual(console_functions_touching_skills("def _skill_suggest_call(self):\n    return 1\n"), [])
+
+
 class RoutineRules(unittest.TestCase):
     """P44-2: rules 8 and 9 over the real modules, and the small made-up sources that show the scan fires."""
 

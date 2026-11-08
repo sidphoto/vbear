@@ -71,6 +71,7 @@ from . import role_departments
 from . import translations
 from . import chief, chief_runner as chief_runner_mod
 from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
+from . import skillbook_suggest, skillbook_suggest_runner as skill_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
 from . import auto_continue as auto_continue_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
@@ -142,6 +143,8 @@ CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
 MEMORY_RE = re.compile(r"^/api/memory/(m-[0-9a-f]{10})\Z")
 # /api/my-skills[/<id>[/delete]] (P44-1, ADR 0010): the person's skills; only these routes write skills.json
 SKILL_RE = re.compile(r"^/api/my-skills/(k-[0-9a-f]{12})(?:/(delete))?\Z")
+# /api/my-skills/suggest[/preview | /<id>[/saved | /dismiss | /cancel]] (P44-5): suggested skills; none of these writes skills.json
+SKILL_SUGGEST_RE = re.compile(r"^/api/my-skills/suggest/(ks-[0-9a-f]{12})(?:/(saved|dismiss|cancel))?\Z")
 # /api/memory/suggest[/preview | /<id>[/saved | /dismiss | /cancel]] (P42-4): memory suggestions; none of these writes memory.json
 SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismiss|cancel))?\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
@@ -285,6 +288,8 @@ class Console:
                 self.chief = chief_runner_mod.ChiefRunner(on_proposal=self._on_proposal)
             if not hasattr(self, "memory_suggest"):
                 self.memory_suggest = memory_suggest_runner_mod.MemorySuggestRunner()
+            if not hasattr(self, "skill_suggest"):
+                self.skill_suggest = skill_suggest_runner_mod.SkillSuggestRunner()
             return self.meetings, self.staffing, self.chief
 
     def meeting_runner(self):
@@ -299,6 +304,10 @@ class Console:
     def memory_suggest_runner(self):
         self._boards()
         return self.memory_suggest
+
+    def skill_suggest_runner(self):
+        self._boards()
+        return self.skill_suggest
 
     def _on_proposal(self, chief_id: str) -> None:
         """A kept proposal of the chief of staff becomes a dispatch (and, when the person ticked 「自己動手」, goes on)."""
@@ -761,6 +770,11 @@ def make_handler(console: Console):
                     return self._chat_action(memory_mod.export)
                 if path == "/api/my-skills":
                     return self._chat_action(skillbook_mod.view)
+                if path == "/api/my-skills/suggest":
+                    return self._skill_suggest_call("list")
+                if path.startswith("/api/my-skills/suggest/"):
+                    found = SKILL_SUGGEST_RE.match(path)
+                    return self._skill_suggest_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path == "/api/memory/suggest":
                     return self._suggest_call("list")
                 if path.startswith("/api/memory/suggest/"):
@@ -999,6 +1013,15 @@ def make_handler(console: Console):
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
                 if path == "/api/memory/clear":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/my-skills/suggest/preview":
+                    return self._skill_suggest_call("preview", None, self._body_strict())
+                if path == "/api/my-skills/suggest":
+                    return self._skill_suggest_call("start", None, self._body_strict())
+                if path.startswith("/api/my-skills/suggest/"):
+                    found = SKILL_SUGGEST_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._skill_suggest_call(found.group(2), found.group(1), self._body_strict())
                 if path == "/api/my-skills":
                     return self._chat_action(lambda b=self._body_strict(): skillbook_mod.add(b), 201)
                 if path.startswith("/api/my-skills/"):
@@ -1277,6 +1300,9 @@ def make_handler(console: Console):
                 if path.startswith("/api/memory/suggest/"):
                     found = SUGGEST_RE.match(path)
                     return self._suggest_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path.startswith("/api/my-skills/suggest/"):
+                    found = SKILL_SUGGEST_RE.match(path)
+                    return self._skill_suggest_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path.startswith("/api/memory/"):
                     found = MEMORY_RE.match(path)
                     if not found:
@@ -2426,6 +2452,48 @@ def make_handler(console: Console):
                     raise memory_suggest.SuggestError("bad_request", "這個動作不需要內容")
                 if action == "dismiss":
                     return self._json(memory_suggest.view(runner.dismiss(suggest_id)))
+                if action == "cancel":
+                    return self._json(runner.cancel(suggest_id))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
+        def _skill_suggest_sources(self, conf) -> skill_suggest_runner_mod.SuggestSources:
+            """Where a skill suggestion reads from (P44-5): a chat's own files (read only) and whether a group opened the chat. Nothing of
+            the person's memory or skills is read, and nothing here writes anything."""
+            return skill_suggest_runner_mod.SuggestSources(chat=skill_suggest_runner_mod.chat_reader(), conf=conf,
+                                                           in_group=lambda chat_id: chat_id in groups_mod.member_chat_ids())
+
+        def _skill_suggest_call(self, action, suggest_id=None, body=None):
+            """The skill-suggestion endpoints (P44-5). Reads and the preview run nothing; only a confirmed preview starts the one tool-less
+            call. What the person does with an answer (`saved`, `dismiss`) is written on the suggestion's record, and the skill itself is
+            saved by the browser's own POST /api/my-skills, from the box of 存成技能: nothing here writes skills.json."""
+            try:
+                runner = console.skill_suggest_runner()
+                if action == "list":
+                    return self._json(runner.list())
+                if action == "get":
+                    return self._json(runner.get(suggest_id))
+                if action == "delete":
+                    runner.delete(suggest_id)
+                    return self._json({"ok": True, "deleted": suggest_id})
+                if not isinstance(body, dict):
+                    raise skillbook_suggest.SuggestError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "preview":
+                    if set(body) != {"chat_id"}:
+                        raise skillbook_suggest.SuggestError("bad_request", "只需要 chat_id")
+                    return self._json(runner.preview(body["chat_id"], self._skill_suggest_sources(console.store.conf)))
+                if action == "start":
+                    if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
+                        raise skillbook_suggest.SuggestError("bad_request", "只需要 preview_id")
+                    rec = runner.start(body["preview_id"], self._skill_suggest_sources(console.store.conf))
+                    return self._json({"id": rec["id"], "suggestion": skillbook_suggest.view(rec)}, 202)
+                if body:
+                    raise skillbook_suggest.SuggestError("bad_request", "這個動作不需要內容")
+                if action == "saved":
+                    return self._json(skillbook_suggest.view(runner.mark_saved(suggest_id)))
+                if action == "dismiss":
+                    return self._json(skillbook_suggest.view(runner.dismiss(suggest_id)))
                 if action == "cancel":
                     return self._json(runner.cancel(suggest_id))
                 return self._error(404, "not found")

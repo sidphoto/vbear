@@ -27,7 +27,7 @@ from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import chief, config as cfg, memory_suggest as ms, meetings as mt, staffing as st, try_spend
+from . import chief, config as cfg, memory_suggest as ms, meetings as mt, skillbook_suggest, staffing as st, try_spend
 from .board_engine import HeadlessBoard
 from .jsonstore import StoreError
 from .meeting_runner import COST_NOTE
@@ -149,7 +149,8 @@ class MemorySuggestRunner(HeadlessBoard):
     def spend_kinds(self) -> list:
         """The suggestions share the day with the meetings, the staffing meetings, the chief of staff, the chats and the tries."""
         return [(mt.meeting_ids, mt.load, mt.per_call_limit), (st.record_ids, st.load, st.per_call_of), chief.spend_kind(),
-                cs.spend_kind(self.clock), try_spend.spend_kind(), ms.spend_kind()]
+                cs.spend_kind(self.clock), try_spend.spend_kind(), ms.spend_kind(),
+                skillbook_suggest.spend_kind()]
 
     # -- the chat and the memory -----------------------------------------------------------------------------------
 

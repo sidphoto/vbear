@@ -12362,6 +12362,10 @@ async function viewRoutines() {
       el("label", { class: "cw-field" }, el("span", null, "名稱"), name),
       el("label", { class: "cw-field" }, el("span", null, "請哪位員工"), who),
       el("label", { class: "cw-field" }, el("span", null, "請他做什麼（每次都送這段話）"), text),
+      el("div", { class: "cw-field" },
+        el("button", { class: "btn small", type: "button", "data-routine-action": "from-skill", on: { click: () => openSkillPicker(text, { title: "從技能帶入", pickLabel: "帶入", replace: true,
+          note: "選一個技能，它現在的內容會複製到「請他做什麼」的欄位。之後改技能，不會改這個例行工作。帶入之後你還可以再改；這裡不會儲存任何東西。" }) } }, "從技能帶入"),
+        el("span", { class: "small muted", "data-routine": "from-skill-note" }, " 複製當下的文字；之後改技能不會改這個例行工作。")),
       el("div", { class: "cw-field" }, el("span", null, "星期"), el("div", null, days.map((d) => d[2]))),
       el("div", { class: "cw-field" }, el("span", null, "時間（最多三個，兩個時間至少差 1 小時）"), el("div", null, times)),
       el("label", { class: "switch" }, enabled, el("div", null, el("div", { class: "t" }, "開啟"), el("div", { class: "small muted" }, "關著的不會提醒也不會開始。"))),
@@ -13961,8 +13965,9 @@ async function viewChatDetail(token, id) {
   const isCeo = !inGroup && !!all.card && all.card.position === "planner";        // P40: only a CEO's chat has 「請幕僚長安排」
   const chief = isCeo ? chiefDesk(id, all.card) : null;
   const suggest = inGroup ? null : memorySuggestDesk(id);                   // P42-4: 「整理要記住的事」, one-to-one chats only
-  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, noteBox, transcript, liveBox, composer);
-  activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); if (suggest) suggest.stop(); };
+  const skillDesk = inGroup ? null : skillSuggestDesk(id);                  // P44-5: 「整理成技能」, one-to-one chats only
+  setKids(main, crumbs([["聊天", "#/chat"], [view.card && view.card.name || id]]), headBox, groupNote, chief ? chief.node : null, suggest ? suggest.node : null, skillDesk ? skillDesk.node : null, noteBox, transcript, liveBox, composer);
+  activeViewCleanup = () => { stopStream(); if (chief) chief.stop(); if (suggest) suggest.stop(); if (skillDesk) skillDesk.stop(); };
   stream();
   if (opening) input.focus();
 }
@@ -15929,7 +15934,7 @@ async function viewMemory() {
 // be kept (passwords, keys, account names, card numbers) and asks for a second yes for what reads like an order or holds a phone number
 // or an address, and for the words of an employee. 「用技能」 beside the box of a chat or a group only puts a skill's words in the box
 // (after what is already there): nothing is sent, the person reads them, changes them and presses 送出. 「存成技能」 beside a spoken
-// line opens a box with that line to be named and saved. A skill is the person's words: it is not a skill card of an AI tool (#/skills),
+// line opens a box with that line to be named and saved (a suggested skill opens it with its name filled in). A skill is the person's words: it is not a skill card of an AI tool (#/skills),
 // and the page says so. Every name and text is set as text, never as markup.
 
 const SKILL_MAX_NAME = 40;
@@ -16093,7 +16098,7 @@ function openSkillSave(o) {
   const titleId = "skill-save-title";
   const got = skillCut(o.text, SKILL_MAX_TEXT);
   let close = () => {};
-  const form = skillForm({ text: got.text, rows: "6", needYes: o.speaker === "employee", onCancel: () => close(),
+  const form = skillForm({ name: o.name, text: got.text, rows: "6", needYes: o.speaker === "employee", onCancel: () => close(),
     submit: (body) => api.post("/api/my-skills", { ...body, source: o.source }),
     done: async () => { close(); toast("已存成技能"); if (typeof o.onSaved === "function") await o.onSaved(); } });
   const head = el("h2", { id: titleId, tabindex: "-1" }, "存成技能");
@@ -16109,11 +16114,12 @@ function openSkillSave(o) {
   return close;
 }
 
-// Put a skill's words in a box, after what is in it (a blank line between); nothing is sent. The box keeps its own limit: words that would
+// Put a skill's words in a box, after what is in it (a blank line between), or in place of it with `replace` (the box of a routine: the
+// words are copied once, and the skill is not linked to it); nothing is sent. The box keeps its own limit: words that would
 // not fit are not put in, and the person is told. Returns whether they were put in.
-function skillPut(input, words) {
+function skillPut(input, words, replace) {
   const now = String(input.value || "");
-  const joined = now.trim() ? now.replace(/\s+$/, "") + "\n\n" + words : words;
+  const joined = now.trim() && !replace ? now.replace(/\s+$/, "") + "\n\n" + words : words;
   const max = Number(input.getAttribute("maxlength"));
   if (Number.isFinite(max) && max > 0 && skillLen(joined) > max) { toast(`放不下：這個輸入框最多 ${max} 字。請先清掉一些，或到「技能」頁改短一點。`); return false; }
   input.value = joined;
@@ -16127,25 +16133,28 @@ function skillPut(input, words) {
 function skillUseButton(input) {
   return el("button", { type: "button", class: "btn", "data-skill": "use", "aria-haspopup": "dialog", on: { click: () => openSkillPicker(input) } }, "用技能");
 }
-async function openSkillPicker(input) {
+// `opts` (all optional): { title, pickLabel, replace, note } - 「從技能帶入」 of a routine's form says so in its words and replaces.
+async function openSkillPicker(input, opts) {
+  opts = opts || {};
   let data = null, failed = "";
   try { data = await api.get("/api/my-skills"); } catch (e) { failed = e.message; }
   const titleId = "skill-pick-title";
   let close = () => {};
   const skills = data && Array.isArray(data.skills) ? data.skills.filter((s) => s && typeof s.id === "string" && typeof s.text === "string") : [];
-  const pick = (skill) => { if (skillPut(input, skill.text)) close(); };
+  const pick = (skill) => { if (skillPut(input, skill.text, opts.replace === true)) close(); };
   const body = failed ? notice("bad", "讀不到技能：" + failed)
     : data && data.readable === false ? notice("bad", data.problem || SKILL_UNREADABLE)
     : skills.length ? el("ul", { class: "mt-list", "data-skill": "choices" }, skills.map((s) =>
       el("li", { class: "mt-row card", "data-skill": "choice", "data-skill-id": s.id },
         el("strong", null, s.name),
         el("span", { class: "memory-text small" }, skillPreview(s.text)),
-        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `用技能：${s.name}`, on: { click: () => pick(s) } }, "放進輸入框"))))
+        el("button", { type: "button", class: "btn small primary", "data-skill": "pick", "aria-label": `${opts.title || "用技能"}：${s.name}`, on: { click: () => pick(s) } }, opts.pickLabel || "放進輸入框"))))
     : el("p", { class: "small muted", "data-skill": "none" }, SKILL_NONE, " ", el("a", { href: "#/my-skills", on: { click: () => close() } }, "到技能頁新增"));
-  const head = el("h2", { id: titleId, tabindex: "-1" }, "用技能");
+  const head = el("h2", { id: titleId, tabindex: "-1" }, opts.title || "用技能");
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-skill": "picker" },
     el("div", { class: "modal-box", style: "max-width: 600px; max-height: 88vh; overflow-y: auto;" }, head,
-      el("p", { class: "small", "data-skill": "pick-note" }, "選一個技能，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
+      el("p", { class: "small", "data-skill": "pick-note" }, opts.note || "選一個技能，它的內容會放進輸入框。你可以先看、先改，再按送出；這裡不會送出任何東西。"),
+      opts.replace && String(input.value || "").trim() ? notice("warn", "這個欄位已經有字，帶入會取代它。") : null,
       body,
       el("div", { class: "modal-actions" }, el("button", { type: "button", class: "btn", "data-skill": "pick-cancel", on: { click: () => close() } }, "取消"))));
   document.body.append(modal);
@@ -16153,6 +16162,195 @@ async function openSkillPicker(input) {
   head.focus();
 }
 // ---------- end of my skills -------------------------------------------------------------------------------------------------
+
+// ---------- skill suggestions (v0.18, P44-5, ADR 0010) -----------------------------------------------------------------------
+// A one-to-one chat page has the button 「整理成技能」. It opens a dialog that says how much of the chat is read, the most it costs, what
+// is left today and that the chat goes to Anthropic, and only a press of its own button starts the one call (POST /api/my-skills/suggest
+// from a preview). What comes back is a card with at most one proposal (a name, the words, a note on where it came from), NOT saved: the
+// button on it opens the same box as 「存成技能」 with the name and the words filled in, and only the person's press of 存 there saves
+// (POST /api/my-skills, with how "suggested" and the id), after which the suggestion is marked saved. Everything shown is the server's
+// record, set as text; what a model wrote is never markup. Nothing here saves a skill by itself, writes a setting or a limit, installs
+// a skill card, makes a role card, sends to a chat or answers a card of an employee.
+
+const KSUGGEST_BUTTON = "整理成技能";
+const KSUGGEST_LEDE = "VBear 會讀這段聊天最近的對話（最多 20 則），提議 1 個技能（名稱和做法），最多花 US$0.10；這段對話會送給 Anthropic。"
+  + "提議不會自己存：它會放進「存成技能」的視窗，你看過、可以改，按「存」才會存。";
+const KSUGGEST_NEEDS_WHY = "整理成技能要用 Claude Code；只有 Codex 的話，這個功能現在還不能用，但每句話旁的「存成技能」照常能用。";
+const KSUGGEST_POLL_MS = 3000;
+const KSUGGEST_ERROR_TEXT = {
+  invalid_output: "整理回的格式不對，已經丟掉，沒有存任何東西。可以再按一次「整理成技能」。",
+  not_traditional: "整理回的字含簡體字，已經丟掉，沒有存任何東西。可以再按一次。",
+  timeout: "等太久，逾時了。可以再按一次。",
+  budget: "額度不夠，沒有送出。",
+  time_up: "時間不夠，沒有送出。",
+  restart: "VBear 重新啟動，這次整理被中斷了。",
+  spend_unknown: "VBear 算不出今天已經花了多少，所以沒有送出。",
+  cancelled: "已取消。",
+};
+const KSUGGEST_MADE_BY_AI = "這是 AI 整理的，不是你寫的。存了以後，用它時它會變成你對員工說的話；請看過再存。";
+
+function skillSuggestNeedsClaude() {
+  return el("div", { class: "notice info", "data-ksuggest": "needs-claude" }, el("span", { class: "ico", "aria-hidden": "true" }, "i"),
+    el("div", null, el("b", null, MSUGGEST_NEEDS_TITLE),
+      el("p", { class: "small", style: "margin:4px 0 0" }, KSUGGEST_NEEDS_WHY),
+      el("p", { class: "small", style: "margin:4px 0 0" }, NEEDS_CLAUDE_HOW),
+      el("p", { style: "margin:8px 0 0" }, el("a", { class: "btn small primary", href: "#/setup", "data-ksuggest": "setup-go" }, NEEDS_CLAUDE_GO))));
+}
+
+// The dialog before anything is asked. `pv` is the answer of POST /api/my-skills/suggest/preview; hooks: onStart(previewId), onRecheck().
+function openSkillSuggestDialog(pv, hooks) {
+  const blockers = Array.isArray(pv.blockers) ? pv.blockers.filter((b) => b && typeof b === "object") : [];
+  const cap = usdUp(dispatchNum(pv.cap_usd)), left = usdDown(dispatchNum(pv.day_left_usd));
+  const titleId = "ksuggest-dialog-title";
+  let close = () => {};
+  const actions = [el("button", { class: "btn", type: "button", on: { click: () => close() } }, "取消")];
+  // the tool-less check is shared with the chief of staff, the meetings and the memory: when it has not been done, the button is here
+  if (blockers.some((b) => b.code === "boundary_unverified")) {
+    actions.push(el("button", { class: "btn", type: "button", "data-ksuggest": "verify", on: { click: async () => {
+      close();
+      if (!(await confirmInPage("無工具安全檢查", "會用你自己的 Claude 帳號做一次小型檢查，通常不到 1 美分。幕僚長、會議和記憶整理用同一個檢查，一律檢查 Claude Code；檢查完會重新整理預覽，還不會開始整理。", "檢查"))) return;
+      try { const r = await api.post("/api/meetings/verify", {}); toast(`Claude Code ${r.version} 通過無工具安全檢查`); }
+      catch (e) { toast("檢查失敗：" + e.message); return; }
+      if (hooks.onRecheck) await hooks.onRecheck();
+    } } }, CHIEF_VERIFY_LABEL));
+  }
+  if (pv.ok === true && typeof pv.preview_id === "string" && pv.preview_id) {
+    const start = el("button", { class: "btn primary", type: "button", "data-ksuggest": "start", on: { click: async () => {
+      start.disabled = true;
+      close();
+      try { await hooks.onStart(pv.preview_id); } catch (e) { toast(e.message); }
+    } } }, "開始整理");
+    actions.push(start);
+  }
+  const head = el("h2", { id: titleId, tabindex: "-1" }, KSUGGEST_BUTTON);
+  const reads = Number.isInteger(pv.messages) ? `${pv.messages} 則` : "最近的幾則";
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-ksuggest": "dialog" },
+    el("div", { class: "modal-box", style: "max-width: 640px; max-height: 88vh; overflow-y: auto;" }, head,
+      blockers.map((b) => (b.code === "cli_not_found" ? skillSuggestNeedsClaude() : notice("warn", b.message || "現在不能開始"))),
+      el("p", null, `VBear 會讀你和這位員工最近的對話（${reads}${pv.omitted_messages ? `，更早的 ${pv.omitted_messages} 則不讀` : ""}）。`
+        + "工具的輸出、檔案內容、你按過的允許，還有你的記憶和其他技能，都不會送出。"),
+      el("p", { class: "chief-money", "data-ksuggest": "money" }, el("b", null, `最多花 ${cap}，今天還剩 ${left}。`)),
+      el("p", null, `這段對話會送給 ${typeof pv.sends_to === "string" && pv.sends_to ? pv.sends_to : "Anthropic"}。`),
+      pv.notice ? notice("info", pv.notice) : null,
+      typeof pv.save_note === "string" && pv.save_note ? el("p", { "data-ksuggest": "save-note" }, pv.save_note) : null,
+      typeof pv.disclosure === "string" && pv.disclosure ? el("p", { class: "small muted" }, pv.disclosure) : null,
+      typeof pv.cost_note === "string" && pv.cost_note ? el("p", { class: "small muted" }, pv.cost_note) : null,
+      el("div", { class: "modal-actions" }, actions)));
+  document.body.append(modal);
+  close = withModalA11y(modal, () => modal.remove());
+  head.focus();
+  return close;
+}
+
+// The card of one suggestion `v` (GET /api/my-skills/suggest/<id>); hooks: onDone() once it is saved or dropped.
+function skillSuggestCard(v, hooks) {
+  const items = Array.isArray(v.items) ? v.items.filter((i) => i && typeof i === "object") : [];
+  const spentNote = dispatchNum(v.spent_usd) !== null ? `這次花了 ${usdUp(dispatchNum(v.spent_usd))}（Claude Code 回報的估值；沒回報的以上限計）。` : "";
+  const dismiss = el("button", { class: "btn", type: "button", "data-ksuggest": "dismiss" }, items.length ? "不用了" : "關閉");
+  dismiss.addEventListener("click", async () => {
+    dismiss.disabled = true;
+    try { await api.post(`/api/my-skills/suggest/${encodeURIComponent(v.id)}/dismiss`, {}); }
+    catch (e) { toast(e.message); dismiss.disabled = false; return; }
+    hooks.onDone();
+  });
+  if (!items.length) {
+    return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 整理好了"),
+      el("p", null, "這段對話裡沒有值得存成技能的做法。"), el("p", { class: "small muted" }, spentNote), dismiss);
+  }
+  const it = items[0];
+  const refuse = it.refuse ? (typeof it.refuse_text === "string" && it.refuse_text ? it.refuse_text : "這一段現在不能存。") : null;
+  const warn = Array.isArray(it.warn_text) ? it.warn_text.filter((w) => typeof w === "string") : [];
+  const use = el("button", { class: "btn primary", type: "button", "data-ksuggest": "use", on: { click: () => {
+    openSkillSave({ name: String(it.name), text: String(it.text), speaker: "you", source: { how: "suggested", suggestion_id: v.id }, onSaved: async () => {
+      try { await api.post(`/api/my-skills/suggest/${encodeURIComponent(v.id)}/saved`, {}); } catch (e) { toast(e.message); }
+      hooks.onDone();
+    } });
+  } } }, "放進「存成技能」的視窗");
+  return el("section", { class: "panel pad", "data-ksuggest": "card" }, el("h3", null, "VBear 提議了 1 個技能，預設沒存"),
+    el("p", { class: "small" }, KSUGGEST_MADE_BY_AI),
+    el("p", null, el("strong", { "data-ksuggest": "name" }, it.name)),
+    el("p", { class: "memory-text", style: "white-space: pre-wrap", "data-ksuggest": "text" }, it.text),
+    typeof it.note === "string" && it.note ? el("p", { class: "small muted", "data-ksuggest": "note" }, `根據：${it.note}`) : null,
+    refuse ? notice("bad", refuse) : null,
+    warn.length ? notice("warn", warn.join(" ")) : null,
+    el("p", { class: "small muted" }, spentNote),
+    el("div", { class: "row" }, use, dismiss));
+}
+
+// The desk on a one-to-one chat page: the button, the dialog, the call that runs and the card of what came back.
+function skillSuggestDesk(chatId) {
+  const runs = el("div", { "data-ksuggest": "runs" });
+  const button = el("button", { class: "btn", type: "button", "data-ksuggest": "open", on: { click: () => openDialog() } }, KSUGGEST_BUTTON);
+  const box = el("section", { class: "panel pad", "data-ksuggest": "desk" }, el("div", { class: "row" }, button),
+    el("p", { class: "small" }, KSUGGEST_LEDE), runs);
+  let gone = false, watching = null, mine = null, shown = null;
+  async function openDialog() {
+    button.disabled = true;
+    let pv;
+    try { pv = await api.post("/api/my-skills/suggest/preview", { chat_id: chatId }); }
+    catch (e) { toast(e.message); button.disabled = false; return; }
+    button.disabled = false;
+    openSkillSuggestDialog(pv, {
+      onRecheck: openDialog,
+      onStart: async (previewId) => {
+        const r = await api.post("/api/my-skills/suggest", { preview_id: previewId });
+        mine = r.id;
+        toast("開始整理了");
+        show(r.suggestion || { id: r.id, status: "running" });
+      },
+    });
+  }
+  const failure = (v) => {
+    const code = typeof v.error_code === "string" ? v.error_code : "";
+    const words = code ? (cardHas(KSUGGEST_ERROR_TEXT, code) ? KSUGGEST_ERROR_TEXT[code] : "") : "";
+    return el("div", { class: "chief-run", "data-ksuggest": "run" }, notice("bad", `這次整理沒有成功。${words}${code ? `（${code}）` : ""}`));
+  };
+  function show(v) {
+    if (gone || !v || typeof v !== "object" || typeof v.id !== "string") return;
+    if (v.status === "running") {
+      watching = v.id;
+      shown = null;
+      const cancel = el("button", { class: "btn small", type: "button", "data-ksuggest": "cancel", on: { click: async () => {
+        try { await api.post(`/api/my-skills/suggest/${encodeURIComponent(v.id)}/cancel`, {}); } catch (e) { toast(e.message); }
+        await poll();
+      } } }, "取消");
+      setKids(runs, el("div", { class: "chief-run", "data-ksuggest": "run", role: "status" }, el("strong", null, "VBear 正在整理…"),
+        el("span", { class: "small muted" }, " 最多 120 秒"), " ", cancel));
+      return;
+    }
+    watching = null;
+    if (v.status === "ready") {
+      const list = Array.isArray(v.items) ? v.items : [];
+      if (v.dismissed === true || v.saved === true || (!list.length && v.id !== mine)) { shown = null; setKids(runs, null); return; }
+      if (shown === v.id) return;                       // a card the person may be reading is kept, not rebuilt
+      shown = v.id;
+      setKids(runs, skillSuggestCard(v, { onDone: () => { shown = null; setKids(runs, null); } }));
+      return;
+    }
+    shown = null;
+    setKids(runs, v.id === mine ? failure(v) : null);
+  }
+  async function poll() {
+    if (gone || !watching) return;
+    let v;
+    try { v = await api.get(`/api/my-skills/suggest/${encodeURIComponent(watching)}`); }
+    catch (e) { if (e.status === 404) { watching = null; setKids(runs, null); } return; }
+    show(v);
+  }
+  async function refresh() {
+    const list = await api.get("/api/my-skills/suggest").catch(() => null);
+    if (gone || !list || !Array.isArray(list.suggestions)) return;
+    const newest = list.suggestions.filter((s) => s && typeof s === "object" && !s.blocked && s.chat_id === chatId && s.dismissed !== true && s.saved !== true
+      && (s.status === "running" || (s.status === "ready" && s.found > 0))).sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+    if (!newest) return;
+    const v = await api.get(`/api/my-skills/suggest/${encodeURIComponent(newest.id)}`).catch(() => null);
+    if (v && !gone && !watching && shown === null) show(v);
+  }
+  const timer = setInterval(() => { if (!document.hidden) poll(); }, KSUGGEST_POLL_MS);
+  refresh();
+  return { node: box, stop: () => { gone = true; clearInterval(timer); } };
+}
+// ---------- end of skill suggestions ----------
 
 // ---------- the shared folder (P43-1, P43-4, ADR 0009) ----------------------------------------------------------------
 // The page of the shared folder (#/shared): where it is, what is in it (names, sizes and times: VBear never reads a file), a button
