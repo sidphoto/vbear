@@ -31,14 +31,16 @@ const TITLE_2 = "幕僚長可以自己派工給員工";
 const EFFECT_2 = "幕僚長的提議一到就開始派工，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、或幕僚長有問題要問你時，還是會停下來等你。";
 const TITLE_3 = "例行工作可以自己啟用、定時執行";
 const EFFECT_3 = "例行工作到時間時 VBear 自己開始；Mac 醒來或 VBear 打開時，12 小時內錯過的也自己補做一次（每次醒來最多 3 件）。不勾時，到時間只提醒你，由你按「現在開始」。員工要跑指令、改檔案時照舊問你；你不在電腦前時，卡片 5 分鐘沒人按就當作拒絕。例行工作不會自己建立或啟用，只有你能。";
-const LATER = "不必每次問、倒數後自動接續這兩項會在之後的版本加入。";
+const TITLE_5 = "碰到上限暫停的工作，倒數結束後自動接續";
+const EFFECT_5 = "派工碰到每天上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份派工最多 3 次，全部加起來每天最多 5 次）。被打斷的那一步不會重做，下一步會被告知上一步可能不完整。AI 工具沒說恢復時間時（Claude Code 目前都沒說）不會自己接續；群組不會自己接續。";
+const LATER = "第 4 項（不必每次問）會在之後的版本加入。";
 const NEVER = ["AI 不能自己調高每天的花費上限。", "AI 不能自己讓員工用完整模式出發。", "AI 不能自己從網路安裝新技能。"];
 const ITEMS = [
   { id: 1, adr: "0003", key: "create_cards", active: true, title: TITLE_1, effect: EFFECT_1 },
   { id: 2, adr: "0003", key: "dispatch", active: true, title: TITLE_2, effect: EFFECT_2 },
   { id: 3, adr: "0003", key: "routines", active: true, title: TITLE_3, effect: EFFECT_3 },
   { id: 4, adr: "0003", key: null, active: false, title: "員工在安全模式裡跑指令、改檔案時不必每次問", effect: "還沒有；聊天照舊每個指令、每個檔案修改都問你。" },
-  { id: 5, adr: "0003", key: null, active: false, title: "碰到上限暫停的工作，倒數結束後自動接續", effect: "跟著例行工作一起在之後的版本加入；現在暫停後由你按「繼續」。" },
+  { id: 5, adr: "0003", key: "auto_continue", active: true, title: TITLE_5, effect: EFFECT_5 },
 ];
 
 let state;
@@ -87,25 +89,25 @@ const posts = () => calls.filter((c) => c[0] === "POST");
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
-test("the section lists exactly the three items that work, in order, with the plan's words, all off", async () => {
+test("the section lists exactly the four items that work, in order, with the plan's words, all off", async () => {
   setServer();
   const main = await open();
   assert(section(main), "the section is on the settings page");
   assert(text(section(main).find((n) => n.tag === "h2")).includes("自己動手"));
-  assert.deepStrictEqual(boxes(main).map((b) => attr(b, "data-autonomy")), ["create_cards", "dispatch", "routines"]);
+  assert.deepStrictEqual(boxes(main).map((b) => attr(b, "data-autonomy")), ["create_cards", "dispatch", "routines", "auto_continue"]);
   assert(boxes(main).every((b) => !b.checked), "off by default");
   const t = text(section(main));
-  for (const s of [TITLE_1, EFFECT_1, TITLE_2, EFFECT_2, TITLE_3, EFFECT_3]) assert(t.includes(s), s);
-  assert(t.indexOf(TITLE_1) < t.indexOf(TITLE_2) && t.indexOf(TITLE_2) < t.indexOf(TITLE_3));
+  for (const s of [TITLE_1, EFFECT_1, TITLE_2, EFFECT_2, TITLE_3, EFFECT_3, TITLE_5, EFFECT_5]) assert(t.includes(s), s);
+  assert(t.indexOf(TITLE_1) < t.indexOf(TITLE_2) && t.indexOf(TITLE_2) < t.indexOf(TITLE_3) && t.indexOf(TITLE_3) < t.indexOf(TITLE_5));
 });
 
-test("the other two items are one sentence and no tick box, and their words are not listed", async () => {
+test("the one item that is not here (4) is one sentence and no tick box, and its words are not listed", async () => {
   setServer();
   const main = await open();
   const t = text(section(main));
   assert(t.includes(LATER), t);
-  for (const item of ITEMS.slice(3)) assert(!t.includes(item.title), "not listed: " + item.title);
-  assert.strictEqual(boxes(main).length, 3);
+  assert(!t.includes(ITEMS[3].title), "not listed: " + ITEMS[3].title);
+  assert.strictEqual(boxes(main).length, 4);
 });
 
 test("the three things that stay forbidden are said, and the section does not offer them", async () => {
@@ -170,6 +172,21 @@ test("the third item (routines) has its own dialog words and sends all four valu
   await settle();
   assert.deepStrictEqual(posts().map((c) => c[2]), [{ create_cards: false, dispatch: false, routines: true, auto_continue: false }]);
   assert.strictEqual(box(main, "routines").checked, true);
+});
+
+test("the fifth item (auto_continue) has its own dialog words, says the limits, and sends all four values", async () => {
+  setServer();
+  const main = await open();
+  await tick(box(main, "auto_continue"), true);
+  const d = dialog();
+  assert(text(d).includes(TITLE_5) && text(d).includes(EFFECT_5));
+  assert(text(d).includes("每份派工最多自己接續 3 次") && text(d).includes("每天") && text(d).includes("10 分鐘"), "says the limits it keeps: " + text(d));
+  assert(text(d).includes("群組"), "says a group never goes on by itself");
+  assert.strictEqual(posts().length, 0);
+  button(d, "我了解，打開").dispatch("click");
+  await settle();
+  assert.deepStrictEqual(posts().map((c) => c[2]), [{ create_cards: false, dispatch: false, routines: false, auto_continue: true }]);
+  assert.strictEqual(box(main, "auto_continue").checked, true);
 });
 
 test("cancelling leaves the tick off and sends nothing", async () => {

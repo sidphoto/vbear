@@ -6673,6 +6673,7 @@ function autonomyDialogBody(item, limits, never) {
     el("p", null, `最多花多少：幕僚長每次最多 ${usdText(l.chief_call_usd)}；派工的每一步是員工的一個聊天回合，每回合最多 ${usdText(l.per_turn_usd)}。` +
       `全部和聊天、會議共用每天上限（${usdText(l.daily_usd)}），到了就暫停，由你按「繼續」。`),
     item.key === "routines" ? el("p", null, "例行工作每天最多花多少，另外在「例行工作」頁設定，預設是每天上限的一半，不會超過每天上限。") : null,
+    item.key === "auto_continue" ? el("p", null, "它只接續派工，群組和例行工作不會。每份派工最多自己接續 3 次，全部加起來每天最多 5 次；接續後 10 分鐘內又因同一個原因暫停，這份派工就不再自己接續，由你按「繼續」。恢復時間過了 12 小時以上（VBear 關著或 Mac 睡著），也只列出來等你決定。") : null,
     el("p", null, "每一件它做的事都會列在「AI 自己做了什麼」，可以停止或撤回；也可以回到這裡關掉。"),
     el("p", { class: "small muted" }, "就算全部勾了，下面三件事還是不會做："),
     el("ul", { class: "small" }, never.map((t) => el("li", null, t))));

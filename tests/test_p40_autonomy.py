@@ -28,15 +28,18 @@ TITLE_2 = "幕僚長可以自己派工給員工"
 EFFECT_2 = ("幕僚長的提議一到就開始派工，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、"
             "或幕僚長有問題要問你時，還是會停下來等你。")
 OFF4 = {"create_cards": False, "dispatch": False, "routines": False, "auto_continue": False}
-LATER = "不必每次問、倒數後自動接續這兩項會在之後的版本加入。"
+TITLE_5 = "碰到上限暫停的工作，倒數結束後自動接續"
+EFFECT_5 = ("派工碰到每天上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份派工最多 3 次，全部加起來每天最多 5 次）。"
+            "被打斷的那一步不會重做，下一步會被告知上一步可能不完整。AI 工具沒說恢復時間時（Claude Code 目前都沒說）不會自己接續；群組不會自己接續。")
+LATER = "第 4 項（不必每次問）會在之後的版本加入。"
 
 
 class TableTests(unittest.TestCase):
-    def test_the_five_items_of_adr_0003_and_only_three_work_in_this_version(self):
-        # P44-2 made item 3 work and gave the block its two new booleans; item 5 (P44-4) is in the block but not yet in the table
+    def test_the_five_items_of_adr_0003_and_only_four_work_in_this_version(self):
+        # P44-2 made item 3 work and gave the block its two new booleans; P44-4 made item 5 work; item 4 is the one that is not here
         self.assertEqual([i["id"] for i in autonomy.ITEMS], [1, 2, 3, 4, 5])
-        self.assertEqual([i["id"] for i in autonomy.ITEMS if i["active"]], [1, 2, 3])
-        self.assertEqual([i["key"] for i in autonomy.ITEMS if i["active"]], ["create_cards", "dispatch", "routines"])
+        self.assertEqual([i["id"] for i in autonomy.ITEMS if i["active"]], [1, 2, 3, 5])
+        self.assertEqual([i["key"] for i in autonomy.ITEMS if i["active"]], ["create_cards", "dispatch", "routines", "auto_continue"])
         self.assertEqual(autonomy.KEYS, ("create_cards", "dispatch", "routines", "auto_continue"))
         for item in autonomy.ITEMS:
             self.assertEqual(item["adr"], "0003")
@@ -47,6 +50,8 @@ class TableTests(unittest.TestCase):
         first, second = autonomy.ITEMS[0], autonomy.ITEMS[1]
         self.assertEqual((first["title"], first["effect"]), (TITLE_1, EFFECT_1))
         self.assertEqual((second["title"], second["effect"]), (TITLE_2, EFFECT_2))
+        fifth = autonomy.ITEMS[4]
+        self.assertEqual((fifth["title"], fifth["effect"]), (TITLE_5, EFFECT_5))
         self.assertEqual(autonomy.LATER_NOTE, LATER)
 
     def test_the_three_things_never_allowed_are_listed(self):
@@ -143,7 +148,7 @@ class SettingsRoutes(Http, unittest.TestCase):
         self.assertEqual(status, 200, out)
         self.assertEqual(out["autonomy"], OFF4)
         self.assertEqual([i["id"] for i in out["items"]], [1, 2, 3, 4, 5])
-        self.assertEqual([i["id"] for i in out["items"] if i["active"]], [1, 2, 3])
+        self.assertEqual([i["id"] for i in out["items"] if i["active"]], [1, 2, 3, 5])
         self.assertEqual(out["later_note"], LATER)
         self.assertEqual(len(out["never"]), 3)
         self.assertIn("per_turn_usd", out["limits"])
