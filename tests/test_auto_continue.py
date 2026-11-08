@@ -474,6 +474,20 @@ class TheRoutineRunnerCallsItTests(unittest.TestCase):
         self.assertIsNotNone(runner.last_error)
         self.assertNotIn("boom", runner.last_error, "the log has codes, not messages")
 
+    def test_routines_or_runs_that_cannot_be_read_do_not_stop_the_dispatches_from_going_on(self):
+        calls = []
+
+        class Spy:
+            def tick(self_inner):
+                calls.append(1)
+        runner = self.runner(Spy())
+        folder = cfg.state_dir() / "routines"
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (folder / "routines.json").write_text("{ not json", encoding="utf-8")
+        self.assertEqual(runner.tick(), {})
+        self.assertIsNotNone(runner.last_error, "the routines say they cannot be read")
+        self.assertEqual(len(calls), 1, "and item 5's module is still asked")
+
     def test_without_it_the_pass_is_as_it_was(self):
         self.assertEqual(self.runner(None).tick(), {})
 

@@ -218,6 +218,7 @@ class RoutineRunner:
         runs, runs_problem = rt.read_runs()
         if problem or runs_problem:
             self.last_error = problem or runs_problem
+            self._continue()                                  # a routine file that cannot be read is no reason to leave a dispatch waiting
             return out
         self.last_error = None
         auto = self._auto()
