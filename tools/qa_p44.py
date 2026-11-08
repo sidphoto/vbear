@@ -95,6 +95,7 @@ CLOSED_FROM, CLOSED_TO = (23, 30), (0, 30)             # local times between whi
 LEAD_MIN = 2                                           # a routine of the stages with the console running is due this many minutes from now
 LEAD_CLOSED_MIN = 3                                    # a routine that is to be missed while the console is stopped
 CLOSED_WAIT_MIN = 4                                    # the console stays stopped this long
+ON_TIME_S = 120                                        # vbear/routine_rules.py ON_TIME_S: a slot is on time this long after it is due
 PMSET = "/usr/bin/pmset"
 PS = "/bin/ps"
 PREFIX = "QA44 "
@@ -641,11 +642,11 @@ class Run:
         self.memo["ids"][stage] = {k: {"id": v["id"], "slot": v["slot"]} for k, v in made.items()}
         latest = max(v["due"] for v in made.values())
         now = self.clock()
-        back = max(now + minutes_closed * 60, latest + 60)
+        back = max(now + minutes_closed * 60, latest + ON_TIME_S + 60)   # past the product's on-time window, or the slot is on time, not missed
         self.memo["ids"][stage + "-back"] = back
         self.save_memo()
         self.check.ok(f"{stage}: routine {', '.join(made)} made, due at {', '.join(minutes_text(v['due'], self.tz) for v in made.values())}, item 3 {'on' if item3 else 'off'}")
-        self.check.ok(f"STOP the console now: check with ps -E that its VBEAR_HOME is the state folder, then kill -TERM its pid. Start it again on the same state and port not before {minutes_text(back, self.tz)}")
+        self.check.ok(f"STOP the console now: check with ps -E that its VBEAR_HOME is the state folder, then kill -TERM its pid. Start it again on the same state and port not before {minutes_text(back + 59, self.tz)} (rounded up to the next minute)")
         self.stopped = True
 
     def wake1_prepare(self) -> None:
@@ -728,8 +729,9 @@ class Run:
             if asked is None:
                 raise Stop("the first employee was not asked")
             # The first turn is on. The day's limit is brought down to what is spent: the next employee is not asked and the round stops.
-            now_spent = self.spent()
-            low = max(0.01, math.floor((now_spent or spent) * 100 + 1e-9) / 100)
+            # Not the ledger of now: while a turn runs it counts the per-turn limit too (meetings.turn_cost), so the lamp would turn
+            # green again when the turn ends. What was spent before the round (no turn running) is what the day has for sure.
+            low = max(0.01, math.floor(spent * 100 + 1e-9) / 100)
             code, _ = self.c.call("/api/setup/daily-limit", "POST", {"daily_usd": low})
             if code != 200:
                 raise Stop(f"the daily limit could not be brought down ({code})")
