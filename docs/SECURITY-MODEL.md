@@ -1542,11 +1542,11 @@ own** after one confirmation. What it never does is fixed by the structure of th
 - **Money.** The chief of staff's call is counted in the day (`GET /api/meetings/ledger` lists `chief` among what it includes).
   A step is a chat turn: the chat's per-turn limit and the daily limit apply. The proposal card says the most it can cost
   (steps × the per-turn limit) and what is left today before the person confirms; when the daily limit is reached, the
-  dispatch pauses and says so, and only the person's 「繼續」 goes on. VBear does not count down and does not continue anything by
-  itself in this version.
+  dispatch pauses and says so, shows a countdown to the time the limit is over (v0.18) and then asks the person to press 「繼續」; only with
+  自己動手 item 5 does VBear press it itself (see "Skills and routines (v0.18)", "Continuing a paused dispatch": `resume_dispatch(…, by="vbear")`, at most once per pause, three per dispatch and five a day).
 - **The person can stop it and see all of it.** 「停止」 stops the running turn and sends no more; an employee VBear made can be
   taken back (switched off, not deleted; the chat record stays). `#/actions` (「AI 自己做了什麼」, `GET /api/actions`) lists
-  every action with who decided: the person, 自己動手 item 1, item 2, or VBear. A message that was sent cannot be taken back,
+  every action with who decided: the person, 自己動手 item 1, item 2 (and, from v0.18, the routines' items 3 and 5), or VBear. A message that was sent cannot be taken back,
   and the list says so. 「繼續」 does not redo a step that was sent and did not end normally; it goes to the next one, and the
   page says so beside the button.
 
@@ -1885,16 +1885,57 @@ A chat that began with the folder on has a fingerprint that includes the folder'
 The chat-check reports gain `shared` and `shared_steps`; v0.17.0 reads `mode`, `passed` and the version only (that it accepts the extra keys is read, not run: 待確認).
 No key of `config.json` was added.
 
-## Waking up and keeping the Mac awake (v0.18, P44-3)
+## Skills and routines (v0.18)
 
-Part of "Skills and routines (v0.18)" (ADR 0010 point 6; the rest of that section is written with the release). A routine only runs while
-VBear is open and the Mac is awake: VBear installs nothing that runs when it is closed (no LaunchAgent, no login item, no crontab) and
-schedules no `pmset` wake-up. This section covers the two things P44-3 added.
+A **skill** is words the person saved in VBear to say to an employee later; a **routine** hands one employee a job at times the person chose; a paused dispatch can be **continued** when its limit is over. ADR 0010 gives the reasons. What is new is
+**VBear starting work while the person is away** (a routine with 自己動手 item 3; a continuation with item 5), one **new program VBear starts** (`caffeinate`, only on the person's switch) and **words the person saved** reaching the employees later. The part that
+stays as it was is fixed by the structure of the code: every message goes through `ChatService` into a safe-mode chat, so every command and every file change is still asked of the person, a card nobody answers within 5 minutes counts as refused, and **no card is answered**
+by any of this code. `vbear/runtime/` gains one function, `memory_rules.check_text` (and its tests); `agent_sessions.py`, `daemon*.py`, `chat_protocol.py`, `codex_chat_protocol.py`, `chat_session.py`, `chat_store.py` (`KINDS`, `origin_ok`) and `proctrack.py` are not touched, so the launch
+boundary of every chat is v0.17.1's.
+
+### Skills
+
+- **Only the person saves one, and only in the browser.** `<state>/skillbook/skills.json` (0600, `GuardedJsonStore`: `{v: 1, skills: […]}`; an id `k-<12 hex>`, a name of 1 to 40 characters, a text of 1 to 4,000, a `source` and two times) holds at most 100 skills; `log.jsonl` has `{at, action, id}` and
+  never a name or a word. The writers (`add`, `edit`, `delete`, `store`) are called only from `vbear/server.py`'s routes, `POST /api/my-skills`, `POST /api/my-skills/<id>` and `POST /api/my-skills/<id>/delete` (token and `X-VBear`, closed bodies). The ways to a save are three: the person
+  writes one on the 技能 page; presses 「存成技能」 beside a line of a chat or a group (a line the employee wrote needs the tick 「我確定」 in the dialog and `confirm_warning: true`, 409 `employee_words` otherwise, because once saved it is something the person says to the employee); or presses
+  「整理成技能」 on a one-to-one chat and then changes the proposal and presses 「存」. `tests/test_autonomy_guard.py` (rule 8) fails the build when any module but `server.py` calls a writer, and when `skillbook_suggest*.py` imports `skillbook`, with a small sample that shows the rule fires.
+- **The words are judged as memory's are.** The name and the text go through `memory_rules.check_text` (the same refuse and warn rules as `check`, which is unchanged): a password, a key, an account, a card or an identity number is refused (400 `skill_refused`); something that sounds like an order to act
+  without asking, a phone number or an address asks for `confirm_warning` (409). A `skills.json` that cannot be read is moved aside by the store (as memory's is) and the page says so; chats go on and no skill can be saved until the person looks.
+- **A skill is not an instruction of VBear's.** It is never in the system prompt, never on a role card and never written as a skill file of an AI tool (`skillbook*.py` import none of `armory`, `loadout`, `skill_fit`, `scan` or the writers of `agent_profiles`, and write nothing outside `<state>/skillbook/`); `memory_rules.combine`, `prompt_sha`, the
+  `chat-prompt` format, `--append-system-prompt` and Codex's `developerInstructions` are as they were. 「用技能」 only puts the words in the box of a chat or a group (a `GET /api/my-skills` and nothing sent); the person reads them, may change them, and presses send, so
+  what goes out is **the person's own message**, with the weight of one the person typed. A test with the real daemon and the fake Claude Code compares the `argv`, the first message and the `prompt_sha` of a chat that used a skill with one that typed the same words, and they are equal.
+- **「整理成技能」 sends the conversation to Anthropic.** It is one tool-less Claude Code call on the meetings' engine (`HeadlessBoard`, as 「整理要記住的事」): the newest messages of one one-to-one chat (the person's and the employee's words, no tool output, no allow card) go to Anthropic through the
+  person's own Claude Code, also when the chat is a Codex employee's; a Codex-only Mac is told it needs Claude Code. The preview (`POST /api/my-skills/suggest/preview`) costs nothing and says how many messages, where they go and the most it can cost, **US$0.10**, and it is counted in the day
+  (the spending kind `skill_suggest`, in the ledger's `includes`). The conversation is put in the prompt as one escaped JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING`; the answer must be `{items: […]}` with at most one `{name, text, note}` and no other field, or it is void; the record
+  `<state>/skillbook/suggest/ks-<12 hex>.json` keeps sizes and sums, not the conversation. Nothing is saved by it.
+
+### Routines
+
+- **Only the person makes, changes, switches on, switches off or deletes one.** `<state>/routines/routines.json` (0600): at most 20 routines, ten of them on; each is one employee who can chat (a Claude Code or Codex card), a text of 1 to 4,000 characters (the same check as a skill's), days of the week and one to three
+  times at least 60 minutes apart. The writers (`create`, `edit`, `set_enabled`, `delete`, `set_settings`, `store`) are called only from `vbear/server.py`'s `POST /api/routines`, `POST /api/routines/<id>`, `…/delete` and `POST /api/routines/settings` (token and `X-VBear`); the functions that record a run are called only in `routines.py`,
+  `routine_runner.py` and `server.py`; `routine*.py` never calls `save_profile` or `create_profile`. `tests/test_autonomy_guard.py` (rule 9) fails the build otherwise. The chief of staff's proposal format is unchanged (`additionalProperties: false`, no field for a routine or a skill), VBear does not read an
+  employee's words for anything, and **what an employee says (「我幫你排好每天的工作了」) makes nothing**. There is **no 自己動手 item** for making a routine: item 3 makes a routine *start* and *catch up*, never exist or be switched on.
+- **A run is one turn of a new chat.** `RoutineRunner` (`vbear/routine_runner.py`, a thread started by `serve()`, one pass every 15 seconds, the lock `<state>/routine-runner.lock`) opens a chat with `ChatService.create` and sends with `ChatService.send_for_routine`. That method takes only a chat a routine opened (the run is `starting` and names the
+  chat), is called nowhere else (`tests/test_autonomy_guard.py` knows the name only in `chat_service.py` and `routine_runner.py`), is reached by no route of the browser and adds no `origin` (the chat record has no new field). What is sent is one fixed line (that this is a routine the person set up, that the person may not be at the Mac, that commands and file
+  changes will still be asked and that no answer counts as refused), the name and the time as one escaped JSON string between `BEGIN_UNTRUSTED_JSON_STRING` and `END_UNTRUSTED_JSON_STRING`, a blank line, and then the person's text outside the markers (it is the person's instruction). The chat then runs by the chat's own rules:
+  safe mode, a card for every command and file change, **a card nobody answers in 5 minutes counts as refused**, 10 minutes a turn, the per-turn limit, the daily limit, memory and the shared folder as that employee's switches say. A routine never uses the full mode or a terminal, never installs or inserts a skill, never changes a role card, never writes `config.json` and never answers a card.
+  That a model follows the fixed line has no record (待真機驗證).
+- **Without item 3, a routine only reminds.** At the time (within 2 minutes, and VBear looking all along) the run is `waiting` and a line over every page says so (`GET /api/waiting`, names, times and counts, no word of any text) with 「現在開始」 and 「這次跳過」; nothing is sent and nothing is spent. A reminder nobody pressed is put away at the routine's next time or after 12 hours.
+  With item 3 on the run starts by itself (`by: auto3`) and 「AI 自己做了什麼」 says 「自己動手第 3 項」. Item 3 is read in one place from `autonomy.read(conf)["routines"]`; a missing key, a value that is not `True` or a `config.json` that cannot be read means off (the behaviour test in rule 10 runs the runner with each and counts `send_for_routine` calls: 0).
+- **One time of a routine starts at most once.** `<state>/routines/runs.jsonl` (append-only; `{run_id, routine_id, slot, state, by, why, chat_id, turn, cost_usd, reason, at}`; no name and no text) is the record: a slot that has a run never gets another, whatever a restart, a clock set back or a catch-up does. Clock changes (a day that skips an hour or repeats one) are handled
+  on the local clock. Runs go one at a time; an employee who is busy or a full house is asked again every 30 seconds for 12 minutes and then the run is `skipped`. If the console stops between the send and the note, the next start reads the chat: the message is there and it is noted, or it is not and the run is `uncertain`
+  and **is never sent again by itself**.
+- **Money.** A run is one chat turn, counted in the chat: the per-turn limit, then the routines' own daily limit, then the daily limit, which still caps everything. The routines' limit is `daily_usd` in `<state>/routines/settings.json` (never in `config.json`), **half of the daily limit unless the person sets it, and never above the daily limit** (the person decided on 2026-11-08);
+  once the routines spent it, no new run starts (one that is going can spend one more turn's limit). A run is not started with the day's lamp red or the ledger unreadable; it is `skipped` with the reason, not counted down and not continued, and the next time comes as always. Codex employees' runs are estimated from tokens, as in a chat.
+
+### Waking up and keeping the Mac awake
+
+A routine only runs while VBear is open and the Mac is awake: VBear installs nothing that runs when it is closed (no LaunchAgent, no login item, no crontab, no change to how the app starts or ends) and schedules no `pmset` wake-up. This part covers the two things around it.
 
 - **Missed times are only a list, unless item 3 is ticked.** The runner writes `<state>/routines/heartbeat.json` (`{"v": 1, "at": <seconds>}`,
   0600, replaced whole, never followed through a link, no name and no word of a routine) about once a minute. When two looks are more than
   90 seconds apart (the Mac slept) or, at a console's start, the file is older than that (VBear was closed), the times that passed in
-  between are *missed*: counted from the later of the routine's `enabled_at` and the last heartbeat, at most 7 days back. No heartbeat file
+  between are *missed*: counted from the later of the routine's `enabled_at` and the last heartbeat, at most seven days back. No heartbeat file
   (a fresh upgrade) or one that cannot be read counts nothing. Every routine offers only its **latest** missed time (a run in the state
   `waiting`, `why: catch_up`); the earlier ones are recorded `missed` so that no time is ever done twice. Nothing is sent by this: the
   person presses 補做 (`POST /api/routines/missed/<id>`, `X-VBear`; the run is `by: you`) or 不用了. Only with 「自己動手」 item 3 (read in the
@@ -1905,17 +1946,52 @@ schedules no `pmset` wake-up. This section covers the two things P44-3 added.
   just its ordinary reminder or run and does not also catch up.
 - **`caffeinate` is the one program VBear starts that is not an AI tool**, and only when the person has switched on 「有工作在跑時不讓 Mac
   睡著」 (`keep_awake` in `<state>/routines/settings.json`, default off, changed only by `POST /api/routines/settings`, never in
-  `config.json`). While a routine's run is going or a dispatch is running, `vbear/keep_awake.py` runs
+  `config.json`). While a routine's run is going or a dispatch is running, `vbear/keep_awake.py` runs `/usr/bin/caffeinate` with the argv
   `["/usr/bin/caffeinate", "-i", "-w", "<the console's pid>"]`: a constant, no shell, no input or output, nothing taken from a record, a
   request or a setting. `-i` only stops *idle* sleep (a closed lid still sleeps), `-w` ends it when the console ends, and it is ended by
   VBear 30 seconds after the last work or at once when the switch is turned off. `serve()` alone hands the launch to a console
   (`Console.keep_awake_command`); a console built any other way has none and starts nothing. A guard test (rule 12 of
-  tests/test_autonomy_guard.py) keeps it so: no other file of `vbear/` names the program, its argv is one constant list, `routine*.py`,
+  `tests/test_autonomy_guard.py`) keeps it so: no other file of `vbear/` names the program, its argv is one constant list, `routine*.py`,
   `skillbook*.py` and `auto_continue.py` start no program, and only `server.py` imports the module.
-- **Residual risks.** The wall clock is the only evidence of a sleep: a clock that is set forward by hand looks like one (the missed times
-  are then offered, or with item 3 queued once, within the limits above). A user who switches `keep_awake` on keeps an idle Mac awake
-  while a long dispatch runs, which costs battery. `caffeinate` is the macOS system tool; whether a real Mac sleeps despite it, and a real
-  sleep and wake (not a stopped VBear, whose detection is the same), were **not tried on a real machine by this task** (待真機驗證).
+
+### Continuing a paused dispatch
+
+- **A countdown, then a reminder; the press itself only with item 5.** A dispatch paused for the daily limit (the time is midnight on this Mac) or for an AI tool's plan limit (the time the tool reported: Codex does, Claude Code does not, and then the page says 「AI 工具沒說什麼時候恢復」, there is no countdown and nothing continues
+  by itself) shows 「還有 H 小時 M 分可以繼續」 on its page and in the line over every page; the group page shows the same for a round paused at the daily limit. Two minutes after the time, if the lamp is not red and (for a plan limit) the tool's last report does not say full, the line says 「派工『X』可以繼續了」 with 「繼續」 (the old `resume_dispatch`, `by: you`).
+  With 自己動手 item 5, `vbear/auto_continue.py` makes the press (`resume_dispatch(did, by="vbear")`, which takes only `you` or `vbear`, writes a `continued` event by `vbear` that v0.17.1 reads, and refuses a step that may have been sent) and notes it in `<state>/routines/auto-continue.jsonl` (`{at, dispatch_id, event_seq, pause_seq, reason, item: 5}`, no name or word). **The step the limit cut off is not done again** and the next step is told that the
+  one before did not end normally. Limits: once for a pause, three for a dispatch, five a day in all (the local day), not again when the dispatch was stopped by the same reason within 10 minutes of a press, not when the time went by 12 hours ago (listed for the person instead), and never for another reason (`uncertain`, `interrupted`, `runner_error`, `turn_*`, `busy`, `limit`). A group never continues by itself
+  (`group*.py` do not import `auto_continue`): only the person's words make an employee answer. Item 5 is read in one place, `autonomy.read(conf)["auto_continue"]`; off means `resume_dispatch` is not called (rule 11). The records have no new field (`BYS` and `_EVENT_FIELDS` are unchanged); 「AI 自己做了什麼」 shows the press as 「自己動手第 5 項」.
+
+### What stays as it was
+
+`routine*.py`, `skillbook*.py` and `auto_continue.py` are in the autonomy guard's scan with the rules of the chief of staff, dispatch and groups: they never write `config.json`, start a terminal or a full-mode launch, install or insert a skill, make or change a role card or call `answer`, and the
+scan of `autonomy.py` goes on. `config.json` gains two keys inside `autonomy` (`routines`, `auto_continue`, exactly four booleans), written only by `POST /api/settings/autonomy`; the routines' own settings are in `<state>/routines/settings.json`. Logs hold ids, times, states, counts and amounts, never a name or a word of a skill or a routine
+(`log.jsonl`, `runs.jsonl`, the console's log, the daemon's log, errors). `tests/test_skills_routines_flow.py` walks it once over HTTP (a skill saved and used, a routine made, the reminder, 「現在開始」, item 3 on and a run by itself, a closed VBear and the catch-up, a paused dispatch and item 5) with a fake clock and a fake chat service, and shows `config.json` changed
+only where the settings page's route writes it. `tools/qa_p44.py` is the coordinator's real-machine check through the HTTP API.
+
+### A known gap in the day's money
+
+The chat process in the runtime adds up the day's spending in `_chat_day_spent` (`vbear/runtime/daemon_chat.py`) from a fixed list of kinds (the chief of staff, memory suggestions and the meetings). It **does not include** what 「整理成技能」 (`skill_suggest`) spent: the guard rules forbid the runtime to know about skills, and this release does not change the launch boundary. The result is one-sided:
+the per-turn check of a chat can allow up to US$0.10 more for each 「整理成技能」 run that day than the daily limit says, while 「整理成技能」 itself checks the day including the chats, and the ledger counts it. To be settled in a later release.
+
+### Residual risks of skills and routines
+
+1. **A saved line of an employee becomes the person's order.** 「存成技能」 on an employee's line keeps words the employee wrote, and later 「用技能」 sends them as the person's message. What stands in the way is the tick 「我確定」 and the sentence at save time, the box where the person reads and may change the words before sending, and that every command and every file change is still a card.
+   A skill that sounds like an order to act without asking asks for `confirm_warning` again. A prompt-injection path remains: an employee that read something hostile writes a line, the person saves it without reading, uses it later.
+2. **A routine runs when the person is away, with item 3 ticked.** The model's reply (a draft, a summary) is made and paid for within the routines' daily limit; what the employee wants to run or change is a card that counts as refused after 5 minutes, so it does not happen. A routine's text is the person's, but a file the employee reads or a page it fetches can steer the reply (the existing risk of any chat).
+3. **A command the person allowed can reach VBear itself.** It can read the access token and call the API, including `POST /api/routines` (make and switch on a routine), `POST /api/my-skills` and `POST /api/settings/autonomy` (tick items 3 and 5): the existing risk of every chat, now with more to reach. Nothing runs from a card nobody answered, so this needs the person to allow the command with their own hand.
+4. **Item 5 continues in the night.** A dispatch continues by itself after the limit's time; the step cut off by the limit is not redone, but the next step may get an incomplete reply (it is told so). The limits (once, three, five, ten minutes) bound it.
+5. **The clock is the evidence.** A clock set forward by hand looks like a sleep (missed times are offered, or with item 3 queued once, within the limits); a clock set back cannot make a time run twice. `keep_awake` on keeps an idle Mac awake while a long dispatch runs, which costs battery. `caffeinate` is the macOS tool; whether it really holds off the sleep, and a Mac that really sleeps and wakes (a closed VBear stands in, and
+   the detection is the same), were **not tried on a real machine** by this task (待真機驗證).
+6. **「整理成技能」 sends a conversation to Anthropic** (also from a Codex employee's chat) and its US$0.10 is not in the chat process's own count of the day (the known gap above).
+7. **Codex employees and routines were not tried on a real machine**, and the automatic continuation after midnight was only run on a fake clock; both are not verified on a real machine. How a model treats a skill's words and the routine's fixed line has no record (待真機驗證).
+
+### Going back to v0.17.1
+
+Read from the code and not run. `<state>/skillbook/`, `<state>/routines/` and `<state>/routine-runner.lock` stay and are not read: routines no longer run and nothing is caught up, skills are not offered, nothing is deleted. A running `caffeinate` ends with the v0.18.0 console (`-w`). `config.json`'s `autonomy` keeps
+`routines` and `auto_continue`; v0.17.1 reads `create_cards` and `dispatch` only, and a save on its settings page writes those two back (items 3 and 5 come back off). Chats, dispatches and groups have no new field and read as before: a routine's chats are ordinary one-to-one chats, 「用技能」 sent ordinary messages, and an automatic continuation is a
+`continued` by `vbear` (in v0.17.1's `BYS`), shown as 「VBear」; `auto-continue.jsonl` is not read. A paused dispatch or group waits for the person's press. The `memory_rules.check_text` function is unused. 「整理成技能」's records are in their own folder, which v0.17.1's ledger does not read (tested with v0.17.1's code), so that day's total in v0.17.1 leaves them out (at most US$0.10 each); the ledger does not become unreadable.
+How a v0.18.0 process still running at that moment ends: 待確認.
 
 ## The start-up page (v0.12)
 
