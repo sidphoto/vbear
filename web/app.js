@@ -12298,9 +12298,13 @@ async function refreshWaitingBar() {
   let rows = [];
   try { const r = await api.get("/api/waiting"); rows = r && Array.isArray(r.waiting) ? r.waiting : []; } catch (_) { rows = []; }
   const text = waitingBarText(rows);
-  if (!text) { bar.hidden = true; setKids(bar); return; }
+  const resume = resumeBarRows(rows);
+  if (!text && !resume.length) { bar.hidden = true; setKids(bar); return; }
   bar.hidden = false;
-  setKids(bar, el("span", { "data-waiting": "text" }, text), " ", el("a", { href: "#/routines", "data-waiting": "link" }, "去處理"));
+  setKids(bar, text ? el("span", { "data-waiting": "text" }, text) : null, text ? " " : null,
+    text ? el("a", { href: "#/routines", "data-waiting": "link" }, "去處理") : null, text && resume.length ? "　" : null,
+    resume.length ? el("span", { "data-waiting": "resume" }, (text ? "" : "等你決定：") + resume[0].text + (resume.length > 1 ? `，另外還有 ${resume.length - 1} 件` : "")) : null,
+    resume.length ? " " : null, resume.length ? el("a", { href: resume[0].href, "data-waiting": "resume-link" }, "去看看") : null);
 }
 
 async function viewRoutines() {
@@ -14606,7 +14610,7 @@ async function viewGroup(id) {
   const drawControls = () => {
     const round = view.round && typeof view.round === "object" ? view.round : null;
     const kids = [];
-    if (round && round.pause) kids.push(notice("warn", round.pause.text || "這一句暫停了。"));
+    if (round && round.pause) kids.push(notice("warn", el("div", null, round.pause.text || "這一句暫停了。", countdownNode(round.pause.countdown, COUNTDOWN_GROUP_NOTE))));
     const act = (what, label, cls) => el("button", { type: "button", class: `btn small${cls ? " " + cls : ""}`, "data-group": what, disabled: busy, on: { click: () => groupAct(what) } }, label);
     const buttons = [can().continue === true ? act("continue", "繼續（請剩下的人回答）", "primary") : null,
       can().drop === true ? act("drop", "不用了") : null, can().stop === true ? act("stop", "停止") : null].filter(Boolean);
@@ -15357,6 +15361,7 @@ async function viewDispatchDetail(token, id) {
     ].filter(Boolean);
     setKids(root, crumb, head,
       v.pause ? notice("warn", el("div", { "data-dispatch": "pause" }, el("b", null, "暫停了　"), v.pause.text || "原因不明。",
+        dispatchCountdown(v.pause),
         can.continue && dispatchContinueNote(v) ? el("p", { class: "small", style: "margin:6px 0 0", "data-dispatch": "continue-note" }, dispatchContinueNote(v)) : null)) : null,
       v.state === "done" ? notice("info", "每一步都做完了。") : null,
       v.state === "stopped" ? notice("info", "你停止了這份派工。已經送出的訊息收不回來，沒有再送新的。") : null,
@@ -15411,7 +15416,7 @@ async function viewActions() {
     setKids(box,
       unreadable ? notice("warn", `有 ${unreadable} 份派工的紀錄讀不出來，沒有列在這裡（它們還在，沒有被刪掉）。`) : null,
       rows.length ? el("ul", { class: "mt-list" }, rows.map((r) => {
-        const auto = r.by === "auto1" || r.by === "auto2" || r.by === "auto3";
+        const auto = r.by === "auto1" || r.by === "auto2" || r.by === "auto3" || r.by === "auto5";
         const routineRow = r.kind === "routine_started";
         const stopHere = r.can_stop === true && !stopShown.has(r.dispatch_id);
         if (stopHere) stopShown.add(r.dispatch_id);
@@ -15513,6 +15518,34 @@ function chatOriginFill(line, origin) {
   });
 }
 // ---------- end of the chief of staff and the dispatch ----------------------------------------------------------------------------
+
+// ---------- the countdown (v0.18, P44-4, ADR 0010 point 6) ----------
+// A dispatch or a group that stopped for a limit (the day's money, or an AI tool's plan) shows when it can go on, and the line over every page lists
+// them. The words come from the server (`countdown.text`, a row's `text`); this block only draws what it is given, makes no request, and sets every name
+// and word as text. A dispatch goes on by itself only when 「自己動手」 item 5 is ticked, a group never does, and the page says both.
+const COUNTDOWN_DISPATCH_NOTE = "設定頁勾了「自己動手」第 5 項時，到了恢復時間 VBear 會自己按「繼續」（每份派工最多 3 次）；沒勾，就由你按「繼續」。";
+const COUNTDOWN_UNKNOWN_NOTE = "沒有恢復時間，VBear 不會自己接續；等你確認 AI 工具可以用了，再按「繼續」。";
+const COUNTDOWN_GROUP_NOTE = "群組不會自己接續，到時候請你按「繼續」。";
+function countdownNode(cd, note) {
+  if (!cd || typeof cd !== "object" || typeof cd.text !== "string" || !cd.text) return null;
+  const state = cd.state === "ready" || cd.state === "unknown" ? cd.state : "counting";
+  return el("p", { class: "small", "data-countdown": state }, el("b", null, cd.text), note ? el("span", { class: "muted" }, "　" + note) : null);
+}
+function dispatchCountdown(pause) {
+  const cd = pause && typeof pause === "object" ? pause.countdown : null;
+  return countdownNode(cd, cd && cd.state === "unknown" ? COUNTDOWN_UNKNOWN_NOTE : COUNTDOWN_DISPATCH_NOTE);
+}
+// The rows of the line over every page that are about a limit: [{ text, href }] (a name, the server's words, a link).
+function resumeBarRows(rows) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!r || typeof r !== "object" || typeof r.name !== "string" || typeof r.text !== "string") continue;
+    if (r.kind === "dispatch_resume" && typeof r.dispatch_id === "string") out.push({ text: `派工「${r.name}」${r.text}`, href: `#/dispatch/${encodeURIComponent(r.dispatch_id)}` });
+    else if (r.kind === "group_resume" && typeof r.group_id === "string") out.push({ text: `群組「${r.name}」${r.text}`, href: `#/chat/group/${encodeURIComponent(r.group_id)}` });
+  }
+  return out;
+}
+// ---------- end of the countdown ----------
 
 // ---------- memory (P42-1, P42-3) ----------------------------------------------------------------------------------------
 // The person's memory (#/memory): a few lines about them, their work and their decisions, the same for every employee. Only the
