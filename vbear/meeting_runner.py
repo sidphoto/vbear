@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from . import agent_profiles as ap, chief, config as cfg, meeting_rules as rules, meetings as mt, memory_suggest, staffing as st, try_spend
+from . import agent_profiles as ap, chief, config as cfg, meeting_rules as rules, meetings as mt, memory_suggest, skillbook_suggest, staffing as st, try_spend
 from .runtime import chat_store
 from .board_engine import HeadlessBoard, Sources, _select, _sha, opinions_for_chair, participant
 # the names the server and the tests have always found here
@@ -129,7 +129,8 @@ class MeetingRunner(HeadlessBoard):
         """A meeting shares the day with the staffing meetings (staffing_runner), the chief of staff's proposals (chief_runner)
         and the chats (P36)."""
         return [(self.ids, self.load, self.per_call), (st.record_ids, st.load, st.per_call_of),
-                chat_store.spend_kind(self.clock), try_spend.spend_kind(), chief.spend_kind(), memory_suggest.spend_kind()]
+                chat_store.spend_kind(self.clock), try_spend.spend_kind(), chief.spend_kind(), memory_suggest.spend_kind(),
+                skillbook_suggest.spend_kind()]
 
     # -- a new meeting ---------------------------------------------------------------------------------------------
 
@@ -358,4 +359,4 @@ class MeetingRunner(HeadlessBoard):
             running = self.job["meeting_id"] if self.job else None
         return {"spent_usd": mt.fmt(day), "daily_usd": mt.fmt(limits["daily_usd"]), "per_call_usd": mt.fmt(limits["per_call_usd"]),
                 "meeting_usd": mt.fmt(limits["meeting_usd"]), "lamp": mt.lamp(day, limits), "running": running,
-                "blocked": (cfg.state_dir() / f"{WORKER}.blocked").exists(), "note": COST_NOTE, "includes": ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"]}
+                "blocked": (cfg.state_dir() / f"{WORKER}.blocked").exists(), "note": COST_NOTE, "includes": ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest", "skill_suggest"]}

@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -49,6 +50,7 @@ from . import loadout as loadout_mod
 from . import model_options
 from . import chat_service as chat_service_mod
 from . import memory as memory_mod
+from . import skillbook as skillbook_mod
 from . import shared_folder
 from . import claude_verify
 from . import codex_verify
@@ -69,8 +71,10 @@ from . import role_departments
 from . import translations
 from . import chief, chief_runner as chief_runner_mod
 from . import memory_suggest, memory_suggest_runner as memory_suggest_runner_mod
+from . import skillbook_suggest, skillbook_suggest_runner as skill_suggest_runner_mod
 from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
+from . import auto_continue as auto_continue_mod, keep_awake as keep_awake_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
 from . import meetings
 from . import staffing
@@ -137,12 +141,20 @@ STAFFING_RE = re.compile(r"^/api/staffing/(s-[0-9a-f]{12})(?:/(retry-preview|ret
 CHIEF_RE = re.compile(r"^/api/chief/(cos-[0-9a-f]{12})(?:/(retry|cancel))?\Z")
 # /api/memory[/<id>|/clear|/cards|/export] (P42-1, P42-2): the person's memory; only these routes write memory.json
 MEMORY_RE = re.compile(r"^/api/memory/(m-[0-9a-f]{10})\Z")
+# /api/my-skills[/<id>[/delete]] (P44-1, ADR 0010): the person's skills; only these routes write skills.json
+SKILL_RE = re.compile(r"^/api/my-skills/(k-[0-9a-f]{12})(?:/(delete))?\Z")
+# /api/my-skills/suggest[/preview | /<id>[/saved | /dismiss | /cancel]] (P44-5): suggested skills; none of these writes skills.json
+SKILL_SUGGEST_RE = re.compile(r"^/api/my-skills/suggest/(ks-[0-9a-f]{12})(?:/(saved|dismiss|cancel))?\Z")
 # /api/memory/suggest[/preview | /<id>[/saved | /dismiss | /cancel]] (P42-4): memory suggestions; none of these writes memory.json
 SUGGEST_RE = re.compile(r"^/api/memory/suggest/(ms-[0-9a-f]{12})(?:/(saved|dismiss|cancel))?\Z")
 # /api/dispatch/<id>[/confirm | /dismiss | /stop | /continue | /withdraw-card | /delete] (P40-3)
 DISPATCH_RE = re.compile(r"^/api/dispatch/(d-[0-9a-f]{12})(?:/(confirm|dismiss|stop|continue|withdraw-card|delete))?\Z")
 # /api/groups/<id>[/messages|stop|continue|drop|members|rename] (P41-1, P41-2)
 GROUP_RE = re.compile(r"^/api/groups/(g-[0-9a-f]{12})(?:/(messages|stop|continue|drop|members|rename))?\Z")
+# /api/routines[/<id>[/delete | /start] | /settings | /waiting/<run id> | /missed/<id>] (P44-2, P44-3): the person's routines; only these routes write them
+ROUTINE_RE = re.compile(r"^/api/routines/(r-[0-9a-f]{12})(?:/(delete|start))?\Z")
+ROUTINE_WAITING_RE = re.compile(r"^/api/routines/waiting/(rr-[0-9a-f]{12})\Z")
+ROUTINE_MISSED_RE = re.compile(r"^/api/routines/missed/(r-[0-9a-f]{12})\Z")       # P44-3: 補做 / 不用了 on what a sleep missed
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -190,6 +202,9 @@ class Console:
         self.port = port
         # How "open in Finder" is done (P43-1): None here, so that nothing built for a test opens a window; serve() sets it.
         self.reveal_command = None
+        # How the Mac is kept from sleeping while employees work (P44-3): None here, so that nothing built for a test starts a program;
+        # serve() sets it. It is given the fixed argv of vbear/keep_awake.py and nothing else.
+        self.keep_awake_command = None
         # Every /api/ request must carry this token (cookie or Bearer). It is
         # new for each server start and is shared only through an owner-only
         # file in the state directory. None turns the check off; only test
@@ -277,6 +292,8 @@ class Console:
                 self.chief = chief_runner_mod.ChiefRunner(on_proposal=self._on_proposal)
             if not hasattr(self, "memory_suggest"):
                 self.memory_suggest = memory_suggest_runner_mod.MemorySuggestRunner()
+            if not hasattr(self, "skill_suggest"):
+                self.skill_suggest = skill_suggest_runner_mod.SkillSuggestRunner()
             return self.meetings, self.staffing, self.chief
 
     def meeting_runner(self):
@@ -291,6 +308,10 @@ class Console:
     def memory_suggest_runner(self):
         self._boards()
         return self.memory_suggest
+
+    def skill_suggest_runner(self):
+        self._boards()
+        return self.skill_suggest
 
     def _on_proposal(self, chief_id: str) -> None:
         """A kept proposal of the chief of staff becomes a dispatch (and, when the person ticked 「自己動手」, goes on)."""
@@ -340,6 +361,28 @@ class Console:
     def group_runner(self):
         self.group_service()
         return self._group_runner
+
+    def routine_runner(self):
+        """The one routine runner (P44-2), built on first use; its thread is started by serve() only. It reads the chat service and the
+        day's ledger the way the dispatch runner does, and 「自己動手」 item 3 from the console's configuration."""
+        with self.lock:
+            if "_routine_runner" not in self.__dict__:
+                # P44-4: the pass of the routine runner also asks 「自己動手」 item 5's module whether a dispatch that stopped for a limit may go
+                # on; its press is the dispatch runner's, as VBear (the dispatch runner is looked for when the press is made, not here)
+                ledger = lambda: self.meeting_runner().ledger(self.store.conf)
+                auto = auto_continue_mod.AutoContinue(
+                    conf=lambda: self.store.conf, ledger=ledger,
+                    resume=lambda did, seq: self.dispatch_runner().resume_dispatch(did, by="vbear", expect_pause_seq=seq),
+                    usage=lambda did: self.dispatch_runner().plan_usage_of(did))
+                self._routine_runner = routine_runner_mod.RoutineRunner(
+                    chats=self.chat_service, ledger=ledger, conf=lambda: self.store.conf, auto_continue=auto,
+                    keep_awake=keep_awake_mod.KeepAwake(launch=self._keep_awake_launch), also_working=keep_awake_mod.dispatch_running)
+            return self._routine_runner
+
+    def _keep_awake_launch(self, command):
+        """Start what ``keep_awake_command`` starts, or nothing when the console has none (see ``serve()``)."""
+        start = self.keep_awake_command
+        return start(command) if start is not None else None
 
     def _chat_busy(self, chat_id: str) -> bool:
         """Whether a turn is running in a chat (True when it cannot be told: a turn that cannot be ruled out is a turn)."""
@@ -706,7 +749,7 @@ def make_handler(console: Console):
                     found = MEETING_RE.match(path)
                     return self._meeting_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path == "/api/chats":
-                    return self._chat_action(lambda: console.chat_service().list(console.store.conf))
+                    return self._chat_action(self._chat_list)
                 if path == "/api/chat-support":
                     return self._chat_action(lambda: {"support": console.chat_service().support()})
                 if path.startswith("/api/chats/"):
@@ -718,7 +761,7 @@ def make_handler(console: Console):
                         return self._error(400, "after 必須是非負整數")
                     if found.group(2) == "stream":
                         return self._chat_stream(found.group(1), after)
-                    return self._chat_action(lambda: console.chat_service().get(found.group(1), after))
+                    return self._chat_action(lambda: self._chat_detail(found.group(1), after))
                 if path == "/api/groups":
                     return self._group_call("list")
                 if path.startswith("/api/groups/"):
@@ -735,6 +778,13 @@ def make_handler(console: Console):
                     return self._chat_action(self._shared_view)
                 if path == "/api/memory/export":
                     return self._chat_action(memory_mod.export)
+                if path == "/api/my-skills":
+                    return self._chat_action(skillbook_mod.view)
+                if path == "/api/my-skills/suggest":
+                    return self._skill_suggest_call("list")
+                if path.startswith("/api/my-skills/suggest/"):
+                    found = SKILL_SUGGEST_RE.match(path)
+                    return self._skill_suggest_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path == "/api/memory/suggest":
                     return self._suggest_call("list")
                 if path.startswith("/api/memory/suggest/"):
@@ -751,6 +801,10 @@ def make_handler(console: Console):
                     return self._dispatch_call("list")
                 if path == "/api/actions":
                     return self._dispatch_call("actions")
+                if path == "/api/routines":
+                    return self._chat_action(self._routines_view)
+                if path == "/api/waiting":
+                    return self._chat_action(self._waiting_view)
                 if path.startswith("/api/dispatch/"):
                     found = DISPATCH_RE.match(path)
                     return self._dispatch_call("get", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
@@ -956,6 +1010,8 @@ def make_handler(console: Console):
                     svc, chat_id, body = console.chat_service(), found.group(1), self._body_strict()
                     call = {"messages": svc.send, "answer": svc.answer, "stop": svc.stop}[action]
                     return self._chat_action(lambda: call(chat_id, body), 202 if action == "messages" else 200)
+                if path == "/api/routines" or path.startswith("/api/routines/"):
+                    return self._routines_post(path, self._body_strict())
                 if path == "/api/groups":
                     return self._group_call("create", None, self._body_strict())
                 if path.startswith("/api/groups/"):
@@ -967,6 +1023,24 @@ def make_handler(console: Console):
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.add(b), 201)
                 if path == "/api/memory/clear":
                     return self._chat_action(lambda b=self._body_strict(): memory_mod.clear(b))
+                if path == "/api/my-skills/suggest/preview":
+                    return self._skill_suggest_call("preview", None, self._body_strict())
+                if path == "/api/my-skills/suggest":
+                    return self._skill_suggest_call("start", None, self._body_strict())
+                if path.startswith("/api/my-skills/suggest/"):
+                    found = SKILL_SUGGEST_RE.match(path)
+                    if not found or not found.group(2):
+                        return self._error(404, "not found")
+                    return self._skill_suggest_call(found.group(2), found.group(1), self._body_strict())
+                if path == "/api/my-skills":
+                    return self._chat_action(lambda b=self._body_strict(): skillbook_mod.add(b), 201)
+                if path.startswith("/api/my-skills/"):
+                    found = SKILL_RE.match(path)
+                    if not found:
+                        return self._error(404, "not found")
+                    if found.group(2) == "delete":
+                        return self._chat_action(lambda b=self._body_strict(): skillbook_mod.delete(found.group(1), b))
+                    return self._chat_action(lambda b=self._body_strict(): skillbook_mod.edit(found.group(1), b))
                 if path == "/api/shared/cards":
                     return self._chat_action(lambda b=self._body_strict(): shared_folder.set_card(b, self._memory_cards()))
                 if path == "/api/shared/reveal":
@@ -1236,6 +1310,9 @@ def make_handler(console: Console):
                 if path.startswith("/api/memory/suggest/"):
                     found = SUGGEST_RE.match(path)
                     return self._suggest_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
+                if path.startswith("/api/my-skills/suggest/"):
+                    found = SKILL_SUGGEST_RE.match(path)
+                    return self._skill_suggest_call("delete", found.group(1)) if found and not found.group(2) else self._error(404, "not found")
                 if path.startswith("/api/memory/"):
                     found = MEMORY_RE.match(path)
                     if not found:
@@ -1655,7 +1732,7 @@ def make_handler(console: Console):
                                "setup_notice": conf.get("setup_notice") is True, "upgraded": upgraded})
 
         def _autonomy_view(self, conf=None):
-            """「自己動手」: the two ticks in force, the table of ADR 0003's five items for the page, what the chief of staff may
+            """「自己動手」: the ticks in force, the table of ADR 0003's five items for the page, what the chief of staff may
             cost (for the words before an item is turned on) and the three things that stay forbidden."""
             conf = console.store.conf if conf is None else conf
             return self._json({"ok": True, "autonomy": autonomy.read(conf), "items": list(autonomy.ITEMS),
@@ -1666,7 +1743,7 @@ def make_handler(console: Console):
 
         def _autonomy_write(self, body):
             """The only way to change 「自己動手」: the person's own click in the settings (X-VBear is checked for every POST).
-            Exactly the two booleans; the rest of config.json is written back as it was read."""
+            Exactly the four booleans; the rest of config.json is written back as it was read."""
             try:
                 block = autonomy.validate(body)
             except ValueError as exc:
@@ -2043,6 +2120,106 @@ def make_handler(console: Console):
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"error": PROFILE_STORE_UNREADABLE, "code": "storage"}, 503)
 
+        # ---- routines (P44-2): the person's own presses; every write below carries X-VBear (checked for every POST) ----
+
+        def _chat_list(self) -> dict:
+            """The chat list, with the title of the chats routines opened (read from the routines' records; the chat's own record has no field)."""
+            out = console.chat_service().list(console.store.conf)
+            titles = routines_mod.chat_titles()
+            for row in out.get("chats", []):
+                if isinstance(row, dict) and row.get("id") in titles:
+                    row["routine_title"] = titles[row["id"]]
+            return out
+
+        def _chat_detail(self, chat_id, after) -> dict:
+            out = console.chat_service().get(chat_id, after)
+            title = routines_mod.chat_titles().get(chat_id)
+            if title:
+                out["routine_title"] = title
+            return out
+
+        @staticmethod
+        def _usd(value) -> str | None:
+            return None if value is None else f"{Decimal(value):.2f}"
+
+        def _routines_view(self) -> dict:
+            """GET /api/routines: every routine with its next time and its last 10 runs, the settings, today's money, and the reminders
+            that wait. Reads only; a record that cannot be read is said so and nothing is guessed."""
+            runner = console.routine_runner()
+            now = time.time()
+            routines, problem = routines_mod.read_routines()
+            runs, runs_problem = routines_mod.read_runs()
+            settings, settings_problem = routines_mod.read_settings()
+            conf = console.store.conf
+            try:
+                cards = {c["id"]: c for c in console.chat_service().cards() if isinstance(c, dict)}
+            except Exception:
+                cards = {}
+            limits = runner.limits()
+            per_turn = chat_store.limits_from(conf)["per_turn_usd"]
+            rows = []
+            for routine in routines:
+                card = cards.get(routine["profile_id"], {})
+                nxt = routine_rules.next_due(routine, now, runner.tz) if routine["enabled"] else None
+                mine = [r for r in runs if r["routine_id"] == routine["id"]][-10:][::-1]
+                rows.append({**routine, "profile_name": card.get("name"), "can_chat": card.get("can_chat") is True,
+                             "next": {"slot": nxt[0], "at": nxt[1]} if nxt else None, "per_run_usd": self._usd(per_turn),
+                             "runs": [{**r, "by_text": {"you": "你按的", "auto3": "自己動手第 3 項"}.get(r["by"])} for r in mine]})
+            return {"routines": rows, "readable": problem is None and runs_problem is None, "problem": problem or runs_problem,
+                    "cards": [{"id": c.get("id"), "name": c.get("name"), "can_chat": c.get("can_chat") is True, "reason": c.get("reason")}
+                              for c in cards.values()],
+                    "settings": {"daily_usd": self._usd(limits["routine_usd"]), "daily_usd_set": settings["daily_usd"],
+                                 "default_usd": self._usd(limits["default_usd"]), "keep_awake": settings["keep_awake"],
+                                 "problem": settings_problem},
+                    "today": {"routine_spent_usd": self._usd(limits["routine_spent_usd"]), "routine_limit_usd": self._usd(limits["routine_usd"]),
+                              "day_usd": self._usd(limits["day_usd"]), "day_left_usd": self._usd(limits["left_usd"]), "lamp": limits["lamp"]},
+                    "autonomy": {"routines": autonomy.read(conf)["routines"]}, "waiting": runner.waiting_rows(),
+                    "limits": {"per_turn_usd": self._usd(per_turn), "max_routines": routine_rules.MAX_ROUTINES,
+                               "max_enabled": routine_rules.MAX_ENABLED}}
+
+        def _waiting_view(self) -> dict:
+            """GET /api/waiting: what waits for the person, for the line over every page: only counts, names, times and ids."""
+            runner = console.routine_runner()
+            rows = runner.waiting_rows()
+            if runner.auto_continue is not None:                  # P44-4: the dispatches and groups that wait for a limit to be over
+                rows = rows + runner.auto_continue.waiting_rows()
+            return {"waiting": rows}
+
+        def _routines_post(self, path, body):
+            """The routes that write routines. The employee must be a card the chat service says can chat; the text is held to the memory's
+            rules; the settings never touch config.json."""
+            runner = console.routine_runner()
+            if path == "/api/routines":
+                return self._chat_action(lambda: routines_mod.create(body, console.chat_service().cards()), 201)
+            if path == "/api/routines/settings":
+                return self._chat_action(lambda: routines_mod.set_settings(body, runner.limits()["day_usd"]))
+            found = ROUTINE_WAITING_RE.match(path)
+            if found:
+                def decide():
+                    if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in ("start", "skip"):
+                        raise ApiError(400, "bad_request", "只接受 action，值是 start 或 skip。")
+                    run = (runner.start_waiting if body["action"] == "start" else runner.skip_waiting)(found.group(1))
+                    return {"run": run}
+                return self._chat_action(decide)
+            found = ROUTINE_MISSED_RE.match(path)
+            if found:
+                def catch_up():
+                    if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in ("run", "dismiss"):
+                        raise ApiError(400, "bad_request", "只接受 action，值是 run 或 dismiss。")
+                    return {"run": (runner.catch_up if body["action"] == "run" else runner.dismiss_missed)(found.group(1))}
+                return self._chat_action(catch_up)
+            found = ROUTINE_RE.match(path)
+            if not found:
+                return self._error(404, "not found")
+            rid, action = found.group(1), found.group(2)
+            if action in ("delete", "start"):
+                def act():
+                    if body != {}:
+                        raise ApiError(400, "bad_request", "這個動作不需要內容。")
+                    return routines_mod.delete(rid) if action == "delete" else {"run": runner.start_now(rid)}
+                return self._chat_action(act, 202 if action == "start" else 200)
+            return self._chat_action(lambda: routines_mod.edit(rid, body, console.chat_service().cards()))
+
         def _memory_cards(self) -> list:
             """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
             return console.chat_service().cards()
@@ -2298,6 +2475,48 @@ def make_handler(console: Console):
             except meetings.MeetingError as exc:
                 return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
 
+        def _skill_suggest_sources(self, conf) -> skill_suggest_runner_mod.SuggestSources:
+            """Where a skill suggestion reads from (P44-5): a chat's own files (read only) and whether a group opened the chat. Nothing of
+            the person's memory or skills is read, and nothing here writes anything."""
+            return skill_suggest_runner_mod.SuggestSources(chat=skill_suggest_runner_mod.chat_reader(), conf=conf,
+                                                           in_group=lambda chat_id: chat_id in groups_mod.member_chat_ids())
+
+        def _skill_suggest_call(self, action, suggest_id=None, body=None):
+            """The skill-suggestion endpoints (P44-5). Reads and the preview run nothing; only a confirmed preview starts the one tool-less
+            call. What the person does with an answer (`saved`, `dismiss`) is written on the suggestion's record, and the skill itself is
+            saved by the browser's own POST /api/my-skills, from the box of 存成技能: nothing here writes skills.json."""
+            try:
+                runner = console.skill_suggest_runner()
+                if action == "list":
+                    return self._json(runner.list())
+                if action == "get":
+                    return self._json(runner.get(suggest_id))
+                if action == "delete":
+                    runner.delete(suggest_id)
+                    return self._json({"ok": True, "deleted": suggest_id})
+                if not isinstance(body, dict):
+                    raise skillbook_suggest.SuggestError("bad_request", "請求內容必須是一個 JSON 物件")
+                if action == "preview":
+                    if set(body) != {"chat_id"}:
+                        raise skillbook_suggest.SuggestError("bad_request", "只需要 chat_id")
+                    return self._json(runner.preview(body["chat_id"], self._skill_suggest_sources(console.store.conf)))
+                if action == "start":
+                    if set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
+                        raise skillbook_suggest.SuggestError("bad_request", "只需要 preview_id")
+                    rec = runner.start(body["preview_id"], self._skill_suggest_sources(console.store.conf))
+                    return self._json({"id": rec["id"], "suggestion": skillbook_suggest.view(rec)}, 202)
+                if body:
+                    raise skillbook_suggest.SuggestError("bad_request", "這個動作不需要內容")
+                if action == "saved":
+                    return self._json(skillbook_suggest.view(runner.mark_saved(suggest_id)))
+                if action == "dismiss":
+                    return self._json(skillbook_suggest.view(runner.dismiss(suggest_id)))
+                if action == "cancel":
+                    return self._json(runner.cancel(suggest_id))
+                return self._error(404, "not found")
+            except meetings.MeetingError as exc:
+                return self._json({"code": exc.code, "error": str(exc)}, MEETING_STATUS.get(exc.code, 409))
+
         def _group_call(self, action, group_id=None, body=None, after=0):
             """The group endpoints (P41-1, P41-2). Reads run nothing; making a group, or adding a member, opens a chat (nothing is
             started, nothing is spent); the person's words start a round and the group runner asks the employees; 「停止」, 「繼續」 and
@@ -2427,7 +2646,7 @@ def make_handler(console: Console):
                 if action == "list":
                     return self._json(dispatcher.list())
                 if action == "actions":
-                    return self._json(dispatcher.actions())
+                    return self._json(self._with_routine_actions(dispatcher.actions()))
                 if action == "get":
                     got = dispatcher.get(dispatch_id)
                     return self._json(self._dispatch_shared(dispatch_id, got) if got["state"] == "proposed" else got)
@@ -2455,6 +2674,29 @@ def make_handler(console: Console):
                 return self._json({"error": str(exc), "code": exc.code, **exc.extra}, exc.status)
             except agent_profiles.AgentProfileStorageError:
                 return self._json({"code": "storage", "error": PROFILE_STORE_UNREADABLE}, 503)
+
+        @staticmethod
+        def _with_routine_actions(got: dict, limit: int = 200) -> dict:
+            """「AI 自己做了什麼」 also lists the routines VBear began by itself (item 3): the same row shape as a dispatch's, newest first.
+            Best effort: a failure here leaves the dispatch rows as they were."""
+            try:
+                runner = console.routine_runner()
+                extra = runner.actions()
+            except Exception:
+                return got
+            try:                                                 # P44-4: the presses that were item 5's (the dispatch's own record says "vbear")
+                taken = runner.auto_continue.taken() if runner.auto_continue is not None else set()
+            except Exception:
+                taken = set()
+            for r in got.get("actions", []):
+                if r.get("kind") == "continued" and (r.get("dispatch_id"), r.get("seq")) in taken:
+                    r.update(by="auto5", by_text="自己動手第 5 項", what="恢復時間到了，VBear 自己按了「繼續」")
+            rows = list(got.get("actions", [])) + [
+                {"at": r["at"], "dispatch_id": None, "seq": 0, "kind": r["kind"], "what": r["what"], "by": r["by"], "by_text": r["by_text"],
+                 "profile_id": None, "can_stop": False, "can_withdraw": False, "routine_id": r["routine_id"], "chat_id": r["chat_id"]}
+                for r in extra]
+            rows.sort(key=lambda r: (r["at"], r["seq"]), reverse=True)
+            return {**got, "actions": rows[:limit]}
 
         def _translation_call(self, action, body=None, skill_id=None, roles=False):
             try:
@@ -2896,6 +3138,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     handed = take_handed_token()  # first: out of the environment before anything else runs
     console = Console(port)
     console.reveal_command = _open_in_finder
+    console.keep_awake_command = keep_awake_mod.launch
     if handed:
         console.auth_token = handed  # the macOS app chose it, so it can sign its window in
     console.store.static()  # load cached index or perform the first scan
@@ -2914,6 +3157,9 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
     group_runner = console.group_runner()
     if not group_runner.start():
         print(f"提示：這個主控台不執行群組（{group_runner.last_error}）", flush=True)
+    routine_runner = console.routine_runner()
+    if not routine_runner.start():
+        print(f"提示：這個主控台不執行例行工作（{routine_runner.last_error}）", flush=True)
     print(f"VBear 已啟動：{url}（只接受本機連線，Ctrl+C 結束）", flush=True)
     if open_browser:
         threading.Timer(0.4, lambda: open_in_browser(port)).start()
@@ -2929,6 +3175,7 @@ def serve(port: int | None = None, open_browser: bool = False) -> None:
         console.runner.stop()
         dispatch_runner.close()
         group_runner.close()
+        routine_runner.close()
         if console._previews is not None:
             console._previews.close()  # unconfirmed previews: remove their prepared state
         console.runtime.close_all()  # no orphaned child processes on exit

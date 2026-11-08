@@ -101,6 +101,10 @@ button, input, select { font: inherit; color: inherit; }
 .side-foot { margin-top: auto; font-size: 12px; color: var(--ink-3); padding: 0 8px; }
 .side-foot button { margin-top: 6px; }
 
+.stage { min-width: 0; }
+.waiting-bar { position: sticky; top: 0; z-index: 20; padding: 8px clamp(16px, 4vw, 44px); background: var(--warn-soft, var(--panel-2)); border-bottom: 1px solid var(--line); color: var(--ink); font-weight: 600; }
+.waiting-bar[hidden] { display: none; }
+.waiting-bar a { margin-left: 6px; }
 main { padding: 28px clamp(16px, 4vw, 44px) 64px; max-width: 1240px; width: 100%; }
 main:focus { outline: none; }
 h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.01em; }
@@ -1720,6 +1724,12 @@ form.annot input, form.annot textarea { width: 100%; padding: 7px 10px; border-r
 .chat-intro > p, .chat-intro > button { margin: 6px 12px 10px; }
 .chat-excerpt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--ink-2); }
 .memory-text { flex: 1 1 18rem; min-width: 0; overflow-wrap: anywhere; }
+/* P44-1: the skills (the page, the boxes 「存成技能」 and 「用技能」) */
+.skill-form { display: grid; gap: 6px; }
+.skill-form input[type="text"], .skill-form textarea { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: inherit; }
+.skill-form textarea { resize: vertical; white-space: pre-wrap; }
+.mt-row > .skill-form { flex: 1 1 100%; }
+.chat-remember { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (prefers-reduced-motion: reduce) { .chat-card, .chat-msg { transition: none; animation: none; } }
 
 /* ---- groups (v0.16, P41-1) ---- */

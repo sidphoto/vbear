@@ -29,9 +29,45 @@ SUGGESTED = "每週六下午固定出貨（虛構）"
 WORDS = ("小熊", "客服電話", "0912", "新台幣", "每週六", "qa-Pass")
 
 
+def message_text(body):
+    """What a log or a record says in words: the strings of every JSON line (a line that is not JSON is kept whole). The numbers of a
+    line (its time, a cost) are not words and can hold any four digits by chance, so they are left out of the comparison."""
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                yield key
+                yield from strings(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from strings(item)
+    out = []
+    for line in body.splitlines():
+        try:
+            out.extend(strings(json.loads(line)))
+        except ValueError:
+            out.append(line)
+    return "\n".join(out)
+
+
 def state_bytes(*parts):
     path = cfg.state_dir().joinpath(*parts)
     return path.read_bytes() if path.exists() else None
+
+
+class MessageTextTests(unittest.TestCase):
+    """The walk below looks for four digits of a phone number in the logs: only in words, never in a time or a cost."""
+
+    def test_a_time_that_holds_the_four_digits_is_not_a_word(self):
+        line = '{"seq":14,"at":1794107358.309124,"cost_usd":0.00912,"kind":"reply","text":"好的"}'
+        self.assertNotIn("0912", message_text(line))
+        self.assertIn("好的", message_text(line))
+
+    def test_the_same_digits_in_a_message_or_a_line_that_is_not_json_still_count(self):
+        self.assertIn("0912", message_text('{"at":1.5,"text":"打 0912-345 給我"}'))
+        self.assertIn("0912", message_text("a plain log line 0912"))
+        self.assertIn("0912", message_text('{"a":[{"b":"x0912"}]}'))
 
 
 class WalkTests(RoutesCase):
@@ -196,7 +232,7 @@ class WalkTests(RoutesCase):
         record = self.raw(chat_id)
         for where, body in (("memory log", log), ("daemon log", "\n".join(self.logs)), ("chat record", record)):
             for word in WORDS:
-                self.assertNotIn(word, body.replace("你好", ""), (where, word))
+                self.assertNotIn(word, message_text(body).replace("你好", ""), (where, word))
         whats = [json.loads(x)["what"] for x in log.splitlines()]
         self.assertEqual(whats[-1], "cleared")
         for what in ("added", "edited", "card_off", "card_on", "exported"):

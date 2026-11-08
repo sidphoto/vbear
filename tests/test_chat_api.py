@@ -467,7 +467,7 @@ class ListAndSupportTests(ApiCase):
         status, lst = self.call("/api/chats")
         self.assertEqual(status, 200)
         self.assertEqual(lst["limits"], {"per_turn_usd": "0.25", "daily_usd": "3"})
-        self.assertEqual((lst["ledger"]["lamp"], lst["ledger"]["includes"]), ("green", ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"]))
+        self.assertEqual((lst["ledger"]["lamp"], lst["ledger"]["includes"]), ("green", ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest", "skill_suggest"]))
         self.assertIsNone(lst["ledger_error"])
         self.assertEqual(lst["chats"], [])
         self.assertEqual(lst["support"]["detected"], cf.VERSION)

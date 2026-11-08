@@ -1,7 +1,9 @@
 """「自己動手」: what the person may let the chief of staff do without asking (ADR 0003, v0.15 P40-2).
 
-ADR 0003 lists five items. Only the first two work in this version, and both are off until the person turns them on in the
-settings page; the other three are in the table so that the page and the tests say what is not here yet.
+ADR 0003 lists five items. Items 1, 2, 3 and 5 work in this version (3: P44-2, a routine starts by itself at its time; 5: P44-4, a
+dispatch that stopped for a limit goes on by itself when the limit is over), and every one is off until the person turns it on in the
+settings page; item 4 is in the table so that the page and the tests say what is not here yet. The stored block always has exactly four
+booleans: ``create_cards``, ``dispatch``, ``routines`` (item 3) and ``auto_continue`` (item 5).
 
 Only ``POST /api/settings/autonomy`` writes ``config.json``'s ``autonomy`` block (never ``/api/config``, never an AI-written
 plan). This module only reads and checks: it writes nothing and imports nothing from the launch, skill or limit code, and
@@ -13,7 +15,7 @@ from the network. They are not items here; they are the ``NEVER`` lines the page
 
 from __future__ import annotations
 
-KEYS = ("create_cards", "dispatch")  # the two items that work in this version, in the order of the page
+KEYS = ("create_cards", "dispatch", "routines", "auto_continue")  # the four booleans of the block, in the order of the page
 
 ITEMS = (
     {"id": 1, "adr": "0003", "key": "create_cards", "active": True,
@@ -23,18 +25,21 @@ ITEMS = (
      "title": "幕僚長可以自己派工給員工",
      "effect": "幕僚長的提議一到就開始派工，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、"
                "VBear 拿掉了東西、或幕僚長有問題要問你時，還是會停下來等你。"},
-    {"id": 3, "adr": "0003", "key": None, "active": False,
+    {"id": 3, "adr": "0003", "key": "routines", "active": True,
      "title": "例行工作可以自己啟用、定時執行",
-     "effect": "跟著例行工作一起在之後的版本加入。"},
+     "effect": "例行工作到時間時 VBear 自己開始；Mac 醒來或 VBear 打開時，12 小時內錯過的也自己補做一次（每次醒來最多 3 件）。"
+               "不勾時，到時間只提醒你，由你按「現在開始」。員工要跑指令、改檔案時照舊問你；你不在電腦前時，卡片 5 分鐘沒人按就當作拒絕。"
+               "例行工作不會自己建立或啟用，只有你能。"},
     {"id": 4, "adr": "0003", "key": None, "active": False,
      "title": "員工在安全模式裡跑指令、改檔案時不必每次問",
      "effect": "還沒有；聊天照舊每個指令、每個檔案修改都問你。"},
-    {"id": 5, "adr": "0003", "key": None, "active": False,
+    {"id": 5, "adr": "0003", "key": "auto_continue", "active": True,
      "title": "碰到上限暫停的工作，倒數結束後自動接續",
-     "effect": "跟著例行工作一起在之後的版本加入；現在暫停後由你按「繼續」。"},
+     "effect": "派工碰到每天上限或 AI 工具的方案用量上限暫停時，到了恢復時間 VBear 自己按「繼續」（每份派工最多 3 次，全部加起來每天最多 5 次）。"
+               "被打斷的那一步不會重做，下一步會被告知上一步可能不完整。AI 工具沒說恢復時間時（Claude Code 目前都沒說）不會自己接續；群組不會自己接續。"},
 )
 
-LATER_NOTE = "例行工作、不必每次問、倒數後自動接續這三項會在之後的版本加入。"
+LATER_NOTE = "第 4 項（不必每次問）會在之後的版本加入。"
 
 NEVER = (
     "AI 不能自己調高每天的花費上限。",
@@ -50,9 +55,10 @@ _OFF = {key: False for key in KEYS}
 
 
 def read(conf) -> dict:
-    """{create_cards, dispatch}: each True only when config.json holds exactly ``True`` for it; anything else is False.
+    """{create_cards, dispatch, routines, auto_continue}: each True only when config.json holds exactly ``True`` for it; anything else is False.
 
-    A missing block, a block that is not an object, a value that is not a boolean, or a config flagged corrupt: all off.
+    A missing block, a block that is not an object, a value that is not a boolean, or a config flagged corrupt: all off. A block of
+    v0.17.1 (two keys) reads the new two as off. Item 3 (a routine starts by itself) looks at ``routines`` here and nowhere else; item 5 (a dispatch goes on by itself) at ``auto_continue``.
     """
     if not isinstance(conf, dict) or conf.get("_corrupt"):
         return dict(_OFF)
@@ -63,9 +69,9 @@ def read(conf) -> dict:
 
 
 def validate(body) -> dict:
-    """The block to store for a request: exactly the two booleans, nothing more, nothing less. Raises ValueError (zh-TW)."""
+    """The block to store for a request: exactly the four booleans, nothing more, nothing less. Raises ValueError (zh-TW)."""
     if not isinstance(body, dict) or set(body) != set(KEYS):
-        raise ValueError("請求只能有 create_cards 與 dispatch 兩個欄位，值是 true 或 false")
+        raise ValueError("請求只能有 create_cards、dispatch、routines 與 auto_continue 四個欄位，值是 true 或 false")
     if any(type(body[key]) is not bool for key in KEYS):
-        raise ValueError("create_cards 與 dispatch 必須是 true 或 false")
+        raise ValueError("create_cards、dispatch、routines 與 auto_continue 必須是 true 或 false")
     return {key: body[key] for key in KEYS}

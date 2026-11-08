@@ -539,7 +539,7 @@ class SharedDayTests(Base):
             self.assertEqual(runner._day(), Decimal("0.07"), runner)
         ledger = meetings.ledger({})
         self.assertEqual(ledger["spent_usd"], "0.07")
-        self.assertEqual(ledger["includes"], ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest"])
+        self.assertEqual(ledger["includes"], ["meetings", "staffing", "chats", "setup_try", "chief", "memory_suggest", "skill_suggest"])
 
     def test_the_chat_daemon_counts_them_too(self):
         self.done_proposal("0.07")

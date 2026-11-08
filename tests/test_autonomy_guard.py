@@ -19,9 +19,32 @@ Never, whatever the person ticked in 「自己動手」:
      scanned modules do not import ``vbear.shared_folder`` at all. The shared folder's own modules (``shared*.py``, ``runtime/shared*.py``)
      are held to every rule above: they never write config.json, start a terminal or a program, install a skill, make or change a role
      card, or answer a question of a chat.
+  8. (P44-1, ADR 0010) save a skill of the person's on its own: the functions that write the skills (``add``, ``edit``, ``delete`` of
+     vbear/skillbook.py, and its store) are called from vbear/server.py's /api/my-skills routes and from nowhere else, and the other
+     scanned modules (the suggestions of skills, ``skillbook_suggest*.py``, included) do not import ``vbear.skillbook`` at all. The skills'
+     own modules (``skillbook*.py``) are held to every rule above, and also never reach the skill cards of the AI tools (``scan``), the
+     role cards, the chat service, a system prompt or the folders of the AI tools: a skill is only the words the person sends.
+
+  8. (P44-2) a routine is made, changed, switched on or deleted by the person alone: the functions that do it (``create``, ``edit``,
+     ``set_enabled``, ``delete``, ``set_settings`` of vbear/routines.py, and its store) are called from vbear/server.py's /api/routines routes
+     and from nowhere else; the functions that record a run (``record_run``, ``new_run``, ``update_run``, ``run_store``) only from the
+     routines' own modules and the console; the other scanned modules do not import ``vbear.routines`` or ``vbear.routine_runner`` at all;
+     ``send_for_routine`` is named in vbear/chat_service.py and vbear/routine_runner.py and nowhere else; the routines' modules never make or
+     change a role card. The routines' modules (``routine*.py``) are held to every rule above.
+  9. (P44-2) a routine starts by itself only for 「自己動手」 item 3: vbear/routine_runner.py reads it with ``autonomy.read(...)["routines"]``
+     in one place and never names ``autonomy`` as a key itself (the behaviour is tested in tests/test_routine_runner.py).
+
+  11. (P44-4) a dispatch goes on by itself only for 「自己動手」 item 5: vbear/auto_continue.py reads it with ``autonomy.read(...)["auto_continue"]``
+     in one place; only vbear/server.py imports ``auto_continue`` (the groups' modules do not: a group never goes on by itself), the only
+     call that presses 「繼續」 as ``by="vbear"`` is the console's wiring, and the module reaches no chat (it is handed one function). The
+     behaviour (item 5 off: ``resume`` is called 0 times) is tested in tests/test_auto_continue.py.
+  12. (P44-3) the only program VBear starts that is not an AI tool is the one of vbear/keep_awake.py: ``routine*.py``, ``skillbook*.py`` and
+     ``auto_continue.py`` stay under the ``subprocess`` / ``pty`` ban above (and start nothing by ``os.popen``, ``os.spawn*``, ``os.exec*``);
+     no file of ``vbear/`` but keep_awake.py names the program; its argv is one constant list (the program, ``-i``, ``-w``, the console's own
+     pid), passed without a shell; vbear/server.py is the only module that imports it and only ``serve()`` hands it to a console.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
-``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
+``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
 so the scan cannot go quiet.
 """
@@ -34,7 +57,10 @@ import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
-PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py")
+PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py",
+            "skillbook*.py", "routine*.py")
+
+PATTERNS = PATTERNS + ("auto_continue.py",)    # (P44-4) item 5's module is held to every rule below
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -59,6 +85,9 @@ BANNED_MODULES = {
     "memory": "the person's memory file (its writing functions are the browser's routes' alone)",
     # 7. the shared folder's switches: only the browser's /api/shared routes in server.py write them
     "shared_folder": "the shared folder's switches (its writing functions are the browser's routes' alone)",
+    # 8. (P44-1) the person's skills file: only the browser's /api/my-skills routes in server.py write it, and the suggestions of skills
+    # (skillbook_suggest*.py) only make a proposal, so none of the scanned modules imports it
+    "skillbook": "the person's skills file (its writing functions are the browser's routes' alone)",
     # processes and dynamic code
     "subprocess": "starting a program",
     "pty": "starting a terminal",
@@ -136,6 +165,102 @@ SHARED_WRITER_HOMES = {"server.py", "shared_folder.py"}          # the routes, a
 
 def shared_writer_uses(source: str, label: str = "<source>") -> list[str]:
     return writer_uses(source, label, SHARED_MODULE, SHARED_WRITERS)
+
+
+# 8. (P44-1) who may save a skill: the module's writers, and the only modules that may name them
+SKILLBOOK_MODULE = "skillbook"
+SKILLBOOK_WRITERS = {"add", "edit", "delete", "store"}
+SKILLBOOK_WRITER_HOMES = {"server.py", "skillbook.py"}          # the routes, and the module itself
+# what the modules of the skills (skillbook*.py) never reach, on top of the table above: the skill files and the role cards of the AI
+# tools, the chat service, and every way into a system prompt or an AI tool's own folders (a skill is only the person's words)
+SKILLBOOK_BANNED_MODULES = ("scan", "agent_profiles", "chat_service", "chat_protocol", "codex_chat_protocol", "runtime.chat_protocol",
+                            "runtime.codex_chat_protocol", "runtime.daemon_chat", "runtime.native", "agent_sessions")
+SKILLBOOK_BANNED_NAMES = ("combine", "prompt_sha", "save_profile", "create_profile", "update_profile", "delete_profile")
+SKILLBOOK_BANNED_STRINGS = ("--append-system-prompt", "developerInstructions", "append-system-prompt", ".claude", ".codex", ".agents",
+                            "codex-chat-home", "grok-chat-home", "SKILL.md", "skills.include_instructions")
+
+
+def skillbook_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, SKILLBOOK_MODULE, SKILLBOOK_WRITERS)
+
+
+def skillbook_reaches(source: str, label: str = "<source>") -> list[str]:
+    """What a module of the skills (skillbook*.py) reaches that it never may (P44-1): the modules and names above, and the folders of
+    the AI tools, outside its docstrings."""
+    tree = ast.parse(source, filename=label)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docstrings.add(id(first.value))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for name in _module_of(node):
+                for banned in SKILLBOOK_BANNED_MODULES:
+                    if name == banned or name.startswith(banned + "."):
+                        found.append(f"{label}:{node.lineno}: imports {name}")
+            for a in node.names:
+                if a.name in SKILLBOOK_BANNED_NAMES:
+                    found.append(f"{label}:{node.lineno}: imports {a.name}")
+        elif isinstance(node, ast.Attribute) and node.attr in SKILLBOOK_BANNED_NAMES:
+            found.append(f"{label}:{node.lineno}: uses .{node.attr}")
+        elif isinstance(node, ast.Name) and node.id in SKILLBOOK_BANNED_NAMES:
+            found.append(f"{label}:{node.lineno}: uses {node.id}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            for bad in SKILLBOOK_BANNED_STRINGS:
+                if bad in node.value:
+                    found.append(f"{label}:{node.lineno}: names {bad}")
+    return found
+
+
+# 9. (P44-2) who may change the routines: the module's writers, and the only modules that may name them
+ROUTINES_MODULE = "routines"
+ROUTINE_WRITERS = {"create", "edit", "set_enabled", "delete", "set_settings", "store", "settings_store"}
+ROUTINE_WRITER_HOMES = {"server.py", "routines.py"}                   # the routes, and the module itself
+ROUTINE_RUN_WRITERS = {"record_run", "new_run", "update_run", "run_store", "write_heartbeat"}
+ROUTINE_RUN_HOMES = {"routines.py", "routine_runner.py", "server.py"}  # the module, the runner, and the routes of the person's decision
+ROUTINE_ONLY_NAMES = {"send_for_routine": {"chat_service.py", "routine_runner.py"}}
+
+
+def routine_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, ROUTINES_MODULE, ROUTINE_WRITERS)
+
+
+def routine_run_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, ROUTINES_MODULE, ROUTINE_RUN_WRITERS)
+
+
+def named_uses(source: str, label: str, name: str) -> list[str]:
+    """Every place a source names ``name``: a call, an attribute, a plain name, an import, or a string."""
+    tree = ast.parse(source, filename=label)
+    found = []
+    for node in ast.walk(tree):
+        hit = ((isinstance(node, ast.Attribute) and node.attr == name) or (isinstance(node, ast.Name) and node.id == name)
+               or (isinstance(node, ast.alias) and node.name == name) or (isinstance(node, ast.FunctionDef) and node.name == name)
+               or (isinstance(node, ast.Constant) and node.value == name))
+        if hit:
+            found.append(f"{label}:{getattr(node, 'lineno', '?')}: names {name}")
+    return found
+
+
+# a role card is made or changed through these (the routines' modules never call them)
+CARD_WRITERS = {"save_profile", "create_profile", "delete_profile", "duplicate_profile", "set_profile_enabled"}
+
+
+def card_writer_calls(source: str, label: str = "<source>") -> list[str]:
+    tree = ast.parse(source, filename=label)
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+            if name in CARD_WRITERS:
+                found.append(f"{label}:{node.lineno}: calls {name}")
+        elif isinstance(node, ast.ImportFrom):
+            found += [f"{label}:{node.lineno}: imports {a.name}" for a in node.names if a.name in CARD_WRITERS]
+    return found
 
 
 def package_files() -> list[Path]:
@@ -311,6 +436,46 @@ class GuardOverTheRealModules(unittest.TestCase):
         names = [p.name for p in scanned_files()]
         for name in ("memory.py", "memory_suggest.py", "memory_suggest_runner.py"):
             self.assertIn(name, names)
+
+    def test_the_skillbook_modules_are_scanned(self):
+        names = [p.name for p in scanned_files()]
+        self.assertIn("skillbook.py", names)
+        for path in PACKAGE.rglob("*.py"):
+            if path.name.startswith("skillbook") and "__pycache__" not in path.parts:
+                self.assertIn(path.name, names, "a skillbook module the scan does not cover")
+
+    def test_only_the_skill_routes_of_the_console_save_a_skill(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in SKILLBOOK_WRITER_HOMES:
+                problems += skillbook_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_every_skill_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        calls = {m.group(1) for m in re.finditer(r"skillbook_mod\.(\w+)", source)}
+        self.assertEqual(calls & (SKILLBOOK_WRITERS - {"store"}), SKILLBOOK_WRITERS - {"store"})
+        self.assertNotEqual(skillbook_writer_uses(source, "server.py"), [])
+
+    def test_the_skillbook_modules_reach_no_skill_card_no_role_card_and_no_system_prompt(self):
+        problems: list[str] = []
+        for path in PACKAGE.glob("skillbook*.py"):
+            problems += skillbook_reaches(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_suggestions_of_skills_only_propose(self):
+        for path in PACKAGE.glob("skillbook_suggest*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    self.assertNotIn("skillbook", _module_of(node), f"{path.name} imports the skills file")
+
+    def test_the_chat_service_and_the_runtime_know_nothing_of_skills(self):
+        for module in ("chat_service.py", "runtime/daemon_chat.py", "runtime/chat_protocol.py", "runtime/codex_chat_protocol.py",
+                       "runtime/agent_sessions.py", "runtime/memory_rules.py"):
+            source = (PACKAGE / module).read_text(encoding="utf-8")
+            self.assertNotIn("skillbook", source, module)
+            self.assertNotIn("my-skills", source, module)
 
     def test_no_module_breaks_a_rule(self):
         problems: list[str] = []
@@ -505,6 +670,62 @@ class ScanFiresOnEachRule(unittest.TestCase):
         self.assertCaught("from vbear.memory import for_card\n", "memory")
         self.assertCaught("import vbear.memory as m\n", "memory")
 
+    def assertSkillWrites(self, source: str, *needles: str):
+        found = " | ".join(skillbook_writer_uses(source))
+        self.assertTrue(found, f"nothing found in:\n{source}")
+        for needle in needles:
+            self.assertIn(needle, found)
+
+    def test_saving_a_skill_from_anywhere_but_the_console_routes(self):
+        self.assertSkillWrites("from . import skillbook\nskillbook.add({'name': 'x', 'text': 'y'})\n", "skillbook.add")
+        self.assertSkillWrites("from . import skillbook as book\ndef f(b):\n    return book.edit('k-1', b)\n", "skillbook.edit")
+        self.assertSkillWrites("from .. import skillbook\nskillbook.delete('k-1')\n", "skillbook.delete")
+        self.assertSkillWrites("from vbear import skillbook\nskillbook.store.save({})\n", "skillbook.store")
+        self.assertSkillWrites("import vbear.skillbook\nvbear.skillbook.add({})\n", "skillbook.add")
+        self.assertSkillWrites("from .skillbook import add\n", "imports skillbook.add")
+        self.assertSkillWrites("from .skillbook import delete as drop\n", "imports skillbook.delete")
+        self.assertSkillWrites("from vbear.skillbook import store\n", "imports skillbook.store")
+        self.assertSkillWrites("from .skillbook import *\n", "imports skillbook.*")
+        self.assertSkillWrites("from . import skillbook\nf = getattr(skillbook, 'add')\n", "getattr")
+        self.assertSkillWrites("from . import skillbook\nf = getattr(skillbook, name)\n", "getattr")
+
+    def test_reading_the_skills_and_other_modules_with_the_same_names_are_allowed(self):
+        self.assertEqual(skillbook_writer_uses("from . import skillbook\ndef f():\n    return skillbook.view()\n"), [])
+        self.assertEqual(skillbook_writer_uses("from . import memory, groups\ndef f(b, g):\n    memory.add(b)\n    groups.edit(g)\n"), [],
+                         "the memory's own writers are the memory rule's business")
+        self.assertEqual(skillbook_writer_uses("import other\nother.add({})\n"), [], "only the skills module")
+
+    def test_the_other_modules_may_not_import_the_skills_module_at_all(self):
+        self.assertCaught("from . import skillbook\n", "skillbook")
+        self.assertCaught("from .skillbook import view\n", "skillbook")
+        self.assertCaught("from vbear import skillbook\n", "skillbook")
+        self.assertCaught("import vbear.skillbook as k\n", "skillbook")
+
+    def test_the_skillbook_modules_obey_the_rules_of_the_others(self):
+        self.assertCaught("from . import config as cfg\ncfg.save({})\n", "config.save")           # the same table, now over skillbook*.py
+        self.assertCaught("import subprocess\nsubprocess.run(['x'])\n", "subprocess")
+        self.assertCaught("from .runtime import daemon\n", "runtime.daemon")
+        self.assertCaught("def f(svc):\n    return svc.answer('c-1', {})\n", "answer")
+        self.assertCaught("def f(ap):\n    ap.save_profile(launch_mode='full')\n", "launch_mode")
+        self.assertCaught("from . import armory\n", "armory")
+        self.assertCaught("from . import loadout\n", "loadout")
+        self.assertCaught("from . import skill_fit\n", "skill_fit")
+
+    def test_the_skillbook_modules_never_reach_the_skill_files_the_role_cards_or_a_system_prompt(self):
+        for source, needle in (("from . import scan\n", "imports scan"), ("from .scan.document import redact\n", "imports scan.document"),
+                               ("from . import agent_profiles\n", "imports agent_profiles"), ("from .chat_service import ChatService\n", "imports chat_service"),
+                               ("from .runtime import memory_rules\nmemory_rules.combine(None, None)\n", "uses .combine"),
+                               ("from .runtime.memory_rules import prompt_sha\n", "imports prompt_sha"),
+                               ("def f(ap):\n    return ap.save_profile({})\n", "uses .save_profile"),
+                               ("def f(ap):\n    return ap.create_profile({})\n", "uses .create_profile"),
+                               ("ARG = '--append-system-prompt'\n", "append-system-prompt"), ("KEY = 'developerInstructions'\n", "developerInstructions"),
+                               ("DIR = '~/.claude/skills'\n", ".claude"), ("DIR = '~/.codex/skills'\n", ".codex"), ("DIR = '~/.agents'\n", ".agents"),
+                               ("DIR = 'codex-chat-home'\n", "codex-chat-home"), ("NAME = 'SKILL.md'\n", "SKILL.md")):
+            with self.subTest(source=source):
+                found = " | ".join(skillbook_reaches(source))
+                self.assertIn(needle, found, f"nothing found in:\n{source}")
+        self.assertEqual(skillbook_reaches('"""A docstring may say .claude and SKILL.md."""\nfrom . import config as cfg\n'), [])
+
     def test_what_is_allowed_is_clean(self):
         clean = (
             "from . import agent_profiles as ap, autonomy, config as cfg, meetings\n"
@@ -522,6 +743,449 @@ class ScanFiresOnEachRule(unittest.TestCase):
             "    return got, chats.stop(chat_id, {}), chats.close(chat_id), 'The answer never came'\n"
         )
         self.assertEqual(scan_source(clean), [])
+
+
+# 8b. (P44-5) the suggestions of skills only propose: they do not name the skills' file or its routes, and the console's functions that serve
+# them never touch the skills module (the person's own press of 「存」 in the browser is what calls POST /api/my-skills)
+SKILL_SUGGEST_BANNED_STRINGS = ("skills.json", "/api/my-skills", "skillbook_mod")
+SKILL_SUGGEST_SERVERS = ("_skill_suggest_call", "_skill_suggest_sources")
+
+
+def skill_suggest_names(source: str, label: str = "<source>") -> list[str]:
+    """What a module of the suggestions of skills names that it never may: the skills' file, the skills' routes, the console's alias of the
+    skills module (docstrings and comments are not code, so they may talk about them)."""
+    tree = ast.parse(source, filename=label)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+                docstrings.add(id(first.value))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            found += [f"{label}:{node.lineno}: names {bad}" for bad in SKILL_SUGGEST_BANNED_STRINGS if bad in node.value]
+        elif isinstance(node, ast.Name) and node.id in ("skillbook", "skillbook_mod"):
+            found.append(f"{label}:{node.lineno}: uses {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in ("skillbook", "skillbook_mod"):
+            found.append(f"{label}:{node.lineno}: uses .{node.attr}")
+    return found
+
+
+def console_functions_touching_skills(source: str, names=SKILL_SUGGEST_SERVERS) -> list[str]:
+    """The functions of the console named ``names`` that touch the skills module (``skillbook_mod``, ``skillbook``)."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source, filename="server.py")):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Name) and sub.id in ("skillbook_mod", "skillbook")) or (
+                        isinstance(sub, ast.Attribute) and sub.attr in ("skillbook_mod", "skillbook")):
+                    found.append(f"{node.name}:{sub.lineno}: touches the skills module")
+    return found
+
+
+class SkillSuggestRules(unittest.TestCase):
+    def test_the_suggestion_modules_exist_and_are_scanned_by_every_rule(self):
+        names = {p.name for p in PACKAGE.glob("skillbook_suggest*.py")}
+        self.assertEqual(names, {"skillbook_suggest.py", "skillbook_suggest_runner.py"})
+        scanned = {p.name for p in scanned_files()}
+        self.assertLessEqual(names, scanned)
+
+    def test_they_name_neither_the_skills_file_nor_its_routes(self):
+        problems: list[str] = []
+        for path in PACKAGE.glob("skillbook_suggest*.py"):
+            problems += skill_suggest_names(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_consoles_suggestion_functions_never_touch_the_skills_module(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        self.assertEqual(console_functions_touching_skills(source), [])
+        defined = {n.name for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)}
+        self.assertTrue(set(SKILL_SUGGEST_SERVERS) <= defined, "the functions this rule is about are not there any more")
+
+    def test_the_rule_fires_on_small_made_up_sources(self):
+        self.assertIn("skills.json", " ".join(skill_suggest_names("PATH = 'skillbook/skills.json'\n")))
+        self.assertIn("/api/my-skills", " ".join(skill_suggest_names("URL = '/api/my-skills'\n")))
+        self.assertIn("skillbook_mod", " ".join(skill_suggest_names("def f(c):\n    return skillbook_mod.add(c)\n")))
+        self.assertEqual(skill_suggest_names('"""talks of skills.json"""\nX = 1\n'), [])
+        self.assertNotEqual(console_functions_touching_skills("def _skill_suggest_call(self):\n    return skillbook_mod.add({})\n"), [])
+        self.assertEqual(console_functions_touching_skills("def other(self):\n    return skillbook_mod.add({})\n"), [])
+        self.assertEqual(console_functions_touching_skills("def _skill_suggest_call(self):\n    return 1\n"), [])
+
+
+class RoutineRules(unittest.TestCase):
+    """P44-2: rules 8 and 9 over the real modules, and the small made-up sources that show the scan fires."""
+
+    def test_the_routines_modules_are_scanned(self):
+        names = [p.name for p in scanned_files()]
+        for name in ("routine_rules.py", "routines.py", "routine_runner.py"):
+            self.assertIn(name, names)
+        for path in PACKAGE.rglob("routine*.py"):
+            self.assertIn(path.name, names, "a routines module the scan does not cover")
+
+    def test_only_the_routes_of_the_console_change_a_routine(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in ROUTINE_WRITER_HOMES:
+                problems += routine_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_each_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        used = {m.group(1) for m in re.finditer(r"routines_mod\.(\w+)", source)}
+        self.assertEqual(used & {"create", "edit", "delete", "set_settings"}, {"create", "edit", "delete", "set_settings"})
+        self.assertNotEqual(routine_writer_uses(source, "server.py"), [])
+
+    def test_only_the_routines_own_modules_and_the_console_record_a_run(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in ROUTINE_RUN_HOMES:
+                problems += routine_run_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+        runner = (PACKAGE / "routine_runner.py").read_text(encoding="utf-8")
+        self.assertNotEqual(routine_run_writer_uses(runner, "routine_runner.py"), [], "the runner does record runs, so the rule is not empty")
+
+    def test_the_other_scanned_modules_do_not_import_the_routines_at_all(self):
+        problems: list[str] = []
+        for path in scanned_files():
+            if path.name.startswith("routine"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                        n == m or n.startswith(m + ".") for n in _module_of(node) for m in ("routines", "routine_runner", "routine_rules")):
+                    problems.append(f"{path.name}:{node.lineno}: imports the routines")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_send_for_routine_is_named_only_by_the_chat_service_and_the_runner(self):
+        problems: list[str] = []
+        seen: set[str] = set()
+        for path in package_files():
+            hits = named_uses(path.read_text(encoding="utf-8"), path.name, "send_for_routine")
+            if hits:
+                seen.add(path.name)
+                if path.name not in ROUTINE_ONLY_NAMES["send_for_routine"]:
+                    problems += hits
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertEqual(seen, {"chat_service.py", "routine_runner.py"})
+
+    def test_the_routines_modules_never_make_or_change_a_role_card(self):
+        problems: list[str] = []
+        for path in PACKAGE.glob("routine*.py"):
+            problems += card_writer_calls(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_routines_modules_never_name_a_chat_answer_or_the_config(self):
+        for path in PACKAGE.glob("routine*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            self.assertFalse(names & {"answer", "chat_answer", "set_conf", "write_private", "config_path", "Popen", "system", "subprocess"}, path.name)
+
+    def test_item_3_is_read_in_one_place_and_the_runner_never_names_the_autonomy_block(self):
+        source = (PACKAGE / "routine_runner.py").read_text(encoding="utf-8")
+        self.assertEqual(len(re.findall(r"autonomy\.read\(", source)), 1)
+        self.assertIn('["routines"]', source)
+        tree = ast.parse(source)
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+                      and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+        strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+        self.assertNotIn("autonomy", strings, "the block is read through autonomy.read and no other way")
+        self.assertNotIn("auto_continue", strings)
+
+    # ---- the made-up sources: each rule fires ----------------------------------------------------------------------------
+
+    def test_changing_a_routine_from_anywhere_but_the_console_routes(self):
+        for name in sorted(ROUTINE_WRITERS):
+            self.assertTrue(routine_writer_uses(f"from . import routines\nroutines.{name}()\n"), name)
+            self.assertTrue(routine_writer_uses(f"from . import routines as rt\ndef f(x):\n    return rt.{name}(x)\n"), name)
+            self.assertTrue(routine_writer_uses(f"from .routines import {name}\n"), name)
+        self.assertTrue(routine_writer_uses("import vbear.routines\nvbear.routines.create({})\n"))
+        self.assertTrue(routine_writer_uses("from .routines import *\n"))
+        self.assertTrue(routine_writer_uses("from . import routines\nf = getattr(routines, name)\n"))
+        self.assertTrue(routine_writer_uses("from . import routines\nroutines.store.save({})\n"))
+
+    def test_reading_the_routines_is_allowed(self):
+        self.assertEqual(routine_writer_uses("from . import routines\ndef f():\n    return routines.read_routines(), routines.chat_titles(), routines.starting_chat('c')\n"), [])
+        self.assertEqual(routine_writer_uses("from . import groups\ngroups.create({})\ngroups.delete('g')\n"), [], "other modules with the same names")
+
+    def test_recording_a_run_from_anywhere_else(self):
+        for name in sorted(ROUTINE_RUN_WRITERS):
+            self.assertTrue(routine_run_writer_uses(f"from . import routines\nroutines.{name}\n"), name)
+        self.assertTrue(routine_run_writer_uses("from .routines import new_run\n"))
+        self.assertEqual(routine_run_writer_uses("from . import routines\nroutines.read_runs()\n"), [])
+
+    def test_naming_send_for_routine_elsewhere(self):
+        for source in ("def f(chats, c):\n    return chats.send_for_routine(c, 'x')\n", "from .chat_service import send_for_routine\n",
+                       "f = getattr(chats, 'send_for_routine')\n", "send_for_routine = 1\n", "def send_for_routine(self):\n    pass\n"):
+            self.assertTrue(named_uses(source, "x.py", "send_for_routine"), source)
+        self.assertEqual(named_uses("def f(chats):\n    return chats.send_for_group(1, 'x')\n", "x.py", "send_for_routine"), [])
+
+    def test_making_a_role_card_from_the_routines_modules(self):
+        for source in ("from . import agent_profiles as ap\nap.save_profile(None, {})\n", "from .agent_profiles import create_profile\n",
+                       "def f(ap):\n    ap.delete_profile('x')\n"):
+            self.assertTrue(card_writer_calls(source), source)
+        self.assertEqual(card_writer_calls("def f(ap):\n    return ap.get_profile_readonly('x')\n"), [])
+
+    def test_the_routines_modules_obey_the_rules_of_the_others(self):
+        self.assertCaughtHere("from . import config as cfg\ncfg.save({})\n", "config.save")
+        self.assertCaughtHere("import subprocess\n", "subprocess")
+        self.assertCaughtHere("from . import agent_launch\n", "agent_launch")
+        self.assertCaughtHere("def f(svc):\n    return svc.answer('c-1', {})\n", "answer")
+        self.assertCaughtHere("from . import armory\n", "armory")
+        self.assertCaughtHere("from . import server\n", "server")
+        self.assertCaughtHere("def f(c):\n    c['autonomy'] = {'routines': True}\n", "autonomy")
+        self.assertCaughtHere("def f(c):\n    c['daily_usd'] = 1\n", "daily_usd")
+        self.assertCaughtHere("URL = '/api/settings/autonomy'\n", "autonomy")
+        self.assertCaughtHere("import os\nos.system('caffeinate')\n", "system")
+
+    def assertCaughtHere(self, source: str, needle: str):
+        found = " | ".join(scan_source(source))
+        self.assertTrue(found, source)
+        self.assertIn(needle, found)
+
+
+class AutoContinueRules(unittest.TestCase):
+    """P44-4, rule 11: a dispatch goes on by itself only for item 5; a group never does."""
+
+    MODULE = "auto_continue"
+
+    @staticmethod
+    def imports_module(source: str, name: str = "auto_continue") -> list[str]:
+        tree = ast.parse(source)
+        return [f"line {node.lineno}" for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                and any(n == name or n.startswith(name + ".") for n in _module_of(node))]
+
+    @staticmethod
+    def vbear_presses(source: str, label: str = "<source>") -> list[str]:
+        """Every call of ``resume_dispatch`` that says ``by="vbear"``, and every call that gives ``by`` something this scan cannot read."""
+        found = []
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+                if name != "resume_dispatch":
+                    continue
+                for kw in node.keywords:
+                    if kw.arg == "by" and not (isinstance(kw.value, ast.Constant) and kw.value.value == "you"):
+                        found.append(f"{label}:{node.lineno}: resume_dispatch by something that is not the person")
+                if len(node.args) >= 2:
+                    found.append(f"{label}:{node.lineno}: resume_dispatch with a positional by")
+        return found
+
+    def test_the_module_is_scanned_by_the_table(self):
+        self.assertIn("auto_continue.py", [p.name for p in scanned_files()])
+
+    def test_only_the_console_imports_it_and_no_group_module_does(self):
+        problems = []
+        for path in package_files():
+            if path.name in ("server.py", "auto_continue.py"):
+                continue
+            problems += [f"{path.name}:{hit}" for hit in self.imports_module(path.read_text(encoding="utf-8"))]
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertNotEqual(self.imports_module((PACKAGE / "server.py").read_text(encoding="utf-8")), [], "the console does wire it")
+        for path in PACKAGE.glob("group*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("auto_continue", text, f"{path.name} names item 5's module")
+            self.assertNotIn("resume_dispatch", text, f"{path.name} presses a dispatch's 繼續")
+
+    def test_item_5_is_read_in_one_place(self):
+        source = (PACKAGE / "auto_continue.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        reads = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "read"
+                 and isinstance(n.func.value, ast.Name) and n.func.value.id == "autonomy"]
+        self.assertEqual(len(reads), 1)
+        self.assertIn('["auto_continue"]', source)
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+                      and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+        strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+        self.assertNotIn("autonomy", strings, "the block is read through autonomy.read and no other way")
+
+    def test_only_the_console_presses_continue_as_vbear(self):
+        problems = []
+        for path in package_files():
+            if path.name == "server.py":
+                continue
+            problems += self.vbear_presses(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+        wiring = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        self.assertIn('resume_dispatch(did, by="vbear"', wiring, "the console hands the press to item 5's module")
+
+    def test_the_module_reaches_no_chat_no_card_and_no_config(self):
+        tree = ast.parse((PACKAGE / "auto_continue.py").read_text(encoding="utf-8"))
+        names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        for banned in ("send", "send_for_dispatch", "send_for_group", "send_for_routine", "answer", "chat_answer",
+                       "save_profile", "create_profile", "set_conf", "write_private", "config_path", "Popen", "system", "subprocess", "resume_dispatch"):
+            self.assertNotIn(banned, names, banned)
+        self.assertFalse([m for m in _module_of_all(tree) if m.split(".")[0] in ("chat_service", "routines", "routine_runner", "skillbook", "agent_profiles")])
+
+    def test_importing_it_from_a_group_module_is_caught(self):
+        for source in ("from . import auto_continue\n", "from .auto_continue import AutoContinue\n", "import vbear.auto_continue as a\n",
+                       "from vbear import auto_continue\n"):
+            self.assertTrue(self.imports_module(source), source)
+        self.assertEqual(self.imports_module("from . import dispatch, countdown\n"), [])
+
+    def test_pressing_continue_as_vbear_from_anywhere_else_is_caught(self):
+        for source in ('def f(r, d):\n    return r.resume_dispatch(d, by="vbear")\n', 'def f(r, d, b):\n    return r.resume_dispatch(d, by=b)\n',
+                       'def f(r, d):\n    return r.resume_dispatch(d, "vbear")\n'):
+            self.assertTrue(self.vbear_presses(source), source)
+        self.assertEqual(self.vbear_presses('def f(r, d):\n    return r.resume_dispatch(d)\n'), [])
+        self.assertEqual(self.vbear_presses('def f(r, d):\n    return r.resume_dispatch(d, by="you")\n'), [])
+
+    def test_the_module_obeys_the_rules_of_the_others(self):
+        for source, needle in (("from . import config as cfg\ncfg.save({})\n", "config.save"), ("import subprocess\n", "subprocess"),
+                               ("from .runtime import daemon\n", "runtime.daemon"), ("def f(s):\n    return s.answer('c', {})\n", "answer"),
+                               ("def f(c):\n    c['autonomy'] = {'auto_continue': True}\n", "autonomy"),
+                               ("URL = '/api/settings/autonomy'\n", "autonomy"), ("from . import agent_launch\n", "agent_launch")):
+            found = " | ".join(scan_source(source))
+            self.assertIn(needle, found, source)
+
+
+def _module_of_all(tree) -> list[str]:
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            out += _module_of(node)
+    return out
+
+
+# 12. (P44-3) the one program: the name, where it may be, and the other ways to start a program
+PROGRAM_NAME = "caffeinate"
+PROGRAM_HOME = "keep_awake.py"
+START_NAMES = {"popen", "system", "startfile", "execv", "execve", "execvp", "execvpe", "execl", "execle", "execlp", "execlpe",
+               "spawnv", "spawnve", "spawnvp", "spawnvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "posix_spawn", "posix_spawnp", "fork", "forkpty"}
+NO_PROGRAM_PATTERNS = ("routine*.py", "skillbook*.py", "auto_continue.py")
+
+
+def program_mentions(source: str, label: str = "<source>") -> list[str]:
+    """Every line that names the program, in code, comment or docstring."""
+    return [f"{label}:{n}: names {PROGRAM_NAME}" for n, line in enumerate(source.splitlines(), 1) if PROGRAM_NAME in line.lower()]
+
+
+def start_calls(source: str, label: str = "<source>") -> list[str]:
+    """Every way of starting a program that is not ``subprocess`` (which the table above bans by import): os.popen/os.spawn*/os.exec*/..."""
+    found = []
+    for node in ast.walk(ast.parse(source, filename=label)):
+        name = None
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+        elif isinstance(node, ast.ImportFrom) and (node.module or "") in ("os", "posix"):
+            name = next((a.name for a in node.names if a.name.lower() in START_NAMES), None)
+        if name and name.lower() in START_NAMES:
+            found.append(f"{label}:{node.lineno}: starts a program with {name}")
+    return found
+
+
+def argv_problems(source: str) -> list[str]:
+    """What is wrong with the argv of keep_awake.py: it must be exactly one list ["/usr/bin/caffeinate", "-i", "-w", str(os.getpid())], and
+    the program may be started only with a call of ``argv()`` and without ``shell``."""
+    tree = ast.parse(source)
+    docstrings = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+                  and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    problems = []
+    named = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings
+             and PROGRAM_NAME in n.value]
+    lists = [n for n in ast.walk(tree) if isinstance(n, ast.List) and n.elts and isinstance(n.elts[0], ast.Constant) and PROGRAM_NAME in str(n.elts[0].value)]
+    if len(named) != 1 or len(lists) != 1:
+        return ["the program must be named once, as the first word of one list"]
+    elts = lists[0].elts
+    words = [e.value if isinstance(e, ast.Constant) else ast.dump(e) for e in elts]
+    expected = ["/usr/bin/caffeinate", "-i", "-w", ast.dump(ast.parse("str(os.getpid())", mode="eval").body)]
+    if words != expected:
+        problems.append(f"the argv is not the fixed one: {words}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "Popen":
+                first = node.args[0] if node.args else None
+                if not (isinstance(first, ast.Call) and isinstance(first.func, ast.Name) and first.func.id == "argv" and not first.args):
+                    problems.append("Popen is not given argv()")
+                if any(kw.arg in ("shell", "executable", "env", "cwd") for kw in node.keywords):
+                    problems.append("Popen is given a keyword that changes what runs")
+    return problems
+
+
+class KeepAwakeRules(unittest.TestCase):
+    """P44-3, rule 12."""
+
+    def test_no_file_of_the_package_but_the_one_names_the_program(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name != PROGRAM_HOME:
+                problems += program_mentions(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertNotEqual(program_mentions((PACKAGE / PROGRAM_HOME).read_text(encoding="utf-8")), [], "the rule is not empty")
+
+    def test_the_argv_is_one_constant_list_started_without_a_shell(self):
+        self.assertEqual(argv_problems((PACKAGE / PROGRAM_HOME).read_text(encoding="utf-8")), [])
+
+    def test_the_modules_of_routines_skills_and_continuation_start_no_program(self):
+        problems: list[str] = []
+        files = {p.name: p for pattern in NO_PROGRAM_PATTERNS for p in PACKAGE.glob(pattern)}
+        self.assertTrue({"routine_runner.py", "routines.py", "routine_rules.py", "skillbook.py"} <= set(files))
+        for name, path in sorted(files.items()):
+            source = path.read_text(encoding="utf-8")
+            problems += start_calls(source, name)
+            problems += scan_source(source, name)
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and any(n.split(".")[0] in ("subprocess", "pty", "keep_awake") for n in _module_of(node)):
+                    problems.append(f"{name}:{node.lineno}: imports a way to start a program")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_only_the_console_imports_the_module_and_only_serve_hands_it_over(self):
+        for path in package_files():
+            if path.name in (PROGRAM_HOME, "server.py"):
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    self.assertNotIn("keep_awake", [n.split(".")[-1] for n in _module_of(node)], f"{path.name} imports keep_awake")
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        launches = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "launch" and isinstance(n.value, ast.Name) and n.value.id == "keep_awake_mod"]
+        self.assertEqual(len(launches), 1)
+        serve = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "serve")
+        self.assertTrue(any(n is launches[0] for n in ast.walk(serve)), "only serve() hands the launch to a console")
+        assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Attribute) and t.attr == "keep_awake_command" for t in n.targets)]
+        self.assertEqual(len(assigns), 2, "the empty default in Console and the one in serve()")
+
+    def test_the_runner_only_tells_the_machine_whether_anyone_works(self):
+        source = (PACKAGE / "routine_runner.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        calls = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and isinstance(n.func.value, ast.Attribute) and n.func.value.attr == "keep_awake"}
+        self.assertEqual(calls, {"update", "close"})
+
+    # ---- the made-up sources: each part of the rule fires ------------------------------------------------------------------
+
+    def test_naming_the_program_elsewhere(self):
+        self.assertTrue(program_mentions("ARGV = ['/usr/bin/caffeinate', '-i']\n"))
+        self.assertTrue(program_mentions("# runs Caffeinate when it is time\n"))
+        self.assertTrue(program_mentions('"""keeps the Mac up with CAFFEINATE"""\n'))
+        self.assertEqual(program_mentions("KEEP = 'keep_awake'\n"), [])
+
+    def test_other_ways_to_start_a_program(self):
+        for source in ("import os\nos.popen('x')\n", "import os\nos.system('x')\n", "import os\nos.execv('/bin/x', ['x'])\n",
+                       "import os\nos.spawnl(0, '/bin/x', 'x')\n", "import os\nos.posix_spawn('/bin/x', ['x'], {})\n",
+                       "from os import popen\n", "import os\nos.fork()\n"):
+            self.assertTrue(start_calls(source), source)
+        self.assertEqual(start_calls("import os\nos.getpid()\nos.path.join('a', 'b')\n"), [])
+
+    def test_an_argv_that_is_not_the_fixed_one(self):
+        good = ("import os, subprocess\n"
+                "def argv():\n    return ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())]\n"
+                "def launch(c):\n    return subprocess.Popen(argv(), stdin=subprocess.DEVNULL)\n")
+        self.assertEqual(argv_problems(good), [])
+        bad = {
+            "another flag": good.replace("'-i'", "'-d'"),
+            "an extra word": good.replace("str(os.getpid())]", "str(os.getpid()), 'x']"),
+            "a word from a variable": good.replace("'-i'", "WORD"),
+            "a shell": good.replace("stdin=subprocess.DEVNULL", "shell=True"),
+            "not argv()": good.replace("Popen(argv()", "Popen(c"),
+            "an env": good.replace("stdin=subprocess.DEVNULL", "env={}"),
+            "named twice": good + "OTHER = ['/usr/bin/caffeinate', '-i']\n",
+        }
+        for why, source in bad.items():
+            self.assertTrue(argv_problems(source), why)
 
 
 if __name__ == "__main__":

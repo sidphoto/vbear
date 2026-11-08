@@ -2513,7 +2513,8 @@
     "chats",
     "setup_try",
     "chief",
-    "memory_suggest"
+    "memory_suggest",
+    "skill_suggest"
    ],
    "lamp": "red",
    "meeting_usd": "1.5",
@@ -2728,7 +2729,8 @@
    "chats",
    "setup_try",
    "chief",
-   "memory_suggest"
+   "memory_suggest",
+   "skill_suggest"
   ],
   "lamp": "red",
   "meeting_usd": "1.5",
@@ -2746,7 +2748,8 @@
    "chats",
    "setup_try",
    "chief",
-   "memory_suggest"
+   "memory_suggest",
+   "skill_suggest"
   ],
   "lamp": "green",
   "meeting_usd": "1.5",
