@@ -101,6 +101,10 @@ button, input, select { font: inherit; color: inherit; }
 .side-foot { margin-top: auto; font-size: 12px; color: var(--ink-3); padding: 0 8px; }
 .side-foot button { margin-top: 6px; }
 
+.stage { min-width: 0; }
+.waiting-bar { position: sticky; top: 0; z-index: 20; padding: 8px clamp(16px, 4vw, 44px); background: var(--warn-soft, var(--panel-2)); border-bottom: 1px solid var(--line); color: var(--ink); font-weight: 600; }
+.waiting-bar[hidden] { display: none; }
+.waiting-bar a { margin-left: 6px; }
 main { padding: 28px clamp(16px, 4vw, 44px) 64px; max-width: 1240px; width: 100%; }
 main:focus { outline: none; }
 h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.01em; }

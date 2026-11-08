@@ -233,7 +233,7 @@ class FlowTests(unittest.TestCase):
         self.assertIn("chief", ledger["includes"])
 
     def test_with_both_ticks_on_the_proposal_starts_by_itself_and_the_list_says_which_item_and_the_settings_are_what_the_person_wrote(self):
-        self.ok("/api/settings/autonomy", "POST", {"create_cards": True, "dispatch": True})
+        self.ok("/api/settings/autonomy", "POST", {"create_cards": True, "dispatch": True, "routines": False, "auto_continue": False})
         config_after_ticks = self.config_bytes()
         _, _, did = self.ask()
         view = self.ok(f"/api/dispatch/{did}")

@@ -27,15 +27,17 @@ EFFECT_1 = "幕僚長提議要新員工時，VBear 不等你確認就建好（�
 TITLE_2 = "幕僚長可以自己派工給員工"
 EFFECT_2 = ("幕僚長的提議一到就開始派工，不再停在提議卡；員工照舊每個指令都問你。提議要新員工（而第 1 項沒勾）、VBear 拿掉了東西、"
             "或幕僚長有問題要問你時，還是會停下來等你。")
-LATER = "例行工作、不必每次問、倒數後自動接續這三項會在之後的版本加入。"
+OFF4 = {"create_cards": False, "dispatch": False, "routines": False, "auto_continue": False}
+LATER = "不必每次問、倒數後自動接續這兩項會在之後的版本加入。"
 
 
 class TableTests(unittest.TestCase):
-    def test_the_five_items_of_adr_0003_and_only_two_work_in_this_version(self):
+    def test_the_five_items_of_adr_0003_and_only_three_work_in_this_version(self):
+        # P44-2 made item 3 work and gave the block its two new booleans; item 5 (P44-4) is in the block but not yet in the table
         self.assertEqual([i["id"] for i in autonomy.ITEMS], [1, 2, 3, 4, 5])
-        self.assertEqual([i["id"] for i in autonomy.ITEMS if i["active"]], [1, 2])
-        self.assertEqual([i["key"] for i in autonomy.ITEMS if i["active"]], ["create_cards", "dispatch"])
-        self.assertEqual(autonomy.KEYS, ("create_cards", "dispatch"))
+        self.assertEqual([i["id"] for i in autonomy.ITEMS if i["active"]], [1, 2, 3])
+        self.assertEqual([i["key"] for i in autonomy.ITEMS if i["active"]], ["create_cards", "dispatch", "routines"])
+        self.assertEqual(autonomy.KEYS, ("create_cards", "dispatch", "routines", "auto_continue"))
         for item in autonomy.ITEMS:
             self.assertEqual(item["adr"], "0003")
             self.assertTrue(item["title"] and item["effect"])
@@ -62,7 +64,7 @@ class ChiefTests(unittest.TestCase):
 
 
 class ReadTests(unittest.TestCase):
-    OFF = {"create_cards": False, "dispatch": False}
+    OFF = {"create_cards": False, "dispatch": False, "routines": False, "auto_continue": False}
 
     def test_the_default_is_both_off(self):
         self.assertEqual(autonomy.read({}), self.OFF)
@@ -70,13 +72,13 @@ class ReadTests(unittest.TestCase):
 
     def test_only_true_is_true_and_what_cannot_be_read_is_false(self):
         self.assertEqual(autonomy.read({"autonomy": {"create_cards": True, "dispatch": False}}),
-                         {"create_cards": True, "dispatch": False})
+                         {"create_cards": True, "dispatch": False, "routines": False, "auto_continue": False})
         for bad in (None, "yes", 1, [], [True], {"create_cards": 1, "dispatch": "true"}, {"create_cards": None},
                     {"dispatch": [True]}, {"unknown": True}):
             self.assertEqual(autonomy.read({"autonomy": bad}), self.OFF, bad)
         # one item that cannot be read does not turn the other off, and never turns anything on
         self.assertEqual(autonomy.read({"autonomy": {"create_cards": "x", "dispatch": True}}),
-                         {"create_cards": False, "dispatch": True})
+                         {"create_cards": False, "dispatch": True, "routines": False, "auto_continue": False})
         self.assertEqual(autonomy.read("not a dict"), self.OFF)
         self.assertEqual(autonomy.read(None), self.OFF)
 
@@ -90,16 +92,18 @@ class ReadTests(unittest.TestCase):
 
 
 class ValidateTests(unittest.TestCase):
-    def test_exactly_the_two_booleans(self):
-        self.assertEqual(autonomy.validate({"create_cards": True, "dispatch": False}),
-                         {"create_cards": True, "dispatch": False})
+    def test_exactly_the_four_booleans(self):
+        body = {"create_cards": True, "dispatch": False, "routines": True, "auto_continue": False}
+        self.assertEqual(autonomy.validate(body), body)
 
     def test_anything_else_is_refused(self):
+        four = {"create_cards": True, "dispatch": True, "routines": True, "auto_continue": True}
         for bad in (None, [], "x", {}, {"create_cards": True}, {"dispatch": True},
-                    {"create_cards": True, "dispatch": True, "daily_usd": 9},
-                    {"create_cards": True, "dispatch": True, "routine": True},
-                    {"create_cards": 1, "dispatch": 0}, {"create_cards": "true", "dispatch": False},
-                    {"create_cards": None, "dispatch": False}):
+                    {"create_cards": True, "dispatch": True},                       # the two keys of v0.17.1: one short of four
+                    {**four, "daily_usd": 9}, {**four, "routine": True},
+                    {k: v for k, v in four.items() if k != "routines"}, {k: v for k, v in four.items() if k != "auto_continue"},
+                    {**four, "create_cards": 1, "dispatch": 0}, {**four, "create_cards": "true"},
+                    {**four, "routines": None}, {**four, "auto_continue": 1}):
             with self.assertRaises(ValueError, msg=bad):
                 autonomy.validate(bad)
 
@@ -137,9 +141,9 @@ class SettingsRoutes(Http, unittest.TestCase):
     def test_the_default_is_both_off_and_the_page_gets_the_table(self):
         status, out = self.call(PATH)
         self.assertEqual(status, 200, out)
-        self.assertEqual(out["autonomy"], {"create_cards": False, "dispatch": False})
+        self.assertEqual(out["autonomy"], OFF4)
         self.assertEqual([i["id"] for i in out["items"]], [1, 2, 3, 4, 5])
-        self.assertEqual([i["id"] for i in out["items"] if i["active"]], [1, 2])
+        self.assertEqual([i["id"] for i in out["items"] if i["active"]], [1, 2, 3])
         self.assertEqual(out["later_note"], LATER)
         self.assertEqual(len(out["never"]), 3)
         self.assertIn("per_turn_usd", out["limits"])
@@ -155,25 +159,26 @@ class SettingsRoutes(Http, unittest.TestCase):
         cfg.config_path().write_text(json.dumps(conf), encoding="utf-8")
         self.console.store.set_conf(cfg.load())
         status, out = self.call(PATH)
-        self.assertEqual((status, out["autonomy"]), (200, {"create_cards": False, "dispatch": False}))
+        self.assertEqual((status, out["autonomy"]), (200, OFF4))
 
-    def test_post_writes_the_two_booleans_and_only_them(self):
+    def test_post_writes_the_four_booleans_and_only_them(self):
         before = self.raw_conf()
-        status, out = self.call(PATH, "POST", {"create_cards": True, "dispatch": False})
+        on = {**OFF4, "create_cards": True}
+        status, out = self.call(PATH, "POST", on)
         self.assertEqual(status, 200, out)
-        self.assertEqual(out["autonomy"], {"create_cards": True, "dispatch": False})
+        self.assertEqual(out["autonomy"], on)
         after = self.raw_conf()
-        self.assertEqual(after["autonomy"], {"create_cards": True, "dispatch": False})
+        self.assertEqual(after["autonomy"], on)
         self.assertEqual({k: v for k, v in after.items() if k != "autonomy"}, {k: v for k, v in before.items() if k != "autonomy"})
-        self.assertEqual(self.call(PATH)[1]["autonomy"], {"create_cards": True, "dispatch": False})
+        self.assertEqual(self.call(PATH)[1]["autonomy"], on)
         # and back off
-        self.assertEqual(self.call(PATH, "POST", {"create_cards": False, "dispatch": False})[0], 200)
-        self.assertEqual(self.raw_conf()["autonomy"], {"create_cards": False, "dispatch": False})
+        self.assertEqual(self.call(PATH, "POST", OFF4)[0], 200)
+        self.assertEqual(self.raw_conf()["autonomy"], OFF4)
 
     def test_post_without_the_header_is_refused_and_nothing_is_written(self):
         before = self.bytes_of_conf()
         req = urllib.request.Request(f"http://127.0.0.1:{self.console.port}{PATH}", method="POST",
-                                     data=json.dumps({"create_cards": True, "dispatch": True}).encode(),
+                                     data=json.dumps({**OFF4, "routines": True}).encode(),
                                      headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
         with self.assertRaises(urllib.error.HTTPError) as caught:
             urllib.request.urlopen(req, timeout=15)
@@ -183,10 +188,10 @@ class SettingsRoutes(Http, unittest.TestCase):
 
     def test_post_with_a_bad_body_is_400_and_nothing_is_written(self):
         before = self.bytes_of_conf()
-        for body in ({"create_cards": True}, {"dispatch": True}, {}, {"create_cards": True, "dispatch": True, "daily_usd": 9},
-                     {"create_cards": True, "dispatch": True, "launch_mode": "full"},
-                     {"create_cards": 1, "dispatch": 0}, {"create_cards": "true", "dispatch": False},
-                     {"create_cards": None, "dispatch": True}):
+        for body in ({"create_cards": True}, {"dispatch": True}, {}, {"create_cards": True, "dispatch": True},
+                     {**OFF4, "daily_usd": 9}, {**OFF4, "launch_mode": "full"},
+                     {**OFF4, "create_cards": 1, "dispatch": 0}, {**OFF4, "create_cards": "true"},
+                     {**OFF4, "create_cards": None, "dispatch": True}, {"create_cards": True, "dispatch": True, "routines": True}):
             status, out = self.call(PATH, "POST", body)
             self.assertEqual(status, 400, (body, out))
             self.assertIn("error", out)
@@ -204,23 +209,25 @@ class SettingsRoutes(Http, unittest.TestCase):
         self.assertNotIn("autonomy", server.CONFIG_WRITABLE)
 
     def test_the_config_route_leaves_the_setting_as_it_was(self):
-        self.call(PATH, "POST", {"create_cards": True, "dispatch": True})
+        both = {**OFF4, "create_cards": True, "dispatch": True}
+        self.call(PATH, "POST", both)
         status, out = self.call("/api/config", "POST", {"advanced_mode": True})
         self.assertEqual(status, 200, out)
-        self.assertEqual(self.raw_conf()["autonomy"], {"create_cards": True, "dispatch": True})
-        self.assertEqual(out["config"]["autonomy"], {"create_cards": True, "dispatch": True})
+        self.assertEqual(self.raw_conf()["autonomy"], both)
+        self.assertEqual(out["config"]["autonomy"], both)
 
     def test_the_other_settings_routes_do_not_touch_it(self):
-        self.call(PATH, "POST", {"create_cards": True, "dispatch": False})
+        one = {**OFF4, "create_cards": True}
+        self.call(PATH, "POST", one)
         self.assertEqual(self.call("/api/setup/daily-limit", "POST", {"daily_usd": 1})[0], 200)
-        self.assertEqual(self.raw_conf()["autonomy"], {"create_cards": True, "dispatch": False})
+        self.assertEqual(self.raw_conf()["autonomy"], one)
 
     def test_a_config_that_cannot_be_read_blocks_the_write(self):
         cfg.config_path().write_text("[1, 2]", encoding="utf-8")
-        status, out = self.call(PATH, "POST", {"create_cards": True, "dispatch": True})
+        status, out = self.call(PATH, "POST", {**OFF4, "create_cards": True, "dispatch": True})
         self.assertEqual(status, 409, out)
         self.assertEqual(cfg.config_path().read_text(encoding="utf-8"), "[1, 2]")
-        self.assertEqual(self.call(PATH)[1]["autonomy"], {"create_cards": False, "dispatch": False})
+        self.assertEqual(self.call(PATH)[1]["autonomy"], OFF4)
 
 
 if __name__ == "__main__":

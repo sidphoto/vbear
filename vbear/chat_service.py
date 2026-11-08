@@ -34,7 +34,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import admin_policy, agent_profiles, ai_tools, board_engine, config as cfg, daemon_client, groups, meetings as mt
-from . import memory as memory_store, shared_folder
+from . import memory as memory_store, routines as routines_store, shared_folder
 from .api_error import ApiError
 from .runtime import agent_sessions, chat_engines, chat_protocol as cp, chat_store as cs, cli_versions, codex_chat_env, memory_rules
 from .runtime import shared_rules
@@ -557,6 +557,17 @@ class ChatService:
             raise ApiError(400, "bad_request", "訊息必須是文字。")
         if not isinstance(chat_id, str) or chat_id not in groups.member_chat_ids():
             raise ApiError(400, "bad_request", "這不是群組用的聊天。")
+        return self._send(chat_id, text, None)
+
+    def send_for_routine(self, chat_id, text) -> dict:
+        """The first message of a routine's run (P44-2): the same send as a person's, so every limit, every question about a command or a
+        file and the day's money apply as they do there. Only into the chat a run is in the middle of opening (its record says
+        ``starting`` with this chat, and no turn yet); the record gets no new field. Not reachable from the browser's routes: only the
+        routine runner calls it. Once the run has its turn the chat is an ordinary one, and the person goes on in it with ``send``."""
+        if not isinstance(text, str):
+            raise ApiError(400, "bad_request", "訊息必須是文字。")
+        if routines_store.starting_chat(chat_id) is None:
+            raise ApiError(400, "bad_request", "這不是例行工作正在開的聊天。")
         return self._send(chat_id, text, None)
 
     def send_for_dispatch(self, chat_id, text, origin) -> dict:

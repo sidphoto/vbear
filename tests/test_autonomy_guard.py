@@ -25,6 +25,15 @@ Never, whatever the person ticked in 「自己動手」:
      own modules (``skillbook*.py``) are held to every rule above, and also never reach the skill cards of the AI tools (``scan``), the
      role cards, the chat service, a system prompt or the folders of the AI tools: a skill is only the words the person sends.
 
+  8. (P44-2) a routine is made, changed, switched on or deleted by the person alone: the functions that do it (``create``, ``edit``,
+     ``set_enabled``, ``delete``, ``set_settings`` of vbear/routines.py, and its store) are called from vbear/server.py's /api/routines routes
+     and from nowhere else; the functions that record a run (``record_run``, ``new_run``, ``update_run``, ``run_store``) only from the
+     routines' own modules and the console; the other scanned modules do not import ``vbear.routines`` or ``vbear.routine_runner`` at all;
+     ``send_for_routine`` is named in vbear/chat_service.py and vbear/routine_runner.py and nowhere else; the routines' modules never make or
+     change a role card. The routines' modules (``routine*.py``) are held to every rule above.
+  9. (P44-2) a routine starts by itself only for 「自己動手」 item 3: vbear/routine_runner.py reads it with ``autonomy.read(...)["routines"]``
+     in one place and never names ``autonomy`` as a key itself (the behaviour is tested in tests/test_routine_runner.py).
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -40,7 +49,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
 PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py",
-            "skillbook*.py")
+            "skillbook*.py", "routine*.py")
 
 # --- the table: (what it keeps from happening) -> what is not allowed -------------------------------------------------------
 
@@ -192,6 +201,54 @@ def skillbook_reaches(source: str, label: str = "<source>") -> list[str]:
             for bad in SKILLBOOK_BANNED_STRINGS:
                 if bad in node.value:
                     found.append(f"{label}:{node.lineno}: names {bad}")
+    return found
+
+
+# 9. (P44-2) who may change the routines: the module's writers, and the only modules that may name them
+ROUTINES_MODULE = "routines"
+ROUTINE_WRITERS = {"create", "edit", "set_enabled", "delete", "set_settings", "store", "settings_store"}
+ROUTINE_WRITER_HOMES = {"server.py", "routines.py"}                   # the routes, and the module itself
+ROUTINE_RUN_WRITERS = {"record_run", "new_run", "update_run", "run_store"}
+ROUTINE_RUN_HOMES = {"routines.py", "routine_runner.py", "server.py"}  # the module, the runner, and the routes of the person's decision
+ROUTINE_ONLY_NAMES = {"send_for_routine": {"chat_service.py", "routine_runner.py"}}
+
+
+def routine_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, ROUTINES_MODULE, ROUTINE_WRITERS)
+
+
+def routine_run_writer_uses(source: str, label: str = "<source>") -> list[str]:
+    return writer_uses(source, label, ROUTINES_MODULE, ROUTINE_RUN_WRITERS)
+
+
+def named_uses(source: str, label: str, name: str) -> list[str]:
+    """Every place a source names ``name``: a call, an attribute, a plain name, an import, or a string."""
+    tree = ast.parse(source, filename=label)
+    found = []
+    for node in ast.walk(tree):
+        hit = ((isinstance(node, ast.Attribute) and node.attr == name) or (isinstance(node, ast.Name) and node.id == name)
+               or (isinstance(node, ast.alias) and node.name == name) or (isinstance(node, ast.FunctionDef) and node.name == name)
+               or (isinstance(node, ast.Constant) and node.value == name))
+        if hit:
+            found.append(f"{label}:{getattr(node, 'lineno', '?')}: names {name}")
+    return found
+
+
+# a role card is made or changed through these (the routines' modules never call them)
+CARD_WRITERS = {"save_profile", "create_profile", "delete_profile", "duplicate_profile", "set_profile_enabled"}
+
+
+def card_writer_calls(source: str, label: str = "<source>") -> list[str]:
+    tree = ast.parse(source, filename=label)
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+            if name in CARD_WRITERS:
+                found.append(f"{label}:{node.lineno}: calls {name}")
+        elif isinstance(node, ast.ImportFrom):
+            found += [f"{label}:{node.lineno}: imports {a.name}" for a in node.names if a.name in CARD_WRITERS]
     return found
 
 
@@ -675,6 +732,137 @@ class ScanFiresOnEachRule(unittest.TestCase):
             "    return got, chats.stop(chat_id, {}), chats.close(chat_id), 'The answer never came'\n"
         )
         self.assertEqual(scan_source(clean), [])
+
+
+class RoutineRules(unittest.TestCase):
+    """P44-2: rules 8 and 9 over the real modules, and the small made-up sources that show the scan fires."""
+
+    def test_the_routines_modules_are_scanned(self):
+        names = [p.name for p in scanned_files()]
+        for name in ("routine_rules.py", "routines.py", "routine_runner.py"):
+            self.assertIn(name, names)
+        for path in PACKAGE.rglob("routine*.py"):
+            self.assertIn(path.name, names, "a routines module the scan does not cover")
+
+    def test_only_the_routes_of_the_console_change_a_routine(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in ROUTINE_WRITER_HOMES:
+                problems += routine_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_console_does_call_each_writer_so_the_rule_is_not_empty(self):
+        source = (PACKAGE / "server.py").read_text(encoding="utf-8")
+        used = {m.group(1) for m in re.finditer(r"routines_mod\.(\w+)", source)}
+        self.assertEqual(used & {"create", "edit", "delete", "set_settings"}, {"create", "edit", "delete", "set_settings"})
+        self.assertNotEqual(routine_writer_uses(source, "server.py"), [])
+
+    def test_only_the_routines_own_modules_and_the_console_record_a_run(self):
+        problems: list[str] = []
+        for path in package_files():
+            if path.name not in ROUTINE_RUN_HOMES:
+                problems += routine_run_writer_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+        runner = (PACKAGE / "routine_runner.py").read_text(encoding="utf-8")
+        self.assertNotEqual(routine_run_writer_uses(runner, "routine_runner.py"), [], "the runner does record runs, so the rule is not empty")
+
+    def test_the_other_scanned_modules_do_not_import_the_routines_at_all(self):
+        problems: list[str] = []
+        for path in scanned_files():
+            if path.name.startswith("routine"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                        n == m or n.startswith(m + ".") for n in _module_of(node) for m in ("routines", "routine_runner", "routine_rules")):
+                    problems.append(f"{path.name}:{node.lineno}: imports the routines")
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_send_for_routine_is_named_only_by_the_chat_service_and_the_runner(self):
+        problems: list[str] = []
+        seen: set[str] = set()
+        for path in package_files():
+            hits = named_uses(path.read_text(encoding="utf-8"), path.name, "send_for_routine")
+            if hits:
+                seen.add(path.name)
+                if path.name not in ROUTINE_ONLY_NAMES["send_for_routine"]:
+                    problems += hits
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertEqual(seen, {"chat_service.py", "routine_runner.py"})
+
+    def test_the_routines_modules_never_make_or_change_a_role_card(self):
+        problems: list[str] = []
+        for path in PACKAGE.glob("routine*.py"):
+            problems += card_writer_calls(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_the_routines_modules_never_name_a_chat_answer_or_the_config(self):
+        for path in PACKAGE.glob("routine*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)} | {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            self.assertFalse(names & {"answer", "chat_answer", "set_conf", "write_private", "config_path", "Popen", "system", "subprocess"}, path.name)
+
+    def test_item_3_is_read_in_one_place_and_the_runner_never_names_the_autonomy_block(self):
+        source = (PACKAGE / "routine_runner.py").read_text(encoding="utf-8")
+        self.assertEqual(len(re.findall(r"autonomy\.read\(", source)), 1)
+        self.assertIn('["routines"]', source)
+        tree = ast.parse(source)
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+                      and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+        strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+        self.assertNotIn("autonomy", strings, "the block is read through autonomy.read and no other way")
+        self.assertNotIn("auto_continue", strings)
+
+    # ---- the made-up sources: each rule fires ----------------------------------------------------------------------------
+
+    def test_changing_a_routine_from_anywhere_but_the_console_routes(self):
+        for name in sorted(ROUTINE_WRITERS):
+            self.assertTrue(routine_writer_uses(f"from . import routines\nroutines.{name}()\n"), name)
+            self.assertTrue(routine_writer_uses(f"from . import routines as rt\ndef f(x):\n    return rt.{name}(x)\n"), name)
+            self.assertTrue(routine_writer_uses(f"from .routines import {name}\n"), name)
+        self.assertTrue(routine_writer_uses("import vbear.routines\nvbear.routines.create({})\n"))
+        self.assertTrue(routine_writer_uses("from .routines import *\n"))
+        self.assertTrue(routine_writer_uses("from . import routines\nf = getattr(routines, name)\n"))
+        self.assertTrue(routine_writer_uses("from . import routines\nroutines.store.save({})\n"))
+
+    def test_reading_the_routines_is_allowed(self):
+        self.assertEqual(routine_writer_uses("from . import routines\ndef f():\n    return routines.read_routines(), routines.chat_titles(), routines.starting_chat('c')\n"), [])
+        self.assertEqual(routine_writer_uses("from . import groups\ngroups.create({})\ngroups.delete('g')\n"), [], "other modules with the same names")
+
+    def test_recording_a_run_from_anywhere_else(self):
+        for name in sorted(ROUTINE_RUN_WRITERS):
+            self.assertTrue(routine_run_writer_uses(f"from . import routines\nroutines.{name}\n"), name)
+        self.assertTrue(routine_run_writer_uses("from .routines import new_run\n"))
+        self.assertEqual(routine_run_writer_uses("from . import routines\nroutines.read_runs()\n"), [])
+
+    def test_naming_send_for_routine_elsewhere(self):
+        for source in ("def f(chats, c):\n    return chats.send_for_routine(c, 'x')\n", "from .chat_service import send_for_routine\n",
+                       "f = getattr(chats, 'send_for_routine')\n", "send_for_routine = 1\n", "def send_for_routine(self):\n    pass\n"):
+            self.assertTrue(named_uses(source, "x.py", "send_for_routine"), source)
+        self.assertEqual(named_uses("def f(chats):\n    return chats.send_for_group(1, 'x')\n", "x.py", "send_for_routine"), [])
+
+    def test_making_a_role_card_from_the_routines_modules(self):
+        for source in ("from . import agent_profiles as ap\nap.save_profile(None, {})\n", "from .agent_profiles import create_profile\n",
+                       "def f(ap):\n    ap.delete_profile('x')\n"):
+            self.assertTrue(card_writer_calls(source), source)
+        self.assertEqual(card_writer_calls("def f(ap):\n    return ap.get_profile_readonly('x')\n"), [])
+
+    def test_the_routines_modules_obey_the_rules_of_the_others(self):
+        self.assertCaughtHere("from . import config as cfg\ncfg.save({})\n", "config.save")
+        self.assertCaughtHere("import subprocess\n", "subprocess")
+        self.assertCaughtHere("from . import agent_launch\n", "agent_launch")
+        self.assertCaughtHere("def f(svc):\n    return svc.answer('c-1', {})\n", "answer")
+        self.assertCaughtHere("from . import armory\n", "armory")
+        self.assertCaughtHere("from . import server\n", "server")
+        self.assertCaughtHere("def f(c):\n    c['autonomy'] = {'routines': True}\n", "autonomy")
+        self.assertCaughtHere("def f(c):\n    c['daily_usd'] = 1\n", "daily_usd")
+        self.assertCaughtHere("URL = '/api/settings/autonomy'\n", "autonomy")
+        self.assertCaughtHere("import os\nos.system('caffeinate')\n", "system")
+
+    def assertCaughtHere(self, source: str, needle: str):
+        found = " | ".join(scan_source(source))
+        self.assertTrue(found, source)
+        self.assertIn(needle, found)
 
 
 if __name__ == "__main__":
