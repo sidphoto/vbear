@@ -76,7 +76,7 @@ from . import dispatch as dispatch_mod, dispatch_runner as dispatch_runner_mod
 from . import groups as groups_mod, group_runner as group_runner_mod
 from . import auto_continue as auto_continue_mod, keep_awake as keep_awake_mod, routines as routines_mod, routine_rules, routine_runner as routine_runner_mod
 from . import meeting_runner as meeting_runner_mod
-from . import templates as templates_mod, templates_apply as templates_apply_mod
+from . import templates as templates_mod, templates_apply as templates_apply_mod, templates_mine as templates_mine_mod
 from .jsonstore import StoreError as JsonStoreError
 from . import meetings
 from . import staffing
@@ -160,6 +160,8 @@ ROUTINE_MISSED_RE = re.compile(r"^/api/routines/missed/(r-[0-9a-f]{12})\Z")     
 # /api/templates/applies/<id>/undo-preview | undo (P45-2): 復原這次套用; the other routes of the team templates are named in _templates_post
 TEMPLATE_APPLY_RE = re.compile(r"^/api/templates/applies/(ta-[0-9a-f]{12})/(undo-preview|undo)\Z")
 TEMPLATE_WRITE_LOCK = threading.Lock()      # one apply or undo at a time (they read the limits and the files before they write)
+# /api/templates/mine[/<id>[/delete]] (P45-3, ADR 0011): the person's own team templates; only these routes write mine.json
+TEMPLATE_MINE_RE = re.compile(r"^/api/templates/mine/(tm-[0-9a-f]{12})(?:/(delete))?\Z")
 # /api/chats/<id>[/messages | /answer | /stop | /stream] (P36-2)
 CHAT_RE = re.compile(r"^/api/chats/(c-[0-9a-f]{16})(?:/(messages|answer|stop|stream))?\Z")
 CHAT_STREAMS_MAX = 4          # chat pages that may hold a live stream open at once
@@ -392,7 +394,7 @@ class Console:
     def template_mine(self):
         """The person's own team templates as ``(templates, readable, problem)``. P45-3 reads ``<state>/templates/mine.json`` here; until
         then there is none and nothing to read. A file that cannot be read gives ``([], False, a sentence)``: the built-in four still work."""
-        return [], True, None
+        return templates_mine_mod.read_mine()
 
     def template_names(self) -> dict:
         """``{(kind, id): name}`` of the employees, skills and routines the person has now, read from the person's own files (the record of the
@@ -2349,7 +2351,8 @@ def make_handler(console: Console):
                 if found.group(2) == "undo-preview":
                     return self._chat_action(lambda: self._templates_undo_preview(found.group(1), body))
                 return self._chat_action(lambda: self._templates_undo(found.group(1), body))
-            # P45-3 adds: /mine, /mine/<id>, /mine/<id>/delete.
+            if path == "/api/templates/mine" or TEMPLATE_MINE_RE.match(path):
+                return self._templates_mine_post(path, body)
             return self._error(404, "not found")
 
         # ---- the apply of team templates and 復原這次套用 (P45-2): the one place that makes and deletes what a team template is made of ----
@@ -2586,6 +2589,37 @@ def make_handler(console: Console):
                             pass
             shown = self._templates_undo_shown(apply, dict(plan, delete=deleted), names)
             return {"deleted": shown["delete"], "kept": shown["keep"], "gone": shown["gone"]}
+
+        def _templates_mine_post(self, path, body):
+            """The person's own team templates (P45-3): save a copy of what is ticked or of what the person has now, rename one, delete one.
+            Deleting only removes the template; nothing made from it or into it is touched."""
+            if path == "/api/templates/mine":
+                return self._chat_action(lambda: self._templates_mine_save(body), 201)
+            found = TEMPLATE_MINE_RE.match(path)
+            tid, action = found.group(1), found.group(2)
+            if action == "delete":
+                return self._chat_action(lambda: templates_mine_mod.delete_mine(tid, body))
+            return self._chat_action(lambda: templates_mine_mod.rename_mine(tid, body))
+
+        def _templates_mine_save(self, body) -> dict:
+            """What the person has now, as stored (the cards without a chat service, the skills, the routines), handed to ``save_mine``. Only
+            what the request names is read; a file of it that cannot be read is a 503 and nothing is saved."""
+            def names(kind, key):
+                rows = body.get(kind) if isinstance(body, dict) else None
+                return isinstance(rows, list) and any(isinstance(r, dict) and key in r for r in rows)
+            cards = list(agent_profiles.load_all(None, None, mark_corrupt=False).values()) if names("cards", "profile_id") else []
+            skills: list = []
+            if names("skills", "skill_id"):
+                view = skillbook_mod.view()
+                if view["readable"] is not True:
+                    raise ApiError(503, "skills_unreadable", skillbook_mod.UNREADABLE)
+                skills = view["skills"]
+            routine_list: list = []
+            if names("routines", "routine_id"):
+                routine_list, routine_problem = routines_mod.read_routines()
+                if routine_problem:
+                    raise ApiError(503, "routines_unreadable", routine_problem)
+            return templates_mine_mod.save_mine(body, cards=cards, skills=skills, routines=routine_list)
 
         def _memory_cards(self) -> list:
             """The role cards as the chat service lists them (the memory page's switches and the check of a switch)."""
