@@ -430,7 +430,7 @@ def plan(body, *, templates, current):
     ``/apply`` (the same), ``templates`` is ``index(...)``, ``current`` is
     ``{"cards": [{id, name, can_chat}], "skills": number, "routines": number}``: what the person has now. ValueError (zh) when the request
     is not well-formed (an unknown template, the same item twice, more than one apply holds); everything else the person can still fix is
-    a problem in the answer, which is {tool, cards, skills, routines, choices, after, notes, warn_items, problems, ok}. Each card has ``body``
+    a problem in the answer, which is {tool, cards, skills, routines, warn_text, choices, after, notes, warn_items, problems, ok}. Each card has ``body``
     and each routine has ``routine`` (the template's own routine, to be given ``routine_body`` once its employee has an id): ``public`` drops
     them for the screen. Nothing given is changed."""
     req = _request(body, templates)
@@ -537,7 +537,10 @@ def plan(body, *, templates, current):
         problems.append({"code": "confirm_warning", "warn": codes, "items": copy.deepcopy(warn_items), "text": WARN_TEXT[codes[0]],
                          "warn_text": [WARN_TEXT[c] for c in codes]})
 
-    return {"tool": tool, "cards": cards, "skills": skills, "routines": routines,
+    warn_codes = []
+    for w in warn_items:
+        warn_codes += [c for c in w["warn"] if c not in warn_codes]
+    return {"tool": tool, "cards": cards, "skills": skills, "routines": routines, "warn_text": {c: WARN_TEXT[c] for c in warn_codes},
             "choices": {"cards": [{"template": c["from"]["template"], "key": c["from"]["key"], "name": c["name"]} for c in cards],
                         "existing": chatters},
             "after": after, "notes": notes, "warn_items": warn_items, "problems": problems, "ok": not problems}

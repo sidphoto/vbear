@@ -6422,7 +6422,9 @@ async function viewTeam(params = {}) {
       on: { click: needCatalog(() => openCardWizard({ catalog, profiles, existing: null, onSaved: refresh })) } }, "＋ 新角色卡"),
     !hasOwnCard && profilesRes.ok
       ? el("button", { type: "button", class: "btn", "data-pool": "starter",
-        on: { click: needCatalog(() => openStarterDeck({ catalog, profiles, onSaved: refresh })) } }, "用起手牌組開始") : null);
+        on: { click: needCatalog(() => openStarterDeck({ catalog, profiles, onSaved: refresh })) } }, "用起手牌組開始") : null,
+    !hasOwnCard && profilesRes.ok
+      ? el("a", { class: "btn", href: "#/templates", "data-pool": "team-templates" }, "用團隊範本開始") : null);
 
   const shown = filter ? profiles.filter((p) => p.model && p.model.tool === filter) : profiles;
   // a camp is in the bar when the catalog offers it or a card names it (a hidden tool that is switched off shows only for its cards)
@@ -12487,6 +12489,271 @@ async function viewRoutines() {
 }
 // ---------- end of routines ----------
 
+// ---------- team templates (v0.19, P45-1) ----------
+// 團隊範本 (ADR 0011): a set of ready-made employees, skills and routines. The person ticks the ones they want (from one template or several),
+// looks at the preview, and later presses 套用 (P45-2). This block reads GET /api/templates and asks POST /api/templates/preview, which only
+// plans: nothing here writes a card, a skill or a routine. Names and texts are set with textContent only (el() children).
+// Extension points for the next batches are the functions templatesApplyAction (P45-2: the 套用 button and what follows), templatesAppliesSection
+// (P45-2: 套用紀錄), templatesMineSection and templatesSaveAction (P45-3: 你存的團隊範本, 你現在的, 存成團隊範本); each is replaced as a whole.
+const TPL_LINES = [
+  "團隊範本是一組現成的員工、技能和例行工作。勾你要的，按「預覽並套用」看清楚再套用。",
+  "套用不用 AI、不花錢。員工一律用安全模式，跑指令、改檔案照舊每次都問你；記憶和共用資料夾照你平常的設定；例行工作建好是關著的。",
+  "每次套用都可以「復原這次套用」：只刪這次建的、你沒改過也沒用過的，改過或用過的會留著並告訴你。團隊範本不會改或刪你原本就有的東西。",
+  "團隊範本只存在這台電腦，不會上傳，也不能匯出。",
+];
+const TPL_CEO_LINE = "要用幕僚長派工，還需要一位 CEO（到角色卡池建）。";
+const TPL_PREVIEW_LINES = {
+  safe: "員工一律用安全模式：跑指令、改檔案照舊每次都問你。團隊範本不會建出完整模式的員工。",
+  memory: "記憶照你平常的設定（Claude Code 的員工帶記憶，Codex 的員工不帶，因為記憶會送到 OpenAI）；共用資料夾都關著。要改，到記憶頁或共用資料夾頁一位一位打開。",
+  off: "例行工作建好是關著的，要你自己到例行工作頁打開。",
+  free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。",
+  codex: "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  notReady: "這個 AI 工具還沒準備好：員工會建好，但要先到開始設定登入才能聊天。",
+};
+const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex" };
+const TPL_KINDS = [["cards", "員工"], ["skills", "技能"], ["routines", "例行工作"]];
+
+function tplId(ref) { return `${ref.template}/${ref.key}`; }
+function tplSelection() { return { cards: new Map(), skills: new Map(), routines: new Map() }; }
+function tplCounts(sel) { return { cards: sel.cards.size, skills: sel.skills.size, routines: sel.routines.size }; }
+function tplCountText(sel) {
+  const c = tplCounts(sel);
+  return `已勾：${c.cards} 位員工、${c.skills} 個技能、${c.routines} 件例行工作`;
+}
+// The request of the preview and (P45-2) of the apply: the same body. `name` and `to` are sent only when the person changed them.
+function tplRequestBody(sel, opts) {
+  const from = (r) => ({ template: r.from.template, key: r.from.key });
+  const body = {
+    tool: opts.tool,
+    cards: Array.from(sel.cards.values()).map((c) => (c.name === undefined ? { from: from(c) } : { from: from(c), name: c.name })),
+    skills: Array.from(sel.skills.values()).map((s) => ({ from: from(s) })),
+    routines: Array.from(sel.routines.values()).map((r) => (r.to === undefined ? { from: from(r) } : { from: from(r), to: r.to })),
+  };
+  if (opts.confirm === true) body.confirm_warning = true;
+  return body;
+}
+// Tick or untick one item. A routine that was handed to a card that is no longer ticked goes back to the template's own choice.
+function tplSetPick(sel, kind, ref, on) {
+  const id = tplId(ref);
+  if (on) { if (!sel[kind].has(id)) sel[kind].set(id, { from: { template: ref.template, key: ref.key } }); return; }
+  sel[kind].delete(id);
+  if (kind === "cards") sel.routines.forEach((r) => { if (r.to && r.to.card && tplId(r.to.card) === id) delete r.to; });
+}
+function tplScheduleText(r) {
+  const days = r.days.length === 7 ? "每天" : `每週${r.days.map((d) => ROUTINE_DAYS[d]).join("、")}`;
+  return `${days}　${r.times.join("、")}`;
+}
+function tplModelText(card) { return card.claude_model ? `建議模型 ${card.claude_model}` : ""; }
+
+// One team template as a block: its name, what it is for, and three rows of tick boxes. `ctx.sel` is the selection of the page; `ctx.boxes` collects
+// the boxes so that one call of `ctx.sync()` can redraw their state and the line at the bottom.
+function templatesBlock(template, ctx) {
+  const sel = ctx.sel;
+  const cardName = (key) => (template.cards.find((c) => c.key === key) || {}).name;
+  const line = (kind, item) => {
+    const ref = { template: template.id, key: item.key };
+    const box = el("input", { type: "checkbox", "data-tpl-pick": kind, "data-tpl-template": template.id, "data-tpl-key": item.key,
+      "aria-label": `勾選${item.name}`,
+      on: { change: (e) => { tplSetPick(sel, kind, ref, e.target.checked); ctx.sync(); } } });
+    box.checked = sel[kind].has(tplId(ref));
+    ctx.boxes.push({ box, kind, id: tplId(ref) });
+    const facts = kind === "cards"
+      ? [el("span", { class: "tag" }, CARD_POSITION_LABEL[item.position] || "未指定"), " ", el("span", { class: "small muted" }, tplModelText(item))]
+      : kind === "routines"
+        ? [el("span", { class: "small muted" }, `${tplScheduleText(item)}　交給：${item.who ? cardName(item.who) || "（這個團隊範本裡沒有）" : "套用時再選"}`)]
+        : [];
+    const words = kind === "cards" ? (item.instructions || "（沒有固定指示）") : item.text;
+    return el("li", { class: "tpl-item", "data-tpl-item": kind, "data-tpl-key": item.key },
+      el("label", { class: "tpl-pick" }, box, " ", el("strong", null, item.name), " ", facts),
+      el("details", { class: "tpl-more" }, el("summary", { class: "small" }, "看全文"), el("p", { class: "small tpl-text", "data-tpl-text": kind }, words)));
+  };
+  const all = (on) => {
+    TPL_KINDS.forEach(([kind]) => template[kind].forEach((item) => tplSetPick(sel, kind, { template: template.id, key: item.key }, on)));
+    ctx.sync();
+  };
+  return el("section", { class: "panel pad tpl-block", "data-templates": "block", "data-template-id": template.id },
+    el("h2", null, template.name, " ", template.builtin ? el("span", { class: "tag" }, "VBear 內建") : el("span", { class: "tag mine" }, "你存的")),
+    template.about ? el("p", { class: "small muted", "data-templates": "about" }, template.about) : null,
+    el("div", { class: "row" },
+      el("button", { class: "btn small", type: "button", "data-tpl-action": "all", on: { click: () => all(true) } }, "全選"), " ",
+      el("button", { class: "btn small", type: "button", "data-tpl-action": "none", on: { click: () => all(false) } }, "全不選"), " ",
+      templatesBlockActions(template, ctx)),
+    TPL_KINDS.map(([kind, word]) => (template[kind].length
+      ? el("div", { class: "tpl-group", "data-templates": kind }, el("h3", null, word), el("ul", { class: "tpl-list" }, template[kind].map((item) => line(kind, item))))
+      : null)));
+}
+
+// P45-3 replaces this: the buttons of a block of the person's own (改名, 刪除).
+function templatesBlockActions(template, ctx) { return null; }
+
+// P45-3 replaces this: 「你現在的」 (the employees, skills and routines the person has now), which is only for saving. The person's own team
+// templates are drawn above with templatesBlock; their buttons (改名, 刪除) are templatesBlockActions's.
+function templatesMineSection(ctx) { return null; }
+
+// P45-2 replaces this: the record of the applies, each with 復原這次套用.
+function templatesAppliesSection(ctx) { return null; }
+
+// P45-3 replaces this: the button 存成團隊範本 beside 預覽並套用.
+function templatesSaveAction(ctx) { return null; }
+
+// P45-2 replaces this: the 套用 button of the preview. `box`: { ctx, state, preview, body(), close }; `preview.ok` says whether anything stops the apply.
+function templatesApplyAction(box) {
+  return el("span", { "data-templates": "apply-slot" },
+    el("button", { class: "btn primary", type: "button", disabled: true, "data-tpl-action": "apply" }, "套用"), " ",
+    el("span", { class: "small muted", "data-templates": "apply-later" }, "下一批加入"));
+}
+
+function openTemplatesPreview(ctx) {
+  const data = ctx.data;
+  const state = { tool: data.tools && data.tools.default === "codex" ? "codex" : "claude", confirm: false, preview: null, error: "", busy: false };
+  const titleId = "tpl-preview-title";
+  const bodyBox = el("div", { "data-templates": "preview-body" });
+  const foot = el("div", { class: "modal-actions", "data-templates": "preview-foot" });
+  const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-templates": "preview" },
+    el("div", { class: "modal-box", style: "max-width: 720px; max-height: 88vh; overflow-y: auto;" },
+      el("h2", { id: titleId, tabindex: "-1" }, "預覽這次套用"), bodyBox, foot));
+  document.body.append(modal);
+  const close = withModalA11y(modal, () => modal.remove());
+  let asked = 0;
+  const ask = async () => {
+    const mine = ++asked;
+    state.busy = true;
+    draw();
+    try {
+      const res = await api.post("/api/templates/preview", tplRequestBody(ctx.sel, state));
+      if (mine !== asked) return;
+      state.preview = res.preview; state.error = "";
+    } catch (e) {
+      if (mine !== asked) return;
+      state.preview = null; state.error = e.message;
+    }
+    state.busy = false;
+    draw();
+  };
+  const toolRow = () => {
+    const tools = data.tools || {};
+    const radio = (tool) => {
+      const input = el("input", { type: "radio", name: "tpl-tool", value: tool, "data-tpl-tool": tool,
+        on: { change: () => { state.tool = tool; ask(); } } });
+      input.checked = state.tool === tool;
+      return el("label", { class: "tpl-radio" }, input, " ", TPL_TOOL_LABEL[tool]);
+    };
+    const chosen = tools[state.tool];
+    return el("div", { class: "tpl-tool", "data-templates": "tool" },
+      el("span", { "data-templates": "tool-label" }, "這次的員工都用："), " ", radio("claude"), "　", radio("codex"),
+      chosen && chosen.ready === false
+        ? el("p", { class: "small", "data-templates": "tool-not-ready" }, TPL_PREVIEW_LINES.notReady, chosen.why ? ` ${chosen.why}` : "") : null);
+  };
+  const cardLine = (c) => {
+    const input = el("input", { type: "text", maxlength: "40", value: c.name, "data-tpl-name": tplId(c.from), "aria-label": `員工的名字：${c.default_name}`,
+      on: { change: (e) => { const entry = ctx.sel.cards.get(tplId(c.from)); if (entry) { entry.name = e.target.value; ask(); } } } });
+    input.value = c.name;
+    return el("li", { "data-tpl-preview": "card" }, input, " ",
+      el("span", { class: "tag" }, CARD_POSITION_LABEL[c.position] || "未指定"), " ",
+      el("span", { class: "small muted" }, `${TPL_TOOL_LABEL[state.preview.tool]}${c.model_id ? `　${c.model_id}` : "　工具自己的預設模型"}`),
+      c.instructions_head ? el("p", { class: "small tpl-text", "data-tpl-preview": "head" }, c.instructions_head + (c.instructions_cut ? "…" : "")) : null,
+      c.same_in_batch ? el("p", { class: "small muted", "data-tpl-preview": "same-batch" }, `這次有不只一位叫「${c.name}」，只是提醒。`) : null,
+      c.same_existing ? el("p", { class: "small muted", "data-tpl-preview": "same-existing" }, `你已經有一位叫「${c.name}」，只是提醒。`) : null);
+  };
+  const assigneeValue = (a) => (a.kind === "card" ? `card:${tplId(a.card)}` : a.kind === "existing" ? `existing:${a.profile_id}` : "");
+  const routineLine = (r) => {
+    const choices = state.preview.choices;
+    const pick = el("select", { "data-tpl-to": tplId(r.from), "aria-label": `例行工作「${r.name}」交給誰`,
+      on: { change: (e) => {
+        const entry = ctx.sel.routines.get(tplId(r.from));
+        const v = String(e.target.value || "");
+        if (!entry) return;
+        if (v.startsWith("card:")) { const [template, key] = v.slice(5).split("/"); entry.to = { card: { template, key } }; }
+        else if (v.startsWith("existing:")) entry.to = { profile_id: v.slice(9) };
+        else delete entry.to;
+        ask();
+      } } },
+      el("option", { value: "" }, r.assignee.kind ? "（照團隊範本的安排）" : "（還沒選）"),
+      choices.cards.map((c) => el("option", { value: `card:${tplId(c)}` }, `這次勾的員工：${c.name}`)),
+      choices.existing.map((c) => el("option", { value: `existing:${c.profile_id}` }, `你現在的員工：${c.name}`)));
+    pick.value = assigneeValue(r.assignee);
+    return el("li", { "data-tpl-preview": "routine" }, el("strong", null, r.name), "　", el("span", { class: "small muted" }, tplScheduleText(r)), "　交給 ", pick,
+      r.assignee.name ? el("span", { class: "small", "data-tpl-preview": "to-name" }, ` ${r.assignee.name}`) : null);
+  };
+  const afterLine = (after) =>
+    `套用後：員工 ${after.cards.after}/${after.cards.max}、技能 ${after.skills.after}/${after.skills.max}、例行工作 ${after.routines.after}/${after.routines.max}`;
+  const itemName = (kind, from) => {
+    const template = (data.builtin || []).concat(data.mine || []).find((t) => t.id === from.template);
+    const item = template ? (template[kind === "card" ? "cards" : kind === "skill" ? "skills" : "routines"] || []).find((x) => x.key === from.key) : null;
+    return item ? item.name : from.key;
+  };
+  const warnBox = (p) => {
+    const box = el("input", { type: "checkbox", "data-tpl-confirm": "yes", on: { change: (e) => { state.confirm = e.target.checked; ask(); } } });
+    box.checked = state.confirm === true;
+    return el("div", { class: "tpl-warn", "data-templates": "warn" },
+      notice("warn", Object.values(p.warn_text || {}).join(" ")),
+      el("ul", { class: "small" }, p.warn_items.map((w) => el("li", { "data-tpl-warn": w.kind },
+        `${w.kind === "card" ? "員工" : w.kind === "skill" ? "技能" : "例行工作"}：${itemName(w.kind, w.from)}`))),
+      el("label", null, box, " 我確定"));
+  };
+  const draw = () => {
+    const p = state.preview;
+    const kids = [toolRow()];
+    if (state.error) kids.push(notice("bad", state.error));
+    if (p) {
+      kids.push(
+        el("p", { "data-templates": "summary" }, `這次會建：${p.cards.length} 位員工、${p.skills.length} 個技能、${p.routines.length} 件例行工作。`),
+        p.cards.length ? el("div", null, el("h3", null, "員工"), el("ul", { class: "tpl-list", "data-templates": "preview-cards" }, p.cards.map(cardLine))) : null,
+        p.skills.length ? el("div", null, el("h3", null, "技能"), el("ul", { class: "tpl-list", "data-templates": "preview-skills" },
+          p.skills.map((s) => el("li", { "data-tpl-preview": "skill" }, s.name)))) : null,
+        p.routines.length ? el("div", null, el("h3", null, "例行工作"), el("ul", { class: "tpl-list", "data-templates": "preview-routines" }, p.routines.map(routineLine))) : null,
+        el("p", { class: "small", "data-templates": "after" }, afterLine(p.after)),
+        p.problems.filter((x) => x.code !== "confirm_warning").map((x) => notice("bad", x.text)),
+        p.warn_items.length ? warnBox(p) : null,
+        p.notes.map((n) => el("p", { class: "small muted", "data-tpl-preview": "note" }, n.text)));
+    } else if (!state.error) kids.push(el("p", { class: "small muted" }, "整理中…"));
+    const lines = [TPL_PREVIEW_LINES.safe, TPL_PREVIEW_LINES.memory, TPL_PREVIEW_LINES.off, TPL_PREVIEW_LINES.free];
+    if (state.tool === "codex") lines.push(TPL_PREVIEW_LINES.codex);
+    kids.push(el("ul", { class: "small tpl-fixed", "data-templates": "fixed" }, lines.map((l) => el("li", null, l))));
+    setKids(bodyBox, kids);
+    setKids(foot,
+      el("button", { class: "btn", type: "button", "data-tpl-action": "cancel", on: { click: () => close() } }, "取消"),
+      templatesApplyAction({ ctx, state, preview: state.preview, body: () => tplRequestBody(ctx.sel, state), close }));
+  };
+  draw();
+  ask();
+  return { close, state };
+}
+
+async function viewTemplates() {
+  const token = seq;
+  let data;
+  try { data = await api.get("/api/templates"); }
+  catch (e) { setKids(claim(token), el("h1", null, "團隊範本"), notice("bad", "讀不到團隊範本：" + e.message)); return; }
+  const main = claim(token);
+  const ctx = { data, sel: tplSelection(), boxes: [], reload: () => viewTemplates() };
+  const count = el("span", { "data-templates": "count" });
+  const preview = el("button", { class: "btn primary", type: "button", "data-tpl-action": "preview", on: { click: () => openTemplatesPreview(ctx) } }, "預覽並套用");
+  ctx.sync = () => {
+    ctx.boxes.forEach((b) => { b.box.checked = ctx.sel[b.kind].has(b.id); });
+    count.textContent = tplCountText(ctx.sel);
+    const c = tplCounts(ctx.sel);
+    preview.disabled = c.cards + c.skills + c.routines === 0;
+  };
+  const problems = Array.isArray(data.problems) ? data.problems : [];
+  const blocks = (data.builtin || []).map((t) => templatesBlock(t, ctx));
+  const own = Array.isArray(data.mine) ? data.mine : [];
+  setKids(main, el("h1", null, "團隊範本"),
+    el("ul", { class: "lede tpl-lines", "data-templates": "lines" }, TPL_LINES.map((l) => el("li", null, l))),
+    el("p", { class: "small muted", "data-templates": "ceo-line" }, TPL_CEO_LINE),
+    problems.map((p) => notice("warn", `${p}　這個檔案讀不出來之前，不能套用。`)),
+    data.mine_readable === false ? notice("warn", data.problem || "你存的團隊範本的檔案讀不出來；VBear 內建的照常可以用。") : null,
+    blocks,
+    own.length ? el("h2", { "data-templates": "mine-title" }, "你存的團隊範本") : null,
+    own.map((t) => templatesBlock(t, ctx)),
+    templatesMineSection(ctx),
+    templatesAppliesSection(ctx),
+    el("div", { class: "panel pad tpl-foot", "data-templates": "foot" }, count, " ", preview, " ",
+      el("span", { "data-templates": "foot-actions" }, templatesSaveAction(ctx))));
+  ctx.sync();
+}
+// ---------- end of team templates ----------
+
 // ---------- router ---------------------------------------------------------
 
 // The phone menu (design card-play 3.9, #11): at 720px and narrower the nav folds behind one button that names the page
@@ -12556,6 +12823,7 @@ async function route() {
     else if (top === "dispatch") await viewDispatch(parts[1] ? decodeURIComponent(parts[1]) : null);
     else if (top === "actions") await viewActions();
     else if (top === "routines") await viewRoutines();
+    else if (top === "templates") await viewTemplates();
     else if (top === "meetings") await viewMeetings(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "staffing") await viewStaffing(parts[1] ? decodeURIComponent(parts[1]) : null, params);
     else if (top === "armory") await viewArmory();

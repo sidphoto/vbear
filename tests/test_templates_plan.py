@@ -512,6 +512,7 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(got["problems"][0]["warn"], ["looks_like_order"])
         self.assertEqual(got["problems"][0]["items"], [{"kind": "skill", "from": ref("tm-0123456789ab", "daily"), "warn": ["looks_like_order"]}])
         self.assertEqual(got["warn_items"], got["problems"][0]["items"])
+        self.assertEqual(got["warn_text"], {"looks_like_order": tp.WARN_TEXT["looks_like_order"]})
         self.assertFalse(got["ok"])
         got = plan({**body, "confirm_warning": True}, extra=(t,))
         self.assertEqual(got["problems"], [])
@@ -543,7 +544,7 @@ class ThePlan(unittest.TestCase):
                  "skills": [pick(t["id"], s["key"]) for t in tb.builtin() for s in t["skills"]],
                  "routines": [pick(t["id"], r["key"]) for t in tb.builtin() for r in t["routines"]]}
         got = plan(every)
-        self.assertEqual((got["problems"], got["warn_items"]), ([], []))
+        self.assertEqual((got["problems"], got["warn_items"], got["warn_text"]), ([], [], {}))
 
     def test_planning_changes_nothing_it_was_given(self):
         templates = templates_by_id(mine_template())
