@@ -340,6 +340,29 @@ class ChatHomeTests(FolderCase):
                     path.write_text("{}" if name.endswith(".json") else "x")
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
 
+    def test_the_sqlite_side_files_next_to_the_summaries_db_are_fine_on_the_second_start_and_nothing_like_them_is(self):
+        self.make_home()
+        cli = self.chat_home / "antigravity-cli"
+        self.write_private(cli / "conversation_summaries.db", "x")
+        for side in ("-shm", "-wal", "-journal"):                    # left by the first process (the sixth real run saw -shm and -wal)
+            self.write_private(cli / ("conversation_summaries.db" + side), "x")
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "a second start in the same folder")
+        for letters in ("conversation_summaries.db-WAL", "Conversation_Summaries.db-wal", "CONVERSATION_SUMMARIES.DB-SHM"):
+            with self.assertRaises(env.AgyRefused, msg=letters):        # (a disk that folds letters would not show the difference)
+                env._refuse_strangers([letters], env.CREATED_CLI, exact=True)
+        for stranger in ("conversation_summaries.db-wal2",
+                         "conversation_summaries.db-shm.bak", "other.db-wal", "conversation_summaries-wal", "jetski_state.pbtxt-wal"):
+            with self.subTest(stranger=stranger):
+                self.write_private(cli / stranger, "x")
+                self.assertIn(stranger, self.refused(env.check_chat_home, self.state, code="foreign_settings"))
+                (cli / stranger).unlink()
+        for elsewhere in (self.chat_home / "conversation_summaries.db-wal", self.chat_home / "config" / "conversation_summaries.db-wal"):
+            with self.subTest(elsewhere=str(elsewhere.relative_to(self.chat_home))):
+                self.write_private(elsewhere, "x")
+                self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                elsewhere.unlink()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
     def test_a_name_in_antigravity_cli_that_is_not_on_the_list_is_refused_by_name_and_so_is_a_forbidden_one_at_any_depth(self):
         self.make_home()
         cli = self.chat_home / "antigravity-cli"

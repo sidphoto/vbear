@@ -83,6 +83,8 @@ class ConstantsTests(unittest.TestCase):
         self.assertEqual(c.home_created, (
             "antigravity-cli", "antigravity-cli/annotations", "antigravity-cli/bin", "antigravity-cli/brain",
             "antigravity-cli/builtin", "antigravity-cli/cache", "antigravity-cli/conversation_summaries.db",
+            "antigravity-cli/conversation_summaries.db-journal", "antigravity-cli/conversation_summaries.db-shm",
+            "antigravity-cli/conversation_summaries.db-wal",
             "antigravity-cli/conversations", "antigravity-cli/crashes", "antigravity-cli/implicit", "antigravity-cli/installation_id",
             "antigravity-cli/jetbox_summaries_proto.pb", "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log",
             "antigravity-cli/persistent_terminals", "antigravity-cli/settings.json", "config", "config/.migrated", "config/config.json", "config/mcp_config.json",
