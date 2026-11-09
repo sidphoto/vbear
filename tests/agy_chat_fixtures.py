@@ -83,12 +83,17 @@ def is_request(line) -> bool:
     return isinstance(line, dict) and "id" in line and "method" in line
 
 
+ANNOUNCED_KINDS = ("execute", "edit", "delete", "move")      # the version table's announced_kinds of AGY 1.5.3 (a test holds them equal)
+
+
 class Player:
     """One script in memory: ``send(line)`` is what VBear writes, the result is what the agent prints because of it (and
     ``initial``, what it printed before VBear wrote anything). The player stops at a request of the agent until the answer comes.
     Anything VBear writes that the script does not expect is kept in ``unexpected`` (a request among them is answered with an error)."""
 
     def __init__(self, name: str, vars: dict | None = None, *, work: str = "/made/up/work", shared: str | None = None):
+        if name == "permission" and (vars or {}).get("KIND", "execute") in ANNOUNCED_KINDS:
+            name = "announced"               # these kinds come in the order a real AGY 1.5.3 sends them (the other script is the old one)
         defaults, rows = load(name)
         self.name = name
         self.vars: dict = {"WORK": work, "SHARED": shared, "SESSION": SESSION, "MODEL": MODEL, **defaults, **(vars or {})}

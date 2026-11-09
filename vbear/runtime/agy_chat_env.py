@@ -65,6 +65,8 @@ PROJECTS_MAX_ENTRIES = 200
 CLI_MAX_DEPTH = 10
 CLI_MAX_ENTRIES = 20_000
 CREATED_CLI = tuple(n.split("/", 1)[1] for n in _NEWEST.home_created if n.startswith(CLI_DIR + "/"))
+BUILTIN_NAME = "builtin"
+BUILTIN_PATHS = frozenset(_NEWEST.builtin_paths)       # exact paths, below antigravity-cli/builtin; nothing else is let through there
 MCP_CONFIG_NAME = "mcp_config.json"
 MCP_CONFIG_MAX = 64 << 10
 
@@ -209,8 +211,10 @@ def _check_projects(cfd) -> None:
 def _check_cli_dir(fd) -> None:
     """``antigravity-cli`` (AGY's own working folder, with VBear's ``settings.json`` in it), when it is there: a plain folder whose
     top level holds only the names of ``CREATED_CLI``. Below the top level nothing is allowed that is named like a hook, rule,
-    workflow, skill, plugin, setting or instruction file, at any depth (so an AGY that puts such a thing in its built-in or cache
-    folders is refused by name and a person decides), and nothing but folders and plain files."""
+    workflow, skill, plugin, setting or instruction file, at any depth (so an AGY that puts such a thing in its cache folders is
+    refused by name and a person decides), and nothing but folders and plain files. The one exception is ``builtin``: AGY's own
+    built-in skills and plugin, named like the things refused elsewhere. Inside it only the exact paths of ``BUILTIN_PATHS`` (the
+    table) pass and any other path is refused, so what is not on the table is never let in by its name."""
     try:
         st = os.lstat(CLI_DIR, dir_fd=fd)
     except FileNotFoundError:
@@ -227,7 +231,10 @@ def _check_cli_dir(fd) -> None:
     top = [w for w, depth, _ in found if depth == 0]
     _refuse_strangers(top, CREATED_CLI)
     for where, depth, mode in found:
-        if depth >= 1 and _is_forbidden_name(where.rsplit("/", 1)[-1]):
+        if where.startswith(BUILTIN_NAME + "/"):         # AGY's own built-in content: only the paths of the table, exactly
+            if where[len(BUILTIN_NAME) + 1:] not in BUILTIN_PATHS or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise _foreign(CLI_DIR + "/" + where)
+        elif depth >= 1 and _is_forbidden_name(where.rsplit("/", 1)[-1]):
             raise _foreign(CLI_DIR + "/" + where)
     if too_much is not None:
         raise _foreign(CLI_DIR + "/" + too_much)

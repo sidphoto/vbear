@@ -1711,6 +1711,13 @@ class AgyChatRules(unittest.TestCase):
             self.assertEqual(settings["permissions"], {"allow": [], "ask": [], "deny": []})
             self.assertEqual(json.loads(acp.settings_bytes(consts)), settings)
 
+    def announce(self, tracker, fx, kind="execute", cid="c-1"):
+        """The order AGY 1.5.3 really sends before it asks: tool_call in_progress, then tool_call_update pending."""
+        tracker.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": fx.SESSION, "update": {
+            "sessionUpdate": "tool_call", "toolCallId": cid, "title": "T", "kind": kind, "status": "in_progress"}}})
+        tracker.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": fx.SESSION, "update": {
+            "sessionUpdate": "tool_call_update", "toolCallId": cid, "status": "pending"}}})
+
     # 14c: BypassSandbox is refused by VBear, with no card
     def test_14c_a_request_with_bypass_sandbox_is_refused_with_no_card_for_true_a_string_and_a_number(self):
         from tests import agy_chat_fixtures as fx
@@ -1718,6 +1725,7 @@ class AgyChatRules(unittest.TestCase):
         consts = acp.VERSIONS["1.5.3"]
         for value in (True, "true", 1):
             tracker = acp.AgyTracker(consts, workdir="/made/up/work", session_id=fx.SESSION)
+            self.announce(tracker, fx)
             out = tracker.on_message({"jsonrpc": "2.0", "id": 4, "method": "session/request_permission", "params": {
                 "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
                 "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending",
@@ -1733,6 +1741,7 @@ class AgyChatRules(unittest.TestCase):
         acp = self.agy_protocol()
         for raw in ({"CommandLine": "echo x"}, {"CommandLine": "echo x", "BypassSandbox": False}):
             tracker = acp.AgyTracker(acp.VERSIONS["1.5.3"], workdir="/made/up/work", session_id=fx.SESSION)
+            self.announce(tracker, fx)
             out = tracker.on_message({"jsonrpc": "2.0", "id": 4, "method": "session/request_permission", "params": {
                 "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
                 "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending", "rawInput": raw}}})

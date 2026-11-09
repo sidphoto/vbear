@@ -1029,8 +1029,33 @@ def _home_deep_names(home: Path, limit: int = 60) -> dict:
                 seen += 1
                 if seen > 20_000:
                     return out
+                if rel == "antigravity-cli/builtin" or rel.startswith("antigravity-cli/builtin/"):
+                    if (rel + "/" + name)[len("antigravity-cli/builtin/"):] in agy_chat_env.BUILTIN_PATHS:
+                        continue                              # AGY's own, on the table: listed by ``builtin_names``
                 if agy_chat_env._is_forbidden_name(name) and len(out["forbidden_named"]) < limit and (rel != "antigravity-cli" or name != "settings.json"):
                     out["forbidden_named"].append(rel + "/" + ("<id>" if re.search(r"[0-9a-f]{8}-[0-9a-f]{4}", name) else name))
+    return out
+
+
+def _builtin_names(home: Path, limit: int = 400) -> dict:
+    """The names (relative to ``antigravity-cli/builtin``, nothing of any content) AGY's own built-in folder holds, so that the table of
+    ``builtin_paths`` can be written from a real run: ``{"paths": [...], "more": number left out, "not_in_table": [...]}``."""
+    base = home / "antigravity-cli" / "builtin"
+    out = {"paths": [], "more": 0, "not_in_table": []}
+    if not base.is_dir() or base.is_symlink():
+        return out
+    for dirpath, dirs, files in os.walk(base, followlinks=False):
+        rel = os.path.relpath(dirpath, base)
+        for name in sorted(dirs + files):
+            path = name if rel == "." else rel + "/" + name
+            if len(out["paths"]) >= limit:
+                out["more"] += 1
+                continue
+            out["paths"].append(path)
+            if path not in agy_chat_env.BUILTIN_PATHS:
+                out["not_in_table"].append(path)
+    out["paths"].sort()
+    out["not_in_table"].sort()
     return out
 
 
@@ -1040,6 +1065,7 @@ def _final_checks(s: AgySession, ctx: dict, checks: dict, obs: dict) -> None:
     home = agy_chat_env.chat_home_path(state)
     obs["home_items"] = _home_names(home)
     obs["home_deep"] = _home_deep_names(home)
+    obs["builtin_names"] = _builtin_names(home)
     checks["home_clean"] = check(
         status == "ok", state=status, reason=None if status == "ok" else why,
         note="聊天用的 AGY 設定資料夾裡沒有 VBear 不准出現的項目（hooks、技能、外掛、工作流程、規則檔）、MCP 設定是空的")

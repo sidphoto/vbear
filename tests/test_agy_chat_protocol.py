@@ -850,9 +850,17 @@ class PermissionTests(Drive):
         self.prompt()
         self.t.begin_turn()
         out = self.t.on_message({"jsonrpc": "2.0", "id": 5, "method": "session/request_permission", "params": {
-            "sessionId": SESSION, "toolCall": {"toolCallId": "solo-1", "title": "T", "kind": "execute", "status": "pending",
+            "sessionId": SESSION, "toolCall": {"toolCallId": "solo-1", "title": "T", "kind": "fetch", "status": "pending",
                                                "rawInput": {"CommandLine": "ls"}}, "options": fx_options()}})
         self.assertEqual([k for k, _ in out], ["tool_call", "permission_request"])
+
+    def test_a_request_alone_for_a_command_or_a_file_change_is_a_violation_because_the_order_is_not_the_known_one(self):
+        self.drive("text").start()
+        self.prompt()
+        out = self.t.on_message({"jsonrpc": "2.0", "id": 5, "method": "session/request_permission", "params": {
+            "sessionId": SESSION, "toolCall": {"toolCallId": "solo-1", "title": "T", "kind": "execute", "status": "pending",
+                                               "rawInput": {"CommandLine": "ls"}}, "options": fx_options()}})
+        self.assertEqual([k for k, _ in out], ["violation"])
 
     def test_bypass_sandbox_is_refused_with_no_card_for_every_value_that_is_not_false(self):
         for value in (True, "true", 1, "false", 0, None, "", "False", [], {}, 1.0, "no"):
@@ -1169,6 +1177,230 @@ def fx_options():
     return [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}]
 
 
+def update_line(status, cid="call-1", **more):
+    return {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+        "sessionUpdate": "tool_call_update", "toolCallId": cid, "status": status, **more}}}
+
+
+def call_line(kind, status, cid="call-1", **more):
+    raw = {"edit": {"Path": "/w/a.txt", "Content": "x"}, "delete": {"Path": "/w/a.txt"},
+           "move": {"Path": "/w/a.txt", "Destination": "/w/b.txt"}}.get(kind, {"CommandLine": "ls"})
+    return {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+        "sessionUpdate": "tool_call", "toolCallId": cid, "title": "T", "kind": kind, "status": status, "rawInput": raw,
+        "locations": [{"path": "/w/a.txt"}] if kind != "execute" else [], **more}}}
+
+
+TEXT_OUTPUT = {"content": [{"type": "content", "content": {"type": "text", "text": "made-up output"}}]}
+OUTPUTS = ({"content": [{"type": "content", "content": {"type": "text", "text": "made-up output"}}]},
+           {"rawOutput": {"stdout": "made-up output"}}, {"rawOutput": {"exit_code": 0}}, {"rawOutput": {"exit_code": 1}})
+ANNOUNCED = ("execute", "edit", "delete", "move")
+
+
+class AnnouncedCallTests(Drive):
+    """AGY 1.5.3 (the third real run): an execute or edit call arrives as tool_call in_progress, then tool_call_update pending, then the
+    request for permission, and only after a yes does it run. Only exactly this order is not a violation: the first in_progress is
+    an announcement, and after a refusal an in_progress then failed or cancelled. An extra in_progress, another order, a status
+    nobody knows, any output of the command before a yes, a call that completes or fails without being asked, or one left
+    announced when the turn ends is a violation."""
+
+    def open_turn(self):
+        self.drive("text").start()
+        self.prompt()
+
+    def send(self, line):
+        return self.t.on_message(line)
+
+    def assert_violation(self, out, text=None):
+        self.assertEqual([k for k, _ in out], ["violation"], out)
+        self.assertTrue(self.t.stopped)
+        if text:
+            self.assertIn(text, out[0][1]["message"])
+
+    def run_fixture(self, decision):
+        self.drive("announced").start()
+        self.prompt()
+        self.assertEqual(self.requests()[-1]["action"], "ask")
+        self.answer(decision)
+
+    def test_the_real_order_with_a_yes_runs_and_completes_without_a_violation(self):
+        self.run_fixture("allow")
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual(self.of("turn_completed")[0]["stop_reason"], "end_turn")
+        self.assertEqual(self.of("tool_result")[0]["status"], "completed")
+        self.assertEqual(self.of("anomaly"), [])
+
+    def test_the_real_order_with_a_no_ends_failed_and_the_in_progress_after_the_refusal_is_not_a_violation(self):
+        self.run_fixture("deny")
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual(self.of("turn_completed")[0]["stop_reason"], "end_turn")
+        self.assertEqual(self.of("anomaly"), [])
+
+    def test_the_real_order_with_a_cancel_is_the_same(self):
+        self.run_fixture("cancelled")
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual(self.of("turn_completed")[0]["stop_reason"], "cancelled")
+
+    def test_the_real_order_is_the_same_for_every_announced_kind(self):
+        for kind in ANNOUNCED:
+            for decision, ending in (("allow", "completed"), ("deny", "failed"), ("cancelled", "cancelled")):
+                with self.subTest(kind=kind, decision=decision):
+                    self.open_turn()
+                    self.send(call_line(kind, "in_progress"))
+                    self.send(update_line("pending"))
+                    req = self.t.on_message({"jsonrpc": "2.0", "id": 90, "method": "session/request_permission", "params": {
+                        "sessionId": SESSION, "toolCall": {"toolCallId": "call-1", "kind": kind, "status": "pending", **{
+                            k: v for k, v in call_line(kind, "x")["params"]["update"].items() if k in ("rawInput", "locations", "title")},
+                            **({"content": [{"type": "diff", "path": "/w/a.txt", "oldText": None, "newText": "x"}]}
+                               if kind == "edit" else {})}, "options": fx_options()}})
+                    self.assertIn("permission_request", [k for k, _ in req])
+                    if req[-1][1]["action"] not in ("ask", "allow"):
+                        continue                    # (VBear refuses some of these places itself; the order is what is looked at here)
+                    self.t.answered(90, decision)
+                    if decision == "allow":
+                        out = self.send(update_line("in_progress")) + self.send(update_line(ending, rawOutput={"exit_code": 0}))
+                    else:
+                        out = self.send(update_line("in_progress")) + self.send(update_line(ending))
+                    self.assertNotIn("violation", [k for k, _ in out])
+
+    def test_a_call_that_completes_without_ever_asking_is_a_violation(self):
+        for kind in ANNOUNCED:
+            for between in ((), ("pending",)):
+                with self.subTest(kind=kind, between=between):
+                    self.open_turn()
+                    self.send(call_line(kind, "in_progress"))
+                    for status in between:
+                        self.assertEqual(self.send(update_line(status)), [])
+                    self.assert_violation(self.send(update_line("completed", rawOutput={"exit_code": 0})), "沒有經過 VBear 的允許")
+
+    def test_a_call_that_ends_failed_or_cancelled_without_ever_being_asked_is_a_violation(self):
+        for kind in ANNOUNCED:
+            for ending in ("failed", "cancelled"):
+                for between in ((), ("pending",)):
+                    with self.subTest(kind=kind, ending=ending, between=between):
+                        self.open_turn()
+                        self.send(call_line(kind, "in_progress"))
+                        for status in between:
+                            self.send(update_line(status))
+                        self.assert_violation(self.send(update_line(ending)))
+
+    def test_any_output_before_a_yes_is_a_violation_in_every_phase_and_for_every_announced_kind(self):
+        for kind in ANNOUNCED:
+            for more in OUTPUTS:
+                for phase in ("announced", "pending"):
+                    for status in ("in_progress", "pending", "failed", "cancelled", "completed"):
+                        with self.subTest(kind=kind, more=more, phase=phase, status=status):
+                            self.open_turn()
+                            self.send(call_line(kind, "in_progress"))
+                            if phase == "pending":
+                                self.send(update_line("pending"))
+                            self.assert_violation(self.send(update_line(status, **more)))
+
+    def test_output_after_a_refusal_is_a_violation_even_when_the_call_ends_failed_or_cancelled(self):
+        for kind in ANNOUNCED:
+            for more in OUTPUTS:
+                for ending in ("in_progress", "failed", "cancelled"):
+                    for first_running in (False, True):
+                        with self.subTest(kind=kind, more=more, ending=ending, first_running=first_running):
+                            self.drive("announced").start()
+                            self.prompt()
+                            self.t.answered(self.requests()[-1]["request_id"], "deny")
+                            if first_running:
+                                self.assertEqual(self.send(update_line("in_progress")), [])
+                            self.assert_violation(self.send(update_line(ending, **more)))
+
+    def test_a_failed_end_after_a_refusal_with_no_output_is_fine_and_so_is_cancelled(self):
+        for ending in ("failed", "cancelled"):
+            for first_running in (False, True):
+                with self.subTest(ending=ending, first_running=first_running):
+                    self.drive("announced").start()
+                    self.prompt()
+                    self.t.answered(self.requests()[-1]["request_id"], "deny")
+                    if first_running:
+                        self.assertEqual(self.send(update_line("in_progress")), [])
+                    self.assertNotIn("violation", [k for k, _ in self.send(update_line(ending))])
+
+    def test_another_order_than_the_real_one_is_a_violation(self):
+        wrong = {
+            "an extra in_progress before pending": [("call", "in_progress"), ("update", "in_progress")],
+            "an extra in_progress after pending": [("call", "in_progress"), ("update", "pending"), ("update", "in_progress")],
+            "pending twice": [("call", "in_progress"), ("update", "pending"), ("update", "pending")],
+            "announced as pending": [("call", "pending")],
+            "announced as nothing": [("call", None)],
+            "announced as something else": [("call", "awaiting_approval")],
+            "an unknown status after the announcement": [("call", "in_progress"), ("update", "awaiting_approval")],
+            "an unknown status after pending": [("call", "in_progress"), ("update", "pending"), ("update", "waiting")],
+            "an update with no status": [("call", "in_progress"), ("update", None)],
+            "a second announcement": [("call", "in_progress"), ("call", "in_progress")],
+            "an update that starts the call": [("update", "in_progress")],
+            "an update that starts the call as pending": [("update", "pending")],
+        }
+        for why, steps in wrong.items():
+            for kind in ANNOUNCED:
+                with self.subTest(why=why, kind=kind):
+                    self.open_turn()
+                    out = []
+                    for step, status in steps:
+                        line = call_line(kind, status) if step == "call" else update_line(status)
+                        if step == "update" and why.startswith("an update that starts"):
+                            line["params"]["update"]["kind"] = kind
+                        if status is None:
+                            del line["params"]["update"]["status"]
+                        out += self.send(line)
+                    self.assertIn("violation", [k for k, _ in out], why)
+
+    def test_a_request_before_pending_or_with_no_call_before_it_is_a_violation_and_so_is_an_update_while_it_waits(self):
+        def request(kind="execute"):
+            return {"jsonrpc": "2.0", "id": 91, "method": "session/request_permission", "params": {
+                "sessionId": SESSION, "toolCall": {"toolCallId": "call-1", "kind": kind, "status": "pending", "rawInput": {"CommandLine": "ls"}},
+                "options": fx_options()}}
+        self.open_turn()
+        self.send(call_line("execute", "in_progress"))
+        self.assertIn("violation", [k for k, _ in self.send(request())])               # no pending before the request
+        self.open_turn()
+        self.assertIn("violation", [k for k, _ in self.send(request())])               # no call before the request
+        for status in ("in_progress", "pending", "completed", "failed"):
+            self.open_turn()
+            self.send(call_line("execute", "in_progress"))
+            self.send(update_line("pending"))
+            self.send(request())
+            self.assert_violation(self.send(update_line(status)))                      # nothing happens while it waits for the answer
+
+    def test_after_a_yes_the_statuses_are_free_but_what_runs_must_be_what_was_allowed(self):
+        self.drive("announced").start()
+        self.prompt()
+        self.t.answered(self.requests()[-1]["request_id"], "allow")
+        for status in ("in_progress", "in_progress", "completed"):
+            self.assertNotIn("violation", [k for k, _ in self.send(update_line(status, **TEXT_OUTPUT))])
+        self.open_turn()
+        req = self.permission("execute", {"CommandLine": "ls -a"})
+        self.t.answered(req["request_id"], "allow")
+        out = self.send(update_line("in_progress", rawInput={"CommandLine": "rm -rf /made/up"}))
+        self.assert_violation(out, "不同")
+
+    def test_a_call_left_announced_when_the_turn_ends_is_a_violation(self):
+        for statuses in (("in_progress",), ("in_progress", "pending")):
+            with self.subTest(statuses=statuses):
+                self.drive("announced").start()
+                self.prompt()
+                self.send(call_line("execute", statuses[0], cid="call-2"))
+                for status in statuses[1:]:
+                    self.send(update_line(status, cid="call-2"))
+                out = self.answer("deny")                          # the turn ends here; call-1 was refused, call-2 was never asked
+                self.assertEqual([k for k, _ in out if k == "violation"], ["violation"], out)
+                self.assertNotIn("turn_completed", self.kinds())
+                self.assertTrue(self.t.stopped)
+
+    def test_a_call_that_was_asked_and_refused_and_left_open_when_the_turn_ends_is_not_a_violation(self):
+        self.drive("announced").start()
+        self.prompt()
+        self.t.answered(self.requests()[-1]["request_id"], "deny")
+        out = self.send({"jsonrpc": "2.0", "id": self.ids, "result": {"stopReason": "cancelled", "usage": {
+            "inputTokens": 60000, "outputTokens": 2000, "cachedReadTokens": 24000, "cachedWriteTokens": 0, "thoughtTokens": 1500,
+            "totalTokens": 86000}}})
+        self.assertNotIn("violation", [k for k, _ in out])
+        self.assertIn("turn_completed", [k for k, _ in out])
+
+
 class ViolationTests(Drive):
     def violates(self, fixture="no-ask", vars=None):
         self.drive(fixture, vars).start()
@@ -1176,38 +1408,47 @@ class ViolationTests(Drive):
         return self.of("violation")
 
     def test_a_tool_that_runs_without_vbears_yes_stops_the_chat_for_every_kind_that_is_not_a_read(self):
+        announced = acp.VERSIONS["1.5.3"].announced_kinds
+        self.assertEqual(announced, ("execute", "edit", "delete", "move"))
         for kind in ("execute", "edit", "delete", "move", "fetch", "other", "think", "switch_mode", "surprise"):
             for first in ("in_progress", "completed"):
                 got = self.violates(vars={"KIND": kind, "FIRST": first})
                 self.assertEqual(len(got), 1, (kind, first))
-                self.assertIn("沒有經過 VBear 的允許", got[0]["message"])
+                self.assertTrue("沒有經過 VBear 的允許" in got[0]["message"] or "順序" in got[0]["message"], got[0]["message"])
                 self.assertTrue(self.t.stopped)
                 self.assertNotIn("turn_completed", self.kinds())          # nothing is read after a violation
+
+    def test_the_fixtures_know_the_same_announced_kinds_as_the_table(self):
+        self.assertEqual(fx.ANNOUNCED_KINDS, acp.VERSIONS["1.5.3"].announced_kinds)
+
+    def test_the_kinds_that_are_not_announced_still_stop_at_in_progress(self):
+        for kind in ("fetch", "other", "think", "switch_mode", "surprise"):
+            self.assertEqual(len(self.violates(vars={"KIND": kind, "FIRST": "in_progress"})), 1, kind)
 
     def test_a_call_that_is_only_announced_or_that_failed_is_not_a_violation(self):
         for status in ("pending", "failed", None):
             self.drive("text").start()
             self.prompt()
             out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
-                "sessionUpdate": "tool_call", "toolCallId": f"c-{status}", "title": "T", "kind": "execute", "status": status,
+                "sessionUpdate": "tool_call", "toolCallId": f"c-{status}", "title": "T", "kind": "fetch", "status": status,
                 "rawInput": {"CommandLine": "ls"}}}})
             self.assertNotIn("violation", [k for k, _ in out], status)
 
-    def test_a_refused_call_that_runs_anyway_is_a_violation(self):
+    def test_a_refused_call_that_completes_anyway_is_a_violation(self):
         req = self.permission("execute", {"CommandLine": "ls"})
         self.answer("deny", req)
         out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
-            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress"}}})
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed"}}})
         self.assertEqual([k for k, _ in out], ["violation"])
 
     def test_a_second_request_for_the_same_call_takes_the_first_yes_back(self):
         req = self.permission("execute", {"CommandLine": "ls"})
-        self.answer("allow", req)
+        self.t.answered(req["request_id"], "allow")                # (the player is not told: the turn stays open)
         self.t.on_message({"jsonrpc": "2.0", "id": 40, "method": "session/request_permission", "params": {
             "sessionId": SESSION, "toolCall": {"toolCallId": "call-1", "title": "T", "kind": "execute", "status": "pending",
                                                "rawInput": {"CommandLine": "rm -rf /made/up"}}, "options": fx_options()}})
         out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
-            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress"}}})
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed"}}})
         self.assertEqual([k for k, _ in out], ["violation"])
 
     def test_what_runs_must_be_what_was_allowed(self):
