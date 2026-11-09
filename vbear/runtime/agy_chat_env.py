@@ -25,10 +25,10 @@ import json
 import os
 import re
 import secrets
-import shutil
 import stat
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import admin_policy
@@ -63,16 +63,18 @@ HOOKS_FILE = ".agents/hooks.json"             # under the person's HOME; looked 
 # Versions this code knows how to run. The argv, environment and message constants of a version are the protocol table's
 # (agy_chat_protocol, P46-1); this is only the list the binary's version is matched against, and agrees with it by a test.
 KNOWN_VERSIONS = ("1.5.3",)
-VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)\n?\Z")
+VERSION_OUT = re.compile(r"([0-9]+\.[0-9]+\.[0-9]+)\n?")        # the whole output of ``agy --version``, nothing else
+BINARY_NAME = "agy"
 
 
 class AgyRefused(Exception):
     """Something here is not safe or not as expected. ``code`` is stable; the message is a sentence for the person and
-    carries no path and nothing AGY printed."""
+    carries no path and nothing AGY printed (a version number that matched the version pattern is the one exception)."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, version: str | None = None):
         super().__init__(message)
         self.code = code
+        self.version = version             # the version AGY printed, when the refusal came after reading it
 
 
 # ---- the folder ------------------------------------------------------------------------------------------------------
@@ -474,3 +476,210 @@ def check_workdir(path, *, code: str = "agy_workdir", label: str = "工作資料
             except OSError:
                 pass
     return path
+
+
+# ---- the binary ------------------------------------------------------------------------------------------------------
+
+def _uid() -> int:
+    return os.getuid()
+
+
+@dataclass(frozen=True)
+class PinnedAgy:
+    """The AGY that may chat: its real path, the version it printed, and ``cli_identity`` (the six numbers a launch manifest
+    keeps, so a file that changed after the check is seen at the next start)."""
+    binary: str
+    version: str
+    identity: list
+
+
+def cli_identity(path: str) -> list[int]:
+    """[device, inode, mode, size, mtime_ns, ctime_ns] of the executable file (the same list ``agent_sessions.binary_identity``
+    gives). OSError when it is not a plain executable file."""
+    info = os.stat(path, follow_symlinks=True)
+    if not stat.S_ISREG(info.st_mode) or not os.access(path, os.X_OK):
+        raise OSError("binary is not a regular executable file")
+    return [info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def unchanged(binary: str, identity) -> bool:
+    """Whether the file at ``binary`` is, by its identity, the one that was checked. A file that is gone is no."""
+    if not (isinstance(identity, (list, tuple)) and len(identity) == 6):
+        return False
+    try:
+        return cli_identity(binary) == list(identity)
+    except OSError:
+        return False
+
+
+def _trusted_owner(uid: int) -> bool:
+    return uid in (0, _uid())
+
+
+def _unsafe_binary(why: str) -> AgyRefused:
+    return AgyRefused("unsafe_binary", f"找到的 AGY 執行檔{why}，所以不使用它。")
+
+
+def _check_chain(directory: str) -> None:
+    """Every folder from ``directory`` up to "/" belongs to this user or to root, and none can be changed by anyone else: no
+    group or other write bit, except a sticky folder (like /tmp) that a trusted owner has, where nobody can replace what is
+    inside it that is not theirs."""
+    current = directory
+    while True:
+        try:
+            info = os.stat(current)
+        except OSError as exc:
+            raise _unsafe_binary(f"所在的資料夾無法確認（{exc.strerror or type(exc).__name__}）") from exc
+        if not _trusted_owner(info.st_uid):
+            raise _unsafe_binary("所在的路徑上有別人的資料夾")
+        if info.st_mode & 0o022 and not (info.st_mode & stat.S_ISVTX):
+            raise _unsafe_binary("所在的路徑上有別人可以改動的資料夾")
+        parent = os.path.dirname(current)
+        if parent == current:
+            return
+        current = parent
+
+
+def locate_binary(search_path: str | None = None) -> str:
+    """The real path of the first executable file named ``agy`` on the search path (``daemon.cli_search_path()``, the one the
+    full-mode terminal looks along, unless one is given), after the checks that make it the person's own program: a plain
+    file owned by this user (or by root), that nobody else can write, in folders (its link's and its own) that nobody else can
+    change. AgyRefused ``not_installed`` when there is none, ``unsafe_binary`` when the first one found is not safe (later
+    entries are not tried: the same file must be found every time). The program is not run here."""
+    if search_path is None:
+        from . import daemon                                 # not at import time: the daemon imports the chat code
+        search_path = daemon.cli_search_path()
+    for folder in search_path.split(os.pathsep):
+        if not folder or not os.path.isabs(folder):
+            continue
+        candidate = os.path.join(folder, BINARY_NAME)
+        try:
+            info = os.stat(candidate)
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or not os.access(candidate, os.X_OK):
+            continue
+        real = os.path.realpath(candidate)
+        try:
+            real_info = os.lstat(real)
+        except OSError as exc:
+            raise _unsafe_binary(f"無法確認（{exc.strerror or type(exc).__name__}）") from exc
+        if not stat.S_ISREG(real_info.st_mode) or not _trusted_owner(real_info.st_uid) or real_info.st_mode & 0o022:
+            raise _unsafe_binary("不是本人的一般檔案，或別人可以改動它")
+        _check_chain(os.path.dirname(real))
+        _check_chain(os.path.realpath(folder))
+        return real
+    raise AgyRefused("not_installed", "找不到 AGY。請到「開始設定」安裝 AGY。")
+
+
+def read_version(binary: str) -> str:
+    """``agy --version`` run from "/" with the daemon's safe environment and no input: its output must be exactly one line,
+    X.Y.Z, and the exit code 0. AgyRefused ``version_unreadable`` otherwise (the sentence does not carry what it printed)."""
+    def unreadable(why: str) -> AgyRefused:
+        return AgyRefused("version_unreadable", f"AGY 沒有印出剛好是 X.Y.Z 的版本行（{why}），所以不使用它。")
+    try:
+        code, out, err = cli_versions.run_capture([binary, "--version"], "/", cli_versions._probe_environment(),
+                                                  STATUS_TIMEOUT_S, 4096)
+    except Exception as exc:
+        raise unreadable(f"無法執行：{type(exc).__name__}") from exc
+    if err:
+        raise unreadable("執行失敗或逾時")
+    if code != 0:
+        raise unreadable(f"結束碼 {code}")
+    try:
+        text = out.decode("utf-8")
+    except UnicodeDecodeError:
+        raise unreadable("輸出不是 UTF-8") from None
+    match = VERSION_OUT.fullmatch(text)
+    if not match:
+        raise unreadable("輸出不是剛好一行版本號")
+    return match.group(1)
+
+
+def pinned_binary(search_path: str | None = None, verified=None) -> PinnedAgy:
+    """The AGY that may chat: located (``locate_binary``), its version read (``read_version``), the version one of
+    ``KNOWN_VERSIONS`` (``unsupported`` otherwise) and one that passed the chat check on this Mac (``unverified`` otherwise;
+    ``verified`` is given by tests). The file must be the same one before and after the run. AgyRefused carries the version
+    when it was read."""
+    verified = cli_versions.agy_chat_verified_versions() if verified is None else verified
+    binary = locate_binary(search_path)
+    try:
+        before = cli_identity(binary)
+    except OSError as exc:
+        raise _unsafe_binary("不是可以執行的一般檔案") from exc
+    version = read_version(binary)
+    if not unchanged(binary, before):
+        raise AgyRefused("version_unreadable", "AGY 的執行檔在檢查版本的時候被換掉了，所以不使用它。")
+    if version not in KNOWN_VERSIONS:
+        raise AgyRefused("unsupported", f"AGY {version} 不是 VBear 能聊天的版本。VBear 目前能聊天的 AGY 版本："
+                         + "、".join(KNOWN_VERSIONS) + "。", version)
+    if version not in verified:
+        raise AgyRefused("unverified", cli_versions.agy_chat_unverified_text(version), version)
+    return PinnedAgy(binary, version, before)
+
+
+# ---- the answer ------------------------------------------------------------------------------------------------------
+
+_cache: dict = {}
+_cache_lock = threading.Lock()
+
+
+def invalidate() -> None:
+    with _cache_lock:
+        _cache.clear()
+
+
+def status(base, *, home=None, root: str | None = None, search_path: str | None = None, force: bool = False) -> dict:
+    """May this Mac chat with AGY now? One dict, no path and no command output in it:
+
+    state: "not_installed" | "unsupported" | "unverified" | "policy" | "hooks" | "folder" | "version_unreadable" | "ready"
+    (the first that does not hold, in the order of the checks: binary and version, then the policy, the hooks, the folder)
+    installed / version (the one AGY printed, when it was read) / verified / shared_verified (the shared-folder part of the
+    check passed too) / admin_policy_ok and hooks_ok (None until they were asked) / why (the sentence for a person; "" when
+    ready) / verified_versions. Not logged in is not a state here: the chat check needs the real login, and "not logged in"
+    shows when a chat starts (``not_logged_in``). Nothing is made on disk. ``home`` is the person's HOME (the hooks), ``root``
+    where the administrator policy is looked for, ``search_path`` where ``agy`` is looked for (all three are given by tests)."""
+    root = POLICY_ROOT if root is None else root
+    key = (os.fspath(base), str(home or ""), root, search_path or "")
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and not force and CACHE_TTL_S > 0 and now - hit[0] < CACHE_TTL_S:
+            return dict(hit[1], verified_versions=list(hit[1]["verified_versions"]))
+    out = _look(base, home, root, search_path)
+    with _cache_lock:
+        if CACHE_TTL_S > 0:
+            _cache[key] = (now, out)
+    return dict(out, verified_versions=list(out["verified_versions"]))
+
+
+def _look(base, home, root, search_path) -> dict:
+    verified = cli_versions.agy_chat_verified_versions()
+    out = {"state": "", "installed": False, "version": None, "verified": False, "shared_verified": False,
+           "admin_policy_ok": None, "hooks_ok": None, "why": "",
+           "verified_versions": sorted(verified, key=cli_versions._version_key)}
+    try:
+        pinned = pinned_binary(search_path, verified)
+    except AgyRefused as exc:
+        out.update(installed=exc.code != "not_installed", version=exc.version, why=str(exc),
+                   state={"not_installed": "not_installed", "unsupported": "unsupported",
+                          "unverified": "unverified"}.get(exc.code, "version_unreadable"))
+        return out
+    out.update(installed=True, version=pinned.version, verified=True,
+               shared_verified=cli_versions.shared_verified("agy-chat", pinned.version))
+    policy = admin_policy.check_agy(pinned.version, root)
+    out["admin_policy_ok"] = policy.ok
+    if not policy.ok:
+        out.update(state="policy", why=policy.reason())
+        return out
+    hooks, why = home_hooks_state(home)
+    out["hooks_ok"] = hooks == "absent"
+    if hooks != "absent":
+        out.update(state="hooks", why=why)
+        return out
+    folder, why = home_state(base)
+    if folder == "refused":
+        out.update(state="folder", why=why)
+        return out
+    out["state"] = "ready"
+    return out

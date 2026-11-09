@@ -11,12 +11,10 @@ import shutil
 import stat
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from vbear import admin_policy
 from vbear.runtime import agy_chat_env as env, cli_versions
 
 VERSION = "1.5.3"
@@ -35,6 +33,18 @@ class TempCase(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         patch = mock.patch.object(env, "CACHE_TTL_S", 0.0)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.policy_root = self.tmp / "policy-root"                  # no administrator policy anywhere unless a test makes one
+        self.policy_root.mkdir()
+        patch = mock.patch.object(env, "POLICY_ROOT", str(self.policy_root))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.bindir = self.tmp / "bin"
+        self.bindir.mkdir(mode=0o700)
+        # Nothing here may find a real agy: the default search path is this empty folder, and the tests that look for the
+        # file pass their own folder under self.tmp.
+        patch = mock.patch("vbear.runtime.daemon.cli_search_path", return_value=str(self.tmp / "no-bin"))
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -498,8 +508,8 @@ class WorkdirTests(TempCase):
         outside = self.tmp / "outside"
         outside.mkdir()
         self.write_private(outside / "decoy.txt", "decoy")
-        cases = {"absolute": str(outside), "absolute file": str(outside / "decoy.txt"), "relative": "../outside",
-                 "dangling": "../nothing-at-all", "root": "/"}
+        cases = {"absolute": str(outside), "absolute file": str(outside / "decoy.txt"), "relative": "../../../outside",
+                 "dangling": "../../../nothing-at-all", "root": "/"}
         for label, target in cases.items():
             with self.subTest(label=label):
                 link = self.work / "a" / "b" / "link"
@@ -551,6 +561,317 @@ class WorkdirTests(TempCase):
         self.write_private(self.work / "secret.txt", "decoy")
         (self.work / "secret.txt").chmod(0o000)
         self.assertEqual(env.check_workdir(self.work), self.work)
+
+
+CANARY = "CANARY-NOT-A-REAL-SECRET-0000"
+FAKE_AGY = r'''#!%(py)s
+import os, sys, time
+here = os.path.dirname(os.path.realpath(__file__))
+with open(os.path.join(here, "calls.log"), "a") as f:
+    f.write(" ".join(sys.argv[1:]) + " | cwd=" + os.getcwd() + " | env=" + ",".join(sorted(os.environ)) + "\n")
+sys.stderr.write(%(canary)r + "\n")
+time.sleep(%(sleep)r)
+sys.stdout.buffer.write(%(out)r)
+sys.exit(%(code)d)
+'''
+
+
+class BinaryCase(TempCase):
+    def install_agy(self, version="1.5.3", *, out=None, code=0, sleep=0.0, folder=None, name="agy"):
+        folder = Path(folder) if folder else self.bindir
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / name
+        out = (version + "\n").encode() if out is None else out
+        path.write_text(FAKE_AGY % {"py": sys.executable, "canary": CANARY, "sleep": sleep, "out": out, "code": code})
+        path.chmod(0o700)
+        return path
+
+    def calls(self, folder=None):
+        log = Path(folder or self.bindir) / "calls.log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def refused(self, fn, *args, code, **kwargs):
+        with self.assertRaises(env.AgyRefused) as ctx:
+            fn(*args, **kwargs)
+        self.assertEqual(ctx.exception.code, code, str(ctx.exception))
+        self.assertNotIn(str(self.tmp), str(ctx.exception), "no path in the sentence")
+        self.assertNotIn(CANARY, str(ctx.exception), "nothing AGY printed in the sentence")
+        return ctx.exception
+
+    def locate(self, folder=None):
+        return env.locate_binary(str(folder or self.bindir))
+
+    def pin(self, folder=None, **kw):
+        return env.pinned_binary(str(folder or self.bindir), **kw)
+
+
+class LocateTests(BinaryCase):
+    def test_the_file_is_found_on_the_given_path_only(self):
+        self.refused(self.locate, code="not_installed")
+        self.install_agy()
+        self.assertEqual(self.locate(), os.path.realpath(self.bindir / "agy"))
+        self.refused(env.locate_binary, str(self.tmp / "elsewhere") + os.pathsep + "", code="not_installed")
+        self.assertEqual(env.locate_binary(str(self.tmp / "elsewhere") + os.pathsep + str(self.bindir)),
+                         os.path.realpath(self.bindir / "agy"), "the path is searched in order")
+
+    def test_the_default_search_path_is_the_daemons(self):
+        self.install_agy(folder=self.tmp / "default-bin")
+        with mock.patch("vbear.runtime.daemon.cli_search_path", return_value=str(self.tmp / "default-bin")):
+            self.assertEqual(env.locate_binary(), os.path.realpath(self.tmp / "default-bin" / "agy"))
+
+    def test_only_a_file_named_agy_that_can_run_counts(self):
+        self.install_agy(name="agy-other")
+        self.refused(self.locate, code="not_installed")
+        (self.bindir / "agy").write_text("#!/bin/sh\n")
+        (self.bindir / "agy").chmod(0o600)                                    # not executable
+        self.refused(self.locate, code="not_installed")
+        (self.bindir / "agy").unlink()
+        (self.bindir / "agy").mkdir()
+        self.refused(self.locate, code="not_installed")
+
+    def test_a_link_is_followed_to_the_real_file_and_that_is_what_is_returned(self):
+        real = self.install_agy(folder=self.tmp / "versions", name="agy-1.5.3")
+        (self.bindir / "agy").symlink_to(real)
+        self.assertEqual(self.locate(), os.path.realpath(real))
+
+    def test_a_file_that_others_can_change_is_refused(self):
+        path = self.install_agy()
+        path.chmod(0o722)
+        self.refused(self.locate, code="unsafe_binary")
+        path.chmod(0o770)
+        self.refused(self.locate, code="unsafe_binary")
+        path.chmod(0o700)
+        self.assertTrue(self.locate())
+
+    def test_a_folder_on_the_way_that_others_can_change_is_refused_wherever_it_is(self):
+        deep = self.tmp / "a" / "b"
+        self.install_agy(folder=deep)
+        for folder in (self.tmp / "a", deep):
+            for mode in (0o770, 0o707, 0o777):
+                with self.subTest(folder=folder.name, mode=oct(mode)):
+                    os.chmod(folder, mode)
+                    self.refused(self.locate, deep, code="unsafe_binary")
+                    os.chmod(folder, 0o700)
+        self.assertTrue(self.locate(deep))
+        # the link's own folder is on the way too, as well as the folder of the file it ends at
+        real = self.install_agy(folder=self.tmp / "versions")
+        (self.bindir / "agy").symlink_to(real)
+        os.chmod(self.tmp / "versions", 0o770)
+        self.refused(self.locate, code="unsafe_binary")
+        os.chmod(self.tmp / "versions", 0o700)
+
+    def test_a_sticky_folder_is_the_only_writable_one_allowed_and_only_when_a_trusted_owner_has_it(self):
+        self.install_agy()
+        os.chmod(self.tmp, 0o1777)                                            # like /tmp itself
+        self.assertTrue(self.locate())
+        os.chmod(self.tmp, 0o777)
+        self.refused(self.locate, code="unsafe_binary")
+        os.chmod(self.tmp, 0o700)
+
+    def test_a_file_or_folder_of_someone_else_is_refused(self):
+        self.install_agy()
+        real_uid = os.getuid()
+        with mock.patch.object(env, "_uid", return_value=real_uid + 1):
+            self.refused(self.locate, code="unsafe_binary")
+        self.assertTrue(self.locate())
+
+    def test_the_cli_identity_is_the_six_numbers_every_launch_manifest_has(self):
+        from vbear.runtime import agent_sessions
+        path = self.install_agy()
+        real = os.path.realpath(path)
+        identity = env.cli_identity(real)
+        self.assertEqual(identity, agent_sessions.binary_identity(real))
+        self.assertEqual(len(identity), 6)
+        self.assertTrue(env.unchanged(real, identity))
+        path.write_text(path.read_text() + "# changed\n")
+        self.assertFalse(env.unchanged(real, identity), "a changed file is not the one that was checked")
+        path.unlink()
+        self.assertFalse(env.unchanged(real, identity))
+        self.assertFalse(env.unchanged(real, [1, 2, 3]))
+        self.assertFalse(env.unchanged(real, None))
+
+
+class PinnedTests(BinaryCase):
+    def setUp(self):
+        super().setUp()
+        self.record_pass()
+
+    def test_a_known_verified_version_is_pinned_with_its_identity(self):
+        path = self.install_agy()
+        pinned = self.pin()
+        self.assertEqual((pinned.binary, pinned.version), (os.path.realpath(path), "1.5.3"))
+        self.assertEqual(pinned.identity, env.cli_identity(pinned.binary))
+        self.assertEqual(self.calls(), ["--version | cwd=/ | env=" + self.calls()[0].split("env=")[1]],
+                         "one run, with exactly --version, from the root folder")
+
+    def test_the_version_is_read_from_a_run_with_a_safe_environment(self):
+        self.install_agy()
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x", "ANTIGRAVITY_PERM_GRANTS": "x", "GOOGLE_API_KEY": "x",
+                                          "OPENAI_API_KEY": "x", "ANTHROPIC_API_KEY": "x"}):
+            self.pin()
+        keys = set(self.calls()[0].split("env=")[1].split(","))
+        for bad in ("GEMINI_API_KEY", "ANTIGRAVITY_PERM_GRANTS", "GOOGLE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+            self.assertNotIn(bad, keys)
+        self.assertLessEqual(keys, {"HOME", "USER", "LOGNAME", "PATH", "TERM", "LANG", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"})
+
+    def test_anything_but_exactly_one_version_line_is_unreadable(self):
+        cases = [b"agy 1.5.3\n", b"v1.5.3\n", b"1.5.3 (build 7)\n", b"1.5.3\n1.5.3\n", b"1.5.3\n\n", b"\n1.5.3\n", b" 1.5.3\n",
+                 b"1.5\n", b"1.5.3.1\n", b"", b"\n", b"\xff\xfe\n", b"1.5.3\x00\n", b"x" * 100000]
+        for out in cases:
+            with self.subTest(out=out[:30]):
+                self.install_agy(out=out)
+                self.refused(self.pin, code="version_unreadable")
+        self.install_agy(out=b"1.5.3")                                        # no final newline is fine: it is still one line
+        self.assertEqual(self.pin().version, "1.5.3")
+
+    def test_a_program_that_fails_or_does_not_finish_is_unreadable(self):
+        self.install_agy(code=1)
+        self.refused(self.pin, code="version_unreadable")
+        self.install_agy(sleep=5.0)
+        with mock.patch.object(env, "STATUS_TIMEOUT_S", 0.5):
+            self.refused(self.pin, code="version_unreadable")
+
+    def test_a_version_not_in_the_table_is_unsupported_and_the_sentence_lists_what_is(self):
+        for version in ("1.5.4", "1.5.2", "2.0.0", "0.0.1"):
+            with self.subTest(version=version):
+                self.install_agy(version)
+                exc = self.refused(self.pin, code="unsupported")
+                self.assertEqual(exc.version, version)
+                self.assertIn(version, str(exc))
+                self.assertIn("1.5.3", str(exc))
+
+    def test_a_known_version_that_never_passed_the_check_is_unverified(self):
+        self.install_agy()
+        (self.state / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE).unlink()
+        exc = self.refused(self.pin, code="unverified")
+        self.assertEqual(exc.version, "1.5.3")
+        self.assertIn("驗證", str(exc))
+        self.assertIn("Google 方案", str(exc))
+        self.record_pass("1.5.2")                                             # another version passed: still not this one
+        self.refused(self.pin, code="unverified")
+        self.assertEqual(self.pin(verified=("1.5.3",)).version, "1.5.3", "the verified list can be given")
+
+    def test_a_new_version_is_checked_again_at_the_next_pin(self):
+        path = self.install_agy()
+        self.assertEqual(self.pin().version, "1.5.3")
+        self.install_agy("1.5.4")                                             # AGY updated itself
+        self.refused(self.pin, code="unsupported")
+        self.assertEqual(path.read_text().count("1.5.4"), 1)
+
+    def test_the_known_versions_are_the_ones_the_plan_names(self):
+        self.assertEqual(env.KNOWN_VERSIONS, ("1.5.3",))
+        with mock.patch.object(env, "KNOWN_VERSIONS", ("1.5.3", "1.5.4")):
+            self.install_agy("1.5.4")
+            self.record_pass("1.5.4")
+            self.assertEqual(self.pin().version, "1.5.4")
+
+
+class StatusTests(BinaryCase):
+    KEYS = {"state", "installed", "version", "verified", "shared_verified", "admin_policy_ok", "hooks_ok", "why",
+            "verified_versions"}
+
+    def status(self, **kw):
+        kw.setdefault("search_path", str(self.bindir))
+        return env.status(self.state, **kw)
+
+    def ready(self):
+        self.install_agy()
+        self.record_pass()
+
+    def assert_state(self, state, *, why=True, **fields):
+        out = self.status()
+        self.assertEqual(out["state"], state, out)
+        self.assertEqual(set(out), self.KEYS)
+        self.assertEqual(bool(out["why"]), why, out)
+        for k, v in fields.items():
+            self.assertEqual(out[k], v, (k, out))
+        text = json.dumps(out, ensure_ascii=False)
+        self.assertNotIn(str(self.tmp), text, "no path in the answer")
+        self.assertNotIn(CANARY, text, "nothing AGY printed in the answer")
+        return out
+
+    def test_not_installed(self):
+        out = self.assert_state("not_installed", installed=False, version=None, verified=False)
+        self.assertIn("開始設定", out["why"])
+
+    def test_ready(self):
+        self.ready()
+        self.assert_state("ready", why=False, installed=True, version="1.5.3", verified=True, admin_policy_ok=True,
+                          hooks_ok=True, shared_verified=False, verified_versions=["1.5.3"])
+        self.assertFalse((self.state / "agy-chat-home").exists(), "a look makes nothing")
+        self.record_pass(shared=True)
+        self.assert_state("ready", why=False, shared_verified=True)
+
+    def test_a_file_that_is_not_safe_or_prints_the_wrong_thing_is_version_unreadable(self):
+        path = self.install_agy(out=b"agy 1.5.3\n")
+        self.assert_state("version_unreadable", installed=True, verified=False)
+        self.install_agy()
+        path.chmod(0o722)
+        self.assert_state("version_unreadable", installed=True)
+
+    def test_unsupported_and_unverified(self):
+        self.install_agy("1.5.4")
+        self.record_pass()
+        out = self.assert_state("unsupported", installed=True, version="1.5.4", verified=False)
+        self.assertIn("1.5.3", out["why"])
+        self.install_agy()
+        (self.state / cli_versions.LOCAL_AGY_CHAT_VERIFIED_FILE).unlink()
+        out = self.assert_state("unverified", installed=True, version="1.5.3", verified=False, verified_versions=[])
+        self.assertIn("驗證", out["why"])
+
+    def test_policy_hooks_and_folder_in_that_order(self):
+        self.ready()
+        (self.state / "agy-chat-home").mkdir(mode=0o700)
+        (self.state / "agy-chat-home" / "AGENTS.md").write_text("x")
+        self.write_private(self.home / ".agents" / "hooks.json", "{}")
+        (self.policy_root / "etc" / "antigravity").mkdir(parents=True)
+        out = self.assert_state("policy", admin_policy_ok=False, hooks_ok=None, verified=True)
+        self.assertIn("管理員", out["why"])
+        shutil.rmtree(self.policy_root / "etc")
+        out = self.assert_state("hooks", admin_policy_ok=True, hooks_ok=False)
+        self.assertIn("hooks.json", out["why"])
+        (self.home / ".agents" / "hooks.json").unlink()
+        out = self.assert_state("folder", hooks_ok=True)
+        self.assertIn("AGENTS.md", out["why"])
+        (self.state / "agy-chat-home" / "AGENTS.md").unlink()
+        self.assert_state("ready", why=False)
+
+    def test_a_hooks_file_that_cannot_be_told_is_hooks_too(self):
+        self.ready()
+        (self.home / ".agents").write_text("a file")
+        out = self.assert_state("hooks", hooks_ok=False)
+        self.assertIn("無法確認", out["why"])
+
+    def test_the_policy_root_can_be_given(self):
+        self.ready()
+        other = self.tmp / "other-root"
+        (other / "etc" / "antigravity").mkdir(parents=True)
+        out = env.status(self.state, search_path=str(self.bindir), root=str(other))
+        self.assertEqual(out["state"], "policy")
+        self.assertEqual(env.POLICY_ROOT, str(self.policy_root))
+
+    def test_the_answer_is_cached_for_a_few_seconds_and_can_be_forced_or_dropped(self):
+        self.ready()
+        with mock.patch.object(env, "CACHE_TTL_S", 30.0):
+            self.assertEqual(self.status()["state"], "ready")
+            self.assertEqual(len(self.calls()), 1)
+            (self.home / ".agents").mkdir()
+            (self.home / ".agents" / "hooks.json").write_text("{}")
+            self.assertEqual(self.status()["state"], "ready", "from the cache")
+            self.assertEqual(len(self.calls()), 1)
+            self.assertEqual(self.status(force=True)["state"], "hooks")
+            self.assertEqual(len(self.calls()), 2)
+            (self.home / ".agents" / "hooks.json").unlink()
+            env.invalidate()
+            self.assertEqual(self.status()["state"], "ready")
+            first = self.status()
+            first["verified_versions"].append("9.9.9")
+            self.assertEqual(self.status()["verified_versions"], ["1.5.3"], "a copy is returned, not the cached list")
+
+    def test_no_real_agy_is_run_or_read_when_nothing_is_given(self):
+        # self.tmp/no-bin does not exist: the default search path finds nothing
+        out = env.status(self.state)
+        self.assertEqual(out["state"], "not_installed")
 
 
 if __name__ == "__main__":
