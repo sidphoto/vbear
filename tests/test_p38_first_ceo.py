@@ -71,9 +71,9 @@ class WhichToolTests(FirstCeoCase):
         self.assertIn("聊天用的 Codex", r["chat_note"])
 
     def test_a_tool_that_only_has_a_mark_is_never_the_ceo(self):
-        # AGY, Grok and MCODE cannot chat yet: ready for them is not a reason to make a CEO card on them
-        self.install("agy")
-        self.assertEqual(self.req("POST", "/api/setup/tools/agy/marker", {"done": True})[0], 200)
+        # Grok and MCODE cannot chat yet: ready for them is not a reason to make a CEO card on them (AGY can since v0.20.0)
+        self.install("grok")
+        self.assertEqual(self.req("POST", "/api/setup/tools/grok/marker", {"done": True})[0], 200)
         r = self.plan()
         self.assertEqual((r["can_create"], r["go"], r["tool"]), (False, "setup", None))
 

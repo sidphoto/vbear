@@ -15,7 +15,7 @@ from tests.group_fixtures import GroupBase
 from tests.test_chief_runner import Base as ChiefBase, card as chief_card, plan as chief_plan
 from tests.test_p46_agy_chat_api import ApiCase, READY
 from vbear.runtime import chat_store as cs
-from vbear import agent_profiles as ap, ai_tool_status, chat_service, chief, chief_runner, dispatch, groups, memory, shared_folder
+from vbear import agent_profiles as ap, ai_tool_status, first_ceo, chat_service, chief, chief_runner, dispatch, groups, memory, shared_folder
 from vbear.runtime import cli_versions
 
 
@@ -254,6 +254,54 @@ class ChiefAndDispatchWithAgyTests(ChiefBase):
         self.assertEqual((body["launch_mode"], body["model"], body["equipped_skill_ids"], body["enabled"]),
                          ("safe", {"tool": "agy", "model_id": ""}, [], True))
         self.assertEqual(set(body) & {"memory", "shared", "shared_folder", "confirm_company"}, set(), "memory and the shared folder stay off")
+
+
+class FirstCeoWithAgyTests(unittest.TestCase):
+    """P38-8, P46-5: the first CEO card may be an AGY card, as the last choice."""
+
+    @staticmethod
+    def rows(**ready):
+        out = []
+        for tool_id, state in ready.items():
+            row = {"id": tool_id, "ready": bool(state)}
+            if isinstance(state, dict):
+                row.update(state, ready=True)
+            out.append(row)
+        return out
+
+    def test_agy_is_the_choice_only_when_claude_code_and_codex_are_not_ready(self):
+        plan = first_ceo.plan([], self.rows(claude=False, codex=False, agy={"chat": {"verified": True}}))
+        self.assertEqual((plan["can_create"], plan["tool"], plan["tool_name"], plan["go"]), (True, "agy", "AGY", None))
+        self.assertEqual(plan["launch_mode"], "safe")
+        for first in ("claude", "codex"):
+            ready = {"claude": False, "codex": False, "agy": {"chat": {"verified": True}}}
+            ready[first] = True
+            self.assertEqual(first_ceo.plan([], self.rows(**ready))["tool"], first)
+
+    def test_a_verified_agy_chat_needs_no_note_and_an_unverified_one_says_what_to_press(self):
+        done = first_ceo.plan([], self.rows(agy={"chat": {"verified": True}}))
+        self.assertEqual((done["chat_ready"], done["chat_note"]), (True, ""))
+        todo = first_ceo.plan([], self.rows(agy={"chat": {"verified": False}}))
+        self.assertIs(todo["chat_ready"], False)
+        self.assertIn("驗證聊天", todo["chat_note"])
+        self.assertIn("Google", todo["chat_note"])
+        self.assertIs(first_ceo.plan([], self.rows(agy=True))["chat_ready"], False, "a row without the record is not verified")
+
+    def test_nothing_ready_still_goes_back_to_the_start_up_and_names_all_three(self):
+        plan = first_ceo.plan([], self.rows(claude=False, codex=False, agy=False, grok=True))
+        self.assertEqual((plan["can_create"], plan["go"], plan["tool"]), (False, "setup", None))
+        for word in ("Claude Code", "Codex", "AGY"):
+            self.assertIn(word, plan["reason"])
+
+    def test_a_person_with_an_agy_card_that_can_chat_needs_no_step(self):
+        card = {"id": "agy1", "name": "虛構AGY員工", "enabled": True, "model": {"tool": "agy"}, "position": "pm"}
+        self.assertFalse(first_ceo.needed([card]))
+        self.assertTrue(first_ceo.needed([dict(card, enabled=False)]))
+
+    def test_the_claude_and_codex_words_are_what_they_were(self):
+        plan = first_ceo.plan([], self.rows(codex=True))
+        self.assertEqual((plan["tool"], plan["chat_ready"]), ("codex", False))
+        self.assertIn("聊天用的 Codex", plan["chat_note"])
 
 
 if __name__ == "__main__":
