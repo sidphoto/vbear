@@ -2,7 +2,7 @@
 StreamOps is.
 
   chat_open    {profile_id, engine?}                        a new chat (engine claude-chat, or codex-chat for a role
-                                                            card whose AI tool is Codex); no process
+                                                            card whose AI tool is Codex, or agy-chat for AGY); no process
   chat_send    {chat_id, text, cli: {binary, version, identity}, model_id, instructions?, memory?, engine?, origin?}
                                                             a person's message: a turn, in the chat's live process
                                                             or a new one (``--resume`` once the session exists, a
@@ -52,12 +52,14 @@ import os
 import secrets
 import selectors
 import subprocess
+import tempfile
 import time
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
 from .. import admin_policy, config as cfg, meetings as mt
 from . import agent_sessions, chat_engines, chat_protocol as cp, chat_session, chat_store as cs, cli_versions, memory_rules, proctrack, shared_rules
+from . import agy_chat_env, agy_chat_protocol as acp, agy_chat_session
 from . import codex_chat_env, codex_chat_protocol as ccp, codex_chat_session
 from . import stream_session
 
@@ -229,7 +231,8 @@ class ChatOps:
             return None, _err(rid, "bad_request", "shared 只能是 true（不用共用資料夾就不要送這個欄位）")
         engine = chat["engine"]
         version = req["cli"].get("version") if isinstance(req.get("cli"), dict) else None
-        probing = self.chat_probe_versions if engine == "claude-chat" else self.codex_chat_probe_versions
+        probing = {"claude-chat": self.chat_probe_versions, "codex-chat": self.codex_chat_probe_versions,
+                   "agy-chat": self.agy_chat_probe_versions}[engine]
         if not (isinstance(version, str) and (version in probing or cli_versions.shared_verified(engine, version))):
             return None, _err(rid, "shared_unverified", cli_versions.shared_unverified_text(engine, str(version)[:32]))
         home = str(Path.home())
@@ -535,6 +538,169 @@ class ChatOps:
                 instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block),
                 thread_id=thread_id, last_tokens=state.last_tokens, followup=self._codex_followup,
                 client_version=DAEMON_VERSION)
+            self._chats[chat_id] = p
+            self._watch_chat(p, "stdout")
+            self._watch_chat(p, "stderr")
+            try:
+                p.descendants.observe(proctrack.process_table())
+            except proctrack.ProcessTableUnavailable as exc:
+                self._log(f"{sid}: process table unavailable at launch: {exc}")
+            agent_sessions.update_manifest(self.base, launch_id, state="running", leader={
+                "pid": proc.pid, "start": leader_start, "source": proctrack.SOURCE}, observed=p.descendants.export())
+            p.send_initialize()
+            p.start_turn(n, allowance, text, time.monotonic())
+        except Exception as exc:
+            return self._chat_abort_spawned(rid, log, n, m, proc, p, leader_start, f"{type(exc).__name__}: {exc}")
+        return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "resume" if resume else "new"})
+
+    # ---- an AGY chat (P46-3, ADR 0012) --------------------------------------------------------------------------
+
+    def _agy_send(self, rid: str, chat: dict, text: str, cli: dict, model_id: str | None,
+                  instructions: str | None, origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+        """A person's message in an AGY chat: a turn in the chat's live ``agy acp`` (its session goes on), or in a new one
+        (``session/new`` the first time, ``session/resume`` after). Money is as for a Codex chat: the turn's cap is the per-turn
+        limit or what is left of the day, whichever is less. AGY has the one model of its version's table: a ``model_id`` is refused."""
+        if model_id is not None:
+            return _err(rid, "bad_request", "AGY 聊天只用固定的一個模型，不能指定模型")
+        chat_id = chat["id"]
+        now = time.monotonic()
+        p = self._chats.get(chat_id)
+        if p is not None:
+            if p.state == "closing" or p.phase is not None or p.exit_info is not None or p.finished:
+                return _err(rid, "restarting", "這個聊天的程序正在結束，請稍後再送一次")
+            if p.turn is not None or p.state == "starting":
+                return _err(rid, "busy", "員工還在回覆上一則訊息")
+        allowance, per_turn, refused = self._chat_allowance(rid, time.time())
+        if refused:
+            return refused
+        if p is None:
+            return self._agy_spawn(rid, chat, text, cli, allowance, instructions, origin, memory, shared)
+        if p.shared != shared:                       # the folders of a live process are fixed: a new one gives the new setting
+            p.close_gracefully("共用資料夾的設定改了，要換新的程序", now)
+            return _err(rid, "restarting", "員工要換新的程序（共用資料夾的設定改了），請稍後再送一次")
+        if p.cli_version != cli.get("version"):
+            p.close_gracefully("AI 工具的版本不同，要換新的程序", now)
+            return _err(rid, "restarting", "員工要換新的程序（版本不同），請稍後再送一次")
+        try:
+            n = p.next_turn
+            p.log.append("user_message", _said(n, text, origin), now=time.time())
+            p.log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
+        except cs.ChatStoreError as exc:
+            p.stop("聊天紀錄無法寫入", now)
+            return _store_err(rid, exc)
+        p.start_turn(n, allowance, text, now)
+        return _ok(rid, {"turn": n, "cap_usd": cs.usd(allowance), "process": "reused"})
+
+    def _agy_followup(self, p, text: str) -> str | None:
+        """A card the person changed (AGY has no "allow a changed command"): the original was refused and, its turn being over,
+        the changed text is the next message, a new turn of the live process. None when it was sent, else why it was not (said in
+        the chat's record)."""
+        if self._chats.get(p.chat_id) is not p or p.state != "idle" or p.turn is not None:
+            return "員工的程序已經不能收新的訊息"
+        allowance, _per_turn, refused = self._chat_allowance("followup", time.time())
+        if refused:
+            return refused["error"]["message"]
+        now = time.monotonic()
+        try:
+            n = p.next_turn
+            p.log.append("user_message", {"turn": n, "text": text}, now=time.time())
+            p.log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
+        except cs.ChatStoreError as exc:
+            return exc.message
+        p.start_turn(n, allowance, text, now)
+        return None
+
+    def _agy_spawn(self, rid: str, chat: dict, text: str, cli: dict, allowance: Decimal, instructions: str | None,
+                   origin: dict | None = None, memory=None, shared: str | None = None) -> dict:
+        from .daemon import build_env      # here: daemon imports this module
+        chat_id, profile_id = chat["id"], chat["profile_id"]
+        state, binary, version, identity, refused = self._chat_precheck(rid, chat, cli)
+        if refused:
+            return refused
+        if acp.constants_for(version) is None:
+            return _err(rid, "unsupported_version", f"AGY {str(version)[:32]} 沒有聊天模式的常數")
+        if version not in cli_versions.agy_chat_verified_versions() and version not in self.agy_chat_probe_versions:
+            return _err(rid, "unverified", cli_versions.agy_chat_unverified_text(version))
+        policy = admin_policy.check_agy(version)
+        if not policy.ok:
+            return _err(rid, "admin_policy", policy.reason())
+        hooks, why = agy_chat_env.home_hooks_state()
+        if hooks != "absent":
+            return _err(rid, "agy_hooks", why)
+        if shared is not None and shared_rules.usage(shared)["over"]:      # only when a process begins; names are never looked at
+            return _err(rid, "shared_full", SHARED_TEXT["shared_full"])
+        shared_block = shared_rules.block(shared) if shared is not None else None
+        try:
+            workdir = cs.ensure_work_dir(self.base, profile_id)
+            log = cs.ChatLog(self.base, chat_id)
+        except cs.ChatStoreError as exc:
+            return _store_err(rid, exc)
+        try:
+            agy_chat_env.check_workdir(workdir)
+            if shared is not None:
+                agy_chat_env.check_workdir(shared, code="shared_unsafe", label="共用資料夾")
+            agy_chat_env.ensure_chat_home(self.base)
+            agy_chat_env.write_settings(self.base)          # AGY reads its settings from here: written before every process
+        except agy_chat_env.AgyRefused as exc:
+            log.close()
+            return _err(rid, {"unsafe_path": "agy_home", "foreign_settings": "agy_home", "too_big": "agy_home"}.get(exc.code, exc.code),
+                        str(exc))
+        session_id = state.thread_id
+        resume = session_id is not None
+        n = state.next_turn
+        m = None
+        try:
+            m = agent_sessions.prepare_agy_chat_launch(
+                self.base, workdir=workdir, cli_binary=binary, cli_version=version, cli_identity=identity,
+                chat_id=chat_id, profile_id=profile_id, resume=resume, session_id=session_id,
+                agy_home=str(agy_chat_env.chat_home_path(self.base)), shared=shared)
+            agent_sessions.update_manifest(self.base, m["launch_id"], state="launching")
+            m = agent_sessions.load_validated(self.base, m["launch_id"])
+            argv = agent_sessions.agy_chat_argv(m)
+            source = dict(build_env(), TMPDIR=os.environ.get("TMPDIR") or tempfile.gettempdir())
+            env = agent_sessions.agy_chat_env(m, source)
+        except (agent_sessions.LaunchRefused, OSError, ValueError) as exc:
+            log.close()
+            if m is not None:
+                agent_sessions.cleanup_launch(self.base, m["launch_id"], proven_dead=True)
+            return _err(rid, getattr(exc, "code", "refused"), str(exc))
+        launch_id = m["launch_id"]
+        self._log_memory(launch_id, memory, instructions)
+        self._log_shared(launch_id, shared)
+        if not resume:
+            self._keep_prompt_start(chat_id, instructions, memory, shared_block)
+        try:
+            log.append("user_message", _said(n, text, origin), now=time.time())
+            log.append("turn_started", {"turn": n, "cap_usd": cs.usd(allowance)}, now=time.time())
+            log.append("process_started", {"mode": "resume" if resume else "new", "budget_usd": cs.usd(allowance),
+                                           "instructions": instructions is not None}, now=time.time())
+        except cs.ChatStoreError as exc:
+            self._chat_not_started(log, n, launch_id, "聊天紀錄無法寫入")
+            return _store_err(rid, exc)
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    cwd=workdir, env=env, start_new_session=True, close_fds=True)
+        except OSError as exc:
+            self._chat_not_started(log, n, launch_id, f"無法啟動：{exc}"[:200])
+            return _err(rid, "internal", f"無法啟動 AGY：{exc}")
+        p = leader_start = None
+        try:
+            leader_start = stream_session.capture_leader(proc.pid)
+            if leader_start is None:
+                raise RuntimeError("無法取得 leader 的開始時間，這個程序無法安全地管理")
+            sid = "n-" + secrets.token_hex(6)
+            while sid in self._sessions or any(x.sid == sid for x in list(self._streams.values())
+                                               + list(self._chats.values())):
+                sid = "n-" + secrets.token_hex(6)
+            p = agy_chat_session.AgyChatProcess(
+                sid=sid, chat_id=chat_id, profile_id=profile_id, manifest=m, proc=proc, log=log, next_turn=n,
+                now=time.monotonic(), leader_start=leader_start, logger=self._log, watch=self._watch_chat,
+                unwatch=self._unwatch_chat, card_ttl=self.chat_card_ttl, init_deadline=self.chat_init_deadline,
+                turn_timeout=self.chat_turn_timeout, idle_timeout=self.chat_idle_timeout,
+                close_grace=self.chat_close_grace, close_below=Decimal(0),
+                instructions=memory_rules.combine(instructions, memory.block if memory else None, shared_block),
+                session_id=session_id, followup=self._agy_followup,
+                settings_ok=lambda: agy_chat_env.settings_intact(self.base))
             self._chats[chat_id] = p
             self._watch_chat(p, "stdout")
             self._watch_chat(p, "stderr")
