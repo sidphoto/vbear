@@ -35,6 +35,8 @@ CENT = Decimal("0.01")
 DISCLOSURE = ("開始後，你和 CEO 最近的對話（最多 20 則、12 KiB）與員工名單，會用你的 Claude 帳號送到 Anthropic（由本機的 Claude Code 送出）。"
               "VBear 不會把任何文字送到其他地方。每次呼叫前，VBear 都會確認這個版本的 Claude Code 沒有任何工具、沒有 MCP；確認不了就不送。")
 CODEX_NOTICE = "這張 CEO 是 Codex 的角色卡：你和它的對話會送給 Claude Code（Anthropic）整理成提議。"
+AGY_NOTICE = "這張 CEO 是 AGY 的角色卡：你和它的對話會送給 Claude Code（Anthropic）整理成提議。"
+CEO_NOTICE = {"codex": CODEX_NOTICE, "agy": AGY_NOTICE}
 
 
 @dataclass
@@ -255,7 +257,7 @@ class ChiefRunner(HeadlessBoard):
                "messages": ctx.read["count"], "omitted_messages": ctx.read["omitted"], "bytes": ctx.read["bytes"],
                "cards": len(ctx.cards), "omitted_cards": ctx.omitted_cards, "tools": list(ctx.tools),
                "cap_usd": mt.fmt(cap), "day_left_usd": mt.fmt(max(ctx.daily_usd - day, Decimal(0))), "today": today,
-               "sends_to": "Claude Code", "ceo_tool": ctx.ceo_tool, "notice": CODEX_NOTICE if ctx.ceo_tool == "codex" else None,
+               "sends_to": "Claude Code", "ceo_tool": ctx.ceo_tool, "notice": CEO_NOTICE.get(ctx.ceo_tool),
                "cli": {"version": version, "verified": version is not None}, "disclosure": DISCLOSURE, "cost_note": COST_NOTE}
         if not blockers:
             out["preview_id"] = self._keep({"kind": "new", "chat_id": chat_id, "read_sha": ctx.read["sha256"],

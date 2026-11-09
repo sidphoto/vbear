@@ -12,9 +12,10 @@ from unittest import mock
 import sys
 
 from tests.group_fixtures import GroupBase
+from tests.test_chief_runner import Base as ChiefBase, card as chief_card, plan as chief_plan
 from tests.test_p46_agy_chat_api import ApiCase, READY
 from vbear.runtime import chat_store as cs
-from vbear import agent_profiles as ap, ai_tool_status, chat_service, groups, memory, shared_folder
+from vbear import agent_profiles as ap, ai_tool_status, chat_service, chief, chief_runner, dispatch, groups, memory, shared_folder
 from vbear.runtime import cli_versions
 
 
@@ -199,6 +200,60 @@ class GroupsWithAgyTests(GroupBase):
         text = groups.skip_text("agy_hooks", "虛構AGY員工", groups.TOOL_NAME["agy"])
         self.assertIn("虛構AGY員工這次沒有回答", text)
         self.assertIn("hooks", text)
+
+
+class ChiefAndDispatchWithAgyTests(ChiefBase):
+    """ADR 0006: the chief of staff and the dispatches take an AGY employee in; the chief of staff itself still needs Claude Code."""
+
+    def setUp(self):
+        super().setUp()
+        self.profiles["ceo3"] = chief_card("ceo3", "planner", tool="agy", name="第三個CEO")
+        self.profiles["worker"] = chief_card("worker", "social", tool="agy", name="AGY小編")
+        self.tools = ("claude", "codex", "agy")
+
+    def test_an_agy_chat_that_is_ready_counts_as_a_tool_that_can_chat(self):
+        self.assertEqual(chief_runner.usable_tools({"state": "verified", "agy": {"state": "ready"}}), ("claude", "agy"))
+        self.assertEqual(chief_runner.usable_tools({"state": "unknown", "agy": {"state": "ready"}}), ("agy",))
+        self.assertEqual(chief_runner.usable_tools({"state": "verified", "agy": {"state": "unverified"}}), ("claude",))
+        self.assertEqual(chief_runner.usable_tools({"state": "verified", "codex": {"state": "ready"}, "agy": {"state": "ready"}}),
+                         ("claude", "codex", "agy"))
+
+    def test_the_words_for_no_tool_name_all_three(self):
+        text = str(chief.ChiefError("no_chat_tool"))
+        for word in ("Claude Code", "Codex", "AGY"):
+            self.assertIn(word, text)
+
+    def test_an_agy_ceo_is_told_the_chat_goes_to_claude_code(self):
+        chat_id = self.chat("ceo3", [("user", "你好")], engine="agy-chat")
+        preview = self.board().preview(chat_id, self.sources())
+        self.assertEqual(preview["ceo_tool"], "agy")
+        self.assertEqual(preview["notice"], "這張 CEO 是 AGY 的角色卡：你和它的對話會送給 Claude Code（Anthropic）整理成提議。")
+        self.assertEqual(preview["sends_to"], "Claude Code")
+        self.assertIn("agy", preview["tools"])
+
+    def test_a_claude_ceo_has_no_notice_and_the_codex_one_is_as_it_was(self):
+        self.assertIsNone(self.board().preview(self.chat_id, self.sources())["notice"])
+        chat_id = self.chat("ceo2", [("user", "你好")], engine="codex-chat")
+        self.assertEqual(self.board().preview(chat_id, self.sources())["notice"],
+                         "這張 CEO 是 Codex 的角色卡：你和它的對話會送給 Claude Code（Anthropic）整理成提議。")
+
+    def test_the_chief_may_name_an_agy_employee_to_take_and_a_new_one_to_make(self):
+        shown, _ = chief.candidates(list(self.profiles.values()), self.tools)
+        self.assertIn("agy", [c["tool"] for c in shown])
+        out = chief.validate_plan(chief_plan(
+            team=[{"who": "C1", "why": "會寫文案"}, {"who": "N1", "why": "排時間表"}],
+            new_cards=[{"ref": "N1", "name": "新來的AGY", "position": "pm", "tool": "agy", "model_alias": "opus", "why": "沒有合適的人"}],
+            steps=[{"who": "N1", "text": "請排時間表。"}]), shown, self.tools)
+        self.assertEqual([c["tool"] for c in out["kept"]["new_cards"]], ["agy"])
+        self.assertEqual(out["kept"]["new_cards"][0]["model_alias"], "", "only a Claude Code employee takes a model alias")
+        self.assertIn("model_alias_cleared", [n["code"] for n in out["notes"]])
+        self.assertIn("agy", chief.plan_schema(self.tools)["properties"]["new_cards"]["items"]["properties"]["tool"]["enum"])
+
+    def test_a_new_agy_employee_is_made_in_safe_mode_with_no_model_and_nothing_switched_on(self):
+        body = dispatch.card_body({"ref": "N1", "name": "新來的AGY", "position": "pm", "tool": "agy", "model_alias": ""})
+        self.assertEqual((body["launch_mode"], body["model"], body["equipped_skill_ids"], body["enabled"]),
+                         ("safe", {"tool": "agy", "model_id": ""}, [], True))
+        self.assertEqual(set(body) & {"memory", "shared", "shared_folder", "confirm_company"}, set(), "memory and the shared folder stay off")
 
 
 if __name__ == "__main__":
