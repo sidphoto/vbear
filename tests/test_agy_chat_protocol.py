@@ -85,9 +85,14 @@ class ConstantsTests(unittest.TestCase):
             "antigravity-cli/builtin", "antigravity-cli/cache", "antigravity-cli/conversation_summaries.db",
             "antigravity-cli/conversations", "antigravity-cli/crashes", "antigravity-cli/implicit", "antigravity-cli/installation_id",
             "antigravity-cli/jetbox_summaries_proto.pb", "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log",
-            "antigravity-cli/settings.json", "config", "config/.migrated", "config/config.json", "config/mcp_config.json",
+            "antigravity-cli/persistent_terminals", "antigravity-cli/settings.json", "config", "config/.migrated", "config/config.json", "config/mcp_config.json",
             "config/projects"))
         self.assertTrue(set(c.home_created).isdisjoint(c.home_forbidden))
+        self.assertEqual(c.cli_closed, (("persistent_terminals", ()),), "nothing is known to be made inside it")
+        self.assertEqual(c.builtin_sha256, (), "no hash is pinned until a real run's builtin_hashes gives them")
+        for ending in (".js", ".mjs", ".cjs", ".sh", ".py", ".json"):
+            self.assertIn(ending, c.builtin_runnable)
+        self.assertTrue(all(e == e.lower() and e.startswith(".") for e in c.builtin_runnable))
         self.assertEqual(c.project_entries, (), "nothing is known to be made inside a project folder yet (a real run must show it)")
         self.assertEqual(c.forbidden_anywhere, ("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings",
                                                 "gemini", "agents", "agent", "mcp_config"))

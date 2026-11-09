@@ -83,6 +83,11 @@ class AgyConstants:
     home_created: tuple                 # the only other paths AGY makes there by itself (seen in a real run); anything else is refused
     project_entries: tuple              # the names AGY is known to make inside a folder of config/projects (none known yet)
     announced_kinds: tuple              # tool kinds whose first tool_call only announces the call (it may say in_progress before it asks)
+    cli_closed: tuple                   # (folder of antigravity-cli, the names allowed in it) for a folder whose content is closed to names
+                                        # of this list: AGY made it (it shows after a command ran) and its content is not known yet
+    builtin_sha256: tuple               # (path below antigravity-cli/builtin, SHA-256 of the file): a file listed here passes only with that
+                                        # hash; a file that can run (``builtin_runnable``) and has no hash here is refused whatever its name
+    builtin_runnable: tuple             # lower-case endings of the names of files that can run or be run by something (.js, .json, ...)
     builtin_paths: tuple                # every path (below antigravity-cli/builtin) AGY's own built-in content is known to have: only these
                                         # exact paths pass the forbidden-name scan there, and any other path in builtin is refused
     forbidden_anywhere: tuple           # a name (up to its first dot, any case) that is refused at any depth of config/projects
@@ -120,7 +125,8 @@ VERSIONS = {
                       "antigravity-cli/builtin", "antigravity-cli/cache", "antigravity-cli/conversation_summaries.db",
                       "antigravity-cli/conversations", "antigravity-cli/crashes", "antigravity-cli/implicit",
                       "antigravity-cli/installation_id", "antigravity-cli/jetbox_summaries_proto.pb",
-                      "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log", "antigravity-cli/settings.json",
+                      "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/log", "antigravity-cli/persistent_terminals",
+                      "antigravity-cli/settings.json",
                       "config", "config/.migrated", "config/config.json", "config/mcp_config.json", "config/projects"),
         # Inside config/projects only empty folders pass until a real run shows what AGY makes there (it is the one place where a
         # foreign hook, rule or skill could hide): a name to add goes here, and nowhere else.
@@ -130,11 +136,40 @@ VERSIONS = {
         # cancelled. Exactly this order (``_order_problem``) is the only one that is not a violation; the first in_progress is only an
         # announcement. Any other order, status, output before a yes, or a call left announced at the end of a turn is a violation.
         announced_kinds=("execute", "edit", "delete", "move"),
-        # AGY's own built-in skills and plugin (names only, from the third real run; the check's ``builtin_names`` observation lists
-        # what a real AGY 1.5.3 has, to complete this list). Named like a skill or plugin, so they are listed exactly, never by pattern.
-        builtin_paths=("plugins", "skills", "skills/agy-customizations", "skills/agy-customizations/docs",
-                       "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/plugins.md",
-                       "skills/agy-customizations/docs/hooks.md", "skills/agy-customizations/docs/rules.md"),
+        # persistent_terminals shows after AGY ran a command (the fourth real run: empty when looked at); nothing is known to be in it,
+        # so nothing may be, and a name to add goes here and nowhere else.
+        cli_closed=(("persistent_terminals", ()),),
+        # No hash is pinned yet: the check's ``builtin_hashes`` observation (path -> SHA-256, nothing of the content) of a real run gives
+        # them. Until they are here a built-in file that can run (the plugin's scripts and its json files, any of these endings) is refused.
+        builtin_sha256=(),
+        builtin_runnable=(".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".sh", ".bash", ".zsh", ".command", ".py", ".rb", ".pl", ".html",
+                          ".htm", ".json"),
+        # AGY's own built-in skills and plugin: every path below antigravity-cli/builtin of a real AGY 1.5.3 (the fourth real run: names
+        # only, no content). They are named like the skills, plugins, hooks and rules VBear refuses elsewhere, so each is listed exactly,
+        # never by pattern; a name that is not here is refused, and the check's ``builtin_names`` observation lists what a real run has.
+        builtin_paths=(
+                       ".checksum", ".manifest", "keep.txt", "plugins", "plugins/swarm", "plugins/swarm/README.md", "plugins/swarm/assets",
+                       "plugins/swarm/assets/logo.svg", "plugins/swarm/plugin.json", "plugins/swarm/sidecars",
+                       "plugins/swarm/sidecars/swarm_board", "plugins/swarm/sidecars/swarm_board/README.md",
+                       "plugins/swarm/sidecars/swarm_board/app.js", "plugins/swarm/sidecars/swarm_board/channels.mjs",
+                       "plugins/swarm/sidecars/swarm_board/hive.css", "plugins/swarm/sidecars/swarm_board/hive.js",
+                       "plugins/swarm/sidecars/swarm_board/index.html", "plugins/swarm/sidecars/swarm_board/main.mjs",
+                       "plugins/swarm/sidecars/swarm_board/narrator_bootstrap.js", "plugins/swarm/sidecars/swarm_board/package.json",
+                       "plugins/swarm/sidecars/swarm_board/sidecar.json", "plugins/swarm/sidecars/swarm_board/styles.css", "skills",
+                       "skills/agy-customizations", "skills/agy-customizations/SKILL.md", "skills/agy-customizations/docs",
+                       "skills/agy-customizations/docs/hooks.md", "skills/agy-customizations/docs/json_configs.md",
+                       "skills/agy-customizations/docs/mcp_servers.md", "skills/agy-customizations/docs/plugins.md",
+                       "skills/agy-customizations/docs/rules.md", "skills/agy-customizations/docs/skills.md", "skills/antigravity_guide",
+                       "skills/antigravity_guide/SKILL.md", "skills/antigravity_guide/references",
+                       "skills/antigravity_guide/references/app.md", "skills/antigravity_guide/references/cli.md",
+                       "skills/antigravity_guide/references/ide.md", "skills/antigravity_guide/references/sdk.md", "skills/automation",
+                       "skills/automation/SKILL.md", "skills/generative_ui", "skills/generative_ui/SKILL.md",
+                       "skills/migrate-agent-settings", "skills/migrate-agent-settings/SKILL.md", "skills/migrate-workflows",
+                       "skills/migrate-workflows/SKILL.md", "skills/native_swarm", "skills/native_swarm/SKILL.md",
+                       "skills/native_swarm/logo.svg", "skills/permissioned-github", "skills/permissioned-github/SKILL.md", "skills/plugin",
+                       "skills/plugin/SKILL.md", "skills/run-workflow", "skills/run-workflow/SKILL.md", "skills/swarm_monitor",
+                       "skills/swarm_monitor/SKILL.md", "skills/swarm_narrator", "skills/swarm_narrator/SKILL.md",
+                       "skills/ui-plugin-navigation", "skills/ui-plugin-navigation/SKILL.md"),
         forbidden_anywhere=("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings", "gemini", "agents",
                             "agent", "mcp_config"),
         workdir_forbidden=(".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md")),

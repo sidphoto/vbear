@@ -5,6 +5,7 @@ else. No real AGY is looked for, started or read, and the stand-in HOME holds de
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -326,13 +327,14 @@ class ChatHomeTests(FolderCase):
         self.make_home()
         real = {"antigravity-cli": ["annotations", "bin", "brain", "builtin", "cache", "conversation_summaries.db", "conversations",
                                    "crashes", "implicit", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt",
-                                   "log", "settings.json"],
+                                   "log", "persistent_terminals", "settings.json"],
                 "config": [".migrated", "config.json", "mcp_config.json", "projects"]}
         for top, names in real.items():
             for name in names:
                 path = self.chat_home / top / name
                 path.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
-                if name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log", "projects"):
+                if name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log", "projects",
+                            "persistent_terminals"):
                     path.mkdir(exist_ok=True)
                 elif name != "settings.json":
                     path.write_text("{}" if name.endswith(".json") else "x")
@@ -361,20 +363,32 @@ class ChatHomeTests(FolderCase):
                     shutil.rmtree(path) if path.is_dir() else path.unlink()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home, "VBear's own settings.json is not what is looked for")
 
+    def hashed(self, text="x", only=None):
+        """Patch the table's pinned hashes with the hash of ``text`` for every built-in file that counts as executable (or ``only``)."""
+        paths = only if only is not None else [p for p in env.BUILTIN_PATHS if env.builtin_executable_like(p)]
+        patch = mock.patch.object(env, "BUILTIN_SHA", {p: hashlib.sha256(text.encode()).hexdigest() for p in paths})
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def make_builtin(self, *paths):
         base = self.chat_home / "antigravity-cli" / "builtin"
         for rel in paths:
             path = base / rel
-            if rel.endswith(".md"):
-                self.write_private(path, "x")
-            else:
+            if any(other.startswith(rel + "/") for other in env.BUILTIN_PATHS):          # a folder: something is below it
                 path.mkdir(parents=True, exist_ok=True)
+            else:
+                self.write_private(path, "x")
         return base
 
     def test_the_built_in_content_of_agy_passes_only_by_the_exact_paths_of_the_table(self):
         self.make_home()
-        self.assertTrue(env.BUILTIN_PATHS, "the table has names")
-        self.assertIn("skills/agy-customizations/docs/skills.md", env.BUILTIN_PATHS)
+        self.assertEqual(len(env.BUILTIN_PATHS), 62, "every path of the real AGY 1.5.3 (the fourth real run), one by one")
+        for name in (".checksum", ".manifest", "keep.txt", "plugins/swarm/plugin.json", "plugins/swarm/sidecars/swarm_board/main.mjs",
+                     "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/rules.md", "skills/native_swarm/logo.svg"):
+            self.assertIn(name, env.BUILTIN_PATHS)
+        self.assertEqual(sum(1 for p in env.BUILTIN_PATHS if p.startswith("skills/") and p.count("/") == 1), 13, "13 skill folders")
+        self.assertFalse(any(set(p) & set("*?[") for p in env.BUILTIN_PATHS), "no pattern, only names")
+        self.hashed()
         for rel in sorted(env.BUILTIN_PATHS):                  # all of the table, though named skills, plugins, hooks and rules
             self.make_builtin(rel)
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
@@ -392,6 +406,82 @@ class ChatHomeTests(FolderCase):
                     self.assertNotIn(str(self.tmp), why)
                     shutil.rmtree(path) if path.is_dir() else path.unlink()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_a_built_in_file_that_can_run_is_refused_until_its_hash_is_pinned_whatever_its_name(self):
+        self.make_home()
+        self.assertEqual(env.BUILTIN_SHA, {}, "no hash is pinned yet: a real run has to show them (the check's builtin_hashes)")
+        runnable = [p for p in env.BUILTIN_PATHS if env.builtin_executable_like(p)]
+        self.assertIn("plugins/swarm/plugin.json", runnable)
+        self.assertIn("plugins/swarm/sidecars/swarm_board/main.mjs", runnable)
+        self.assertIn("plugins/swarm/sidecars/swarm_board/narrator_bootstrap.js", runnable)
+        self.assertIn("plugins/swarm/sidecars/swarm_board/sidecar.json", runnable)
+        self.assertIn("plugins/swarm/sidecars/swarm_board/package.json", runnable)
+        self.assertNotIn("skills/agy-customizations/docs/skills.md", runnable)
+        for rel in ("a.js", "a.mjs", "a.cjs", "a.sh", "a.py", "A.JS", "plugin.json", "sidecar.json", "package.json"):
+            self.assertTrue(env.builtin_executable_like(rel), rel)
+        for rel in runnable:
+            with self.subTest(rel=rel):
+                self.make_builtin(rel)
+                why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                self.assertIn("antigravity-cli/builtin/" + rel, why)
+                shutil.rmtree(self.chat_home / "antigravity-cli" / "builtin")
+        self.make_builtin("skills/agy-customizations/docs/skills.md", "keep.txt", ".manifest")
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home, "documents pass by their exact names")
+
+    def test_a_pinned_hash_must_match_and_a_file_that_can_run_passes_only_with_the_right_one(self):
+        self.make_home()
+        rel = "plugins/swarm/sidecars/swarm_board/main.mjs"
+        self.hashed("made-up", only=[rel])
+        path = self.make_builtin(rel) / rel
+        path.write_text("made-up")
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        path.write_text("made-up!")                                  # changed by one byte
+        self.assertIn(rel, self.refused(env.check_chat_home, self.state, code="foreign_settings"))
+        path.write_text("")
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        path.unlink()
+        path.mkdir()                                                  # a folder where the pinned file belongs
+        self.refused(env.check_chat_home, self.state, code="foreign_settings")
+
+    def test_a_file_with_a_pinned_hash_is_looked_at_by_what_is_in_it_not_by_a_link(self):
+        self.make_home()
+        rel = "plugins/swarm/plugin.json"
+        self.hashed("made-up", only=[rel])
+        base = self.make_builtin(rel)
+        real = self.tmp / "real.json"
+        real.write_text("made-up")
+        (base / rel).unlink()
+        (base / rel).symlink_to(real)                                 # the same bytes, behind a link
+        with self.assertRaises(env.AgyRefused):
+            env.check_chat_home(self.state)
+
+    def test_a_folder_that_is_spelled_with_other_letters_than_the_table_is_never_the_table_s(self):
+        self.make_home()
+        cli = self.chat_home / "antigravity-cli"
+        for spelling in ("Builtin", "BUILTIN", "Persistent_Terminals", "PERSISTENT_TERMINALS"):
+            with self.subTest(spelling=spelling):
+                (cli / spelling / "skills").mkdir(parents=True)
+                (cli / spelling / "skills" / "Hooks.md").write_text("x")
+                why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                self.assertIn(spelling, why)
+                self.assertNotIn(str(self.tmp), why)
+                shutil.rmtree(cli / spelling)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_a_name_inside_the_built_in_folder_with_other_letters_is_refused(self):
+        self.make_home()
+        self.hashed()
+        self.make_builtin("skills/agy-customizations/docs/skills.md")
+        base = self.chat_home / "antigravity-cli" / "builtin"
+        (base / "skills" / "Native_Swarm").mkdir()                      # not a spelling of the table
+        self.assertIn("Native_Swarm", self.refused(env.check_chat_home, self.state, code="foreign_settings"))
+
+    def test_the_one_function_that_names_a_folder_of_the_table_is_exact_and_says_when_only_the_letters_differ(self):
+        self.assertEqual(env.table_folder("builtin/skills"), "builtin")
+        self.assertEqual(env.table_folder("persistent_terminals"), "persistent_terminals")
+        self.assertIsNone(env.table_folder("cache/x"))
+        self.assertEqual(env.table_folder("Builtin/skills"), env.LETTERS_DIFFER)
+        self.assertEqual(env.table_folder("PERSISTENT_TERMINALS/t"), env.LETTERS_DIFFER)
 
     def test_fewer_built_in_names_than_the_table_is_fine_and_a_link_there_is_refused(self):
         self.make_home()
@@ -412,6 +502,27 @@ class ChatHomeTests(FolderCase):
                 if "/" in where:
                     (cli / where.split("/")[0]).rmdir()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_persistent_terminals_is_made_by_agy_and_only_empty_passes(self):
+        self.make_home()
+        cli = self.chat_home / "antigravity-cli"
+        (cli / "persistent_terminals").mkdir(parents=True, exist_ok=True)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        for where, kind in (("t-1", "file"), ("t-1", "dir"), ("hooks.json", "file"), ("a/b/rules", "dir")):
+            with self.subTest(where=where, kind=kind):
+                path = cli / "persistent_terminals" / where
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("x") if kind == "file" else path.mkdir(exist_ok=True)
+                why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                self.assertIn("antigravity-cli/persistent_terminals/", why)
+                self.assertNotIn(str(self.tmp), why)
+                shutil.rmtree(cli / "persistent_terminals")
+                (cli / "persistent_terminals").mkdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        shutil.rmtree(cli / "persistent_terminals")
+        (cli / "persistent_terminals").symlink_to(self.tmp)
+        with self.assertRaises(env.AgyRefused):                  # a link is never let in (it is refused whichever check sees it first)
+            env.check_chat_home(self.state)
 
     def test_a_config_folder_that_is_a_link_or_a_file_is_refused(self):
         self.make_home()
