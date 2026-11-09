@@ -69,6 +69,14 @@ class Walk(AutoBase):
         self.rrunner = rrun.RoutineRunner(chats=lambda: self.service, ledger=self.ledger, conf=lambda: c.store.conf, clock=lambda: self.now[0],
                                           tz=TAIPEI, auto_continue=self.auto)
         self.addCleanup(self.rrunner.close)
+        # The routine store stamps created_at/enabled_at with the wall clock; tie it to the test clock so the walk does not depend on today's date.
+        from unittest import mock
+        from vbear import routines as routines_mod
+        import time as real_time
+        clock = types.SimpleNamespace(time=lambda: self.now[0], monotonic=real_time.monotonic, sleep=real_time.sleep)
+        clock_patch = mock.patch.object(routines_mod, "time", clock)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
         c._routine_runner = self.rrunner
 
     def close_console(self):
