@@ -123,7 +123,7 @@ class MemoryDocsTests(unittest.TestCase):
         self.assertEqual(rules.KINDS, ("about_you", "work", "decision"))
         self.assertEqual((rules.BEGIN_MARK, rules.END_MARK), ("BEGIN_VBEAR_MEMORY_JSON", "END_VBEAR_MEMORY_JSON"))
         self.assertEqual(memory.CARDS_OFF_MAX, 200)
-        self.assertEqual(memory.DEFAULT_ON, {"claude-chat": True, "codex-chat": False})
+        self.assertEqual(memory.DEFAULT_ON, {"claude-chat": True, "codex-chat": False, "agy-chat": False})
         for text in (self.section, self.changelog):
             self.assertIn("50 lines", text)
             self.assertIn("200 characters", text)

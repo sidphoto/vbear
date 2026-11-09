@@ -153,7 +153,7 @@ class TheList(ApiBase):
             self.addCleanup(setattr, type(self), "rows", READY)
             tools = self.call("/api/templates")[1]["tools"]
             self.assertEqual((tools["default"], tools["claude"]["ready"], tools["codex"]["ready"]), (default, claude_ready, codex_ready), rows)
-            self.assertEqual(set(tools), {"claude", "codex", "default"})
+            self.assertEqual(set(tools), {"claude", "codex", "agy", "default"})
 
     def test_the_status_is_read_from_the_start_up_pages_source_and_never_forced(self):
         self.call("/api/templates")
@@ -234,7 +234,7 @@ class ThePreview(ApiBase):
         self.assertIn("技能會超過 100 個：你現在有 97 個，這次要加 5 個，請少勾 2 個", problem["text"])
 
     def test_a_bad_request_is_a_400_with_a_code(self):
-        for body in ({}, {"tool": "agy", "cards": [pick("shop", "service")]}, {"tool": "claude", "cards": [pick("nope", "service")]},
+        for body in ({}, {"tool": "grok", "cards": [pick("shop", "service")]}, {"tool": "claude", "cards": [pick("nope", "service")]},
                      {"tool": "claude", "cards": [pick("shop", "service"), pick("shop", "service")]}, {"tool": "claude", "extra": 1},
                      {"tool": "claude", "cards": [pick("shop", "service")], "launch_mode": "full"}):
             status, out = self.preview(body)

@@ -37,6 +37,8 @@ DISCLOSURE = ("開始後，你和這位員工最近的對話（最多 20 則、1
               "VBear 不會把任何文字送到其他地方，也不會送你的記憶和你存的其他技能。"
               "每次呼叫前，VBear 都會確認這個版本的 Claude Code 沒有任何工具、沒有 MCP；確認不了就不送。")
 CODEX_NOTICE = "這是和 Codex 員工的對話，也會送給 Anthropic（Claude Code）整理。"
+AGY_NOTICE = "這是和 AGY 員工的對話，也會送給 Anthropic（Claude Code）整理。"
+ENGINE_NOTICE = {"codex-chat": CODEX_NOTICE, "agy-chat": AGY_NOTICE}
 SAVE_NOTE = "整理只是提議：不會自己存。它會放進「存成技能」的視窗，你看過、可以改，按「存」才會存。"
 
 CENT = Decimal("0.01")
@@ -183,7 +185,7 @@ class SkillSuggestRunner(HeadlessBoard):
         out = {"preview_id": None, "ok": not blockers, "blockers": blockers, "chat_id": chat_id,
                "messages": ctx.read["count"], "omitted_messages": ctx.read["omitted"], "bytes": ctx.read["bytes"],
                "cap_usd": mt.fmt(cap), "day_left_usd": mt.fmt(max(ctx.daily_usd - day, Decimal(0))), "today": today,
-               "sends_to": ks.SENDS_TO, "engine": ctx.engine, "notice": CODEX_NOTICE if ctx.engine == "codex-chat" else None,
+               "sends_to": ks.SENDS_TO, "engine": ctx.engine, "notice": ENGINE_NOTICE.get(ctx.engine),
                "save_note": SAVE_NOTE, "cli": {"version": version, "verified": version is not None}, "disclosure": DISCLOSURE,
                "cost_note": COST_NOTE}
         if not blockers:

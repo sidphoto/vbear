@@ -244,7 +244,7 @@ class TheBodies(unittest.TestCase):
 
     def test_only_two_tools(self):
         with self.assertRaises(ValueError):
-            tp.card_body(SHOP["cards"][0], "agy")
+            tp.card_body(SHOP["cards"][0], "grok")
 
     def test_a_skill_is_a_name_and_words_and_nothing_else(self):
         self.assertEqual(tp.skill_body(SHOP["skills"][2]), {"name": "整理一天的帳", "text": SHOP["skills"][2]["text"]})
@@ -401,7 +401,7 @@ class ThePlan(unittest.TestCase):
 
     def test_a_malformed_request_is_a_value_error(self):
         good = {"tool": "claude", "cards": [pick("shop", "service")]}
-        for bad in (None, [], "x", {}, {"cards": [pick("shop", "service")]}, {"tool": "agy", "cards": [pick("shop", "service")]},
+        for bad in (None, [], "x", {}, {"cards": [pick("shop", "service")]}, {"tool": "grok", "cards": [pick("shop", "service")]},
                     {**good, "extra": 1}, {**good, "confirm_warning": "yes"}, {**good, "cards": "x"}, {**good, "cards": [None]},
                     {**good, "cards": [{"from": ref("shop", "service"), "color": 1}]}, {**good, "cards": [{"from": {"template": "shop"}}]},
                     {**good, "cards": [{"from": {**ref("shop", "service"), "x": 1}}]}, {**good, "cards": [pick("nope", "service")]},

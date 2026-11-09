@@ -228,7 +228,7 @@ class TheCheckBeforeAnythingIsMade(fx.ApplyBase):
         self.nothing_made()
 
     def test_a_bad_request_is_a_400_with_the_same_rules_as_the_preview(self):
-        for body in ({}, {"tool": "agy", "cards": [pick("shop", "service")]}, {"tool": "claude", "cards": [pick("nope", "service")]},
+        for body in ({}, {"tool": "grok", "cards": [pick("shop", "service")]}, {"tool": "claude", "cards": [pick("nope", "service")]},
                      {"tool": "claude", "cards": [pick("shop", "service"), pick("shop", "service")]}, {"tool": "claude", "extra": 1},
                      {"tool": "claude", "cards": [pick("shop", "service")], "launch_mode": "full"},
                      {"tool": "claude", "cards": [pick("shop", "service", launch_mode="full")]},

@@ -88,7 +88,7 @@ ERRORS = {
     "not_ceo": "只有 CEO 職位的角色卡的聊天，才能請幕僚長安排",
     "card_unavailable": "和這個聊天的角色卡現在不能聊天（已停用或工具換了）",
     "no_conversation": "你和 CEO 還沒有對話，先跟 CEO 說說想做什麼",
-    "no_chat_tool": "目前沒有可以聊天的 AI 工具（Claude Code 的聊天驗證或 Codex 的聊天登入還沒完成），幕僚長沒有可以派工的對象",
+    "no_chat_tool": "目前沒有可以聊天的 AI 工具（Claude Code 的聊天驗證、Codex 的聊天登入或 AGY 的聊天驗證還沒完成），幕僚長沒有可以派工的對象",
 }
 
 
