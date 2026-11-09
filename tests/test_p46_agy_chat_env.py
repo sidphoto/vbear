@@ -342,13 +342,13 @@ class ChatHomeTests(FolderCase):
         self.make_home()
         cli = self.chat_home / "antigravity-cli"
         cli.mkdir(exist_ok=True, mode=0o700)
-        (cli / "builtin" / "tools").mkdir(parents=True)
+        (cli / "builtin").mkdir(parents=True)
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
         (cli / "made-up-top").write_text("x")
         self.assertIn("made-up-top", self.refused(env.check_chat_home, self.state, code="foreign_settings"))
         (cli / "made-up-top").unlink()
-        for where in ("builtin/skills", "implicit/Workflows", "brain/a/b/c/hooks.json", "cache/rules.md", "bin/GEMINI.md",
-                      "conversations/AGENTS.md", "log/plugins", "builtin/tools/settings.json", "implicit/mcp_config.json"):
+        for where in ("implicit/Workflows", "brain/a/b/c/hooks.json", "cache/rules.md", "bin/GEMINI.md",
+                      "conversations/AGENTS.md", "log/plugins", "implicit/mcp_config.json"):
             for kind in ("file", "dir"):
                 with self.subTest(where=where, kind=kind):
                     path = cli / where
@@ -361,6 +361,58 @@ class ChatHomeTests(FolderCase):
                     shutil.rmtree(path) if path.is_dir() else path.unlink()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home, "VBear's own settings.json is not what is looked for")
 
+    def make_builtin(self, *paths):
+        base = self.chat_home / "antigravity-cli" / "builtin"
+        for rel in paths:
+            path = base / rel
+            if rel.endswith(".md"):
+                self.write_private(path, "x")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def test_the_built_in_content_of_agy_passes_only_by_the_exact_paths_of_the_table(self):
+        self.make_home()
+        self.assertTrue(env.BUILTIN_PATHS, "the table has names")
+        self.assertIn("skills/agy-customizations/docs/skills.md", env.BUILTIN_PATHS)
+        for rel in sorted(env.BUILTIN_PATHS):                  # all of the table, though named skills, plugins, hooks and rules
+            self.make_builtin(rel)
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        base = self.chat_home / "antigravity-cli" / "builtin"
+        for rel in ("skills/made-up-skill", "skills/agy-customizations/hooks", "skills/agy-customizations/docs/mcp_config.json",
+                    "plugins/made-up", "hooks.json", "made-up.txt",
+                    "skills/agy-customizations/docs/skills.md.bak"):
+            for kind in ("file", "dir"):
+                with self.subTest(rel=rel, kind=kind):
+                    path = base / rel
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("x") if kind == "file" else path.mkdir(exist_ok=True)
+                    why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                    self.assertIn("antigravity-cli/builtin/" + rel, why)
+                    self.assertNotIn(str(self.tmp), why)
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
+    def test_fewer_built_in_names_than_the_table_is_fine_and_a_link_there_is_refused(self):
+        self.make_home()
+        self.make_builtin("skills")
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        (self.chat_home / "antigravity-cli" / "builtin" / "plugins").symlink_to(self.tmp)
+        self.assertIn("builtin/plugins", self.refused(env.check_chat_home, self.state, code="foreign_settings"))
+
+    def test_the_table_exemption_is_only_inside_builtin(self):
+        self.make_home()
+        cli = self.chat_home / "antigravity-cli"
+        for where in ("skills", "plugins", "cache/skills/agy-customizations", "implicit/plugins", "brain/x/skills"):
+            with self.subTest(where=where):
+                (cli / where).mkdir(parents=True, exist_ok=True)
+                self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                shutil.rmtree(cli / where.split("/")[0])
+                (cli / where.split("/")[0]).mkdir() if "/" in where else None
+                if "/" in where:
+                    (cli / where.split("/")[0]).rmdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+
     def test_a_config_folder_that_is_a_link_or_a_file_is_refused(self):
         self.make_home()
         (self.chat_home / "config").symlink_to(self.tmp)
@@ -372,7 +424,7 @@ class ChatHomeTests(FolderCase):
     def test_what_agy_makes_itself_is_fine(self):
         self.make_home()
         for rel in ("config/config.json", "config/.migrated", "antigravity-cli/conversations/c1.db", "antigravity-cli/log/a.log",
-                    "antigravity-cli/builtin/some-tool/readme.txt", "antigravity-cli/conversation_summaries.db",
+                    "antigravity-cli/builtin/skills/agy-customizations/docs/hooks.md", "antigravity-cli/conversation_summaries.db",
                     "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/installation_id"):
             self.write_private(self.chat_home / rel, "{}")
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)

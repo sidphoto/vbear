@@ -82,6 +82,9 @@ class AgyConstants:
     home_forbidden: tuple               # paths in the chat's settings folder that VBear never writes and that must not be there
     home_created: tuple                 # the only other paths AGY makes there by itself (seen in a real run); anything else is refused
     project_entries: tuple              # the names AGY is known to make inside a folder of config/projects (none known yet)
+    announced_kinds: tuple              # tool kinds whose first tool_call only announces the call (it may say in_progress before it asks)
+    builtin_paths: tuple                # every path (below antigravity-cli/builtin) AGY's own built-in content is known to have: only these
+                                        # exact paths pass the forbidden-name scan there, and any other path in builtin is refused
     forbidden_anywhere: tuple           # a name (up to its first dot, any case) that is refused at any depth of config/projects
     workdir_forbidden: tuple            # names at the top of a work folder that AGY would read as settings or rules
 
@@ -122,6 +125,14 @@ VERSIONS = {
         # Inside config/projects only empty folders pass until a real run shows what AGY makes there (it is the one place where a
         # foreign hook, rule or skill could hide): a name to add goes here, and nowhere else.
         project_entries=(),
+        # AGY 1.5.3 (the third real run): a call of these kinds arrives as tool_call in_progress, then tool_call_update pending, then the
+        # request for permission, and only after a yes does it run. In_progress without a yes is an announcement, not an execution.
+        announced_kinds=("execute", "edit", "delete", "move"),
+        # AGY's own built-in skills and plugin (names only, from the third real run; the check's ``builtin_names`` observation lists
+        # what a real AGY 1.5.3 has, to complete this list). Named like a skill or plugin, so they are listed exactly, never by pattern.
+        builtin_paths=("plugins", "skills", "skills/agy-customizations", "skills/agy-customizations/docs",
+                       "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/plugins.md",
+                       "skills/agy-customizations/docs/hooks.md", "skills/agy-customizations/docs/rules.md"),
         forbidden_anywhere=("hooks", "rules", "workflows", "global_workflows", "skills", "plugins", "settings", "gemini", "agents",
                             "agent", "mcp_config"),
         workdir_forbidden=(".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md")),
@@ -528,6 +539,14 @@ def _output_of(content) -> str | None:
     return "\n".join(texts)[:MAX_OUTPUT_TEXT] if texts else None
 
 
+def _has_output(data: dict) -> bool:
+    """A command's own output in a message about it: text in its content, or a text value in its raw output (an exit code is not output)."""
+    if _output_of(data.get("content")):
+        return True
+    raw = data.get("rawOutput")
+    return isinstance(raw, dict) and any(isinstance(v, str) and v.strip() for v in raw.values())
+
+
 def _clean_options(options) -> list[dict]:
     """The options as VBear keeps them for the answer: id and kind of each, nothing else (a name is the agent's wording)."""
     out = []
@@ -565,6 +584,8 @@ def _strings_of(value):
 
 _STOP_REASONS = frozenset({"end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"})
 _RUNNING_FREE = (None, "pending", "failed")           # a call in one of these statuses has not run (or did not)
+_ANNOUNCED_FREE = (None, "pending", "in_progress", "failed", "cancelled")   # the same for a call of an ``announced_kinds`` kind
+_REFUSAL_END = ("failed", "cancelled")                 # how a call that was refused has to end
 _CATEGORY = {"execute": "command", "edit": "file_change", "delete": "file_change", "move": "file_change", "read": "read",
              "search": "read"}
 
@@ -648,6 +669,7 @@ class AgyTracker:
         call = self.calls.get(rec["call_id"])
         if call is not None:
             call["approved"] = decision == "allow"
+            call["answered"] = decision
 
     def open_requests(self) -> list:
         """The agent's requests that have no answer yet (the session answers them as cancelled when it stops a turn)."""
@@ -769,8 +791,12 @@ class AgyTracker:
         reason = result.get("stopReason")
         tokens, problem = self._usage(result.get("usage"))
         open_calls = sum(1 for c in self.calls.values() if not c["done"])
+        left = [c for c in self.calls.values() if c["kind"] in self.c.announced_kinds and not c["done"] and not c["approved"]
+                and c["status"] not in _REFUSAL_END]
         self.calls.clear()
         self.requests.clear()
+        if left:                                         # announced and then neither asked nor finished (or refused and not ended)
+            out.append(("anomaly", {"event_type": "call_left_announced", "fields": []}))
         out.append(("turn_completed", {"stop_reason": reason if reason in _STOP_REASONS else "?", "tokens": tokens,
                                        "usage_problem": problem, "open_calls": open_calls}))
         return out
@@ -860,7 +886,8 @@ class AgyTracker:
             return None, None, False
         new = cid not in self.calls
         rec = self.calls.setdefault(cid, {"kind": None, "status": None, "raw": {}, "paths": [], "locations": [], "content": [],
-                                          "title": "", "done": False, "approved": False, "asked": None})
+                                          "title": "", "done": False, "approved": False, "asked": None, "output": False,
+                                          "requested": False, "answered": None})
         if isinstance(data.get("kind"), str):
             rec["kind"] = data["kind"]
         if isinstance(data.get("status"), str):
@@ -874,6 +901,8 @@ class AgyTracker:
         if isinstance(data.get("content"), list):
             rec["content"] = data["content"]
         rec["paths"] = _paths_of(rec["raw"], rec["locations"], rec["kind"])
+        if rec["kind"] == "execute" and _has_output(data):
+            rec["output"] = True
         return cid, rec, new
 
     def _summary(self, rec) -> str:
@@ -926,9 +955,17 @@ class AgyTracker:
                 return "AGY 在你允許之後要求在沙盒外執行"
             if rec["asked"] is not None and self._signature(rec) != rec["asked"]:
                 return "AGY 做的和你允許時看到的不同"
-        if rec["status"] in _RUNNING_FREE or rec["approved"]:
-            return None
         kind = rec["kind"]
+        status = rec["status"]
+        if kind in self.c.announced_kinds and not rec["approved"]:
+            # an announcement (in_progress, before or after a request, and after a refusal) is not an execution; what is: completed,
+            # or output of the command before it ended as failed or cancelled
+            if rec["output"] and status not in _REFUSAL_END:
+                status = "completed"
+            elif status in _ANNOUNCED_FREE:
+                return None
+        if status in _RUNNING_FREE or rec["approved"]:
+            return None
         if kind == "search":
             return self._search_problem(rec)
         if kind == "read":
@@ -1059,6 +1096,7 @@ class AgyTracker:
             out += self._flush_reply()
             out.append(self._tool_fact(cid, rec))
         rec["approved"] = False                         # an older yes does not cover what this request asks
+        rec["requested"], rec["answered"] = True, None
         raw = rec["raw"]                                # a request carries only what changed: the rest was said by the tool call
         action, why, extra = self._decide(rec, raw, options)
         kind = rec["kind"]

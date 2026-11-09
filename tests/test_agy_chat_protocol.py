@@ -1169,6 +1169,116 @@ def fx_options():
     return [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}]
 
 
+def update_line(status, **more):
+    return {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+        "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": status, **more}}}
+
+
+class AnnouncedCallTests(Drive):
+    """AGY 1.5.3 (the third real run): an execute or edit call arrives as tool_call in_progress, then tool_call_update pending, then the
+    request for permission, and only after a yes does it run. The first in_progress is an announcement, not an execution; what is
+    an execution without a yes is completed, or the command's output."""
+
+    def run_fixture(self, decision):
+        self.drive("announced").start()
+        self.prompt()
+        before = list(self.facts)
+        self.assertEqual(self.requests()[-1]["action"], "ask")
+        self.answer(decision)
+        return before
+
+    def test_the_real_order_with_a_yes_runs_and_completes_without_a_violation(self):
+        self.run_fixture("allow")
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual(self.of("turn_completed")[0]["stop_reason"], "end_turn")
+        self.assertEqual(self.of("tool_result")[0]["status"], "completed")
+        self.assertEqual(self.of("anomaly"), [])
+
+    def test_the_real_order_with_a_no_ends_failed_and_the_in_progress_after_the_refusal_is_not_a_violation(self):
+        self.run_fixture("deny")
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual(self.of("turn_completed")[0]["stop_reason"], "end_turn")
+        self.assertEqual(self.of("anomaly"), [])
+
+    def test_the_real_order_with_a_cancel_is_the_same(self):
+        self.run_fixture("cancelled")
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual(self.of("turn_completed")[0]["stop_reason"], "cancelled")
+
+    def test_a_call_that_completes_without_ever_asking_is_still_a_violation(self):
+        self.drive("text").start()
+        self.prompt()
+        for first in ("in_progress", "pending"):
+            self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+                "sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "T", "kind": "execute", "status": first,
+                "rawInput": {"CommandLine": "ls"}}}})
+            self.assertFalse(self.t.stopped, first)
+            out = self.t.on_message(update_line("completed", rawOutput={"exit_code": 0}))
+            self.assertEqual([k for k, _ in out], ["violation"], first)
+            self.assertIn("執行了指令", out[0][1]["message"])
+            self.drive("text").start()
+            self.prompt()
+
+    def test_a_call_that_prints_output_before_any_yes_is_a_violation_but_an_exit_code_alone_is_not(self):
+        for more in ({"content": [{"type": "content", "content": {"type": "text", "text": "made-up output"}}]},
+                     {"rawOutput": {"stdout": "made-up output"}}):
+            self.drive("text").start()
+            self.prompt()
+            self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+                "sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "T", "kind": "execute", "status": "in_progress",
+                "rawInput": {"CommandLine": "ls"}}}})
+            out = self.t.on_message(update_line("in_progress", **more))
+            self.assertEqual([k for k, _ in out], ["violation"], more)
+        self.drive("text").start()
+        self.prompt()
+        self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+            "sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "T", "kind": "execute", "status": "in_progress",
+            "rawInput": {"CommandLine": "ls"}}}})
+        out = self.t.on_message(update_line("in_progress", rawOutput={"exit_code": None}))
+        self.assertNotIn("violation", [k for k, _ in out])
+
+    def test_output_after_a_refusal_is_a_violation_but_a_failed_end_with_a_message_is_not(self):
+        req = self.permission("execute", {"CommandLine": "ls"})
+        self.answer("deny", req)
+        out = self.t.on_message(update_line("in_progress", content=[{"type": "content", "content": {"type": "text", "text": "ran"}}]))
+        self.assertEqual([k for k, _ in out], ["violation"])
+        req = self.permission("execute", {"CommandLine": "ls"})
+        self.answer("deny", req)
+        out = self.t.on_message(update_line("failed", content=[{"type": "content", "content": {"type": "text", "text": "refused"}}]))
+        self.assertNotIn("violation", [k for k, _ in out])
+
+    def test_an_announced_edit_is_the_same_and_only_completed_is_an_execution(self):
+        self.drive("text").start()
+        self.prompt()
+        self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+            "sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "T", "kind": "edit", "status": "in_progress",
+            "rawInput": {"Path": "/w/a.txt", "Content": "x"}, "content": [{"type": "diff", "path": "/w/a.txt", "oldText": None,
+                                                                         "newText": "x"}]}}})
+        self.assertFalse(self.t.stopped, "a diff in the announcement is not an execution")
+        out = self.t.on_message(update_line("completed"))
+        self.assertEqual([k for k, _ in out], ["violation"])
+
+    def test_a_call_left_announced_when_the_turn_ends_is_noted_but_not_a_violation(self):
+        self.drive("announced").start()
+        self.prompt()
+        self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+            "sessionUpdate": "tool_call", "toolCallId": "call-2", "title": "T", "kind": "execute", "status": "in_progress",
+            "rawInput": {"CommandLine": "ls"}}}})
+        self.answer("deny")                                        # the turn ends here; call-1 failed, call-2 was never asked
+        self.assertNotIn("violation", self.kinds())
+        self.assertEqual([d["event_type"] for d in self.of("anomaly")], ["call_left_announced"])
+        self.assertEqual(len(self.of("turn_completed")), 1)
+
+    def test_a_yes_still_has_to_cover_what_runs(self):
+        req = self.permission("execute", {"CommandLine": "ls -a"})
+        self.t.answered(req["request_id"], "allow")
+        out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress",
+            "rawInput": {"CommandLine": "rm -rf /made/up"}}}})
+        self.assertEqual([k for k, _ in out], ["violation"])
+        self.assertIn("不同", out[0][1]["message"])
+
+
 class ViolationTests(Drive):
     def violates(self, fixture="no-ask", vars=None):
         self.drive(fixture, vars).start()
@@ -1176,13 +1286,21 @@ class ViolationTests(Drive):
         return self.of("violation")
 
     def test_a_tool_that_runs_without_vbears_yes_stops_the_chat_for_every_kind_that_is_not_a_read(self):
+        announced = acp.VERSIONS["1.5.3"].announced_kinds
+        self.assertEqual(announced, ("execute", "edit", "delete", "move"))
         for kind in ("execute", "edit", "delete", "move", "fetch", "other", "think", "switch_mode", "surprise"):
             for first in ("in_progress", "completed"):
+                if kind in announced and first == "in_progress":
+                    continue                    # AGY 1.5.3 announces these as in_progress before it asks (the class below)
                 got = self.violates(vars={"KIND": kind, "FIRST": first})
                 self.assertEqual(len(got), 1, (kind, first))
                 self.assertIn("沒有經過 VBear 的允許", got[0]["message"])
                 self.assertTrue(self.t.stopped)
                 self.assertNotIn("turn_completed", self.kinds())          # nothing is read after a violation
+
+    def test_the_kinds_that_are_not_announced_still_stop_at_in_progress(self):
+        for kind in ("fetch", "other", "think", "switch_mode", "surprise"):
+            self.assertEqual(len(self.violates(vars={"KIND": kind, "FIRST": "in_progress"})), 1, kind)
 
     def test_a_call_that_is_only_announced_or_that_failed_is_not_a_violation(self):
         for status in ("pending", "failed", None):
@@ -1193,11 +1311,11 @@ class ViolationTests(Drive):
                 "rawInput": {"CommandLine": "ls"}}}})
             self.assertNotIn("violation", [k for k, _ in out], status)
 
-    def test_a_refused_call_that_runs_anyway_is_a_violation(self):
+    def test_a_refused_call_that_completes_anyway_is_a_violation(self):
         req = self.permission("execute", {"CommandLine": "ls"})
         self.answer("deny", req)
         out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
-            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress"}}})
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed"}}})
         self.assertEqual([k for k, _ in out], ["violation"])
 
     def test_a_second_request_for_the_same_call_takes_the_first_yes_back(self):
@@ -1207,7 +1325,7 @@ class ViolationTests(Drive):
             "sessionId": SESSION, "toolCall": {"toolCallId": "call-1", "title": "T", "kind": "execute", "status": "pending",
                                                "rawInput": {"CommandLine": "rm -rf /made/up"}}, "options": fx_options()}})
         out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": {
-            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "in_progress"}}})
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed"}}})
         self.assertEqual([k for k, _ in out], ["violation"])
 
     def test_what_runs_must_be_what_was_allowed(self):

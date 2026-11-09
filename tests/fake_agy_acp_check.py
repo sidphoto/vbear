@@ -35,6 +35,7 @@ The configuration is the JSON file named by $FAKE_AGY_CONFIG (``write_launcher``
   probe_unasked        in the probe step the command arrives already running and no request for permission ever comes
   probe_running_then_ask  in the probe step the command arrives running and a request for permission follows
   home_stranger        the --gemini-dir folder gets an item nobody knows (at the end of the process that answered resume_ask)
+  builtin_stranger     a skill folder appears in antigravity-cli/builtin/skills that the version table does not list (same moment)
   project_hook         a hooks file appears inside config/projects/p-0001 (at the end of the process that answered resume_ask)
   auth_error           session/new is answered with "Authentication required"
   add_dir_ignored      --add-dir does not make the shared folder writable for a command
@@ -73,6 +74,8 @@ INIT = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "prompt
                                                                             "additionalDirectories": {}}},
         "authMethods": [{"id": "fake-auth-1", "name": "Made-up sign-in"}], "_meta": {"antigravity": {"tier": "fake-tier-alpha"}}}
 SKILLS = ["fake-skill-alpha", "fake-skill-beta", "fake-builtin"]
+BUILTIN = ("plugins", "skills/agy-customizations/docs/skills.md", "skills/agy-customizations/docs/plugins.md",
+           "skills/agy-customizations/docs/hooks.md", "skills/agy-customizations/docs/rules.md")      # (parents are made)
 EXACT = re.compile(r"exactly(?: this shell command)?: (.+?) -- ", re.S)
 
 
@@ -182,6 +185,8 @@ class Agent:
             pass
         if self.flags.get("project_hook") and self.gemini and self.last_step == "resume_ask":
             (Path(self.gemini) / "config" / "projects" / "p-0001" / "hooks.json").write_text("{}")
+        if self.flags.get("builtin_stranger") and self.gemini and self.last_step == "resume_ask":
+            (Path(self.gemini) / "antigravity-cli" / "builtin" / "skills" / "made-up-skill").mkdir(parents=True, exist_ok=True)
         if self.flags.get("home_stranger") and self.gemini and self.last_step == "resume_ask":
             (Path(self.gemini) / "stranger-item").write_text("x")
         if self.flags.get("home_item") and self.gemini and self.last_step == "resume_ask":
@@ -221,6 +226,11 @@ class Agent:
         cli = base / "antigravity-cli"
         for name in ("annotations", "bin", "brain", "builtin", "cache", "conversations", "crashes", "implicit", "log"):
             (cli / name).mkdir(parents=True, exist_ok=True)
+        for rel in BUILTIN:                                  # AGY's own built-in skills and plugin: named like what VBear refuses elsewhere
+            path = cli / "builtin" / rel
+            path.mkdir(parents=True, exist_ok=True) if "." not in rel.rsplit("/", 1)[-1] else path.parent.mkdir(parents=True, exist_ok=True)
+            if "." in rel.rsplit("/", 1)[-1]:
+                path.write_text("made-up")
         for name in ("conversation_summaries.db", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt"):
             (cli / name).write_text("made-up")
         if method == "session/new":
@@ -245,7 +255,11 @@ class Agent:
         cid = f"call-{os.getpid()}-{self.call_no}"
         call = {"toolCallId": cid, "title": title, "kind": kind, "status": "pending", "rawInput": raw,
                 "locations": locations or [], "content": content or []}
-        self.update(sessionUpdate="tool_call", **{k: v for k, v in call.items()})
+        if kind in ("execute", "edit", "delete", "move"):       # the real order of AGY 1.5.3: announced as running, then pending, then asks
+            self.update(sessionUpdate="tool_call", **{**call, "status": "in_progress"})
+            self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="pending")
+        else:
+            self.update(sessionUpdate="tool_call", **{k: v for k, v in call.items()})
         if not ask:
             return cid, "silent"
         self.next_id += 1
@@ -264,6 +278,11 @@ class Agent:
                 return cid, "cancelled"
             if msg is not None and "method" in msg and msg.get("id") is not None:
                 self.write({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "no"}})
+
+    def refuse_call(self, cid):
+        """The end of a call that was refused: the real AGY 1.5.3 still says in_progress, then failed."""
+        self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="in_progress")
+        self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="failed")
 
     def finish_call(self, cid, ok, code=0, output=""):
         self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="in_progress")
@@ -288,7 +307,7 @@ class Agent:
         cid, decision = self.permission("execute", "Run a command", raw, ask=ask and not (self.flags.get("ls_unasked") and command == "ls -a"))
         if decision in ("deny", "cancelled"):
             if decision == "deny":
-                self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="failed")
+                self.refuse_call(cid)
                 if self.flags.get("deny_ignored") and command.startswith("rm "):
                     self.run(command, bypass)
             return decision, None, ""
@@ -413,7 +432,7 @@ class Agent:
                 self.finish_call(cid, True, 0, "")
             return decision
         if decision == "deny":
-            self.update(sessionUpdate="tool_call_update", toolCallId=cid, status="failed")
+            self.refuse_call(cid)
         return decision
 
     def read_file(self, path, ask):

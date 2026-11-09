@@ -271,10 +271,19 @@ class RealMachineShapeTests(CheckCase):
         deep = report["observations"]["home_deep"]
         self.assertEqual(deep["forbidden_named"], [])
         self.assertIn("antigravity-cli/builtin", deep["counts"])
-        self.assertEqual(deep["counts"]["antigravity-cli/builtin"], 0)
+        self.assertEqual(deep["counts"]["antigravity-cli/builtin"], 2)     # (plugins and skills: the fake makes the table's paths)
+        names = report["observations"]["builtin_names"]            # names only; what the table does not have is said apart
+        self.assertIn("skills/agy-customizations/docs/hooks.md", names["paths"])
+        self.assertEqual((names["not_in_table"], names["more"]), ([], 0))
         code, report = self.check({"project_hook": True})
         deep = report["observations"]["home_deep"]
         self.assertEqual(deep["forbidden_named"], ["config/projects/p-0001/hooks.json"])
+
+    def test_a_built_in_name_that_the_table_does_not_list_fails_home_clean_and_is_named_in_the_observation(self):
+        code, report = self.check({"builtin_stranger": True})
+        self.assert_failed(code, report, "home_clean")
+        self.assertIn("builtin/skills/made-up-skill", report["checks"]["home_clean"]["reason"])
+        self.assertEqual(report["observations"]["builtin_names"]["not_in_table"], ["skills/made-up-skill"])
 
     def test_a_hooks_file_hidden_inside_a_project_folder_fails_home_clean_by_where_it_is(self):
         code, report = self.check({"project_hook": True})
@@ -325,11 +334,14 @@ class AskProbeTests(CheckCase):
         probe = report["observations"]["ask_probe"]
         self.assertEqual((probe["asked"], probe["verdict"], probe["file_written"], probe["turn_ended"], probe["problem"]),
                          (True, "asked_and_refused", False, True, None))
-        self.assertEqual(probe["statuses_before_the_request"], ["pending"])
-        self.assertEqual(probe["events"][0], ["tool_call", "pending", "execute"])
+        self.assertEqual(probe["statuses_before_the_request"], ["in_progress", "pending"])     # the real order of AGY 1.5.3
+        self.assertEqual(probe["events"][0], ["tool_call", "in_progress", "execute"])
+        self.assertEqual([e[0] for e in probe["events"]], ["tool_call", "tool_call_update", "request_permission",
+                                                           "tool_call_update", "tool_call_update"])
+        self.assertEqual([e[1] for e in probe["events"]], ["in_progress", "pending", "pending", "in_progress", "failed"])
         self.assertIn(["request_permission", "pending", "execute"], probe["events"])
         proto = report["observations"]["protocol"]
-        self.assertIn("tool_call:pending", proto["tool_statuses"]["execute"])
+        self.assertIn("tool_call:in_progress", proto["tool_statuses"]["execute"])
         self.assertIn("CommandLine", proto["tool_raw_fields"]["execute"])
         self.assertTrue(proto["sequence"])
 
@@ -369,7 +381,7 @@ class AskProbeTests(CheckCase):
         code, report = self.check({"ls_unasked": True})
         self.assert_failed(code, report, "ls_asks")
         at = report["observations"]["protocol"]["violation_at"]
-        self.assertTrue(at and at[0]["after"] == ["tool_call_update", "in_progress", "execute"], at)
+        self.assertTrue(at and at[0]["after"] == ["tool_call_update", "completed", "execute"], at)
         self.assertIn("沒有經過 VBear 的允許", at[0]["message"])
 
 

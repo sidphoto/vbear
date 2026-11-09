@@ -2239,6 +2239,9 @@ believes of what comes back. The process that uses it is described in "Chats wit
   the folders without a request, a search ran without a request unless every string in it is a bare name, the work folder has no link to the
   outside and every place it names is an absolute path with no `~ { * ? [` inside the folders (a member named like a pattern is never a place, and a string in one that holds `/`, `..` or `~` makes a read or a search a card, never VBear's own yes; the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
   session, or the model could not be set. The tracker reads nothing after that.
+- **AGY 1.5.3 announces a command or file change as running before it asks, and that is not a violation.** For those kinds (`announced_kinds`
+  of the version table) a call that says `in_progress` or `pending` is only an announcement until it is answered "allow once", also after a refusal or a cancel, which must end `failed` or `cancelled`; it is a violation when an unapproved call is `completed` or shows output of the command, or when the turn ends with a completed call that VBear was never asked about, and a call left announced at the end of a turn is only an anomaly; for every other kind and for any other version `in_progress` without a yes still stops the chat.
+- **AGY's own built-in skills and plugin are pinned by name.** The chat folder's `antigravity-cli/builtin` is the one place where names like `skills` and `plugins` pass the forbidden-name scan, and only as the exact paths the version table lists (`builtin_paths`); any other path there, a link, or the same names anywhere else is refused.
 - **Nothing about the person is kept**: not the plan name, the sign-in methods, the thoughts or the names of the commands and skills.
 
 What is still only synthetic: the fixtures are built from the investigation's facts and ACP's public formats, since its raw messages were not
