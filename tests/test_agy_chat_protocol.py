@@ -89,7 +89,8 @@ class ConstantsTests(unittest.TestCase):
             "config/projects"))
         self.assertTrue(set(c.home_created).isdisjoint(c.home_forbidden))
         self.assertEqual(c.cli_closed, (("persistent_terminals", ()),), "nothing is known to be made inside it")
-        self.assertEqual(c.builtin_sha256, (), "no hash is pinned until a real run's builtin_hashes gives them")
+        self.assertEqual(len(c.builtin_sha256), 41, "the hash of every built-in file of the real run (not only the ones that run)")
+        self.assertEqual({p for p, _ in c.builtin_sha256}, {p for p in c.builtin_paths if not any(q.startswith(p + "/") for q in c.builtin_paths)})
         for ending in (".js", ".mjs", ".cjs", ".sh", ".py", ".json"):
             self.assertIn(ending, c.builtin_runnable)
         self.assertTrue(all(e == e.lower() and e.startswith(".") for e in c.builtin_runnable))
