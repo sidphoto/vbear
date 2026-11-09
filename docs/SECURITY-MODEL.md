@@ -2198,3 +2198,35 @@ translation whose source name or description changed is stale and is not shown.
 VBear's own two main agents (`cli-claude`, `cli-codex`, kind `cli`) are not listed for translation and their names
 are not sent: their Chinese names are VBear's, and the author wrote no description for them. An older translation of
 one stays in `role-translations.json` unused; nothing reads it.
+
+## The AGY chat protocol (v0.20, draft from P46-1)
+
+`vbear/runtime/agy_chat_protocol.py` (ADR 0012) is the part of the AGY chat that decides what VBear writes to `agy acp` and what it
+believes of what comes back. Nothing starts a process with it yet (P46-3 does, and replaces this note with "Chats with an AGY role
+card"); what it already fixes, and what `tests/test_agy_chat_protocol.py` and rules 14a–14c of `tests/test_autonomy_guard.py` hold it to:
+
+- **The command line is one table**: `acp --gemini-dir <state>/agy-chat-home --sandbox --disable-telemetry`, and `--add-dir <shared
+  folder>` for an employee who has it. The switches that skip permissions, sign in, move the app data or load the person's default
+  customizations are never passed, and no file that builds the command names them.
+- **The settings file is one fixed byte string** (`request-review`, terminal sandbox on, non-workspace access off, paid credits off, no
+  permission rules); VBear writes it before every process and compares it after every turn.
+- **Only two answers exist**: the option of kind "allow once" and the one of kind "reject once", chosen by kind, and the cancelled outcome. A
+  list of options that does not hold exactly one of each is not answered "yes". The two kinds that would remember an answer are named in one
+  constant and are never a value to send.
+- **A request to run outside the sandbox (`BypassSandbox`, any value but `false`) is refused by VBear with no card.** So is anything that
+  reaches the network, and any kind of tool VBear has no card for.
+- **File tools are judged by VBear** (they are not in AGY's sandbox), every place the call names (a move names where it goes; a move with no
+  destination is refused; any member of the raw input that is not on a short list of describing or content ones is read as a possible place,
+  and one that cannot be read is refused): inside the work folder (or the shared folder the employee has), links
+  followed, none of `.git`, `.agents`, `.agent`, `.gemini`, `.codex`, `.claude` or a `GEMINI.md` / `AGENTS.md` at any depth, no file with another
+  hard link, and a card that fits; otherwise refused with no card. A read inside the folders is VBear's own yes; outside, a card that says the
+  content goes to Google.
+- **The chat stops (a violation) when** a command, a file change, a network use or any other tool ran and VBear had not answered "allow once"
+  (or the call changed after the yes: any member of its raw input but a short list of describing ones, or `BypassSandbox`, or the kind of tool), a read ran outside
+  the folders without a request, a search ran without a request unless every string in it is a bare name, the work folder has no link to the
+  outside and every place it names is an absolute path with no `~ { * ? [` inside the folders (a member named like a pattern is never a place, and a string in one that holds `/`, `..` or `~` makes a read or a search a card, never VBear's own yes; the rule of a Claude chat's Glob and Grep), the mode is not `default`, a message is of another
+  session, or the model could not be set. The tracker reads nothing after that.
+- **Nothing about the person is kept**: not the plan name, the sign-in methods, the thoughts or the names of the commands and skills.
+
+What is still only synthetic: the fixtures are built from the investigation's facts and ACP's public formats, since its raw messages were not
+kept; `docs/evidence/agy-1.5.3-chat.md` section 11 lists what the first real `--mode agy-chat` run must confirm.
