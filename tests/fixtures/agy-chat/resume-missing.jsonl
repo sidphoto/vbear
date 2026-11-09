@@ -1,0 +1,5 @@
+{"_synthetic": "Synthetic, not a recording: the spike of 2026-11-09 kept no raw messages. The session to resume cannot be found. Built from plan.md of runs/20261109-p46 (實測事實, ACP 訊息) and the public ACP v1 formats. Every name, id, command and text is made up."}
+{"dir": "in", "method": "initialize"}
+{"dir": "out", "line": {"jsonrpc": "2.0", "id": "$REPLY", "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true, "promptCapabilities": {}, "mcpCapabilities": {}, "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}}}, "authMethods": [{"id": "fake-auth-1", "name": "Made-up sign-in"}], "_meta": {"antigravity": {"tier": "fake-tier-alpha"}}}}}
+{"dir": "in", "method": "session/resume"}
+{"dir": "out", "line": {"jsonrpc": "2.0", "id": "$REPLY", "error": {"code": -32602, "message": "Session not found"}}}

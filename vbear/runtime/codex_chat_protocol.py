@@ -47,7 +47,7 @@ MAX_OUTPUT_TEXT = 256 * 1024                    # the output of one command, kep
 MAX_REPLY_TEXT = 256 * 1024
 MAX_EVENT_TYPE = sp.MAX_EVENT_TYPE
 MAX_TOKENS = 10 ** 12
-CODEX_USD_PER_MTOK = Decimal("1.00")            # VBear's own accounting rule, not a price (ADR 0005)
+TOKEN_USD_PER_MTOK = Decimal("1.00")            # VBear's own accounting rule, not a price (ADR 0005; AGY chats use it too, ADR 0012)
 MIN_TURN_USD = Decimal("0.01")
 JSONRPC_METHOD_NOT_FOUND = -32601
 
@@ -316,7 +316,7 @@ def estimate_usd(tokens) -> Decimal:
     US$0.01. ValueError when there is no usable count (the session then counts the turn's cap instead)."""
     if isinstance(tokens, bool) or not isinstance(tokens, int) or not 0 <= tokens <= MAX_TOKENS:
         raise ValueError("沒有可用的 token 數")
-    usd = (Decimal(tokens) * CODEX_USD_PER_MTOK / Decimal(1_000_000)).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    usd = (Decimal(tokens) * TOKEN_USD_PER_MTOK / Decimal(1_000_000)).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
     return max(usd, MIN_TURN_USD)
 
 
