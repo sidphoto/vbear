@@ -72,6 +72,9 @@ function setPage(over = {}) {
     if (p === "/api/chats" && method === "GET") return jsonResponse(page.list);
     if (p === "/api/chats" && method === "POST") return jsonResponse({ ok: true, chat: { id: AGY_CID, profile_id: "emp-5", created_at: 1 } }, true, 201);
     if (p === "/api/chat-support/verify") return jsonResponse(page.verifyBody || { ok: true, status: { running: true } }, page.verifyStatus < 400, page.verifyStatus);
+    if (p === "/api/memory/cards" && method === "POST") return jsonResponse({ ok: true });
+    if (p === "/api/shared/cards" && method === "POST") return jsonResponse({ ok: true });
+    if (p === "/api/setup/tools") return jsonResponse(page.setup || { tools: [] });
     if (p === "/api/memory") return jsonResponse(page.memory || { ok: true, entries: [], used: { count: 0, chars: 0, max_count: 50, max_chars: 4000 }, readable: true, where_text: "", cards: [] });
     if (p === "/api/shared") return jsonResponse(page.shared || { ok: true });
     const m = /^\/api\/chats\/(c-[0-9a-f]{16})(?:\/([a-z]+))?$/.exec(p);
@@ -282,6 +285,261 @@ test("the start-up status decides whether AGY chat is ready from the row alone, 
   assert.strictEqual(app.agyChatReady(row({ installed: false })), false);
   assert.strictEqual(app.agyChatReady({ tools: [] }), false);
   assert.strictEqual(app.agyChatReady(null), false);
+});
+
+// ---- the chat page of an AGY employee ------------------------------------------------------------------------------------
+
+test("the chat page of an AGY employee says what AGY does differently: the sandbox, Google, the skills, the estimate", async () => {
+  setPage();
+  const main = await open(`#/chat/${AGY_CID}`);
+  const note = text(q(main, "agy-note"));
+  for (const w of ["不能連網", "送到 Google", "AGY 員工會用到你自己裝的 AGY 技能", "不是帳單", "超過花費上限", "Google 方案"]) assert(note.includes(w), w);
+  assert.strictEqual(q(main, "codex-note"), null);
+  assert(text(main).includes("工具：AGY"));
+  assert.strictEqual(q(main, "plan-usage"), null, "AGY reports no plan use");
+  noMarkup(main);
+});
+
+test("a card that asks while an AGY chat is open is drawn as an AGY card", async () => {
+  setPage({ detail: agyDetail({ live: live({ state: "waiting_for_you", turn: 1, cards: [agyRead()] }) }) });
+  const main = await open(`#/chat/${AGY_CID}`);
+  const cardNode = q(main, "live-card");
+  assert(cardNode && text(cardNode).includes("員工想讀取檔案") && q(cardNode, "read-note") && !q(cardNode, "modify"));
+  setPage({ detail: agyDetail({ live: live({ state: "waiting_for_you", turn: 1, cards: [agyCommand()] }) }) });
+  const again = await open(`#/chat/${AGY_CID}`);
+  assert(text(q(again, "sandbox-warning")).includes("AGY 的沙盒"));
+});
+
+test("deleting an AGY chat says AGY keeps its own copy and where", async () => {
+  setPage();
+  const main = await open(`#/chat/${AGY_CID}`);
+  q(main, "delete").click();
+  await settle();
+  const dlg = text(dialog());
+  for (const w of ["AGY 自己", "對話副本", "agy-chat-home", "不會刪掉"]) assert(dlg.includes(w), w);
+  assert(!dlg.includes("codex-chat-home"));
+});
+
+test("the first-time notes name AGY: what it costs, that it goes to Google, the read card, and 改內容再問", () => {
+  const all = app.CHAT_INTRO.map(([t, b]) => t + "：" + b).join("\n");
+  assert(app.CHAT_INTRO.some(([t]) => t === "用 AGY 聊天"));
+  const agy = app.CHAT_INTRO.find(([t]) => t === "用 AGY 聊天")[1];
+  for (const w of ["Google 方案", "送到 Google", "不是帳單", "超過花費上限", "驗證聊天", "AGY 員工會用到你自己裝的 AGY 技能", "讀取檔案", "沒有可以改的內容", "下一則訊息"]) assert(agy.includes(w), w);
+  assert(all.includes("Claude Code 或 Codex、而且已啟用的角色卡可以聊天（AGY 的員工也可以"), "the old sentence stays, with AGY beside it");
+});
+
+// ---- memory and the shared folder: off, and a yes to Google first -----------------------------------------------------------
+
+const MEM_CARDS = () => [
+  { profile_id: "emp-1", name: "文案小編", tool: "claude", company: "Anthropic", can_chat: true, on: true },
+  { profile_id: "emp-5", name: "AGY 員工", tool: "agy", company: "Google", can_chat: true, on: false },
+];
+const memView = (over = {}) => ({ ok: true, entries: [], used: { count: 3, chars: 30, max_count: 50, max_chars: 4000 }, readable: true, where_text: "", problem: null, cards: MEM_CARDS(), ...over });
+
+test("memory page: an AGY employee starts off, the notes name Google, and switching on asks first and says the content goes to Google", async () => {
+  setPage({ memory: memView() });
+  const main = await open("#/memory");
+  const rows = qa(main, "card", "data-memory");
+  assert(text(rows[1]).includes("AGY") && text(rows[1]).includes("Google"));
+  assert.strictEqual(q(rows[1], "card-switch", "data-memory").checked, false, "off by default");
+  assert(text(q(main, "cards-note", "data-memory")).includes("AGY 的員工預設不帶") && text(q(main, "cards-note", "data-memory")).includes("送到 Google"));
+  assert(text(main).includes("Google（AGY 的員工）"), "the line over the page names Google");
+  const sw = q(rows[1], "card-switch", "data-memory");
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  const dlg = text(dialog());
+  assert(dlg.includes("內容會送到 Google") || dlg.includes("記憶的內容會送到 Google"), dlg);
+  assert(dlg.includes("3 條都會送") && !dlg.includes("OpenAI"));
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").length, 0, "nothing before the yes");
+  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").map((c) => c.body), [{ profile_id: "emp-5", on: true, confirm_company: true }]);
+});
+
+test("memory page: saying no leaves AGY off and posts nothing; switching it off asks nothing", async () => {
+  setPage({ memory: memView() });
+  let main = await open("#/memory");
+  let sw = q(qa(main, "card", "data-memory")[1], "card-switch", "data-memory");
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  dialog().find((n) => n.tag === "button" && text(n) === "取消").click();
+  await settle(80);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").length, 0);
+  assert.strictEqual(q(qa(h.dom().mainEl, "card", "data-memory")[1], "card-switch", "data-memory").checked, false);
+  setPage({ memory: memView({ cards: MEM_CARDS().map((c) => (c.profile_id === "emp-5" ? { ...c, on: true } : c)) }) });
+  main = await open("#/memory");
+  sw = q(qa(main, "card", "data-memory")[1], "card-switch", "data-memory");
+  sw.checked = false; sw.dispatch("change");
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/memory/cards").map((c) => c.body), [{ profile_id: "emp-5", on: false }]);
+  assert.strictEqual(dialog(), null);
+});
+
+test("the chat page's memory line names Google for an AGY employee", () => {
+  const line = text(app.memoryChatLine({ on: true, count: 2, readable: true }, "agy-chat"));
+  assert(line.includes("Google") && line.includes("2 條"), line);
+  assert(text(app.memoryChatLine({ on: false, count: 2, readable: true }, "agy-chat")).includes("不帶記憶"));
+});
+
+const SH_CARDS = () => [
+  { profile_id: "emp-1", name: "文案小編", tool: "claude", company: "Anthropic", can_chat: true, on: false, verified: null },
+  { profile_id: "emp-5", name: "AGY 員工", tool: "agy", company: "Google", can_chat: true, on: false, verified: null },
+];
+const shView = (over = {}) => ({ ok: true, where_text: "~/.vbear/shared", exists: true, problem: null, readable: true,
+  used: { bytes: 0, entries: 0, max_bytes: 1073741824, max_entries: 10000, over: false }, links: 0, files: [], cards: SH_CARDS(), ...over });
+
+test("shared folder page: the rule line names Google, an AGY employee has a switch, and switching on asks first and then sends the yes", async () => {
+  setPage({ shared: shView() });
+  const main = await open("#/shared");
+  const company = text(q(main, "rule-company", "data-shared"));
+  assert(company.includes("AGY 的員工送到 Google") && company.includes("不要放密碼、帳號、金鑰"));
+  const rows = qa(main, "card", "data-shared");
+  assert(text(q(rows[1], "company", "data-shared")).includes("打開後，讀到的檔案會送給 Google"));
+  const sw = q(rows[1], "card-switch", "data-shared");
+  assert(sw && sw.checked === false);
+  sw.checked = true; sw.dispatch("change");
+  await settle();
+  const dlg = text(dialog());
+  assert(dlg.includes("會送到 Google") && dlg.includes("AGY"), dlg);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/shared/cards").length, 0);
+  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
+  await settle(80);
+  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/shared/cards").map((c) => c.body), [{ profile_id: "emp-5", on: true, confirm_company: true }]);
+});
+
+test("shared folder page: when the server does not support the shared folder for an AGY employee, the page says the AI tool cannot use it and offers no switch", async () => {
+  setPage({ shared: shView({ cards: SH_CARDS().map((c) => (c.tool === "agy" ? { ...c, company: null } : c)) }) });
+  const main = await open("#/shared");
+  const row = qa(main, "card", "data-shared")[1];
+  assert.strictEqual(q(row, "card-switch", "data-shared"), null);
+  assert(text(q(row, "unsupported", "data-shared")).includes("還不能用共用資料夾"));
+});
+
+// ---- groups, dispatch, the chief of staff -----------------------------------------------------------------------------------
+
+const GROUP_CARDS = () => [
+  { id: "emp-1", name: "文案小編", tool: "claude", can_chat: true },
+  { id: "emp-4", name: "會計師", tool: "codex", can_chat: true },
+  { id: "emp-5", name: "AGY 員工", tool: "agy", can_chat: true },
+];
+function groupDialog(onCreate = async () => ({})) {
+  app.openGroupDialog(GROUP_CARDS(), { onCreate });
+  const all = h.dom().bodyEl.findAll((n) => n.hasClass && n.hasClass("modal-backdrop"));
+  return all[all.length - 1];
+}
+const pickIn = (dlg, id) => { const b = qa(dlg, "pick", "data-group").find((x) => x.getAttribute("data-profile-id") === id); b.checked = true; b.dispatch("change"); };
+
+test("group dialog: the sentence names every company in the group, in the order Claude Code, Codex, AGY, and says nothing for one company", () => {
+  const dlg = groupDialog();
+  pickIn(dlg, "emp-1");
+  pickIn(dlg, "emp-5");
+  assert.strictEqual(text(q(dlg, "mixed-box", "data-group")).includes("群組裡有 Claude Code 和 AGY 的員工，群組裡的對話會同時送給 Anthropic 和 Google。"), true, text(q(dlg, "mixed-box", "data-group")));
+  pickIn(dlg, "emp-4");
+  const three = text(q(dlg, "mixed-box", "data-group"));
+  assert(three.includes("Claude Code、Codex 和 AGY") && three.includes("Anthropic、OpenAI 和 Google"), three);
+  assert.strictEqual(app.groupMixedNote(["claude", "codex"]), app.GROUP_MIXED_NOTE, "the old sentence is word for word");
+  assert.strictEqual(app.groupMixedNote(["agy", "agy"]), "");
+  assert.strictEqual(app.groupMixedNote(["claude"]), "");
+});
+
+test("group dialog: ticking the shared folder with an AGY member says the files go to Google and the request carries confirm_company", async () => {
+  const bodies = [];
+  const dlg = groupDialog(async (b) => { bodies.push(b); return {}; });
+  pickIn(dlg, "emp-1"); pickIn(dlg, "emp-5");
+  assert.strictEqual(q(dlg, "shared-google", "data-group"), null, "the line waits for the tick");
+  const tick = q(dlg, "shared", "data-group");
+  tick.checked = true; tick.dispatch("change");
+  assert.strictEqual(text(q(dlg, "shared-google", "data-group")), app.GROUP_SHARED_GOOGLE_NOTE);
+  assert(text(q(dlg, "shared-google", "data-group")).includes("Google") && !q(dlg, "shared-codex", "data-group"));
+  q(dlg, "create", "data-group").click();
+  await settle();
+  assert.deepStrictEqual(bodies, [{ profile_ids: ["emp-1", "emp-5"], shared_folder: true, confirm_company: true }]);
+});
+
+test("a group's reply of an AGY employee is costed as an estimate that AGY reports at the end of the turn; the other tools keep their words", () => {
+  const cost = (tool, extra = {}) => app.groupReplyCost({ tool, cost_usd: "0.02", ...extra });
+  assert(cost("agy").includes("估計 US$0.02") && cost("agy").includes("AGY 到一回合結束才回報用量"), cost("agy"));
+  assert.strictEqual(cost("codex"), "按上限 US$0.02 計");
+  assert.strictEqual(cost("claude"), "US$0.02（Claude Code 回報的估值）");
+});
+
+test("a dispatch proposal with an AGY employee: the tick says the files go to Google and the confirmation carries the yes", async () => {
+  const SHA = "a".repeat(64), DID = "d-0123456789ab";
+  FETCH_LOG.length = 0;
+  setHandler((url) => (url.split("?")[0] === `/api/dispatch/${DID}/confirm` ? jsonResponse({ id: DID, state: "running", shared: { opened: [] } }) : null));
+  const v = { id: DID, chief_id: "cos-0123456789ab", chat_id: AGY_CID, created_at: 1790000200, state: "proposed", started_by: null, started_by_text: null, summary: "找 AGY 員工。",
+    questions: [], notes: [], team: [{ who: "C1", why: "會寫", kind: "existing", name: "AGY 員工" }], tools: ["claude", "codex", "agy"], proposal_sha: SHA, edited: false, task_id: null,
+    created_cards: [], steps: [], plan: { title: "週末市集", goal: "準備", deliverables: ["x"], new_cards: [], steps: [{ who: "C1", text: "請寫", name: "AGY 員工" }] },
+    cost: { steps: 1, per_turn_usd: "0.5", max_usd: "0.5", day_left_usd: "2.71" }, pause: null, events: [],
+    can: { confirm: true, dismiss: true, stop: false, continue: false, delete: true, withdraw: [] },
+    shared: { people: [{ who: "C1", name: "AGY 員工", on: false, company: "Google", usable: true }] } };
+  const node = app.proposalCard(v, {});
+  await settle();
+  const tick = q(node, "shared", "data-dispatch");
+  assert(tick);
+  tick.checked = true; tick.dispatch("change");
+  assert.strictEqual(text(q(node, "shared-google", "data-dispatch")), app.DISPATCH_SHARED_GOOGLE_NOTE);
+  assert(!q(node, "shared-codex", "data-dispatch"));
+  q(node, "confirm", "data-dispatch").click();
+  await settle();
+  const sent = FETCH_LOG.filter((c) => c.method === "POST" && c.url.split("?")[0] === `/api/dispatch/${DID}/confirm`)[0].body;
+  assert.strictEqual(sent.shared_folder, true);
+  assert.strictEqual(sent.confirm_company, true);
+});
+
+test("the chief of staff's desk on an AGY CEO's chat says the talk goes to Claude Code; other CEOs' desks do not", async () => {
+  setHandler(() => jsonResponse({ ok: true, chiefs: [], dispatch: [] }));
+  const real = global.setInterval;
+  global.setInterval = () => 0;
+  try {
+    const agy = app.chiefDesk(AGY_CID, { tool: "agy" });
+    assert(text(q(agy.node, "agy-sends", "data-chief")).includes("AGY") && text(q(agy.node, "agy-sends", "data-chief")).includes("Claude Code（Anthropic）"));
+    assert.strictEqual(q(agy.node, "codex-sends", "data-chief"), null);
+    agy.stop();
+    const claude = app.chiefDesk(AGY_CID, { tool: "claude" });
+    assert.strictEqual(q(claude.node, "agy-sends", "data-chief"), null);
+    claude.stop();
+  } finally { global.setInterval = real; }
+  assert(app.CHIEF_NEEDS_WHY.includes("Codex 或 AGY"));
+});
+
+// ---- the role card pool, the first CEO, the start-up page, templates -------------------------------------------------------------
+
+test("a role card of an AGY employee can chat and says what AGY is for; a card of another unsupported tool still cannot", () => {
+  const mk = (tool) => app.profileCard({ id: "emp-5", name: "虛構員工", enabled: true, model: { tool }, position: "pm" },
+    { handlers: { chat: () => {} } }).node;
+  const agy = mk("agy");
+  const btn = agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat");
+  assert.notStrictEqual(btn.disabled, true);
+  assert.strictEqual(text(agy.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note")), "AGY 的員工可以聊天（每個指令都問你）；要在終端機出發請選完整模式。");
+  const grok = mk("grok");
+  assert.strictEqual(grok.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "chat").disabled, true);
+  assert.strictEqual(grok.find((n) => n.getAttribute && n.getAttribute("data-pcard") === "agy-note"), null);
+});
+
+test("the start-up page says whether AGY chat has been checked, with no login button for it", () => {
+  const row = { id: "agy", name: "AGY", state: "ready", installed: true, version: "1.5.3", login: "marked", can_mark: true, chat: { verified: false } };
+  const bad = app.setupToolView(row);
+  assert(bad.note.includes("聊天：還沒驗證") && bad.note.includes("驗證聊天") && bad.note.includes("Google 方案") && bad.note.includes("hooks"), bad.note);
+  assert(bad.note.includes("AGY 員工會用到你自己裝的 AGY 技能"));
+  assert(!bad.buttons.some((b) => b.kind === "chat_login"), "no chat login for AGY");
+  const good = app.setupToolView({ ...row, chat: { verified: true } });
+  assert(good.note.includes("聊天：已驗證"));
+  const away = app.setupToolView({ ...row, installed: false, state: "not_installed", chat: { verified: false } });
+  assert(!away.note.includes("聊天：") || away.note.includes("安裝"), "not installed: nothing about chat");
+  assert.strictEqual(app.setupToolView({ id: "claude", state: "ready", installed: true }).note.includes("聊天："), false);
+});
+
+test("the whole of the new code has no innerHTML, no emoji and no external address", () => {
+  const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
+  assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));
+  const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u;
+  for (const marker of ["CHAT_AGY_SANDBOX_WARNING", "CHAT_AGY_WORD", "SETUP_AGY_NOT_VERIFIED", "CEO_AGY_NOTE", "MEMORY_CONFIRM_COMPANY", "GROUP_SHARED_GOOGLE_NOTE"]) assert(source.includes(marker), marker);
+  const mine = source.split("\n").filter((l) => /AGY|agy/.test(l)).join("\n");
+  assert(!emoji.test(mine), "no emoji");
+  assert(!/https?:\/\//.test(mine), "no external address");
+  const css = fs.readFileSync(path.join(root, "style.css"), "utf8");
+  assert(!emoji.test(css));
 });
 
 // ---- run ---------------------------------------------------------------------------------------------------------

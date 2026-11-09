@@ -171,6 +171,23 @@ test("the card can be made on the ready Codex when Claude Code is not ready, and
   assert.strictEqual(posts("/api/agent-profiles")[0].body.launch_mode, "safe");
 });
 
+test("AGY: the card can be made on a ready AGY (the last choice), and the page says the talk goes to Google and the AGY skills are used", async () => {
+  setPage({ plan: plan({ tool: "agy", tool_name: "AGY", chat_ready: false,
+    chat_note: "AGY 聊天要先通過驗證：到聊天頁按「驗證聊天」（用你的 Google 方案）。" }) });
+  const main = await open("#/ceo");
+  assert(/AGY/.test(text(ceo(main, "tool"))) && /已就緒/.test(text(ceo(main, "tool"))));
+  const note = text(ceo(main, "agy-note"));
+  assert(note.includes("送到 Google") && note.includes("AGY 技能") && note.includes("通過驗證"), note);
+  assert(/驗證聊天/.test(text(ceo(main, "chat-note"))));
+  await click(ceo(main, "create"));
+  assert.strictEqual(posts("/api/agent-profiles")[0].body.model.tool, "agy");
+  assert.strictEqual(posts("/api/agent-profiles")[0].body.launch_mode, "safe");
+  const other = await open("#/ceo");
+  setPage();
+  const claude = await open("#/ceo");
+  assert.strictEqual(byAttr(claude, "data-ceo", "agy-note"), null, "only an AGY CEO gets the line");
+});
+
 test("a card that could not be made says why and makes no chat", async () => {
   setPage({ createError: "角色卡已達上限 500 筆" });
   const main = await open("#/ceo");

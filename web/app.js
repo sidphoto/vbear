@@ -6083,6 +6083,7 @@ function cardPassLine(loadoutState) {
   return `出發後可以改檔案${CARD_PASS_WRITE_REACH[passKind(write)]}；擋不住存下版本紀錄；詳情看出發通行證`;
 }
 
+const CARD_AGY_NOTE = "AGY 的員工可以聊天（每個指令都問你）；要在終端機出發請選完整模式。";
 const CARD_CODEX_NOTE = "放在任務卡的審查位時，自動模式會派它在暫存副本裡審查；也可以手動記錄審查結果。";
 
 // What the light says. Yellow is the intents (as cardLight); once they are all decided, green is only for a loadout that
@@ -6158,6 +6159,7 @@ function profileCard(p, opts = {}) {
           launchOff ? badge("停用", "b-mute", "已停用，但保留存檔") : null))),
     fullOnlyNote, hiddenNote, slotsBox, lightBox, passLineBox,
     el("p", { class: "small muted", "data-pcard": "roster" }, "名冊，不代表正在出勤"),
+    tool === "agy" ? el("p", { class: "small muted", "data-pcard": "agy-note" }, CARD_AGY_NOTE) : null,
     el("div", { class: "rcard-actions" },
       handlers.launch ? el("button", { type: "button", class: "btn small primary", "data-pcard": "launch", disabled: launchOff || Boolean(caps.unavailable),
         title: launchOff ? "這張卡已停用" : caps.unavailable ? caps.unavailable : "先看這次出發會套用什麼，確認後才啟動",
@@ -6165,8 +6167,8 @@ function profileCard(p, opts = {}) {
       handlers.place ? el("button", { type: "button", class: "btn small", "data-pcard": "place",
         title: "把這張卡放進一張任務卡的隊伍（規劃、執行或審查位）",
         on: { click: () => handlers.place(p) } }, "放上任務卡") : null,
-      handlers.chat ? el("button", { type: "button", class: "btn small", "data-pcard": "chat", disabled: launchOff || (tool !== "claude" && tool !== "codex"),
-        title: launchOff ? "這張卡已停用，啟用之後才能聊天" : tool !== "claude" && tool !== "codex" ? "聊天目前只支援工具是 Claude Code 或 Codex 的角色卡" : "和這位員工聊天（開了聊天頁才會選，送出訊息才花錢）",
+      handlers.chat ? el("button", { type: "button", class: "btn small", "data-pcard": "chat", disabled: launchOff || (tool !== "claude" && tool !== "codex" && tool !== "agy"),
+        title: launchOff ? "這張卡已停用，啟用之後才能聊天" : tool !== "claude" && tool !== "codex" && tool !== "agy" ? "聊天目前只支援工具是 Claude Code 或 Codex 的角色卡，以及 AGY 的員工" : "和這位員工聊天（開了聊天頁才會選，送出訊息才花錢）",
         on: { click: () => handlers.chat(p) } }, "聊天") : null,
       frontFlip));
 
@@ -12829,6 +12831,8 @@ function setupTryView(row, st) {
 }
 
 // What one row of /api/setup/tools shows. -> { state, label, cls, version, note, buttons: [{ key, label, kind, region? }] }
+const SETUP_AGY_VERIFIED = "聊天：已驗證。AGY 員工會用到你自己裝的 AGY 技能。";
+const SETUP_AGY_NOT_VERIFIED = "聊天：還沒驗證（到聊天頁按「驗證聊天」，用你的 Google 方案）。聊天用的是你自己的 AGY；如果你的 AGY 設了會在聊天時自動執行的 hooks，聊天會被擋下，原因會寫在聊天頁。AGY 員工會用到你自己裝的 AGY 技能。";
 function setupToolView(row) {
   const r = row && typeof row === "object" ? row : {};
   const [label, cls] = SETUP_STATE[r.state] || ["未知", "b-mute"];
@@ -12867,6 +12871,12 @@ function setupToolView(row) {
         ? "查不出聊天用的 Codex 有沒有登入。聊天用的 Codex 和你自己的 Codex 是分開登入的，可以按「讓聊天用的 Codex 登入」。"
         : "要和 Codex 員工聊天，需要另外登入一次聊天用的 Codex（和你自己的 Codex 分開，VBear 看不到你自己的設定）。";
     }
+  }
+  // AGY only (P46-5): the chat uses the person's own AGY as it is, so there is no login button for it; the line says whether this version
+  // has passed the chat check, and where the way out is. The server sends `chat` only for a tool that has one.
+  const ch = r.chat && typeof r.chat === "object" ? r.chat : null;
+  if (ch && r.installed === true) {
+    chatNote = ch.verified === true ? SETUP_AGY_VERIFIED : SETUP_AGY_NOT_VERIFIED;
   }
   if (chatNote) note = note ? note + " " + chatNote : chatNote;
   return { state: r.state, label, cls, version: typeof r.version === "string" ? r.version : "", note, buttons };
@@ -12941,7 +12951,7 @@ function setupSettings() {
 }
 
 function setupToolKey(rows) {
-  return JSON.stringify((rows || []).map((r) => [r.id, r.state, r.version, r.login, r.marked_at, r.install_problem, r.chat_login && r.chat_login.state]));
+  return JSON.stringify((rows || []).map((r) => [r.id, r.state, r.version, r.login, r.marked_at, r.install_problem, r.chat_login && r.chat_login.state, ...(r.chat && typeof r.chat === "object" ? [r.chat.verified === true] : [])]));
 }
 
 async function openSetupTerminal(toolId, action, region) {
@@ -13111,6 +13121,7 @@ const CEO_TITLE = "建立你的 CEO";
 const CEO_LEDE = "你的 AI 工具已經準備好了。接下來先請一位 CEO：你把想做的事告訴他，他會先問你幾個簡單的問題，再幫你把想法整理成一份計畫。";
 const CEO_LIMITS = "CEO 現在能做的是和你聊天、幫你整理想法。把工作分派給其他員工的功能還沒有；之後有了，也會先問你才做。";
 const CEO_COST = "建立角色卡不花錢，也不會讓 CEO 開始做任何事。你按「送出」送出第一句話之後，才會用到你的 AI 方案。";
+const CEO_AGY_NOTE = "這位 CEO 會用 AGY：和它的對話內容會送到 Google，它會用到你自己裝的 AGY 技能。AGY 的聊天要先通過驗證，才能開始聊。";
 const CEO_MODE = "安全模式：CEO 只能在自己的工作資料夾裡動手，要執行指令或改檔案前，都會先問你，你按允許才做。";
 const CEO_OPENING_NOTE = "上面這句開場是 VBear 先幫你填好的，可以改成你自己想說的話。按「送出」才會真的送出，也才會開始用你的 AI 方案。";
 const CEO_NAME_MAX = 200;
@@ -13203,6 +13214,7 @@ async function viewCeo() {
       el("label", { class: "ceo-field" }, el("span", null, "角色說明（可以改，也可以先不動）"), about),
       toolLine,
       el("p", { class: "small", "data-ceo": "mode" }, CEO_MODE),
+      plan.tool === "agy" ? el("p", { class: "small", "data-ceo": "agy-note" }, CEO_AGY_NOTE) : null,
       plan.chat_note ? el("p", { class: "small", "data-ceo": "chat-note" }, plan.chat_note, " ", el("a", { href: "#/setup" }, "到開始設定")) : null,
       el("p", { class: "small muted", "data-ceo": "limits" }, CEO_LIMITS),
       el("p", { class: "small muted", "data-ceo": "cost" }, CEO_COST),
@@ -13227,7 +13239,7 @@ async function ceoLobbyDoor(plan, configRes, profilesRes) {
   const card = cards.find((c) => c && c.id === id);
   if (!card) { ceoForget(configRes); return null; }                     // the card is gone: nothing to offer, now or later
   const tool = card.model && card.model.tool;
-  if (card.enabled === false || (tool !== "claude" && tool !== "codex")) return null;
+  if (card.enabled === false || (tool !== "claude" && tool !== "codex" && tool !== "agy")) return null;
   let chats = [];
   try { const r = await api.get("/api/chats"); chats = Array.isArray(r.chats) ? r.chats : []; } catch (_) { chats = []; }
   const mine = chats.filter((c) => c && c.profile_id === id);
@@ -13303,6 +13315,9 @@ const CHAT_CODEX_WORD = {
 };
 const CHAT_CODEX_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你（連只讀檔的也問），每次改檔也問，沒有「以後都允許」。Codex 的沙盒只擋「寫」，不擋「讀」："
   + "指令可以讀到你電腦上工作資料夾以外的檔案，所以每個指令你都要看清楚才按允許。Codex 不回報金額，每則回覆的花費是 VBear 依 token 數的估計，不是帳單，Codex 用的是你的 ChatGPT 方案。";
+const CHAT_AGY_NOTE = "員工只能寫自己的工作資料夾；每個指令都會先問你，每次改檔也問，沒有「以後都允許」。指令在 AGY 的沙盒裡執行，不能連網；要讀工作資料夾以外的檔案時也會問你，讀到的內容會送到 Google。"
+  + "AGY 員工會用到你自己裝的 AGY 技能。AGY 不回報金額，而且到一回合結束才回報用量，所以每則回覆的花費是 VBear 依 token 數的估計，不是帳單；一回合有可能超過花費上限，VBear 會在那之後停下來。AGY 用的是你的 Google 方案。";
+const CHAT_AGY_DELETE_NOTE = "　AGY 自己會在 VBear 狀態資料夾裡的 agy-chat-home 留一份對話副本，刪除這個聊天不會刪掉它；要清掉它，要自己到那個資料夾處理。";
 const CHAT_CODEX_DELETE_NOTE = "　Codex 自己會在 VBear 狀態資料夾裡的 codex-chat-home（sessions）留一份對話副本，刪除這個聊天不會刪掉它；要清掉它，要自己到那個資料夾處理。";
 // AGY (P46-5): what the card of a chat with an AGY employee says that the Codex one does not.
 const CHAT_AGY_SANDBOX_WARNING = "允許後，這個指令在 AGY 的沙盒裡執行：不能連網，只能寫工作資料夾（和暫存資料夾）。只允許你看得懂、確定沒問題的指令。";
@@ -13314,13 +13329,16 @@ const CHAT_CODEX_ACTION = { listFiles: "列出檔案", read: "讀檔", search: "
 const CHAT_CHANGE_KIND = { add: "新增", update: "修改", delete: "刪除" };
 const CHAT_FIELD_TEXT = { command: "指令", file_path: "檔案", content: "要寫的內容", old_string: "原本的字串", new_string: "改成", path: "路徑", pattern: "搜尋", description: "說明" };
 const CHAT_INTRO = [
-  ["這是什麼", "和一張角色卡（員工）聊天。目前工具是 Claude Code 或 Codex、而且已啟用的角色卡可以聊天；用哪個 AI 工具聊，開聊天時就決定了，之後不會換。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
-  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」。"],
+  ["這是什麼", "和一張角色卡（員工）聊天。目前工具是 Claude Code 或 Codex、而且已啟用的角色卡可以聊天（AGY 的員工也可以，看下面「用 AGY 聊天」）；用哪個 AI 工具聊，開聊天時就決定了，之後不會換。每位員工有自己的工作資料夾，員工能寫的地方只有那裡和暫存區。"],
+  ["會花錢", "Claude Code 員工用你自己的 Claude 登入，會用掉你的 Claude 額度。金額是 Claude Code 回報的估值；沒有回報時，這一回合按上限（最壞情況）計。每回合有上限，今天的總花費和會議、組隊會議共用同一個每日上限，用完就不能再送。Codex 員工看下面「用 Codex 聊天」，AGY 員工看「用 AGY 聊天」。"],
   ["不會自己動手", "員工想執行指令、改檔或寫檔時，會出現一張卡片問你。你按「允許這一次」才會做；也可以拒絕，或改了內容再允許。每次都問，沒有「以後都允許」。卡片 5 分鐘沒回覆就過期，視為拒絕。"],
   ["員工的指示", "只有你自己寫在這張角色卡上的指示會帶進聊天；VBear 替職位預設的文字不會帶。續接的對話會沿用第一次送出時的指示，之後再改卡片，已經開始的對話不一定會跟著變（這一點還沒有在真機上確認）。"],
   ["用 Codex 聊天", "Codex 員工用的是你的 ChatGPT 方案，不另外收費。Codex 不回報金額，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單。"
     + "聊天用的 Codex 要在「開始設定」另外登入一次（和你自己的 Codex 分開，VBear 看不到你自己的 Codex 設定）。每個指令和每次改檔都會先問你，連只讀檔的指令也問；"
     + "Codex 的沙盒只擋「寫」，不擋「讀」，指令讀得到工作資料夾以外的檔案，所以指令要看清楚才按允許。「改內容再問」會先拒絕原本的，再請 Codex 照你改的重新問你一次，你要再按一次允許。"],
+  ["用 AGY 聊天", "AGY 員工用的是你的 Google 方案，不另外收費；聊天的內容會送到 Google。AGY 不回報金額，而且到一回合結束才回報用量，VBear 依 token 數估算（每 100 萬 token 計 US$1，至少 US$0.01）後算進每天上限；這是 VBear 的記帳規則，不是帳單，一回合有可能超過花費上限。"
+    + "AGY 要先通過聊天驗證（在這一頁的 AGY 區塊按「驗證聊天」）。AGY 員工會用到你自己裝的 AGY 技能。每個指令和每次改檔都會先問你；指令在 AGY 的沙盒裡執行，不能連網。"
+    + "要讀工作資料夾以外的檔案，會出現「讀取檔案」的卡片，只能允許或拒絕，沒有可以改的內容。「改內容再問」會先拒絕原本的，等這一回合結束，再把你改的內容當成下一則訊息送出，你要再按一次允許。"],
 ];
 
 // ---- small, pure helpers (tested) ----
@@ -13870,6 +13888,7 @@ async function viewChatDetail(token, id) {
   let sharedUnverified = false;                                             // a send was refused with shared_unverified (the check itself: P43-2's note below)
   const engineOf = () => (view.chat && view.chat.engine) || (view.card && view.card.engine) || null;
   const isCodex = () => engineOf() === "codex-chat";
+  const isAgy = () => engineOf() === "agy-chat";
 
   const turnOpen = () => view.live && view.live.turn != null;
   const gate = () => (view.card && view.card.can_chat === false ? view.card.reason || "這張角色卡現在不能聊天。" : "");
@@ -13881,7 +13900,8 @@ async function viewChatDetail(token, id) {
       el("p", { class: "small" }, badge(live ? word[0] : "沒有程序在跑", live ? word[1] : "b-mute"), " ",
         view.card ? `${view.card.position ? "職位：" + view.card.position + "・" : ""}工具：${chatToolName(view.card.tool)}` : ""),
       el("p", { class: "small muted", "data-chat": "limits" }, chatLimitsText(limits, ledger)),
-      isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
+      isAgy() ? el("p", { class: "small muted", "data-chat": "agy-note" }, CHAT_AGY_NOTE)
+        : isCodex() ? el("p", { class: "small muted", "data-chat": "codex-note" }, CHAT_CODEX_NOTE)
         : el("p", { class: "small muted" }, "員工只能在自己的工作資料夾裡讀寫；要執行指令、改檔或寫檔，都會先問你。"),
       isCodex() && chatPlanUsageText(planRecord) ? el("p", { class: "small", "data-chat": "plan-usage" }, chatPlanUsageText(planRecord)) : null,
       memoryBox, sharedBox);
@@ -13952,7 +13972,7 @@ async function viewChatDetail(token, id) {
   // runs, with shared: true (the check is also run for a version that passed without the folder); the answer is read from the chat itself.
   let sharedChecking = false, sharedCheckMsg = "";
   const sharedCheckNode = () => el("div", { "data-chat": "shared-unverified" },
-    notice("warn", `這位員工打開了共用資料夾，但${isCodex() ? "Codex" : "Claude Code"} 的這個版本還沒有通過含共用資料夾的檢查，現在不能送訊息。按「檢查」跑一次（要花一點錢），或到「共用資料夾」頁把這位員工關掉。`),
+    notice("warn", `這位員工打開了共用資料夾，但${isAgy() ? "AGY" : isCodex() ? "Codex" : "Claude Code"} 的這個版本還沒有通過含共用資料夾的檢查，現在不能送訊息。按「檢查」跑一次（要花一點錢），或到「共用資料夾」頁把這位員工關掉。`),
     el("div", { class: "row" },
       el("button", { type: "button", class: "btn small", "data-chat": "shared-check", disabled: sharedChecking, on: { click: () => startSharedCheck() } },
         sharedChecking ? "檢查中…" : "檢查"),
@@ -13960,23 +13980,25 @@ async function viewChatDetail(token, id) {
   async function startSharedCheck() {
     if (sharedChecking) return;
     const codex = isCodex();
+    const agy = isAgy();
     const ok = await confirmInPage("檢查共用資料夾？",
-      codex ? "會用你的 ChatGPT 方案跑一次 Codex 的檢查（約十幾次很短的對話），全部在暫時的資料夾裡做，不碰你的檔案。"
+      agy ? "會用你的 Google 方案跑一次 AGY 的檢查（約十幾次很短的對話，內容會送到 Google），全部在暫時的資料夾裡做，不碰你的檔案。"
+        : codex ? "會用你的 ChatGPT 方案跑一次 Codex 的檢查（約十幾次很短的對話），全部在暫時的資料夾裡做，不碰你的檔案。"
         : "會用你自己的 Claude Code 登入跑一次檢查（約 US$0.01），全部在暫時的資料夾裡做，不碰你的檔案。", "開始檢查");
     if (!ok) return;
     sharedChecking = true; sharedCheckMsg = ""; draw();
     let started;
-    try { started = await api.post("/api/chat-support/verify", { engine: codex ? "codex" : "claude", shared: true }); }
+    try { started = await api.post("/api/chat-support/verify", { engine: agy ? "agy" : codex ? "codex" : "claude", shared: true }); }
     catch (e) { sharedChecking = false; sharedCheckMsg = e.message; toast(e.message); draw(); return; }
     if (started && started.already_verified === true) { sharedChecking = false; await pollOnce(); draw(); return; }
-    watchSharedCheck(codex);
+    watchSharedCheck(agy ? "agy" : codex ? "codex" : "claude");
   }
-  async function watchSharedCheck(codex) {
+  async function watchSharedCheck(which) {
     for (let i = 0; i < 400 && token === seq && !gone; i++) {
       await new Promise((r) => setTimeout(r, 3000));
       const info = await api.get("/api/chats").catch(() => null);
       const sup = info && info.support;
-      const st = sup && (codex ? sup.codex && sup.codex.verify : sup.verify);
+      const st = sup && (which === "agy" ? sup.agy && sup.agy.verify : which === "codex" ? sup.codex && sup.codex.verify : sup.verify);
       if (st && st.running === false) {
         sharedChecking = false;
         sharedCheckMsg = typeof st.message === "string" && st.result !== "passed" ? st.message : "";
@@ -14092,7 +14114,7 @@ async function viewChatDetail(token, id) {
   const composer = inGroup ? null : el("div", { class: "chat-composer" }, input, el("div", { class: "row" }, sendBtn, stopBtn, skillUseButton(input),
     el("button", { type: "button", class: "btn small", "data-chat": "delete", on: { click: async () => {
       if (!(await confirmInPage("刪除聊天", "確定要刪除這個聊天的紀錄嗎？刪除後無法復原；已花的錢仍算在今天的額度裡。員工還在回覆時要先按停止。"
-        + (isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
+        + (isAgy() ? CHAT_AGY_DELETE_NOTE : isCodex() ? CHAT_CODEX_DELETE_NOTE : ""), "刪除"))) return;
       try { await api.del(`/api/chats/${encodeURIComponent(id)}`); stopStream(); toast("聊天已刪除"); location.hash = "#/chat"; }
       catch (e) { toast(e.message); }
     } } }, "刪除這個聊天")), sendNote, openingNote);
@@ -14119,7 +14141,7 @@ const MSUGGEST_BUTTON = "整理要記住的事";
 const MSUGGEST_LEDE = "VBear 會讀這段聊天最近的對話（最多 20 則），提議最多 5 條值得記住的事，最多花 US$0.10；這段對話會送給 Anthropic。"
   + "每一條都不會自己存：你勾選、可以改字，按「存進記憶」才會存。";
 const MSUGGEST_NEEDS_TITLE = "這個功能目前需要 Claude Code";
-const MSUGGEST_NEEDS_WHY = "整理要用 Claude Code；只有 Codex 的話，這個功能現在還不能用，但每句話旁的「記住」照常能用。";
+const MSUGGEST_NEEDS_WHY = "整理要用 Claude Code；只有 Codex 或 AGY 的話，這個功能現在還不能用，但每句話旁的「記住」照常能用。";
 const MSUGGEST_POLL_MS = 3000;
 const MSUGGEST_ERROR_TEXT = {
   invalid_output: "整理回的格式不對，已經丟掉，沒有存任何東西。可以再按一次「整理要記住的事」。",
@@ -14380,11 +14402,13 @@ const GROUP_MIXED_NOTE = "群組裡有 Claude Code 和 Codex 的員工，群組�
 const GROUP_SHARED_LABEL = "讓這幾位都能用共用資料夾";
 const GROUP_SHARED_ON_NOTE = "打開之後，這幾位可以在共用資料夾放檔案給彼此和你；每一次寫進去都照舊先問你。剛打開時，要開新的聊天員工才知道有這個資料夾。關掉不會刪任何檔案，要刪請到 Finder。";
 const GROUP_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
+const GROUP_SHARED_GOOGLE_NOTE = "AGY 員工讀到的檔案內容會送到 Google（AGY 是 Google 做的）。不要放密碼、帳號、金鑰。";
 const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
   + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
 const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，卡片會出現在那位員工的名字下面，每一次都要你按「允許這一次」，沒有一次允許好幾張的按鈕。不按的話，5 分鐘後視為拒絕。";
 const GROUP_EDIT_LOCKED = "這一句還沒回完的時候，不能改名、加人、移除或刪除群組。";
 const GROUP_DELETE_NOTE = "會刪掉群組和群組裡每位員工的對話紀錄；已經花的錢照記。Codex 自己保存的對話副本不會被刪。";
+const GROUP_DELETE_AGY_NOTE = "AGY 自己保存的對話副本也不會被刪。";
 const GROUP_RED_NOTE = "今天的額度已用完（亮紅燈），今天不能再送訊息，本機日期隔天才會重算。";
 const GROUP_STATE = {
   idle: ["等你說話", "b-mute"], running: ["進行中", "b-info"], paused: ["暫停了", "b-warn"], readonly: ["紀錄有問題", "b-bad"],
@@ -14395,6 +14419,16 @@ const GROUP_ROUND_END = { stopped: "你按了停止，這一輪結束了。", dr
 // ---- small, pure helpers (tested) ----
 
 function groupMixed(tools) { return Array.isArray(tools) && tools.includes("claude") && tools.includes("codex"); }
+// The sentence over a group whose members' AI tools belong to two companies or more (the server's `mixed_note`, in the order Claude Code,
+// Codex, AGY); "" for one company. With only Claude Code and Codex it is GROUP_MIXED_NOTE, word for word.
+const GROUP_TOOL_COMPANY = [["claude", "Claude Code", "Anthropic"], ["codex", "Codex", "OpenAI"], ["agy", "AGY", "Google"]];
+function groupJoin(words) { return words.length > 2 ? words.slice(0, -1).join("、") + " 和 " + words[words.length - 1] : words.join(" 和 "); }
+function groupMixedNote(tools) {
+  const list = Array.isArray(tools) ? tools : [];
+  const named = GROUP_TOOL_COMPANY.filter(([t]) => list.includes(t));
+  if (named.length < 2) return "";
+  return `群組裡有 ${groupJoin(named.map((x) => x[1]))} 的員工，群組裡的對話會同時送給 ${groupJoin(named.map((x) => x[2]))}。`;
+}
 function groupDefaultName(names) { return names.filter((n) => typeof n === "string" && n).join("、").slice(0, GROUP_NAME_MAX); }
 // "這句會請 N 位回答（名字…），最多 US$X，今天還剩 US$Y": the most is the number asked times the per-turn limit, rounded up; what is
 // left is rounded down; `over` when the most is more than what is left.
@@ -14412,7 +14446,7 @@ function groupStateBadge(state) {
 function groupReplyCost(item) {
   const money = chatMoney(item.cost_usd);
   if (item.estimate === true) return `估計 ${money}，不是帳單`;
-  return item.tool === "codex" ? `按上限 ${money} 計` : `${money}（Claude Code 回報的估值）`;
+  return item.tool === "agy" ? `估計 ${money}，AGY 到一回合結束才回報用量` : item.tool === "codex" ? `按上限 ${money} 計` : `${money}（Claude Code 回報的估值）`;
 }
 
 // P43-3: under a reply, the names of the files that appeared in the shared folder while this employee was answering (`item.shared_changes`
@@ -14508,7 +14542,7 @@ function openGroupDialog(cards, hooks) {
     if (typed) body.name = typed;
     if (sharedBox.checked === true) {
       body.shared_folder = true;
-      if (list.some((c) => chosen.has(c.id) && c.tool === "codex")) body.confirm_company = true;      // the line below the tick says it
+      if (list.some((c) => chosen.has(c.id) && (c.tool === "codex" || c.tool === "agy"))) body.confirm_company = true;      // the line below the tick says it
     }
     try { await hooks.onCreate(body); close(); }
     catch (e) { busy = false; setKids(errorBox, notice("bad", e && e.message ? e.message : "沒有建立成功")); redraw(); }
@@ -14529,10 +14563,12 @@ function openGroupDialog(cards, hooks) {
     }
     const n = picked.length;
     setKids(countBox, n >= GROUP_MIN && n <= GROUP_MAX ? `已選 ${n} 位。` : `已選 ${n} 位；要選 ${GROUP_MIN} 到 ${GROUP_MAX} 位。`);
-    setKids(mixedBox, groupMixed(picked.map((c) => c.tool)) ? notice("warn", GROUP_MIXED_NOTE) : null);
+    const mixedText = groupMixedNote(picked.map((c) => c.tool));
+    setKids(mixedBox, mixedText ? notice("warn", mixedText) : null);
     setKids(sharedNote, sharedBox.checked === true
       ? [el("p", { class: "small", "data-group": "shared-on-note" }, GROUP_SHARED_ON_NOTE),
-        picked.some((c) => c.tool === "codex") ? el("p", { class: "small", "data-group": "shared-codex" }, GROUP_SHARED_CODEX_NOTE) : null]
+        picked.some((c) => c.tool === "codex") ? el("p", { class: "small", "data-group": "shared-codex" }, GROUP_SHARED_CODEX_NOTE) : null,
+        picked.some((c) => c.tool === "agy") ? el("p", { class: "small", "data-group": "shared-google" }, GROUP_SHARED_GOOGLE_NOTE) : null]
       : null);
     name.setAttribute("placeholder", picked.length ? `名字（選填，預設：${groupDefaultName(picked.map((c) => c.name || c.id))}）` : "名字（選填，40 字內）");
     create.disabled = busy || n < GROUP_MIN || n > GROUP_MAX;
@@ -14833,7 +14869,8 @@ async function viewGroup(id) {
     if (token === seq) draw();
   }
   async function removeGroup() {
-    if (!(await confirmInPage("刪除群組", GROUP_DELETE_NOTE, "刪除"))) return;
+    const hasAgy = members().some((m) => m && m.tool === "agy");
+    if (!(await confirmInPage("刪除群組", GROUP_DELETE_NOTE + (hasAgy ? GROUP_DELETE_AGY_NOTE : ""), "刪除"))) return;
     try { await api.del(`/api/groups/${gid}`); stopPolling(); toast("群組已刪除"); location.hash = "#/chat"; }
     catch (e) { toast(e.message); }
   }
@@ -14919,8 +14956,9 @@ async function viewGroup(id) {
 const CHIEF_BUTTON = "請幕僚長安排";
 const CHIEF_LEDE = "想把一件事交給員工做時，按這顆：幕僚長會看你和 CEO 最近的對話，提議要找哪些員工、分幾步做。它只提議，你看過、確認了，VBear 才會動手。";
 const CHIEF_CODEX_SENDS = "這位 CEO 用的是 Codex：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
+const CHIEF_AGY_SENDS = "這位 CEO 用的是 AGY：你和它的對話會送給 Claude Code（Anthropic）整理成提議。";
 const CHIEF_NEEDS_TITLE = "幕僚長目前需要 Claude Code";
-const CHIEF_NEEDS_WHY = "幕僚長要用 Claude Code 整理提議；只有 Codex 的話，這個功能現在還不能用。";
+const CHIEF_NEEDS_WHY = "幕僚長要用 Claude Code 整理提議；只有 Codex 或 AGY 的話，這個功能現在還不能用。";
 const CHIEF_VERIFY_LABEL = "先做無工具安全檢查（用你的 Claude 帳號，通常不到 1 美分）";
 const CHIEF_NOTE_MAX = 200;
 const CHIEF_POLL_MS = 4000;
@@ -15039,6 +15077,7 @@ function openChiefDialog(pv, hooks) {
 const DISPATCH_SHARED_LABEL = "替這次派工的員工打開共用資料夾";
 const DISPATCH_SHARED_NOTE = "打開之後，這些員工可以在共用資料夾放檔案給彼此和你，下一步的員工會收到上一步期間新增或改過的檔名（只有檔名）。每一次寫進去都照舊先問你。";
 const DISPATCH_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
+const DISPATCH_SHARED_GOOGLE_NOTE = "AGY 員工讀到的檔案內容會送到 Google（AGY 是 Google 做的）。不要放密碼、帳號、金鑰。";
 function proposalDraft(v) {
   const plan = v.plan && typeof v.plan === "object" ? v.plan : {};
   const cards = Array.isArray(plan.new_cards) ? plan.new_cards : [];
@@ -15107,7 +15146,8 @@ function proposalCard(v, opts = {}) {
     const used = usedRefs();
     const off = people.filter((x) => x && used.has(x.who) && x.usable === true && x.on !== true);
     const fresh = liveCards().filter((c) => used.has(c.ref) && !made.has(c.ref));
-    return { off, fresh, codex: off.some((x) => x.company === "OpenAI") || fresh.some((c) => c.tool === "codex") };
+    return { off, fresh, codex: off.some((x) => x.company === "OpenAI") || fresh.some((c) => c.tool === "codex"),
+      google: off.some((x) => x.company === "Google") || fresh.some((c) => c.tool === "agy") };
   };
   const drawShared = () => {
     const sp = sharedPlan();
@@ -15120,12 +15160,13 @@ function proposalCard(v, opts = {}) {
       el("p", { class: "small" }, el("label", null, box, " ", DISPATCH_SHARED_LABEL), " ", el("span", { class: "muted" }, "（預設不勾）")),
       el("p", { class: "small muted", "data-dispatch": "shared-who" }, `現在沒有打開的：${who.join("、")}。`),
       sharedOn ? el("p", { class: "small", "data-dispatch": "shared-note" }, DISPATCH_SHARED_NOTE) : null,
-      sharedOn && sp.codex ? el("p", { class: "small", "data-dispatch": "shared-codex" }, DISPATCH_SHARED_CODEX_NOTE) : null);
+      sharedOn && sp.codex ? el("p", { class: "small", "data-dispatch": "shared-codex" }, DISPATCH_SHARED_CODEX_NOTE) : null,
+      sharedOn && sp.google ? el("p", { class: "small", "data-dispatch": "shared-google" }, DISPATCH_SHARED_GOOGLE_NOTE) : null);
   };
   const sharedFields = () => {
     const sp = sharedPlan();
     if (!sharedOn || !sp || !(sp.off.length || sp.fresh.length)) return {};
-    return sp.codex ? { shared_folder: true, confirm_company: true } : { shared_folder: true };
+    return sp.codex || sp.google ? { shared_folder: true, confirm_company: true } : { shared_folder: true };
   };
   const derive = () => {
     drawShared();
@@ -15258,6 +15299,7 @@ function proposalCard(v, opts = {}) {
 // the chat's card (its tool decides whether the Codex sentence is beside the button).
 function chiefDesk(chatId, chatCard) {
   const codex = !!chatCard && chatCard.tool === "codex";
+  const agy = !!chatCard && chatCard.tool === "agy";
   const runs = el("div", { class: "chief-runs", "data-chief": "runs" });
   const button = el("button", { class: "btn primary", type: "button", "data-chief": "open", on: { click: () => openDialog() } }, CHIEF_BUTTON);
   const box = el("section", { class: "panel pad chief-desk", "data-chief": "desk" },
@@ -15265,6 +15307,7 @@ function chiefDesk(chatId, chatCard) {
       el("a", { class: "btn small", href: "#/actions", "data-chief": "actions" }, "AI 自己做了什麼")),
     el("p", { class: "small" }, CHIEF_LEDE),
     codex ? el("p", { class: "small", "data-chief": "codex-sends" }, CHIEF_CODEX_SENDS) : null,
+    agy ? el("p", { class: "small", "data-chief": "agy-sends" }, CHIEF_AGY_SENDS) : null,
     runs);
   const cards = new Map();                 // dispatch id -> { sha, node }: a card the person may be editing is kept, not rebuilt
   let gone = false, timer = null, drawing = false;
@@ -15698,16 +15741,18 @@ function resumeBarRows(rows) {
 
 const MEMORY_KINDS = [["about_you", "關於你"], ["work", "你的工作"], ["decision", "決定"]];
 const MEMORY_MAX_TEXT = 200;
-const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）或 OpenAI（Codex 的員工）。不要寫密碼、帳號、卡號；VBear 看到像這樣的內容會擋下。";
+const MEMORY_WHERE = "員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工）或 Google（AGY 的員工）。不要寫密碼、帳號、卡號；VBear 看到像這樣的內容會擋下。";
 const MEMORY_SPLIT = "只有這位員工要照做的，寫在角色卡的固定指示；換一位員工也該知道的，放記憶。";
 const MEMORY_COST = "記憶越長，員工每次開新程序會多花一點。";
-const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。";
+const MEMORY_DELETE_NOTE = "已經送出的對話，Claude Code 與 Codex 自己保存的副本不會因此刪掉。AGY 自己保存的副本也一樣。";
 const MEMORY_BLOCKED = "這一條現在不能送出（看起來有密碼、金鑰或帳號一類的內容），員工的聊天會被擋下。請刪掉它。";
-const MEMORY_REMEMBER_SENDS = "存了以後，每位員工開新聊天時都會看到（在記憶頁關掉的員工除外）。記憶會跟著送給 Anthropic（Claude Code 的員工）或 OpenAI（Codex 的員工，要先在記憶頁打開）。不要存密碼、帳號、卡號。";
+const MEMORY_REMEMBER_SENDS = "存了以後，每位員工開新聊天時都會看到（在記憶頁關掉的員工除外）。記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工，要先在記憶頁打開）或 Google（AGY 的員工，要先在記憶頁打開）。不要存密碼、帳號、卡號。";
 const MEMORY_EMPLOYEE_WORDS = "這段是員工說的，存了以後每位員工開新聊天都會看到，請確定內容正確。";
 const MEMORY_TERMINAL = "在終端機（完整模式）出發時不帶記憶。";
-const MEMORY_CARDS_NOTE = "Claude Code 的員工預設帶記憶，記憶會送給 Anthropic。Codex 的員工預設不帶；打開後，記憶會送給 OpenAI。員工說「我記住了」不會存任何東西，只有你按「存」才算數。";
-const MEMORY_CHAT_COMPANY = { "claude-chat": "Anthropic", "codex-chat": "OpenAI" };
+const MEMORY_CARDS_NOTE = "Claude Code 的員工預設帶記憶，記憶會送給 Anthropic。Codex 的員工預設不帶；打開後，記憶會送給 OpenAI。AGY 的員工預設不帶；打開後，記憶內容會送到 Google。員工說「我記住了」不會存任何東西，只有你按「存」才算數。";
+const MEMORY_CHAT_COMPANY = { "claude-chat": "Anthropic", "codex-chat": "OpenAI", "agy-chat": "Google" };
+// The company whose employee needs the person's yes before the memory goes along (the server refuses without it): the word the box says.
+const MEMORY_CONFIRM_COMPANY = { OpenAI: "Codex", Google: "AGY" };       // the employees whose memory needs the yes first, by the company it goes to
 
 function memoryCount(n) { return String(Number.isFinite(n) ? n : 0).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 function memoryLen(s) { return Array.from(String(s)).length; }
@@ -16043,11 +16088,14 @@ async function viewMemory() {
   async function switchCard(c, on, box) {
     if (box) box.disabled = true;
     let agreed = false;
-    if (on && (c.company === "OpenAI" || c.tool === "codex")) {
+    const sendsTo = c.company === "Google" || c.tool === "agy" ? "Google" : c.company === "OpenAI" || c.tool === "codex" ? "OpenAI" : null;
+    if (on && sendsTo) {
       const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
       const used = cur.used && Number.isFinite(cur.used.count) ? cur.used.count : 0;
       const ok = await confirmInPage(`讓「${name}」帶記憶？`,
-        `「${name}」用的是 Codex。打開後，這位員工開新聊天時，記憶會跟著送給 OpenAI（目前 ${memoryCount(used)} 條都會送）。不要寫密碼、帳號、卡號。要打開嗎？`, "打開");
+        sendsTo === "Google"
+          ? `「${name}」用的是 AGY。打開後，這位員工開新聊天時，記憶的內容會送到 Google（目前 ${memoryCount(used)} 條都會送）。不要寫密碼、帳號、卡號。要打開嗎？`
+          : `「${name}」用的是 Codex。打開後，這位員工開新聊天時，記憶會跟著送給 OpenAI（目前 ${memoryCount(used)} 條都會送）。不要寫密碼、帳號、卡號。要打開嗎？`, "打開");
       if (!ok) { if (token === seq) draw(); return; }
       agreed = true;
     }
@@ -16309,7 +16357,7 @@ async function openSkillPicker(input, opts) {
 const KSUGGEST_BUTTON = "整理成技能";
 const KSUGGEST_LEDE = "VBear 會讀這段聊天最近的對話（最多 20 則），提議 1 個技能（名稱和做法），最多花 US$0.10；這段對話會送給 Anthropic。"
   + "提議不會自己存：它會放進「存成技能」的視窗，你看過、可以改，按「存」才會存。";
-const KSUGGEST_NEEDS_WHY = "整理成技能要用 Claude Code；只有 Codex 的話，這個功能現在還不能用，但每句話旁的「存成技能」照常能用。";
+const KSUGGEST_NEEDS_WHY = "整理成技能要用 Claude Code；只有 Codex 或 AGY 的話，這個功能現在還不能用，但每句話旁的「存成技能」照常能用。";
 const KSUGGEST_POLL_MS = 3000;
 const KSUGGEST_ERROR_TEXT = {
   invalid_output: "整理回的格式不對，已經丟掉，沒有存任何東西。可以再按一次「整理成技能」。",
@@ -16498,7 +16546,7 @@ const SHARED_WHAT = "共用資料夾是放在 VBear 狀態資料夾裡的一個�
 const SHARED_RULES = [
   ["rule-data", "打開的員工可以在這裡放檔案給彼此和你。員工寫進來時，照舊每一次都會先問你；裡面的檔案是資料，員工不會照著裡面的字做事。"
     + "VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。"],
-  ["rule-company", "員工讀到的檔案會送到它的 AI 公司：Claude Code 的員工送到 Anthropic，Codex 的員工送到 OpenAI。不要放密碼、帳號、金鑰。"],
+  ["rule-company", "員工讀到的檔案會送到它的 AI 公司：Claude Code 的員工送到 Anthropic，Codex 的員工送到 OpenAI，AGY 的員工送到 Google。不要放密碼、帳號、金鑰。"],
   ["rule-finder", "不要在 Finder 裡直接打開你不認得的檔案，特別是 .command、.app、.sh（點兩下就可能執行）。員工放進來的檔案，先當資料看。"],
 ];
 const SHARED_AFTER = [
@@ -16507,11 +16555,11 @@ const SHARED_AFTER = [
   ["full-note", "在終端機（完整模式）出發的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
 ];
 const SHARED_WRITE_NOTE = "員工在裡面新增或修改檔案，每一次都會先問你（卡片），和其他檔案一樣。VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。";
-const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
+const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic，Codex 是 OpenAI，AGY 是 Google）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
 const SHARED_LIMIT_NOTE = "上限 1 GiB、1 萬個檔案（含資料夾）；超過時，開新聊天會被擋下，請到 Finder 整理。";
 const SHARED_TOOL_NOTE = "這位員工的 AI 工具還不能用共用資料夾。";
 const SHARED_NOT_CHECKED = "這個 AI 工具的版本還要檢查一次共用資料夾，沒檢查過的話，打開的員工送不出訊息。";
-const SHARED_COMPANY = { Anthropic: "Anthropic", OpenAI: "OpenAI" };
+const SHARED_COMPANY = { Anthropic: "Anthropic", OpenAI: "OpenAI", Google: "Google" };
 const SHARED_PROBLEM = {
   shared_unsafe: "共用資料夾的位置不安全（可能被換成連結，或權限被改過）。VBear 不會用它，也不會自己修或刪：請到 Finder 看一下那個資料夾。",
   shared_full: "共用資料夾超過 1 GiB 或 1 萬個檔案。請在 Finder 整理，或把這位員工的共用資料夾關掉。",
@@ -16550,7 +16598,7 @@ function sharedFileRow(f) {
     f.link === true ? el("span", { class: "tag", "data-shared": "link" }, "連結（VBear 不會跟著走）") : null,
     el("span", { class: "small muted" }, `${sharedBytes(f.size)}，${fmtTime(f.mtime)}`));
 }
-// The body of POST /api/shared/cards. A Codex card switched on carries the person's yes to OpenAI; nothing else is ever sent.
+// The body of POST /api/shared/cards. A Codex card (OpenAI) or an AGY card (Google) switched on carries the person's yes; nothing else is ever sent.
 function sharedCardBody(card, on, agreed) {
   return on && agreed === true ? { profile_id: card.profile_id, on, confirm_company: true } : { profile_id: card.profile_id, on };
 }
@@ -16600,11 +16648,13 @@ async function viewShared() {
     let agreed = false;
     if (on) {
       const name = typeof c.name === "string" && c.name ? c.name : c.profile_id;
-      const openai = c.company === "OpenAI" || c.tool === "codex";
+      const google = c.company === "Google" || c.tool === "agy";
+      const openai = !google && (c.company === "OpenAI" || c.tool === "codex");
       const ok = await confirmInPage(`讓「${name}」用共用資料夾？`,
-        (openai ? `「${name}」用的是 Codex。打開後，它讀到的共用資料夾檔案會送到 OpenAI。確定嗎？` : "") + SHARED_READ_NOTE + SHARED_WRITE_NOTE, "打開");
+        (google ? `「${name}」用的是 AGY。打開後，它讀到的共用資料夾檔案內容會送到 Google（AGY 是 Google 做的）。不要放密碼、帳號、金鑰。確定嗎？`
+          : openai ? `「${name}」用的是 Codex。打開後，它讀到的共用資料夾檔案會送到 OpenAI。確定嗎？` : "") + SHARED_READ_NOTE + SHARED_WRITE_NOTE, "打開");
       if (!ok) { if (token === seq) draw(); return; }
-      agreed = openai;
+      agreed = google || openai;
     }
     try { await api.post("/api/shared/cards", sharedCardBody(c, on, agreed)); toast(on ? "已打開" : "已關掉"); }
     catch (e) { toast(e.message); }
@@ -18718,8 +18768,10 @@ const TPL_PREVIEW_LINES = {
   free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。",
   codex: "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。",
   notReady: "這個 AI 工具還沒準備好：員工會建好，但要先到開始設定登入才能聊天。",
+  agy: "AGY 的員工預設不帶記憶，也不能用共用資料夾（打開時要你同意，內容會送到 Google）；員工會用到你自己裝的 AGY 技能。要在終端機用 AGY 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  agyUnverified: "你的 AGY 還沒通過聊天驗證：員工會建好，但要先到聊天頁按「驗證聊天」（用你的 Google 方案）才能聊天。",
 };
-const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex" };
+const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex", agy: "AGY" };
 const TPL_KINDS = [["cards", "員工"], ["skills", "技能"], ["routines", "例行工作"]];
 const TPL_ONE = { card: "員工", skill: "技能", routine: "例行工作" };
 const TPL_STATE_TEXT = { done: "完成", partial: "建到一半停下了", interrupted: "中斷了", applying: "進行中" };
@@ -19141,7 +19193,7 @@ async function templatesApplyPress(box) {
 
 function openTemplatesPreview(ctx) {
   const data = ctx.data;
-  const state = { tool: data.tools && data.tools.default === "codex" ? "codex" : "claude", confirm: false, preview: null, error: "", busy: false, applying: false, done: null };
+  const state = { tool: data.tools && (data.tools.default === "codex" || (data.tools.default === "agy" && data.tools.agy)) ? data.tools.default : "claude", confirm: false, preview: null, error: "", busy: false, applying: false, done: null };
   const titleId = "tpl-preview-title";
   const bodyBox = el("div", { "data-templates": "preview-body" });
   const foot = el("div", { class: "modal-actions", "data-templates": "preview-foot" });
@@ -19177,7 +19229,7 @@ function openTemplatesPreview(ctx) {
     };
     const chosen = tools[state.tool];
     return el("div", { class: "tpl-tool", "data-templates": "tool" },
-      el("span", { "data-templates": "tool-label" }, "這次的員工都用："), " ", radio("claude"), "　", radio("codex"),
+      el("span", { "data-templates": "tool-label" }, "這次的員工都用："), " ", radio("claude"), "　", radio("codex"), tools.agy ? ["　", radio("agy")] : null,
       chosen && chosen.ready === false
         ? el("p", { class: "small", "data-templates": "tool-not-ready" }, TPL_PREVIEW_LINES.notReady, chosen.why ? ` ${chosen.why}` : "") : null);
   };
@@ -19256,6 +19308,10 @@ function openTemplatesPreview(ctx) {
     } else if (!state.error) kids.push(el("p", { class: "small muted" }, "整理中…"));
     const lines = [TPL_PREVIEW_LINES.safe, TPL_PREVIEW_LINES.memory, TPL_PREVIEW_LINES.off, TPL_PREVIEW_LINES.free];
     if (state.tool === "codex") lines.push(TPL_PREVIEW_LINES.codex);
+    if (state.tool === "agy") {
+      lines.push(TPL_PREVIEW_LINES.agy);
+      if (data.tools && data.tools.agy && data.tools.agy.chat_verified === false) lines.push(TPL_PREVIEW_LINES.agyUnverified);
+    }
     kids.push(el("ul", { class: "small tpl-fixed", "data-templates": "fixed" }, lines.map((l) => el("li", null, l))));
     setKids(bodyBox, kids);
     setKids(foot,
@@ -19422,6 +19478,7 @@ if (typeof module !== "undefined" && module.exports) {
     OFFICE_CAMPS,
     prov,
     boardGroups,
+    CHIEF_NEEDS_WHY, CHIEF_AGY_SENDS, CEO_AGY_NOTE, memoryChatLine, groupReplyCost,
     chiefDesk, openChiefDialog, proposalCard, dispatchStepWord, dispatchContinueNote, dispatchCostText, chiefErrorText, viewDispatch, viewActions,
     boardKey,
     boardKeyContext,
@@ -19538,6 +19595,8 @@ if (typeof module !== "undefined" && module.exports) {
     onboardingSection,
     onboardingSettings,
     SETUP_STATE,
+    SETUP_AGY_VERIFIED,
+    SETUP_AGY_NOT_VERIFIED,
     SETUP_UPGRADE_NOTICE,
     SETUP_REOPEN_HINT,
     setupToolView,
@@ -19587,8 +19646,11 @@ if (typeof module !== "undefined" && module.exports) {
     GROUP_SHARED_LABEL,
     GROUP_SHARED_ON_NOTE,
     GROUP_SHARED_CODEX_NOTE,
+    GROUP_SHARED_GOOGLE_NOTE,
+    groupMixedNote,
     DISPATCH_SHARED_LABEL,
     DISPATCH_SHARED_CODEX_NOTE,
+    DISPATCH_SHARED_GOOGLE_NOTE,
     groupSharedChanges,
     GROUP_WHAT,
     groupMixed,

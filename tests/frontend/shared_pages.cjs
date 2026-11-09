@@ -257,7 +257,7 @@ test("the new code has no markup setting, no emoji, no outside address, no conso
   const asks = source.match(/api\.post\("\/api\/chat-support\/verify"[^)]*\)/g) || [];
   const mine = asks.filter((a) => /shared: true/.test(a));
   assert.strictEqual(mine.length, 1, "exactly one place asks for the check with the folder: " + asks.join(" | "));
-  assert(/\{ engine: codex \? "codex" : "claude", shared: true \}/.test(mine[0]), "it sends an engine and shared: true and nothing else");
+  assert(/\{ engine: agy \? "agy" : codex \? "codex" : "claude", shared: true \}/.test(mine[0]), "it sends an engine and shared: true and nothing else");
 });
 
 test("a chat that needs the check shows exactly one note and one button, whether the server said so or a send was refused", async () => {
