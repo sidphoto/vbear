@@ -2038,26 +2038,48 @@ class AgyFeatureRules(unittest.TestCase):
         self.assertEqual(self.tree(), before, "a refusal writes nothing")
         self.assertEqual(memory.set_card({"profile_id": "agy-one", "on": True, "confirm_company": True}, self.cards)["on"], True)
 
-    def test_14f_the_shared_folder_needs_the_yes_to_google_for_every_way_in(self):
+    def test_14f_the_shared_folder_is_not_open_to_agy_in_v0200_by_any_way_in(self):
+        """v0.20.0 does not open the shared folder to an AGY employee (ADR 0012): every way in is refused, and nothing is written."""
         from vbear import shared_folder as sf
         from vbear.api_error import ApiError
-        self.assertEqual(sf.COMPANY["agy-chat"], "Google")
+        self.assertNotIn("agy-chat", sf.SUPPORTED_ENGINES)
         before = self.tree()
-        with self.assertRaises(ApiError) as got:
-            sf.set_card({"profile_id": "agy-one", "on": True}, self.cards)
-        self.assertEqual((got.exception.status, got.exception.code, got.exception.extra["warn"]), (409, "shared_confirm", ["send_to_google"]))
-        with self.assertRaises(ApiError) as got:
-            sf.plan_cards(["agy-one", "agy-two"], self.cards)
-        self.assertEqual((got.exception.status, got.exception.code), (409, "shared_confirm"))
-        with self.assertRaises(ApiError) as got:
-            sf.plan_cards([], self.cards, False, new_engines=["agy-chat"])
-        self.assertEqual(got.exception.code, "shared_confirm")
-        opened, error = sf.open_cards(["agy-one", "agy-two"], self.cards, "group")
-        self.assertEqual((opened, error.code), ([], "shared_confirm"))
+        for call in (lambda: sf.set_card({"profile_id": "agy-one", "on": True, "confirm_company": True}, self.cards),
+                     lambda: sf.plan_cards(["agy-one", "agy-two"], self.cards, True),
+                     lambda: sf.plan_cards([], self.cards, True, new_engines=["agy-chat"])):
+            with self.assertRaises(ApiError) as got:
+                call()
+            self.assertEqual((got.exception.status, got.exception.code, str(got.exception)),
+                             (400, "card_tool_unsupported", "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。"))
+        opened, error = sf.open_cards(["agy-one", "agy-two"], self.cards, "group", True)
+        self.assertEqual((opened, error.code), ([], "card_tool_unsupported"))
         self.assertEqual(self.tree(), before, "none of them wrote a byte")
         self.assertFalse(sf.for_card("agy-one", "agy-chat"))
 
+    def test_14f_the_part_for_agy_kept_in_the_code_still_needs_the_yes_to_google(self):
+        """If a newer AGY is checked and ``agy-chat`` is put back into ``SUPPORTED_ENGINES``, the rule 14f is still there."""
+        from unittest import mock
+        from vbear import shared_folder as sf
+        from vbear.api_error import ApiError
+        self.assertEqual(sf.COMPANY["agy-chat"], "Google")
+        with mock.patch.object(sf, "SUPPORTED_ENGINES", ("claude-chat", "codex-chat", "agy-chat")):
+            before = self.tree()
+            with self.assertRaises(ApiError) as got:
+                sf.set_card({"profile_id": "agy-one", "on": True}, self.cards)
+            self.assertEqual((got.exception.status, got.exception.code, got.exception.extra["warn"]), (409, "shared_confirm", ["send_to_google"]))
+            with self.assertRaises(ApiError) as got:
+                sf.plan_cards(["agy-one", "agy-two"], self.cards)
+            self.assertEqual((got.exception.status, got.exception.code), (409, "shared_confirm"))
+            with self.assertRaises(ApiError) as got:
+                sf.plan_cards([], self.cards, False, new_engines=["agy-chat"])
+            self.assertEqual(got.exception.code, "shared_confirm")
+            opened, error = sf.open_cards(["agy-one", "agy-two"], self.cards, "group")
+            self.assertEqual((opened, error.code), ([], "shared_confirm"))
+            self.assertEqual(self.tree(), before, "none of them wrote a byte")
+            self.assertFalse(sf.for_card("agy-one", "agy-chat"))
+
     def test_14f_a_dispatch_that_was_not_ticked_opens_nothing_for_the_employee_it_made(self):
+        from unittest import mock
         from vbear import shared_folder as sf
         before = self.tree()
         self.assertFalse(sf.open_for_dispatch("d-" + "0" * 12, "agy-one", self.cards))
@@ -2067,8 +2089,13 @@ class AgyFeatureRules(unittest.TestCase):
         from vbear.api_error import ApiError
         with self.assertRaises(ApiError) as got:
             sf.open_for_dispatch("d-" + "1" * 12, "agy-one", self.cards)
-        self.assertEqual(got.exception.code, "shared_confirm")
+        self.assertEqual(got.exception.code, "card_tool_unsupported", "this version: AGY has no shared folder at all")
         self.assertEqual(self.tree(), marked)
+        with mock.patch.object(sf, "SUPPORTED_ENGINES", ("claude-chat", "codex-chat", "agy-chat")):
+            with self.assertRaises(ApiError) as got:
+                sf.open_for_dispatch("d-" + "1" * 12, "agy-one", self.cards)
+            self.assertEqual(got.exception.code, "shared_confirm")
+            self.assertEqual(self.tree(), marked)
 
     def test_14f_the_templates_and_the_dispatch_name_neither_memory_nor_the_shared_folder_in_a_card(self):
         from vbear import dispatch, templates

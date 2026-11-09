@@ -100,47 +100,56 @@ class MemoryForAgyTests(ApiCase):
 
 
 class SharedFolderForAgyTests(ApiCase):
-    """ADR 0009, ADR 0012: the shared folder is off for an AGY employee until the person says yes to Google, and the whole AGY part can be lifted
-    out by taking ``agy-chat`` out of ``SUPPORTED_ENGINES``."""
+    """ADR 0009, ADR 0012 (final): v0.20.0 does NOT open the shared folder to an AGY employee. The real check found that AGY's file tools can write
+    into the shared folder (after asking) but a command cannot (``--add-dir`` does not make the sandbox writable), and two answers for two ways of
+    writing would leave an employee stuck. ``SUPPORTED_ENGINES`` holds ``claude-chat`` and ``codex-chat`` only; the code for AGY (the company,
+    the yes to Google, the check's shared part) stays, and putting ``agy-chat`` back into the tuple is all it takes to bring it back."""
 
-    def test_agy_is_supported_and_names_google(self):
-        self.assertIn("agy-chat", shared_folder.SUPPORTED_ENGINES)
-        self.assertEqual(shared_folder.COMPANY["agy-chat"], "Google")
+    NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。"
+
+    def test_agy_is_not_supported_and_the_page_says_so(self):
+        self.assertNotIn("agy-chat", shared_folder.SUPPORTED_ENGINES)
+        self.assertEqual(shared_folder.SUPPORTED_ENGINES, ("claude-chat", "codex-chat"))
         status, out = self.call("/api/shared")
         self.assertEqual(status, 200, out)
         mine = next(c for c in out["cards"] if c["profile_id"] == self.emp)
-        self.assertEqual((mine["company"], mine["on"], mine["can_chat"]), ("Google", False, True))
+        self.assertEqual((mine["on"], mine["can_chat"], mine["verified"], mine["company"]), (False, True, None, None))
 
-    def test_switching_on_takes_the_yes_to_google_and_says_google(self):
-        status, out = self.call("/api/shared/cards", "POST", {"profile_id": self.emp, "on": True})
-        self.assertEqual((status, out["code"], out["warn"]), (409, "shared_confirm", ["send_to_google"]), out)
-        self.assertIn("Google", out["warn_text"][0])
-        self.assertNotIn("OpenAI", out["warn_text"][0])
-        self.assertFalse(shared_folder.for_card(self.emp, "agy-chat"))
-        status, out = self.call("/api/shared/cards", "POST", {"profile_id": self.emp, "on": True, "confirm_company": True})
-        self.assertEqual((status, out["on"]), (200, True), out)
-        self.assertTrue(shared_folder.for_card(self.emp, "agy-chat"))
-
-    def test_the_ticks_of_a_group_or_a_dispatch_say_google_too(self):
-        cards = [{"id": self.emp, "engine": "agy-chat", "tool": "agy", "can_chat": True}]
-        with self.assertRaises(shared_folder.ApiError) as ctx:
-            shared_folder.plan_cards([self.emp], cards)
-        self.assertEqual((ctx.exception.status, ctx.exception.code, ctx.exception.extra.get("warn")), (409, "shared_confirm", ["send_to_google"]))
-        self.assertIn("Google", str(ctx.exception))
-        self.assertEqual(shared_folder.plan_cards([self.emp], cards, True), [self.emp])
-        with self.assertRaises(shared_folder.ApiError) as ctx:
-            shared_folder.plan_cards([], cards, False, new_engines=["agy-chat"])
-        self.assertEqual(ctx.exception.code, "shared_confirm")
-
-    def test_taken_out_the_part_for_agy_is_gone_and_nothing_else_changes(self):
-        with mock.patch.object(shared_folder, "SUPPORTED_ENGINES", ("claude-chat", "codex-chat")):
-            status, out = self.call("/api/shared/cards", "POST", {"profile_id": self.emp, "on": True, "confirm_company": True})
+    def test_switching_on_is_refused_with_the_sentence_for_agy_even_with_the_yes(self):
+        for body in ({"profile_id": self.emp, "on": True}, {"profile_id": self.emp, "on": True, "confirm_company": True}):
+            status, out = self.call("/api/shared/cards", "POST", body)
             self.assertEqual((status, out["code"]), (400, "card_tool_unsupported"), out)
+            self.assertEqual(out["error"] if "error" in out else out.get("message", ""), self.NOTE, out)
             self.assertFalse(shared_folder.for_card(self.emp, "agy-chat"))
-            mine = next(c for c in shared_folder.cards_view([{"id": self.emp, "engine": "agy-chat", "tool": "agy", "can_chat": True}], [self.emp])
-                        if c["profile_id"] == self.emp)
-            self.assertFalse(mine["on"], "whatever the file says")
-            self.assertIsNone(mine["verified"])
+
+    def test_a_group_or_a_dispatch_with_an_agy_member_cannot_tick_it(self):
+        cards = [{"id": self.emp, "engine": "agy-chat", "tool": "agy", "can_chat": True}]
+        for confirm in (False, True):
+            with self.assertRaises(shared_folder.ApiError) as ctx:
+                shared_folder.plan_cards([self.emp], cards, confirm)
+            self.assertEqual((ctx.exception.status, ctx.exception.code, str(ctx.exception)), (400, "card_tool_unsupported", self.NOTE))
+        with self.assertRaises(shared_folder.ApiError) as ctx:
+            shared_folder.plan_cards([], cards, True, new_engines=["agy-chat"])
+        self.assertEqual((ctx.exception.code, str(ctx.exception)), ("card_tool_unsupported", self.NOTE))
+        people = shared_folder.employees_view([("C1", "AGY 員工", self.emp)], cards)
+        self.assertEqual((people[0]["usable"], people[0]["on"]), (False, False))
+
+    def test_the_other_employees_sentence_is_unchanged(self):
+        with self.assertRaises(shared_folder.ApiError) as ctx:
+            shared_folder.plan_cards(["p1"], [{"id": "p1", "engine": "grok-chat", "tool": "grok", "can_chat": True}], True)
+        self.assertEqual(ctx.exception.code, "bad_request")
+
+    def test_put_back_the_part_for_agy_works_and_says_google(self):
+        """The code for AGY is kept: with the tuple that held it, the yes to Google is asked and given."""
+        with mock.patch.object(shared_folder, "SUPPORTED_ENGINES", ("claude-chat", "codex-chat", "agy-chat")):
+            self.assertEqual(shared_folder.COMPANY["agy-chat"], "Google")
+            status, out = self.call("/api/shared/cards", "POST", {"profile_id": self.emp, "on": True})
+            self.assertEqual((status, out["code"], out["warn"]), (409, "shared_confirm", ["send_to_google"]), out)
+            self.assertIn("Google", out["warn_text"][0])
+            status, out = self.call("/api/shared/cards", "POST", {"profile_id": self.emp, "on": True, "confirm_company": True})
+            self.assertEqual((status, out["on"]), (200, True), out)
+            self.assertTrue(shared_folder.for_card(self.emp, "agy-chat"))
+        self.assertFalse(shared_folder.for_card(self.emp, "agy-chat"), "whatever the file says, the tuple decides")
 
 
 class RoutinesForAgyTests(ApiCase):

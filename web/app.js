@@ -14402,7 +14402,7 @@ const GROUP_MIXED_NOTE = "群組裡有 Claude Code 和 Codex 的員工，群組�
 const GROUP_SHARED_LABEL = "讓這幾位都能用共用資料夾";
 const GROUP_SHARED_ON_NOTE = "打開之後，這幾位可以在共用資料夾放檔案給彼此和你；每一次寫進去都照舊先問你。剛打開時，要開新的聊天員工才知道有這個資料夾。關掉不會刪任何檔案，要刪請到 Finder。";
 const GROUP_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
-const GROUP_SHARED_GOOGLE_NOTE = "AGY 員工讀到的檔案內容會送到 Google（AGY 是 Google 做的）。不要放密碼、帳號、金鑰。";
+const GROUP_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的群組先不要打開共用資料夾。";
 const GROUP_WHAT = "群組：你說話，被叫到的員工輪流回答，員工動手前都會問你。要大家各寫一份意見、由 CEO 做決定，用「會議」；"
   + "要員工照順序做完一件事，請 CEO 那邊的幕僚長安排「派工」。";
 const GROUP_CARD_NOTE = "員工想執行指令或改檔案時，卡片會出現在那位員工的名字下面，每一次都要你按「允許這一次」，沒有一次允許好幾張的按鈕。不按的話，5 分鐘後視為拒絕。";
@@ -14542,7 +14542,7 @@ function openGroupDialog(cards, hooks) {
     if (typed) body.name = typed;
     if (sharedBox.checked === true) {
       body.shared_folder = true;
-      if (list.some((c) => chosen.has(c.id) && (c.tool === "codex" || c.tool === "agy"))) body.confirm_company = true;      // the line below the tick says it
+      if (list.some((c) => chosen.has(c.id) && c.tool === "codex")) body.confirm_company = true;      // the line below the tick says it
     }
     try { await hooks.onCreate(body); close(); }
     catch (e) { busy = false; setKids(errorBox, notice("bad", e && e.message ? e.message : "沒有建立成功")); redraw(); }
@@ -14568,10 +14568,10 @@ function openGroupDialog(cards, hooks) {
     setKids(sharedNote, sharedBox.checked === true
       ? [el("p", { class: "small", "data-group": "shared-on-note" }, GROUP_SHARED_ON_NOTE),
         picked.some((c) => c.tool === "codex") ? el("p", { class: "small", "data-group": "shared-codex" }, GROUP_SHARED_CODEX_NOTE) : null,
-        picked.some((c) => c.tool === "agy") ? el("p", { class: "small", "data-group": "shared-google" }, GROUP_SHARED_GOOGLE_NOTE) : null]
+        picked.some((c) => c.tool === "agy") ? el("p", { class: "small", "data-group": "shared-agy", role: "status" }, GROUP_SHARED_AGY_NOTE) : null]
       : null);
     name.setAttribute("placeholder", picked.length ? `名字（選填，預設：${groupDefaultName(picked.map((c) => c.name || c.id))}）` : "名字（選填，40 字內）");
-    create.disabled = busy || n < GROUP_MIN || n > GROUP_MAX;
+    create.disabled = busy || n < GROUP_MIN || n > GROUP_MAX || (sharedBox.checked === true && picked.some((c) => c.tool === "agy"));
   }
   const head = el("h2", { id: titleId, tabindex: "-1" }, "開新群組");
   const modal = el("div", { class: "modal-backdrop", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "data-group": "dialog" },
@@ -15077,7 +15077,7 @@ function openChiefDialog(pv, hooks) {
 const DISPATCH_SHARED_LABEL = "替這次派工的員工打開共用資料夾";
 const DISPATCH_SHARED_NOTE = "打開之後，這些員工可以在共用資料夾放檔案給彼此和你，下一步的員工會收到上一步期間新增或改過的檔名（只有檔名）。每一次寫進去都照舊先問你。";
 const DISPATCH_SHARED_CODEX_NOTE = "Codex 員工讀到的檔案會送到 OpenAI。";
-const DISPATCH_SHARED_GOOGLE_NOTE = "AGY 員工讀到的檔案內容會送到 Google（AGY 是 Google 做的）。不要放密碼、帳號、金鑰。";
+const DISPATCH_SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。有 AGY 員工的派工先不要打開共用資料夾。";
 function proposalDraft(v) {
   const plan = v.plan && typeof v.plan === "object" ? v.plan : {};
   const cards = Array.isArray(plan.new_cards) ? plan.new_cards : [];
@@ -15145,15 +15145,17 @@ function proposalCard(v, opts = {}) {
     if (!people) return null;
     const used = usedRefs();
     const off = people.filter((x) => x && used.has(x.who) && x.usable === true && x.on !== true);
-    const fresh = liveCards().filter((c) => used.has(c.ref) && !made.has(c.ref));
-    return { off, fresh, codex: off.some((x) => x.company === "OpenAI") || fresh.some((c) => c.tool === "codex"),
-      google: off.some((x) => x.company === "Google") || fresh.some((c) => c.tool === "agy") };
+    const fresh = liveCards().filter((c) => used.has(c.ref) && !made.has(c.ref) && c.tool !== "agy");
+    // an AGY employee in the steps (one who exists, or one about to be made) cannot use the folder in this version, and the server
+    // refuses the whole confirmation with the tick on: so the tick and an AGY step do not go together
+    const agy = people.some((x) => x && used.has(x.who) && x.company === "Google") || liveCards().some((c) => used.has(c.ref) && c.tool === "agy");
+    return { off, fresh, agy, codex: off.some((x) => x.company === "OpenAI") || fresh.some((c) => c.tool === "codex") };
   };
   const drawShared = () => {
     const sp = sharedPlan();
     if (!sp || !(sp.off.length || sp.fresh.length)) { setKids(sharedBox, null); return; }
     const box = el("input", { type: "checkbox", "data-dispatch": "shared", "aria-label": DISPATCH_SHARED_LABEL,
-      on: { change: (e) => { sharedOn = e.target.checked === true; drawShared(); } } });
+      on: { change: (e) => { sharedOn = e.target.checked === true; derive(); } } });
     box.checked = sharedOn;
     const who = [...sp.off.map((x) => x.name || x.who), ...sp.fresh.map((c) => `${c.name || "新員工"}（新建）`)];
     setKids(sharedBox,
@@ -15161,12 +15163,12 @@ function proposalCard(v, opts = {}) {
       el("p", { class: "small muted", "data-dispatch": "shared-who" }, `現在沒有打開的：${who.join("、")}。`),
       sharedOn ? el("p", { class: "small", "data-dispatch": "shared-note" }, DISPATCH_SHARED_NOTE) : null,
       sharedOn && sp.codex ? el("p", { class: "small", "data-dispatch": "shared-codex" }, DISPATCH_SHARED_CODEX_NOTE) : null,
-      sharedOn && sp.google ? el("p", { class: "small", "data-dispatch": "shared-google" }, DISPATCH_SHARED_GOOGLE_NOTE) : null);
+      sharedOn && sp.agy ? el("p", { class: "small", "data-dispatch": "shared-agy", role: "status" }, DISPATCH_SHARED_AGY_NOTE) : null);
   };
   const sharedFields = () => {
     const sp = sharedPlan();
     if (!sharedOn || !sp || !(sp.off.length || sp.fresh.length)) return {};
-    return sp.codex || sp.google ? { shared_folder: true, confirm_company: true } : { shared_folder: true };
+    return sp.codex ? { shared_folder: true, confirm_company: true } : { shared_folder: true };
   };
   const derive = () => {
     drawShared();
@@ -15178,8 +15180,10 @@ function proposalCard(v, opts = {}) {
     setKids(costBox, cost.text, " ", el("span", { class: "small muted" }, DISPATCH_SENT_NOTE));
     const bad = problems();
     const red = lamp === "red";
-    if (confirmBtn) confirmBtn.disabled = busy || red || bad.length > 0 || !(v.can && v.can.confirm);
-    setKids(whyOff, !confirmBtn ? "" : red ? DISPATCH_RED_NOTE : bad.length ? bad[0] : "");
+    const sp = sharedPlan();
+    const agyShared = sharedOn && !!sp && sp.agy === true && (sp.off.length > 0 || sp.fresh.length > 0);
+    if (confirmBtn) confirmBtn.disabled = busy || red || bad.length > 0 || agyShared || !(v.can && v.can.confirm);
+    setKids(whyOff, !confirmBtn ? "" : red ? DISPATCH_RED_NOTE : bad.length ? bad[0] : agyShared ? DISPATCH_SHARED_AGY_NOTE : "");
   };
   const redraw = () => { draw(); derive(); };
 
@@ -16546,7 +16550,7 @@ const SHARED_WHAT = "共用資料夾是放在 VBear 狀態資料夾裡的一個�
 const SHARED_RULES = [
   ["rule-data", "打開的員工可以在這裡放檔案給彼此和你。員工寫進來時，照舊每一次都會先問你；裡面的檔案是資料，員工不會照著裡面的字做事。"
     + "VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。"],
-  ["rule-company", "員工讀到的檔案會送到它的 AI 公司：Claude Code 的員工送到 Anthropic，Codex 的員工送到 OpenAI，AGY 的員工送到 Google。不要放密碼、帳號、金鑰。"],
+  ["rule-company", "員工讀到的檔案會送到它的 AI 公司：Claude Code 的員工送到 Anthropic，Codex 的員工送到 OpenAI。不要放密碼、帳號、金鑰。AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。"],
   ["rule-finder", "不要在 Finder 裡直接打開你不認得的檔案，特別是 .command、.app、.sh（點兩下就可能執行）。員工放進來的檔案，先當資料看。"],
 ];
 const SHARED_AFTER = [
@@ -16555,9 +16559,11 @@ const SHARED_AFTER = [
   ["full-note", "在終端機（完整模式）出發的員工，本來就能動你電腦上的任何檔案，VBear 不另外告訴它有這個資料夾。"],
 ];
 const SHARED_WRITE_NOTE = "員工在裡面新增或修改檔案，每一次都會先問你（卡片），和其他檔案一樣。VBear 自己不會讀、不會刪裡面的檔案，也不會把檔名寫進紀錄。";
-const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic，Codex 是 OpenAI，AGY 是 Google）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
+const SHARED_READ_NOTE = "員工讀到裡面的檔案，內容就會送給它的 AI 公司（Claude Code 是 Anthropic，Codex 是 OpenAI）。檔案可能是別的員工寫的，員工被告知那是資料、不是指令。不要放密碼、帳號、卡號。";
 const SHARED_LIMIT_NOTE = "上限 1 GiB、1 萬個檔案（含資料夾）；超過時，開新聊天會被擋下，請到 Finder 整理。";
 const SHARED_TOOL_NOTE = "這位員工的 AI 工具還不能用共用資料夾。";
+const SHARED_AGY_NOTE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。";
+const sharedToolNote = (c) => (c && c.tool === "agy" ? SHARED_AGY_NOTE : SHARED_TOOL_NOTE);
 const SHARED_NOT_CHECKED = "這個 AI 工具的版本還要檢查一次共用資料夾，沒檢查過的話，打開的員工送不出訊息。";
 const SHARED_COMPANY = { Anthropic: "Anthropic", OpenAI: "OpenAI", Google: "Google" };
 const SHARED_PROBLEM = {
@@ -16571,7 +16577,8 @@ function sharedBytes(n) {
   if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
   return `${(n / 1073741824).toFixed(2)} GB`;
 }
-// Whether the server has the shared folder for this card's AI tool: the card chats and its company is one of the two that do.
+// Whether the server has the shared folder for this card's AI tool: the card chats and its company is one of the two that do (v0.20.0
+// sends no company for an AGY card, and the page then says AGY cannot use it in this version).
 function sharedCardSupported(c) {
   return !!c && c.can_chat === true && typeof c.company === "string" && cardHas(SHARED_COMPANY, c.company);
 }
@@ -16586,7 +16593,7 @@ function sharedCardRow(c, onSwitch) {
     el("span", { class: "tag" }, chatToolName(c.tool)),
     supported ? el("label", { class: "small" }, sw, c.on === true ? " 可以用共用資料夾" : " 不用共用資料夾") : null,
     supported ? el("span", { class: "small muted", "data-shared": "company" }, c.on === true ? `讀到的檔案會送給 ${c.company}` : `打開後，讀到的檔案會送給 ${c.company}`)
-      : el("span", { class: "small muted", "data-shared": "unsupported" }, can ? SHARED_TOOL_NOTE : "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"),
+      : el("span", { class: "small muted", "data-shared": "unsupported" }, can ? sharedToolNote(c) : "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"),
     supported && c.verified === true ? el("span", { class: "small muted", "data-shared": "verified" }, "版本已檢查過") : null,
     supported && c.verified === false
       ? el("span", { class: "small", "data-shared": "verify-need" }, `還要檢查一次：${SHARED_NOT_CHECKED}`, " ", el("a", { href: "#/chat" }, "到聊天頁檢查")) : null);
@@ -16680,7 +16687,7 @@ function sharedCardLine(c) {
   const p = el("p", { class: "small", "data-shared": "card-line" });
   if (!c || typeof c !== "object") return p;
   if (c.can_chat !== true) { setKids(p, "這位員工的 AI 工具還不能聊天，用不到共用資料夾。"); return p; }
-  if (!sharedCardSupported(c)) { setKids(p, SHARED_TOOL_NOTE); return p; }
+  if (!sharedCardSupported(c)) { setKids(p, sharedToolNote(c)); return p; }
   setKids(p, c.on === true ? "這位員工能用共用資料夾" : "這位員工不能用共用資料夾", "（", el("a", { href: "#/shared" }, "到共用資料夾頁改"), "）");
   return p;
 }
@@ -18768,7 +18775,7 @@ const TPL_PREVIEW_LINES = {
   free: "套用不用 AI、不花錢。之後跟員工聊天才會花錢，照你的每回合上限與每天上限。",
   codex: "Codex 的員工在 VBear 裡可以聊天；要在終端機用 Codex 只能用完整模式，團隊範本建的員工不會是完整模式。",
   notReady: "這個 AI 工具還沒準備好：員工會建好，但要先到開始設定登入才能聊天。",
-  agy: "AGY 的員工預設不帶記憶，也不能用共用資料夾（打開時要你同意，內容會送到 Google）；員工會用到你自己裝的 AGY 技能。要在終端機用 AGY 只能用完整模式，團隊範本建的員工不會是完整模式。",
+  agy: "AGY 的員工預設不帶記憶（打開時要你同意，內容會送到 Google），這版也不能用共用資料夾；員工會用到你自己裝的 AGY 技能。要在終端機用 AGY 只能用完整模式，團隊範本建的員工不會是完整模式。",
   agyUnverified: "你的 AGY 還沒通過聊天驗證：員工會建好，但要先到聊天頁按「驗證聊天」（用你的 Google 方案）才能聊天。",
 };
 const TPL_TOOL_LABEL = { claude: "Claude Code", codex: "Codex", agy: "AGY" };
@@ -19646,11 +19653,11 @@ if (typeof module !== "undefined" && module.exports) {
     GROUP_SHARED_LABEL,
     GROUP_SHARED_ON_NOTE,
     GROUP_SHARED_CODEX_NOTE,
-    GROUP_SHARED_GOOGLE_NOTE,
+    GROUP_SHARED_AGY_NOTE,
     groupMixedNote,
     DISPATCH_SHARED_LABEL,
     DISPATCH_SHARED_CODEX_NOTE,
-    DISPATCH_SHARED_GOOGLE_NOTE,
+    DISPATCH_SHARED_AGY_NOTE,
     groupSharedChanges,
     GROUP_WHAT,
     groupMixed,
