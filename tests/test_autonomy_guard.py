@@ -53,8 +53,9 @@ Never, whatever the person ticked in 「自己動手」:
      14a, 14b, 14c (P46-1: the protocol module's answers, its argv and settings, and ``BypassSandbox``; 14b also holds the AGY settings the
      chat environment writes and the launch records to the protocol's one table); 14d, 14g, 14h (P46-3: the six variables of the process
      environment, nothing of the person's own AGY folders read or changed by a whole fake chat, no ``session/set_mode``,
-     ``session/set_config_option`` or ``session/load`` and a model only from the table); 14e, 14f are added by P46-5. The behaviour is
-     tested in tests/test_agy_chat_protocol.py and tests/test_p46_agy_chat_daemon.py.
+     ``session/set_config_option`` or ``session/load`` and a model only from the table); 14e, 14f (P46-5: no feature module reaches the AGY chat code, the AGY
+     code reaches no feature's writer, and memory and the shared folder are off for an AGY employee until the person says yes to Google).
+     The behaviour is tested in tests/test_agy_chat_protocol.py, tests/test_p46_agy_chat_daemon.py and tests/test_p46_features.py.
 
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
@@ -1939,6 +1940,136 @@ class AgyChatHomeIsLeftAlone(AgyCase):
         self.wait_turn(chat_id, 1)
         self.assertEqual(self.methods().count("session/prompt"), 1)
         self.assertLessEqual(set(self.methods()), {"initialize", "session/new", "session/set_model", "session/prompt", "session/cancel"})
+
+
+# 14e (P46-5): the feature modules never reach the code of the AGY chat, and the AGY code never reaches a feature's writer
+AGY_CHAT_MODULES = ("agy_chat_env", "agy_chat_session", "agy_chat_protocol", "agy_chat_check", "agy_verify",
+                    "runtime.agy_chat_env", "runtime.agy_chat_session", "runtime.agy_chat_protocol")
+AGY_FEATURE_MODULES = ("memory", "shared_folder", "skillbook", "routines", "groups", "group_runner", "chief", "chief_runner", "dispatch",
+                       "dispatch_runner", "autonomy", "auto_continue", "templates", "templates_apply", "templates_mine", "agent_profiles")
+
+
+def agy_feature_uses(source: str, label: str = "<source>") -> list[str]:
+    """What an AGY module (agy*.py, runtime/agy*.py) reaches that belongs to a feature of the person: the writers of the memory, the shared
+    folder's switches, the skills, the routines, the role cards, config.json, and the feature modules themselves."""
+    found = []
+    for check in (memory_writer_uses, shared_writer_uses, skillbook_writer_uses, routine_writer_uses, routine_run_writer_uses, card_writer_calls):
+        found += check(source, label)
+    found += imports_of(source, AGY_FEATURE_MODULES, label)
+    found += [line for line in scan_source(source, label) if "config" in line or "set_conf" in line or "/api/" in line]
+    return found
+
+
+class AgyFeatureRules(unittest.TestCase):
+    """P46-5, rules 14e and 14f."""
+
+    def test_14e_no_feature_module_imports_the_code_of_the_agy_chat(self):
+        files = scanned_files()
+        self.assertTrue(files)
+        found = [line for path in files for line in imports_of(path.read_text(encoding="utf-8"), AGY_CHAT_MODULES, path.name)]
+        self.assertEqual(found, [])
+
+    def test_14e_the_agy_modules_reach_no_feature_writer_and_no_config(self):
+        files = agy_files(AGY_PATTERNS)
+        self.assertTrue(files)
+        found = [line for path in files for line in agy_feature_uses(path.read_text(encoding="utf-8"), path.name)]
+        self.assertEqual(found, [])
+
+    def test_14e_the_scans_fire_on_small_made_up_sources(self):
+        for why, source in {
+            "imports the env": "from .runtime import agy_chat_env\n",
+            "imports the session": "from vbear.runtime.agy_chat_session import AgyChatProcess\n",
+            "imports the protocol": "import vbear.runtime.agy_chat_protocol as p\n",
+            "imports the check": "from . import agy_chat_check\n",
+            "imports the verifier": "from .agy_verify import AgyChatVerifier\n",
+        }.items():
+            self.assertTrue(imports_of(source, AGY_CHAT_MODULES), why)
+        for why, source in {
+            "switches memory": "from . import memory\nmemory.set_card({}, [])\n",
+            "switches the shared folder": "from . import shared_folder\nshared_folder.set_card({}, [])\n",
+            "saves a card": "def f(ap):\n    ap.save_profile(None, {})\n",
+            "saves the config": "from . import config as cfg\ncfg.save({})\n",
+            "imports the groups": "from . import groups\n",
+            "imports the templates": "from .templates_apply import begin_apply\n",
+        }.items():
+            self.assertTrue(agy_feature_uses(source), why)
+        self.assertEqual(agy_feature_uses("import json\nfrom . import admin_policy\n"), [])
+
+    # 14f: memory and the shared folder are off for an AGY employee, and open only on the person's yes to Google
+    def setUp(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory(prefix="vg14-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(os.path.realpath(tmp.name))
+        home = self.root / "h"
+        (home / ".vbear").mkdir(parents=True, mode=0o700)
+        patch = mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.state = home / ".vbear"
+        self.cards = [{"id": "agy-one", "name": "虛構AGY員工", "tool": "agy", "engine": "agy-chat", "can_chat": True},
+                      {"id": "agy-two", "name": "虛構AGY員工二", "tool": "agy", "engine": "agy-chat", "can_chat": True}]
+
+    def tree(self):
+        return {str(p.relative_to(self.state)): p.read_bytes() for p in sorted(self.state.rglob("*")) if p.is_file()}
+
+    def test_14f_memory_is_off_for_agy_by_default_and_needs_the_yes_to_google(self):
+        from vbear import memory
+        from vbear.api_error import ApiError
+        self.assertIs(memory.DEFAULT_ON["agy-chat"], False)
+        self.assertEqual(memory.COMPANY["agy-chat"], "Google")
+        before = self.tree()
+        for body in ({"profile_id": "agy-one", "on": True}, {"profile_id": "agy-one", "on": True, "confirm_company": False}):
+            with self.assertRaises(ApiError) as got:
+                memory.set_card(body, self.cards)
+            self.assertEqual((got.exception.status, got.exception.code, got.exception.extra["warn"]), (409, "memory_confirm", ["send_to_google"]))
+        with self.assertRaises(ApiError) as got:
+            memory.set_card({"profile_id": "agy-one", "on": True, "confirm_company": "yes"}, self.cards)
+        self.assertEqual(got.exception.status, 400)
+        self.assertEqual(self.tree(), before, "a refusal writes nothing")
+        self.assertEqual(memory.set_card({"profile_id": "agy-one", "on": True, "confirm_company": True}, self.cards)["on"], True)
+
+    def test_14f_the_shared_folder_needs_the_yes_to_google_for_every_way_in(self):
+        from vbear import shared_folder as sf
+        from vbear.api_error import ApiError
+        self.assertEqual(sf.COMPANY["agy-chat"], "Google")
+        before = self.tree()
+        with self.assertRaises(ApiError) as got:
+            sf.set_card({"profile_id": "agy-one", "on": True}, self.cards)
+        self.assertEqual((got.exception.status, got.exception.code, got.exception.extra["warn"]), (409, "shared_confirm", ["send_to_google"]))
+        with self.assertRaises(ApiError) as got:
+            sf.plan_cards(["agy-one", "agy-two"], self.cards)
+        self.assertEqual((got.exception.status, got.exception.code), (409, "shared_confirm"))
+        with self.assertRaises(ApiError) as got:
+            sf.plan_cards([], self.cards, False, new_engines=["agy-chat"])
+        self.assertEqual(got.exception.code, "shared_confirm")
+        opened, error = sf.open_cards(["agy-one", "agy-two"], self.cards, "group")
+        self.assertEqual((opened, error.code), ([], "shared_confirm"))
+        self.assertEqual(self.tree(), before, "none of them wrote a byte")
+        self.assertFalse(sf.for_card("agy-one", "agy-chat"))
+
+    def test_14f_a_dispatch_that_was_not_ticked_opens_nothing_for_the_employee_it_made(self):
+        from vbear import shared_folder as sf
+        before = self.tree()
+        self.assertFalse(sf.open_for_dispatch("d-" + "0" * 12, "agy-one", self.cards))
+        self.assertEqual(self.tree(), before)
+        sf.mark_dispatch("d-" + "1" * 12, True, False)              # ticked, but the yes to Google was not given
+        marked = self.tree()
+        from vbear.api_error import ApiError
+        with self.assertRaises(ApiError) as got:
+            sf.open_for_dispatch("d-" + "1" * 12, "agy-one", self.cards)
+        self.assertEqual(got.exception.code, "shared_confirm")
+        self.assertEqual(self.tree(), marked)
+
+    def test_14f_the_templates_and_the_dispatch_name_neither_memory_nor_the_shared_folder_in_a_card(self):
+        from vbear import dispatch, templates
+        card = {"key": "x", "name": "名", "position": "pm", "instructions": "寫", "claude_model": None}
+        for body in (templates.card_body(card, "agy"),
+                     dispatch.card_body({"ref": "N1", "name": "名", "position": "pm", "tool": "agy", "model_alias": ""})):
+            text = json.dumps(body, ensure_ascii=False)
+            for word in ("memory", "shared", "confirm_company", "send_to_google"):
+                self.assertNotIn(word, text)
+            self.assertEqual(body["model"], {"tool": "agy", "model_id": ""})
 
 
 if __name__ == "__main__":
