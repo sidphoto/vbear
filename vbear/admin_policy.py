@@ -19,6 +19,8 @@ each file and does not miss a file a later version adds:
                managed preferences domain com.anthropic.claudecode
   Codex        /etc/codex   (managed_config.toml, requirements.toml, config.toml)
                managed preferences domain com.openai.codex
+  AGY          /etc/antigravity   (admin_settings.json)
+               managed preferences domain com.google.antigravity (a candidate, see AGY_SOURCES)
 
 Managed preferences are looked up in ``/Library/Managed Preferences/`` and in
 every per-user directory under it.
@@ -73,6 +75,15 @@ CLAUDE_SOURCES = {"2.1.292": _CLAUDE, "2.1.296": _CLAUDE, "2.1.318": _CLAUDE_2_1
 # has no such flag), so the system and managed layers matter as much as for the review. The list is taken over from 0.160.0 and
 # is to be checked against the installed 0.163.0 on a real Mac when the chat check is run (docs/evidence/codex-0.163.0-chat.md).
 CODEX_SOURCES = {"0.160.0": _CODEX, "0.163.0": _CODEX}
+# 1.5.3 (P46-2, the AGY chat, ADR 0012): NOT taken from the vendor's documentation. The planner read the strings of the
+# installed 1.5.3 binary on 2026-11-09 (the file was not run): /etc/antigravity/admin_settings.json appears as a whole path,
+# beside the words AdminSettings and AdminSettingsPath; com.google.antigravity appears too, and nothing shows whether it is a
+# macOS managed-preferences domain. So the whole folder /etc/antigravity is listed (stricter than naming the file, and a
+# later file in it refuses as well) and the domain is a candidate: if its plist exists the launch is refused, which costs a
+# person nothing when it is not a real source. "Better to refuse too much" is the rule here. AGY's own user-level
+# hooks (~/.agents/hooks.json) are not a policy source and are checked by agy_chat_env.home_hooks_state. Method and result:
+# docs/evidence/agy-1.5.3-chat.md, section 8.
+AGY_SOURCES = {"1.5.3": {"paths": ("etc/antigravity",), "domain": "com.google.antigravity", "home_paths": ()}}
 
 
 @dataclass
@@ -166,5 +177,14 @@ def check_codex(version: str, root: str = "/") -> PolicyCheck:
     try:
         return _check(CODEX_SOURCES.get(version) if isinstance(version, str) else None, str(version), root,
                       "", "Codex")
+    except Exception as exc:
+        return PolicyCheck(False, problems=[f"系統設定層檢查失敗（{type(exc).__name__}）"])
+
+
+def check_agy(version: str, root: str = "/") -> PolicyCheck:
+    """Before every AGY chat process (P46-2, ADR 0012). Never raises."""
+    try:
+        return _check(AGY_SOURCES.get(version) if isinstance(version, str) else None, str(version), root,
+                      "", "AGY")
     except Exception as exc:
         return PolicyCheck(False, problems=[f"系統設定層檢查失敗（{type(exc).__name__}）"])

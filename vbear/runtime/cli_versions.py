@@ -243,28 +243,65 @@ def codex_chat_unverified_text(version: str) -> str:
             f"處理方式：安裝其中一個版本，或先為 {version} 執行聊天模式的驗證（會用到你的 ChatGPT 方案）。")
 
 
+# AGY versions whose chat mode (P46, ADR 0012) passed ``boundary_check --mode agy-chat`` on this Mac. None is built in: a version
+# counts only when this Mac's own record names a report that mode "agy-chat" wrote, that passed, and that names the same version
+# under ``agy_version``. Kept apart from the other two records: passing one says nothing about the others.
+AGY_CHAT_VERIFIED_VERSIONS: tuple[str, ...] = ()
+LOCAL_AGY_CHAT_VERIFIED_FILE = "agy-chat-verified.json"
+
+
+def local_agy_chat_verified_versions() -> dict:
+    """{version: record} whose AGY chat check passed here, each backed by its report, re-read every time."""
+    return _local_chat_record(LOCAL_AGY_CHAT_VERIFIED_FILE, "agy-chat", "agy_version")
+
+
+def agy_chat_verified_versions() -> tuple[str, ...]:
+    built_in = AGY_CHAT_VERIFIED_VERSIONS
+    return built_in + tuple(v for v in sorted(local_agy_chat_verified_versions()) if v not in built_in)
+
+
+def agy_chat_shared_verified_versions() -> tuple[str, ...]:
+    """The same for AGY: the chat check and its shared-folder part."""
+    return tuple(sorted(_local_chat_record(LOCAL_AGY_CHAT_VERIFIED_FILE, "agy-chat", "agy_version", shared=True),
+                        key=_version_key))
+
+
+def agy_chat_unverified_text(version: str) -> str:
+    """The one wording for "this AGY has no chat-mode verification"."""
+    supported = agy_chat_verified_versions()
+    if not supported:
+        return (f"AGY {version} 的聊天模式還沒有通過驗證，VBear 目前沒有任何通過聊天驗證的 AGY 版本。"
+                "處理方式：先執行聊天模式的驗證（會用到你的 Google 方案，約十幾次很短的對話）。")
+    listed = "、".join(sorted(supported, key=_version_key))
+    return (f"AGY {version} 的聊天模式還沒有通過驗證。已通過的版本：{listed}。"
+            f"處理方式：安裝其中一個版本，或先為 {version} 執行聊天模式的驗證（會用到你的 Google 方案）。")
+
+
 def shared_verified(engine, version) -> bool:
-    """Whether this version of the AI tool a chat ``engine`` ("claude-chat", "codex-chat") runs has passed the chat check with the
-    shared folder (P43-2). Anything else, a bad name or no report included, is no."""
+    """Whether this version of the AI tool a chat ``engine`` ("claude-chat", "codex-chat", "agy-chat") runs has passed the chat check
+    with the shared folder (P43-2). Anything else, a bad name or no report included, is no."""
     if not (isinstance(version, str) and _VERSION_RE.match(version)):
         return False
     if engine == "claude-chat":
         return version in chat_shared_verified_versions()
     if engine == "codex-chat":
         return version in codex_chat_shared_verified_versions()
+    if engine == "agy-chat":
+        return version in agy_chat_shared_verified_versions()
     return False
 
 
 def shared_unverified_text(engine: str, version: str) -> str:
     """The one wording for "this version has not passed the check with the shared folder": which tool and version, which versions
-    have, and what to do (the check costs Claude Code a few cents; Codex uses the person's ChatGPT plan)."""
-    codex = engine == "codex-chat"
-    name = "Codex" if codex else "Claude Code"
-    supported = codex_chat_shared_verified_versions() if codex else chat_shared_verified_versions()
+    have, and what to do (the check costs Claude Code a few cents; Codex uses the person's ChatGPT plan, AGY the Google plan)."""
+    name = {"codex-chat": "Codex", "agy-chat": "AGY"}.get(engine, "Claude Code")
+    supported = {"codex-chat": codex_chat_shared_verified_versions,
+                 "agy-chat": agy_chat_shared_verified_versions}.get(engine, chat_shared_verified_versions)()
     head = f"{name} {version} 還沒有通過含共用資料夾的檢查。"
     if supported:
         head += "已通過的版本：" + "、".join(sorted(supported, key=_version_key)) + "。"
-    cost = "會用到你的 ChatGPT 方案，約十幾次很短的對話" if codex else "約 US$0.01"
+    cost = {"codex-chat": "會用到你的 ChatGPT 方案，約十幾次很短的對話",
+            "agy-chat": "會用到你的 Google 方案，約十幾次很短的對話"}.get(engine, "約 US$0.01")
     return head + f"處理方式：按聊天頁的「檢查」（{cost}），或先把這位員工的共用資料夾關掉。"
 
 
