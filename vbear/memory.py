@@ -51,7 +51,7 @@ CLEAR_WORDS = "全部刪除"
 SOURCE_TEXT = {"typed": "你寫的", "chat": "從聊天記住的", "group": "從群組記住的", "suggested": "整理提議、你確認的"}
 KIND_TITLE = {"about_you": "關於你", "work": "你的工作", "decision": "決定"}
 ENTRY_KEYS = {"id", "kind", "text", "created_at", "updated_at", "source", "confirmed_warning"}
-WHERE_TEXT = ("員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）或 OpenAI（Codex 的員工）。"
+WHERE_TEXT = ("員工開新程序時，記憶會跟著送給 Anthropic（Claude Code 的員工）、OpenAI（Codex 的員工）或 Google（AGY 的員工）。"
               "不要寫密碼、帳號、卡號；VBear 看到像這樣的內容會擋下。")
 UNREADABLE = ("記憶的檔案有問題，VBear 先不碰它：聊天照常，但這段時間員工不帶記憶。請檢查狀態資料夾裡的 memory 資料夾"
               "（權限、是不是連結，或有沒有 memory.json.corrupted）。")
@@ -136,8 +136,9 @@ def _read() -> dict:
 
 
 # Whether a role card takes memory along when the person has not said (v0.17, the person's choice): Claude Code cards do, Codex
-# cards do not (memory goes to OpenAI there, so the person switches it on). An engine not listed (cannot chat) takes none.
-DEFAULT_ON = {"claude-chat": True, "codex-chat": False}
+# and AGY cards do not (memory goes to OpenAI or Google there, so the person switches it on, P46-5). An engine not listed (cannot
+# chat) takes none.
+DEFAULT_ON = {"claude-chat": True, "codex-chat": False, "agy-chat": False}
 
 
 def card_on(profile_id, engine, cards_off, cards_on) -> bool:
@@ -175,7 +176,7 @@ def view() -> dict:
                 cards_on=data["cards_on"])
 
 
-COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI"}
+COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI", "agy-chat": "Google"}
 
 
 def cards_view(cards, cards_off, cards_on) -> list:
@@ -423,13 +424,17 @@ def clear(body, now: float | None = None) -> dict:
     return {"cleared": count}
 
 
-COMPANY_WARN = {"send_to_openai": "打開之後，員工開新程序時，記憶會跟著送給 OpenAI（Codex 的公司）。確定要讓這位員工帶記憶嗎？"}
+COMPANY_WARN = {"send_to_openai": "打開之後，員工開新程序時，記憶會跟著送給 OpenAI（Codex 的公司）。確定要讓這位員工帶記憶嗎？",
+                "send_to_google": "打開之後，員工開新程序時，記憶的內容會送到 Google（AGY 是 Google 做的）。確定要讓這位員工帶記憶嗎？"}
+# The company whose engine's employee needs the person's yes before memory goes: the word of ``warn`` that asks for it.
+CONFIRM_WARN = {"OpenAI": "send_to_openai", "Google": "send_to_google"}
 
 
 def set_card(body, cards, now: float | None = None) -> dict:
     """Switch memory on or off for one role card: ``{profile_id, on, confirm_company?}``. ``cards`` are the chat service's cards
     (``{id, engine, ...}``): the card must be there and its AI tool must be one that chats. Switching a card on whose tool
-    belongs to OpenAI takes ``confirm_company: true`` (409 ``memory_confirm`` with ``warn: ["send_to_openai"]`` without it). A
+    belongs to OpenAI or Google takes ``confirm_company: true`` (409 ``memory_confirm`` with ``warn: ["send_to_openai"]`` or
+    ``["send_to_google"]`` without it). A
     state that is the card's default is not kept in the file."""
     body = _body(body, {"profile_id", "on", "confirm_company"}, {"profile_id", "on"})
     pid, on = body["profile_id"], body["on"]
@@ -444,9 +449,9 @@ def set_card(body, cards, now: float | None = None) -> dict:
     engine = card.get("engine")
     if engine not in COMPANY:
         raise ApiError(400, "bad_request", "這位員工的 AI 工具還不能聊天，用不到記憶。")
-    if on and COMPANY[engine] == "OpenAI" and not confirm:
-        raise ApiError(409, "memory_confirm", COMPANY_WARN["send_to_openai"], warn=["send_to_openai"],
-                       warn_text=[COMPANY_WARN["send_to_openai"]])
+    warn = CONFIRM_WARN.get(COMPANY[engine])
+    if on and warn and not confirm:
+        raise ApiError(409, "memory_confirm", COMPANY_WARN[warn], warn=[warn], warn_text=[COMPANY_WARN[warn]])
     try:
         _folder(True)
         with store.locked():
