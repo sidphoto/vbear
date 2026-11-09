@@ -458,7 +458,9 @@ class Run:
         self.ready = True
 
     def setup(self) -> None:
-        support = self.c.ok("/api/chat-support")
+        answer = self.c.ok("/api/chat-support")
+        # the route wraps its answer in "support" (a real console showed it); an older or bare shape is read as it is
+        support = answer.get("support") if isinstance(answer.get("support"), dict) else answer
         agy = support.get("agy") if isinstance(support.get("agy"), dict) else {}
         self.check.expect(agy.get("state") == "ready" and agy.get("version") == VERSION and agy.get("verified") is True,
                           "AGY is ready, 1.5.3 and verified for chat", f"state {agy.get('state')}, version {agy.get('version')}, verified {agy.get('verified')}")
@@ -767,6 +769,8 @@ class Run:
         for ident in got.get("routines", []):
             self.c.call(f"/api/routines/{ident}/delete", "POST", {})
         self.count_agy([c for c in got.get("chats", [])])
+        # the kinds of record are read before the chats are deleted: afterwards there is nothing left to read
+        kinds = kinds_in(self.state)
         for chat in got.get("chats", []):
             self.c.call(f"/api/chats/{chat}", "DELETE")
         for ident in got.get("cards", []):
@@ -784,7 +788,8 @@ class Run:
         self.check.expect(now.get("config.json") == base["watched"].get("config.json"), "config.json is the same bytes as at setup")
         ticks = self.ticks()
         self.check.expect(len(ticks) == 4 and all(v is False for v in ticks.values()), "the four 自己動手 ticks are false")
-        kinds = kinds_in(self.state)
+        if not kinds:
+            self.check.warn("no chat record was there to read the kinds of", "the kinds check saw nothing")
         extra = sorted(kinds - V019_KINDS)
         self.check.expect(not extra, "every kind of record in the chats is one v0.19.0 already had", f"{len(kinds)} kinds, {len(extra)} new")
         ledger = self.ledger()

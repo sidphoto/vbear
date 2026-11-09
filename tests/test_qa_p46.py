@@ -117,7 +117,7 @@ class FakeConsole(qa.Console):
             agy = {"state": "unverified", "version": "1.5.3", "verified": False}
         else:
             agy = {"state": "ready", "version": "1.5.3", "verified": True}
-        return 200, {"state": "verified", "agy": agy}
+        return 200, {"support": {"state": "verified", "agy": agy}}
 
     def ledger(self):
         return 200, {"spent_usd": str(round(self.spent_agy + self.spent_claude, 4))}
