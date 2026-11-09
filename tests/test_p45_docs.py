@@ -46,7 +46,7 @@ class TeamTemplatesDocsTests(unittest.TestCase):
     # -- the changelog ---------------------------------------------------------------------------------------------------------
 
     def test_the_release_heading_is_first_and_not_unreleased(self):
-        self.assertTrue(self.raw.startswith("# Changelog\n\n## v0.19.0 — team templates\n"), self.raw[:70])
+        self.assertRegex(self.raw, r"\A# Changelog\n\n## v0\.\d+\.\d+ — ")        # a later release goes in front (P46-6)
         self.assertLess(self.raw.index("## v0.19.0 — team templates"), self.raw.index("## v0.18.0 — skills and routines"))
         self.assertNotIn("Unreleased", self.changelog)
         self.assertNotIn("not released yet", self.changelog)

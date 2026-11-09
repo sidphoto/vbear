@@ -853,8 +853,10 @@ What is read, and what is not:
 - **Content.** Each skill is read like any other: only its `SKILL.md` (size-capped, secrets masked), and no file it
   mentions is opened or run.
 - **Not covered.** AGY's built-in and plugin skills (under `~/.gemini/antigravity-cli/plugins`) are not scanned, and
-  neither is the older `.agent/skills` spelling. The shared store `~/.agents/skills` is not read by AGY unless
-  `skills.json` lists it.
+  neither is the older `.agent/skills` spelling. **The shared store `~/.agents/skills` is read by AGY even when `skills.json` does not list
+  it:** the 2026-11-09 investigation saw an AGY that was given a settings folder of VBear's still load the person's skills from there (an
+  earlier version of this paragraph said the opposite; the investigation disproved it). The index above does not model that, so a
+  skill under `~/.agents/skills` may be missing from `read_by` for AGY. The AGY chat accepts it and says so (see "Chats with an AGY role card").
 - **A judgement, not a launch.** `read_by` says where a skill sits and what AGY's own config lists. It does not prove
   AGY loads the skill (VBear cannot see a per-skill switch), and a role card with such a skill is still only a record.
 
@@ -1035,7 +1037,7 @@ process starts until a version passes the chat check.
   has none) the same `--append-system-prompt` argument carries one fixed paragraph the daemon builds from the `memory` field
   of `chat_send`: VBear's own explanation, then the person's lines as one JSON string between `BEGIN_VBEAR_MEMORY_JSON` and
   `END_VBEAR_MEMORY_JSON`. The console sends the field when the role card takes memory along (a Claude Code card does by default; a Codex card only after the
-  person switches it on, because memory goes to OpenAI there) and `<state>/memory/memory.json` can be read; a card switched off, or a file that cannot be read, sends no field and not a
+  person switches it on, because memory goes to OpenAI there; an AGY card only after the person switches it on, because memory goes to Google there) and `<state>/memory/memory.json` can be read; a card switched off, or a file that cannot be read, sends no field and not a
   word reaches the model. The paragraph is sent even when there are no lines, because it also tells the employee that only
   the person can save one. The field is a list of at most 50 objects with exactly `kind` (`about_you`, `work` or `decision`)
   and `text`, at most 4,000 characters in all; one more key, another kind or a longer list is `bad_request`. **The daemon
@@ -1056,7 +1058,7 @@ process starts until a version passes the chat check.
   (`KINDS` is unchanged; `process_started.instructions` still says whether the *card* has instructions of its own), and the
   daemon's log has one line per new process, `chat process memory entries=<N|none> instructions=<yes|no>`, with the count
   and nothing else. The launch manifest of a live process holds the paragraph as it holds the card's instructions (it is
-  removed with the launch). Memory goes to the company of the employee's tool, Anthropic or OpenAI, and stays in the tool's
+  removed with the launch). Memory goes to the company of the employee's tool, Anthropic, OpenAI or Google (AGY), and stays in the tool's
   own copy of the conversation; deleting a line in VBear does not delete those copies. The memory rules are a best effort:
   a secret written in ordinary words is not caught. Only the person's own `/api/memory*` routes in the browser (with
   `X-VBear`) change the file; the chat service only reads it, and no module of the chief of staff, dispatch, groups or the
@@ -1116,7 +1118,11 @@ process starts until a version passes the chat check.
     scans `shared*.py` and `runtime/shared*.py` with the rules of the chief of staff, dispatch, groups and memory, and fails when
     any other module reaches `set_card` or the store). The chat service only reads (`for_card`); a settings file that cannot be
     read means every employee is off, and the page says so. A Claude Code card and a Codex card have it (P43-2); a card of any other tool is
-    refused with 400 `card_tool_unsupported` and `for_card` says no for it whatever the file says. Switching a **Codex** card on takes
+    refused with 400 `card_tool_unsupported` and `for_card` says no for it whatever the file says. **An AGY card does not have it in v0.20.0** (ADR 0012,
+    decision 7): `SUPPORTED_ENGINES` lists `claude-chat` and `codex-chat` only, so switching an AGY card on is 400 `card_tool_unsupported` with the sentence
+    「AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查」 with or without `confirm_company`, a group or a dispatch with the shared box ticked and an AGY employee in it is
+    refused (the dialog and the proposal say the same sentence), and `for_card` says no for an AGY card whatever the file says. The code for Google (the
+    company, the confirmation) is kept so that a later AGY version can list `agy-chat` again. Switching a **Codex** card on takes
     `confirm_company: true` in the body (what it reads goes to OpenAI): without it the answer is 409 `shared_confirm` with
     `warn: ["send_to_openai"]` and nothing is written. Switching off never asks.
   - **Process and sandbox.** For a Claude Code chat with the folder on, the settings file written for the process lists the folder
@@ -1650,9 +1656,10 @@ is new is **an employee's words going to another employee** (and, with Claude Co
 2. **「大家」 makes more cards.** One sentence to everyone can make each of up to three employees want a command or an edit, one
    after the other. The person reads and answers each card one at a time (no card is ever answered for them, and an unanswered
    card is a refusal after five minutes); the more cards, the more a tired press of 允許這一次 is a risk.
-3. **Mixed Claude Code and Codex: the conversation goes to two companies.** What the person says in a group, and what each
-   employee answers, is sent to every member's AI tool: to Anthropic for a Claude Code employee and to OpenAI for a Codex one,
-   each through the person's own login. The dialog for a new group and for adding someone says so when both are present.
+3. **Mixed tools: the conversation goes to two or three companies.** What the person says in a group, and what each
+   employee answers, is sent to every member's AI tool: to Anthropic for a Claude Code employee, to OpenAI for a Codex one and to Google for an AGY one,
+   each through the person's own login. The dialog for a new group and for adding someone says so when two or more are present (the sentence lists the
+   companies in the order Claude Code, Codex, AGY). A group of AGY employees only has one company and says nothing about crossing.
 4. **An allowed command can reach VBear itself, and Codex may run outside its sandbox.** A command the person allows runs as the
    person and can read the console's access token and call VBear's API (to raise a limit, for example), and a Codex command may run
    outside the sandbox after it was allowed (the card says so). VBear guarantees only that **its own group code** does not do the
@@ -1706,8 +1713,8 @@ that persists and is sent to a company's servers every time a process starts**, 
   quotes can make 409 `memory_full` earlier); at most 200 card switches in the file. A file that cannot be read is reported on the
   page (記憶的檔案有問題), VBear does not overwrite it, and chats go on **without** memory (not with half of it) and say so.
 - **Which employees.** Per card, from `GET /api/memory`'s `cards` (`on`): a Claude Code card takes memory along by default (to Anthropic),
-  a Codex card does not until the person switches it on (to OpenAI), and switching it on takes a question on the page and
-  `confirm_company: true` in the body. A card that cannot chat has no switch. The meetings, staffing meetings, the chief of staff
+  a Codex card does not until the person switches it on (to OpenAI), an AGY card does not either (to Google), and switching either on takes a question on
+  the page and `confirm_company: true` in the body (409 `memory_confirm` with `warn: ["send_to_google"]` for AGY). A card that cannot chat has no switch. The meetings, staffing meetings, the chief of staff
   and full-mode terminals are never given memory. A card switched off sends not a word, even if there are lines.
 - **The paragraph and the process.** Described under "Chats with a role card" (second paragraph: fixed words, a JSON string
   between `BEGIN_VBEAR_MEMORY_JSON` and `END_VBEAR_MEMORY_JSON`, the daemon's second check, 8,000 characters for a chat's added prompt
@@ -1765,9 +1772,9 @@ that persists and is sent to a company's servers every time a process starts**, 
 2. **A command the person allowed can add a line.** It runs as the person, can read the console's access token and call VBear's
    API (an existing risk of every chat), and so can post a line. The memory page lists every line with its source, but a line
    made through the API says it was typed. The person should read the page now and then.
-3. **Memory goes to Anthropic and to OpenAI.** Every new process of a Claude Code employee carries the lines to Anthropic, and every
-   one of a Codex employee that was switched on carries them to OpenAI, through the person's own login; the tools keep them in their copy
-   of the conversation. The page says so at the top, in the box that saves a line and in the question before a Codex card is switched
+3. **Memory goes to Anthropic, to OpenAI and to Google.** Every new process of a Claude Code employee carries the lines to Anthropic, every
+   one of a Codex employee that was switched on carries them to OpenAI, and every one of an AGY employee that was switched on carries them to Google, through the person's own login; the tools keep them in their copy
+   of the conversation. The page says so at the top, in the box that saves a line and in the question before a Codex or AGY card is switched
    on. A memory suggestion sends the conversation to Anthropic whatever the chat's tool.
 4. **The rules catch shapes, not meanings.** A password or a name written in ordinary words, a phone number written in letters, or a
    secret split over two lines of memory passes. Memory is not a place for secrets, and the page says so.
@@ -1794,6 +1801,8 @@ check) is written under "Chats with a role card" (the bullet "The shared folder"
 check"; this section is the whole picture: who can switch it on, what is handed on, what never changes, what was and was not seen on a
 real machine, and the residual risks. Nothing about it removes a question: every Bash command and every Edit, Write or Codex file
 change in it is still a card.
+
+- **AGY employees do not use it in v0.20.0.** 「AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查」: the real check of AGY 1.5.3 found that AGY's file tools can write into the folder (after a card) but a shell command cannot (`--add-dir` does not make AGY's sandbox writable), two behaviours that would leave an employee stuck. `shared_folder.SUPPORTED_ENGINES` lists `claude-chat` and `codex-chat` only; switching an AGY card on, ticking the folder for a group or a dispatch that holds an AGY employee, and `for_card` for an AGY card are all refused or "no". Everything below that is said of "a Claude Code card and a Codex card" is the whole of it. See "Chats with an AGY role card".
 
 - **Only the person switches it on, and only in the browser.** Every employee is off until the person switches it on, in one of three
   places, each a browser request with the access token and `X-VBear`: the 共用資料夾 page (`POST /api/shared/cards`), the tick 「讓這幾位都能用共用資料夾」 on
@@ -1860,7 +1869,7 @@ change in it is still a card.
    What stands in the way is that every command and every file change is still asked of the person, and VBear never asks an employee because a file said so.
 2. **What an employee reads goes to its AI company, and with mixed tools it crosses companies.** A file a Claude Code employee wrote and a Codex
    employee read goes to OpenAI (and the other way round); a file the person dropped in goes to whoever reads it. The page says so at the top and
-   the question before a Codex employee is switched on says it; the folder is not a place for passwords, accounts or keys.
+   the question before a Codex employee is switched on says it. An AGY employee does not use the shared folder in v0.20.0, so nothing of it goes to Google this way; the folder is not a place for passwords, accounts or keys.
 3. **Links and hard links.** A command the person allowed can make a link or a hard link in the folder (Codex 0.163.0 was seen to allow it). VBear's Edit,
    Write and Codex file changes follow links, refuse a path that leaves the folder and refuse an existing file with more than one hard link, and the
    Codex sandbox refuses a write through a link to the outside (seen for 0.163.0, `codex sandbox`; for Claude Code's Bash sandbox it is the version check's job to see it); a command that made a hard link to a file elsewhere, followed by a write
@@ -2015,7 +2024,7 @@ uses no AI and costs nothing; every command and every file change is still asked
   A Codex card in the safe mode can chat in VBear and cannot start in a terminal (VBear's terminal starts Codex only in the full mode), as with the cards a dispatch makes. The format of a team template has no field for the tool, the mode, a skill card, a profession, permissions, a switch, memory, the shared folder, a chat or an id, and `mine.json` is a closed format (one field more is a file that cannot be read).
 - **Every routine is made switched off** (`routine_body` has the literal `enabled: False`; every `enabled` in a template module must be `False`, rule 13c). Switching one on is the routines page's press, with the old checks (at most ten on), and after that a routine follows v0.18.0: a reminder, or a start by itself only with 自己動手 item 3.
 - **Memory, the shared folder, `config.json`, the 自己動手 ticks and the limits are not touched:** the apply routes call none of `memory.set_card`, `shared_folder.set_card` and `open_cards`, the dispatch's `on_new_employee`, the chat service's `create` and `send`, the daemon, the meetings' engine, `config.save` or `autonomy`. `config.json`, `memory/memory.json` and `shared-meta/` are the same bytes after an apply and after an undo (a test compares them), the chat service is asked only for the list of cards and the daemon is a trap that fails on any call.
-  So the new employees have the card's default: Claude Code's takes memory along, Codex's does not (it would go to OpenAI), and none has the shared folder.
+  So the new employees have the card's default: Claude Code's takes memory along, Codex's does not (it would go to OpenAI), AGY's does not (it would go to Google), and none has the shared folder.
 - **No AI, no money, no program.** `subprocess` is a trap in the tests of the apply; the ledger of the day is the same after. Talking to a new employee afterwards is an ordinary chat under the per-turn and the daily limits.
 - **No way out of this computer.** No route exports, imports, uploads or downloads a team template, and a template module imports none of `urllib`, `http` and `socket` (a test says so; `/api/templates/mine/<id>/export` and the like are 404).
 
@@ -2067,7 +2076,7 @@ Whether the macOS app of v0.18.0 does anything with a `templates` folder it does
 
 ## Chats with an AGY role card (engine `agy-chat`, v0.20)
 
-*Draft. P46-2 wrote the part about what has to be true before a process may start (`vbear/runtime/agy_chat_env.py`, `admin_policy.AGY_SOURCES`, the AGY records in `cli_versions.py`); P46-3 added the process, the launch and the console's side (the second half of this section, "The process, the launch and the console's side"); P46-6 makes it final. ADR 0012 gives the reasons.*
+*Final for v0.20.0 (P46-6). The first half is what has to be true before a process may start (`vbear/runtime/agy_chat_env.py`, `admin_policy.AGY_SOURCES`, the AGY records in `cli_versions.py`); the second half is the process, the launch and the console's side; then what the real runs showed, the residual risks, and what happens on going back to v0.19.0. ADR 0012 gives the reasons.*
 
 A chat with a role card whose AI tool is AGY (Antigravity CLI) runs `agy acp` with a settings folder of VBear's and the person's own AGY login, on **the person's Google plan**. The first half of this section is what has to be true before any such process may start; the program it looks at is only `agy --version`, which starts AGY and not a model.
 
@@ -2078,7 +2087,7 @@ A chat with a role card whose AI tool is AGY (Antigravity CLI) runs `agy acp` wi
 - **The administrator policy.** `/etc/antigravity` (the whole folder) and the managed preferences domain `com.google.antigravity` refuse the chat, and an AGY version without a list cannot start. The list comes from reading the strings of the 1.5.3 binary, not from the vendor's documentation, and the domain is a candidate.
 - **The binary.** The first executable `agy` on the daemon's search path (the one full-mode terminals use), at its real path, a plain file of this user or root that nobody else can write, with every folder on its way (the link's and the file's) owned by this user or root and not writable by group or others (a sticky folder like /tmp passes). `agy --version` is run from "/" with the daemon's safe environment (no `ANTIGRAVITY_*`, `GEMINI_*`, `GOOGLE_*`) and must print exactly one `X.Y.Z` line and exit 0; the file must be the same before and after the run (`cli_identity`, the six numbers a launch manifest keeps). The version must be in the code's table (`1.5.3`) and listed in `agy-chat-verified.json`, which counts a version only when the report it names is of mode `agy-chat`, passed and names that version under `agy_version` (and `"shared": "passed"` for the shared folder). AGY updates itself: a new version is unsupported or unverified until the check is run for it.
 - **The answer** (`agy_chat_env.status`) is one dictionary with no path and no command output: `not_installed`, `unsupported`, `unverified`, `policy`, `hooks`, `folder`, `version_unreadable` or `ready`, in the order of the checks. Not being logged in is not a state; it shows when a chat starts.
-- **The person's skills are loaded by AGY anyway** (ADR 0012, decision 1): a skill is text for the model and not a permission; every command and file change is still asked, and commands still run in AGY's sandbox. The screen says so.
+- **The person's own installed AGY skills are loaded by AGY anyway** (ADR 0012, decision 1; the person accepted it): AGY's login follows `HOME`, and a settings folder of VBear's does not stop AGY from reading the skills under `~/.agents/skills`. A skill is text for the model and not a permission; every command and file change is still asked, and commands still run in AGY's sandbox. The screen says "AGY 員工會用到你自己裝的 AGY 技能".
 
 ### The process, the launch and the console's side (P46-3)
 
@@ -2092,7 +2101,31 @@ A chat with a role card whose AI tool is AGY (Antigravity CLI) runs `agy acp` wi
 - **Money.** AGY reports tokens, only at the end of a turn. A turn costs `totalTokens` at VBear's rate (US$1 per million, up to the cent, at least US$0.01) when AGY ended it and the count adds up (the three that make it); anything else (cut off, timed out, process ended, no usable count) costs the turn's cap, and a turn that never reached AGY costs nothing. The cap is checked before a turn starts only; a turn can cost more than it, and the record says what it cost. Stopping sends `session/cancel` and waits 10 seconds for AGY's own end (its usage then counts); after that the process group is ended and the turn costs its cap.
 - **What the record keeps** is the same as for a Codex chat: nothing about the plan, the sign-in methods, the thoughts, the names of AGY's commands or skills, or the chat folder's path; AGY's own copy of the conversation stays in the chat folder and is never deleted by VBear.
 - **The verified list gates it.** No AGY version is verified out of the box; a message to an AGY chat on a version that did not pass `--mode agy-chat` (P46-4) is `unverified`. The console's `POST /api/chat-support/verify {"engine": "agy"}` is refused when the check could not pass anyway and otherwise starts the check (`agy_verifier`; wired by P46-4).
-- **Residual risks** (final wording in P46-6): the AGY process itself is not in the sandbox and runs with the person's real `HOME` and the skills in `~/.agents/skills`; a read inside the work folder does not pass through VBear (VBear sees the path afterwards and stops the chat when it is outside, which can be too late); the sandbox writes the temporary folders; a turn can cost more than its cap; the session code's behaviour was only played against synthetic scripts until the first real run of the check.
+- **What the real runs showed (AGY 1.5.3, seventh run; `docs/evidence/agy-1.5.3-chat.md` sections 11 and 12).** The main check passed: 15 turns, an estimated US$0.57 on the person's Google plan. Every command is asked (even `ls -a`); a refusal means it did not run; "change it and ask again" works; the file tools outside the work folder are refused by VBear with no card; allowed commands could not write outside, read outside or reach the network; a request to leave the sandbox was refused with no card; a link did not give a read of the outside; stopping ended the turn and the process in 3.1 seconds and left nothing running. The order AGY really uses for a call that asks (`in_progress`, `pending`, request, answer, `in_progress`, `completed` or `failed`) is the one the tracker allows and no other. **The shared-folder part of the check did not pass**: a file change in the shared folder is asked about and written, but a shell command cannot write there (`--add-dir` does not make AGY's sandbox writable), and one step flagged a home-folder path as account data (a false positive of the check, not a leak). So the shared folder is not opened to AGY employees in this version (below).
+- **Error codes the person can meet.** `agy_version` (the AGY version is not one VBear has a table for, or `agy --version` did not print one line), `agy_home` (the chat's settings folder holds something VBear did not put there), `agy_hooks` (the person's own `~/.agents/hooks.json` exists), `agy_workdir` (the work folder holds `.agents`, `.agent`, `.gemini`, `GEMINI.md`, `AGENTS.md` or a link out), `admin_policy` (an administrator policy exists), `unverified` (this version has not passed `--mode agy-chat` on this Mac) and `card_tool_unsupported` (the shared folder, above); a group skips an AGY member with one of the first four, and each comes with a sentence that says what happened and what to do.
+- **Guard rules 14a to 14h** of `tests/test_autonomy_guard.py` are the AGY rules: 14a only "allow once" or "reject once" is ever chosen, 14b the argument list and the settings are one table, 14c `BypassSandbox` is refused with no card, 14d the environment is exactly six variables, 14e no feature module imports the AGY chat and the AGY modules reach no feature writer, 14f memory is off by default and needs the yes to Google and the shared folder is not open to AGY, 14g the person's own AGY folders are left alone, 14h only the known messages are written. `tests/test_p46_flow.py` walks one AGY employee over HTTP and runs the v0.19.0 code over what v0.20.0 wrote; `tools/qa_p46.py` is the coordinator's real-machine check through the HTTP API only (port 7801; it refuses 7788, 7789, `~/.vbear` and anything under it, and a state folder under `/tmp`; the Claude stages are capped at US$0.30 in all and gated before each one).
+- **The shared folder is not open to an AGY employee in v0.20.0.** `shared_folder.SUPPORTED_ENGINES` is `("claude-chat", "codex-chat")`; every way in (the shared page, a group's tick, a dispatch's tick) is refused with the sentence 「AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查」. The argument `--add-dir` and the shared part of the verification stay in the code (the verification can still be run with `--shared`) for a later AGY version; `tests/test_autonomy_guard.py` rule 14f holds both the refusal and the Google confirmation that returns if the engine is listed again.
+- **Residual risks.**
+  1. The person's own AGY skills are loaded (above); so may be workflow and agent definitions under `~/.agents`.
+  2. The AGY process itself (not the commands it runs) is not in the sandbox: it runs with the person's real `HOME`, and VBear controls only its argument list, its environment, its settings folder and the answer to each request.
+  3. A read inside the work folder does not pass through VBear. VBear sees the path afterwards and stops the chat when it is outside, which can be too late; the check's `link_read` step found no leak in the case it tries.
+  4. The sandbox allows the temporary folder and common build caches, and system files may be readable.
+  5. What a read card allows goes to Google (the card says so), as everything the person says in an AGY chat does.
+  6. The per-turn cap is checked only before a turn starts; one turn may cost more than the cap, and the cost is an estimate (tokens at US$1 per million, not an invoice; AGY uses the Google plan).
+  7. The administrator-policy list comes from reading `strings` of the program, not from vendor documentation; whether the person's App permissions are merged is not verified (the rule "a call that completed without being asked stops the chat" is the backstop); `useG1Credits` is not shown to be a settings field (the check shows only that AGY still starts with it).
+  8. AGY updates itself. A new version is unsupported or unverified until the table and the check are done for it, and until then the chat does not start.
+  9. A command the person allows runs as the person and can read the console's access token and call VBear's API (the risk of every chat). The sandbox stopped writes outside, reads outside and the network in the real run; it was not tested against reading VBear's own state.
+
+### Going back to v0.19.0 (after using AGY chats in v0.20.0)
+
+Nothing is migrated: v0.20.0 added no setting and no kind of chat event. What a v0.19.0 console does with what v0.20.0 left (read from the v0.19.0 code, and for the first two by running that code in `tests/test_p46_flow.py`; items marked 待確認 were not run):
+
+1. **An AGY chat is shown with a problem and cannot be sent to or deleted.** Its `chat.json` names the engine `agy-chat`, which v0.19.0's engine table does not have, so the file is read as 「欄位不符」. The files are kept. The day's spending is still counted from the events, so the limit still includes the AGY turns.
+2. **An AGY role card cannot chat** (`card_gate` says `card_tool_unsupported`; run in `tests/test_p46_flow.py`). Read from the v0.19.0 code: a new group refuses an AGY member and adding one is refused, a new routine for an AGY employee is refused (`routine_card`), and every send of a group, routine or dispatch goes through the chat service, which refuses the card. What a group that already has an AGY member, an existing routine and a dispatch that reaches an AGY step then record (skipped, failed, paused) was not run and is 待確認. The role card itself is kept as it was.
+3. **Memory and shared-folder switches** keep only card ids; v0.19.0 shows a card that cannot chat as one with no switch and does not load it. That this does not make the whole switch file unreadable is read from the code and not run (待確認).
+4. **Left on disk and not read by v0.19.0:** `<state>/agy-chat-home/` (and AGY's own copies of the conversations in it), `agy-chat-verified.json`, and the launch records under `<state>/sessions/` of engine `agy-chat`. v0.19.0's daemon opens a launch record only by the id it is given and at start only lists the folder to clean up or keep launches that are provably dead; it never signals. How it reads an unknown engine there is 待確認. `config.json` has no new key, so it reads the same.
+5. **A team template applied with AGY blocks all team templates in v0.19.0.** `applies.json` keeps the tool of each apply, and in v0.19.0 `tool` is a closed set of two, so the whole file is read as unreadable: v0.19.0 cannot apply a template again and cannot undo any. Undoing in v0.20.0 first does not remove the record (it stays, marked undone), so the file stays unreadable. The cards the apply made are ordinary role cards and are not affected. If you used AGY for a template, do not go back, or accept that team templates stay locked.
+6. **Upgrading again to v0.20.0 restores everything**: the chats read again, the cards chat again, the templates work again.
 
 ## The start-up page (v0.12)
 
@@ -2213,7 +2246,7 @@ VBear's own two main agents (`cli-claude`, `cli-codex`, kind `cli`) are not list
 are not sent: their Chinese names are VBear's, and the author wrote no description for them. An older translation of
 one stays in `role-translations.json` unused; nothing reads it.
 
-## The AGY chat protocol (v0.20, draft from P46-1)
+## The AGY chat protocol (v0.20)
 
 `vbear/runtime/agy_chat_protocol.py` (ADR 0012) is the part of the AGY chat that decides what VBear writes to `agy acp` and what it
 believes of what comes back. The process that uses it is described in "Chats with an AGY role card"; what it fixes, and what `tests/test_agy_chat_protocol.py` and rules 14a–14c of `tests/test_autonomy_guard.py` hold it to:
@@ -2246,4 +2279,4 @@ believes of what comes back. The process that uses it is described in "Chats wit
 - **Nothing about the person is kept**: not the plan name, the sign-in methods, the thoughts or the names of the commands and skills.
 
 What is still only synthetic: the fixtures are built from the investigation's facts and ACP's public formats, since its raw messages were not
-kept; `docs/evidence/agy-1.5.3-chat.md` section 11 lists what the first real `--mode agy-chat` run must confirm.
+kept; the first six real runs of the check each found something the fixtures could not have shown (section 12 of `docs/evidence/agy-1.5.3-chat.md`), the seventh passed the main part (section 11), and the fixtures are still synthetic.

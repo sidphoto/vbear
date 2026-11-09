@@ -388,31 +388,33 @@ const SH_CARDS = () => [
 const shView = (over = {}) => ({ ok: true, where_text: "~/.vbear/shared", exists: true, problem: null, readable: true,
   used: { bytes: 0, entries: 0, max_bytes: 1073741824, max_entries: 10000, over: false }, links: 0, files: [], cards: SH_CARDS(), ...over });
 
-test("shared folder page: the rule line names Google, an AGY employee has a switch, and switching on asks first and then sends the yes", async () => {
-  setPage({ shared: shView() });
+const SHARED_AGY_SENTENCE = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。";
+const SH_CARDS_V020 = () => SH_CARDS().map((c) => (c.tool === "agy" ? { ...c, company: null } : c));      // what v0.20.0's server sends: no company, no switch
+
+test("shared folder page (v0.20.0): an AGY employee has no switch and the page says AGY cannot use the shared folder in this version", async () => {
+  setPage({ shared: shView({ cards: SH_CARDS_V020() }) });
   const main = await open("#/shared");
-  const company = text(q(main, "rule-company", "data-shared"));
-  assert(company.includes("AGY 的員工送到 Google") && company.includes("不要放密碼、帳號、金鑰"));
+  const rule = text(q(main, "rule-company", "data-shared"));
+  assert(rule.includes("Claude Code 的員工送到 Anthropic") && rule.includes("Codex 的員工送到 OpenAI"), rule);
+  assert(rule.includes(SHARED_AGY_SENTENCE) && !rule.includes("AGY 的員工送到 Google"), rule);
   const rows = qa(main, "card", "data-shared");
-  assert(text(q(rows[1], "company", "data-shared")).includes("打開後，讀到的檔案會送給 Google"));
-  const sw = q(rows[1], "card-switch", "data-shared");
-  assert(sw && sw.checked === false);
-  sw.checked = true; sw.dispatch("change");
-  await settle();
-  const dlg = text(dialog());
-  assert(dlg.includes("會送到 Google") && dlg.includes("AGY"), dlg);
-  assert.strictEqual(FETCH_LOG.filter((c) => c.url === "/api/shared/cards").length, 0);
-  dialog().find((n) => n.tag === "button" && n.hasClass("primary")).click();
-  await settle(80);
-  assert.deepStrictEqual(FETCH_LOG.filter((c) => c.url === "/api/shared/cards").map((c) => c.body), [{ profile_id: "emp-5", on: true, confirm_company: true }]);
+  assert(q(rows[0], "card-switch", "data-shared"), "Claude Code keeps its switch");
+  assert.strictEqual(q(rows[1], "card-switch", "data-shared"), null, "no switch for AGY");
+  assert.strictEqual(text(q(rows[1], "unsupported", "data-shared")), SHARED_AGY_SENTENCE);
+  assert.strictEqual(FETCH_LOG.filter((c) => c.method === "POST" && c.url === "/api/shared/cards").length, 0);
 });
 
-test("shared folder page: when the server does not support the shared folder for an AGY employee, the page says the AI tool cannot use it and offers no switch", async () => {
-  setPage({ shared: shView({ cards: SH_CARDS().map((c) => (c.tool === "agy" ? { ...c, company: null } : c)) }) });
+test("shared folder page: the line on an AGY role card's back says the same", async () => {
+  const line = app.sharedCardLine({ profile_id: "emp-5", name: "AGY 員工", tool: "agy", company: null, can_chat: true, on: false, verified: null });
+  assert.strictEqual(text(line), SHARED_AGY_SENTENCE);
+  assert(!text(app.sharedCardLine({ profile_id: "emp-9", tool: "grok", company: null, can_chat: true, on: false })).includes("AGY"), "another tool keeps the general sentence");
+});
+
+test("shared folder page: a tool that is not AGY and not supported keeps the general sentence", async () => {
+  setPage({ shared: shView({ cards: [...SH_CARDS_V020(), { profile_id: "emp-9", name: "別家員工", tool: "grok", company: null, can_chat: true, on: false, verified: null }] }) });
   const main = await open("#/shared");
-  const row = qa(main, "card", "data-shared")[1];
-  assert.strictEqual(q(row, "card-switch", "data-shared"), null);
-  assert(text(q(row, "unsupported", "data-shared")).includes("還不能用共用資料夾"));
+  const row = qa(main, "card", "data-shared")[2];
+  assert(text(q(row, "unsupported", "data-shared")).includes("還不能用共用資料夾") && !text(row).includes("AGY 新版"));
 });
 
 // ---- groups, dispatch, the chief of staff -----------------------------------------------------------------------------------
@@ -442,18 +444,23 @@ test("group dialog: the sentence names every company in the group, in the order 
   assert.strictEqual(app.groupMixedNote(["claude"]), "");
 });
 
-test("group dialog: ticking the shared folder with an AGY member says the files go to Google and the request carries confirm_company", async () => {
+test("group dialog (v0.20.0): ticking the shared folder with an AGY member says AGY cannot use it and the group cannot be made like that", async () => {
   const bodies = [];
   const dlg = groupDialog(async (b) => { bodies.push(b); return {}; });
   pickIn(dlg, "emp-1"); pickIn(dlg, "emp-5");
-  assert.strictEqual(q(dlg, "shared-google", "data-group"), null, "the line waits for the tick");
+  assert.strictEqual(q(dlg, "shared-agy", "data-group"), null, "the line waits for the tick");
   const tick = q(dlg, "shared", "data-group");
   tick.checked = true; tick.dispatch("change");
-  assert.strictEqual(text(q(dlg, "shared-google", "data-group")), app.GROUP_SHARED_GOOGLE_NOTE);
-  assert(text(q(dlg, "shared-google", "data-group")).includes("Google") && !q(dlg, "shared-codex", "data-group"));
+  assert.strictEqual(text(q(dlg, "shared-agy", "data-group")), app.GROUP_SHARED_AGY_NOTE);
+  assert(app.GROUP_SHARED_AGY_NOTE.includes("AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查"));
+  assert.strictEqual(q(dlg, "shared-google", "data-group"), null, "no more yes to Google for the shared folder");
+  assert.strictEqual(q(dlg, "create", "data-group").disabled, true, "it would be refused, so it is not offered");
+  tick.checked = false; tick.dispatch("change");
+  assert.strictEqual(q(dlg, "shared-agy", "data-group"), null);
+  assert.strictEqual(q(dlg, "create", "data-group").disabled, false);
   q(dlg, "create", "data-group").click();
   await settle();
-  assert.deepStrictEqual(bodies, [{ profile_ids: ["emp-1", "emp-5"], shared_folder: true, confirm_company: true }]);
+  assert.deepStrictEqual(bodies, [{ profile_ids: ["emp-1", "emp-5"] }]);
 });
 
 test("a group's reply of an AGY employee is costed as an estimate that AGY reports at the end of the turn; the other tools keep their words", () => {
@@ -463,28 +470,34 @@ test("a group's reply of an AGY employee is costed as an estimate that AGY repor
   assert.strictEqual(cost("claude"), "US$0.02（Claude Code 回報的估值）");
 });
 
-test("a dispatch proposal with an AGY employee: the tick says the files go to Google and the confirmation carries the yes", async () => {
+test("a dispatch proposal with an AGY employee (v0.20.0): the tick says AGY cannot use the shared folder and the confirmation waits until it is taken off", async () => {
   const SHA = "a".repeat(64), DID = "d-0123456789ab";
   FETCH_LOG.length = 0;
   setHandler((url) => (url.split("?")[0] === `/api/dispatch/${DID}/confirm` ? jsonResponse({ id: DID, state: "running", shared: { opened: [] } }) : null));
-  const v = { id: DID, chief_id: "cos-0123456789ab", chat_id: AGY_CID, created_at: 1790000200, state: "proposed", started_by: null, started_by_text: null, summary: "找 AGY 員工。",
-    questions: [], notes: [], team: [{ who: "C1", why: "會寫", kind: "existing", name: "AGY 員工" }], tools: ["claude", "codex", "agy"], proposal_sha: SHA, edited: false, task_id: null,
-    created_cards: [], steps: [], plan: { title: "週末市集", goal: "準備", deliverables: ["x"], new_cards: [], steps: [{ who: "C1", text: "請寫", name: "AGY 員工" }] },
-    cost: { steps: 1, per_turn_usd: "0.5", max_usd: "0.5", day_left_usd: "2.71" }, pause: null, events: [],
+  const v = { id: DID, chief_id: "cos-0123456789ab", chat_id: AGY_CID, created_at: 1790000200, state: "proposed", started_by: null, started_by_text: null, summary: "找兩位員工。",
+    questions: [], notes: [], team: [{ who: "C1", why: "會寫", kind: "existing", name: "AGY 員工" }, { who: "C2", why: "會算", kind: "existing", name: "文案小編" }],
+    tools: ["claude", "codex", "agy"], proposal_sha: SHA, edited: false, task_id: null,
+    created_cards: [], steps: [], plan: { title: "週末市集", goal: "準備", deliverables: ["x"], new_cards: [], steps: [{ who: "C1", text: "請寫", name: "AGY 員工" }, { who: "C2", text: "請算", name: "文案小編" }] },
+    cost: { steps: 2, per_turn_usd: "0.5", max_usd: "1.0", day_left_usd: "2.71" }, pause: null, events: [],
     can: { confirm: true, dismiss: true, stop: false, continue: false, delete: true, withdraw: [] },
-    shared: { people: [{ who: "C1", name: "AGY 員工", on: false, company: "Google", usable: true }] } };
+    shared: { people: [{ who: "C1", name: "AGY 員工", on: false, company: "Google", usable: false }, { who: "C2", name: "文案小編", on: false, company: "Anthropic", usable: true }] } };
   const node = app.proposalCard(v, {});
   await settle();
   const tick = q(node, "shared", "data-dispatch");
-  assert(tick);
+  assert(tick, "the tick is there for the employee who can use the folder");
   tick.checked = true; tick.dispatch("change");
-  assert.strictEqual(text(q(node, "shared-google", "data-dispatch")), app.DISPATCH_SHARED_GOOGLE_NOTE);
-  assert(!q(node, "shared-codex", "data-dispatch"));
+  assert.strictEqual(text(q(node, "shared-agy", "data-dispatch")), app.DISPATCH_SHARED_AGY_NOTE);
+  assert(app.DISPATCH_SHARED_AGY_NOTE.includes("AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查"));
+  assert.strictEqual(q(node, "shared-google", "data-dispatch"), null);
+  assert.strictEqual(q(node, "confirm", "data-dispatch").disabled, true, "it would be refused, so it is not offered");
+  tick.checked = false; tick.dispatch("change");
+  assert.strictEqual(q(node, "shared-agy", "data-dispatch"), null);
+  assert.strictEqual(q(node, "confirm", "data-dispatch").disabled, false);
   q(node, "confirm", "data-dispatch").click();
   await settle();
   const sent = FETCH_LOG.filter((c) => c.method === "POST" && c.url.split("?")[0] === `/api/dispatch/${DID}/confirm`)[0].body;
-  assert.strictEqual(sent.shared_folder, true);
-  assert.strictEqual(sent.confirm_company, true);
+  assert.strictEqual(sent.shared_folder, undefined);
+  assert.strictEqual(sent.confirm_company, undefined);
 });
 
 test("the chief of staff's desk on an AGY CEO's chat says the talk goes to Claude Code; other CEOs' desks do not", async () => {
@@ -534,7 +547,7 @@ test("the whole of the new code has no innerHTML, no emoji and no external addre
   const source = fs.readFileSync(path.join(root, "app.js"), "utf8");
   assert(!/\.innerHTML\s*=|insertAdjacentHTML\s*\(/.test(source));
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u;
-  for (const marker of ["CHAT_AGY_SANDBOX_WARNING", "CHAT_AGY_WORD", "SETUP_AGY_NOT_VERIFIED", "CEO_AGY_NOTE", "MEMORY_CONFIRM_COMPANY", "GROUP_SHARED_GOOGLE_NOTE"]) assert(source.includes(marker), marker);
+  for (const marker of ["CHAT_AGY_SANDBOX_WARNING", "CHAT_AGY_WORD", "SETUP_AGY_NOT_VERIFIED", "CEO_AGY_NOTE", "MEMORY_CONFIRM_COMPANY", "GROUP_SHARED_AGY_NOTE"]) assert(source.includes(marker), marker);
   const mine = source.split("\n").filter((l) => /AGY|agy/.test(l)).join("\n");
   assert(!emoji.test(mine), "no emoji");
   assert(!/https?:\/\//.test(mine), "no external address");
