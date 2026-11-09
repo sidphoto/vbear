@@ -203,7 +203,7 @@ class ChatHomeTests(FolderCase):
         self.make_home()
         names = ["GEMINI.md", "AGENTS.md", "gemini.md", "Agents.MD",
                  "config/hooks.json", "config/skills", "config/workflows", "config/global_workflows", "config/plugins",
-                 "config/projects", "config/Hooks.json"]
+                 "config/Hooks.json"]
         for name in names:
             for kind in ("file", "dir", "link"):
                 with self.subTest(name=name, kind=kind):
@@ -219,6 +219,34 @@ class ChatHomeTests(FolderCase):
                     else:
                         path.unlink()
         self.assertEqual(env.check_chat_home(self.state), self.chat_home, "clean again")
+
+    def test_what_agy_makes_there_by_itself_is_accepted_and_every_other_name_is_refused_by_name(self):
+        self.make_home()
+        for name in ("config/projects", "config/config.json", "config/mcp_config.json", "antigravity-cli/conversations",
+                     "antigravity-cli/logs/x.log"):
+            path = self.chat_home / name
+            path.parent.mkdir(exist_ok=True, parents=True, mode=0o700)
+            path.mkdir() if not name.endswith((".json", ".log")) else path.write_text("{}" if name.endswith(".json") else "x")
+        (self.chat_home / "config" / "projects" / "p1").mkdir()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
+        for where in ("", "config"):
+            for kind in ("file", "dir"):
+                with self.subTest(where=where, kind=kind):
+                    path = self.chat_home / where / "made-up-item"
+                    path.write_text("x") if kind == "file" else path.mkdir()
+                    why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+                    self.assertIn("made-up-item", why)
+                    self.assertNotIn(str(self.tmp), why)
+                    path.unlink() if kind == "file" else path.rmdir()
+        extra = [self.chat_home / "stranger-a", self.chat_home / "stranger-b"]
+        for path in extra:
+            path.write_text("x")
+        why = self.refused(env.check_chat_home, self.state, code="foreign_settings")
+        self.assertIn("stranger-a、stranger-b", why, "all the names are said, so one run shows them all")
+        self.assertNotEqual(env.home_state(self.state)[0], "ok")
+        for path in extra:
+            path.unlink()
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
 
     def test_a_config_folder_that_is_a_link_or_a_file_is_refused(self):
         self.make_home()

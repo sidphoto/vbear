@@ -61,7 +61,7 @@ class ConstantsTests(unittest.TestCase):
         c = acp.VERSIONS["1.5.3"]
         self.assertEqual(c.session_updates, frozenset({
             "agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "available_commands_update",
-            "plan", "current_mode_update", "user_message_chunk"}))
+            "plan", "current_mode_update", "user_message_chunk", "config_option_update", "session_info_update"}))
         self.assertEqual(c.tool_kinds, frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch",
                                                   "switch_mode", "other"}))
         self.assertEqual(c.allow_option_kind, "allow_once")
@@ -78,8 +78,10 @@ class ConstantsTests(unittest.TestCase):
     def test_what_may_not_be_in_the_home_or_the_work_folder(self):
         c = acp.VERSIONS["1.5.3"]
         self.assertEqual(c.home_forbidden, ("GEMINI.md", "AGENTS.md", "config/hooks.json", "config/skills",
-                                            "config/workflows", "config/global_workflows", "config/plugins",
-                                            "config/projects"))
+                                            "config/workflows", "config/global_workflows", "config/plugins"))
+        self.assertEqual(c.home_created, ("antigravity-cli", "config", "config/config.json", "config/mcp_config.json",
+                                          "config/projects"))
+        self.assertTrue(set(c.home_created).isdisjoint(c.home_forbidden))
         self.assertEqual(c.workdir_forbidden, (".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md"))
 
     def test_argv_is_the_fixed_tail_and_nothing_else(self):
@@ -723,14 +725,26 @@ class TurnTests(Drive):
         out = self.feed([{"jsonrpc": "2.0", "id": 80, "error": {"code": -32603, "message": "boom with a secret detail"}}])
         self.assertEqual(out, [("request_failed", {"kind": "prompt", "code": -32603, "auth_required": False})])
 
-    def test_an_unknown_update_a_replayed_user_message_and_a_message_that_is_not_text_are_anomalies(self):
+    def test_the_echo_of_our_message_and_the_option_and_info_updates_are_known_and_keep_nothing(self):
         self.drive("unknown-update").start()
         self.prompt()
-        anomalies = self.of("anomaly")
-        self.assertEqual([a["event_type"] for a in anomalies], ["config_option_update", "user_message_chunk"])
-        self.assertEqual(anomalies[0]["fields"], ["configOptions", "sessionUpdate"])
+        self.assertEqual(self.of("anomaly"), [])
         self.assertNotIn("replayed", json.dumps(self.facts))
         self.assertEqual(self.of("reply")[-1]["text"], "Fine.")
+        self.assertNotIn("violation", self.kinds())
+        for update in ({"sessionUpdate": "session_info_update", "title": "Made-up title", "updatedAt": "2026-01-01T00:00:00Z"},
+                       {"sessionUpdate": "config_option_update", "configOptions": [{"id": "x", "currentValue": "made-up"}]},
+                       {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "echo of the message"}}):
+            out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": update}})
+            self.assertEqual(out, [], update["sessionUpdate"])
+
+    def test_an_unknown_update_and_a_message_that_is_not_text_are_anomalies(self):
+        self.drive("text").start()
+        self.prompt()
+        out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": SESSION, "update": {"sessionUpdate": "made_up_update", "configOptions": [], "secret": "x"}}})
+        self.assertEqual([(k, d["event_type"], d["fields"]) for k, d in out],
+                         [("anomaly", "made_up_update", ["configOptions", "secret", "sessionUpdate"])])
         self.assertNotIn("violation", self.kinds())
         out = self.t.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {
             "sessionId": SESSION, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "image", "data": "x"}}}})

@@ -54,6 +54,9 @@ SETTINGS_BYTES = acp.settings_bytes(_NEWEST)
 # Names VBear never writes in the chat folder: finding one means another program put it there. (name as shown, where it sits)
 FORBIDDEN_TOP = tuple(n for n in _NEWEST.home_forbidden if "/" not in n)
 FORBIDDEN_CONFIG = tuple(n.split("/", 1)[1] for n in _NEWEST.home_forbidden if n.startswith(CONFIG_DIR + "/"))
+# The names AGY makes there itself (the same table): at the top of the folder and in its config folder. Any other name is refused.
+CREATED_TOP = tuple(n for n in _NEWEST.home_created if "/" not in n)
+CREATED_CONFIG = tuple(n.split("/", 1)[1] for n in _NEWEST.home_created if n.startswith(CONFIG_DIR + "/"))
 MCP_CONFIG_NAME = "mcp_config.json"
 MCP_CONFIG_MAX = 64 << 10
 
@@ -109,6 +112,14 @@ def _open_checked(base, home=None):
 def _foreign(name: str) -> AgyRefused:
     return AgyRefused("foreign_settings", f"聊天用的 AGY 設定資料夾裡有 {name}，不是 VBear 放的，所以不使用它。"
                       "請把它移走（VBear 不會替你刪）。")
+
+
+def _refuse_strangers(names, known) -> None:
+    """AgyRefused when a name is neither one AGY makes by itself nor one VBear writes (compared without regard to case)."""
+    allowed = {n.casefold() for n in known}
+    strangers = sorted(n for n in names if n.casefold() not in allowed)
+    if strangers:
+        raise _foreign("、".join(strangers[:5]))
 
 
 def _names(fd) -> list[str]:
@@ -237,6 +248,7 @@ def check_chat_home(base, *, size: bool = True, home=None) -> Path:
         for name in FORBIDDEN_TOP:
             if name.casefold() in folded:
                 raise _foreign(name)
+        _refuse_strangers(top, CREATED_TOP)
         cfd = _config_fd(fd)
         if cfd is not None:
             try:
@@ -248,6 +260,7 @@ def check_chat_home(base, *, size: bool = True, home=None) -> Path:
                 for name in FORBIDDEN_CONFIG:
                     if name.casefold() in inner:
                         raise _foreign(name)
+                _refuse_strangers(_names(cfd), CREATED_CONFIG)
                 _check_mcp_config(cfd)
             finally:
                 os.close(cfd)

@@ -49,6 +49,7 @@ never a value) is in ``observations.protocol``, to confirm the "format" fields o
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import re
@@ -592,6 +593,12 @@ def _run_steps(s: AgySession, ctx: dict, checks: dict, obs: dict) -> None:
         bool(ls_cards) and decisions.get(ls_cards[0]["card_id"]) == "allow" and bool(results) and not results[0]["is_error"]
         and end is not None and end["reason"] == "result",
         cards=len(ls_cards), note="連只讀的 ls -a 也先出卡片、等你允許；允許後照常執行")
+    # what the plan left open: does AGY ask before a read-only command? Whatever the verdict above, say what was seen (VBear's own words and
+    # the tools AGY called; the check does not decide for the person that a command AGY ran by itself is harmless)
+    obs["ls_ask"] = {"cards": len(ls_cards), "turn_ended": end["reason"] if end else None,
+                     "calls": [{"tool": x.get("tool"), "summary": str(x.get("summary"))[:60]} for x in s.of_turn(n, "tool_call")][:6],
+                     "errors": [str(x.get("message"))[:120] for x in s.of_turn(n, "error")][:3],
+                     "ran_without_a_card": bool(not ls_cards and s.of_turn(n, "tool_result"))}
     n = s.say("deny", msgs["deny"])
     cards = s.drive(n, _deny)
     rm_cards = [c for c in s.command_cards(cards) if re.search(r"\brm\b", _command(c))]
@@ -907,7 +914,7 @@ def _final_checks(s: AgySession, ctx: dict, checks: dict, obs: dict) -> None:
     home = agy_chat_env.chat_home_path(state)
     obs["home_items"] = _home_names(home)
     checks["home_clean"] = check(
-        status == "ok", state=status,
+        status == "ok", state=status, reason=None if status == "ok" else why,
         note="聊天用的 AGY 設定資料夾裡沒有 VBear 不准出現的項目（hooks、技能、外掛、工作流程、規則檔）、MCP 設定是空的")
     checks["settings_untouched"] = check(
         agy_chat_env.settings_intact(state), note="settings.json 的位元組仍然是 VBear 寫的那一份")
@@ -919,7 +926,7 @@ def _final_checks(s: AgySession, ctx: dict, checks: dict, obs: dict) -> None:
         except OSError:
             pass
     texts.append("\n".join(ctx["logs"]))
-    found = leaks("\n".join(texts), (str(real_home),))
+    found = leaks("\n".join(texts))                  # the person's home path is not account data (it is in every log line of a real run)
     checks["no_account_data"] = check(
         not found, found=found, note="方案名稱、登入方式、email 樣式的字串、技能名稱沒有進聊天紀錄、日誌或這份報告")
     seen = s.words.decoy in "\n".join(texts)
@@ -1001,15 +1008,53 @@ def run(binary: str, version: str, out: str | None, *, tmp_root: str | None = No
     report["passed"] = all(c["pass"] for c in report["checks"].values()) and "error" not in report
     if not report["passed"] and code == 0:
         code = 1
-    found = leaks(json.dumps(report, ensure_ascii=False), (str(Path.home()),))
-    if found:                                        # never let it reach the disk: keep the pass flags only
-        report["checks"] = {k: {"pass": v["pass"]} for k, v in report["checks"].items()}
-        report["checks"]["no_account_data"] = check(False, found=found, note="報告裡出現帳號資料，已移除細節")
-        for key in ("observations", "turns", "daemon_log_tail"):
-            report.pop(key, None)
+    code = _scrub(report, code)
+    return _finish(report, out_path, code, record=(real_state, binary))
+
+
+def tidy(value, home):
+    """``value`` (strings in nested lists and dicts) with the person's home folder written as ``~``: the report is read by others."""
+    if isinstance(value, str):
+        return value.replace(home, "~") if len(home) > 1 else value
+    if isinstance(value, list):
+        return [tidy(v, home) for v in value]
+    if isinstance(value, dict):
+        return {k: tidy(v, home) for k, v in value.items()}
+    return value
+
+
+def _scrub(report: dict, code: int) -> int:
+    """Nothing of an account reaches the disk. The home path is written as ``~`` first. Then every part of the report is looked at on its
+    own: a part with account data in it is replaced by the kinds of data found (``{"removed": [...]}``), the rest stays, so that one
+    leak does not take the whole evidence with it. The check ``no_account_data`` then fails, and says which kinds."""
+    tidied = tidy(report, str(Path.home()))
+    report.clear()
+    report.update(tidied)
+    kinds: set = set()
+
+    def look(holder: dict, key) -> None:
+        found = leaks(json.dumps(holder[key], ensure_ascii=False))
+        if found:
+            kinds.update(found)
+            holder[key] = {"removed": found}
+            if holder is report.get("checks"):                      # a check keeps its verdict
+                holder[key]["pass"] = False
+
+    for key in list(report):
+        if key == "observations" and isinstance(report[key], dict):
+            for sub in list(report[key]):
+                look(report[key], sub)
+        elif key == "checks" and isinstance(report[key], dict):
+            for sub in list(report[key]):
+                look(report[key], sub)
+        elif key not in ("passed", "mode", "tool", "agy_version"):
+            look(report, key)
+    if kinds:
+        report.setdefault("checks", {})["no_account_data"] = check(
+            False, found=sorted(kinds), note="報告裡出現帳號資料（只列出是哪幾類），那幾個部分已移除，其他部分保留")
         report["passed"] = False
         code = 1
-    return _finish(report, out_path, code, record=(real_state, binary))
+    return code
 
 
 def main(agy: str | None, out: str | None, *, shared: bool = True) -> int:
@@ -1059,6 +1104,7 @@ ASSUMPTIONS = (
     ("session/new 回的 sessionId 是 UUID", "check", "session_id_uuid"),
     ("AGY 讀的是 VBear 寫的 settings.json（toolPermission strict 會先問）", "check", "strict_settings"),
     ("工作資料夾內的讀取 AGY 自己不問（request-review）", "observation", "read_inside"),
+    ("連只讀的指令（ls -a）AGY 也會先問", "observation", "ls_ask"),
     ("--disable-telemetry 與 settings 的 useG1Credits:false 沒有讓 AGY 拒絕啟動；六個環境變數夠用", "check", "initialize"),
     ("--add-dir 讓沙盒可以寫共用資料夾", "shared", "shared_shell_card"),
     ("session/cancel 能結束回合並中斷正在跑的指令", "check", "stop_works"),
@@ -1107,6 +1153,18 @@ def summary_text(report: dict, out_path, code: int, recorded: bool = False) -> s
     failed = [(k, v) for k, v in (report.get("checks") or {}).items() if not v.get("pass")]
     for name, item in failed:
         lines.append(f"  失敗的步驟：{name}" + (f"——{item['note']}" if item.get("note") else ""))
+    ls = (report.get("observations") or {}).get("ls_ask")
+    if isinstance(ls, dict) and "ls_asks" in {k for k, v in failed}:
+        calls = "、".join(f"{c.get('tool')}（{c.get('summary')}）" for c in ls.get("calls") or ()) or "沒有"
+        lines.append(f"  ls -a 那個回合看到的：卡片 {ls.get('cards')} 張；回合結束原因 {ls.get('turn_ended')}；沒出卡片就跑完："
+                     f"{'是' if ls.get('ran_without_a_card') else '否'}；AGY 呼叫的工具：{calls}")
+    nad = (report.get("checks") or {}).get("no_account_data") or {}
+    if nad.get("found"):
+        lines.append("  帳號資料的類別：" + "、".join(str(k) for k in nad["found"]) + "（只列類別，內容沒有印出，那幾個部分已從報告移除）")
+    for message in report.get("error_messages") or ():
+        lines.append(f"  VBear 紀錄的錯誤：{message}")
+    if report.get("anomalies"):
+        lines.append("  AGY 傳了 VBear 還不認得或需要注意的訊息：" + "、".join(report["anomalies"]))
     shared = report.get("shared")
     if shared:
         bad = [k for k, v in (report.get("shared_steps") or {}).items() if not v.get("pass")]
@@ -1184,6 +1242,11 @@ def _run(binary: str, version: str, root: Path, real_state: Path, report: dict, 
         report["spent_usd"] = str((session.spent() if session else Decimal(0)))
         report["records"] = len(recs)
         report["anomalies"] = sorted({x["event_type"] for x in recs if x["kind"] == "anomaly"})
+        # what a person needs to see why a turn stopped: VBear's own sentences, and what AGY called (a tool and a short summary)
+        report["error_messages"] = [str(x.get("message"))[:200] for x in recs if x["kind"] == "error"][:10]
+        report["calls"] = [{"turn": x.get("turn"), "tool": x.get("tool"), "summary": str(x.get("summary"))[:100]}
+                           for x in recs if x["kind"] == "tool_call"][:30]
+        report["record_kinds"] = dict(sorted(collections.Counter(x["kind"] for x in recs).items()))
         report["daemon_log_tail"] = [line[:200] for line in logs[-12:]]
     finally:
         for each in (session, shared_session):

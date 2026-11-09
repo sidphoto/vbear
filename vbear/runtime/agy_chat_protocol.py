@@ -80,6 +80,7 @@ class AgyConstants:
     usage_fields: tuple
     usage_sum_fields: tuple             # totalTokens is the sum of these (measured)
     home_forbidden: tuple               # paths in the chat's settings folder that VBear never writes and that must not be there
+    home_created: tuple                 # the only other paths AGY makes there by itself (seen in a real run); anything else is refused
     workdir_forbidden: tuple            # names at the top of a work folder that AGY would read as settings or rules
 
     def settings_copy(self) -> dict:
@@ -97,7 +98,8 @@ VERSIONS = {
         settings={"toolPermission": "request-review", "allowNonWorkspaceAccess": False, "enableTerminalSandbox": True,
                   "useG1Credits": False, "permissions": {"allow": [], "ask": [], "deny": []}},
         session_updates=frozenset({"agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update",
-                                   "available_commands_update", "plan", "current_mode_update", "user_message_chunk"}),
+                                   "available_commands_update", "plan", "current_mode_update", "user_message_chunk",
+                                   "config_option_update", "session_info_update"}),
         tool_kinds=frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode",
                               "other"}),
         allow_option_kind="allow_once",
@@ -106,7 +108,10 @@ VERSIONS = {
                       "totalTokens"),
         usage_sum_fields=("inputTokens", "cachedReadTokens", "outputTokens"),
         home_forbidden=("GEMINI.md", "AGENTS.md", "config/hooks.json", "config/skills", "config/workflows",
-                        "config/global_workflows", "config/plugins", "config/projects"),
+                        "config/global_workflows", "config/plugins"),
+        # AGY 1.5.3 makes these in a fresh --gemini-dir (the first real run found config/projects among them). Names only are
+        # looked at, and a name that is in neither list is a name something else put there.
+        home_created=("antigravity-cli", "config", "config/config.json", "config/mcp_config.json", "config/projects"),
         workdir_forbidden=(".agents", ".agent", ".gemini", "GEMINI.md", "AGENTS.md")),
 }
 
@@ -814,7 +819,13 @@ class AgyTracker:
         return []
 
     def _u_user_message_chunk(self, update):
-        return [("anomaly", {"event_type": "user_message_chunk", "fields": []})]
+        return []                                         # the echo of VBear's own message: nothing in it is kept
+
+    def _u_config_option_update(self, update):
+        return []                                         # AGY telling the options it has (model, mode): nothing in it is kept
+
+    def _u_session_info_update(self, update):
+        return []                                         # AGY telling about the session (a title...): nothing in it is kept
 
     def _u_current_mode_update(self, update):
         if update.get("currentModeId") != "default":
