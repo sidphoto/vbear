@@ -57,6 +57,7 @@ it read).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -263,11 +264,12 @@ class Agent:
             else:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("made-up")
-        manifest = {"files": {rel: "made-up-hash" for rel in BUILTIN if not any(o.startswith(rel + "/") for o in BUILTIN)
+        manifest = {"files": {rel: hashlib.sha256(b"made-up").hexdigest() for rel in BUILTIN if not any(o.startswith(rel + "/") for o in BUILTIN)
                               and rel not in (".manifest", ".checksum")}}
         if self.flags.get("manifest_differs"):
             manifest["files"].pop("keep.txt")                                   # a name that is there but not listed
-            manifest["files"]["skills/made-up/SKILL.md"] = "made-up-hash"        # and one that is listed but not there
+            manifest["files"]["skills/made-up/SKILL.md"] = "0" * 64              # and one that is listed but not there
+            manifest["files"]["plugins/swarm/plugin.json"] = "1" * 64            # and a hash that is not the file's
         (cli / "builtin" / ".manifest").write_text(json.dumps(manifest))
         for name in ("conversation_summaries.db", "installation_id", "jetbox_summaries_proto.pb", "jetski_state.pbtxt"):
             (cli / name).write_text("made-up")

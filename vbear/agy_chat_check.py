@@ -1239,7 +1239,8 @@ def _builtin_manifest(home: Path) -> dict:
     does not list. A name is any string in it (a JSON string, or a word of a text) that looks like a relative path."""
     base = home / "antigravity-cli" / "builtin"
     path = base / ".manifest"
-    out = {"present": False, "format": None, "listed": 0, "listed_not_there": [], "there_not_listed": []}
+    out = {"present": False, "format": None, "listed": 0, "listed_not_there": [], "there_not_listed": [], "hashes_listed": 0,
+           "hashes_differ_from_files": [], "hashes_differ_from_pinned": []}
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > (1 << 20):
             return out
@@ -1248,6 +1249,8 @@ def _builtin_manifest(home: Path) -> dict:
         return out
     out["present"] = True
     strings: list[str] = []
+    pairs: dict[str, str] = {}                             # a name and a SHA-256 the manifest gives for it (when it gives one)
+    hex64 = re.compile(r"[0-9a-fA-F]{64}")
     try:
         data = json.loads(text)
         out["format"] = "json"
@@ -1256,6 +1259,8 @@ def _builtin_manifest(home: Path) -> dict:
             if isinstance(x, dict):
                 for k, v in x.items():
                     strings.append(str(k))
+                    if isinstance(v, str) and hex64.fullmatch(v):
+                        pairs[str(k)] = v.lower()
                     walk(v)
             elif isinstance(x, list):
                 for v in x:
@@ -1266,6 +1271,12 @@ def _builtin_manifest(home: Path) -> dict:
     except ValueError:
         out["format"] = "text"
         strings = text.split()
+        for line in text.splitlines():                     # a line that holds one name and one SHA-256 (in either order)
+            words = line.split()
+            digests = [w for w in words if hex64.fullmatch(w)]
+            names = [w for w in words if not hex64.fullmatch(w)]
+            if len(digests) == 1 and len(names) == 1:
+                pairs[names[0]] = digests[0].lower()
     there = set()
     if base.is_dir() and not base.is_symlink():
         for dirpath, dirs, files in os.walk(base, followlinks=False):
@@ -1278,6 +1289,17 @@ def _builtin_manifest(home: Path) -> dict:
     out["listed"] = len(listed)
     out["listed_not_there"] = sorted(x for x in listed if x not in there and "/" in x)[:40]
     out["there_not_listed"] = sorted(x for x in there if x not in listed and x not in (".manifest", ".checksum"))[:40]
+    # the hashes it gives, against the files and against the ones the table pins (a comparison only: the table decides)
+    own = {}
+    for name, digest in pairs.items():
+        name = name[2:] if name.startswith("./") else name
+        if name in there:
+            own[name] = digest
+    out["hashes_listed"] = len(own)
+    actual = _builtin_hashes(home)["files"]
+    out["hashes_differ_from_files"] = sorted(n for n, d in own.items() if actual.get(n) != d)[:40]
+    out["hashes_differ_from_pinned"] = sorted(n for n, d in own.items() if n in agy_chat_env.BUILTIN_SHA
+                                              and agy_chat_env.BUILTIN_SHA[n] != d)[:40]
     return out
 
 

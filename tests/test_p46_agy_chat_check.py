@@ -69,9 +69,9 @@ class CheckCase(unittest.TestCase):
         patch = mock.patch.object(cc, "find_left", lambda root: [])
         patch.start()
         self.addCleanup(patch.stop)
-        # no hash of the real AGY's built-in files is pinned yet: the fake's files hold "made-up" and the test pins that for the ones that run
+        # the real AGY's built-in hashes are not the fake's: its files hold "made-up" and the test pins that for all of them
         pinned = {rel: hashlib.sha256(b"made-up").hexdigest() for rel in agy_chat_env.BUILTIN_PATHS
-                  if agy_chat_env.builtin_executable_like(rel) and rel not in agy_chat_env.BUILTIN_DIRS}
+                  if rel not in agy_chat_env.BUILTIN_DIRS and rel != ".manifest"}       # (the fake writes its own .manifest)
         patch = mock.patch.object(agy_chat_env, "BUILTIN_SHA", pinned)
         patch.start()
         self.addCleanup(patch.stop)
@@ -327,10 +327,13 @@ class RealMachineShapeTests(CheckCase):
         got = report["observations"]["builtin_manifest"]
         self.assertEqual((got["format"], got["listed_not_there"], got["there_not_listed"]), ("json", [], []))
         self.assertGreater(got["listed"], 30)
+        self.assertEqual((got["hashes_listed"], got["hashes_differ_from_files"], got["hashes_differ_from_pinned"]), (39, [], []))
         code, report = self.check({"manifest_differs": True})
         self.assertEqual(code, 0, report.get("error"))          # an observation: the exact table is what decides
         got = report["observations"]["builtin_manifest"]
         self.assertEqual((got["listed_not_there"], got["there_not_listed"]), (["skills/made-up/SKILL.md"], ["keep.txt"]))
+        self.assertEqual(got["hashes_differ_from_files"], ["plugins/swarm/plugin.json"])
+        self.assertEqual(got["hashes_differ_from_pinned"], ["plugins/swarm/plugin.json"])
 
     def test_a_hooks_file_hidden_inside_a_project_folder_fails_home_clean_by_where_it_is(self):
         code, report = self.check({"project_hook": True})

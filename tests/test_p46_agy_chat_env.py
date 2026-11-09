@@ -409,7 +409,9 @@ class ChatHomeTests(FolderCase):
 
     def test_a_built_in_file_that_can_run_is_refused_until_its_hash_is_pinned_whatever_its_name(self):
         self.make_home()
-        self.assertEqual(env.BUILTIN_SHA, {}, "no hash is pinned yet: a real run has to show them (the check's builtin_hashes)")
+        patch = mock.patch.object(env, "BUILTIN_SHA", {})           # (the case of a file nobody pinned: the table has them all now)
+        patch.start()
+        self.addCleanup(patch.stop)
         runnable = [p for p in env.BUILTIN_PATHS if env.builtin_executable_like(p)]
         self.assertIn("plugins/swarm/plugin.json", runnable)
         self.assertIn("plugins/swarm/sidecars/swarm_board/main.mjs", runnable)
@@ -427,6 +429,30 @@ class ChatHomeTests(FolderCase):
                 shutil.rmtree(self.chat_home / "antigravity-cli" / "builtin")
         self.make_builtin("skills/agy-customizations/docs/skills.md", "keep.txt", ".manifest")
         self.assertEqual(env.check_chat_home(self.state), self.chat_home, "documents pass by their exact names")
+
+    def test_the_table_pins_every_built_in_file_and_no_folder_with_a_real_sha256(self):
+        files = {p for p in env.BUILTIN_PATHS if p not in env.BUILTIN_DIRS}
+        self.assertEqual(len(files), 41)
+        self.assertEqual(set(env.BUILTIN_SHA), files, "every file of the real AGY 1.5.3 (the fifth real run), not only the ones that run")
+        for rel, digest in env.BUILTIN_SHA.items():
+            self.assertRegex(digest, r"^[0-9a-f]{64}$", rel)
+        self.assertEqual(len(set(env.BUILTIN_SHA.values())), 41 - 1, "one empty file (keep.txt) shares nothing but its own hash")
+        self.assertEqual(env.BUILTIN_SHA["keep.txt"], hashlib.sha256(b"").hexdigest(), "keep.txt is empty")
+
+    def test_with_the_real_table_a_file_of_any_kind_with_other_bytes_is_refused_by_its_path(self):
+        self.make_home()
+        for rel in sorted(p for p in env.BUILTIN_PATHS if p not in env.BUILTIN_DIRS):
+            with self.subTest(rel=rel):
+                base = self.make_builtin(rel)
+                (base / rel).write_text("other bytes")
+                self.assertIn("antigravity-cli/builtin/" + rel, self.refused(env.check_chat_home, self.state, code="foreign_settings"))
+                shutil.rmtree(base)
+
+    def test_with_the_real_table_the_right_bytes_pass(self):
+        self.make_home()
+        base = self.make_builtin("keep.txt")                          # the one file whose bytes are known: it is empty
+        (base / "keep.txt").write_bytes(b"")
+        self.assertEqual(env.check_chat_home(self.state), self.chat_home)
 
     def test_a_pinned_hash_must_match_and_a_file_that_can_run_passes_only_with_the_right_one(self):
         self.make_home()
@@ -535,9 +561,10 @@ class ChatHomeTests(FolderCase):
     def test_what_agy_makes_itself_is_fine(self):
         self.make_home()
         for rel in ("config/config.json", "config/.migrated", "antigravity-cli/conversations/c1.db", "antigravity-cli/log/a.log",
-                    "antigravity-cli/builtin/skills/agy-customizations/docs/hooks.md", "antigravity-cli/conversation_summaries.db",
+                    "antigravity-cli/conversation_summaries.db",
                     "antigravity-cli/jetski_state.pbtxt", "antigravity-cli/installation_id"):
             self.write_private(self.chat_home / rel, "{}")
+        self.write_private(self.chat_home / "antigravity-cli" / "builtin" / "keep.txt", "")      # (a built-in file: its bytes are pinned)
         self.assertEqual(env.check_chat_home(self.state), self.chat_home)
 
     def test_mcp_config_must_be_missing_or_say_nothing(self):
