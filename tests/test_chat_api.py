@@ -252,7 +252,7 @@ class CardGateTests(ApiCase):
         self.assertEqual(os.listdir(self.base / "chats") if (self.base / "chats").exists() else [], [])
 
     def test_a_card_of_another_tool_cannot_open_a_chat_and_says_which_tool(self):
-        for tool, label in (("grok", "Grok"), ("agy", "AGY"), ("shared", "共用")):
+        for tool, label in (("grok", "Grok"), ("shared", "共用")):      # AGY chats since v0.20.0 (P46-3)
             with self.subTest(tool=tool):
                 other = self.card(f"{tool}員工", tool)
                 status, out = self.call("/api/chats", "POST", {"profile_id": other})

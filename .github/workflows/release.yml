@@ -18,7 +18,8 @@ jobs:
   macos-app:
     runs-on: macos-latest  # Apple Silicon
     # the whole test suite (about 20 minutes, and CI once needed more than 20) runs here before the build
-    timeout-minutes: 50
+    # v0.20.0: the tests alone now take about 35 minutes on a runner, so the build has room after them
+    timeout-minutes: 75
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:

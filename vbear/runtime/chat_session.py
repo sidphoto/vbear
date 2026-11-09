@@ -80,6 +80,8 @@ class Card:
 
 
 class ChatProcess(ProcessGroupEnd):
+    TOOL = "Claude Code"                       # the name the messages say (an engine of another AI tool names its own)
+
     def __init__(self, *, sid: str, chat_id: str, profile_id: str, manifest: dict, proc, log: cs.ChatLog,
                  last_total: float | None, next_turn: int, now: float, leader_start: str | None, logger,
                  watch, unwatch, card_ttl: float, init_deadline: float, turn_timeout: float, idle_timeout: float,
@@ -333,7 +335,7 @@ class ChatProcess(ProcessGroupEnd):
             except BlockingIOError:
                 return False
             except OSError:
-                self._fail("無法寫入 Claude Code 的輸入", now)
+                self._fail(f"無法寫入 {self.TOOL} 的輸入", now)
                 return True
             self.wbuf = self.wbuf[n:]
             self.write_since = now
@@ -398,7 +400,7 @@ class ChatProcess(ProcessGroupEnd):
             return
         self.events_total += 1
         if self.events_total > EVENTS_MAX:
-            self._fail("Claude Code 的事件數超過上限", now)
+            self._fail(f"{self.TOOL} 的事件數超過上限", now)
             return
         parsed = strictjson.loads(line, strictjson.CLAUDE_STDOUT)
         if not parsed.ok:
@@ -593,10 +595,10 @@ class ChatProcess(ProcessGroupEnd):
 
     def _timers(self, now: float) -> None:
         if self.write_since is not None and (self.wbuf or self.out) and now - self.write_since > WRITE_DEADLINE:
-            self._fail("寫入 Claude Code 的輸入逾時", now)
+            self._fail(f"寫入 {self.TOOL} 的輸入逾時", now)
             return
         if self.state == "starting" and now - self.spawned > self.init_deadline:
-            self._fail("Claude Code 沒有回應初始化（initialize）", now)
+            self._fail(f"{self.TOOL} 沒有回應初始化（initialize）", now)
             return
         t = self.turn
         if t is not None and t.written and now - t.started > self.turn_timeout:
@@ -618,7 +620,7 @@ class ChatProcess(ProcessGroupEnd):
         self._close_stdin()
         info = self.exit_info
         code = info.si_status if info.si_code == os.CLD_EXITED else None
-        self._record("process_ended", {"reason": (self.close_reason or "Claude Code 已結束")[:cs.MAX_SHORT],
+        self._record("process_ended", {"reason": (self.close_reason or f"{self.TOOL} 已結束")[:cs.MAX_SHORT],
                                        "returncode": code if code is not None and 0 <= code <= 255 else None})
 
     # ---- ProcessGroupEnd ------------------------------------------------------------------------------------------

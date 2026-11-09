@@ -49,6 +49,14 @@ Never, whatever the person ticked in 「自己動手」:
      templates are named in vbear/server.py and nowhere else in the package. (13d, 13e: the write functions of the applies and of the
      person's own templates, added by P45-2 and P45-3; the behaviour is tested in tests/test_templates_apply.py.)
 
+  14. (P46, ADR 0012) an AGY chat asks every time, always runs in AGY's sandbox, and reads and changes nothing of the person's AGY settings:
+     14a, 14b, 14c (P46-1: the protocol module's answers, its argv and settings, and ``BypassSandbox``; 14b also holds the AGY settings the
+     chat environment writes and the launch records to the protocol's one table); 14d, 14g, 14h (P46-3: the six variables of the process
+     environment, nothing of the person's own AGY folders read or changed by a whole fake chat, no ``session/set_mode``,
+     ``session/set_config_option`` or ``session/load`` and a model only from the table); 14e, 14f (P46-5: no feature module reaches the AGY chat code, the AGY
+     code reaches no feature's writer, and memory and the shared folder are off for an AGY employee until the person says yes to Google).
+     The behaviour is tested in tests/test_agy_chat_protocol.py, tests/test_p46_agy_chat_daemon.py and tests/test_p46_features.py.
+
 The scan reads the syntax tree (imports and calls) of every ``vbear/chief*.py``, ``vbear/dispatch*.py``, ``vbear/group*.py``,
 ``vbear/memory*.py``, ``vbear/runtime/memory*.py``, ``vbear/shared*.py``, ``vbear/runtime/shared*.py``, ``vbear/skillbook*.py`` and ``vbear/autonomy.py`` that exists, so the later modules of the chief of
 staff, of dispatch, of groups and of memory (the suggestions, P42-4) are held to it the day they are added. The rules are below, as a table; the tests at the bottom run the scan on small made-up sources to show each rule fires,
@@ -58,9 +66,14 @@ so the scan cannot go quiet.
 from __future__ import annotations
 
 import ast
+import json
+import os
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from vbear.runtime import cli_versions
 
 PACKAGE = Path(__file__).resolve().parents[1] / "vbear"
 PATTERNS = ("chief*.py", "dispatch*.py", "group*.py", "autonomy.py", "memory*.py", "runtime/memory*.py", "shared*.py", "runtime/shared*.py",
@@ -1543,6 +1556,556 @@ class KeepAwakeRules(unittest.TestCase):
         }
         for why, source in bad.items():
             self.assertTrue(argv_problems(source), why)
+
+
+# 14. (P46, ADR 0012) the AGY chat: every request asked, only "allow once" or "reject once" ever answered, argv and settings fixed
+AGY_PATTERNS = ("agy*.py", "runtime/agy*.py")
+AGY_BANNED_PATTERNS = AGY_PATTERNS + ("runtime/agent_sessions.py",)
+AGY_NEVER_CHOSEN = ("allow_always", "reject_always")
+AGY_NEVER_CHOSEN_HOME = "NEVER_CHOSEN_OPTION_KINDS"        # the one constant in which the two words of a kind VBear never chooses may stand
+AGY_BANNED_FLAGS = ("--dangerously-skip-permissions", "--login", "--app-data-dir", "--process-per-session",
+                    "--include-default-customizations")
+
+
+def agy_files(patterns=AGY_PATTERNS) -> list[Path]:
+    return sorted({p for pattern in patterns for p in PACKAGE.glob(pattern)})
+
+
+def _docstring_ids(tree) -> set:
+    return {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+
+
+def never_chosen_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every string in code that holds the name of a kind of option VBear never chooses (``allow_always``, ``reject_always``), except in the
+    one constant that names them (and docstrings): the words may not be a value to send."""
+    tree = ast.parse(source, filename=label)
+    docs = _docstring_ids(tree)
+    allowed: set = set()
+    for node in ast.walk(tree):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(t, ast.Name) and t.id == AGY_NEVER_CHOSEN_HOME for t in targets):
+            allowed |= {id(n) for n in ast.walk(node)}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs and id(node) not in allowed \
+                and any(word in node.value for word in AGY_NEVER_CHOSEN):
+            found.append(f"{label}:{node.lineno}: holds a kind of option VBear never chooses")
+    return found
+
+
+def banned_flag_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every line (code, comment or docstring) that names a switch the AGY chat never passes."""
+    return [f"{label}:{n}: names {flag}" for n, line in enumerate(source.splitlines(), 1) for flag in AGY_BANNED_FLAGS if flag in line]
+
+
+AGY_ACCOUNT_PREFIXES = ("ANTIGRAVITY_", "GEMINI_", "GOOGLE_")      # variables of the person's account or keys: never named in code
+AGY_BANNED_METHODS = ("session/set_mode", "session/set_config_option", "session/load")
+
+
+def account_variable_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every string in code (not a docstring) that starts with the name of a variable of the person's AGY or Google account."""
+    tree = ast.parse(source, filename=label)
+    docs = _docstring_ids(tree)
+    return [f"{label}:{n.lineno}: names {n.value}" for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs
+            and any(n.value.startswith(prefix) for prefix in AGY_ACCOUNT_PREFIXES)]
+
+
+def banned_method_uses(source: str, label: str = "<source>") -> list[str]:
+    """Every line (code, comment or docstring) that names a message the AGY chat never writes. ``session/set_model`` is not
+    ``session/set_mode``: the name ends there."""
+    return [f"{label}:{i}: names {method}" for i, line in enumerate(source.splitlines(), 1) for method in AGY_BANNED_METHODS
+            if re.search(re.escape(method) + r"(?![A-Za-z0-9_])", line)]
+
+
+class AgyChatRules(unittest.TestCase):
+    """P46-1, rules 14a-14c; P46-3, rules 14b (the one table), 14d and 14h."""
+
+    def agy_protocol(self):
+        from vbear.runtime import agy_chat_protocol as acp
+        return acp
+
+    def test_the_protocol_module_is_scanned(self):
+        self.assertIn("agy_chat_protocol.py", [p.name for p in agy_files()])
+
+    # 14a: only "allow once" and "reject once" are ever answered
+    def test_14a_no_agy_module_holds_an_always_kind_outside_the_one_constant(self):
+        problems = []
+        for path in agy_files():
+            problems += never_chosen_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14a_the_constant_that_names_them_exists_and_is_not_among_the_kinds_chosen(self):
+        acp = self.agy_protocol()
+        self.assertEqual(acp.NEVER_CHOSEN_OPTION_KINDS, frozenset(AGY_NEVER_CHOSEN))
+        tree = ast.parse((PACKAGE / "runtime" / "agy_chat_protocol.py").read_text(encoding="utf-8"))
+        named = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == AGY_NEVER_CHOSEN_HOME
+                                                                                for t in n.targets)]
+        self.assertEqual(len(named), 1)
+        for consts in acp.VERSIONS.values():
+            self.assertTrue(set(AGY_NEVER_CHOSEN).isdisjoint({consts.allow_option_kind, consts.reject_option_kind}))
+
+    def test_14a_the_scan_fires_on_small_made_up_sources(self):
+        for source in ('KIND = "allow_always"\n', 'def f():\n    return {"optionId": "x", "kind": "reject_always"}\n',
+                       'CHOICES = ("allow_once", "allow_always")\n', 'X = f"{1}allow_always"\n',
+                       'OTHER = frozenset({"allow_always"})\n'):
+            self.assertTrue(never_chosen_uses(source), source)
+        for source in ('NEVER_CHOSEN_OPTION_KINDS = frozenset({"allow_always", "reject_always"})\n',
+                       'NEVER_CHOSEN_OPTION_KINDS: frozenset = frozenset({"allow_always"})\n',
+                       '"""Mentions allow_always in prose."""\ndef f():\n    """And reject_always here."""\n    return 1\n',
+                       'KIND = "allow_once"\n'):
+            self.assertEqual(never_chosen_uses(source), [], source)
+
+    def test_14a_answers_only_ever_select_allow_once_or_reject_once(self):
+        acp = self.agy_protocol()
+        mixed = [{"optionId": "a-always", "kind": "allow_always"}, {"optionId": "allow", "kind": "allow_once"},
+                 {"optionId": "r-always", "kind": "reject_always"}, {"optionId": "deny", "kind": "reject_once"},
+                 {"optionId": "other", "kind": "something_else"}]
+        for options in (mixed, mixed[::-1], mixed[:1] + mixed[2:3], mixed[::2]):
+            for decision in ("allow", "deny", "cancelled"):
+                try:
+                    line = json.loads(acp.answer_line(1, options, decision))
+                except ValueError:
+                    continue                                   # an "allow" it cannot give is an error, never another option
+                chosen = line["result"]["outcome"].get("optionId")
+                self.assertIn(chosen, (None, "allow", "deny"), (options, decision))
+        for decision in ("allow_always", "reject_always", "accept", "allow_once", "reject_once"):
+            with self.assertRaises(ValueError, msg=decision):
+                acp.answer_line(1, mixed, decision)
+        self.assertEqual(acp.DECISIONS, ("allow", "deny", "cancelled"))
+
+    # 14b: the argv, the switches that are never passed, and the settings
+    def test_14b_the_argv_tail_is_the_fixed_one(self):
+        acp = self.agy_protocol()
+        for consts in acp.VERSIONS.values():
+            self.assertEqual(acp.argv_for(consts, "/s/agy-chat-home"),
+                             ["acp", "--gemini-dir", "/s/agy-chat-home", "--sandbox", "--disable-telemetry"])
+            self.assertEqual(acp.argv_for(consts, "/s/agy-chat-home", shared="/s/shared"),
+                             ["acp", "--gemini-dir", "/s/agy-chat-home", "--sandbox", "--disable-telemetry", "--add-dir", "/s/shared"])
+
+    def test_14b_no_file_that_builds_the_command_names_a_switch_that_is_never_passed(self):
+        problems = []
+        files = agy_files(AGY_BANNED_PATTERNS)
+        self.assertIn("agent_sessions.py", [p.name for p in files])
+        for path in files:
+            problems += banned_flag_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14b_the_scan_fires_on_small_made_up_sources(self):
+        for flag in AGY_BANNED_FLAGS:
+            self.assertTrue(banned_flag_uses(f'ARGV = ["acp", "{flag}"]\n'), flag)
+            self.assertTrue(banned_flag_uses(f"# add {flag} to go faster\n"), flag)
+        self.assertEqual(banned_flag_uses('ARGV = ["acp", "--sandbox", "--disable-telemetry", "--add-dir"]\n'), [])
+
+    def test_14b_the_settings_are_exactly_the_five_keys_and_values_of_the_design(self):
+        acp = self.agy_protocol()
+        for consts in acp.VERSIONS.values():
+            settings = consts.settings
+            self.assertEqual(sorted(settings), ["allowNonWorkspaceAccess", "enableTerminalSandbox", "permissions", "toolPermission",
+                                                "useG1Credits"])
+            self.assertEqual(settings["toolPermission"], "request-review")
+            self.assertIs(settings["enableTerminalSandbox"], True)
+            self.assertIs(settings["allowNonWorkspaceAccess"], False)
+            self.assertIs(settings["useG1Credits"], False)
+            self.assertEqual(settings["permissions"], {"allow": [], "ask": [], "deny": []})
+            self.assertEqual(json.loads(acp.settings_bytes(consts)), settings)
+
+    def announce(self, tracker, fx, kind="execute", cid="c-1"):
+        """The order AGY 1.5.3 really sends before it asks: tool_call in_progress, then tool_call_update pending."""
+        tracker.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": fx.SESSION, "update": {
+            "sessionUpdate": "tool_call", "toolCallId": cid, "title": "T", "kind": kind, "status": "in_progress"}}})
+        tracker.on_message({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": fx.SESSION, "update": {
+            "sessionUpdate": "tool_call_update", "toolCallId": cid, "status": "pending"}}})
+
+    # 14c: BypassSandbox is refused by VBear, with no card
+    def test_14c_a_request_with_bypass_sandbox_is_refused_with_no_card_for_true_a_string_and_a_number(self):
+        from tests import agy_chat_fixtures as fx
+        acp = self.agy_protocol()
+        consts = acp.VERSIONS["1.5.3"]
+        for value in (True, "true", 1):
+            tracker = acp.AgyTracker(consts, workdir="/made/up/work", session_id=fx.SESSION)
+            self.announce(tracker, fx)
+            out = tracker.on_message({"jsonrpc": "2.0", "id": 4, "method": "session/request_permission", "params": {
+                "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
+                "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending",
+                             "rawInput": {"BypassSandbox": value, "CommandLine": "echo x"}}}})
+            request = [d for k, d in out if k == "permission_request"]
+            self.assertEqual(len(request), 1, value)
+            self.assertEqual((request[0]["action"], request[0]["bypass"]), ("deny", True), value)
+            with self.assertRaises(ValueError):
+                tracker.answered(4, "allow")                   # there is no way to allow it
+
+    def test_14c_a_request_without_it_is_asked_and_one_with_false_is_too(self):
+        from tests import agy_chat_fixtures as fx
+        acp = self.agy_protocol()
+        for raw in ({"CommandLine": "echo x"}, {"CommandLine": "echo x", "BypassSandbox": False}):
+            tracker = acp.AgyTracker(acp.VERSIONS["1.5.3"], workdir="/made/up/work", session_id=fx.SESSION)
+            self.announce(tracker, fx)
+            out = tracker.on_message({"jsonrpc": "2.0", "id": 4, "method": "session/request_permission", "params": {
+                "sessionId": fx.SESSION, "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}],
+                "toolCall": {"toolCallId": "c-1", "title": "T", "kind": "execute", "status": "pending", "rawInput": raw}}})
+            self.assertEqual([d["action"] for k, d in out if k == "permission_request"], ["ask"], raw)
+
+    def test_14b_the_settings_the_chat_environment_writes_and_the_launch_records_are_the_one_table(self):
+        from vbear.runtime import agent_sessions, agy_chat_env
+        acp = self.agy_protocol()
+        newest = acp.VERSIONS[tuple(acp.VERSIONS)[-1]]
+        self.assertIs(agy_chat_env.SETTINGS, newest.settings)
+        self.assertEqual(agy_chat_env.SETTINGS_BYTES, acp.settings_bytes(newest))
+        for version, consts in acp.VERSIONS.items():
+            recorded = agent_sessions.agy_chat_settings(version, "/s/agy-chat-home")
+            self.assertEqual(recorded["settings"], consts.settings)
+            self.assertEqual((recorded["model"], recorded["sandbox"], recorded["argv"]),
+                             (consts.model_id, True, acp.argv_for(consts, "/s/agy-chat-home")))
+        # no file but the protocol module spells a value of the settings out
+        for path in agy_files(AGY_PATTERNS):
+            if path.name == "agy_chat_protocol.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            # (the session reads ``toolPermission`` out of the table for the record's permission_mode: a key read, not a value spelled out)
+            for word in ("request-review", "enableTerminalSandbox", "allowNonWorkspaceAccess", "useG1Credits"):
+                code = [n.value for n in ast.walk(ast.parse(text)) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                        and n.value == word]
+                self.assertEqual(code, [], f"{path.name} spells {word} out")
+
+    # 14d: the environment of the process is the six variables of the table and nothing of the account, however polluted the daemon's is
+    def test_14d_the_environment_is_exactly_the_six_variables_whatever_the_source_holds(self):
+        from vbear.runtime import agent_sessions
+        acp = self.agy_protocol()
+        polluted = {"PATH": "/usr/bin", "USER": "someone", "LOGNAME": "someone", "LANG": "C", "TMPDIR": "/var/tmp/x", "HOME": "/real/home",
+                    "ANTIGRAVITY_PERM_GRANTS": "must-not-pass", "GEMINI_API_KEY": "must-not-pass", "GOOGLE_API_KEY": "must-not-pass",
+                    "GOOGLE_APPLICATION_CREDENTIALS": "must-not-pass", "GOOGLE_CLOUD_PROJECT": "must-not-pass", "OPENAI_API_KEY": "x",
+                    "ANTHROPIC_API_KEY": "x", "TERM": "xterm", "SSH_AUTH_SOCK": "/x", "CODEX_HOME": "/x"}
+        for version, consts in acp.VERSIONS.items():
+            self.assertEqual(consts.env_keys, ("PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME"))
+            got = agent_sessions.agy_chat_env({"cli_version": version}, polluted)
+            self.assertEqual(sorted(got), sorted(consts.env_keys))
+            self.assertEqual(got, {k: polluted[k] for k in consts.env_keys})
+            self.assertNotIn("must-not-pass", json.dumps(got))
+
+    def test_14d_no_agy_file_names_a_variable_of_the_account_in_code(self):
+        problems = []
+        for path in agy_files(AGY_BANNED_PATTERNS):
+            problems += account_variable_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14d_the_scan_fires_on_small_made_up_sources(self):
+        for source in ('KEYS = ["ANTIGRAVITY_PERM_GRANTS"]\n', 'env["GEMINI_API_KEY"] = os.environ["GEMINI_API_KEY"]\n',
+                       'X = {"GOOGLE_API_KEY": 1}\n', 'def f(env):\n    env.pop("GOOGLE_APPLICATION_CREDENTIALS")\n'):
+            self.assertTrue(account_variable_uses(source), source)
+        for source in ('"""Says ANTIGRAVITY_* and GEMINI_* in prose."""\nX = 1\n', 'KEYS = ("PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME")\n'):
+            self.assertEqual(account_variable_uses(source), [], source)
+
+    # 14h: nothing writes a message that changes the mode, the settings of the session or loads one, and the model comes only from the table
+    def test_14h_no_agy_file_names_a_message_that_changes_the_mode_or_the_config_or_loads_a_session(self):
+        problems = []
+        files = agy_files(AGY_BANNED_PATTERNS)
+        self.assertIn("agy_chat_session.py", [p.name for p in files])
+        for path in files:
+            problems += banned_method_uses(path.read_text(encoding="utf-8"), str(path.relative_to(PACKAGE)))
+        self.assertEqual(problems, [], "\n".join(problems))
+
+    def test_14h_the_scan_fires_on_small_made_up_sources(self):
+        for method in AGY_BANNED_METHODS:
+            self.assertTrue(banned_method_uses(f'LINE = {{"method": "{method}"}}\n'), method)
+            self.assertTrue(banned_method_uses(f"# {method} would switch it\n"), method)
+        self.assertEqual(banned_method_uses('LINE = {"method": "session/set_model"}\n# session/set_model after every start\n'), [])
+        self.assertEqual(banned_method_uses('X = "session/loaded"\n'), [])
+
+    def test_14h_the_protocol_has_a_function_for_each_message_it_writes_and_for_no_other(self):
+        acp = self.agy_protocol()
+        names = sorted(n for n in dir(acp) if n.endswith("_line") and not n.startswith("_") and callable(getattr(acp, n)))
+        self.assertEqual(names, ["answer_line", "cancel_line", "error_line", "initialize_line", "prompt_line", "session_new_line",
+                                 "session_resume_line", "set_model_line"])
+
+    def test_14h_the_only_methods_written_are_the_known_ones_and_the_model_is_the_tables(self):
+        acp = self.agy_protocol()
+        consts = acp.VERSIONS["1.5.3"]
+        sid = "00000000-0000-4000-8000-0000000000a1"
+        options = [{"optionId": "a", "kind": "allow_once"}, {"optionId": "d", "kind": "reject_once"}]
+        lines = [acp.initialize_line(1), acp.session_new_line(2, cwd="/w"), acp.session_resume_line(3, sid, cwd="/w"),
+                 acp.set_model_line(4, sid, consts), acp.prompt_line(5, sid, "hi"), acp.cancel_line(sid)]
+        methods = [json.loads(x)["method"] for x in lines]
+        self.assertEqual(methods, ["initialize", "session/new", "session/resume", "session/set_model", "session/prompt", "session/cancel"])
+        self.assertEqual(json.loads(acp.set_model_line(4, sid, consts))["params"]["modelId"], consts.model_id)
+        self.assertNotIn("method", json.loads(acp.answer_line(6, options, "allow")))              # an answer, not a request
+        import inspect
+        self.assertEqual(list(inspect.signature(acp.set_model_line).parameters), ["request_id", "session_id", "consts"])
+
+
+# 14g: a whole fake chat reads and changes nothing of the person's own AGY folders; 14d end to end
+from tests.test_p46_agy_chat_daemon import AgyCase, file_call, permission      # noqa: E402
+
+
+class AgyChatHomeIsLeftAlone(AgyCase):
+    DECOYS = (".gemini/antigravity-cli/settings.json", ".gemini/GEMINI.md", ".gemini/config/hooks.json",
+              ".agents/skills/decoy-skill/SKILL.md", ".agents/skills/decoy-skill/run.sh", ".agents/workflows/decoy.md",
+              ".agents/agents.json")
+
+    def snapshot(self):
+        out = {}
+        for root, dirs, files in os.walk(self.home):
+            for name in dirs + files:
+                full = Path(root) / name
+                if name.startswith("fake-agy.json"):
+                    continue
+                st = os.lstat(full)
+                out[str(full.relative_to(self.home))] = (st.st_mode, st.st_size, st.st_mtime_ns, st.st_ino)
+        return out
+
+    def test_14g_a_whole_chat_with_an_allow_a_deny_and_the_shared_folder_leaves_the_persons_agy_folders_alone(self):
+        decoys = []
+        for rel in self.DECOYS:
+            path = self.home / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("decoy " + rel)
+            decoys.append(path)
+        os.chmod(self.home / ".agents" / "skills" / "decoy-skill" / "run.sh", 0o755)
+        for path in decoys:                                    # nothing may open one: a try would fail, and is seen below
+            path.chmod(0o000)
+        before = self.snapshot()
+        opened = []
+        real_open, real_listdir, real_scandir = os.open, os.listdir, os.scandir
+
+        def under_decoys(path) -> bool:
+            try:
+                text = os.fspath(path)
+            except TypeError:
+                return False
+            return str(self.home / ".gemini") in text or str(self.home / ".agents") in text
+
+        def watch_open(path, *args, **kwargs):
+            if under_decoys(path):
+                opened.append(("open", os.fspath(path)))
+            return real_open(path, *args, **kwargs)
+
+        def watch_listdir(path=".", *args, **kwargs):
+            if under_decoys(path):
+                opened.append(("listdir", os.fspath(path)))
+            return real_listdir(path, *args, **kwargs)
+
+        def watch_scandir(path=".", *args, **kwargs):
+            if under_decoys(path):
+                opened.append(("scandir", os.fspath(path)))
+            return real_scandir(path, *args, **kwargs)
+
+        with mock.patch("os.open", watch_open), mock.patch("os.listdir", watch_listdir), mock.patch("os.scandir", watch_scandir), \
+                mock.patch("builtins.open", side_effect=self.refuse_decoys(open)):
+            with mock.patch.object(cli_versions, "shared_verified", return_value=True):
+                self.configure("permission", permission(**file_call()), "permission")
+                first = self.open_chat("emp-1")
+                self.assertTrue(self.send(first, shared=True)["ok"])
+                self.assertTrue(self.answer(first, self.wait_card(first), "allow")["ok"])
+                self.wait_turn(first, 1)
+                self.rpc("chat_close", chat_id=first)
+                self.wait_gone(first)
+                second = self.open_chat("emp-2")
+                self.assertTrue(self.send(second)["ok"])
+                self.assertTrue(self.answer(second, self.wait_card(second), "deny")["ok"])
+                self.wait_turn(second, 1)
+        self.assertEqual(opened, [])
+        for path in decoys:
+            path.chmod(0o000)                                   # unchanged
+        self.assertEqual(self.snapshot(), before, "nothing in the persons HOME was made, changed or removed")
+        self.assertEqual(len(self.starts()), 2)
+
+    def refuse_decoys(self, real):
+        def guarded(file, *args, **kwargs):
+            text = os.fspath(file) if isinstance(file, (str, bytes, os.PathLike)) else ""
+            if str(self.home / ".gemini") in text or str(self.home / ".agents") in text:
+                raise AssertionError(f"opened {text}")
+            return real(file, *args, **kwargs)
+        return guarded
+
+    def test_14g_the_hooks_name_is_only_looked_at(self):
+        hooks = self.home / ".agents" / "hooks.json"
+        hooks.parent.mkdir()
+        hooks.write_text("{}")
+        before = (hooks.stat().st_mtime_ns, hooks.read_bytes())
+        self.configure("text")
+        chat_id = self.open_chat()
+        with mock.patch("builtins.open", side_effect=self.refuse_decoys(open)):
+            self.assertEqual(self.send(chat_id)["error"]["code"], "agy_hooks")
+        self.assertEqual((hooks.stat().st_mtime_ns, hooks.read_bytes()), before)
+        self.assertEqual(self.fake_log(), [])
+
+    def test_14d_a_daemon_that_holds_the_variables_of_the_account_passes_none_of_them_on(self):
+        polluted = {"ANTIGRAVITY_PERM_GRANTS": "must-not-pass", "GEMINI_API_KEY": "must-not-pass", "GOOGLE_API_KEY": "must-not-pass",
+                    "GOOGLE_APPLICATION_CREDENTIALS": "must-not-pass", "OPENAI_API_KEY": "must-not-pass"}
+        self.configure("text")
+        chat_id = self.open_chat()
+        with mock.patch.dict(os.environ, polluted):
+            self.assertTrue(self.send(chat_id)["ok"])
+            self.wait_turn(chat_id, 1)
+        self.assertEqual(sorted(self.starts()[0]["env_keys"]), sorted(["PATH", "USER", "LOGNAME", "LANG", "TMPDIR", "HOME"]))
+
+    def test_14h_a_whole_fake_chat_writes_only_the_known_methods(self):
+        self.configure("permission")
+        chat_id = self.open_chat()
+        self.assertTrue(self.send(chat_id)["ok"])
+        self.wait_card(chat_id)
+        self.assertTrue(self.rpc("chat_stop", chat_id=chat_id)["result"]["stopped"])
+        self.wait_turn(chat_id, 1)
+        self.assertEqual(self.methods().count("session/prompt"), 1)
+        self.assertLessEqual(set(self.methods()), {"initialize", "session/new", "session/set_model", "session/prompt", "session/cancel"})
+
+
+# 14e (P46-5): the feature modules never reach the code of the AGY chat, and the AGY code never reaches a feature's writer
+AGY_CHAT_MODULES = ("agy_chat_env", "agy_chat_session", "agy_chat_protocol", "agy_chat_check", "agy_verify",
+                    "runtime.agy_chat_env", "runtime.agy_chat_session", "runtime.agy_chat_protocol")
+AGY_FEATURE_MODULES = ("memory", "shared_folder", "skillbook", "routines", "groups", "group_runner", "chief", "chief_runner", "dispatch",
+                       "dispatch_runner", "autonomy", "auto_continue", "templates", "templates_apply", "templates_mine", "agent_profiles")
+
+
+def agy_feature_uses(source: str, label: str = "<source>") -> list[str]:
+    """What an AGY module (agy*.py, runtime/agy*.py) reaches that belongs to a feature of the person: the writers of the memory, the shared
+    folder's switches, the skills, the routines, the role cards, config.json, and the feature modules themselves."""
+    found = []
+    for check in (memory_writer_uses, shared_writer_uses, skillbook_writer_uses, routine_writer_uses, routine_run_writer_uses, card_writer_calls):
+        found += check(source, label)
+    found += imports_of(source, AGY_FEATURE_MODULES, label)
+    found += [line for line in scan_source(source, label) if "config" in line or "set_conf" in line or "/api/" in line]
+    return found
+
+
+class AgyFeatureRules(unittest.TestCase):
+    """P46-5, rules 14e and 14f."""
+
+    def test_14e_no_feature_module_imports_the_code_of_the_agy_chat(self):
+        files = scanned_files()
+        self.assertTrue(files)
+        found = [line for path in files for line in imports_of(path.read_text(encoding="utf-8"), AGY_CHAT_MODULES, path.name)]
+        self.assertEqual(found, [])
+
+    def test_14e_the_agy_modules_reach_no_feature_writer_and_no_config(self):
+        files = agy_files(AGY_PATTERNS)
+        self.assertTrue(files)
+        found = [line for path in files for line in agy_feature_uses(path.read_text(encoding="utf-8"), path.name)]
+        self.assertEqual(found, [])
+
+    def test_14e_the_scans_fire_on_small_made_up_sources(self):
+        for why, source in {
+            "imports the env": "from .runtime import agy_chat_env\n",
+            "imports the session": "from vbear.runtime.agy_chat_session import AgyChatProcess\n",
+            "imports the protocol": "import vbear.runtime.agy_chat_protocol as p\n",
+            "imports the check": "from . import agy_chat_check\n",
+            "imports the verifier": "from .agy_verify import AgyChatVerifier\n",
+        }.items():
+            self.assertTrue(imports_of(source, AGY_CHAT_MODULES), why)
+        for why, source in {
+            "switches memory": "from . import memory\nmemory.set_card({}, [])\n",
+            "switches the shared folder": "from . import shared_folder\nshared_folder.set_card({}, [])\n",
+            "saves a card": "def f(ap):\n    ap.save_profile(None, {})\n",
+            "saves the config": "from . import config as cfg\ncfg.save({})\n",
+            "imports the groups": "from . import groups\n",
+            "imports the templates": "from .templates_apply import begin_apply\n",
+        }.items():
+            self.assertTrue(agy_feature_uses(source), why)
+        self.assertEqual(agy_feature_uses("import json\nfrom . import admin_policy\n"), [])
+
+    # 14f: memory and the shared folder are off for an AGY employee, and open only on the person's yes to Google
+    def setUp(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory(prefix="vg14-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(os.path.realpath(tmp.name))
+        home = self.root / "h"
+        (home / ".vbear").mkdir(parents=True, mode=0o700)
+        patch = mock.patch.dict(os.environ, {"HOME": str(home), "VBEAR_HOME": str(home / ".vbear"), "VBEAR_RUNTIME_AUTOSTART": "0"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.state = home / ".vbear"
+        self.cards = [{"id": "agy-one", "name": "虛構AGY員工", "tool": "agy", "engine": "agy-chat", "can_chat": True},
+                      {"id": "agy-two", "name": "虛構AGY員工二", "tool": "agy", "engine": "agy-chat", "can_chat": True}]
+
+    def tree(self):
+        return {str(p.relative_to(self.state)): p.read_bytes() for p in sorted(self.state.rglob("*")) if p.is_file()}
+
+    def test_14f_memory_is_off_for_agy_by_default_and_needs_the_yes_to_google(self):
+        from vbear import memory
+        from vbear.api_error import ApiError
+        self.assertIs(memory.DEFAULT_ON["agy-chat"], False)
+        self.assertEqual(memory.COMPANY["agy-chat"], "Google")
+        before = self.tree()
+        for body in ({"profile_id": "agy-one", "on": True}, {"profile_id": "agy-one", "on": True, "confirm_company": False}):
+            with self.assertRaises(ApiError) as got:
+                memory.set_card(body, self.cards)
+            self.assertEqual((got.exception.status, got.exception.code, got.exception.extra["warn"]), (409, "memory_confirm", ["send_to_google"]))
+        with self.assertRaises(ApiError) as got:
+            memory.set_card({"profile_id": "agy-one", "on": True, "confirm_company": "yes"}, self.cards)
+        self.assertEqual(got.exception.status, 400)
+        self.assertEqual(self.tree(), before, "a refusal writes nothing")
+        self.assertEqual(memory.set_card({"profile_id": "agy-one", "on": True, "confirm_company": True}, self.cards)["on"], True)
+
+    def test_14f_the_shared_folder_is_not_open_to_agy_in_v0200_by_any_way_in(self):
+        """v0.20.0 does not open the shared folder to an AGY employee (ADR 0012): every way in is refused, and nothing is written."""
+        from vbear import shared_folder as sf
+        from vbear.api_error import ApiError
+        self.assertNotIn("agy-chat", sf.SUPPORTED_ENGINES)
+        before = self.tree()
+        for call in (lambda: sf.set_card({"profile_id": "agy-one", "on": True, "confirm_company": True}, self.cards),
+                     lambda: sf.plan_cards(["agy-one", "agy-two"], self.cards, True),
+                     lambda: sf.plan_cards([], self.cards, True, new_engines=["agy-chat"])):
+            with self.assertRaises(ApiError) as got:
+                call()
+            self.assertEqual((got.exception.status, got.exception.code, str(got.exception)),
+                             (400, "card_tool_unsupported", "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。"))
+        opened, error = sf.open_cards(["agy-one", "agy-two"], self.cards, "group", True)
+        self.assertEqual((opened, error.code), ([], "card_tool_unsupported"))
+        self.assertEqual(self.tree(), before, "none of them wrote a byte")
+        self.assertFalse(sf.for_card("agy-one", "agy-chat"))
+
+    def test_14f_the_part_for_agy_kept_in_the_code_still_needs_the_yes_to_google(self):
+        """If a newer AGY is checked and ``agy-chat`` is put back into ``SUPPORTED_ENGINES``, the rule 14f is still there."""
+        from unittest import mock
+        from vbear import shared_folder as sf
+        from vbear.api_error import ApiError
+        self.assertEqual(sf.COMPANY["agy-chat"], "Google")
+        with mock.patch.object(sf, "SUPPORTED_ENGINES", ("claude-chat", "codex-chat", "agy-chat")):
+            before = self.tree()
+            with self.assertRaises(ApiError) as got:
+                sf.set_card({"profile_id": "agy-one", "on": True}, self.cards)
+            self.assertEqual((got.exception.status, got.exception.code, got.exception.extra["warn"]), (409, "shared_confirm", ["send_to_google"]))
+            with self.assertRaises(ApiError) as got:
+                sf.plan_cards(["agy-one", "agy-two"], self.cards)
+            self.assertEqual((got.exception.status, got.exception.code), (409, "shared_confirm"))
+            with self.assertRaises(ApiError) as got:
+                sf.plan_cards([], self.cards, False, new_engines=["agy-chat"])
+            self.assertEqual(got.exception.code, "shared_confirm")
+            opened, error = sf.open_cards(["agy-one", "agy-two"], self.cards, "group")
+            self.assertEqual((opened, error.code), ([], "shared_confirm"))
+            self.assertEqual(self.tree(), before, "none of them wrote a byte")
+            self.assertFalse(sf.for_card("agy-one", "agy-chat"))
+
+    def test_14f_a_dispatch_that_was_not_ticked_opens_nothing_for_the_employee_it_made(self):
+        from unittest import mock
+        from vbear import shared_folder as sf
+        before = self.tree()
+        self.assertFalse(sf.open_for_dispatch("d-" + "0" * 12, "agy-one", self.cards))
+        self.assertEqual(self.tree(), before)
+        sf.mark_dispatch("d-" + "1" * 12, True, False)              # ticked, but the yes to Google was not given
+        marked = self.tree()
+        from vbear.api_error import ApiError
+        with self.assertRaises(ApiError) as got:
+            sf.open_for_dispatch("d-" + "1" * 12, "agy-one", self.cards)
+        self.assertEqual(got.exception.code, "card_tool_unsupported", "this version: AGY has no shared folder at all")
+        self.assertEqual(self.tree(), marked)
+        with mock.patch.object(sf, "SUPPORTED_ENGINES", ("claude-chat", "codex-chat", "agy-chat")):
+            with self.assertRaises(ApiError) as got:
+                sf.open_for_dispatch("d-" + "1" * 12, "agy-one", self.cards)
+            self.assertEqual(got.exception.code, "shared_confirm")
+            self.assertEqual(self.tree(), marked)
+
+    def test_14f_the_templates_and_the_dispatch_name_neither_memory_nor_the_shared_folder_in_a_card(self):
+        from vbear import dispatch, templates
+        card = {"key": "x", "name": "名", "position": "pm", "instructions": "寫", "claude_model": None}
+        for body in (templates.card_body(card, "agy"),
+                     dispatch.card_body({"ref": "N1", "name": "名", "position": "pm", "tool": "agy", "model_alias": ""})):
+            text = json.dumps(body, ensure_ascii=False)
+            for word in ("memory", "shared", "confirm_company", "send_to_google"):
+                self.assertNotIn(word, text)
+            self.assertEqual(body["model"], {"tool": "agy", "model_id": ""})
 
 
 if __name__ == "__main__":

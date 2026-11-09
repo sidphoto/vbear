@@ -44,11 +44,22 @@ SCHEMA = 1
 FILES_MAX = 200                                # files named on the page
 PROFILE_ID_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\Z")
 HOW = ("page", "group", "dispatch")
-COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI"}
+COMPANY = {"claude-chat": "Anthropic", "codex-chat": "OpenAI", "agy-chat": "Google"}
 # The engines whose employees can use the shared folder (P43-2 added codex-chat). An engine that is not here is refused with
-# ``card_tool_unsupported`` and ``for_card`` says no for it, whatever the file says.
+# ``card_tool_unsupported`` and ``for_card`` says no for it, whatever the file says. v0.20.0 does NOT list ``agy-chat`` (ADR 0012, the
+# coordinator's decision after the real check): AGY's file tools could write into the shared folder (after asking) but its commands could
+# not (``--add-dir`` does not make AGY's sandbox writable), and two answers for two ways of writing would leave an employee stuck. The rest
+# of the code for AGY (the company, the yes to Google, the check's shared part) stays; adding "agy-chat" back to this line is all it takes
+# once a newer AGY has been checked.
 SUPPORTED_ENGINES = ("claude-chat", "codex-chat")
+UNSUPPORTED_TEXT = "這位員工的 AI 工具還不能用共用資料夾。"
+UNSUPPORTED_AGY_TEXT = "AGY 員工這版不能用共用資料夾，之後 AGY 新版再檢查。"
 CONFIRM_TEXT = "這位員工讀到的共用資料夾檔案會送到 OpenAI（Codex 的公司）。不要放密碼、帳號、金鑰。確定要打開嗎？"
+CONFIRM_TEXT_GOOGLE = "這位員工讀到的共用資料夾檔案會送到 Google（AGY 是 Google 做的）。不要放密碼、帳號、金鑰。確定要打開嗎？"
+# The company whose employee needs the person's yes before the folder opens: the word of ``warn`` and the sentence that asks.
+CONFIRM = {"OpenAI": ("send_to_openai", CONFIRM_TEXT), "Google": ("send_to_google", CONFIRM_TEXT_GOOGLE)}
+GROUP_CONFIRM_TEXT = {"OpenAI": "Codex 員工讀到的共用資料夾檔案會送到 OpenAI，要先確認。",
+                      "Google": "AGY 員工讀到的共用資料夾檔案會送到 Google，要先確認。"}
 FINDER = "/usr/bin/open"
 IS_MAC = sys.platform == "darwin"
 UNREADABLE = ("共用資料夾的設定有問題，VBear 先不碰它：在你修好之前，所有員工都當成不能用共用資料夾。請檢查狀態資料夾裡的 "
@@ -117,6 +128,11 @@ def cards_on() -> tuple[bool, list]:
         return False, []
 
 
+def unsupported_text(engine) -> str:
+    """The sentence for an employee whose AI tool cannot use the shared folder (AGY has its own words: it is a decision of this version)."""
+    return UNSUPPORTED_AGY_TEXT if engine == "agy-chat" else UNSUPPORTED_TEXT
+
+
 def for_card(profile_id, engine) -> bool:
     """Whether this role card may use the shared folder in a new message: switched on by the person, its AI tool one that can use it, and
     the settings readable. Anything else is off. Reads only (the chat service calls this)."""
@@ -177,7 +193,7 @@ def cards_view(cards, on, checked=None) -> list:
     whether the version of the card's AI tool has passed the chat check with the shared folder: ``checked`` maps an engine to
     True, False or None (the version could not be read); an engine it does not name is None."""
     checked = checked if isinstance(checked, dict) else {}
-    return [{"profile_id": c.get("id"), "name": c.get("name"), "tool": c.get("tool"), "company": COMPANY.get(c.get("engine")),
+    return [{"profile_id": c.get("id"), "name": c.get("name"), "tool": c.get("tool"), "company": COMPANY.get(c.get("engine")) if c.get("engine") in SUPPORTED_ENGINES else None,
              "can_chat": c.get("can_chat") is True,
              "on": c.get("engine") in SUPPORTED_ENGINES and c.get("id") in on,
              "verified": checked.get(c.get("engine")) if c.get("engine") in SUPPORTED_ENGINES else None}
@@ -234,8 +250,8 @@ def set_card(body, cards, how: str = "page", now: float | None = None) -> dict:
     """Switch the shared folder on or off for one role card: ``{profile_id, on, confirm_company?}``. ``cards`` are the chat service's cards
     (``{id, engine, ...}``): the card must be there and its AI tool one that chats. Only the browser's routes call this (the
     browser's ``X-VBear`` is checked for every POST). A card of an AI tool the folder is not open to is
-    refused with 400 ``card_tool_unsupported``. Switching a Codex card on takes ``confirm_company: true`` (what it reads goes to
-    OpenAI): 409 ``shared_confirm`` with ``warn: ["send_to_openai"]`` without it. Switching on makes the folder when it is not there and refuses (409 ``shared_unsafe``) one that is
+    refused with 400 ``card_tool_unsupported``. Switching a Codex or AGY card on takes ``confirm_company: true`` (what it reads goes to
+    OpenAI or Google): 409 ``shared_confirm`` with ``warn: ["send_to_openai"]`` or ``["send_to_google"]`` without it. Switching on makes the folder when it is not there and refuses (409 ``shared_unsafe``) one that is
     not right, without mending it; switching off always works and deletes nothing. ``how`` is page, group or dispatch."""
     body = _body(body, {"profile_id", "on", "confirm_company"}, {"profile_id", "on"})
     pid, on = body["profile_id"], body["on"]
@@ -250,9 +266,10 @@ def set_card(body, cards, how: str = "page", now: float | None = None) -> dict:
     if engine not in COMPANY:
         raise ApiError(400, "bad_request", "這位員工的 AI 工具還不能聊天，用不到共用資料夾。")
     if engine not in SUPPORTED_ENGINES:
-        raise ApiError(400, "card_tool_unsupported", "這位員工的 AI 工具還不能用共用資料夾。")
-    if on and COMPANY[engine] == "OpenAI" and body.get("confirm_company") is not True:
-        raise ApiError(409, "shared_confirm", CONFIRM_TEXT, warn=["send_to_openai"], warn_text=[CONFIRM_TEXT])
+        raise ApiError(400, "card_tool_unsupported", unsupported_text(engine))
+    if on and COMPANY[engine] in CONFIRM and body.get("confirm_company") is not True:
+        warn, text = CONFIRM[COMPANY[engine]]
+        raise ApiError(409, "shared_confirm", text, warn=[warn], warn_text=[text])
     if on and sr.ensure_folder(str(cfg.state_dir()), _home()):
         raise ApiError(409, "shared_unsafe", UNSAFE_TEXT)
     try:
@@ -290,7 +307,8 @@ def plan_cards(profile_ids, cards, confirm_company=False, new_engines=()) -> lis
     off now (the ones to switch on), in order. ``new_engines``: the engines of employees that do not exist yet (a dispatch is about to
     make them): they are checked the same way and are not in the answer. ApiError: 404 for a card that is not there, 400 for one whose
     AI tool cannot chat (``bad_request``) or cannot use the folder yet (``card_tool_unsupported``), 409 ``shared_confirm`` (with
-    ``warn: ["send_to_openai"]``) when a Codex employee would be switched on and ``confirm_company`` is not true, 409 ``shared_unsafe``
+    ``warn: ["send_to_openai"]`` or ``["send_to_google"]``, both when both) when a Codex or AGY employee would be switched on and
+    ``confirm_company`` is not true, 409 ``shared_unsafe``
     for a folder that is not right. Reads only."""
     if not isinstance(confirm_company, bool):
         raise ApiError(400, "bad_request", "confirm_company 必須是 true 或 false。")
@@ -312,10 +330,12 @@ def plan_cards(profile_ids, cards, confirm_company=False, new_engines=()) -> lis
         if engine not in COMPANY:
             raise ApiError(400, "bad_request", "這位員工的 AI 工具還不能聊天，用不到共用資料夾。")
         if engine not in SUPPORTED_ENGINES:
-            raise ApiError(400, "card_tool_unsupported", "這位員工的 AI 工具還不能用共用資料夾。")
+            raise ApiError(400, "card_tool_unsupported", unsupported_text(engine))
     opening = [by[pid].get("engine") for pid in todo] + list(new_engines)
-    if any(COMPANY.get(e) == "OpenAI" for e in opening) and not confirm_company:
-        raise ApiError(409, "shared_confirm", "Codex 員工讀到的共用資料夾檔案會送到 OpenAI，要先確認。", warn=["send_to_openai"])
+    asking = [COMPANY[e] for e in opening if COMPANY.get(e) in CONFIRM]
+    if asking and not confirm_company:
+        companies = [c for c in CONFIRM if c in asking]           # OpenAI first, then Google: the order of the table
+        raise ApiError(409, "shared_confirm", " ".join(GROUP_CONFIRM_TEXT[c] for c in companies), warn=[CONFIRM[c][0] for c in companies])
     if (todo or new_engines) and sr.folder_problem(folder(), str(cfg.state_dir()), _home()):
         raise ApiError(409, "shared_unsafe", UNSAFE_TEXT)
     return todo

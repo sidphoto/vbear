@@ -1,0 +1,6 @@
+{"_synthetic": "Synthetic, not a recording: the spike of 2026-11-09 kept no raw messages. A turn is cancelled while the model is still thinking; the answer still has usage. Built from plan.md of runs/20261109-p46 (實測事實, ACP 訊息) and the public ACP v1 formats. Every name, id, command and text is made up.", "defaults": {"USAGE": {"inputTokens": 60000, "outputTokens": 2000, "cachedReadTokens": 24000, "cachedWriteTokens": 0, "thoughtTokens": 1500, "totalTokens": 86000}}}
+{"include": "_handshake-new"}
+{"dir": "in", "method": "session/prompt"}
+{"dir": "out", "line": {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "$SESSION", "update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "(made-up thought)"}}}}}
+{"dir": "in", "method": "session/cancel"}
+{"dir": "out", "line": {"jsonrpc": "2.0", "id": "$PROMPT", "result": {"stopReason": "cancelled", "usage": "$USAGE"}}}

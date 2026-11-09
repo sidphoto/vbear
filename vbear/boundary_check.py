@@ -38,6 +38,7 @@ account fields (booleans only; no value is printed or kept).
     python3 -m vbear.boundary_check --mode stream --claude ~/.local/share/claude/versions/2.1.292
     python3 -m vbear.boundary_check --mode chat --claude ~/.local/share/claude/versions/2.1.318
     python3 -m vbear.boundary_check --mode codex-chat [--codex <the Codex to check>]
+    python3 -m vbear.boundary_check --mode agy-chat [--agy <the AGY to check>] [--shared] [--out <report>]
     (or tools/verify_claude_boundary.py with the same arguments)
 
 Exit status: 0 all checks passed, 1 a check failed, 2 the run itself failed.
@@ -339,6 +340,8 @@ def main() -> int:
     ap.add_argument("--claude", help="Claude Code binary (default: newest in ~/.local/share/claude/versions)")
     ap.add_argument("--codex", help="Codex binary for --mode codex-chat (default: the newest one the vendor's installer "
                                     "left under ~/.codex/packages/standalone/releases)")
+    ap.add_argument("--agy", help="AGY binary for --mode agy-chat (default: the first one on the search path of the full-mode terminal)")
+    ap.add_argument("--shared", action="store_true", help="with --mode agy-chat: also check the shared folder (a second chat)")
     ap.add_argument("--mode", choices=MODES, default="headless")
     ap.add_argument("--model", default=None, help="model id or alias (default: Haiku 4.5 in headless, interactive and "
                                                   "stream, the alias haiku in chat)")
@@ -348,6 +351,9 @@ def main() -> int:
     if args.mode == "codex-chat":
         from . import codex_chat_check
         return codex_chat_check.main(args.codex, args.out)
+    if args.mode == "agy-chat":
+        from . import agy_chat_check
+        return agy_chat_check.main(args.agy, args.out, shared=args.shared)
     binary = pick_claude(args.claude)
     version = claude_version(binary)
     if args.mode == "chat":

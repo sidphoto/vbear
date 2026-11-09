@@ -44,6 +44,7 @@ from . import proctrack
 from . import chat_protocol
 from . import chat_engines
 from . import shared_rules
+from . import agy_chat_protocol
 from . import codex_chat_protocol
 from . import stream_protocol
 
@@ -1266,6 +1267,207 @@ def codex_chat_manifest_problem(m: dict) -> str | None:
         ("shared", "shared" not in m or (isinstance(m["shared"], str) and isinstance(m["allowed_root"], str)
                                          and m["shared"] == os.path.join(os.path.dirname(m["allowed_root"]), shared_rules.DIRNAME))),
         ("boundary", m["boundary"] == _CODEX_CHAT_BOUNDARY),
+    ]
+    for name, ok in checks:
+        if not ok:
+            return f"{name} 不合法"
+    return None
+
+
+# ---- an AGY chat (P46-3): engine "agy-chat" ------------------------------------------------------------------------
+# One ``agy acp`` process of a chat with a role card. Its version table, argv and environment come from agy_chat_protocol.
+# AGY reads its settings from ``antigravity-cli/settings.json`` in its own folder (``--gemini-dir``), ``<state>/agy-chat-home``,
+# which VBear writes itself before every process (agy_chat_env.write_settings, by the daemon: the folder is the person's, not a
+# launch's). So settings.json of the launch records what VBear asks for and is compared with what the version's table says on
+# every load. AGY's login follows HOME, so the process gets the person's own HOME (not an empty folder as a Codex chat does); the
+# launch's scratch folder is only the place the launch keeps its own record.
+
+AGY_CHAT_HOME = "agy-chat-home"                           # agy_chat_env.CHAT_HOME_NAME
+_AGY_CHAT_BOUNDARY = {
+    "write": "commands: AGY's own sandbox (macOS Seatbelt), the role card's work folder and the temporary folders only, no network; "
+             "file tools are not in the sandbox, so VBear judges every path itself; every command and every file change asked by VBear",
+    "read": "not isolated: a command the person allows can read what the sandbox lets it read; AGY itself runs with the person's own "
+            "login and loads the person's own AGY skills",
+    "network": "disabled in the sandbox; a request to run outside the sandbox or to use the network is refused by VBear",
+    "settings": "AGY reads only its own chat folder (agy-chat-home) for settings, which VBear writes before every process; the "
+                "person's own AGY settings folder is not read",
+}
+_AGY_CHAT_OWN = frozenset({"chat_id", "profile_id", "resume", "session_id", "agy_home"})
+_AGY_CHAT_OPTIONAL = frozenset({"shared"})                  # the shared folder (P43), present only when the employee has it
+
+
+def agy_chat_settings(cli_version: str, agy_home: str, shared: str | None = None) -> dict:
+    """What VBear asks of this AGY for a chat: the settings it writes into its own chat folder (the table's), the one model, the
+    sandbox, and the argument list. A path that cannot be one argument refuses the launch. ``shared`` is the shared folder of an
+    employee the person switched it on for (one more folder, a key of its own); without it the record has no such key."""
+    consts = agy_chat_protocol.constants_for(cli_version)
+    if consts is None:
+        raise LaunchRefused("unsupported_version", f"AGY {cli_version} 沒有聊天模式的常數")
+    try:
+        argv = agy_chat_protocol.argv_for(consts, agy_home, shared=shared)
+    except ValueError as exc:
+        raise LaunchRefused("unsafe_path", f"聊天用的資料夾路徑不能交給 AGY：{exc}") from exc
+    out = {"engine": "agy-chat", "settings": consts.settings_copy(), "model": consts.model_id, "sandbox": True, "argv": argv}
+    if shared is not None:
+        out["shared"] = shared
+    return out
+
+
+def _agy_chat_settings(m: dict, workdir: str, scratch, uid: int, base: Path) -> dict:
+    """The same for an agy-chat launch, which must also name VBear's own chat folder of AGY."""
+    if m.get("agy_home") != str(Path(os.path.realpath(base)) / AGY_CHAT_HOME):
+        raise LaunchRefused("drift", "聊天用的 AGY 設定資料夾不是 VBear 的那一個")
+    return agy_chat_settings(m.get("cli_version"), m["agy_home"], shared=m.get("shared"))
+
+
+def agy_chat_argv(manifest: dict) -> list[str]:
+    """The binary and ``acp --gemini-dir <chat folder> --sandbox --disable-telemetry`` (and ``--add-dir <shared folder>`` when the
+    employee has it), exactly (agy_chat_protocol.argv_for). Everything comes from the manifest that agy_chat_manifest_problem
+    accepted; nothing can be added."""
+    problem = agy_chat_manifest_problem(manifest)
+    if problem:
+        raise LaunchRefused("manifest_invalid", f"AGY 聊天 manifest 不符（{problem}）")
+    consts = agy_chat_protocol.constants_for(manifest["cli_version"])
+    try:
+        return [manifest["cli_binary"], *agy_chat_protocol.argv_for(consts, manifest["agy_home"], shared=manifest.get("shared"))]
+    except ValueError as exc:
+        raise LaunchRefused("unsafe_path", f"聊天用的資料夾路徑不能交給 AGY：{exc}") from exc
+
+
+def agy_chat_env(manifest: dict, source_env: dict) -> dict:
+    """Exactly the six variables the version's table names, every one of them from ``source_env`` (the daemon's): PATH, USER,
+    LOGNAME, LANG, TMPDIR and HOME, the person's own, because AGY's login follows it. One that is missing or empty refuses the launch.
+    Nothing else is passed on: not an ``ANTIGRAVITY_*``, ``GEMINI_*`` or ``GOOGLE_*`` variable, not any key."""
+    consts = agy_chat_protocol.constants_for(manifest.get("cli_version"))
+    if consts is None:
+        raise LaunchRefused("unsupported_version", "沒有這個 AGY 版本的聊天模式常數")
+    env = {}
+    for key in consts.env_keys:
+        value = source_env.get(key)
+        if not (isinstance(value, str) and value and "\0" not in value):
+            raise LaunchRefused("bad_request", f"環境變數 {key} 缺少或是空值，不啟動 AGY 聊天")
+        if key in ("HOME", "TMPDIR") and not os.path.isabs(value):
+            raise LaunchRefused("bad_request", f"環境變數 {key} 要是絕對路徑，不啟動 AGY 聊天")
+        env[key] = value
+    return env
+
+
+def prepare_agy_chat_launch(base: Path, *, workdir: str, cli_binary: str, cli_version: str, cli_identity: list[int],
+                            chat_id: str, profile_id: str, resume: bool, session_id: str | None, agy_home: str,
+                            shared: str | None = None) -> dict:
+    """One process of an AGY chat: the managed launch with its recorded settings, whether it resumes the chat's session (and which),
+    and the folder AGY keeps its settings and conversations in. The daemon checks the version (chat-verified, administrator policy),
+    the person's hooks, the folder and the work folder first. No process is started. The model is the table's one. ``shared`` is the
+    shared folder, which must be the one VBear computes for this state folder and safe to use; None when the employee has it off."""
+    if not (isinstance(chat_id, str) and CHAT_ID_RE.match(chat_id)):
+        raise LaunchRefused("bad_request", "聊天 id 格式不符")
+    if not (isinstance(profile_id, str) and TASK_ID_RE.match(profile_id)):
+        raise LaunchRefused("bad_request", "員工 id 格式不符")
+    if not isinstance(resume, bool):
+        raise LaunchRefused("bad_request", "resume 必須是 true 或 false")
+    if resume != (session_id is not None):
+        raise LaunchRefused("bad_request", "只有接續舊對話時才有 session id，而且一定要有")
+    if session_id is not None and not (isinstance(session_id, str) and stream_protocol.UUID_RE.match(session_id)):
+        raise LaunchRefused("bad_request", "session id 格式不符")
+    consts = agy_chat_protocol.constants_for(cli_version)
+    if consts is None:
+        raise LaunchRefused("unsupported_version", f"AGY {cli_version} 沒有聊天模式的常數")
+    if (not isinstance(cli_binary, str) or not os.path.isabs(cli_binary)
+            or os.path.realpath(cli_binary) != cli_binary):
+        raise LaunchRefused("invalid_binary", "AGY 必須是已解析的絕對路徑")
+    uid = os.getuid()
+    base = Path(os.path.realpath(base))
+    if agy_home != str(base / AGY_CHAT_HOME):
+        raise LaunchRefused("bad_request", "聊天用的 AGY 設定資料夾必須是 VBear 狀態資料夾裡的 agy-chat-home")
+    canonical = _check_chat_workdir(workdir, base)
+    if shared is not None:
+        _check_shared(shared, base)
+    record = agy_chat_settings(cli_version, agy_home, shared=shared)
+    root = base / SESSIONS_DIR
+    old_umask = os.umask(0o077)
+    ldir = scratch = None
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        _owned_dir(root, uid)
+        launch_id = "l-" + secrets.token_hex(8)
+        os.mkdir(root / launch_id, 0o700)  # fails if it already exists
+        ldir = root / launch_id
+        lst = _owned_dir(ldir, uid)
+        scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=SCRATCH_PARENT))
+        if os.path.realpath(scratch) != str(scratch):
+            raise LaunchRefused("unsafe_path", "暫存區路徑含 symlink")
+        sst = _owned_dir(scratch, uid)
+        settings_path = ldir / SETTINGS
+        _write_private(settings_path, json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        manifest = {
+            "manifest_version": MANIFEST_VERSION,
+            "launch_id": launch_id,
+            "native_session_id": None,
+            "engine": "agy-chat",
+            "cli_binary": cli_binary,
+            "cli_version": cli_version,
+            "cli_identity": list(cli_identity),
+            "model_id": consts.model_id,
+            "settings_path": str(settings_path),
+            "settings_sha256": _sha256(settings_path),
+            "canonical_workspace": canonical,
+            "allowed_root": str(Path(canonical).parent),
+            "launch_dir": {"path": str(ldir), "inode": lst.st_ino, "uid": lst.st_uid},
+            "scratch": {"path": str(scratch), "inode": sst.st_ino, "uid": sst.st_uid},
+            "state": "prepared",
+            "created": time.time(),
+            "leader": None,
+            "observed": [],
+            "boundary": dict(_AGY_CHAT_BOUNDARY),
+            "chat_id": chat_id,
+            "profile_id": profile_id,
+            "resume": resume,
+            "session_id": session_id,
+            "agy_home": agy_home,
+            **({"shared": shared} if shared is not None else {}),
+        }
+        _write_private(ldir / MANIFEST, json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        return manifest
+    except BaseException:
+        for p in (scratch, ldir):
+            if p is not None:
+                shutil.rmtree(p, ignore_errors=True)
+        raise
+    finally:
+        os.umask(old_umask)
+
+
+def agy_chat_manifest_problem(m: dict) -> str | None:
+    """None when ``m`` is exactly an agy-chat manifest: the fields a Codex terminal launch has (by the same checks), the table's one
+    model, and the chat's own (chat id, role card id, resume with its session id, the chat folder)."""
+    if not isinstance(m, dict):
+        return "不是物件"
+    consts = agy_chat_protocol.constants_for(m.get("cli_version"))
+    if m.get("engine") != "agy-chat" or consts is None:
+        return "引擎或版本不合法"
+    common = {k: v for k, v in m.items() if k not in _AGY_CHAT_OWN and k not in _AGY_CHAT_OPTIONAL and k != "boundary"}
+    common["engine"] = "codex"
+    common["boundary"] = {"write": "-"}
+    problem = managed_manifest_problem(common)
+    if problem:
+        return problem
+    if m.get("native_session_id") is not None:
+        return "native_session_id 不合法"
+    if m.get("model_id") != consts.model_id:
+        return "model_id 不是這個版本聊天用的模型"
+    if not _AGY_CHAT_OWN <= set(m):
+        return "欄位不符"
+    checks = [
+        ("chat_id", isinstance(m["chat_id"], str) and CHAT_ID_RE.match(m["chat_id"]) is not None),
+        ("profile_id", isinstance(m["profile_id"], str) and TASK_ID_RE.match(m["profile_id"]) is not None),
+        ("resume", isinstance(m["resume"], bool)),
+        ("session_id", (m["session_id"] is None and m["resume"] is False)
+                       or (isinstance(m["session_id"], str) and stream_protocol.UUID_RE.match(m["session_id"]) is not None
+                           and m["resume"] is True)),
+        ("agy_home", _abs_path(m["agy_home"]) and os.path.basename(m["agy_home"]) == AGY_CHAT_HOME),
+        ("shared", "shared" not in m or (isinstance(m["shared"], str) and isinstance(m["allowed_root"], str)
+                                         and m["shared"] == os.path.join(os.path.dirname(m["allowed_root"]), shared_rules.DIRNAME))),
+        ("boundary", m["boundary"] == _AGY_CHAT_BOUNDARY),
     ]
     for name, ok in checks:
         if not ok:

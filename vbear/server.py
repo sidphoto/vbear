@@ -53,6 +53,7 @@ from . import memory as memory_mod
 from . import skillbook as skillbook_mod
 from . import shared_folder
 from . import claude_verify
+from . import agy_verify
 from . import codex_verify
 from . import config as cfg
 from . import autonomy, daily_limit
@@ -244,6 +245,7 @@ class Console:
         self.claude_verifier = claude_verify.ClaudeVerifier()
         self.chat_verifier = claude_verify.ChatVerifier()
         self.codex_chat_verifier = codex_verify.CodexChatVerifier()
+        self.agy_chat_verifier = agy_verify.AgyChatVerifier()
         self.chat_streams = 0
         self.translations = translations.TranslationManager()
         self.store.after_rescan = self.translations.after_scan
@@ -464,6 +466,7 @@ class Console:
                 self.chats = chat_service_mod.ChatService(
                     self.runtime, verifier=getattr(self, "chat_verifier", None),
                     codex_verifier=getattr(self, "codex_chat_verifier", None),
+                    agy_verifier=getattr(self, "agy_chat_verifier", None),
                     ledger=lambda: self.meeting_runner().ledger(self.store.conf))
             return self.chats
 
@@ -2198,7 +2201,7 @@ def make_handler(console: Console):
             """GET /api/routines: every routine with its next time and its last 10 runs, the settings, today's money, and the reminders
             that wait. Reads only; a record that cannot be read is said so and nothing is guessed."""
             runner = console.routine_runner()
-            now = time.time()
+            now = runner.clock()
             routines, problem = routines_mod.read_routines()
             runs, runs_problem = routines_mod.read_runs()
             settings, settings_problem = routines_mod.read_settings()

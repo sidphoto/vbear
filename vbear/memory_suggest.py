@@ -180,7 +180,7 @@ _RECORD_KEYS = {"id", "kind", "created_at", "chat_id", "engine", "read", "sent",
 _READ_KEYS = {"count", "omitted", "bytes", "sha256"}
 _SENT_KEYS = {"memory_count", "inputs_sha256"}
 _OUTCOME_KEYS = {"state", "at", "saved", "dismissed"}
-ENGINES = ("claude-chat", "codex-chat")
+ENGINES = ("claude-chat", "codex-chat", "agy-chat")
 
 
 def _count(value) -> bool:

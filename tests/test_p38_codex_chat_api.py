@@ -183,7 +183,7 @@ class NoRuntimeOfItsOwnTests(ApiCase):
 
 class CardGateTests(ApiCase):
     def test_a_card_of_a_tool_that_cannot_chat_is_refused_and_says_which_and_what_can(self):
-        for tool, label in (("grok", "Grok"), ("agy", "AGY"), ("shared", "共用")):
+        for tool, label in (("grok", "Grok"), ("shared", "共用")):      # AGY chats since v0.20.0 (P46-3)
             with self.subTest(tool=tool):
                 other = self.card(f"{tool}員工", tool)
                 status_, out = self.call("/api/chats", "POST", {"profile_id": other})

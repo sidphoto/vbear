@@ -20,7 +20,8 @@ jobs:
         python: ["3.13", "3.14"]
     runs-on: macos-latest
     # v0.17.0: the Python 3.14 job reached the old 20-minute limit while the frontend tests were still to run; the whole suite takes about 20 minutes on a Mac
-    timeout-minutes: 35
+    # v0.20.0: about 5,860 tests take about 33 minutes on a Mac and passed 35 on a runner, so the limit is 60
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

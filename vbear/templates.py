@@ -30,7 +30,7 @@ import unicodedata
 from . import agent_profiles, model_options, templates_builtin
 from .runtime import memory_rules
 
-TOOLS = ("claude", "codex")                                  # the two tools that can chat; one is chosen for the whole apply
+TOOLS = ("claude", "codex", "agy")                          # the tools that can chat; one is chosen for the whole apply
 POSITIONS = agent_profiles.POSITIONS
 CLAUDE_MODELS = model_options.CLAUDE_ALIASES
 BUILTIN_IDS = templates_builtin.BUILTIN_IDS
@@ -278,7 +278,7 @@ def index(mine=()):
 # ---- the AI tools -----------------------------------------------------------------------------------------------------------------
 
 def _tool_state(tool: str, row):
-    name = {"claude": "Claude Code", "codex": "Codex"}[tool]
+    name = {"claude": "Claude Code", "codex": "Codex", "agy": "AGY"}[tool]
     if not isinstance(row, dict):
         return {"ready": False, "why": f"開始設定頁沒有列出 {name}，讀不到它的狀態。"}
     if row.get("state") == "not_installed" or row.get("installed") is False:
@@ -289,26 +289,33 @@ def _tool_state(tool: str, row):
         chat = row.get("chat_login")
         if not (isinstance(chat, dict) and chat.get("state") == "logged_in"):
             return {"ready": False, "why": "聊天用的 Codex 登入還沒完成，Codex 的員工要先到開始設定頁登入才能聊天。"}
+    if tool == "agy":
+        # ready as the start-up page says (the person's 「我登入好了」); whether its chat was checked is told apart, the page says so in the preview
+        chat = row.get("chat")
+        return {"ready": True, "why": "", "chat_verified": isinstance(chat, dict) and chat.get("verified") is True}
     return {"ready": True, "why": ""}
 
 
 def tools_view(rows):
-    """{"claude": {ready, why}, "codex": {ready, why}, "default": "claude" | "codex"} from the rows of the start-up page
-    (``ai_tool_status.report``): the same source, read and not asked again. Codex counts as ready only when the Codex that chats (its own login) is
-    logged in. The default is Claude Code unless it is not ready and Codex is."""
+    """{"claude": {ready, why}, "codex": {ready, why}, "agy": {ready, why, chat_verified}, "default": "claude" | "codex" | "agy"} from the rows
+    of the start-up page (``ai_tool_status.report``): the same source, read and not asked again. Codex counts as ready only when the Codex that
+    chats (its own login) is logged in; AGY when the start-up page calls it ready, with ``chat_verified`` saying whether its chat check passed
+    (an AGY employee needs it before the first chat). The default is Claude Code unless it is not ready; then Codex if that is ready; AGY only
+    when neither is."""
     by_id = {r.get("id"): r for r in rows if isinstance(r, dict)} if isinstance(rows, (list, tuple)) else {}
-    claude, codex = _tool_state("claude", by_id.get("claude")), _tool_state("codex", by_id.get("codex"))
-    return {"claude": claude, "codex": codex, "default": "codex" if (not claude["ready"] and codex["ready"]) else "claude"}
+    claude, codex, agy = (_tool_state(t, by_id.get(t)) for t in TOOLS)
+    default = "claude" if claude["ready"] else "codex" if codex["ready"] else "agy" if agy["ready"] else "claude"
+    return {"claude": claude, "codex": codex, "agy": agy, "default": default}
 
 
 # ---- the bodies for the ordinary write functions ------------------------------------------------------------------------------------
 
 def card_body(card, tool, name=None):
     """What ``POST /api/agent-profiles`` is given for one employee of a template: always safe mode, never a skill card, no profession, the
-    permission records of the starter deck, the model of the template for Claude Code and Codex's own for Codex. No ``enabled`` key (a new card
+    permission records of the starter deck, the model of the template for Claude Code, and Codex's and AGY's own for them. No ``enabled`` key (a new card
     is switched on)."""
     if tool not in TOOLS:
-        raise ValueError("tool 只能是 claude 或 codex")
+        raise ValueError("tool 只能是 claude、codex 或 agy")
     model_id = card["claude_model"] if tool == "claude" and card["claude_model"] else ""
     return {
         "name": card["name"] if name is None else name,
@@ -371,7 +378,7 @@ def _request(body, templates):
     if set(body) - allowed:
         raise ValueError("只接受 " + "、".join(sorted(allowed)))
     if body.get("tool") not in TOOLS:
-        raise ValueError("tool 只能是 claude 或 codex")
+        raise ValueError("tool 只能是 claude、codex 或 agy")
     confirm = body.get("confirm_warning", False)
     if not isinstance(confirm, bool):
         raise ValueError("confirm_warning 必須是 true 或 false")
